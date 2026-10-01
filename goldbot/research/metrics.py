@@ -24,8 +24,8 @@ def max_drawdown(trade_ret: np.ndarray) -> float:
 
 
 def profit_factor(trade_ret: np.ndarray) -> float:
-    g, l = trade_ret[trade_ret > 0].sum(), -trade_ret[trade_ret < 0].sum()
-    return float(g / l) if l > 0 else float("inf")
+    gains, losses = trade_ret[trade_ret > 0].sum(), -trade_ret[trade_ret < 0].sum()
+    return float(gains / losses) if losses > 0 else float("inf")
 
 
 def deflated_sharpe(sr_hat: float, n_trials: int, n_obs: int, skew: float, kurt: float, var_sr_trials: float) -> float:

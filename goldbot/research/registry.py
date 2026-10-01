@@ -17,7 +17,7 @@ class TrialRegistry:
             self.path.write_text("")
 
     def _rows(self) -> list[dict]:
-        return [json.loads(l) for l in self.path.read_text().splitlines() if l.strip()]
+        return [json.loads(line) for line in self.path.read_text().splitlines() if line.strip()]
 
     @property
     def n_trials(self) -> int:

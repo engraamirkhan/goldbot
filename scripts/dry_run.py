@@ -11,7 +11,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from goldbot.data.quality import check_bars, events_frame  # noqa: E402
+from goldbot.data.quality import check_bars  # noqa: E402
 from goldbot.data.resample import resample_bars, ticks_to_1m  # noqa: E402
 from goldbot.data.store import Store  # noqa: E402
 from goldbot.data.synthetic import synthetic_ticks  # noqa: E402

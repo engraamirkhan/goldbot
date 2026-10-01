@@ -14,9 +14,9 @@ from goldbot.features.technical import atr
 
 def swing_points(df: pd.DataFrame, lag: int = 5) -> tuple[pd.Series, pd.Series]:
     """Boolean series marking swing highs/lows at their own bar; confirmation happens `lag` bars later."""
-    h, l = df["high"], df["low"]
+    h, lo = df["high"], df["low"]
     is_high = (h == h.rolling(2 * lag + 1, center=True).max())
-    is_low = (l == l.rolling(2 * lag + 1, center=True).min())
+    is_low = (lo == lo.rolling(2 * lag + 1, center=True).min())
     return is_high.fillna(False), is_low.fillna(False)
 
 

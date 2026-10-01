@@ -13,7 +13,7 @@ from typing import AsyncIterator
 import pandas as pd
 
 from goldbot.data.timeutil import server_to_utc
-from goldbot.execution.broker import AccountInfo, Bar, OrderIntent, OrderResult, Position, SymbolInfo, Tick
+from goldbot.execution.broker import AccountInfo, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 
 try:  # pragma: no cover - Windows only
     import MetaTrader5 as mt5
