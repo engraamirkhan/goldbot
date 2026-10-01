@@ -65,6 +65,19 @@ def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 3) -> pd
         ask = download_side(start, end, "ask", tmp)
         if bid is not None and ask is not None:
             m = bid.merge(ask, on="ts_utc", suffixes=("_bid", "_ask"), how="inner")
+            imputed = False
+            if len(m) < 0.5 * max(len(bid), len(ask)):
+                # one side is patchy on Dukascopy's end (seen for 2025-02): keep the fuller side and impute the other
+                # from the median spread where both exist, flagged so research can exclude it if it matters.
+                base, other = (bid, "ask") if len(bid) >= len(ask) else (ask, "bid")
+                spread = float((m["close_ask"] - m["close_bid"]).median()) if len(m) > 100 else 0.25
+                sign = 1 if other == "ask" else -1
+                m = base.rename(columns={c: f"{c}_{'bid' if other == 'ask' else 'ask'}" for c in ("open", "high", "low", "close", "volume")})
+                for c in ("open", "high", "low", "close"):
+                    m[f"{c}_{other}"] = m[f"{c}_{'bid' if other == 'ask' else 'ask'}"] + sign * spread
+                m[f"volume_{other}"] = m[f"volume_{'bid' if other == 'ask' else 'ask'}"]
+                imputed = True
+                print(f"  {start:%Y-%m}: {other} side patchy ({len(bid)} bid / {len(ask)} ask rows); imputed with spread {spread:.2f}", flush=True)
             out = pd.DataFrame({
                 "ts_utc": m["ts_utc"],
                 "bid_open": m["open_bid"], "bid_high": m["high_bid"], "bid_low": m["low_bid"], "bid_close": m["close_bid"],
@@ -77,6 +90,7 @@ def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 3) -> pd
             out = out[DEFAULT_SESSIONS.is_open(pd.DatetimeIndex(out["ts_utc"]))]
             out.insert(1, "visible_at", out["ts_utc"] + pd.Timedelta(minutes=1))
             out = out[BAR_COLUMNS].sort_values("ts_utc").drop_duplicates("ts_utc").reset_index(drop=True)
+            out["dq_flag"] = "warning:ask_imputed" if imputed else ""
             days = (end - start).days + 1
             expected_full = days >= 27
             if len(out) >= MIN_BARS_PER_FULL_MONTH or (not expected_full and len(out) > 1000):
@@ -109,7 +123,9 @@ def main() -> int:
     if not frames:
         return 1
     out = pd.concat(frames).drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
+    flags = out.pop("dq_flag")
     out, dq = check_bars(out)
+    out["dq_flag"] = [a if a else b for a, b in zip(flags.values, out["dq_flag"].values)]
     out["source"] = "dukascopy"
     path = args.out or f"xauusd_1m_dukascopy_{args.year}.parquet"
     out.to_parquet(path, compression="zstd", index=False)
