@@ -1,0 +1,71 @@
+name: data-dukascopy
+# Downloads XAUUSD ticks from the free Dukascopy archive on GitHub's runners (both Claude sandboxes are
+# blocked from the datafeed host), builds 1m bars with goldbot's own resampler, and publishes one Parquet
+# per year as assets on the rolling release tag `data-v1`. Research jobs and the VPS fetch from there.
+on:
+  workflow_dispatch:
+    inputs:
+      from_year: { description: "first year", default: "2010" }
+      to_year:   { description: "last year (inclusive)", default: "2026" }
+  schedule:
+    - cron: "17 3 * * 6"   # Saturdays 03:17 UTC: refresh the current year
+permissions:
+  contents: write
+jobs:
+  build-year:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        year: ${{ fromJson(needs.plan.outputs.years) }}
+    needs: plan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: pip install -e .
+      - name: download ticks for ${{ matrix.year }}
+        run: |
+          mkdir -p raw/dukascopy
+          Y=${{ matrix.year }}
+          END=$([ "$Y" = "$(date -u +%Y)" ] && date -u +%F || echo "$Y-12-31")
+          npx -y dukascopy-node -i xauusd -from $Y-01-01 -to $END -t tick -f csv -dir raw/dukascopy -bs 10 -bp 1500 -r 5 -fl false
+          ls -la raw/dukascopy
+      - name: build 1m bars
+        run: |
+          python - <<'EOF'
+          import glob, pandas as pd
+          from goldbot.data.loaders import load_dukascopy_ticks_csv
+          from goldbot.data.resample import ticks_to_1m
+          from goldbot.data.quality import check_bars
+          files = glob.glob("raw/dukascopy/*.csv")
+          ticks = pd.concat([load_dukascopy_ticks_csv(f) for f in files], ignore_index=True)
+          print("ticks:", len(ticks), ticks["ts_utc"].min(), "->", ticks["ts_utc"].max())
+          bars = ticks_to_1m(ticks)
+          bars, dq = check_bars(bars)
+          print("1m bars:", len(bars), "dq events:", len(dq))
+          bars["source"] = "dukascopy"
+          bars.to_parquet(f"xauusd_1m_dukascopy_${{ matrix.year }}.parquet", compression="zstd", index=False)
+          EOF
+      - name: publish to release data-v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view data-v1 >/dev/null 2>&1 || gh release create data-v1 --title "Market data (rolling)" --notes "1m XAUUSD bars built by data-dukascopy workflow" --latest=false
+          gh release upload data-v1 xauusd_1m_dukascopy_${{ matrix.year }}.parquet --clobber
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      years: ${{ steps.years.outputs.years }}
+    steps:
+      - id: years
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "years=[$(date -u +%Y)]" >> $GITHUB_OUTPUT
+          else
+            python3 -c "import json;print('years='+json.dumps(list(range(int('${{ inputs.from_year }}'), int('${{ inputs.to_year }}')+1))))" >> $GITHUB_OUTPUT
+          fi
