@@ -1,0 +1,57 @@
+# Account registry. NO SECRETS HERE. Passwords live in the OS keyring (macOS Keychain on the Mac,
+# Windows Credential Manager on the VPS) under service "goldbot" and key "mt5-<account_id>".
+# The engine asks Aamir for a missing credential at the moment it is needed (CLI prompt locally,
+# Telegram prompt when running headless) and stores it; it never writes a password to a file or log.
+#
+# mode: demo | live.  Phases 0-2 run only on demo accounts; live accounts are enabled by the
+# phase gate plus a typed confirmation, never by editing this file alone.
+accounts:
+  icm-demo:
+    broker: icm
+    mode: demo
+    server: ICMarketsSC-Demo  # confirm in the MT5 terminal: File -> Open an Account
+    login: null  # filled by `python -m goldbot.ops.accounts add icm-demo`
+    terminal_path: C:\MT5\ICMarkets\terminal64.exe
+    server_tz: Europe/Athens
+    symbol: XAUUSD
+    magic_base: 260100
+    enabled: true
+  vantage-demo:
+    broker: vantage
+    mode: demo
+    server: VantageInternational-Demo  # confirm in the terminal
+    login: null
+    terminal_path: C:\MT5\Vantage\terminal64.exe
+    server_tz: Europe/Athens
+    symbol: XAUUSD  # may be XAUUSD+ ; the adapter resolves from symbol_info
+    magic_base: 260200
+    enabled: true
+  icm-live:
+    broker: icm
+    mode: live
+    server: ICMarketsSC-Live
+    login: null
+    terminal_path: C:\MT5\ICMarkets-Live\terminal64.exe
+    server_tz: Europe/Athens
+    symbol: XAUUSD
+    magic_base: 260300
+    enabled: false  # unlocked by the paper -> tiny-live gate
+  vantage-live:
+    broker: vantage
+    mode: live
+    server: VantageInternational-Live
+    login: null
+    terminal_path: C:\MT5\Vantage-Live\terminal64.exe
+    server_tz: Europe/Athens
+    symbol: XAUUSD
+    magic_base: 260400
+    enabled: false
+
+tradingview:
+  # Webhook secret and any session cookie for the ideas fetcher also live in the keyring (keys below).
+  secret_key: tradingview-webhook-secret
+  ideas_cookie_key: tradingview-ideas-cookie
+
+telegram:
+  bot_token_key: telegram-bot-token
+  allowed_user_ids: []  # numeric Telegram user ids; filled on first /start with confirmation

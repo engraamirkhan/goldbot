@@ -1,0 +1,58 @@
+# Goldbot settings. Everything time-related is UTC unless the key says otherwise.
+symbol: XAUUSD
+data_root: data            # Parquet root; DuckDB views sit over it
+
+# The three "days" (see design: Data architecture / Time and calendar)
+feature_day_anchor: { tz: America/New_York, time: "13:30" }   # COMEX settlement -> daily bars & features
+risk_day_anchor:    { tz: UTC,              time: "00:00" }   # loss caps reset
+# swap-day is read from each broker terminal at runtime, never configured here.
+
+timeframes:
+  decision: [15m, 1h]
+  context:  [4h, 1d, 1w]
+
+brokers:
+  icm:
+    server_tz: Europe/Athens          # EET/EEST; resolved per bar, never a fixed offset
+    symbol_map: { XAUUSD: XAUUSD }
+    magic_base: 260100
+    canonical_costs: true             # reference broker for backtest cost tables
+  vantage:
+    server_tz: Europe/Athens
+    symbol_map: { XAUUSD: XAUUSD+ }   # confirmed from symbol_info at startup, this is only a hint
+    magic_base: 260200
+    canonical_costs: false
+
+features:
+  max_live_features: 40
+  version: f1
+
+labels:
+  embargo_days: { 15m: 1, 1h: 2 }
+  purge_days:   { 15m: 2, 1h: 5 }
+
+walkforward:
+  15m: { train_months: 24, test_months: 3, step_months: 3 }
+  1h:  { train_months: 36, test_months: 6, step_months: 6 }
+
+risk:
+  risk_per_trade: 0.005
+  risk_per_trade_tiny_live: 0.001
+  multiplier_bounds: [0.25, 1.5]
+  daily_cap: 0.02
+  weekly_cap: 0.05
+  supervisor_daily_cap: 0.015
+  supervisor_weekly_cap: 0.04
+  drawdown_stage1: 0.08
+  drawdown_stage2: 0.12
+  drawdown_stage1_clear: 0.05
+  max_positions_per_account: 2
+  max_spread_points: 45
+  stale_tick_seconds: 20
+  blackout: { before_min: 15, after_min: 30, events: [CPI, NFP, FOMC, PCE] }
+  min_target_over_cost: 2.5
+  approval_window_seconds: 90
+
+costs:
+  slippage_prior_usd: 0.15           # per oz, used until 50 real fills exist
+  commission_per_lot_side_usd: { icm: 3.5, vantage: 3.0 }

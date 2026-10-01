@@ -1,0 +1,40 @@
+[project]
+name = "goldbot"
+version = "0.1.0"
+description = "Evolving XAUUSD trading assistant: point-in-time data store, strategy specialists, walk-forward validation, risk-gated execution."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "pyarrow>=15",
+    "duckdb>=1.0",
+    "polars>=1.0",
+    "lightgbm>=4.3",
+    "scikit-learn>=1.4",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "structlog>=24.1",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "httpx>=0.27",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+# Windows VPS only: the official MetaTrader5 package talks to a running terminal.
+live = ["MetaTrader5>=5.0.45; sys_platform == 'win32'", "keyring>=25", "python-telegram-bot>=21"]
+dev = ["pytest>=8", "pytest-cov", "ruff"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["goldbot*"]
