@@ -1,1 +1,1 @@
-from goldbot.engine.runner import Engine, EngineConfig, ConstantModel  # noqa: F401
+from goldbot.engine.runner import ConstantModel, Engine, EngineConfig  # noqa: F401

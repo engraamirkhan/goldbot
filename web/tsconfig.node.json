@@ -3,24 +3,22 @@
     "target": "ES2022",
     "lib": [
       "ES2022",
-      "DOM",
-      "DOM.Iterable"
+      "DOM"
     ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "resolveJsonModule": true,
-    "allowImportingTsExtensions": true,
     "types": [
-      "vitest/globals",
-      "@testing-library/jest-dom"
+      "node"
     ]
   },
   "include": [
-    "src"
+    "e2e",
+    "playwright.config.ts",
+    "vite.config.ts",
+    "eslint.config.js"
   ]
 }

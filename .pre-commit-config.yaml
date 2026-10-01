@@ -1,0 +1,25 @@
+# Fast, hermetic checks that run on every commit (`pre-commit install`) and as the `pre-commit` CI job.
+# Heavier gates (mypy, tests, eslint, tsc, e2e) are separate CI jobs; see .github/workflows/ci.yml.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+        exclude: ^web/(openapi\.json|src/lib/schema\.d\.ts)$   # generated
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: \.ps1$
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=800]
+      - id: detect-private-key          # credentials live in the OS keyring, never in the repo
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff-check
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^(goldbot|tests|scripts)/

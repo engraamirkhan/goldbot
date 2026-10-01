@@ -1,0 +1,1245 @@
+{
+ "components": {
+  "schemas": {
+   "AcceptRequest": {
+    "properties": {
+     "password": {
+      "default": "",
+      "title": "Password",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "AcceptRequest",
+    "type": "object"
+   },
+   "AcceptResponse": {
+    "properties": {
+     "email": {
+      "title": "Email",
+      "type": "string"
+     },
+     "totp_uri": {
+      "title": "Totp Uri",
+      "type": "string"
+     }
+    },
+    "required": [
+     "email",
+     "totp_uri"
+    ],
+    "title": "AcceptResponse",
+    "type": "object"
+   },
+   "AccountSummary": {
+    "properties": {
+     "account_class": {
+      "enum": [
+       "raw",
+       "standard",
+       "unknown"
+      ],
+      "title": "Account Class",
+      "type": "string"
+     },
+     "account_id": {
+      "title": "Account Id",
+      "type": "string"
+     },
+     "broker": {
+      "title": "Broker",
+      "type": "string"
+     },
+     "day_pnl_pct": {
+      "title": "Day Pnl Pct",
+      "type": "number"
+     },
+     "drawdown_pct": {
+      "title": "Drawdown Pct",
+      "type": "number"
+     },
+     "equity": {
+      "title": "Equity",
+      "type": "number"
+     },
+     "mode": {
+      "enum": [
+       "demo",
+       "live",
+       "paper"
+      ],
+      "title": "Mode",
+      "type": "string"
+     },
+     "open_positions": {
+      "title": "Open Positions",
+      "type": "integer"
+     },
+     "stage": {
+      "enum": [
+       "normal",
+       "size_down",
+       "halted"
+      ],
+      "title": "Stage",
+      "type": "string"
+     },
+     "week_pnl_pct": {
+      "title": "Week Pnl Pct",
+      "type": "number"
+     }
+    },
+    "required": [
+     "account_id",
+     "broker",
+     "mode",
+     "equity",
+     "day_pnl_pct",
+     "week_pnl_pct",
+     "drawdown_pct",
+     "stage",
+     "open_positions",
+     "account_class"
+    ],
+    "title": "AccountSummary",
+    "type": "object"
+   },
+   "AgentRow": {
+    "properties": {
+     "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+     },
+     "calibration_ece": {
+      "title": "Calibration Ece",
+      "type": "number"
+     },
+     "capital_weight": {
+      "title": "Capital Weight",
+      "type": "number"
+     },
+     "expectancy_r": {
+      "title": "Expectancy R",
+      "type": "number"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "fitness": {
+      "title": "Fitness",
+      "type": "number"
+     },
+     "generation": {
+      "title": "Generation",
+      "type": "integer"
+     },
+     "hit_rate": {
+      "title": "Hit Rate",
+      "type": "number"
+     },
+     "n_trades": {
+      "title": "N Trades",
+      "type": "integer"
+     },
+     "parent_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Parent Id"
+     },
+     "status": {
+      "enum": [
+       "shadow",
+       "live",
+       "retired"
+      ],
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent_id",
+     "family",
+     "generation",
+     "parent_id",
+     "status",
+     "n_trades",
+     "expectancy_r",
+     "hit_rate",
+     "calibration_ece",
+     "fitness",
+     "capital_weight"
+    ],
+    "title": "AgentRow",
+    "type": "object"
+   },
+   "AuthState": {
+    "properties": {
+     "needs_setup": {
+      "title": "Needs Setup",
+      "type": "boolean"
+     },
+     "users": {
+      "title": "Users",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "needs_setup",
+     "users"
+    ],
+    "title": "AuthState",
+    "type": "object"
+   },
+   "Decision": {
+    "properties": {
+     "action": {
+      "enum": [
+       "approve",
+       "reject"
+      ],
+      "title": "Action",
+      "type": "string"
+     },
+     "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+     },
+     "reason_code": {
+      "anyOf": [
+       {
+        "enum": [
+         "news",
+         "cost",
+         "discretion",
+         "duplicate",
+         "other"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason Code"
+     }
+    },
+    "required": [
+     "proposal_id",
+     "action"
+    ],
+    "title": "Decision",
+    "type": "object"
+   },
+   "DecisionResult": {
+    "properties": {
+     "outcome": {
+      "title": "Outcome",
+      "type": "string"
+     }
+    },
+    "required": [
+     "outcome"
+    ],
+    "title": "DecisionResult",
+    "type": "object"
+   },
+   "FeedHealth": {
+    "properties": {
+     "account_id": {
+      "title": "Account Id",
+      "type": "string"
+     },
+     "last_tick_age_s": {
+      "title": "Last Tick Age S",
+      "type": "number"
+     },
+     "spread_points": {
+      "title": "Spread Points",
+      "type": "number"
+     },
+     "supervisor_heartbeat_age_s": {
+      "title": "Supervisor Heartbeat Age S",
+      "type": "number"
+     },
+     "terminal_connected": {
+      "title": "Terminal Connected",
+      "type": "boolean"
+     },
+     "webhook_p99_latency_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Webhook P99 Latency S"
+     }
+    },
+    "required": [
+     "account_id",
+     "last_tick_age_s",
+     "spread_points",
+     "terminal_connected",
+     "webhook_p99_latency_s",
+     "supervisor_heartbeat_age_s"
+    ],
+    "title": "FeedHealth",
+    "type": "object"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "title": "Detail",
+      "type": "array"
+     }
+    },
+    "title": "HTTPValidationError",
+    "type": "object"
+   },
+   "InviteRequest": {
+    "properties": {
+     "email": {
+      "title": "Email",
+      "type": "string"
+     },
+     "role": {
+      "default": "viewer",
+      "enum": [
+       "owner",
+       "approver",
+       "viewer"
+      ],
+      "title": "Role",
+      "type": "string"
+     }
+    },
+    "required": [
+     "email"
+    ],
+    "title": "InviteRequest",
+    "type": "object"
+   },
+   "InviteResponse": {
+    "properties": {
+     "expires_h": {
+      "title": "Expires H",
+      "type": "integer"
+     },
+     "invite_token": {
+      "title": "Invite Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "invite_token",
+     "expires_h"
+    ],
+    "title": "InviteResponse",
+    "type": "object"
+   },
+   "LoginRequest": {
+    "properties": {
+     "email": {
+      "default": "",
+      "title": "Email",
+      "type": "string"
+     },
+     "password": {
+      "default": "",
+      "title": "Password",
+      "type": "string"
+     },
+     "totp": {
+      "default": "",
+      "title": "Totp",
+      "type": "string"
+     }
+    },
+    "title": "LoginRequest",
+    "type": "object"
+   },
+   "LoginResponse": {
+    "properties": {
+     "email": {
+      "title": "Email",
+      "type": "string"
+     },
+     "expires_in": {
+      "title": "Expires In",
+      "type": "integer"
+     },
+     "role": {
+      "enum": [
+       "owner",
+       "approver",
+       "viewer"
+      ],
+      "title": "Role",
+      "type": "string"
+     },
+     "token": {
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "token",
+     "expires_in",
+     "role",
+     "email"
+    ],
+    "title": "LoginResponse",
+    "type": "object"
+   },
+   "Me": {
+    "properties": {
+     "email": {
+      "title": "Email",
+      "type": "string"
+     },
+     "role": {
+      "enum": [
+       "owner",
+       "approver",
+       "viewer"
+      ],
+      "title": "Role",
+      "type": "string"
+     }
+    },
+    "required": [
+     "email",
+     "role"
+    ],
+    "title": "Me",
+    "type": "object"
+   },
+   "Ok": {
+    "properties": {
+     "ok": {
+      "default": true,
+      "title": "Ok",
+      "type": "boolean"
+     }
+    },
+    "title": "Ok",
+    "type": "object"
+   },
+   "Proposal": {
+    "properties": {
+     "account_id": {
+      "title": "Account Id",
+      "type": "string"
+     },
+     "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+     },
+     "entry": {
+      "title": "Entry",
+      "type": "number"
+     },
+     "ev_r": {
+      "title": "Ev R",
+      "type": "number"
+     },
+     "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+     },
+     "lots": {
+      "title": "Lots",
+      "type": "number"
+     },
+     "p": {
+      "title": "P",
+      "type": "number"
+     },
+     "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+     },
+     "side": {
+      "enum": [
+       "long",
+       "short"
+      ],
+      "title": "Side",
+      "type": "string"
+     },
+     "spread_points": {
+      "title": "Spread Points",
+      "type": "number"
+     },
+     "stop": {
+      "title": "Stop",
+      "type": "number"
+     },
+     "target": {
+      "title": "Target",
+      "type": "number"
+     },
+     "top_features": {
+      "items": {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "type": "array"
+      },
+      "title": "Top Features",
+      "type": "array"
+     },
+     "tradingview_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tradingview Url"
+     }
+    },
+    "required": [
+     "proposal_id",
+     "account_id",
+     "agent_id",
+     "side",
+     "lots",
+     "entry",
+     "stop",
+     "target",
+     "p",
+     "ev_r",
+     "spread_points",
+     "top_features",
+     "expires_at"
+    ],
+    "title": "Proposal",
+    "type": "object"
+   },
+   "RoleChange": {
+    "properties": {
+     "email": {
+      "title": "Email",
+      "type": "string"
+     },
+     "role": {
+      "enum": [
+       "owner",
+       "approver",
+       "viewer"
+      ],
+      "title": "Role",
+      "type": "string"
+     }
+    },
+    "required": [
+     "email",
+     "role"
+    ],
+    "title": "RoleChange",
+    "type": "object"
+   },
+   "SetupRequest": {
+    "properties": {
+     "email": {
+      "title": "Email",
+      "type": "string"
+     },
+     "password": {
+      "title": "Password",
+      "type": "string"
+     },
+     "setup_code": {
+      "default": "",
+      "title": "Setup Code",
+      "type": "string"
+     }
+    },
+    "required": [
+     "email",
+     "password"
+    ],
+    "title": "SetupRequest",
+    "type": "object"
+   },
+   "Status": {
+    "properties": {
+     "halted": {
+      "title": "Halted",
+      "type": "boolean"
+     },
+     "mode": {
+      "title": "Mode",
+      "type": "string"
+     },
+     "pending": {
+      "title": "Pending",
+      "type": "integer"
+     },
+     "supervisor": {
+      "additionalProperties": true,
+      "title": "Supervisor",
+      "type": "object"
+     }
+    },
+    "required": [
+     "mode",
+     "halted",
+     "pending",
+     "supervisor"
+    ],
+    "title": "Status",
+    "type": "object"
+   },
+   "TotpEnrolment": {
+    "properties": {
+     "totp_uri": {
+      "title": "Totp Uri",
+      "type": "string"
+     }
+    },
+    "required": [
+     "totp_uri"
+    ],
+    "title": "TotpEnrolment",
+    "type": "object"
+   },
+   "UserRef": {
+    "properties": {
+     "email": {
+      "title": "Email",
+      "type": "string"
+     }
+    },
+    "required": [
+     "email"
+    ],
+    "title": "UserRef",
+    "type": "object"
+   },
+   "UserRow": {
+    "properties": {
+     "email": {
+      "title": "Email",
+      "type": "string"
+     },
+     "enabled": {
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "last_login": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Login"
+     },
+     "role": {
+      "enum": [
+       "owner",
+       "approver",
+       "viewer"
+      ],
+      "title": "Role",
+      "type": "string"
+     }
+    },
+    "required": [
+     "email",
+     "role",
+     "enabled",
+     "last_login"
+    ],
+    "title": "UserRow",
+    "type": "object"
+   },
+   "ValidationError": {
+    "properties": {
+     "ctx": {
+      "title": "Context",
+      "type": "object"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "title": "Location",
+      "type": "array"
+     },
+     "msg": {
+      "title": "Message",
+      "type": "string"
+     },
+     "type": {
+      "title": "Error Type",
+      "type": "string"
+     }
+    },
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError",
+    "type": "object"
+   }
+  },
+  "securitySchemes": {
+   "HTTPBearer": {
+    "scheme": "bearer",
+    "type": "http"
+   }
+  }
+ },
+ "info": {
+  "title": "goldbot api",
+  "version": "0.2"
+ },
+ "openapi": "3.1.0",
+ "paths": {
+  "/api/accounts": {
+   "get": {
+    "operationId": "accounts_api_accounts_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/AccountSummary"
+         },
+         "title": "Response Accounts Api Accounts Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Accounts"
+   }
+  },
+  "/api/agents": {
+   "get": {
+    "operationId": "agents_api_agents_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/AgentRow"
+         },
+         "title": "Response Agents Api Agents Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Agents"
+   }
+  },
+  "/api/auth/accept": {
+   "post": {
+    "operationId": "accept_api_auth_accept_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AcceptRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AcceptResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Accept"
+   }
+  },
+  "/api/auth/invite": {
+   "post": {
+    "operationId": "invite_api_auth_invite_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/InviteRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/InviteResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Invite"
+   }
+  },
+  "/api/auth/login": {
+   "post": {
+    "operationId": "login_api_auth_login_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LoginRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LoginResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Login"
+   }
+  },
+  "/api/auth/logout": {
+   "post": {
+    "operationId": "logout_api_auth_logout_post",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Ok"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Logout"
+   }
+  },
+  "/api/auth/setup": {
+   "post": {
+    "operationId": "setup_api_auth_setup_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SetupRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TotpEnrolment"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Setup"
+   }
+  },
+  "/api/auth/state": {
+   "get": {
+    "operationId": "auth_state_api_auth_state_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AuthState"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Auth State"
+   }
+  },
+  "/api/decisions": {
+   "post": {
+    "operationId": "decide_api_decisions_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Decision"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/DecisionResult"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Decide"
+   }
+  },
+  "/api/feeds": {
+   "get": {
+    "operationId": "feeds_api_feeds_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/FeedHealth"
+         },
+         "title": "Response Feeds Api Feeds Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Feeds"
+   }
+  },
+  "/api/me": {
+   "get": {
+    "operationId": "me_api_me_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Me"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Me"
+   }
+  },
+  "/api/proposals": {
+   "get": {
+    "operationId": "proposals_api_proposals_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/Proposal"
+         },
+         "title": "Response Proposals Api Proposals Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Proposals"
+   }
+  },
+  "/api/status": {
+   "get": {
+    "operationId": "status_api_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Status"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Status"
+   }
+  },
+  "/api/users": {
+   "get": {
+    "operationId": "users_api_users_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/UserRow"
+         },
+         "title": "Response Users Api Users Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Users"
+   }
+  },
+  "/api/users/disable": {
+   "post": {
+    "operationId": "disable_api_users_disable_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/UserRef"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Ok"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Disable"
+   }
+  },
+  "/api/users/role": {
+   "post": {
+    "operationId": "set_role_api_users_role_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RoleChange"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Ok"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Set Role"
+   }
+  }
+ }
+}

@@ -1,10 +1,13 @@
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from goldbot.api.app import create_app
 from goldbot.api.auth import totp_code
 from goldbot.telegram.approvals import ApprovalCenter, Proposal
+
+pytestmark = pytest.mark.integration
 
 
 def _secret_from_uri(uri: str) -> str:

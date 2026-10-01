@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from goldbot.data.synthetic import synthetic_ticks
 from goldbot.engine import ConstantModel, Engine, EngineConfig
@@ -9,6 +10,8 @@ from goldbot.execution.broker import Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.specialists import SPECIALISTS
 from goldbot.telegram.approvals import ApprovalCenter
+
+pytestmark = pytest.mark.integration
 
 
 def _run(approval_mode: str, tmp_path: Path, days: int = 5):
