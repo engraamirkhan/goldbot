@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pandas as pd
@@ -39,7 +40,7 @@ MIN_BARS_PER_FULL_MONTH = 15_000   # ~20 trading days x 1,380 minutes = 27,600; 
 MIN_BARS_PARTIAL_MONTH = 5_000     # below this a month is reported MISSING
 
 
-def month_range(year: int, today: dt.date | None = None):
+def month_range(year: int, today: dt.date | None = None) -> Iterator[tuple[dt.date, dt.date]]:
     """(first day, exclusive end) per month of `year` up to today."""
     today = today or dt.date.today()
     for m in range(1, 13):
@@ -50,7 +51,7 @@ def month_range(year: int, today: dt.date | None = None):
         yield start, min(end, today + dt.timedelta(days=1))
 
 
-def week_chunks(start: dt.date, end: dt.date, days: int = 7):
+def week_chunks(start: dt.date, end: dt.date, days: int = 7) -> Iterator[tuple[dt.date, dt.date]]:
     """Split [start, end) into chunks of at most `days`; chunks with no weekday (no gold trading) are skipped."""
     a = start
     while a < end:
@@ -134,6 +135,7 @@ def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 2) -> pd
         if (bid is None) != (ask is None) and a == attempts - 1:
             # one side never came back: impute it from the other (flagged) rather than lose the month
             have = bid if bid is not None else ask
+            assert have is not None
             bid, ask = (bid if bid is not None else have.iloc[0:0]), (ask if ask is not None else have.iloc[0:0])
         if bid is not None and ask is not None and len(bid) + len(ask) > 0:
             m = bid.merge(ask, on="ts_utc", suffixes=("_bid", "_ask"), how="inner")
@@ -177,6 +179,14 @@ def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 2) -> pd
     return None
 
 
+def _published_month(existing: pd.DataFrame, start: dt.date, end: dt.date) -> pd.DataFrame:
+    ts = existing["ts_utc"]
+    b = existing[(ts >= pd.Timestamp(start, tz="UTC")) & (ts < pd.Timestamp(end, tz="UTC"))]
+    b = b.drop(columns=["source"], errors="ignore").copy()
+    b["dq_flag"] = b["dq_flag"].fillna("") if "dq_flag" in b else ""
+    return b
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("year", type=int)
@@ -198,24 +208,17 @@ def main() -> int:
         k = f"{start:%Y-%m}"
         t0 = time.time()
         if k not in todo:
-            ts = existing["ts_utc"]
-            b = existing[(ts >= pd.Timestamp(start, tz="UTC")) & (ts < pd.Timestamp(end, tz="UTC"))].copy()
-            for c in ("source",):
-                if c in b:
-                    b = b.drop(columns=c)
-            b["dq_flag"] = b["dq_flag"].fillna("") if "dq_flag" in b else ""
-            rows.append((k, len(b), "kept", "0s"))
-            frames.append(b)
-            print(f"{k}: kept {len(b):,} bars", flush=True)
+            assert existing is not None   # months_to_fetch keeps a month only when a previous file has it
+            kept = _published_month(existing, start, end)
+            rows.append((k, len(kept), "kept", "0s"))
+            frames.append(kept)
+            print(f"{k}: kept {len(kept):,} bars", flush=True)
             continue
         b = month_bars(start, end, Path(args.tmp))
         if b is None and existing is not None:
             # download failed again: keep whatever was published before rather than lose it
-            ts = existing["ts_utc"]
-            old = existing[(ts >= pd.Timestamp(start, tz="UTC")) & (ts < pd.Timestamp(end, tz="UTC"))]
-            if len(old):
-                b = old.drop(columns=["source"], errors="ignore").copy()
-                b["dq_flag"] = b["dq_flag"].fillna("") if "dq_flag" in b else ""
+            old = _published_month(existing, start, end)
+            b = old if len(old) else None
         n = 0 if b is None else len(b)
         if b is None:
             status = "MISSING"
@@ -241,7 +244,7 @@ def main() -> int:
     out = out[[c for c in BAR_COLUMNS] + ["dq_flag"]]
     flags = out.pop("dq_flag").fillna("").astype(str)
     out, dq = check_bars(out)
-    out["dq_flag"] = [a if a else b for a, b in zip(flags.values, out["dq_flag"].values)]
+    out["dq_flag"] = [a if a else b for a, b in zip(flags.to_numpy(), out["dq_flag"].to_numpy())]
     out["source"] = "dukascopy"
     path = args.out or f"xauusd_1m_dukascopy_{args.year}.parquet"
     out.to_parquet(path, compression="zstd", index=False)

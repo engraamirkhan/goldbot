@@ -28,7 +28,7 @@ def main() -> None:
     ap.add_argument("--data-root", default=None)
     args = ap.parse_args()
     st = load_settings()
-    store = Store(args.data_root or st["data_root"])
+    store = Store(args.data_root or st.data_root)
     frames = []
     for f in args.files:
         if args.source == "dukascopy":

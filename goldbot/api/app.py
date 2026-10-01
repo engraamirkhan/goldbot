@@ -7,11 +7,12 @@ which are forwarded to the ApprovalCenter. The React app is served from web/dist
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 import json
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -19,7 +20,30 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
 from goldbot.api.auth import AuthStore, User, env_setup_code_hint, has_role
-from goldbot.api.schema import AccountSummary, AgentRow, Decision, FeedHealth, Proposal
+from goldbot.api.schema import (
+    AcceptRequest,
+    AcceptResponse,
+    AccountSummary,
+    AgentRow,
+    AuthState,
+    Decision,
+    DecisionResult,
+    FeedHealth,
+    InviteRequest,
+    InviteResponse,
+    LoginRequest,
+    LoginResponse,
+    Me,
+    Ok,
+    Proposal,
+    Role,
+    RoleChange,
+    SetupRequest,
+    Status,
+    TotpEnrolment,
+    UserRef,
+    UserRow,
+)
 from goldbot.telegram.approvals import ApprovalCenter
 from goldbot.telegram.approvals import Proposal as CoreProposal
 
@@ -62,7 +86,7 @@ class State:
 
 
 def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = None,
-               totp_verify=None, web_dist: str | Path = "web/dist") -> FastAPI:
+               totp_verify: Callable[[str], bool] | None = None, web_dist: str | Path = "web/dist") -> FastAPI:
     center = center or ApprovalCenter(set(), totp_verify=totp_verify)
     st = State(state_dir, center)
     app = FastAPI(title="goldbot api", version="0.2")
@@ -77,7 +101,7 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
             raise HTTPException(401, "login required")
         return u
 
-    def need(role: str):
+    def need(role: Role) -> Callable[[User], User]:
         def dep(u: User = Depends(auth)) -> User:
             if not has_role(u, role):
                 raise HTTPException(403, f"{role} role required")
@@ -86,74 +110,74 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
 
     # ------------------------------------------------------------- auth endpoints
     @app.get("/api/auth/state")
-    def auth_state():
-        return {"needs_setup": st.auth.setup_code is not None, "users": len(st.auth.users)}
+    def auth_state() -> AuthState:
+        return AuthState(needs_setup=st.auth.setup_code is not None, users=len(st.auth.users))
 
     @app.post("/api/auth/setup")
-    def setup(body: dict):
+    def setup(body: SetupRequest) -> TotpEnrolment:
         try:
-            uri = st.auth.bootstrap_owner(str(body.get("setup_code", "")), str(body["email"]), str(body["password"]))
-        except (PermissionError, KeyError) as exc:
-            raise HTTPException(403, str(exc))
-        return {"totp_uri": uri}
-
-    @app.post("/api/auth/login")
-    def login(body: dict):
-        try:
-            tok = st.auth.login(str(body.get("email", "")), str(body.get("password", "")), str(body.get("totp", "")))
+            uri = st.auth.bootstrap_owner(body.setup_code, body.email, body.password)
         except PermissionError as exc:
             raise HTTPException(403, str(exc))
-        u = st.auth.users[str(body["email"]).lower()]
-        return {"token": tok, "expires_in": 12 * 3600, "role": u.role, "email": u.email}
+        return TotpEnrolment(totp_uri=uri)
+
+    @app.post("/api/auth/login")
+    def login(body: LoginRequest) -> LoginResponse:
+        try:
+            tok = st.auth.login(body.email, body.password, body.totp)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        u = st.auth.users[body.email.lower()]
+        return LoginResponse(token=tok, expires_in=12 * 3600, role=u.role, email=u.email)
 
     @app.post("/api/auth/logout")
-    def logout(creds: HTTPAuthorizationCredentials = Depends(bearer)):
+    def logout(creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Ok:
         if creds:
             st.auth.logout(creds.credentials)
-        return {"ok": True}
+        return Ok()
 
     @app.post("/api/auth/invite")
-    def invite(body: dict, u: User = Depends(need("owner"))):
+    def invite(body: InviteRequest, u: User = Depends(need("owner"))) -> InviteResponse:
         try:
-            tok = st.auth.create_invite(u.email, str(body["email"]), str(body.get("role", "viewer")))
-        except (ValueError, PermissionError, KeyError) as exc:
-            raise HTTPException(400, str(exc))
-        return {"invite_token": tok, "expires_h": 72}
-
-    @app.post("/api/auth/accept")
-    def accept(body: dict):
-        try:
-            email, uri = st.auth.accept_invite(str(body.get("token", "")), str(body.get("password", "")))
+            tok = st.auth.create_invite(u.email, body.email, body.role)
         except (ValueError, PermissionError) as exc:
             raise HTTPException(400, str(exc))
-        return {"email": email, "totp_uri": uri}
+        return InviteResponse(invite_token=tok, expires_h=72)
+
+    @app.post("/api/auth/accept")
+    def accept(body: AcceptRequest) -> AcceptResponse:
+        try:
+            email, uri = st.auth.accept_invite(body.token, body.password)
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(400, str(exc))
+        return AcceptResponse(email=email, totp_uri=uri)
 
     @app.get("/api/users")
-    def users(u: User = Depends(need("owner"))):
-        return st.auth.list_users()
+    def users(u: User = Depends(need("owner"))) -> list[UserRow]:
+        return [UserRow.model_validate(r) for r in st.auth.list_users()]
 
     @app.post("/api/users/role")
-    def set_role(body: dict, u: User = Depends(need("owner"))):
+    def set_role(body: RoleChange, u: User = Depends(need("owner"))) -> Ok:
         try:
-            st.auth.set_role(u.email, str(body["email"]), str(body["role"]))
+            st.auth.set_role(u.email, body.email, body.role)
         except (ValueError, KeyError) as exc:
             raise HTTPException(400, str(exc))
-        return {"ok": True}
+        return Ok()
 
     @app.post("/api/users/disable")
-    def disable(body: dict, u: User = Depends(need("owner"))):
+    def disable(body: UserRef, u: User = Depends(need("owner"))) -> Ok:
         try:
-            st.auth.disable(u.email, str(body["email"]))
+            st.auth.disable(u.email, body.email)
         except (ValueError, KeyError) as exc:
             raise HTTPException(400, str(exc))
-        return {"ok": True}
+        return Ok()
 
     @app.get("/api/me")
-    def me(u: User = Depends(auth)):
-        return {"email": u.email, "role": u.role}
+    def me(u: User = Depends(auth)) -> Me:
+        return Me(email=u.email, role=u.role)
 
     @app.get("/api/accounts", response_model=list[AccountSummary])
-    def accounts(_=Depends(auth)):
+    def accounts(_: User = Depends(auth)) -> list[AccountSummary]:
         rows = []
         for e in st.engines():
             eq, d0, w0, hwm = e.get("equity", 0), e.get("day_start_equity", 0) or 1, e.get("week_start_equity", 0) or 1, e.get("balance_closed_hwm", 0) or 1
@@ -164,7 +188,7 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
         return rows
 
     @app.get("/api/proposals", response_model=list[Proposal])
-    def proposals(_=Depends(auth)):
+    def proposals(_: User = Depends(auth)) -> list[Proposal]:
         out = []
         for p in center.pending.values():
             out.append(Proposal(proposal_id=p.proposal_id, account_id=p.account_id, agent_id=p.agent_id,
@@ -174,22 +198,23 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
         return out
 
     @app.post("/api/decisions")
-    async def decide(d: Decision, u: User = Depends(need("approver"))):
+    async def decide(d: Decision, u: User = Depends(need("approver"))) -> DecisionResult:
         actor = next(iter(center.allowed), 0)   # the center's owner slot; the dashboard user is recorded in audit
         try:
             p = center.decide(d.proposal_id, actor, d.action == "approve", d.reason_code)
         except (KeyError, ValueError, PermissionError) as exc:
             raise HTTPException(400, str(exc))
-        st.auth.audit("decision", by=u.email, proposal=p.proposal_id, outcome=p.outcome.value, reason=p.reason_code)
-        await st.broadcast({"type": "decision", "proposal_id": p.proposal_id, "outcome": p.outcome.value})
-        return {"outcome": p.outcome.value}
+        outcome = p.outcome.value if p.outcome is not None else "PENDING"
+        st.auth.audit("decision", by=u.email, proposal=p.proposal_id, outcome=outcome, reason=p.reason_code)
+        await st.broadcast({"type": "decision", "proposal_id": p.proposal_id, "outcome": outcome})
+        return DecisionResult(outcome=outcome)
 
     @app.get("/api/agents", response_model=list[AgentRow])
-    def agents(_=Depends(auth)):
+    def agents(_: User = Depends(auth)) -> list[AgentRow]:
         return [AgentRow(**a) for a in st.agents()]
 
     @app.get("/api/feeds", response_model=list[FeedHealth])
-    def feeds(_=Depends(auth)):
+    def feeds(_: User = Depends(auth)) -> list[FeedHealth]:
         sup = st.supervisor()
         age = time.time() - sup.get("ts", 0) if sup else 1e9
         return [FeedHealth(account_id=e["account"], last_tick_age_s=e.get("last_tick_age_s", 1e9), spread_points=e.get("spread_points", 0),
@@ -197,11 +222,11 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
                            supervisor_heartbeat_age_s=age) for e in st.engines()]
 
     @app.get("/api/status")
-    def status():
-        return {"mode": center.mode, "halted": center.halted, "pending": len(center.pending), "supervisor": st.supervisor()}
+    def status() -> Status:
+        return Status(mode=center.mode, halted=center.halted, pending=len(center.pending), supervisor=st.supervisor())
 
     @app.websocket("/ws")
-    async def ws(websocket: WebSocket):
+    async def ws(websocket: WebSocket) -> None:
         await websocket.accept()
         st.ws_clients.add(websocket)
         try:
@@ -216,14 +241,14 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
         app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
         @app.get("/{path:path}")
-        def spa(path: str):
+        def spa(path: str) -> FileResponse:
             f = dist / path
             return FileResponse(f if f.is_file() else dist / "index.html")
 
     return app
 
 
-def make_core_proposal(**kw) -> CoreProposal:  # helper for engines/tests
+def make_core_proposal(**kw: Any) -> CoreProposal:  # helper for engines/tests
     return CoreProposal(**kw)
 
 

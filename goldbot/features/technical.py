@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from goldbot.features.registry import feature
+from goldbot.features.registry import FeatureCtx, feature
 
 
 def atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
@@ -64,7 +64,7 @@ def mfi(df: pd.DataFrame, n: int = 12) -> pd.Series:
 
 # --------------------------------------------------------------------------- returns & volatility
 @feature("returns", "volatility", lookback=96)
-def f_returns(df, ctx):
+def f_returns(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     c = np.log(df["close"])
     out = pd.DataFrame(index=df.index)
     for k in (1, 4, 16, 96):
@@ -73,7 +73,7 @@ def f_returns(df, ctx):
 
 
 @feature("atr", "volatility", lookback=200)
-def f_atr(df, ctx):
+def f_atr(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     a = atr(df, 14)
     out = pd.DataFrame({"atr14": a, "atr14_pct": a / df["close"]})
     out["atr_ratio_14_100"] = a / atr(df, 100)
@@ -81,7 +81,7 @@ def f_atr(df, ctx):
 
 
 @feature("realised_vol", "volatility", lookback=400)
-def f_realised_vol(df, ctx):
+def f_realised_vol(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     r = np.log(df["close"]).diff()
     out = pd.DataFrame(index=df.index)
     out["rv_20"] = r.rolling(20, min_periods=20).std()
@@ -90,14 +90,14 @@ def f_realised_vol(df, ctx):
     # vol regime tercile over the last 400 bars (0 low, 1 mid, 2 high), computed on history only
     out["vol_tercile"] = out["rv_20"].rolling(400, min_periods=100).apply(
         lambda x: 0 if x[-1] <= np.nanpercentile(x[:-1], 33) else (2 if x[-1] > np.nanpercentile(x[:-1], 67) else 1), raw=True)
-    hl = np.log(df["high"] / df["low"])
+    hl = pd.Series(np.log(df["high"] / df["low"]), index=df.index)
     out["parkinson_20"] = np.sqrt((hl ** 2).rolling(20, min_periods=20).mean() / (4 * np.log(2)))
     return out
 
 
 # --------------------------------------------------------------------------- moving averages
 @feature("moving_averages", "trend", lookback=300)
-def f_mas(df, ctx):
+def f_mas(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Several MA families and lengths; distances are in ATR so they compare across regimes."""
     a = atr(df, 14)
     c = df["close"]
@@ -114,7 +114,7 @@ def f_mas(df, ctx):
     bear = np.all([e[i] < e[i + 1] for i in range(4)], axis=0)
     out["ribbon_state"] = np.where(bull, 1, np.where(bear, -1, 0))
     out["ribbon_width_atr"] = (e[0] - e[-1]).abs() / a
-    out["bars_since_ribbon_flip"] = _bars_since_change(pd.Series(out["ribbon_state"].values, index=df.index))
+    out["bars_since_ribbon_flip"] = _bars_since_change(pd.Series(out["ribbon_state"].to_numpy(), index=df.index))
     out["sma50_ema50_cross"] = (sma(c, 50) - ema(c, 50)) / a
     return out
 
@@ -126,7 +126,7 @@ def _bars_since_change(s: pd.Series) -> pd.Series:
 
 
 @feature("trend_strength", "trend", lookback=200)
-def f_trend(df, ctx):
+def f_trend(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     out = pd.DataFrame(index=df.index)
     out["adx14"] = adx(df, 14)
     out["adx14_bucket"] = pd.cut(out["adx14"], [-1, 18, 25, 40, 200], labels=False)
@@ -138,7 +138,7 @@ def f_trend(df, ctx):
 
 # --------------------------------------------------------------------------- mean reversion
 @feature("mean_reversion", "mean_reversion", lookback=100)
-def f_mr(df, ctx):
+def f_mr(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     out = pd.DataFrame(index=df.index)
     c = df["close"]
     m, s = sma(c, 20), c.rolling(20, min_periods=20).std()
@@ -153,7 +153,7 @@ def f_mr(df, ctx):
 
 
 @feature("money_flow", "mean_reversion", lookback=50)
-def f_mfi(df, ctx):
+def f_mfi(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """KOG-MFI replica: MFI(12) with zones 20/40/60/80."""
     m = mfi(df, 12)
     out = pd.DataFrame({"mfi12": m})
@@ -165,7 +165,7 @@ def f_mfi(df, ctx):
 
 # --------------------------------------------------------------------------- breakout
 @feature("breakout", "breakout", lookback=100)
-def f_breakout(df, ctx):
+def f_breakout(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     out = pd.DataFrame(index=df.index)
     a = atr(df, 14)
     for n in (8, 24, 96):
@@ -180,7 +180,7 @@ def f_breakout(df, ctx):
 
 # --------------------------------------------------------------------------- microstructure
 @feature("microstructure", "microstructure", lookback=50)
-def f_micro(df, ctx):
+def f_micro(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     out = pd.DataFrame(index=df.index)
     out["spread_atr"] = df["spread"] / atr(df, 14)
     out["spread_rel_median_48"] = df["spread"] / df["spread"].rolling(48).median().replace(0, np.nan)

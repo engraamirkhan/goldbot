@@ -8,11 +8,10 @@ Also exposes the population view: each agent's weight = allocator family weight 
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from goldbot.base import Record
 
 
-@dataclass
-class Regime:
+class Regime(Record):
     adx_1h: float
     atr_1h_quartile: int        # 0 bottom .. 3 top, over 60 days
     vol_tercile: int            # 0 low, 1 mid, 2 high

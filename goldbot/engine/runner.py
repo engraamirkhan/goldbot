@@ -14,14 +14,15 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 import numpy as np
 import pandas as pd
+from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator
+from goldbot.base import Record
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.resample import mid, resample_bars, ticks_to_1m
@@ -42,18 +43,16 @@ class Model(Protocol):
     def predict(self, X: pd.DataFrame) -> np.ndarray: ...
 
 
-@dataclass
-class ConstantModel:
+class ConstantModel(Record):
     """Stand-in until a trained MetaLabelModel is loaded: returns a fixed probability."""
     p: float = 0.6
-    feature_names: list[str] = field(default_factory=list)
+    feature_names: list[str] = Field(default_factory=list)
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         return np.full(len(X), self.p)
 
 
-@dataclass
-class EngineConfig:
+class EngineConfig(Record):
     account_id: str
     broker_name: str
     mode: str = "paper"              # paper | demo | live (what the broker is); approvals are separate
@@ -69,8 +68,7 @@ class EngineConfig:
     owner_user_id: int = 0
 
 
-@dataclass
-class OpenTrade:
+class OpenTrade(Record):
     position_id: int
     agent_id: str
     side: int
@@ -174,8 +172,8 @@ class Engine:
             w = fam_w.get(agent.family, 0.0)
             mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, self.cfg.cost_atr)[0])
             price = last_tick.ask if side > 0 else last_tick.bid
-            intent = Intent(agent.agent_id, side, p, ls.target_atr, ls.stop_atr, float(a.iloc[last]), self.cfg.cost_atr,
-                            mult if mult > 0 else 0.0, price)
+            intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=self.cfg.cost_atr,
+                            multiplier=mult if mult > 0 else 0.0, price=price)
             if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, self.cfg.cost_atr) + 0.02:
                 decisions.append(self._record(agent, close_ts, p, mult, "below_threshold"))
                 continue
@@ -188,9 +186,9 @@ class Engine:
                 continue
             stop = price - side * gd.stop_distance
             target = price + side * ls.target_atr * float(a.iloc[last])
-            prop = Proposal(pid, self.cfg.account_id, agent.agent_id, side, gd.lots, price, stop, target, p,
-                            p * ls.target_atr - (1 - p) * ls.stop_atr - self.cfg.cost_atr, self.state.spread_points,
-                            self._top_features(model, feats), window_s=90)
+            prop = Proposal(proposal_id=pid, account_id=self.cfg.account_id, agent_id=agent.agent_id, side=side, lots=gd.lots, entry=price, stop=stop, target=target, p=p,
+                            ev_r=p * ls.target_atr - (1 - p) * ls.stop_atr - self.cfg.cost_atr, spread_points=self.state.spread_points,
+                            top_features=self._top_features(model, feats), window_s=90)
             self.pending[pid] = (intent, prop, agent)
             if self.cfg.approval_mode == "auto":
                 self._execute(prop, agent, gd.lots, stop, target)
@@ -221,13 +219,13 @@ class Engine:
 
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float) -> None:
         magic = self.cfg.magic_base + (abs(hash(agent.family)) % 100)
-        oi = OrderIntent(prop.proposal_id, self.cfg.symbol, prop.side, lots, round(stop, 2), round(target, 2), magic,
+        oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
         self.sent_ids.add(prop.proposal_id)   # written BEFORE sending: never double-send
         res = self.broker.place_order(oi)
         if res.ok and res.position_id is not None:
-            self.open[res.position_id] = OpenTrade(res.position_id, agent.agent_id, prop.side, res.filled_lots,
-                                                  pd.Timestamp.now('UTC'), agent.label_spec.max_bars)
+            self.open[res.position_id] = OpenTrade(position_id=res.position_id, agent_id=agent.agent_id, side=prop.side, lots=res.filled_lots,
+                                                  entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=agent.label_spec.max_bars)
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order", "ok": res.ok,
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots})
 
@@ -247,7 +245,7 @@ class Engine:
         # reconciliation: adopt orphans with our magic range
         for p in self.broker.positions():
             if p.position_id not in self.open and self.cfg.magic_base <= p.magic < self.cfg.magic_base + 100:
-                self.open[p.position_id] = OpenTrade(p.position_id, "orphan", p.side, p.lots, p.open_time_utc, 48)
+                self.open[p.position_id] = OpenTrade(position_id=p.position_id, agent_id="orphan", side=p.side, lots=p.lots, entry_bar_ts=p.open_time_utc, max_bars=48)
                 self.decisions.append({"ts": time.time(), "action": "adopt_orphan", "position": p.position_id})
 
     # ------------------------------------------------------------------ helpers

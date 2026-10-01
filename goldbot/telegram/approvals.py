@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import hmac
 import time
-from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
+
+from pydantic import Field
+
+from goldbot.base import Record
 
 REASON_CODES = ("news", "cost", "discretion", "duplicate", "other")
 TOTP_COMMANDS = {"/rearm", "/mode", "/set"}
@@ -25,8 +28,7 @@ class Outcome(str, Enum):
     EXPIRED = "EXPIRED_UNAPPROVED"
 
 
-@dataclass
-class Proposal:
+class Proposal(Record):
     proposal_id: str
     account_id: str
     agent_id: str
@@ -39,7 +41,7 @@ class Proposal:
     ev_r: float
     spread_points: float
     top_features: list[tuple[str, float]]
-    created: float = field(default_factory=time.time)
+    created: float = Field(default_factory=time.time)
     window_s: int = 90
     outcome: Outcome | None = None
     reason_code: str | None = None

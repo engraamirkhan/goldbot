@@ -3,7 +3,7 @@ Phase 1 fills the routers; the shapes are fixed here so the frontend can start i
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -65,3 +65,91 @@ class FeedHealth(BaseModel):
     terminal_connected: bool
     webhook_p99_latency_s: float | None
     supervisor_heartbeat_age_s: float
+
+
+# ----------------------------------------------------------------------------- auth and users
+Role = Literal["owner", "approver", "viewer"]
+
+
+class AuthState(BaseModel):
+    needs_setup: bool
+    users: int
+
+
+class SetupRequest(BaseModel):
+    setup_code: str = ""
+    email: str
+    password: str
+
+
+class TotpEnrolment(BaseModel):
+    totp_uri: str
+
+
+class LoginRequest(BaseModel):
+    email: str = ""
+    password: str = ""
+    totp: str = ""
+
+
+class LoginResponse(BaseModel):
+    token: str
+    expires_in: int
+    role: Role
+    email: str
+
+
+class InviteRequest(BaseModel):
+    email: str
+    role: Role = "viewer"
+
+
+class InviteResponse(BaseModel):
+    invite_token: str
+    expires_h: int
+
+
+class AcceptRequest(BaseModel):
+    token: str = ""
+    password: str = ""
+
+
+class AcceptResponse(BaseModel):
+    email: str
+    totp_uri: str
+
+
+class Me(BaseModel):
+    email: str
+    role: Role
+
+
+class UserRow(BaseModel):
+    email: str
+    role: Role
+    enabled: bool
+    last_login: float | None
+
+
+class RoleChange(BaseModel):
+    email: str
+    role: Role
+
+
+class UserRef(BaseModel):
+    email: str
+
+
+class Ok(BaseModel):
+    ok: bool = True
+
+
+class DecisionResult(BaseModel):
+    outcome: str
+
+
+class Status(BaseModel):
+    mode: str
+    halted: bool
+    pending: int
+    supervisor: dict[str, Any]

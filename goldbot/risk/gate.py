@@ -6,11 +6,12 @@ All state is explicit and serialisable so the engine can reconcile after a resta
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from enum import Enum
 
 import pandas as pd
+from pydantic import Field
 
+from goldbot.base import Record
 from goldbot.data.timeutil import risk_day
 
 
@@ -20,8 +21,7 @@ class Stage(str, Enum):
     HALTED = "halted"            # 12%: no entries until /rearm + 10 days positive shadow + 30 days propose
 
 
-@dataclass
-class RiskLimits:
+class RiskLimits(Record):
     risk_per_trade: float = 0.005
     max_risk_per_trade: float = 0.01
     multiplier_bounds: tuple[float, float] = (0.25, 1.5)
@@ -39,8 +39,7 @@ class RiskLimits:
     leverage_cap: float = 20.0           # FCA retail gold
 
 
-@dataclass
-class AccountState:
+class AccountState(Record):
     equity: float
     balance_closed_hwm: float
     day_start_equity: float
@@ -55,8 +54,7 @@ class AccountState:
     dq_error: bool = False
 
 
-@dataclass
-class Intent:
+class Intent(Record):
     agent_id: str
     side: int
     p: float
@@ -73,11 +71,10 @@ class Intent:
     stops_level_points: float = 0.0
 
 
-@dataclass
-class GateDecision:
+class GateDecision(Record):
     allowed: bool
     lots: float = 0.0
-    reasons: list[str] = field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
     risk_fraction: float = 0.0
     stop_distance: float = 0.0
 
@@ -138,7 +135,7 @@ class RiskGate:
         if intent.target_atr < L.min_target_over_cost * intent.cost_atr:
             reasons.append("target_below_cost_floor")
         if reasons:
-            return GateDecision(False, reasons=reasons)
+            return GateDecision(allowed=False, reasons=reasons)
 
         # sizing
         lo, hi = L.multiplier_bounds
@@ -154,14 +151,14 @@ class RiskGate:
         lots = min(lots, intent.volume_max)
         realised_risk = lots * stop_distance * intent.contract_oz / st.equity
         if realised_risk > 1.2 * risk_frac * mult and lots_raw < intent.volume_min:
-            return GateDecision(False, reasons=["min_lot_exceeds_risk"], stop_distance=stop_distance)
+            return GateDecision(allowed=False, reasons=["min_lot_exceeds_risk"], stop_distance=stop_distance)
         # margin at FCA cap
         notional = lots * intent.contract_oz * intent.price
         margin_needed = notional / L.leverage_cap
         level_after = st.equity / max(st.margin_used + margin_needed, 1e-9)
         if level_after < L.margin_level_floor:
-            return GateDecision(False, reasons=["margin_level_floor"], stop_distance=stop_distance)
-        return GateDecision(True, lots=round(lots, 2), risk_fraction=realised_risk, stop_distance=stop_distance)
+            return GateDecision(allowed=False, reasons=["margin_level_floor"], stop_distance=stop_distance)
+        return GateDecision(allowed=True, lots=round(lots, 2), risk_fraction=realised_risk, stop_distance=stop_distance)
 
 
 def new_day(st: AccountState, now_utc: pd.Timestamp, last_reset: pd.Timestamp | None) -> bool:

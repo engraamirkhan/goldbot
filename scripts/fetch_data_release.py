@@ -28,7 +28,7 @@ def main() -> None:
     hdr = {"Accept": "application/vnd.github+json", **({"Authorization": f"Bearer {token}"} if token else {})}
     rel = json.loads(urllib.request.urlopen(urllib.request.Request(
         f"https://api.github.com/repos/{REPO}/releases/tags/data-v1", headers=hdr)).read())
-    store = Store(load_settings()["data_root"])
+    store = Store(load_settings().data_root)
     frames = []
     for a in rel["assets"]:
         name = a["name"]

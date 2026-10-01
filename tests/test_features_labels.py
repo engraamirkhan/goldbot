@@ -8,7 +8,7 @@ from goldbot.features import FEATURES, build_features, families
 from goldbot.features.mtf import merge_higher_tf
 from goldbot.features.technical import atr
 from goldbot.labels import BarrierSpec, triple_barrier, uniqueness_weights
-from goldbot.specialists import AgentIdentity, SPECIALISTS
+from goldbot.specialists import SPECIALISTS, AgentIdentity
 
 
 @pytest.fixture(scope="module")
@@ -45,7 +45,8 @@ def test_support_resistance_uses_only_confirmed_swings(frames):
     m = mid(b15).reset_index(drop=True)
     X = build_features(m, ["support_resistance"], ctx={"swing_lag": 5})
     # the first level can appear no earlier than bar 2*lag (need a full centered window + confirmation)
-    first = X["levels_within_1atr"].gt(0).idxmax() if X["levels_within_1atr"].gt(0).any() else None
+    hits = np.flatnonzero(X["levels_within_1atr"].gt(0).to_numpy())
+    first = int(hits[0]) if len(hits) else None
     assert first is None or first >= 10
 
 
@@ -70,14 +71,14 @@ def test_triple_barrier_charges_spread_and_respects_order(frames):
     m = mid(b)
     a = atr(m, 14)
     sig = pd.DataFrame({"idx": np.arange(50, len(b) - 40, 37), "side": np.where(np.arange(50, len(b) - 40, 37) % 2 == 0, 1, -1)})
-    spec = BarrierSpec(1.5, 1.0, 16)
+    spec = BarrierSpec(target_atr=1.5, stop_atr=1.0, max_bars=16)
     lab = triple_barrier(b, sig, spec, a)
     assert set(lab["label"].unique()) <= {-1, 0, 1}
     assert (lab["t_exit"] > lab["idx"]).all()
     assert (lab["bars_held"] <= 17).all()
     # longs enter at ask, shorts at bid
     longs = lab[lab["side"] == 1]
-    assert np.allclose(longs["entry"].values, b.loc[longs["idx"], "ask_close"].values)
+    assert np.allclose(longs["entry"].to_numpy(), b.loc[longs["idx"], "ask_close"].to_numpy())
     w = uniqueness_weights(lab, len(b))
     assert len(w) == len(lab) and np.isclose(w.mean(), 1.0)
 
@@ -96,7 +97,7 @@ def test_session_open_specialist_produces_candidates_at_open_times(frames):
 
 
 def test_agent_identity_clone_must_differ():
-    ident = AgentIdentity("session_open", {"target_atr": 1.5})
+    ident = AgentIdentity(family="session_open", config={"target_atr": 1.5})
     child = ident.mutate({"target_atr": 1.75})
     assert child.parent_id == ident.agent_id and child.generation == 1 and child.agent_id != ident.agent_id
     with pytest.raises(ValueError):

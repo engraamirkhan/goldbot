@@ -22,10 +22,15 @@ import os
 import secrets
 import struct
 import time
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
-ROLES = ("owner", "approver", "viewer")
+from pydantic import Field
+
+from goldbot.api.schema import Role
+from goldbot.base import Record
+
+ROLES: tuple[Role, ...] = ("owner", "approver", "viewer")
 ROLE_RANK = {r: i for i, r in enumerate(reversed(ROLES))}  # viewer 0, approver 1, owner 2
 
 
@@ -69,22 +74,20 @@ def verify_password(pw: str, stored: str) -> bool:
 
 
 # ----------------------------------------------------------------------------- store
-@dataclass
-class User:
+class User(Record):
     email: str
-    role: str
+    role: Role
     password_hash: str
     totp_secret: str
     enabled: bool = True
-    created: float = field(default_factory=time.time)
+    created: float = Field(default_factory=time.time)
     last_login: float | None = None
 
 
-@dataclass
-class Invite:
+class Invite(Record):
     token_hash: str
     email: str
-    role: str
+    role: Role
     expires: float
     invited_by: str
 
@@ -111,14 +114,14 @@ class AuthStore:
             self.invites = {k: Invite(**v) for k, v in d.get("invites", {}).items()}
 
     def _save(self) -> None:
-        self.path.write_text(json.dumps({"users": {e: asdict(u) for e, u in self.users.items()},
-                                         "invites": {k: asdict(v) for k, v in self.invites.items()}}, indent=1))
+        self.path.write_text(json.dumps({"users": {e: u.model_dump() for e, u in self.users.items()},
+                                         "invites": {k: v.model_dump() for k, v in self.invites.items()}}, indent=1))
         try:
             self.path.chmod(0o600)
         except OSError:
             pass
 
-    def audit(self, event: str, **kw) -> None:
+    def audit(self, event: str, **kw: Any) -> None:
         with open(self.audit_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps({"ts": time.time(), "event": event, **kw}) + "\n")
 
@@ -127,19 +130,19 @@ class AuthStore:
         if self.users or not self.setup_code or not hmac.compare_digest(setup_code, self.setup_code):
             raise PermissionError("setup not available or bad code")
         secret = new_totp_secret()
-        self.users[email.lower()] = User(email.lower(), "owner", hash_password(password), secret)
+        self.users[email.lower()] = User(email=email.lower(), role="owner", password_hash=hash_password(password), totp_secret=secret)
         self.setup_code = None
         self._save()
         self.audit("bootstrap_owner", email=email)
         return totp_uri(secret, email)
 
-    def create_invite(self, by_email: str, email: str, role: str, ttl_h: int = 72) -> str:
+    def create_invite(self, by_email: str, email: str, role: Role, ttl_h: int = 72) -> str:
         self._require(by_email, "owner")
         if role not in ROLES:
             raise ValueError("bad role")
         token = secrets.token_urlsafe(24)
         th = hashlib.sha256(token.encode()).hexdigest()
-        self.invites[th] = Invite(th, email.lower(), role, time.time() + ttl_h * 3600, by_email)
+        self.invites[th] = Invite(token_hash=th, email=email.lower(), role=role, expires=time.time() + ttl_h * 3600, invited_by=by_email)
         self._save()
         self.audit("invite", by=by_email, email=email, role=role)
         return token
@@ -152,7 +155,7 @@ class AuthStore:
         if len(password) < 12:
             raise ValueError("password must be at least 12 characters")
         secret = new_totp_secret()
-        self.users[inv.email] = User(inv.email, inv.role, hash_password(password), secret)
+        self.users[inv.email] = User(email=inv.email, role=inv.role, password_hash=hash_password(password), totp_secret=secret)
         del self.invites[th]
         self._save()
         self.audit("accept_invite", email=inv.email, role=inv.role)
@@ -167,7 +170,7 @@ class AuthStore:
             raise PermissionError("too many attempts; wait 15 minutes")
         u = self.users.get(email)
         ok = u is not None and u.enabled and verify_password(password, u.password_hash) and totp_verify(u.totp_secret, code)
-        if not ok:
+        if u is None or not ok:
             self.failed[email] = recent + [time.time()]
             self.audit("login_failed", email=email)
             raise PermissionError("invalid credentials")
@@ -193,13 +196,13 @@ class AuthStore:
         self.sessions.pop(token, None)
 
     # ------------------------------------------------------------------ admin
-    def _require(self, email: str, role: str) -> User:
+    def _require(self, email: str, role: Role) -> User:
         u = self.users.get(email.lower())
         if u is None or ROLE_RANK[u.role] < ROLE_RANK[role]:
             raise PermissionError(f"{role} role required")
         return u
 
-    def set_role(self, by_email: str, email: str, role: str) -> None:
+    def set_role(self, by_email: str, email: str, role: Role) -> None:
         self._require(by_email, "owner")
         if role not in ROLES:
             raise ValueError("bad role")
@@ -223,7 +226,7 @@ class AuthStore:
         return [{"email": u.email, "role": u.role, "enabled": u.enabled, "last_login": u.last_login} for u in self.users.values()]
 
 
-def has_role(u: User | None, role: str) -> bool:
+def has_role(u: User | None, role: Role) -> bool:
     return u is not None and ROLE_RANK[u.role] >= ROLE_RANK[role]
 
 

@@ -48,7 +48,7 @@ def main(years: int = 3) -> None:
     # leakage check on the labelled frame
     m, X = build_decision_frame(b15, {"h1": b1h, "d1": b1d})
     lab = res.oof
-    feats = X.drop(columns=["ts_utc"]).iloc[lab["idx"].values].reset_index(drop=True)
+    feats = X.drop(columns=["ts_utc"]).iloc[lab["idx"].to_numpy()].reset_index(drop=True)
     cols = [c for c in feats.columns if feats[c].notna().mean() > 0.8][:40]
     auc = shuffle_test_auc(feats.fillna(0), lab["target_hit"].astype(int), cols)
     print(f"shuffle-test AUC (should be ~0.5): {auc:.3f}")

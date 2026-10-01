@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import itertools
 from collections import deque
+from collections.abc import AsyncIterator
 
 import numpy as np
 import pandas as pd
@@ -42,47 +43,47 @@ class PaperBroker:
         return self._tick
 
     def symbol_info(self, symbol: str) -> SymbolInfo:
-        return SymbolInfo(symbol, 2, self.point, self.contract, 0.01, 0.01, 50.0, 0.0, ["IOC"], True,
+        return SymbolInfo(name=symbol, digits=2, point=self.point, contract_size=self.contract, volume_min=0.01, volume_step=0.01, volume_max=50.0, stops_level_points=0.0, filling_modes=["IOC"], trade_allowed=True,
                           commission_per_lot_side=self.commission)
 
     def account(self) -> AccountInfo:
         float_pl = sum(p.profit for p in self._positions.values())
-        return AccountInfo(0, self._balance + float_pl, self._balance, 0.0, self._balance + float_pl, 20, "USD", "paper")
+        return AccountInfo(login=0, equity=self._balance + float_pl, balance=self._balance, margin=0.0, margin_free=self._balance + float_pl, leverage=20, currency="USD", server="paper")
 
-    def get_bars(self, symbol, tf, n):  # bars come from the store in paper mode
+    def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:  # bars come from the store in paper mode
         return pd.DataFrame()
 
-    async def stream_ticks(self, symbol):  # pragma: no cover - driven by on_tick in tests
+    def stream_ticks(self, symbol: str) -> AsyncIterator[Tick]:  # pragma: no cover - driven by on_tick in tests
         raise NotImplementedError
 
     # ------------------------------------------------------------------ orders
     def place_order(self, intent: OrderIntent) -> OrderResult:
         if intent.client_order_id in self._pending_ids:
-            return OrderResult(False, 10027, None, None, 0.0, None, "duplicate client_order_id")
-        t = self._tick
+            return OrderResult(ok=False, retcode=10027, order_id=None, position_id=None, filled_lots=0.0, price=None, message="duplicate client_order_id")
+        t = self.last_tick(intent.symbol)
         half_sd = float(np.std(self._spreads)) / 2 if len(self._spreads) > 5 else 0.0
         price = (t.ask + half_sd) if intent.side > 0 else (t.bid - half_sd)
         pid = next(self._ids)
-        self._positions[pid] = Position(pid, intent.symbol, intent.side, intent.lots, price, intent.sl, intent.tp,
-                                        intent.magic, intent.comment, t.ts_utc, 0.0)
+        self._positions[pid] = Position(position_id=pid, symbol=intent.symbol, side=intent.side, lots=intent.lots, open_price=price, sl=intent.sl, tp=intent.tp,
+                                        magic=intent.magic, comment=intent.comment, open_time_utc=t.ts_utc, profit=0.0)
         self._balance -= self.commission * intent.lots
         self._pending_ids.add(intent.client_order_id)
         self._deals.append({"ts_utc": t.ts_utc, "position_id": pid, "type": "entry", "price": price, "lots": intent.lots,
                             "comment": intent.comment, "client_order_id": intent.client_order_id})
-        return OrderResult(True, 10009, pid, pid, intent.lots, price, "filled")
+        return OrderResult(ok=True, retcode=10009, order_id=pid, position_id=pid, filled_lots=intent.lots, price=price, message="filled")
 
-    def modify(self, position_id, sl, tp):
+    def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult:
         p = self._positions.get(position_id)
         if p is None:
-            return OrderResult(False, 10013, None, position_id, 0.0, None, "no such position")
+            return OrderResult(ok=False, retcode=10013, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="no such position")
         p.sl, p.tp = (sl if sl is not None else p.sl), (tp if tp is not None else p.tp)
-        return OrderResult(True, 10009, None, position_id, p.lots, None, "modified")
+        return OrderResult(ok=True, retcode=10009, order_id=None, position_id=position_id, filled_lots=p.lots, price=None, message="modified")
 
-    def close(self, position_id, lots=None):
+    def close(self, position_id: int, lots: float | None = None) -> OrderResult:
         p = self._positions.get(position_id)
         if p is None:
-            return OrderResult(False, 10013, None, position_id, 0.0, None, "no such position")
-        t = self._tick
+            return OrderResult(ok=False, retcode=10013, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="no such position")
+        t = self.last_tick(p.symbol)
         price = t.bid if p.side > 0 else t.ask
         return self._close_at(p, price, "close")
 
@@ -90,9 +91,9 @@ class PaperBroker:
         pnl = p.side * (price - p.open_price) * p.lots * self.contract - self.commission * p.lots
         self._balance += pnl
         del self._positions[p.position_id]
-        self._deals.append({"ts_utc": self._tick.ts_utc, "position_id": p.position_id, "type": reason, "price": price,
+        self._deals.append({"ts_utc": self.last_tick(p.symbol).ts_utc, "position_id": p.position_id, "type": reason, "price": price,
                             "lots": p.lots, "pnl": pnl, "comment": p.comment})
-        return OrderResult(True, 10009, None, p.position_id, p.lots, price, reason)
+        return OrderResult(ok=True, retcode=10009, order_id=None, position_id=p.position_id, filled_lots=p.lots, price=price, message=reason)
 
     def _check_exits(self, t: Tick) -> None:
         for p in list(self._positions.values()):
@@ -108,12 +109,12 @@ class PaperBroker:
                 elif p.tp is not None and t.ask <= p.tp:
                     self._close_at(p, p.tp, "target")
 
-    def positions(self, magic_prefix=None):
+    def positions(self, magic_prefix: int | None = None) -> list[Position]:
         ps = list(self._positions.values())
         if magic_prefix is not None:
             ps = [p for p in ps if str(p.magic).startswith(str(magic_prefix))]
         return ps
 
-    def deals_since(self, since_utc):
+    def deals_since(self, since_utc: pd.Timestamp) -> pd.DataFrame:
         d = pd.DataFrame(self._deals)
         return d[d["ts_utc"] >= since_utc] if not d.empty else d

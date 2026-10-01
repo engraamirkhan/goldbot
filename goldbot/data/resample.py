@@ -47,8 +47,8 @@ def ticks_to_1m(ticks: pd.DataFrame, sessions: SessionTable = DEFAULT_SESSIONS) 
 def _agg(bars: pd.DataFrame, key: pd.DatetimeIndex | pd.Series) -> pd.DataFrame:
     b = bars.copy()
     b["_k"] = np.asarray(key)
-    b["_w"] = np.maximum(b["tick_count"].values, 1)
-    b["_sw"] = b["spread_mean"].values * b["_w"].values
+    b["_w"] = np.maximum(b["tick_count"].to_numpy(), 1)
+    b["_sw"] = b["spread_mean"].to_numpy() * b["_w"].to_numpy()
     g = b.groupby("_k", sort=True)
     out = pd.DataFrame({
         "bid_open": g["bid_open"].first(), "bid_high": g["bid_high"].max(), "bid_low": g["bid_low"].min(),

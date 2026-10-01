@@ -4,11 +4,12 @@ bars -> features (+ higher-TF context) -> candidates -> labels -> purged walk-fo
 same feature and model objects."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from goldbot.base import Record
 from goldbot.data.resample import mid
 from goldbot.features import FEATURES, build_features
 from goldbot.features.mtf import merge_higher_tf
@@ -22,8 +23,7 @@ from goldbot.specialists.base import Specialist
 DEFAULT_FEATURE_NAMES = [n for n in FEATURES if n not in ("macro", "calendar_events")]
 
 
-@dataclass
-class ResearchResult:
+class ResearchResult(Record):
     agent_id: str
     n_candidates: int
     n_folds: int
@@ -57,9 +57,9 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
     a = atr(m, 14)
     labels = triple_barrier(bars_dec, cands, spec.label_spec, a)
     if labels.empty:
-        return ResearchResult(spec.agent_id, 0, 0, labels, {"n": 0}, X.attrs["feature_version"], None)
-    labels["weight"] = uniqueness_weights(labels, len(bars_dec)).values
-    feats = X.drop(columns=["ts_utc"]).iloc[labels["idx"].values].reset_index(drop=True)
+        return ResearchResult(agent_id=spec.agent_id, n_candidates=0, n_folds=0, oof=labels, metrics={"n": 0}, feature_version=X.attrs["feature_version"], importance=None)
+    labels["weight"] = uniqueness_weights(labels, len(bars_dec)).to_numpy()
+    feats = X.drop(columns=["ts_utc"]).iloc[labels["idx"].to_numpy()].reset_index(drop=True)
     feats = feats.replace([np.inf, -np.inf], np.nan)
     cols = model_features or [c for c in feats.columns if feats[c].notna().mean() > 0.8][:40]
     y = labels["target_hit"].astype(int)
@@ -67,24 +67,24 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
     oof_pred = np.full(len(labels), np.nan)
     last_model = None
     for f in folds:
-        mdl = MetaLabelModel(cols, feature_version=X.attrs["feature_version"]).fit(
+        mdl = MetaLabelModel(feature_names=cols, feature_version=X.attrs["feature_version"]).fit(
             feats.iloc[f.train_idx], y.iloc[f.train_idx], labels["weight"].iloc[f.train_idx])
         oof_pred[f.test_idx] = mdl.predict_raw(feats.iloc[f.test_idx])
         last_model = mdl
     oof = labels.copy()
     oof["p_raw"] = oof_pred
     scored = oof.dropna(subset=["p_raw"])
-    metrics = {"n_candidates": int(len(labels)), "n_folds": len(folds)}
+    metrics: dict[str, Any] = {"n_candidates": int(len(labels)), "n_folds": len(folds)}
     if len(scored) > 20 and last_model is not None:
-        last_model.calibrate(scored["p_raw"].values, scored["target_hit"].values)
+        last_model.calibrate(scored["p_raw"].to_numpy(), scored["target_hit"].to_numpy())
         oof["p"] = np.where(np.isnan(oof_pred), np.nan, last_model.predict_raw(feats))
-        oof.loc[scored.index, "p"] = last_model.calibrator.predict(scored["p_raw"].values)
+        oof.loc[scored.index.to_numpy(), "p"] = last_model.calibrated(scored["p_raw"].to_numpy())
         # baseline: take every candidate; model: take candidates with p > breakeven+margin
         from goldbot.research.metrics import breakeven_prob
         ls = spec.label_spec
         cost_atr = float(np.nanmedian(m["spread"] / a)) * 2 if len(m) else 0.1
         thr = breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02
-        taken = scored[last_model.calibrator.predict(scored["p_raw"].values) > thr]
+        taken = scored[last_model.calibrated(scored["p_raw"].to_numpy()) > thr]
         metrics.update({
             "threshold": float(thr),
             "all_candidates": summarize(scored, trades_per_year, n_trials),
@@ -92,4 +92,4 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
             "shuffle_auc": None,
         })
     imp = last_model.importance() if last_model is not None else None
-    return ResearchResult(spec.agent_id, len(labels), len(folds), oof, metrics, X.attrs["feature_version"], imp)
+    return ResearchResult(agent_id=spec.agent_id, n_candidates=len(labels), n_folds=len(folds), oof=oof, metrics=metrics, feature_version=X.attrs["feature_version"], importance=imp)

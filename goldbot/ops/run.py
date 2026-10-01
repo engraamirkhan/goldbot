@@ -45,11 +45,11 @@ def run_engine(account_id: str) -> None:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
         log.warning("not on Windows: running %s against the paper broker", account_id)
-    center = ApprovalCenter(set(settings.get("telegram", {}).get("allowed_user_ids", [])))
+    center = ApprovalCenter(set(settings.telegram.allowed_user_ids))
     agents = [SPECIALISTS["session_open"]()]
-    eng = Engine(EngineConfig(account_id, acc.broker, mode=acc.mode, approval_mode="propose", symbol=acc.symbol,
+    eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, approval_mode="propose", symbol=acc.symbol,
                               magic_base=acc.magic_base, state_dir="state"), broker, agents,
-                 {"session_open": ConstantModel(0.0)}, center)  # p=0 until a trained model is loaded by the scheduler
+                 {"session_open": ConstantModel(p=0.0)}, center)  # p=0 until a trained model is loaded by the scheduler
     log.info("engine %s started (%s)", account_id, type(broker).__name__)
     while True:
         try:
@@ -62,12 +62,14 @@ def run_engine(account_id: str) -> None:
 
 def run_api() -> None:
     import uvicorn
+
     from goldbot.api.app import create_app
     uvicorn.run(create_app("state"), host="127.0.0.1", port=8787)
 
 
 def run_webhook() -> None:
     import uvicorn
+
     from goldbot.ops import accounts
     from goldbot.webhook.app import create_app
     secret = accounts.get_credential("tradingview-webhook-secret", "TradingView webhook shared secret")

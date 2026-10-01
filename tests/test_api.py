@@ -17,8 +17,8 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
         "week_start_equity": 10000, "balance_closed_hwm": 10000, "stage": "normal", "open_positions": 1,
         "account_class": "raw", "last_tick_age_s": 0.4, "spread_points": 21, "terminal_connected": True, "ts": 0}))
     center = ApprovalCenter({111})
-    center.propose(Proposal("p1", "icm-demo", "session_open-g0-x", 1, 0.12, 2400, 2396, 2406, 0.61, 0.35, 22, [("a", 0.1)]))
-    center.propose(Proposal("p2", "icm-demo", "session_open-g0-x", -1, 0.10, 2400, 2404, 2394, 0.58, 0.20, 22, [("a", 0.1)]))
+    center.propose(Proposal(proposal_id="p1", account_id="icm-demo", agent_id="session_open-g0-x", side=1, lots=0.12, entry=2400, stop=2396, target=2406, p=0.61, ev_r=0.35, spread_points=22, top_features=[("a", 0.1)]))
+    center.propose(Proposal(proposal_id="p2", account_id="icm-demo", agent_id="session_open-g0-x", side=-1, lots=0.10, entry=2400, stop=2404, target=2394, p=0.58, ev_r=0.20, spread_points=22, top_features=[("a", 0.1)]))
     app = create_app(tmp_path, center, web_dist=tmp_path / "nodist")
     c = TestClient(app)
     st = app.state.st

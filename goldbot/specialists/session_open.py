@@ -8,6 +8,7 @@ Target 1.5 ATR(15m), stop 1.0 ATR, time limit 16 bars, hard flat 1 h before the 
 """
 from __future__ import annotations
 
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -35,9 +36,9 @@ class SessionOpenSpecialist(Specialist):
     @property
     def label_spec(self) -> BarrierSpec:
         c = self.config
-        return BarrierSpec(c["target_atr"], c["stop_atr"], c["max_bars"], name="session_open")
+        return BarrierSpec(target_atr=c["target_atr"], stop_atr=c["stop_atr"], max_bars=c["max_bars"], name="session_open")
 
-    def exit_policy(self):
+    def exit_policy(self) -> dict[str, Any]:
         return {"type": "barrier", "hard_flat_minutes_before_next_session": 60}
 
     def _open_mask(self, ts: pd.DatetimeIndex) -> np.ndarray:
@@ -59,7 +60,7 @@ class SessionOpenSpecialist(Specialist):
         body = mid_bars["close"] - mid_bars["open"]
         rng = (mid_bars["high"] - mid_bars["low"]).replace(0, np.nan)
         body_pct = (body / rng).abs()
-        sign = np.sign(body)
+        sign = pd.Series(np.sign(body), index=mid_bars.index)
         # all k bars same sign and decent bodies
         same = pd.Series(True, index=mid_bars.index)
         strong = pd.Series(True, index=mid_bars.index)
@@ -73,6 +74,6 @@ class SessionOpenSpecialist(Specialist):
         quiet = asia_rng < self.config["asia_range_max_atr_d"] * atr_d
         quiet = quiet.fillna(True)  # no daily context yet -> do not block (feature may be absent in early bars)
         hit = decision & same & strong & quiet & (sign != 0)
-        out = pd.DataFrame({"idx": np.flatnonzero(hit.values), "side": sign[hit].astype(int).values})
-        out["ts_utc"] = ts[hit.values]
+        out = pd.DataFrame({"idx": np.flatnonzero(hit.to_numpy()), "side": sign[hit].astype(int).to_numpy()})
+        out["ts_utc"] = ts[hit.to_numpy()]
         return out

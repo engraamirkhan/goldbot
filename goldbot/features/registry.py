@@ -8,32 +8,34 @@ from the model's. Adding a feature = one decorated function; nothing else change
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 import pandas as pd
+from pydantic import Field
 
-FeatureFn = Callable[[pd.DataFrame, dict], pd.DataFrame]
+from goldbot.base import Record
+
+FeatureCtx = dict[str, Any]   # optional inputs: events, macro frame, blackout minutes
+FeatureFn = Callable[[pd.DataFrame, FeatureCtx], pd.DataFrame]
 
 
-@dataclass
-class FeatureSpec:
+class FeatureSpec(Record):
     name: str
     family: str
     fn: FeatureFn
     version: str = "1"
     lookback: int = 0
-    tags: tuple[str, ...] = field(default_factory=tuple)
+    tags: tuple[str, ...] = Field(default_factory=tuple)
 
 
 FEATURES: dict[str, FeatureSpec] = {}
 
 
-def feature(name: str, family: str, *, version: str = "1", lookback: int = 0, tags: tuple[str, ...] = ()):
+def feature(name: str, family: str, *, version: str = "1", lookback: int = 0, tags: tuple[str, ...] = ()) -> Callable[[FeatureFn], FeatureFn]:
     def deco(fn: FeatureFn) -> FeatureFn:
         if name in FEATURES:
             raise ValueError(f"feature {name!r} already registered")
-        FEATURES[name] = FeatureSpec(name, family, fn, version, lookback, tags)
+        FEATURES[name] = FeatureSpec(name=name, family=family, fn=fn, version=version, lookback=lookback, tags=tags)
         return fn
     return deco
 
@@ -44,11 +46,11 @@ def feature_version(names: list[str]) -> str:
     return "f-" + hashlib.sha1(key.encode()).hexdigest()[:10]
 
 
-def build_features(mid_bars: pd.DataFrame, names: list[str] | None = None, ctx: dict | None = None) -> pd.DataFrame:
+def build_features(mid_bars: pd.DataFrame, names: list[str] | None = None, ctx: FeatureCtx | None = None) -> pd.DataFrame:
     """Compute the named features on mid bars (columns: ts_utc, open, high, low, close, spread, tick_count)."""
     ctx = ctx or {}
     names = names or list(FEATURES)
-    parts = [pd.DataFrame({"ts_utc": pd.to_datetime(mid_bars["ts_utc"].values, utc=True)}, index=mid_bars.index)]
+    parts = [pd.DataFrame({"ts_utc": pd.DatetimeIndex(pd.to_datetime(mid_bars["ts_utc"], utc=True))}, index=mid_bars.index)]
     for n in names:
         cols = FEATURES[n].fn(mid_bars, ctx)
         cols.index = mid_bars.index

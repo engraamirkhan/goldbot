@@ -3,16 +3,19 @@ out-of-fold predictions. The interface takes any estimator with fit/predict_prob
 types can be trialled through the same walk-forward later."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import pandas as pd
+from pydantic import Field
 from sklearn.isotonic import IsotonicRegression
+
+from goldbot.base import Record
 
 try:
     import lightgbm as lgb
 except ImportError:  # pragma: no cover
-    lgb = None
+    lgb = None  # type: ignore[assignment]
 
 DEFAULT_PARAMS = dict(
     objective="binary", learning_rate=0.03, num_leaves=15, min_child_samples=40, feature_fraction=0.7,
@@ -20,12 +23,11 @@ DEFAULT_PARAMS = dict(
 )
 
 
-@dataclass
-class MetaLabelModel:
+class MetaLabelModel(Record):
     feature_names: list[str]
-    params: dict = field(default_factory=lambda: dict(DEFAULT_PARAMS))
+    params: dict[str, Any] = Field(default_factory=lambda: dict(DEFAULT_PARAMS))
     feature_version: str = ""
-    model: object = None
+    model: Any = None   # fitted LGBMClassifier
     calibrator: IsotonicRegression | None = None
 
     def fit(self, X: pd.DataFrame, y: pd.Series, w: pd.Series | None = None) -> "MetaLabelModel":
@@ -34,7 +36,7 @@ class MetaLabelModel:
         if lgb is None:
             raise RuntimeError("lightgbm not installed")
         self.model = lgb.LGBMClassifier(**self.params)
-        self.model.fit(X[self.feature_names], y, sample_weight=None if w is None else w.values)
+        self.model.fit(X[self.feature_names], y, sample_weight=None if w is None else w.to_numpy())
         return self
 
     def predict_raw(self, X: pd.DataFrame) -> np.ndarray:
@@ -44,9 +46,12 @@ class MetaLabelModel:
         self.calibrator = IsotonicRegression(out_of_bounds="clip").fit(oof_pred, oof_y)
         return self
 
+    def calibrated(self, p_raw: np.ndarray) -> np.ndarray:
+        """Map raw scores through the isotonic calibrator (identity until calibrate() has run)."""
+        return self.calibrator.predict(p_raw) if self.calibrator is not None else p_raw
+
     def predict(self, X: pd.DataFrame) -> np.ndarray:
-        p = self.predict_raw(X)
-        return self.calibrator.predict(p) if self.calibrator is not None else p
+        return self.calibrated(self.predict_raw(X))
 
     def importance(self) -> pd.Series:
         return pd.Series(self.model.booster_.feature_importance("gain"), index=self.feature_names).sort_values(ascending=False)
@@ -58,5 +63,5 @@ def shuffle_test_auc(X: pd.DataFrame, y: pd.Series, feature_names: list[str], se
     y_shift = y.shift(1).bfill().astype(int)
     n = len(X)
     cut = int(n * 0.7)
-    m = MetaLabelModel(feature_names).fit(X.iloc[:cut], y_shift.iloc[:cut])
+    m = MetaLabelModel(feature_names=feature_names).fit(X.iloc[:cut], y_shift.iloc[:cut])
     return float(roc_auc_score(y_shift.iloc[cut:], m.predict_raw(X.iloc[cut:])))

@@ -5,16 +5,15 @@ position on a bar carrying an error flag.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 import pandas as pd
 
+from goldbot.base import Record
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
+from goldbot.data.timeutil import epoch_ns
 
 
-@dataclass
-class DQEvent:
+class DQEvent(Record):
     ts_utc: pd.Timestamp
     check: str
     severity: str  # "warning" | "error"
@@ -32,28 +31,28 @@ def check_bars(bars: pd.DataFrame, *, tf_seconds: int = 60, sessions: SessionTab
 
     dup = b["ts_utc"].duplicated(keep="last")
     if dup.any():
-        events.append(DQEvent(ts[dup.values][0], "duplicate_ts", "error", f"{int(dup.sum())} duplicate bar timestamps"))
+        events.append(DQEvent(ts_utc=ts[dup.to_numpy()][0], check="duplicate_ts", severity="error", detail=f"{int(dup.sum())} duplicate bar timestamps"))
         b.loc[dup, "dq_flag"] = "error:duplicate"
 
     bad_spread = (b["ask_close"] < b["bid_close"]) | (b["spread_mean"] < 0)
     if bad_spread.any():
-        events.append(DQEvent(ts[bad_spread.values][0], "bid_gt_ask", "error", f"{int(bad_spread.sum())} bars with bid>ask"))
+        events.append(DQEvent(ts_utc=ts[bad_spread.to_numpy()][0], check="bid_gt_ask", severity="error", detail=f"{int(bad_spread.sum())} bars with bid>ask"))
         b.loc[bad_spread, "dq_flag"] = "error:bid_gt_ask"
 
-    mono = np.diff(ts.asi8) <= 0
+    mono = np.diff(epoch_ns(ts)) <= 0
     if mono.any():
-        events.append(DQEvent(ts[1:][mono][0], "non_monotonic", "error", "timestamps not increasing"))
+        events.append(DQEvent(ts_utc=ts[1:][mono][0], check="non_monotonic", severity="error", detail="timestamps not increasing"))
 
     # gaps inside open sessions
-    gap = np.diff(ts.asi8) / 1e9
+    gap = np.diff(epoch_ns(ts)) / 1e9
     big = gap > tf_seconds * max_gap_bars
     if big.any():
-        for i in np.flatnonzero(big):
+        for i in (int(j) for j in np.flatnonzero(big)):
             # only a problem if the market was open throughout
             probe = pd.date_range(ts[i], ts[i + 1], freq=f"{tf_seconds}s", inclusive="neither")
             if len(probe) and sessions.is_open(probe).all():
-                events.append(DQEvent(ts[i], "gap_in_session", "warning", f"{int(gap[i] // tf_seconds)} missing bars after {ts[i]}"))
-                b.loc[i, "dq_flag"] = "warning:gap"
+                events.append(DQEvent(ts_utc=ts[i], check="gap_in_session", severity="warning", detail=f"{int(gap[i] // tf_seconds)} missing bars after {ts[i]}"))
+                b.at[i, "dq_flag"] = "warning:gap"
 
     # spikes: |log return| > k sigma of trailing 60 bars
     mid = (b["bid_close"] + b["ask_close"]) / 2
@@ -61,9 +60,10 @@ def check_bars(bars: pd.DataFrame, *, tf_seconds: int = 60, sessions: SessionTab
     sigma = r.shift(1).rolling(60, min_periods=20).std()  # trailing, excluding the bar under test
     spike = (r.abs() > spike_sigma * sigma) & sigma.notna()
     if spike.any():
-        for i in np.flatnonzero(spike.values):
-            events.append(DQEvent(ts[i], "spike", "warning", f"return {r.iloc[i]:.4f} vs sigma {sigma.iloc[i]:.5f}"))
-            b.loc[i, "dq_flag"] = (b.loc[i, "dq_flag"] + ";" if b.loc[i, "dq_flag"] else "") + "warning:spike"
+        for i in (int(j) for j in np.flatnonzero(spike.to_numpy())):
+            events.append(DQEvent(ts_utc=ts[i], check="spike", severity="warning", detail=f"return {r.iloc[i]:.4f} vs sigma {sigma.iloc[i]:.5f}"))
+            prev = str(b.at[i, "dq_flag"])
+            b.at[i, "dq_flag"] = (prev + ";" if prev else "") + "warning:spike"
 
     return b, events
 
@@ -78,4 +78,4 @@ def stale_feed(last_tick_utc: pd.Timestamp, now_utc: pd.Timestamp, *, limit_seco
 def events_frame(events: list[DQEvent]) -> pd.DataFrame:
     if not events:
         return pd.DataFrame(columns=["ts_utc", "check", "severity", "detail"])
-    return pd.DataFrame([e.__dict__ for e in events])
+    return pd.DataFrame([e.model_dump() for e in events])

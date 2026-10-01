@@ -16,11 +16,11 @@ def _run(approval_mode: str, tmp_path: Path, days: int = 5):
     pb = PaperBroker(equity=10_000)
     center = ApprovalCenter({111})
     spec = SPECIALISTS["session_open"](min_body_pct=0.0, asia_range_max_atr_d=99.0)  # permissive for the test
-    eng = Engine(EngineConfig("icm-demo", "icm", approval_mode=approval_mode, state_dir=str(tmp_path), owner_user_id=111),
-                 pb, [spec], {"session_open": ConstantModel(0.65)}, center)
+    eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", approval_mode=approval_mode, state_dir=str(tmp_path), owner_user_id=111),
+                 pb, [spec], {"session_open": ConstantModel(p=0.65)}, center)
     decisions = []
-    for row in ticks.itertuples(index=False):
-        decisions += eng.on_tick(Tick(row.ts_utc, row.bid, row.ask))
+    for ts, bid, ask in zip(ticks["ts_utc"], ticks["bid"].to_numpy(float), ticks["ask"].to_numpy(float)):
+        decisions += eng.on_tick(Tick(ts_utc=pd.Timestamp(ts), bid=float(bid), ask=float(ask)))
         # approve everything that gets proposed, like an owner tapping Approve
         if approval_mode == "propose":
             for pid in list(center.pending):
