@@ -47,6 +47,8 @@ def ticks_to_1m(ticks: pd.DataFrame, sessions: SessionTable = DEFAULT_SESSIONS) 
 def _agg(bars: pd.DataFrame, key: pd.DatetimeIndex | pd.Series) -> pd.DataFrame:
     b = bars.copy()
     b["_k"] = np.asarray(key)
+    b["_w"] = np.maximum(b["tick_count"].values, 1)
+    b["_sw"] = b["spread_mean"].values * b["_w"].values
     g = b.groupby("_k", sort=True)
     out = pd.DataFrame({
         "bid_open": g["bid_open"].first(), "bid_high": g["bid_high"].max(), "bid_low": g["bid_low"].min(),
@@ -54,7 +56,7 @@ def _agg(bars: pd.DataFrame, key: pd.DatetimeIndex | pd.Series) -> pd.DataFrame:
         "ask_open": g["ask_open"].first(), "ask_high": g["ask_high"].max(), "ask_low": g["ask_low"].min(),
         "ask_close": g["ask_close"].last(),
         "tick_count": g["tick_count"].sum(),
-        "spread_mean": (g.apply(lambda x: np.average(x["spread_mean"], weights=np.maximum(x["tick_count"], 1)))),
+        "spread_mean": g["_sw"].sum() / g["_w"].sum(),
         "spread_max": g["spread_max"].max(),
         "_last_minute": g["ts_utc"].last(),
     })

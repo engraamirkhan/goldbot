@@ -48,13 +48,12 @@ def build_features(mid_bars: pd.DataFrame, names: list[str] | None = None, ctx: 
     """Compute the named features on mid bars (columns: ts_utc, open, high, low, close, spread, tick_count)."""
     ctx = ctx or {}
     names = names or list(FEATURES)
-    out = pd.DataFrame(index=mid_bars.index)
-    out["ts_utc"] = pd.to_datetime(mid_bars["ts_utc"].values, utc=True)
+    parts = [pd.DataFrame({"ts_utc": pd.to_datetime(mid_bars["ts_utc"].values, utc=True)}, index=mid_bars.index)]
     for n in names:
-        spec = FEATURES[n]
-        cols = spec.fn(mid_bars, ctx)
-        for c in cols.columns:
-            out[c] = cols[c].values
+        cols = FEATURES[n].fn(mid_bars, ctx)
+        cols.index = mid_bars.index
+        parts.append(cols)
+    out = pd.concat(parts, axis=1)
     out.attrs["feature_version"] = feature_version(names)
     out.attrs["features"] = list(names)
     return out
