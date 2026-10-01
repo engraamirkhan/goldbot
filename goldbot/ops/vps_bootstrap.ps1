@@ -54,3 +54,10 @@ foreach ($s in $svcs) {
   nssm set $s.name Start SERVICE_AUTO_START
 }
 Write-Host "Installed. Log in to each MT5 terminal once (demo accounts), then: nssm start goldbot-supervisor; nssm start goldbot-engine-icm ..."
+
+# ---- Public HTTPS access from any device (no VPN): Cloudflare Tunnel in front of the API (port 8787).
+# Free Cloudflare account + a domain (or a free *.cfargotunnel.com hostname). The tunnel token is entered
+# ONCE by the owner on the VPS (it is a secret): `cloudflared service install <TOKEN>`. The API enforces
+# login (email + password + authenticator) and roles for everyone, including on the public URL.
+winget install -e --id Cloudflare.cloudflared --silent --accept-package-agreements --accept-source-agreements
+Write-Host "Then: cloudflared service install <tunnel token>  (from the Cloudflare Zero Trust dashboard; route the hostname to http://localhost:8787)"

@@ -10,7 +10,6 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import os
-import secrets
 import time
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
+from goldbot.api.auth import AuthStore, User, env_setup_code_hint, has_role
 from goldbot.api.schema import AccountSummary, AgentRow, Decision, FeedHealth, Proposal
 from goldbot.telegram.approvals import ApprovalCenter
 from goldbot.telegram.approvals import Proposal as CoreProposal
@@ -30,7 +30,7 @@ class State:
     def __init__(self, state_dir: str | Path, center: ApprovalCenter):
         self.dir = Path(state_dir)
         self.center = center
-        self.sessions: dict[str, float] = {}
+        self.auth = AuthStore(self.dir)
         self.ws_clients: set[WebSocket] = set()
 
     def engines(self) -> list[dict]:
@@ -65,22 +65,92 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
                totp_verify=None, web_dist: str | Path = "web/dist") -> FastAPI:
     center = center or ApprovalCenter(set(), totp_verify=totp_verify)
     st = State(state_dir, center)
-    app = FastAPI(title="goldbot api", version="0.1")
+    app = FastAPI(title="goldbot api", version="0.2")
     app.state.st = st
+    hint = env_setup_code_hint(st.auth)
+    if hint:
+        print(hint, flush=True)
 
-    def auth(creds: HTTPAuthorizationCredentials = Depends(bearer)) -> str:
-        if creds is None or creds.credentials not in st.sessions or st.sessions[creds.credentials] < time.time():
+    def auth(creds: HTTPAuthorizationCredentials = Depends(bearer)) -> User:
+        u = st.auth.session_user(creds.credentials if creds else None)
+        if u is None:
             raise HTTPException(401, "login required")
-        return creds.credentials
+        return u
 
-    @app.post("/api/login")
+    def need(role: str):
+        def dep(u: User = Depends(auth)) -> User:
+            if not has_role(u, role):
+                raise HTTPException(403, f"{role} role required")
+            return u
+        return dep
+
+    # ------------------------------------------------------------- auth endpoints
+    @app.get("/api/auth/state")
+    def auth_state():
+        return {"needs_setup": st.auth.setup_code is not None, "users": len(st.auth.users)}
+
+    @app.post("/api/auth/setup")
+    def setup(body: dict):
+        try:
+            uri = st.auth.bootstrap_owner(str(body.get("setup_code", "")), str(body["email"]), str(body["password"]))
+        except (PermissionError, KeyError) as exc:
+            raise HTTPException(403, str(exc))
+        return {"totp_uri": uri}
+
+    @app.post("/api/auth/login")
     def login(body: dict):
-        code = str(body.get("totp", ""))
-        if not (totp_verify and totp_verify(code)):
-            raise HTTPException(403, "bad code")
-        tok = secrets.token_urlsafe(32)
-        st.sessions[tok] = time.time() + 12 * 3600
-        return {"token": tok, "expires_in": 12 * 3600}
+        try:
+            tok = st.auth.login(str(body.get("email", "")), str(body.get("password", "")), str(body.get("totp", "")))
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        u = st.auth.users[str(body["email"]).lower()]
+        return {"token": tok, "expires_in": 12 * 3600, "role": u.role, "email": u.email}
+
+    @app.post("/api/auth/logout")
+    def logout(creds: HTTPAuthorizationCredentials = Depends(bearer)):
+        if creds:
+            st.auth.logout(creds.credentials)
+        return {"ok": True}
+
+    @app.post("/api/auth/invite")
+    def invite(body: dict, u: User = Depends(need("owner"))):
+        try:
+            tok = st.auth.create_invite(u.email, str(body["email"]), str(body.get("role", "viewer")))
+        except (ValueError, PermissionError, KeyError) as exc:
+            raise HTTPException(400, str(exc))
+        return {"invite_token": tok, "expires_h": 72}
+
+    @app.post("/api/auth/accept")
+    def accept(body: dict):
+        try:
+            email, uri = st.auth.accept_invite(str(body.get("token", "")), str(body.get("password", "")))
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(400, str(exc))
+        return {"email": email, "totp_uri": uri}
+
+    @app.get("/api/users")
+    def users(u: User = Depends(need("owner"))):
+        return st.auth.list_users()
+
+    @app.post("/api/users/role")
+    def set_role(body: dict, u: User = Depends(need("owner"))):
+        try:
+            st.auth.set_role(u.email, str(body["email"]), str(body["role"]))
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True}
+
+    @app.post("/api/users/disable")
+    def disable(body: dict, u: User = Depends(need("owner"))):
+        try:
+            st.auth.disable(u.email, str(body["email"]))
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True}
+
+    @app.get("/api/me")
+    def me(u: User = Depends(auth)):
+        return {"email": u.email, "role": u.role}
 
     @app.get("/api/accounts", response_model=list[AccountSummary])
     def accounts(_=Depends(auth)):
@@ -104,12 +174,13 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
         return out
 
     @app.post("/api/decisions")
-    async def decide(d: Decision, _=Depends(auth)):
-        owner = next(iter(center.allowed), 0)
+    async def decide(d: Decision, u: User = Depends(need("approver"))):
+        actor = next(iter(center.allowed), 0)   # the center's owner slot; the dashboard user is recorded in audit
         try:
-            p = center.decide(d.proposal_id, owner, d.action == "approve", d.reason_code)
+            p = center.decide(d.proposal_id, actor, d.action == "approve", d.reason_code)
         except (KeyError, ValueError, PermissionError) as exc:
             raise HTTPException(400, str(exc))
+        st.auth.audit("decision", by=u.email, proposal=p.proposal_id, outcome=p.outcome.value, reason=p.reason_code)
         await st.broadcast({"type": "decision", "proposal_id": p.proposal_id, "outcome": p.outcome.value})
         return {"outcome": p.outcome.value}
 

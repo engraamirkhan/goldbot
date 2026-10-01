@@ -23,3 +23,8 @@ dl { display: grid; grid-template-columns: repeat(6, auto); gap: 4px 12px; margi
 .login input { width: 100%; padding: 10px; font-size: 18px; letter-spacing: 0.2em; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
 .login button { padding: 10px; border-radius: 6px; border: 0; background: var(--accent); color: white; font-size: 15px; }
 tr.retired { color: var(--muted); }
+
+.who { margin-left: auto; font-size: 13px; } button.link { background: none; border: 0; color: var(--muted); cursor: pointer; }
+.mono { font-family: ui-monospace, monospace; word-break: break-all; }
+form.inline { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; } form.inline input, form.inline select, table select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
+form.inline button { padding: 6px 12px; border-radius: 6px; border: 0; background: var(--accent); color: white; }

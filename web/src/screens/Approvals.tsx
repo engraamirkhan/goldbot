@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ReasonCode } from "../lib/api";
+import { api, hasRole, ReasonCode } from "../lib/api";
 
 const REASONS: ReasonCode[] = ["news", "cost", "discretion", "duplicate", "other"];
 
@@ -24,12 +24,12 @@ export function Approvals() {
               <dt>p</dt><dd>{p.p.toFixed(2)}</dd><dt>EV</dt><dd>{p.ev_r.toFixed(2)}R</dd><dt>Spread</dt><dd>{p.spread_points.toFixed(0)}pt</dd>
             </dl>
             <p className="muted">{p.agent_id} · {p.top_features.slice(0, 3).map(([n, v]) => `${n} ${v >= 0 ? "+" : ""}${v.toFixed(2)}`).join(", ")}</p>
-            <div className="actions">
+            {hasRole("approver") ? <div className="actions">
               <button className="ok" onClick={() => m.mutate({ id: p.proposal_id, action: "approve" })}>Approve</button>
               {REASONS.map((r) => (
                 <button key={r} onClick={() => m.mutate({ id: p.proposal_id, action: "reject", reason: r })}>Reject: {r}</button>
               ))}
-            </div>
+            </div> : <p className="muted">Viewer role: you can watch, not approve.</p>}
             {p.tradingview_url && <a href={p.tradingview_url} target="_blank" rel="noreferrer">Open chart in TradingView</a>}
           </article>
         );

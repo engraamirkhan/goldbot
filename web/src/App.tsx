@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { hasToken, liveSocket } from "./lib/api";
+import { api, currentUser, hasRole, hasToken, liveSocket, setToken } from "./lib/api";
 import { Login } from "./screens/Login";
 import { Overview } from "./screens/Overview";
 import { Approvals } from "./screens/Approvals";
 import { Agents } from "./screens/Agents";
 import { Feeds } from "./screens/Feeds";
+import { Users } from "./screens/Users";
 
-const TABS = ["Overview", "Approvals", "Agents", "Feeds"] as const;
+const TABS = ["Overview", "Approvals", "Agents", "Feeds", "Users"] as const;
 type Tab = (typeof TABS)[number];
 
 export function App() {
@@ -29,16 +30,19 @@ export function App() {
       <header>
         <h1>goldbot</h1>
         <nav>
-          {TABS.map((t) => (
+          {TABS.filter((t) => t !== "Users" || hasRole("owner")).map((t) => (
             <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>
           ))}
         </nav>
+        <span className="muted who">{currentUser()?.email} · {currentUser()?.role}</span>
+        <button className="link" onClick={async () => { try { await api.logout(); } catch {} setToken(null); setAuthed(false); }}>Sign out</button>
       </header>
       <main>
         {tab === "Overview" && <Overview />}
         {tab === "Approvals" && <Approvals />}
         {tab === "Agents" && <Agents />}
         {tab === "Feeds" && <Feeds />}
+        {tab === "Users" && hasRole("owner") && <Users />}
       </main>
     </div>
   );
