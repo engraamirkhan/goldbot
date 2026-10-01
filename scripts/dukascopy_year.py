@@ -184,6 +184,7 @@ def main() -> int:
     ap.add_argument("--tmp", default="raw/dukascopy")
     ap.add_argument("--report", default=None)
     ap.add_argument("--existing", default=None, help="previously published Parquet for this year; complete months are kept")
+    ap.add_argument("--refetch-all", action="store_true", help="download every month; --existing is only a fallback")
     args = ap.parse_args()
     months = list(month_range(args.year))
     existing = None
@@ -191,7 +192,7 @@ def main() -> int:
         existing = pd.read_parquet(args.existing)
         existing["ts_utc"] = pd.to_datetime(existing["ts_utc"], utc=True)
         print(f"existing: {len(existing):,} bars from {args.existing}", flush=True)
-    todo = months_to_fetch(existing, months)
+    todo = {f"{m:%Y-%m}" for m, _ in months} if args.refetch_all else months_to_fetch(existing, months)
     frames, rows = [], []
     for start, end in months:
         k = f"{start:%Y-%m}"

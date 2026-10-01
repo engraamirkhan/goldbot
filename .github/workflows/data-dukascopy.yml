@@ -7,7 +7,7 @@ on:
     inputs:
       from_year: { description: "first year", default: "2010" }
       to_year:   { description: "last year (inclusive)", default: "2026" }
-      full_refresh: { description: "ignore the published files and download every month again", type: boolean, default: false }
+      full_refresh: { description: "download every month again (published bars stay as fallback)", type: boolean, default: false }
   schedule:
     - cron: "17 3 * * 6"   # Saturdays 03:17 UTC: refresh the current year
 permissions:
@@ -42,19 +42,17 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
       - run: pip install -e .
-      - name: fetch the previously published year (complete months are kept, only gaps are downloaded)
+      - name: fetch the previously published year (complete months are kept unless full_refresh)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p prev
-          if [ "${{ inputs.full_refresh }}" != "true" ]; then
-            gh release download data-v1 -p xauusd_1m_dukascopy_${{ matrix.year }}.parquet -D prev || echo "no previous file"
-          fi
+          gh release download data-v1 -p xauusd_1m_dukascopy_${{ matrix.year }}.parquet -D prev || echo "no previous file"
       - name: download and build 1m bars for ${{ matrix.year }}
         run: |
           set -o pipefail
           python scripts/dukascopy_year.py ${{ matrix.year }} --report coverage-${{ matrix.year }}.md \
-            --existing prev/xauusd_1m_dukascopy_${{ matrix.year }}.parquet 2>&1 | tee report-${{ matrix.year }}.txt
+            --existing prev/xauusd_1m_dukascopy_${{ matrix.year }}.parquet ${{ inputs.full_refresh == true && '--refetch-all' || '' }} 2>&1 | tee report-${{ matrix.year }}.txt
       - name: publish to release data-v1
         if: always()
         env:
