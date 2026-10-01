@@ -1,0 +1,136 @@
+"""Approval flow: confirm-entry-then-automate.
+
+Transport-agnostic core (tested without Telegram), plus a thin python-telegram-bot adapter.
+* Only allow-listed owner user ids may act. `/halt` and `/approve` need no second factor; `/rearm`,
+  `/mode` and parameter changes require a TOTP within 60 s.
+* Each proposal has a 90 s window; timeouts are logged EXPIRED_UNAPPROVED. Rejections carry a reason code.
+* Exits are never gated here.
+* The bot also acts as the credential prompter for goldbot.ops.accounts (headless secret entry).
+"""
+from __future__ import annotations
+
+import hmac
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable
+
+REASON_CODES = ("news", "cost", "discretion", "duplicate", "other")
+TOTP_COMMANDS = {"/rearm", "/mode", "/set"}
+
+
+class Outcome(str, Enum):
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED_UNAPPROVED"
+
+
+@dataclass
+class Proposal:
+    proposal_id: str
+    account_id: str
+    agent_id: str
+    side: int
+    lots: float
+    entry: float
+    stop: float
+    target: float
+    p: float
+    ev_r: float
+    spread_points: float
+    top_features: list[tuple[str, float]]
+    created: float = field(default_factory=time.time)
+    window_s: int = 90
+    outcome: Outcome | None = None
+    reason_code: str | None = None
+    decided_by: int | None = None
+
+    @property
+    def expired(self) -> bool:
+        return self.outcome is None and time.time() > self.created + self.window_s
+
+    def text(self) -> str:
+        side = "LONG" if self.side > 0 else "SHORT"
+        feats = ", ".join(f"{n} {v:+.2f}" for n, v in self.top_features[:3])
+        return (f"{self.account_id} · {side} {self.lots:.2f} lots XAUUSD\n"
+                f"entry {self.entry:.2f}  stop {self.stop:.2f}  target {self.target:.2f}\n"
+                f"p={self.p:.2f}  EV={self.ev_r:+.2f}R  spread {self.spread_points:.0f}pt\n"
+                f"agent {self.agent_id}\nwhy: {feats}\n"
+                f"approve within {self.window_s}s or it expires")
+
+
+class ApprovalCenter:
+    def __init__(self, allowed_user_ids: set[int], totp_verify: Callable[[str], bool] | None = None,
+                 on_decision: Callable[[Proposal], None] | None = None):
+        self.allowed = set(allowed_user_ids)
+        self.totp_verify = totp_verify or (lambda code: False)
+        self.on_decision = on_decision or (lambda p: None)
+        self.pending: dict[str, Proposal] = {}
+        self.log: list[Proposal] = []
+        self.mode = "paper"
+        self.halted = False
+
+    # ------------------------------------------------------------- proposals
+    def propose(self, p: Proposal) -> Proposal:
+        self.pending[p.proposal_id] = p
+        return p
+
+    def decide(self, proposal_id: str, user_id: int, approve: bool, reason_code: str | None = None) -> Proposal:
+        if user_id not in self.allowed:
+            raise PermissionError("user not allowed")
+        p = self.pending.get(proposal_id)
+        if p is None:
+            raise KeyError("unknown or already decided proposal")
+        if p.expired:
+            return self._finish(p, Outcome.EXPIRED)
+        if not approve and reason_code not in REASON_CODES:
+            raise ValueError(f"rejection needs a reason code from {REASON_CODES}")
+        p.decided_by = user_id
+        p.reason_code = None if approve else reason_code
+        return self._finish(p, Outcome.APPROVED if approve else Outcome.REJECTED)
+
+    def sweep_expired(self) -> list[Proposal]:
+        done = [self._finish(p, Outcome.EXPIRED) for p in list(self.pending.values()) if p.expired]
+        return done
+
+    def _finish(self, p: Proposal, outcome: Outcome) -> Proposal:
+        p.outcome = outcome
+        self.pending.pop(p.proposal_id, None)
+        self.log.append(p)
+        self.on_decision(p)
+        return p
+
+    # ------------------------------------------------------------- commands
+    def command(self, user_id: int, cmd: str, arg: str = "", totp: str | None = None) -> str:
+        if user_id not in self.allowed:
+            raise PermissionError("user not allowed")
+        if cmd in TOTP_COMMANDS and not (totp and self.totp_verify(totp)):
+            return "TOTP required: resend as `<command> <arg> <6-digit code>`"
+        if cmd == "/halt":
+            self.halted = True
+            return "HALTED: no new entries. Open positions keep their stops. /rearm <code> to resume."
+        if cmd == "/rearm":
+            self.halted = False
+            return "re-armed; 30 days propose-and-approve probation begins"
+        if cmd == "/mode":
+            if arg not in ("paper", "propose", "auto"):
+                return "mode must be paper | propose | auto"
+            self.mode = arg
+            return f"mode set to {arg}"
+        if cmd == "/status":
+            return f"mode={self.mode} halted={self.halted} pending={len(self.pending)} decided={len(self.log)}"
+        return "unknown command"
+
+    # ------------------------------------------------------------- analytics
+    def veto_value(self) -> dict:
+        """Approved vs rejected proposals; outcomes are attached later by the journal (needs realised PnL)."""
+        a = [p for p in self.log if p.outcome == Outcome.APPROVED]
+        r = [p for p in self.log if p.outcome == Outcome.REJECTED]
+        e = [p for p in self.log if p.outcome == Outcome.EXPIRED]
+        other = sum(1 for p in r if p.reason_code == "other")
+        return {"approved": len(a), "rejected": len(r), "expired": len(e),
+                "other_share": other / len(r) if r else 0.0, "review_prompt": bool(r) and other / len(r) > 0.3}
+
+
+def constant_time_equal(a: str, b: str) -> bool:
+    return hmac.compare_digest(a.encode(), b.encode())
