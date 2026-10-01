@@ -1,0 +1,25 @@
+:root { color-scheme: light dark; --bg: #f7f7f5; --fg: #1a1a1a; --muted: #6b6b6b; --line: #ddd; --ok: #1f7a4d; --bad: #b3261e; --accent: #b8860b; font-family: ui-sans-serif, system-ui, sans-serif; }
+@media (prefers-color-scheme: dark) { :root { --bg: #121212; --fg: #eaeaea; --muted: #9a9a9a; --line: #333; } }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+.shell header { display: flex; align-items: center; gap: 24px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.shell h1, .login h1 { font-size: 18px; margin: 0; letter-spacing: 0.04em; }
+nav button { background: none; border: 0; padding: 8px 12px; color: var(--muted); cursor: pointer; font-size: 14px; }
+nav button.active { color: var(--fg); border-bottom: 2px solid var(--accent); }
+main { padding: 16px; max-width: 1200px; margin: 0 auto; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+.tile span { color: var(--muted); font-size: 12px; } .tile strong { font-size: 20px; }
+.tile.bad, tr.bad { color: var(--bad); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; } th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; }
+.cards { display: grid; gap: 12px; } .card { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; padding: 12px; }
+.card.long { border-left-color: var(--ok); } .card.short { border-left-color: var(--bad); }
+.card header { display: flex; gap: 16px; align-items: baseline; }
+dl { display: grid; grid-template-columns: repeat(6, auto); gap: 4px 12px; margin: 8px 0; } dt { color: var(--muted); } dd { margin: 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; } .actions button { padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line); background: none; color: var(--fg); cursor: pointer; }
+.actions button.ok { background: var(--ok); color: white; border-color: var(--ok); }
+.muted { color: var(--muted); } .err { color: var(--bad); }
+.login { max-width: 320px; margin: 15vh auto; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.login input { width: 100%; padding: 10px; font-size: 18px; letter-spacing: 0.2em; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
+.login button { padding: 10px; border-radius: 6px; border: 0; background: var(--accent); color: white; font-size: 15px; }
+tr.retired { color: var(--muted); }
