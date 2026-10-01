@@ -1,5 +1,8 @@
 name: ci
-on: [push, pull_request]
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+  issues: write
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -8,6 +11,26 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - run: pip install -e ".[dev]"
-      - run: ruff check goldbot tests scripts --select E,F,W --ignore E501
-      - run: pytest -q
-      - run: python scripts/dry_run.py 1
+      - name: versions
+        run: python -c "import pandas,numpy,sklearn,lightgbm,duckdb,pyarrow,fastapi;print('pandas',pandas.__version__,'numpy',numpy.__version__,'sklearn',sklearn.__version__,'lgbm',lightgbm.__version__,'duckdb',duckdb.__version__,'pyarrow',pyarrow.__version__,'fastapi',fastapi.__version__)" | tee ci-report.txt
+      - name: lint
+        run: ruff check goldbot tests scripts --select E,F,W --ignore E501 2>&1 | tee -a ci-report.txt
+      - name: tests
+        run: pytest -q -x --tb=short 2>&1 | tee -a ci-report.txt
+      - name: dry run
+        run: python scripts/dry_run.py 1 2>&1 | tail -40 | tee -a ci-report.txt
+      - name: report failure to issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'EOF'
+          import json, os, subprocess, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]; sha = os.environ["GITHUB_SHA"][:7]
+          run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          body = open("ci-report.txt").read()[-60000:]
+          payload = {"title": f"CI failure on {sha}", "body": f"Run: {run_url}\n\n```\n{body}\n```", "labels": ["ci"]}
+          req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues", data=json.dumps(payload).encode(),
+                                       headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"})
+          print(urllib.request.urlopen(req).status)
+          EOF
