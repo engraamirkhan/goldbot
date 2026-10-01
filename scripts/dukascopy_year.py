@@ -6,7 +6,16 @@ Why m1 rather than ticks: Dukascopy serves m1 as one file per day per price side
 these bars is ask_close - bid_close per minute, which is adequate for price-structure features; the
 execution-cost model uses the brokers' own ticks (design: Data architecture).
 
+Two dukascopy-node behaviours shape the download loop: `-to` is exclusive (bars with ts < to), and by default
+one day that exhausts its retries aborts the whole request with no output. So each side is fetched in
+week-sized chunks with an exclusive end, retried with backoff, and a last salvage pass runs with
+--no-fail-after-retries so a single bad day costs that day rather than the month.
+
+With --existing (last published Parquet for the year) months that are already complete are kept and only
+missing, partial or still-open months are downloaded again.
+
   python scripts/dukascopy_year.py 2025 [--out xauusd_1m_dukascopy_2025.parquet] [--report report.md]
+                                        [--existing xauusd_1m_dukascopy_2025.parquet]
 """
 from __future__ import annotations
 
@@ -30,43 +39,105 @@ MIN_BARS_PER_FULL_MONTH = 15_000   # ~20 trading days x 1,380 minutes = 27,600; 
 MIN_BARS_PARTIAL_MONTH = 5_000     # below this a month is reported MISSING
 
 
-def month_range(year: int):
-    today = dt.date.today()
+def month_range(year: int, today: dt.date | None = None):
+    """(first day, exclusive end) per month of `year` up to today."""
+    today = today or dt.date.today()
     for m in range(1, 13):
         start = dt.date(year, m, 1)
         if start > today:
             break
-        end = (dt.date(year + 1, 1, 1) if m == 12 else dt.date(year, m + 1, 1)) - dt.timedelta(days=1)
-        yield start, min(end, today)
+        end = dt.date(year + 1, 1, 1) if m == 12 else dt.date(year, m + 1, 1)
+        yield start, min(end, today + dt.timedelta(days=1))
+
+
+def week_chunks(start: dt.date, end: dt.date, days: int = 7):
+    """Split [start, end) into chunks of at most `days`; chunks with no weekday (no gold trading) are skipped."""
+    a = start
+    while a < end:
+        b = min(a + dt.timedelta(days=days), end)
+        if any((a + dt.timedelta(days=i)).weekday() < 5 for i in range((b - a).days)):
+            yield a, b
+        a = b
+
+
+def months_to_fetch(existing: pd.DataFrame | None, months: list[tuple[dt.date, dt.date]], today: dt.date | None = None) -> set[str]:
+    """Month keys (YYYY-MM) that need downloading: absent, short or flagged partial in `existing`, or still open."""
+    today = today or dt.date.today()
+    keys = {f"{s:%Y-%m}" for s, _ in months}
+    if existing is None or existing.empty:
+        return keys
+    ts = pd.DatetimeIndex(pd.to_datetime(existing["ts_utc"], utc=True))
+    key = pd.Series(ts.strftime("%Y-%m"), index=existing.index)
+    counts = key.value_counts()
+    flags = existing["dq_flag"].astype(str) if "dq_flag" in existing else pd.Series("", index=existing.index)
+    partial = set(key[flags.str.contains("partial_month|ask_imputed|bid_imputed")].unique())
+    need = set()
+    for s, e in months:
+        k = f"{s:%Y-%m}"
+        still_open = e > today  # the current month keeps growing
+        if still_open or counts.get(k, 0) < MIN_BARS_PER_FULL_MONTH or k in partial:
+            need.add(k)
+    return need
 
 
 def _run(cmd: list[str], timeout: int = 1800) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
-def download_side(start: dt.date, end: dt.date, side: str, outdir: Path) -> pd.DataFrame | None:
+def _fetch(start: dt.date, end: dt.date, side: str, outdir: Path, salvage: bool = False) -> tuple[pd.DataFrame | None, str]:
+    """One dukascopy-node call for [start, end). Returns (frame or None, error text)."""
     outdir.mkdir(parents=True, exist_ok=True)
+    for f in outdir.glob(f"xauusd-m1-{side}-*.csv"):
+        f.unlink(missing_ok=True)
     cmd = ["npx", "-y", "dukascopy-node", "-i", "xauusd", "-from", start.isoformat(), "-to", end.isoformat(),
-           "-t", "m1", "-p", side, "-v", "true", "-f", "csv", "-dir", str(outdir), "-bs", "4", "-bp", "1500", "-r", "6", "-ch", "0"]
-    r = _run(cmd)
-    files = sorted(outdir.glob(f"xauusd-m1-{side}-{start.isoformat()}-*.csv"), key=os.path.getmtime)
-    if not files or files[-1].stat().st_size < 1000:
-        print(f"  {side} {start:%Y-%m}: no data (rc={r.returncode}) {r.stderr[-300:]}", flush=True)
-        return None
+           "-t", "m1", "-p", side, "-v", "true", "-f", "csv", "-dir", str(outdir),
+           "-bs", "2", "-bp", "1500", "-r", "5", "-rp", "4000"] + (["-fr"] if salvage else [])
+    try:
+        r = _run(cmd)
+    except subprocess.TimeoutExpired:
+        return None, "timeout"
+    files = sorted(outdir.glob(f"xauusd-m1-{side}-*.csv"), key=os.path.getmtime)
+    if not files or files[-1].stat().st_size < 100:
+        err = (r.stderr.strip() or r.stdout.strip())[-200:].replace("\n", " ")
+        return None, f"rc={r.returncode} {err}"
     df = pd.read_csv(files[-1])
+    files[-1].unlink(missing_ok=True)
+    if df.empty:
+        return None, "empty file"
     df.columns = [c.lower() for c in df.columns]
     df["ts_utc"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-    files[-1].unlink(missing_ok=True)
-    return df[["ts_utc", "open", "high", "low", "close", "volume"]]
+    return df[["ts_utc", "open", "high", "low", "close", "volume"]], ""
 
 
-def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 3) -> pd.DataFrame | None:
+def download_side(start: dt.date, end: dt.date, side: str, outdir: Path, attempts: int = 4) -> pd.DataFrame | None:
+    frames = []
+    for a, b in week_chunks(start, end):
+        df, err = None, ""
+        for i in range(attempts):
+            df, err = _fetch(a, b, side, outdir, salvage=(i == attempts - 1))
+            if df is not None:
+                break
+            time.sleep(10 * (i + 1))
+        if df is None:
+            print(f"  {side} {a}..{b}: no data after {attempts} attempts ({err})", flush=True)
+        else:
+            frames.append(df)
+    if not frames:
+        return None
+    return pd.concat(frames).drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
+
+
+def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 2) -> pd.DataFrame | None:
     for a in range(attempts):
         bid = download_side(start, end, "bid", tmp)
         ask = download_side(start, end, "ask", tmp)
-        if bid is not None and ask is not None:
+        if (bid is None) != (ask is None) and a == attempts - 1:
+            # one side never came back: impute it from the other (flagged) rather than lose the month
+            have = bid if bid is not None else ask
+            bid, ask = (bid if bid is not None else have.iloc[0:0]), (ask if ask is not None else have.iloc[0:0])
+        if bid is not None and ask is not None and len(bid) + len(ask) > 0:
             m = bid.merge(ask, on="ts_utc", suffixes=("_bid", "_ask"), how="inner")
-            imputed = False
+            imputed = ""
             if len(m) < 0.5 * max(len(bid), len(ask)):
                 # one side is patchy on Dukascopy's end (seen for 2025-02): keep the fuller side and impute the other
                 # from the median spread where both exist, flagged so research can exclude it if it matters.
@@ -77,7 +148,7 @@ def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 3) -> pd
                 for c in ("open", "high", "low", "close"):
                     m[f"{c}_{other}"] = m[f"{c}_{'bid' if other == 'ask' else 'ask'}"] + sign * spread
                 m[f"volume_{other}"] = m[f"volume_{'bid' if other == 'ask' else 'ask'}"]
-                imputed = True
+                imputed = other
                 print(f"  {start:%Y-%m}: {other} side patchy ({len(bid)} bid / {len(ask)} ask rows); imputed with spread {spread:.2f}", flush=True)
             out = pd.DataFrame({
                 "ts_utc": m["ts_utc"],
@@ -91,8 +162,8 @@ def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 3) -> pd
             out = out[DEFAULT_SESSIONS.is_open(pd.DatetimeIndex(out["ts_utc"]))]
             out.insert(1, "visible_at", out["ts_utc"] + pd.Timedelta(minutes=1))
             out = out[BAR_COLUMNS].sort_values("ts_utc").drop_duplicates("ts_utc").reset_index(drop=True)
-            out["dq_flag"] = "warning:ask_imputed" if imputed else ""
-            days = (end - start).days + 1
+            out["dq_flag"] = f"warning:{imputed}_imputed" if imputed else ""
+            days = (end - start).days
             expected_full = days >= 27
             if len(out) >= MIN_BARS_PER_FULL_MONTH or (not expected_full and len(out) > 1000):
                 return out
@@ -112,25 +183,62 @@ def main() -> int:
     ap.add_argument("--out", default=None)
     ap.add_argument("--tmp", default="raw/dukascopy")
     ap.add_argument("--report", default=None)
+    ap.add_argument("--existing", default=None, help="previously published Parquet for this year; complete months are kept")
     args = ap.parse_args()
+    months = list(month_range(args.year))
+    existing = None
+    if args.existing and Path(args.existing).exists():
+        existing = pd.read_parquet(args.existing)
+        existing["ts_utc"] = pd.to_datetime(existing["ts_utc"], utc=True)
+        print(f"existing: {len(existing):,} bars from {args.existing}", flush=True)
+    todo = months_to_fetch(existing, months)
     frames, rows = [], []
-    for start, end in month_range(args.year):
+    for start, end in months:
+        k = f"{start:%Y-%m}"
         t0 = time.time()
+        if k not in todo:
+            ts = existing["ts_utc"]
+            b = existing[(ts >= pd.Timestamp(start, tz="UTC")) & (ts < pd.Timestamp(end, tz="UTC"))].copy()
+            for c in ("source",):
+                if c in b:
+                    b = b.drop(columns=c)
+            b["dq_flag"] = b["dq_flag"].fillna("") if "dq_flag" in b else ""
+            rows.append((k, len(b), "kept", "0s"))
+            frames.append(b)
+            print(f"{k}: kept {len(b):,} bars", flush=True)
+            continue
         b = month_bars(start, end, Path(args.tmp))
+        if b is None and existing is not None:
+            # download failed again: keep whatever was published before rather than lose it
+            ts = existing["ts_utc"]
+            old = existing[(ts >= pd.Timestamp(start, tz="UTC")) & (ts < pd.Timestamp(end, tz="UTC"))]
+            if len(old):
+                b = old.drop(columns=["source"], errors="ignore").copy()
+                b["dq_flag"] = b["dq_flag"].fillna("") if "dq_flag" in b else ""
         n = 0 if b is None else len(b)
-        status = "MISSING" if b is None else ("partial" if (b["dq_flag"] == "warning:partial_month").any() else "ok")
-        rows.append((f"{start:%Y-%m}", n, status, f"{time.time() - t0:.0f}s"))
-        print(f"{start:%Y-%m}: {n:,} bars [{time.time() - t0:.0f}s]", flush=True)
+        if b is None:
+            status = "MISSING"
+        elif (b["dq_flag"] == "warning:partial_month").any():
+            status = "partial"
+        elif b["dq_flag"].astype(str).str.endswith("_imputed").any():
+            status = "imputed"
+        else:
+            status = "ok"
+        rows.append((k, n, status, f"{time.time() - t0:.0f}s"))
+        print(f"{k}: {n:,} bars [{time.time() - t0:.0f}s]", flush=True)
         if b is not None:
             frames.append(b)
     report = "| month | 1m bars | status | time |\n|---|---:|---|---|\n" + "\n".join(f"| {m} | {n:,} | {s} | {t} |" for m, n, s, t in rows)
+    n_ok = sum(1 for _, _, s, _ in rows if s in ("ok", "kept", "imputed"))
+    report += f"\n\n{n_ok}/{len(rows)} months complete; " + ", ".join(f"{s}: {sum(1 for r in rows if r[2] == s)}" for s in ("ok", "kept", "imputed", "partial", "MISSING"))
     if args.report:
         Path(args.report).write_text(report)
     print(report)
     if not frames:
         return 1
     out = pd.concat(frames).drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
-    flags = out.pop("dq_flag")
+    out = out[[c for c in BAR_COLUMNS] + ["dq_flag"]]
+    flags = out.pop("dq_flag").fillna("").astype(str)
     out, dq = check_bars(out)
     out["dq_flag"] = [a if a else b for a, b in zip(flags.values, out["dq_flag"].values)]
     out["source"] = "dukascopy"
