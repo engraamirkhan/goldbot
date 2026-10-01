@@ -3,9 +3,10 @@
 Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc; edit it here from now on).
 Standing instructions for Claude sessions: `CLAUDE.md`.
 
-## Where things are (as of 2026-10-01)
-- GitHub `engraamirkhan/goldbot`, `main` is the only branch. CI (`ci.yml`) lints, tests and dry-runs on every push and
-  opens an issue labelled `ci` with the full report on failure. Data workflow (`data-dukascopy.yml`) builds yearly
+## Where things are (as of 2026-10-01, evening)
+- GitHub `engraamirkhan/goldbot`. Work from 2026-10-01 is on branch `claude/gifted-goldberg-lcb7pl` (not yet merged to
+  `main`). CI (`ci.yml`) runs pre-commit, backend lint/mypy/unit/integration, frontend eslint/tsc/vitest, an API
+  contract check and Playwright e2e as separate jobs, and opens one issue labelled `ci` with each failed job's output. Data workflow (`data-dukascopy.yml`) builds yearly
   1m Parquet files to release `data-v1` and keeps a "data coverage <year>" issue updated.
 - Built and tested: point-in-time store, calendar/UTC, resampler, loaders, quality checks, macro loaders; feature
   registry (volatility, MA families + ribbon, trend, mean-reversion, MFI, breakout, microstructure, S/R, swings,
@@ -16,10 +17,22 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
   Telegram approval centre + bot adapter; trading engine loop; FastAPI backend with multi-user auth
   (owner/approver/viewer, password + authenticator, invites, lockout, audit); React+TS dashboard
   (Overview, Approvals, Agents, Feeds, Users); VPS bootstrap (NSSM services, Cloudflare Tunnel) and service entry points.
+- Typed stack: records are pydantic (`goldbot/base.py`), settings are a validated `Settings` model, every API endpoint has
+  request/response models, mypy is clean; web types are generated from the backend OpenAPI schema.
+- Data pull fixes (2026-10-01): dukascopy-node `-to` is exclusive (the last day of every month was missing) and one bad
+  day aborted a whole month (the MISSING months in 2010-2018). Fixed with week chunks + retries + salvage pass; the
+  workflow now refetches only gaps (`full_refresh` refetches all, keeping published bars as fallback). A full refresh of
+  2010-2026 was dispatched from the branch: run https://github.com/engraamirkhan/goldbot/actions/runs/36885085622 ;
+  results land in the "data coverage <year>" issues.
+- pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`; the old `.asi8` code made the gap check and
+  some time features wrong by 1000x (fixed, with regression tests).
 
 ## Next steps (no owner input needed unless marked)
-1. Confirm the 2025 data run gives full monthly coverage (issue "data coverage 2025"); then dispatch 2010-2026.
+1. Read the "data coverage <year>" issues from run 36885085622. Years with MISSING months: re-dispatch
+   `data-dukascopy.yml` (no full_refresh) for just those years; it only refetches gaps. Then merge the branch to `main`
+   (OWNER: approve the merge, or say "merge it").
 2. Research pass: `scripts/fetch_data_release.py` then session-open walk-forward on real bars; record in registry.
+   Sandboxes cannot download release assets reliably, so run it as a workflow that posts results to an issue.
 3. Scheduler: nightly cost tables + classifier, Saturday retrain + shadow, monthly bounded research loop.
 4. Journal + agent layer (data steward, research analyst, risk officer, journal coach, improvement agent).
 5. Population tournament mechanics (fitness, cloning, retirement) on top of agent lineage.
