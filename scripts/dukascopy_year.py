@@ -27,6 +27,7 @@ from goldbot.data.quality import check_bars  # noqa: E402
 from goldbot.data.resample import BAR_COLUMNS  # noqa: E402
 
 MIN_BARS_PER_FULL_MONTH = 15_000   # ~20 trading days x 1,380 minutes = 27,600; accept down to 15,000
+MIN_BARS_PARTIAL_MONTH = 5_000     # below this a month is reported MISSING
 
 
 def month_range(year: int):
@@ -95,6 +96,11 @@ def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 3) -> pd
             expected_full = days >= 27
             if len(out) >= MIN_BARS_PER_FULL_MONTH or (not expected_full and len(out) > 1000):
                 return out
+            if a == attempts - 1 and len(out) >= MIN_BARS_PARTIAL_MONTH:
+                # consistent shortfall across attempts = a gap in Dukascopy's archive, not throttling: keep, flagged
+                out["dq_flag"] = out["dq_flag"].where(out["dq_flag"] != "", "warning:partial_month")
+                print(f"  {start:%Y-%m}: accepting partial month with {len(out):,} bars (flagged)", flush=True)
+                return out
             print(f"  {start:%Y-%m}: only {len(out):,} bars (attempt {a + 1}); retrying", flush=True)
         time.sleep(20 * (a + 1))
     return None
@@ -112,7 +118,8 @@ def main() -> int:
         t0 = time.time()
         b = month_bars(start, end, Path(args.tmp))
         n = 0 if b is None else len(b)
-        rows.append((f"{start:%Y-%m}", n, "ok" if b is not None else "MISSING", f"{time.time() - t0:.0f}s"))
+        status = "MISSING" if b is None else ("partial" if (b["dq_flag"] == "warning:partial_month").any() else "ok")
+        rows.append((f"{start:%Y-%m}", n, status, f"{time.time() - t0:.0f}s"))
         print(f"{start:%Y-%m}: {n:,} bars [{time.time() - t0:.0f}s]", flush=True)
         if b is not None:
             frames.append(b)
