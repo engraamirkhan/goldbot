@@ -41,14 +41,15 @@ MIN_BARS_PARTIAL_MONTH = 5_000     # below this a month is reported MISSING
 
 
 def month_range(year: int, today: dt.date | None = None) -> Iterator[tuple[dt.date, dt.date]]:
-    """(first day, exclusive end) per month of `year` up to today."""
+    """(first day, exclusive end) per month of `year`, covering completed days only: Dukascopy publishes a day's
+    m1 file after the day closes, so today is never requested (on the 1st the current month is skipped)."""
     today = today or dt.date.today()
     for m in range(1, 13):
         start = dt.date(year, m, 1)
-        if start > today:
+        if start >= today:
             break
         end = dt.date(year + 1, 1, 1) if m == 12 else dt.date(year, m + 1, 1)
-        yield start, min(end, today + dt.timedelta(days=1))
+        yield start, min(end, today)
 
 
 def week_chunks(start: dt.date, end: dt.date, days: int = 7) -> Iterator[tuple[dt.date, dt.date]]:
@@ -75,7 +76,8 @@ def months_to_fetch(existing: pd.DataFrame | None, months: list[tuple[dt.date, d
     need = set()
     for s, e in months:
         k = f"{s:%Y-%m}"
-        still_open = e > today  # the current month keeps growing
+        natural_end = dt.date(s.year + 1, 1, 1) if s.month == 12 else dt.date(s.year, s.month + 1, 1)
+        still_open = natural_end > today  # the current month keeps growing
         if still_open or counts.get(k, 0) < MIN_BARS_PER_FULL_MONTH or k in partial:
             need.add(k)
     return need

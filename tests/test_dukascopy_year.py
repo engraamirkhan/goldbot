@@ -17,10 +17,13 @@ def test_month_range_end_is_exclusive_first_of_next_month():
     assert months[-1] == (dt.date(2025, 12, 1), dt.date(2026, 1, 1))
 
 
-def test_month_range_current_month_ends_tomorrow():
+def test_month_range_current_month_stops_before_today():
+    # today's file is not published until the day closes
     months = list(dy.month_range(2026, today=dt.date(2026, 3, 10)))
     assert len(months) == 3
-    assert months[-1] == (dt.date(2026, 3, 1), dt.date(2026, 3, 11))
+    assert months[-1] == (dt.date(2026, 3, 1), dt.date(2026, 3, 10))
+    # on the 1st there is no completed day in the new month, so it is not requested (was reported MISSING)
+    assert list(dy.month_range(2026, today=dt.date(2026, 10, 1)))[-1] == (dt.date(2026, 9, 1), dt.date(2026, 10, 1))
 
 
 def test_week_chunks_cover_range_and_skip_weekend_only_chunks():
