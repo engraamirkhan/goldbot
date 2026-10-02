@@ -31,6 +31,7 @@ class ResearchResult(Record):
     metrics: dict
     feature_version: str
     importance: pd.Series | None
+    model: MetaLabelModel | None = None   # last fold's model, calibrated on all OOF predictions
 
 
 def build_decision_frame(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None = None,
@@ -92,4 +93,4 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
             "shuffle_auc": None,
         })
     imp = last_model.importance() if last_model is not None else None
-    return ResearchResult(agent_id=spec.agent_id, n_candidates=len(labels), n_folds=len(folds), oof=oof, metrics=metrics, feature_version=X.attrs["feature_version"], importance=imp)
+    return ResearchResult(agent_id=spec.agent_id, n_candidates=len(labels), n_folds=len(folds), oof=oof, metrics=metrics, feature_version=X.attrs["feature_version"], importance=imp, model=last_model if "threshold" in metrics else None)

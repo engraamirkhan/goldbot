@@ -153,3 +153,16 @@ class Status(BaseModel):
     halted: bool
     pending: int
     supervisor: dict[str, Any]
+
+
+class JobRow(BaseModel):
+    """One scheduler job as the dashboard shows it (from state/scheduler.json)."""
+    name: str
+    last_slot: datetime | None
+    last_finished: datetime | None
+    last_ok: bool | None
+    last_error: str | None
+    next_slot: datetime | None
+    runs: int
+    failures: int
+    heartbeat_age_s: float

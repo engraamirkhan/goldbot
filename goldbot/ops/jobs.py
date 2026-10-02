@@ -1,0 +1,239 @@
+"""The scheduler's jobs (design: Retraining and promotion, Bounded research loop, Execution costs).
+
+* nightly_costs     per enabled account: spread table from its own ticks, slippage table from its own fills,
+                    commission from settings -> state/costs_<account>.json (read by the engine every bar).
+                    On Fridays it also re-runs the account classifier (two consecutive disagreements to change).
+* saturday_retrain  refresh bars from the data release (best effort), then per specialist: evaluate any challenger
+                    that has a shadow record against the promotion gates (promote automatically when all pass),
+                    and retrain on the rolling window. A family keeps at most one challenger in shadow; a new one
+                    replaces it only after it is decided or has been in shadow for CHALLENGER_MAX_WEEKS.
+* monthly_research  bounded search: up to `trial_budget_per_month` label-grid variants (+-step on target, stop and
+                    time limit) per specialist, each a walk-forward recorded in the trial registry whose count
+                    feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
+"""
+from __future__ import annotations
+
+import functools
+import itertools
+import json
+import logging
+import random
+from pathlib import Path
+from typing import Any, Callable, cast
+
+import pandas as pd
+
+from goldbot.base import Record
+from goldbot.config import DecisionTimeframe, Settings
+from goldbot.data.store import Store
+from goldbot.execution.classifier import PersistentClassifier, classify
+from goldbot.execution.costs import build_cost_table
+from goldbot.ops.accounts import Account
+from goldbot.ops.scheduler import Schedule, Scheduler
+from goldbot.research.model_registry import ModelEntry, ModelRegistry
+from goldbot.research.pipeline import ResearchResult, run_specialist
+from goldbot.research.promotion import PerfStats, evaluate_promotion
+from goldbot.research.registry import TrialRegistry
+from goldbot.specialists import SPECIALISTS
+
+log = logging.getLogger("goldbot.jobs")
+
+CHALLENGER_MAX_WEEKS = 8
+CLASSIFIER_WEEKDAY = 4          # Friday's nightly run re-classifies (design: weekly, from the nightly cost job)
+CONTEXT_EXTRA_MONTHS = 2        # daily/1h context needs history before the decision window starts
+
+
+class JobContext(Record):
+    settings: Settings
+    store: Store
+    state_dir: Path
+    models: ModelRegistry
+    trials: TrialRegistry
+    accounts: list[Account]
+    sync_bars: Callable[[Store], dict[str, int]] | None = None   # release -> store refresh before retraining
+
+
+# ---------------------------------------------------------------------------------------------- nightly costs
+def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    r = ctx.settings.research
+    out: dict[str, Any] = {}
+    for acc in ctx.accounts:
+        ticks = ctx.store.read("ticks", source=acc.account_id, symbol=acc.symbol, start=slot - pd.Timedelta(days=r.cost_window_days))
+        fills = ctx.store.read("fills", source=acc.account_id, symbol=acc.symbol, start=slot - pd.Timedelta(days=r.fills_window_days))
+        table = build_cost_table(acc.account_id, ticks, fills,
+                                 commission_per_lot_side_usd=ctx.settings.costs.commission_per_lot_side_usd.get(acc.broker, 0.0),
+                                 slippage_prior_usd=ctx.settings.costs.slippage_prior_usd,
+                                 min_fills=r.min_fills_for_slippage, now=slot)
+        table.save(ctx.state_dir / f"costs_{acc.account_id}.json")
+        row: dict[str, Any] = {"ticks": len(ticks), "fills": len(fills),
+                               "round_trip_usd": {s: table.round_trip_usd_per_oz(s) for s in ("asia", "london", "newyork")}}
+        if slot.dayofweek == CLASSIFIER_WEEKDAY:
+            c = classify(ticks, fills)
+            row["account_class"] = PersistentClassifier(ctx.state_dir / f"classifier_{acc.account_id}.json").update(c)
+            row["classifier_reason"] = c.reason
+        out[acc.account_id] = row
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- retrain
+def _bars(ctx: JobContext, tf: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    return ctx.store.read(f"bars_{tf}", start=start, end=end).drop(columns=["source", "symbol", "year", "month"], errors="ignore")
+
+
+def _walk_forward(ctx: JobContext, family: str, end: pd.Timestamp, months: int, overrides: dict[str, Any] | None = None,
+                  n_trials: int = 1) -> ResearchResult | None:
+    spec = SPECIALISTS[family](**(overrides or {}))
+    start = end - pd.DateOffset(months=months)
+    dec = _bars(ctx, spec.timeframe, start, end)
+    if dec.empty:
+        return None
+    ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
+    context = {"h1": _bars(ctx, "1h", ctx_start, end), "d1": _bars(ctx, "1d", ctx_start, end)}
+    years = max((pd.to_datetime(dec["ts_utc"].iloc[-1]) - pd.to_datetime(dec["ts_utc"].iloc[0])).days / 365.25, 1e-9)
+    res = run_specialist(spec, dec, context=context, n_trials=n_trials)
+    if res.n_candidates:
+        res.metrics["trades_per_year"] = res.n_candidates / years
+    return res
+
+
+def backtest_stats(res: ResearchResult) -> PerfStats | None:
+    s = res.metrics.get("model_filtered") or {}
+    if not s.get("n"):
+        return None
+    tpy = float(res.metrics.get("trades_per_year", 0.0)) * s["n"] / max(res.metrics.get("all_candidates", {}).get("n", s["n"]), 1)
+    return PerfStats(n_trades=int(s["n"]), sharpe_ann=float(s["sharpe_ann"]), hit_rate=float(s["hit_rate"]),
+                     max_dd=float(s["max_dd"]), trades_per_week=tpy / 52.0)
+
+
+def shadow_stats(ctx: JobContext, entry: ModelEntry) -> PerfStats | None:
+    """Shadow record written by the engine's shadow book (state/shadow_<version>.json), if any yet."""
+    f = ctx.state_dir / f"shadow_{entry.version}.json"
+    return PerfStats.model_validate(json.loads(f.read_text())) if f.exists() else None
+
+
+def _decide_challengers(ctx: JobContext, family: str, slot: pd.Timestamp) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    champion = ctx.models.champion(family)
+    champ_shadow = shadow_stats(ctx, champion) if champion else None
+    champ_turnover = champ_shadow or (PerfStats.model_validate(champion.backtest) if champion and champion.backtest else None)
+    for ch in ctx.models.by_family(family, "challenger"):
+        bt = PerfStats.model_validate(ch.backtest) if ch.backtest else None
+        sh = shadow_stats(ctx, ch)
+        if bt is not None and sh is not None:
+            d = evaluate_promotion(bt, sh, champ_turnover)
+            if d.promote:
+                ctx.models.promote(ch.version, now=slot, note="all promotion gates passed")
+                out.append({"version": ch.version, "action": "promoted"})
+                continue
+            if d.ready:
+                ctx.models.retire(ch.version, "failed promotion gates: " + ", ".join(d.failed))
+                out.append({"version": ch.version, "action": "retired", "failed": d.failed})
+                continue
+        if slot - ch.created_utc > pd.Timedelta(weeks=CHALLENGER_MAX_WEEKS):
+            ctx.models.retire(ch.version, f"no decision after {CHALLENGER_MAX_WEEKS} weeks in shadow")
+            out.append({"version": ch.version, "action": "expired"})
+        else:
+            out.append({"version": ch.version, "action": "waiting", "shadow_trades": sh.n_trades if sh else 0})
+    return out
+
+
+def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if ctx.sync_bars is not None:
+        try:
+            out["bars_synced"] = ctx.sync_bars(ctx.store)
+        except Exception as exc:   # network trouble must not stop the retrain on what we already have
+            log.warning("bar sync failed, retraining on the store as is: %s", exc)
+            out["bars_synced"] = f"failed: {exc}"
+    for family in sorted(SPECIALISTS):
+        fam: dict[str, Any] = {"challengers": _decide_challengers(ctx, family, slot)}
+        if ctx.models.by_family(family, "challenger"):
+            fam["retrain"] = "skipped: a challenger is still in shadow"
+            out[family] = fam
+            continue
+        tf = SPECIALISTS[family].timeframe
+        if tf not in ("15m", "1h"):
+            fam["retrain"] = f"skipped: no walk-forward window configured for {tf}"
+            out[family] = fam
+            continue
+        wf = ctx.settings.walkforward[cast(DecisionTimeframe, tf)]
+        # rolling train window plus enough test history for out-of-fold backtest stats
+        res = _walk_forward(ctx, family, slot, wf.train_months + 4 * wf.test_months)
+        if res is None or res.model is None:
+            fam["retrain"] = "no model: not enough bars or candidates"
+        else:
+            bt = backtest_stats(res)
+            e = ctx.models.add_challenger(res.model, family=family, agent_id=res.agent_id,
+                                          backtest=bt.model_dump() if bt else {}, now=slot,
+                                          notes=[f"walk-forward {res.n_folds} folds, {res.n_candidates} candidates"])
+            fam["retrain"] = {"challenger": e.version, "backtest": e.backtest}
+        out[family] = fam
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- research loop
+def label_grid(base: dict[str, Any], step: float) -> list[dict[str, Any]]:
+    """+-step around target_atr, stop_atr and max_bars (the base itself excluded: it is the champion's config)."""
+    f = (1 - step, 1.0, 1 + step)
+    out = []
+    for a, b, c in itertools.product(f, f, f):
+        if (a, b, c) == (1.0, 1.0, 1.0):
+            continue
+        out.append({"target_atr": round(base["target_atr"] * a, 4), "stop_atr": round(base["stop_atr"] * b, 4),
+                    "max_bars": max(1, int(round(base["max_bars"] * c)))})
+    return out
+
+
+def _num(v: float | None, fmt: str) -> str:
+    return "" if v is None else format(v, fmt)
+
+
+def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    r = ctx.settings.research
+    rng = random.Random(f"{slot:%Y-%m}")        # reproducible choice of variants for the month
+    lines = [f"# Research loop {slot:%Y-%m}", ""]
+    out: dict[str, Any] = {}
+    for family in sorted(SPECIALISTS):
+        grid = label_grid(SPECIALISTS[family].default_config, r.label_grid_step)
+        rng.shuffle(grid)
+        tf = SPECIALISTS[family].timeframe
+        history_months = 12 * 30          # everything the store has
+        rows = []
+        for overrides in grid[: r.trial_budget_per_month]:
+            res = _walk_forward(ctx, family, slot, history_months, overrides, n_trials=ctx.trials.n_trials + 1)
+            if res is None:
+                break
+            row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
+                                    feature_version=res.feature_version, results=res.metrics, status="evaluated",
+                                    rationale=f"monthly bounded label-grid search {slot:%Y-%m} (+-{r.label_grid_step:.0%})")
+            mf = res.metrics.get("model_filtered") or {}
+            rows.append({"trial": row["trial"], **overrides, "n": mf.get("n", 0), "sharpe": mf.get("sharpe_ann"), "dsr": mf.get("dsr")})
+        out[family] = {"trials": len(rows), "timeframe": tf, "registry_total": ctx.trials.n_trials}
+        lines += [f"## {family} ({len(rows)} trials, registry total {ctx.trials.n_trials})", "",
+                  "| trial | target | stop | max bars | n | Sharpe | DSR |", "|---:|---:|---:|---:|---:|---:|---:|"]
+        for x in sorted(rows, key=lambda x: -(x["dsr"] or 0)):
+            lines.append(f"| {x['trial']} | {x['target_atr']} | {x['stop_atr']} | {x['max_bars']} | {x['n']} | "
+                         f"{_num(x['sharpe'], '.2f')} | {_num(x['dsr'], '.3f')} |")
+        lines += ["", "Variants are candidates for the research analyst; none is promoted by this job.", ""]
+    report = ctx.state_dir / f"research_{slot:%Y-%m}.md"
+    report.write_text("\n".join(lines))
+    out["report"] = str(report)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- wiring
+JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
+    "nightly_costs": nightly_costs,
+    "saturday_retrain": saturday_retrain,
+    "monthly_research": monthly_research,
+}
+
+
+def build_scheduler(ctx: JobContext, clock: Callable[[], pd.Timestamp] | None = None) -> Scheduler:
+    sch = Scheduler(ctx.state_dir / "scheduler.json", clock=clock)
+    cfg = ctx.settings.scheduler
+    for name, fn in JOBS.items():
+        s = getattr(cfg, name)
+        sch.add(name, Schedule(kind=s.kind, at=s.at, weekdays=tuple(s.weekdays), weekday=s.weekday, day=s.day,
+                               max_late_hours=s.max_late_hours), functools.partial(fn, ctx))
+    return sch

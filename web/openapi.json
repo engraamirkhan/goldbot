@@ -353,6 +353,98 @@
     "title": "InviteResponse",
     "type": "object"
    },
+   "JobRow": {
+    "description": "One scheduler job as the dashboard shows it (from state/scheduler.json).",
+    "properties": {
+     "failures": {
+      "title": "Failures",
+      "type": "integer"
+     },
+     "heartbeat_age_s": {
+      "title": "Heartbeat Age S",
+      "type": "number"
+     },
+     "last_error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Error"
+     },
+     "last_finished": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Finished"
+     },
+     "last_ok": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Ok"
+     },
+     "last_slot": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Slot"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "next_slot": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Slot"
+     },
+     "runs": {
+      "title": "Runs",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "name",
+     "last_slot",
+     "last_finished",
+     "last_ok",
+     "last_error",
+     "next_slot",
+     "runs",
+     "failures",
+     "heartbeat_age_s"
+    ],
+    "title": "JobRow",
+    "type": "object"
+   },
    "LoginRequest": {
     "properties": {
      "email": {
@@ -1058,6 +1150,33 @@
      }
     ],
     "summary": "Feeds"
+   }
+  },
+  "/api/jobs": {
+   "get": {
+    "operationId": "jobs_api_jobs_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/JobRow"
+         },
+         "title": "Response Jobs Api Jobs Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Jobs"
    }
   },
   "/api/me": {

@@ -1,10 +1,12 @@
 import json
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 from goldbot.api.app import create_app
 from goldbot.api.auth import totp_code
+from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.telegram.approvals import ApprovalCenter, Proposal
 
 pytestmark = pytest.mark.integration
@@ -80,3 +82,26 @@ def test_lockout_after_five_failures(tmp_path):
         c.post("/api/auth/login", json={"email": "o@x.io", "password": "nope nope nope", "totp": "000000"})
     r = c.post("/api/auth/login", json={"email": "o@x.io", "password": "a long password here", "totp": "000000"})
     assert r.status_code == 403 and "too many" in r.json()["detail"]
+
+
+def test_jobs_endpoint_reports_the_scheduler_state(tmp_path):
+    now = {"t": pd.Timestamp("2026-10-02 12:00", tz="UTC")}
+
+    def failing(slot):
+        raise RuntimeError("no ticks table")
+    sch = Scheduler(tmp_path / "scheduler.json", clock=lambda: now["t"])
+    sch.add("nightly_costs", Schedule(kind="daily", at="23:10"), failing)
+    now["t"] = pd.Timestamp("2026-10-02 23:11", tz="UTC")
+    sch.run_pending()
+
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    c = TestClient(app)
+    assert c.get("/api/jobs").status_code == 401
+    uri = c.post("/api/auth/setup", json={"setup_code": app.state.st.auth.setup_code, "email": "o@x.io", "password": "a long password here"}).json()["totp_uri"]
+    tok = c.post("/api/auth/login", json={"email": "o@x.io", "password": "a long password here", "totp": totp_code(_secret_from_uri(uri))}).json()["token"]
+    rows = c.get("/api/jobs", headers={"Authorization": f"Bearer {tok}"}).json()
+    assert [r["name"] for r in rows] == ["nightly_costs"]
+    row = rows[0]
+    assert row["last_ok"] is False and row["last_error"] == "RuntimeError: no ticks table"   # first line only
+    assert row["failures"] == 1 and row["next_slot"].startswith("2026-10-03T23:10")
+    assert row["heartbeat_age_s"] >= 0

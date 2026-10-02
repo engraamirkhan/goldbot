@@ -31,6 +31,7 @@ from goldbot.api.schema import (
     FeedHealth,
     InviteRequest,
     InviteResponse,
+    JobRow,
     LoginRequest,
     LoginResponse,
     Me,
@@ -69,6 +70,13 @@ class State:
     def supervisor(self) -> dict:
         f = self.dir / "supervisor.json"
         return json.loads(f.read_text()) if f.exists() else {}
+
+    def scheduler(self) -> dict:
+        f = self.dir / "scheduler.json"
+        try:
+            return json.loads(f.read_text()) if f.exists() else {}
+        except json.JSONDecodeError:
+            return {}
 
     def agents(self) -> list[dict]:
         f = self.dir / "agents.json"
@@ -220,6 +228,17 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
         return [FeedHealth(account_id=e["account"], last_tick_age_s=e.get("last_tick_age_s", 1e9), spread_points=e.get("spread_points", 0),
                            terminal_connected=e.get("terminal_connected", False), webhook_p99_latency_s=e.get("webhook_p99_latency_s"),
                            supervisor_heartbeat_age_s=age) for e in st.engines()]
+
+    @app.get("/api/jobs", response_model=list[JobRow])
+    def jobs(_: User = Depends(auth)) -> list[JobRow]:
+        sch = st.scheduler()
+        if not sch:
+            return []
+        age = max(0.0, time.time() - datetime.fromisoformat(sch["ts"]).timestamp())   # clamp clock skew
+        return [JobRow(name=n, last_slot=j.get("last_slot"), last_finished=j.get("last_finished"), last_ok=j.get("last_ok"),
+                       last_error=(j.get("last_error") or "").splitlines()[0] if j.get("last_error") else None,
+                       next_slot=j.get("next_slot"), runs=j.get("runs", 0), failures=j.get("failures", 0), heartbeat_age_s=age)
+                for n, j in sorted(sch.get("jobs", {}).items())]
 
     @app.get("/api/status")
     def status() -> Status:

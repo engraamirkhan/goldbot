@@ -27,9 +27,12 @@ def run_supervisor() -> None:
 
 
 def run_engine(account_id: str) -> None:
+    from pathlib import Path
+
     from goldbot.config import load_settings
-    from goldbot.engine import ConstantModel, Engine, EngineConfig
+    from goldbot.engine import Engine, EngineConfig
     from goldbot.ops import accounts
+    from goldbot.research.model_registry import ModelRegistry
     from goldbot.specialists import SPECIALISTS
     from goldbot.telegram.approvals import ApprovalCenter
     acc = accounts.load_accounts()[account_id]
@@ -46,17 +49,35 @@ def run_engine(account_id: str) -> None:
         broker = PaperBroker(symbol=acc.symbol)
         log.warning("not on Windows: running %s against the paper broker", account_id)
     center = ApprovalCenter(set(settings.telegram.allowed_user_ids))
+    registry_file = Path(settings.research.models_dir) / "registry.json"
+
+    def champions() -> dict:
+        # no champion for a family -> no model -> the engine never proposes for it (no placeholder probabilities)
+        return ModelRegistry(settings.research.models_dir).champion_models()
+
     agents = [SPECIALISTS["session_open"]()]
     eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, approval_mode="propose", symbol=acc.symbol,
-                              magic_base=acc.magic_base, state_dir="state"), broker, agents,
-                 {"session_open": ConstantModel(p=0.0)}, center)  # p=0 until a trained model is loaded by the scheduler
-    log.info("engine %s started (%s)", account_id, type(broker).__name__)
+                              magic_base=acc.magic_base, state_dir="state", data_root=settings.data_root), broker, agents,
+                 champions(), center)
+    log.info("engine %s started (%s), models: %s", account_id, type(broker).__name__, sorted(eng.models))
+    seen = registry_file.stat().st_mtime if registry_file.exists() else -1.0
+    last_check = time.time()
     while True:
         try:
             t = broker.last_tick(acc.symbol)
             eng.on_tick(t)
         except AssertionError:
             pass
+        if time.time() - last_check > 60:          # promotions by the scheduler take effect without a restart
+            last_check = time.time()
+            mtime = registry_file.stat().st_mtime if registry_file.exists() else -1.0
+            if mtime != seen:
+                seen = mtime
+                try:
+                    eng.models = champions()
+                    log.info("models reloaded: %s", sorted(eng.models))
+                except (ValueError, TypeError, OSError) as exc:
+                    log.error("model reload refused, keeping current models: %s", exc)
         time.sleep(0.25)
 
 
@@ -77,9 +98,24 @@ def run_webhook() -> None:
 
 
 def run_scheduler() -> None:
-    log.info("scheduler: nightly cost tables, Saturday retrain, monthly research — wired in Phase 1")
-    while True:
-        time.sleep(60)
+    from pathlib import Path
+
+    from goldbot.config import load_settings
+    from goldbot.data.release import sync_release_bars
+    from goldbot.data.store import Store
+    from goldbot.ops import accounts
+    from goldbot.ops.jobs import JobContext, build_scheduler
+    from goldbot.research.model_registry import ModelRegistry
+    from goldbot.research.registry import TrialRegistry
+    settings = load_settings()
+    ctx = JobContext(settings=settings, store=Store(settings.data_root), state_dir=Path("state"),
+                     models=ModelRegistry(settings.research.models_dir), trials=TrialRegistry(settings.research.registry),
+                     accounts=accounts.enabled_accounts(),   # live accounts only once the phase gate has passed
+                     sync_bars=lambda store: sync_release_bars(store))
+    sch = build_scheduler(ctx)
+    for name, st in sch.status()["jobs"].items():
+        log.info("scheduler: %s next at %s", name, st["next_slot"])
+    sch.run_forever()
 
 
 if __name__ == "__main__":

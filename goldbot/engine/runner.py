@@ -26,7 +26,9 @@ from goldbot.base import Record
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.resample import mid, resample_bars, ticks_to_1m
+from goldbot.data.store import Store
 from goldbot.execution.broker import Broker, OrderIntent, Tick
+from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
 from goldbot.features.mtf import merge_higher_tf
 from goldbot.features.technical import atr
@@ -66,6 +68,8 @@ class EngineConfig(Record):
     max_bars_in_memory: int = 60000     # 1m bars kept (~40 trading days)
     feature_window: int = 800            # decision bars the features are computed on
     owner_user_id: int = 0
+    data_root: str | None = None         # when set, ticks and fills are logged to the store for the nightly cost job
+    tick_flush_s: int = 60               # market seconds between tick-log flushes
 
 
 class OpenTrade(Record):
@@ -98,6 +102,9 @@ class Engine:
         self.state = AccountState(equity=0, balance_closed_hwm=0, day_start_equity=0, week_start_equity=0,
                                   open_positions=0, margin_used=0, last_tick_age_s=0, spread_points=0)
         self.decisions: list[dict] = []
+        self.store = Store(cfg.data_root) if cfg.data_root else None
+        self._tick_log: list[Tick] = []
+        self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
         self.center.on_decision = self._on_decision
 
@@ -105,6 +112,7 @@ class Engine:
     def on_tick(self, t: Tick) -> list[dict]:
         """Feed a tick; returns any decisions made at a bar close."""
         self.ticks.append(t)
+        self._log_tick(t)
         if hasattr(self.broker, "on_tick"):
             self.broker.on_tick(t)  # paper broker fills
         sec = tf_seconds(self.cfg.decision_tf)
@@ -157,6 +165,7 @@ class Engine:
         fam_w = self.allocator.weights(regime)
         decisions = []
         last = len(dec) - 1
+        cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)
         for agent in self.agents.values():
             cands = agent.candidates(m, X)
             if cands.empty or int(cands["idx"].iloc[-1]) != last:
@@ -170,11 +179,11 @@ class Engine:
             p = float(model.predict(feats[[c for c in cols if c in feats.columns]] if model.feature_names else feats)[0])
             ls = agent.label_spec
             w = fam_w.get(agent.family, 0.0)
-            mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, self.cfg.cost_atr)[0])
+            mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, cost_atr)[0])
             price = last_tick.ask if side > 0 else last_tick.bid
-            intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=self.cfg.cost_atr,
+            intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
                             multiplier=mult if mult > 0 else 0.0, price=price)
-            if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, self.cfg.cost_atr) + 0.02:
+            if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02:
                 decisions.append(self._record(agent, close_ts, p, mult, "below_threshold"))
                 continue
             gd = self.gate.check(intent, self.state)
@@ -187,11 +196,11 @@ class Engine:
             stop = price - side * gd.stop_distance
             target = price + side * ls.target_atr * float(a.iloc[last])
             prop = Proposal(proposal_id=pid, account_id=self.cfg.account_id, agent_id=agent.agent_id, side=side, lots=gd.lots, entry=price, stop=stop, target=target, p=p,
-                            ev_r=p * ls.target_atr - (1 - p) * ls.stop_atr - self.cfg.cost_atr, spread_points=self.state.spread_points,
+                            ev_r=p * ls.target_atr - (1 - p) * ls.stop_atr - cost_atr, spread_points=self.state.spread_points,
                             top_features=self._top_features(model, feats), window_s=90)
             self.pending[pid] = (intent, prop, agent)
             if self.cfg.approval_mode == "auto":
-                self._execute(prop, agent, gd.lots, stop, target)
+                self._execute(prop, agent, gd.lots, stop, target, requested=price)
                 decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid))
             else:
                 self.center.propose(prop)
@@ -212,12 +221,12 @@ class Engine:
             if gd.allowed:
                 price = tick.ask if prop.side > 0 else tick.bid
                 self._execute(prop, agent, gd.lots, price - prop.side * gd.stop_distance,
-                              price + prop.side * agent.label_spec.target_atr * intent.atr_usd)
+                              price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price)
             else:
                 self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "gate_at_approval:" + ",".join(gd.reasons)})
         self._write_state()
 
-    def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float) -> None:
+    def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float) -> None:
         magic = self.cfg.magic_base + (abs(hash(agent.family)) % 100)
         oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
@@ -228,6 +237,12 @@ class Engine:
                                                   entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=agent.label_spec.max_bars)
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order", "ok": res.ok,
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots})
+        if self.store is not None and res.ok and res.price is not None:
+            # requested vs filled feeds the nightly slippage table
+            fill = pd.DataFrame([{"ts_utc": self.broker.last_tick(self.cfg.symbol).ts_utc, "client_order_id": prop.proposal_id,
+                                  "agent_id": agent.agent_id, "side": prop.side, "lots": res.filled_lots, "requested": requested,
+                                  "filled": res.price, "order_type": "market", "retcode": res.retcode, "commission": np.nan}])
+            self.store.append("fills", fill, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
 
     # ------------------------------------------------------------------ position management
     def _manage_open(self, dec: pd.DataFrame) -> None:
@@ -290,6 +305,45 @@ class Engine:
         self.decisions.append(d)
         return d
 
+    def _log_tick(self, t: Tick) -> None:
+        if self.store is None:
+            return
+        self._tick_log.append(t)
+        if (t.ts_utc - self._tick_log[0].ts_utc).total_seconds() >= self.cfg.tick_flush_s:
+            self.flush_ticks()
+
+    def flush_ticks(self) -> None:
+        """Write buffered ticks as one new part file (append-only; the nightly cost job reads them)."""
+        if self.store is None or not self._tick_log:
+            return
+        df = pd.DataFrame({"ts_utc": [x.ts_utc for x in self._tick_log], "bid": [x.bid for x in self._tick_log],
+                           "ask": [x.ask for x in self._tick_log]})
+        self.store.append("ticks", df, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+        self._tick_log = []
+
+    def _cost_atr(self, atr_usd: float, ts: pd.Timestamp) -> float:
+        """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one."""
+        path = Path(self.cfg.state_dir, f"costs_{self.cfg.account_id}.json")
+        mtime = path.stat().st_mtime if path.exists() else -1.0
+        if mtime != self._cost_cache[0]:
+            try:
+                self._cost_cache = (mtime, CostTable.load(path))
+            except (ValueError, OSError):
+                self._cost_cache = (mtime, None)   # a bad file must not stop trading decisions; fall back
+        table = self._cost_cache[1]
+        if table is None:
+            return self.cfg.cost_atr
+        session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([ts]))[0])
+        c = table.round_trip_atr(session, atr_usd)
+        return c if c is not None else self.cfg.cost_atr
+
+    def _account_class(self) -> str:
+        path = Path(self.cfg.state_dir, f"classifier_{self.cfg.account_id}.json")
+        try:
+            return str(json.loads(path.read_text()).get("class") or "unknown") if path.exists() else "unknown"
+        except (ValueError, OSError):
+            return "unknown"
+
     def _write_state(self) -> None:
         st = self.state
         payload = {
@@ -297,6 +351,6 @@ class Engine:
             "equity": st.equity, "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
-            "terminal_connected": True, "account_class": "unknown", "pending": len(self.center.pending),
+            "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
         }
         Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json").write_text(json.dumps(payload))

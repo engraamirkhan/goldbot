@@ -7,7 +7,10 @@ by isinstance; `extra="forbid"` turns a misspelt field into an error instead of 
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from typing import Annotated, Any
+
+import pandas as pd
+from pydantic import BaseModel, BeforeValidator, ConfigDict, PlainSerializer
 
 
 class Record(BaseModel):
@@ -20,3 +23,14 @@ class FrozenRecord(BaseModel):
     """Immutable record (hashable when its fields are); change it with model_copy(update=...)."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra="forbid")
+
+
+def _to_utc_timestamp(v: Any) -> pd.Timestamp:
+    t = pd.Timestamp(v)
+    return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+
+
+# A UTC pandas Timestamp that round-trips through JSON (ISO 8601). Use it for every timestamp field that is
+# persisted: a bare pd.Timestamp field only accepts Timestamp instances, so reading a saved file back would fail.
+UtcTimestamp = Annotated[pd.Timestamp, BeforeValidator(_to_utc_timestamp),
+                         PlainSerializer(lambda t: t.isoformat(), return_type=str, when_used="json")]

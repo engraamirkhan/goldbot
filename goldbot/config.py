@@ -94,6 +94,31 @@ class CostSettings(_Section):
     commission_per_lot_side_usd: dict[str, float]
 
 
+class ScheduleSettings(_Section):
+    kind: Literal["daily", "weekly", "monthly"]
+    at: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    weekdays: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4, 5, 6])
+    weekday: int | None = Field(None, ge=0, le=6)
+    day: int | None = Field(None, ge=1, le=28)
+    max_late_hours: float = Field(12.0, gt=0)
+
+
+class SchedulerSettings(_Section):
+    nightly_costs: ScheduleSettings
+    saturday_retrain: ScheduleSettings
+    monthly_research: ScheduleSettings
+
+
+class ResearchSettings(_Section):
+    trial_budget_per_month: int = Field(12, ge=1, le=200)
+    label_grid_step: float = Field(0.25, gt=0, lt=1)
+    cost_window_days: int = Field(30, ge=1)
+    fills_window_days: int = Field(180, ge=1)
+    min_fills_for_slippage: int = Field(50, ge=1)
+    registry: str = "state/research_registry.jsonl"
+    models_dir: str = "models"
+
+
 class TelegramSettings(_Section):
     allowed_user_ids: list[int] = Field(default_factory=list)
 
@@ -111,6 +136,8 @@ class Settings(_Section):
     risk: RiskSettings
     costs: CostSettings
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
+    scheduler: SchedulerSettings
+    research: ResearchSettings = Field(default_factory=ResearchSettings)
 
 
 @lru_cache(maxsize=4)

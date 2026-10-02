@@ -56,3 +56,19 @@ risk:
 costs:
   slippage_prior_usd: 0.15           # per oz, used until 50 real fills exist
   commission_per_lot_side_usd: { icm: 3.5, vantage: 3.0 }
+
+# Research scheduler (VPS service `goldbot-scheduler`). Times are UTC; gold's daily break is 21:00-22:00 UTC in
+# summer and 22:00-23:00 in winter, so the nightly job sits after both. Weekdays 0=Mon .. 6=Sun.
+scheduler:
+  nightly_costs:    { kind: daily,   at: "23:10", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }
+  saturday_retrain: { kind: weekly,  at: "06:00", weekday: 5, max_late_hours: 30 }
+  monthly_research: { kind: monthly, at: "08:00", weekday: 6, max_late_hours: 30 }   # first Sunday of the month
+
+research:
+  trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
+  label_grid_step: 0.25              # +-25% on target/stop/max_bars
+  cost_window_days: 30               # ticks used for the nightly spread table
+  fills_window_days: 180             # fills used for the slippage table
+  min_fills_for_slippage: 50         # below this a session keeps the slippage prior
+  registry: state/research_registry.jsonl
+  models_dir: models
