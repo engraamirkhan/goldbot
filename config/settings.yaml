@@ -62,6 +62,7 @@ costs:
 scheduler:
   nightly_costs:    { kind: daily,   at: "23:10", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }
   saturday_retrain: { kind: weekly,  at: "06:00", weekday: 5, max_late_hours: 30 }
+  model_watch:      { kind: daily,   at: "23:30", max_late_hours: 20 }                  # CUSUM on new champions
   monthly_research: { kind: monthly, at: "08:00", weekday: 6, max_late_hours: 30 }   # first Sunday of the month
 
 research:

@@ -27,6 +27,7 @@ from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.resample import mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
+from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.broker import Broker, OrderIntent, Tick
 from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
@@ -69,6 +70,7 @@ class EngineConfig(Record):
     feature_window: int = 800            # decision bars the features are computed on
     owner_user_id: int = 0
     data_root: str | None = None         # when set, ticks and fills are logged to the store for the nightly cost job
+    shadow_host: bool = False            # this engine runs the shadow book (one per deployment: the canonical-cost broker)
     tick_flush_s: int = 60               # market seconds between tick-log flushes
 
 
@@ -85,7 +87,7 @@ class OpenTrade(Record):
 class Engine:
     def __init__(self, cfg: EngineConfig, broker: Broker, agents: list[Specialist], models: dict[str, Model],
                  center: ApprovalCenter | None = None, allocator: RuleAllocator | None = None,
-                 limits: RiskLimits | None = None):
+                 limits: RiskLimits | None = None, shadow_models: dict[str, tuple[str, Model]] | None = None):
         self.cfg = cfg
         self.broker = broker
         self.agents = {a.agent_id: a for a in agents}
@@ -105,6 +107,10 @@ class Engine:
         self.store = Store(cfg.data_root) if cfg.data_root else None
         self._tick_log: list[Tick] = []
         self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)
+        # shadow book: version -> (family, model); champions and challengers paper-trade without orders
+        self.shadow = ShadowBook(cfg.state_dir) if cfg.shadow_host else None
+        self.shadow_models: dict[str, tuple[str, Model]] = {}
+        self.set_shadow_models(shadow_models or {})
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
         self.center.on_decision = self._on_decision
 
@@ -166,8 +172,11 @@ class Engine:
         decisions = []
         last = len(dec) - 1
         cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)
+        cands_by_agent = {aid: agent.candidates(m, X) for aid, agent in self.agents.items()}
+        if self.shadow is not None:
+            self._shadow_step(dec, X, cands_by_agent, float(a.iloc[last]), cost_atr, close_ts)
         for agent in self.agents.values():
-            cands = agent.candidates(m, X)
+            cands = cands_by_agent[agent.agent_id]
             if cands.empty or int(cands["idx"].iloc[-1]) != last:
                 continue
             side = int(cands["side"].iloc[-1])
@@ -304,6 +313,38 @@ class Engine:
         d = {"ts": ts.isoformat(), "agent": agent.agent_id, "p": round(p, 4), "mult": round(mult, 3), "action": action, "proposal": pid}
         self.decisions.append(d)
         return d
+
+    # ------------------------------------------------------------------ shadow book
+    def set_shadow_models(self, models: dict[str, tuple[str, Model]]) -> None:
+        """Replace the shadow set (on registry reload); versions no longer listed stop opening trades."""
+        self.shadow_models = dict(models)
+        if self.shadow is not None:
+            now = self.last_bar_close or pd.Timestamp.now("UTC")
+            for version in models:
+                self.shadow.track(version, now)
+
+    def _shadow_step(self, dec: pd.DataFrame, X: pd.DataFrame, cands_by_agent: dict[str, pd.DataFrame], atr_usd: float,
+                     cost_atr: float, close_ts: pd.Timestamp) -> None:
+        assert self.shadow is not None
+        last = len(dec) - 1
+        bar = dec.iloc[last]
+        self.shadow.on_bar(bar)           # advance open shadow trades first; a new entry starts after this bar
+        feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
+        for version, (family, model) in self.shadow_models.items():
+            for agent in self.agents.values():
+                cands = cands_by_agent[agent.agent_id]
+                if agent.family != family or cands.empty or int(cands["idx"].iloc[-1]) != last:
+                    continue
+                side = int(cands["side"].iloc[-1])
+                cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
+                p = float(model.predict(feats[cols])[0])
+                ls = agent.label_spec
+                if p <= breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02:
+                    continue
+                self.shadow.open_trade(version=version, agent_id=agent.agent_id, side=side, bar_ts=pd.Timestamp(bar["ts_utc"]),
+                                       entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
+                                       target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p)
+        self.shadow.save(close_ts)
 
     def _log_tick(self, t: Tick) -> None:
         if self.store is None:

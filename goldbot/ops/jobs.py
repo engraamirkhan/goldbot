@@ -7,6 +7,8 @@
                     that has a shadow record against the promotion gates (promote automatically when all pass),
                     and retrain on the rolling window. A family keeps at most one challenger in shadow; a new one
                     replaces it only after it is decided or has been in shadow for CHALLENGER_MAX_WEEKS.
+* model_watch       daily: a champion promoted in the last CUSUM_WINDOW_DAYS whose shadow returns trip the CUSUM
+                    alarm against its backtest is replaced by the previous champion (design: Retraining and promotion).
 * monthly_research  bounded search: up to `trial_budget_per_month` label-grid variants (+-step on target, stop and
                     time limit) per specialist, each a walk-forward recorded in the trial registry whose count
                     feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
@@ -26,13 +28,14 @@ import pandas as pd
 from goldbot.base import Record
 from goldbot.config import DecisionTimeframe, Settings
 from goldbot.data.store import Store
+from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.classifier import PersistentClassifier, classify
 from goldbot.execution.costs import build_cost_table
 from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import ResearchResult, run_specialist
-from goldbot.research.promotion import PerfStats, evaluate_promotion
+from goldbot.research.promotion import PerfStats, cusum_alarm, evaluate_promotion
 from goldbot.research.registry import TrialRegistry
 from goldbot.specialists import SPECIALISTS
 
@@ -41,6 +44,7 @@ log = logging.getLogger("goldbot.jobs")
 CHALLENGER_MAX_WEEKS = 8
 CLASSIFIER_WEEKDAY = 4          # Friday's nightly run re-classifies (design: weekly, from the nightly cost job)
 CONTEXT_EXTRA_MONTHS = 2        # daily/1h context needs history before the decision window starts
+CUSUM_WINDOW_DAYS = 14          # a new champion is watched for its first two weeks
 
 
 class JobContext(Record):
@@ -51,6 +55,7 @@ class JobContext(Record):
     trials: TrialRegistry
     accounts: list[Account]
     sync_bars: Callable[[Store], dict[str, int]] | None = None   # release -> store refresh before retraining
+    sync_trials: Callable[[Path], int] | None = None            # union the trial registry with the release copy
 
 
 # ---------------------------------------------------------------------------------------------- nightly costs
@@ -102,7 +107,7 @@ def backtest_stats(res: ResearchResult) -> PerfStats | None:
         return None
     tpy = float(res.metrics.get("trades_per_year", 0.0)) * s["n"] / max(res.metrics.get("all_candidates", {}).get("n", s["n"]), 1)
     return PerfStats(n_trades=int(s["n"]), sharpe_ann=float(s["sharpe_ann"]), hit_rate=float(s["hit_rate"]),
-                     max_dd=float(s["max_dd"]), trades_per_week=tpy / 52.0)
+                     max_dd=float(s["max_dd"]), trades_per_week=tpy / 52.0, mean_ret=s.get("mean_ret"), std_ret=s.get("std_ret"))
 
 
 def shadow_stats(ctx: JobContext, entry: ModelEntry) -> PerfStats | None:
@@ -171,6 +176,27 @@ def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- model watch
+def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    book = ShadowBook(ctx.state_dir)   # read-only view of the engine's shadow book
+    out: dict[str, Any] = {}
+    for family in sorted({e.family for e in ctx.models.entries}):
+        ch = ctx.models.champion(family)
+        if ch is None or ch.promoted_utc is None or slot - ch.promoted_utc > pd.Timedelta(days=CUSUM_WINDOW_DAYS):
+            continue
+        bt = PerfStats.model_validate(ch.backtest) if ch.backtest else None
+        rets = book.returns_since(ch.version, ch.promoted_utc)
+        if bt is None or bt.mean_ret is None or bt.std_ret is None:
+            out[family] = {"version": ch.version, "watch": "no backtest moments; cannot run CUSUM"}
+            continue
+        if cusum_alarm(rets, bt.mean_ret, bt.std_ret) and ctx.models.by_family(family, "previous"):
+            restored = ctx.models.restore_previous(family, f"CUSUM alarm on {len(rets)} shadow trades within {CUSUM_WINDOW_DAYS} days of promotion")
+            out[family] = {"version": ch.version, "action": "restored_previous", "restored": restored.version, "trades": len(rets)}
+        else:
+            out[family] = {"version": ch.version, "action": "ok", "trades": len(rets)}
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- research loop
 def label_grid(base: dict[str, Any], step: float) -> list[dict[str, Any]]:
     """+-step around target_atr, stop_atr and max_bars (the base itself excluded: it is the champion's config)."""
@@ -188,8 +214,19 @@ def _num(v: float | None, fmt: str) -> str:
     return "" if v is None else format(v, fmt)
 
 
+def _sync_trials(ctx: JobContext) -> int | str | None:
+    if ctx.sync_trials is None:
+        return None
+    try:
+        return ctx.sync_trials(ctx.trials.path)
+    except Exception as exc:   # the loop still runs; the next sync unions whatever was written meanwhile
+        log.warning("trial registry sync failed: %s", exc)
+        return f"failed: {exc}"
+
+
 def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     r = ctx.settings.research
+    synced_before = _sync_trials(ctx)     # count trials run elsewhere (the research workflow) before deflating
     rng = random.Random(f"{slot:%Y-%m}")        # reproducible choice of variants for the month
     lines = [f"# Research loop {slot:%Y-%m}", ""]
     out: dict[str, Any] = {}
@@ -218,6 +255,7 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     report = ctx.state_dir / f"research_{slot:%Y-%m}.md"
     report.write_text("\n".join(lines))
     out["report"] = str(report)
+    out["registry_sync"] = {"before": synced_before, "after": _sync_trials(ctx)}
     return out
 
 
@@ -225,6 +263,7 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
+    "model_watch": model_watch,
     "monthly_research": monthly_research,
 }
 

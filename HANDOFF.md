@@ -32,21 +32,24 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
   (`research/promotion.py`) once a shadow record exists; monthly bounded label-grid research loop. The engine logs
   ticks/fills, prices candidates with the nightly cost table, reports the classifier's account class, and trades
   only with registry champions (hot-reloaded on promotion).
+- Shadow book (`engine/shadow.py`): the engine on the canonical-cost broker (IC Markets) paper-trades the champion and
+  every challenger on live bars with label-identical mechanics (exact parity with `triple_barrier` is tested) and
+  writes `state/shadow_<version>.json`; the Saturday job promotes/retires from it, and the daily `model_watch` job runs
+  a CUSUM on a new champion's first two weeks and restores the previous champion on an alarm.
+- One trial registry (`research/registry_sync.py`): the VPS monthly loop and the research workflow both union their
+  registry with the `research-v1` release copy before and after writing, so the deflated Sharpe counts every trial once.
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
 
 ## Next steps (no owner input needed unless marked)
 1. OWNER: merge PR 36. Then dispatch `research.yml` (session_open, 2010-2026) and read the "research: session_open"
    issue; until a model passes there is no champion, so the engine proposes nothing (by design).
-2. Shadow book in the engine: run every challenger (and retired agents) on the same bars without orders, record
-   trades to `state/shadow_<version>.json` as `PerfStats` (the Saturday job already reads it to promote/retire).
-   Also feed live champion PerfStats for the turnover gate and a CUSUM alarm that calls `restore_previous`.
-3. Journal + agent layer (data steward, research analyst, risk officer, journal coach, improvement agent).
-4. Population tournament mechanics (fitness, cloning, retirement) on top of agent lineage and the shadow book.
-5. One trial registry: the VPS monthly loop writes `state/research_registry.jsonl`, the research workflow writes the
-   `research-v1` release copy; sync them (VPS pushes/pulls the release asset) so N is counted once.
-6. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals
-   once and answer the credential prompts; create the Cloudflare tunnel and enter its token on the VPS.
-7. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
+2. Journal + agent layer (data steward, research analyst, risk officer, journal coach, improvement agent).
+3. Population tournament mechanics (fitness, cloning, retirement) on top of agent lineage and the shadow book;
+   retired agents keep shadow-trading (add them to `ModelRegistry.shadow_models`), league table on the Agents screen.
+4. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals
+   once and answer the credential prompts; create the Cloudflare tunnel and enter its token on the VPS; store a
+   GitHub token with `python -m goldbot.ops.accounts set github-token` (bar sync + shared trial registry).
+5. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
 
 ## Environment facts
 - Claude sandboxes (cloud container and the Mac's Cowork VM) cannot reach market-data hosts or download Actions

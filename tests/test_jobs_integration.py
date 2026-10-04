@@ -106,9 +106,9 @@ def test_label_grid_is_the_26_neighbours_of_the_base():
     assert {g["max_bars"] for g in grid} == {12, 16, 20}
 
 
-def test_build_scheduler_registers_the_three_jobs(tmp_path):
+def test_build_scheduler_registers_every_job(tmp_path):
     ctx = _ctx(tmp_path / "data", tmp_path)
     sch = build_scheduler(ctx, clock=lambda: pd.Timestamp("2026-10-02 12:00", tz="UTC"))
     nxt = {k: v["next_slot"] for k, v in sch.status()["jobs"].items()}
     assert nxt == {"nightly_costs": "2026-10-02T23:10:00+00:00", "saturday_retrain": "2026-10-03T06:00:00+00:00",
-                   "monthly_research": "2026-10-04T08:00:00+00:00"}
+                   "model_watch": "2026-10-02T23:30:00+00:00", "monthly_research": "2026-10-04T08:00:00+00:00"}

@@ -31,6 +31,8 @@ class PerfStats(FrozenRecord):
     max_dd: float = Field(ge=0)
     trades_per_week: float = Field(ge=0)
     weeks: float = Field(0.0, ge=0)
+    mean_ret: float | None = None      # per-trade return moments, used by the CUSUM alarm
+    std_ret: float | None = None
 
 
 class GateCheck(FrozenRecord):
@@ -71,3 +73,17 @@ def evaluate_promotion(backtest: PerfStats, shadow: PerfStats, champion: PerfSta
         checks.append(GateCheck(name="turnover", passed=change <= MAX_TURNOVER_CHANGE,
                                 detail=f"{shadow.trades_per_week:.1f}/week vs champion {champion.trades_per_week:.1f} ({change:.0%} change)"))
     return PromotionDecision(promote=all(c.passed for c in checks), ready=True, checks=checks)
+
+
+def cusum_alarm(returns: list[float], expected_mean: float, expected_std: float, k: float = 0.5, h: float = 4.0) -> bool:
+    """One-sided CUSUM on standardised trade returns for a downward shift from the backtest's mean (design: a new
+    champion that trips the alarm in its first two weeks is replaced by the previous one). k is the allowance and
+    h the decision interval, both in standard deviations; defaults detect a ~1 sd drop within a handful of trades."""
+    if expected_std <= 0 or not returns:
+        return False
+    s = 0.0
+    for r in returns:
+        s = max(0.0, s + (expected_mean - r) / expected_std - k)
+        if s > h:
+            return True
+    return False

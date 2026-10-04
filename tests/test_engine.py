@@ -9,20 +9,22 @@ from goldbot.data.synthetic import synthetic_ticks
 from goldbot.engine import ConstantModel, Engine, EngineConfig
 from goldbot.execution.broker import Tick
 from goldbot.execution.paper import PaperBroker
+from goldbot.research.promotion import PerfStats
 from goldbot.specialists import SPECIALISTS
 from goldbot.telegram.approvals import ApprovalCenter
 
 pytestmark = pytest.mark.integration
 
 
-def _run(approval_mode: str, tmp_path: Path, days: int = 5, data_root: str | None = None):
+def _run(approval_mode: str, tmp_path: Path, days: int = 5, data_root: str | None = None, shadow: bool = False):
     ticks = synthetic_ticks("2025-03-03", f"2025-03-{3 + days:02d}", ticks_per_minute=1, seed=5)
     pb = PaperBroker(equity=10_000)
     center = ApprovalCenter({111})
     spec = SPECIALISTS["session_open"](min_body_pct=0.0, asia_range_max_atr_d=99.0)  # permissive for the test
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", approval_mode=approval_mode, state_dir=str(tmp_path), owner_user_id=111,
-                              data_root=data_root),
-                 pb, [spec], {"session_open": ConstantModel(p=0.65)}, center)
+                              data_root=data_root, shadow_host=shadow),
+                 pb, [spec], {"session_open": ConstantModel(p=0.65)}, center,
+                 shadow_models={"session_open-test-v1": ("session_open", ConstantModel(p=0.65))} if shadow else None)
     decisions = []
     for ts, bid, ask in zip(ticks["ts_utc"], ticks["bid"].to_numpy(float), ticks["ask"].to_numpy(float)):
         decisions += eng.on_tick(Tick(ts_utc=pd.Timestamp(ts), bid=float(bid), ask=float(ask)))
@@ -35,7 +37,7 @@ def _run(approval_mode: str, tmp_path: Path, days: int = 5, data_root: str | Non
 
 
 def test_engine_auto_mode_places_orders_and_writes_state(tmp_path):
-    eng, pb, center, decisions = _run("auto", tmp_path)
+    eng, pb, center, decisions = _run("auto", tmp_path, shadow=True)
     executed = [d for d in decisions if d["action"] == "executed:auto"]
     assert executed, "expected at least one auto-executed trade on synthetic data"
     deals = pb.deals_since(pd.Timestamp("2025-01-01", tz="UTC"))
@@ -45,6 +47,13 @@ def test_engine_auto_mode_places_orders_and_writes_state(tmp_path):
     # idempotency: no proposal id was sent twice
     ids = [d["proposal"] for d in decisions if d.get("proposal")]
     assert len(ids) == len(set(ids))
+    # the shadow book paper-traded the same signals without orders; the risk gate can only make live take fewer
+    book = eng.shadow.books["session_open-test-v1"]
+    shadow_entries = len(book.open) + len(book.closed)
+    assert shadow_entries >= len(executed) >= 1 and book.closed
+    st = PerfStats.model_validate_json((tmp_path / "shadow_session_open-test-v1.json").read_text())
+    assert st.n_trades == len(book.closed)
+    assert len(pb.deals_since(pd.Timestamp("2025-01-01", tz="UTC"))) == len(deals)   # shadow placed no orders
 
 
 def test_engine_propose_mode_waits_for_approval(tmp_path):

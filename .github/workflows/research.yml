@@ -43,6 +43,9 @@ jobs:
             --specialist "$SPECIALIST" --from-year "$FROM_YEAR" --to-year "$TO_YEAR" --rationale "$RATIONALE" 2>&1 | tee research.log
       - name: save the registry
         run: |
+          # union with whatever the VPS monthly loop pushed while this ran, so no trial is dropped
+          gh release download research-v1 -p registry.jsonl -O registry.remote.jsonl || touch registry.remote.jsonl
+          python -m goldbot.research.registry_sync merge registry.jsonl registry.remote.jsonl -o registry.jsonl
           gh release view research-v1 >/dev/null 2>&1 || gh release create research-v1 --title "Research trial registry" \
             --notes "registry.jsonl: every evaluated trial (feeds the deflated Sharpe). Written by the research workflow." --latest=false
           gh release upload research-v1 registry.jsonl --clobber

@@ -78,6 +78,10 @@ class ModelRegistry:
                 out[fam] = self.load(ch)
         return out
 
+    def shadow_models(self) -> dict[str, tuple[str, MetaLabelModel]]:
+        """version -> (family, model) for every champion and challenger: what the shadow book paper-trades."""
+        return {e.version: (e.family, self.load(e)) for e in self.entries if e.status in ("champion", "challenger")}
+
     # ------------------------------------------------------------------ changes
     def add_challenger(self, model: MetaLabelModel, *, family: str, agent_id: str, backtest: dict[str, Any],
                        now: UtcTimestamp | None = None, notes: list[str] | None = None) -> ModelEntry:
