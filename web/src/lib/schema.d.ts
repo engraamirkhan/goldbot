@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agent-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Agent Runs */
+        get: operations["agent_runs_api_agent_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents": {
         parameters: {
             query?: never;
@@ -377,6 +394,29 @@ export interface components {
              */
             status: "shadow" | "live" | "retired";
         };
+        /**
+         * AgentRunRow
+         * @description One staff-agent run (data steward, risk officer, journal coach, improvement agent) and its report.
+         */
+        AgentRunRow: {
+            /** Cost Usd */
+            cost_usd: number;
+            /** Detail */
+            detail: string | null;
+            /** Report */
+            report: string | null;
+            /** Role */
+            role: string;
+            /**
+             * Started Utc
+             * Format: date-time
+             */
+            started_utc: string;
+            /** Status */
+            status: string;
+            /** Turns */
+            turns: number;
+        };
         /** AuthState */
         AuthState: {
             /** Needs Setup */
@@ -650,6 +690,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountSummary"][];
+                };
+            };
+        };
+    };
+    agent_runs_api_agent_runs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunRow"][];
                 };
             };
         };

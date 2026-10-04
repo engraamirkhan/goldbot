@@ -43,6 +43,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
   winners cloned into 2-3 mutated shadow children; caps 12 live / 24 shadow; capital = family weight x fitness share.
   Models are keyed by agent (`ModelRegistry`); the engine trades only live members and shadow-trades all of them;
   `state/agents.json` feeds the dashboard's Agents league table.
+- Journal + staff agents: the engine journals every decision to the store's `decisions` table. `goldbot/agents/`:
+  data steward and risk officer (weekday nights), journal coach and improvement agent (Saturdays) run on Claude
+  Opus 5.5 through a budgeted tool-use loop over read-only tools (`agents/tools.py`; the only write is filing a
+  hypothesis to `state/hypotheses.jsonl`), with refusal fallbacks enabled, a per-run cap and a monthly cap
+  (`settings.yaml: agents`), every run logged to `state/agent_runs.jsonl`; reports appear on the Agents screen.
 - One trial registry (`research/registry_sync.py`): the VPS monthly loop and the research workflow both union their
   registry with the `research-v1` release copy before and after writing, so the deflated Sharpe counts every trial once.
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
@@ -50,10 +55,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
 ## Next steps (no owner input needed unless marked)
 1. OWNER: merge PR 36. Then dispatch `research.yml` (session_open, 2010-2026) and read the "research: session_open"
    issue; until a model passes there is no champion, so the engine proposes nothing (by design).
-2. Journal + agent layer (data steward, research analyst, risk officer, journal coach, improvement agent).
+2. Research analyst agent: pick up `state/hypotheses.jsonl`, run the walk-forward for each (bounded by the monthly
+   trial budget) and report; macro/news analyst and execution auditor roles; Telegram delivery of the reports.
 3. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals
    once and answer the credential prompts; create the Cloudflare tunnel and enter its token on the VPS; store a
-   GitHub token with `python -m goldbot.ops.accounts set github-token` (bar sync + shared trial registry).
+   GitHub token with `python -m goldbot.ops.accounts set github-token` (bar sync + shared trial registry) and an
+   Anthropic API key with `python -m goldbot.ops.accounts set anthropic-api-key` (staff agents; off without it).
 4. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
 5. More specialists (trend, mean-reversion, breakout per the design) so the allocator and the population have more
    than one family; feature-subset and timeframe mutations for cloning (need pipeline support).

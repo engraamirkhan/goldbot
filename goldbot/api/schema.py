@@ -166,3 +166,14 @@ class JobRow(BaseModel):
     runs: int
     failures: int
     heartbeat_age_s: float
+
+
+class AgentRunRow(BaseModel):
+    """One staff-agent run (data steward, risk officer, journal coach, improvement agent) and its report."""
+    role: str
+    started_utc: datetime
+    status: str
+    turns: int
+    cost_usd: float
+    detail: str | None
+    report: str | None

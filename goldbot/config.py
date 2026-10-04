@@ -108,6 +108,8 @@ class SchedulerSettings(_Section):
     saturday_retrain: ScheduleSettings
     model_watch: ScheduleSettings
     tournament: ScheduleSettings
+    agents_daily: ScheduleSettings
+    agents_weekly: ScheduleSettings
     monthly_research: ScheduleSettings
 
 
@@ -119,6 +121,11 @@ class ResearchSettings(_Section):
     min_fills_for_slippage: int = Field(50, ge=1)
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
+
+
+class AgentSettings(_Section):
+    monthly_cap_usd: float = Field(40.0, ge=0)
+    model: str = "claude-opus-5-5"
 
 
 class TelegramSettings(_Section):
@@ -140,12 +147,34 @@ class Settings(_Section):
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     scheduler: SchedulerSettings
     research: ResearchSettings = Field(default_factory=ResearchSettings)
+    agents: AgentSettings = Field(default_factory=AgentSettings)
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """safe_load that rejects duplicate keys (plain YAML silently keeps the last one)."""
+
+
+def _no_duplicates(loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool = False) -> dict:
+    seen = set()
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise yaml.constructor.ConstructorError(None, None, f"duplicate key {key!r}", key_node.start_mark)
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+_UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates)
+
+
+def load_yaml(path: str | Path) -> dict:
+    with open(path, "r", encoding="utf-8") as fh:
+        return yaml.load(fh, Loader=_UniqueKeyLoader)   # a SafeLoader subclass: no arbitrary objects
 
 
 @lru_cache(maxsize=4)
 def load_settings(path: str | Path = DEFAULT_SETTINGS) -> Settings:
-    with open(path, "r", encoding="utf-8") as fh:
-        return Settings.model_validate(yaml.safe_load(fh))
+    return Settings.model_validate(load_yaml(path))
 
 
 def tf_seconds(tf: str) -> int:

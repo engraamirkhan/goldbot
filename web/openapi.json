@@ -183,6 +183,65 @@
     "title": "AgentRow",
     "type": "object"
    },
+   "AgentRunRow": {
+    "description": "One staff-agent run (data steward, risk officer, journal coach, improvement agent) and its report.",
+    "properties": {
+     "cost_usd": {
+      "title": "Cost Usd",
+      "type": "number"
+     },
+     "detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Detail"
+     },
+     "report": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Report"
+     },
+     "role": {
+      "title": "Role",
+      "type": "string"
+     },
+     "started_utc": {
+      "format": "date-time",
+      "title": "Started Utc",
+      "type": "string"
+     },
+     "status": {
+      "title": "Status",
+      "type": "string"
+     },
+     "turns": {
+      "title": "Turns",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "role",
+     "started_utc",
+     "status",
+     "turns",
+     "cost_usd",
+     "detail",
+     "report"
+    ],
+    "title": "AgentRunRow",
+    "type": "object"
+   },
    "AuthState": {
     "properties": {
      "needs_setup": {
@@ -855,6 +914,33 @@
      }
     ],
     "summary": "Accounts"
+   }
+  },
+  "/api/agent-runs": {
+   "get": {
+    "operationId": "agent_runs_api_agent_runs_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/AgentRunRow"
+         },
+         "title": "Response Agent Runs Api Agent Runs Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Agent Runs"
    }
   },
   "/api/agents": {

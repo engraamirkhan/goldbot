@@ -34,3 +34,11 @@ def test_out_of_range_values_are_rejected(path, value):
     raw[path[0]][path[1]] = value
     with pytest.raises(ValidationError):
         Settings.model_validate(raw)
+
+
+def test_duplicate_keys_are_rejected(tmp_path):
+    text = open(DEFAULT_SETTINGS, encoding="utf-8").read()
+    dup = tmp_path / "s.yaml"
+    dup.write_text(text + "\nagents:\n  monthly_cap_usd: 1.0\n")
+    with pytest.raises(yaml.constructor.ConstructorError, match="duplicate key 'agents'"):
+        load_settings(dup)

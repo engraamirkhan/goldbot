@@ -105,3 +105,23 @@ def test_jobs_endpoint_reports_the_scheduler_state(tmp_path):
     assert row["last_ok"] is False and row["last_error"] == "RuntimeError: no ticks table"   # first line only
     assert row["failures"] == 1 and row["next_slot"].startswith("2026-10-03T23:10")
     assert row["heartbeat_age_s"] >= 0
+
+
+def test_agent_runs_endpoint_serves_reports_from_the_state_dir_only(tmp_path):
+    rep = tmp_path / "agent_reports" / "risk_officer"
+    rep.mkdir(parents=True)
+    (rep / "r.md").write_text("Drawdown 2.1%, no limits tripped.")
+    outside = tmp_path.parent / "secret.md"
+    outside.write_text("not for the dashboard")
+    rows = [{"role": "risk_officer", "started_utc": "2026-10-05T23:45:00+00:00", "status": "ok", "turns": 3, "cost_usd": 0.21,
+             "detail": None, "report_path": str(rep / "r.md")},
+            {"role": "data_steward", "started_utc": "2026-10-05T23:46:00+00:00", "status": "ok", "turns": 1, "cost_usd": 0.05,
+             "detail": None, "report_path": str(outside)}]
+    (tmp_path / "agent_runs.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\nnot json\n")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    c = TestClient(app)
+    uri = c.post("/api/auth/setup", json={"setup_code": app.state.st.auth.setup_code, "email": "o@x.io", "password": "a long password here"}).json()["totp_uri"]
+    tok = c.post("/api/auth/login", json={"email": "o@x.io", "password": "a long password here", "totp": totp_code(_secret_from_uri(uri))}).json()["token"]
+    got = c.get("/api/agent-runs", headers={"Authorization": f"Bearer {tok}"}).json()
+    assert [r["role"] for r in got] == ["data_steward", "risk_officer"]          # newest first, bad line skipped
+    assert got[1]["report"].startswith("Drawdown") and got[0]["report"] is None   # outside the state dir: not served

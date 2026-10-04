@@ -28,3 +28,8 @@ tr.retired { color: var(--muted); }
 .mono { font-family: ui-monospace, monospace; word-break: break-all; }
 form.inline { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; } form.inline input, form.inline select, table select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
 form.inline button { padding: 6px 12px; border-radius: 6px; border: 0; background: var(--accent); color: white; }
+
+.reports { list-style: none; padding: 0; }
+.reports li { margin: 0.4rem 0; }
+.reports summary { cursor: pointer; }
+.report { white-space: pre-wrap; font-size: 0.9rem; max-width: 100%; overflow-x: auto; }

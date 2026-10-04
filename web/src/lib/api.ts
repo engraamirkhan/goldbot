@@ -16,6 +16,7 @@ export type Role = Schemas["Me"]["role"];
 export type Me = Schemas["Me"];
 export type UserRow = Schemas["UserRow"];
 export type JobRow = Schemas["JobRow"];
+export type AgentRunRow = Schemas["AgentRunRow"];
 
 let token: string | null = sessionStorage.getItem("goldbot_token");
 let me: Me | null = JSON.parse(sessionStorage.getItem("goldbot_me") ?? "null");
@@ -54,6 +55,7 @@ export const api = {
   agents: () => req<AgentRow[]>("/api/agents"),
   feeds: () => req<FeedHealth[]>("/api/feeds"),
   jobs: () => req<JobRow[]>("/api/jobs"),
+  agentRuns: () => req<AgentRunRow[]>("/api/agent-runs"),
 };
 
 export function liveSocket(onEvent: (e: { type: string } & Record<string, unknown>) => void): () => void {

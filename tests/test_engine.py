@@ -73,6 +73,10 @@ def test_engine_propose_mode_waits_for_approval(tmp_path):
     assert len(logged) == n_ticks
     fills = store.read("fills", source="icm-demo")
     orders = [d for d in eng.decisions if d.get("action") == "order" and d["ok"]]
+    # every decision is journaled for the agents and reviews (proposals, orders, below-threshold scores ...)
+    eng.flush_journal()                      # decisions after the last bar close (approval-time orders)
+    journal = store.read("decisions", source="icm-demo")
+    assert len(journal) == len(eng.decisions) and {"proposed", "order"} <= set(journal["action"])
     assert len(fills) == len(orders) >= 1
     assert ((fills["side"] * (fills["filled"] - fills["requested"])) >= 0).all()   # paper fills never improve on the quote
 

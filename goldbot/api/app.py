@@ -25,6 +25,7 @@ from goldbot.api.schema import (
     AcceptResponse,
     AccountSummary,
     AgentRow,
+    AgentRunRow,
     AuthState,
     Decision,
     DecisionResult,
@@ -77,6 +78,24 @@ class State:
             return json.loads(f.read_text()) if f.exists() else {}
         except json.JSONDecodeError:
             return {}
+
+    def agent_runs(self, limit: int = 30) -> list[dict]:
+        f = self.dir / "agent_runs.jsonl"
+        if not f.exists():
+            return []
+        rows = []
+        for line in f.read_text().splitlines()[-limit:]:
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            path = r.get("report_path")
+            rp = Path(path) if path else None
+            # only reports inside this state dir are served
+            ok = rp is not None and rp.exists() and self.dir.resolve() in rp.resolve().parents
+            r["report"] = rp.read_text() if ok and rp is not None else None
+            rows.append(r)
+        return rows[::-1]
 
     def agents(self) -> list[dict]:
         f = self.dir / "agents.json"
@@ -239,6 +258,12 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
                        last_error=(j.get("last_error") or "").splitlines()[0] if j.get("last_error") else None,
                        next_slot=j.get("next_slot"), runs=j.get("runs", 0), failures=j.get("failures", 0), heartbeat_age_s=age)
                 for n, j in sorted(sch.get("jobs", {}).items())]
+
+    @app.get("/api/agent-runs", response_model=list[AgentRunRow])
+    def agent_runs(_: User = Depends(auth)) -> list[AgentRunRow]:
+        return [AgentRunRow(role=r["role"], started_utc=r["started_utc"], status=r["status"], turns=r.get("turns", 0),
+                            cost_usd=r.get("cost_usd", 0.0), detail=r.get("detail"), report=r.get("report"))
+                for r in st.agent_runs()]
 
     @app.get("/api/status")
     def status() -> Status:

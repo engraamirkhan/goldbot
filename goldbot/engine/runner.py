@@ -109,6 +109,7 @@ class Engine:
         self.decisions: list[dict] = []
         self.store = Store(cfg.data_root) if cfg.data_root else None
         self._tick_log: list[Tick] = []
+        self._journaled = 0                  # decisions already written to the store's journal
         self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)
         # shadow book: version -> (family, model); champions and challengers paper-trade without orders
         self.shadow = ShadowBook(cfg.state_dir) if cfg.shadow_host else None
@@ -221,6 +222,7 @@ class Engine:
                 self.center.propose(prop)
                 decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid))
         self._write_state()
+        self.flush_journal()
         return decisions
 
     # ------------------------------------------------------------------ approvals -> orders
@@ -352,6 +354,27 @@ class Engine:
                                        entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
                                        target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p)
         self.shadow.save(close_ts)
+
+    def flush_journal(self) -> None:
+        """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the
+        store's `decisions` table: the trade journal the agents and reviews read. One part file per flush."""
+        if self.store is None or self._journaled >= len(self.decisions):
+            return
+        rows = []
+        for d in self.decisions[self._journaled:]:
+            ts = d.get("ts")
+            if isinstance(ts, (int, float)):
+                ts_utc = pd.Timestamp(ts, unit="s", tz="UTC")
+            else:
+                ts_utc = pd.Timestamp(ts) if ts is not None else pd.Timestamp.now("UTC")
+            extra = {k: v for k, v in d.items() if k not in ("ts", "agent", "action", "p", "mult", "proposal")}
+            rows.append({"ts_utc": ts_utc, "account_id": self.cfg.account_id, "agent_id": d.get("agent"),
+                         "action": str(d.get("action")), "p": d.get("p"), "mult": d.get("mult"),
+                         "proposal_id": d.get("proposal"), "detail": json.dumps(extra, default=str)})
+        df = pd.DataFrame(rows)
+        df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
+        self.store.append("decisions", df, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+        self._journaled = len(self.decisions)
 
     def _log_tick(self, t: Tick) -> None:
         if self.store is None:

@@ -11,6 +11,12 @@ from __future__ import annotations
 import logging
 import sys
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # service entry points import lazily; these are for annotations only
+    from goldbot.agents.runner import AgentRunner
+    from goldbot.config import Settings
+    from goldbot.data.store import Store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("goldbot.run")
@@ -124,6 +130,24 @@ def run_webhook() -> None:
     uvicorn.run(create_app(secret), host="0.0.0.0", port=8443)
 
 
+def _agent_runner(settings: Settings, store: Store) -> AgentRunner | None:
+    """Staff agents run only when the owner has stored an Anthropic API key in the OS keyring."""
+    from pathlib import Path
+
+    from goldbot.agents.runner import AgentRunner, SpendLedger  # noqa: F811
+    from goldbot.agents.tools import ReadOnlyTools
+    from goldbot.ops import accounts
+    key = accounts.get_secret("anthropic-api-key")
+    if not key:
+        log.warning("no anthropic-api-key in the keyring: staff agents are off "
+                    "(python -m goldbot.ops.accounts set anthropic-api-key)")
+        return None
+    import anthropic
+    return AgentRunner(anthropic.Anthropic(api_key=key), ReadOnlyTools("state", store),
+                       SpendLedger(Path("state") / "agent_spend.json", settings.agents.monthly_cap_usd), "state",
+                       model=settings.agents.model)
+
+
 def run_scheduler() -> None:
     from pathlib import Path
 
@@ -147,7 +171,8 @@ def run_scheduler() -> None:
                      accounts=accounts.enabled_accounts(),   # live accounts only once the phase gate has passed
                      sync_bars=lambda store: sync_release_bars(store, token=gh_token),
                      sync_trials=(lambda path: sync_registry(path, gh_token)) if gh_token else None,
-                     population=Population(Path("state") / "population.json"))
+                     population=Population(Path("state") / "population.json"),
+                     agent_runner=_agent_runner(settings, Store(settings.data_root)))
     sch = build_scheduler(ctx)
     for name, st in sch.status()["jobs"].items():
         log.info("scheduler: %s next at %s", name, st["next_slot"])

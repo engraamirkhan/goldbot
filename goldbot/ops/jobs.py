@@ -27,6 +27,8 @@ from typing import Any, Callable, cast
 
 import pandas as pd
 
+from goldbot.agents.roles import ROLES
+from goldbot.agents.runner import AgentRunner
 from goldbot.base import Record
 from goldbot.config import DecisionTimeframe, Settings
 from goldbot.data.store import Store
@@ -61,6 +63,7 @@ class JobContext(Record):
     sync_bars: Callable[[Store], dict[str, int]] | None = None   # release -> store refresh before retraining
     sync_trials: Callable[[Path], int] | None = None            # union the trial registry with the release copy
     population: Population
+    agent_runner: AgentRunner | None = None                      # None when no Anthropic API key is in the keyring
 
 
 # ---------------------------------------------------------------------------------------------- nightly costs
@@ -217,6 +220,27 @@ def tournament(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return summary
 
 
+# ---------------------------------------------------------------------------------------------- staff agents
+def _run_agents(ctx: JobContext, slot: pd.Timestamp, cadence: str) -> dict[str, Any]:
+    if ctx.agent_runner is None:
+        return {"skipped": "no anthropic-api-key in the keyring (python -m goldbot.ops.accounts set anthropic-api-key)"}
+    out: dict[str, Any] = {}
+    for role in ROLES.values():
+        if role.cadence == cadence:
+            run = ctx.agent_runner.run(role, slot)
+            out[role.name] = {"status": run.status, "cost_usd": round(run.cost_usd, 4), "turns": run.turns,
+                              "report": run.report_path, "detail": run.detail}
+    return out
+
+
+def agents_daily(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    return _run_agents(ctx, slot, "daily")
+
+
+def agents_weekly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    return _run_agents(ctx, slot, "weekly")
+
+
 # ---------------------------------------------------------------------------------------------- research loop
 def label_grid(base: dict[str, Any], step: float) -> list[dict[str, Any]]:
     """+-step around target_atr, stop_atr and max_bars (the base itself excluded: it is the champion's config)."""
@@ -285,6 +309,8 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "saturday_retrain": saturday_retrain,
     "model_watch": model_watch,
     "tournament": tournament,
+    "agents_daily": agents_daily,
+    "agents_weekly": agents_weekly,
     "monthly_research": monthly_research,
 }
 
