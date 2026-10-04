@@ -1,8 +1,8 @@
-"""Model registry: which trained model each specialist family trades with, and its challengers.
+"""Model registry: which trained model each agent (population member) trades with, and its challengers.
 
 Statuses: `challenger` (shadow only) -> `champion` (traded) -> `previous` (the champion before the current one,
 kept so it can be restored if the new champion trips its alarm in the first two weeks) -> `retired`. Artefacts are
-pickles under models/<family>/; the registry stores each file's SHA-256 and refuses to load a file that does not
+pickles under models/<family>/<agent_id>-<timestamp>.pkl; the registry stores each file's SHA-256 and refuses to load a file that does not
 match, so a corrupted or swapped artefact can never reach the engine.
 """
 from __future__ import annotations
@@ -39,6 +39,9 @@ class ModelEntry(Record):
 
 
 class ModelRegistry:
+    """Keyed by agent: every population member (a specialist family + config, see research/population.py) has its own
+    champion, challengers and previous champion. The founder agent of a family is its default configuration."""
+
     def __init__(self, root: str | Path):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -47,12 +50,15 @@ class ModelRegistry:
         self.entries: list[ModelEntry] = [ModelEntry.model_validate(r) for r in raw]
 
     # ------------------------------------------------------------------ queries
-    def by_family(self, family: str, status: Status | None = None) -> list[ModelEntry]:
-        return [e for e in self.entries if e.family == family and (status is None or e.status == status)]
+    def by_agent(self, agent_id: str, status: Status | None = None) -> list[ModelEntry]:
+        return [e for e in self.entries if e.agent_id == agent_id and (status is None or e.status == status)]
 
-    def champion(self, family: str) -> ModelEntry | None:
-        ch = self.by_family(family, "champion")
+    def champion(self, agent_id: str) -> ModelEntry | None:
+        ch = self.by_agent(agent_id, "champion")
         return ch[-1] if ch else None
+
+    def agent_ids(self) -> list[str]:
+        return sorted({e.agent_id for e in self.entries})
 
     def get(self, version: str) -> ModelEntry:
         for e in self.entries:
@@ -71,22 +77,26 @@ class ModelRegistry:
         return model
 
     def champion_models(self) -> dict[str, MetaLabelModel]:
+        """agent_id -> champion model."""
         out = {}
-        for fam in sorted({e.family for e in self.entries}):
-            ch = self.champion(fam)
+        for aid in self.agent_ids():
+            ch = self.champion(aid)
             if ch is not None:
-                out[fam] = self.load(ch)
+                out[aid] = self.load(ch)
         return out
 
     def shadow_models(self) -> dict[str, tuple[str, MetaLabelModel]]:
-        """version -> (family, model) for every champion and challenger: what the shadow book paper-trades."""
-        return {e.version: (e.family, self.load(e)) for e in self.entries if e.status in ("champion", "challenger")}
+        """version -> (agent_id, model) for every champion and challenger: what the shadow book paper-trades."""
+        return {e.version: (e.agent_id, self.load(e)) for e in self.entries if e.status in ("champion", "challenger")}
 
     # ------------------------------------------------------------------ changes
     def add_challenger(self, model: MetaLabelModel, *, family: str, agent_id: str, backtest: dict[str, Any],
                        now: UtcTimestamp | None = None, notes: list[str] | None = None) -> ModelEntry:
         now = now or pd.Timestamp.now("UTC")
-        version = f"{family}-{now:%Y%m%dT%H%M%S}"
+        version = f"{agent_id}-{now:%Y%m%dT%H%M%S}"
+        n = 1
+        while any(e.version == version for e in self.entries):     # two trainings in one second
+            version, n = f"{agent_id}-{now:%Y%m%dT%H%M%S}-{n}", n + 1
         rel = Path(family) / f"{version}.pkl"
         (self.root / family).mkdir(parents=True, exist_ok=True)
         data = pickle.dumps(model)
@@ -102,9 +112,9 @@ class ModelRegistry:
         e = self.get(version)
         if e.status != "challenger":
             raise ValueError(f"{version} is {e.status}, only a challenger can be promoted")
-        for old in self.by_family(e.family, "previous"):
+        for old in self.by_agent(e.agent_id, "previous"):
             old.status = "retired"
-        for old in self.by_family(e.family, "champion"):
+        for old in self.by_agent(e.agent_id, "champion"):
             old.status = "previous"
         e.status, e.promoted_utc = "champion", now or pd.Timestamp.now("UTC")
         if note:
@@ -112,11 +122,11 @@ class ModelRegistry:
         self._save()
         return e
 
-    def restore_previous(self, family: str, reason: str) -> ModelEntry:
-        prev = self.by_family(family, "previous")
+    def restore_previous(self, agent_id: str, reason: str) -> ModelEntry:
+        prev = self.by_agent(agent_id, "previous")
         if not prev:
-            raise ValueError(f"no previous champion for {family}")
-        for cur in self.by_family(family, "champion"):
+            raise ValueError(f"no previous champion for {agent_id}")
+        for cur in self.by_agent(agent_id, "champion"):
             cur.status = "retired"
             cur.notes.append(f"demoted: {reason}")
         prev[-1].status = "champion"
@@ -128,6 +138,15 @@ class ModelRegistry:
         e = self.get(version)
         e.status = "retired"
         e.notes.append(reason)
+        self._save()
+
+    def retire_agent(self, agent_id: str, reason: str) -> None:
+        """End of an agent's life: called when a retired member's six months of shadow trading are over (population
+        retirement itself only stops live trading; its champion keeps shadow-trading so the record stays unbiased)."""
+        for e in self.entries:
+            if e.agent_id == agent_id and e.status in ("champion", "challenger", "previous"):
+                e.status = "retired"
+                e.notes.append(reason)
         self._save()
 
     def _save(self) -> None:

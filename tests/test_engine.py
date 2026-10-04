@@ -16,7 +16,8 @@ from goldbot.telegram.approvals import ApprovalCenter
 pytestmark = pytest.mark.integration
 
 
-def _run(approval_mode: str, tmp_path: Path, days: int = 5, data_root: str | None = None, shadow: bool = False):
+def _run(approval_mode: str, tmp_path: Path, days: int = 5, data_root: str | None = None, shadow: bool = False,
+         live_shares: dict[str, float] | None = None):
     ticks = synthetic_ticks("2025-03-03", f"2025-03-{3 + days:02d}", ticks_per_minute=1, seed=5)
     pb = PaperBroker(equity=10_000)
     center = ApprovalCenter({111})
@@ -24,7 +25,8 @@ def _run(approval_mode: str, tmp_path: Path, days: int = 5, data_root: str | Non
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", approval_mode=approval_mode, state_dir=str(tmp_path), owner_user_id=111,
                               data_root=data_root, shadow_host=shadow),
                  pb, [spec], {"session_open": ConstantModel(p=0.65)}, center,
-                 shadow_models={"session_open-test-v1": ("session_open", ConstantModel(p=0.65))} if shadow else None)
+                 shadow_models={"session_open-test-v1": (spec.agent_id, ConstantModel(p=0.65))} if shadow else None,
+                 live_shares=live_shares)
     decisions = []
     for ts, bid, ask in zip(ticks["ts_utc"], ticks["bid"].to_numpy(float), ticks["ask"].to_numpy(float)):
         decisions += eng.on_tick(Tick(ts_utc=pd.Timestamp(ts), bid=float(bid), ask=float(ask)))
@@ -73,3 +75,13 @@ def test_engine_propose_mode_waits_for_approval(tmp_path):
     orders = [d for d in eng.decisions if d.get("action") == "order" and d["ok"]]
     assert len(fills) == len(orders) >= 1
     assert ((fills["side"] * (fills["filled"] - fills["requested"])) >= 0).all()   # paper fills never improve on the quote
+
+
+def test_shadow_only_member_never_reaches_the_broker(tmp_path):
+    # population member without a live share: the shadow book trades it, the broker sees nothing
+    eng, pb, center, decisions = _run("auto", tmp_path, shadow=True, live_shares={})
+    assert not [d for d in decisions if str(d["action"]).startswith("executed")]
+    assert pb.deals_since(pd.Timestamp("2025-01-01", tz="UTC")).empty and not center.pending
+    book = eng.shadow.books["session_open-test-v1"]
+    assert book.closed or book.open
+    assert {t.agent_id for t in book.closed + book.open} == set(eng.agents)   # trades carry the member's agent_id

@@ -102,22 +102,30 @@ def test_registry_lifecycle_and_restore(tmp_path):
     reg = ModelRegistry(tmp_path)
     t0 = pd.Timestamp("2026-10-03 06:00", tz="UTC")
     a = reg.add_challenger(_model("a"), family="session_open", agent_id="session_open-g0-x", backtest=BT.model_dump(), now=t0)
-    assert reg.champion("session_open") is None and reg.champion_models() == {}
+    assert reg.champion("session_open-g0-x") is None and reg.champion_models() == {}
     reg.promote(a.version, now=t0)
     b = reg.add_challenger(_model("b"), family="session_open", agent_id="session_open-g0-x", backtest={}, now=t0 + pd.Timedelta(days=7))
     reg.promote(b.version)
-    champ = reg.champion("session_open")
+    champ = reg.champion("session_open-g0-x")
     assert champ is not None and champ.version == b.version and reg.get(a.version).status == "previous"
     # the registry survives a restart and loads the artefact it points at
     reloaded = ModelRegistry(tmp_path)
-    assert reloaded.champion_models()["session_open"].feature_version == "f-b"
+    assert reloaded.champion_models()["session_open-g0-x"].feature_version == "f-b"
     assert reloaded.get(a.version).created_utc == t0
     # the new champion trips its alarm: the previous one comes back
-    reloaded.restore_previous("session_open", "CUSUM alarm in first two weeks")
-    champ = reloaded.champion("session_open")
+    reloaded.restore_previous("session_open-g0-x", "CUSUM alarm in first two weeks")
+    champ = reloaded.champion("session_open-g0-x")
     assert champ is not None and champ.version == a.version and reloaded.get(b.version).status == "retired"
     with pytest.raises(ValueError):
         reloaded.promote(b.version)                         # only challengers can be promoted
+    # another agent of the same family has its own champion slot
+    c = reloaded.add_challenger(_model("c"), family="session_open", agent_id="session_open-g1-y", backtest={}, now=t0)
+    reloaded.promote(c.version)
+    assert set(reloaded.champion_models()) == {"session_open-g0-x", "session_open-g1-y"}
+    assert reloaded.champion("session_open-g0-x").version == a.version   # type: ignore[union-attr]
+    # same agent, same second: versions stay unique
+    d = reloaded.add_challenger(_model("d"), family="session_open", agent_id="session_open-g1-y", backtest={}, now=t0)
+    assert d.version != c.version
 
 
 def test_tampered_artefact_is_refused(tmp_path):

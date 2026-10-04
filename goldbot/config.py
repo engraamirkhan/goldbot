@@ -107,6 +107,7 @@ class SchedulerSettings(_Section):
     nightly_costs: ScheduleSettings
     saturday_retrain: ScheduleSettings
     model_watch: ScheduleSettings
+    tournament: ScheduleSettings
     monthly_research: ScheduleSettings
 
 

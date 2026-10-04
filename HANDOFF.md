@@ -36,6 +36,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
   every challenger on live bars with label-identical mechanics (exact parity with `triple_barrier` is tested) and
   writes `state/shadow_<version>.json`; the Saturday job promotes/retires from it, and the daily `model_watch` job runs
   a CUSUM on a new champion's first two weeks and restores the previous champion on an alarm.
+- Population tournament (`research/population.py`, weekly `tournament` job): agents = specialist family + config with
+  lineage; founders seeded per family; fitness only from shadow trades (per-trade Sharpe x calibration x drawdown
+  haircut x diversity penalty); ranked after 60 trades; retired on a negative 80% lower bound after 100 trades or two
+  bottom-quartile months (then 6 months more in shadow); shadow -> live via DSR with population size as trials;
+  winners cloned into 2-3 mutated shadow children; caps 12 live / 24 shadow; capital = family weight x fitness share.
+  Models are keyed by agent (`ModelRegistry`); the engine trades only live members and shadow-trades all of them;
+  `state/agents.json` feeds the dashboard's Agents league table.
 - One trial registry (`research/registry_sync.py`): the VPS monthly loop and the research workflow both union their
   registry with the `research-v1` release copy before and after writing, so the deflated Sharpe counts every trial once.
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
@@ -44,12 +51,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
 1. OWNER: merge PR 36. Then dispatch `research.yml` (session_open, 2010-2026) and read the "research: session_open"
    issue; until a model passes there is no champion, so the engine proposes nothing (by design).
 2. Journal + agent layer (data steward, research analyst, risk officer, journal coach, improvement agent).
-3. Population tournament mechanics (fitness, cloning, retirement) on top of agent lineage and the shadow book;
-   retired agents keep shadow-trading (add them to `ModelRegistry.shadow_models`), league table on the Agents screen.
-4. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals
+3. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals
    once and answer the credential prompts; create the Cloudflare tunnel and enter its token on the VPS; store a
    GitHub token with `python -m goldbot.ops.accounts set github-token` (bar sync + shared trial registry).
-5. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
+4. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
+5. More specialists (trend, mean-reversion, breakout per the design) so the allocator and the population have more
+   than one family; feature-subset and timeframe mutations for cloning (need pipeline support).
 
 ## Environment facts
 - Claude sandboxes (cloud container and the Mac's Cowork VM) cannot reach market-data hosts or download Actions

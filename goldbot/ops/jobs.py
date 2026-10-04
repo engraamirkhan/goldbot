@@ -7,6 +7,8 @@
                     that has a shadow record against the promotion gates (promote automatically when all pass),
                     and retrain on the rolling window. A family keeps at most one challenger in shadow; a new one
                     replaces it only after it is decided or has been in shadow for CHALLENGER_MAX_WEEKS.
+* tournament        weekly after the retrain: the population round (fitness, retirement, promotion to live,
+                    cloning, capital shares) -> state/agents.json for the dashboard's league table.
 * model_watch       daily: a champion promoted in the last CUSUM_WINDOW_DAYS whose shadow returns trip the CUSUM
                     alarm against its backtest is replaced by the previous champion (design: Retraining and promotion).
 * monthly_research  bounded search: up to `trial_budget_per_month` label-grid variants (+-step on target, stop and
@@ -35,9 +37,11 @@ from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import ResearchResult, run_specialist
+from goldbot.research.population import Population
 from goldbot.research.promotion import PerfStats, cusum_alarm, evaluate_promotion
 from goldbot.research.registry import TrialRegistry
 from goldbot.specialists import SPECIALISTS
+from goldbot.specialists.base import Specialist
 
 log = logging.getLogger("goldbot.jobs")
 
@@ -56,6 +60,7 @@ class JobContext(Record):
     accounts: list[Account]
     sync_bars: Callable[[Store], dict[str, int]] | None = None   # release -> store refresh before retraining
     sync_trials: Callable[[Path], int] | None = None            # union the trial registry with the release copy
+    population: Population
 
 
 # ---------------------------------------------------------------------------------------------- nightly costs
@@ -85,9 +90,7 @@ def _bars(ctx: JobContext, tf: str, start: pd.Timestamp, end: pd.Timestamp) -> p
     return ctx.store.read(f"bars_{tf}", start=start, end=end).drop(columns=["source", "symbol", "year", "month"], errors="ignore")
 
 
-def _walk_forward(ctx: JobContext, family: str, end: pd.Timestamp, months: int, overrides: dict[str, Any] | None = None,
-                  n_trials: int = 1) -> ResearchResult | None:
-    spec = SPECIALISTS[family](**(overrides or {}))
+def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int, n_trials: int = 1) -> ResearchResult | None:
     start = end - pd.DateOffset(months=months)
     dec = _bars(ctx, spec.timeframe, start, end)
     if dec.empty:
@@ -116,12 +119,12 @@ def shadow_stats(ctx: JobContext, entry: ModelEntry) -> PerfStats | None:
     return PerfStats.model_validate(json.loads(f.read_text())) if f.exists() else None
 
 
-def _decide_challengers(ctx: JobContext, family: str, slot: pd.Timestamp) -> list[dict[str, Any]]:
+def _decide_challengers(ctx: JobContext, agent_id: str, slot: pd.Timestamp) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    champion = ctx.models.champion(family)
+    champion = ctx.models.champion(agent_id)
     champ_shadow = shadow_stats(ctx, champion) if champion else None
     champ_turnover = champ_shadow or (PerfStats.model_validate(champion.backtest) if champion and champion.backtest else None)
-    for ch in ctx.models.by_family(family, "challenger"):
+    for ch in ctx.models.by_agent(agent_id, "challenger"):
         bt = PerfStats.model_validate(ch.backtest) if ch.backtest else None
         sh = shadow_stats(ctx, ch)
         if bt is not None and sh is not None:
@@ -150,29 +153,32 @@ def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         except Exception as exc:   # network trouble must not stop the retrain on what we already have
             log.warning("bar sync failed, retraining on the store as is: %s", exc)
             out["bars_synced"] = f"failed: {exc}"
-    for family in sorted(SPECIALISTS):
-        fam: dict[str, Any] = {"challengers": _decide_challengers(ctx, family, slot)}
-        if ctx.models.by_family(family, "challenger"):
-            fam["retrain"] = "skipped: a challenger is still in shadow"
-            out[family] = fam
+    ctx.population.ensure_founders(slot)
+    for m in sorted(ctx.population.active("live", "shadow"), key=lambda m: m.agent_id):
+        agent: dict[str, Any] = {"challengers": _decide_challengers(ctx, m.agent_id, slot)}
+        if ctx.models.by_agent(m.agent_id, "challenger"):
+            agent["retrain"] = "skipped: a challenger is still in shadow"
+            out[m.agent_id] = agent
             continue
-        tf = SPECIALISTS[family].timeframe
-        if tf not in ("15m", "1h"):
-            fam["retrain"] = f"skipped: no walk-forward window configured for {tf}"
-            out[family] = fam
+        spec = m.specialist()
+        if spec.timeframe not in ("15m", "1h"):
+            agent["retrain"] = f"skipped: no walk-forward window configured for {spec.timeframe}"
+            out[m.agent_id] = agent
             continue
-        wf = ctx.settings.walkforward[cast(DecisionTimeframe, tf)]
+        wf = ctx.settings.walkforward[cast(DecisionTimeframe, spec.timeframe)]
         # rolling train window plus enough test history for out-of-fold backtest stats
-        res = _walk_forward(ctx, family, slot, wf.train_months + 4 * wf.test_months)
+        res = _walk_forward(ctx, spec, slot, wf.train_months + 4 * wf.test_months)
         if res is None or res.model is None:
-            fam["retrain"] = "no model: not enough bars or candidates"
+            agent["retrain"] = "no model: not enough bars or candidates"
         else:
             bt = backtest_stats(res)
-            e = ctx.models.add_challenger(res.model, family=family, agent_id=res.agent_id,
+            e = ctx.models.add_challenger(res.model, family=m.family, agent_id=m.agent_id,
                                           backtest=bt.model_dump() if bt else {}, now=slot,
                                           notes=[f"walk-forward {res.n_folds} folds, {res.n_candidates} candidates"])
-            fam["retrain"] = {"challenger": e.version, "backtest": e.backtest}
-        out[family] = fam
+            # the challenger shadow-trades from now on; it becomes this agent's champion only through the gates
+            agent["retrain"] = {"challenger": e.version, "backtest": e.backtest}
+        out[m.agent_id] = agent
+    ctx.population.save(ctx.state_dir / "agents.json")
     return out
 
 
@@ -180,21 +186,35 @@ def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     book = ShadowBook(ctx.state_dir)   # read-only view of the engine's shadow book
     out: dict[str, Any] = {}
-    for family in sorted({e.family for e in ctx.models.entries}):
-        ch = ctx.models.champion(family)
+    for agent_id in ctx.models.agent_ids():
+        ch = ctx.models.champion(agent_id)
         if ch is None or ch.promoted_utc is None or slot - ch.promoted_utc > pd.Timedelta(days=CUSUM_WINDOW_DAYS):
             continue
+        if not ctx.models.by_agent(agent_id, "previous"):
+            continue                    # a first model has nothing to fall back to
         bt = PerfStats.model_validate(ch.backtest) if ch.backtest else None
         rets = book.returns_since(ch.version, ch.promoted_utc)
         if bt is None or bt.mean_ret is None or bt.std_ret is None:
-            out[family] = {"version": ch.version, "watch": "no backtest moments; cannot run CUSUM"}
+            out[agent_id] = {"version": ch.version, "watch": "no backtest moments; cannot run CUSUM"}
             continue
-        if cusum_alarm(rets, bt.mean_ret, bt.std_ret) and ctx.models.by_family(family, "previous"):
-            restored = ctx.models.restore_previous(family, f"CUSUM alarm on {len(rets)} shadow trades within {CUSUM_WINDOW_DAYS} days of promotion")
-            out[family] = {"version": ch.version, "action": "restored_previous", "restored": restored.version, "trades": len(rets)}
+        if cusum_alarm(rets, bt.mean_ret, bt.std_ret):
+            restored = ctx.models.restore_previous(agent_id, f"CUSUM alarm on {len(rets)} shadow trades within {CUSUM_WINDOW_DAYS} days of promotion")
+            out[agent_id] = {"version": ch.version, "action": "restored_previous", "restored": restored.version, "trades": len(rets)}
         else:
-            out[family] = {"version": ch.version, "action": "ok", "trades": len(rets)}
+            out[agent_id] = {"version": ch.version, "action": "ok", "trades": len(rets)}
     return out
+
+
+# ---------------------------------------------------------------------------------------------- tournament
+def tournament(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Weekly population round (research/population.py): fitness from shadow trades, retirement, shadow -> live
+    promotion through the DSR gate, cloning of winners, capital shares; writes state/agents.json for the dashboard.
+    Agents whose six months of retired shadow trading are over leave the model registry's book."""
+    summary = ctx.population.tournament(ShadowBook(ctx.state_dir), slot)
+    for aid in summary["expired"]:
+        ctx.models.retire_agent(aid, "retired agent's six months of shadow trading are over")
+    ctx.population.save(ctx.state_dir / "agents.json")
+    return summary
 
 
 # ---------------------------------------------------------------------------------------------- research loop
@@ -237,7 +257,7 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         history_months = 12 * 30          # everything the store has
         rows = []
         for overrides in grid[: r.trial_budget_per_month]:
-            res = _walk_forward(ctx, family, slot, history_months, overrides, n_trials=ctx.trials.n_trials + 1)
+            res = _walk_forward(ctx, SPECIALISTS[family](**overrides), slot, history_months, n_trials=ctx.trials.n_trials + 1)
             if res is None:
                 break
             row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
@@ -264,6 +284,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
     "model_watch": model_watch,
+    "tournament": tournament,
     "monthly_research": monthly_research,
 }
 

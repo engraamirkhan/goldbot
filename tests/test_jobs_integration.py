@@ -22,8 +22,11 @@ from goldbot.ops.jobs import (
     saturday_retrain,
 )
 from goldbot.research.model_registry import ModelRegistry
+from goldbot.research.population import Population
 from goldbot.research.promotion import PerfStats
 from goldbot.research.registry import TrialRegistry
+from goldbot.specialists import SPECIALISTS
+from goldbot.specialists.base import AgentIdentity
 
 pytestmark = pytest.mark.integration
 
@@ -47,7 +50,8 @@ def _ctx(root: Path, tmp_path: Path, **research) -> JobContext:
     if research:
         s = s.model_copy(update={"research": s.research.model_copy(update=research)})
     return JobContext(settings=s, store=Store(root), state_dir=tmp_path, models=ModelRegistry(tmp_path / "models"),
-                      trials=TrialRegistry(tmp_path / "trials.jsonl"), accounts=[ACC])
+                      trials=TrialRegistry(tmp_path / "trials.jsonl"), accounts=[ACC],
+                      population=Population(tmp_path / "population.json"))
 
 
 def test_nightly_costs_from_logged_ticks_and_fills(tmp_path):
@@ -75,20 +79,23 @@ def test_nightly_costs_from_logged_ticks_and_fills(tmp_path):
 def test_retrain_challenger_shadow_promotion_cycle(bars_store, tmp_path):
     ctx = _ctx(bars_store, tmp_path)
     sat = pd.Timestamp("2025-09-27 06:00", tz="UTC")
-    first = saturday_retrain(ctx, sat)["session_open"]
+    founder = AgentIdentity(family="session_open", config=dict(SPECIALISTS["session_open"].default_config)).agent_id
+    first = saturday_retrain(ctx, sat)[founder]
     version = first["retrain"]["challenger"]
     assert ctx.models.get(version).status == "challenger"
     # a challenger in shadow blocks the next retrain from replacing it
-    nxt = saturday_retrain(ctx, sat + pd.Timedelta(weeks=1))["session_open"]
+    nxt = saturday_retrain(ctx, sat + pd.Timedelta(weeks=1))[founder]
     assert nxt["retrain"].startswith("skipped") and nxt["challengers"][0]["action"] == "waiting"
     # the shadow book reports a record that passes every gate -> automatic promotion; the engine can load it
     bt = PerfStats.model_validate(ctx.models.get(version).backtest)
     good = PerfStats(n_trades=max(bt.n_trades, 60), sharpe_ann=max(bt.sharpe_ann, 1.0), hit_rate=bt.hit_rate,
                      max_dd=bt.max_dd * 0.5, trades_per_week=bt.trades_per_week, weeks=6.0)
     (tmp_path / f"shadow_{version}.json").write_text(good.model_dump_json())
-    third = saturday_retrain(ctx, sat + pd.Timedelta(weeks=6))["session_open"]
+    third = saturday_retrain(ctx, sat + pd.Timedelta(weeks=6))[founder]
     assert third["challengers"][0] == {"version": version, "action": "promoted"}
-    assert ModelRegistry(tmp_path / "models").champion_models()["session_open"].feature_names
+    assert ModelRegistry(tmp_path / "models").champion_models()[founder].feature_names
+    # the founder exists in the population and the dashboard's league table was written
+    assert founder in ctx.population.members and (tmp_path / "agents.json").exists()
     assert "challenger" in third["retrain"]                 # a fresh challenger starts its own shadow period
 
 
@@ -111,4 +118,5 @@ def test_build_scheduler_registers_every_job(tmp_path):
     sch = build_scheduler(ctx, clock=lambda: pd.Timestamp("2026-10-02 12:00", tz="UTC"))
     nxt = {k: v["next_slot"] for k, v in sch.status()["jobs"].items()}
     assert nxt == {"nightly_costs": "2026-10-02T23:10:00+00:00", "saturday_retrain": "2026-10-03T06:00:00+00:00",
-                   "model_watch": "2026-10-02T23:30:00+00:00", "monthly_research": "2026-10-04T08:00:00+00:00"}
+                   "tournament": "2026-10-03T12:00:00+00:00", "model_watch": "2026-10-02T23:30:00+00:00",
+                   "monthly_research": "2026-10-04T08:00:00+00:00"}

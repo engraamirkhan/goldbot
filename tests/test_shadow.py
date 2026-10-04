@@ -11,6 +11,7 @@ from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier
 from goldbot.ops.jobs import JobContext, model_watch
 from goldbot.research.model import MetaLabelModel
 from goldbot.research.model_registry import ModelRegistry
+from goldbot.research.population import Population
 from goldbot.research.promotion import PerfStats, cusum_alarm
 from goldbot.research.registry import TrialRegistry
 
@@ -90,14 +91,15 @@ def test_cusum_flags_a_drop_but_not_noise():
 
 def _watch_ctx(tmp_path) -> JobContext:
     return JobContext(settings=load_settings(), store=Store(tmp_path / "data"), state_dir=tmp_path,
-                      models=ModelRegistry(tmp_path / "models"), trials=TrialRegistry(tmp_path / "t.jsonl"), accounts=[])
+                      models=ModelRegistry(tmp_path / "models"), trials=TrialRegistry(tmp_path / "t.jsonl"), accounts=[],
+                      population=Population(tmp_path / "population.json"))
 
 
 def _promote_pair(ctx: JobContext, t: pd.Timestamp) -> tuple[str, str]:
     bt = PerfStats(n_trades=300, sharpe_ann=1.2, hit_rate=0.45, max_dd=0.1, trades_per_week=4, mean_ret=0.001, std_ret=0.004)
-    a = ctx.models.add_challenger(MetaLabelModel(feature_names=["x"]), family="session_open", agent_id="a", backtest=bt.model_dump(), now=t)
+    a = ctx.models.add_challenger(MetaLabelModel(feature_names=["x"]), family="session_open", agent_id="agent-x", backtest=bt.model_dump(), now=t)
     ctx.models.promote(a.version, now=t)
-    b = ctx.models.add_challenger(MetaLabelModel(feature_names=["x"]), family="session_open", agent_id="b",
+    b = ctx.models.add_challenger(MetaLabelModel(feature_names=["x"]), family="session_open", agent_id="agent-x",
                                   backtest=bt.model_dump(), now=t + pd.Timedelta(days=30))
     ctx.models.promote(b.version, now=t + pd.Timedelta(days=30))
     return a.version, b.version
@@ -124,8 +126,8 @@ def test_model_watch_restores_the_previous_champion_on_a_cusum_alarm(tmp_path):
     promoted = t + pd.Timedelta(days=30)
     _shadow_rets(tmp_path, b, promoted, [-0.006] * 12)
     out = model_watch(ctx, promoted + pd.Timedelta(days=6))
-    assert out["session_open"]["action"] == "restored_previous"
-    assert ctx.models.champion("session_open").version == a          # type: ignore[union-attr]
+    assert out["agent-x"]["action"] == "restored_previous"
+    assert ctx.models.champion("agent-x").version == a               # type: ignore[union-attr]
 
 
 def test_model_watch_leaves_a_healthy_or_settled_champion_alone(tmp_path):
@@ -134,7 +136,7 @@ def test_model_watch_leaves_a_healthy_or_settled_champion_alone(tmp_path):
     _, b = _promote_pair(ctx, t)
     promoted = t + pd.Timedelta(days=30)
     _shadow_rets(tmp_path, b, promoted, [0.002, -0.003, 0.004, 0.001, -0.002, 0.003])
-    assert model_watch(ctx, promoted + pd.Timedelta(days=6))["session_open"]["action"] == "ok"
+    assert model_watch(ctx, promoted + pd.Timedelta(days=6))["agent-x"]["action"] == "ok"
     _shadow_rets(tmp_path, b, promoted, [-0.006] * 12)
     assert model_watch(ctx, promoted + pd.Timedelta(days=20)) == {}  # past the two-week window: not watched
-    assert ctx.models.champion("session_open").version == b          # type: ignore[union-attr]
+    assert ctx.models.champion("agent-x").version == b               # type: ignore[union-attr]

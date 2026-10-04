@@ -29,11 +29,13 @@ def run_supervisor() -> None:
 def run_engine(account_id: str) -> None:
     from pathlib import Path
 
+    import pandas as pd
+
     from goldbot.config import load_settings
     from goldbot.engine import Engine, EngineConfig
     from goldbot.ops import accounts
     from goldbot.research.model_registry import ModelRegistry
-    from goldbot.specialists import SPECIALISTS
+    from goldbot.research.population import Population
     from goldbot.telegram.approvals import ApprovalCenter
     acc = accounts.load_accounts()[account_id]
     settings = load_settings()
@@ -51,23 +53,35 @@ def run_engine(account_id: str) -> None:
     center = ApprovalCenter(set(settings.telegram.allowed_user_ids))
     registry_file = Path(settings.research.models_dir) / "registry.json"
 
+    population_file = Path("state") / "population.json"
+
     def champions() -> dict:
-        # no champion for a family -> no model -> the engine never proposes for it (no placeholder probabilities)
+        # no champion for an agent -> no model -> the engine never proposes for it (no placeholder probabilities)
         return ModelRegistry(settings.research.models_dir).champion_models()
 
     def shadow_set() -> dict:
         return ModelRegistry(settings.research.models_dir).shadow_models()
 
+    def population_view() -> tuple[list, dict[str, float]]:
+        """Agents in the shadow book (live, shadow, recently retired) and the live agents' capital shares."""
+        pop = Population(population_file)
+        pop.ensure_founders(pd.Timestamp.now("UTC"))
+        members = pop.in_book()
+        return [m.specialist() for m in members], {m.agent_id: m.capital_weight for m in members if m.status == "live"}
+
     broker_cfg = settings.brokers.get(acc.broker)
     shadow_host = bool(broker_cfg and broker_cfg.canonical_costs)   # one shadow book: the canonical-cost broker
 
-    agents = [SPECIALISTS["session_open"]()]
+    agents, live_shares = population_view()
     eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, approval_mode="propose", symbol=acc.symbol,
                               magic_base=acc.magic_base, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host), broker, agents,
-                 champions(), center, shadow_models=shadow_set() if shadow_host else None)
+                 champions(), center, shadow_models=shadow_set() if shadow_host else None, live_shares=live_shares)
     log.info("engine %s started (%s), models: %s", account_id, type(broker).__name__, sorted(eng.models))
-    seen = registry_file.stat().st_mtime if registry_file.exists() else -1.0
+    def mtimes() -> tuple[float, ...]:
+        return tuple(f.stat().st_mtime if f.exists() else -1.0 for f in (registry_file, population_file))
+
+    seen = mtimes()
     last_check = time.time()
     while True:
         try:
@@ -77,14 +91,18 @@ def run_engine(account_id: str) -> None:
             pass
         if time.time() - last_check > 60:          # promotions by the scheduler take effect without a restart
             last_check = time.time()
-            mtime = registry_file.stat().st_mtime if registry_file.exists() else -1.0
-            if mtime != seen:
-                seen = mtime
+            now_m = mtimes()
+            if now_m != seen:
+                seen = now_m
                 try:
+                    agents, live_shares = population_view()
+                    eng.agents = {a.agent_id: a for a in agents}
+                    eng.live_shares = live_shares
                     eng.models = champions()
                     if shadow_host:
                         eng.set_shadow_models(shadow_set())
-                    log.info("models reloaded: %s (shadow: %s)", sorted(eng.models), sorted(eng.shadow_models))
+                    log.info("reloaded: %d agents, %d live, models %s, shadow %s", len(eng.agents), len(live_shares),
+                             sorted(eng.models), sorted(eng.shadow_models))
                 except (ValueError, TypeError, OSError) as exc:
                     log.error("model reload refused, keeping current models: %s", exc)
         time.sleep(0.25)
@@ -115,6 +133,7 @@ def run_scheduler() -> None:
     from goldbot.ops import accounts
     from goldbot.ops.jobs import JobContext, build_scheduler
     from goldbot.research.model_registry import ModelRegistry
+    from goldbot.research.population import Population
     from goldbot.research.registry import TrialRegistry
     from goldbot.research.registry_sync import sync as sync_registry
     settings = load_settings()
@@ -127,7 +146,8 @@ def run_scheduler() -> None:
                      models=ModelRegistry(settings.research.models_dir), trials=TrialRegistry(settings.research.registry),
                      accounts=accounts.enabled_accounts(),   # live accounts only once the phase gate has passed
                      sync_bars=lambda store: sync_release_bars(store, token=gh_token),
-                     sync_trials=(lambda path: sync_registry(path, gh_token)) if gh_token else None)
+                     sync_trials=(lambda path: sync_registry(path, gh_token)) if gh_token else None,
+                     population=Population(Path("state") / "population.json"))
     sch = build_scheduler(ctx)
     for name, st in sch.status()["jobs"].items():
         log.info("scheduler: %s next at %s", name, st["next_slot"])

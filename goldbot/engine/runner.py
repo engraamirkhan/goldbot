@@ -87,11 +87,14 @@ class OpenTrade(Record):
 class Engine:
     def __init__(self, cfg: EngineConfig, broker: Broker, agents: list[Specialist], models: dict[str, Model],
                  center: ApprovalCenter | None = None, allocator: RuleAllocator | None = None,
-                 limits: RiskLimits | None = None, shadow_models: dict[str, tuple[str, Model]] | None = None):
+                 limits: RiskLimits | None = None, shadow_models: dict[str, tuple[str, Model]] | None = None,
+                 live_shares: dict[str, float] | None = None):
         self.cfg = cfg
         self.broker = broker
         self.agents = {a.agent_id: a for a in agents}
-        self.models = models
+        self.models = models                 # agent_id (or family, for a single-agent setup) -> model
+        # population: agent_id -> share of its family's capital; None = every agent trades at the family weight
+        self.live_shares = live_shares
         self.center = center or ApprovalCenter({cfg.owner_user_id})
         self.allocator = allocator or RuleAllocator()
         self.gate = RiskGate(limits)
@@ -180,14 +183,17 @@ class Engine:
             if cands.empty or int(cands["idx"].iloc[-1]) != last:
                 continue
             side = int(cands["side"].iloc[-1])
-            model = self.models.get(agent.family)
+            model = self.models.get(agent.agent_id) or self.models.get(agent.family)
             if model is None:
                 continue
+            share = 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
+            if share <= 0:
+                continue      # shadow-only member of the population: the shadow book trades it, not the broker
             feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
             cols = model.feature_names or [c for c in feats.columns]
             p = float(model.predict(feats[[c for c in cols if c in feats.columns]] if model.feature_names else feats)[0])
             ls = agent.label_spec
-            w = fam_w.get(agent.family, 0.0)
+            w = fam_w.get(agent.family, 0.0) * share
             mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, cost_atr)[0])
             price = last_tick.ask if side > 0 else last_tick.bid
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
@@ -316,7 +322,8 @@ class Engine:
 
     # ------------------------------------------------------------------ shadow book
     def set_shadow_models(self, models: dict[str, tuple[str, Model]]) -> None:
-        """Replace the shadow set (on registry reload); versions no longer listed stop opening trades."""
+        """Replace the shadow set (version -> (agent_id, model)) on registry reload; versions no longer listed stop
+        opening trades. Each version paper-trades with its own agent's specialist, so the record is per agent."""
         self.shadow_models = dict(models)
         if self.shadow is not None:
             now = self.last_bar_close or pd.Timestamp.now("UTC")
@@ -330,10 +337,10 @@ class Engine:
         bar = dec.iloc[last]
         self.shadow.on_bar(bar)           # advance open shadow trades first; a new entry starts after this bar
         feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
-        for version, (family, model) in self.shadow_models.items():
+        for version, (agent_key, model) in self.shadow_models.items():
             for agent in self.agents.values():
                 cands = cands_by_agent[agent.agent_id]
-                if agent.family != family or cands.empty or int(cands["idx"].iloc[-1]) != last:
+                if agent_key not in (agent.agent_id, agent.family) or cands.empty or int(cands["idx"].iloc[-1]) != last:
                     continue
                 side = int(cands["side"].iloc[-1])
                 cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
