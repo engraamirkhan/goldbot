@@ -90,6 +90,9 @@ def test_asof_join_never_leaks_future_release():
     assert (after["real_yield_10y"] == 2.1).all()
     with pytest.raises(ValueError):
         asof_join(bars, macro.rename(columns={"available_utc": "value_date"}))
+    # different timestamp units on the two sides (pandas 3) join the same way
+    macro_us = macro.assign(available_utc=pd.DatetimeIndex(macro["available_utc"]).as_unit("us"))
+    assert asof_join(bars, macro_us)["real_yield_10y"].equals(out["real_yield_10y"])
 
 
 def test_quality_checks_flag_spike_and_bid_gt_ask(bars1m):

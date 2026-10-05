@@ -61,7 +61,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
 
 ## Next steps (no owner input needed unless marked)
-1. Read the "research: session_open" issue from the first research.yml run on main (dispatched 2026-10-05); until a
+1. The first research.yml run on main (2026-10-05, issue "research: session_open") failed on a pandas-3 timestamp
+   unit mismatch (release Parquet us vs resampled ns) in the multi-timeframe merge; fixed on this branch (both
+   as-of merges normalise to ns). Re-dispatch research.yml for every family once the branch is on main; until a
    model passes the gates there is no champion, so the engine proposes nothing (by design).
 2. Macro/news analyst and execution auditor roles; Telegram delivery of the agents' reports.
 3. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals
