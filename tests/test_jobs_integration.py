@@ -17,6 +17,7 @@ from goldbot.ops.jobs import (
     JobContext,
     build_scheduler,
     label_grid,
+    make_trial_runner,
     monthly_research,
     nightly_costs,
     saturday_retrain,
@@ -121,3 +122,13 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "tournament": "2026-10-03T12:00:00+00:00", "model_watch": "2026-10-02T23:30:00+00:00",
                    "agents_daily": "2026-10-02T23:45:00+00:00", "agents_weekly": "2026-10-03T13:00:00+00:00",
                    "monthly_research": "2026-10-04T08:00:00+00:00"}
+
+
+def test_research_analyst_trial_is_recorded_in_the_registry(bars_store, tmp_path):
+    ctx = _ctx(bars_store, tmp_path)
+    runner = make_trial_runner(ctx, now=lambda: pd.Timestamp("2025-09-30", tz="UTC"))
+    # a looser filter keeps enough candidates for a fold on three synthetic years (a tighter one would not)
+    out = runner("session_open", {"asia_range_max_atr_d": 1.2}, "research analyst, hypothesis abc: looser filter")
+    assert out["trial"] == 1 and out["n_folds"] >= 1 and "model_filtered" in out
+    row = ctx.trials._rows()[0]
+    assert row["config"]["asia_range_max_atr_d"] == 1.2 and row["rationale"].startswith("research analyst")

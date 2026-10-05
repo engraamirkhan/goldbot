@@ -91,6 +91,7 @@ class AgentRunner:
         if budget < 0.05:
             run.status, run.detail = "monthly_cap", f"monthly agent budget {self.ledger.cap:.2f} USD used up"
             return self._finish(run, now)
+        self.tools.begin_run()
         tools = self.tools.definitions(list(role.tools))
         prompt = f"Current UTC time: {now.isoformat()}.\n\n{role.task}" + (f"\n\nContext:\n{extra_context}" if extra_context else "")
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]

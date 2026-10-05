@@ -254,6 +254,22 @@ def label_grid(base: dict[str, Any], step: float) -> list[dict[str, Any]]:
     return out
 
 
+def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = None
+                      ) -> Callable[[str, dict[str, Any], str], dict[str, Any]]:
+    """The research analyst's trial: the family's default config with overrides, walk-forward over the whole store,
+    recorded in the trial registry (so it counts toward the deflated Sharpe like every monthly-loop trial)."""
+    def run(family: str, overrides: dict[str, Any], rationale: str) -> dict[str, Any]:
+        end = now() if now is not None else pd.Timestamp.now("UTC")
+        res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, 12 * 30, n_trials=ctx.trials.n_trials + 1)
+        if res is None:
+            return {"error": "no bars in the store for this family's timeframe"}
+        row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
+                                feature_version=res.feature_version, results=res.metrics, status="evaluated", rationale=rationale)
+        keep = ("n_candidates", "n_folds", "threshold", "all_candidates", "model_filtered", "trades_per_year")
+        return {"trial": row["trial"], "registry_total": ctx.trials.n_trials, **{k: res.metrics[k] for k in keep if k in res.metrics}}
+    return run
+
+
 def _num(v: float | None, fmt: str) -> str:
     return "" if v is None else format(v, fmt)
 

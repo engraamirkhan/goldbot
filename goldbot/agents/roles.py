@@ -56,4 +56,15 @@ ROLES: dict[str, Role] = {r.name: r for r in [
               "at most two hypotheses (read_hypotheses first to avoid duplicates) for the research analyst to test, "
               "each with the evidence that motivated it. You can propose anything; you promote nothing.",
          max_cost_usd=2.00, max_turns=16, effort="high"),
+    # runs after the improvement agent in the same weekly job (roles run in this order)
+    Role(name="research_analyst", title="research analyst", cadence="weekly",
+         tools=("read_hypotheses", "read_research_registry", "read_shadow_stats", "run_trial", "update_hypothesis"),
+         task="Take the oldest hypotheses whose status is 'proposed'. For each, decide whether the evidence justifies a "
+              "trial; if it does, translate it into at most one run_trial with numeric overrides of the family's settings "
+              "(you may run two trials in total this run), then compare the trial's model_filtered metrics and deflated SR "
+              "with the baseline trials of the same family in the research registry. Record a verdict with "
+              "update_hypothesis for every hypothesis you looked at (inconclusive if you did not run a trial, with the "
+              "reason). Report in plain language what was tested, the numbers, and what you would test next. You "
+              "promote nothing: a promising result is a candidate for the population, nothing more.",
+         max_cost_usd=3.00, max_turns=20, effort="high"),
 ]}

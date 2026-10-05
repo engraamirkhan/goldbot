@@ -3,10 +3,9 @@
 Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc; edit it here from now on).
 Standing instructions for Claude sessions: `CLAUDE.md`.
 
-## Where things are (as of 2026-10-02)
-- GitHub `engraamirkhan/goldbot`. Work from 2026-10-01/02 is on branch `claude/gifted-goldberg-lcb7pl`, open as
-  PR https://github.com/engraamirkhan/goldbot/pull/36 (OWNER: merge it; Claude sessions are not allowed to push to
-  `main`). CI (`ci.yml`) runs pre-commit, backend lint/mypy/unit/integration, frontend eslint/tsc/vitest, an API
+## Where things are (as of 2026-10-05)
+- GitHub `engraamirkhan/goldbot`. PR 36 (2026-10-01..04 work) is merged into `main`; follow-up work goes on branch
+  `claude/gifted-goldberg-lcb7pl` restarted from `main` (Claude sessions do not push to `main` directly). CI (`ci.yml`) runs pre-commit, backend lint/mypy/unit/integration, frontend eslint/tsc/vitest, an API
   contract check and Playwright e2e as separate jobs, and opens one issue labelled `ci` with each failed job's output.
 - Built and tested: point-in-time store, calendar/UTC, resampler, loaders, quality checks, macro loaders; feature
   registry (volatility, MA families + ribbon, trend, mean-reversion, MFI, breakout, microstructure, S/R, swings,
@@ -48,15 +47,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
   Opus 5.5 through a budgeted tool-use loop over read-only tools (`agents/tools.py`; the only write is filing a
   hypothesis to `state/hypotheses.jsonl`), with refusal fallbacks enabled, a per-run cap and a monthly cap
   (`settings.yaml: agents`), every run logged to `state/agent_runs.jsonl`; reports appear on the Agents screen.
+  The research analyst (Saturdays, after the improvement agent) turns filed hypotheses into at most two bounded
+  walk-forward trials per run (`run_trial`: numeric overrides within +-50% of the defaults, recorded in the trial
+  registry) and records a verdict on each hypothesis; it promotes nothing.
 - One trial registry (`research/registry_sync.py`): the VPS monthly loop and the research workflow both union their
   registry with the `research-v1` release copy before and after writing, so the deflated Sharpe counts every trial once.
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
 
 ## Next steps (no owner input needed unless marked)
-1. OWNER: merge PR 36. Then dispatch `research.yml` (session_open, 2010-2026) and read the "research: session_open"
-   issue; until a model passes there is no champion, so the engine proposes nothing (by design).
-2. Research analyst agent: pick up `state/hypotheses.jsonl`, run the walk-forward for each (bounded by the monthly
-   trial budget) and report; macro/news analyst and execution auditor roles; Telegram delivery of the reports.
+1. Read the "research: session_open" issue from the first research.yml run on main (dispatched 2026-10-05); until a
+   model passes the gates there is no champion, so the engine proposes nothing (by design).
+2. Macro/news analyst and execution auditor roles; Telegram delivery of the agents' reports.
 3. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals
    once and answer the credential prompts; create the Cloudflare tunnel and enter its token on the VPS; store a
    GitHub token with `python -m goldbot.ops.accounts set github-token` (bar sync + shared trial registry) and an
