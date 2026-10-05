@@ -20,6 +20,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
+from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.research.metrics import summarize  # noqa: E402
 from goldbot.research.model import shuffle_test_auc  # noqa: E402
 from goldbot.research.pipeline import ResearchResult, build_decision_frame, run_specialist  # noqa: E402
@@ -114,12 +115,14 @@ def main() -> int:
     print(f"1m bars: {len(b1):,} ({b1['ts_utc'].iloc[0]:%Y-%m-%d} -> {b1['ts_utc'].iloc[-1]:%Y-%m-%d})", flush=True)
     spec = SPECIALISTS[args.specialist]()
     tf = spec.timeframe
-    b_dec, b1h, b1d = (resample_bars(b1, x) for x in (tf, "1h", "1d"))
-    print(f"{tf} {len(b_dec):,}  1h {len(b1h):,}  1d {len(b1d):,}  [{time.time() - t0:.0f}s]", flush=True)
+    b_dec = resample_bars(b1, tf)
+    context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
+    sizes = "  ".join(f"{k} {len(v):,}" for k, v in context.items())
+    print(f"{tf} {len(b_dec):,}  {sizes}  [{time.time() - t0:.0f}s]", flush=True)
 
     reg = TrialRegistry(args.registry)
     n_trials = reg.n_trials + 1
-    res = run_specialist(spec, b_dec, context={"h1": b1h, "d1": b1d}, n_trials=n_trials)
+    res = run_specialist(spec, b_dec, context=context, n_trials=n_trials)
     trades_per_year = res.n_candidates / years_span if years_span > 0 else 0.0
     if "threshold" in res.metrics and trades_per_year > 0:
         # annualise by the candidate rate actually observed, not the pipeline's default guess
@@ -131,7 +134,7 @@ def main() -> int:
 
     auc = None
     if res.n_candidates > 200:
-        _, X = build_decision_frame(b_dec, {"h1": b1h, "d1": b1d})
+        _, X = build_decision_frame(b_dec, context)
         lab = res.oof
         feats = X.drop(columns=["ts_utc"]).iloc[lab["idx"].to_numpy()].reset_index(drop=True)
         cols = [c for c in feats.columns if feats[c].notna().mean() > 0.8][:40]

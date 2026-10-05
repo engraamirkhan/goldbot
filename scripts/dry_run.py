@@ -15,6 +15,7 @@ from goldbot.data.quality import check_bars  # noqa: E402
 from goldbot.data.resample import resample_bars, ticks_to_1m  # noqa: E402
 from goldbot.data.store import Store  # noqa: E402
 from goldbot.data.synthetic import synthetic_ticks  # noqa: E402
+from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.research.model import shuffle_test_auc  # noqa: E402
 from goldbot.research.pipeline import build_decision_frame, run_specialist  # noqa: E402
 from goldbot.research.registry import TrialRegistry  # noqa: E402
@@ -32,13 +33,15 @@ def main(years: int = 3) -> None:
     print(f"1m bars: {len(b1):,}  dq events: {len(dq)}")
     store = Store("data_dryrun")
     store.append("bars_1m", b1, source="synthetic")
-    b15, b1h, b1d = (resample_bars(b1, tf) for tf in ("15m", "1h", "1d"))
-    for tf, b in (("15m", b15), ("1h", b1h), ("1d", b1d)):
+    bars = {tf: resample_bars(b1, tf) for tf in ("15m", *context_tfs("15m"))}
+    for tf, b in bars.items():
         store.append(f"bars_{tf}", b, source="synthetic")
-    print(f"15m {len(b15):,}  1h {len(b1h):,}  1d {len(b1d):,}   [{time.time() - t0:.0f}s]")
+    print("  ".join(f"{tf} {len(b):,}" for tf, b in bars.items()) + f"   [{time.time() - t0:.0f}s]")
+    b15 = bars["15m"]
+    context = {TF_LABEL[tf]: bars[tf] for tf in context_tfs("15m")}
 
     spec = SPECIALISTS["session_open"]()
-    res = run_specialist(spec, b15, context={"h1": b1h, "d1": b1d}, n_trials=1)
+    res = run_specialist(spec, b15, context=context, n_trials=1)
     print(f"candidates: {res.n_candidates}  folds: {res.n_folds}  feature_version: {res.feature_version}")
     for k, v in res.metrics.items():
         print(f"  {k}: {v}")
@@ -46,7 +49,7 @@ def main(years: int = 3) -> None:
         print("top features:\n", res.importance.head(10).to_string())
 
     # leakage check on the labelled frame
-    m, X = build_decision_frame(b15, {"h1": b1h, "d1": b1d})
+    m, X = build_decision_frame(b15, context)
     lab = res.oof
     feats = X.drop(columns=["ts_utc"]).iloc[lab["idx"].to_numpy()].reset_index(drop=True)
     cols = [c for c in feats.columns if feats[c].notna().mean() > 0.8][:40]

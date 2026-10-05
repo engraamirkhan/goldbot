@@ -20,3 +20,15 @@ def merge_higher_tf(decision: pd.DataFrame, higher_feats: pd.DataFrame, higher_b
     d = decision.sort_values("ts_utc")
     out = pd.merge_asof(d, h, left_on="ts_utc", right_on="visible_at", direction="backward", allow_exact_matches=True)
     return out.drop(columns=["visible_at"])
+
+
+TF_LABEL = {"1h": "h1", "4h": "h4", "1d": "d1", "1w": "w1"}
+CONTEXT_TFS = ("1h", "4h", "1d")
+
+
+def context_tfs(decision_tf: str) -> list[str]:
+    """The context timeframes merged into a decision frame: every one of CONTEXT_TFS longer than the decision bar
+    (a 15m agent sees h1/h4/d1, a 1h agent h4/d1). Research, retrains and the engine all use this one rule, so a
+    model is always served the columns it was trained on."""
+    from goldbot.config import tf_seconds
+    return [tf for tf in CONTEXT_TFS if tf_seconds(tf) > tf_seconds(decision_tf)]

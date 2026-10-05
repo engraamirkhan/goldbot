@@ -31,7 +31,8 @@ class ShadowTrade(Record):
     entry: float
     stop: float
     target: float
-    max_bars: int
+    max_bars: int                     # in bars of `timeframe`
+    timeframe: str = "15m"
     p: float
     bars_held: int = 0
     exit_ts: UtcTimestamp | None = None
@@ -62,7 +63,7 @@ class ShadowBook:
             self.books[version] = VersionBook(version=version, started_utc=now)
 
     def open_trade(self, *, version: str, agent_id: str, side: int, bar_ts: pd.Timestamp, entry: float, atr_usd: float,
-                   target_atr: float, stop_atr: float, max_bars: int, p: float) -> ShadowTrade | None:
+                   target_atr: float, stop_atr: float, max_bars: int, p: float, timeframe: str = "15m") -> ShadowTrade | None:
         if not np.isfinite(atr_usd) or atr_usd <= 0:
             return None
         book = self.books[version]
@@ -70,18 +71,19 @@ class ShadowBook:
             return None   # one shadow entry per version per signal bar, even if the bar is replayed
         t = ShadowTrade(version=version, agent_id=agent_id, side=side, entry_ts=bar_ts, entry=entry,
                         stop=entry - side * stop_atr * atr_usd, target=entry + side * target_atr * atr_usd,
-                        max_bars=max_bars, p=p)
+                        max_bars=max_bars, p=p, timeframe=timeframe)
         book.open.append(t)
         return t
 
-    def on_bar(self, bar: pd.Series) -> list[ShadowTrade]:
-        """Advance every open trade by one completed decision bar (store schema: ts_utc, bid/ask high/low/close)."""
+    def on_bar(self, bar: pd.Series, timeframe: str = "15m") -> list[ShadowTrade]:
+        """Advance the open trades of `timeframe` by one completed bar of it (store schema: ts_utc, bid/ask
+        high/low/close). Each trade counts its time barrier in bars of its own agent's timeframe, as its labels do."""
         ts = pd.Timestamp(bar["ts_utc"])
         closed = []
         for book in self.books.values():
             still = []
             for t in book.open:
-                if ts <= t.entry_ts:
+                if t.timeframe != timeframe or ts <= t.entry_ts:
                     still.append(t)            # the entry bar itself never exits the trade
                     continue
                 t.bars_held += 1

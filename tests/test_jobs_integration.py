@@ -41,7 +41,7 @@ def bars_store(tmp_path_factory) -> Path:
     store = Store(root)
     b1, _ = check_bars(ticks_to_1m(synthetic_ticks("2022-10-01", "2025-10-01", ticks_per_minute=1, seed=11)))
     store.append("bars_1m", b1, source="synthetic")
-    for tf in ("15m", "1h", "1d"):
+    for tf in ("15m", "1h", "4h", "1d"):
         store.append(f"bars_{tf}", resample_bars(b1, tf), source="synthetic")
     return root
 
@@ -101,9 +101,10 @@ def test_retrain_challenger_shadow_promotion_cycle(bars_store, tmp_path):
 
 
 def test_monthly_research_is_bounded_and_counted(bars_store, tmp_path):
-    ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=2)
+    ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=1)
     out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
-    assert out["session_open"]["trials"] == 2 and ctx.trials.n_trials == 2
+    # the budget is per specialist; every family's trials count towards one registry total
+    assert all(out[f]["trials"] == 1 for f in SPECIALISTS) and ctx.trials.n_trials == len(SPECIALISTS)
     report = Path(out["report"]).read_text()
     assert "Research loop 2025-09" in report and report.count("\n| ") >= 3
 

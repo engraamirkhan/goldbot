@@ -61,7 +61,7 @@ def test_strong_shadow_record_is_promoted_and_a_weak_one_is_not(tmp_path):
     pop.ensure_founders(NOW)
     _member(pop, "strong")
     _member(pop, "flat")
-    _add_trades(book, "strong", _good(90))
+    _add_trades(book, "strong", _good(150))                            # 6 members -> 6 trials in the deflated SR
     _add_trades(book, "flat", list(np.tile([0.002, -0.002], 45)))
     out = pop.tournament(book, NOW)
     assert "strong" in out["promoted"] and pop.members["strong"].status == "live"
@@ -112,7 +112,8 @@ def test_winners_are_cloned_into_mutated_shadow_children(tmp_path):
 
 
 def test_shadow_and_live_caps(tmp_path, monkeypatch):
-    monkeypatch.setattr(P, "SHADOW_CAP", 3)
+    cap = len(SPECIALISTS) + 2                                         # the founders plus s0, s1: already full
+    monkeypatch.setattr(P, "SHADOW_CAP", cap)
     monkeypatch.setattr(P, "LIVE_CAP", 1)
     pop, book = Population(tmp_path / "p.json"), ShadowBook(tmp_path)
     _member(pop, "winner", status="live")
@@ -122,7 +123,8 @@ def test_shadow_and_live_caps(tmp_path, monkeypatch):
         _add_trades(book, f"s{i}", _good(90, seed=10 + i))
     out = pop.tournament(book, NOW)
     assert out["promoted"] == []                                       # the single live slot is taken
-    assert len(pop.active("shadow")) <= 3
+    assert len(pop.active("shadow")) <= cap
+    assert not [m for m in pop.members.values() if m.parent_id == "winner"]   # no room for the winner's children
 
 
 def test_capital_splits_by_fitness_within_a_family(tmp_path):
@@ -161,7 +163,7 @@ def test_mutations_always_change_the_config_and_keep_types():
 def test_league_rows_match_the_api_contract_and_population_persists(tmp_path):
     pop, book = Population(tmp_path / "p.json"), ShadowBook(tmp_path)
     _member(pop, "strong")
-    _add_trades(book, "strong", _good(90))
+    _add_trades(book, "strong", _good(150))                            # 6 members -> 6 trials in the deflated SR
     pop.tournament(book, NOW)
     pop.save(tmp_path / "agents.json")
     rows = [AgentRow.model_validate(r) for r in pop.league()]

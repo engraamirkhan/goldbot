@@ -10,7 +10,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
 - Built and tested: point-in-time store, calendar/UTC, resampler, loaders, quality checks, macro loaders; feature
   registry (volatility, MA families + ribbon, trend, mean-reversion, MFI, breakout, microstructure, S/R, swings,
   gaps, candles, session/calendar, macro); triple-barrier labels; specialist interface with agent lineage;
-  session-open specialist; purged walk-forward + LightGBM meta-labeller + deflated Sharpe + trial registry;
+  four specialist families per the design table: session-open (15m), mean-reversion (15m), trend (1h, 4h EMA-50
+  slope + pullback) and breakout (1h, tight-range break on volume); purged walk-forward + LightGBM meta-labeller + deflated Sharpe + trial registry;
   RiskGate + supervisor; broker protocol, paper broker, MT5 adapter, account classifier; TradingView webhook;
   account registry + keyring credential prompts (demo-first, live locked by gate); rule-table allocator;
   Telegram approval centre + bot adapter; trading engine loop; FastAPI backend with multi-user auth
@@ -52,6 +53,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
   registry) and records a verdict on each hypothesis; it promotes nothing.
 - One trial registry (`research/registry_sync.py`): the VPS monthly loop and the research workflow both union their
   registry with the `research-v1` release copy before and after writing, so the deflated Sharpe counts every trial once.
+- Multi-timeframe: research, retrains, the dry run and the engine all build context with `features.mtf.context_tfs`
+  (every one of 1h/4h/1d longer than the decision bar, prefixed h1_/h4_/d1_), so a model sees the columns it was
+  trained on. The engine runs on its 15m clock and evaluates each agent only when a bar of the agent's own timeframe
+  completes; context features are cached until a new context bar completes; open positions' time barriers and
+  shadow trades count bars of the agent's timeframe.
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
 
 ## Next steps (no owner input needed unless marked)
@@ -63,8 +69,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
    GitHub token with `python -m goldbot.ops.accounts set github-token` (bar sync + shared trial registry) and an
    Anthropic API key with `python -m goldbot.ops.accounts set anthropic-api-key` (staff agents; off without it).
 4. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
-5. More specialists (trend, mean-reversion, breakout per the design) so the allocator and the population have more
-   than one family; feature-subset and timeframe mutations for cloning (need pipeline support).
+5. Dispatch research.yml for `trend`, `mean_reversion` and `breakout` once this branch is on main, and read their
+   issues; the population seeds a founder per family automatically (shadow first, like every agent).
+6. Feature-subset and timeframe mutations for cloning (need pipeline support).
 
 ## Environment facts
 - Claude sandboxes (cloud container and the Mac's Cowork VM) cannot reach market-data hosts or download Actions

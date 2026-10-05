@@ -83,7 +83,9 @@ def run_engine(account_id: str) -> None:
                               magic_base=acc.magic_base, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host), broker, agents,
                  champions(), center, shadow_models=shadow_set() if shadow_host else None, live_shares=live_shares)
-    log.info("engine %s started (%s), models: %s", account_id, type(broker).__name__, sorted(eng.models))
+    warm = eng.warm_start(pd.Timestamp.now("UTC"))
+    log.info("engine %s started (%s), models: %s, %d 1m bars of history", account_id, type(broker).__name__,
+             sorted(eng.models), warm)
     def mtimes() -> tuple[float, ...]:
         return tuple(f.stat().st_mtime if f.exists() else -1.0 for f in (registry_file, population_file))
 
