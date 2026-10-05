@@ -14,7 +14,7 @@ def merge_higher_tf(decision: pd.DataFrame, higher_feats: pd.DataFrame, higher_b
     """decision: frame with ts_utc. higher_feats: features aligned to higher_bars (same index) with ts_utc.
     higher_bars must carry visible_at. Returns decision with `{tf_label}_` prefixed higher features."""
     h = higher_feats.copy()
-    h["visible_at"] = pd.to_datetime(higher_bars["visible_at"].values, utc=True)
+    h["visible_at"] = pd.DatetimeIndex(pd.to_datetime(higher_bars["visible_at"], utc=True))
     h = h.drop(columns=["ts_utc"]).sort_values("visible_at")
     h = h.rename(columns={c: f"{tf_label}_{c}" for c in h.columns if c != "visible_at"})
     d = decision.sort_values("ts_utc")

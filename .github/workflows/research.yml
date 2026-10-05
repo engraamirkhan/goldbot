@@ -1,0 +1,77 @@
+name: research
+# Walk-forward research on the published 1m bars (release data-v1). Runs on GitHub's runners because Claude
+# sandboxes cannot download release assets. The trial registry lives on release research-v1 so the deflated
+# Sharpe counts every trial ever run; the report is posted to the issue "research: <specialist>".
+on:
+  workflow_dispatch:
+    inputs:
+      specialist: { description: "specialist family", default: "session_open" }
+      from_year:  { description: "first year of bars", default: "2010" }
+      to_year:    { description: "last year of bars", default: "2026" }
+      rationale:  { description: "why this trial (recorded in the registry)", default: "baseline walk-forward on Dukascopy 1m bars" }
+permissions:
+  contents: write
+  issues: write
+concurrency:
+  group: research-registry   # one writer at a time for registry.jsonl
+  cancel-in-progress: false
+jobs:
+  walk-forward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e .
+      - name: fetch bars and the trial registry
+        run: |
+          gh release download data-v1 -p 'xauusd_1m_dukascopy_*.parquet' -D raw
+          ls -la raw
+          gh release download research-v1 -p registry.jsonl || echo "no registry yet; starting at trial 1"
+      - name: walk-forward
+        env:
+          SPECIALIST: ${{ inputs.specialist }}
+          FROM_YEAR: ${{ inputs.from_year }}
+          TO_YEAR: ${{ inputs.to_year }}
+          RATIONALE: ${{ inputs.rationale }}
+        run: |
+          set -o pipefail
+          python scripts/research_pass.py --bars raw --registry registry.jsonl --report report.md \
+            --specialist "$SPECIALIST" --from-year "$FROM_YEAR" --to-year "$TO_YEAR" --rationale "$RATIONALE" 2>&1 | tee research.log
+      - name: save the registry
+        run: |
+          # union with whatever the VPS monthly loop pushed while this ran, so no trial is dropped
+          gh release download research-v1 -p registry.jsonl -O registry.remote.jsonl || touch registry.remote.jsonl
+          python -m goldbot.research.registry_sync merge registry.jsonl registry.remote.jsonl -o registry.jsonl
+          gh release view research-v1 >/dev/null 2>&1 || gh release create research-v1 --title "Research trial registry" \
+            --notes "registry.jsonl: every evaluated trial (feeds the deflated Sharpe). Written by the research workflow." --latest=false
+          gh release upload research-v1 registry.jsonl --clobber
+      - name: post the report to an issue
+        if: always()
+        env:
+          SPECIALIST: ${{ inputs.specialist }}
+        run: |
+          python - <<'EOF'
+          import json, os, pathlib, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]; spec = os.environ["SPECIALIST"]
+          hdr = {"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"}
+          run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          rep = pathlib.Path("report.md")
+          if rep.exists():
+              body = f"Run: {run_url}\n\n{rep.read_text()}"
+          else:
+              log = pathlib.Path("research.log").read_text(errors="replace")[-50000:] if pathlib.Path("research.log").exists() else "(no log)"
+              body = f"Run: {run_url}\n\n**The research pass failed.**\n\n```\n{log}\n```"
+          title = f"research: {spec}"
+          q = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues?labels=research&state=open&per_page=50", headers=hdr)
+          existing = [i for i in json.load(urllib.request.urlopen(q)) if i["title"] == title]
+          if existing:   # one issue per specialist; each run is a comment so the history of trials stays readable
+              req = urllib.request.Request(existing[0]["comments_url"], data=json.dumps({"body": body}).encode(), headers=hdr)
+          else:
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues",
+                                           data=json.dumps({"title": title, "body": body, "labels": ["research"]}).encode(), headers=hdr)
+          print(urllib.request.urlopen(req).status)
+          EOF

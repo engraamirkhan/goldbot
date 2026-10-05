@@ -57,7 +57,7 @@ def size_multiplier(p: np.ndarray, allocator_w: float, target_atr: float, stop_a
 
 
 def summarize(trades: pd.DataFrame, trades_per_year: float, n_trials: int = 1) -> dict:
-    r = trades["ret"].values
+    r = trades["ret"].to_numpy()
     if len(r) == 0:
         return {"n": 0}
     sr_per_trade = np.mean(r) / (np.std(r, ddof=1) if len(r) > 1 and np.std(r, ddof=1) > 0 else 1)
@@ -65,6 +65,7 @@ def summarize(trades: pd.DataFrame, trades_per_year: float, n_trials: int = 1) -
         "n": int(len(r)),
         "hit_rate": float(np.mean(r > 0)),
         "mean_ret": float(np.mean(r)),
+        "std_ret": float(np.std(r, ddof=1)) if len(r) > 1 else 0.0,
         "profit_factor": profit_factor(r),
         "sharpe_ann": sharpe_annualised(r, trades_per_year),
         "max_dd": max_drawdown(r),

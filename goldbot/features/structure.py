@@ -8,7 +8,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from goldbot.features.registry import feature
+from goldbot.data.timeutil import epoch_ns
+from goldbot.features.registry import FeatureCtx, feature
 from goldbot.features.technical import atr
 
 
@@ -26,8 +27,8 @@ def confirmed_levels(df: pd.DataFrame, lag: int = 5, max_levels: int = 60) -> li
     O(n * max_levels); fine for a few hundred thousand bars. Levels within 0.3 ATR merge, touch count grows.
     """
     is_high, is_low = swing_points(df, lag)
-    a = atr(df, 14).bfill().values
-    highs, lows = df["high"].values, df["low"].values
+    a = atr(df, 14).bfill().to_numpy()
+    highs, lows = df["high"].to_numpy(), df["low"].to_numpy()
     known: list[list[float]] = []  # [price, touches, created_idx]
     per_bar: list[list[tuple[float, int, int]]] = []
     n = len(df)
@@ -49,16 +50,16 @@ def confirmed_levels(df: pd.DataFrame, lag: int = 5, max_levels: int = 60) -> li
                 if len(known) > max_levels:
                     known.sort(key=lambda x: (-x[1], -x[2]))
                     del known[max_levels:]
-        per_bar.append([(lv[0], lv[1], i - lv[2]) for lv in known])
+        per_bar.append([(float(lv[0]), int(lv[1]), i - int(lv[2])) for lv in known])
     return per_bar
 
 
 @feature("support_resistance", "structure", lookback=600)
-def f_levels(df, ctx):
+def f_levels(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     lag = ctx.get("swing_lag", 5)
     levels = confirmed_levels(df, lag)
-    a = atr(df, 14).bfill().values
-    close = df["close"].values
+    a = atr(df, 14).bfill().to_numpy()
+    close = df["close"].to_numpy()
     up = np.full(len(df), np.nan)
     dn = np.full(len(df), np.nan)
     up_t = np.zeros(len(df))
@@ -84,7 +85,7 @@ def f_levels(df, ctx):
 
 
 @feature("swings", "structure", lookback=200)
-def f_swings(df, ctx):
+def f_swings(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     lag = ctx.get("swing_lag", 5)
     is_high, is_low = swing_points(df, lag)
     # only confirmed swings are usable: shift by lag
@@ -104,14 +105,14 @@ def f_swings(df, ctx):
 
 
 @feature("gaps", "structure", lookback=20)
-def f_gaps(df, ctx):
+def f_gaps(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Gaps between consecutive bars (session break / weekend / news) in ATR, and whether filled."""
     a = atr(df, 14)
     gap = df["open"] - df["close"].shift(1)
     out = pd.DataFrame(index=df.index)
     out["gap_atr"] = gap / a
     # time gap in bars implied by timestamp (large => session break or weekend)
-    dt = pd.Series(pd.DatetimeIndex(df["ts_utc"]).asi8, index=df.index).diff() / 1e9
+    dt = pd.Series(epoch_ns(df["ts_utc"]), index=df.index).diff() / 1e9
     med = dt.rolling(50, min_periods=5).median()
     out["after_break"] = (dt > 3 * med).astype(int)
     # most recent unfilled gap: level and distance
@@ -123,7 +124,7 @@ def f_gaps(df, ctx):
 
 
 @feature("candles", "structure", lookback=5)
-def f_candles(df, ctx):
+def f_candles(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     rng = (df["high"] - df["low"]).replace(0, np.nan)
     body = (df["close"] - df["open"])
     out = pd.DataFrame(index=df.index)
@@ -134,7 +135,7 @@ def f_candles(df, ctx):
     out["outside_bar"] = ((df["high"] > df["high"].shift(1)) & (df["low"] < df["low"].shift(1))).astype(int)
     out["engulfing"] = np.sign(body) * ((body.abs() > body.shift(1).abs()) & (np.sign(body) != np.sign(body.shift(1)))).astype(int)
     out["pin_bar"] = np.where(out["lower_wick_pct"] > 0.66, 1, np.where(out["upper_wick_pct"] > 0.66, -1, 0))
-    out["consec_same_dir"] = _consecutive(np.sign(body))
+    out["consec_same_dir"] = _consecutive(pd.Series(np.sign(body), index=df.index))
     return out
 
 

@@ -7,11 +7,12 @@ that start within `embargo` after the test window ends.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Iterator
 
 import numpy as np
 import pandas as pd
+
+from goldbot.base import Record
 
 WINDOWS = {
     "15m": dict(train_months=24, test_months=3, step_months=3, purge_days=2, embargo_days=1),
@@ -19,8 +20,7 @@ WINDOWS = {
 }
 
 
-@dataclass
-class Fold:
+class Fold(Record):
     k: int
     train_idx: np.ndarray
     test_idx: np.ndarray
@@ -51,11 +51,11 @@ def walk_forward_splits(labels: pd.DataFrame, *, train_months: int, test_months:
         train_mask = (in_window & no_overlap) | (after_embargo & False)
         tr, tst = np.flatnonzero(train_mask), np.flatnonzero(test_mask)
         if len(tr) >= min_train and len(tst) > 0:
-            yield Fold(k, tr, tst, t0, t1)
+            yield Fold(k=k, train_idx=tr, test_idx=tst, test_start=t0, test_end=t1)
             k += 1
         t0 = t0 + pd.DateOffset(months=step_months)
 
 
-def splits_for(labels: pd.DataFrame, timeframe: str, **overrides) -> list[Fold]:
+def splits_for(labels: pd.DataFrame, timeframe: str, **overrides: int) -> list[Fold]:
     cfg = {**WINDOWS[timeframe], **overrides}
     return list(walk_forward_splits(labels, **cfg))

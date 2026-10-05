@@ -6,14 +6,13 @@ The barrier search uses only bars after entry, so labels can never see the signa
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 import pandas as pd
 
+from goldbot.base import FrozenRecord
 
-@dataclass(frozen=True)
-class BarrierSpec:
+
+class BarrierSpec(FrozenRecord):
     target_atr: float
     stop_atr: float
     max_bars: int
@@ -29,11 +28,11 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
     bars_held, entry, exit, barrier_hit.
     """
     n = len(bars)
-    bid_h, bid_l, bid_c = bars["bid_high"].values, bars["bid_low"].values, bars["bid_close"].values
-    ask_h, ask_l, ask_c = bars["ask_high"].values, bars["ask_low"].values, bars["ask_close"].values
-    a = atr.values
+    bid_h, bid_l, bid_c = bars["bid_high"].to_numpy(), bars["bid_low"].to_numpy(), bars["bid_close"].to_numpy()
+    ask_h, ask_l, ask_c = bars["ask_high"].to_numpy(), bars["ask_low"].to_numpy(), bars["ask_close"].to_numpy()
+    a = atr.to_numpy()
     rows = []
-    for idx, side in zip(signals["idx"].values.astype(int), signals["side"].values.astype(int)):
+    for idx, side in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int)):
         e = idx + 1
         if e >= n or not np.isfinite(a[idx]) or a[idx] <= 0:
             continue
@@ -69,8 +68,9 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
                      "target_hit": int(hit == "target")})
     out = pd.DataFrame(rows)
     if not out.empty:
-        out["ts_utc"] = bars["ts_utc"].values[out["idx"].values]
-        out["ts_exit"] = bars["ts_utc"].values[out["t_exit"].values]
+        bar_ts = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True))
+        out["ts_utc"] = bar_ts[out["idx"].to_numpy()]
+        out["ts_exit"] = bar_ts[out["t_exit"].to_numpy()]
     return out
 
 
@@ -79,9 +79,9 @@ def uniqueness_weights(labels: pd.DataFrame, n_bars: int) -> pd.Series:
     if labels.empty:
         return pd.Series(dtype=float)
     conc = np.zeros(n_bars + 1)
-    for s, e in zip(labels["t_entry"].values, labels["t_exit"].values):
+    for s, e in zip(labels["t_entry"].to_numpy(), labels["t_exit"].to_numpy()):
         conc[s:e + 1] += 1
-    w = np.array([np.mean(1.0 / conc[s:e + 1]) for s, e in zip(labels["t_entry"].values, labels["t_exit"].values)])
-    w = w * (labels["ret"].abs().values + 1e-6)
+    w = np.array([np.mean(1.0 / conc[s:e + 1]) for s, e in zip(labels["t_entry"].to_numpy(), labels["t_exit"].to_numpy())])
+    w = w * (labels["ret"].abs().to_numpy() + 1e-6)
     w = w / w.mean()
     return pd.Series(w, index=labels.index, name="weight")

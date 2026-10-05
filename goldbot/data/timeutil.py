@@ -19,6 +19,14 @@ import pandas as pd
 UTC = ZoneInfo("UTC")
 
 
+def epoch_ns(ts: pd.DatetimeIndex | pd.Series | pd.Index) -> np.ndarray:
+    """Epoch nanoseconds as int64, whatever unit the timestamps carry.
+
+    pandas 3 keeps the inferred resolution (s/ms/us/ns) instead of always using ns, so raw `.asi8` or
+    `.view("i8")` silently changes scale with the data source. Always go through this helper."""
+    return pd.DatetimeIndex(ts).as_unit("ns").to_numpy(dtype=np.int64)
+
+
 def server_to_utc(server_ts: pd.Series | pd.DatetimeIndex, server_tz: str) -> pd.DatetimeIndex:
     """Convert naive MT5 'server time' stamps to tz-aware UTC.
 
@@ -71,7 +79,7 @@ def floor_tf(utc_ts: pd.DatetimeIndex, tf_sec: int) -> pd.DatetimeIndex:
         dow = (idx.dayofweek + 1) % 7  # Sunday -> 0
         return (idx.normalize() - pd.to_timedelta(dow, unit="D"))
     ns = np.int64(tf_sec) * 1_000_000_000
-    vals = idx.tz_convert(UTC).as_unit("ns").asi8
+    vals = epoch_ns(idx.tz_convert(UTC))
     return pd.DatetimeIndex(pd.to_datetime((vals // ns) * ns, unit="ns", utc=True))
 
 

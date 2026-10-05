@@ -11,3 +11,11 @@ __pycache__/
 .env
 web/node_modules/
 web/dist/
+web/e2e/.server.json
+web/test-results/
+web/playwright-report/
+web/coverage/
+.mypy_cache/
+.ruff_cache/
+.coverage
+*.tsbuildinfo

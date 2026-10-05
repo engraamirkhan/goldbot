@@ -1,1 +1,1 @@
-from goldbot.allocator.rules import RuleAllocator, Regime  # noqa: F401
+from goldbot.allocator.rules import Regime, RuleAllocator  # noqa: F401

@@ -7,6 +7,7 @@ on:
     inputs:
       from_year: { description: "first year", default: "2010" }
       to_year:   { description: "last year (inclusive)", default: "2026" }
+      full_refresh: { description: "download every month again (published bars stay as fallback)", type: boolean, default: false }
   schedule:
     - cron: "17 3 * * 6"   # Saturdays 03:17 UTC: refresh the current year
 permissions:
@@ -31,28 +32,40 @@ jobs:
     timeout-minutes: 340
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 2   # Dukascopy throttles; the 3-way run lost whole months
       matrix:
         year: ${{ fromJson(needs.plan.outputs.years) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
-      - uses: actions/setup-node@v4
-        with: { node-version: "20" }
+      - uses: actions/setup-node@v5
+        with: { node-version: "22" }
       - run: pip install -e .
+      - name: fetch the previously published year (complete months are kept unless full_refresh)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p prev
+          gh release download data-v1 -p xauusd_1m_dukascopy_${{ matrix.year }}.parquet -D prev || echo "no previous file"
       - name: download and build 1m bars for ${{ matrix.year }}
         run: |
           set -o pipefail
-          python scripts/dukascopy_year.py ${{ matrix.year }} --report coverage-${{ matrix.year }}.md 2>&1 | tee report-${{ matrix.year }}.txt
+          python scripts/dukascopy_year.py ${{ matrix.year }} --report coverage-${{ matrix.year }}.md \
+            --existing prev/xauusd_1m_dukascopy_${{ matrix.year }}.parquet ${{ inputs.full_refresh == true && '--refetch-all' || '' }} 2>&1 | tee report-${{ matrix.year }}.txt
       - name: publish to release data-v1
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           [ -f xauusd_1m_dukascopy_${{ matrix.year }}.parquet ] || exit 0
-          gh release view data-v1 >/dev/null 2>&1 || gh release create data-v1 --title "Market data (rolling)" --notes "1m XAUUSD bars built by the data-dukascopy workflow" --latest=false
-          gh release upload data-v1 xauusd_1m_dukascopy_${{ matrix.year }}.parquet --clobber
+          # parallel matrix jobs race on create/upload: retry with backoff
+          for i in 1 2 3 4 5; do
+            { gh release view data-v1 >/dev/null 2>&1 || gh release create data-v1 --title "Market data (rolling)" --notes "1m XAUUSD bars built by the data-dukascopy workflow" --latest=false; } &&
+            gh release upload data-v1 xauusd_1m_dukascopy_${{ matrix.year }}.parquet --clobber && exit 0
+            sleep $((i * 15))
+          done
+          exit 1
       - name: coverage report to issue
         if: always()
         env:

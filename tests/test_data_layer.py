@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -99,4 +100,24 @@ def test_quality_checks_flag_spike_and_bid_gt_ask(bars1m):
     flagged, events = check_bars(b)
     kinds = {e.check for e in events}
     assert "spike" in kinds and "bid_gt_ask" in kinds
-    assert flagged.loc[i + 5, "dq_flag"].startswith("error")
+    assert str(flagged.at[i + 5, "dq_flag"]).startswith("error")
+
+
+@pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+def test_epoch_ns_is_unit_independent(unit):
+    from goldbot.data.timeutil import epoch_ns
+    idx = pd.DatetimeIndex(["2025-03-05 13:00", "2025-03-05 13:01"], tz="UTC").as_unit(unit)
+    assert epoch_ns(idx).tolist() == [1741179600_000_000_000, 1741179660_000_000_000]
+    assert epoch_ns(pd.Series(idx)).tolist() == epoch_ns(idx).tolist()
+
+
+@pytest.mark.parametrize("unit", ["ms", "ns"])
+def test_gap_check_fires_whatever_the_timestamp_unit(bars1m, unit):
+    # pandas 3 keeps ms resolution from Dukascopy timestamps; the gap check must still see a 30-minute hole
+    b = bars1m.copy()
+    b["ts_utc"] = pd.DatetimeIndex(b["ts_utc"]).as_unit(unit)
+    open_ = DEFAULT_SESSIONS.is_open(pd.DatetimeIndex(b["ts_utc"]))
+    i = int(np.flatnonzero(open_)[500])
+    hole = b.iloc[i:i + 30].index
+    _, dq = check_bars(b.drop(index=hole))
+    assert any(e.check == "gap_in_session" for e in dq), [e.check for e in dq]

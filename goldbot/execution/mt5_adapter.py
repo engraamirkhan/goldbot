@@ -57,12 +57,12 @@ class MT5Broker:
         if i.filling_mode & 2:
             modes.append("IOC")
         modes.append("RETURN")
-        return SymbolInfo(i.name, i.digits, i.point, i.trade_contract_size, i.volume_min, i.volume_step, i.volume_max,
-                          i.trade_stops_level, modes, i.trade_mode != 0)
+        return SymbolInfo(name=i.name, digits=i.digits, point=i.point, contract_size=i.trade_contract_size, volume_min=i.volume_min, volume_step=i.volume_step, volume_max=i.volume_max,
+                          stops_level_points=i.trade_stops_level, filling_modes=modes, trade_allowed=i.trade_mode != 0)
 
     def account(self) -> AccountInfo:
         a = mt5.account_info()
-        return AccountInfo(a.login, a.equity, a.balance, a.margin, a.margin_free, a.leverage, a.currency, a.server)
+        return AccountInfo(login=a.login, equity=a.equity, balance=a.balance, margin=a.margin, margin_free=a.margin_free, leverage=a.leverage, currency=a.currency, server=a.server)
 
     # ------------------------------------------------------------------ data
     def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
@@ -84,7 +84,7 @@ class MT5Broker:
     def last_tick(self, symbol: str) -> Tick:
         t = mt5.symbol_info_tick(symbol)
         ts = server_to_utc(pd.Series(pd.to_datetime([t.time_msc], unit="ms")), self.server_tz)[0]
-        return Tick(ts, t.bid, t.ask)
+        return Tick(ts_utc=ts, bid=t.bid, ask=t.ask)
 
     async def stream_ticks(self, symbol: str) -> AsyncIterator[Tick]:  # pragma: no cover
         import asyncio
@@ -116,32 +116,32 @@ class MT5Broker:
         for attempt in range(3):
             chk = mt5.order_check(req)
             if chk is None or chk.retcode not in (0, RETCODE_DONE):
-                return OrderResult(False, getattr(chk, "retcode", -1), None, None, 0.0, None, f"order_check: {getattr(chk, 'comment', '')}")
+                return OrderResult(ok=False, retcode=getattr(chk, "retcode", -1), order_id=None, position_id=None, filled_lots=0.0, price=None, message=f"order_check: {getattr(chk, 'comment', '')}")
             res = mt5.order_send(req)
             if res is not None and res.retcode == RETCODE_DONE:
-                return OrderResult(True, res.retcode, res.order, res.deal, res.volume, res.price, res.comment)
+                return OrderResult(ok=True, retcode=res.retcode, order_id=res.order, position_id=res.deal, filled_lots=res.volume, price=res.price, message=res.comment)
             if res is not None and res.retcode in (RETCODE_REQUOTE, RETCODE_REJECT) and attempt < 2:
                 time.sleep(0.5)
                 tick = mt5.symbol_info_tick(intent.symbol)
                 req["price"] = tick.ask if intent.side > 0 else tick.bid
                 continue
-            return OrderResult(False, getattr(res, "retcode", -1), None, None, 0.0, None, getattr(res, "comment", "send failed"))
-        return OrderResult(False, -1, None, None, 0.0, None, "FAILED_EXEC")
+            return OrderResult(ok=False, retcode=getattr(res, "retcode", -1), order_id=None, position_id=None, filled_lots=0.0, price=None, message=getattr(res, "comment", "send failed"))
+        return OrderResult(ok=False, retcode=-1, order_id=None, position_id=None, filled_lots=0.0, price=None, message="FAILED_EXEC")
 
-    def modify(self, position_id: int, sl, tp) -> OrderResult:
+    def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult:
         pos = [p for p in mt5.positions_get() or [] if p.ticket == position_id]
         if not pos:
-            return OrderResult(False, 10013, None, position_id, 0.0, None, "no such position")
+            return OrderResult(ok=False, retcode=10013, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="no such position")
         p = pos[0]
         req = {"action": mt5.TRADE_ACTION_SLTP, "symbol": p.symbol, "position": position_id,
                "sl": sl if sl is not None else p.sl, "tp": tp if tp is not None else p.tp}
         res = mt5.order_send(req)
-        return OrderResult(res.retcode == RETCODE_DONE, res.retcode, None, position_id, p.volume, None, res.comment)
+        return OrderResult(ok=res.retcode == RETCODE_DONE, retcode=res.retcode, order_id=None, position_id=position_id, filled_lots=p.volume, price=None, message=res.comment)
 
     def close(self, position_id: int, lots: float | None = None) -> OrderResult:
         pos = [p for p in mt5.positions_get() or [] if p.ticket == position_id]
         if not pos:
-            return OrderResult(False, 10013, None, position_id, 0.0, None, "no such position")
+            return OrderResult(ok=False, retcode=10013, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="no such position")
         p = pos[0]
         tick = mt5.symbol_info_tick(p.symbol)
         is_buy = p.type == mt5.POSITION_TYPE_BUY
@@ -150,7 +150,7 @@ class MT5Broker:
                "price": tick.bid if is_buy else tick.ask, "deviation": 30, "magic": p.magic,
                "comment": "close", "type_filling": self._filling()}
         res = mt5.order_send(req)
-        return OrderResult(res.retcode == RETCODE_DONE, res.retcode, res.order, position_id, res.volume, res.price, res.comment)
+        return OrderResult(ok=res.retcode == RETCODE_DONE, retcode=res.retcode, order_id=res.order, position_id=position_id, filled_lots=res.volume, price=res.price, message=res.comment)
 
     def positions(self, magic_prefix: int | None = None) -> list[Position]:
         out = []
@@ -158,8 +158,8 @@ class MT5Broker:
             if magic_prefix is not None and not str(p.magic).startswith(str(magic_prefix)):
                 continue
             ts = server_to_utc(pd.Series(pd.to_datetime([p.time_msc], unit="ms")), self.server_tz)[0]
-            out.append(Position(p.ticket, p.symbol, 1 if p.type == mt5.POSITION_TYPE_BUY else -1, p.volume, p.price_open,
-                                p.sl or None, p.tp or None, p.magic, p.comment, ts, p.profit))
+            out.append(Position(position_id=p.ticket, symbol=p.symbol, side=1 if p.type == mt5.POSITION_TYPE_BUY else -1, lots=p.volume, open_price=p.price_open,
+                                sl=p.sl or None, tp=p.tp or None, magic=p.magic, comment=p.comment, open_time_utc=ts, profit=p.profit))
         return out
 
     def deals_since(self, since_utc: pd.Timestamp) -> pd.DataFrame:

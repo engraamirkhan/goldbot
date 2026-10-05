@@ -7,16 +7,17 @@ At runtime the live engine overwrites these from `symbol_info(...).session_deals
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import time
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+from pydantic import Field
+
+from goldbot.base import FrozenRecord
 
 
-@dataclass(frozen=True)
-class SessionTable:
+class SessionTable(FrozenRecord):
     server_tz: str = "Europe/Athens"
     daily_break_start: time = time(23, 59)
     daily_break_end: time = time(1, 2)
@@ -24,7 +25,7 @@ class SessionTable:
     week_close_day: int = 4         # Friday
     week_close_time: time = time(23, 57)
     # Trading sessions in UTC, used only for features (not for open/closed state)
-    sessions_utc: dict[str, tuple[time, time]] = field(
+    sessions_utc: dict[str, tuple[time, time]] = Field(
         default_factory=lambda: {
             "asia": (time(23, 0), time(7, 0)),
             "london": (time(7, 0), time(12, 30)),
@@ -34,7 +35,7 @@ class SessionTable:
 
     def is_open(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
         local = pd.DatetimeIndex(utc_ts).tz_convert(ZoneInfo(self.server_tz))
-        dow = local.dayofweek.values
+        dow = local.dayofweek.to_numpy()
         t = local.time
         tsec = np.array([x.hour * 3600 + x.minute * 60 + x.second for x in t])
         bs = self.daily_break_start.hour * 3600 + self.daily_break_start.minute * 60

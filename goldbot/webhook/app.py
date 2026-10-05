@@ -15,6 +15,7 @@ import os
 import queue
 import threading
 from datetime import datetime, timezone
+from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
@@ -62,18 +63,19 @@ def to_row(a: Alert, received_utc: datetime) -> dict:
     }
 
 
-def create_app(secret: str | None = None, sink: "queue.Queue | None" = None, enforce_ip: bool = True) -> FastAPI:
+def create_app(secret: str | None = None, sink: queue.Queue[dict[str, Any]] | None = None, enforce_ip: bool = True) -> FastAPI:
     secret = secret or os.environ.get("TV_WEBHOOK_SECRET", "")
     if not secret:
         raise RuntimeError("TV_WEBHOOK_SECRET not set")
-    q: queue.Queue = sink or queue.Queue()
+    q: queue.Queue[dict[str, Any]] = sink or queue.Queue()
     app = FastAPI(title="goldbot webhook")
     app.state.queue = q
-    app.state.seen: set[str] = set()
+    seen: set[str] = set()
+    app.state.seen = seen
     lock = threading.Lock()
 
     @app.post("/tv")
-    async def tv(req: Request, alert: Alert):
+    async def tv(req: Request, alert: Alert) -> dict[str, bool]:
         client_ip = req.headers.get("x-forwarded-for", req.client.host if req.client else "").split(",")[0].strip()
         if enforce_ip and client_ip not in TRADINGVIEW_IPS:
             raise HTTPException(403, "ip not allowed")
@@ -81,14 +83,14 @@ def create_app(secret: str | None = None, sink: "queue.Queue | None" = None, enf
             raise HTTPException(403, "bad secret")
         row = to_row(alert, datetime.now(timezone.utc))
         with lock:
-            if row["signal_hash"] in app.state.seen:
+            if row["signal_hash"] in seen:
                 return {"ok": True, "dup": True}
-            app.state.seen.add(row["signal_hash"])
+            seen.add(row["signal_hash"])
         q.put(row)  # the store writer drains this queue; respond immediately
         return {"ok": True, "dup": False, "intrabar": row["intrabar"]}
 
     @app.get("/health")
-    async def health():
+    async def health() -> dict[str, Any]:
         return {"ok": True, "queued": q.qsize()}
 
     return app

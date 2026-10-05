@@ -19,12 +19,12 @@ def test_rule_allocator_weights_and_blackout():
 
 
 def _prop(pid="p1", window=90):
-    return Proposal(pid, "icm-demo", "session_open-g0-x", 1, 0.12, 2400.0, 2396.0, 2406.0, 0.61, 0.35, 22.0,
-                    [("dist_res_atr", 0.4), ("mfi12", -0.2), ("adx14", 0.1)], window_s=window)
+    return Proposal(proposal_id=pid, account_id="icm-demo", agent_id="session_open-g0-x", side=1, lots=0.12, entry=2400.0, stop=2396.0, target=2406.0, p=0.61, ev_r=0.35, spread_points=22.0,
+                    top_features=[("dist_res_atr", 0.4), ("mfi12", -0.2), ("adx14", 0.1)], window_s=window)
 
 
 def test_approval_flow_permissions_reasons_and_expiry():
-    decided = []
+    decided: list[Proposal] = []
     c = ApprovalCenter({111}, totp_verify=lambda code: code == "123456", on_decision=decided.append)
     c.propose(_prop())
     with pytest.raises(PermissionError):

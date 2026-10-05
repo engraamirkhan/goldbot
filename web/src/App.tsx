@@ -35,7 +35,7 @@ export function App() {
           ))}
         </nav>
         <span className="muted who">{currentUser()?.email} · {currentUser()?.role}</span>
-        <button className="link" onClick={async () => { try { await api.logout(); } catch {} setToken(null); setAuthed(false); }}>Sign out</button>
+        <button className="link" onClick={async () => { try { await api.logout(); } catch { /* session already gone server-side */ } setToken(null); setAuthed(false); }}>Sign out</button>
       </header>
       <main>
         {tab === "Overview" && <Overview />}

@@ -2,21 +2,21 @@
 names and units into these dataclasses (price in $/oz, volume in lots, times in UTC)."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import AsyncIterator, Protocol
 
 import pandas as pd
+from pydantic import Field
+
+from goldbot.base import Record
 
 
-@dataclass
-class Tick:
+class Tick(Record):
     ts_utc: pd.Timestamp
     bid: float
     ask: float
 
 
-@dataclass
-class Bar:
+class Bar(Record):
     ts_utc: pd.Timestamp
     open: float
     high: float
@@ -26,8 +26,7 @@ class Bar:
     spread_points: float
 
 
-@dataclass
-class SymbolInfo:
+class SymbolInfo(Record):
     name: str
     digits: int
     point: float
@@ -38,12 +37,11 @@ class SymbolInfo:
     stops_level_points: float
     filling_modes: list[str]
     trade_allowed: bool
-    sessions: dict = field(default_factory=dict)
+    sessions: dict = Field(default_factory=dict)
     commission_per_lot_side: float | None = None
 
 
-@dataclass
-class OrderIntent:
+class OrderIntent(Record):
     client_order_id: str          # {account}-{bar_close_ts}-{intent_hash}, written to pending_orders BEFORE sending
     symbol: str
     side: int                     # +1 buy / -1 sell
@@ -55,8 +53,7 @@ class OrderIntent:
     comment: str = ""
 
 
-@dataclass
-class OrderResult:
+class OrderResult(Record):
     ok: bool
     retcode: int
     order_id: int | None
@@ -66,8 +63,7 @@ class OrderResult:
     message: str = ""
 
 
-@dataclass
-class Position:
+class Position(Record):
     position_id: int
     symbol: str
     side: int
@@ -81,8 +77,7 @@ class Position:
     profit: float
 
 
-@dataclass
-class AccountInfo:
+class AccountInfo(Record):
     login: int
     equity: float
     balance: float

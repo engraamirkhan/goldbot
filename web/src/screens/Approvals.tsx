@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, hasRole, ReasonCode } from "../lib/api";
+import { api, hasRole, type ReasonCode } from "../lib/api";
+import { secondsLeft, useNow } from "../lib/useNow";
 
 const REASONS: ReasonCode[] = ["news", "cost", "discretion", "duplicate", "other"];
 
@@ -10,12 +11,13 @@ export function Approvals() {
     mutationFn: (v: { id: string; action: "approve" | "reject"; reason?: ReasonCode }) => api.decide(v.id, v.action, v.reason),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["proposals"] }),
   });
+  const now = useNow();
   const items = q.data ?? [];
   if (items.length === 0) return <p className="muted">No proposals waiting. Entries you approve here or on Telegram are managed automatically afterwards.</p>;
   return (
     <section className="cards">
       {items.map((p) => {
-        const left = Math.max(0, Math.round((new Date(p.expires_at).getTime() - Date.now()) / 1000));
+        const left = secondsLeft(p.expires_at, now);
         return (
           <article key={p.proposal_id} className={`card ${p.side}`}>
             <header><strong>{p.side.toUpperCase()} {p.lots.toFixed(2)} lots</strong><span>{p.account_id}</span><span className="muted">{left}s left</span></header>

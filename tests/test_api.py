@@ -1,10 +1,15 @@
 import json
 
+import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from goldbot.api.app import create_app
 from goldbot.api.auth import totp_code
+from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.telegram.approvals import ApprovalCenter, Proposal
+
+pytestmark = pytest.mark.integration
 
 
 def _secret_from_uri(uri: str) -> str:
@@ -17,8 +22,8 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
         "week_start_equity": 10000, "balance_closed_hwm": 10000, "stage": "normal", "open_positions": 1,
         "account_class": "raw", "last_tick_age_s": 0.4, "spread_points": 21, "terminal_connected": True, "ts": 0}))
     center = ApprovalCenter({111})
-    center.propose(Proposal("p1", "icm-demo", "session_open-g0-x", 1, 0.12, 2400, 2396, 2406, 0.61, 0.35, 22, [("a", 0.1)]))
-    center.propose(Proposal("p2", "icm-demo", "session_open-g0-x", -1, 0.10, 2400, 2404, 2394, 0.58, 0.20, 22, [("a", 0.1)]))
+    center.propose(Proposal(proposal_id="p1", account_id="icm-demo", agent_id="session_open-g0-x", side=1, lots=0.12, entry=2400, stop=2396, target=2406, p=0.61, ev_r=0.35, spread_points=22, top_features=[("a", 0.1)]))
+    center.propose(Proposal(proposal_id="p2", account_id="icm-demo", agent_id="session_open-g0-x", side=-1, lots=0.10, entry=2400, stop=2404, target=2394, p=0.58, ev_r=0.20, spread_points=22, top_features=[("a", 0.1)]))
     app = create_app(tmp_path, center, web_dist=tmp_path / "nodist")
     c = TestClient(app)
     st = app.state.st
@@ -77,3 +82,46 @@ def test_lockout_after_five_failures(tmp_path):
         c.post("/api/auth/login", json={"email": "o@x.io", "password": "nope nope nope", "totp": "000000"})
     r = c.post("/api/auth/login", json={"email": "o@x.io", "password": "a long password here", "totp": "000000"})
     assert r.status_code == 403 and "too many" in r.json()["detail"]
+
+
+def test_jobs_endpoint_reports_the_scheduler_state(tmp_path):
+    now = {"t": pd.Timestamp("2026-10-02 12:00", tz="UTC")}
+
+    def failing(slot):
+        raise RuntimeError("no ticks table")
+    sch = Scheduler(tmp_path / "scheduler.json", clock=lambda: now["t"])
+    sch.add("nightly_costs", Schedule(kind="daily", at="23:10"), failing)
+    now["t"] = pd.Timestamp("2026-10-02 23:11", tz="UTC")
+    sch.run_pending()
+
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    c = TestClient(app)
+    assert c.get("/api/jobs").status_code == 401
+    uri = c.post("/api/auth/setup", json={"setup_code": app.state.st.auth.setup_code, "email": "o@x.io", "password": "a long password here"}).json()["totp_uri"]
+    tok = c.post("/api/auth/login", json={"email": "o@x.io", "password": "a long password here", "totp": totp_code(_secret_from_uri(uri))}).json()["token"]
+    rows = c.get("/api/jobs", headers={"Authorization": f"Bearer {tok}"}).json()
+    assert [r["name"] for r in rows] == ["nightly_costs"]
+    row = rows[0]
+    assert row["last_ok"] is False and row["last_error"] == "RuntimeError: no ticks table"   # first line only
+    assert row["failures"] == 1 and row["next_slot"].startswith("2026-10-03T23:10")
+    assert row["heartbeat_age_s"] >= 0
+
+
+def test_agent_runs_endpoint_serves_reports_from_the_state_dir_only(tmp_path):
+    rep = tmp_path / "agent_reports" / "risk_officer"
+    rep.mkdir(parents=True)
+    (rep / "r.md").write_text("Drawdown 2.1%, no limits tripped.")
+    outside = tmp_path.parent / "secret.md"
+    outside.write_text("not for the dashboard")
+    rows = [{"role": "risk_officer", "started_utc": "2026-10-05T23:45:00+00:00", "status": "ok", "turns": 3, "cost_usd": 0.21,
+             "detail": None, "report_path": str(rep / "r.md")},
+            {"role": "data_steward", "started_utc": "2026-10-05T23:46:00+00:00", "status": "ok", "turns": 1, "cost_usd": 0.05,
+             "detail": None, "report_path": str(outside)}]
+    (tmp_path / "agent_runs.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\nnot json\n")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    c = TestClient(app)
+    uri = c.post("/api/auth/setup", json={"setup_code": app.state.st.auth.setup_code, "email": "o@x.io", "password": "a long password here"}).json()["totp_uri"]
+    tok = c.post("/api/auth/login", json={"email": "o@x.io", "password": "a long password here", "totp": totp_code(_secret_from_uri(uri))}).json()["token"]
+    got = c.get("/api/agent-runs", headers={"Authorization": f"Bearer {tok}"}).json()
+    assert [r["role"] for r in got] == ["data_steward", "risk_officer"]          # newest first, bad line skipped
+    assert got[1]["report"].startswith("Drawdown") and got[0]["report"] is None   # outside the state dir: not served

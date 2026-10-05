@@ -9,18 +9,18 @@ from __future__ import annotations
 import hashlib
 import json
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
 from typing import Any
 
 import pandas as pd
+from pydantic import Field
 
+from goldbot.base import FrozenRecord, Record
 from goldbot.labels.triple_barrier import BarrierSpec
 
 
-@dataclass(frozen=True)
-class AgentIdentity:
+class AgentIdentity(FrozenRecord):
     family: str                 # e.g. "session_open"
-    config: dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
     parent_id: str | None = None
     generation: int = 0
 
@@ -33,11 +33,10 @@ class AgentIdentity:
         cfg = {**self.config, **changes}
         if cfg == self.config:
             raise ValueError("a clone must differ from its parent")
-        return AgentIdentity(self.family, cfg, parent_id=self.agent_id, generation=self.generation + 1)
+        return AgentIdentity(family=self.family, config=cfg, parent_id=self.agent_id, generation=self.generation + 1)
 
 
-@dataclass
-class Candidate:
+class Candidate(Record):
     idx: int
     ts_utc: pd.Timestamp
     side: int
@@ -48,9 +47,9 @@ class Specialist(ABC):
     timeframe: str = "15m"
     default_config: dict[str, Any] = {}
 
-    def __init__(self, identity: AgentIdentity | None = None, **overrides):
+    def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
         cfg = {**self.default_config, **overrides}
-        self.identity = identity or AgentIdentity(self.family, cfg)
+        self.identity = identity or AgentIdentity(family=self.family, config=cfg)
         self.config = {**self.default_config, **self.identity.config}
 
     @property
@@ -70,7 +69,7 @@ class Specialist(ABC):
 
     def describe(self) -> dict[str, Any]:
         return {"agent_id": self.agent_id, "family": self.family, "timeframe": self.timeframe,
-                "config": self.config, "label_spec": asdict(self.label_spec), "exit": self.exit_policy(),
+                "config": self.config, "label_spec": self.label_spec.model_dump(), "exit": self.exit_policy(),
                 "parent": self.identity.parent_id, "generation": self.identity.generation}
 
 

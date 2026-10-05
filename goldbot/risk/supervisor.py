@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
+from goldbot.base import Record
 
-@dataclass
-class SupervisorLimits:
+
+class SupervisorLimits(Record):
     daily_cap: float = 0.015
     weekly_cap: float = 0.04
     dd_stage1: float = 0.08

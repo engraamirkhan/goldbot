@@ -1,26 +1,32 @@
 import queue
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from fastapi.testclient import TestClient
 
+from goldbot.execution.broker import OrderIntent, Tick
 from goldbot.execution.classifier import Classification, PersistentClassifier, classify
 from goldbot.execution.paper import PaperBroker
-from goldbot.execution.broker import OrderIntent, Tick
 from goldbot.risk import AccountState, Intent, RiskGate
 from goldbot.risk.gate import Stage
 from goldbot.webhook.app import create_app
 
 
-def _state(**kw):
-    base = dict(equity=10_000, balance_closed_hwm=10_000, day_start_equity=10_000, week_start_equity=10_000,
+def _state(**kw: Any) -> AccountState:
+    base: dict[str, Any] = dict(equity=10_000, balance_closed_hwm=10_000, day_start_equity=10_000, week_start_equity=10_000,
                 open_positions=0, margin_used=0.0, last_tick_age_s=1.0, spread_points=25.0)
     base.update(kw)
     return AccountState(**base)
 
 
-def _intent(**kw):
-    base = dict(agent_id="session_open-g0-x", side=1, p=0.62, target_atr=1.5, stop_atr=1.0, atr_usd=4.0, cost_atr=0.1,
+def _stage(st: AccountState) -> Stage:
+    # read through a call: rearm() mutates st.stage, which mypy's narrowing cannot see
+    return st.stage
+
+
+def _intent(**kw: Any) -> Intent:
+    base: dict[str, Any] = dict(agent_id="session_open-g0-x", side=1, p=0.62, target_atr=1.5, stop_atr=1.0, atr_usd=4.0, cost_atr=0.1,
                 multiplier=1.0, price=2400.0)
     base.update(kw)
     return Intent(**base)
@@ -56,19 +62,19 @@ def test_gate_drawdown_stages():
     # recovery does not clear a halt without /rearm
     st2.equity = 9_900
     assert g.update_stage(st2) == Stage.HALTED
-    assert g.rearm(st2, "REARM") and st2.stage == Stage.NORMAL
+    assert g.rearm(st2, "REARM") and _stage(st2) == Stage.NORMAL
 
 
 def test_paper_broker_fills_stops_and_is_idempotent():
     pb = PaperBroker(equity=10_000)
     t0 = pd.Timestamp("2025-03-05 10:00", tz="UTC")
     for i in range(10):
-        pb.on_tick(Tick(t0 + pd.Timedelta(seconds=i), 2400.0, 2400.25))
-    oi = OrderIntent("icm-1-abc", "XAUUSD", 1, 0.10, sl=2396.0, tp=2406.0, magic=260101, comment="icm-1-abc")
+        pb.on_tick(Tick(ts_utc=t0 + pd.Timedelta(seconds=i), bid=2400.0, ask=2400.25))
+    oi = OrderIntent(client_order_id="icm-1-abc", symbol="XAUUSD", side=1, lots=0.10, sl=2396.0, tp=2406.0, magic=260101, comment="icm-1-abc")
     r = pb.place_order(oi)
-    assert r.ok and r.filled_lots == 0.10 and r.price >= 2400.25
+    assert r.ok and r.filled_lots == 0.10 and r.price is not None and r.price >= 2400.25
     assert not pb.place_order(oi).ok  # duplicate client order id
-    pb.on_tick(Tick(t0 + pd.Timedelta(seconds=20), 2395.9, 2396.15))  # bid through stop
+    pb.on_tick(Tick(ts_utc=t0 + pd.Timedelta(seconds=20), bid=2395.9, ask=2396.15))  # bid through stop
     assert pb.positions() == []
     deals = pb.deals_since(t0)
     stop = deals[deals["type"] == "stop"].iloc[0]
@@ -88,13 +94,13 @@ def test_classifier_rules_and_persistence(tmp_path):
     asia = raw_ticks.assign(ts_utc=pd.date_range("2025-03-05 02:00", periods=3000, freq="1s", tz="UTC"))
     assert classify(asia, no_deals).account_class == "unknown"
     pc = PersistentClassifier(tmp_path / "acct.json")
-    assert pc.update(Classification("raw", 0.17, 0.2, False, 3000, "")) == "raw"
-    assert pc.update(Classification("unknown", None, None, False, 10, "")) == "raw"     # one disagreement: keep
-    assert pc.update(Classification("unknown", None, None, False, 10, "")) == "unknown"  # two in a row: change
+    assert pc.update(Classification(account_class="raw", median_spread=0.17, p90_spread=0.2, commission_seen=False, n_ticks=3000, reason="")) == "raw"
+    assert pc.update(Classification(account_class="unknown", median_spread=None, p90_spread=None, commission_seen=False, n_ticks=10, reason="")) == "raw"     # one disagreement: keep
+    assert pc.update(Classification(account_class="unknown", median_spread=None, p90_spread=None, commission_seen=False, n_ticks=10, reason="")) == "unknown"  # two in a row: change
 
 
 def test_webhook_auth_hash_and_intrabar():
-    q = queue.Queue()
+    q: queue.Queue[dict[str, Any]] = queue.Queue()
     app = create_app(secret="s3cret", sink=q, enforce_ip=False)
     c = TestClient(app)
     body = {"indicator": "K-Indi", "version": "2.02", "symbol": "XAUUSD", "tf": "15",

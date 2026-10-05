@@ -21,12 +21,12 @@ import getpass
 import json
 import re
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 import yaml
 
+from goldbot.base import Record
 from goldbot.config import ROOT
 
 ACCOUNTS_FILE = ROOT / "config" / "accounts.yaml"
@@ -34,18 +34,17 @@ PHASE_FILE = ROOT / "state" / "phase_state.json"
 SERVICE = "goldbot"
 
 try:
-    import keyring  # type: ignore
-    _kr_ok = keyring.get_keyring().__class__.__name__ not in ("fail.Keyring", "Keyring") or True
+    import keyring
+    _kr_ok: bool = keyring.get_keyring().__class__.__name__ not in ("fail.Keyring", "Keyring") or True
 except Exception:  # pragma: no cover
     keyring = None
     _kr_ok = False
 
 
-@dataclass
-class Account:
+class Account(Record):
     account_id: str
     broker: str
-    mode: str
+    mode: Literal["demo", "live"]
     server: str
     login: int | None
     terminal_path: str
@@ -63,7 +62,7 @@ Prompter = Callable[[str, bool], str]  # (message, secret) -> value
 _prompter: Prompter | None = None
 
 
-def register_prompter(fn: Prompter) -> None:
+def register_prompter(fn: Prompter | None) -> None:
     """The Telegram bot registers itself here so headless prompts reach the owner."""
     global _prompter
     _prompter = fn
@@ -156,8 +155,8 @@ def load_accounts(path: Path | None = None) -> dict[str, Account]:
     raw = yaml.safe_load(path.read_text())
     out = {}
     for aid, a in raw["accounts"].items():
-        out[aid] = Account(aid, a["broker"], a["mode"], a["server"], a.get("login"), a["terminal_path"],
-                           a["server_tz"], a["symbol"], a["magic_base"], bool(a.get("enabled", False)))
+        out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=a.get("login"), terminal_path=a["terminal_path"],
+                           server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)))
     return out
 
 

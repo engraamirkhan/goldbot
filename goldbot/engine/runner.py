@@ -14,18 +14,22 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 import numpy as np
 import pandas as pd
+from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator
+from goldbot.base import Record
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.resample import mid, resample_bars, ticks_to_1m
+from goldbot.data.store import Store
+from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.broker import Broker, OrderIntent, Tick
+from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
 from goldbot.features.mtf import merge_higher_tf
 from goldbot.features.technical import atr
@@ -42,18 +46,16 @@ class Model(Protocol):
     def predict(self, X: pd.DataFrame) -> np.ndarray: ...
 
 
-@dataclass
-class ConstantModel:
+class ConstantModel(Record):
     """Stand-in until a trained MetaLabelModel is loaded: returns a fixed probability."""
     p: float = 0.6
-    feature_names: list[str] = field(default_factory=list)
+    feature_names: list[str] = Field(default_factory=list)
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         return np.full(len(X), self.p)
 
 
-@dataclass
-class EngineConfig:
+class EngineConfig(Record):
     account_id: str
     broker_name: str
     mode: str = "paper"              # paper | demo | live (what the broker is); approvals are separate
@@ -67,10 +69,12 @@ class EngineConfig:
     max_bars_in_memory: int = 60000     # 1m bars kept (~40 trading days)
     feature_window: int = 800            # decision bars the features are computed on
     owner_user_id: int = 0
+    data_root: str | None = None         # when set, ticks and fills are logged to the store for the nightly cost job
+    shadow_host: bool = False            # this engine runs the shadow book (one per deployment: the canonical-cost broker)
+    tick_flush_s: int = 60               # market seconds between tick-log flushes
 
 
-@dataclass
-class OpenTrade:
+class OpenTrade(Record):
     position_id: int
     agent_id: str
     side: int
@@ -83,11 +87,14 @@ class OpenTrade:
 class Engine:
     def __init__(self, cfg: EngineConfig, broker: Broker, agents: list[Specialist], models: dict[str, Model],
                  center: ApprovalCenter | None = None, allocator: RuleAllocator | None = None,
-                 limits: RiskLimits | None = None):
+                 limits: RiskLimits | None = None, shadow_models: dict[str, tuple[str, Model]] | None = None,
+                 live_shares: dict[str, float] | None = None):
         self.cfg = cfg
         self.broker = broker
         self.agents = {a.agent_id: a for a in agents}
-        self.models = models
+        self.models = models                 # agent_id (or family, for a single-agent setup) -> model
+        # population: agent_id -> share of its family's capital; None = every agent trades at the family weight
+        self.live_shares = live_shares
         self.center = center or ApprovalCenter({cfg.owner_user_id})
         self.allocator = allocator or RuleAllocator()
         self.gate = RiskGate(limits)
@@ -100,6 +107,14 @@ class Engine:
         self.state = AccountState(equity=0, balance_closed_hwm=0, day_start_equity=0, week_start_equity=0,
                                   open_positions=0, margin_used=0, last_tick_age_s=0, spread_points=0)
         self.decisions: list[dict] = []
+        self.store = Store(cfg.data_root) if cfg.data_root else None
+        self._tick_log: list[Tick] = []
+        self._journaled = 0                  # decisions already written to the store's journal
+        self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)
+        # shadow book: version -> (family, model); champions and challengers paper-trade without orders
+        self.shadow = ShadowBook(cfg.state_dir) if cfg.shadow_host else None
+        self.shadow_models: dict[str, tuple[str, Model]] = {}
+        self.set_shadow_models(shadow_models or {})
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
         self.center.on_decision = self._on_decision
 
@@ -107,6 +122,7 @@ class Engine:
     def on_tick(self, t: Tick) -> list[dict]:
         """Feed a tick; returns any decisions made at a bar close."""
         self.ticks.append(t)
+        self._log_tick(t)
         if hasattr(self.broker, "on_tick"):
             self.broker.on_tick(t)  # paper broker fills
         sec = tf_seconds(self.cfg.decision_tf)
@@ -159,24 +175,31 @@ class Engine:
         fam_w = self.allocator.weights(regime)
         decisions = []
         last = len(dec) - 1
+        cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)
+        cands_by_agent = {aid: agent.candidates(m, X) for aid, agent in self.agents.items()}
+        if self.shadow is not None:
+            self._shadow_step(dec, X, cands_by_agent, float(a.iloc[last]), cost_atr, close_ts)
         for agent in self.agents.values():
-            cands = agent.candidates(m, X)
+            cands = cands_by_agent[agent.agent_id]
             if cands.empty or int(cands["idx"].iloc[-1]) != last:
                 continue
             side = int(cands["side"].iloc[-1])
-            model = self.models.get(agent.family)
+            model = self.models.get(agent.agent_id) or self.models.get(agent.family)
             if model is None:
                 continue
+            share = 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
+            if share <= 0:
+                continue      # shadow-only member of the population: the shadow book trades it, not the broker
             feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
             cols = model.feature_names or [c for c in feats.columns]
             p = float(model.predict(feats[[c for c in cols if c in feats.columns]] if model.feature_names else feats)[0])
             ls = agent.label_spec
-            w = fam_w.get(agent.family, 0.0)
-            mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, self.cfg.cost_atr)[0])
+            w = fam_w.get(agent.family, 0.0) * share
+            mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, cost_atr)[0])
             price = last_tick.ask if side > 0 else last_tick.bid
-            intent = Intent(agent.agent_id, side, p, ls.target_atr, ls.stop_atr, float(a.iloc[last]), self.cfg.cost_atr,
-                            mult if mult > 0 else 0.0, price)
-            if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, self.cfg.cost_atr) + 0.02:
+            intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
+                            multiplier=mult if mult > 0 else 0.0, price=price)
+            if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02:
                 decisions.append(self._record(agent, close_ts, p, mult, "below_threshold"))
                 continue
             gd = self.gate.check(intent, self.state)
@@ -188,17 +211,18 @@ class Engine:
                 continue
             stop = price - side * gd.stop_distance
             target = price + side * ls.target_atr * float(a.iloc[last])
-            prop = Proposal(pid, self.cfg.account_id, agent.agent_id, side, gd.lots, price, stop, target, p,
-                            p * ls.target_atr - (1 - p) * ls.stop_atr - self.cfg.cost_atr, self.state.spread_points,
-                            self._top_features(model, feats), window_s=90)
+            prop = Proposal(proposal_id=pid, account_id=self.cfg.account_id, agent_id=agent.agent_id, side=side, lots=gd.lots, entry=price, stop=stop, target=target, p=p,
+                            ev_r=p * ls.target_atr - (1 - p) * ls.stop_atr - cost_atr, spread_points=self.state.spread_points,
+                            top_features=self._top_features(model, feats), window_s=90)
             self.pending[pid] = (intent, prop, agent)
             if self.cfg.approval_mode == "auto":
-                self._execute(prop, agent, gd.lots, stop, target)
+                self._execute(prop, agent, gd.lots, stop, target, requested=price)
                 decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid))
             else:
                 self.center.propose(prop)
                 decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid))
         self._write_state()
+        self.flush_journal()
         return decisions
 
     # ------------------------------------------------------------------ approvals -> orders
@@ -214,22 +238,28 @@ class Engine:
             if gd.allowed:
                 price = tick.ask if prop.side > 0 else tick.bid
                 self._execute(prop, agent, gd.lots, price - prop.side * gd.stop_distance,
-                              price + prop.side * agent.label_spec.target_atr * intent.atr_usd)
+                              price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price)
             else:
                 self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "gate_at_approval:" + ",".join(gd.reasons)})
         self._write_state()
 
-    def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float) -> None:
+    def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float) -> None:
         magic = self.cfg.magic_base + (abs(hash(agent.family)) % 100)
-        oi = OrderIntent(prop.proposal_id, self.cfg.symbol, prop.side, lots, round(stop, 2), round(target, 2), magic,
+        oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
         self.sent_ids.add(prop.proposal_id)   # written BEFORE sending: never double-send
         res = self.broker.place_order(oi)
         if res.ok and res.position_id is not None:
-            self.open[res.position_id] = OpenTrade(res.position_id, agent.agent_id, prop.side, res.filled_lots,
-                                                  pd.Timestamp.now('UTC'), agent.label_spec.max_bars)
+            self.open[res.position_id] = OpenTrade(position_id=res.position_id, agent_id=agent.agent_id, side=prop.side, lots=res.filled_lots,
+                                                  entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=agent.label_spec.max_bars)
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order", "ok": res.ok,
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots})
+        if self.store is not None and res.ok and res.price is not None:
+            # requested vs filled feeds the nightly slippage table
+            fill = pd.DataFrame([{"ts_utc": self.broker.last_tick(self.cfg.symbol).ts_utc, "client_order_id": prop.proposal_id,
+                                  "agent_id": agent.agent_id, "side": prop.side, "lots": res.filled_lots, "requested": requested,
+                                  "filled": res.price, "order_type": "market", "retcode": res.retcode, "commission": np.nan}])
+            self.store.append("fills", fill, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
 
     # ------------------------------------------------------------------ position management
     def _manage_open(self, dec: pd.DataFrame) -> None:
@@ -247,7 +277,7 @@ class Engine:
         # reconciliation: adopt orphans with our magic range
         for p in self.broker.positions():
             if p.position_id not in self.open and self.cfg.magic_base <= p.magic < self.cfg.magic_base + 100:
-                self.open[p.position_id] = OpenTrade(p.position_id, "orphan", p.side, p.lots, p.open_time_utc, 48)
+                self.open[p.position_id] = OpenTrade(position_id=p.position_id, agent_id="orphan", side=p.side, lots=p.lots, entry_bar_ts=p.open_time_utc, max_bars=48)
                 self.decisions.append({"ts": time.time(), "action": "adopt_orphan", "position": p.position_id})
 
     # ------------------------------------------------------------------ helpers
@@ -292,6 +322,99 @@ class Engine:
         self.decisions.append(d)
         return d
 
+    # ------------------------------------------------------------------ shadow book
+    def set_shadow_models(self, models: dict[str, tuple[str, Model]]) -> None:
+        """Replace the shadow set (version -> (agent_id, model)) on registry reload; versions no longer listed stop
+        opening trades. Each version paper-trades with its own agent's specialist, so the record is per agent."""
+        self.shadow_models = dict(models)
+        if self.shadow is not None:
+            now = self.last_bar_close or pd.Timestamp.now("UTC")
+            for version in models:
+                self.shadow.track(version, now)
+
+    def _shadow_step(self, dec: pd.DataFrame, X: pd.DataFrame, cands_by_agent: dict[str, pd.DataFrame], atr_usd: float,
+                     cost_atr: float, close_ts: pd.Timestamp) -> None:
+        assert self.shadow is not None
+        last = len(dec) - 1
+        bar = dec.iloc[last]
+        self.shadow.on_bar(bar)           # advance open shadow trades first; a new entry starts after this bar
+        feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
+        for version, (agent_key, model) in self.shadow_models.items():
+            for agent in self.agents.values():
+                cands = cands_by_agent[agent.agent_id]
+                if agent_key not in (agent.agent_id, agent.family) or cands.empty or int(cands["idx"].iloc[-1]) != last:
+                    continue
+                side = int(cands["side"].iloc[-1])
+                cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
+                p = float(model.predict(feats[cols])[0])
+                ls = agent.label_spec
+                if p <= breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02:
+                    continue
+                self.shadow.open_trade(version=version, agent_id=agent.agent_id, side=side, bar_ts=pd.Timestamp(bar["ts_utc"]),
+                                       entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
+                                       target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p)
+        self.shadow.save(close_ts)
+
+    def flush_journal(self) -> None:
+        """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the
+        store's `decisions` table: the trade journal the agents and reviews read. One part file per flush."""
+        if self.store is None or self._journaled >= len(self.decisions):
+            return
+        rows = []
+        for d in self.decisions[self._journaled:]:
+            ts = d.get("ts")
+            if isinstance(ts, (int, float)):
+                ts_utc = pd.Timestamp(ts, unit="s", tz="UTC")
+            else:
+                ts_utc = pd.Timestamp(ts) if ts is not None else pd.Timestamp.now("UTC")
+            extra = {k: v for k, v in d.items() if k not in ("ts", "agent", "action", "p", "mult", "proposal")}
+            rows.append({"ts_utc": ts_utc, "account_id": self.cfg.account_id, "agent_id": d.get("agent"),
+                         "action": str(d.get("action")), "p": d.get("p"), "mult": d.get("mult"),
+                         "proposal_id": d.get("proposal"), "detail": json.dumps(extra, default=str)})
+        df = pd.DataFrame(rows)
+        df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
+        self.store.append("decisions", df, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+        self._journaled = len(self.decisions)
+
+    def _log_tick(self, t: Tick) -> None:
+        if self.store is None:
+            return
+        self._tick_log.append(t)
+        if (t.ts_utc - self._tick_log[0].ts_utc).total_seconds() >= self.cfg.tick_flush_s:
+            self.flush_ticks()
+
+    def flush_ticks(self) -> None:
+        """Write buffered ticks as one new part file (append-only; the nightly cost job reads them)."""
+        if self.store is None or not self._tick_log:
+            return
+        df = pd.DataFrame({"ts_utc": [x.ts_utc for x in self._tick_log], "bid": [x.bid for x in self._tick_log],
+                           "ask": [x.ask for x in self._tick_log]})
+        self.store.append("ticks", df, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+        self._tick_log = []
+
+    def _cost_atr(self, atr_usd: float, ts: pd.Timestamp) -> float:
+        """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one."""
+        path = Path(self.cfg.state_dir, f"costs_{self.cfg.account_id}.json")
+        mtime = path.stat().st_mtime if path.exists() else -1.0
+        if mtime != self._cost_cache[0]:
+            try:
+                self._cost_cache = (mtime, CostTable.load(path))
+            except (ValueError, OSError):
+                self._cost_cache = (mtime, None)   # a bad file must not stop trading decisions; fall back
+        table = self._cost_cache[1]
+        if table is None:
+            return self.cfg.cost_atr
+        session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([ts]))[0])
+        c = table.round_trip_atr(session, atr_usd)
+        return c if c is not None else self.cfg.cost_atr
+
+    def _account_class(self) -> str:
+        path = Path(self.cfg.state_dir, f"classifier_{self.cfg.account_id}.json")
+        try:
+            return str(json.loads(path.read_text()).get("class") or "unknown") if path.exists() else "unknown"
+        except (ValueError, OSError):
+            return "unknown"
+
     def _write_state(self) -> None:
         st = self.state
         payload = {
@@ -299,6 +422,6 @@ class Engine:
             "equity": st.equity, "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
-            "terminal_connected": True, "account_class": "unknown", "pending": len(self.center.pending),
+            "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
         }
         Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json").write_text(json.dumps(payload))

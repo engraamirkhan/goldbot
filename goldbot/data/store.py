@@ -19,14 +19,21 @@ import pyarrow.parquet as pq
 TABLES = {
     "ticks", "bars_1m", "bars_15m", "bars_1h", "bars_4h", "bars_1d", "bars_1w",
     "macro", "calendar_events", "news", "tv_signals", "tv_ideas", "features", "labels",
-    "trades", "decisions", "dq_events", "cost_tables",
+    "trades", "decisions", "dq_events", "cost_tables", "fills",
 }
 
 KEY_COLUMNS = {
     "ticks": ["ts_utc", "bid", "ask"],
     "tv_signals": ["signal_hash"],
     "macro": ["series", "value_date", "vintage"],
+    "fills": ["ts_utc", "client_order_id"],
 }
+
+
+def _utc(x: str | pd.Timestamp) -> pd.Timestamp:
+    """Naive values are taken as UTC; aware ones are converted (pd.Timestamp(aware, tz=...) raises)."""
+    t = pd.Timestamp(x)
+    return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
 
 
 class Store:
@@ -44,8 +51,11 @@ class Store:
         return self.table_dir(table) / f"source={source}" / f"symbol={symbol}" / f"year={ts.year}" / f"month={ts.month:02d}"
 
     # ------------------------------------------------------------------ write
-    def append(self, table: str, df: pd.DataFrame, *, source: str, symbol: str = "XAUUSD") -> int:
-        """Append rows, de-duplicating against the key columns within each partition."""
+    def append(self, table: str, df: pd.DataFrame, *, source: str, symbol: str = "XAUUSD", dedupe: bool = True) -> int:
+        """Append rows, de-duplicating against the key columns within each partition.
+
+        dedupe=False writes each call as a new part file without reading the partition back: for append-only
+        logs (the engine's ticks and fills) where rewriting a month of rows on every flush would be the cost."""
         if df.empty:
             return 0
         df = df.copy()
@@ -58,7 +68,7 @@ class Store:
         for (y, m), part in df.groupby([df["ts_utc"].dt.year, df["ts_utc"].dt.month]):
             pdir = self.partition_dir(table, source, symbol, part["ts_utc"].iloc[0])
             pdir.mkdir(parents=True, exist_ok=True)
-            existing = self._read_partition(pdir)
+            existing = self._read_partition(pdir) if dedupe else None
             if existing is not None and not existing.empty:
                 merged = pd.concat([existing, part], ignore_index=True)
                 merged = merged.drop_duplicates(subset=[k for k in keys if k in merged.columns], keep="last")
@@ -106,10 +116,10 @@ class Store:
             params.append(source)
         if start is not None:
             where.append("ts_utc >= ?")
-            params.append(pd.Timestamp(start, tz="UTC").to_pydatetime())
+            params.append(_utc(start).to_pydatetime())
         if end is not None:
             where.append("ts_utc < ?")
-            params.append(pd.Timestamp(end, tz="UTC").to_pydatetime())
+            params.append(_utc(end).to_pydatetime())
         sql = f"SELECT {cols} FROM read_parquet('{glob}', hive_partitioning=true) WHERE {' AND '.join(where)} ORDER BY ts_utc"
         df = con.execute(sql, params).df()
         con.close()

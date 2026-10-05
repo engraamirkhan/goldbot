@@ -8,17 +8,16 @@ disabled; on Unknown, the engine trades paper and alerts.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from goldbot.base import Record
 from goldbot.data.calendar import DEFAULT_SESSIONS
 
 
-@dataclass
-class Classification:
+class Classification(Record):
     account_class: str      # raw | standard | unknown
     median_spread: float | None
     p90_spread: float | None
@@ -32,22 +31,22 @@ def classify(ticks: pd.DataFrame, deals: pd.DataFrame, *, raw_spread_max: float 
     commission_seen = bool(not deals.empty and "commission" in deals.columns and (deals["commission"].abs() > 0).any())
     if commission_seen:
         med = float(np.median(ticks["ask"] - ticks["bid"])) if not ticks.empty else None
-        return Classification("raw", med, None, True, len(ticks), "commission on past deals")
+        return Classification(account_class="raw", median_spread=med, p90_spread=None, commission_seen=True, n_ticks=len(ticks), reason="commission on past deals")
     if ticks.empty:
-        return Classification("unknown", None, None, False, 0, "no ticks")
+        return Classification(account_class="unknown", median_spread=None, p90_spread=None, commission_seen=False, n_ticks=0, reason="no ticks")
     idx = pd.DatetimeIndex(pd.to_datetime(ticks["ts_utc"], utc=True))
     sess = DEFAULT_SESSIONS.session_label(idx)
     t = ticks[np.isin(sess, ["london", "newyork"])]
     if len(t) < min_ticks:
-        return Classification("unknown", None, None, False, len(t), f"only {len(t)} London/NY ticks (< {min_ticks})")
-    spread = (t["ask"] - t["bid"]).values
+        return Classification(account_class="unknown", median_spread=None, p90_spread=None, commission_seen=False, n_ticks=len(t), reason=f"only {len(t)} London/NY ticks (< {min_ticks})")
+    spread = (t["ask"] - t["bid"]).to_numpy()
     med, p90 = float(np.median(spread)), float(np.percentile(spread, 90))
     floating = float(np.std(spread)) > 1e-6
     if med < raw_spread_max and floating:
-        return Classification("raw", med, p90, False, len(t), "tight floating spread")
+        return Classification(account_class="raw", median_spread=med, p90_spread=p90, commission_seen=False, n_ticks=len(t), reason="tight floating spread")
     if med >= std_spread_min:
-        return Classification("standard", med, p90, False, len(t), "wide spread, no commission")
-    return Classification("unknown", med, p90, False, len(t), "spread in dead band")
+        return Classification(account_class="standard", median_spread=med, p90_spread=p90, commission_seen=False, n_ticks=len(t), reason="wide spread, no commission")
+    return Classification(account_class="unknown", median_spread=med, p90_spread=p90, commission_seen=False, n_ticks=len(t), reason="spread in dead band")
 
 
 class PersistentClassifier:
@@ -69,7 +68,7 @@ class PersistentClassifier:
                 self.state["pending"] = c.account_class
         else:
             self.state["pending"] = None
-        self.state["runs"] = (self.state["runs"] + [c.__dict__])[-20:]
+        self.state["runs"] = (self.state["runs"] + [c.model_dump()])[-20:]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self.state, default=str))
         return self.state["class"]

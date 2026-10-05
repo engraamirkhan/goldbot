@@ -12,7 +12,14 @@ log = logging.getLogger(__name__)
 
 try:  # pragma: no cover
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-    from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+    from telegram.ext import (
+        Application,
+        CallbackQueryHandler,
+        CommandHandler,
+        ContextTypes,
+        MessageHandler,
+        filters,
+    )
 except ImportError:  # pragma: no cover
     Application = None
 
@@ -50,8 +57,9 @@ class TelegramBot:  # pragma: no cover - needs network + token
                 p = self.center.decide(parts[1], uid, True)
             else:
                 p = self.center.decide(parts[1], uid, False, parts[2])
-            await q.answer(p.outcome.value)
-            await q.edit_message_text(q.message.text + f"\n\n→ {p.outcome.value}" + (f" ({p.reason_code})" if p.reason_code else ""))
+            outcome = p.outcome.value if p.outcome is not None else "PENDING"
+            await q.answer(outcome)
+            await q.edit_message_text(q.message.text + f"\n\n→ {outcome}" + (f" ({p.reason_code})" if p.reason_code else ""))
         except (PermissionError, KeyError, ValueError) as exc:
             await q.answer(str(exc), show_alert=True)
 
