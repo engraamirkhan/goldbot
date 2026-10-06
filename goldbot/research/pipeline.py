@@ -95,7 +95,11 @@ def lookahead_check(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | N
 
 def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None = None,
                    feature_names: list[str] | None = None, model_features: list[str] | None = None,
-                   n_trials: int = 1, trades_per_year: float = 400.0, ctx: dict | None = None) -> ResearchResult:
+                   n_trials: int = 1, trades_per_year: float = 400.0, ctx: dict | None = None,
+                   extra_cost_usd: float = 0.0) -> ResearchResult:
+    """extra_cost_usd: measured round-trip cost per oz beyond the bar spread (entry and exit slippage plus commission
+    from the live cost table). It is charged on every label's return and in the take-trade threshold, so models
+    retrained on the VPS learn against the costs the broker actually charges, not Dukascopy's spread alone."""
     bars_dec = bars_dec.reset_index(drop=True)
     m, X = build_decision_frame(bars_dec, context, feature_names, ctx)
     cands = spec.candidates(m, X)
@@ -103,6 +107,8 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
     labels = one_at_a_time(triple_barrier(bars_dec, cands, spec.label_spec, a))
     if labels.empty:
         return ResearchResult(agent_id=spec.agent_id, n_candidates=0, n_folds=0, oof=labels, metrics={"n": 0}, feature_version=X.attrs["feature_version"], importance=None)
+    if extra_cost_usd > 0:
+        labels["ret"] = labels["ret"] - extra_cost_usd / labels["entry"].astype(float)
     labels["weight"] = uniqueness_weights(labels, len(bars_dec)).to_numpy()
     feats = X.drop(columns=["ts_utc"]).iloc[labels["idx"].to_numpy()].reset_index(drop=True)
     feats = feats.replace([np.inf, -np.inf], np.nan)
@@ -128,6 +134,8 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
         from goldbot.research.metrics import breakeven_prob
         ls = spec.label_spec
         cost_atr = float(np.nanmedian(m["spread"] / a)) * 2 if len(m) else 0.1
+        if extra_cost_usd > 0:
+            cost_atr += extra_cost_usd / float(np.nanmedian(a))
         thr = breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02
         taken = scored[last_model.calibrated(scored["p_raw"].to_numpy()) > thr]
         metrics.update({

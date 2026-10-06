@@ -95,6 +95,26 @@ def _bars(ctx: JobContext, tf: str, start: pd.Timestamp, end: pd.Timestamp) -> p
     return ctx.store.read(f"bars_{tf}", start=start, end=end).drop(columns=["source", "symbol", "year", "month"], errors="ignore")
 
 
+def live_extra_cost_usd(ctx: JobContext) -> float:
+    """Round-trip cost per oz the canonical-cost broker charges beyond the quoted spread, from its nightly cost table:
+    entry and exit slippage (the measured mean, or the conservative prior until enough fills exist) plus commission
+    both sides. 0 when no table exists yet (before the first live week)."""
+    from goldbot.execution.costs import CONTRACT_OZ, CostTable
+    canonical = {b for b, cfg in ctx.settings.brokers.items() if cfg.canonical_costs}
+    for acc in ctx.accounts:
+        if acc.broker not in canonical:
+            continue
+        try:
+            table = CostTable.load(ctx.state_dir / f"costs_{acc.account_id}.json")
+        except ValueError:
+            table = None
+        if table is None:
+            continue
+        slips = [max(s.mean, 0.0) for k, s in table.slippage.items() if k.endswith(":market")] or [table.slippage_prior_usd]
+        return float(2 * (sum(slips) / len(slips)) + 2 * table.commission_per_lot_side_usd / CONTRACT_OZ)
+    return 0.0
+
+
 def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int, n_trials: int = 1) -> ResearchResult | None:
     start = end - pd.DateOffset(months=months)
     dec = _bars(ctx, spec.timeframe, start, end)
@@ -103,7 +123,9 @@ def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: 
     ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
     context = {TF_LABEL[tf]: _bars(ctx, tf, ctx_start, end) for tf in context_tfs(spec.timeframe)}
     years = max((pd.to_datetime(dec["ts_utc"].iloc[-1]) - pd.to_datetime(dec["ts_utc"].iloc[0])).days / 365.25, 1e-9)
-    res = run_specialist(spec, dec, context=context, n_trials=n_trials)
+    # learn against what the broker actually charges: the live cost table's slippage and commission
+    res = run_specialist(spec, dec, context=context, n_trials=n_trials, extra_cost_usd=live_extra_cost_usd(ctx))
+    res.metrics["extra_cost_usd"] = live_extra_cost_usd(ctx)
     if res.n_candidates:
         res.metrics["trades_per_year"] = res.n_candidates / years
     return res

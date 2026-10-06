@@ -54,3 +54,20 @@ def test_missing_files_fail_clearly(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(tmp_path)])
     with pytest.raises(SystemExit, match="no xauusd_1m_dukascopy"):
         rp.main()
+
+
+def test_variants_are_separate_trials_and_typos_fail(release_dir, tmp_path, monkeypatch):
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    variants = '[{}, {"asia_range_max_atr_d": 1.2}]'
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--variants", variants])
+    assert rp.main() == 0
+    rows = [json.loads(line) for line in registry.read_text().splitlines()]
+    assert [r["trial"] for r in rows] == [1, 2] and rows[1]["config"]["asia_range_max_atr_d"] == 1.2
+    assert "overrides" in rows[1]["rationale"] and "overrides" not in rows[0]["rationale"]
+    text = report.read_text()
+    assert "## session_open: 2 variants" in text and '`{"asia_range_max_atr_d": 1.2}`' in text
+    with pytest.raises(SystemExit, match="unknown session_open settings"):
+        rp.parse_variants("session_open", '[{"asia_range_max": 1.2}]')
+    with pytest.raises(SystemExit, match="does not run on"):
+        rp.parse_variants("trend", '[{"timeframe": "4h"}]')
