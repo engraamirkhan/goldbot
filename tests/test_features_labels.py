@@ -127,3 +127,14 @@ def test_one_at_a_time_keeps_a_candidate_only_after_the_previous_exit():
     # 11 and 12 enter while 10 is open (exits at bar 20); 20 enters at 21 > 20; 30 after 25; 31 enters at 32 > 31
     assert kept["idx"].tolist() == [10, 20, 30, 31]
     assert one_at_a_time(lab.iloc[:0]).empty
+
+
+def test_mfi_weights_fractional_volumes():
+    from goldbot.features.technical import mfi
+    n = 40
+    close = 100 + np.sin(np.arange(n))                      # alternating up and down bars
+    base = pd.DataFrame({"high": close + 0.5, "low": close - 0.5, "close": close})
+    up = np.r_[0.0, np.diff(close) > 0]
+    heavy_up = base.assign(tick_count=np.where(up, 0.9, 0.1))   # fractional, more volume on up bars
+    heavy_dn = base.assign(tick_count=np.where(up, 0.1, 0.9))
+    assert mfi(heavy_up).iloc[-1] > 70 and mfi(heavy_dn).iloc[-1] < 30
