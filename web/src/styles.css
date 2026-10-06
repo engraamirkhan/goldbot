@@ -33,3 +33,9 @@ form.inline button { padding: 6px 12px; border-radius: 6px; border: 0; backgroun
 .reports li { margin: 0.4rem 0; }
 .reports summary { cursor: pointer; }
 .report { white-space: pre-wrap; font-size: 0.9rem; max-width: 100%; overflow-x: auto; }
+.halt { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; }
+.halt.bad { border: 1px solid var(--bad); border-radius: 8px; padding: 8px 12px; color: var(--bad); }
+.halt form { display: flex; gap: 8px; }
+.halt input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
+.halt button { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: none; color: var(--fg); cursor: pointer; }
+.halt button.danger { background: var(--bad); border-color: var(--bad); color: white; }

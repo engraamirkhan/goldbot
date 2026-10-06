@@ -50,6 +50,7 @@ class AccountState(Record):
     spread_points: float
     stage: Stage = Stage.NORMAL
     supervisor_halt: bool = False
+    owner_halt: bool = False          # /halt from Telegram or the dashboard (state/control.json)
     in_blackout: bool = False
     dq_error: bool = False
 
@@ -110,6 +111,8 @@ class RiskGate:
         self.update_stage(st)
         if st.supervisor_halt:
             reasons.append("supervisor_halt")
+        if st.owner_halt:
+            reasons.append("owner_halt")
         if st.stage == Stage.HALTED:
             reasons.append("drawdown_halt")
         if st.dq_error:

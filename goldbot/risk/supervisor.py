@@ -4,6 +4,7 @@ closed if the supervisor heartbeat is older than 60 s."""
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -52,7 +53,9 @@ class Supervisor:
         stale = [e["account"] for e in engines if time.time() - e.get("ts", 0) > self.limits.heartbeat_max_age_s]
         state = {"ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale}
-        (self.dir / "supervisor.json").write_text(json.dumps(state))
+        tmp = self.dir / "supervisor.json.tmp"
+        tmp.write_text(json.dumps(state))
+        os.replace(tmp, self.dir / "supervisor.json")      # engines never read a half-written file
         return state
 
     @staticmethod
@@ -60,7 +63,10 @@ class Supervisor:
         f = Path(state_dir) / "supervisor.json"
         if not f.exists():
             return True, "no_supervisor_heartbeat"
-        s = json.loads(f.read_text())
+        try:
+            s = json.loads(f.read_text())
+        except (ValueError, OSError):
+            return True, "supervisor_state_unreadable"
         if time.time() - s.get("ts", 0) > max_age_s:
             return True, "supervisor_heartbeat_stale"
         return bool(s.get("halt")), ",".join(s.get("reasons", []))

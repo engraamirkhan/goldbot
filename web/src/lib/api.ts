@@ -52,6 +52,8 @@ export const api = {
   proposals: () => req<Proposal[]>("/api/proposals"),
   decide: (proposal_id: string, action: "approve" | "reject", reason_code?: ReasonCode) =>
     req<Schemas["DecisionResult"]>("/api/decisions", { method: "POST", body: JSON.stringify({ proposal_id, action, reason_code }) }),
+  halt: (reason?: string) => req<Status>("/api/halt", { method: "POST", body: JSON.stringify({ reason: reason || null }) }),
+  rearm: (totp: string) => req<Status>("/api/rearm", { method: "POST", body: JSON.stringify({ totp }) }),
   agents: () => req<AgentRow[]>("/api/agents"),
   feeds: () => req<FeedHealth[]>("/api/feeds"),
   jobs: () => req<JobRow[]>("/api/jobs"),

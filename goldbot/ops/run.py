@@ -5,13 +5,14 @@
   python -m goldbot.ops.run api
   python -m goldbot.ops.run webhook
   python -m goldbot.ops.run scheduler
+  python -m goldbot.ops.run telegram
 """
 from __future__ import annotations
 
 import logging
 import sys
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:   # service entry points import lazily; these are for annotations only
     from goldbot.agents.runner import AgentRunner
@@ -43,6 +44,7 @@ def run_engine(account_id: str) -> None:
     from goldbot.research.model_registry import ModelRegistry
     from goldbot.research.population import Population
     from goldbot.telegram.approvals import ApprovalCenter
+    from goldbot.telegram.bus import ApprovalBus
     acc = accounts.load_accounts()[account_id]
     settings = load_settings()
     if acc.is_live and acc not in accounts.enabled_accounts("live"):
@@ -56,7 +58,8 @@ def run_engine(account_id: str) -> None:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
         log.warning("not on Windows: running %s against the paper broker", account_id)
-    center = ApprovalCenter(set(settings.telegram.allowed_user_ids))
+    # proposals go to the approval bus in state/; the dashboard and the Telegram service decide through it
+    center = ApprovalCenter(set(settings.telegram.allowed_user_ids), bus=ApprovalBus("state"))
     registry_file = Path(settings.research.models_dir) / "registry.json"
 
     population_file = Path("state") / "population.json"
@@ -81,9 +84,11 @@ def run_engine(account_id: str) -> None:
     agents, live_shares = population_view()
     eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, approval_mode="propose", symbol=acc.symbol,
                               magic_base=acc.magic_base, state_dir="state", data_root=settings.data_root,
-                              shadow_host=shadow_host), broker, agents,
+                              shadow_host=shadow_host, halt_checks=True), broker, agents,
                  champions(), center, shadow_models=shadow_set() if shadow_host else None, live_shares=live_shares)
-    log.info("engine %s started (%s), models: %s", account_id, type(broker).__name__, sorted(eng.models))
+    warm = eng.warm_start(pd.Timestamp.now("UTC"))
+    log.info("engine %s started (%s), models: %s, %d 1m bars of history", account_id, type(broker).__name__,
+             sorted(eng.models), warm)
     def mtimes() -> tuple[float, ...]:
         return tuple(f.stat().st_mtime if f.exists() else -1.0 for f in (registry_file, population_file))
 
@@ -130,7 +135,8 @@ def run_webhook() -> None:
     uvicorn.run(create_app(secret), host="0.0.0.0", port=8443)
 
 
-def _agent_runner(settings: Settings, store: Store) -> AgentRunner | None:
+def _agent_runner(settings: Settings, store: Store,
+                  trial_runner: Callable[[str, dict[str, Any], str], dict[str, Any]] | None = None) -> AgentRunner | None:
     """Staff agents run only when the owner has stored an Anthropic API key in the OS keyring."""
     from pathlib import Path
 
@@ -143,7 +149,7 @@ def _agent_runner(settings: Settings, store: Store) -> AgentRunner | None:
                     "(python -m goldbot.ops.accounts set anthropic-api-key)")
         return None
     import anthropic
-    return AgentRunner(anthropic.Anthropic(api_key=key), ReadOnlyTools("state", store),
+    return AgentRunner(anthropic.Anthropic(api_key=key), ReadOnlyTools("state", store, trial_runner=trial_runner),
                        SpendLedger(Path("state") / "agent_spend.json", settings.agents.monthly_cap_usd), "state",
                        model=settings.agents.model)
 
@@ -155,7 +161,7 @@ def run_scheduler() -> None:
     from goldbot.data.release import sync_release_bars
     from goldbot.data.store import Store
     from goldbot.ops import accounts
-    from goldbot.ops.jobs import JobContext, build_scheduler
+    from goldbot.ops.jobs import JobContext, build_scheduler, make_trial_runner
     from goldbot.research.model_registry import ModelRegistry
     from goldbot.research.population import Population
     from goldbot.research.registry import TrialRegistry
@@ -171,12 +177,25 @@ def run_scheduler() -> None:
                      accounts=accounts.enabled_accounts(),   # live accounts only once the phase gate has passed
                      sync_bars=lambda store: sync_release_bars(store, token=gh_token),
                      sync_trials=(lambda path: sync_registry(path, gh_token)) if gh_token else None,
-                     population=Population(Path("state") / "population.json"),
-                     agent_runner=_agent_runner(settings, Store(settings.data_root)))
+                     population=Population(Path("state") / "population.json"))
+    ctx.agent_runner = _agent_runner(settings, ctx.store, trial_runner=make_trial_runner(ctx))
     sch = build_scheduler(ctx)
     for name, st in sch.status()["jobs"].items():
         log.info("scheduler: %s next at %s", name, st["next_slot"])
     sch.run_forever()
+
+
+def run_telegram() -> None:
+    from goldbot.config import load_settings
+    from goldbot.ops import accounts
+    from goldbot.telegram.bot import TelegramBot
+    settings = load_settings()
+    token = accounts.get_secret("telegram-bot-token")
+    if not token:
+        raise SystemExit("no telegram-bot-token in the keyring: python -m goldbot.ops.accounts set telegram-bot-token")
+    if not settings.telegram.allowed_user_ids:
+        raise SystemExit("settings.yaml telegram.allowed_user_ids is empty: add your Telegram user id")
+    TelegramBot(token, "state", set(settings.telegram.allowed_user_ids)).run()
 
 
 if __name__ == "__main__":
@@ -191,6 +210,8 @@ if __name__ == "__main__":
         run_webhook()
     elif cmd == "scheduler":
         run_scheduler()
+    elif cmd == "telegram":
+        run_telegram()
     else:
         print(__doc__)
         sys.exit(1)

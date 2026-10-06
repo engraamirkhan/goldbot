@@ -21,7 +21,7 @@ async function signIn(page: Page, email: string, password: string, secret: strin
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 }
 
-// One serial story: first run -> owner approves a trade -> invites a viewer -> viewer sees but cannot act.
+// One serial story: first run -> owner approves a trade -> halts and re-arms -> invites a viewer -> viewer sees but cannot act.
 test.describe.configure({ mode: "serial" });
 let ownerSecret = "";
 let inviteLink = "";
@@ -67,6 +67,20 @@ test("owner approves one proposal and rejects the other with a reason", async ({
   await expect(cards).toHaveCount(1);
   await page.locator("article.card.short").getByRole("button", { name: "Reject: cost" }).click();
   await expect(page.getByText(/No proposals waiting/)).toBeVisible();
+});
+
+test("owner halts new entries and re-arms with an authenticator code", async ({ page }) => {
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await page.getByLabel("Halt reason").fill("fomc surprise");
+  await page.getByRole("button", { name: "Halt new entries" }).click();
+  await expect(page.getByText(`Entries halted by dashboard:${OWNER.email}: fomc surprise.`)).toBeVisible();
+  await page.getByLabel("Authenticator code").fill("000000");
+  await page.getByRole("button", { name: "Re-arm" }).click();
+  await expect(page.locator(".err")).toContainText("authenticator code required");
+  await page.getByLabel("Authenticator code").fill(totp(ownerSecret));
+  await page.getByRole("button", { name: "Re-arm" }).click();
+  await expect(page.getByRole("button", { name: "Halt new entries" })).toBeVisible();
 });
 
 test("owner invites a viewer", async ({ page }) => {

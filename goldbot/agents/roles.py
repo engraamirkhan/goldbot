@@ -45,6 +45,14 @@ ROLES: dict[str, Role] = {r.name: r for r in [
               "gate that blocked an entry in the last day (read_decisions, actions starting 'gate:'), concentration "
               "building up across accounts, and any divergence between shadow performance and backtest. Explain each "
               "tripped limit in one or two sentences."),
+    Role(name="execution_auditor", title="execution auditor", cadence="daily",
+         tools=("read_execution_audit", "read_state", "read_fills", "read_decisions"),
+         task="Write the daily execution audit for every account (read_execution_audit with an empty account id, "
+              "days 30): slippage by session and order type against the cost table, any drift flag and how large it is "
+              "in $/oz and in ATR terms if the engine state shows the ATR, spreads that widened, failed orders with "
+              "their retcodes, and whether the cost table is fresh. Compare the two brokers where both have fills. "
+              "Say plainly when there are too few fills to conclude anything; never call a cell drifting that the "
+              "audit did not flag."),
     Role(name="journal_coach", title="journal coach", cadence="weekly", tools=tuple(READ_ALL),
          task="Write the weekly trading journal review: what was proposed, approved, rejected (with reason codes) "
               "and expired over the last 7 days, outcomes of executed trades, whether the owner's vetoes added value "
@@ -56,4 +64,15 @@ ROLES: dict[str, Role] = {r.name: r for r in [
               "at most two hypotheses (read_hypotheses first to avoid duplicates) for the research analyst to test, "
               "each with the evidence that motivated it. You can propose anything; you promote nothing.",
          max_cost_usd=2.00, max_turns=16, effort="high"),
+    # runs after the improvement agent in the same weekly job (roles run in this order)
+    Role(name="research_analyst", title="research analyst", cadence="weekly",
+         tools=("read_hypotheses", "read_research_registry", "read_shadow_stats", "run_trial", "update_hypothesis"),
+         task="Take the oldest hypotheses whose status is 'proposed'. For each, decide whether the evidence justifies a "
+              "trial; if it does, translate it into at most one run_trial with numeric overrides of the family's settings "
+              "(you may run two trials in total this run), then compare the trial's model_filtered metrics and deflated SR "
+              "with the baseline trials of the same family in the research registry. Record a verdict with "
+              "update_hypothesis for every hypothesis you looked at (inconclusive if you did not run a trial, with the "
+              "reason). Report in plain language what was tested, the numbers, and what you would test next. You "
+              "promote nothing: a promising result is a candidate for the population, nothing more.",
+         max_cost_usd=3.00, max_turns=20, effort="high"),
 ]}

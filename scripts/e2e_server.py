@@ -19,19 +19,18 @@ sys.path.insert(0, str(ROOT))
 import uvicorn  # noqa: E402
 
 from goldbot.api.app import create_app  # noqa: E402
-from goldbot.telegram.approvals import ApprovalCenter, Proposal  # noqa: E402
+from goldbot.telegram.approvals import Proposal  # noqa: E402
+from goldbot.telegram.bus import ApprovalBus  # noqa: E402
 
-DASHBOARD_ACTOR = 1  # the approval centre's owner slot; dashboard decisions are attributed in the audit log
 
-
-def seeded_center() -> ApprovalCenter:
-    center = ApprovalCenter({DASHBOARD_ACTOR})
+def seed_proposals(state: str) -> None:
+    """Two proposals as an engine would publish them to the approval bus."""
+    bus = ApprovalBus(state)
     for pid, side, entry in (("e2e-long", 1, 2400.25), ("e2e-short", -1, 2410.50)):
-        center.propose(Proposal(
+        bus.publish(Proposal(
             proposal_id=pid, account_id="icm-demo", agent_id="session_open-g0-e2e", side=side, lots=0.05,
             entry=entry, stop=entry - side * 4.0, target=entry + side * 6.0, p=0.62, ev_r=0.31, spread_points=22.0,
             top_features=[("atr_14", 0.4), ("adx_14", -0.2)], created=time.time(), window_s=3600))
-    return center
 
 
 def main() -> None:
@@ -40,7 +39,8 @@ def main() -> None:
     ap.add_argument("--info", default=str(ROOT / "web" / "e2e" / ".server.json"))
     args = ap.parse_args()
     state = tempfile.mkdtemp(prefix="goldbot-e2e-")
-    app = create_app(state, seeded_center(), web_dist=ROOT / "web" / "dist")
+    seed_proposals(state)
+    app = create_app(state, web_dist=ROOT / "web" / "dist")
     Path(args.info).parent.mkdir(parents=True, exist_ok=True)
     Path(args.info).write_text(json.dumps({"setup_code": app.state.st.auth.setup_code, "state_dir": state}))
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")

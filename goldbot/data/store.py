@@ -150,8 +150,11 @@ def asof_join(bars: pd.DataFrame, other: pd.DataFrame, *, on: str = "ts_utc", av
     """
     if available_col not in other.columns:
         raise ValueError(f"asof_join requires {available_col!r}; never join on nominal dates")
-    left = bars.sort_values(on)
+    left = bars.sort_values(on).copy()
     right = other.sort_values(available_col).copy()
+    # one timestamp unit on both keys (pandas 3 keeps s/ms/us/ns per source and merge_asof rejects a mismatch)
+    left[on] = pd.DatetimeIndex(pd.to_datetime(left[on], utc=True)).as_unit("ns")
+    right[available_col] = pd.DatetimeIndex(pd.to_datetime(right[available_col], utc=True)).as_unit("ns")
     if prefix:
         right = right.rename(columns={c: f"{prefix}{c}" for c in right.columns if c not in (available_col,)})
     out = pd.merge_asof(

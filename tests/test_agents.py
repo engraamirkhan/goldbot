@@ -169,3 +169,107 @@ def test_agent_jobs_are_skipped_without_a_key(tmp_path):
     ctx = JobContext(settings=load_settings(), store=Store(tmp_path / "d"), state_dir=tmp_path, models=ModelRegistry(tmp_path / "m"),
                      trials=TrialRegistry(tmp_path / "t.jsonl"), accounts=[], population=Population(tmp_path / "p.json"))
     assert "skipped" in agents_daily(ctx, NOW)
+
+
+# ------------------------------------------------------------------------------------------- research analyst
+def test_overrides_are_validated_against_the_family_defaults():
+    from goldbot.agents.tools import validate_overrides
+    ok = validate_overrides("session_open", [{"key": "asia_range_max_atr_d", "value": 0.6}, {"key": "max_bars", "value": 20}])
+    assert ok == {"asia_range_max_atr_d": 0.6, "max_bars": 20} and isinstance(ok["max_bars"], int)
+    bad = [([{"key": "london_open_local", "value": 1}], "not a numeric setting"),
+           ([{"key": "stop_atr", "value": 3.0}], "outside"),
+           ([{"key": "stop_atr", "value": 1.0}], "equal the defaults"),
+           ([], "at least one override")]
+    for pairs, msg in bad:
+        with pytest.raises(ValueError, match=msg):
+            validate_overrides("session_open", pairs)
+    with pytest.raises(ValueError, match="unknown family"):
+        validate_overrides("astrology", [{"key": "x", "value": 1}])
+
+
+def test_research_analyst_tests_a_hypothesis_and_records_the_verdict(setup):
+    tmp, _, ledger = setup
+    calls: list[tuple[str, dict, str]] = []
+
+    def fake_trial(family, overrides, rationale):
+        calls.append((family, overrides, rationale))
+        return {"trial": 7, "registry_total": 7, "n_candidates": 900,
+                "model_filtered": {"n": 300, "sharpe_ann": 1.1, "dsr": 0.62}}
+    tools = ReadOnlyTools(tmp, Store(tmp / "data"), now=lambda: NOW, trial_runner=fake_trial)
+    hid = tools.file_hypothesis(title="Asian-range filter too loose", family="session_open", rationale="r",
+                                proposed_change="asia_range_max_atr_d 0.8 -> 0.6", evidence="e")["id"]
+    pairs = [{"key": "asia_range_max_atr_d", "value": 0.6}]
+    client = FakeClient([
+        _resp([_tool("read_hypotheses", {})], stop="tool_use"),
+        _resp([_tool("run_trial", {"hypothesis_id": hid, "family": "session_open", "overrides": pairs,
+                                   "rationale": "tighter filter"})], stop="tool_use"),
+        _resp([_tool("update_hypothesis", {"hypothesis_id": hid, "status": "tested_promising",
+                                           "summary": "trial 7: DSR 0.62 vs baseline 0.41"})], stop="tool_use"),
+        _resp([_text("Tested one hypothesis: promising.")]),
+    ])
+    run = AgentRunner(client, tools, ledger, tmp).run(ROLES["research_analyst"], NOW)
+    assert run.status == "ok" and [c["error"] for c in run.tool_calls] == [False, False, False]
+    assert calls[0][0] == "session_open" and calls[0][1] == {"asia_range_max_atr_d": 0.6}
+    assert hid in calls[0][2] and "tighter filter" in calls[0][2]
+    h = tools.read_hypotheses()[0]
+    assert h["status"] == "tested_promising" and "trial 7" in h["verdict"] and h["id"] == hid
+
+
+def test_trial_limit_per_run_and_missing_runner(setup):
+    tmp, _, _ = setup
+    tools = ReadOnlyTools(tmp, Store(tmp / "data"), now=lambda: NOW, trial_runner=lambda f, o, r: {"trial": 1})
+    hid = tools.file_hypothesis(title="t", family="session_open", rationale="r", proposed_change="c", evidence="e")["id"]
+    args = {"hypothesis_id": hid, "family": "session_open", "overrides": [{"key": "max_bars", "value": 20}], "rationale": "x"}
+    tools.begin_run()
+    results = [tools.call("run_trial", args, ["run_trial"]) for _ in range(3)]
+    assert [err for _, err in results] == [False, False, True] and "limit" in results[2][0]
+    tools.begin_run()                                            # a new run starts with a fresh allowance
+    assert tools.call("run_trial", args, ["run_trial"])[1] is False
+    sandbox = ReadOnlyTools(tmp, Store(tmp / "data"), now=lambda: NOW)
+    out, err = sandbox.call("run_trial", args, ["run_trial"])
+    assert err and "research host" in out
+    out, err = tools.call("update_hypothesis", {"hypothesis_id": "nope", "status": "inconclusive", "summary": "s"}, ["update_hypothesis"])
+    assert err and "no hypothesis" in out
+
+
+# ------------------------------------------------------------------------------------------- execution auditor
+def test_execution_audit_flags_slippage_drift_wider_spreads_and_failed_orders(setup):
+    from goldbot.execution.costs import CostTable, SlippageStat, SpreadStat
+    tmp, tools, _ = setup
+    store = tools.store
+    (tmp / "engine_icm-demo.json").write_text("{}")
+    CostTable(account_id="icm-demo", built_utc=NOW - pd.Timedelta(hours=20),
+              spread={"london": SpreadStat(median=0.10, p90=0.15, n=1000)},
+              slippage={"london:market": SlippageStat(mean=0.02, n=80, from_prior=False),
+                        "newyork:market": SlippageStat(mean=0.15, n=3, from_prior=True)},
+              commission_per_lot_side_usd=3.5, slippage_prior_usd=0.15).save(tmp / "costs_icm-demo.json")
+    # London (09:00-11:00 UTC): 20 older fills at the table's 0.02, then 15 recent fills at 0.20 -> drift.
+    # New York: 12 recent fills at 0.10, under the 0.15 prior -> no drift.
+    day = lambda n: (NOW - pd.Timedelta(days=n)).normalize()    # noqa: E731  (NOW is a Monday: 3 and 4 days back are Fri/Thu)
+    old = [day(20) + pd.Timedelta(hours=10, minutes=i) for i in range(20)]
+    rec = [day(4) + pd.Timedelta(hours=9, minutes=5 * i) for i in range(15)]
+    ny = [day(3) + pd.Timedelta(hours=15, minutes=5 * i) for i in range(12)]
+    ts = old + rec + ny
+    slip = [0.02] * 20 + [0.20 + 0.01 * (i % 3) for i in range(15)] + [0.10] * 12
+    store.append("fills", pd.DataFrame({"ts_utc": pd.DatetimeIndex(ts), "client_order_id": [f"o{i}" for i in range(len(ts))],
+                                        "side": 1, "requested": 2400.0, "filled": [2400.0 + s for s in slip],
+                                        "order_type": "market"}), source="icm-demo", dedupe=False)
+    ticks_ts = pd.date_range(day(3) + pd.Timedelta(hours=9), periods=60, freq="1min", tz="UTC")
+    store.append("ticks", pd.DataFrame({"ts_utc": ticks_ts, "bid": 2400.0, "ask": 2400.25}), source="icm-demo", dedupe=False)
+    store.append("decisions", pd.DataFrame({"ts_utc": [NOW - pd.Timedelta(hours=3)] * 2, "account_id": "icm-demo",
+                                            "agent_id": "a", "action": "order", "p": None, "mult": None, "proposal_id": None,
+                                            "detail": [json.dumps({"ok": True, "retcode": 10009}),
+                                                       json.dumps({"ok": False, "retcode": 10004})]}),
+                 source="icm-demo", dedupe=False)
+    out, err = tools.call("read_execution_audit", {"account_id": "", "days": 30}, list(ROLES["execution_auditor"].tools))
+    assert not err
+    audit = json.loads(out)[0]
+    cells = {(r["session"], r["order_type"]): r for r in audit["slippage"]}
+    assert cells[("london", "market")]["drift"] and cells[("london", "market")]["recent_n"] == 15
+    assert not cells[("newyork", "market")]["drift"] and cells[("newyork", "market")]["table_from_prior"]
+    assert audit["spread"][0]["session"] == "london" and audit["spread"][0]["widened"]
+    assert audit["failed_orders"] == 1 and audit["orders"] == 2
+    assert audit["cost_table"]["age_h"] == 20.0
+    assert any("slippage drift london/market" in f for f in audit["flags"]) and len(audit["flags"]) == 3
+    out, err = tools.call("read_execution_audit", {"account_id": "../x", "days": 30}, ["read_execution_audit"])
+    assert err and "bad account id" in out

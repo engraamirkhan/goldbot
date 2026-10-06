@@ -17,6 +17,7 @@ from goldbot.ops.jobs import (
     JobContext,
     build_scheduler,
     label_grid,
+    make_trial_runner,
     monthly_research,
     nightly_costs,
     saturday_retrain,
@@ -40,7 +41,7 @@ def bars_store(tmp_path_factory) -> Path:
     store = Store(root)
     b1, _ = check_bars(ticks_to_1m(synthetic_ticks("2022-10-01", "2025-10-01", ticks_per_minute=1, seed=11)))
     store.append("bars_1m", b1, source="synthetic")
-    for tf in ("15m", "1h", "1d"):
+    for tf in ("15m", "1h", "4h", "1d"):
         store.append(f"bars_{tf}", resample_bars(b1, tf), source="synthetic")
     return root
 
@@ -100,9 +101,10 @@ def test_retrain_challenger_shadow_promotion_cycle(bars_store, tmp_path):
 
 
 def test_monthly_research_is_bounded_and_counted(bars_store, tmp_path):
-    ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=2)
+    ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=1)
     out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
-    assert out["session_open"]["trials"] == 2 and ctx.trials.n_trials == 2
+    # the budget is per specialist; every family's trials count towards one registry total
+    assert all(out[f]["trials"] == 1 for f in SPECIALISTS) and ctx.trials.n_trials == len(SPECIALISTS)
     report = Path(out["report"]).read_text()
     assert "Research loop 2025-09" in report and report.count("\n| ") >= 3
 
@@ -121,3 +123,13 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "tournament": "2026-10-03T12:00:00+00:00", "model_watch": "2026-10-02T23:30:00+00:00",
                    "agents_daily": "2026-10-02T23:45:00+00:00", "agents_weekly": "2026-10-03T13:00:00+00:00",
                    "monthly_research": "2026-10-04T08:00:00+00:00"}
+
+
+def test_research_analyst_trial_is_recorded_in_the_registry(bars_store, tmp_path):
+    ctx = _ctx(bars_store, tmp_path)
+    runner = make_trial_runner(ctx, now=lambda: pd.Timestamp("2025-09-30", tz="UTC"))
+    # a looser filter keeps enough candidates for a fold on three synthetic years (a tighter one would not)
+    out = runner("session_open", {"asia_range_max_atr_d": 1.2}, "research analyst, hypothesis abc: looser filter")
+    assert out["trial"] == 1 and out["n_folds"] >= 1 and "model_filtered" in out
+    row = ctx.trials._rows()[0]
+    assert row["config"]["asia_range_max_atr_d"] == 1.2 and row["rationale"].startswith("research analyst")

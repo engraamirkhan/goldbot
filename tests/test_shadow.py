@@ -80,6 +80,25 @@ def test_book_persists_and_reports_stats(tmp_path):
     assert restarted.returns_since("v1", t0) == [restarted.books["v1"].closed[0].ret]
 
 
+def test_trades_count_bars_of_their_own_timeframe(tmp_path):
+    bars = _bars(vol=0.01)                                                 # quiet: only the time barrier can close
+    book = ShadowBook(tmp_path)
+    t0 = bars["ts_utc"].iloc[0]
+    book.track("v1", t0)
+    book.open_trade(version="v1", agent_id="a", side=1, bar_ts=t0, entry=2400.0, atr_usd=50.0, target_atr=1.5,
+                    stop_atr=1.0, max_bars=2, p=0.6, timeframe="1h")
+    for i in range(1, 9):
+        book.on_bar(bars.iloc[i], "15m")                                    # 15m bars do not age a 1h trade
+    assert book.books["v1"].open and book.books["v1"].open[0].bars_held == 0
+    hourly = bars.iloc[4::4].reset_index(drop=True)                          # stand-ins for later 1h bars
+    for i in range(3):
+        book.on_bar(hourly.iloc[i], "1h")
+    t = book.books["v1"].closed[0]
+    assert t.barrier == "time" and t.bars_held == 3 and t.timeframe == "1h"
+    book.save(t0)
+    assert ShadowBook(tmp_path).books["v1"].closed[0].timeframe == "1h"     # persisted
+
+
 def test_cusum_flags_a_drop_but_not_noise():
     rng = np.random.default_rng(4)
     healthy = list(rng.normal(0.001, 0.004, 40))

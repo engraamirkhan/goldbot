@@ -35,6 +35,7 @@ from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.classifier import PersistentClassifier, classify
 from goldbot.execution.costs import build_cost_table
+from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
@@ -49,7 +50,7 @@ log = logging.getLogger("goldbot.jobs")
 
 CHALLENGER_MAX_WEEKS = 8
 CLASSIFIER_WEEKDAY = 4          # Friday's nightly run re-classifies (design: weekly, from the nightly cost job)
-CONTEXT_EXTRA_MONTHS = 2        # daily/1h context needs history before the decision window starts
+CONTEXT_EXTRA_MONTHS = 2        # daily/4h/1h context needs history before the decision window starts
 CUSUM_WINDOW_DAYS = 14          # a new champion is watched for its first two weeks
 
 
@@ -99,7 +100,7 @@ def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: 
     if dec.empty:
         return None
     ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
-    context = {"h1": _bars(ctx, "1h", ctx_start, end), "d1": _bars(ctx, "1d", ctx_start, end)}
+    context = {TF_LABEL[tf]: _bars(ctx, tf, ctx_start, end) for tf in context_tfs(spec.timeframe)}
     years = max((pd.to_datetime(dec["ts_utc"].iloc[-1]) - pd.to_datetime(dec["ts_utc"].iloc[0])).days / 365.25, 1e-9)
     res = run_specialist(spec, dec, context=context, n_trials=n_trials)
     if res.n_candidates:
@@ -252,6 +253,22 @@ def label_grid(base: dict[str, Any], step: float) -> list[dict[str, Any]]:
         out.append({"target_atr": round(base["target_atr"] * a, 4), "stop_atr": round(base["stop_atr"] * b, 4),
                     "max_bars": max(1, int(round(base["max_bars"] * c)))})
     return out
+
+
+def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = None
+                      ) -> Callable[[str, dict[str, Any], str], dict[str, Any]]:
+    """The research analyst's trial: the family's default config with overrides, walk-forward over the whole store,
+    recorded in the trial registry (so it counts toward the deflated Sharpe like every monthly-loop trial)."""
+    def run(family: str, overrides: dict[str, Any], rationale: str) -> dict[str, Any]:
+        end = now() if now is not None else pd.Timestamp.now("UTC")
+        res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, 12 * 30, n_trials=ctx.trials.n_trials + 1)
+        if res is None:
+            return {"error": "no bars in the store for this family's timeframe"}
+        row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
+                                feature_version=res.feature_version, results=res.metrics, status="evaluated", rationale=rationale)
+        keep = ("n_candidates", "n_folds", "threshold", "all_candidates", "model_filtered", "trades_per_year")
+        return {"trial": row["trial"], "registry_total": ctx.trials.n_trials, **{k: res.metrics[k] for k in keep if k in res.metrics}}
+    return run
 
 
 def _num(v: float | None, fmt: str) -> str:

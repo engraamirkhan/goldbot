@@ -25,18 +25,20 @@ from goldbot.allocator import Regime, RuleAllocator
 from goldbot.base import Record
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
-from goldbot.data.resample import mid, resample_bars, ticks_to_1m
+from goldbot.data.resample import BAR_COLUMNS, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
+from goldbot.data.timeutil import feature_day, floor_tf
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.broker import Broker, OrderIntent, Tick
 from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
-from goldbot.features.mtf import merge_higher_tf
+from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.technical import atr
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
 from goldbot.risk.gate import Stage
+from goldbot.risk.supervisor import Supervisor
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 
@@ -62,7 +64,6 @@ class EngineConfig(Record):
     approval_mode: str = "propose"   # propose | auto
     symbol: str = "XAUUSD"
     decision_tf: str = "15m"
-    context_tfs: tuple[str, ...] = ("1h", "1d")
     magic_base: int = 260100
     state_dir: str = "state"
     cost_atr: float = 0.10           # round-trip cost in ATR until the measured cost table exists
@@ -72,6 +73,15 @@ class EngineConfig(Record):
     data_root: str | None = None         # when set, ticks and fills are logged to the store for the nightly cost job
     shadow_host: bool = False            # this engine runs the shadow book (one per deployment: the canonical-cost broker)
     tick_flush_s: int = 60               # market seconds between tick-log flushes
+    # production: block entries on the supervisor's halt (or a missing/stale heartbeat) and on the owner's halt
+    halt_checks: bool = False
+
+
+class _Frame(Record):
+    dec: pd.DataFrame
+    m: pd.DataFrame
+    X: pd.DataFrame
+    atr: pd.Series
 
 
 class OpenTrade(Record):
@@ -111,6 +121,7 @@ class Engine:
         self._tick_log: list[Tick] = []
         self._journaled = 0                  # decisions already written to the store's journal
         self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)
+        self._ctx_cache: dict[str, tuple[pd.Timestamp, tuple[pd.DataFrame, pd.DataFrame] | None]] = {}
         # shadow book: version -> (family, model); champions and challengers paper-trade without orders
         self.shadow = ShadowBook(cfg.state_dir) if cfg.shadow_host else None
         self.shadow_models: dict[str, tuple[str, Model]] = {}
@@ -123,6 +134,7 @@ class Engine:
         """Feed a tick; returns any decisions made at a bar close."""
         self.ticks.append(t)
         self._log_tick(t)
+        self.center.poll_bus()          # approvals from the dashboard / Telegram service, applied within a tick
         if hasattr(self.broker, "on_tick"):
             self.broker.on_tick(t)  # paper broker fills
         sec = tf_seconds(self.cfg.decision_tf)
@@ -132,6 +144,21 @@ class Engine:
             out = self.on_bar_close(self.last_bar_close + pd.Timedelta(seconds=sec), t)
         self.last_bar_close = bar_close
         return out
+
+    def warm_start(self, now: pd.Timestamp) -> int:
+        """Seed the 1m history from the store (release bars synced by the scheduler) so a restarted engine can decide
+        at once instead of rebuilding days of bars from live ticks; 1h agents and the daily context need weeks.
+        Returns the number of bars loaded (0 without a store or bars)."""
+        if self.store is None:
+            return 0
+        days = self.cfg.max_bars_in_memory // (60 * 23) * 7 // 5 + 3     # trading minutes -> calendar days
+        b = self.store.read("bars_1m", symbol=self.cfg.symbol, start=now - pd.Timedelta(days=days), end=now)
+        if b.empty:
+            return 0
+        b = b[[c for c in BAR_COLUMNS if c in b.columns]]
+        b = b[pd.to_datetime(b["visible_at"], utc=True) <= now].sort_values("ts_utc")
+        self.bars_1m = b.drop_duplicates("ts_utc", keep="last").tail(self.cfg.max_bars_in_memory).reset_index(drop=True)
+        return len(self.bars_1m)
 
     def _rebuild_bars(self) -> None:
         """Incremental: only ticks since the last completed minute are aggregated; bars accumulate."""
@@ -149,37 +176,77 @@ class Engine:
         self.ticks = [x for x in self.ticks if x.ts_utc >= last_minute]
 
     # ------------------------------------------------------------------ main step
+    def _frame(self, complete: pd.DataFrame, tf: str, close_ts: pd.Timestamp) -> _Frame | None:
+        """Completed bars of one decision timeframe with features and its context (the same rule as research)."""
+        dec = resample_bars(complete, tf).reset_index(drop=True)
+        dec = dec[dec["visible_at"] <= close_ts].tail(self.cfg.feature_window).reset_index(drop=True)
+        if len(dec) < 120:
+            return None
+        m = mid(dec)
+        X = build_features(m, DEFAULT_FEATURE_NAMES)
+        for ctf in context_tfs(tf):
+            hit = self._context(complete, ctf, close_ts)
+            if hit is not None:
+                X = merge_higher_tf(X, hit[1], hit[0], TF_LABEL[ctf])
+        return _Frame(dec=dec, m=m, X=X, atr=atr(m, 14))
+
+    def _context(self, complete: pd.DataFrame, tf: str, close_ts: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+        """Completed context bars and their features, rebuilt only when a new bar of `tf` has completed: the key is
+        the period close_ts falls in (UTC floor intraday, the feature-day for 1d), which changes at a bar's visible_at."""
+        at = pd.DatetimeIndex([close_ts])
+        key = feature_day(at)[0] if tf == "1d" else floor_tf(at, tf_seconds(tf))[0]
+        cached = self._ctx_cache.get(tf)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        hb = resample_bars(complete, tf).reset_index(drop=True)
+        hb = hb[hb["visible_at"] <= close_ts].reset_index(drop=True)
+        out = None if len(hb) < 30 else (hb, build_features(mid(hb), ["atr", "trend_strength", "moving_averages", "realised_vol"]))
+        self._ctx_cache[tf] = (key, out)
+        return out
+
     def on_bar_close(self, close_ts: pd.Timestamp, last_tick: Tick) -> list[dict]:
+        """Runs on every base (decision_tf) bar. Each agent decides on its own timeframe, so a 1h agent is
+        evaluated only at closes that complete a 1h bar; position management stays on the base clock."""
         self._rebuild_bars()
         complete = self.bars_1m[self.bars_1m["visible_at"] <= close_ts]
         if len(complete) < 400:
             return []
-        dec = resample_bars(complete, self.cfg.decision_tf).reset_index(drop=True)
-        dec = dec[dec["visible_at"] <= close_ts].tail(self.cfg.feature_window).reset_index(drop=True)
-        if len(dec) < 120:
+        base = self._frame(complete, self.cfg.decision_tf, close_ts)
+        if base is None:
             return []
-        m = mid(dec)
-        X = build_features(m, DEFAULT_FEATURE_NAMES)
-        for tf in self.cfg.context_tfs:
-            hb = resample_bars(complete, tf).reset_index(drop=True)
-            hb = hb[hb["visible_at"] <= close_ts].reset_index(drop=True)
-            if len(hb) < 30:
-                continue
-            hf = build_features(mid(hb), ["atr", "trend_strength", "moving_averages", "realised_vol"])
-            X = merge_higher_tf(X, hf, hb, {"1h": "h1", "4h": "h4", "1d": "d1", "1w": "w1"}[tf])
-        a = atr(m, 14)
         self._refresh_account(last_tick)
-        self._manage_open(dec)
+        self._manage_open(base.dec)
         self.center.sweep_expired()
-        regime = self._regime(X)
+        regime = self._regime(base.X)
         fam_w = self.allocator.weights(regime)
+        decisions: list[dict] = []
+        tfs = {a.timeframe for a in self.agents.values()} | {self.cfg.decision_tf}
+        if self.shadow is not None:            # open shadow trades keep ageing after their agent leaves the set
+            tfs |= {t.timeframe for b in self.shadow.books.values() for t in b.open}
+        for tf in sorted(tfs, key=tf_seconds):
+            if tf != "1d" and int(close_ts.timestamp()) % tf_seconds(tf):
+                continue                       # cheap pre-check: this close does not complete an intraday bar of tf
+            fr = base if tf == self.cfg.decision_tf else self._frame(complete, tf, close_ts)
+            if fr is None or pd.Timestamp(fr.dec["visible_at"].iloc[-1]) != close_ts:
+                continue
+            agents = [a for a in self.agents.values() if a.timeframe == tf]
+            decisions += self._decide(tf, fr, agents, fam_w, close_ts, last_tick)
+        if self.shadow is not None:
+            self.shadow.save(close_ts)
+        self._write_state()
+        self.flush_journal()
+        return decisions
+
+    def _decide(self, tf: str, fr: _Frame, agents: list[Specialist], fam_w: dict[str, float], close_ts: pd.Timestamp,
+                last_tick: Tick) -> list[dict]:
+        dec, m, X, a = fr.dec, fr.m, fr.X, fr.atr
         decisions = []
         last = len(dec) - 1
         cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)
-        cands_by_agent = {aid: agent.candidates(m, X) for aid, agent in self.agents.items()}
+        cands_by_agent = {agent.agent_id: agent.candidates(m, X) for agent in agents}
         if self.shadow is not None:
-            self._shadow_step(dec, X, cands_by_agent, float(a.iloc[last]), cost_atr, close_ts)
-        for agent in self.agents.values():
+            self._shadow_step(tf, dec, X, agents, cands_by_agent, float(a.iloc[last]), cost_atr)
+        for agent in agents:
             cands = cands_by_agent[agent.agent_id]
             if cands.empty or int(cands["idx"].iloc[-1]) != last:
                 continue
@@ -221,8 +288,6 @@ class Engine:
             else:
                 self.center.propose(prop)
                 decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid))
-        self._write_state()
-        self.flush_journal()
         return decisions
 
     # ------------------------------------------------------------------ approvals -> orders
@@ -251,7 +316,7 @@ class Engine:
         res = self.broker.place_order(oi)
         if res.ok and res.position_id is not None:
             self.open[res.position_id] = OpenTrade(position_id=res.position_id, agent_id=agent.agent_id, side=prop.side, lots=res.filled_lots,
-                                                  entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=agent.label_spec.max_bars)
+                                                  entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=self._base_bars(agent))
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order", "ok": res.ok,
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots})
         if self.store is not None and res.ok and res.price is not None:
@@ -292,6 +357,9 @@ class Engine:
         st.open_positions = len(self.broker.positions())
         st.spread_points = (tick.ask - tick.bid) / 0.01
         st.last_tick_age_s = 0.0
+        if self.cfg.halt_checks:
+            st.supervisor_halt, _ = Supervisor.engine_should_halt(self.cfg.state_dir)
+            st.owner_halt = self.center.bus.control().halted if self.center.bus is not None else False
         self.gate.update_stage(st)
 
     def _regime(self, X: pd.DataFrame) -> Regime:
@@ -313,6 +381,10 @@ class Engine:
         except Exception:
             return []
 
+    def _base_bars(self, agent: Specialist) -> int:
+        """The agent's time barrier in base bars (position management runs on the decision_tf clock)."""
+        return int(agent.label_spec.max_bars * tf_seconds(agent.timeframe) // tf_seconds(self.cfg.decision_tf))
+
     def _proposal_id(self, agent_id: str, close_ts: pd.Timestamp) -> str:
         h = hashlib.sha1(f"{self.cfg.account_id}|{agent_id}|{close_ts.isoformat()}".encode()).hexdigest()[:10]
         return f"{self.cfg.account_id}-{int(close_ts.timestamp())}-{h}"
@@ -332,15 +404,15 @@ class Engine:
             for version in models:
                 self.shadow.track(version, now)
 
-    def _shadow_step(self, dec: pd.DataFrame, X: pd.DataFrame, cands_by_agent: dict[str, pd.DataFrame], atr_usd: float,
-                     cost_atr: float, close_ts: pd.Timestamp) -> None:
+    def _shadow_step(self, tf: str, dec: pd.DataFrame, X: pd.DataFrame, agents: list[Specialist],
+                     cands_by_agent: dict[str, pd.DataFrame], atr_usd: float, cost_atr: float) -> None:
         assert self.shadow is not None
         last = len(dec) - 1
         bar = dec.iloc[last]
-        self.shadow.on_bar(bar)           # advance open shadow trades first; a new entry starts after this bar
+        self.shadow.on_bar(bar, tf)       # advance open shadow trades of this timeframe; a new entry starts after this bar
         feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
         for version, (agent_key, model) in self.shadow_models.items():
-            for agent in self.agents.values():
+            for agent in agents:
                 cands = cands_by_agent[agent.agent_id]
                 if agent_key not in (agent.agent_id, agent.family) or cands.empty or int(cands["idx"].iloc[-1]) != last:
                     continue
@@ -352,8 +424,7 @@ class Engine:
                     continue
                 self.shadow.open_trade(version=version, agent_id=agent.agent_id, side=side, bar_ts=pd.Timestamp(bar["ts_utc"]),
                                        entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
-                                       target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p)
-        self.shadow.save(close_ts)
+                                       target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p, timeframe=tf)
 
     def flush_journal(self) -> None:
         """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the
@@ -423,5 +494,6 @@ class Engine:
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
             "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
+            "approval_mode": self.cfg.approval_mode,
         }
         Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json").write_text(json.dumps(payload))

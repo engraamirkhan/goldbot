@@ -65,6 +65,21 @@ def test_mtf_merge_has_no_lookahead(frames):
     assert np.isclose(row["h1_atr14"], f1h.loc[latest.name, "atr14"], equal_nan=True)
 
 
+def test_mtf_merge_accepts_mixed_timestamp_units(frames):
+    # release Parquet comes back in us, resampled bars in ns (pandas 3 keeps both); the first research run on the
+    # release data failed with "incompatible merge keys" before the merge normalised units
+    b15, b1h, _ = frames
+    m15, m1h = mid(b15), mid(b1h)
+    f1h = build_features(m1h, ["atr"])
+    h_us = b1h.copy()
+    h_us["visible_at"] = pd.DatetimeIndex(h_us["visible_at"]).as_unit("us")
+    d_ms = m15[["ts_utc", "close"]].copy()
+    d_ms["ts_utc"] = pd.DatetimeIndex(d_ms["ts_utc"]).as_unit("ms")
+    a = merge_higher_tf(d_ms, f1h, h_us, "h1")
+    b = merge_higher_tf(m15[["ts_utc", "close"]], f1h, b1h, "h1")
+    np.testing.assert_allclose(a["h1_atr14"].to_numpy(float), b["h1_atr14"].to_numpy(float), equal_nan=True)
+
+
 def test_triple_barrier_charges_spread_and_respects_order(frames):
     b15, _, _ = frames
     b = b15.reset_index(drop=True)
