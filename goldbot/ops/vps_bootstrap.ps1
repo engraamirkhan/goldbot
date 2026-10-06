@@ -1,8 +1,8 @@
 # goldbot Windows VPS bootstrap (run once in an elevated PowerShell on the VPS).
 # Installs Python 3.11, git, NSSM, uv; clones the repo; creates the service account layout; installs two
 # portable MT5 terminals (IC Markets, Vantage) into C:\MT5\<broker>; registers the services.
-# Credentials are NEVER in this script: on first start each engine prompts the owner (Telegram) and stores
-# them in Windows Credential Manager via goldbot.ops.accounts.
+# Credentials are NEVER in this script: before starting the services the owner stores them in Windows Credential
+# Manager with `python -m goldbot.ops.accounts add|set` (services cannot prompt; see docs/RUNBOOK.md).
 $ErrorActionPreference = "Stop"
 $Repo = "https://github.com/engraamirkhan/goldbot.git"
 $Root = "C:\goldbot"

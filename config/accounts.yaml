@@ -1,7 +1,7 @@
 # Account registry. NO SECRETS HERE. Passwords live in the OS keyring (macOS Keychain on the Mac,
 # Windows Credential Manager on the VPS) under service "goldbot" and key "mt5-<account_id>".
-# The engine asks Aamir for a missing credential at the moment it is needed (CLI prompt locally,
-# Telegram prompt when running headless) and stores it; it never writes a password to a file or log.
+# Store credentials before starting an engine service (`python -m goldbot.ops.accounts add <account_id>`):
+# a service has no terminal to prompt in. Nothing writes a password to a file or log.
 #
 # mode: demo | live.  Phases 0-2 run only on demo accounts; live accounts are enabled by the
 # phase gate plus a typed confirmation, never by editing this file alone.
@@ -54,4 +54,4 @@ tradingview:
 
 telegram:
   bot_token_key: telegram-bot-token
-  allowed_user_ids: []  # numeric Telegram user ids; filled on first /start with confirmation
+  allowed_user_ids: []  # not read: the services use settings.yaml telegram.allowed_user_ids
