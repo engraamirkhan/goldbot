@@ -22,8 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.research.metrics import summarize  # noqa: E402
-from goldbot.research.model import shuffle_test_auc  # noqa: E402
-from goldbot.research.pipeline import ResearchResult, build_decision_frame, run_specialist  # noqa: E402
+from goldbot.research.pipeline import ResearchResult, lookahead_check, run_specialist  # noqa: E402
 from goldbot.research.registry import TrialRegistry  # noqa: E402
 from goldbot.specialists import SPECIALISTS  # noqa: E402
 
@@ -69,12 +68,17 @@ def _fmt(v: Any) -> str:
     return str(v)
 
 
-def render_report(res: ResearchResult, years: pd.DataFrame, auc: float | None, meta: dict[str, Any]) -> str:
+def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any] | None, meta: dict[str, Any]) -> str:
     m = res.metrics
     lines = [f"## {meta['specialist']} walk-forward on real bars ({meta['from_year']}-{meta['to_year']})", "",
              f"- bars: {meta['n_1m']:,} 1m -> {meta['n_dec']:,} {meta['tf']} decision bars, feature version `{res.feature_version}`",
              f"- candidates {res.n_candidates:,}, folds {res.n_folds}, registry trial #{meta['trial']} (the deflated SR counts all {meta['trial']} trials)",
-             f"- shuffle-test AUC (leakage check, should be ~0.5): {_fmt(auc) if auc is not None else 'n/a'}",
+             f"- lookahead check (features rebuilt on history cut at {leak['cut_utc'][:10]}): "
+             + ("clean" if not leak["lookahead_columns"] else f"**{len(leak['lookahead_columns'])} columns use future data: "
+                f"{', '.join(leak['lookahead_columns'][:10])}**") if leak else "- lookahead check: n/a",
+             f"- out-of-fold AUC of the model (0.5 = no skill): {_fmt(res.metrics.get('oof_auc'))}",
+             f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
+             + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
              f"- runtime {meta['seconds']:.0f}s", ""]
     if "all_candidates" in m:
         lines += ["| set | n | hit rate | mean ret | profit factor | Sharpe (ann.) | max DD | deflated SR |",
@@ -114,7 +118,9 @@ def main() -> int:
     t0 = time.time()
     b1 = load_bars(Path(args.bars), args.from_year, args.to_year)
     years_span = (b1["ts_utc"].iloc[-1] - b1["ts_utc"].iloc[0]).days / 365.25
-    print(f"1m bars: {len(b1):,} ({b1['ts_utc'].iloc[0]:%Y-%m-%d} -> {b1['ts_utc'].iloc[-1]:%Y-%m-%d})", flush=True)
+    zero_volume = float((b1["tick_count"].astype(float) <= 0).mean())
+    print(f"1m bars: {len(b1):,} ({b1['ts_utc'].iloc[0]:%Y-%m-%d} -> {b1['ts_utc'].iloc[-1]:%Y-%m-%d}), "
+          f"zero tick volume in {zero_volume:.1%}", flush=True)
     spec = SPECIALISTS[args.specialist]()
     tf = spec.timeframe
     b_dec = resample_bars(b1, tf)
@@ -134,22 +140,17 @@ def main() -> int:
         res.metrics["model_filtered"] = summarize(taken, trades_per_year * len(taken) / max(len(scored), 1), n_trials)
     print(f"candidates {res.n_candidates}  folds {res.n_folds}  [{time.time() - t0:.0f}s]", flush=True)
 
-    auc = None
-    if res.n_candidates > 200:
-        _, X = build_decision_frame(b_dec, context)
-        lab = res.oof
-        feats = X.drop(columns=["ts_utc"]).iloc[lab["idx"].to_numpy()].reset_index(drop=True)
-        cols = [c for c in feats.columns if feats[c].notna().mean() > 0.8][:40]
-        auc = shuffle_test_auc(feats.fillna(0), lab["target_hit"].astype(int), cols)
-
-    results = {**res.metrics, "shuffle_auc": auc, "trades_per_year": trades_per_year,
+    leak = lookahead_check(b_dec, context)
+    print(f"lookahead check: {len(leak['lookahead_columns'])} of {leak['columns_checked']} columns differ "
+          f"[{time.time() - t0:.0f}s]", flush=True)
+    results = {**res.metrics, "lookahead": leak, "trades_per_year": trades_per_year,
                "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1])}
     row = reg.record(agent_id=res.agent_id, family=spec.family, config=spec.config, feature_version=res.feature_version,
                      rationale=args.rationale, results=results, status="evaluated")
     years = per_year(res.oof, res.metrics.get("threshold"))
     meta = {"specialist": args.specialist, "from_year": int(b1["ts_utc"].iloc[0].year), "to_year": int(b1["ts_utc"].iloc[-1].year),
-            "n_1m": len(b1), "n_dec": len(b_dec), "tf": tf, "trial": row["trial"], "seconds": time.time() - t0}
-    report = render_report(res, years, auc, meta)
+            "n_1m": len(b1), "n_dec": len(b_dec), "tf": tf, "zero_volume": zero_volume, "trial": row["trial"], "seconds": time.time() - t0}
+    report = render_report(res, years, leak, meta)
     Path(args.report).write_text(report)
     print(report)
     print(json.dumps({"trial": row["trial"], "agent_id": res.agent_id}), flush=True)

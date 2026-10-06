@@ -86,12 +86,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
 
 ## Next steps (no owner input needed unless marked)
-1. Re-run research.yml for all four families once this branch is on main (one-position labels, breakout threshold
-   2.0 ATR, empty-result report fix). First results on main (2026-10-06, issues "research: <family>"): session_open
-   no edge (94 out-of-fold trades, all 2025-26); trend 60 model trades over 13 years (PF 2.5, DSR 0.995) but a
-   shifted-label AUC of 0.59 from overlapping candidates; mean_reversion 5 model trades, AUC 0.72 (same cause);
-   breakout 0 candidates (threshold 1.2 ATR could not fire). None is promotable; until one passes the gates the
-   engines propose nothing (by design).
+1. Re-pull the bars: `data-dukascopy.yml` with `full_refresh` (hours). The Dukascopy pull truncated fractional XAUUSD
+   volumes to 0 with an int cast, so every tick-volume feature was constant on the published history and breakout
+   (which needs a volume surge) never fired; the research report now prints the share of zero-volume 1m bars. Then
+   re-run research.yml for all four families. Results so far (2026-10-06, issues "research: <family>"): no family has
+   an edge at its default settings — session_open too few candidates per fold; trend (trial #4, one position at a
+   time) model takes 2 trades in 13 years; mean_reversion (trial #5) 20 trades in 15 years (PF 8.8) far below the
+   trade-count gates; breakout 0 candidates (the volume bug). Until one passes the gates the engines propose nothing.
+   Leakage: the shifted-label "shuffle AUC" was dropped (it reads ~0.7 on any non-overlapping trade sequence without
+   any lookahead); reports now carry a lookahead check (features rebuilt on history cut at 70%, offending columns
+   listed) and the model's out-of-fold AUC.
 2. On the VPS, check `state/news_feeds.json` after the first hour: the feed URLs in `settings.yaml: news` could not be
    verified from a Claude sandbox. Fix any that fail; the collector skips broken feeds.
 3. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals

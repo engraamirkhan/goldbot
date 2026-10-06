@@ -62,3 +62,15 @@ def test_months_to_fetch_always_refreshes_open_month():
     existing = pd.concat([_bars(m, 20_000) for m in ("2026-01", "2026-02", "2026-03")])
     assert dy.months_to_fetch(existing, months, today=today) == {"2026-03"}
     assert dy.months_to_fetch(None, months, today=today) == {"2026-01", "2026-02", "2026-03"}
+
+
+def test_fractional_dukascopy_volumes_are_kept(monkeypatch, tmp_path):
+    # XAUUSD volumes from Dukascopy are fractional; an int cast once turned most minutes into 0 volume
+    ts = pd.date_range("2025-03-04 09:00", periods=5, freq="1min", tz="UTC")
+    side = pd.DataFrame({"ts_utc": ts, "open": 2900.0, "high": 2901.0, "low": 2899.0, "close": 2900.5,
+                         "volume": [0.12, 0.5, 1.7, 0.0, 0.03]})
+    monkeypatch.setattr(dy, "download_side", lambda s, e, which, out: side.assign(close=2900.5 + (which == "ask") * 0.2))
+    monkeypatch.setattr(dy, "MIN_BARS_PER_FULL_MONTH", 1)
+    monkeypatch.setattr(dy.time, "sleep", lambda s: None)
+    bars = dy.month_bars(dt.date(2025, 3, 1), dt.date(2025, 4, 1), tmp_path)
+    assert bars is not None and bars["tick_count"].tolist() == [0.12, 0.5, 1.7, 0.0, 0.03]

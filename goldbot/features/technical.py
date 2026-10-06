@@ -55,7 +55,8 @@ def adx(df: pd.DataFrame, n: int = 14) -> pd.Series:
 def mfi(df: pd.DataFrame, n: int = 12) -> pd.Series:
     """Money Flow Index on tick count as the volume proxy (CFD volume is tick count, never 'volume')."""
     tp = (df["high"] + df["low"] + df["close"]) / 3
-    flow = tp * df["tick_count"].clip(lower=1)
+    # a tiny floor (not 1): Dukascopy volumes are fractional, and a floor of 1 would flatten them all to equal weight
+    flow = tp * df["tick_count"].astype(float).clip(lower=1e-9)
     pos = flow.where(tp > tp.shift(1), 0.0)
     neg = flow.where(tp < tp.shift(1), 0.0)
     ratio = pos.rolling(n, min_periods=n).sum() / neg.rolling(n, min_periods=n).sum().replace(0, np.nan)
@@ -152,7 +153,7 @@ def f_mr(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     return out
 
 
-@feature("money_flow", "mean_reversion", lookback=50)
+@feature("money_flow", "mean_reversion", version="2", lookback=50)   # v2: fractional volumes keep their weight
 def f_mfi(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """KOG-MFI replica: MFI(12) with zones 20/40/60/80."""
     m = mfi(df, 12)

@@ -101,3 +101,21 @@ def test_mean_reversion_on_1h_uses_its_own_volatility_tercile(bars_1m):
     spec = SPECIALISTS["mean_reversion"](timeframe="1h", band_z=1.0, rsi_low=45.0, rsi_high=55.0, max_vol_tercile=2)
     m, X = _frame(bars_1m, "1h")
     assert "h1_vol_tercile" not in X.columns and len(spec.candidates(m, X)) > 10
+
+
+def test_lookahead_check_passes_the_real_features_and_catches_a_leaky_one(bars_1m):
+    from goldbot.features.registry import FEATURES, feature
+    from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES, lookahead_check
+    dec = resample_bars(bars_1m, "15m").reset_index(drop=True)
+    context = {TF_LABEL[x]: resample_bars(bars_1m, x) for x in context_tfs("15m")}
+    clean = lookahead_check(dec, context)
+    assert clean["lookahead_columns"] == [] and clean["columns_checked"] > 100
+
+    @feature("test_leaky_zscore", "test")
+    def leaky(df, ctx):            # normalised by the whole sample's mean: uses the future
+        return pd.DataFrame({"close_over_sample_mean": df["close"] / df["close"].mean()}, index=df.index)
+    try:
+        out = lookahead_check(dec, context, feature_names=[*DEFAULT_FEATURE_NAMES, "test_leaky_zscore"])
+        assert out["lookahead_columns"] == ["close_over_sample_mean"]
+    finally:
+        del FEATURES["test_leaky_zscore"]
