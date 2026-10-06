@@ -60,6 +60,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
   or the dashboard (any approver); re-arm only on the dashboard by the owner with an authenticator code. Engines in
   production (`halt_checks`) also block entries when the supervisor's heartbeat is missing or stale. Exits are
   never gated.
+- Clone mutations (`population.mutate_agent`): perturbed barriers/thresholds, a different feature subset
+  (`feature_seed`: seeded 40 of the eligible features) or a different timeframe for breakout and mean_reversion
+  (15m <-> 1h, holding horizon kept).
+- One position per agent at a time (`labels.one_at_a_time`): research keeps a candidate only after the previous one
+  exited, the shadow book refuses entries while the agent's trade is open, the engine skips an agent with an open
+  position or pending proposal. Without it trend's clustered candidates overlapped and inflated every statistic.
+- News blackout: `calendar_archive` (daily 06:10 UTC) stores the Forex Factory week in `calendar_events` with tiers
+  (1 = US CPI/NFP/FOMC/PCE, 2 = other high-impact USD); production engines block entries from 15 min before to 30
+  min after each tier-1 event, and for 30 min after a high-relevance unscheduled news shock. Headlines: service
+  `goldbot-news` (`run.py news`) polls the RSS feeds in `settings.yaml: news` every 5 min, scores gold-relevant items
+  in batches with structured output (budget `news.daily_cap_usd`, counted in the agents' monthly cap; unscored items
+  are kept), stores them in `news`. The macro/news analyst writes the pre-session briefing (weekdays 06:30 UTC) from
+  the calendar and headlines.
 - Telegram service (`python -m goldbot.ops.run telegram`, NSSM `goldbot-telegram`): sends proposals with
   Approve/Reject buttons, posts each outcome, delivers every staff-agent report, answers /status and /halt
   (`telegram/outbox.py` keeps progress across restarts).
@@ -73,24 +86,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
 
 ## Next steps (no owner input needed unless marked)
-1. The first research.yml run on main (2026-10-05, issue "research: session_open") failed on a pandas-3 timestamp
-   unit mismatch (release Parquet us vs resampled ns) in the multi-timeframe merge; fixed on this branch (both
-   as-of merges normalise to ns). Re-dispatch research.yml for every family once the branch is on main; until a
-   model passes the gates there is no champion, so the engine proposes nothing (by design).
-2. Macro/news analyst: needs the economic-calendar archiver (Forex Factory weekly feed) and the headline collector
-   (RSS + GDELT, scored into the design's fixed schema) first, both on the VPS (market/news hosts are blocked from
-   Claude sandboxes); then the role writes the pre-session briefing from them, and tier-1 events drive the
-   RiskGate's news blackout (`AccountState.in_blackout` is not set by anything yet).
+1. Re-run research.yml for all four families once this branch is on main (one-position labels, breakout threshold
+   2.0 ATR, empty-result report fix). First results on main (2026-10-06, issues "research: <family>"): session_open
+   no edge (94 out-of-fold trades, all 2025-26); trend 60 model trades over 13 years (PF 2.5, DSR 0.995) but a
+   shifted-label AUC of 0.59 from overlapping candidates; mean_reversion 5 model trades, AUC 0.72 (same cause);
+   breakout 0 candidates (threshold 1.2 ATR could not fire). None is promotable; until one passes the gates the
+   engines propose nothing (by design).
+2. On the VPS, check `state/news_feeds.json` after the first hour: the feed URLs in `settings.yaml: news` could not be
+   verified from a Claude sandbox. Fix any that fail; the collector skips broken feeds.
 3. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals
    once and answer the credential prompts; create the Cloudflare tunnel and enter its token on the VPS; store a
    GitHub token with `python -m goldbot.ops.accounts set github-token` (bar sync + shared trial registry), an
-   Anthropic API key with `python -m goldbot.ops.accounts set anthropic-api-key` (staff agents; off without it) and
-   the Telegram bot token with `python -m goldbot.ops.accounts set telegram-bot-token` (from @BotFather), and put
-   your Telegram user id in `settings.yaml: telegram.allowed_user_ids`.
+   Anthropic API key with `python -m goldbot.ops.accounts set anthropic-api-key` (staff agents and headline scoring;
+   off without it) and the Telegram bot token with `python -m goldbot.ops.accounts set telegram-bot-token` (from
+   @BotFather), and put your Telegram user id in `settings.yaml: telegram.allowed_user_ids`.
 4. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
-5. Dispatch research.yml for `trend`, `mean_reversion` and `breakout` once this branch is on main, and read their
-   issues; the population seeds a founder per family automatically (shadow first, like every agent).
-6. Feature-subset and timeframe mutations for cloning (need pipeline support).
+5. Session-open has too few candidates per 15m test fold (about 90 a year against the 60-per-fold minimum); a
+   rationale-backed variant (looser Asia-range filter or both sessions) is the next research trial for it.
 
 ## Environment facts
 - Claude sandboxes (cloud container and the Mac's Cowork VM) cannot reach market-data hosts or download Actions

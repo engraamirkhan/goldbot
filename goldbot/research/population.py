@@ -15,8 +15,8 @@ record, and capital share. The tournament (run weekly by the scheduler) applies 
 * caps: LIVE_CAP live and SHADOW_CAP shadow agents; capital within a family is split by fitness share (the allocator
   multiplies by its family weight).
 
-Mutations perturb numeric config values (barriers, trigger thresholds); feature-subset and timeframe mutations need
-pipeline support and are not generated yet.
+Mutations (mutate_agent): perturbed barriers or trigger thresholds, a different feature subset within the 40-feature
+cap (`feature_seed`), or a different decision timeframe for families that allow one (holding horizon kept).
 """
 from __future__ import annotations
 
@@ -32,10 +32,11 @@ from pydantic import Field
 from scipy import stats
 
 from goldbot.base import Record, UtcTimestamp
+from goldbot.config import tf_seconds
 from goldbot.engine.shadow import ShadowBook
 from goldbot.research.metrics import deflated_sharpe, max_drawdown
 from goldbot.specialists import SPECIALISTS
-from goldbot.specialists.base import AgentIdentity, Specialist
+from goldbot.specialists.base import FEATURE_SEED_KEY, TIMEFRAME_KEY, AgentIdentity, Specialist
 
 MIN_RANK_TRADES = 60
 RETIRE_MIN_TRADES = 100
@@ -158,7 +159,8 @@ def score_agent(trades: pd.DataFrame, corr_funded: float, n_population: int) -> 
 
 def mutate_config(base: dict[str, Any], rng: random.Random, n_keys: int = 2) -> dict[str, Any]:
     """Perturb 1-n_keys numeric config values by a factor from MUTATION_FACTORS (ints rounded, never unchanged)."""
-    numeric = [k for k, v in base.items() if isinstance(v, (int, float)) and not isinstance(v, bool) and v != 0]
+    numeric = [k for k, v in base.items() if isinstance(v, (int, float)) and not isinstance(v, bool) and v != 0
+               and k not in (FEATURE_SEED_KEY, TIMEFRAME_KEY)]
     if not numeric:
         raise ValueError("no numeric config to mutate")
     keys = rng.sample(numeric, k=min(len(numeric), rng.randint(1, n_keys)))
@@ -170,6 +172,32 @@ def mutate_config(base: dict[str, Any], rng: random.Random, n_keys: int = 2) -> 
         if out[k] == v:           # small ints can round back: step by one instead
             out[k] = v + 1 if isinstance(v, int) else round(float(v) * 1.1, 4)
     return out
+
+
+MUTATION_KINDS = (("params", 0.6), ("features", 0.25), ("timeframe", 0.15))
+
+
+def mutate_agent(family: str, base: dict[str, Any], rng: random.Random) -> tuple[str, dict[str, Any]]:
+    """One child config (design: perturbed barriers or trigger thresholds, a different feature subset within the
+    40-feature cap, or a different timeframe). Returns (kind, config); kinds a family cannot take fall back to params.
+
+    A timeframe move rescales `max_bars` so the holding horizon in hours stays the same."""
+    cls = SPECIALISTS[family]
+    kind = rng.choices([k for k, _ in MUTATION_KINDS], weights=[w for _, w in MUTATION_KINDS])[0]
+    current_tf = base.get(TIMEFRAME_KEY, cls.timeframe)
+    options = [tf for tf in (cls.timeframe, *cls.timeframes) if tf != current_tf]
+    if kind == "timeframe" and options:
+        tf = rng.choice(options)
+        out = {**base, TIMEFRAME_KEY: tf}
+        if "max_bars" in base:
+            out["max_bars"] = max(1, int(round(base["max_bars"] * tf_seconds(current_tf) / tf_seconds(tf))))
+        return "timeframe", out
+    if kind == "features":
+        seed = rng.randrange(1, 2**31)
+        while seed == base.get(FEATURE_SEED_KEY):
+            seed = rng.randrange(1, 2**31)
+        return "features", {**base, FEATURE_SEED_KEY: seed}
+    return "params", mutate_config(base, rng)
 
 
 # ---------------------------------------------------------------------------------------------- population
@@ -265,14 +293,15 @@ class Population:
                 if len(self.active("shadow")) >= SHADOW_CAP:
                     break
                 for _attempt in range(10):
-                    child = w.identity().mutate(mutate_config(w.config, rng))
+                    kind, cfg = mutate_agent(w.family, w.config, rng)
+                    child = w.identity().mutate(cfg)
                     if child.agent_id not in self.members:
                         break
                 else:
                     continue
                 self.members[child.agent_id] = Member(agent_id=child.agent_id, family=w.family, config=child.config,
                                                       parent_id=w.agent_id, generation=child.generation, created_utc=now,
-                                                      status_since_utc=now, notes=[f"clone of {w.agent_id}"])
+                                                      status_since_utc=now, notes=[f"clone of {w.agent_id} ({kind})"])
                 summary["cloned"].append(child.agent_id)
 
         # capital: within a family, live agents split by fitness share

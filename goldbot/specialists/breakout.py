@@ -1,7 +1,7 @@
 """Breakout specialist (design table: 15m/1h; implemented on 1h bars).
 
-Trigger: the previous `range_bars` (>= 8) 1h bars form a range narrower than `max_range_atr` (1.2) x ATR, and this
-bar closes outside it with tick volume above `min_tick_ratio` (1.5) x its 20-bar median. Barriers 2.0 / 1.0 x
+Trigger: the previous `range_bars` (>= 8) 1h bars form a range narrower than `max_range_atr` (2.0) x ATR(14) (8 bars
+of a random walk span about 3 ATR, so this is a compressed range), and this bar closes outside it with tick volume above `min_tick_ratio` (1.5) x its 20-bar median. Barriers 2.0 / 1.0 x
 ATR(1h), 24 h. The design's live exit (half at 1.0 ATR, rest trailed at 1.0 ATR; stop inside the range) is the exit
 policy; labels use the barriers.
 """
@@ -20,9 +20,10 @@ from goldbot.specialists.base import Specialist, register
 class BreakoutSpecialist(Specialist):
     family = "breakout"
     timeframe = "1h"
+    timeframes = ("15m",)
     default_config = {
         "range_bars": 8,
-        "max_range_atr": 1.2,
+        "max_range_atr": 2.0,
         "min_tick_ratio": 1.5,
         "target_atr": 2.0,
         "stop_atr": 1.0,

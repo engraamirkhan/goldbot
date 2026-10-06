@@ -47,6 +47,8 @@ def load_bars(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
 
 def per_year(oof: pd.DataFrame, threshold: float | None) -> pd.DataFrame:
     """Out-of-fold trades per calendar year: every candidate vs the model-filtered subset."""
+    if oof.empty or "p_raw" not in oof:
+        return pd.DataFrame()                    # no candidates or no fold: nothing was scored out of fold
     scored = oof.dropna(subset=["p_raw"]).copy()
     if scored.empty:
         return pd.DataFrame()

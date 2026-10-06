@@ -7,7 +7,7 @@ import pytest
 from goldbot.config import load_settings
 from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowBook
-from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier
+from goldbot.labels.triple_barrier import BarrierSpec, one_at_a_time, triple_barrier
 from goldbot.ops.jobs import JobContext, model_watch
 from goldbot.research.model import MetaLabelModel
 from goldbot.research.model_registry import ModelRegistry
@@ -34,7 +34,9 @@ def test_shadow_trades_reproduce_triple_barrier_labels(tmp_path, seed, vol):
     atr = pd.Series(np.full(len(bars), 2.0))
     spec = BarrierSpec(target_atr=1.5, stop_atr=1.0, max_bars=16)
     signals = pd.DataFrame({"idx": np.arange(20, 360, 7), "side": np.where(np.arange(20, 360, 7) % 2 == 0, 1, -1)})
-    labels = triple_barrier(bars, signals, spec, atr).set_index("idx")
+    # one position at a time on both sides: the shadow book refuses an entry while the agent's trade is open, the
+    # research labels drop the candidates that fire before the previous one exited
+    labels = one_at_a_time(triple_barrier(bars, signals, spec, atr)).set_index("idx")
 
     book = ShadowBook(tmp_path)
     book.track("v1", bars["ts_utc"].iloc[0])
@@ -48,9 +50,13 @@ def test_shadow_trades_reproduce_triple_barrier_labels(tmp_path, seed, vol):
                                 entry=float(bar["ask_close"] if sig[i] > 0 else bar["bid_close"]), atr_usd=2.0,
                                 target_atr=1.5, stop_atr=1.0, max_bars=16, p=0.6)
             opened[i] = t
+    taken = {i for i, t in opened.items() if t is not None}
+    assert taken == set(labels.index)
+    if vol < 1.0:
+        assert len(taken) < len(signals)       # quiet: trades run to the time barrier, so later signals are skipped
     barriers = set()
-    for idx, t in opened.items():
-        lab = labels.loc[idx]
+    for idx in taken:
+        t, lab = opened[idx], labels.loc[idx]
         assert t is not None and t.exit is not None, idx
         assert t.barrier == lab["barrier_hit"] and t.exit == pytest.approx(lab["exit"]) and t.ret == pytest.approx(lab["ret"])
         assert t.exit_ts == lab["ts_exit"]

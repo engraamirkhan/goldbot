@@ -18,6 +18,7 @@ from goldbot.specialists.base import Specialist, register
 class MeanReversionSpecialist(Specialist):
     family = "mean_reversion"
     timeframe = "15m"
+    timeframes = ("1h",)
     default_config = {
         "band_z": 2.0,
         "rsi_low": 25.0,
@@ -38,12 +39,14 @@ class MeanReversionSpecialist(Specialist):
 
     def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
         c = self.config
-        need = ("bb_z_20", "rsi14", "h1_vol_tercile")
+        # calm-market filter: the 1h volatility tercile from context on 15m bars, the bar's own on 1h bars
+        vol = "h1_vol_tercile" if "h1_vol_tercile" in features.columns else "vol_tercile"
+        need = ("bb_z_20", "rsi14", vol)
         if any(k not in features.columns for k in need):
             return pd.DataFrame({"idx": pd.Series(dtype=int), "side": pd.Series(dtype=int)})
         z = features["bb_z_20"].astype(float)
         rsi = features["rsi14"].astype(float)
-        calm = features["h1_vol_tercile"].astype(float) <= c["max_vol_tercile"]
+        calm = features[vol].astype(float) <= c["max_vol_tercile"]
         short = (z > c["band_z"]) & (rsi > c["rsi_high"])
         long_ = (z < -c["band_z"]) & (rsi < c["rsi_low"])
         side = pd.Series(np.where(long_, 1, np.where(short, -1, 0)), index=features.index)

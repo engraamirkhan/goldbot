@@ -27,6 +27,7 @@ KEY_COLUMNS = {
     "tv_signals": ["signal_hash"],
     "macro": ["series", "value_date", "vintage"],
     "fills": ["ts_utc", "client_order_id"],
+    "calendar_events": ["event_id"],          # a re-fetched event replaces the earlier copy (forecast revisions)
 }
 
 

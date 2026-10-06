@@ -171,3 +171,25 @@ def test_league_rows_match_the_api_contract_and_population_persists(tmp_path):
     again = Population(tmp_path / "p.json")
     assert again.members["strong"].status == pop.members["strong"].status
     assert again.members["strong"].created_utc == pop.members["strong"].created_utc
+
+
+def test_mutations_cover_params_feature_subsets_and_timeframes():
+    from goldbot.research.population import mutate_agent
+    rng = random.Random(3)
+    base = dict(SPECIALISTS["breakout"].default_config)
+    kinds: dict[str, dict] = {}
+    for _ in range(60):
+        kind, cfg = mutate_agent("breakout", base, rng)
+        assert cfg != base
+        kinds.setdefault(kind, cfg)
+    assert set(kinds) == {"params", "features", "timeframe"}
+    tf = kinds["timeframe"]
+    assert tf["timeframe"] == "15m" and tf["max_bars"] == base["max_bars"] * 4       # same 24 h horizon on 15m bars
+    assert SPECIALISTS["breakout"](**tf).timeframe == "15m"
+    assert isinstance(kinds["features"]["feature_seed"], int)
+    # a family with one timeframe never moves; numeric mutation never touches the seed
+    for _ in range(40):
+        kind, cfg = mutate_agent("session_open", dict(SPECIALISTS["session_open"].default_config, feature_seed=7), rng)
+        assert "timeframe" not in cfg and (kind == "features" or cfg["feature_seed"] == 7)
+    with pytest.raises(ValueError, match="does not run on 4h"):
+        SPECIALISTS["trend"](timeframe="4h")

@@ -23,7 +23,7 @@ in Markdown: a 3-line summary first, then sections. Keep it short enough to read
 class Role(FrozenRecord):
     name: str
     title: str
-    cadence: Literal["daily", "weekly"]
+    cadence: Literal["daily", "weekly", "presession"]
     tools: tuple[str, ...]
     task: str                       # the standing instruction for one run
     max_cost_usd: float = 1.00      # per run; the loop stops before exceeding it
@@ -53,6 +53,17 @@ ROLES: dict[str, Role] = {r.name: r for r in [
               "their retcodes, and whether the cost table is fresh. Compare the two brokers where both have fills. "
               "Say plainly when there are too few fills to conclude anything; never call a cell drifting that the "
               "audit did not flag."),
+    Role(name="macro_news_analyst", title="macro and news analyst", cadence="presession",
+         tools=("read_calendar", "read_headlines", "read_state", "read_decisions"),
+         task="Write the pre-session briefing before London opens: today's and tomorrow's scheduled events from "
+              "read_calendar (days_ahead 2), in UTC and in the trader's terms (what each release is, consensus vs "
+              "previous where given), the exact entry-blackout windows around tier-1 events (the engines block new "
+              "entries in them automatically), any tier-2 USD event worth caution, and the rest of the week's tier-1 "
+              "events in one line each, then the overnight headlines that matter for gold (read_headlines hours 12, "
+              "min_relevance 0.5): what happened, scored direction, and any unscheduled shock (the engines block "
+              "entries for 30 minutes after one). Do not forecast prices or recommend trades; the system's models decide "
+              "entries and the owner approves them.",
+         max_cost_usd=0.60, max_turns=6, effort="low"),
     Role(name="journal_coach", title="journal coach", cadence="weekly", tools=tuple(READ_ALL),
          task="Write the weekly trading journal review: what was proposed, approved, rejected (with reason codes) "
               "and expired over the last 7 days, outcomes of executed trades, whether the owner's vetoes added value "

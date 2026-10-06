@@ -67,10 +67,24 @@ scheduler:
   agents_daily:     { kind: daily,   at: "23:45", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # data steward, risk officer
   agents_weekly:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }     # journal coach, improvement agent
   monthly_research: { kind: monthly, at: "08:00", weekday: 6, max_late_hours: 30 }   # first Sunday of the month
+  calendar_archive: { kind: daily,   at: "06:10", max_late_hours: 20 }                  # Forex Factory week -> calendar_events
+  agents_presession: { kind: daily,  at: "06:30", weekdays: [0, 1, 2, 3, 4], max_late_hours: 1 }   # macro/news briefing before London
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
   model: claude-opus-5-5
+
+news:                                # headline collector (VPS service goldbot-news); URLs unverified from the sandbox
+  feeds:
+    forexlive: https://www.forexlive.com/feed/news
+    fxstreet: https://www.fxstreet.com/rss/news
+    fed_press: https://www.federalreserve.gov/feeds/press_all.xml
+    bls: https://www.bls.gov/feed/bls_latest.rss
+  poll_seconds: 300
+  model: claude-opus-5-5
+  daily_cap_usd: 0.50                # scoring spend per UTC day, counted in agents.monthly_cap_usd
+  shock_blackout_min: 30             # entries blocked after a high-relevance unscheduled shock (design)
+  shock_min_relevance: 0.7
 
 research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)

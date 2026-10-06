@@ -85,3 +85,19 @@ def uniqueness_weights(labels: pd.DataFrame, n_bars: int) -> pd.Series:
     w = w * (labels["ret"].abs().to_numpy() + 1e-6)
     w = w / w.mean()
     return pd.Series(w, index=labels.index, name="weight")
+
+
+def one_at_a_time(labels: pd.DataFrame) -> pd.DataFrame:
+    """Keep a candidate only once the previously kept one has exited (one position per agent, as the engine and
+    the shadow book trade). Rules that fire on runs of consecutive bars otherwise yield heavily overlapping labels:
+    the effective sample is far smaller than the row count and neighbouring rows share their price path, which
+    inflates any statistic (and the shifted-label leakage check) computed on them."""
+    if labels.empty:
+        return labels
+    lab = labels.sort_values("t_entry")
+    keep, busy_until = [], -1
+    for i, (e, x) in enumerate(zip(lab["t_entry"].to_numpy(), lab["t_exit"].to_numpy())):
+        if e > busy_until:
+            keep.append(i)
+            busy_until = x
+    return lab.iloc[keep].reset_index(drop=True)

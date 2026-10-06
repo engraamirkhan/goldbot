@@ -111,6 +111,8 @@ class SchedulerSettings(_Section):
     agents_daily: ScheduleSettings
     agents_weekly: ScheduleSettings
     monthly_research: ScheduleSettings
+    calendar_archive: ScheduleSettings
+    agents_presession: ScheduleSettings
 
 
 class ResearchSettings(_Section):
@@ -126,6 +128,15 @@ class ResearchSettings(_Section):
 class AgentSettings(_Section):
     monthly_cap_usd: float = Field(40.0, ge=0)
     model: str = "claude-opus-5-5"
+
+
+class NewsSettings(_Section):
+    feeds: dict[str, str] = Field(default_factory=dict)       # name -> RSS/Atom URL
+    poll_seconds: int = Field(300, ge=60)
+    model: str = "claude-opus-5-5"
+    daily_cap_usd: float = Field(0.50, ge=0)                  # scoring spend per UTC day (inside the agents' monthly cap)
+    shock_blackout_min: int = Field(30, ge=0)
+    shock_min_relevance: float = Field(0.7, ge=0, le=1)
 
 
 class TelegramSettings(_Section):
@@ -148,6 +159,7 @@ class Settings(_Section):
     scheduler: SchedulerSettings
     research: ResearchSettings = Field(default_factory=ResearchSettings)
     agents: AgentSettings = Field(default_factory=AgentSettings)
+    news: NewsSettings = Field(default_factory=NewsSettings)
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):

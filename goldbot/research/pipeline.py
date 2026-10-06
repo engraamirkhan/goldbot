@@ -4,6 +4,7 @@ bars -> features (+ higher-TF context) -> candidates -> labels -> purged walk-fo
 same feature and model objects."""
 from __future__ import annotations
 
+import random
 from typing import Any
 
 import numpy as np
@@ -14,11 +15,11 @@ from goldbot.data.resample import mid
 from goldbot.features import FEATURES, build_features
 from goldbot.features.mtf import merge_higher_tf
 from goldbot.features.technical import atr
-from goldbot.labels import triple_barrier, uniqueness_weights
+from goldbot.labels import one_at_a_time, triple_barrier, uniqueness_weights
 from goldbot.research.metrics import summarize
 from goldbot.research.model import MetaLabelModel
 from goldbot.research.walkforward import splits_for
-from goldbot.specialists.base import Specialist
+from goldbot.specialists.base import FEATURE_SEED_KEY, Specialist
 
 DEFAULT_FEATURE_NAMES = [n for n in FEATURES if n not in ("macro", "calendar_events")]
 
@@ -49,6 +50,19 @@ def build_decision_frame(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame
     return m, X
 
 
+MAX_FEATURES = 40       # design: at most 40 features per live model
+
+
+def select_features(eligible: list[str], config: dict[str, Any]) -> list[str]:
+    """The model's feature list: the first MAX_FEATURES eligible columns, or, for a clone carrying `feature_seed`, a
+    seeded random subset of them (design: a child may differ from its parent by its feature subset)."""
+    seed = config.get(FEATURE_SEED_KEY)
+    if seed is None or len(eligible) <= MAX_FEATURES:
+        return eligible[:MAX_FEATURES]
+    rng = random.Random(int(seed))
+    return sorted(rng.sample(eligible, MAX_FEATURES), key=eligible.index)
+
+
 def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None = None,
                    feature_names: list[str] | None = None, model_features: list[str] | None = None,
                    n_trials: int = 1, trades_per_year: float = 400.0, ctx: dict | None = None) -> ResearchResult:
@@ -56,13 +70,13 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
     m, X = build_decision_frame(bars_dec, context, feature_names, ctx)
     cands = spec.candidates(m, X)
     a = atr(m, 14)
-    labels = triple_barrier(bars_dec, cands, spec.label_spec, a)
+    labels = one_at_a_time(triple_barrier(bars_dec, cands, spec.label_spec, a))
     if labels.empty:
         return ResearchResult(agent_id=spec.agent_id, n_candidates=0, n_folds=0, oof=labels, metrics={"n": 0}, feature_version=X.attrs["feature_version"], importance=None)
     labels["weight"] = uniqueness_weights(labels, len(bars_dec)).to_numpy()
     feats = X.drop(columns=["ts_utc"]).iloc[labels["idx"].to_numpy()].reset_index(drop=True)
     feats = feats.replace([np.inf, -np.inf], np.nan)
-    cols = model_features or [c for c in feats.columns if feats[c].notna().mean() > 0.8][:40]
+    cols = model_features or select_features([c for c in feats.columns if feats[c].notna().mean() > 0.8], spec.config)
     y = labels["target_hit"].astype(int)
     folds = splits_for(labels, spec.timeframe)
     oof_pred = np.full(len(labels), np.nan)

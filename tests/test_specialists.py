@@ -84,3 +84,20 @@ def test_candidates_use_no_future_bars(bars_1m, family):
     part = spec.candidates(m2, X2)
     upto = full[full["idx"] < len(m2)].reset_index(drop=True)
     pd.testing.assert_frame_equal(part.reset_index(drop=True), upto, check_dtype=False)
+
+
+def test_feature_subset_is_seeded_and_capped():
+    from goldbot.research.pipeline import MAX_FEATURES, select_features
+    cols = [f"f{i}" for i in range(90)]
+    assert select_features(cols, {}) == cols[:MAX_FEATURES]
+    a, b = select_features(cols, {"feature_seed": 11}), select_features(cols, {"feature_seed": 11})
+    assert a == b and len(a) == MAX_FEATURES and a != cols[:MAX_FEATURES]
+    assert a == sorted(a, key=cols.index)                                   # keeps the frame's column order
+    assert select_features(cols, {"feature_seed": 12}) != a
+    assert select_features(cols[:30], {"feature_seed": 11}) == cols[:30]
+
+
+def test_mean_reversion_on_1h_uses_its_own_volatility_tercile(bars_1m):
+    spec = SPECIALISTS["mean_reversion"](timeframe="1h", band_z=1.0, rsi_low=45.0, rsi_high=55.0, max_vol_tercile=2)
+    m, X = _frame(bars_1m, "1h")
+    assert "h1_vol_tercile" not in X.columns and len(spec.candidates(m, X)) > 10

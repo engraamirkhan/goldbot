@@ -3,7 +3,7 @@ import { api, type AgentRunRow } from "../lib/api";
 
 const ROLE_TITLES: Record<string, string> = {
   data_steward: "Data steward", risk_officer: "Risk officer", journal_coach: "Journal coach", improvement_agent: "Improvement agent",
-  research_analyst: "Research analyst", execution_auditor: "Execution auditor",
+  research_analyst: "Research analyst", execution_auditor: "Execution auditor", macro_news_analyst: "Macro & news analyst",
 };
 
 function StaffReports({ runs }: { runs: AgentRunRow[] }) {
