@@ -42,7 +42,7 @@ def test_research_pass_reports_and_records_trials(release_dir, tmp_path, monkeyp
     rows = [json.loads(line) for line in registry.read_text().splitlines()]
     assert len(rows) == 1 and rows[0]["family"] == "session_open"
     assert rows[0]["results"]["n_folds"] >= 1
-    assert 0.3 < rows[0]["results"]["shuffle_auc"] < 0.7     # synthetic data: no leakage, no edge
+    assert rows[0]["results"]["lookahead"]["lookahead_columns"] == []     # every feature is as-of
 
     # a second run on a narrower window is a new trial; the counter feeds the deflated Sharpe
     monkeypatch.setattr(sys, "argv", argv + ["--from-year", "2023"])

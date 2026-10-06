@@ -63,6 +63,36 @@ def select_features(eligible: list[str], config: dict[str, Any]) -> list[str]:
     return sorted(rng.sample(eligible, MAX_FEATURES), key=eligible.index)
 
 
+def _auc(y: np.ndarray, p: np.ndarray) -> float | None:
+    from sklearn.metrics import roc_auc_score
+    return float(roc_auc_score(y, p)) if len(np.unique(y)) == 2 else None
+
+
+def lookahead_check(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None, cut_frac: float = 0.7,
+                    feature_names: list[str] | None = None) -> dict[str, Any]:
+    """Leakage check on the data actually used: build the decision frame on the full history and on the history
+    truncated at `cut_frac` (context bars only those visible by then). A feature whose value on a bar before the cut
+    differs between the two used data from after the cut. Returns the offending columns (empty = clean)."""
+    bars_dec = bars_dec.reset_index(drop=True)
+    cut = int(len(bars_dec) * cut_frac)
+    cut_ts = pd.Timestamp(bars_dec["visible_at"].iloc[cut - 1])
+    _, full = build_decision_frame(bars_dec, context, feature_names)
+    ctx_cut = {k: v[pd.to_datetime(v["visible_at"], utc=True) <= cut_ts] for k, v in (context or {}).items()}
+    _, part = build_decision_frame(bars_dec.iloc[:cut], ctx_cut, feature_names)
+    a = full.drop(columns=["ts_utc"]).iloc[:cut].reset_index(drop=True)
+    b = part.drop(columns=["ts_utc"]).reset_index(drop=True)
+    bad = []
+    for c in a.columns:
+        if c not in b.columns:
+            bad.append(c)
+            continue
+        x, z = pd.to_numeric(a[c], errors="coerce").to_numpy(float), pd.to_numeric(b[c], errors="coerce").to_numpy(float)
+        same = np.isclose(x, z, rtol=1e-6, atol=1e-9, equal_nan=True)
+        if not same.all():
+            bad.append(c)
+    return {"cut_utc": cut_ts.isoformat(), "columns_checked": int(a.shape[1]), "lookahead_columns": bad}
+
+
 def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None = None,
                    feature_names: list[str] | None = None, model_features: list[str] | None = None,
                    n_trials: int = 1, trades_per_year: float = 400.0, ctx: dict | None = None) -> ResearchResult:
@@ -104,7 +134,7 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
             "threshold": float(thr),
             "all_candidates": summarize(scored, trades_per_year, n_trials),
             "model_filtered": summarize(taken, trades_per_year * len(taken) / max(len(scored), 1), n_trials),
-            "shuffle_auc": None,
+            "oof_auc": _auc(scored["target_hit"].to_numpy(), scored["p_raw"].to_numpy()),
         })
     imp = last_model.importance() if last_model is not None else None
     return ResearchResult(agent_id=spec.agent_id, n_candidates=len(labels), n_folds=len(folds), oof=oof, metrics=metrics, feature_version=X.attrs["feature_version"], importance=imp, model=last_model if "threshold" in metrics else None)

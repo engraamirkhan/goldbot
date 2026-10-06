@@ -158,7 +158,9 @@ def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 2) -> pd
                 "ts_utc": m["ts_utc"],
                 "bid_open": m["open_bid"], "bid_high": m["high_bid"], "bid_low": m["low_bid"], "bid_close": m["close_bid"],
                 "ask_open": m["open_ask"], "ask_high": m["high_ask"], "ask_low": m["low_ask"], "ask_close": m["close_ask"],
-                "tick_count": m["volume_bid"].fillna(0).astype(int),
+                # Dukascopy XAUUSD volumes are fractional: an int cast truncated most minutes to 0, which made every
+                # tick-volume feature constant. Features only use ratios and z-scores, so the scale does not matter.
+                "tick_count": m["volume_bid"].fillna(0.0).astype(float).round(6),
             })
             out["spread_mean"] = (out["ask_close"] - out["bid_close"]).clip(lower=0)
             out["spread_max"] = (out["ask_high"] - out["bid_low"]).clip(lower=0)

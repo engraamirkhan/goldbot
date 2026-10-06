@@ -16,8 +16,7 @@ from goldbot.data.resample import resample_bars, ticks_to_1m  # noqa: E402
 from goldbot.data.store import Store  # noqa: E402
 from goldbot.data.synthetic import synthetic_ticks  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
-from goldbot.research.model import shuffle_test_auc  # noqa: E402
-from goldbot.research.pipeline import build_decision_frame, run_specialist  # noqa: E402
+from goldbot.research.pipeline import lookahead_check, run_specialist  # noqa: E402
 from goldbot.research.registry import TrialRegistry  # noqa: E402
 from goldbot.specialists import SPECIALISTS  # noqa: E402
 
@@ -48,13 +47,9 @@ def main(years: int = 3) -> None:
     if res.importance is not None:
         print("top features:\n", res.importance.head(10).to_string())
 
-    # leakage check on the labelled frame
-    m, X = build_decision_frame(b15, context)
-    lab = res.oof
-    feats = X.drop(columns=["ts_utc"]).iloc[lab["idx"].to_numpy()].reset_index(drop=True)
-    cols = [c for c in feats.columns if feats[c].notna().mean() > 0.8][:40]
-    auc = shuffle_test_auc(feats.fillna(0), lab["target_hit"].astype(int), cols)
-    print(f"shuffle-test AUC (should be ~0.5): {auc:.3f}")
+    leak = lookahead_check(b15, context)
+    print(f"lookahead check: {len(leak['lookahead_columns'])} of {leak['columns_checked']} columns use future data "
+          f"{leak['lookahead_columns'][:10]}")
 
     reg = TrialRegistry("data_dryrun/registry.jsonl")
     row = reg.record(agent_id=res.agent_id, family=spec.family, config=spec.config, feature_version=res.feature_version,

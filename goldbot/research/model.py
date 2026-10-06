@@ -55,13 +55,3 @@ class MetaLabelModel(Record):
 
     def importance(self) -> pd.Series:
         return pd.Series(self.model.booster_.feature_importance("gain"), index=self.feature_names).sort_values(ascending=False)
-
-
-def shuffle_test_auc(X: pd.DataFrame, y: pd.Series, feature_names: list[str], seed: int = 0) -> float:
-    """Leakage check: train on labels shifted by one row; AUC must be near 0.5."""
-    from sklearn.metrics import roc_auc_score
-    y_shift = y.shift(1).bfill().astype(int)
-    n = len(X)
-    cut = int(n * 0.7)
-    m = MetaLabelModel(feature_names=feature_names).fit(X.iloc[:cut], y_shift.iloc[:cut])
-    return float(roc_auc_score(y_shift.iloc[cut:], m.predict_raw(X.iloc[cut:])))
