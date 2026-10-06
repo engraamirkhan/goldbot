@@ -101,6 +101,24 @@ def test_poll_scores_relevant_items_stores_all_and_never_twice(tmp_path):
     assert SpendLedger(tmp_path / "agent_spend.json", 40.0).month_spent(NOW) == pytest.approx(out["cost_usd"])
 
 
+def test_headlines_sharing_a_timestamp_are_all_kept_across_polls(tmp_path):
+    """Two different headlines published in the same minute (or both without a parseable time, so both take the
+    receipt time) must both survive the next poll's append into the same month partition."""
+    rss = """<?xml version="1.0"?><rss version="2.0"><channel><title>fl</title>
+<item><title>Gold jumps on Fed cut bets</title><link>https://x/a</link><pubDate>Mon, 12 Oct 2026 05:40:00 GMT</pubDate></item>
+<item><title>Missile strike reported, gold bid</title><link>https://x/b</link><pubDate>Mon, 12 Oct 2026 05:40:00 GMT</pubDate></item>
+</channel></rss>"""
+    later = """<?xml version="1.0"?><rss version="2.0"><channel><title>fl</title>
+<item><title>Dollar slips after CPI</title><link>https://x/c</link><pubDate>Mon, 12 Oct 2026 05:50:00 GMT</pubDate></item>
+</channel></rss>"""
+    pages = iter([rss, later])
+    c = NewsCollector(Store(tmp_path / "data"), tmp_path, {"fl": "u"}, lambda url: next(pages), None, None, "m", 0.0)
+    c.poll(NOW)
+    c.poll(NOW + pd.Timedelta(minutes=5))
+    stored = Store(tmp_path / "data").read("news")
+    assert sorted(stored["link"]) == ["https://x/a", "https://x/b", "https://x/c"]
+
+
 def test_budget_exhausted_items_are_stored_unscored(tmp_path):
     c = _collector(tmp_path, FakeClient(), cap=0.0)
     out = c.poll(NOW)
