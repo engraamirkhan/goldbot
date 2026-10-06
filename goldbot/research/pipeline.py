@@ -14,7 +14,7 @@ from goldbot.data.resample import mid
 from goldbot.features import FEATURES, build_features
 from goldbot.features.mtf import merge_higher_tf
 from goldbot.features.technical import atr
-from goldbot.labels import triple_barrier, uniqueness_weights
+from goldbot.labels import one_at_a_time, triple_barrier, uniqueness_weights
 from goldbot.research.metrics import summarize
 from goldbot.research.model import MetaLabelModel
 from goldbot.research.walkforward import splits_for
@@ -56,7 +56,7 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
     m, X = build_decision_frame(bars_dec, context, feature_names, ctx)
     cands = spec.candidates(m, X)
     a = atr(m, 14)
-    labels = triple_barrier(bars_dec, cands, spec.label_spec, a)
+    labels = one_at_a_time(triple_barrier(bars_dec, cands, spec.label_spec, a))
     if labels.empty:
         return ResearchResult(agent_id=spec.agent_id, n_candidates=0, n_folds=0, oof=labels, metrics={"n": 0}, feature_version=X.attrs["feature_version"], importance=None)
     labels["weight"] = uniqueness_weights(labels, len(bars_dec)).to_numpy()

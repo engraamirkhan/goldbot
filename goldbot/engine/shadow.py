@@ -69,6 +69,8 @@ class ShadowBook:
         book = self.books[version]
         if any(t.entry_ts == bar_ts for t in book.open) or any(t.entry_ts == bar_ts for t in book.closed[-5:]):
             return None   # one shadow entry per version per signal bar, even if the bar is replayed
+        if any(t.agent_id == agent_id for t in book.open):
+            return None   # one position per agent at a time, as the labels it was trained on (one_at_a_time)
         t = ShadowTrade(version=version, agent_id=agent_id, side=side, entry_ts=bar_ts, entry=entry,
                         stop=entry - side * stop_atr * atr_usd, target=entry + side * target_atr * atr_usd,
                         max_bars=max_bars, p=p, timeframe=timeframe)

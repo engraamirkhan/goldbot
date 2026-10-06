@@ -133,3 +133,19 @@ def test_outbox_delivers_new_agent_reports_without_replaying_history(tmp_path):
     assert len(msgs[2]) <= MAX_MESSAGE and msgs[2].endswith("full report on the dashboard (Agents)")
     assert "secret" not in msgs[3]                                  # only reports inside the state dir are read
     assert Outbox(tmp_path).new_reports() == []
+
+
+def test_engine_keeps_one_position_or_proposal_per_agent(tmp_path):
+    from goldbot.engine.runner import OpenTrade
+    spec = SPECIALISTS["session_open"]()
+    eng = Engine(EngineConfig(account_id="x", broker_name="icm", state_dir=str(tmp_path)), PaperBroker(equity=10_000),
+                 [spec], {})
+    assert not eng._busy(spec.agent_id)
+    eng.open[7] = OpenTrade(position_id=7, agent_id=spec.agent_id, side=1, lots=0.1,
+                            entry_bar_ts=pd.Timestamp("2025-03-03", tz="UTC"), max_bars=16)
+    assert eng._busy(spec.agent_id) and not eng._busy("other-agent")
+    del eng.open[7]
+    p = _p("q1")
+    eng.pending["q1"] = (Intent(agent_id=spec.agent_id, side=1, p=0.6, target_atr=1.5, stop_atr=1.0, atr_usd=4.0,
+                                cost_atr=0.1, multiplier=1.0, price=2400.0), p, spec)
+    assert eng._busy(spec.agent_id)

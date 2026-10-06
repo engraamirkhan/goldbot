@@ -257,6 +257,8 @@ class Engine:
             share = 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
             if share <= 0:
                 continue      # shadow-only member of the population: the shadow book trades it, not the broker
+            if self._busy(agent.agent_id):
+                continue      # one position (or pending proposal) per agent, as its labels were built
             feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
             cols = model.feature_names or [c for c in feats.columns]
             p = float(model.predict(feats[[c for c in cols if c in feats.columns]] if model.feature_names else feats)[0])
@@ -281,11 +283,11 @@ class Engine:
             prop = Proposal(proposal_id=pid, account_id=self.cfg.account_id, agent_id=agent.agent_id, side=side, lots=gd.lots, entry=price, stop=stop, target=target, p=p,
                             ev_r=p * ls.target_atr - (1 - p) * ls.stop_atr - cost_atr, spread_points=self.state.spread_points,
                             top_features=self._top_features(model, feats), window_s=90)
-            self.pending[pid] = (intent, prop, agent)
             if self.cfg.approval_mode == "auto":
                 self._execute(prop, agent, gd.lots, stop, target, requested=price)
                 decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid))
             else:
+                self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
                 self.center.propose(prop)
                 decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid))
         return decisions
@@ -380,6 +382,10 @@ class Engine:
             return [(n, float(feats[n].iloc[0]) if n in feats.columns else 0.0) for n in s.index]
         except Exception:
             return []
+
+    def _busy(self, agent_id: str) -> bool:
+        return any(t.agent_id == agent_id for t in self.open.values()) or \
+            any(a.agent_id == agent_id for _, _, a in self.pending.values())
 
     def _base_bars(self, agent: Specialist) -> int:
         """The agent's time barrier in base bars (position management runs on the decision_tf clock)."""

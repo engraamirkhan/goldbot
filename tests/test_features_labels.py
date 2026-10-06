@@ -117,3 +117,13 @@ def test_agent_identity_clone_must_differ():
     assert child.parent_id == ident.agent_id and child.generation == 1 and child.agent_id != ident.agent_id
     with pytest.raises(ValueError):
         ident.mutate({"target_atr": 1.5})
+
+
+def test_one_at_a_time_keeps_a_candidate_only_after_the_previous_exit():
+    from goldbot.labels import one_at_a_time
+    lab = pd.DataFrame({"idx": [10, 11, 12, 20, 30, 31], "t_entry": [11, 12, 13, 21, 31, 32],
+                        "t_exit": [20, 14, 15, 25, 31, 40]})
+    kept = one_at_a_time(lab.sample(frac=1.0, random_state=0))     # order-independent
+    # 11 and 12 enter while 10 is open (exits at bar 20); 20 enters at 21 > 20; 30 after 25; 31 enters at 32 > 31
+    assert kept["idx"].tolist() == [10, 20, 30, 31]
+    assert one_at_a_time(lab.iloc[:0]).empty
