@@ -54,7 +54,8 @@ class NewsCollector:
         if not frames:
             return out
         items = pd.concat(frames, ignore_index=True).drop_duplicates("item_id")
-        seen = self.store.read("news", start=now - pd.Timedelta(days=7), columns=["item_id"])
+        # from the oldest item in the feeds, not a fixed window: press-release feeds keep items for weeks
+        seen = self.store.read("news", start=items["ts_utc"].min(), columns=["item_id"])
         if not seen.empty:
             items = items[~items["item_id"].isin(set(seen["item_id"]))]
         if items.empty:

@@ -141,6 +141,18 @@ def test_items_whose_scoring_failed_are_scored_on_the_next_round(tmp_path):
     assert len(stored) == 5 and stored["item_id"].is_unique and int(stored["scored"].sum()) == 3
 
 
+def test_old_items_still_in_a_feed_are_not_rescored_every_poll(tmp_path):
+    """Press-release feeds (Fed, BLS) keep items for weeks: an item published more than 7 days ago that is already
+    stored must be recognised as seen, not re-scored (and re-billed) on every poll."""
+    old = RSS.replace("Mon, 12 Oct 2026 05:10:00 +0000", "Tue, 01 Sep 2026 18:00:00 +0000")
+    client = FakeClient(cost_tokens=1000)
+    c = NewsCollector(Store(tmp_path / "data"), tmp_path, {"fl": "u"}, lambda url: old, client,
+                      SpendLedger(tmp_path / "agent_spend.json", 40.0), "m", 0.5)
+    assert c.poll(NOW)["new"] == 4 and len(client.requests) == 1
+    again = c.poll(NOW + pd.Timedelta(minutes=5))
+    assert again["new"] == 0 and len(client.requests) == 1
+
+
 def test_budget_exhausted_items_are_stored_unscored(tmp_path):
     c = _collector(tmp_path, FakeClient(), cap=0.0)
     out = c.poll(NOW)
