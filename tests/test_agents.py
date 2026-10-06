@@ -160,6 +160,19 @@ def test_read_tools_over_the_journal(setup):
     assert err and "bad state name" in out
 
 
+def test_read_state_serves_only_the_documented_service_files(setup):
+    tmp, tools, _ = setup
+    (tmp / "users.json").write_text(json.dumps({"users": {"o@x.io": {"totp_secret": "JBSWY3DPEHPK3PXP"}}}))
+    (tmp / "telegram_outbox.json").write_text("{}")
+    (tmp / "engine_icm-demo.json").write_text(json.dumps({"account": "icm-demo"}))
+    (tmp / "supervisor.json").write_text(json.dumps({"halt": False}))
+    for name in ("users", "telegram_outbox", "control", "phase_state", "engine_"):
+        out, err = tools.call("read_state", {"name": name}, ["read_state"])
+        assert err and "bad state name" in out and "JBSWY3DP" not in out, name
+    assert json.loads(tools.call("read_state", {"name": "engine_icm-demo"}, ["read_state"])[0]) == {"account": "icm-demo"}
+    assert json.loads(tools.call("read_state", {"name": "supervisor"}, ["read_state"])[0]) == {"halt": False}
+
+
 def test_agent_jobs_are_skipped_without_a_key(tmp_path):
     from goldbot.config import load_settings
     from goldbot.ops.jobs import JobContext, agents_daily
