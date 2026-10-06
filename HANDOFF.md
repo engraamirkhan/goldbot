@@ -94,6 +94,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
 
 ## Next steps (no owner input needed unless marked)
+- OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.
 1. Research status (2026-10-06, bars re-pulled with real volumes, lookahead check clean on all 163 features):
    baselines (trials #8-#11) show no model skill except a weak one in mean_reversion (OOF AUC 0.54, 16 model trades
    in 15 years, DSR 0.991: far below the trade-count gates). The design review
