@@ -230,3 +230,46 @@ def test_trial_limit_per_run_and_missing_runner(setup):
     assert err and "research host" in out
     out, err = tools.call("update_hypothesis", {"hypothesis_id": "nope", "status": "inconclusive", "summary": "s"}, ["update_hypothesis"])
     assert err and "no hypothesis" in out
+
+
+# ------------------------------------------------------------------------------------------- execution auditor
+def test_execution_audit_flags_slippage_drift_wider_spreads_and_failed_orders(setup):
+    from goldbot.execution.costs import CostTable, SlippageStat, SpreadStat
+    tmp, tools, _ = setup
+    store = tools.store
+    (tmp / "engine_icm-demo.json").write_text("{}")
+    CostTable(account_id="icm-demo", built_utc=NOW - pd.Timedelta(hours=20),
+              spread={"london": SpreadStat(median=0.10, p90=0.15, n=1000)},
+              slippage={"london:market": SlippageStat(mean=0.02, n=80, from_prior=False),
+                        "newyork:market": SlippageStat(mean=0.15, n=3, from_prior=True)},
+              commission_per_lot_side_usd=3.5, slippage_prior_usd=0.15).save(tmp / "costs_icm-demo.json")
+    # London (09:00-11:00 UTC): 20 older fills at the table's 0.02, then 15 recent fills at 0.20 -> drift.
+    # New York: 12 recent fills at 0.10, under the 0.15 prior -> no drift.
+    day = lambda n: (NOW - pd.Timedelta(days=n)).normalize()    # noqa: E731  (NOW is a Monday: 3 and 4 days back are Fri/Thu)
+    old = [day(20) + pd.Timedelta(hours=10, minutes=i) for i in range(20)]
+    rec = [day(4) + pd.Timedelta(hours=9, minutes=5 * i) for i in range(15)]
+    ny = [day(3) + pd.Timedelta(hours=15, minutes=5 * i) for i in range(12)]
+    ts = old + rec + ny
+    slip = [0.02] * 20 + [0.20 + 0.01 * (i % 3) for i in range(15)] + [0.10] * 12
+    store.append("fills", pd.DataFrame({"ts_utc": pd.DatetimeIndex(ts), "client_order_id": [f"o{i}" for i in range(len(ts))],
+                                        "side": 1, "requested": 2400.0, "filled": [2400.0 + s for s in slip],
+                                        "order_type": "market"}), source="icm-demo", dedupe=False)
+    ticks_ts = pd.date_range(day(3) + pd.Timedelta(hours=9), periods=60, freq="1min", tz="UTC")
+    store.append("ticks", pd.DataFrame({"ts_utc": ticks_ts, "bid": 2400.0, "ask": 2400.25}), source="icm-demo", dedupe=False)
+    store.append("decisions", pd.DataFrame({"ts_utc": [NOW - pd.Timedelta(hours=3)] * 2, "account_id": "icm-demo",
+                                            "agent_id": "a", "action": "order", "p": None, "mult": None, "proposal_id": None,
+                                            "detail": [json.dumps({"ok": True, "retcode": 10009}),
+                                                       json.dumps({"ok": False, "retcode": 10004})]}),
+                 source="icm-demo", dedupe=False)
+    out, err = tools.call("read_execution_audit", {"account_id": "", "days": 30}, list(ROLES["execution_auditor"].tools))
+    assert not err
+    audit = json.loads(out)[0]
+    cells = {(r["session"], r["order_type"]): r for r in audit["slippage"]}
+    assert cells[("london", "market")]["drift"] and cells[("london", "market")]["recent_n"] == 15
+    assert not cells[("newyork", "market")]["drift"] and cells[("newyork", "market")]["table_from_prior"]
+    assert audit["spread"][0]["session"] == "london" and audit["spread"][0]["widened"]
+    assert audit["failed_orders"] == 1 and audit["orders"] == 2
+    assert audit["cost_table"]["age_h"] == 20.0
+    assert any("slippage drift london/market" in f for f in audit["flags"]) and len(audit["flags"]) == 3
+    out, err = tools.call("read_execution_audit", {"account_id": "../x", "days": 30}, ["read_execution_audit"])
+    assert err and "bad account id" in out

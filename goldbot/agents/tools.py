@@ -93,6 +93,12 @@ class ReadOnlyTools:
             "read_state": ("A state file the services write. name is one of: supervisor, scheduler, population, agents, "
                            "costs_<account>, classifier_<account>, engine_<account>.",
                            _schema({"name": {"type": "string"}}, ["name"]), self.read_state),
+            "read_execution_audit": ("Execution audit per account: slippage by session and order type over the window and "
+                                     "the last 7 days against the nightly cost table (drift flags), recent spreads against "
+                                     "the table, failed orders. Numbers are computed by code; explain them.",
+                                     _schema({"account_id": {"type": "string", "description": "account id, or empty for every engine"},
+                                              "days": {"type": "integer", "description": "window, 7-90"}},
+                                             ["account_id", "days"]), self.read_execution_audit),
             "read_shadow_stats": ("Shadow-book performance (n_trades, Sharpe, hit rate, drawdown, turnover) per model version.",
                                   _schema({}), self.read_shadow_stats),
             "read_research_registry": ("The last N trials in the research registry (config, rationale, results).",
@@ -164,6 +170,24 @@ class ReadOnlyTools:
         if not f.exists():
             return {"missing": name}
         return json.loads(f.read_text())
+
+    def read_execution_audit(self, account_id: str, days: int) -> list[dict[str, Any]]:
+        from goldbot.execution.audit import execution_audit
+        from goldbot.execution.costs import CostTable
+        if account_id and not account_id.replace("_", "").replace("-", "").isalnum():
+            raise ValueError("bad account id")
+        ids = [account_id] if account_id else sorted(f.stem.removeprefix("engine_") for f in self.state.glob("engine_*.json"))
+        since = self._since(max(int(days), 7))
+        out = []
+        for acc in ids:
+            try:
+                table = CostTable.load(self.state / f"costs_{acc}.json")
+            except ValueError:
+                table = None
+            out.append(execution_audit(acc, self.store.read("fills", source=acc, start=since),
+                                       self.store.read("ticks", source=acc, start=since), table,
+                                       self.store.read("decisions", source=acc, start=since), self.now()))
+        return out
 
     def read_shadow_stats(self) -> dict[str, Any]:
         return {f.stem.removeprefix("shadow_"): json.loads(f.read_text())

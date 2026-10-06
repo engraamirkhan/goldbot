@@ -45,6 +45,14 @@ ROLES: dict[str, Role] = {r.name: r for r in [
               "gate that blocked an entry in the last day (read_decisions, actions starting 'gate:'), concentration "
               "building up across accounts, and any divergence between shadow performance and backtest. Explain each "
               "tripped limit in one or two sentences."),
+    Role(name="execution_auditor", title="execution auditor", cadence="daily",
+         tools=("read_execution_audit", "read_state", "read_fills", "read_decisions"),
+         task="Write the daily execution audit for every account (read_execution_audit with an empty account id, "
+              "days 30): slippage by session and order type against the cost table, any drift flag and how large it is "
+              "in $/oz and in ATR terms if the engine state shows the ATR, spreads that widened, failed orders with "
+              "their retcodes, and whether the cost table is fresh. Compare the two brokers where both have fills. "
+              "Say plainly when there are too few fills to conclude anything; never call a cell drifting that the "
+              "audit did not flag."),
     Role(name="journal_coach", title="journal coach", cadence="weekly", tools=tuple(READ_ALL),
          task="Write the weekly trading journal review: what was proposed, approved, rejected (with reason codes) "
               "and expired over the last 7 days, outcomes of executed trades, whether the owner's vetoes added value "
