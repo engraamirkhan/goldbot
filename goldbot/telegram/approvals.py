@@ -12,11 +12,14 @@ from __future__ import annotations
 import hmac
 import time
 from enum import Enum
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from pydantic import Field
 
 from goldbot.base import Record
+
+if TYPE_CHECKING:
+    from goldbot.telegram.bus import ApprovalBus
 
 REASON_CODES = ("news", "cost", "discretion", "duplicate", "other")
 TOTP_COMMANDS = {"/rearm", "/mode", "/set"}
@@ -46,6 +49,7 @@ class Proposal(Record):
     outcome: Outcome | None = None
     reason_code: str | None = None
     decided_by: int | None = None
+    decided_via: str | None = None       # "telegram:<id>" | "dashboard:<email>" for decisions from the bus
 
     @property
     def expired(self) -> bool:
@@ -63,7 +67,7 @@ class Proposal(Record):
 
 class ApprovalCenter:
     def __init__(self, allowed_user_ids: set[int], totp_verify: Callable[[str], bool] | None = None,
-                 on_decision: Callable[[Proposal], None] | None = None):
+                 on_decision: Callable[[Proposal], None] | None = None, bus: ApprovalBus | None = None):
         self.allowed = set(allowed_user_ids)
         self.totp_verify = totp_verify or (lambda code: False)
         self.on_decision = on_decision or (lambda p: None)
@@ -71,11 +75,30 @@ class ApprovalCenter:
         self.log: list[Proposal] = []
         self.mode = "paper"
         self.halted = False
+        self.bus = bus                      # set in production: proposals and decisions cross process boundaries
 
     # ------------------------------------------------------------- proposals
     def propose(self, p: Proposal) -> Proposal:
         self.pending[p.proposal_id] = p
+        if self.bus is not None:
+            self.bus.publish(p)
         return p
+
+    def poll_bus(self) -> list[Proposal]:
+        """Apply decisions written to the bus by the dashboard or the Telegram service (already authenticated
+        there). A decision arriving after the window counts as expired, as it would in-process."""
+        if self.bus is None or not self.pending:
+            return []
+        done = []
+        for d in self.bus.decisions_for(set(self.pending)):
+            p = self.pending[d.proposal_id]
+            if p.expired:
+                done.append(self._finish(p, Outcome.EXPIRED))
+                continue
+            p.decided_via = d.by
+            p.reason_code = None if d.approve else d.reason_code
+            done.append(self._finish(p, Outcome.APPROVED if d.approve else Outcome.REJECTED))
+        return done
 
     def decide(self, proposal_id: str, user_id: int, approve: bool, reason_code: str | None = None) -> Proposal:
         if user_id not in self.allowed:
@@ -99,6 +122,8 @@ class ApprovalCenter:
         p.outcome = outcome
         self.pending.pop(p.proposal_id, None)
         self.log.append(p)
+        if self.bus is not None:
+            self.bus.archive(p)
         self.on_decision(p)
         return p
 

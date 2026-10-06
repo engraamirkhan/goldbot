@@ -38,6 +38,7 @@ from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
 from goldbot.risk.gate import Stage
+from goldbot.risk.supervisor import Supervisor
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 
@@ -72,6 +73,8 @@ class EngineConfig(Record):
     data_root: str | None = None         # when set, ticks and fills are logged to the store for the nightly cost job
     shadow_host: bool = False            # this engine runs the shadow book (one per deployment: the canonical-cost broker)
     tick_flush_s: int = 60               # market seconds between tick-log flushes
+    # production: block entries on the supervisor's halt (or a missing/stale heartbeat) and on the owner's halt
+    halt_checks: bool = False
 
 
 class _Frame(Record):
@@ -131,6 +134,7 @@ class Engine:
         """Feed a tick; returns any decisions made at a bar close."""
         self.ticks.append(t)
         self._log_tick(t)
+        self.center.poll_bus()          # approvals from the dashboard / Telegram service, applied within a tick
         if hasattr(self.broker, "on_tick"):
             self.broker.on_tick(t)  # paper broker fills
         sec = tf_seconds(self.cfg.decision_tf)
@@ -353,6 +357,9 @@ class Engine:
         st.open_positions = len(self.broker.positions())
         st.spread_points = (tick.ask - tick.bid) / 0.01
         st.last_tick_age_s = 0.0
+        if self.cfg.halt_checks:
+            st.supervisor_halt, _ = Supervisor.engine_should_halt(self.cfg.state_dir)
+            st.owner_halt = self.center.bus.control().halted if self.center.bus is not None else False
         self.gate.update_stage(st)
 
     def _regime(self, X: pd.DataFrame) -> Regime:
@@ -487,5 +494,6 @@ class Engine:
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
             "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
+            "approval_mode": self.cfg.approval_mode,
         }
         Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json").write_text(json.dumps(payload))

@@ -145,12 +145,22 @@ class Ok(BaseModel):
 
 
 class DecisionResult(BaseModel):
-    outcome: str
+    outcome: str                    # SUBMITTED: the engine applies it (and re-checks the RiskGate) on its next tick
+
+
+class HaltRequest(BaseModel):
+    reason: str | None = None
+
+
+class RearmRequest(BaseModel):
+    totp: str                       # a fresh authenticator code: re-arming needs a second factor (design)
 
 
 class Status(BaseModel):
     mode: str
     halted: bool
+    halted_by: str | None = None
+    halt_reason: str | None = None
     pending: int
     supervisor: dict[str, Any]
 

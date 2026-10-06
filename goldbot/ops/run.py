@@ -5,6 +5,7 @@
   python -m goldbot.ops.run api
   python -m goldbot.ops.run webhook
   python -m goldbot.ops.run scheduler
+  python -m goldbot.ops.run telegram
 """
 from __future__ import annotations
 
@@ -43,6 +44,7 @@ def run_engine(account_id: str) -> None:
     from goldbot.research.model_registry import ModelRegistry
     from goldbot.research.population import Population
     from goldbot.telegram.approvals import ApprovalCenter
+    from goldbot.telegram.bus import ApprovalBus
     acc = accounts.load_accounts()[account_id]
     settings = load_settings()
     if acc.is_live and acc not in accounts.enabled_accounts("live"):
@@ -56,7 +58,8 @@ def run_engine(account_id: str) -> None:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
         log.warning("not on Windows: running %s against the paper broker", account_id)
-    center = ApprovalCenter(set(settings.telegram.allowed_user_ids))
+    # proposals go to the approval bus in state/; the dashboard and the Telegram service decide through it
+    center = ApprovalCenter(set(settings.telegram.allowed_user_ids), bus=ApprovalBus("state"))
     registry_file = Path(settings.research.models_dir) / "registry.json"
 
     population_file = Path("state") / "population.json"
@@ -81,7 +84,7 @@ def run_engine(account_id: str) -> None:
     agents, live_shares = population_view()
     eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, approval_mode="propose", symbol=acc.symbol,
                               magic_base=acc.magic_base, state_dir="state", data_root=settings.data_root,
-                              shadow_host=shadow_host), broker, agents,
+                              shadow_host=shadow_host, halt_checks=True), broker, agents,
                  champions(), center, shadow_models=shadow_set() if shadow_host else None, live_shares=live_shares)
     warm = eng.warm_start(pd.Timestamp.now("UTC"))
     log.info("engine %s started (%s), models: %s, %d 1m bars of history", account_id, type(broker).__name__,
@@ -182,6 +185,19 @@ def run_scheduler() -> None:
     sch.run_forever()
 
 
+def run_telegram() -> None:
+    from goldbot.config import load_settings
+    from goldbot.ops import accounts
+    from goldbot.telegram.bot import TelegramBot
+    settings = load_settings()
+    token = accounts.get_secret("telegram-bot-token")
+    if not token:
+        raise SystemExit("no telegram-bot-token in the keyring: python -m goldbot.ops.accounts set telegram-bot-token")
+    if not settings.telegram.allowed_user_ids:
+        raise SystemExit("settings.yaml telegram.allowed_user_ids is empty: add your Telegram user id")
+    TelegramBot(token, "state", set(settings.telegram.allowed_user_ids)).run()
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "supervisor":
@@ -194,6 +210,8 @@ if __name__ == "__main__":
         run_webhook()
     elif cmd == "scheduler":
         run_scheduler()
+    elif cmd == "telegram":
+        run_telegram()
     else:
         print(__doc__)
         sys.exit(1)

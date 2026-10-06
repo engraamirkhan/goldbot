@@ -1,8 +1,8 @@
 """FastAPI backend: typed REST for the React dashboard + WebSocket for live updates. Single owner auth
 (bearer session token issued after passkey/TOTP login; TOTP path implemented, passkey later).
 
-Routers read from the store and engine state files; writes are limited to approvals, mode and halt,
-which are forwarded to the ApprovalCenter. The React app is served from web/dist when present.
+Routers read from the store and engine state files; writes are limited to approval decisions and the owner halt,
+which go through the approval bus in the state directory (the engines are separate processes). The React app is served from web/dist when present.
 """
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
-from goldbot.api.auth import AuthStore, User, env_setup_code_hint, has_role
+from goldbot.api.auth import AuthStore, User, env_setup_code_hint, has_role, totp_verify
 from goldbot.api.schema import (
     AcceptRequest,
     AcceptResponse,
@@ -30,6 +30,7 @@ from goldbot.api.schema import (
     Decision,
     DecisionResult,
     FeedHealth,
+    HaltRequest,
     InviteRequest,
     InviteResponse,
     JobRow,
@@ -38,6 +39,7 @@ from goldbot.api.schema import (
     Me,
     Ok,
     Proposal,
+    RearmRequest,
     Role,
     RoleChange,
     SetupRequest,
@@ -46,16 +48,15 @@ from goldbot.api.schema import (
     UserRef,
     UserRow,
 )
-from goldbot.telegram.approvals import ApprovalCenter
-from goldbot.telegram.approvals import Proposal as CoreProposal
+from goldbot.telegram.bus import ApprovalBus
 
 bearer = HTTPBearer(auto_error=False)
 
 
 class State:
-    def __init__(self, state_dir: str | Path, center: ApprovalCenter):
+    def __init__(self, state_dir: str | Path):
         self.dir = Path(state_dir)
-        self.center = center
+        self.bus = ApprovalBus(self.dir)
         self.auth = AuthStore(self.dir)
         self.ws_clients: set[WebSocket] = set()
 
@@ -112,10 +113,8 @@ class State:
             self.ws_clients.discard(ws)
 
 
-def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = None,
-               totp_verify: Callable[[str], bool] | None = None, web_dist: str | Path = "web/dist") -> FastAPI:
-    center = center or ApprovalCenter(set(), totp_verify=totp_verify)
-    st = State(state_dir, center)
+def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist") -> FastAPI:
+    st = State(state_dir)
     app = FastAPI(title="goldbot api", version="0.2")
     app.state.st = st
     hint = env_setup_code_hint(st.auth)
@@ -217,7 +216,7 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
     @app.get("/api/proposals", response_model=list[Proposal])
     def proposals(_: User = Depends(auth)) -> list[Proposal]:
         out = []
-        for p in center.pending.values():
+        for p in st.bus.pending():
             out.append(Proposal(proposal_id=p.proposal_id, account_id=p.account_id, agent_id=p.agent_id,
                                 side="long" if p.side > 0 else "short", lots=p.lots, entry=p.entry, stop=p.stop, target=p.target,
                                 p=p.p, ev_r=p.ev_r, spread_points=p.spread_points, top_features=p.top_features,
@@ -226,15 +225,31 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
 
     @app.post("/api/decisions")
     async def decide(d: Decision, u: User = Depends(need("approver"))) -> DecisionResult:
-        actor = next(iter(center.allowed), 0)   # the center's owner slot; the dashboard user is recorded in audit
         try:
-            p = center.decide(d.proposal_id, actor, d.action == "approve", d.reason_code)
-        except (KeyError, ValueError, PermissionError) as exc:
-            raise HTTPException(400, str(exc))
-        outcome = p.outcome.value if p.outcome is not None else "PENDING"
-        st.auth.audit("decision", by=u.email, proposal=p.proposal_id, outcome=outcome, reason=p.reason_code)
-        await st.broadcast({"type": "decision", "proposal_id": p.proposal_id, "outcome": outcome})
-        return DecisionResult(outcome=outcome)
+            st.bus.submit(d.proposal_id, d.action == "approve", d.reason_code, by=f"dashboard:{u.email}")
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(400, str(exc).strip("'\""))
+        st.auth.audit("decision", by=u.email, proposal=d.proposal_id, action=d.action, reason=d.reason_code)
+        await st.broadcast({"type": "decision", "proposal_id": d.proposal_id, "action": d.action})
+        return DecisionResult(outcome="SUBMITTED")
+
+    @app.post("/api/halt")
+    async def halt(body: HaltRequest, u: User = Depends(need("approver"))) -> Status:
+        # stopping new entries needs no second factor (design); exits and open positions are untouched
+        st.bus.set_halt(True, by=f"dashboard:{u.email}", reason=body.reason)
+        st.auth.audit("halt", by=u.email, reason=body.reason)
+        await st.broadcast({"type": "halt", "halted": True})
+        return status()
+
+    @app.post("/api/rearm")
+    async def rearm(body: RearmRequest, u: User = Depends(need("owner"))) -> Status:
+        if not totp_verify(u.totp_secret, body.totp):
+            st.auth.audit("rearm_failed", by=u.email)
+            raise HTTPException(403, "authenticator code required to re-arm")
+        st.bus.set_halt(False, by=f"dashboard:{u.email}")
+        st.auth.audit("rearm", by=u.email)
+        await st.broadcast({"type": "halt", "halted": False})
+        return status()
 
     @app.get("/api/agents", response_model=list[AgentRow])
     def agents(_: User = Depends(auth)) -> list[AgentRow]:
@@ -267,7 +282,10 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
 
     @app.get("/api/status")
     def status() -> Status:
-        return Status(mode=center.mode, halted=center.halted, pending=len(center.pending), supervisor=st.supervisor())
+        modes = sorted({str(e.get("approval_mode", "propose")) for e in st.engines()})
+        c = st.bus.control()
+        return Status(mode=",".join(modes) or "propose", halted=c.halted, halted_by=c.by if c.halted else None,
+                      halt_reason=c.reason if c.halted else None, pending=len(st.bus.pending()), supervisor=st.supervisor())
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
@@ -290,10 +308,6 @@ def create_app(state_dir: str | Path = "state", center: ApprovalCenter | None = 
             return FileResponse(f if f.is_file() else dist / "index.html")
 
     return app
-
-
-def make_core_proposal(**kw: Any) -> CoreProposal:  # helper for engines/tests
-    return CoreProposal(**kw)
 
 
 if __name__ == "__main__":  # pragma: no cover

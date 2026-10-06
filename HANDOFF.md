@@ -50,7 +50,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
   (`settings.yaml: agents`), every run logged to `state/agent_runs.jsonl`; reports appear on the Agents screen.
   The research analyst (Saturdays, after the improvement agent) turns filed hypotheses into at most two bounded
   walk-forward trials per run (`run_trial`: numeric overrides within +-50% of the defaults, recorded in the trial
-  registry) and records a verdict on each hypothesis; it promotes nothing.
+  registry) and records a verdict on each hypothesis; it promotes nothing. The execution auditor (weekday nights)
+  explains `execution/audit.py`'s numbers: slippage per session/order type against the nightly cost table with drift
+  flags, widened spreads, failed orders.
+- Approvals across processes (`telegram/bus.py`): engines, the API and the Telegram service are separate services,
+  so engines publish proposals to `state/approvals/pending/`, the dashboard or Telegram writes a decision file
+  (created exclusively: first decision wins), and the engine applies it on its next tick, re-running the RiskGate,
+  then archives it in `approvals/done/` with the outcome. Owner halt: `state/control.json`, set by Telegram `/halt`
+  or the dashboard (any approver); re-arm only on the dashboard by the owner with an authenticator code. Engines in
+  production (`halt_checks`) also block entries when the supervisor's heartbeat is missing or stale. Exits are
+  never gated.
+- Telegram service (`python -m goldbot.ops.run telegram`, NSSM `goldbot-telegram`): sends proposals with
+  Approve/Reject buttons, posts each outcome, delivers every staff-agent report, answers /status and /halt
+  (`telegram/outbox.py` keeps progress across restarts).
 - One trial registry (`research/registry_sync.py`): the VPS monthly loop and the research workflow both union their
   registry with the `research-v1` release copy before and after writing, so the deflated Sharpe counts every trial once.
 - Multi-timeframe: research, retrains, the dry run and the engine all build context with `features.mtf.context_tfs`
@@ -65,11 +77,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
    unit mismatch (release Parquet us vs resampled ns) in the multi-timeframe merge; fixed on this branch (both
    as-of merges normalise to ns). Re-dispatch research.yml for every family once the branch is on main; until a
    model passes the gates there is no champion, so the engine proposes nothing (by design).
-2. Macro/news analyst and execution auditor roles; Telegram delivery of the agents' reports.
+2. Macro/news analyst: needs the economic-calendar archiver (Forex Factory weekly feed) and the headline collector
+   (RSS + GDELT, scored into the design's fixed schema) first, both on the VPS (market/news hosts are blocked from
+   Claude sandboxes); then the role writes the pre-session briefing from them, and tier-1 events drive the
+   RiskGate's news blackout (`AccountState.in_blackout` is not set by anything yet).
 3. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals
    once and answer the credential prompts; create the Cloudflare tunnel and enter its token on the VPS; store a
-   GitHub token with `python -m goldbot.ops.accounts set github-token` (bar sync + shared trial registry) and an
-   Anthropic API key with `python -m goldbot.ops.accounts set anthropic-api-key` (staff agents; off without it).
+   GitHub token with `python -m goldbot.ops.accounts set github-token` (bar sync + shared trial registry), an
+   Anthropic API key with `python -m goldbot.ops.accounts set anthropic-api-key` (staff agents; off without it) and
+   the Telegram bot token with `python -m goldbot.ops.accounts set telegram-bot-token` (from @BotFather), and put
+   your Telegram user id in `settings.yaml: telegram.allowed_user_ids`.
 4. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
 5. Dispatch research.yml for `trend`, `mean_reversion` and `breakout` once this branch is on main, and read their
    issues; the population seeds a founder per family automatically (shadow first, like every agent).

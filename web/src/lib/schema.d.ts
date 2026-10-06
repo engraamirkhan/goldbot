@@ -191,6 +191,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/halt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Halt */
+        post: operations["halt_api_halt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs": {
         parameters: {
             query?: never;
@@ -236,6 +253,23 @@ export interface paths {
         get: operations["proposals_api_proposals_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/rearm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rearm */
+        post: operations["rearm_api_rearm_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -461,6 +495,11 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HaltRequest */
+        HaltRequest: {
+            /** Reason */
+            reason?: string | null;
+        };
         /** InviteRequest */
         InviteRequest: {
             /** Email */
@@ -593,6 +632,11 @@ export interface components {
             /** Tradingview Url */
             tradingview_url?: string | null;
         };
+        /** RearmRequest */
+        RearmRequest: {
+            /** Totp */
+            totp: string;
+        };
         /** RoleChange */
         RoleChange: {
             /** Email */
@@ -617,8 +661,12 @@ export interface components {
         };
         /** Status */
         Status: {
+            /** Halt Reason */
+            halt_reason?: string | null;
             /** Halted */
             halted: boolean;
+            /** Halted By */
+            halted_by?: string | null;
             /** Mode */
             mode: string;
             /** Pending */
@@ -959,6 +1007,39 @@ export interface operations {
             };
         };
     };
+    halt_api_halt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HaltRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Status"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     jobs_api_jobs_get: {
         parameters: {
             query?: never;
@@ -1015,6 +1096,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Proposal"][];
+                };
+            };
+        };
+    };
+    rearm_api_rearm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RearmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Status"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

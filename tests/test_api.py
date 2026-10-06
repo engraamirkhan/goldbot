@@ -7,7 +7,8 @@ from fastapi.testclient import TestClient
 from goldbot.api.app import create_app
 from goldbot.api.auth import totp_code
 from goldbot.ops.scheduler import Schedule, Scheduler
-from goldbot.telegram.approvals import ApprovalCenter, Proposal
+from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
+from goldbot.telegram.bus import ApprovalBus
 
 pytestmark = pytest.mark.integration
 
@@ -21,10 +22,10 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
         "account": "icm-demo", "broker": "icm", "mode": "demo", "equity": 9900, "day_start_equity": 10000,
         "week_start_equity": 10000, "balance_closed_hwm": 10000, "stage": "normal", "open_positions": 1,
         "account_class": "raw", "last_tick_age_s": 0.4, "spread_points": 21, "terminal_connected": True, "ts": 0}))
-    center = ApprovalCenter({111})
-    center.propose(Proposal(proposal_id="p1", account_id="icm-demo", agent_id="session_open-g0-x", side=1, lots=0.12, entry=2400, stop=2396, target=2406, p=0.61, ev_r=0.35, spread_points=22, top_features=[("a", 0.1)]))
-    center.propose(Proposal(proposal_id="p2", account_id="icm-demo", agent_id="session_open-g0-x", side=-1, lots=0.10, entry=2400, stop=2404, target=2394, p=0.58, ev_r=0.20, spread_points=22, top_features=[("a", 0.1)]))
-    app = create_app(tmp_path, center, web_dist=tmp_path / "nodist")
+    bus = ApprovalBus(tmp_path)                       # an engine (separate process) published two proposals
+    bus.publish(Proposal(proposal_id="p1", account_id="icm-demo", agent_id="session_open-g0-x", side=1, lots=0.12, entry=2400, stop=2396, target=2406, p=0.61, ev_r=0.35, spread_points=22, top_features=[("a", 0.1)]))
+    bus.publish(Proposal(proposal_id="p2", account_id="icm-demo", agent_id="session_open-g0-x", side=-1, lots=0.10, entry=2400, stop=2404, target=2394, p=0.58, ev_r=0.20, spread_points=22, top_features=[("a", 0.1)]))
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
     c = TestClient(app)
     st = app.state.st
 
@@ -59,8 +60,24 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
     assert c.get("/api/users", headers=viewer).status_code == 403
     # approver decides; rejection needs a reason code
     assert c.post("/api/decisions", json={"proposal_id": "p1", "action": "reject"}, headers=approver).status_code == 400
-    assert c.post("/api/decisions", json={"proposal_id": "p1", "action": "reject", "reason_code": "cost"}, headers=approver).json()["outcome"] == "REJECTED"
-    assert c.post("/api/decisions", json={"proposal_id": "p2", "action": "approve"}, headers=approver).json()["outcome"] == "APPROVED"
+    assert c.post("/api/decisions", json={"proposal_id": "p1", "action": "reject", "reason_code": "cost"}, headers=approver).json()["outcome"] == "SUBMITTED"
+    assert c.post("/api/decisions", json={"proposal_id": "p2", "action": "approve"}, headers=approver).json()["outcome"] == "SUBMITTED"
+    assert c.post("/api/decisions", json={"proposal_id": "p2", "action": "approve"}, headers=owner).status_code == 400  # first wins
+    assert c.get("/api/proposals", headers=viewer).json() == []
+    # the engine picks the decisions up on its next tick and archives them with the outcome
+    engine = ApprovalCenter({111}, bus=ApprovalBus(tmp_path))
+    engine.pending = {p.proposal_id: p for p in (Proposal.model_validate_json((tmp_path / "approvals" / "pending" / f"{i}.json").read_text())
+                                                 for i in ("p1", "p2"))}
+    done = {p.proposal_id: p for p in engine.poll_bus()}
+    assert done["p1"].outcome == Outcome.REJECTED and done["p1"].reason_code == "cost" and done["p1"].decided_via == "dashboard:partner@x.io"
+    assert done["p2"].outcome == Outcome.APPROVED and bus.outcome("p2") == "APPROVED"
+    # halt: an approver may stop new entries; re-arming needs the owner and an authenticator code
+    assert c.post("/api/halt", json={"reason": "fomc surprise"}, headers=viewer).status_code == 403
+    assert c.post("/api/halt", json={"reason": "fomc surprise"}, headers=approver).json()["halted"] is True
+    assert bus.control().halted and c.get("/api/status").json()["halted_by"] == "dashboard:partner@x.io"
+    assert c.post("/api/rearm", json={"totp": totp_code(owner_secret)}, headers=approver).status_code == 403
+    assert c.post("/api/rearm", json={"totp": "000000"}, headers=owner).status_code == 403
+    assert c.post("/api/rearm", json={"totp": totp_code(owner_secret)}, headers=owner).json()["halted"] is False
     # owner administers
     users = c.get("/api/users", headers=owner).json()
     assert {u["email"] for u in users} == {"aamir@x.io", "friend@x.io", "partner@x.io"}
@@ -69,12 +86,13 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
     assert c.post("/api/users/role", json={"email": "aamir@x.io", "role": "viewer"}, headers=owner).status_code == 400  # last owner
     # audit trail written
     events = [json.loads(line)["event"] for line in (tmp_path / "audit.jsonl").read_text().splitlines()]
-    assert {"bootstrap_owner", "login", "login_failed", "invite", "accept_invite", "decision", "disable"} <= set(events)
+    assert {"bootstrap_owner", "login", "login_failed", "invite", "accept_invite", "decision", "disable", "halt", "rearm",
+            "rearm_failed"} <= set(events)
     assert c.get("/api/status").json()["pending"] == 0
 
 
 def test_lockout_after_five_failures(tmp_path):
-    app = create_app(tmp_path, ApprovalCenter({111}), web_dist=tmp_path / "nodist")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
     c = TestClient(app)
     st = app.state.st
     c.post("/api/auth/setup", json={"setup_code": st.auth.setup_code, "email": "o@x.io", "password": "a long password here"})

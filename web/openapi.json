@@ -371,6 +371,23 @@
     "title": "HTTPValidationError",
     "type": "object"
    },
+   "HaltRequest": {
+    "properties": {
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     }
+    },
+    "title": "HaltRequest",
+    "type": "object"
+   },
    "InviteRequest": {
     "properties": {
      "email": {
@@ -694,6 +711,19 @@
     "title": "Proposal",
     "type": "object"
    },
+   "RearmRequest": {
+    "properties": {
+     "totp": {
+      "title": "Totp",
+      "type": "string"
+     }
+    },
+    "required": [
+     "totp"
+    ],
+    "title": "RearmRequest",
+    "type": "object"
+   },
    "RoleChange": {
     "properties": {
      "email": {
@@ -742,9 +772,31 @@
    },
    "Status": {
     "properties": {
+     "halt_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Halt Reason"
+     },
      "halted": {
       "title": "Halted",
       "type": "boolean"
+     },
+     "halted_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Halted By"
      },
      "mode": {
       "title": "Mode",
@@ -1238,6 +1290,49 @@
     "summary": "Feeds"
    }
   },
+  "/api/halt": {
+   "post": {
+    "operationId": "halt_api_halt_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/HaltRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Status"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Halt"
+   }
+  },
   "/api/jobs": {
    "get": {
     "operationId": "jobs_api_jobs_get",
@@ -1313,6 +1408,49 @@
      }
     ],
     "summary": "Proposals"
+   }
+  },
+  "/api/rearm": {
+   "post": {
+    "operationId": "rearm_api_rearm_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RearmRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Status"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Rearm"
    }
   },
   "/api/status": {
