@@ -105,6 +105,38 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
     return "\n".join(lines)
 
 
+def parse_variants(family: str, raw: str) -> list[dict[str, Any]]:
+    """`--variants` JSON: a list of config overrides, one trial each ([{}] = the family's defaults). Keys must be
+    settings of the family (or timeframe / feature_seed); a typo must not silently run the defaults."""
+    from goldbot.specialists.base import FEATURE_SEED_KEY, TIMEFRAME_KEY
+    variants = json.loads(raw)
+    if isinstance(variants, dict):
+        variants = [variants]
+    if not isinstance(variants, list) or not variants or not all(isinstance(v, dict) for v in variants):
+        raise SystemExit("--variants must be a JSON list of objects, e.g. '[{}, {\"band_z\": 1.5}]'")
+    allowed = set(SPECIALISTS[family].default_config) | {TIMEFRAME_KEY, FEATURE_SEED_KEY}
+    for v in variants:
+        bad = sorted(set(v) - allowed)
+        if bad:
+            raise SystemExit(f"unknown {family} settings {bad}; allowed: {sorted(allowed)}")
+        try:
+            SPECIALISTS[family](**v)         # rejects e.g. a timeframe the family cannot run on
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from None
+    return variants
+
+
+def summary_table(rows: list[dict[str, Any]]) -> str:
+    out = ["| trial | overrides | candidates | OOF AUC | model n | model hit | model PF | DSR |",
+           "|---:|---|---:|---:|---:|---:|---:|---:|"]
+    for r in rows:
+        mf = r["metrics"].get("model_filtered") or {}
+        out.append(f"| {r['trial']} | `{json.dumps(r['overrides']) if r['overrides'] else 'defaults'}` | {r['n']:,} | "
+                   f"{_fmt(r['metrics'].get('oof_auc'))} | {mf.get('n', 0)} | {_fmt(mf.get('hit_rate', float('nan')))} | "
+                   f"{_fmt(mf.get('profit_factor', float('nan')))} | {_fmt(mf.get('dsr', float('nan')))} |")
+    return "\n".join(out)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bars", default="raw")
@@ -114,46 +146,62 @@ def main() -> int:
     ap.add_argument("--from-year", type=int, default=2010)
     ap.add_argument("--to-year", type=int, default=2100)
     ap.add_argument("--rationale", default="baseline walk-forward on Dukascopy 1m bars")
+    ap.add_argument("--variants", default="[{}]", help="JSON list of config overrides; each is one recorded trial")
     args = ap.parse_args()
+    variants = parse_variants(args.specialist, args.variants)
     t0 = time.time()
     b1 = load_bars(Path(args.bars), args.from_year, args.to_year)
     years_span = (b1["ts_utc"].iloc[-1] - b1["ts_utc"].iloc[0]).days / 365.25
     zero_volume = float((b1["tick_count"].astype(float) <= 0).mean())
     print(f"1m bars: {len(b1):,} ({b1['ts_utc'].iloc[0]:%Y-%m-%d} -> {b1['ts_utc'].iloc[-1]:%Y-%m-%d}), "
           f"zero tick volume in {zero_volume:.1%}", flush=True)
-    spec = SPECIALISTS[args.specialist]()
-    tf = spec.timeframe
-    b_dec = resample_bars(b1, tf)
-    context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
-    sizes = "  ".join(f"{k} {len(v):,}" for k, v in context.items())
-    print(f"{tf} {len(b_dec):,}  {sizes}  [{time.time() - t0:.0f}s]", flush=True)
-
+    frames: dict[str, tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, Any]]] = {}
     reg = TrialRegistry(args.registry)
-    n_trials = reg.n_trials + 1
-    res = run_specialist(spec, b_dec, context=context, n_trials=n_trials)
-    trades_per_year = res.n_candidates / years_span if years_span > 0 else 0.0
-    if "threshold" in res.metrics and trades_per_year > 0:
-        # annualise by the candidate rate actually observed, not the pipeline's default guess
-        scored = res.oof.dropna(subset=["p_raw"])
-        taken = scored[scored["p"] > res.metrics["threshold"]]
-        res.metrics["all_candidates"] = summarize(scored, trades_per_year, n_trials)
-        res.metrics["model_filtered"] = summarize(taken, trades_per_year * len(taken) / max(len(scored), 1), n_trials)
-    print(f"candidates {res.n_candidates}  folds {res.n_folds}  [{time.time() - t0:.0f}s]", flush=True)
-
-    leak = lookahead_check(b_dec, context)
-    print(f"lookahead check: {len(leak['lookahead_columns'])} of {leak['columns_checked']} columns differ "
-          f"[{time.time() - t0:.0f}s]", flush=True)
-    results = {**res.metrics, "lookahead": leak, "trades_per_year": trades_per_year,
-               "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1])}
-    row = reg.record(agent_id=res.agent_id, family=spec.family, config=spec.config, feature_version=res.feature_version,
-                     rationale=args.rationale, results=results, status="evaluated")
-    years = per_year(res.oof, res.metrics.get("threshold"))
-    meta = {"specialist": args.specialist, "from_year": int(b1["ts_utc"].iloc[0].year), "to_year": int(b1["ts_utc"].iloc[-1].year),
-            "n_1m": len(b1), "n_dec": len(b_dec), "tf": tf, "zero_volume": zero_volume, "trial": row["trial"], "seconds": time.time() - t0}
-    report = render_report(res, years, leak, meta)
+    sections, rows = [], []
+    for overrides in variants:
+        spec = SPECIALISTS[args.specialist](**overrides)
+        tf = spec.timeframe
+        if tf not in frames:                       # bars, context and the lookahead check once per timeframe
+            b_dec = resample_bars(b1, tf)
+            context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
+            leak = lookahead_check(b_dec, context)
+            frames[tf] = (b_dec, context, leak)
+            sizes = "  ".join(f"{k} {len(v):,}" for k, v in context.items())
+            print(f"{tf} {len(b_dec):,}  {sizes}; lookahead check: {len(leak['lookahead_columns'])} of "
+                  f"{leak['columns_checked']} columns differ [{time.time() - t0:.0f}s]", flush=True)
+        b_dec, context, leak = frames[tf]
+        n_trials = reg.n_trials + 1
+        res = run_specialist(spec, b_dec, context=context, n_trials=n_trials)
+        trades_per_year = res.n_candidates / years_span if years_span > 0 else 0.0
+        if "threshold" in res.metrics and trades_per_year > 0:
+            # annualise by the candidate rate actually observed, not the pipeline's default guess
+            scored = res.oof.dropna(subset=["p_raw"])
+            taken = scored[scored["p"] > res.metrics["threshold"]]
+            res.metrics["all_candidates"] = summarize(scored, trades_per_year, n_trials)
+            res.metrics["model_filtered"] = summarize(taken, trades_per_year * len(taken) / max(len(scored), 1), n_trials)
+        print(f"{json.dumps(overrides) or 'defaults'}: candidates {res.n_candidates}  folds {res.n_folds}  "
+              f"[{time.time() - t0:.0f}s]", flush=True)
+        results = {**res.metrics, "lookahead": leak, "trades_per_year": trades_per_year,
+                   "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1])}
+        rationale = args.rationale + (f" | overrides {json.dumps(overrides, sort_keys=True)}" if overrides else "")
+        row = reg.record(agent_id=res.agent_id, family=spec.family, config=spec.config, feature_version=res.feature_version,
+                         rationale=rationale, results=results, status="evaluated")
+        years = per_year(res.oof, res.metrics.get("threshold"))
+        meta = {"specialist": args.specialist, "from_year": int(b1["ts_utc"].iloc[0].year),
+                "to_year": int(b1["ts_utc"].iloc[-1].year), "n_1m": len(b1), "n_dec": len(b_dec), "tf": tf,
+                "zero_volume": zero_volume, "trial": row["trial"], "seconds": time.time() - t0}
+        text = render_report(res, years, leak, meta)
+        if overrides:
+            text = text.replace("\n\n", f"\n\n- config overrides: `{json.dumps(overrides, sort_keys=True)}`\n", 1)
+        sections.append(text)
+        rows.append({"trial": row["trial"], "overrides": overrides, "n": res.n_candidates, "metrics": res.metrics})
+        print(json.dumps({"trial": row["trial"], "agent_id": res.agent_id}), flush=True)
+    head = [] if len(rows) == 1 else [f"## {args.specialist}: {len(rows)} variants", "", summary_table(rows), "",
+                                      "Each variant is one recorded trial; the deflated SR of every later trial counts "
+                                      "them all.", ""]
+    report = "\n".join(head) + "\n\n".join(sections)
     Path(args.report).write_text(report)
     print(report)
-    print(json.dumps({"trial": row["trial"], "agent_id": res.agent_id}), flush=True)
     return 0
 
 
