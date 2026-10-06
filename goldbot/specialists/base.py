@@ -42,15 +42,25 @@ class Candidate(Record):
     side: int
 
 
+# config keys that are not trigger/barrier parameters: a clone may carry them (population mutations)
+TIMEFRAME_KEY = "timeframe"          # decision timeframe override, one of the family's `timeframes`
+FEATURE_SEED_KEY = "feature_seed"    # model trains on a seeded random subset of the eligible features (<= 40)
+
+
 class Specialist(ABC):
     family: str = "abstract"
     timeframe: str = "15m"
+    timeframes: tuple[str, ...] = ()     # other decision timeframes a clone may move to (empty: fixed)
     default_config: dict[str, Any] = {}
 
     def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
         cfg = {**self.default_config, **overrides}
         self.identity = identity or AgentIdentity(family=self.family, config=cfg)
         self.config = {**self.default_config, **self.identity.config}
+        tf = self.config.get(TIMEFRAME_KEY, type(self).timeframe)
+        if tf != type(self).timeframe and tf not in self.timeframes:
+            raise ValueError(f"{self.family} does not run on {tf}; allowed: {(type(self).timeframe, *self.timeframes)}")
+        self.timeframe = tf
 
     @property
     def agent_id(self) -> str:

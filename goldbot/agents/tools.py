@@ -99,6 +99,18 @@ class ReadOnlyTools:
                                      _schema({"account_id": {"type": "string", "description": "account id, or empty for every engine"},
                                               "days": {"type": "integer", "description": "window, 7-90"}},
                                              ["account_id", "days"]), self.read_execution_audit),
+            "read_calendar": ("Economic calendar from the archived Forex Factory feed: events from 6 hours ago to N days "
+                              "ahead with tier (1 = blackout list: US CPI, NFP, FOMC, PCE; 2 = other high-impact USD; "
+                              "3 = rest), forecast, previous, and each tier-1 event's entry-blackout window.",
+                              _schema({"days_ahead": {"type": "integer", "description": "1-14"},
+                                       "max_tier": {"type": "integer", "description": "1-3; 2 skips minor events"}},
+                                      ["days_ahead", "max_tier"]), self.read_calendar),
+            "read_headlines": ("Scored news headlines received in the last N hours (relevance to gold 0-1, rates/risk/"
+                               "dollar direction, surprise, unscheduled-shock flag), newest first; unscored items have "
+                               "relevance null.",
+                               _schema({"hours": {"type": "integer", "description": "1-72"},
+                                        "min_relevance": {"type": "number", "description": "0-1; 0 includes unscored"}},
+                                       ["hours", "min_relevance"]), self.read_headlines),
             "read_shadow_stats": ("Shadow-book performance (n_trades, Sharpe, hit rate, drawdown, turnover) per model version.",
                                   _schema({}), self.read_shadow_stats),
             "read_research_registry": ("The last N trials in the research registry (config, rationale, results).",
@@ -188,6 +200,41 @@ class ReadOnlyTools:
                                        self.store.read("ticks", source=acc, start=since), table,
                                        self.store.read("decisions", source=acc, start=since), self.now()))
         return out
+
+    def read_calendar(self, days_ahead: int, max_tier: int) -> dict[str, Any]:
+        from goldbot.config import load_settings
+        now = self.now()
+        days = min(max(int(days_ahead), 1), 14)
+        df = self.store.read("calendar_events", start=now - pd.Timedelta(hours=6), end=now + pd.Timedelta(days=days))
+        b = load_settings().risk.blackout
+        if df.empty:
+            return {"now": now.isoformat(), "events": [], "note": "no calendar archived for this window "
+                    "(scheduler job calendar_archive)"}
+        df = df[df["tier"] <= min(max(int(max_tier), 1), 3)].sort_values("ts_utc")
+        events: list[dict[str, Any]] = []
+        for r in df.to_dict("records"):
+            t = pd.Timestamp(str(r["ts_utc"]))
+            e: dict[str, Any] = {"ts_utc": t.isoformat(), "country": r["country"], "title": r["title"],
+                                 "tier": int(str(r["tier"])), "impact": r["impact"], "forecast": r["forecast"],
+                                 "previous": r["previous"]}
+            if e["tier"] == 1:
+                e["blackout_utc"] = [(t - pd.Timedelta(minutes=b.before_min)).isoformat(),
+                                     (t + pd.Timedelta(minutes=b.after_min)).isoformat()]
+            events.append(e)
+        return {"now": now.isoformat(), "events": events}
+
+    def read_headlines(self, hours: int, min_relevance: float) -> list[dict[str, Any]]:
+        now = self.now()
+        df = self.store.read("news", start=now - pd.Timedelta(hours=min(max(int(hours), 1), 72)), end=now)
+        if df.empty:
+            return []
+        rel = df["relevance"].astype(float)
+        if float(min_relevance) > 0:
+            df = df[rel >= float(min_relevance)]
+        cols = ["received_utc", "source", "title", "relevance", "rates", "risk", "dollar", "surprise", "shock"]
+        df = df.sort_values("received_utc", ascending=False).head(100)
+        return [{str(k): (None if isinstance(v, float) and v != v else v) for k, v in r.items()}
+                for r in df[cols].to_dict("records")]
 
     def read_shadow_stats(self) -> dict[str, Any]:
         return {f.stem.removeprefix("shadow_"): json.loads(f.read_text())

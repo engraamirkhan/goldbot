@@ -25,6 +25,8 @@ from goldbot.allocator import Regime, RuleAllocator
 from goldbot.base import Record
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
+from goldbot.data.econ_calendar import blackout_window
+from goldbot.data.news import shock_window
 from goldbot.data.resample import BAR_COLUMNS, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import feature_day, floor_tf
@@ -75,6 +77,12 @@ class EngineConfig(Record):
     tick_flush_s: int = 60               # market seconds between tick-log flushes
     # production: block entries on the supervisor's halt (or a missing/stale heartbeat) and on the owner's halt
     halt_checks: bool = False
+    # production: block entries around tier-1 events from the archived calendar (store table calendar_events)
+    news_blackout: bool = False
+    blackout_before_min: int = 15
+    blackout_after_min: int = 30
+    shock_blackout_min: int = 30             # after a high-relevance unscheduled news shock (store table news)
+    shock_min_relevance: float = 0.7
 
 
 class _Frame(Record):
@@ -122,6 +130,9 @@ class Engine:
         self._journaled = 0                  # decisions already written to the store's journal
         self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)
         self._ctx_cache: dict[str, tuple[pd.Timestamp, tuple[pd.DataFrame, pd.DataFrame] | None]] = {}
+        self._calendar: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
+        self._blackout_event: dict | None = None
+        self._news: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         # shadow book: version -> (family, model); champions and challengers paper-trade without orders
         self.shadow = ShadowBook(cfg.state_dir) if cfg.shadow_host else None
         self.shadow_models: dict[str, tuple[str, Model]] = {}
@@ -362,6 +373,8 @@ class Engine:
         if self.cfg.halt_checks:
             st.supervisor_halt, _ = Supervisor.engine_should_halt(self.cfg.state_dir)
             st.owner_halt = self.center.bus.control().halted if self.center.bus is not None else False
+        if self.cfg.news_blackout:
+            st.in_blackout = self._blackout(tick.ts_utc) is not None
         self.gate.update_stage(st)
 
     def _regime(self, X: pd.DataFrame) -> Regime:
@@ -382,6 +395,23 @@ class Engine:
             return [(n, float(feats[n].iloc[0]) if n in feats.columns else 0.0) for n in s.index]
         except Exception:
             return []
+
+    def _blackout(self, now: pd.Timestamp) -> dict | None:
+        """The tier-1 event whose blackout window contains `now`, else a recent high-relevance unscheduled news shock.
+        The calendar is re-read at most every 5 minutes, the news every minute;
+        no store or no archived calendar means no blackout can be known, which is logged in the engine state."""
+        if self.store is None:
+            return None
+        if self._calendar[0] is None or now - self._calendar[0] > pd.Timedelta(minutes=5):
+            ev = self.store.read("calendar_events", start=now - pd.Timedelta(days=1), end=now + pd.Timedelta(days=2))
+            self._calendar = (now, ev if not ev.empty else pd.DataFrame(columns=["ts_utc", "tier", "title"]))
+        hit = blackout_window(self._calendar[1], now, self.cfg.blackout_before_min, self.cfg.blackout_after_min)
+        if hit is None and self.cfg.shock_blackout_min > 0:
+            if self._news[0] is None or now - self._news[0] > pd.Timedelta(minutes=1):   # shocks need a fast re-read
+                self._news = (now, self.store.read("news", start=now - pd.Timedelta(days=1), end=now))
+            hit = shock_window(self._news[1], now, self.cfg.shock_blackout_min, self.cfg.shock_min_relevance)
+        self._blackout_event = hit
+        return hit
 
     def _busy(self, agent_id: str) -> bool:
         return any(t.agent_id == agent_id for t in self.open.values()) or \
@@ -500,6 +530,6 @@ class Engine:
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
             "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
-            "approval_mode": self.cfg.approval_mode,
+            "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,
         }
         Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json").write_text(json.dumps(payload))

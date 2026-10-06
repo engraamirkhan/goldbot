@@ -6,6 +6,7 @@
   python -m goldbot.ops.run webhook
   python -m goldbot.ops.run scheduler
   python -m goldbot.ops.run telegram
+  python -m goldbot.ops.run news
 """
 from __future__ import annotations
 
@@ -84,7 +85,11 @@ def run_engine(account_id: str) -> None:
     agents, live_shares = population_view()
     eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, approval_mode="propose", symbol=acc.symbol,
                               magic_base=acc.magic_base, state_dir="state", data_root=settings.data_root,
-                              shadow_host=shadow_host, halt_checks=True), broker, agents,
+                              shadow_host=shadow_host, halt_checks=True, news_blackout=True,
+                              blackout_before_min=settings.risk.blackout.before_min,
+                              blackout_after_min=settings.risk.blackout.after_min,
+                              shock_blackout_min=settings.news.shock_blackout_min,
+                              shock_min_relevance=settings.news.shock_min_relevance), broker, agents,
                  champions(), center, shadow_models=shadow_set() if shadow_host else None, live_shares=live_shares)
     warm = eng.warm_start(pd.Timestamp.now("UTC"))
     log.info("engine %s started (%s), models: %s, %d 1m bars of history", account_id, type(broker).__name__,
@@ -179,6 +184,8 @@ def run_scheduler() -> None:
                      sync_trials=(lambda path: sync_registry(path, gh_token)) if gh_token else None,
                      population=Population(Path("state") / "population.json"))
     ctx.agent_runner = _agent_runner(settings, ctx.store, trial_runner=make_trial_runner(ctx))
+    from goldbot.data.econ_calendar import fetch_ff_week
+    ctx.fetch_calendar = fetch_ff_week
     sch = build_scheduler(ctx)
     for name, st in sch.status()["jobs"].items():
         log.info("scheduler: %s next at %s", name, st["next_slot"])
@@ -198,6 +205,37 @@ def run_telegram() -> None:
     TelegramBot(token, "state", set(settings.telegram.allowed_user_ids)).run()
 
 
+def run_news() -> None:
+    import time
+    from pathlib import Path
+
+    import pandas as pd
+
+    from goldbot.agents.runner import SpendLedger
+    from goldbot.config import load_settings
+    from goldbot.data.news import fetch
+    from goldbot.data.news_collector import NewsCollector
+    from goldbot.data.store import Store
+    from goldbot.ops import accounts
+    settings = load_settings()
+    key = accounts.get_secret("anthropic-api-key")
+    client = None
+    if key:
+        import anthropic
+        client = anthropic.Anthropic(api_key=key)
+    else:
+        log.warning("no anthropic-api-key in the keyring: headlines are collected but not scored (no shock blackout)")
+    collector = NewsCollector(Store(settings.data_root), "state", settings.news.feeds, fetch, client,
+                              SpendLedger(Path("state") / "agent_spend.json", settings.agents.monthly_cap_usd),
+                              settings.news.model, settings.news.daily_cap_usd)
+    while True:
+        try:
+            log.info("news: %s", collector.poll(pd.Timestamp.now("UTC")))
+        except Exception:
+            log.exception("news poll")
+        time.sleep(settings.news.poll_seconds)
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "supervisor":
@@ -212,6 +250,8 @@ if __name__ == "__main__":
         run_scheduler()
     elif cmd == "telegram":
         run_telegram()
+    elif cmd == "news":
+        run_news()
     else:
         print(__doc__)
         sys.exit(1)

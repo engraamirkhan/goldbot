@@ -41,7 +41,8 @@ $svcs = @(
   @{ name="goldbot-api"; args="-m goldbot.ops.run api" },
   @{ name="goldbot-webhook"; args="-m goldbot.ops.run webhook" },
   @{ name="goldbot-scheduler"; args="-m goldbot.ops.run scheduler" },
-  @{ name="goldbot-telegram"; args="-m goldbot.ops.run telegram" }
+  @{ name="goldbot-telegram"; args="-m goldbot.ops.run telegram" },
+  @{ name="goldbot-news"; args="-m goldbot.ops.run news" }
 )
 foreach ($s in $svcs) {
   nssm install $s.name $py $s.args

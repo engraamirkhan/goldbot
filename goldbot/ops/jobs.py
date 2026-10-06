@@ -65,6 +65,7 @@ class JobContext(Record):
     sync_trials: Callable[[Path], int] | None = None            # union the trial registry with the release copy
     population: Population
     agent_runner: AgentRunner | None = None                      # None when no Anthropic API key is in the keyring
+    fetch_calendar: Callable[[], str] | None = None              # Forex Factory weekly JSON (network, VPS only)
 
 
 # ---------------------------------------------------------------------------------------------- nightly costs
@@ -242,6 +243,25 @@ def agents_weekly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return _run_agents(ctx, slot, "weekly")
 
 
+def agents_presession(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    return _run_agents(ctx, slot, "presession")
+
+
+# ---------------------------------------------------------------------------------------------- calendar
+def calendar_archive(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Archive this week's Forex Factory calendar; engines read tier-1 events from it for the news blackout."""
+    from goldbot.data.econ_calendar import parse_ff_week
+    if ctx.fetch_calendar is None:
+        return {"skipped": "no calendar fetcher configured"}
+    df = parse_ff_week(ctx.fetch_calendar(), slot, ctx.settings.risk.blackout.events)
+    if df.empty:
+        raise RuntimeError("calendar feed returned no events: the feed format may have changed")
+    n = ctx.store.append("calendar_events", df, source="forexfactory")
+    tier1 = df[(df["tier"] == 1) & (df["ts_utc"] >= slot)].sort_values("ts_utc")
+    return {"events": n, "by_tier": {str(k): int(v) for k, v in df["tier"].value_counts().items()},
+            "next_tier1": [f"{t:%a %H:%M} {x}" for t, x in zip(tier1["ts_utc"], tier1["title"])][:8]}
+
+
 # ---------------------------------------------------------------------------------------------- research loop
 def label_grid(base: dict[str, Any], step: float) -> list[dict[str, Any]]:
     """+-step around target_atr, stop_atr and max_bars (the base itself excluded: it is the champion's config)."""
@@ -329,6 +349,8 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "agents_daily": agents_daily,
     "agents_weekly": agents_weekly,
     "monthly_research": monthly_research,
+    "calendar_archive": calendar_archive,
+    "agents_presession": agents_presession,
 }
 
 
