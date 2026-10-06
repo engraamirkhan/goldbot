@@ -135,3 +135,44 @@ def test_tampered_artefact_is_refused(tmp_path):
     (tmp_path / e.artefact).write_bytes(b"not the model")
     with pytest.raises(ValueError, match="checksum"):
         reg.champion_models()
+
+
+@pytest.mark.integration
+def test_retraining_is_charged_the_brokers_measured_costs(tmp_path):
+    from goldbot.config import load_settings
+    from goldbot.data.resample import resample_bars, ticks_to_1m
+    from goldbot.data.store import Store
+    from goldbot.data.synthetic import synthetic_ticks
+    from goldbot.execution.costs import CostTable, SlippageStat, SpreadStat
+    from goldbot.ops.accounts import Account
+    from goldbot.ops.jobs import JobContext, live_extra_cost_usd
+    from goldbot.research.model_registry import ModelRegistry
+    from goldbot.research.pipeline import run_specialist
+    from goldbot.research.population import Population
+    from goldbot.research.registry import TrialRegistry
+    from goldbot.specialists import SPECIALISTS
+
+    acc = Account(account_id="icm-demo", broker="icm", mode="demo", server="s", login=None, terminal_path="",
+                  server_tz="Europe/Athens", symbol="XAUUSD", magic_base=260100, enabled=True)
+    ctx = JobContext(settings=load_settings(), store=Store(tmp_path / "d"), state_dir=tmp_path,
+                     models=ModelRegistry(tmp_path / "m"), trials=TrialRegistry(tmp_path / "t.jsonl"), accounts=[acc],
+                     population=Population(tmp_path / "p.json"))
+    assert live_extra_cost_usd(ctx) == 0.0                                   # no live week yet
+    CostTable(account_id="icm-demo", built_utc=pd.Timestamp("2026-10-05", tz="UTC"),
+              spread={"london": SpreadStat(median=0.1, p90=0.2, n=100)},
+              slippage={"london:market": SlippageStat(mean=0.04, n=80, from_prior=False),
+                        "newyork:market": SlippageStat(mean=0.15, n=3, from_prior=True)},
+              commission_per_lot_side_usd=3.5, slippage_prior_usd=0.15).save(tmp_path / "costs_icm-demo.json")
+    # entry + exit slippage (mean of the market cells) + commission both sides per oz
+    assert live_extra_cost_usd(ctx) == pytest.approx(2 * 0.095 + 2 * 3.5 / 100)
+
+    b1 = ticks_to_1m(synthetic_ticks("2023-01-01", "2025-06-01", ticks_per_minute=1, seed=5))
+    dec = resample_bars(b1, "15m")
+    spec = SPECIALISTS["session_open"](asia_range_max_atr_d=1.2)
+    plain = run_specialist(spec, dec)
+    charged = run_specialist(spec, dec, extra_cost_usd=0.26)
+    assert len(plain.oof) == len(charged.oof) > 0
+    diff = plain.oof["ret"].to_numpy() - charged.oof["ret"].to_numpy()
+    assert diff == pytest.approx(0.26 / plain.oof["entry"].to_numpy())
+    if "threshold" in plain.metrics and "threshold" in charged.metrics:
+        assert charged.metrics["threshold"] > plain.metrics["threshold"]   # costlier trades need a higher p

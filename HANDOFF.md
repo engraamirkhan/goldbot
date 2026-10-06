@@ -63,6 +63,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
 - Clone mutations (`population.mutate_agent`): perturbed barriers/thresholds, a different feature subset
   (`feature_seed`: seeded 40 of the eligible features) or a different timeframe for breakout and mean_reversion
   (15m <-> 1h, holding horizon kept).
+- Self-improvement loop (learns from past and present, changes only through gates): Saturday 03:17 UTC the data
+  workflow appends the latest week of Dukascopy bars; 06:00 every population member is retrained on a rolling window
+  ending at the latest bar, charged the canonical broker's measured slippage and commission from the nightly cost
+  table (`jobs.live_extra_cost_usd`), and enters shadow as a challenger; it replaces the champion only when its live
+  shadow record passes the promotion gates, and the daily CUSUM rolls a new champion back if live results drift.
+  The tournament scores agents only on live shadow trades (expectancy, calibration of their own p, drawdown,
+  correlation), clones winners into mutated children and retires losers; the research analyst tests hypotheses the
+  improvement agent files from live scorecards. Every trial counts in the deflated Sharpe.
 - One position per agent at a time (`labels.one_at_a_time`): research keeps a candidate only after the previous one
   exited, the shadow book refuses entries while the agent's trade is open, the engine skips an agent with an open
   position or pending proposal. Without it trend's clustered candidates overlapped and inflated every statistic.
@@ -86,16 +94,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
 
 ## Next steps (no owner input needed unless marked)
-1. Re-pull the bars: `data-dukascopy.yml` with `full_refresh` (hours). The Dukascopy pull truncated fractional XAUUSD
-   volumes to 0 with an int cast, so every tick-volume feature was constant on the published history and breakout
-   (which needs a volume surge) never fired; the research report now prints the share of zero-volume 1m bars. Then
-   re-run research.yml for all four families. Results so far (2026-10-06, issues "research: <family>"): no family has
-   an edge at its default settings — session_open too few candidates per fold; trend (trial #4, one position at a
-   time) model takes 2 trades in 13 years; mean_reversion (trial #5) 20 trades in 15 years (PF 8.8) far below the
-   trade-count gates; breakout 0 candidates (the volume bug). Until one passes the gates the engines propose nothing.
-   Leakage: the shifted-label "shuffle AUC" was dropped (it reads ~0.7 on any non-overlapping trade sequence without
-   any lookahead); reports now carry a lookahead check (features rebuilt on history cut at 70%, offending columns
-   listed) and the model's out-of-fold AUC.
+1. Research status (2026-10-06, bars re-pulled with real volumes, lookahead check clean on all 163 features):
+   baselines (trials #8-#11) show no model skill except a weak one in mean_reversion (OOF AUC 0.54, 16 model trades
+   in 15 years, DSR 0.991: far below the trade-count gates). Next: the variant batches via research.yml `variants`
+   (mean_reversion looser entries / 1h; session_open more candidates per fold) and the research analyst's
+   hypotheses. Until an agent passes the gates the engines propose nothing (by design).
 2. On the VPS, check `state/news_feeds.json` after the first hour: the feed URLs in `settings.yaml: news` could not be
    verified from a Claude sandbox. Fix any that fail; the collector skips broken feeds.
 3. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals
@@ -105,8 +108,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
    off without it) and the Telegram bot token with `python -m goldbot.ops.accounts set telegram-bot-token` (from
    @BotFather), and put your Telegram user id in `settings.yaml: telegram.allowed_user_ids`.
 4. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
-5. Session-open has too few candidates per 15m test fold (about 90 a year against the 60-per-fold minimum); a
-   rationale-backed variant (looser Asia-range filter or both sessions) is the next research trial for it.
+5. Session-open has about 90 candidates a year, so most 24-month training windows miss the walk-forward's 200-trade
+   training minimum (9 folds in trial #11); the session_open variant batch loosens its filters for more candidates.
 
 ## Environment facts
 - Claude sandboxes (cloud container and the Mac's Cowork VM) cannot reach market-data hosts or download Actions
