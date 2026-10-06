@@ -143,3 +143,19 @@ def test_agent_runs_endpoint_serves_reports_from_the_state_dir_only(tmp_path):
     got = c.get("/api/agent-runs", headers={"Authorization": f"Bearer {tok}"}).json()
     assert [r["role"] for r in got] == ["data_steward", "risk_officer"]          # newest first, bad line skipped
     assert got[1]["report"].startswith("Drawdown") and got[0]["report"] is None   # outside the state dir: not served
+
+
+def test_spa_fallback_never_serves_files_outside_web_dist(tmp_path):
+    dist = tmp_path / "web" / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("INDEX")
+    (dist / "favicon.svg").write_text("<svg/>")
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / ".secrets.json").write_text('{"mt5-icm-live": "SECRET"}')
+    c = TestClient(create_app(state, web_dist=dist))
+    assert c.get("/favicon.svg").text == "<svg/>"
+    assert c.get("/approvals").text == "INDEX"                     # client-side route -> the app shell
+    for path in ("/..%2f..%2fstate/.secrets.json", "/%2e%2e/%2e%2e/state/.secrets.json", "/..%2F..%2Fstate%2F.secrets.json"):
+        r = c.get(path)
+        assert "SECRET" not in r.text and r.text == "INDEX", path

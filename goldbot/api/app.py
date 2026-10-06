@@ -298,14 +298,15 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         except WebSocketDisconnect:
             st.ws_clients.discard(websocket)
 
-    dist = Path(web_dist)
+    dist = Path(web_dist).resolve()
     if dist.exists():
         app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
         @app.get("/{path:path}")
         def spa(path: str) -> FileResponse:
-            f = dist / path
-            return FileResponse(f if f.is_file() else dist / "index.html")
+            # the path arrives percent-decoded ("..%2f" -> "../"): serve only files that resolve inside web/dist
+            f = (dist / path).resolve()
+            return FileResponse(f if f.is_file() and dist in f.parents else dist / "index.html")
 
     return app
 
