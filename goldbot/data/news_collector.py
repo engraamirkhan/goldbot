@@ -68,8 +68,9 @@ class NewsCollector:
                 break
             try:
                 s, usage = score_batch(self.client, self.model, todo.iloc[start:start + BATCH])
-            except Exception as exc:                     # API trouble: store unscored, try again next round
+            except Exception as exc:                     # API trouble: keep these unstored, try again next round
                 out["error"] = f"{type(exc).__name__}: {exc}"[:200]
+                items = items[~items["item_id"].isin(set(todo["item_id"].iloc[start:]))]
                 break
             _, usd = cost_of(usage)
             self._add_spend(now, usd)

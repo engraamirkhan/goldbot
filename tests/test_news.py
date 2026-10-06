@@ -119,6 +119,28 @@ def test_headlines_sharing_a_timestamp_are_all_kept_across_polls(tmp_path):
     assert sorted(stored["link"]) == ["https://x/a", "https://x/b", "https://x/c"]
 
 
+def test_items_whose_scoring_failed_are_scored_on_the_next_round(tmp_path):
+    """An API error during scoring must not store the relevant items as unscored-and-seen: the collector promises to
+    try again next round, otherwise a shock headline arriving during an API blip never blocks entries."""
+    client = FakeClient(cost_tokens=1000, shock_ids=())
+    ok_create = client._create
+    calls = {"n": 0}
+
+    def flaky(**kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("overloaded")
+        return ok_create(**kw)
+    client.beta = NS(messages=NS(create=flaky))
+    c = _collector(tmp_path, client)
+    first = c.poll(NOW)
+    assert "overloaded" in first["error"] and first["scored"] == 0
+    again = c.poll(NOW + pd.Timedelta(minutes=5))
+    assert again["scored"] == 3
+    stored = Store(tmp_path / "data").read("news")
+    assert len(stored) == 5 and stored["item_id"].is_unique and int(stored["scored"].sum()) == 3
+
+
 def test_budget_exhausted_items_are_stored_unscored(tmp_path):
     c = _collector(tmp_path, FakeClient(), cap=0.0)
     out = c.poll(NOW)
