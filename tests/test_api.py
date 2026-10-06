@@ -74,7 +74,7 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
     # halt: an approver may stop new entries; re-arming needs the owner and an authenticator code
     assert c.post("/api/halt", json={"reason": "fomc surprise"}, headers=viewer).status_code == 403
     assert c.post("/api/halt", json={"reason": "fomc surprise"}, headers=approver).json()["halted"] is True
-    assert bus.control().halted and c.get("/api/status").json()["halted_by"] == "dashboard:partner@x.io"
+    assert bus.control().halted and c.get("/api/status", headers=viewer).json()["halted_by"] == "dashboard:partner@x.io"
     assert c.post("/api/rearm", json={"totp": totp_code(owner_secret)}, headers=approver).status_code == 403
     assert c.post("/api/rearm", json={"totp": "000000"}, headers=owner).status_code == 403
     assert c.post("/api/rearm", json={"totp": totp_code(owner_secret)}, headers=owner).json()["halted"] is False
@@ -88,7 +88,7 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
     events = [json.loads(line)["event"] for line in (tmp_path / "audit.jsonl").read_text().splitlines()]
     assert {"bootstrap_owner", "login", "login_failed", "invite", "accept_invite", "decision", "disable", "halt", "rearm",
             "rearm_failed"} <= set(events)
-    assert c.get("/api/status").json()["pending"] == 0
+    assert c.get("/api/status", headers=owner).json()["pending"] == 0
 
 
 def test_lockout_after_five_failures(tmp_path):
@@ -159,3 +159,24 @@ def test_spa_fallback_never_serves_files_outside_web_dist(tmp_path):
     for path in ("/..%2f..%2fstate/.secrets.json", "/%2e%2e/%2e%2e/state/.secrets.json", "/..%2F..%2Fstate%2F.secrets.json"):
         r = c.get(path)
         assert "SECRET" not in r.text and r.text == "INDEX", path
+
+
+def test_status_and_live_socket_need_a_session(tmp_path):
+    from starlette.websockets import WebSocketDisconnect
+    (tmp_path / "supervisor.json").write_text(json.dumps({"ts": 0, "combined_equity": 123456.0}))
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    c = TestClient(app)
+    assert c.get("/api/status").status_code == 401                    # equity and halt details are not public
+    with c.websocket_connect("/ws") as ws:                             # bad token: closed without any event
+        ws.send_json({"token": "forged"})
+        with pytest.raises(WebSocketDisconnect) as exc:
+            ws.receive_json()
+        assert exc.value.code == 4401
+    assert app.state.st.ws_clients == set()
+    uri = c.post("/api/auth/setup", json={"setup_code": app.state.st.auth.setup_code, "email": "o@x.io", "password": "a long password here"}).json()["totp_uri"]
+    tok = c.post("/api/auth/login", json={"email": "o@x.io", "password": "a long password here", "totp": totp_code(_secret_from_uri(uri))}).json()["token"]
+    assert c.get("/api/status", headers={"Authorization": f"Bearer {tok}"}).json()["supervisor"]["combined_equity"] == 123456.0
+    with c.websocket_connect("/ws") as ws:
+        ws.send_json({"token": tok})
+        assert ws.receive_json() == {"type": "hello"}
+        assert len(app.state.st.ws_clients) == 1

@@ -63,6 +63,8 @@ export const api = {
 export function liveSocket(onEvent: (e: { type: string } & Record<string, unknown>) => void): () => void {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  // browsers cannot set headers on a WebSocket: the session token is the first message, or the server closes it
+  ws.onopen = () => ws.send(JSON.stringify({ token }));
   ws.onmessage = (m) => onEvent(JSON.parse(m.data));
   return () => ws.close();
 }

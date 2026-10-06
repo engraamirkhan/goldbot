@@ -239,7 +239,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         st.bus.set_halt(True, by=f"dashboard:{u.email}", reason=body.reason)
         st.auth.audit("halt", by=u.email, reason=body.reason)
         await st.broadcast({"type": "halt", "halted": True})
-        return status()
+        return current_status()
 
     @app.post("/api/rearm")
     async def rearm(body: RearmRequest, u: User = Depends(need("owner"))) -> Status:
@@ -249,7 +249,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         st.bus.set_halt(False, by=f"dashboard:{u.email}")
         st.auth.audit("rearm", by=u.email)
         await st.broadcast({"type": "halt", "halted": False})
-        return status()
+        return current_status()
 
     @app.get("/api/agents", response_model=list[AgentRow])
     def agents(_: User = Depends(auth)) -> list[AgentRow]:
@@ -280,22 +280,40 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                             cost_usd=r.get("cost_usd", 0.0), detail=r.get("detail"), report=r.get("report"))
                 for r in st.agent_runs()]
 
-    @app.get("/api/status")
-    def status() -> Status:
+    def current_status() -> Status:
         modes = sorted({str(e.get("approval_mode", "propose")) for e in st.engines()})
         c = st.bus.control()
         return Status(mode=",".join(modes) or "propose", halted=c.halted, halted_by=c.by if c.halted else None,
                       halt_reason=c.reason if c.halted else None, pending=len(st.bus.pending()), supervisor=st.supervisor())
 
+    @app.get("/api/status")
+    def status(_: User = Depends(auth)) -> Status:
+        return current_status()
+
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
+        # browsers cannot set headers on a WebSocket, so the session token is the first message: {"token": "..."}
         await websocket.accept()
+        try:
+            first = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+            token = str(first.get("token", "")) if isinstance(first, dict) else ""
+        except (asyncio.TimeoutError, ValueError, WebSocketDisconnect):
+            token = ""
+        if st.auth.session_user(token) is None:
+            await websocket.close(code=4401)
+            return
+        await websocket.send_json({"type": "hello"})
         st.ws_clients.add(websocket)
         try:
             while True:
                 await asyncio.sleep(30)
+                if st.auth.session_user(token) is None:      # logged out, expired or disabled: stop the feed
+                    await websocket.close(code=4401)
+                    break
                 await websocket.send_json({"type": "ping", "t": time.time()})
         except WebSocketDisconnect:
+            pass
+        finally:
             st.ws_clients.discard(websocket)
 
     dist = Path(web_dist).resolve()
