@@ -24,7 +24,7 @@ import json
 import math
 import random
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import numpy as np
 import pandas as pd
@@ -230,14 +230,19 @@ class Population:
         if status != "live":
             m.capital_weight = 0.0
 
-    def tournament(self, book: ShadowBook, now: pd.Timestamp, seed: str | None = None) -> dict[str, Any]:
-        """One round: score, record the month's quartiles, retire, promote, clone, weight. Returns a summary."""
+    def tournament(self, book: ShadowBook, now: pd.Timestamp, seed: str | None = None,
+                   research_passed: Callable[[Member], bool] | None = None) -> dict[str, Any]:
+        """One round: score, record the month's quartiles, retire, promote, clone, weight. Returns a summary.
+
+        research_passed: when given, a shadow agent is promoted to live only if its configuration has a research trial
+        that passed the design's gates (1,500 candidates, 60 per test fold, three positive years incl. 2021-22); the
+        scheduler passes TrialRegistry.passed_gates. Agents held back are listed under "awaiting_research"."""
         self.ensure_founders(now)
         trades = agent_trades(book)
         n_pop = len(self.members)
         weekly = {a: weekly_returns(t) for a, t in trades.items()}
         live_ids = {m.agent_id for m in self.active("live")}
-        summary: dict[str, Any] = {"retired": [], "promoted": [], "cloned": [], "expired": []}
+        summary: dict[str, Any] = {"retired": [], "promoted": [], "cloned": [], "expired": [], "awaiting_research": []}
 
         scores: dict[str, Score] = {}
         for m in self.members.values():
@@ -279,6 +284,9 @@ class Population:
             if len(self.active("live")) >= LIVE_CAP:
                 break
             if s.dsr > DSR_PROMOTE and s.fitness > 0:
+                if research_passed is not None and not research_passed(m):
+                    summary["awaiting_research"].append(m.agent_id)
+                    continue
                 self._set_status(m, "live", now, f"promoted to live: DSR {s.dsr:.3f} with {n_pop} trials")
                 summary["promoted"].append(m.agent_id)
 

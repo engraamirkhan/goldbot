@@ -9,7 +9,8 @@ on:
       from_year:  { description: "first year of bars", default: "2010" }
       to_year:    { description: "last year of bars", default: "2026" }
       rationale:  { description: "why this trial (recorded in the registry)", default: "baseline walk-forward on Dukascopy 1m bars" }
-      variants:   { description: "JSON list of config overrides, one trial each", default: "[{}]" }
+      variants:   { description: "JSON list of config overrides, one trial each (charged to the quarter's trial budget)", default: "[{}]" }
+      score_holdout: { description: "score these configurations on the held-out year (once per configuration, final)", type: boolean, default: false }
 permissions:
   contents: write
   issues: write
@@ -39,11 +40,12 @@ jobs:
           TO_YEAR: ${{ inputs.to_year }}
           RATIONALE: ${{ inputs.rationale }}
           VARIANTS: ${{ inputs.variants }}
+          SCORE_HOLDOUT: ${{ inputs.score_holdout && '--score-holdout' || '' }}
         run: |
           set -o pipefail
           python scripts/research_pass.py --bars raw --registry registry.jsonl --report report.md \
             --specialist "$SPECIALIST" --from-year "$FROM_YEAR" --to-year "$TO_YEAR" --rationale "$RATIONALE" \
-            --variants "$VARIANTS" 2>&1 | tee research.log
+            --variants "$VARIANTS" $SCORE_HOLDOUT 2>&1 | tee research.log
       - name: save the registry
         run: |
           # union with whatever the VPS monthly loop pushed while this ran, so no trial is dropped
