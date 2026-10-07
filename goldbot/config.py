@@ -108,6 +108,7 @@ class SchedulerSettings(_Section):
     saturday_retrain: ScheduleSettings
     model_watch: ScheduleSettings
     tournament: ScheduleSettings
+    research_director: ScheduleSettings
     agents_daily: ScheduleSettings
     agents_weekly: ScheduleSettings
     monthly_research: ScheduleSettings
@@ -117,6 +118,7 @@ class SchedulerSettings(_Section):
 
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
+    director_floor: int = Field(2, ge=0, le=200)        # research director: exploration trials per family per month
     label_grid_step: float = Field(0.25, gt=0, lt=1)
     cost_window_days: int = Field(30, ge=1)
     fills_window_days: int = Field(180, ge=1)

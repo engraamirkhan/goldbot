@@ -53,6 +53,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   registry) and records a verdict on each hypothesis; it promotes nothing. The execution auditor (weekday nights)
   explains `execution/audit.py`'s numbers: slippage per session/order type against the nightly cost table with drift
   flags, widened spreads, failed orders.
+- Research director (`research/director.py`, scheduler job `research_director` Saturdays 12:30 UTC, before
+  `agents_weekly`): a deterministic score per family from the trial registry (median OOF AUC z-score with
+  se = 1/sqrt(3 n_oof), best DSR on 200+ model-filtered trades, lookahead flags) and the shadow book/population
+  (shadow t-stat), then splits what is left of the quarter's trial budget (`research.trial_budget_quarter`, 20 when
+  unset, counted from the registry): an exploration floor (`research.director_floor`) per family, the rest in
+  proportion to evidence, 0 for a lookahead-dirty family; the label grid may use at most half of a family's share.
+  Trials with status `holdout` are never evidence and `monthly_research` never walks into the held-out year
+  (`research.holdout_from`, default 2025-10-01). Output `state/research_plan.json`; `monthly_research` follows it (flat
+  budget without a plan under 21 days old) and stops when the quarter's budget is spent. The `research_director` staff
+  agent explains the plan (`read_research_plan`) and may file two hypotheses; the analyst prefers the plan's focus
+  families. Boundary: it decides what to research, never what is promoted or traded; promotion stays with the gates.
 - Approvals across processes (`telegram/bus.py`): engines, the API and the Telegram service are separate services,
   so engines publish proposals to `state/approvals/pending/`, the dashboard or Telegram writes a decision file
   (created exclusively: first decision wins), and the engine applies it on its next tick, re-running the RiskGate,

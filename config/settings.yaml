@@ -63,6 +63,7 @@ scheduler:
   nightly_costs:    { kind: daily,   at: "23:10", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }
   saturday_retrain: { kind: weekly,  at: "06:00", weekday: 5, max_late_hours: 30 }
   tournament:       { kind: weekly,  at: "12:00", weekday: 5, max_late_hours: 30 }   # population round after the retrain
+  research_director: { kind: weekly, at: "12:30", weekday: 5, max_late_hours: 30 }   # research plan before agents_weekly
   model_watch:      { kind: daily,   at: "23:30", max_late_hours: 20 }                  # CUSUM on new champions
   agents_daily:     { kind: daily,   at: "23:45", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # data steward, risk officer
   agents_weekly:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }     # journal coach, improvement agent
@@ -88,6 +89,8 @@ news:                                # headline collector (VPS service goldbot-n
 
 research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
+  director_floor: 2                  # research director: every unblocked family gets at least this many of the
+                                     # month's trials; the rest of (budget x families) follows evidence of signal
   label_grid_step: 0.25              # +-25% on target/stop/max_bars
   cost_window_days: 30               # ticks used for the nightly spread table
   fills_window_days: 180             # fills used for the slippage table
