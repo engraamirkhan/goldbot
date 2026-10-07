@@ -187,3 +187,50 @@ class AgentRunRow(BaseModel):
     cost_usd: float
     detail: str | None
     report: str | None
+
+
+# ----------------------------------------------------------------------------- calendar and news
+class CalendarEvent(BaseModel):
+    """One archived economic-calendar event. Tier 1 (US CPI, NFP, FOMC, PCE) carries its entry-blackout window."""
+    event_id: str
+    ts_utc: datetime
+    country: str
+    title: str
+    impact: str
+    tier: int
+    forecast: str
+    previous: str
+    blackout_start: datetime | None        # tier 1 only
+    blackout_end: datetime | None
+
+
+class ActiveBlackout(BaseModel):
+    """An entry blackout an engine is enforcing now (from state/engine_<account>.json)."""
+    kind: Literal["calendar", "news_shock"]
+    title: str
+    ts_utc: datetime | None          # scheduled time of a calendar event
+    received_utc: datetime | None    # when a news shock was received
+    accounts: list[str]
+
+
+class CalendarResponse(BaseModel):
+    now: datetime
+    events: list[CalendarEvent]
+    active_blackout: ActiveBlackout | None
+    note: str | None                        # why the list is empty, when it is
+
+
+class Headline(BaseModel):
+    """One collected headline; unscored items (prefiltered out or over the daily cap) have relevance and tags null."""
+    item_id: str
+    ts_utc: datetime
+    received_utc: datetime
+    source: str
+    title: str
+    link: str | None
+    relevance: float | None
+    rates: Literal["hawkish", "dovish", "neutral"] | None
+    risk: Literal["risk_on", "risk_off", "neutral"] | None
+    dollar: Literal["positive", "negative", "neutral"] | None
+    surprise: Literal["beat", "miss", "inline", "none"] | None
+    shock: bool

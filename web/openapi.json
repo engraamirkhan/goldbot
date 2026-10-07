@@ -108,6 +108,63 @@
     "title": "AccountSummary",
     "type": "object"
    },
+   "ActiveBlackout": {
+    "description": "An entry blackout an engine is enforcing now (from state/engine_<account>.json).",
+    "properties": {
+     "accounts": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Accounts",
+      "type": "array"
+     },
+     "kind": {
+      "enum": [
+       "calendar",
+       "news_shock"
+      ],
+      "title": "Kind",
+      "type": "string"
+     },
+     "received_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Received Utc"
+     },
+     "title": {
+      "title": "Title",
+      "type": "string"
+     },
+     "ts_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ts Utc"
+     }
+    },
+    "required": [
+     "kind",
+     "title",
+     "ts_utc",
+     "received_utc",
+     "accounts"
+    ],
+    "title": "ActiveBlackout",
+    "type": "object"
+   },
    "AgentRow": {
     "properties": {
      "agent_id": {
@@ -260,6 +317,127 @@
     "title": "AuthState",
     "type": "object"
    },
+   "CalendarEvent": {
+    "description": "One archived economic-calendar event. Tier 1 (US CPI, NFP, FOMC, PCE) carries its entry-blackout window.",
+    "properties": {
+     "blackout_end": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Blackout End"
+     },
+     "blackout_start": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Blackout Start"
+     },
+     "country": {
+      "title": "Country",
+      "type": "string"
+     },
+     "event_id": {
+      "title": "Event Id",
+      "type": "string"
+     },
+     "forecast": {
+      "title": "Forecast",
+      "type": "string"
+     },
+     "impact": {
+      "title": "Impact",
+      "type": "string"
+     },
+     "previous": {
+      "title": "Previous",
+      "type": "string"
+     },
+     "tier": {
+      "title": "Tier",
+      "type": "integer"
+     },
+     "title": {
+      "title": "Title",
+      "type": "string"
+     },
+     "ts_utc": {
+      "format": "date-time",
+      "title": "Ts Utc",
+      "type": "string"
+     }
+    },
+    "required": [
+     "event_id",
+     "ts_utc",
+     "country",
+     "title",
+     "impact",
+     "tier",
+     "forecast",
+     "previous",
+     "blackout_start",
+     "blackout_end"
+    ],
+    "title": "CalendarEvent",
+    "type": "object"
+   },
+   "CalendarResponse": {
+    "properties": {
+     "active_blackout": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ActiveBlackout"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "events": {
+      "items": {
+       "$ref": "#/components/schemas/CalendarEvent"
+      },
+      "title": "Events",
+      "type": "array"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "now": {
+      "format": "date-time",
+      "title": "Now",
+      "type": "string"
+     }
+    },
+    "required": [
+     "now",
+     "events",
+     "active_blackout",
+     "note"
+    ],
+    "title": "CalendarResponse",
+    "type": "object"
+   },
    "Decision": {
     "properties": {
      "action": {
@@ -386,6 +564,140 @@
      }
     },
     "title": "HaltRequest",
+    "type": "object"
+   },
+   "Headline": {
+    "description": "One collected headline; unscored items (prefiltered out or over the daily cap) have relevance and tags null.",
+    "properties": {
+     "dollar": {
+      "anyOf": [
+       {
+        "enum": [
+         "positive",
+         "negative",
+         "neutral"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dollar"
+     },
+     "item_id": {
+      "title": "Item Id",
+      "type": "string"
+     },
+     "link": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Link"
+     },
+     "rates": {
+      "anyOf": [
+       {
+        "enum": [
+         "hawkish",
+         "dovish",
+         "neutral"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rates"
+     },
+     "received_utc": {
+      "format": "date-time",
+      "title": "Received Utc",
+      "type": "string"
+     },
+     "relevance": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Relevance"
+     },
+     "risk": {
+      "anyOf": [
+       {
+        "enum": [
+         "risk_on",
+         "risk_off",
+         "neutral"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk"
+     },
+     "shock": {
+      "title": "Shock",
+      "type": "boolean"
+     },
+     "source": {
+      "title": "Source",
+      "type": "string"
+     },
+     "surprise": {
+      "anyOf": [
+       {
+        "enum": [
+         "beat",
+         "miss",
+         "inline",
+         "none"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Surprise"
+     },
+     "title": {
+      "title": "Title",
+      "type": "string"
+     },
+     "ts_utc": {
+      "format": "date-time",
+      "title": "Ts Utc",
+      "type": "string"
+     }
+    },
+    "required": [
+     "item_id",
+     "ts_utc",
+     "received_utc",
+     "source",
+     "title",
+     "link",
+     "relevance",
+     "rates",
+     "risk",
+     "dollar",
+     "surprise",
+     "shock"
+    ],
+    "title": "Headline",
     "type": "object"
    },
    "InviteRequest": {
@@ -1220,6 +1532,61 @@
     "summary": "Auth State"
    }
   },
+  "/api/calendar": {
+   "get": {
+    "operationId": "calendar_api_calendar_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "days",
+      "required": false,
+      "schema": {
+       "default": 7,
+       "title": "Days",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "max_tier",
+      "required": false,
+      "schema": {
+       "default": 2,
+       "title": "Max Tier",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/CalendarResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Calendar"
+   }
+  },
   "/api/decisions": {
    "post": {
     "operationId": "decide_api_decisions_post",
@@ -1381,6 +1748,65 @@
      }
     ],
     "summary": "Me"
+   }
+  },
+  "/api/news": {
+   "get": {
+    "operationId": "news_api_news_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "hours",
+      "required": false,
+      "schema": {
+       "default": 24,
+       "title": "Hours",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "min_relevance",
+      "required": false,
+      "schema": {
+       "default": 0.0,
+       "title": "Min Relevance",
+       "type": "number"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/Headline"
+         },
+         "title": "Response News Api News Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "News"
    }
   },
   "/api/proposals": {
