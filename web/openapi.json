@@ -1468,6 +1468,11 @@
       "description": "Successful Response"
      }
     },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
     "summary": "Status"
    }
   },

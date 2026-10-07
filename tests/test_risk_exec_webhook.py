@@ -112,3 +112,16 @@ def test_webhook_auth_hash_and_intrabar():
     early = {**body, "bar_time": "2025-03-05T10:15:00Z", "fired_at": "2025-03-05T10:20:00Z"}
     assert c.post("/tv", json=early).json()["intrabar"] is True
     assert q.qsize() == 2
+
+
+def test_webhook_ip_allow_list_uses_the_peer_address_not_a_forwarded_header():
+    q: queue.Queue[dict[str, Any]] = queue.Queue()
+    app = create_app(secret="s3cret", sink=q)
+    body = {"indicator": "K-Indi", "symbol": "XAUUSD", "tf": "15", "bar_time": "2025-03-05T10:00:00Z",
+            "fired_at": "2025-03-05T10:15:01Z", "signal": "long", "secret": "s3cret"}
+    outsider = TestClient(app, client=("203.0.113.9", 40000))
+    assert outsider.post("/tv", json=body, headers={"X-Forwarded-For": "52.89.214.238"}).status_code == 403
+    assert q.empty()
+    tradingview = TestClient(app, client=("52.89.214.238", 40000))
+    assert tradingview.post("/tv", json={**body, "secret": "s3crët"}).status_code == 403   # non-ASCII: refused, not a 500
+    assert tradingview.post("/tv", json=body).json()["ok"] is True and q.qsize() == 1

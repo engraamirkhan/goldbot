@@ -1,4 +1,7 @@
 import json
+import os
+import stat
+from pathlib import Path
 
 import pytest
 
@@ -42,3 +45,24 @@ def test_live_unlock_requires_gate_and_phrase(isolated, tmp_path):
     assert not acc_mod.unlock_live("icm-live", "yes please", isolated)
     assert acc_mod.unlock_live("icm-live", "ENABLE LIVE icm-live", isolated)
     assert any(a.is_live for a in acc_mod.enabled_accounts())
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_secret_and_user_files_are_never_readable_by_others(isolated, tmp_path, monkeypatch):
+    from goldbot.api.auth import AuthStore
+
+    def chmod_fails(self, mode, **kw):              # e.g. a filesystem that ignores chmod: must not leave 0644
+        raise OSError("chmod not supported")
+    monkeypatch.setattr(Path, "chmod", chmod_fails)
+    old = os.umask(0o022)
+    try:
+        acc_mod.set_secret("mt5-icm-demo", "pw1")
+        acc_mod.set_secret("telegram-bot-token", "tok")
+        store = AuthStore(tmp_path / "auth")
+        store.bootstrap_owner(store.setup_code or "", "o@x.io", "a long password here")
+    finally:
+        os.umask(old)
+    for f in (tmp_path / "state" / ".secrets.json", tmp_path / "auth" / "users.json"):
+        assert stat.S_IMODE(f.stat().st_mode) & 0o077 == 0, f
+    assert json.loads((tmp_path / "state" / ".secrets.json").read_text()) == {"mt5-icm-demo": "pw1", "telegram-bot-token": "tok"}
+    assert not [p for p in (tmp_path / "state").iterdir() if p.name != ".secrets.json"]     # no temp files left behind

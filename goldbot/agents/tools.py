@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,6 +23,7 @@ MAX_RESULT_CHARS = 20_000
 MAX_TRIALS_PER_RUN = 2
 MAX_OVERRIDE_CHANGE = 0.5          # a trial may move a numeric setting at most +-50% from its default
 HYPOTHESIS_STATUSES = ["tested_promising", "tested_rejected", "inconclusive"]
+STATE_NAME = re.compile(r"(?:supervisor|scheduler|population|agents|(?:costs|classifier|engine)_[A-Za-z0-9][A-Za-z0-9_-]*)")
 
 # (family, overrides, rationale) -> trial summary; injected so tests and the sandbox need no bars or models
 TrialRunner = Callable[[str, dict[str, Any], str], dict[str, Any]]
@@ -176,8 +178,11 @@ class ReadOnlyTools:
         return _records(df) if not df.empty else []
 
     def read_state(self, name: str) -> Any:
-        if not name.replace("_", "").replace("-", "").isalnum():
-            raise ValueError("bad state name")
+        # only the service files named in the tool description: state/ also holds users.json (password hashes,
+        # authenticator secrets) and other files no agent (or a prompt injected into one) may read
+        if not STATE_NAME.fullmatch(name):
+            raise ValueError("bad state name; one of: supervisor, scheduler, population, agents, "
+                             "costs_<account>, classifier_<account>, engine_<account>")
         f = self.state / f"{name}.json"
         if not f.exists():
             return {"missing": name}

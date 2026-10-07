@@ -28,7 +28,7 @@ from typing import Any
 from pydantic import Field
 
 from goldbot.api.schema import Role
-from goldbot.base import Record
+from goldbot.base import Record, write_private
 
 ROLES: tuple[Role, ...] = ("owner", "approver", "viewer")
 ROLE_RANK = {r: i for i, r in enumerate(reversed(ROLES))}  # viewer 0, approver 1, owner 2
@@ -114,12 +114,8 @@ class AuthStore:
             self.invites = {k: Invite(**v) for k, v in d.get("invites", {}).items()}
 
     def _save(self) -> None:
-        self.path.write_text(json.dumps({"users": {e: u.model_dump() for e, u in self.users.items()},
-                                         "invites": {k: v.model_dump() for k, v in self.invites.items()}}, indent=1))
-        try:
-            self.path.chmod(0o600)
-        except OSError:
-            pass
+        write_private(self.path, json.dumps({"users": {e: u.model_dump() for e, u in self.users.items()},
+                                             "invites": {k: v.model_dump() for k, v in self.invites.items()}}, indent=1))
 
     def audit(self, event: str, **kw: Any) -> None:
         with open(self.audit_path, "a", encoding="utf-8") as fh:
