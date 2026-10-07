@@ -92,6 +92,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   completes; context features are cached until a new context bar completes; open positions' time barriers and
   shadow trades count bars of the agent's timeframe.
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
+- Research discipline (proposal P1-P3, `docs/proposals/2026-10-design-improvements.md`): selection is cross-fitted
+  (fold k calibrated only on earlier folds' OOF predictions; threshold from signal-time information); the cost hurdle
+  is slippage + commission (`live_extra_cost_usd`, the settings prior before a cost table exists), not the spread
+  again; `research/gates.py` checks 1,500 candidates / 60 per test fold / three positive years incl. 2021-22, and
+  live promotion in the tournament needs a passed trial of the exact config; DSR is null below 200 trades; reports
+  carry rule-only gross and net expectancy. Quarterly budget of 20 pre-registered trials
+  (`research.trial_budget_quarter`), holdout 2025-10-01..2026-09-30 (`research_pass.py --score-holdout`, once per
+  config), monthly label grid paused (`research.label_grid_paused`). Meta-models get `side` and side-aligned signed
+  features (`features.registry.side_align`) from each specialist's declared `model_features` (h1_/h4_/d1_ context
+  included). Fold-internal feature selection is deferred.
 
 ## Next steps (no owner input needed unless marked)
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.

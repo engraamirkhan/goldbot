@@ -71,3 +71,38 @@ def test_variants_are_separate_trials_and_typos_fail(release_dir, tmp_path, monk
         rp.parse_variants("session_open", '[{"asia_range_max": 1.2}]')
     with pytest.raises(SystemExit, match="does not run on"):
         rp.parse_variants("trend", '[{"timeframe": "4h"}]')
+
+
+def test_reports_carry_gates_rule_only_and_the_cost_line(release_dir, tmp_path, monkeypatch):
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--extra-cost-usd", "0.3"])
+    assert rp.main() == 0
+    text = report.read_text()
+    assert "### Design gates: **FAIL**" in text and "FAIL candidates" in text      # 3 synthetic years: far too few
+    assert "### The rule alone" in text and "gross (mid prices, no costs)" in text
+    assert "0.30 $/oz round trip" in text and "holdout 2025-10-01 .. 2026-10-01 excluded" in text
+    row = json.loads(registry.read_text().splitlines()[0])
+    assert row["results"]["gates"]["passed"] is False and row["results"]["evaluation"] == "cross-fitted"
+    assert row["budget_quarter"] and row["status"] == "evaluated"
+
+
+def test_trial_budget_refuses_and_the_holdout_is_scored_once(release_dir, tmp_path, monkeypatch):
+    from goldbot.research.registry import TrialRegistry, quarter_of
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    reg = TrialRegistry(registry)
+    for _ in range(20):                                                  # this quarter's budget is spent
+        reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={},
+                   budget_quarter=quarter_of())
+    argv = ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry), "--report", str(report)]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="trial budget exceeded"):
+        rp.main()
+    # scoring the holdout is not a search trial: allowed once per configuration, then refused
+    monkeypatch.setattr(sys, "argv", argv + ["--score-holdout"])
+    assert rp.main() == 0
+    last = json.loads(registry.read_text().splitlines()[-1])
+    assert last["status"] == "holdout" and last["results"]["holdout"]["scored"] is True and "budget_quarter" not in last
+    assert "**holdout scoring**" in report.read_text()
+    with pytest.raises(SystemExit, match="already scored on the holdout"):
+        rp.main()

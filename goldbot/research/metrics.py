@@ -56,11 +56,19 @@ def size_multiplier(p: np.ndarray, allocator_w: float, target_atr: float, stop_a
     return allocator_w * np.clip((p - p0) / width, 0.0, 1.0)
 
 
+MIN_TRADES_FOR_DSR = 200      # below this the deflated Sharpe is not reported (asymptotic statistic; design gates)
+
+
 def summarize(trades: pd.DataFrame, trades_per_year: float, n_trials: int = 1) -> dict:
+    """Trade-level summary. `dsr` is None below MIN_TRADES_FOR_DSR trades: on a few dozen trades the deflated Sharpe's
+    normal approximation and its skew/kurtosis terms are meaningless (16 trades once read 0.991)."""
     r = trades["ret"].to_numpy()
     if len(r) == 0:
         return {"n": 0}
     sr_per_trade = np.mean(r) / (np.std(r, ddof=1) if len(r) > 1 and np.std(r, ddof=1) > 0 else 1)
+    dsr = (deflated_sharpe(sr_per_trade, n_trials, len(r), float(stats.skew(r)), float(stats.kurtosis(r, fisher=False)),
+                           var_sr_trials=1.0 / max(len(r), 1))
+           if len(r) >= MIN_TRADES_FOR_DSR else None)
     return {
         "n": int(len(r)),
         "hit_rate": float(np.mean(r > 0)),
@@ -69,6 +77,19 @@ def summarize(trades: pd.DataFrame, trades_per_year: float, n_trials: int = 1) -
         "profit_factor": profit_factor(r),
         "sharpe_ann": sharpe_annualised(r, trades_per_year),
         "max_dd": max_drawdown(r),
-        "dsr": deflated_sharpe(sr_per_trade, n_trials, len(r), float(stats.skew(r)), float(stats.kurtosis(r, fisher=False)),
-                               var_sr_trials=1.0 / max(len(r), 1)),
+        "dsr": dsr,
     }
+
+
+def expectancy(ret: np.ndarray, risk: np.ndarray) -> dict:
+    """Per-trade expectancy of a set of trades: mean return, mean R (return / fraction of price risked), hit rate and
+    the t-statistic of the mean R (0 below two trades)."""
+    ret, risk = np.asarray(ret, dtype=float), np.asarray(risk, dtype=float)
+    ok = np.isfinite(ret) & np.isfinite(risk) & (risk > 0)
+    ret, r = ret[ok], ret[ok] / risk[ok]
+    n = len(r)
+    if n == 0:
+        return {"n": 0}
+    sd = float(np.std(r, ddof=1)) if n > 1 else 0.0
+    return {"n": int(n), "mean_ret": float(np.mean(ret)), "mean_r": float(np.mean(r)), "hit_rate": float(np.mean(ret > 0)),
+            "t_stat": float(np.mean(r) / sd * np.sqrt(n)) if sd > 0 else 0.0}

@@ -100,13 +100,26 @@ def test_retrain_challenger_shadow_promotion_cycle(bars_store, tmp_path):
     assert "challenger" in third["retrain"]                 # a fresh challenger starts its own shadow period
 
 
+def test_monthly_label_grid_is_paused_by_default(tmp_path):
+    ctx = _ctx(tmp_path / "data", tmp_path)
+    out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
+    assert "paused" in out and ctx.trials.n_trials == 0
+
+
 def test_monthly_research_is_bounded_and_counted(bars_store, tmp_path):
-    ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=1)
+    ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=1, label_grid_paused=False)
     out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
     # the budget is per specialist; every family's trials count towards one registry total
     assert all(out[f]["trials"] == 1 for f in SPECIALISTS) and ctx.trials.n_trials == len(SPECIALISTS)
+    assert ctx.trials.budget_used("2025Q3") == len(SPECIALISTS)       # and towards the quarter's trial budget
     report = Path(out["report"]).read_text()
     assert "Research loop 2025-09" in report and report.count("\n| ") >= 3
+
+
+def test_monthly_research_stops_at_the_quarterly_budget(bars_store, tmp_path):
+    ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=1, label_grid_paused=False, trial_budget_quarter=2)
+    out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
+    assert ctx.trials.n_trials == 2 and "trial budget exceeded" in out["budget"]
 
 
 def test_label_grid_is_the_26_neighbours_of_the_base():
@@ -132,5 +145,10 @@ def test_research_analyst_trial_is_recorded_in_the_registry(bars_store, tmp_path
     # a looser filter keeps enough candidates for a fold on three synthetic years (a tighter one would not)
     out = runner("session_open", {"asia_range_max_atr_d": 1.2}, "research analyst, hypothesis abc: looser filter")
     assert out["trial"] == 1 and out["n_folds"] >= 1 and "model_filtered" in out
+    assert "gates" in out and out["gates"]["passed"] is False and out["rule_only"]["gross"]["n"] > 0
     row = ctx.trials._rows()[0]
     assert row["config"]["asia_range_max_atr_d"] == 1.2 and row["rationale"].startswith("research analyst")
+    assert row["budget_quarter"] == "2025Q3"
+    # the quarter's pre-registered budget is enforced for the analyst too
+    capped = make_trial_runner(_ctx(bars_store, tmp_path, trial_budget_quarter=1), now=lambda: pd.Timestamp("2025-09-30", tz="UTC"))
+    assert "trial budget exceeded" in capped("session_open", {}, "one too many")["error"]
