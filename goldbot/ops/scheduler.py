@@ -7,7 +7,7 @@ Rules that make it safe to restart at any time:
 * after downtime a missed slot is caught up once if it is no older than `max_late`, otherwise it is skipped and
   the skip is recorded (a Saturday retrain should not start on a Wednesday afternoon);
 * one job failing never stops the others; the error is recorded and the next slot runs normally;
-* state/scheduler.json doubles as the heartbeat the supervisor and dashboard read.
+* state/scheduler.json doubles as the heartbeat the dashboard reads (`/api/jobs`); the supervisor does not read it.
 """
 from __future__ import annotations
 

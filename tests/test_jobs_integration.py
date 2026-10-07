@@ -120,7 +120,8 @@ def test_build_scheduler_registers_every_job(tmp_path):
     sch = build_scheduler(ctx, clock=lambda: pd.Timestamp("2026-10-02 12:00", tz="UTC"))
     nxt = {k: v["next_slot"] for k, v in sch.status()["jobs"].items()}
     assert nxt == {"nightly_costs": "2026-10-02T23:10:00+00:00", "saturday_retrain": "2026-10-03T06:00:00+00:00",
-                   "tournament": "2026-10-03T12:00:00+00:00", "model_watch": "2026-10-02T23:30:00+00:00",
+                   "tournament": "2026-10-03T12:00:00+00:00", "research_director": "2026-10-03T12:30:00+00:00",
+                   "model_watch": "2026-10-02T23:30:00+00:00",
                    "agents_daily": "2026-10-02T23:45:00+00:00", "agents_weekly": "2026-10-03T13:00:00+00:00",
                    "monthly_research": "2026-10-04T08:00:00+00:00", "calendar_archive": "2026-10-03T06:10:00+00:00",
                    "agents_presession": "2026-10-05T06:30:00+00:00"}

@@ -283,8 +283,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         if not totp_verify(u.totp_secret, body.totp):
             st.auth.audit("rearm_failed", by=u.email)
             raise HTTPException(403, "authenticator code required to re-arm")
-        st.bus.set_halt(False, by=f"dashboard:{u.email}")
-        st.auth.audit("rearm", by=u.email)
+        c = st.bus.owner_rearm(by=f"dashboard:{u.email}")      # also clears the engines' drawdown halts
+        st.auth.audit("rearm", by=u.email, rearm_id=c.rearm_id)
         await st.broadcast({"type": "halt", "halted": False})
         return current_status()
 

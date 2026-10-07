@@ -115,6 +115,58 @@ def test_poll_scores_relevant_items_stores_all_and_never_twice(tmp_path):
     assert SpendLedger(tmp_path / "agent_spend.json", 40.0).month_spent(NOW) == pytest.approx(out["cost_usd"])
 
 
+def test_headlines_sharing_a_timestamp_are_all_kept_across_polls(tmp_path):
+    """Two different headlines published in the same minute (or both without a parseable time, so both take the
+    receipt time) must both survive the next poll's append into the same month partition."""
+    rss = """<?xml version="1.0"?><rss version="2.0"><channel><title>fl</title>
+<item><title>Gold jumps on Fed cut bets</title><link>https://x/a</link><pubDate>Mon, 12 Oct 2026 05:40:00 GMT</pubDate></item>
+<item><title>Missile strike reported, gold bid</title><link>https://x/b</link><pubDate>Mon, 12 Oct 2026 05:40:00 GMT</pubDate></item>
+</channel></rss>"""
+    later = """<?xml version="1.0"?><rss version="2.0"><channel><title>fl</title>
+<item><title>Dollar slips after CPI</title><link>https://x/c</link><pubDate>Mon, 12 Oct 2026 05:50:00 GMT</pubDate></item>
+</channel></rss>"""
+    pages = iter([rss, later])
+    c = NewsCollector(Store(tmp_path / "data"), tmp_path, {"fl": "u"}, lambda url: next(pages), None, None, "m", 0.0)
+    c.poll(NOW)
+    c.poll(NOW + pd.Timedelta(minutes=5))
+    stored = Store(tmp_path / "data").read("news")
+    assert sorted(stored["link"]) == ["https://x/a", "https://x/b", "https://x/c"]
+
+
+def test_items_whose_scoring_failed_are_scored_on_the_next_round(tmp_path):
+    """An API error during scoring must not store the relevant items as unscored-and-seen: the collector promises to
+    try again next round, otherwise a shock headline arriving during an API blip never blocks entries."""
+    client = FakeClient(cost_tokens=1000, shock_ids=())
+    ok_create = client._create
+    calls = {"n": 0}
+
+    def flaky(**kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("overloaded")
+        return ok_create(**kw)
+    client.beta = NS(messages=NS(create=flaky))
+    c = _collector(tmp_path, client)
+    first = c.poll(NOW)
+    assert "overloaded" in first["error"] and first["scored"] == 0
+    again = c.poll(NOW + pd.Timedelta(minutes=5))
+    assert again["scored"] == 3
+    stored = Store(tmp_path / "data").read("news")
+    assert len(stored) == 5 and stored["item_id"].is_unique and int(stored["scored"].sum()) == 3
+
+
+def test_old_items_still_in_a_feed_are_not_rescored_every_poll(tmp_path):
+    """Press-release feeds (Fed, BLS) keep items for weeks: an item published more than 7 days ago that is already
+    stored must be recognised as seen, not re-scored (and re-billed) on every poll."""
+    old = RSS.replace("Mon, 12 Oct 2026 05:10:00 +0000", "Tue, 01 Sep 2026 18:00:00 +0000")
+    client = FakeClient(cost_tokens=1000)
+    c = NewsCollector(Store(tmp_path / "data"), tmp_path, {"fl": "u"}, lambda url: old, client,
+                      SpendLedger(tmp_path / "agent_spend.json", 40.0), "m", 0.5)
+    assert c.poll(NOW)["new"] == 4 and len(client.requests) == 1
+    again = c.poll(NOW + pd.Timedelta(minutes=5))
+    assert again["new"] == 0 and len(client.requests) == 1
+
+
 def test_budget_exhausted_items_are_stored_unscored(tmp_path):
     c = _collector(tmp_path, FakeClient(), cap=0.0)
     out = c.poll(NOW)

@@ -6,13 +6,17 @@ All state is explicit and serialisable so the engine can reconcile after a resta
 """
 from __future__ import annotations
 
+import math
 from enum import Enum
 
 import pandas as pd
 from pydantic import Field
 
 from goldbot.base import Record
-from goldbot.data.timeutil import risk_day
+from goldbot.config import RiskSettings
+from goldbot.data.timeutil import floor_tf, risk_day
+
+REARM_PHRASE = "REARM"   # what rearm() expects; the engine passes it only for an owner re-arm seen on the bus
 
 
 class Stage(str, Enum):
@@ -37,6 +41,16 @@ class RiskLimits(Record):
     min_target_over_cost: float = 2.5
     margin_level_floor: float = 3.0      # 300%
     leverage_cap: float = 20.0           # FCA retail gold
+
+    @classmethod
+    def from_settings(cls, risk: RiskSettings, *, tiny_live: bool) -> RiskLimits:
+        """The `risk:` section of settings.yaml; `tiny_live` selects the tiny-live phase's risk per trade."""
+        return cls(risk_per_trade=risk.risk_per_trade_tiny_live if tiny_live else risk.risk_per_trade,
+                   multiplier_bounds=risk.multiplier_bounds, daily_cap=risk.daily_cap, weekly_cap=risk.weekly_cap,
+                   dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2,
+                   dd_stage1_clear=risk.drawdown_stage1_clear, max_positions=risk.max_positions_per_account,
+                   max_spread_points=risk.max_spread_points, stale_tick_seconds=risk.stale_tick_seconds,
+                   min_target_over_cost=risk.min_target_over_cost)
 
 
 class AccountState(Record):
@@ -98,7 +112,7 @@ class RiskGate:
         return st.stage
 
     def rearm(self, st: AccountState, confirmation: str) -> bool:
-        if confirmation != "REARM":  # the Telegram layer adds TOTP before calling this
+        if confirmation != REARM_PHRASE:  # the owner's TOTP-verified re-arm (control.json rearm_seq) precedes this
             return False
         st.stage = Stage.NORMAL
         st.balance_closed_hwm = st.equity
@@ -150,7 +164,8 @@ class RiskGate:
         stop_distance = max(intent.stop_atr * intent.atr_usd, intent.stops_level_points * L.point + st.spread_points * L.point)
         risk_usd = st.equity * risk_frac * mult
         lots_raw = risk_usd / (stop_distance * intent.contract_oz)
-        lots = max(intent.volume_min, (lots_raw // intent.volume_step) * intent.volume_step)
+        steps = math.floor(lots_raw / intent.volume_step + 1e-9)   # 0.25 // 0.01 == 24.0 in floats: not here
+        lots = max(intent.volume_min, steps * intent.volume_step)
         lots = min(lots, intent.volume_max)
         realised_risk = lots * stop_distance * intent.contract_oz / st.equity
         if realised_risk > 1.2 * risk_frac * mult and lots_raw < intent.volume_min:
@@ -164,9 +179,16 @@ class RiskGate:
         return GateDecision(allowed=True, lots=round(lots, 2), risk_fraction=realised_risk, stop_distance=stop_distance)
 
 
+def _risk_week(ts: pd.Timestamp) -> pd.Timestamp:
+    return floor_tf(pd.DatetimeIndex([ts]), 7 * 86400)[0]      # weeks start Sunday 00:00 UTC (gold opens Sunday)
+
+
 def new_day(st: AccountState, now_utc: pd.Timestamp, last_reset: pd.Timestamp | None) -> bool:
-    """Reset the day-start equity at the risk-day boundary (00:00 UTC)."""
+    """Reset the day-start equity at the risk-day boundary (00:00 UTC), and the week-start equity when the reset
+    also crosses into a new risk week. Returns True when a reset happened (the caller persists `now_utc`)."""
     if last_reset is None or risk_day(pd.DatetimeIndex([now_utc]))[0] != risk_day(pd.DatetimeIndex([last_reset]))[0]:
         st.day_start_equity = st.equity
+        if last_reset is None or _risk_week(now_utc) != _risk_week(last_reset):
+            st.week_start_equity = st.equity
         return True
     return False

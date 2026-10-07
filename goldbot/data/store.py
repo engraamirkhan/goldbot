@@ -28,6 +28,7 @@ KEY_COLUMNS = {
     "macro": ["series", "value_date", "vintage"],
     "fills": ["ts_utc", "client_order_id"],
     "calendar_events": ["event_id"],          # a re-fetched event replaces the earlier copy (forecast revisions)
+    "news": ["item_id"],                       # headlines often share a published minute; ts_utc is not a key
 }
 
 
@@ -77,7 +78,8 @@ class Store:
                     f.unlink()
                 part_out = merged.sort_values("ts_utc")
             else:
-                part_out = part
+                part_out = part.drop_duplicates(subset=[k for k in keys if k in part.columns], keep="last") \
+                    if dedupe else part
             pq.write_table(
                 pa.Table.from_pandas(part_out, preserve_index=False),
                 pdir / f"part-{uuid.uuid4().hex[:8]}.parquet",
@@ -161,5 +163,6 @@ def asof_join(bars: pd.DataFrame, other: pd.DataFrame, *, on: str = "ts_utc", av
     out = pd.merge_asof(
         left, right, left_on=on, right_on=available_col, direction="backward",
         allow_exact_matches=True, tolerance=tolerance,
+        suffixes=("", "_other"),     # the bars keep their own columns (every store table also carries ts_utc)
     )
     return out.drop(columns=[available_col])

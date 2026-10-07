@@ -114,7 +114,7 @@ def test_hourly_agent_decides_only_on_hour_closes(tmp_path):
     hourly = [d for d in decisions if d["agent"] == trend.agent_id]
     assert hourly and all(pd.Timestamp(d["ts"]).minute == 0 for d in hourly)
     assert any(pd.Timestamp(d["ts"]).minute != 0 for d in decisions if d["agent"] == session.agent_id)
-    assert eng._base_bars(trend) == trend.label_spec.max_bars * 4
+    assert eng._base_bars(trend) == (trend.label_spec.max_bars + 1) * 4   # as the labels: max_bars + 1 bars
     assert eng.shadow is not None
     book = eng.shadow.books["trend-v1"]
     trades = book.open + book.closed

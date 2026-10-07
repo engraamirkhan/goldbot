@@ -24,7 +24,7 @@ FF_THIS_WEEK = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 TIER1_PATTERNS = {
     "CPI": r"\bCPI\b",
     "NFP": r"Non-Farm Employment Change|\bNFP\b",
-    "FOMC": r"\bFOMC\b|Federal Funds Rate",
+    "FOMC": r"\bFOMC (?:Statement|Press Conference)\b|Federal Funds Rate",   # design: statement and presser
     "PCE": r"\bPCE\b",
 }
 COLUMNS = ["event_id", "ts_utc", "country", "title", "impact", "tier", "forecast", "previous", "received_utc"]
