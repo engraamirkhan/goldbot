@@ -88,6 +88,9 @@ class EngineConfig(Record):
     shock_min_relevance: float = 0.7
     # production: tick age and feed staleness are measured against the wall clock (replays and tests use tick time)
     live_clock: bool = False
+    # between bar closes the account is refreshed (drawdown stages, kill switch, halts) and the state file written
+    # this often (tick time), so the supervisor's combined caps and the 12% kill switch act within seconds
+    state_every_s: int = 10
     stale_feed_s: int = 90                   # no tick for this long in an open session -> data-quality error
 
 
@@ -153,6 +156,22 @@ class Engine:
         self._last_reset: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
         self._load_risk_state()
+        self._last_state_write: pd.Timestamp | None = None
+        self._archive_stale_proposals()
+
+    def _archive_stale_proposals(self) -> None:
+        """Proposals this account published before a restart can never be executed (the pending entries died with
+        the process): archive the expired ones so the dashboard, Telegram and health checks do not list them."""
+        bus = self.center.bus
+        if bus is None:
+            return
+        for f in bus.pending_dir.glob(f"{self.cfg.account_id}-*.json"):
+            try:
+                p = Proposal.model_validate_json(f.read_text())
+            except (ValueError, OSError):
+                continue
+            if p.expired and p.proposal_id not in self.pending:
+                bus.archive(p)
 
     # ------------------------------------------------------------------ ticks and bars
     def on_tick(self, t: Tick) -> list[dict]:
@@ -172,6 +191,11 @@ class Engine:
         out: list[dict] = []
         if self.last_bar_close is not None and bar_close > self.last_bar_close:
             out = self.on_bar_close(self.last_bar_close + pd.Timedelta(seconds=sec), t)
+            self._last_state_write = t.ts_utc
+        elif self._last_state_write is None or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:
+            self._refresh_account(t)
+            self._write_state()
+            self._last_state_write = t.ts_utc
         self.last_bar_close = bar_close
         return out
 

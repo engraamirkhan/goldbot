@@ -173,9 +173,8 @@ retrain load the bars with the stored `github-token`.
 
 ### 2.6 Build the dashboard
 
-The API serves the dashboard from `C:\goldbot\web\dist`, which is not in the repository and is not built by the
-bootstrap script. Without it the API runs but the browser shows nothing. Install Node.js 22 (the version CI
-uses; for example from nodejs.org, this is outside the repository), then:
+The API serves the dashboard from `C:\goldbot\web\dist` (not in the repository). `vps_bootstrap.ps1` installs
+Node.js 22 (as CI) and builds it; `vps_update.ps1` rebuilds it when `web/` changes. To build by hand:
 
 ```powershell
 cd C:\goldbot\web
@@ -183,8 +182,6 @@ npm ci
 npm run build
 cd C:\goldbot
 ```
-
-Repeat `npm ci` and `npm run build` after every `git pull` that changes `web/`.
 
 ### 2.7 Cloudflare tunnel (dashboard from your phone, no VPN)
 
@@ -270,7 +267,9 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
     (any approver).
   * It is recorded in `state\control.json`.
 * **Re-arm** (resume entries) is only possible on the dashboard, by the owner: **Overview** -> enter the 6-digit
-  authenticator code -> **Re-arm**. Telegram `/rearm` only tells you to use the dashboard.
+  authenticator code -> **Re-arm**. Telegram `/rearm` only tells you to use the dashboard. The same re-arm also
+  clears an engine's 12% drawdown halt (the kill switch, which closes every position at market when it trips); each
+  engine applies it once, and a restart does not clear the halt.
 * `/status` on Telegram shows whether entries are halted and how many proposals are pending.
 
 ### Staff-agent reports
@@ -447,14 +446,29 @@ was a network blip.
 Issues labelled `ci` and `data` (`data-dukascopy failure for <year>`) mean a bar download failed; the next
 Saturday run or a manual run of `data-dukascopy` retries it.
 
+### Health check
+
+`python -m goldbot.ops.run health` lists every check (settings, secrets present, disk, supervisor heartbeat, halt,
+phase gates, each engine's state, stage and data quality, risk state, scheduler jobs, cost tables, news feeds,
+agent spend, stuck approvals) as ok / warn / fail with a one-line reason, and exits 1 on any fail. `--json`,
+`--out FILE`, `--baseline FILE` (fail only on new fails) and `--static` (no running services needed) exist for the
+update script. The Telegram service runs the same checks every 5 minutes and messages you when a check turns fail
+and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service running; the `alerts` check shows
+when that loop has stopped).
+
 ### Updating the VPS to a new version
 
 ```powershell
 cd C:\goldbot
-git pull
-.\.venv\Scripts\python -m pip install -e ".[live]"
+.\goldbot\ops\vps_update.ps1 -Ref main
 ```
 
-Then rebuild the dashboard if `web/` changed (section 2.6) and restart the services with
-`nssm restart <service>` (supervisor first). Approve nothing in the minute after an engine restart until the Feeds
-tab shows it connected again.
+The script saves a health baseline (`logs\health_before.json`), fetches, stops the services (inputs first, engines
+last), checks out the new commit, reinstalls `.[live]`, rebuilds the dashboard if `web/` changed, starts the
+services (supervisor first, engines next) and runs the health check again (`logs\health_after.json`). On any new
+fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back, 2 the rollback is unhealthy too.
+
+* It refuses while a scheduler job is running (Saturday 06:00-13:00 UTC is the retrain); `-Force` overrides.
+* Proposals open during an update expire. Positions keep their broker-side stop and target while engines are down.
+* If the new commit changes `config/accounts.yaml` or `config/settings.yaml` that you edited on the VPS, the
+  checkout fails and the script restores the old version untouched: merge those files by hand.
