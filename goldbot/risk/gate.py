@@ -6,6 +6,7 @@ All state is explicit and serialisable so the engine can reconcile after a resta
 """
 from __future__ import annotations
 
+import math
 from enum import Enum
 
 import pandas as pd
@@ -163,7 +164,8 @@ class RiskGate:
         stop_distance = max(intent.stop_atr * intent.atr_usd, intent.stops_level_points * L.point + st.spread_points * L.point)
         risk_usd = st.equity * risk_frac * mult
         lots_raw = risk_usd / (stop_distance * intent.contract_oz)
-        lots = max(intent.volume_min, (lots_raw // intent.volume_step) * intent.volume_step)
+        steps = math.floor(lots_raw / intent.volume_step + 1e-9)   # 0.25 // 0.01 == 24.0 in floats: not here
+        lots = max(intent.volume_min, steps * intent.volume_step)
         lots = min(lots, intent.volume_max)
         realised_risk = lots * stop_distance * intent.contract_oz / st.equity
         if realised_risk > 1.2 * risk_frac * mult and lots_raw < intent.volume_min:

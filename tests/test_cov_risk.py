@@ -156,8 +156,6 @@ def test_risk_per_trade_is_capped_by_the_hard_maximum():
     assert d.risk_fraction <= 0.01
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: gate.py sizes with `lots_raw // volume_step`; 0.25 // 0.01 == 24.0 in floating "
-                                       "point, so a raw size that is already a whole number of steps loses one step")
 def test_a_raw_size_that_is_an_exact_number_of_steps_is_kept():
     g = RiskGate(RiskLimits(risk_per_trade=0.01))
     assert g.check(_intent(), _state()).lots == 0.25        # $100 / ($4 x 100 oz) = exactly 0.25 lots
