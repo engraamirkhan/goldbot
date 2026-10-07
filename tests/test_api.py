@@ -6,6 +6,9 @@ from fastapi.testclient import TestClient
 
 from goldbot.api.app import create_app
 from goldbot.api.auth import totp_code
+from goldbot.config import load_settings
+from goldbot.data.econ_calendar import COLUMNS
+from goldbot.data.store import Store
 from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
@@ -143,3 +146,75 @@ def test_agent_runs_endpoint_serves_reports_from_the_state_dir_only(tmp_path):
     got = c.get("/api/agent-runs", headers={"Authorization": f"Bearer {tok}"}).json()
     assert [r["role"] for r in got] == ["data_steward", "risk_officer"]          # newest first, bad line skipped
     assert got[1]["report"].startswith("Drawdown") and got[0]["report"] is None   # outside the state dir: not served
+
+
+def _owner_headers(c: TestClient, app) -> dict[str, str]:
+    uri = c.post("/api/auth/setup", json={"setup_code": app.state.st.auth.setup_code, "email": "o@x.io", "password": "a long password here"}).json()["totp_uri"]
+    tok = c.post("/api/auth/login", json={"email": "o@x.io", "password": "a long password here", "totp": totp_code(_secret_from_uri(uri))}).json()["token"]
+    return {"Authorization": f"Bearer {tok}"}
+
+
+def _seed_calendar_and_news(root, now: pd.Timestamp) -> None:
+    store = Store(root)
+    ev = [("cpi", now + pd.Timedelta(hours=2), "USD", "CPI m/m", "High", 1, "0.3%", "0.2%"),
+          ("ism", now + pd.Timedelta(hours=1), "USD", "ISM Manufacturing PMI", "High", 2, "49.5", "48.7"),
+          ("gbp", now + pd.Timedelta(hours=3), "GBP", "Construction PMI", "Low", 3, "", ""),
+          ("nfp", now + pd.Timedelta(days=10), "USD", "Non-Farm Employment Change", "High", 1, "150K", "142K")]
+    store.append("calendar_events", pd.DataFrame(
+        [{"event_id": i, "ts_utc": t, "country": c, "title": ti, "impact": im, "tier": tier, "forecast": f, "previous": p,
+          "received_utc": now} for i, t, c, ti, im, tier, f, p in ev], columns=COLUMNS), source="forexfactory")
+    nan = float("nan")
+    items = [("n1", 10, "Fed's Powell signals pause", 0.8, "dovish", "risk_on", "negative", "none", False, True),
+             ("n2", 30, "Missile strike reported near Gulf shipping lane", 0.95, "neutral", "risk_off", "positive", "none", True, True),
+             ("n3", 60, "Local sports results", nan, "", "", "", "", False, False),
+             ("n4", 600, "Old item from this morning", 0.5, "neutral", "neutral", "neutral", "none", False, True),
+             ("n5", 120, "ECB minutes show split", 0.3, "hawkish", "neutral", "negative", "none", False, True)]
+    store.append("news", pd.DataFrame(
+        [{"item_id": i, "ts_utc": now - pd.Timedelta(minutes=m), "received_utc": now - pd.Timedelta(minutes=m - 1),
+          "source": "forexlive", "title": t, "summary": "", "link": f"https://example.com/{i}" if i != "n3" else "",
+          "scored": sc, "relevance": rel, "rates": ra, "risk": ri, "dollar": d, "surprise": su, "shock": sh}
+         for i, m, t, rel, ra, ri, d, su, sh, sc in items]), source="rss")
+
+
+def test_calendar_and_news_endpoints(tmp_path):
+    now = pd.Timestamp.now("UTC").floor("s")
+    _seed_calendar_and_news(tmp_path / "data", now)
+    shock = {"title": "Missile strike reported near Gulf shipping lane", "kind": "news_shock",
+             "received_utc": (now - pd.Timedelta(minutes=29)).isoformat()}
+    (tmp_path / "engine_icm.json").write_text(json.dumps({"account": "icm-demo", "blackout": shock}))
+    (tmp_path / "engine_vantage.json").write_text(json.dumps({"account": "vantage-demo", "blackout": shock}))
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", data_root=tmp_path / "data")
+    c = TestClient(app)
+    assert c.get("/api/calendar").status_code == 401 and c.get("/api/news").status_code == 401
+    h = _owner_headers(c, app)
+
+    cal = c.get("/api/calendar", headers=h).json()
+    assert [e["event_id"] for e in cal["events"]] == ["ism", "cpi"]          # 7 days, tiers 1-2, by time
+    cpi = cal["events"][1]
+    blackout = load_settings().risk.blackout
+    assert pd.Timestamp(cpi["blackout_start"]) == now + pd.Timedelta(hours=2) - pd.Timedelta(minutes=blackout.before_min)
+    assert pd.Timestamp(cpi["blackout_end"]) == now + pd.Timedelta(hours=2) + pd.Timedelta(minutes=blackout.after_min)
+    assert cal["events"][0]["blackout_start"] is None and cal["events"][0]["forecast"] == "49.5"
+    ab = cal["active_blackout"]
+    assert ab["kind"] == "news_shock" and ab["title"].startswith("Missile") and ab["accounts"] == ["icm-demo", "vantage-demo"]
+    # inputs are clamped, not rejected
+    assert [e["event_id"] for e in c.get("/api/calendar?days=99&max_tier=9", headers=h).json()["events"]] == ["ism", "cpi", "gbp", "nfp"]
+    assert [e["event_id"] for e in c.get("/api/calendar?days=0&max_tier=0", headers=h).json()["events"]] == ["cpi"]
+
+    news = c.get("/api/news", headers=h).json()
+    assert [n["item_id"] for n in news] == ["n1", "n2", "n3", "n5", "n4"]    # newest first, last 24 h
+    unscored = news[2]
+    assert unscored["relevance"] is None and unscored["rates"] is None and unscored["link"] is None and unscored["shock"] is False
+    assert news[1]["shock"] is True and news[1]["risk"] == "risk_off" and news[0]["link"] == "https://example.com/n1"
+    assert [n["item_id"] for n in c.get("/api/news?min_relevance=0.7", headers=h).json()] == ["n1", "n2"]
+    assert [n["item_id"] for n in c.get("/api/news?hours=0&min_relevance=-3", headers=h).json()] == ["n1", "n2"]   # 1 h, all
+    assert c.get("/api/news?min_relevance=5", headers=h).json() == []
+
+
+def test_calendar_and_news_without_archive_or_engines(tmp_path):
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", data_root=tmp_path / "empty")
+    c = TestClient(app)
+    h = _owner_headers(c, app)
+    cal = c.get("/api/calendar", headers=h).json()
+    assert cal["events"] == [] and cal["active_blackout"] is None and "no calendar archived" in cal["note"]
+    assert c.get("/api/news", headers=h).json() == []

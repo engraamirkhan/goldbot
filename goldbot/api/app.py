@@ -12,7 +12,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -24,13 +24,17 @@ from goldbot.api.schema import (
     AcceptRequest,
     AcceptResponse,
     AccountSummary,
+    ActiveBlackout,
     AgentRow,
     AgentRunRow,
     AuthState,
+    CalendarEvent,
+    CalendarResponse,
     Decision,
     DecisionResult,
     FeedHealth,
     HaltRequest,
+    Headline,
     InviteRequest,
     InviteResponse,
     JobRow,
@@ -50,15 +54,47 @@ from goldbot.api.schema import (
 )
 from goldbot.telegram.bus import ApprovalBus
 
+if TYPE_CHECKING:
+    from goldbot.agents.tools import ReadOnlyTools
+
 bearer = HTTPBearer(auto_error=False)
 
 
 class State:
-    def __init__(self, state_dir: str | Path):
+    def __init__(self, state_dir: str | Path, data_root: str | Path | None = None):
         self.dir = Path(state_dir)
         self.bus = ApprovalBus(self.dir)
         self.auth = AuthStore(self.dir)
         self.ws_clients: set[WebSocket] = set()
+        self._data_root = data_root
+        self._tools: ReadOnlyTools | None = None
+
+    def tools(self) -> ReadOnlyTools:
+        """The agents' read-only store tools (calendar, headlines), opened on first use: the store root comes from
+        settings.data_root unless create_app was given one, so apps that never read the store never touch it."""
+        if self._tools is None:
+            from goldbot.agents.tools import ReadOnlyTools
+            from goldbot.config import load_settings
+            from goldbot.data.store import Store
+            root = self._data_root if self._data_root is not None else load_settings().data_root
+            self._tools = ReadOnlyTools(self.dir, Store(root))
+        return self._tools
+
+    def active_blackout(self) -> ActiveBlackout | None:
+        """The entry blackout the engines report (calendar event or news shock), with the accounts enforcing it."""
+        found: dict[tuple[str, str], tuple[dict[str, Any], list[str]]] = {}
+        for e in self.engines():
+            b = e.get("blackout")
+            if not isinstance(b, dict) or not b.get("title"):
+                continue
+            kind = "news_shock" if b.get("kind") == "news_shock" else "calendar"
+            key = (kind, str(b["title"]))
+            found.setdefault(key, (b, []))[1].append(str(e.get("account", "?")))
+        if not found:
+            return None
+        (kind, title), (b, accounts) = next(iter(found.items()))
+        return ActiveBlackout(kind="news_shock" if kind == "news_shock" else "calendar", title=title,
+                              ts_utc=b.get("ts_utc"), received_utc=b.get("received_utc"), accounts=sorted(accounts))
 
     def engines(self) -> list[dict]:
         out = []
@@ -113,8 +149,9 @@ class State:
             self.ws_clients.discard(ws)
 
 
-def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist") -> FastAPI:
-    st = State(state_dir)
+def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist",
+               data_root: str | Path | None = None) -> FastAPI:
+    st = State(state_dir, data_root)
     app = FastAPI(title="goldbot api", version="0.2")
     app.state.st = st
     hint = env_setup_code_hint(st.auth)
@@ -280,6 +317,25 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                             cost_usd=r.get("cost_usd", 0.0), detail=r.get("detail"), report=r.get("report"))
                 for r in st.agent_runs()]
 
+    @app.get("/api/calendar", response_model=CalendarResponse)
+    def calendar(days: int = 7, max_tier: int = 2, _: User = Depends(auth)) -> CalendarResponse:
+        out = st.tools().read_calendar(min(max(days, 1), 14), min(max(max_tier, 1), 3))
+        events = []
+        for e in out["events"]:
+            start, end = e.get("blackout_utc") or (None, None)
+            events.append(CalendarEvent.model_validate({**e, "impact": e["impact"] or "", "forecast": e["forecast"] or "",
+                                                        "previous": e["previous"] or "", "blackout_start": start,
+                                                        "blackout_end": end}))
+        return CalendarResponse(now=out["now"], events=events, active_blackout=st.active_blackout(), note=out.get("note"))
+
+    @app.get("/api/news", response_model=list[Headline])
+    def news(hours: int = 24, min_relevance: float = 0.0, _: User = Depends(auth)) -> list[Headline]:
+        mr = min(max(min_relevance, 0.0), 1.0) if min_relevance == min_relevance else 0.0   # NaN -> 0
+        rows = st.tools().read_headlines(min(max(hours, 1), 72), mr, extra=("item_id", "ts_utc", "link"))
+        tags = ("rates", "risk", "dollar", "surprise")      # unscored rows store "" for the direction tags
+        return [Headline.model_validate({**r, "link": r.get("link") or None, "shock": bool(r["shock"]),
+                                         **{k: r[k] or None for k in tags}}) for r in rows]
+
     @app.get("/api/status")
     def status() -> Status:
         modes = sorted({str(e.get("approval_mode", "propose")) for e in st.engines()})
@@ -312,4 +368,5 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
-    uvicorn.run(create_app(os.environ.get("GOLDBOT_STATE", "state")), host="127.0.0.1", port=8787)
+    uvicorn.run(create_app(os.environ.get("GOLDBOT_STATE", "state"), data_root=os.environ.get("GOLDBOT_DATA")),
+                host="127.0.0.1", port=8787)

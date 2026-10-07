@@ -83,6 +83,24 @@ test("owner halts new entries and re-arms with an authenticator code", async ({ 
   await expect(page.getByRole("button", { name: "Halt new entries" })).toBeVisible();
 });
 
+test("news tab shows the calendar with blackout windows and the scored headlines", async ({ page }) => {
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await page.getByRole("button", { name: "News", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Economic calendar" })).toBeVisible();
+  const cpi = page.locator("tr", { hasText: "CPI m/m" });
+  await expect(cpi.locator(".badge.tier1")).toHaveText("T1");
+  await expect(cpi.locator("td").last()).toHaveText(/^\d\d:\d\d–\d\d:\d\d/);   // the seeded tier-1 event's blackout window
+  await expect(page.locator("tr", { hasText: "ISM Manufacturing PMI" }).locator("td").last()).toHaveText("—");
+  const shock = page.locator("tr.shock", { hasText: "Missile strike" });
+  await expect(shock.getByText("SHOCK")).toBeVisible();
+  await expect(shock.getByText("risk-off")).toBeVisible();
+  await expect(page.locator("tr", { hasText: "Weekend football results" }).getByText("unscored")).toBeVisible();
+  await page.getByLabel("Minimum relevance").selectOption("0.7");
+  await expect(page.getByText("Weekend football results")).toHaveCount(0);
+  await expect(page.getByText("Fed's Powell signals a pause in hikes")).toBeVisible();
+});
+
 test("owner invites a viewer", async ({ page }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
@@ -106,7 +124,7 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   await signIn(page, VIEWER.email, VIEWER.password, secret);
   await expect(page.getByText(`${VIEWER.email} · viewer`)).toBeVisible();
   await expect(page.getByRole("button", { name: "Users" })).toHaveCount(0);
-  for (const tab of ["Overview", "Agents", "Feeds", "Approvals"]) {
+  for (const tab of ["Overview", "News", "Agents", "Feeds", "Approvals"]) {
     await page.getByRole("button", { name: tab, exact: true }).click();
   }
   await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);

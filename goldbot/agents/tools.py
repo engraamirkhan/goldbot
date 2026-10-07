@@ -214,7 +214,7 @@ class ReadOnlyTools:
         events: list[dict[str, Any]] = []
         for r in df.to_dict("records"):
             t = pd.Timestamp(str(r["ts_utc"]))
-            e: dict[str, Any] = {"ts_utc": t.isoformat(), "country": r["country"], "title": r["title"],
+            e: dict[str, Any] = {"event_id": r["event_id"], "ts_utc": t.isoformat(), "country": r["country"], "title": r["title"],
                                  "tier": int(str(r["tier"])), "impact": r["impact"], "forecast": r["forecast"],
                                  "previous": r["previous"]}
             if e["tier"] == 1:
@@ -223,7 +223,8 @@ class ReadOnlyTools:
             events.append(e)
         return {"now": now.isoformat(), "events": events}
 
-    def read_headlines(self, hours: int, min_relevance: float) -> list[dict[str, Any]]:
+    def read_headlines(self, hours: int, min_relevance: float, *, extra: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+        """`extra` adds stored columns (e.g. item_id, link for the dashboard); agents get the compact default."""
         now = self.now()
         df = self.store.read("news", start=now - pd.Timedelta(hours=min(max(int(hours), 1), 72)), end=now)
         if df.empty:
@@ -231,7 +232,7 @@ class ReadOnlyTools:
         rel = df["relevance"].astype(float)
         if float(min_relevance) > 0:
             df = df[rel >= float(min_relevance)]
-        cols = ["received_utc", "source", "title", "relevance", "rates", "risk", "dollar", "surprise", "shock"]
+        cols = [*extra, "received_utc", "source", "title", "relevance", "rates", "risk", "dollar", "surprise", "shock"]
         df = df.sort_values("received_utc", ascending=False).head(100)
         return [{str(k): (None if isinstance(v, float) and v != v else v) for k, v in r.items()}
                 for r in df[cols].to_dict("records")]

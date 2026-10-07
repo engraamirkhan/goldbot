@@ -1,7 +1,7 @@
 // Typed client over the FastAPI backend. Every shape comes from schema.d.ts, which is generated from the
 // backend's OpenAPI schema: `python scripts/export_openapi.py && npm run gen:api`. CI regenerates both and
 // fails on a diff, so a contract change in goldbot/api/schema.py cannot reach main without the client.
-import type { components } from "./schema";
+import type { components, operations } from "./schema";
 
 type Schemas = components["schemas"];
 export type AccountSummary = Schemas["AccountSummary"];
@@ -17,6 +17,20 @@ export type Me = Schemas["Me"];
 export type UserRow = Schemas["UserRow"];
 export type JobRow = Schemas["JobRow"];
 export type AgentRunRow = Schemas["AgentRunRow"];
+export type CalendarResponse = Schemas["CalendarResponse"];
+export type CalendarEvent = Schemas["CalendarEvent"];
+export type ActiveBlackout = Schemas["ActiveBlackout"];
+export type Headline = Schemas["Headline"];
+export type CalendarQuery = NonNullable<operations["calendar_api_calendar_get"]["parameters"]["query"]>;
+export type NewsQuery = NonNullable<operations["news_api_news_get"]["parameters"]["query"]>;
+
+/** `?a=1&b=2` from the defined values of a typed query object (the server clamps out-of-range values). */
+function qs(q: Record<string, number | string | undefined>): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(q)) if (v !== undefined) p.set(k, String(v));
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
 
 let token: string | null = sessionStorage.getItem("goldbot_token");
 let me: Me | null = JSON.parse(sessionStorage.getItem("goldbot_me") ?? "null");
@@ -58,6 +72,8 @@ export const api = {
   feeds: () => req<FeedHealth[]>("/api/feeds"),
   jobs: () => req<JobRow[]>("/api/jobs"),
   agentRuns: () => req<AgentRunRow[]>("/api/agent-runs"),
+  calendar: (q: CalendarQuery = {}) => req<CalendarResponse>(`/api/calendar${qs(q)}`),
+  news: (q: NewsQuery = {}) => req<Headline[]>(`/api/news${qs(q)}`),
 };
 
 export function liveSocket(onEvent: (e: { type: string } & Record<string, unknown>) => void): () => void {

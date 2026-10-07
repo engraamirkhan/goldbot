@@ -39,3 +39,21 @@ form.inline button { padding: 6px 12px; border-radius: 6px; border: 0; backgroun
 .halt input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
 .halt button { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: none; color: var(--fg); cursor: pointer; }
 .halt button.danger { background: var(--bad); border-color: var(--bad); color: white; }
+
+.banner { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+.banner.bad { border-color: var(--bad); color: var(--bad); }
+.section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.section-head select { padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
+.section-head select option { background: var(--bg); color: var(--fg); }
+.nowrap { white-space: nowrap; }
+tr.past { color: var(--muted); }
+tr.shock { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); }
+.badge.tier1 { background: var(--bad); border-color: var(--bad); color: white; }
+.badge.tier2 { border-color: var(--accent); color: var(--accent); }
+.badge.tier3 { color: var(--muted); }
+.badge.shock { background: var(--bad); border-color: var(--bad); color: white; }
+.tag { display: inline-block; margin: 0 4px 2px 0; padding: 0 6px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px; color: var(--muted); }
+meter { width: 48px; vertical-align: middle; }
+td a { color: inherit; }
+.scroll { overflow-x: auto; }
