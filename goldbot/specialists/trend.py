@@ -28,6 +28,15 @@ class TrendSpecialist(Specialist):
         "stop_atr": 1.25,
         "max_bars": 48,
     }
+    # declared meta-model inputs, chosen by rationale (trend quality on the decision bar and the 4h/daily bars, pullback depth, structure and momentum); the model adds `side`, <= 40 in all
+    model_features = (
+        "dist_ema20_atr", "dist_ema50_atr", "dist_ema200_atr", "slope_ema20", "slope_ema50", "slope_ema200",
+        "ribbon_state", "ribbon_width_atr", "bars_since_ribbon_flip", "adx14", "adx14_bucket", "donchian_pos_20",
+        "ret_1", "ret_4", "ret_16", "ret_96", "atr14_pct", "atr_ratio_14_100", "rv_ratio", "vol_tercile", "rsi14",
+        "bb_z_20", "mfi12", "structure_state", "dist_last_swing_high_atr", "dist_last_swing_low_atr", "dist_res_atr",
+        "dist_sup_atr", "tick_vol_ratio_20", "session_id", "dow", "h4_adx14", "h4_dist_ema50_atr", "h4_slope_ema50",
+        "h4_ribbon_state", "h4_vol_tercile", "d1_dist_ema50_atr", "d1_slope_ema50", "d1_adx14",
+    )
 
     @property
     def label_spec(self) -> BarrierSpec:

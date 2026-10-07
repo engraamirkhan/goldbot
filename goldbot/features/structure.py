@@ -84,7 +84,7 @@ def f_levels(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     }, index=df.index)
 
 
-@feature("swings", "structure", lookback=200)
+@feature("swings", "structure", lookback=200, signed={"hh": 0.5, "hl": 0.5, "structure_state": 0.0})
 def f_swings(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     lag = ctx.get("swing_lag", 5)
     is_high, is_low = swing_points(df, lag)
@@ -104,7 +104,7 @@ def f_swings(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     return out
 
 
-@feature("gaps", "structure", lookback=20)
+@feature("gaps", "structure", lookback=20, signed={"gap_atr": 0.0, "last_gap_level_dist_atr": 0.0})
 def f_gaps(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Gaps between consecutive bars (session break / weekend / news) in ATR, and whether filled."""
     a = atr(df, 14)
@@ -123,7 +123,7 @@ def f_gaps(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     return out
 
 
-@feature("candles", "structure", lookback=5)
+@feature("candles", "structure", lookback=5, signed={"body_pct": 0.0, "engulfing": 0.0, "pin_bar": 0.0})
 def f_candles(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     rng = (df["high"] - df["low"]).replace(0, np.nan)
     body = (df["close"] - df["open"])

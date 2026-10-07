@@ -271,6 +271,7 @@ class Engine:
             if self._busy(agent.agent_id):
                 continue      # one position (or pending proposal) per agent, as its labels were built
             feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
+            feats["side"] = side          # side-aligned models (features include `side`) align signed inputs themselves
             cols = model.feature_names or [c for c in feats.columns]
             p = float(model.predict(feats[[c for c in cols if c in feats.columns]] if model.feature_names else feats)[0])
             ls = agent.label_spec
@@ -453,6 +454,7 @@ class Engine:
                 if agent_key not in (agent.agent_id, agent.family) or cands.empty or int(cands["idx"].iloc[-1]) != last:
                     continue
                 side = int(cands["side"].iloc[-1])
+                feats["side"] = side
                 cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
                 p = float(model.predict(feats[cols])[0])
                 ls = agent.label_spec

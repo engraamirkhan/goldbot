@@ -8,6 +8,7 @@ from the model's. Adding a feature = one decorated function; nothing else change
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any, Callable
 
 import pandas as pd
@@ -30,11 +31,20 @@ class FeatureSpec(Record):
 
 FEATURES: dict[str, FeatureSpec] = {}
 
+# Signed columns (regex on the column name without its h1_/h4_/d1_/w1_ context prefix -> neutral value). For a
+# meta-label model a signed value means opposite things for a long and a short (ret_4 = +0.3% favours a long, hurts a
+# short), so models trained with a `side` column see side x (value - neutral): positive always favours the trade.
+SIGNED: dict[str, float] = {}
+_CONTEXT_PREFIX = re.compile(r"^(h1|h4|d1|w1)_")
 
-def feature(name: str, family: str, *, version: str = "1", lookback: int = 0, tags: tuple[str, ...] = ()) -> Callable[[FeatureFn], FeatureFn]:
+
+def feature(name: str, family: str, *, version: str = "1", lookback: int = 0, tags: tuple[str, ...] = (),
+            signed: dict[str, float] | None = None) -> Callable[[FeatureFn], FeatureFn]:
+    """`signed`: column-name patterns (full match) of this feature's directional columns -> their neutral value."""
     def deco(fn: FeatureFn) -> FeatureFn:
         if name in FEATURES:
             raise ValueError(f"feature {name!r} already registered")
+        SIGNED.update(signed or {})
         FEATURES[name] = FeatureSpec(name=name, family=family, fn=fn, version=version, lookback=lookback, tags=tags)
         return fn
     return deco
@@ -66,3 +76,28 @@ def families() -> dict[str, list[str]]:
     for s in FEATURES.values():
         fam.setdefault(s.family, []).append(s.name)
     return fam
+
+
+def signed_neutral(column: str) -> float | None:
+    """Neutral value of a signed column (context-prefixed columns included), None for an unsigned one."""
+    base = _CONTEXT_PREFIX.sub("", column)
+    for pattern, neutral in SIGNED.items():
+        if re.fullmatch(pattern, base):
+            return neutral
+    return None
+
+
+def side_align(X: pd.DataFrame) -> pd.DataFrame:
+    """Side-aligned copy of a candidate frame that carries a `side` column (+1 long, -1 short): every signed column
+    becomes side x (value - neutral). Unsigned columns and `side` itself are unchanged; without `side`, X is returned."""
+    if "side" not in X.columns:
+        return X
+    side = X["side"].astype(float).to_numpy()
+    out = X.copy()
+    for c in X.columns:
+        if c == "side":
+            continue
+        neutral = signed_neutral(c)
+        if neutral is not None:
+            out[c] = side * (pd.to_numeric(X[c], errors="coerce").to_numpy(dtype=float) - neutral)
+    return out

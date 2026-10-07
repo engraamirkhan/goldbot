@@ -29,6 +29,16 @@ class BreakoutSpecialist(Specialist):
         "stop_atr": 1.0,
         "max_bars": 24,
     }
+    # declared meta-model inputs, chosen by rationale (the range being broken, the volume and spread of the break, the candle, nearby levels and trend context); the model adds `side`, <= 40 in all
+    model_features = (
+        "range_width_8_atr", "range_width_24_atr", "range_width_96_atr", "dist_high_8_atr", "dist_low_8_atr",
+        "dist_high_24_atr", "dist_low_24_atr", "compression_8_96", "tick_vol_ratio_20", "tick_count_z_48",
+        "spread_atr", "spread_rel_median_48", "atr14_pct", "atr_ratio_14_100", "rv_ratio", "vol_tercile",
+        "parkinson_20", "adx14", "dist_ema50_atr", "slope_ema50", "ribbon_state", "ret_1", "ret_4", "ret_16",
+        "body_pct", "upper_wick_pct", "lower_wick_pct", "dist_res_atr", "dist_sup_atr", "levels_within_1atr",
+        "session_id", "h4_adx14", "h4_dist_ema50_atr", "h4_slope_ema50", "h4_ribbon_state", "h4_vol_tercile",
+        "d1_dist_ema50_atr", "d1_slope_ema50", "d1_atr_ratio_14_100",
+    )
 
     @property
     def label_spec(self) -> BarrierSpec:
