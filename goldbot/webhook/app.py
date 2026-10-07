@@ -76,10 +76,12 @@ def create_app(secret: str | None = None, sink: queue.Queue[dict[str, Any]] | No
 
     @app.post("/tv")
     async def tv(req: Request, alert: Alert) -> dict[str, bool]:
-        client_ip = req.headers.get("x-forwarded-for", req.client.host if req.client else "").split(",")[0].strip()
+        # the TCP peer, never X-Forwarded-For: the service listens directly, so that header is whatever the caller
+        # wrote (uvicorn already substitutes it only for its trusted proxies, by default 127.0.0.1)
+        client_ip = req.client.host if req.client else ""
         if enforce_ip and client_ip not in TRADINGVIEW_IPS:
             raise HTTPException(403, "ip not allowed")
-        if not hmac.compare_digest(alert.secret, secret):
+        if not hmac.compare_digest(alert.secret.encode(), secret.encode()):
             raise HTTPException(403, "bad secret")
         row = to_row(alert, datetime.now(timezone.utc))
         with lock:
