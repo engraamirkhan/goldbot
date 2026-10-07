@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import time
+import zlib
 from pathlib import Path
 from typing import Protocol
 
@@ -345,7 +346,7 @@ class Engine:
         self._write_state()
 
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float) -> None:
-        magic = self.cfg.magic_base + (abs(hash(agent.family)) % 100)
+        magic = self._magic(agent.family)
         oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
         self.sent_ids.add(prop.proposal_id)   # written BEFORE sending: never double-send
@@ -387,6 +388,7 @@ class Engine:
         st = self.state
         st.equity = acc.equity
         st.margin_used = acc.margin
+        self._roll_risk_period(tick.ts_utc)
         if st.balance_closed_hwm == 0:
             st.balance_closed_hwm = acc.balance
         if st.day_start_equity == 0:            # normally set by the risk-period roll on the first tick
@@ -408,6 +410,21 @@ class Engine:
         stage = st.stage
         if self.gate.update_stage(st) != stage:
             self._save_risk_state()             # a drawdown stage change survives a restart at once
+        if st.stage == Stage.HALTED:
+            self._kill_switch(everything=stage != Stage.HALTED)
+
+    def _kill_switch(self, *, everything: bool) -> None:
+        """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
+        approve. On the trip every position on the account is closed; while halted, any of this engine's positions
+        (its magic range) that is still open, e.g. after a failed close, is closed again on each refresh."""
+        self.cfg.approval_mode = "propose"
+        for p in self.broker.positions():
+            if everything or self.cfg.magic_base <= p.magic < self.cfg.magic_base + 100:
+                res = self.broker.close(p.position_id)
+                self.open.pop(p.position_id, None)
+                self.decisions.append({"ts": time.time(), "action": "kill_switch_close", "position": p.position_id,
+                                       "ok": res.ok, "retcode": res.retcode, "price": res.price})
+        self.state.open_positions = len(self.broker.positions())
 
     def _now(self, tick: Tick) -> pd.Timestamp:
         return pd.Timestamp.now("UTC") if self.cfg.live_clock else tick.ts_utc
@@ -536,9 +553,16 @@ class Engine:
         return any(t.agent_id == agent_id for t in self.open.values()) or \
             any(a.agent_id == agent_id for _, _, a in self.pending.values())
 
+    def _magic(self, family: str) -> int:
+        """Per-family magic number; crc32 is stable across processes (str hash() is salted per process), so a
+        restarted engine reconciles its own positions to the same family."""
+        return self.cfg.magic_base + zlib.crc32(family.encode()) % 100
+
     def _base_bars(self, agent: Specialist) -> int:
-        """The agent's time barrier in base bars (position management runs on the decision_tf clock)."""
-        return int(agent.label_spec.max_bars * tf_seconds(agent.timeframe) // tf_seconds(self.cfg.decision_tf))
+        """The agent's time barrier in base bars (position management runs on the decision_tf clock). The labels
+        (triple_barrier) exit at the close of the (max_bars + 1)-th bar after the signal bar, so the live trade is
+        held for max_bars + 1 bars of the agent's timeframe, as the models were trained."""
+        return int((agent.label_spec.max_bars + 1) * tf_seconds(agent.timeframe) // tf_seconds(self.cfg.decision_tf))
 
     def _proposal_id(self, agent_id: str, close_ts: pd.Timestamp) -> str:
         h = hashlib.sha1(f"{self.cfg.account_id}|{agent_id}|{close_ts.isoformat()}".encode()).hexdigest()[:10]
@@ -652,5 +676,8 @@ class Engine:
             "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,
             "dq_error": st.dq_error, "dq_checks": sorted({e.check for e in self._dq_bar_errors + self._dq_pending}),
         }
-        Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json").write_text(json.dumps(payload))
+        path = Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json")
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")       # the supervisor never reads a half-written file
+        tmp.write_text(json.dumps(payload))
+        os.replace(tmp, path)
         self._save_risk_state()

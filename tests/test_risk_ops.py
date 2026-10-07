@@ -248,3 +248,64 @@ def test_record_gate_appends_atomically_and_refuses_bad_names(phase_file, tmp_pa
     assert st["gate_log"][1]["evidence"] == {"text": "walk-forward + DSR pass, trial 41"}
     assert not list(phase_file.parent.glob("*.tmp"))
     assert "paper_to_tiny_live" in acc_mod.phase_state()["gates_passed"]           # what unlock_live reads
+
+
+# ------------------------------------------------------------------ time exit, magic numbers, engine state file
+def test_live_time_exit_holds_as_long_as_the_labels(tmp_path):
+    from goldbot.engine.runner import OpenTrade
+    from goldbot.execution.broker import OrderIntent
+    from goldbot.labels.triple_barrier import triple_barrier
+    eng = _engine(tmp_path, _Equity())
+    for name in ("session_open", "trend"):                       # a 15m agent and a 1h agent on the 15m clock
+        agent = SPECIALISTS[name]()
+        spec = agent.label_spec
+        n = spec.max_bars + 10                                   # flat bars: no barrier is touched, the time exit decides
+        bars = pd.DataFrame({"ts_utc": pd.date_range("2025-03-03", periods=n, freq="15min", tz="UTC"),
+                             "bid_high": 2400.0, "bid_low": 2400.0, "bid_close": 2400.0,
+                             "ask_high": 2400.2, "ask_low": 2400.2, "ask_close": 2400.2})
+        lab = triple_barrier(bars, pd.DataFrame({"idx": [0], "side": [1]}), spec, pd.Series(4.0, index=bars.index))
+        held_label = int(lab["bars_held"].iloc[0])               # in bars of the agent's timeframe
+        assert held_label == spec.max_bars + 1
+        b = _Equity()
+        b.on_tick(_tick("2025-03-03 08:00"))
+        pos = b.place_order(OrderIntent(client_order_id=name, symbol="XAUUSD", side=1, lots=0.1, sl=2300.0, tp=2500.0,
+                                        magic=260100, comment=name)).position_id
+        assert pos is not None
+        eng.broker = b
+        eng.open = {pos: OpenTrade(position_id=pos, agent_id=agent.agent_id, side=1, lots=0.1,
+                                   entry_bar_ts=pd.Timestamp("2025-03-03 08:00", tz="UTC"), max_bars=eng._base_bars(agent))}
+        closes = 0
+        while eng.open:
+            eng._manage_open(pd.DataFrame())
+            closes += 1
+        ratio = 4 if agent.timeframe == "1h" else 1
+        assert closes == held_label * ratio                      # base-bar closes until the time exit
+
+
+def test_magic_numbers_are_stable_across_processes(tmp_path):
+    import subprocess
+    import sys
+    eng = _engine(tmp_path, _Equity())
+    here = {f: eng._magic(f) for f in ("trend", "breakout", "session_open", "mean_reversion")}
+    assert all(260100 <= m < 260200 for m in here.values())
+    code = ("import zlib; print({f: 260100 + zlib.crc32(f.encode()) % 100 "
+            "for f in ('trend', 'breakout', 'session_open', 'mean_reversion')})")
+    for seed in ("1", "2"):                                       # str hash() differs per PYTHONHASHSEED; crc32 does not
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                             env={"PYTHONHASHSEED": seed})
+        assert out.stdout.strip() == str(here)
+
+
+def test_engine_state_is_written_atomically_and_an_unreadable_one_halts(tmp_path):
+    eng = _engine(tmp_path, _Equity())
+    eng._refresh_account(_tick("2025-03-03 08:00"))
+    eng._write_state()
+    assert json.loads((tmp_path / "engine_x.json").read_text())["account"] == "x"
+    assert not list(tmp_path.glob("*.tmp"))
+    sup = Supervisor(tmp_path)
+    assert "engine_state_unreadable" not in sup.evaluate()["reasons"]
+    (tmp_path / "engine_y.json").write_text('{"account": "y", "equity": 10')       # torn / corrupt
+    st = sup.evaluate()
+    assert st["halt"] and "engine_state_unreadable" in st["reasons"] and st["unreadable_engines"] == ["engine_y.json"]
+    halt, why = Supervisor.engine_should_halt(tmp_path)
+    assert halt and "engine_state_unreadable" in why
