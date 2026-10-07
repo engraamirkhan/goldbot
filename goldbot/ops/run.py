@@ -7,6 +7,7 @@
   python -m goldbot.ops.run scheduler
   python -m goldbot.ops.run telegram
   python -m goldbot.ops.run news
+  python -m goldbot.ops.run record-gate <gate_name> --evidence <path or text>   # appends to state/phase_state.json
 """
 from __future__ import annotations
 
@@ -19,14 +20,17 @@ if TYPE_CHECKING:   # service entry points import lazily; these are for annotati
     from goldbot.agents.runner import AgentRunner
     from goldbot.config import Settings
     from goldbot.data.store import Store
+    from goldbot.ops.accounts import Account
+    from goldbot.risk import RiskLimits
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("goldbot.run")
 
 
 def run_supervisor() -> None:
-    from goldbot.risk.supervisor import Supervisor
-    sup = Supervisor("state")
+    from goldbot.config import load_settings
+    from goldbot.risk.supervisor import Supervisor, SupervisorLimits
+    sup = Supervisor("state", SupervisorLimits.from_settings(load_settings().risk))
     while True:
         st = sup.evaluate()
         if st["halt"]:
@@ -50,6 +54,7 @@ def run_engine(account_id: str) -> None:
     settings = load_settings()
     if acc.is_live and acc not in accounts.enabled_accounts("live"):
         raise SystemExit("live account not unlocked by the phase gate")
+    limits = engine_limits(settings, acc)
     if sys.platform == "win32":
         from goldbot.execution.mt5_adapter import MT5Broker
         acc = accounts.ensure_login(acc)
@@ -89,11 +94,12 @@ def run_engine(account_id: str) -> None:
                               blackout_before_min=settings.risk.blackout.before_min,
                               blackout_after_min=settings.risk.blackout.after_min,
                               shock_blackout_min=settings.news.shock_blackout_min,
-                              shock_min_relevance=settings.news.shock_min_relevance), broker, agents,
-                 champions(), center, shadow_models=shadow_set() if shadow_host else None, live_shares=live_shares)
+                              shock_min_relevance=settings.news.shock_min_relevance, live_clock=True), broker, agents,
+                 champions(), center, limits=limits, shadow_models=shadow_set() if shadow_host else None,
+                 live_shares=live_shares)
     warm = eng.warm_start(pd.Timestamp.now("UTC"))
-    log.info("engine %s started (%s), models: %s, %d 1m bars of history", account_id, type(broker).__name__,
-             sorted(eng.models), warm)
+    log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f", account_id,
+             type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade)
     def mtimes() -> tuple[float, ...]:
         return tuple(f.stat().st_mtime if f.exists() else -1.0 for f in (registry_file, population_file))
 
@@ -122,6 +128,32 @@ def run_engine(account_id: str) -> None:
                 except (ValueError, TypeError, OSError) as exc:
                     log.error("model reload refused, keeping current models: %s", exc)
         time.sleep(0.25)
+
+
+def engine_limits(settings: Settings, acc: Account) -> RiskLimits:
+    """RiskLimits from settings.yaml `risk:`; a live account before the full-size gate (or with an unreadable phase
+    file) gets the tiny-live risk per trade."""
+    from goldbot.ops import accounts
+    from goldbot.risk import RiskLimits
+    return RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
+
+
+def record_gate_cli(argv: list[str]) -> int:
+    """record-gate <gate_name> --evidence <path or text>"""
+    import argparse
+
+    from goldbot.ops import accounts
+    ap = argparse.ArgumentParser(prog="python -m goldbot.ops.run record-gate")
+    ap.add_argument("gate", help="one of: " + ", ".join(accounts.GATES))
+    ap.add_argument("--evidence", required=True, help="path to the evidence file (hashed) or a short text")
+    args = ap.parse_args(argv)
+    try:
+        st = accounts.record_gate(args.gate, args.evidence)
+    except ValueError as exc:
+        print(f"refused: {exc}")
+        return 1
+    print(f"recorded {args.gate}: phase {st['phase']}, gates passed {st['gates_passed']}")
+    return 0
 
 
 def run_api() -> None:
@@ -252,6 +284,8 @@ if __name__ == "__main__":
         run_telegram()
     elif cmd == "news":
         run_news()
+    elif cmd == "record-gate":
+        sys.exit(record_gate_cli(sys.argv[2:]))
     else:
         print(__doc__)
         sys.exit(1)

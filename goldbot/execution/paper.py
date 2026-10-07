@@ -99,13 +99,13 @@ class PaperBroker:
         for p in list(self._positions.values()):
             p.profit = p.side * ((t.bid if p.side > 0 else t.ask) - p.open_price) * p.lots * self.contract
             if p.side > 0:
-                if p.sl is not None and t.bid <= p.sl:
-                    self._close_at(p, p.sl - self.slip, "stop")
+                if p.sl is not None and t.bid <= p.sl:      # a gap through the stop fills at the market, not the stop
+                    self._close_at(p, min(p.sl, t.bid) - self.slip, "stop")
                 elif p.tp is not None and t.bid >= p.tp:
                     self._close_at(p, p.tp, "target")
             else:
                 if p.sl is not None and t.ask >= p.sl:
-                    self._close_at(p, p.sl + self.slip, "stop")
+                    self._close_at(p, max(p.sl, t.ask) + self.slip, "stop")
                 elif p.tp is not None and t.ask <= p.tp:
                     self._close_at(p, p.tp, "target")
 

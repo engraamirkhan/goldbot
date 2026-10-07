@@ -48,7 +48,7 @@ def test_short_stop_fills_with_adverse_slippage_and_target_fills_at_the_level():
     pb.place_order(_order("s1", -1, sl=2403.0, tp=2395.0))
     pb.on_tick(_tick(1, 2402.80, 2403.05))                  # ask through the stop
     stop = pb.deals_since(T0).query("type == 'stop'").iloc[0]
-    assert stop["price"] == pytest.approx(2403.0 + 0.20)    # 20 points against a short
+    assert stop["price"] == pytest.approx(2403.05 + 0.20)   # the triggering ask, then 20 points against a short
     pb.place_order(_order("s2", -1, sl=2410.0, tp=2400.0))
     pb.on_tick(_tick(2, 2399.70, 2399.95))                  # ask at/below the target
     tgt = pb.deals_since(T0).query("type == 'target'").iloc[0]
@@ -105,9 +105,6 @@ def test_symbol_info_reports_the_real_commission():
     assert info.commission_per_lot_side == 3.25 and info.volume_step == 0.01 and info.trade_allowed
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: paper.py _check_exits fills a gapped stop at sl - 20 points, not at the market "
-                                       "that gapped through it, so weekend/event gaps fill better than reality "
-                                       "(design: paper fills slightly worse than reality)")
 def test_a_stop_gapped_through_fills_no_better_than_the_market():
     pb = PaperBroker()
     pb.on_tick(_tick(0, 2400.0, 2400.20))

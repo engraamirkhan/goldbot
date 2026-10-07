@@ -151,8 +151,6 @@ def test_dedupe_keeps_the_last_copy_of_a_key_and_append_only_logs_keep_everythin
     assert len(ev) == 1 and ev["forecast"].iloc[0] == 0.3          # a re-fetched event replaces the earlier copy
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: store.py Store.append de-duplicates only against rows already on disk; "
-                                       "duplicate keys inside one batch written to an empty partition are all kept")
 def test_duplicates_inside_the_first_batch_are_deduplicated(tmp_path):
     s = Store(tmp_path)
     ts = pd.Timestamp("2025-03-05 10:00", tz="UTC")
@@ -206,8 +204,6 @@ def test_asof_join_prefix_namespaces_the_joined_columns():
     assert list(out.columns) == ["ts_utc", "m_level"] and list(out["m_level"]) == [5.0, 5.0]
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: store.py asof_join renames the bars' ts_utc to ts_utc_x when `other` also "
-                                       "carries ts_utc (every store table does) and no prefix is given")
 def test_asof_join_keeps_the_bar_time_when_joining_a_store_table():
     bars = pd.DataFrame({"ts_utc": pd.date_range("2025-03-05 12:00", periods=2, freq="h", tz="UTC"), "close": [1.0, 2.0]})
     macro = pd.DataFrame({"ts_utc": pd.to_datetime(["2025-03-04"], utc=True),

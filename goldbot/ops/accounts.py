@@ -19,11 +19,14 @@ CLI:
 from __future__ import annotations
 
 import getpass
+import hashlib
 import json
+import os
 import re
 import sys
+import time
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 import yaml
 
@@ -173,8 +176,55 @@ def ensure_login(acc: Account) -> Account:
     return acc
 
 
+# The four roadmap gates in order; passing gate i puts the system in phase i + 1 (0 foundation, 1 backtest,
+# 2 paper on demo accounts, 3 tiny live, 4 full size).
+GATES = ("foundation_to_backtest", "backtest_to_paper", "paper_to_tiny_live", "tiny_live_to_full_size")
+
+
 def phase_state() -> dict:
     return json.loads(PHASE_FILE.read_text()) if PHASE_FILE.exists() else {"phase": 0, "gates_passed": []}
+
+
+def record_gate(gate: str, evidence: str, path: Path | None = None) -> dict:
+    """Record a passed roadmap gate in phase_state.json (atomically): appended to `gates_passed`, with a timestamp and
+    the evidence (a file path is recorded with its sha256) in `gate_log`. Refuses unknown names, a gate recorded twice
+    and a gate whose predecessor has not passed. Raises ValueError on refusal."""
+    path = path or PHASE_FILE
+    if gate not in GATES:
+        raise ValueError(f"unknown gate {gate!r}; known: {', '.join(GATES)}")
+    if not evidence.strip():
+        raise ValueError("evidence is required")
+    st: dict[str, Any] = json.loads(path.read_text()) if path.exists() else {"phase": 0, "gates_passed": []}
+    passed = list(st.get("gates_passed", []))
+    if gate in passed:
+        raise ValueError(f"gate {gate} is already recorded")
+    i = GATES.index(gate)
+    if i > 0 and GATES[i - 1] not in passed:
+        raise ValueError(f"gate {GATES[i - 1]} must be recorded before {gate}")
+    ev: dict[str, str] = {"text": evidence}
+    f = Path(evidence)
+    if f.is_file():
+        ev = {"path": str(f.resolve()), "sha256": hashlib.sha256(f.read_bytes()).hexdigest()}
+    st["gates_passed"] = passed + [gate]
+    st["phase"] = max(int(st.get("phase", 0)), i + 1)
+    st.setdefault("gate_log", []).append({"gate": gate, "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                          "evidence": ev})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(st, indent=2))
+    os.replace(tmp, path)
+    return st
+
+
+def tiny_live_risk(acc: Account) -> bool:
+    """True when the account trades at the tiny-live risk per trade: a live account before the full-size gate, or
+    whenever the phase file cannot be read (the smaller risk is the safe default). Demo accounts use the normal risk."""
+    if not acc.is_live:
+        return False
+    try:
+        return "tiny_live_to_full_size" not in phase_state().get("gates_passed", [])
+    except (ValueError, OSError, AttributeError):
+        return True
 
 
 def unlock_live(account_id: str, confirmation: str, path: Path | None = None) -> bool:

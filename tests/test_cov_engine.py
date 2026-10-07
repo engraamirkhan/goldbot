@@ -142,10 +142,7 @@ def test_reconciliation_adopts_only_positions_in_its_own_magic_range(tmp_path):
     assert eng._busy("orphan") and not eng._busy("someone")
 
 
-# ---------------------------------------------------------------------------------------------- known gaps
-@pytest.mark.xfail(strict=True, reason="BUG: engine/runner.py _refresh_account sets day_start_equity (and week_start_equity) "
-                                       "only on the first refresh and never calls risk.gate.new_day, so the 2% daily cap "
-                                       "never resets at 00:00 UTC")
+# ---------------------------------------------------------------------------------------------- risk periods and kill switch
 def test_day_start_equity_resets_at_the_risk_day_boundary(tmp_path):
     eng, pb, _ = _engine(tmp_path)
     eng._refresh_account(_tick(T0))
@@ -156,8 +153,6 @@ def test_day_start_equity_resets_at_the_risk_day_boundary(tmp_path):
     assert eng.state.day_start_equity == pytest.approx(pb.account().equity)
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: nothing in engine/runner.py acts on Stage.HALTED besides blocking entries; the "
-                                       "design's 12% kill switch must close every position at market immediately")
 def test_twelve_percent_drawdown_closes_everything_at_market(tmp_path):
     eng, pb, _ = _engine(tmp_path)
     ticks = synthetic_ticks("2025-03-03", "2025-03-05", ticks_per_minute=1, seed=5)
