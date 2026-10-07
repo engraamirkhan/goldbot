@@ -31,7 +31,7 @@ from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.econ_calendar import blackout_window
 from goldbot.data.news import shock_window
 from goldbot.data.quality import DQEvent, check_bars, events_frame, stale_feed
-from goldbot.data.resample import BAR_COLUMNS, mid, resample_bars, ticks_to_1m
+from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import feature_day, floor_tf
 from goldbot.engine.shadow import ShadowBook
@@ -169,6 +169,8 @@ class Engine:
         self._journaled = 0                  # decisions already written to the store's journal
         self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)
         self._ctx_cache: dict[str, tuple[pd.Timestamp, tuple[pd.DataFrame, pd.DataFrame] | None]] = {}
+        # per timeframe: completed 1m bars -> bars, re-aggregating only the groups that changed since the last close
+        self._resamplers: dict[str, IncrementalResampler] = {}
         self._calendar: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         self._blackout_event: dict | None = None
         self._news: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
@@ -275,7 +277,7 @@ class Engine:
     # ------------------------------------------------------------------ main step
     def _frame(self, complete: pd.DataFrame, tf: str, close_ts: pd.Timestamp) -> _Frame | None:
         """Completed bars of one decision timeframe with features and its context (the same rule as research)."""
-        dec = resample_bars(complete, tf).reset_index(drop=True)
+        dec = self._resample(complete, tf)
         dec = dec[dec["visible_at"] <= close_ts].tail(self.cfg.feature_window).reset_index(drop=True)
         if len(dec) < 120:
             return None
@@ -289,6 +291,13 @@ class Engine:
         X.attrs["feature_version"] = version          # as research stamps it (pipeline.build_decision_frame)
         return _Frame(dec=dec, m=m, X=X, atr=atr(m, 14))
 
+    def _resample(self, complete: pd.DataFrame, tf: str) -> pd.DataFrame:
+        """resample_bars(complete, tf), incrementally (identical output; see IncrementalResampler)."""
+        rs = self._resamplers.get(tf)
+        if rs is None:
+            rs = self._resamplers[tf] = IncrementalResampler(tf)
+        return rs(complete)
+
     def _context(self, complete: pd.DataFrame, tf: str, close_ts: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame] | None:
         """Completed context bars and their features, rebuilt only when a new bar of `tf` has completed: the key is
         the period close_ts falls in (UTC floor intraday, the feature-day for 1d), which changes at a bar's visible_at."""
@@ -297,7 +306,7 @@ class Engine:
         cached = self._ctx_cache.get(tf)
         if cached is not None and cached[0] == key:
             return cached[1]
-        hb = resample_bars(complete, tf).reset_index(drop=True)
+        hb = self._resample(complete, tf)
         hb = hb[hb["visible_at"] <= close_ts].reset_index(drop=True)
         out = None if len(hb) < 30 else (hb, build_features(mid(hb), ["atr", "trend_strength", "moving_averages", "realised_vol"]))
         self._ctx_cache[tf] = (key, out)

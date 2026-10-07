@@ -7,6 +7,7 @@ import pandas as pd
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.store import asof_join
 from goldbot.data.timeutil import epoch_ns
+from goldbot.features.columns import Columns
 from goldbot.features.registry import FeatureCtx, feature
 
 SESSION_OPENS_UTC = {"asia": 23, "london": 7, "newyork": 12.5}
@@ -16,7 +17,7 @@ SESSION_OPENS_UTC = {"asia": 23, "london": 7, "newyork": 12.5}
 def f_session(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     idx = pd.DatetimeIndex(df["ts_utc"]).tz_convert("UTC")
     sess = DEFAULT_SESSIONS.session_label(idx)
-    out = pd.DataFrame(index=df.index)
+    out = Columns(df.index)
     out["session_id"] = pd.Categorical(sess, categories=["asia", "london", "newyork"]).codes
     hour = idx.hour + idx.minute / 60
     for name, h in SESSION_OPENS_UTC.items():
@@ -25,9 +26,20 @@ def f_session(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     out["dow"] = idx.dayofweek
     out["hour_utc"] = idx.hour
     # US and EU DST flags (shifts the NY/London open relative to UTC)
-    out["us_dst"] = (idx.tz_convert("America/New_York").map(lambda t: t.dst().total_seconds() > 0)).astype(int)
-    out["eu_dst"] = (idx.tz_convert("Europe/London").map(lambda t: t.dst().total_seconds() > 0)).astype(int)
-    return out
+    out["us_dst"] = _dst_flag(idx, "America/New_York")
+    out["eu_dst"] = _dst_flag(idx, "Europe/London")
+    return out.frame()
+
+
+def _dst_flag(idx: pd.DatetimeIndex, tz: str) -> np.ndarray:
+    """1 where `tz` observes daylight saving at the instant, else 0 (int64). New York and London switch on whole
+    UTC hours, so the flag is constant within a UTC hour: tz.dst() is evaluated once per distinct hour and spread
+    back, instead of once per bar."""
+    ns = epoch_ns(idx)
+    hours, inv = np.unique(ns // 3_600_000_000_000, return_inverse=True)
+    at = pd.DatetimeIndex(pd.to_datetime(hours * 3_600_000_000_000, unit="ns", utc=True)).tz_convert(tz)
+    flag = np.array([t.dst().total_seconds() > 0 for t in at], dtype=np.bool_)   # type: ignore[union-attr]
+    return flag[inv.reshape(-1)].astype(int)
 
 
 @feature("calendar_events", "calendar")

@@ -120,9 +120,16 @@ class Store:
         if start is not None:
             where.append("ts_utc >= ?")
             params.append(_utc(start).to_pydatetime())
+            # rows sit in the UTC year/month partition of their ts_utc: a filter on the partition values lets DuckDB
+            # skip every other month's files without opening them (same rows; the column types still come from the
+            # whole table, as before)
+            where.append("year * 12 + CAST(month AS BIGINT) >= ?")
+            params.append(_utc(start).year * 12 + _utc(start).month)
         if end is not None:
             where.append("ts_utc < ?")
             params.append(_utc(end).to_pydatetime())
+            where.append("year * 12 + CAST(month AS BIGINT) <= ?")
+            params.append(_utc(end).year * 12 + _utc(end).month)
         sql = f"SELECT {cols} FROM read_parquet('{glob}', hive_partitioning=true) WHERE {' AND '.join(where)} ORDER BY ts_utc"
         df = con.execute(sql, params).df()
         con.close()

@@ -14,7 +14,7 @@ import pandas as pd
 
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
-from goldbot.data.timeutil import feature_day, feature_day_close, floor_tf
+from goldbot.data.timeutil import epoch_ns, feature_day, feature_day_close, floor_tf, utc_index
 
 BAR_COLUMNS = [
     "ts_utc", "visible_at", "bid_open", "bid_high", "bid_low", "bid_close",
@@ -46,7 +46,9 @@ def ticks_to_1m(ticks: pd.DataFrame, sessions: SessionTable = DEFAULT_SESSIONS) 
 
 def _agg(bars: pd.DataFrame, key: pd.DatetimeIndex | pd.Series) -> pd.DataFrame:
     b = bars.copy()
-    b["_k"] = np.asarray(key)
+    # a tz-aware key goes in as a datetime column: np.asarray would box every row into a Timestamp object and the
+    # groupby would parse them back (most of the cost of an intraday resample); same groups, same labels
+    b["_k"] = key if isinstance(key, pd.DatetimeIndex) and key.tz is not None else np.asarray(key)
     tc = b["tick_count"].to_numpy(dtype=float)
     b["_w"] = np.where(tc > 0, tc, 1e-9)        # volume-weighted spread; fractional volumes (Dukascopy) keep their weight
     b["_sw"] = b["spread_mean"].to_numpy() * b["_w"].to_numpy()
@@ -70,7 +72,7 @@ def resample_bars(bars_1m: pd.DataFrame, tf: str, *, feature_day_tz: str = "Amer
     """Aggregate 1m bars to `tf`. Intraday timeframes floor on the UTC clock; 1d uses the feature-day."""
     if bars_1m.empty:
         return pd.DataFrame(columns=BAR_COLUMNS)
-    idx = pd.DatetimeIndex(pd.to_datetime(bars_1m["ts_utc"], utc=True))
+    idx = utc_index(bars_1m["ts_utc"])
     if tf == "1d":
         day = feature_day(idx, feature_day_tz, feature_day_anchor)
         out = _agg(bars_1m, day)
@@ -88,6 +90,111 @@ def resample_bars(bars_1m: pd.DataFrame, tf: str, *, feature_day_tz: str = "Amer
         out["visible_at"] = out["ts_utc"] + pd.Timedelta(seconds=sec)
     # a bar whose last constituent minute is before the nominal close is still only visible at the nominal close
     return out.drop(columns=["_last_minute"])[BAR_COLUMNS].reset_index(drop=True)
+
+
+_AGG_INPUTS = [c for c in BAR_COLUMNS if c not in ("ts_utc", "visible_at")]   # what a resampled bar is made of
+
+
+def _group_keys(idx: pd.DatetimeIndex, tf: str, feature_day_tz: str, feature_day_anchor: str) -> np.ndarray:
+    """The group key of each 1m bar in resample_bars, as int64 ns (sorted key order = output row order)."""
+    if tf == "1d":
+        return epoch_ns(feature_day(idx, feature_day_tz, feature_day_anchor))
+    return epoch_ns(floor_tf(idx, tf_seconds(tf)))
+
+
+class IncrementalResampler:
+    """`resample_bars(bars_1m, tf)` for a 1m history that grows at the end and is trimmed at the start (the live
+    engine's rolling buffer): only the groups whose 1m bars changed are aggregated again.
+
+    Each call checks the new frame against the 1m bars of the previous call (timestamps, every aggregated column,
+    dtypes); the frame may drop leading rows and append new ones. A group that lost leading rows and the last group
+    (which may have gained rows) are re-aggregated from their 1m bars, every other group is reused, so the output is
+    exactly resample_bars on the full frame: a group's bar is a function of its own 1m bars only. Anything else
+    (rows replaced or reordered, non-increasing timestamps, dtype change) falls back to a full resample."""
+
+    def __init__(self, tf: str, *, feature_day_tz: str = "America/New_York", feature_day_anchor: str = "13:30"):
+        self.tf = tf
+        self._tz, self._anchor = feature_day_tz, feature_day_anchor
+        self._reset()
+        self.full_builds = 0                     # diagnostics for tests: how often the cache could not be used
+
+    def _reset(self) -> None:
+        self._ts: np.ndarray | None = None       # int64 ns of the 1m bars covered
+        self._cols: dict[str, np.ndarray] = {}
+        self._dtypes: tuple = ()
+        self._keys = np.empty(0, dtype=np.int64)  # group key per 1m bar
+        self._out = pd.DataFrame()
+
+    def _resample(self, bars: pd.DataFrame) -> pd.DataFrame:
+        return resample_bars(bars, self.tf, feature_day_tz=self._tz, feature_day_anchor=self._anchor)
+
+    def __call__(self, bars: pd.DataFrame) -> pd.DataFrame:
+        if bars.empty or any(c not in bars.columns for c in ("ts_utc", *_AGG_INPUTS)):
+            self._reset()
+            return self._resample(bars)
+        idx = utc_index(bars["ts_utc"])
+        ts = epoch_ns(idx)
+        if len(ts) > 1 and not bool((np.diff(ts) > 0).all()):
+            self._reset()
+            return self._resample(bars)
+        cols = {c: bars[c].to_numpy() for c in _AGG_INPUTS}
+        dtypes = tuple(bars[c].dtype for c in ("ts_utc", *_AGG_INPUTS))
+        out = self._update(bars, idx, ts, cols, dtypes)
+        if out is None:
+            out = self._full(bars, idx, ts, cols, dtypes)
+        return out.copy(deep=False)
+
+    def _full(self, bars: pd.DataFrame, idx: pd.DatetimeIndex, ts: np.ndarray, cols: dict[str, np.ndarray],
+              dtypes: tuple) -> pd.DataFrame:
+        self.full_builds += 1
+        out = self._resample(bars)
+        keys = _group_keys(idx, self.tf, self._tz, self._anchor)
+        if (len(keys) > 1 and not bool((np.diff(keys) >= 0).all())) or len(np.unique(keys)) != len(out):
+            self._reset()                        # keys out of time order: never reuse groups
+            return out
+        self._ts, self._dtypes, self._keys, self._out = ts.copy(), dtypes, keys, out
+        self._cols = {c: np.array(v, copy=True) for c, v in cols.items()}
+        return out
+
+    def _update(self, bars: pd.DataFrame, idx: pd.DatetimeIndex, ts: np.ndarray, cols: dict[str, np.ndarray],
+                dtypes: tuple) -> pd.DataFrame | None:
+        old = self._ts
+        if old is None or dtypes != self._dtypes:
+            return None
+        k = int(np.searchsorted(old, ts[0]))
+        m = len(old) - k                         # cached rows still present
+        if k >= len(old) or old[k] != ts[0] or len(ts) < m or not np.array_equal(old[k:], ts[:m]):
+            return None
+        for c, v in cols.items():
+            prev = self._cols[c][k:]
+            if not np.array_equal(prev, v[:m], equal_nan=v.dtype.kind == "f"):
+                return None
+        new_keys = _group_keys(idx[m:], self.tf, self._tz, self._anchor) if len(ts) > m else np.empty(0, np.int64)
+        keys = np.concatenate((self._keys[k:], new_keys))
+        if len(new_keys) and (new_keys[0] < self._keys[-1] or not bool((np.diff(new_keys) >= 0).all())):
+            return None
+        first_key, last_key = keys[0], self._keys[-1]
+        head_dirty = k > 0 and self._keys[k - 1] == first_key
+        tail_dirty = len(ts) > m
+        if first_key == last_key and (head_dirty or tail_dirty):
+            return None                           # one group both trimmed and extended: rebuild it whole
+        out_keys = np.unique(self._keys)
+        lo = out_keys > first_key if head_dirty else out_keys >= first_key
+        hi = out_keys < last_key if tail_dirty else out_keys <= last_key
+        pieces = []
+        if head_dirty:
+            pieces.append(self._resample(bars.iloc[:int(np.searchsorted(keys, first_key, side="right"))]))
+        pieces.append(self._out[lo & hi])
+        if tail_dirty:
+            pieces.append(self._resample(bars.iloc[int(np.searchsorted(keys, last_key, side="left")):]))
+        pieces = [x for x in pieces if not x.empty] or [self._out.iloc[0:0]]
+        out = pd.concat(pieces, ignore_index=True) if len(pieces) > 1 else pieces[0].reset_index(drop=True)
+        if len(out) != len(np.unique(keys)):
+            return None
+        self._ts = ts.copy()
+        self._cols = {c: np.concatenate((self._cols[c][k:], np.asarray(v[m:]))) for c, v in cols.items()}
+        self._keys, self._out = keys, out
+        return out
 
 
 def mid(bars: pd.DataFrame) -> pd.DataFrame:

@@ -5,10 +5,13 @@ so a level never exists before the system could have known it.
 """
 from __future__ import annotations
 
+from typing import Iterator
+
 import numpy as np
 import pandas as pd
 
 from goldbot.data.timeutil import epoch_ns
+from goldbot.features.columns import Columns
 from goldbot.features.registry import FeatureCtx, feature
 from goldbot.features.technical import atr
 
@@ -21,21 +24,18 @@ def swing_points(df: pd.DataFrame, lag: int = 5) -> tuple[pd.Series, pd.Series]:
     return is_high.fillna(False), is_low.fillna(False)
 
 
-def confirmed_levels(df: pd.DataFrame, lag: int = 5, max_levels: int = 60) -> list[list[tuple[float, int, int]]]:
-    """For each bar, the list of (price, touches, age_bars) of confirmed swing levels known at that bar.
-
-    O(n * max_levels); fine for a few hundred thousand bars. Levels within 0.3 ATR merge, touch count grows.
-    """
+def _walk_levels(df: pd.DataFrame, lag: int, max_levels: int) -> Iterator[tuple[int, list[list[float]]]]:
+    """The level book bar by bar: yields (i, known) with known = [[price, touches, created_idx], ...] as it stands
+    at bar i (the same list object, updated in place). Levels within 0.3 ATR merge, touch count grows."""
     is_high, is_low = swing_points(df, lag)
+    hi_flag, lo_flag = is_high.to_numpy(), is_low.to_numpy()
     a = atr(df, 14).bfill().to_numpy()
     highs, lows = df["high"].to_numpy(), df["low"].to_numpy()
     known: list[list[float]] = []  # [price, touches, created_idx]
-    per_bar: list[list[tuple[float, int, int]]] = []
-    n = len(df)
-    for i in range(n):
+    for i in range(len(df)):
         j = i - lag  # swing at j is confirmed now
         if j >= 0:
-            for flag, px in ((is_high.iat[j], highs[j]), (is_low.iat[j], lows[j])):
+            for flag, px in ((hi_flag[j], highs[j]), (lo_flag[j], lows[j])):
                 if not flag:
                     continue
                 merged = False
@@ -50,14 +50,23 @@ def confirmed_levels(df: pd.DataFrame, lag: int = 5, max_levels: int = 60) -> li
                 if len(known) > max_levels:
                     known.sort(key=lambda x: (-x[1], -x[2]))
                     del known[max_levels:]
-        per_bar.append([(float(lv[0]), int(lv[1]), i - int(lv[2])) for lv in known])
-    return per_bar
+        yield i, known
+
+
+def confirmed_levels(df: pd.DataFrame, lag: int = 5, max_levels: int = 60) -> list[list[tuple[float, int, int]]]:
+    """For each bar, the list of (price, touches, age_bars) of confirmed swing levels known at that bar.
+
+    O(n * max_levels); fine for a few hundred thousand bars. Levels within 0.3 ATR merge, touch count grows.
+    """
+    return [[(float(lv[0]), int(lv[1]), i - int(lv[2])) for lv in known] for i, known in _walk_levels(df, lag, max_levels)]
 
 
 @feature("support_resistance", "structure", lookback=600)
 def f_levels(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
+    """Nearest confirmed level above (resistance) and at/below (support) the close in ATR, with its touches and
+    age, and the number of levels within 1 ATR. One pass over the level book as `confirmed_levels` builds it
+    (the first lowest level above / first highest at or below in book order, as min/max over the snapshot pick)."""
     lag = ctx.get("swing_lag", 5)
-    levels = confirmed_levels(df, lag)
     a = atr(df, 14).bfill().to_numpy()
     close = df["close"].to_numpy()
     up = np.full(len(df), np.nan)
@@ -67,16 +76,27 @@ def f_levels(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     up_age = np.full(len(df), np.nan)
     dn_age = np.full(len(df), np.nan)
     n_near = np.zeros(len(df))
-    for i, lvls in enumerate(levels):
-        above = [lv for lv in lvls if lv[0] > close[i]]
-        below = [lv for lv in lvls if lv[0] <= close[i]]
-        if above:
-            lv = min(above, key=lambda x: x[0])
-            up[i], up_t[i], up_age[i] = (lv[0] - close[i]) / a[i], lv[1], lv[2]
-        if below:
-            lv = max(below, key=lambda x: x[0])
-            dn[i], dn_t[i], dn_age[i] = (close[i] - lv[0]) / a[i], lv[1], lv[2]
-        n_near[i] = sum(1 for lv in lvls if abs(lv[0] - close[i]) <= 1.0 * a[i])
+    for i, known in _walk_levels(df, lag, 60):
+        c, ai = close[i], a[i]
+        lim = 1.0 * ai
+        best_up: list[float] | None = None
+        best_dn: list[float] | None = None
+        near = 0
+        for lv in known:
+            px = float(lv[0])
+            if px > c:
+                if best_up is None or px < float(best_up[0]):
+                    best_up = lv
+            elif px <= c:
+                if best_dn is None or px > float(best_dn[0]):
+                    best_dn = lv
+            if abs(px - c) <= lim:
+                near += 1
+        if best_up is not None:
+            up[i], up_t[i], up_age[i] = (float(best_up[0]) - c) / ai, int(best_up[1]), i - int(best_up[2])
+        if best_dn is not None:
+            dn[i], dn_t[i], dn_age[i] = (c - float(best_dn[0])) / ai, int(best_dn[1]), i - int(best_dn[2])
+        n_near[i] = near
     return pd.DataFrame({
         "dist_res_atr": up, "res_touches": up_t, "res_age": up_age,
         "dist_sup_atr": dn, "sup_touches": dn_t, "sup_age": dn_age,
@@ -95,13 +115,13 @@ def f_swings(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     prev_sh = df["high"].shift(lag).where(ch).shift(1).ffill()
     prev_sl = df["low"].shift(lag).where(cl).shift(1).ffill()
     a = atr(df, 14)
-    out = pd.DataFrame(index=df.index)
+    out = Columns(df.index)
     out["hh"] = (sh > prev_sh).astype(int)
     out["hl"] = (sl > prev_sl).astype(int)
     out["structure_state"] = out["hh"] + out["hl"] - 1  # +1 uptrend structure, -1 downtrend, 0 mixed
     out["dist_last_swing_high_atr"] = (df["close"] - sh) / a
     out["dist_last_swing_low_atr"] = (df["close"] - sl) / a
-    return out
+    return out.frame()
 
 
 @feature("gaps", "structure", lookback=20, signed={"gap_atr": 0.0, "last_gap_level_dist_atr": 0.0})
@@ -109,7 +129,7 @@ def f_gaps(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Gaps between consecutive bars (session break / weekend / news) in ATR, and whether filled."""
     a = atr(df, 14)
     gap = df["open"] - df["close"].shift(1)
-    out = pd.DataFrame(index=df.index)
+    out = Columns(df.index)
     out["gap_atr"] = gap / a
     # time gap in bars implied by timestamp (large => session break or weekend)
     dt = pd.Series(epoch_ns(df["ts_utc"]), index=df.index).diff() / 1e9
@@ -120,14 +140,14 @@ def f_gaps(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     out["last_gap_level_dist_atr"] = (df["close"] - gap_lvl.ffill()) / a
     filled = ((gap > 0) & (df["low"] <= gap_lvl)) | ((gap < 0) & (df["high"] >= gap_lvl))
     out["gap_filled_same_bar"] = filled.astype(int)
-    return out
+    return out.frame()
 
 
 @feature("candles", "structure", lookback=5, signed={"body_pct": 0.0, "engulfing": 0.0, "pin_bar": 0.0})
 def f_candles(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     rng = (df["high"] - df["low"]).replace(0, np.nan)
     body = (df["close"] - df["open"])
-    out = pd.DataFrame(index=df.index)
+    out = Columns(df.index)
     out["body_pct"] = body / rng
     out["upper_wick_pct"] = (df["high"] - df[["open", "close"]].max(axis=1)) / rng
     out["lower_wick_pct"] = (df[["open", "close"]].min(axis=1) - df["low"]) / rng
@@ -136,7 +156,7 @@ def f_candles(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     out["engulfing"] = np.sign(body) * ((body.abs() > body.shift(1).abs()) & (np.sign(body) != np.sign(body.shift(1)))).astype(int)
     out["pin_bar"] = np.where(out["lower_wick_pct"] > 0.66, 1, np.where(out["upper_wick_pct"] > 0.66, -1, 0))
     out["consec_same_dir"] = _consecutive(pd.Series(np.sign(body), index=df.index))
-    return out
+    return out.frame()
 
 
 def _consecutive(sign: pd.Series) -> pd.Series:

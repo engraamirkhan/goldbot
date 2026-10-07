@@ -10,7 +10,7 @@ and no fixed offset is ever assumed.
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -25,6 +25,15 @@ def epoch_ns(ts: pd.DatetimeIndex | pd.Series | pd.Index) -> np.ndarray:
     pandas 3 keeps the inferred resolution (s/ms/us/ns) instead of always using ns, so raw `.asi8` or
     `.view("i8")` silently changes scale with the data source. Always go through this helper."""
     return pd.DatetimeIndex(ts).as_unit("ns").to_numpy(dtype=np.int64)
+
+
+def utc_index(col: pd.Series) -> pd.DatetimeIndex:
+    """`pd.DatetimeIndex(pd.to_datetime(col, utc=True))`, skipping the conversion when the column already is UTC
+    datetimes (to_datetime then returns the same values and dtype, after an object-level cache check per call)."""
+    dt = col.dtype
+    if isinstance(dt, pd.DatetimeTZDtype) and dt.tz is timezone.utc:
+        return pd.DatetimeIndex(col)
+    return pd.DatetimeIndex(pd.to_datetime(col, utc=True))
 
 
 def server_to_utc(server_ts: pd.Series | pd.DatetimeIndex, server_tz: str) -> pd.DatetimeIndex:
