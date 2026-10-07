@@ -23,6 +23,8 @@ class DQEvent(Record):
 def check_bars(bars: pd.DataFrame, *, tf_seconds: int = 60, sessions: SessionTable = DEFAULT_SESSIONS,
                spike_sigma: float = 12.0, max_gap_bars: int = 3) -> tuple[pd.DataFrame, list[DQEvent]]:
     events: list[DQEvent] = []
+    # arrival order is checked before sorting, which would otherwise hide an out-of-order batch
+    arrived = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True)) if len(bars) else pd.DatetimeIndex([])
     b = bars.sort_values("ts_utc").reset_index(drop=True).copy()
     b["dq_flag"] = ""
     if b.empty:
@@ -39,9 +41,10 @@ def check_bars(bars: pd.DataFrame, *, tf_seconds: int = 60, sessions: SessionTab
         events.append(DQEvent(ts_utc=ts[bad_spread.to_numpy()][0], check="bid_gt_ask", severity="error", detail=f"{int(bad_spread.sum())} bars with bid>ask"))
         b.loc[bad_spread, "dq_flag"] = "error:bid_gt_ask"
 
-    mono = np.diff(epoch_ns(ts)) <= 0
+    mono = np.diff(epoch_ns(arrived)) < 0          # equal stamps are reported as duplicates above
     if mono.any():
-        events.append(DQEvent(ts_utc=ts[1:][mono][0], check="non_monotonic", severity="error", detail="timestamps not increasing"))
+        events.append(DQEvent(ts_utc=arrived[1:][mono][0], check="non_monotonic", severity="error",
+                              detail=f"{int(mono.sum())} bars arrived out of time order"))
 
     # gaps inside open sessions
     gap = np.diff(epoch_ns(ts)) / 1e9
