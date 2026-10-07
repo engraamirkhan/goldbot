@@ -1,0 +1,277 @@
+# Requirements traceability: docs/DESIGN.md -> code -> tests
+
+Checked against `main` at `ea070ba` (PR 46) plus the commits on this branch, 2026-10-07. Each row is a concrete,
+testable requirement from `docs/DESIGN.md` (section in brackets), its status, where it lives and the test that
+proves it. Code locations are `file:line` at that revision; tests are `file::test_name`. "untested" means no test
+asserts the rule, even where the code exists.
+
+Status values:
+- **implemented**: the rule is in code as the design states it.
+- **partial**: some of the rule is in code; the missing part is named.
+- **missing**: nothing in code enforces it.
+- **deviates**: code does something different from the design's text (the reason is given when the code documents one).
+- **in review**: being changed on another branch (research evaluation, proposals P1-P3 in
+  `docs/proposals/2026-10-design-improvements.md`).
+
+## Counts
+
+| Status | Rows |
+| --- | --- |
+| implemented | 99 |
+| partial | 25 |
+| missing | 18 |
+| deviates | 9 |
+| in review | 6 |
+| **total** | **157** |
+
+Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
+
+## Risk limits and RiskGate [Execution and risk: Sizing, Hard limits]
+
+| # | Requirement | Status | Code | Test |
+| --- | --- | --- | --- | --- |
+| R1 | "Risk per trade defaults to 0.5% of equity (0.1% in the tiny-live phase)" | implemented | config/settings.yaml:47-48; goldbot/risk/gate.py:46 (`from_settings`); goldbot/ops/run.py `engine_limits`; goldbot/ops/accounts.py:219 `tiny_live_risk` | tests/test_trace_risk.py::test_design_numbers_in_settings_and_code_defaults; tests/test_risk_ops.py::test_settings_reach_the_gate_with_tiny_live_risk |
+| R2 | "scaled by the model multiplier bounded 0.25-1.5" | implemented | goldbot/risk/gate.py:158-159 | tests/test_cov_risk.py::test_model_multiplier_is_bounded_to_quarter_and_one_and_a_half |
+| R3 | "Stop distance is 1.5 x ATR(14) on the decision timeframe, floored at the broker stop level plus spread" | deviates | goldbot/risk/gate.py:167 uses the specialist's `stop_atr` x ATR (1.0-1.5 per the Modelling table), so the live stop equals the label's stop; the floor is implemented | floor: tests/test_cov_risk.py::test_stop_distance_is_floored_at_broker_stop_level_plus_spread |
+| R4 | "Lots = (equity x risk x m) / (stop distance in $ x 100 oz), rounded down to volume_step" | implemented | goldbot/risk/gate.py:168-172 | tests/test_cov_risk.py::test_lots_are_rounded_down_to_the_volume_step_and_capped_at_volume_max; ::test_a_raw_size_that_is_an_exact_number_of_steps_is_kept |
+| R5 | "if rounding pushes risk above 1.2x target the trade is skipped" | implemented | goldbot/risk/gate.py:173-175 | tests/test_cov_risk.py::test_min_lot_is_used_only_while_it_keeps_risk_within_one_point_two_times_target |
+| R6 | "Per-trade risk 1% max - Clamped, not rejected" | implemented (fixed here) | goldbot/risk/gate.py:164-166: the cap now applies after the multiplier (before: 0.8% x 1.5 = 1.2%) | tests/test_trace_risk.py::test_per_trade_risk_is_clamped_at_one_percent_after_the_multiplier; tests/test_cov_risk.py::test_risk_per_trade_is_capped_by_the_hard_maximum |
+| R7 | "Combined exposure across both accounts is capped at 3 lots or 30% of combined equity notional, treated as one position" | missing | no exposure check across engines; each engine sizes alone | untested |
+| R8 | "checked with order_calc_margin and against the FCA retail cap of 1:20; rejected if projected margin level would fall below 300%" | partial | goldbot/risk/gate.py:176-181 computes margin at 1:20; `order_calc_margin` is not called | tests/test_cov_risk.py::test_entries_that_would_take_margin_level_below_300_percent_are_refused |
+| R9 | Daily loss cap "2% of own equity per account", no new entries | implemented | goldbot/risk/gate.py:143-145; config/settings.yaml:50 | tests/test_cov_risk.py::test_each_account_condition_blocks_entries_on_its_own; tests/test_trace_risk.py::test_design_numbers_in_settings_and_code_defaults |
+| R10 | Daily cap resets "00:00 UTC (risk-day)" | implemented | goldbot/risk/gate.py:189 `new_day`; goldbot/engine/runner.py:461 `_roll_risk_period` | tests/test_cov_risk.py::test_new_day_resets_day_start_equity_at_utc_midnight; tests/test_risk_ops.py::test_engine_rolls_caps_across_day_and_week_and_survives_restart |
+| R11 | Weekly loss cap "5% per account", "No new entries; owner told" | partial | goldbot/risk/gate.py:143, 146-147; the owner notice is the gate reason in the journal, no Telegram alert | tests/test_cov_risk.py::test_each_account_condition_blocks_entries_on_its_own |
+| R12 | Weekly cap resets "Sunday 17:00 New York" | deviates (equivalent) | goldbot/risk/gate.py:185 `_risk_week` rolls at Sunday 00:00 UTC on the first day roll; both boundaries fall in the weekend closure (broker opens Sunday 22:02 UTC summer / 23:02 winter), so no trading hour is counted differently | tests/test_risk_ops.py::test_new_day_rolls_the_week_only_at_the_week_boundary |
+| R13 | Drawdown kill switch staged "8% and 12% mark-to-market drawdown from the closed-equity high-water mark" | implemented | goldbot/risk/gate.py:102 `update_stage`; goldbot/engine/runner.py:398 (`balance_closed_hwm` from balance) | tests/test_cov_risk.py::test_drawdown_is_measured_from_closed_balance_high_water_mark |
+| R14 | "8%: multiplier ceiling 0.5 and risk per trade halved"; "8% clears when drawdown < 5%" | implemented | goldbot/risk/gate.py:161-163, 102-112 | tests/test_cov_risk.py::test_size_down_stage_halves_risk_and_caps_the_multiplier_at_half; ::test_size_down_clears_only_below_five_percent_drawdown |
+| R15 | "12%: close everything at market immediately, no new entries" | implemented | goldbot/engine/runner.py:412-427 `_kill_switch` | tests/test_cov_engine.py::test_twelve_percent_drawdown_closes_everything_at_market |
+| R16 | 12% reset: "/rearm with TOTP, then 10 trading days of positive paper shadow, then 30 days propose-and-approve" | partial | owner re-arm with TOTP: goldbot/engine/runner.py:472 `_poll_rearm`, goldbot/risk/gate.py:114; the 10-day positive-shadow condition and a 30-day propose-only lock are not enforced (the re-arm forces propose mode, nothing keeps it there for 30 days) | tests/test_risk_ops.py::test_owner_rearm_on_the_bus_clears_the_drawdown_halt; tests/test_cov_risk.py::test_halt_is_sticky_and_rearm_needs_the_exact_phrase |
+| R17 | Drawdown stages "per account and on combined equity" | partial | combined 12% halts (goldbot/risk/supervisor.py:67-68); the combined 8% `size_down` flag is written but no engine reads it | tests/test_cov_risk.py::test_combined_weekly_cap_and_drawdown_stages (flag only) |
+| R18 | "A 12% kill-switch event always returns the system to propose-and-approve" | implemented | goldbot/engine/runner.py:420 | tests/test_cov_engine.py::test_twelve_percent_drawdown_closes_everything_at_market |
+| R19 | Open positions "2 per account", entry skipped | implemented | goldbot/risk/gate.py:140-141 | tests/test_cov_risk.py::test_each_account_condition_blocks_entries_on_its_own; ::test_values_just_inside_the_limits_are_allowed |
+| R20 | News blackout "CPI, NFP, FOMC statement and presser, PCE: -15 to +30 min", no entries | implemented | goldbot/data/econ_calendar.py:24 (tiers), :75 `blackout_window`; goldbot/engine/runner.py:535 | tests/test_econ_calendar.py::test_blackout_window_is_15_minutes_before_to_30_after_a_tier1_event; ::test_engine_blocks_entries_inside_the_blackout |
+| R21 | Blackout: "early close if p < 0.5" | missing | open positions are not re-scored in a blackout | untested |
+| R22 | Weekend "Friday 21:30 server: close losers; tighten stops on winners" | missing | no weekend rule in the engine | untested |
+| R23 | Rollover "+-5 min of 00:00 server: no entries" | missing | no rollover window in the gate or engine | untested |
+| R24 | Max spread at entry "45 points: entry skipped, not queued" | implemented | goldbot/risk/gate.py:138-139 | tests/test_cov_risk.py::test_values_just_inside_the_limits_are_allowed; ::test_each_account_condition_blocks_entries_on_its_own |
+| R25 | Stale data "No tick 20 s in session, or last bar > 1 period old: no entries; alert" | partial | tick age: goldbot/risk/gate.py:136-137 fed by goldbot/engine/runner.py:402 (live clock); last-bar age is not checked; no alert | tests/test_cov_risk.py::test_each_account_condition_blocks_entries_on_its_own |
+| R26 | Stale data reset "60 s of healthy data" | missing | entries resume on the first fresh tick | untested |
+| R27 | "Each engine gates entries against its own measured table" and "minimum model-implied target of 2.5x round-trip cost" | implemented | goldbot/risk/gate.py:152-153; goldbot/engine/runner.py:645 `_cost_atr` | tests/test_cov_risk.py::test_target_must_clear_two_and_a_half_times_round_trip_cost; tests/test_engine_costs.py::test_cost_comes_from_the_table_by_session |
+| R28 | "only if expected value after costs is positive: EV = pT - (1-p)S - c" | implemented | goldbot/risk/gate.py:149-151; goldbot/research/metrics.py:48 | tests/test_cov_risk.py::test_zero_expected_value_is_refused |
+| R29 | "RiskGate is the only path to an order" (CLAUDE.md) and gate re-run at approval | implemented | goldbot/engine/runner.py:309 (gate before proposal), :331-345 `_on_decision` re-checks | tests/test_cov_engine.py::test_approval_re_runs_the_risk_gate_and_a_halt_meanwhile_blocks_the_entry |
+| R30 | Data-quality error blocks entries ("never opens a position on a flagged bar") | implemented | goldbot/risk/gate.py:132-133; goldbot/engine/runner.py:404, 433, 447 | tests/test_risk_ops.py::test_crossed_and_out_of_order_ticks_set_dq_error_until_a_clean_bar; ::test_bar_checks_and_stale_feed_set_dq_error |
+| R31 | Numbers in settings.yaml and code defaults equal the design's | implemented | config/settings.yaml:46-63; goldbot/risk/gate.py:26-42; goldbot/risk/supervisor.py:18-23 | tests/test_trace_risk.py::test_design_numbers_in_settings_and_code_defaults |
+
+## Supervisor [Execution and risk: Supervisor]
+
+| # | Requirement | Status | Code | Test |
+| --- | --- | --- | --- | --- |
+| S1 | Combined caps "1.5% daily, 4% weekly" of combined equity, tighter than per account | implemented | goldbot/risk/supervisor.py:53-66; goldbot/ops/run.py `run_supervisor` (from settings) | tests/test_cov_risk.py::test_combined_daily_cap_halts_although_each_account_is_inside_its_own_cap; ::test_combined_weekly_cap_and_drawdown_stages |
+| S2 | "writes a HALT flag each engine checks every cycle" | implemented | goldbot/risk/supervisor.py:72-76; goldbot/engine/runner.py:405-406 | tests/test_cov_engine.py::test_production_engines_fail_closed_without_a_supervisor_and_obey_the_owner_halt |
+| S3 | "if the supervisor heartbeat is older than 60 seconds they stop entering" | implemented | goldbot/risk/supervisor.py:81 | tests/test_cov_risk.py::test_engines_fail_closed_without_a_fresh_readable_supervisor_heartbeat |
+| S4 | Unreadable engine state counts as a fault (fail closed) | implemented | goldbot/risk/supervisor.py:69-70 | tests/test_risk_ops.py::test_engine_state_is_written_atomically_and_an_unreadable_one_halts |
+| S5 | "a heartbeat alert fires if any service has been silent for five minutes" [Infrastructure] | partial | stale engines are listed in supervisor.json (`stale_engines`), no alert is sent; other services have no heartbeat | tests/test_cov_risk.py::test_silent_engines_are_reported_stale_and_torn_files_are_skipped |
+
+## Approval flow and Telegram [Operating mode, Telegram rights]
+
+| # | Requirement | Status | Code | Test |
+| --- | --- | --- | --- | --- |
+| A1 | "the window is 90 seconds, timeouts are logged EXPIRED_UNAPPROVED" | implemented | goldbot/telegram/approvals.py:31, 48; goldbot/engine/runner.py:320; config/settings.yaml:63 | tests/test_trace_data_exec.py::test_approval_window_and_reason_codes; tests/test_cov_telegram.py::test_a_late_approval_is_logged_as_expired_unapproved |
+| A2 | Engine window read from `approval_window_seconds` | partial | goldbot/engine/runner.py:320 hard-codes 90 (equal to the setting today) | tests/test_trace_data_exec.py::test_approval_window_and_reason_codes (equality only) |
+| A3 | "approval re-runs the RiskGate and spread check at approval time" | implemented | goldbot/engine/runner.py:331-345 | tests/test_cov_engine.py::test_approval_re_runs_the_risk_gate_and_a_halt_meanwhile_blocks_the_entry |
+| A4 | "Rejections carry a reason code (news, cost, discretion, duplicate, other)" | implemented | goldbot/telegram/approvals.py:24, 111-112; goldbot/telegram/bus.py:102-104 | tests/test_cov_telegram.py::test_rejection_needs_a_listed_reason_code_and_a_bad_one_leaves_it_pending; ::test_every_reason_code_is_accepted_and_recorded |
+| A5 | Proposal carries "account, direction, lots, stop, target, p, top three SHAP features and current spread" | partial | goldbot/telegram/approvals.py `Proposal.text`; top features are gain importance (`model.importance`), not per-trade TreeSHAP | tests/test_cov_telegram.py::test_proposal_text_carries_what_the_owner_needs_to_decide |
+| A6 | "every exit is automatic and never gated by approval" | implemented | goldbot/engine/runner.py:367 `_manage_open` (no approval path) | tests/test_cov_engine.py::test_time_exit_and_broker_side_closes_are_tracked |
+| A7 | First decision wins across dashboard and Telegram | implemented | goldbot/telegram/bus.py:114 (O_EXCL) | tests/test_cov_telegram.py::test_bus_submit_validates_and_the_first_decision_wins |
+| A8 | "accepted by numeric user-id allow-list" | implemented | goldbot/telegram/approvals.py:104-105, 132-133 | tests/test_cov_telegram.py::test_only_allow_listed_users_decide_and_only_once |
+| A9 | "/halt and /approve need no second factor; /rearm, /mode and any parameter change require a 6-digit TOTP within 60 seconds" | implemented | goldbot/telegram/approvals.py:25, 134; goldbot/api/auth.py:53 (+-1 step of 30 s) | tests/test_cov_telegram.py::test_halt_needs_no_second_factor_but_authority_raising_commands_do |
+| A10 | "/mode auto ... only offered after at least 100 proposals with no RiskGate breach and no distinguishable difference between approved and rejected outcomes" | missing | `veto_value` (goldbot/telegram/approvals.py:152) counts outcomes; no 100-proposal test, no outcome comparison, `/mode auto` is accepted on TOTP alone | untested |
+| A11 | Owner halt fails closed on an unreadable control file | implemented | goldbot/telegram/bus.py:129 | tests/test_cov_telegram.py::test_owner_halt_round_trips_and_fails_closed_on_a_corrupt_file |
+
+## Dashboard authentication [Infrastructure: Dashboard]
+
+| # | Requirement | Status | Code | Test |
+| --- | --- | --- | --- | --- |
+| U1 | "email, password and an authenticator code for every login" | implemented | goldbot/api/auth.py:161-176 | tests/test_api.py::test_bootstrap_invite_roles_and_decisions |
+| U2 | Three roles: owner / approver / viewer with the stated rights | implemented | goldbot/api/auth.py:33-34, `_require`; goldbot/api/app.py role checks | tests/test_api.py::test_bootstrap_invite_roles_and_decisions |
+| U3 | "single-use 72-hour link" | implemented | goldbot/api/auth.py:135-141 | tests/test_api.py::test_bootstrap_invite_roles_and_decisions |
+| U4 | "five failed logins lock an account for 15 minutes" | partial | goldbot/api/auth.py:163-166: five failures in a sliding 15-minute window lock until the oldest ages out, i.e. the lock can be shorter than 15 min after the fifth failure | tests/test_api.py::test_lockout_after_five_failures |
+| U5 | "sessions are revocable" | implemented | goldbot/api/auth.py:191 `logout` (server-side session table) | tests/test_api.py::test_bootstrap_invite_roles_and_decisions |
+| U6 | "every login, invite, role change and decision is written to an audit log" | implemented | goldbot/api/auth.py:120; goldbot/api/app.py decision endpoint | tests/test_api.py::test_bootstrap_invite_roles_and_decisions |
+| U7 | Re-arm on the dashboard only by the owner with an authenticator code | implemented | goldbot/api/app.py re-arm endpoint; goldbot/engine/runner.py:472 | tests/test_risk_ops.py::test_owner_rearm_on_the_bus_clears_the_drawdown_halt |
+
+## Data and time [Data architecture]
+
+| # | Requirement | Status | Code | Test |
+| --- | --- | --- | --- | --- |
+| D1 | "Everything is stored in UTC"; server offset "resolved per bar via zoneinfo('Europe/Athens'), never hard-coded" | implemented | goldbot/data/timeutil.py:30 `server_to_utc` | tests/test_data_layer.py::test_server_to_utc_handles_eu_dst |
+| D2 | Feature-day "ends at COMEX settlement, 13:30 America/New_York (17:30 or 18:30 UTC)" | implemented | goldbot/data/timeutil.py:47, 63; config/settings.yaml:6 | tests/test_data_layer.py::test_feature_day_boundary_at_1330_new_york |
+| D3 | Risk-day "ends at 00:00 UTC" | implemented | goldbot/data/timeutil.py:70 | tests/test_cov_risk.py::test_new_day_resets_day_start_equity_at_utc_midnight |
+| D4 | Swap-day "read from the terminal, used only for cost attribution" | missing | not read; no swap in the cost model (see X9) | untested |
+| D5 | "Resampling is label='left', closed='left', a bar is complete only at open + tf" | implemented | goldbot/data/resample.py:68-91 (`visible_at`) | tests/test_data_layer.py::test_resample_15m_1h_1d; ::test_ticks_to_1m_and_visibility |
+| D6 | Daily bars on the feature-day | implemented | goldbot/data/resample.py:74-79 | tests/test_data_layer.py::test_resample_15m_1h_1d |
+| D7 | "bars that would straddle the daily break are not formed" | partial | 1m bars inside the break are dropped (goldbot/data/resample.py:42); a 4h bar spanning the break is still formed from both sides | untested |
+| D8 | "Weekly bars run Sunday open to Friday close" | implemented | goldbot/data/timeutil.py:74 (Sunday-anchored), goldbot/data/resample.py:80 | untested |
+| D9 | "no placeholder bars are ever written" | implemented | goldbot/data/resample.py:42 | tests/test_data_layer.py::test_ticks_to_1m_and_visibility |
+| D10 | "Bar close is detected by clock (close time plus 1.5 s grace), not by tick arrival" | deviates | goldbot/engine/runner.py `on_tick` closes a bar when the first tick of the next bar arrives | untested |
+| D11 | Live collector "polls copy_ticks_from every 250 ms, dedups on (time_msc, bid, ask, flags)" | partial | goldbot/execution/mt5_adapter.py `stream_ticks` polls every 0.25 s and dedups on (ts, bid, ask); `flags` not used | untested |
+| D12 | "daily reconciliation against the broker's own M1 logs any divergence" | missing | | untested |
+| D13 | Session state "from symbol_info().session_deals, not from silence" | partial | goldbot/data/calendar.py SessionTable (static defaults); runtime override from session_deals not wired | tests/test_data_layer.py::test_sessions_closed_on_weekend_and_daily_break |
+| D14 | Macro tables carry `value_date`, `available_utc`, `vintage`; "features join with merge_asof on available_utc only", with a unit test seeding a fake release | implemented | goldbot/data/store.py:145 `asof_join` (refuses frames without `available_utc`); goldbot/data/macro.py | tests/test_data_layer.py::test_asof_join_never_leaks_future_release; tests/test_cov_labels_store.py::test_asof_join_never_uses_a_row_before_it_was_available |
+| D15 | Multi-timeframe rule "visible only if open_TF + TF <= t ... no 1h feature at 10:15 contains the 10:00-11:00 bar" | implemented | goldbot/features/mtf.py:12 | tests/test_features_labels.py::test_mtf_merge_has_no_lookahead |
+| D16 | News features "join as-of on received_utc"; "a high-relevance unscheduled shock triggers a 30-minute entry blackout" | implemented | goldbot/data/news.py:167 `shock_window`; goldbot/engine/runner.py:535 | tests/test_news.py::test_shock_blocks_entries_for_30_minutes |
+| D17 | Quality on every ingest: duplicate timestamps, bid > ask as errors | implemented | goldbot/data/quality.py:34-42 | tests/test_trace_data_exec.py::test_duplicate_timestamps_are_an_error; tests/test_data_layer.py::test_quality_checks_flag_spike_and_bid_gt_ask |
+| D18 | Quality: "non-monotonic time" | implemented (fixed here) | goldbot/data/quality.py:27-29, 46-50: checked on arrival order; before, the batch was sorted first so the check could never fire (the engine had a workaround in goldbot/engine/runner.py:447) | tests/test_trace_data_exec.py::test_non_monotonic_batch_is_an_error |
+| D19 | Quality: "Gaps against the calendar" | implemented | goldbot/data/quality.py:52-58 | tests/test_data_layer.py::test_gap_check_fires_whatever_the_timestamp_unit |
+| D20 | Quality: "spikes (>12 sigma of trailing hour with no match on the other feed)" | partial | goldbot/data/quality.py:60-69: 12 sigma of the trailing 60 bars; the other-feed match is not checked | tests/test_data_layer.py::test_quality_checks_flag_spike_and_bid_gt_ask |
+| D21 | Quality: "stale feed (90 s without a tick in session)" | implemented | goldbot/data/quality.py:74 `stale_feed` | tests/test_trace_data_exec.py::test_stale_feed_is_90s_in_session_only |
+| D22 | "Warnings commit with a dq_flag; errors quarantine the batch and alert" | partial | flags set (goldbot/data/quality.py); the release/store writers do not quarantine error batches and nothing alerts | untested |
+| D23 | "Dukascopy ... kept separate and tagged"; "every signal must survive on both feeds" | partial | `source=` partitions in the store; the two-feed survival check is missing | untested |
+| D24 | "CFD volume is tick count and is never labelled otherwise" | implemented | goldbot/data/resample.py BAR_COLUMNS (`tick_count`) | tests/test_dukascopy_year.py::test_fractional_dukascopy_volumes_are_kept |
+| D25 | Timestamps via `epoch_ns`, never `.asi8` (CLAUDE.md) | implemented | goldbot/data/timeutil.py:22 | tests/test_data_layer.py::test_epoch_ns_is_unit_independent |
+
+## Features and labels [Features and labels]
+
+| # | Requirement | Status | Code | Test |
+| --- | --- | --- | --- | --- |
+| F1 | "capped at 40 per live model" | implemented | goldbot/research/model.py:34; goldbot/research/pipeline.py:53; goldbot/config.py:52 (`le=40`) | tests/test_trace_data_exec.py::test_live_models_are_capped_at_40_features; tests/test_specialists.py::test_feature_subset_is_seeded_and_capped |
+| F2 | "versioned so a model can only ever score the feature frame it was trained on" | partial | version stamped (goldbot/features/registry.py:43, goldbot/research/model_registry.py:31); the engine does not compare `model.feature_version` with the frame's before scoring | tests/test_features_labels.py::test_build_features_runs_and_is_versioned (stamp only) |
+| F3 | Labels: "Triple-barrier on mid price with spread charged at entry and exit (buy at ask, sell at bid)" | implemented | goldbot/labels/triple_barrier.py:39-60 | tests/test_cov_labels_store.py::test_long_enters_at_the_ask_and_only_bars_after_the_signal_count; ::test_short_enters_at_the_bid_and_is_stopped_by_the_ask |
+| F4 | "The label is the sign of the first barrier touched, with the time barrier yielding the sign of the realised return" | implemented | goldbot/labels/triple_barrier.py:44-63 | tests/test_cov_labels_store.py::test_time_exit_label_is_the_sign_of_the_realised_return; ::test_stop_is_assumed_first_when_both_barriers_are_inside_one_bar |
+| F5 | "Meta-labelling: the rule sets the side, the model learns P(rule is right)" | implemented | goldbot/research/pipeline.py:96 `run_specialist` (y = target_hit) | tests/test_research_pass_integration.py::test_research_pass_reports_and_records_trials |
+| F6 | "weighted by uniqueness (average inverse concurrency over the label's life) times absolute return" | implemented | goldbot/labels/triple_barrier.py:77 | tests/test_cov_labels_store.py::test_uniqueness_weights_discount_overlapping_labels |
+| F7 | One position per agent (HANDOFF; labels built one at a time) | implemented | goldbot/labels/triple_barrier.py:90; goldbot/engine/runner.py:552 | tests/test_features_labels.py::test_one_at_a_time_keeps_a_candidate_only_after_the_previous_exit; tests/test_approval_bus.py::test_engine_keeps_one_position_or_proposal_per_agent |
+| F8 | Leakage CI tests: "A shuffle test (labels shifted by one bar must drive AUC to 0.5)" | deviates | replaced by a lookahead check on truncated history (goldbot/research/pipeline.py:71); HANDOFF explains the shifted-label AUC reads ~0.7 on non-overlapping trades without leakage | tests/test_specialists.py::test_lookahead_check_passes_the_real_features_and_catches_a_leaky_one |
+| F9 | "an as-of audit on every join" | implemented | goldbot/data/store.py:145 (refuses non-`available_utc` joins), goldbot/features/mtf.py:12 | tests/test_data_layer.py::test_asof_join_never_leaks_future_release |
+| F10 | "a Dukascopy cross-check: a signal that only works on broker-fed bars is ... dropped" | missing | | untested |
+| F11 | TradingView alerts "with fired_at - bar_time < tf are flagged intrabar and excluded from training" | partial | flagged (goldbot/webhook/app.py:56); no TV features reach training yet, so exclusion is moot | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar |
+| F12 | "about 1% of alerts randomly blanked" in training; "a missed alert sets the feature to NaN" | missing | no TradingView feature family in the registry | untested |
+
+## Modelling, validation and promotion [Modelling]
+
+| # | Requirement | Status | Code | Test |
+| --- | --- | --- | --- | --- |
+| M1 | Specialist table: barriers, timeframes and time limits (trend 2.5/1.25 48 h, mean-rev 1.0/1.5 12 bars, breakout 2.0/1.0 24 h, session-open 1.5/1.0 16 bars) | implemented | goldbot/specialists/{trend,mean_reversion,breakout,session_open}.py `default_config` | tests/test_trace_data_exec.py::test_specialist_barriers_match_the_modelling_table |
+| M2 | Trend trigger: EMA-50 side matching the 4h slope, ADX(14) > 20, pullback within 0.5 ATR | implemented | goldbot/specialists/trend.py | tests/test_specialists.py::test_trend_takes_a_pullback_in_the_4h_direction |
+| M3 | Trend "1h primary, 15m execution" and "Trail at 1.5 ATR once 1.25 ATR in profit" | partial | 1h only; the trail is declared in `exit_policy` but the engine does not trail | untested |
+| M4 | Mean-reversion: 2 sigma of 20-bar band, RSI(14) beyond 25/75, 1h vol in bottom two terciles | implemented | goldbot/specialists/mean_reversion.py | tests/test_specialists.py::test_mean_reversion_fades_band_extremes_in_calm_markets |
+| M5 | Breakout: "1h range >= 8 bars and < 1.2 ATR wide ... tick volume > 1.5x 20-bar median" | deviates | goldbot/specialists/breakout.py:26 uses `max_range_atr` 2.0 (docstring: 8 random-walk bars span ~3 ATR, 1.2 never fires); volume rule as designed | tests/test_specialists.py::test_breakout_needs_a_tight_range_and_volume |
+| M6 | Breakout exit "Half at 1.0 ATR, rest trailed at 1.0 ATR"; "stop inside range" | missing | declared in `exit_policy`, not executed; stop is the ATR barrier | untested |
+| M7 | Session-open: "London 08:00 or New York 13:30 UK", Asian range < 0.8 ATR(daily), "hard flat 1 h before next session" | deviates | goldbot/specialists/session_open.py:27 anchors New York at 08:30 New York (equals 13:30 UK except in the DST mismatch weeks); hard-flat not executed | tests/test_features_labels.py::test_session_open_specialist_produces_candidates_at_open_times |
+| M8 | Rule allocator: trend 1.0 if ADX > 25, mean-rev if ADX < 18, breakout if 1h ATR bottom quartile, MR+BO capped at 1.0, session-open 0.75, 0 within 30 min of tier-1 | implemented | goldbot/allocator/rules.py:32-44 | tests/test_allocator_approvals.py::test_rule_allocator_weights_and_blackout |
+| M9 | Allocator's tier-1 input in the engine | partial | goldbot/engine/runner.py `_regime` reads an `in_blackout` feature column that the feature frame does not carry, so the allocator's own 30-min zeroing never triggers live (the RiskGate's -15/+30 blackout still blocks entries) | untested |
+| M10 | Learned allocator "trains only on stacked out-of-fold specialist predictions" | missing | rule table only (design allows it for the first three months) | untested |
+| M11 | "Size multiplier m = w * clip((p - p0)/0.20, 0, 1), p0 = (S + c)/(T + S)" | implemented | goldbot/research/metrics.py:44, 52 | untested |
+| M12 | "Probabilities are isotonic-calibrated on out-of-fold predictions; thresholds maximise out-of-sample profit factor net of costs, shaded up by 0.02" | in review | goldbot/research/model.py:46; threshold is breakeven + 0.02 (goldbot/research/pipeline.py, goldbot/engine/runner.py:306), not PF-optimised; cross-fitted calibration is proposal P1 | tests/test_research_pass_integration.py::test_research_pass_reports_and_records_trials |
+| M13 | Walk-forward windows "15m: train 24, test 3, step 3, purge 2 d, embargo 1 d; 1h: 36/6/6, purge 5 d, embargo 2 d" | implemented | goldbot/research/walkforward.py:17-20; config/settings.yaml:31-36 | tests/test_trace_data_exec.py::test_walk_forward_windows_match_design_and_settings |
+| M14 | "Purge is always at least the specialist's label horizon" | implemented | goldbot/research/walkforward.py:47 | tests/test_trace_data_exec.py::test_purge_is_at_least_every_label_horizon |
+| M15 | Walk-forward windows read from settings | partial | `splits_for` uses the `WINDOWS` constant; `settings.labels` purge/embargo are not read (values equal today) | tests/test_trace_data_exec.py::test_walk_forward_windows_match_design_and_settings |
+| M16 | "Combinatorial purged CV (6 groups, 2 test, 15 paths) runs quarterly" | missing | | untested |
+| M17 | "at least 1,500 labelled candidates overall and 60 per fold" | in review | not enforced on `main`; proposal P1 adds the gates | untested |
+| M18 | "positive expectancy in at least three non-overlapping calendar years including the 2021-2022 chop" | in review | per-year table printed (scripts/research_pass.py), not enforced; P1 | untested |
+| M19 | "deflated Sharpe ratio of 0.95 or better using the real trial count from the research registry" | in review | goldbot/research/metrics.py:31 computed and reported; not a gate on challengers; P1/P2 | untested |
+| M20 | Saturday retrain on "a rolling window matching their walk-forward train length" | implemented | goldbot/ops/jobs.py `saturday_retrain` (train + 4 test windows) | tests/test_jobs_integration.py::test_retrain_challenger_shadow_promotion_cycle |
+| M21 | Challenger shadow "at least four weeks or 40 trades" | implemented | goldbot/research/promotion.py:19-20, 54 (four weeks and 40 trades, the stricter reading) | tests/test_cov_research.py::test_shadow_needs_four_weeks_and_forty_trades_whichever_is_later |
+| M22 | Promotion: "shadow Sharpe within 0.5 of backtest and above 0.8", "hit rate within one binomial SE", "drawdown under 1.5x backtest", "turnover within 30% of the champion" | implemented | goldbot/research/promotion.py:21-24, 54-75 | tests/test_cov_research.py::test_gate_boundaries; ::test_sharpe_shortfall_and_turnover_boundaries; tests/test_costs_promotion_registry.py::test_each_gate_blocks_promotion |
+| M23 | "Specialist promotion is automatic when all gates pass" | implemented | goldbot/ops/jobs.py `_decide_challengers` | tests/test_jobs_integration.py::test_retrain_challenger_shadow_promotion_cycle |
+| M24 | "previous champion is kept and restored automatically if the new one trips the CUSUM alarm in its first two weeks" | implemented | goldbot/ops/jobs.py `model_watch`; goldbot/research/promotion.py:78 | tests/test_shadow.py::test_model_watch_restores_the_previous_champion_on_a_cusum_alarm |
+| M25 | CUSUM "tuned to a 5% quarterly false-alarm rate" | deviates | fixed k = 0.5, h = 4.0 sd (goldbot/research/promotion.py:78), not calibrated to a false-alarm rate | tests/test_cov_research.py::test_cusum_alarms_on_a_sustained_drop_but_not_on_the_expected_record |
+| M26 | Drift: "Daily PSI per feature ... above 0.1 warns, above 0.25 sizes down to 50%"; "ECE above 0.08 sizes down" | missing | | untested |
+| M27 | CUSUM "halts the affected specialist; two specialists halted at once, or a 30-day drawdown above 1.5x backtest, halts the system" | partial | model watch restores the previous champion; no specialist halt, no system halt | untested |
+| M28 | "TreeSHAP is stored for every live, shadow and rejected decision" | missing | decisions are journalled (goldbot/engine/runner.py `flush_journal`) without SHAP | untested |
+| M29 | "Retired specialists keep running in shadow" | implemented | goldbot/research/population.py:47 (182 days) | tests/test_population.py::test_retirement_by_confidence_bound_and_the_six_month_shadow_tail |
+| M30 | Bounded research loop: fixed monthly trial budget, +-25% label grid, every trial in the registry feeding DSR | implemented | goldbot/ops/jobs.py `monthly_research`; config/settings.yaml research; goldbot/research/registry_sync.py | tests/test_jobs_integration.py::test_monthly_research_is_bounded_and_counted; ::test_label_grid_is_the_26_neighbours_of_the_base |
+| M31 | "a held-out year the loop never scores" [Risks table] | in review | not in code; proposal P2 | untested |
+| M32 | Meta-model inputs (side, trigger features, context) | in review | proposal P3 | untested |
+
+## Execution and broker [Broker abstraction, Order lifecycle, Reconciliation, Account classifier]
+
+| # | Requirement | Status | Code | Test |
+| --- | --- | --- | --- | --- |
+| X1 | "The engine never imports MetaTrader5 directly"; Broker protocol | implemented | goldbot/execution/broker.py; MetaTrader5 only in goldbot/execution/mt5_adapter.py | untested (structural) |
+| X2 | "engine refuses to start if a symbol is missing from Market Watch" | implemented | goldbot/execution/mt5_adapter.py:42 | untested (Windows only) |
+| X3 | "Magic numbers encode account and specialist (IC 2601xx, Vantage 2602xx)" | implemented | config/settings.yaml:18, 23; goldbot/engine/runner.py:556 | tests/test_risk_ops.py::test_magic_numbers_are_stable_across_processes |
+| X4 | Paper broker: "entries at the touch plus half the last minute's spread standard deviation, stop fills with 20 points adverse slippage, real commission" | implemented | goldbot/execution/paper.py | tests/test_cov_execution.py::test_entries_fill_worse_than_the_touch_by_half_the_spread_deviation; ::test_short_stop_fills_with_adverse_slippage_and_target_fills_at_the_level |
+| X5 | "Market entries with SL and TP attached in the request" | implemented | goldbot/engine/runner.py:349-351; goldbot/execution/mt5_adapter.py:107 | tests/test_engine.py::test_engine_auto_mode_places_orders_and_writes_state |
+| X6 | "Deviation 30 points; filling mode preferred IOC, FOK, RETURN; retcodes 10004/10006 retried twice with a fresh tick and 500 ms backoff, then logged FAILED_EXEC and alerted" | partial | goldbot/execution/mt5_adapter.py:100-130; no alert on FAILED_EXEC | untested (Windows only) |
+| X7 | Client order id `{account}-{bar_close_ts}-{intent_hash}` "written to a pending_orders table before order_send ... on restart the engine reconciles that table against history_deals_get" | partial | id format and in-memory `sent_ids` before send (goldbot/engine/runner.py:352); no persisted `pending_orders` table, no restart reconciliation against deals | tests/test_cov_engine.py::test_an_approved_entry_is_sized_again_and_sent_once |
+| X8 | Reconciliation "on startup and every 30 seconds"; orphan "given a 1.5 ATR stop"; "Missing or out-of-range stops are reinstated"; unknown magic left alone | partial | goldbot/engine/runner.py:379-384 adopts orphans in its magic range each bar; no 1.5 ATR stop, no stop reinstatement, not every 30 s | tests/test_cov_engine.py::test_reconciliation_adopts_only_positions_in_its_own_magic_range |
+| X9 | Cost model: spread by session from own ticks, slippage from own fills by session and order type, "$0.15 prior until 50 fills"; swap | partial | goldbot/execution/costs.py:99; config/settings.yaml:66; swap not modelled | tests/test_costs_promotion_registry.py::test_slippage_keeps_the_prior_until_enough_fills_and_signs_by_side; tests/test_cov_execution.py::test_slippage_cells_need_their_own_min_fills_and_ignore_unpriced_rows |
+| X10 | "IC Markets' tables are the canonical ones for backtests" | implemented | config/settings.yaml:17 `canonical_costs`; goldbot/ops/run.py (shadow host) | untested |
+| X11 | Classifier: commission => Raw; zero commission and median London/NY spread >= $0.30 => Standard | implemented | goldbot/execution/classifier.py:31-48 | tests/test_risk_exec_webhook.py::test_classifier_rules_and_persistence |
+| X12 | "a median under $0.20 with floating spread and no deal history also reads Raw; anything in between is Unknown" | implemented (fixed here) | goldbot/execution/classifier.py:45: Raw now requires no deal history; zero-commission deals with a tight spread are Unknown | tests/test_trace_data_exec.py::test_tight_spread_reads_raw_only_without_deal_history |
+| X13 | "only changes when two consecutive runs disagree"; "re-runs weekly from the nightly cost job" | implemented | goldbot/execution/classifier.py:53; goldbot/ops/jobs.py (Friday) | tests/test_risk_exec_webhook.py::test_classifier_rules_and_persistence; tests/test_jobs_integration.py::test_nightly_costs_from_logged_ticks_and_fills |
+| X14 | "On a Standard account the 15m specialists are disabled and the 1h and session-open specialists run only when expected edge exceeds 1.5x the measured cost; on Unknown the engine stays in paper and alerts" | missing | the engine reports the class (goldbot/engine/runner.py:661) but does not act on it | tests/test_engine_costs.py::test_account_class_is_reported_from_the_classifier_state (report only) |
+| X15 | Webhook: "accepts POSTs only from TradingView's published IPs" | implemented | goldbot/webhook/app.py:24, 79-83 (peer address) | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar (IP check disabled in test) |
+| X16 | Webhook: "verifies an HMAC over the payload in constant time, rejects replayed nonces" | deviates | constant-time shared secret in the body (goldbot/webhook/app.py:84; TradingView cannot sign) plus content-hash idempotency; no nonce | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar |
+| X17 | "upserts on a content hash so retries are idempotent" | implemented | goldbot/webhook/app.py:40, 87-90 | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar |
+
+## Phases, accounts and credentials [Demo first, live by gate; Logins and credentials]
+
+| # | Requirement | Status | Code | Test |
+| --- | --- | --- | --- | --- |
+| P1 | "Live accounts exist in the registry from day one but are disabled" | implemented | config/accounts.yaml; goldbot/ops/accounts.py:243 | tests/test_accounts.py::test_registry_demo_first_and_live_locked |
+| P2 | Live enabled only "after the paper-to-tiny-live gate is recorded as passed and Aamir types the exact confirmation phrase" | implemented | goldbot/ops/accounts.py:230 | tests/test_accounts.py::test_live_unlock_requires_gate_and_phrase |
+| P3 | "the engine refuses to return a live account unless the gate file agrees with the registry" | implemented | goldbot/ops/accounts.py:243-250; goldbot/ops/run.py `run_engine` | tests/test_accounts.py::test_registry_demo_first_and_live_locked |
+| P4 | Gates recorded in order with evidence | implemented | goldbot/ops/accounts.py:188 `record_gate` | tests/test_risk_ops.py::test_record_gate_appends_atomically_and_refuses_bad_names |
+| P5 | "Passwords, the webhook secret and the Telegram token live only in the operating-system keyring" | implemented | goldbot/ops/accounts.py (keyring; owner-only fallback file without a backend) | tests/test_accounts.py::test_prompt_stores_and_reuses_credential |
+| P6 | Stop rule: "after 18 months ... pooled trade count exceeds 500 and the lower 90% confidence bound on expectancy is still below zero, or any single incident produces a loss larger than the weekly cap" | missing | | untested |
+| P7 | Roadmap gate thresholds (trade-count and time gates "committed in writing before the first paper trade") | missing | `record_gate` records evidence; no code computes whether a gate is met | untested |
+
+## Population and agents [Evolving the system]
+
+| # | Requirement | Status | Code | Test |
+| --- | --- | --- | --- | --- |
+| G1 | "an agent needs at least 60 shadow trades before it is ranked" | implemented | goldbot/research/population.py:41 | tests/test_population.py::test_founders_are_seeded_and_unranked_agents_are_not_promoted |
+| G2 | Fitness "only on out-of-sample shadow and live trades": expectancy, calibration, drawdown, correlation | implemented | goldbot/research/population.py:142 `score_agent` | tests/test_cov_research.py::test_score_uses_the_lower_80_bound_and_needs_two_trades; ::test_diversity_penalty_and_losing_agents_get_no_capital |
+| G3 | Cloning "two or three mutated children ... a parent is never duplicated unchanged" | implemented | goldbot/research/population.py:48, 180 | tests/test_population.py::test_winners_are_cloned_into_mutated_shadow_children; tests/test_features_labels.py::test_agent_identity_clone_must_differ |
+| G4 | Retirement "lower 80% confidence bound on expectancy is below zero after 100 trades, or bottom quarter of its generation for two consecutive months"; retired kept in shadow six months | implemented | goldbot/research/population.py:42-47 | tests/test_population.py::test_retirement_by_confidence_bound_and_the_six_month_shadow_tail; ::test_two_bottom_quartile_months_retire_an_agent |
+| G5 | "capped (initially 12 live, 24 in shadow)" | implemented | goldbot/research/population.py:45-46 | tests/test_population.py::test_shadow_and_live_caps |
+| G6 | "promotion from shadow to live still passes the deflated-Sharpe gate with the population size as the trial count" | deviates (minor) | goldbot/research/population.py `tournament` promotes on DSR > 0.95; the design's "0.95 or better" is >= | tests/test_population.py::test_strong_shadow_record_is_promoted_and_a_weak_one_is_not |
+| G7 | "Total live risk never exceeds the RiskGate limits however many agents are funded" | implemented | every order passes RiskGate (R29); `max_positions` per account | tests/test_cov_risk.py::test_each_account_condition_blocks_entries_on_its_own |
+| G8 | Staff agents: "none can place, modify or close a trade"; read-only tools; the only write is a hypothesis | implemented | goldbot/agents/tools.py; goldbot/agents/roles.py | tests/test_agents.py::test_tools_outside_the_role_are_refused_and_not_run; ::test_improvement_agent_files_a_hypothesis |
+| G9 | "every run is logged with its inputs, outputs and cost, and their total monthly spend is capped" | implemented | goldbot/agents/runner.py; config/settings.yaml agents.monthly_cap_usd | tests/test_agents.py::test_monthly_cap_blocks_the_run_without_calling_the_api; ::test_per_run_budget_stops_before_spending_more |
+| G10 | Research analyst runs walk-forward trials and records them; promotes nothing | implemented | goldbot/agents/tools.py `run_trial` | tests/test_agents.py::test_research_analyst_tests_a_hypothesis_and_records_the_verdict |
+
+## Gaps
+
+Fixed on this branch:
+- R6 per-trade risk clamp after the multiplier (goldbot/risk/gate.py).
+- D18 non-monotonic ingest check could never fire (goldbot/data/quality.py).
+- X12 classifier read zero-commission accounts with tight spreads as Raw (goldbot/execution/classifier.py).
+- Tests pinning the design numbers: tests/test_trace_risk.py, tests/test_trace_data_exec.py.
+
+Already fixed on `main` by other work and verified here: settings-driven RiskLimits/SupervisorLimits (R1, S1),
+risk-day/week roll (R10, R12), kill switch closing at market (R15), owner re-arm (R16), dq_error wiring (R30),
+phase-gate recording (P4), store dedupe and `asof_join` (D14), stable magic numbers (X3), exact lot-step rounding (R4).
+
+In review on another branch (research evaluation, proposals P1-P3): M12, M17, M18, M19, M31, M32.
+
+Larger gaps, by priority (effort: S < 1 day, M 1-3 days, L > 3 days):
+
+1. **X7 persisted `pending_orders` and restart reconciliation against deals** (M). A restart today forgets
+   `sent_ids`; the design's double-fill protection depends on it.
+2. **X8 reconciliation stops**: orphans get a 1.5 ATR stop, missing/out-of-range stops are reinstated, every 30 s (S-M).
+3. **R22/R23 weekend and rollover rules**: no entries +-5 min of server midnight; Friday 21:30 server close losers,
+   tighten winners (S-M).
+4. **R7 combined exposure cap** (3 lots or 30% of combined notional, both accounts as one position): needs the
+   supervisor to publish combined open lots and the gate to read them (M).
+5. **X14 act on the account class**: Standard disables 15m families and requires 1.5x edge over cost; Unknown
+   forces paper and alerts (S).
+6. **R17 combined 8% stage**: engines read the supervisor's `size_down` flag and apply the SIZE_DOWN sizing (S).
+7. **F2 feature-version check at scoring**: refuse a model whose `feature_version` differs from the frame's (S).
+8. **R25/R26 stale data**: last-bar age > 1 period and the 60 s healthy-data reset; alert on stale (S).
+9. **R16 re-arm probation**: 10 days positive shadow before re-arm and a 30-day propose-only lock (S-M).
+10. **M3/M6/M7 live exit policies**: trend trail, breakout scale-out and trail, session-open hard flat (M).
+11. **D22 quarantine of error batches** in the store/release writers, with an alert (S).
+12. **M26/M27 drift and health**: PSI per feature, ECE sizing, specialist and system halts (M-L).
+13. **A10 auto-mode offer** after 100 proposals with the veto comparison (S-M).
+14. **R21 blackout early close if p < 0.5**, which needs re-scoring open positions (M).
+15. **M28 TreeSHAP per decision**, and A5 per-trade SHAP in proposals (M).
+16. **F10/D23 Dukascopy cross-feed check**, **D20 spike other-feed match** (M).
+17. **M16 combinatorial purged CV quarterly** (M); **M10 learned allocator** after three months (L).
+18. **F12 TradingView feature family** with NaN handling and 1% blanking (L); **D4 swap-day and swap costs** (M).
+19. **P6/P7 stop rule and gate thresholds in code** (S once the thresholds are written down).
+20. Minor: **A2** engine window from settings, **M15** walk-forward reads settings, **G6** DSR >= 0.95, **U4**
+    lock measured from the fifth failure, **M25** CUSUM calibrated to 5% quarterly false alarms, **D10** bar close
+    by clock + 1.5 s grace.
