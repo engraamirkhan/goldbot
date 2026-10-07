@@ -157,10 +157,13 @@ class RiskGate:
         # sizing
         lo, hi = L.multiplier_bounds
         mult = min(max(intent.multiplier, lo), hi)
-        risk_frac = min(L.risk_per_trade, L.max_risk_per_trade)
+        risk_frac = L.risk_per_trade
         if st.stage == Stage.SIZE_DOWN:
             risk_frac *= 0.5
             mult = min(mult, 0.5)
+        # per-trade risk is capped after the multiplier (design Hard limits: 1% max, clamped, not rejected)
+        if risk_frac * mult > L.max_risk_per_trade:
+            mult = L.max_risk_per_trade / risk_frac
         stop_distance = max(intent.stop_atr * intent.atr_usd, intent.stops_level_points * L.point + st.spread_points * L.point)
         risk_usd = st.equity * risk_frac * mult
         lots_raw = risk_usd / (stop_distance * intent.contract_oz)
