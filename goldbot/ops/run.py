@@ -8,6 +8,7 @@
   python -m goldbot.ops.run telegram
   python -m goldbot.ops.run news
   python -m goldbot.ops.run record-gate <gate_name> --evidence <path or text>   # appends to state/phase_state.json
+  python -m goldbot.ops.run health [--json] [--static] [--out FILE] [--baseline FILE]   (exit 1 on a fail)
 """
 from __future__ import annotations
 
@@ -286,6 +287,9 @@ if __name__ == "__main__":
         run_news()
     elif cmd == "record-gate":
         sys.exit(record_gate_cli(sys.argv[2:]))
+    elif cmd == "health":
+        from goldbot.ops.health import main as health_main
+        sys.exit(health_main(sys.argv[2:]))
     else:
         print(__doc__)
         sys.exit(1)

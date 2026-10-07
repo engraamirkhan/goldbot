@@ -101,6 +101,7 @@ foreach ($s in $svcs) {
 }
 $svcCred = $null
 Write-Host "Installed. Log in to each MT5 terminal once (demo accounts), then: nssm start goldbot-supervisor; nssm start goldbot-engine-icm ..."
+Write-Host "Check with: $py -m goldbot.ops.run health   Later updates: .\goldbot\ops\vps_update.ps1 -Ref origin/main (keeps this service list)"
 
 # ---- Public HTTPS access from any device (no VPN): Cloudflare Tunnel in front of the API (port 8787).
 # Free Cloudflare account + a domain (or a free *.cfargotunnel.com hostname). The tunnel token is entered
