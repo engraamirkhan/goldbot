@@ -9,11 +9,16 @@
                     replaces it only after it is decided or has been in shadow for CHALLENGER_MAX_WEEKS.
 * tournament        weekly after the retrain: the population round (fitness, retirement, promotion to live,
                     cloning, capital shares) -> state/agents.json for the dashboard's league table.
+* research_director weekly before the staff agents: scores every family's evidence (trial registry, shadow book,
+                    population) and splits what is left of the quarter's trial budget -> state/research_plan.json
+                    (research/director.py). It decides what to research, never what goes live: promotion stays with
+                    the gates. Trials scored on the held-out year are never used as evidence.
 * model_watch       daily: a champion promoted in the last CUSUM_WINDOW_DAYS whose shadow returns trip the CUSUM
                     alarm against its backtest is replaced by the previous champion (design: Retraining and promotion).
-* monthly_research  bounded search: up to `trial_budget_per_month` label-grid variants (+-step on target, stop and
-                    time limit) per specialist, each a walk-forward recorded in the trial registry whose count
-                    feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
+* monthly_research  bounded search: label-grid variants (+-step on target, stop and time limit) per specialist, as
+                    many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
+                    fresh plan), never past the quarter's trial budget and never into the held-out year, each a
+                    walk-forward recorded in the trial registry whose count feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
 """
 from __future__ import annotations
 
@@ -38,11 +43,22 @@ from goldbot.execution.costs import build_cost_table
 from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Schedule, Scheduler
+from goldbot.research.director import (
+    PLAN_FILE,
+    AgentEvidence,
+    ResearchPlan,
+    ShadowEvidence,
+    build_plan,
+    holdout_window,
+    quarter_budget,
+    quarter_usage,
+)
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import ResearchResult, run_specialist
 from goldbot.research.population import Population
 from goldbot.research.promotion import PerfStats, cusum_alarm, evaluate_promotion
 from goldbot.research.registry import TrialRegistry
+from goldbot.research.registry_sync import read_rows
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import Specialist
 
@@ -52,6 +68,7 @@ CHALLENGER_MAX_WEEKS = 8
 CLASSIFIER_WEEKDAY = 4          # Friday's nightly run re-classifies (design: weekly, from the nightly cost job)
 CONTEXT_EXTRA_MONTHS = 2        # daily/4h/1h context needs history before the decision window starts
 CUSUM_WINDOW_DAYS = 14          # a new champion is watched for its first two weeks
+PLAN_MAX_AGE_DAYS = 21          # an older research plan is stale evidence: monthly_research falls back to the flat budget
 
 
 class JobContext(Record):
@@ -222,6 +239,61 @@ def tournament(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return summary
 
 
+# ---------------------------------------------------------------------------------------------- research director
+def research_budget(ctx: JobContext) -> tuple[int, int]:
+    """(most trials the plan may hand out, per-family cap). The plan never exceeds the quarter's remaining budget
+    (build_plan); on top of that it is bounded by the flat monthly loop (budget x families) when the grid runs, and
+    by the quarter budget alone while the grid is paused; a family is capped at the label grid's size or the quarter
+    budget, whichever is larger (pre-registered trials are not limited to grid variants)."""
+    r = ctx.settings.research
+    q = quarter_budget(r)
+    grid = max(len(label_grid(cls.default_config, r.label_grid_step)) for cls in SPECIALISTS.values())
+    total = min(q, r.trial_budget_per_month * len(SPECIALISTS)) if r.trial_budget_per_month > 0 else q
+    return total, max(grid, q)
+
+
+def director_evidence(ctx: JobContext) -> tuple[list[ShadowEvidence], list[AgentEvidence]]:
+    shadow = []
+    for e in ctx.models.entries:
+        st = shadow_stats(ctx, e)
+        if st is not None:
+            shadow.append(ShadowEvidence(family=e.family, version=e.version, stats=st))
+    agents = [AgentEvidence(family=m.family, agent_id=m.agent_id, status=m.status, n=int(m.stats.get("n", 0)),
+                            sharpe_per_trade=float(m.stats.get("sharpe_per_trade", 0.0)), fitness=m.fitness,
+                            ece=float(m.stats.get("ece", 1.0)))
+              for m in ctx.population.members.values() if m.in_shadow_book]
+    return shadow, agents
+
+
+def research_director(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Weekly research plan (research/director.py): evidence per family -> trial budget per family and a ranked focus
+    list, saved to state/research_plan.json for monthly_research and the research director agent. Decides what to
+    research; promotes nothing."""
+    synced = _sync_trials(ctx)            # count the research workflow's trials (and their lookahead checks) too
+    budget, cap = research_budget(ctx)
+    shadow, agents = director_evidence(ctx)
+    r = ctx.settings.research
+    plan = build_plan(slot, sorted(SPECIALISTS), read_rows(ctx.trials.path), shadow, agents,
+                      quarter_budget=quarter_budget(r), monthly_total=budget, trial_budget_per_month=r.trial_budget_per_month,
+                      floor=r.director_floor, cap=cap, holdout=holdout_window(r))
+    plan.save(ctx.state_dir / PLAN_FILE)
+    return {"quarter": plan.quarter, "quarter_used": plan.quarter_used, "budget": plan.budget,
+            "grid_budget": plan.grid_budget, "unallocated": plan.unallocated, "focus": [f.family for f in plan.focus],
+            "blocked": [s.family for s in plan.evidence if s.blocked], "registry_sync": synced}
+
+
+def current_plan(ctx: JobContext, slot: pd.Timestamp) -> ResearchPlan | None:
+    """The director's plan if one exists and is at most PLAN_MAX_AGE_DAYS old at `slot`."""
+    try:
+        plan = ResearchPlan.load(ctx.state_dir / PLAN_FILE)
+    except ValueError as exc:               # a corrupt plan is no plan: the flat budget applies
+        log.warning("research plan unreadable, using the flat budget: %s", exc)
+        return None
+    if plan is None or slot - plan.created_utc > pd.Timedelta(days=PLAN_MAX_AGE_DAYS):
+        return None
+    return plan
+
+
 # ---------------------------------------------------------------------------------------------- staff agents
 def _run_agents(ctx: JobContext, slot: pd.Timestamp, cadence: str) -> dict[str, Any]:
     if ctx.agent_runner is None:
@@ -309,16 +381,27 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     r = ctx.settings.research
     synced_before = _sync_trials(ctx)     # count trials run elsewhere (the research workflow) before deflating
     rng = random.Random(f"{slot:%Y-%m}")        # reproducible choice of variants for the month
-    lines = [f"# Research loop {slot:%Y-%m}", ""]
-    out: dict[str, Any] = {}
+    plan = current_plan(ctx, slot)
+    source = f"research plan of {plan.created_utc:%Y-%m-%d}" if plan else f"flat budget {r.trial_budget_per_month} per family (no fresh research plan)"
+    lines = [f"# Research loop {slot:%Y-%m}", "", f"Trial budget: {source}.", ""]
+    out: dict[str, Any] = {"plan": plan.created_utc.isoformat() if plan else None}
+    q_budget = quarter_budget(r)
+    h_start, _ = holdout_window(r)
+    end = min(slot, h_start)              # the held-out year is never searched
     for family in sorted(SPECIALISTS):
         grid = label_grid(SPECIALISTS[family].default_config, r.label_grid_step)
         rng.shuffle(grid)
         tf = SPECIALISTS[family].timeframe
         history_months = 12 * 30          # everything the store has
+        budget = min(plan.grid_budget.get(family, r.trial_budget_per_month), r.trial_budget_per_month) if plan \
+            else r.trial_budget_per_month
         rows = []
-        for overrides in grid[: r.trial_budget_per_month]:
-            res = _walk_forward(ctx, SPECIALISTS[family](**overrides), slot, history_months, n_trials=ctx.trials.n_trials + 1)
+        stopped = False
+        for overrides in grid[:budget]:
+            if quarter_usage(read_rows(ctx.trials.path), slot, q_budget)[2] <= 0:
+                stopped = True
+                break
+            res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, history_months, n_trials=ctx.trials.n_trials + 1)
             if res is None:
                 break
             row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
@@ -326,9 +409,14 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                                     rationale=f"monthly bounded label-grid search {slot:%Y-%m} (+-{r.label_grid_step:.0%})")
             mf = res.metrics.get("model_filtered") or {}
             rows.append({"trial": row["trial"], **overrides, "n": mf.get("n", 0), "sharpe": mf.get("sharpe_ann"), "dsr": mf.get("dsr")})
-        out[family] = {"trials": len(rows), "timeframe": tf, "registry_total": ctx.trials.n_trials}
-        lines += [f"## {family} ({len(rows)} trials, registry total {ctx.trials.n_trials})", "",
-                  "| trial | target | stop | max bars | n | Sharpe | DSR |", "|---:|---:|---:|---:|---:|---:|---:|"]
+        out[family] = {"trials": len(rows), "budget": budget, "timeframe": tf, "registry_total": ctx.trials.n_trials,
+                       "quarter_budget_spent": stopped}
+        lines += [f"## {family} ({len(rows)} of {budget} budgeted trials, registry total {ctx.trials.n_trials})", ""]
+        if stopped:
+            lines += [f"Stopped: the quarter's trial budget ({q_budget}) is spent.", ""]
+        reasons = next((f.reasons for f in plan.focus if f.family == family), []) if plan else []
+        lines += [f"- director: {x}" for x in reasons] + ([""] if reasons else [])
+        lines += ["| trial | target | stop | max bars | n | Sharpe | DSR |", "|---:|---:|---:|---:|---:|---:|---:|"]
         for x in sorted(rows, key=lambda x: -(x["dsr"] or 0)):
             lines.append(f"| {x['trial']} | {x['target_atr']} | {x['stop_atr']} | {x['max_bars']} | {x['n']} | "
                          f"{_num(x['sharpe'], '.2f')} | {_num(x['dsr'], '.3f')} |")
@@ -346,6 +434,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "saturday_retrain": saturday_retrain,
     "model_watch": model_watch,
     "tournament": tournament,
+    "research_director": research_director,
     "agents_daily": agents_daily,
     "agents_weekly": agents_weekly,
     "monthly_research": monthly_research,
