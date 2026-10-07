@@ -10,6 +10,8 @@ the state directory:
   in `approvals/done/` with the outcome. A proposal nobody decides within its window expires in the engine.
 
 `control.json` carries the owner's halt: no new entries on any engine until an owner re-arms. Exits are never gated.
+An owner re-arm (dashboard, owner role + TOTP) also writes a fresh `rearm_id`; each engine that sees a new id clears
+its own 12% drawdown halt (RiskGate.rearm). Nothing else writes a rearm id, so no halt clears without that action.
 Writers here are authenticated before they call the bus (API role check, Telegram allow-list); the files are only
 reachable on the VPS.
 """
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from pathlib import Path
 
 from goldbot.base import Record
@@ -36,6 +39,9 @@ class Control(Record):
     by: str | None = None
     ts: float = 0.0
     reason: str | None = None
+    rearm_id: str | None = None     # new on every owner re-arm; engines clear a drawdown halt once per id
+    rearm_by: str | None = None
+    rearm_ts: float = 0.0
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -127,6 +133,16 @@ class ApprovalBus:
             return Control(halted=True, reason="unreadable control.json")    # fail closed for entries
 
     def set_halt(self, halted: bool, by: str, reason: str | None = None) -> Control:
-        c = Control(halted=halted, by=by, ts=time.time(), reason=reason)
+        prev = self.control()
+        c = Control(halted=halted, by=by, ts=time.time(), reason=reason, rearm_id=prev.rearm_id, rearm_by=prev.rearm_by,
+                    rearm_ts=prev.rearm_ts)
+        _write_atomic(self.control_path, c.model_dump_json())
+        return c
+
+    def owner_rearm(self, by: str) -> Control:
+        """The owner's re-arm, called only after the owner role and a TOTP code were verified: clears the owner halt
+        and issues a new rearm id, which the engines answer by clearing their drawdown halt."""
+        now = time.time()
+        c = Control(halted=False, by=by, ts=now, rearm_id=uuid.uuid4().hex, rearm_by=by, rearm_ts=now)
         _write_atomic(self.control_path, c.model_dump_json())
         return c

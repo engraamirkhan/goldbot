@@ -1,6 +1,9 @@
 """Supervisor: reads each engine's heartbeat/equity file, enforces the combined caps (tighter than the
 per-account caps because both engines trade the same instrument) and writes a HALT flag. Engines fail
-closed if the supervisor heartbeat is older than 60 s."""
+closed if the supervisor heartbeat is older than 60 s.
+
+The combined caps keep no period state of their own: they sum the engines' day/week-start equity, which each engine
+rolls at the risk-day (00:00 UTC) and risk-week (Sunday 00:00 UTC) boundaries, so they roll with the engines."""
 from __future__ import annotations
 
 import json
@@ -9,6 +12,7 @@ import time
 from pathlib import Path
 
 from goldbot.base import Record
+from goldbot.config import RiskSettings
 
 
 class SupervisorLimits(Record):
@@ -17,6 +21,11 @@ class SupervisorLimits(Record):
     dd_stage1: float = 0.08
     dd_stage2: float = 0.12
     heartbeat_max_age_s: int = 60
+
+    @classmethod
+    def from_settings(cls, risk: RiskSettings) -> SupervisorLimits:
+        return cls(daily_cap=risk.supervisor_daily_cap, weekly_cap=risk.supervisor_weekly_cap,
+                   dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2)
 
 
 class Supervisor:

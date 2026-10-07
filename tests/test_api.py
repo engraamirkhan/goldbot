@@ -77,7 +77,10 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
     assert bus.control().halted and c.get("/api/status").json()["halted_by"] == "dashboard:partner@x.io"
     assert c.post("/api/rearm", json={"totp": totp_code(owner_secret)}, headers=approver).status_code == 403
     assert c.post("/api/rearm", json={"totp": "000000"}, headers=owner).status_code == 403
+    assert bus.control().rearm_id is None                         # refused re-arms issue nothing to the engines
     assert c.post("/api/rearm", json={"totp": totp_code(owner_secret)}, headers=owner).json()["halted"] is False
+    rearm = bus.control()                                         # engines clear their drawdown halt on this id
+    assert rearm.rearm_id and rearm.rearm_by == "dashboard:aamir@x.io"
     # owner administers
     users = c.get("/api/users", headers=owner).json()
     assert {u["email"] for u in users} == {"aamir@x.io", "friend@x.io", "partner@x.io"}
