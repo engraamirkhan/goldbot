@@ -1,7 +1,7 @@
 # goldbot — status and next steps
 
 Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc; edit it here from now on).
-Standing instructions for Claude sessions: `CLAUDE.md`.
+Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
 - GitHub `engraamirkhan/goldbot`. PR 36 (2026-10-01..04 work) is merged into `main`; follow-up work goes on branch
@@ -24,7 +24,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
   gap-fill run 37012050707). The weekly scheduled data run refreshes the current year (completed days only).
 - Research pass: `scripts/research_pass.py` + `.github/workflows/research.yml` (walk-forward on the release bars,
   leakage check, per-year table; registry kept on release `research-v1`; report to issue "research: <specialist>").
-  It can only be dispatched once research.yml is on `main` (GitHub rule), i.e. after PR 36 is merged.
+  It is on `main` (PR 36 merged), so it can be dispatched from the Actions tab.
 - Scheduler (VPS service `goldbot-scheduler`, `goldbot/ops/scheduler.py` + `goldbot/ops/jobs.py`, times in
   `settings.yaml: scheduler`): nightly cost tables per account from the engine's own logged ticks and fills
   (`execution/costs.py`, slippage prior until 50 fills) + Friday classifier; Saturday retrain into a challenger
@@ -96,20 +96,29 @@ Standing instructions for Claude sessions: `CLAUDE.md`.
 ## Next steps (no owner input needed unless marked)
 1. Research status (2026-10-06, bars re-pulled with real volumes, lookahead check clean on all 163 features):
    baselines (trials #8-#11) show no model skill except a weak one in mean_reversion (OOF AUC 0.54, 16 model trades
-   in 15 years, DSR 0.991: far below the trade-count gates). Next: the variant batches via research.yml `variants`
-   (mean_reversion looser entries / 1h; session_open more candidates per fold) and the research analyst's
-   hypotheses. Until an agent passes the gates the engines propose nothing (by design).
+   in 15 years, DSR 0.991: far below the trade-count gates). The design review
+   (`docs/proposals/2026-10-design-improvements.md`) found the evaluation itself biased (calibration and threshold
+   chosen on the test rows, spread charged twice, design gates not enforced), so the variant batches are on hold
+   until that fix (P1-P3) lands; then the four families are re-run once as pre-registered trials. Until an agent passes the gates the engines propose nothing (by design).
 2. On the VPS, check `state/news_feeds.json` after the first hour: the feed URLs in `settings.yaml: news` could not be
    verified from a Claude sandbox. Fix any that fail; the collector skips broken feeds.
-3. VPS: provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in to the two MT5 demo terminals
-   once and answer the credential prompts; create the Cloudflare tunnel and enter its token on the VPS; store a
+3. VPS (step by step in `docs/RUNBOOK.md`): provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in
+   to the two MT5 demo terminals once and store their credentials with `python -m goldbot.ops.accounts add icm-demo`
+   / `add vantage-demo` before starting the services (services cannot prompt); create the Cloudflare tunnel and enter its token on the VPS; store a
    GitHub token with `python -m goldbot.ops.accounts set github-token` (bar sync + shared trial registry), an
    Anthropic API key with `python -m goldbot.ops.accounts set anthropic-api-key` (staff agents and headline scoring;
    off without it) and the Telegram bot token with `python -m goldbot.ops.accounts set telegram-bot-token` (from
-   @BotFather), and put your Telegram user id in `settings.yaml: telegram.allowed_user_ids`.
+   @BotFather), and put your Telegram user id in `settings.yaml: telegram.allowed_user_ids` (the file has no
+   `telegram:` section yet; add it).
 4. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
 5. Session-open has about 90 candidates a year, so most 24-month training windows miss the walk-forward's 200-trade
    training minimum (9 folds in trial #11); the session_open variant batch loosens its filters for more candidates.
+6. Gaps found while writing `docs/RUNBOOK.md` (code changes, through CI): the bootstrap does not build `web/dist`
+   (the API serves nothing without it) and registers services under NSSM's default account, which may not see
+   secrets stored in the owner's Windows Credential Manager; `run_engine` passes no `RiskLimits`, so
+   `settings.yaml: risk` (incl. `risk_per_trade_tiny_live`) is ignored; the engine never calls `risk.gate.new_day`,
+   so daily/weekly caps count from engine start; nothing clears the in-memory `drawdown_halt` except a restart;
+   no live terminals or live engine services are installed. (being fixed)
 
 ## Environment facts
 - Claude sandboxes (cloud container and the Mac's Cowork VM) cannot reach market-data hosts or download Actions

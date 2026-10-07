@@ -6,9 +6,10 @@ import { Overview } from "./screens/Overview";
 import { Approvals } from "./screens/Approvals";
 import { Agents } from "./screens/Agents";
 import { Feeds } from "./screens/Feeds";
+import { News } from "./screens/News";
 import { Users } from "./screens/Users";
 
-const TABS = ["Overview", "Approvals", "Agents", "Feeds", "Users"] as const;
+const TABS = ["Overview", "Approvals", "News", "Agents", "Feeds", "Users"] as const;
 type Tab = (typeof TABS)[number];
 
 export function App() {
@@ -40,6 +41,7 @@ export function App() {
       <main>
         {tab === "Overview" && <Overview />}
         {tab === "Approvals" && <Approvals />}
+        {tab === "News" && <News />}
         {tab === "Agents" && <Agents />}
         {tab === "Feeds" && <Feeds />}
         {tab === "Users" && hasRole("owner") && <Users />}

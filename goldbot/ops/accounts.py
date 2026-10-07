@@ -2,7 +2,8 @@
 
 * `config/accounts.yaml` holds everything except secrets.
 * Secrets live in the OS keyring (macOS Keychain / Windows Credential Manager) via `keyring`, falling back
-  to an encrypted-at-rest file only when no keyring backend exists (headless Linux CI).
+  to state/.secrets.json only when no keyring backend exists (headless Linux CI). That file is plaintext, owner-only
+  (created 0600, replaced atomically); it is not encrypted, so a keyring is required on the VPS.
 * `get_credential()` asks the user when a secret is missing: on a terminal it prompts with getpass; when
   running headless it calls the registered `prompter` (the Telegram bot), which sends the request to the
   allow-listed owner and waits. The value is stored and never logged.
@@ -26,7 +27,7 @@ from typing import Callable, Literal
 
 import yaml
 
-from goldbot.base import Record
+from goldbot.base import Record, write_private
 from goldbot.config import ROOT
 
 ACCOUNTS_FILE = ROOT / "config" / "accounts.yaml"
@@ -108,11 +109,7 @@ def set_secret(key: str, value: str) -> None:
     f = _fallback_file()
     data = json.loads(f.read_text()) if f.exists() else {}
     data[key] = value
-    f.write_text(json.dumps(data))
-    try:
-        f.chmod(0o600)
-    except OSError:
-        pass
+    write_private(f, json.dumps(data))
 
 
 def get_credential(key: str, message: str, *, secret: bool = True) -> str:

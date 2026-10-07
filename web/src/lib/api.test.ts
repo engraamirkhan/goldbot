@@ -25,6 +25,18 @@ describe("api client", () => {
     expect((init.headers as Record<string, string>).authorization).toBe("Bearer tok-1");
   });
 
+  it("builds the calendar and news query strings from the typed parameters", async () => {
+    const { api } = await import("./api");
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(200, [])));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.calendar({ days: 3, max_tier: 1 });
+    await api.news({ hours: 12, min_relevance: 0.5 });
+    await api.news();
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      "/api/calendar?days=3&max_tier=1", "/api/news?hours=12&min_relevance=0.5", "/api/news",
+    ]);
+  });
+
   it("drops the session on 401", async () => {
     const { api, setToken, hasToken } = await import("./api");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(401, { detail: "login required" })));

@@ -157,6 +157,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/calendar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Calendar */
+        get: operations["calendar_api_calendar_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/decisions": {
         parameters: {
             query?: never;
@@ -234,6 +251,23 @@ export interface paths {
         };
         /** Me */
         get: operations["me_api_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/news": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** News */
+        get: operations["news_api_news_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -400,6 +434,25 @@ export interface components {
             /** Week Pnl Pct */
             week_pnl_pct: number;
         };
+        /**
+         * ActiveBlackout
+         * @description An entry blackout an engine is enforcing now (from state/engine_<account>.json).
+         */
+        ActiveBlackout: {
+            /** Accounts */
+            accounts: string[];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "calendar" | "news_shock";
+            /** Received Utc */
+            received_utc: string | null;
+            /** Title */
+            title: string;
+            /** Ts Utc */
+            ts_utc: string | null;
+        };
         /** AgentRow */
         AgentRow: {
             /** Agent Id */
@@ -458,6 +511,48 @@ export interface components {
             /** Users */
             users: number;
         };
+        /**
+         * CalendarEvent
+         * @description One archived economic-calendar event. Tier 1 (US CPI, NFP, FOMC, PCE) carries its entry-blackout window.
+         */
+        CalendarEvent: {
+            /** Blackout End */
+            blackout_end: string | null;
+            /** Blackout Start */
+            blackout_start: string | null;
+            /** Country */
+            country: string;
+            /** Event Id */
+            event_id: string;
+            /** Forecast */
+            forecast: string;
+            /** Impact */
+            impact: string;
+            /** Previous */
+            previous: string;
+            /** Tier */
+            tier: number;
+            /** Title */
+            title: string;
+            /**
+             * Ts Utc
+             * Format: date-time
+             */
+            ts_utc: string;
+        };
+        /** CalendarResponse */
+        CalendarResponse: {
+            active_blackout: components["schemas"]["ActiveBlackout"] | null;
+            /** Events */
+            events: components["schemas"]["CalendarEvent"][];
+            /** Note */
+            note: string | null;
+            /**
+             * Now
+             * Format: date-time
+             */
+            now: string;
+        };
         /** Decision */
         Decision: {
             /**
@@ -499,6 +594,42 @@ export interface components {
         HaltRequest: {
             /** Reason */
             reason?: string | null;
+        };
+        /**
+         * Headline
+         * @description One collected headline; unscored items (prefiltered out or over the daily cap) have relevance and tags null.
+         */
+        Headline: {
+            /** Dollar */
+            dollar: ("positive" | "negative" | "neutral") | null;
+            /** Item Id */
+            item_id: string;
+            /** Link */
+            link: string | null;
+            /** Rates */
+            rates: ("hawkish" | "dovish" | "neutral") | null;
+            /**
+             * Received Utc
+             * Format: date-time
+             */
+            received_utc: string;
+            /** Relevance */
+            relevance: number | null;
+            /** Risk */
+            risk: ("risk_on" | "risk_off" | "neutral") | null;
+            /** Shock */
+            shock: boolean;
+            /** Source */
+            source: string;
+            /** Surprise */
+            surprise: ("beat" | "miss" | "inline" | "none") | null;
+            /** Title */
+            title: string;
+            /**
+             * Ts Utc
+             * Format: date-time
+             */
+            ts_utc: string;
         };
         /** InviteRequest */
         InviteRequest: {
@@ -954,6 +1085,38 @@ export interface operations {
             };
         };
     };
+    calendar_api_calendar_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                max_tier?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     decide_api_decisions_post: {
         parameters: {
             query?: never;
@@ -1076,6 +1239,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Me"];
+                };
+            };
+        };
+    };
+    news_api_news_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+                min_relevance?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Headline"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

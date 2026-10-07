@@ -24,15 +24,16 @@ everything after entry is automatic under a RiskGate no model can override.
 | Broker protocol, paper broker (pessimistic fills), MT5 adapter (Windows), account classifier | `goldbot/execution/` | done; MT5 adapter untested off-Windows |
 | TradingView webhook receiver (IP allow-list, secret, content-hash dedup, intrabar flag, latency) | `goldbot/webhook/app.py` | done, tested |
 
-Not yet built (Phase 1+): allocator, Telegram bot, dashboard, live engine loop, news/ideas collectors,
-agent layer, population tournament mechanics beyond identity/cloning.
+Built since Phase 0 (see `HANDOFF.md` for status): allocator, Telegram bot, dashboard (`web/`), live engine loop,
+scheduler, news collector, staff agents, population tournament. Not yet built: TradingView ideas collector.
+Operating the VPS: `docs/RUNBOOK.md`.
 
 ## Quick start (Mac)
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q                       # 21 tests
+pytest -q -m "not integration"  # unit tests (CI also runs -m integration)
 python scripts/dry_run.py 3     # synthetic 3 years end-to-end (~1 min)
 ```
 
@@ -62,8 +63,10 @@ Then run the session-open research path on real bars (see `scripts/dry_run.py` f
 ```
 goldbot/
   data/ features/ labels/ specialists/ research/ risk/ execution/ webhook/
-  allocator/ telegram/ ops/            (Phase 1+)
-scripts/   dry_run.py  build_bars.py  download_dukascopy.sh
-config/    settings.yaml
+  allocator/ telegram/ engine/ agents/ api/ ops/
+web/       React + TypeScript dashboard
+scripts/   dry_run.py  build_bars.py  download_dukascopy.sh  research_pass.py  fetch_data_release.py ...
+config/    settings.yaml  accounts.yaml
+docs/      DESIGN.md  RUNBOOK.md
 tests/
 ```

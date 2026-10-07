@@ -7,6 +7,8 @@ by isinstance; `extra="forbid"` turns a misspelt field into an error instead of 
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Annotated, Any
 
 import pandas as pd
@@ -34,3 +36,20 @@ def _to_utc_timestamp(v: Any) -> pd.Timestamp:
 # persisted: a bare pd.Timestamp field only accepts Timestamp instances, so reading a saved file back would fail.
 UtcTimestamp = Annotated[pd.Timestamp, BeforeValidator(_to_utc_timestamp),
                          PlainSerializer(lambda t: t.isoformat(), return_type=str, when_used="json")]
+
+
+def write_private(path: Path, text: str) -> None:
+    """Write a file only the owner can read (secrets, users), atomically: the temp file is created 0600, so the
+    content is never readable by others even for a moment or when chmod is unsupported, and a crash mid-write
+    leaves the previous file intact."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
