@@ -26,6 +26,9 @@ def ticks_to_1m(ticks: pd.DataFrame, sessions: SessionTable = DEFAULT_SESSIONS) 
     """ticks: columns ts_utc (tz-aware), bid, ask. Returns 1-minute bars (only in-session minutes)."""
     if ticks.empty:
         return pd.DataFrame(columns=BAR_COLUMNS)
+    fast = _ticks_to_1m_sorted(ticks, sessions)
+    if fast is not None:
+        return fast
     t = ticks.sort_values("ts_utc").copy()
     t["ts_utc"] = pd.to_datetime(t["ts_utc"], utc=True)
     t = t[(t["bid"] > 0) & (t["ask"] >= t["bid"])]
@@ -45,6 +48,40 @@ def ticks_to_1m(ticks: pd.DataFrame, sessions: SessionTable = DEFAULT_SESSIONS) 
     bars = bars[sessions.is_open(pd.DatetimeIndex(bars["ts_utc"]))]
     bars.insert(1, "visible_at", bars["ts_utc"] + pd.Timedelta(seconds=60))
     return bars.reset_index(drop=True)[BAR_COLUMNS]
+
+
+def _ticks_to_1m_sorted(ticks: pd.DataFrame, sessions: SessionTable) -> pd.DataFrame | None:
+    """ticks_to_1m for the common case of float quotes with strictly increasing timestamps (the live engine's tick
+    buffer), in numpy: the time sort is then the identity, each minute a contiguous run, and first/last/max/min/count
+    are exact. The mean spread is pandas' groupby mean on the same values in the same order (its compensated sum).
+    None (use the general path) for anything else."""
+    if ticks["bid"].dtype != np.float64 or ticks["ask"].dtype != np.float64:
+        return None
+    ns = epoch_ns(utc_index(ticks["ts_utc"]))
+    if len(ns) > 1 and not bool((np.diff(ns) > 0).all()):
+        return None
+    bid, ask = ticks["bid"].to_numpy(), ticks["ask"].to_numpy()
+    ok = (bid > 0) & (ask >= bid)
+    if not ok.any():
+        return None
+    ns, bid, ask = ns[ok], bid[ok], ask[ok]
+    spread = ask - bid
+    minute = (ns // 60_000_000_000) * 60_000_000_000
+    starts = np.flatnonzero(np.concatenate(([True], minute[1:] != minute[:-1])))
+    ends = np.append(starts[1:], len(minute)) - 1
+    codes = np.repeat(np.arange(len(starts)), ends - starts + 1)
+    keys = pd.DatetimeIndex(pd.to_datetime(minute[starts], unit="ns", utc=True))
+    bars = pd.DataFrame({
+        "ts_utc": keys, "visible_at": keys + pd.Timedelta(seconds=60),
+        "bid_open": bid[starts], "bid_high": np.maximum.reduceat(bid, starts), "bid_low": np.minimum.reduceat(bid, starts),
+        "bid_close": bid[ends],
+        "ask_open": ask[starts], "ask_high": np.maximum.reduceat(ask, starts), "ask_low": np.minimum.reduceat(ask, starts),
+        "ask_close": ask[ends],
+        "tick_count": (ends - starts + 1).astype(np.int64),
+        "spread_mean": pd.Series(spread).groupby(codes, sort=True).mean().to_numpy(),
+        "spread_max": np.maximum.reduceat(spread, starts),
+    })
+    return bars[sessions.is_open(keys)].reset_index(drop=True)
 
 
 def _minute_bars(t: pd.DataFrame, spread_mean: pd.Series) -> pd.DataFrame:
