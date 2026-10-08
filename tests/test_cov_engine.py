@@ -186,7 +186,7 @@ def test_kill_switch_and_state_heartbeat_act_between_bar_closes(tmp_path):
 
 def test_expired_proposals_of_this_account_are_archived_on_start(tmp_path):
     bus = ApprovalBus(tmp_path)
-    old = {"account_id": "icm-demo", "agent_id": "a", "side": 1, "lots": 0.1, "entry": 2400.0, "stop": 2396.0,
+    old: dict[str, Any] = {"account_id": "icm-demo", "agent_id": "a", "side": 1, "lots": 0.1, "entry": 2400.0, "stop": 2396.0,
            "target": 2406.0, "p": 0.6, "ev_r": 0.1, "spread_points": 20, "top_features": []}
     mine = Proposal(proposal_id="icm-demo-1-aaaa", created=time.time() - 3600, **old)
     other = Proposal(proposal_id="vantage-demo-1-bbbb", created=time.time() - 3600, **{**old, "account_id": "vantage-demo"})
