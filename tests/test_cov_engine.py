@@ -81,6 +81,7 @@ def _pend(eng: Engine, center: ApprovalCenter, pid: str) -> None:
 
 def test_an_approved_entry_is_sized_again_and_sent_once(tmp_path):
     eng, pb, center = _engine(tmp_path)
+    eng.bars_1m = pd.DataFrame({"ts_utc": [T0 - pd.Timedelta(minutes=1)], "visible_at": [T0]})   # fresh data
     _pend(eng, center, "icm-demo-1-a")
     assert eng._busy(SPECIALISTS["session_open"]().agent_id)               # one pending proposal per agent
     center.decide("icm-demo-1-a", OWNER, True)

@@ -94,6 +94,7 @@ class EngineConfig(Record):
     # this often (tick time), so the supervisor's combined caps and the 12% kill switch act within seconds
     state_every_s: int = 10
     stale_feed_s: int = 90                   # no tick for this long in an open session -> data-quality error
+    healthy_resume_s: int = 60               # after stale data or a data-quality error, entries wait this long healthy
     reconcile_every_s: int = 30              # broker reconciliation (tick time), besides every bar close and the start
     orphan_stop_atr: float = 1.5             # an adopted orphan without a stop gets one this many ATR from entry
     server_tz: str = "Europe/Athens"         # broker server clock: rollover (00:00 +-5 min) and the Friday 21:30 rule
@@ -177,6 +178,7 @@ class Engine:
         self._last_tick: Tick | None = None
         self._dq_pending: list[DQEvent] = []
         self._dq_bar_errors: list[DQEvent] = []
+        self._unhealthy_at: pd.Timestamp | None = None    # last time the data was seen stale or in error
         # risk periods and the owner's re-arm survive a restart (state/risk_<account>.json)
         self._last_reset: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
@@ -225,6 +227,7 @@ class Engine:
             out = self.on_bar_close(self.last_bar_close + pd.Timedelta(seconds=sec), t)
             self._last_state_write = t.ts_utc
         elif self._last_state_write is None or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:
+            self._rebuild_bars()            # completed minutes join the bars between closes, so their age is current
             self._refresh_account(t)
             self._write_state()
             self._last_state_write = t.ts_utc
@@ -528,6 +531,18 @@ class Engine:
         st.last_tick_age_s = max(0.0, (now - tick.ts_utc).total_seconds())
         stale = stale_feed(tick.ts_utc, now, limit_seconds=self.cfg.stale_feed_s)
         st.dq_error = stale or bool(self._dq_bar_errors or self._dq_pending)
+        # stale data (design): the last completed bar must be under one decision period old; no bars is stale
+        if self.bars_1m.empty:
+            st.stale_bars = True
+        else:
+            seen = pd.Timestamp(self.bars_1m["visible_at"].iloc[-1])
+            st.stale_bars = (now - seen).total_seconds() > tf_seconds(self.cfg.decision_tf)
+        if st.dq_error or st.stale_bars or st.last_tick_age_s > self.gate.limits.stale_tick_seconds:
+            self._unhealthy_at = now
+            st.data_recovering = False        # the error itself blocks; recovery starts when it clears
+        else:
+            st.data_recovering = self._unhealthy_at is not None and \
+                (now - self._unhealthy_at).total_seconds() < self.cfg.healthy_resume_s
         if self.cfg.halt_checks:
             st.supervisor_halt, _ = Supervisor.engine_should_halt(self.cfg.state_dir)
             sup = Supervisor.read_state(self.cfg.state_dir)
@@ -905,7 +920,7 @@ class Engine:
             "combined_size_down": st.combined_size_down, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
             "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
             "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,
-            "dq_error": st.dq_error, "dq_checks": sorted({e.check for e in self._dq_bar_errors + self._dq_pending}),
+            "dq_error": st.dq_error, "stale_bars": st.stale_bars, "data_recovering": st.data_recovering, "dq_checks": sorted({e.check for e in self._dq_bar_errors + self._dq_pending}),
             "foreign_positions": self._foreign,
         }
         path = Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json")

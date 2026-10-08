@@ -71,6 +71,8 @@ class AccountState(Record):
     owner_halt: bool = False          # /halt from Telegram or the dashboard (state/control.json)
     in_blackout: bool = False
     dq_error: bool = False
+    stale_bars: bool = False          # the last completed bar is more than one decision period old
+    data_recovering: bool = False     # data was unhealthy within the last 60 s (design: reset after 60 s healthy)
     in_rollover: bool = False         # +-5 min of 00:00 broker server time
     weekend: bool = False             # from Friday 21:30 server until the week reopens
     open_lots: float = 0.0            # this account's open exposure
@@ -149,8 +151,10 @@ class RiskGate:
             reasons.append("rollover")
         if st.weekend:
             reasons.append("weekend")
-        if st.last_tick_age_s > L.stale_tick_seconds:
+        if st.last_tick_age_s > L.stale_tick_seconds or st.stale_bars:
             reasons.append("stale_data")
+        if st.data_recovering:
+            reasons.append("data_recovering")
         if st.spread_points > L.max_spread_points:
             reasons.append("spread_too_wide")
         if st.open_positions >= L.max_positions:

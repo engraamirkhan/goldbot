@@ -221,6 +221,7 @@ def test_the_gate_blocks_entries_that_would_breach_the_combined_exposure_cap():
 def test_engine_reads_other_accounts_exposure_and_the_combined_size_down_from_the_supervisor(tmp_path):
     from goldbot.risk.supervisor import Supervisor
     eng, pb = _engine(tmp_path, halt_checks=True)
+    _bar_visible_at(eng, T0)
     _engine_file(tmp_path, "vantage-demo", lots=0.4, equity=10_000)
     eng._refresh_account(pb.last_tick("XAUUSD"))
     eng._write_state()
@@ -285,3 +286,35 @@ def test_a_model_never_scores_a_frame_of_another_feature_version(tmp_path):
     assert detail["model_feature_version"] == "f-0000000000" and detail["frame_feature_version"] == current
     _, _, ok = _decide_once(tmp_path / "same", ConstantModel(p=0.9, feature_version=current))
     assert ok and ok[0]["action"] != "feature_version_mismatch"
+
+
+# ---------------------------------------------------------------------------------------------- 7. stale data
+def _bar_visible_at(eng: Engine, visible_at: pd.Timestamp) -> None:
+    eng.bars_1m = pd.DataFrame({"ts_utc": [visible_at - pd.Timedelta(minutes=1)], "visible_at": [visible_at]})
+
+
+def test_entries_need_a_last_bar_less_than_one_period_old(tmp_path):
+    eng, pb = _engine(tmp_path)
+    eng._refresh_account(_tick(T0))
+    assert eng.state.stale_bars and "stale_data" in eng.gate.check(_intent(), eng.state).reasons   # no bars at all
+    _bar_visible_at(eng, T0 - pd.Timedelta(minutes=1))
+    eng._refresh_account(_tick(T0 + pd.Timedelta(minutes=13)))                # 14 min old on a 15m decision clock
+    assert not eng.state.stale_bars
+    eng._refresh_account(_tick(T0 + pd.Timedelta(minutes=15)))                # 16 min old
+    assert eng.state.stale_bars and "stale_data" in eng.gate.check(_intent(), eng.state).reasons
+
+
+def test_entries_resume_only_after_sixty_seconds_of_healthy_data(tmp_path):
+    from goldbot.data.quality import DQEvent
+    eng, pb = _engine(tmp_path)
+    _bar_visible_at(eng, T0)
+    eng._dq_pending = [DQEvent(ts_utc=T0, check="bid_gt_ask", severity="error", detail="x")]
+    eng._refresh_account(_tick(T0 + pd.Timedelta(seconds=5)))
+    assert eng.state.dq_error
+    eng._dq_pending = []                                                      # the error clears ...
+    eng._refresh_account(_tick(T0 + pd.Timedelta(seconds=35)))
+    assert not eng.state.dq_error and eng.state.data_recovering                # ... but 30 s is not enough
+    assert "data_recovering" in eng.gate.check(_intent(), eng.state).reasons
+    eng._refresh_account(_tick(T0 + pd.Timedelta(seconds=66)))                # 61 s of healthy data
+    assert not eng.state.data_recovering
+    assert eng.gate.check(_intent(), eng.state).allowed
