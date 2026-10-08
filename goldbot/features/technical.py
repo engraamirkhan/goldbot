@@ -175,20 +175,22 @@ def f_mas(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     a = atr(df, 14)
     c = df["close"]
     out = Columns(df.index)
+    em = {n: ema(c, n) for n in (8, 20, 21, 50, 100, 200)}      # each EMA once (deterministic, reused below)
+    sm = {n: sma(c, n) for n in (50, 200)}
     for n in (20, 50, 100, 200):
-        out[f"dist_ema{n}_atr"] = (c - ema(c, n)) / a
-        out[f"slope_ema{n}"] = ema(c, n).diff(5) / a
+        out[f"dist_ema{n}_atr"] = (c - em[n]) / a
+        out[f"slope_ema{n}"] = em[n].diff(5) / a
     for n in (50, 200):
-        out[f"dist_sma{n}_atr"] = (c - sma(c, n)) / a
+        out[f"dist_sma{n}_atr"] = (c - sm[n]) / a
     out["dist_hma55_atr"] = (c - hma(c, 55)) / a
     # EMA stack / ribbon state (K-RB style): +1 fully bullish order, -1 fully bearish, 0 mixed
-    e = [ema(c, n) for n in (8, 21, 50, 100, 200)]
+    e = [em[n] for n in (8, 21, 50, 100, 200)]
     bull = np.all([e[i] > e[i + 1] for i in range(4)], axis=0)
     bear = np.all([e[i] < e[i + 1] for i in range(4)], axis=0)
     out["ribbon_state"] = np.where(bull, 1, np.where(bear, -1, 0))
     out["ribbon_width_atr"] = (e[0] - e[-1]).abs() / a
     out["bars_since_ribbon_flip"] = _bars_since_change(pd.Series(out["ribbon_state"].to_numpy(), index=df.index))
-    out["sma50_ema50_cross"] = (sma(c, 50) - ema(c, 50)) / a
+    out["sma50_ema50_cross"] = (sm[50] - em[50]) / a
     return out.frame()
 
 
