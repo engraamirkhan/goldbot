@@ -51,13 +51,12 @@ from goldbot.research.director import (
     build_plan,
     holdout_window,
     quarter_budget,
-    quarter_usage,
 )
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import ResearchResult, run_specialist
 from goldbot.research.population import Population
 from goldbot.research.promotion import PerfStats, cusum_alarm, evaluate_promotion
-from goldbot.research.registry import TrialRegistry
+from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry
 from goldbot.research.registry_sync import read_rows
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import Specialist
@@ -115,8 +114,9 @@ def _bars(ctx: JobContext, tf: str, start: pd.Timestamp, end: pd.Timestamp) -> p
 def live_extra_cost_usd(ctx: JobContext) -> float:
     """Round-trip cost per oz the canonical-cost broker charges beyond the quoted spread, from its nightly cost table:
     entry and exit slippage (the measured mean, or the conservative prior until enough fills exist) plus commission
-    both sides. 0 when no table exists yet (before the first live week)."""
-    from goldbot.execution.costs import CONTRACT_OZ, CostTable
+    both sides. Before the first table exists: the configured slippage prior plus commission (never 0, so research and
+    retraining are always charged more than the spread)."""
+    from goldbot.execution.costs import CONTRACT_OZ, CostTable, settings_extra_cost_usd
     canonical = {b for b, cfg in ctx.settings.brokers.items() if cfg.canonical_costs}
     for acc in ctx.accounts:
         if acc.broker not in canonical:
@@ -129,10 +129,13 @@ def live_extra_cost_usd(ctx: JobContext) -> float:
             continue
         slips = [max(s.mean, 0.0) for k, s in table.slippage.items() if k.endswith(":market")] or [table.slippage_prior_usd]
         return float(2 * (sum(slips) / len(slips)) + 2 * table.commission_per_lot_side_usd / CONTRACT_OZ)
-    return 0.0
+    return settings_extra_cost_usd(ctx.settings)
 
 
-def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int, n_trials: int = 1) -> ResearchResult | None:
+def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int, n_trials: int = 1,
+                  holdout: tuple[pd.Timestamp, pd.Timestamp] | None = None) -> ResearchResult | None:
+    """Walk-forward on the store. Research trials pass the settings' holdout window (never seen); the Saturday retrain
+    passes none, because a model that will trade must learn from the latest data."""
     start = end - pd.DateOffset(months=months)
     dec = _bars(ctx, spec.timeframe, start, end)
     if dec.empty:
@@ -141,8 +144,8 @@ def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: 
     context = {TF_LABEL[tf]: _bars(ctx, tf, ctx_start, end) for tf in context_tfs(spec.timeframe)}
     years = max((pd.to_datetime(dec["ts_utc"].iloc[-1]) - pd.to_datetime(dec["ts_utc"].iloc[0])).days / 365.25, 1e-9)
     # learn against what the broker actually charges: the live cost table's slippage and commission
-    res = run_specialist(spec, dec, context=context, n_trials=n_trials, extra_cost_usd=live_extra_cost_usd(ctx))
-    res.metrics["extra_cost_usd"] = live_extra_cost_usd(ctx)
+    res = run_specialist(spec, dec, context=context, n_trials=n_trials, extra_cost_usd=live_extra_cost_usd(ctx),
+                         holdout=holdout)
     if res.n_candidates:
         res.metrics["trades_per_year"] = res.n_candidates / years
     return res
@@ -253,11 +256,19 @@ def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 def tournament(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Weekly population round (research/population.py): fitness from shadow trades, retirement, shadow -> live
     promotion through the DSR gate, cloning of winners, capital shares; writes state/agents.json for the dashboard.
-    Agents whose six months of retired shadow trading are over leave the model registry's book."""
-    summary = ctx.population.tournament(ShadowBook(ctx.state_dir), slot)
+    Agents whose six months of retired shadow trading are over leave the model registry's book.
+
+    Shadow -> live also needs a research trial of the agent's exact configuration that passed the design's gates; a
+    clone has its own configuration hash, so it needs its own passed trial (no inheritance from its parent: the design
+    counts real trials). Agents held back for that are reported under `awaiting_research`."""
+    synced = _sync_trials(ctx)            # the research workflow's trials live on the release copy until synced
+    summary = ctx.population.tournament(
+        ShadowBook(ctx.state_dir), slot,
+        research_passed=lambda m: ctx.trials.passed_gates(m.family, {**SPECIALISTS[m.family].default_config, **m.config}))
     for aid in summary["expired"]:
         ctx.models.retire_agent(aid, "retired agent's six months of shadow trading are over")
     ctx.population.save(ctx.state_dir / "agents.json")
+    summary["registry_sync"] = synced
     return summary
 
 
@@ -372,15 +383,26 @@ def label_grid(base: dict[str, Any], step: float) -> list[dict[str, Any]]:
 def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = None
                       ) -> Callable[[str, dict[str, Any], str], dict[str, Any]]:
     """The research analyst's trial: the family's default config with overrides, walk-forward over the whole store,
-    recorded in the trial registry (so it counts toward the deflated Sharpe like every monthly-loop trial)."""
+    recorded in the trial registry (so it counts toward the deflated Sharpe like every monthly-loop trial). It is
+    charged to the quarter's pre-registered trial budget and never sees the holdout window."""
     def run(family: str, overrides: dict[str, Any], rationale: str) -> dict[str, Any]:
         end = now() if now is not None else pd.Timestamp.now("UTC")
-        res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, 12 * 30, n_trials=ctx.trials.n_trials + 1)
-        if res is None:
-            return {"error": "no bars in the store for this family's timeframe"}
-        row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
-                                feature_version=res.feature_version, results=res.metrics, status="evaluated", rationale=rationale)
-        keep = ("n_candidates", "n_folds", "threshold", "all_candidates", "model_filtered", "trades_per_year")
+        r = ctx.settings.research
+        _sync_trials(ctx)                 # count the research workflow's trials before charging the budget
+        with ctx.trials.locked():
+            try:
+                quarter = ctx.trials.check_budget(1, quarter_budget(r))
+            except TrialBudgetExceeded as exc:
+                return {"error": str(exc)}
+            res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, 12 * 30, n_trials=ctx.trials.n_trials + 1,
+                                holdout=r.holdout_window())
+            if res is None:
+                return {"error": "no bars in the store for this family's timeframe"}
+            row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
+                                    feature_version=res.feature_version, results=res.metrics, status="evaluated",
+                                    rationale=rationale, budget_quarter=quarter)
+        keep = ("n_candidates", "n_folds", "threshold", "all_candidates", "model_filtered", "trades_per_year", "rule_only",
+                "gates")
         return {"trial": row["trial"], "registry_total": ctx.trials.n_trials, **{k: res.metrics[k] for k in keep if k in res.metrics}}
     return run
 
@@ -400,8 +422,14 @@ def _sync_trials(ctx: JobContext) -> int | str | None:
 
 
 def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Bounded label-grid search. Paused by default (research.label_grid_paused): barrier perturbations of rules with
+    no signal only raise the deflated-Sharpe bar for every later trial. When enabled, each trial is charged to the
+    quarter's pre-registered budget and the loop stops when it is spent; the holdout window is never seen."""
     r = ctx.settings.research
     synced_before = _sync_trials(ctx)     # count trials run elsewhere (the research workflow) before deflating
+    if r.label_grid_paused:
+        return {"paused": "label-grid loop paused (research.label_grid_paused in config/settings.yaml)",
+                "registry_sync": synced_before}
     rng = random.Random(f"{slot:%Y-%m}")        # reproducible choice of variants for the month
     plan = current_plan(ctx, slot)
     source = f"research plan of {plan.created_utc:%Y-%m-%d}" if plan else f"flat budget {r.trial_budget_per_month} per family (no fresh research plan)"
@@ -420,15 +448,20 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         rows = []
         stopped = False
         for overrides in grid[:budget]:
-            if quarter_usage(read_rows(ctx.trials.path), slot, q_budget)[2] <= 0:
-                stopped = True
-                break
-            res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, history_months, n_trials=ctx.trials.n_trials + 1)
-            if res is None:
-                break
-            row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
-                                    feature_version=res.feature_version, results=res.metrics, status="evaluated",
-                                    rationale=f"monthly bounded label-grid search {slot:%Y-%m} (+-{r.label_grid_step:.0%})")
+            with ctx.trials.locked():           # check, run and record as one step: two writers cannot both pass
+                try:
+                    quarter = ctx.trials.check_budget(1, q_budget)
+                except TrialBudgetExceeded as exc:
+                    stopped, out["budget"] = True, str(exc)
+                    break
+                res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, history_months,
+                                    n_trials=ctx.trials.n_trials + 1, holdout=r.holdout_window())
+                if res is None:
+                    break
+                row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
+                                        feature_version=res.feature_version, results=res.metrics, status="evaluated",
+                                        rationale=f"monthly bounded label-grid search {slot:%Y-%m} (+-{r.label_grid_step:.0%})",
+                                        budget_quarter=quarter)
             mf = res.metrics.get("model_filtered") or {}
             rows.append({"trial": row["trial"], **overrides, "n": mf.get("n", 0), "sharpe": mf.get("sharpe_ann"), "dsr": mf.get("dsr")})
         out[family] = {"trials": len(rows), "budget": budget, "timeframe": tf, "registry_total": ctx.trials.n_trials,

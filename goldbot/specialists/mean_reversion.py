@@ -28,6 +28,15 @@ class MeanReversionSpecialist(Specialist):
         "stop_atr": 1.5,
         "max_bars": 12,
     }
+    # declared meta-model inputs, chosen by rationale (how stretched, how fast, how calm, and what the higher timeframes say about fading the move); the model adds `side`, <= 40 in all
+    model_features = (
+        "bb_z_20", "bb_pctb_20", "rsi14", "rsi14_extreme", "dist_vwap48_atr", "mfi12", "mfi_slope", "ret_1", "ret_4",
+        "ret_16", "ret_96", "atr14_pct", "atr_ratio_14_100", "rv_ratio", "vol_tercile", "dist_ema20_atr",
+        "dist_ema50_atr", "slope_ema20", "adx14", "donchian_pos_20", "spread_atr", "tick_vol_ratio_20",
+        "tick_count_z_48", "dist_res_atr", "dist_sup_atr", "levels_within_1atr", "body_pct", "consec_same_dir",
+        "min_since_london_open", "min_since_newyork_open", "dow", "h1_adx14", "h1_dist_ema50_atr", "h1_vol_tercile",
+        "h4_slope_ema50", "h4_dist_ema50_atr", "h4_ribbon_state", "d1_dist_ema50_atr", "d1_slope_ema50",
+    )
 
     @property
     def label_spec(self) -> BarrierSpec:

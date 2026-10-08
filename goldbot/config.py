@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SETTINGS = ROOT / "config" / "settings.yaml"
@@ -118,6 +122,10 @@ class SchedulerSettings(_Section):
 
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
+    label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
+    trial_budget_quarter: int = Field(20, ge=1, le=500)   # pre-registered trials per calendar quarter, all families
+    holdout_from: date | None = date(2025, 10, 1)          # research never sees this window unless scoring it
+    holdout_to: date | None = date(2026, 9, 30)            # inclusive
     director_floor: int = Field(2, ge=0, le=200)        # research director: exploration trials per family per month
     label_grid_step: float = Field(0.25, gt=0, lt=1)
     cost_window_days: int = Field(30, ge=1)
@@ -125,6 +133,13 @@ class ResearchSettings(_Section):
     min_fills_for_slippage: int = Field(50, ge=1)
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
+
+    def holdout_window(self) -> tuple[pd.Timestamp, pd.Timestamp] | None:
+        """[start, end) in UTC, or None when no holdout is configured."""
+        import pandas as pd
+        if self.holdout_from is None or self.holdout_to is None:
+            return None
+        return (pd.Timestamp(self.holdout_from, tz="UTC"), pd.Timestamp(self.holdout_to, tz="UTC") + pd.Timedelta(days=1))
 
 
 class AgentSettings(_Section):

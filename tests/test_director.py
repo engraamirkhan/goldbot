@@ -154,7 +154,8 @@ def _ctx(tmp_path: Path, **research: Any) -> JobContext:
 ENDS: list[pd.Timestamp] = []
 
 
-def _fake_walk_forward(ctx: JobContext, spec: Any, end: pd.Timestamp, months: int, n_trials: int = 1) -> ResearchResult:
+def _fake_walk_forward(ctx: JobContext, spec: Any, end: pd.Timestamp, months: int, n_trials: int = 1,
+                       holdout: Any = None) -> ResearchResult:
     ENDS.append(end)
     return ResearchResult(agent_id=spec.agent_id, n_candidates=500, n_folds=4, oof=pd.DataFrame(), feature_version="f1",
                           importance=None, metrics={"n_candidates": 500, "n_folds": 4, "oof_auc": 0.52,
@@ -189,7 +190,7 @@ def _plan(created: pd.Timestamp, grid: dict[str, int]) -> ResearchPlan:
 def test_monthly_research_honours_the_plan_the_quarter_budget_and_the_holdout(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
     ENDS.clear()
-    ctx = _ctx(tmp_path, trial_budget_per_month=6)
+    ctx = _ctx(tmp_path, trial_budget_per_month=6, label_grid_paused=False)   # the grid is paused by default
     slot = pd.Timestamp.now("UTC").floor("min")      # the registry stamps rows with the wall clock: same quarter
     grid = {"breakout": 0, "mean_reversion": 5, "session_open": 1, "trend": 2}
     _plan(slot - pd.Timedelta(days=1), grid).save(tmp_path / PLAN_FILE)

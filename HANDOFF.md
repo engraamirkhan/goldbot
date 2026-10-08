@@ -103,8 +103,31 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   completes; context features are cached until a new context bar completes; open positions' time barriers and
   shadow trades count bars of the agent's timeframe.
 - pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
+- Research discipline (proposal P1-P3, `docs/proposals/2026-10-design-improvements.md`): selection is cross-fitted
+  (fold k calibrated only on earlier folds' OOF predictions; threshold from signal-time information); the cost hurdle
+  is slippage + commission (`live_extra_cost_usd`, the settings prior before a cost table exists), not the spread
+  again; `research/gates.py` checks 1,500 candidates / 60 per test fold / three positive years incl. 2021-22, and
+  live promotion in the tournament needs a passed trial of the exact config; DSR is null below 200 trades; reports
+  carry rule-only gross and net expectancy. Quarterly budget of 20 pre-registered trials
+  (`research.trial_budget_quarter`), holdout 2025-10-01..2026-09-30 (`research_pass.py --score-holdout`, once per
+  config), monthly label grid paused (`research.label_grid_paused`). Meta-models get `side` and side-aligned signed
+  features (`features.registry.side_align`) from each specialist's declared `model_features` (h1_/h4_/d1_ context
+  included). Fold-internal feature selection is deferred.
+  Evaluator fixes (2026-10-08): research stops at the holdout start (no stub folds from later bars; the 60-per-fold
+  gate counts complete folds only); gates include DSR >= 0.95 on 200+ model-filtered trades; `--score-holdout` needs a
+  passed trial, is charged to the budget and is judged by its own rule (mean R > 0, t >= 1.65); one cap and one count
+  for the quarterly budget (`registry.quarter_trials`, every row stamped in the quarter; the director plans from the
+  same number); check-run-record under a portable registry lock; tournament, analyst trials and the paused monthly
+  loop sync the release registry first; engine threshold and size multiplier use cost ex spread (RiskGate keeps the
+  full round trip); signed-feature patterns are part of the feature version.
+  Rule: a clone (new config hash) needs its OWN passed research trial before shadow -> live; nothing is inherited
+  from its parent (the design counts real trials). Held-back agents show as `awaiting_research` in the tournament
+  job's output.
+  Deferred (L4): a `preregistered` status written before a trial runs, an `eval_version` field on registry rows,
+  bootstrap confidence intervals on expectancy, and a seeded no-signal test (100 seeds, DSR < 0.5 in >= 95).
 
 ## Next steps (no owner input needed unless marked)
+- OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.
 1. Research status (2026-10-06, bars re-pulled with real volumes, lookahead check clean on all 163 features):
    baselines (trials #8-#11) show no model skill except a weak one in mean_reversion (OOF AUC 0.54, 16 model trades
    in 15 years, DSR 0.991: far below the trade-count gates). The design review

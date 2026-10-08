@@ -64,7 +64,7 @@ def mfi(df: pd.DataFrame, n: int = 12) -> pd.Series:
 
 
 # --------------------------------------------------------------------------- returns & volatility
-@feature("returns", "volatility", lookback=96)
+@feature("returns", "volatility", lookback=96, signed={r"ret_\d+": 0.0})
 def f_returns(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     c = np.log(df["close"])
     out = pd.DataFrame(index=df.index)
@@ -97,7 +97,8 @@ def f_realised_vol(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- moving averages
-@feature("moving_averages", "trend", lookback=300)
+@feature("moving_averages", "trend", lookback=300,
+         signed={r"dist_(ema|sma|hma)\d+_atr": 0.0, r"slope_ema\d+": 0.0, "ribbon_state": 0.0, "sma50_ema50_cross": 0.0})
 def f_mas(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Several MA families and lengths; distances are in ATR so they compare across regimes."""
     a = atr(df, 14)
@@ -126,7 +127,7 @@ def _bars_since_change(s: pd.Series) -> pd.Series:
     return s.groupby(grp).cumcount()
 
 
-@feature("trend_strength", "trend", lookback=200)
+@feature("trend_strength", "trend", lookback=200, signed={"donchian_pos_20": 0.5})
 def f_trend(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     out = pd.DataFrame(index=df.index)
     out["adx14"] = adx(df, 14)
@@ -138,7 +139,8 @@ def f_trend(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- mean reversion
-@feature("mean_reversion", "mean_reversion", lookback=100)
+@feature("mean_reversion", "mean_reversion", lookback=100,
+         signed={"bb_z_20": 0.0, "bb_pctb_20": 0.5, "rsi14": 50.0, "rsi14_extreme": 0.0, "dist_vwap48_atr": 0.0})
 def f_mr(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     out = pd.DataFrame(index=df.index)
     c = df["close"]
@@ -153,7 +155,8 @@ def f_mr(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     return out
 
 
-@feature("money_flow", "mean_reversion", version="2", lookback=50)   # v2: fractional volumes keep their weight
+@feature("money_flow", "mean_reversion", version="2", lookback=50,
+         signed={"mfi12": 50.0, "mfi_zone": 2.0, "mfi_slope": 0.0})   # v2: fractional volumes keep their weight
 def f_mfi(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """KOG-MFI replica: MFI(12) with zones 20/40/60/80."""
     m = mfi(df, 12)

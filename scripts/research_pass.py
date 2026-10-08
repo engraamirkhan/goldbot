@@ -3,8 +3,17 @@ labels -> purged walk-forward -> calibrated OOF metrics, a leakage check, a per-
 trial registry. Runs as the `research` workflow (the sandboxes cannot download release assets); the report is
 posted to an issue and the registry is kept as a release asset so the deflated Sharpe sees every trial ever run.
 
+Research discipline (docs/proposals/2026-10-design-improvements.md, P1/P2):
+* selection is cross-fitted (no calibrator or threshold sees the fold it selects from); costs are the bar spread
+  (in the labels) plus slippage and commission (`--extra-cost-usd`, default: the settings' prior and commission);
+* every report states the design's gates (1,500 candidates, 60 per test fold, three positive years incl. 2021-22)
+  and the rule's own gross and net expectancy; the deflated Sharpe is shown only from 200 trades;
+* each run is charged to the quarter's pre-registered trial budget (research.trial_budget_quarter) and refused
+  beyond it; the holdout window (research.holdout_from/to) is excluded unless `--score-holdout`, which scores a
+  configuration on it exactly once.
+
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
-      [--specialist session_open] [--from-year 2010] [--to-year 2026] [--rationale "..."]
+      [--specialist session_open] [--from-year 2010] [--to-year 2026] [--rationale "..."] [--score-holdout]
 """
 from __future__ import annotations
 
@@ -19,11 +28,13 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
+from goldbot.execution.costs import settings_extra_cost_usd  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
-from goldbot.research.metrics import summarize  # noqa: E402
+from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
 from goldbot.research.pipeline import ResearchResult, lookahead_check, run_specialist  # noqa: E402
-from goldbot.research.registry import TrialRegistry  # noqa: E402
+from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry  # noqa: E402
 from goldbot.specialists import SPECIALISTS  # noqa: E402
 
 
@@ -45,7 +56,7 @@ def load_bars(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
 
 
 def per_year(oof: pd.DataFrame, threshold: float | None) -> pd.DataFrame:
-    """Out-of-fold trades per calendar year: every candidate vs the model-filtered subset."""
+    """Out-of-fold trades per calendar year: every candidate vs the model-filtered (cross-fitted) subset."""
     if oof.empty or "p_raw" not in oof:
         return pd.DataFrame()                    # no candidates or no fold: nothing was scored out of fold
     scored = oof.dropna(subset=["p_raw"]).copy()
@@ -55,7 +66,7 @@ def per_year(oof: pd.DataFrame, threshold: float | None) -> pd.DataFrame:
     rows = []
     for y in sorted(scored["year"].unique()):
         g = scored[scored["year"] == y]
-        taken = g[g["p"] > threshold] if threshold is not None and "p" in g else g.iloc[0:0]
+        taken = g[g["taken"].astype(bool)] if threshold is not None and "taken" in g else g.iloc[0:0]
         rows.append({"year": int(y), "n_all": len(g), "hit_all": g["target_hit"].mean(), "ret_all": g["ret"].mean(),
                      "n_model": len(taken), "hit_model": taken["target_hit"].mean() if len(taken) else np.nan,
                      "ret_model": taken["ret"].mean() if len(taken) else np.nan})
@@ -63,6 +74,8 @@ def per_year(oof: pd.DataFrame, threshold: float | None) -> pd.DataFrame:
 
 
 def _fmt(v: Any) -> str:
+    if v is None:
+        return "—"
     if isinstance(v, float):
         return "—" if np.isnan(v) else f"{v:.4f}"
     return str(v)
@@ -77,20 +90,27 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              + ("clean" if not leak["lookahead_columns"] else f"**{len(leak['lookahead_columns'])} columns use future data: "
                 f"{', '.join(leak['lookahead_columns'][:10])}**") if leak else "- lookahead check: n/a",
              f"- out-of-fold AUC of the model (0.5 = no skill): {_fmt(res.metrics.get('oof_auc'))}",
+             f"- costs: bar spread in every label plus {m.get('extra_cost_usd', 0.0):.2f} $/oz round trip (slippage and commission)",
+             _holdout_line(m.get("holdout")),
              f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
              f"- runtime {meta['seconds']:.0f}s", ""]
+    lines += _gates_lines(m.get("gates")) + _holdout_lines(m.get("holdout_verdict")) + _rule_only_lines(m.get("rule_only"))
     if "all_candidates" in m:
-        lines += ["| set | n | hit rate | mean ret | profit factor | Sharpe (ann.) | max DD | deflated SR |",
+        lines += ["### Out of fold", "",
+                  "| set | n | hit rate | mean ret | profit factor | Sharpe (ann.) | max DD | deflated SR |",
                   "|---|---:|---:|---:|---:|---:|---:|---:|"]
         for name in ("all_candidates", "model_filtered"):
             s = m[name]
             if s.get("n", 0) == 0:
                 lines.append(f"| {name} | 0 | | | | | | |")
                 continue
+            dsr = f"{s['dsr']:.3f}" if s.get("dsr") is not None else f"n < {MIN_TRADES_FOR_DSR}"
             lines.append(f"| {name} | {s['n']} | {s['hit_rate']:.3f} | {s['mean_ret']:.5f} | {s['profit_factor']:.2f} | "
-                         f"{s['sharpe_ann']:.2f} | {s['max_dd']:.3f} | {s['dsr']:.3f} |")
-        lines += ["", f"Model threshold (breakeven + 0.02 after costs): p > {m['threshold']:.3f}", ""]
+                         f"{s['sharpe_ann']:.2f} | {s['max_dd']:.3f} | {dsr} |")
+        lines += ["", f"model_filtered = cross-fitted: each fold's calibrator is fitted on earlier folds only "
+                      f"({m.get('n_calibrated', 0)} of {m['all_candidates'].get('n', 0)} scored candidates calibrated); "
+                      f"take when p > break-even + 0.02 after costs (median threshold {m['threshold']:.3f})", ""]
     else:
         lines += ["Too few out-of-fold predictions to calibrate; no metrics.", ""]
     if not years.empty:
@@ -103,6 +123,45 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
         lines += ["### Top features (gain, last fold)", "", "```", res.importance.head(15).to_string(), "```", ""]
     lines += ["Promotion still needs the design's gates (deflated SR, per-regime stability, shadow period); this is one trial."]
     return "\n".join(lines)
+
+
+def _holdout_line(h: dict[str, Any] | None) -> str:
+    if not h:
+        return "- holdout: none configured"
+    if h.get("scored"):
+        return f"- **holdout scoring**: metrics below are the held-out window {h['from'][:10]} .. {h['to'][:10]} only (final for this configuration)"
+    return f"- holdout {h['from'][:10]} .. {h['to'][:10]} excluded (never seen by research)"
+
+
+def _gates_lines(g: dict[str, Any] | None) -> list[str]:
+    if not g:
+        return []
+    out = [f"### Design gates: {'**PASS**' if g['passed'] else '**FAIL**'}", ""]
+    out += [f"- {'pass' if c['passed'] else 'FAIL'} {c['name']}: {c['detail']}" for c in g["checks"]]
+    return out + [""]
+
+
+def _holdout_lines(v: dict[str, Any] | None) -> list[str]:
+    if not v:
+        return []
+    return [f"### Held-out year: {'**PASS**' if v['passed'] else '**FAIL**'}", "",
+            f"- rule: {v['rule']}",
+            f"- {v['n']} model-filtered trades, mean R {v['mean_r']:.3f}, t-stat {v['t_stat']:.2f}", ""]
+
+
+def _rule_only_lines(r: dict[str, Any] | None) -> list[str]:
+    if not r:
+        return []
+    out = ["### The rule alone (every candidate, no model)", "",
+           "| costs | n | hit rate | mean ret | mean R | t-stat (R) |", "|---|---:|---:|---:|---:|---:|"]
+    for name, label in (("gross", "gross (mid prices, no costs)"), ("net", "net (spread + slippage + commission)")):
+        s = r.get(name) or {}
+        if not s.get("n"):
+            out.append(f"| {label} | 0 | | | | |")
+            continue
+        out.append(f"| {label} | {s['n']} | {s['hit_rate']:.3f} | {s['mean_ret']:.5f} | {s['mean_r']:.3f} | {s['t_stat']:.2f} |")
+    return out + ["", "Meta-labelling can only filter an edge the rule already has: a gross t-stat near zero means "
+                      "there is nothing to filter.", ""]
 
 
 def parse_variants(family: str, raw: str) -> list[dict[str, Any]]:
@@ -127,13 +186,13 @@ def parse_variants(family: str, raw: str) -> list[dict[str, Any]]:
 
 
 def summary_table(rows: list[dict[str, Any]]) -> str:
-    out = ["| trial | overrides | candidates | OOF AUC | model n | model hit | model PF | DSR |",
-           "|---:|---|---:|---:|---:|---:|---:|---:|"]
+    out = ["| trial | overrides | candidates | OOF AUC | gates | model n | model hit | model PF | DSR |",
+           "|---:|---|---:|---:|---|---:|---:|---:|---:|"]
     for r in rows:
         mf = r["metrics"].get("model_filtered") or {}
         out.append(f"| {r['trial']} | `{json.dumps(r['overrides']) if r['overrides'] else 'defaults'}` | {r['n']:,} | "
-                   f"{_fmt(r['metrics'].get('oof_auc'))} | {mf.get('n', 0)} | {_fmt(mf.get('hit_rate', float('nan')))} | "
-                   f"{_fmt(mf.get('profit_factor', float('nan')))} | {_fmt(mf.get('dsr', float('nan')))} |")
+                   f"{_fmt(r['metrics'].get('oof_auc'))} | {'pass' if (r['metrics'].get('gates') or {}).get('passed') else 'fail'} | {mf.get('n', 0)} | {_fmt(mf.get('hit_rate', float('nan')))} | "
+                   f"{_fmt(mf.get('profit_factor', float('nan')))} | {_fmt(mf.get('dsr'))} |")
     return "\n".join(out)
 
 
@@ -147,16 +206,45 @@ def main() -> int:
     ap.add_argument("--to-year", type=int, default=2100)
     ap.add_argument("--rationale", default="baseline walk-forward on Dukascopy 1m bars")
     ap.add_argument("--variants", default="[{}]", help="JSON list of config overrides; each is one recorded trial")
+    ap.add_argument("--extra-cost-usd", type=float, default=None,
+                    help="round-trip slippage + commission per oz beyond the spread (default: settings prior + commission)")
+    ap.add_argument("--score-holdout", action="store_true",
+                    help="score the configurations on the held-out window (once per configuration, ever)")
     args = ap.parse_args()
     variants = parse_variants(args.specialist, args.variants)
+    settings = load_settings()
+    extra_cost = settings_extra_cost_usd(settings) if args.extra_cost_usd is None else float(args.extra_cost_usd)
+    holdout = settings.research.holdout_window()
     t0 = time.time()
-    b1 = load_bars(Path(args.bars), args.from_year, args.to_year)
+    b1 = load_bars(Path(args.bars), args.from_year, args.to_year)      # fails fast, before any registry file exists
+    reg = TrialRegistry(args.registry)
+    with reg.locked():                    # budget check, runs and records as one step
+        return _run(args, variants, settings, extra_cost, holdout, b1, reg, t0)
+
+
+def _run(args: argparse.Namespace, variants: list[dict[str, Any]], settings: Any, extra_cost: float,
+         holdout: tuple[pd.Timestamp, pd.Timestamp] | None, b1: pd.DataFrame, reg: TrialRegistry, t0: float) -> int:
+    if args.score_holdout:
+        if holdout is None:
+            raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
+        for v in variants:
+            cfg = SPECIALISTS[args.specialist](**v).config
+            label = json.dumps(v) if v else "defaults"
+            if reg.holdout_scored(args.specialist, cfg):
+                raise SystemExit(f"{args.specialist} {label} was already scored on the holdout; "
+                                 "that result is final for this configuration")
+            if not reg.passed_gates(args.specialist, cfg):
+                raise SystemExit(f"{args.specialist} {label} has no research trial that passed the design's gates; "
+                                 "only a passing configuration is scored on the holdout")
+    try:                                  # a holdout scoring is a look at the data too: it is charged like any trial
+        quarter = reg.check_budget(len(variants), settings.research.trial_budget_quarter)
+    except TrialBudgetExceeded as exc:
+        raise SystemExit(str(exc)) from None
     years_span = (b1["ts_utc"].iloc[-1] - b1["ts_utc"].iloc[0]).days / 365.25
     zero_volume = float((b1["tick_count"].astype(float) <= 0).mean())
     print(f"1m bars: {len(b1):,} ({b1['ts_utc'].iloc[0]:%Y-%m-%d} -> {b1['ts_utc'].iloc[-1]:%Y-%m-%d}), "
           f"zero tick volume in {zero_volume:.1%}", flush=True)
     frames: dict[str, tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, Any]]] = {}
-    reg = TrialRegistry(args.registry)
     sections, rows = [], []
     for overrides in variants:
         spec = SPECIALISTS[args.specialist](**overrides)
@@ -171,21 +259,17 @@ def main() -> int:
                   f"{leak['columns_checked']} columns differ [{time.time() - t0:.0f}s]", flush=True)
         b_dec, context, leak = frames[tf]
         n_trials = reg.n_trials + 1
-        res = run_specialist(spec, b_dec, context=context, n_trials=n_trials)
+        res = run_specialist(spec, b_dec, context=context, n_trials=n_trials, extra_cost_usd=extra_cost,
+                             holdout=holdout, score_holdout=args.score_holdout)
         trades_per_year = res.n_candidates / years_span if years_span > 0 else 0.0
-        if "threshold" in res.metrics and trades_per_year > 0:
-            # annualise by the candidate rate actually observed, not the pipeline's default guess
-            scored = res.oof.dropna(subset=["p_raw"])
-            taken = scored[scored["p"] > res.metrics["threshold"]]
-            res.metrics["all_candidates"] = summarize(scored, trades_per_year, n_trials)
-            res.metrics["model_filtered"] = summarize(taken, trades_per_year * len(taken) / max(len(scored), 1), n_trials)
         print(f"{json.dumps(overrides) or 'defaults'}: candidates {res.n_candidates}  folds {res.n_folds}  "
               f"[{time.time() - t0:.0f}s]", flush=True)
         results = {**res.metrics, "lookahead": leak, "trades_per_year": trades_per_year,
                    "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1])}
         rationale = args.rationale + (f" | overrides {json.dumps(overrides, sort_keys=True)}" if overrides else "")
         row = reg.record(agent_id=res.agent_id, family=spec.family, config=spec.config, feature_version=res.feature_version,
-                         rationale=rationale, results=results, status="evaluated")
+                         rationale=rationale, results=results, status="holdout" if args.score_holdout else "evaluated",
+                         budget_quarter=quarter)
         years = per_year(res.oof, res.metrics.get("threshold"))
         meta = {"specialist": args.specialist, "from_year": int(b1["ts_utc"].iloc[0].year),
                 "to_year": int(b1["ts_utc"].iloc[-1].year), "n_1m": len(b1), "n_dec": len(b_dec), "tf": tf,

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
@@ -19,6 +19,9 @@ from pydantic import Field
 
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
+
+if TYPE_CHECKING:
+    from goldbot.config import Settings
 
 Session = Literal["asia", "london", "newyork"]
 SESSIONS: tuple[Session, ...] = ("asia", "london", "newyork")
@@ -59,6 +62,16 @@ class CostTable(FrozenRecord):
         slip_usd = slip.mean if slip is not None else self.slippage_prior_usd
         commission = 2 * self.commission_per_lot_side_usd / CONTRACT_OZ
         return float(spread + 2 * max(slip_usd, 0.0) + commission)
+
+    def round_trip_ex_spread_atr(self, session: str, atr_usd: float, order_type: str = "market") -> float | None:
+        """Entry and exit slippage plus commission both sides, in ATR (the spread excluded: labels and the model's p
+        already pay it). None when no spread was measured (no table to speak of) or ATR is unusable."""
+        full = self.round_trip_usd_per_oz(session, order_type)
+        if full is None or not np.isfinite(atr_usd) or atr_usd <= 0:
+            return None
+        sp = self.spread.get(session)
+        spread = sp.median if sp is not None else max(s.median for s in self.spread.values())
+        return (full - spread) / atr_usd
 
     def round_trip_atr(self, session: str, atr_usd: float, order_type: str = "market") -> float | None:
         usd = self.round_trip_usd_per_oz(session, order_type)
@@ -127,3 +140,17 @@ def build_cost_table(account_id: str, ticks: pd.DataFrame, fills: pd.DataFrame, 
                      slippage=slippage_table(fills, prior_usd=slippage_prior_usd, min_fills=min_fills),
                      commission_per_lot_side_usd=commission_per_lot_side_usd, slippage_prior_usd=slippage_prior_usd,
                      n_ticks=len(ticks), n_fills=len(fills), notes=notes)
+
+
+def prior_extra_cost_usd(slippage_prior_usd: float, commission_per_lot_side_usd: float) -> float:
+    """Round-trip cost per oz beyond the quoted spread before any fills are measured: entry and exit slippage at the
+    conservative prior plus commission both sides. Research labels already pay the spread (ask in, bid out)."""
+    return float(2 * max(slippage_prior_usd, 0.0) + 2 * commission_per_lot_side_usd / CONTRACT_OZ)
+
+
+def settings_extra_cost_usd(settings: "Settings") -> float:
+    """prior_extra_cost_usd for the canonical-cost broker's configured commission (the research pass and the VPS
+    jobs before the first cost table exists)."""
+    canonical = [b for b, cfg in settings.brokers.items() if cfg.canonical_costs]
+    commission = max((settings.costs.commission_per_lot_side_usd.get(b, 0.0) for b in canonical), default=0.0)
+    return prior_extra_cost_usd(settings.costs.slippage_prior_usd, commission)
