@@ -1,8 +1,18 @@
 name: ci
-# Gates every push and PR. Backend and frontend each get lint, typecheck, unit and integration jobs; pre-commit
-# and the API contract check run alongside. Any failure is posted as one GitHub issue labelled `ci` with the tail
-# of each failed job's output, because Claude sandboxes cannot download Actions logs.
-on: [push, pull_request, workflow_dispatch]
+# Gates every PR and every push to main. GitHub's free tier gives a private repo 2,000 runner-minutes a month and bills
+# each job rounded up to the minute, so the checks run in two jobs (backend, frontend) instead of ten, once per change
+# (pull_request, plus push to main for the merge commit) and not for docs-only changes. Every check step runs even
+# after an earlier one failed, so one run reports all failures. Any failure is posted as one GitHub issue labelled
+# `ci` with the tail of each failed check's output, because Claude sandboxes cannot download Actions logs.
+# Runner: repository variable CI_RUNNER (e.g. "self-hosted") moves the jobs to a self-hosted runner, which costs no
+# minutes; unset means GitHub's ubuntu-latest.
+on:
+  pull_request:
+    paths-ignore: ["**/*.md", "docs/**"]
+  push:
+    branches: [main]
+    paths-ignore: ["**/*.md", "docs/**"]
+  workflow_dispatch:
 permissions:
   contents: read
   issues: write
@@ -17,193 +27,116 @@ env:
   NODE_VERSION: "22"
 
 jobs:
-  pre-commit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+  backend:
+    # pre-commit, lint, types, unit, API contract, integration and the research dry run
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
-        with: { python-version: "${{ env.PYTHON_VERSION }}" }
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - uses: actions/setup-node@v5
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: web/package-lock.json }
       - uses: actions/cache@v4
         with: { path: ~/.cache/pre-commit, key: "pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}" }
-      - run: pip install pre-commit
-      - name: pre-commit run --all-files
-        run: set -o pipefail; mkdir -p ci-out; pre-commit run --all-files --show-diff-on-failure --color never 2>&1 | tee ci-out/pre-commit.txt
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with: { name: ci-out-pre-commit, path: ci-out/ }
-
-  backend-lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with: { python-version: "${{ env.PYTHON_VERSION }}" }
-      - run: pip install ruff
-      - name: ruff
-        run: set -o pipefail; mkdir -p ci-out; ruff check goldbot tests scripts --output-format concise 2>&1 | tee ci-out/backend-lint.txt
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with: { name: ci-out-backend-lint, path: ci-out/ }
-
-  backend-typecheck:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
-      - run: pip install -e ".[dev]"
-      - name: mypy
-        run: set -o pipefail; mkdir -p ci-out; mypy 2>&1 | tee ci-out/backend-typecheck.txt
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with: { name: ci-out-backend-typecheck, path: ci-out/ }
-
-  backend-unit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
-      - run: pip install -e ".[dev]"
-      - name: versions
-        run: mkdir -p ci-out; python -c "import pandas,numpy,sklearn,lightgbm,duckdb,pyarrow,fastapi,pydantic;print('pandas',pandas.__version__,'numpy',numpy.__version__,'sklearn',sklearn.__version__,'lgbm',lightgbm.__version__,'duckdb',duckdb.__version__,'pyarrow',pyarrow.__version__,'fastapi',fastapi.__version__,'pydantic',pydantic.__version__)" | tee ci-out/backend-unit.txt
-      - name: pytest (unit)
-        run: set -o pipefail; pytest -m "not integration" -q --tb=short --cov=goldbot --cov-report=term:skip-covered 2>&1 | tee -a ci-out/backend-unit.txt
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with: { name: ci-out-backend-unit, path: ci-out/ }
-
-  backend-integration:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
-      - run: pip install -e ".[dev]"
-      - name: pytest (integration)
-        run: set -o pipefail; mkdir -p ci-out; pytest -m integration -q --tb=short 2>&1 | tee ci-out/backend-integration.txt
-      - name: research dry run
-        run: set -o pipefail; python scripts/dry_run.py 1 2>&1 | tail -40 | tee -a ci-out/backend-integration.txt
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with: { name: ci-out-backend-integration, path: ci-out/ }
-
-  frontend-lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults: { run: { working-directory: web } }
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: web/package-lock.json }
-      - run: npm ci
-      - name: eslint
-        run: set -o pipefail; mkdir -p ../ci-out; npm run lint 2>&1 | tee ../ci-out/frontend-lint.txt
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with: { name: ci-out-frontend-lint, path: ci-out/ }
-
-  frontend-typecheck:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults: { run: { working-directory: web } }
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: web/package-lock.json }
-      - run: npm ci
-      - name: tsc
-        run: set -o pipefail; mkdir -p ../ci-out; npm run typecheck 2>&1 | tee ../ci-out/frontend-typecheck.txt
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with: { name: ci-out-frontend-typecheck, path: ci-out/ }
-
-  frontend-unit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults: { run: { working-directory: web } }
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: web/package-lock.json }
-      - run: npm ci
-      - name: vitest
-        run: set -o pipefail; mkdir -p ../ci-out; npm test -- --reporter=verbose 2>&1 | tee ../ci-out/frontend-unit.txt
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with: { name: ci-out-frontend-unit, path: ci-out/ }
-
-  api-contract:
-    # the dashboard's types are generated from the backend's OpenAPI schema; both must be committed in sync
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
-      - uses: actions/setup-node@v5
-        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: web/package-lock.json }
-      - run: pip install -e . && npm --prefix web ci
-      - name: regenerate openapi.json and schema.d.ts, fail on drift
+      - run: pip install -e ".[dev]" pre-commit && npm --prefix web ci && mkdir -p ci-out
+      - name: pre-commit
+        if: success() || failure()
+        run: set -o pipefail; pre-commit run --all-files --show-diff-on-failure --color never 2>&1 | tee ci-out/pre-commit.txt || { echo pre-commit >> ci-out/failed-backend.list; exit 1; }
+      - name: backend-lint
+        if: success() || failure()
+        run: set -o pipefail; ruff check goldbot tests scripts --output-format concise 2>&1 | tee ci-out/backend-lint.txt || { echo backend-lint >> ci-out/failed-backend.list; exit 1; }
+      - name: backend-typecheck
+        if: success() || failure()
+        run: set -o pipefail; mypy 2>&1 | tee ci-out/backend-typecheck.txt || { echo backend-typecheck >> ci-out/failed-backend.list; exit 1; }
+      - name: backend-unit
+        if: success() || failure()
+        run: set -o pipefail; pytest -m "not integration" -q --tb=short --cov=goldbot --cov-report=term:skip-covered 2>&1 | tee ci-out/backend-unit.txt || { echo backend-unit >> ci-out/failed-backend.list; exit 1; }
+      - name: api-contract
+        # the dashboard's types are generated from the backend's OpenAPI schema; both must be committed in sync
+        if: success() || failure()
         run: |
-          set -o pipefail; mkdir -p ci-out
+          set -o pipefail
           { python scripts/export_openapi.py && npm --prefix web run gen:api && git diff --exit-code -- web/openapi.json web/src/lib/schema.d.ts \
-            || { echo "API contract drift: run 'python scripts/export_openapi.py && npm --prefix web run gen:api' and commit"; exit 1; }; } 2>&1 | tee ci-out/api-contract.txt
+            || { echo "API contract drift: run 'python scripts/export_openapi.py && npm --prefix web run gen:api' and commit"; exit 1; }; } 2>&1 | tee ci-out/api-contract.txt \
+            || { echo api-contract >> ci-out/failed-backend.list; exit 1; }
+      - name: backend-integration
+        if: success() || failure()
+        run: |
+          set -o pipefail
+          { pytest -m integration -q --tb=short && python scripts/dry_run.py 1 | tail -40; } 2>&1 | tee ci-out/backend-integration.txt \
+            || { echo backend-integration >> ci-out/failed-backend.list; exit 1; }
       - uses: actions/upload-artifact@v4
         if: failure()
-        with: { name: ci-out-api-contract, path: ci-out/ }
+        with: { name: ci-out-backend, path: ci-out/, include-hidden-files: true }
 
-  e2e:
-    # integration for both halves: the real FastAPI backend serving the production build, driven by Playwright.
-    # Uses the Google Chrome preinstalled on GitHub's Ubuntu runners; `playwright install --with-deps` stalled on apt.
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  frontend:
+    # lint, types, unit, and e2e: the real FastAPI backend serving the production build, driven by Playwright
+    # (Google Chrome preinstalled on GitHub's Ubuntu runners; `playwright install --with-deps` stalled on apt)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
       - uses: actions/setup-node@v5
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: web/package-lock.json }
-      - run: pip install -e . && npm --prefix web ci
-      - name: build and run e2e
+      - run: pip install -e . && npm --prefix web ci && mkdir -p ci-out
+      - name: frontend-lint
+        if: success() || failure()
         working-directory: web
-        env: { CI: "1", PYTHON: python, PW_CHROMIUM_PATH: /usr/bin/google-chrome }
-        run: set -o pipefail; mkdir -p ../ci-out; { npm run build && npm run test:e2e; } 2>&1 | tee ../ci-out/e2e.txt
+        run: set -o pipefail; npm run lint 2>&1 | tee ../ci-out/frontend-lint.txt || { echo frontend-lint >> ../ci-out/failed-frontend.list; exit 1; }
+      - name: frontend-typecheck
+        if: success() || failure()
+        working-directory: web
+        run: set -o pipefail; npm run typecheck 2>&1 | tee ../ci-out/frontend-typecheck.txt || { echo frontend-typecheck >> ../ci-out/failed-frontend.list; exit 1; }
+      - name: frontend-unit
+        if: success() || failure()
+        working-directory: web
+        run: set -o pipefail; npm test -- --reporter=verbose 2>&1 | tee ../ci-out/frontend-unit.txt || { echo frontend-unit >> ../ci-out/failed-frontend.list; exit 1; }
+      - name: e2e
+        if: success() || failure()
+        working-directory: web
+        env: { CI: "1", PYTHON: python, PW_CHROMIUM_PATH: "${{ vars.PW_CHROMIUM_PATH || '/usr/bin/google-chrome' }}" }
+        run: set -o pipefail; { npm run build && npm run test:e2e; } 2>&1 | tee ../ci-out/e2e.txt || { echo e2e >> ../ci-out/failed-frontend.list; exit 1; }
       - uses: actions/upload-artifact@v4
         if: failure()
-        with: { name: ci-out-e2e, path: "ci-out/\nweb/playwright-report/\nweb/test-results/" }
+        with: { name: ci-out-frontend, path: ci-out/, include-hidden-files: true }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: e2e-report, path: "web/playwright-report/\nweb/test-results/" }
 
   report-failure:
-    needs: [pre-commit, backend-lint, backend-typecheck, backend-unit, backend-integration,
-            frontend-lint, frontend-typecheck, frontend-unit, api-contract, e2e]
-    if: failure() && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    if: failure()
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/download-artifact@v4
         with: { pattern: ci-out-*, path: ci-out, merge-multiple: true }
         continue-on-error: true
-      - name: open an issue with the failing jobs' output
+      - name: open an issue with the failing checks' output
         env:
           GH_TOKEN: ${{ github.token }}
-          NEEDS: ${{ toJSON(needs) }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          JOBS: ${{ toJSON(needs) }}
         run: |
-          python - <<'EOF'
+          python3 - <<'EOF'
           import json, os, pathlib, urllib.request
-          repo = os.environ["GITHUB_REPOSITORY"]; sha = os.environ["GITHUB_SHA"][:7]; ref = os.environ["GITHUB_REF_NAME"]
+          repo = os.environ["GITHUB_REPOSITORY"]; sha = os.environ.get("PR_SHA") or os.environ["GITHUB_SHA"]
+          ref = os.environ.get("GITHUB_HEAD_REF") or os.environ["GITHUB_REF_NAME"]
           run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-          failed = [j for j, v in json.loads(os.environ["NEEDS"]).items() if v["result"] == "failure"]
-          parts = [f"Run: {run_url}\nBranch: `{ref}`\nFailed jobs: {', '.join(failed) or '(none reported)'}\n"]
+          failed_jobs = [j for j, v in json.loads(os.environ["JOBS"]).items() if v["result"] == "failure"]
+          out = pathlib.Path("ci-out")
+          names = sorted({n for f in out.glob("failed-*.list") for n in f.read_text().split()}) if out.exists() else []
+          failed = [out / f"{n}.txt" for n in names if (out / f"{n}.txt").exists()]
+          names = names or failed_jobs
+          parts = [f"Run: {run_url}\nBranch: `{ref}`\nFailed: {', '.join(names) or '(none reported)'}\n"]
           budget = 60000 // max(len(failed), 1)
-          for j in failed:
-              f = pathlib.Path("ci-out") / f"{j}.txt"
-              text = f.read_text(errors="replace")[-budget:] if f.exists() else "(no output captured; failed before the main step)"
-              parts.append(f"### {j}\n```\n{text}\n```")
-          payload = {"title": f"CI failure on {sha} ({', '.join(failed)})", "body": "\n".join(parts), "labels": ["ci"]}
+          for p in failed:
+              parts.append(f"### {p.stem}\n```\n{p.read_text(errors='replace')[-budget:]}\n```")
+          if not failed:
+              parts.append("(no output captured: the jobs failed before any check ran, e.g. no runner was assigned)")
+          payload = {"title": f"CI failure on {sha[:7]} ({', '.join(names)})", "body": "\n".join(parts), "labels": ["ci"]}
           req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues", data=json.dumps(payload).encode(),
                                        headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"})
           print(urllib.request.urlopen(req).status)

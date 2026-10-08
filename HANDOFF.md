@@ -132,6 +132,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
    no live terminals or live engine services are installed. (being fixed)
 
 ## Environment facts
+- GitHub free tier: a private repo gets 2,000 Actions minutes a month (reset each billing cycle). CI is two jobs
+  per PR (~15-20 min); research.yml ~30-60 min per run; the weekly data refresh ~5 min. A `full_refresh` of
+  data-dukascopy costs hours per year of data and used up the October quota on 2026-10-06: avoid it on hosted
+  runners. Setting the repository variable `CI_RUNNER` (e.g. `self-hosted`) moves CI to a self-hosted runner, which
+  costs no minutes.
 - Claude sandboxes (cloud container and the Mac's Cowork VM) cannot reach market-data hosts or download Actions
   logs; GitHub API works. Data runs in GitHub Actions. Reports come back as GitHub issues.
 - MetaTrader5 Python package is Windows-only; execution runs on the VPS.
