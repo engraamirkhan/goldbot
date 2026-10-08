@@ -241,3 +241,47 @@ def test_engine_reads_other_accounts_exposure_and_the_combined_size_down_from_th
     assert eng.state.combined_size_down and eng.state.stage.value == "normal"
     half = eng.gate.check(_intent(), eng.state)
     assert half.allowed and half.lots < full.lots and half.lots <= full.lots / 2 + 0.01
+
+
+# ---------------------------------------------------------------------------------------------- 6. feature version
+def _always_long() -> Any:
+    base = type(SPECIALISTS["session_open"]())
+
+    class AlwaysLong(base):  # type: ignore[valid-type,misc]
+        def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
+            return pd.DataFrame({"idx": [len(mid_bars) - 1], "side": [1]})
+    return AlwaysLong()
+
+
+def _decide_once(tmp_path: Path, model: Any) -> tuple[Engine, Any, list[dict]]:
+    from goldbot.data.resample import ticks_to_1m
+    from goldbot.data.synthetic import synthetic_ticks
+    from goldbot.engine import ConstantModel  # noqa: F401  (model type under test)
+    ticks = synthetic_ticks("2025-03-03", "2025-03-05", ticks_per_minute=1, seed=5)
+    last = pd.Timestamp(ticks["ts_utc"].iloc[-1])
+    pb = PaperBroker(equity=10_000)
+    pb.on_tick(_tick(last, float(ticks["bid"].iloc[-1])))
+    agent = _always_long()
+    eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), owner_user_id=OWNER),
+                 pb, [agent], {agent.family: model}, ApprovalCenter({OWNER}))
+    eng.bars_1m = ticks_to_1m(ticks)
+    close_ts = last.floor("15min")
+    fr = eng._frame(eng.bars_1m[eng.bars_1m["visible_at"] <= close_ts], "15m", close_ts)
+    assert fr is not None
+    eng._refresh_account(pb.last_tick("XAUUSD"))
+    return eng, fr, eng._decide("15m", fr, [agent], {agent.family: 1.0}, close_ts, pb.last_tick("XAUUSD"))
+
+
+def test_a_model_never_scores_a_frame_of_another_feature_version(tmp_path):
+    from goldbot.engine import ConstantModel
+    from goldbot.features.registry import feature_version
+    from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
+    current = feature_version(DEFAULT_FEATURE_NAMES)
+    eng, fr, out = _decide_once(tmp_path / "old", ConstantModel(p=0.9, feature_version="f-0000000000"))
+    assert fr.X.attrs["feature_version"] == current                      # the merged frame keeps its version
+    [d] = out
+    assert d["action"] == "feature_version_mismatch" and not eng.pending
+    detail = [x for x in eng.decisions if x["action"] == "feature_version_mismatch"][0]
+    assert detail["model_feature_version"] == "f-0000000000" and detail["frame_feature_version"] == current
+    _, _, ok = _decide_once(tmp_path / "same", ConstantModel(p=0.9, feature_version=current))
+    assert ok and ok[0]["action"] != "feature_version_mismatch"

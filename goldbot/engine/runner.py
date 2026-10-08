@@ -58,6 +58,7 @@ class ConstantModel(Record):
     """Stand-in until a trained MetaLabelModel is loaded: returns a fixed probability."""
     p: float = 0.6
     feature_names: list[str] = Field(default_factory=list)
+    feature_version: str = ""        # empty: an unversioned stand-in (a trained model always carries its version)
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         return np.full(len(X), self.p)
@@ -270,10 +271,12 @@ class Engine:
             return None
         m = mid(dec)
         X = build_features(m, DEFAULT_FEATURE_NAMES)
+        version = X.attrs["feature_version"]
         for ctf in context_tfs(tf):
             hit = self._context(complete, ctf, close_ts)
             if hit is not None:
                 X = merge_higher_tf(X, hit[1], hit[0], TF_LABEL[ctf])
+        X.attrs["feature_version"] = version          # as research stamps it (pipeline.build_decision_frame)
         return _Frame(dec=dec, m=m, X=X, atr=atr(m, 14))
 
     def _context(self, complete: pd.DataFrame, tf: str, close_ts: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame] | None:
@@ -350,6 +353,13 @@ class Engine:
                 continue      # shadow-only member of the population: the shadow book trades it, not the broker
             if self._busy(agent.agent_id):
                 continue      # one position (or pending proposal) per agent, as its labels were built
+            mv, fv = getattr(model, "feature_version", ""), X.attrs.get("feature_version")
+            if mv and mv != fv:
+                # design: a model only ever scores the feature frame it was trained on
+                d = self._record(agent, close_ts, 0.0, 0.0, "feature_version_mismatch")
+                d.update(p=None, model_feature_version=mv, frame_feature_version=fv)     # not scored
+                decisions.append(d)
+                continue
             feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
             cols = model.feature_names or [c for c in feats.columns]
             p = float(model.predict(feats[[c for c in cols if c in feats.columns]] if model.feature_names else feats)[0])
@@ -813,6 +823,9 @@ class Engine:
                 if agent_key not in (agent.agent_id, agent.family) or cands.empty or int(cands["idx"].iloc[-1]) != last:
                     continue
                 side = int(cands["side"].iloc[-1])
+                mv = getattr(model, "feature_version", "")
+                if mv and mv != X.attrs.get("feature_version"):
+                    continue          # a model only scores the frame version it was trained on, in shadow too
                 cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
                 p = float(model.predict(feats[cols])[0])
                 ls = agent.label_spec
