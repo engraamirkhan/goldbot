@@ -405,3 +405,21 @@ def test_rebuild_bars_fast_paths_equal_dedup_append(tmp_path, bars_1m):
         assert [x.ts_utc for x in eng.ticks] == [x.ts_utc for x in pending]
     pd.testing.assert_frame_equal(eng.bars_1m, ref, check_exact=True)
     assert len(ref) == 200
+
+
+def test_single_thread_lightgbm_fits_the_same_model():
+    """FIT_THREADS only changes the thread count: the fitted model predicts exactly what an all-cores fit does."""
+    pytest.importorskip("lightgbm")
+    from goldbot.research.model import DEFAULT_PARAMS, MetaLabelModel
+    rng = np.random.default_rng(2)
+    n, cols = 800, [f"f{i}" for i in range(12)]
+    X = pd.DataFrame(rng.normal(size=(n, len(cols))), columns=cols)
+    X[X > 2.2] = np.nan
+    y = pd.Series((X["f0"].fillna(0) + rng.normal(size=n) > 0).astype(int))
+    w = pd.Series(rng.random(n))
+    short = {**DEFAULT_PARAMS, "n_estimators": 40}       # (all-core fits crawl on a shared CPU; keep the test short)
+    one = MetaLabelModel(feature_names=cols, params=short).fit(X, y, w)
+    every = MetaLabelModel(feature_names=cols, params={**short, "n_jobs": -1}).fit(X, y, w)
+    assert one.model.get_params()["n_jobs"] == 1 and "n_jobs" not in one.params
+    np.testing.assert_array_equal(one.predict_raw(X), every.predict_raw(X))
+    assert (one.importance() == every.importance()).all()
