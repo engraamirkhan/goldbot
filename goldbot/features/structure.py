@@ -24,9 +24,10 @@ def swing_points(df: pd.DataFrame, lag: int = 5) -> tuple[pd.Series, pd.Series]:
     return is_high.fillna(False), is_low.fillna(False)
 
 
-def _walk_levels(df: pd.DataFrame, lag: int, max_levels: int) -> Iterator[tuple[int, list[list[float]]]]:
+def _walk_levels(df: pd.DataFrame, lag: int, max_levels: int) -> Iterator[tuple[int, list[list[float]], bool]]:
     """The level book bar by bar: yields (i, known) with known = [[price, touches, created_idx], ...] as it stands
-    at bar i (the same list object, updated in place). Levels within 0.3 ATR merge, touch count grows."""
+    at bar i (the same list object, updated in place) and whether the book changed at bar i. Levels within 0.3 ATR
+    merge, touch count grows."""
     is_high, is_low = swing_points(df, lag)
     hi_flag, lo_flag = is_high.to_numpy(), is_low.to_numpy()
     a = atr(df, 14).bfill().to_numpy()
@@ -34,10 +35,12 @@ def _walk_levels(df: pd.DataFrame, lag: int, max_levels: int) -> Iterator[tuple[
     known: list[list[float]] = []  # [price, touches, created_idx]
     for i in range(len(df)):
         j = i - lag  # swing at j is confirmed now
+        changed = False
         if j >= 0:
             for flag, px in ((hi_flag[j], highs[j]), (lo_flag[j], lows[j])):
                 if not flag:
                     continue
+                changed = True
                 merged = False
                 for lv in known:
                     if abs(lv[0] - px) <= 0.3 * a[i]:
@@ -50,7 +53,7 @@ def _walk_levels(df: pd.DataFrame, lag: int, max_levels: int) -> Iterator[tuple[
                 if len(known) > max_levels:
                     known.sort(key=lambda x: (-x[1], -x[2]))
                     del known[max_levels:]
-        yield i, known
+        yield i, known, changed
 
 
 def confirmed_levels(df: pd.DataFrame, lag: int = 5, max_levels: int = 60) -> list[list[tuple[float, int, int]]]:
@@ -58,7 +61,7 @@ def confirmed_levels(df: pd.DataFrame, lag: int = 5, max_levels: int = 60) -> li
 
     O(n * max_levels); fine for a few hundred thousand bars. Levels within 0.3 ATR merge, touch count grows.
     """
-    return [[(float(lv[0]), int(lv[1]), i - int(lv[2])) for lv in known] for i, known in _walk_levels(df, lag, max_levels)]
+    return [[(float(lv[0]), int(lv[1]), i - int(lv[2])) for lv in known] for i, known, _ in _walk_levels(df, lag, max_levels)]
 
 
 @feature("support_resistance", "structure", lookback=600)
@@ -69,34 +72,50 @@ def f_levels(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     lag = ctx.get("swing_lag", 5)
     a = atr(df, 14).bfill().to_numpy()
     close = df["close"].to_numpy()
-    up = np.full(len(df), np.nan)
-    dn = np.full(len(df), np.nan)
-    up_t = np.zeros(len(df))
-    dn_t = np.zeros(len(df))
-    up_age = np.full(len(df), np.nan)
-    dn_age = np.full(len(df), np.nan)
-    n_near = np.zeros(len(df))
-    for i, known in _walk_levels(df, lag, 60):
-        c, ai = close[i], a[i]
-        lim = 1.0 * ai
-        best_up: list[float] | None = None
-        best_dn: list[float] | None = None
-        near = 0
-        for lv in known:
-            px = float(lv[0])
-            if px > c:
-                if best_up is None or px < float(best_up[0]):
-                    best_up = lv
-            elif px <= c:
-                if best_dn is None or px > float(best_dn[0]):
-                    best_dn = lv
-            if abs(px - c) <= lim:
-                near += 1
-        if best_up is not None:
-            up[i], up_t[i], up_age[i] = (float(best_up[0]) - c) / ai, int(best_up[1]), i - int(best_up[2])
-        if best_dn is not None:
-            dn[i], dn_t[i], dn_age[i] = (c - float(best_dn[0])) / ai, int(best_dn[1]), i - int(best_dn[2])
-        n_near[i] = near
+    n = len(df)
+    up = np.full(n, np.nan)
+    dn = np.full(n, np.nan)
+    up_t = np.zeros(n)
+    dn_t = np.zeros(n)
+    up_age = np.full(n, np.nan)
+    dn_age = np.full(n, np.nan)
+    n_near = np.zeros(n)
+    # the book only changes on bars that confirm a swing: keep one snapshot per change, then score every bar
+    # against its snapshot with array operations (same comparisons and arithmetic per level as a scan in book order)
+    snaps: list[list[tuple[float, float, float]]] = []
+    snap_of = np.zeros(n, dtype=np.intp)
+    for i, known, changed in _walk_levels(df, lag, 60):
+        if changed or not snaps:
+            snaps.append([(float(lv[0]), float(lv[1]), float(lv[2])) for lv in known])
+        snap_of[i] = len(snaps) - 1
+    width = max((len(x) for x in snaps), default=0)
+    if n == 0 or width == 0:
+        return pd.DataFrame({"dist_res_atr": up, "res_touches": up_t, "res_age": up_age, "dist_sup_atr": dn,
+                             "sup_touches": dn_t, "sup_age": dn_age, "levels_within_1atr": n_near}, index=df.index)
+    book = np.full((len(snaps), 3, width), np.nan)             # price, touches, created bar; NaN = empty slot
+    for k, lvls in enumerate(snaps):
+        if lvls:
+            book[k, :, :len(lvls)] = np.array(lvls).T
+    for s0 in range(0, n, 20000):
+        rows = np.arange(s0, min(s0 + 20000, n))
+        b = book[snap_of[rows]]
+        px, touches, created = b[:, 0], b[:, 1], b[:, 2]
+        c, ai = close[rows][:, None], a[rows][:, None]
+        n_near[rows] = (np.abs(px - c) <= 1.0 * ai).sum(axis=1)
+        for above, out_d, out_t, out_age in ((True, up, up_t, up_age), (False, dn, dn_t, dn_age)):
+            mask = px > c if above else px <= c                  # NaN prices and NaN closes match neither side
+            has = mask.any(axis=1)
+            if not has.any():
+                continue
+            best = np.where(mask, px, np.inf if above else -np.inf)
+            best = best.min(axis=1) if above else best.max(axis=1)
+            pick = np.argmax(mask & (px == best[:, None]), axis=1)   # first such level in book order
+            r = np.flatnonzero(has)
+            lvl = px[r, pick[r]]
+            cc, aa = close[rows[r]], a[rows[r]]
+            out_d[rows[r]] = (lvl - cc) / aa if above else (cc - lvl) / aa
+            out_t[rows[r]] = touches[r, pick[r]]
+            out_age[rows[r]] = rows[r] - created[r, pick[r]]
     return pd.DataFrame({
         "dist_res_atr": up, "res_touches": up_t, "res_age": up_age,
         "dist_sup_atr": dn, "sup_touches": dn_t, "sup_age": dn_age,
