@@ -31,14 +31,25 @@ def f_session(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     return out.frame()
 
 
+def _dst_on(hours: np.ndarray, tz: str) -> np.ndarray:
+    """tz.dst() > 0 at each UTC hour start (int64 hour numbers since the epoch)."""
+    at = pd.DatetimeIndex(pd.to_datetime(hours * 3_600_000_000_000, unit="ns", utc=True)).tz_convert(tz)
+    return np.array([t.dst().total_seconds() > 0 for t in at], dtype=np.bool_)   # type: ignore[union-attr]
+
+
 def _dst_flag(idx: pd.DatetimeIndex, tz: str) -> np.ndarray:
     """1 where `tz` observes daylight saving at the instant, else 0 (int64). New York and London switch on whole
-    UTC hours, so the flag is constant within a UTC hour: tz.dst() is evaluated once per distinct hour and spread
+    UTC hours, at most once a day, so the flag is constant within a UTC hour, and within a UTC day whose start and
+    end agree: tz.dst() is evaluated at each distinct day's two ends and hourly only on a switch day, then spread
     back, instead of once per bar."""
     ns = epoch_ns(idx)
     hours, inv = np.unique(ns // 3_600_000_000_000, return_inverse=True)
-    at = pd.DatetimeIndex(pd.to_datetime(hours * 3_600_000_000_000, unit="ns", utc=True)).tz_convert(tz)
-    flag = np.array([t.dst().total_seconds() > 0 for t in at], dtype=np.bool_)   # type: ignore[union-attr]
+    days = np.unique(hours // 24)
+    start, end = _dst_on(days * 24, tz), _dst_on(days * 24 + 24, tz)
+    flag = start[np.searchsorted(days, hours // 24)]
+    switch = np.isin(hours // 24, days[start != end])
+    if switch.any():
+        flag[switch] = _dst_on(hours[switch], tz)
     return flag[inv.reshape(-1)].astype(int)
 
 
