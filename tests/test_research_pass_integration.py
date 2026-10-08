@@ -87,22 +87,47 @@ def test_reports_carry_gates_rule_only_and_the_cost_line(release_dir, tmp_path, 
     assert row["budget_quarter"] and row["status"] == "evaluated"
 
 
-def test_trial_budget_refuses_and_the_holdout_is_scored_once(release_dir, tmp_path, monkeypatch):
+def test_holdout_needs_passed_gates_is_charged_and_scored_once_and_the_budget_refuses(release_dir, tmp_path, monkeypatch):
     from goldbot.research.registry import TrialRegistry, quarter_of
+    from goldbot.specialists import SPECIALISTS
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
-    reg = TrialRegistry(registry)
-    for _ in range(20):                                                  # this quarter's budget is spent
-        reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={},
-                   budget_quarter=quarter_of())
     argv = ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry), "--report", str(report)]
+    monkeypatch.setattr(sys, "argv", argv + ["--score-holdout"])
+    with pytest.raises(SystemExit, match="no research trial that passed the design's gates"):
+        rp.main()                                                        # only a passing configuration is scored
+    reg = TrialRegistry(registry)
+    reg.record(agent_id="x", family="session_open", config=SPECIALISTS["session_open"]().config, feature_version="f",
+               rationale="a passing walk-forward", results={"gates": {"passed": True, "checks": []}})
+    assert rp.main() == 0
+    last = json.loads(registry.read_text().splitlines()[-1])
+    assert last["status"] == "holdout" and last["results"]["holdout"]["scored"] is True
+    assert last["budget_quarter"] == quarter_of() and reg.budget_used(quarter_of()) == 2     # charged like any trial
+    assert "gates" not in last["results"] and "holdout_verdict" in last["results"]           # judged by its own rule
+    assert "### Held-out year:" in report.read_text() and "**holdout scoring**" in report.read_text()
+    with pytest.raises(SystemExit, match="already scored on the holdout"):
+        rp.main()
+    for _ in range(18):                                                  # this quarter's budget is now spent
+        reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={})
     monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(SystemExit, match="trial budget exceeded"):
         rp.main()
-    # scoring the holdout is not a search trial: allowed once per configuration, then refused
-    monkeypatch.setattr(sys, "argv", argv + ["--score-holdout"])
-    assert rp.main() == 0
-    last = json.loads(registry.read_text().splitlines()[-1])
-    assert last["status"] == "holdout" and last["results"]["holdout"]["scored"] is True and "budget_quarter" not in last
-    assert "**holdout scoring**" in report.read_text()
-    with pytest.raises(SystemExit, match="already scored on the holdout"):
-        rp.main()
+
+
+def test_research_stops_at_the_holdout_and_ignores_truncated_folds(release_dir):
+    """Bars run past the holdout start: nothing that exits at or after it is labelled, and the truncated last test
+    fold does not count against the 60-per-fold gate."""
+    from goldbot.data.resample import resample_bars
+    from goldbot.features.mtf import TF_LABEL, context_tfs
+    from goldbot.research.pipeline import run_specialist
+    from goldbot.specialists import SPECIALISTS
+    b1 = rp.load_bars(release_dir, 2022, 2025)
+    dec = resample_bars(b1, "15m")
+    context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs("15m")}
+    start = pd.Timestamp("2025-04-01", tz="UTC")
+    res = run_specialist(SPECIALISTS["session_open"](asia_range_max_atr_d=1.2), dec, context=context, extra_cost_usd=0.3,
+                         holdout=(start, pd.Timestamp("2025-07-01", tz="UTC")))
+    assert pd.to_datetime(res.oof["ts_exit"], utc=True).max() < start   # data runs to 2025-10: none of it is used
+    m = res.metrics
+    assert len(m["complete_fold_test_sizes"]) == len(m["fold_test_sizes"]) - 1   # the last fold is truncated
+    per_fold = next(c for c in m["gates"]["checks"] if c["name"] == "per_fold")
+    assert f"{len(m['complete_fold_test_sizes'])} test folds" in per_fold["detail"]

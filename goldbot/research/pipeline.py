@@ -16,7 +16,7 @@ from goldbot.features import FEATURES, build_features
 from goldbot.features.mtf import merge_higher_tf
 from goldbot.features.technical import atr
 from goldbot.labels import one_at_a_time, triple_barrier, uniqueness_weights
-from goldbot.research.gates import research_gates
+from goldbot.research.gates import holdout_verdict, research_gates
 from goldbot.research.metrics import expectancy, summarize
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, fit_calibrator
 from goldbot.research.walkforward import splits_for
@@ -110,6 +110,11 @@ def _risk_fraction(labels: pd.DataFrame, a: pd.Series, stop_atr: float) -> np.nd
     return stop_atr * a.to_numpy()[labels["idx"].to_numpy()] / labels["entry"].to_numpy(dtype=float)
 
 
+def _before(labels: pd.DataFrame, start: pd.Timestamp) -> np.ndarray:
+    """Labels that exited before `start` (their whole life precedes it)."""
+    return np.asarray(pd.DatetimeIndex(pd.to_datetime(labels["ts_exit"], utc=True)) < start)
+
+
 def _in_window(labels: pd.DataFrame, window: Window) -> np.ndarray:
     """Labels whose life [signal, exit] touches the window."""
     ts = pd.DatetimeIndex(pd.to_datetime(labels["ts_utc"], utc=True))
@@ -159,9 +164,11 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
     Selection is cross-fitted: fold k's calibrator comes from earlier folds' out-of-fold predictions only, and the
     threshold uses only information at the signal, so `model_filtered` never selects on the outcome it reports.
 
-    holdout: [start, end) window the research loop never sees. By default every candidate whose life touches it is
-    dropped before the walk-forward. With score_holdout=True the walk-forward runs over everything and the metrics
-    are computed on the holdout candidates only (scored once per configuration; see TrialRegistry.holdout_scored)."""
+    holdout: [start, end) window the research loop never sees. By default every candidate that has not exited before
+    the holdout starts is dropped before the walk-forward: the window itself and everything after it (bars past the
+    holdout would otherwise form stub test folds). With score_holdout=True the walk-forward runs over everything and
+    the metrics are computed on the holdout candidates only, judged by the holdout rule (gates.holdout_verdict)
+    instead of the walk-forward gates (scored once per configuration; see TrialRegistry.holdout_scored)."""
     bars_dec = bars_dec.reset_index(drop=True)
     m, X = build_decision_frame(bars_dec, context, feature_names, ctx)
     version = X.attrs["feature_version"]
@@ -172,9 +179,9 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
     gross = one_at_a_time(triple_barrier(_zero_spread(bars_dec), cands, ls, a))
     if holdout is not None and not score_holdout:
         if not labels.empty:
-            labels = labels[~_in_window(labels, holdout)].reset_index(drop=True)
+            labels = labels[_before(labels, holdout[0])].reset_index(drop=True)
         if not gross.empty:
-            gross = gross[~_in_window(gross, holdout)].reset_index(drop=True)
+            gross = gross[_before(gross, holdout[0])].reset_index(drop=True)
     if labels.empty:
         return ResearchResult(agent_id=spec.agent_id, n_candidates=0, n_folds=0, oof=labels, metrics={"n": 0},
                               feature_version=version, importance=None)
@@ -213,6 +220,7 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
     metrics: dict[str, Any] = {
         "n_candidates": int(len(labels)), "n_folds": len(folds),
         "fold_test_sizes": [int(len(f.test_idx)) for f in folds],
+        "complete_fold_test_sizes": [int(len(f.test_idx)) for f in folds if f.complete],
         "extra_cost_usd": float(extra_cost_usd), "evaluation": "cross-fitted",
         "holdout": None if holdout is None else {"from": str(holdout[0]), "to": str(holdout[1]), "scored": score_holdout},
         "rule_only": {
@@ -231,7 +239,11 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
             "model_filtered": summarize(taken, tpy * len(taken) / max(len(scored), 1), n_trials),
             "oof_auc": _auc(scored["target_hit"].to_numpy(), scored["p_raw"].to_numpy()),
         })
-    metrics["gates"] = research_gates(int(len(labels)), metrics["fold_test_sizes"], taken[["ts_utc", "ret"]])
+    if holdout is not None and score_holdout:
+        metrics["holdout_verdict"] = holdout_verdict(taken["ret"].to_numpy(), taken["risk"].to_numpy())
+    else:
+        metrics["gates"] = research_gates(int(len(labels)), metrics["complete_fold_test_sizes"], taken[["ts_utc", "ret"]],
+                                          metrics.get("model_filtered"))
     imp = last_model.importance() if last_model is not None else None
     return ResearchResult(agent_id=spec.agent_id, n_candidates=len(labels), n_folds=len(folds), oof=oof, metrics=metrics,
                           feature_version=version, importance=imp, model=last_model if "threshold" in metrics else None)

@@ -95,7 +95,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
              f"- runtime {meta['seconds']:.0f}s", ""]
-    lines += _gates_lines(m.get("gates")) + _rule_only_lines(m.get("rule_only"))
+    lines += _gates_lines(m.get("gates")) + _holdout_lines(m.get("holdout_verdict")) + _rule_only_lines(m.get("rule_only"))
     if "all_candidates" in m:
         lines += ["### Out of fold", "",
                   "| set | n | hit rate | mean ret | profit factor | Sharpe (ann.) | max DD | deflated SR |",
@@ -139,6 +139,14 @@ def _gates_lines(g: dict[str, Any] | None) -> list[str]:
     out = [f"### Design gates: {'**PASS**' if g['passed'] else '**FAIL**'}", ""]
     out += [f"- {'pass' if c['passed'] else 'FAIL'} {c['name']}: {c['detail']}" for c in g["checks"]]
     return out + [""]
+
+
+def _holdout_lines(v: dict[str, Any] | None) -> list[str]:
+    if not v:
+        return []
+    return [f"### Held-out year: {'**PASS**' if v['passed'] else '**FAIL**'}", "",
+            f"- rule: {v['rule']}",
+            f"- {v['n']} model-filtered trades, mean R {v['mean_r']:.3f}, t-stat {v['t_stat']:.2f}", ""]
 
 
 def _rule_only_lines(r: dict[str, Any] | None) -> list[str]:
@@ -210,20 +218,28 @@ def main() -> int:
     t0 = time.time()
     b1 = load_bars(Path(args.bars), args.from_year, args.to_year)      # fails fast, before any registry file exists
     reg = TrialRegistry(args.registry)
-    quarter: str | None = None
+    with reg.locked():                    # budget check, runs and records as one step
+        return _run(args, variants, settings, extra_cost, holdout, b1, reg, t0)
+
+
+def _run(args: argparse.Namespace, variants: list[dict[str, Any]], settings: Any, extra_cost: float,
+         holdout: tuple[pd.Timestamp, pd.Timestamp] | None, b1: pd.DataFrame, reg: TrialRegistry, t0: float) -> int:
     if args.score_holdout:
         if holdout is None:
             raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
         for v in variants:
             cfg = SPECIALISTS[args.specialist](**v).config
+            label = json.dumps(v) if v else "defaults"
             if reg.holdout_scored(args.specialist, cfg):
-                raise SystemExit(f"{args.specialist} {json.dumps(v) or 'defaults'} was already scored on the holdout; "
+                raise SystemExit(f"{args.specialist} {label} was already scored on the holdout; "
                                  "that result is final for this configuration")
-    else:
-        try:
-            quarter = reg.check_budget(len(variants), settings.research.trial_budget_quarter)
-        except TrialBudgetExceeded as exc:
-            raise SystemExit(str(exc)) from None
+            if not reg.passed_gates(args.specialist, cfg):
+                raise SystemExit(f"{args.specialist} {label} has no research trial that passed the design's gates; "
+                                 "only a passing configuration is scored on the holdout")
+    try:                                  # a holdout scoring is a look at the data too: it is charged like any trial
+        quarter = reg.check_budget(len(variants), settings.research.trial_budget_quarter)
+    except TrialBudgetExceeded as exc:
+        raise SystemExit(str(exc)) from None
     years_span = (b1["ts_utc"].iloc[-1] - b1["ts_utc"].iloc[0]).days / 365.25
     zero_volume = float((b1["tick_count"].astype(float) <= 0).mean())
     print(f"1m bars: {len(b1):,} ({b1['ts_utc'].iloc[0]:%Y-%m-%d} -> {b1['ts_utc'].iloc[-1]:%Y-%m-%d}), "

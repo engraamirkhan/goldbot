@@ -15,11 +15,12 @@ from goldbot.execution.costs import CONTRACT_OZ, prior_extra_cost_usd, settings_
 from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.features.registry import side_align, signed_neutral
 from goldbot.research.director import quarter_usage
-from goldbot.research.gates import MIN_CANDIDATES, MIN_TEST_FOLD, research_gates
+from goldbot.research.gates import MIN_CANDIDATES, MIN_TEST_FOLD, holdout_verdict, research_gates
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR, expectancy, summarize
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, PlattCalibrator, fit_calibrator
 from goldbot.research.pipeline import (
     MIN_CALIBRATION_ROWS,
+    _before,
     _cross_fitted,
     _in_window,
     _zero_spread,
@@ -28,7 +29,7 @@ from goldbot.research.pipeline import (
 )
 from goldbot.research.population import Member, Population
 from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, quarter_of
-from goldbot.research.walkforward import Fold
+from goldbot.research.walkforward import Fold, splits_for
 from goldbot.specialists import SPECIALISTS
 
 NOW = datetime(2026, 10, 7, 12, tzinfo=timezone.utc)
@@ -125,18 +126,48 @@ def _taken(years: dict[int, tuple[int, float]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_research_gates_need_candidates_fold_size_and_three_positive_years():
-    ok = research_gates(MIN_CANDIDATES, [MIN_TEST_FOLD] * 10, _taken({2019: (12, 0.001), 2021: (15, 0.001), 2024: (10, 0.002)}))
-    assert ok["passed"] and [c["name"] for c in ok["checks"]] == ["candidates", "per_fold", "positive_years"]
-    few = research_gates(MIN_CANDIDATES - 1, [MIN_TEST_FOLD] * 10, _taken({2019: (12, 0.001), 2021: (15, 0.001), 2024: (10, 0.002)}))
+def test_research_gates_need_candidates_fold_size_three_positive_years_and_the_dsr():
+    years = _taken({2019: (12, 0.001), 2021: (15, 0.001), 2024: (10, 0.002)})
+    good_mf = {"n": MIN_TRADES_FOR_DSR, "dsr": 0.96}
+    ok = research_gates(MIN_CANDIDATES, [MIN_TEST_FOLD] * 10, years, good_mf)
+    assert ok["passed"] and [c["name"] for c in ok["checks"]] == ["candidates", "per_fold", "positive_years", "dsr"]
+    few = research_gates(MIN_CANDIDATES - 1, [MIN_TEST_FOLD] * 10, years, good_mf)
     assert not few["passed"] and not few["checks"][0]["passed"]
-    thin_fold = research_gates(5000, [100, MIN_TEST_FOLD - 1], _taken({2019: (12, 0.001), 2021: (15, 0.001), 2024: (10, 0.002)}))
+    thin_fold = research_gates(5000, [100, MIN_TEST_FOLD - 1], years, good_mf)
     assert not thin_fold["passed"] and not thin_fold["checks"][1]["passed"]
-    no_chop = research_gates(5000, [100], _taken({2018: (12, 0.001), 2019: (15, 0.001), 2024: (10, 0.002)}))
+    no_chop = research_gates(5000, [100], _taken({2018: (12, 0.001), 2019: (15, 0.001), 2024: (10, 0.002)}), good_mf)
     assert not no_chop["passed"]                                        # none of the three is 2021 or 2022
-    lucky = research_gates(5000, [100], _taken({2019: (12, 0.001), 2021: (3, 0.01), 2024: (10, 0.002)}))
+    lucky = research_gates(5000, [100], _taken({2019: (12, 0.001), 2021: (3, 0.01), 2024: (10, 0.002)}), good_mf)
     assert not lucky["passed"]                                          # three trades are not a positive year
-    assert not research_gates(5000, [], _taken({}))["passed"]
+    assert not research_gates(5000, [], _taken({}), good_mf)["passed"]
+    # the deflated Sharpe gate (DESIGN: Validation): 200+ model-filtered trades and DSR >= 0.95
+    for mf in (None, {"n": MIN_TRADES_FOR_DSR, "dsr": 0.94}, {"n": MIN_TRADES_FOR_DSR - 1, "dsr": 0.99},
+               {"n": 500, "dsr": None}):
+        g = research_gates(MIN_CANDIDATES, [MIN_TEST_FOLD] * 10, years, mf)
+        assert not g["passed"] and not g["checks"][3]["passed"]
+
+
+def test_holdout_verdict_is_positive_mean_r_with_a_t_stat():
+    risk = np.full(40, 0.001)
+    win = np.tile([0.002, -0.001], 20)
+    assert holdout_verdict(win, risk)["passed"]
+    assert not holdout_verdict(-win, risk)["passed"]
+    assert not holdout_verdict(np.tile([0.0011, -0.001], 20), risk)["passed"]      # positive but t far below 1.65
+    assert not holdout_verdict(np.array([]), np.array([]))["passed"]
+
+
+def test_walk_forward_marks_a_truncated_last_fold_incomplete():
+    ts = pd.date_range("2020-01-01", "2023-02-15", freq="1D", tz="UTC")
+    labels = pd.DataFrame({"ts_utc": ts, "ts_exit": ts + pd.Timedelta(hours=4)})
+    folds = splits_for(labels, "15m")                                    # train 24, test 3 months
+    assert [f.complete for f in folds] == [True, True, True, True, False]
+    assert len(folds[-1].test_idx) < 60 <= min(len(f.test_idx) for f in folds if f.complete)
+
+
+def test_research_ends_where_the_holdout_starts():
+    start = pd.Timestamp("2025-10-01", tz="UTC")
+    labels = pd.DataFrame({"ts_exit": pd.to_datetime(["2025-09-30 23:00", "2025-10-01 01:00", "2026-11-01 00:00"], utc=True)})
+    assert _before(labels, start).tolist() == [True, False, False]       # after the window too: no stub folds
 
 
 # ---------------------------------------------------------------------------------------------- P2: budget, holdout
