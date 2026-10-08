@@ -210,6 +210,18 @@ def test_engine_stage_dq_tick_and_blackout(tmp_path):
     assert health.check_engine(ctx, "icm-demo").status == "fail"
 
 
+def test_engine_stale_bars_and_a_refused_rearm_are_reported(tmp_path):
+    ctx = make_ctx(tmp_path)
+    engine(tmp_path, 60, stale_bars=True)
+    c = health.check_engine(ctx, "icm-demo")
+    assert c.status == "warn" and "last bar" in c.reason                     # design R25: stale data alerts
+    engine(tmp_path, 60, stale_bars=True, now=SATURDAY)
+    assert "last bar" not in health.check_engine(make_ctx(tmp_path, now=SATURDAY), "icm-demo").reason
+    engine(tmp_path, 60, stage="halted", rearm_refused="re-arm needs 10 trading days ...; 3 so far")
+    c = health.check_engine(ctx, "icm-demo")
+    assert c.status == "fail" and "3 so far" in c.reason
+
+
 def test_risk_state(tmp_path):
     ctx = make_ctx(tmp_path)
     assert health.check_risk_state(ctx, "icm-demo").status == "warn"          # engine never ran
