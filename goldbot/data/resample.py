@@ -32,16 +32,41 @@ def ticks_to_1m(ticks: pd.DataFrame, sessions: SessionTable = DEFAULT_SESSIONS) 
     t["spread"] = t["ask"] - t["bid"]
     t["minute"] = floor_tf(pd.DatetimeIndex(t["ts_utc"]), 60)
     g = t.groupby("minute", sort=True)
-    bars = pd.DataFrame({
-        "bid_open": g["bid"].first(), "bid_high": g["bid"].max(), "bid_low": g["bid"].min(), "bid_close": g["bid"].last(),
-        "ask_open": g["ask"].first(), "ask_high": g["ask"].max(), "ask_low": g["ask"].min(), "ask_close": g["ask"].last(),
-        "tick_count": g["bid"].size(), "spread_mean": g["spread"].mean(), "spread_max": g["spread"].max(),
-    })
+    if len(t) and t["bid"].dtype == np.float64 and t["ask"].dtype == np.float64:
+        bars = _minute_bars(t, g["spread"].mean())
+    else:
+        bars = pd.DataFrame({
+            "bid_open": g["bid"].first(), "bid_high": g["bid"].max(), "bid_low": g["bid"].min(), "bid_close": g["bid"].last(),
+            "ask_open": g["ask"].first(), "ask_high": g["ask"].max(), "ask_low": g["ask"].min(), "ask_close": g["ask"].last(),
+            "tick_count": g["bid"].size(), "spread_mean": g["spread"].mean(), "spread_max": g["spread"].max(),
+        })
     bars.index.name = "ts_utc"
     bars = bars.reset_index()
     bars = bars[sessions.is_open(pd.DatetimeIndex(bars["ts_utc"]))]
     bars.insert(1, "visible_at", bars["ts_utc"] + pd.Timedelta(seconds=60))
     return bars.reset_index(drop=True)[BAR_COLUMNS]
+
+
+def _minute_bars(t: pd.DataFrame, spread_mean: pd.Series) -> pd.DataFrame:
+    """The per-minute OHLC/size/max aggregates of ticks_to_1m with numpy on the time-sorted ticks (each minute is
+    one contiguous run; the valid-quote filter leaves no NaN, so first/last/max/min equal the groupby's). The mean
+    spread keeps pandas' groupby mean (its compensated sum), passed in. Same frame, a fraction of the fixed cost of
+    ten groupby aggregations, which dominated the engine's 10-second bar refresh."""
+    minute = epoch_ns(pd.DatetimeIndex(t["minute"]))
+    starts = np.flatnonzero(np.concatenate(([True], minute[1:] != minute[:-1])))
+    ends = np.append(starts[1:], len(minute)) - 1
+    out = {}
+    for side in ("bid", "ask"):
+        v = t[side].to_numpy()
+        out[f"{side}_open"], out[f"{side}_high"] = v[starts], np.maximum.reduceat(v, starts)
+        out[f"{side}_low"], out[f"{side}_close"] = np.minimum.reduceat(v, starts), v[ends]
+    sp = t["spread"].to_numpy()
+    out["tick_count"] = (ends - starts + 1).astype(np.int64)
+    out["spread_mean"] = spread_mean.to_numpy()
+    out["spread_max"] = np.maximum.reduceat(sp, starts)
+    order = ["bid_open", "bid_high", "bid_low", "bid_close", "ask_open", "ask_high", "ask_low", "ask_close",
+             "tick_count", "spread_mean", "spread_max"]
+    return pd.DataFrame({k: out[k] for k in order}, index=spread_mean.index)
 
 
 def _agg(bars: pd.DataFrame, key: pd.DatetimeIndex | pd.Series) -> pd.DataFrame:

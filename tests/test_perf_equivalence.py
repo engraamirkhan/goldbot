@@ -287,7 +287,8 @@ def test_store_reads_only_partitions_in_range_with_the_same_rows(tmp_path):
     st.append("bars_1m", b.iloc[::5].assign(ts_utc=lambda d: d["ts_utc"] + pd.Timedelta(seconds=30)), source="b", dedupe=False)
 
     def ref(**kw):
-        where, params = ["symbol = ?"], ["XAUUSD"]
+        where: list[str] = ["symbol = ?"]
+        params: list[Any] = ["XAUUSD"]
         if kw.get("source"):
             where.append("source = ?")
             params.append(kw["source"])
@@ -308,3 +309,99 @@ def test_store_reads_only_partitions_in_range_with_the_same_rows(tmp_path):
                {"source": "zzz", "start": "2024-01-01"}):
         got, exp = st.read("bars_1m", **kw), ref(**kw)            # timestamps are unique: ORDER BY fixes the row order
         pd.testing.assert_frame_equal(got, exp, check_exact=True)
+
+
+def _ref_ticks_to_1m(ticks):
+    """ticks_to_1m before the numpy aggregation (ten groupby aggregates)."""
+    from goldbot.data.calendar import DEFAULT_SESSIONS
+    from goldbot.data.resample import BAR_COLUMNS
+    t = ticks.sort_values("ts_utc").copy()
+    t["ts_utc"] = pd.to_datetime(t["ts_utc"], utc=True)
+    t = t[(t["bid"] > 0) & (t["ask"] >= t["bid"])]
+    t["spread"] = t["ask"] - t["bid"]
+    t["minute"] = floor_tf(pd.DatetimeIndex(t["ts_utc"]), 60)
+    g = t.groupby("minute", sort=True)
+    bars = pd.DataFrame({
+        "bid_open": g["bid"].first(), "bid_high": g["bid"].max(), "bid_low": g["bid"].min(), "bid_close": g["bid"].last(),
+        "ask_open": g["ask"].first(), "ask_high": g["ask"].max(), "ask_low": g["ask"].min(), "ask_close": g["ask"].last(),
+        "tick_count": g["bid"].size(), "spread_mean": g["spread"].mean(), "spread_max": g["spread"].max(),
+    })
+    bars.index.name = "ts_utc"
+    bars = bars.reset_index()
+    bars = bars[DEFAULT_SESSIONS.is_open(pd.DatetimeIndex(bars["ts_utc"]))]
+    bars.insert(1, "visible_at", bars["ts_utc"] + pd.Timedelta(seconds=60))
+    return bars.reset_index(drop=True)[BAR_COLUMNS]
+
+
+def test_ticks_to_1m_numpy_aggregates_match_groupby():
+    rng = np.random.default_rng(9)
+    for k in range(120):
+        n = int(rng.integers(1, 300))
+        start = pd.Timestamp("2025-03-07 21:50", tz="UTC") + pd.Timedelta(minutes=int(rng.integers(0, 4000)))
+        step = 1 if k % 3 else 5000                                   # coarse stamps: many equal timestamps
+        ts = start + pd.to_timedelta(np.sort(rng.integers(0, 600_000, n)) // step * step, unit="ms")
+        bid = 2400 + rng.normal(size=n).cumsum() * 0.1
+        ask = bid + rng.random(n) * 0.5 - (0.6 if k % 7 == 0 else 0)  # some crossed quotes (dropped)
+        if k % 11 == 0:
+            bid[rng.random(n) < 0.1] = -1
+        df = pd.DataFrame({"ts_utc": ts, "bid": bid, "ask": ask})
+        if k % 5 == 0:
+            df = df.sample(frac=1, random_state=k)                    # unsorted input
+        pd.testing.assert_frame_equal(ticks_to_1m(df), _ref_ticks_to_1m(df), check_exact=True)
+    big = synthetic_ticks("2025-03-03", "2025-03-06", ticks_per_minute=4, seed=1)
+    pd.testing.assert_frame_equal(ticks_to_1m(big), _ref_ticks_to_1m(big), check_exact=True)
+
+
+def test_bar_errors_are_check_bars_errors(bars_1m):
+    from goldbot.data.quality import bar_errors, check_bars
+    rng = np.random.default_rng(4)
+    for k in range(150):
+        i = int(rng.integers(0, len(bars_1m) - 20))
+        b = bars_1m.iloc[i:i + int(rng.integers(1, 12))].copy()
+        if k % 3 == 0 and len(b) > 1:
+            b = pd.concat([b, b.iloc[[0]]])                          # duplicate stamp, out of order
+        if k % 4 == 1:
+            b.loc[b.index[0], "ask_close"] = b["bid_close"].iloc[0] - 1
+        if k % 5 == 2:
+            b.loc[b.index[-1], "spread_mean"] = -0.1
+        if k % 6 == 3:
+            b = b.iloc[::-1]
+        if k % 7 == 4:
+            b["ts_utc"] = b["ts_utc"].dt.as_unit("us")
+        _, ev = check_bars(b)
+        assert bar_errors(b) == [e for e in ev if e.severity == "error"]
+    assert bar_errors(bars_1m.iloc[0:0]) == []
+
+
+def test_rebuild_bars_fast_paths_equal_dedup_append(tmp_path, bars_1m):
+    """Bars built tick by tick (skipping minutes still open, appending without re-de-duplicating) equal the
+    de-duplicating rebuild of the previous code, on a trimmed buffer and after an external reassignment."""
+    from goldbot.engine import Engine, EngineConfig
+    from goldbot.execution.broker import Tick
+    from goldbot.execution.paper import PaperBroker
+    ticks = synthetic_ticks("2025-03-04", "2025-03-04 06:00", ticks_per_minute=3, seed=2)
+    eng = Engine(EngineConfig(account_id="x", broker_name="icm", state_dir=str(tmp_path), max_bars_in_memory=200),
+                 PaperBroker(equity=10_000), [], {})
+    ref = pd.DataFrame()
+    pending: list = []
+    for j, (ts, bid, ask) in enumerate(zip(ticks["ts_utc"], ticks["bid"].to_numpy(float), ticks["ask"].to_numpy(float))):
+        t = Tick(ts_utc=pd.Timestamp(ts), bid=float(bid), ask=float(ask))
+        eng.ticks.append(t)
+        pending.append(t)
+        eng._rebuild_bars()
+        # reference: the previous rebuild on every call
+        new = _ref_ticks_to_1m(pd.DataFrame({"ts_utc": [x.ts_utc for x in pending], "bid": [x.bid for x in pending],
+                                             "ask": [x.ask for x in pending]}))
+        if not new.empty:
+            last = new["ts_utc"].iloc[-1]
+            done = new[new["ts_utc"] < last]
+            if not done.empty:
+                ref = pd.concat([ref, done]).drop_duplicates("ts_utc", keep="last").tail(200).reset_index(drop=True) \
+                    if not ref.empty else done.reset_index(drop=True)
+            pending = [x for x in pending if x.ts_utc >= last]
+        if j == 400:                                   # an external reassignment (warm start, tests) is re-deduplicated
+            eng.bars_1m = pd.concat([eng.bars_1m, eng.bars_1m.tail(3)]).reset_index(drop=True)
+            ref = pd.concat([ref, ref.tail(3)]).reset_index(drop=True)
+        assert [x.ts_utc for x in eng.ticks] == [x.ts_utc for x in pending]
+    pd.testing.assert_frame_equal(eng.bars_1m, ref, check_exact=True)
+    assert len(ref) == 200

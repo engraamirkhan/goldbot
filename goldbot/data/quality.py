@@ -71,6 +71,32 @@ def check_bars(bars: pd.DataFrame, *, tf_seconds: int = 60, sessions: SessionTab
     return b, events
 
 
+def bar_errors(bars: pd.DataFrame) -> list[DQEvent]:
+    """The error-severity events of check_bars (duplicate_ts, bid_gt_ask, non_monotonic, in that order, same
+    timestamps and details) without the warning checks and the flagged copy: the engine checks every batch of newly
+    completed minutes, a few rows, where check_bars' fixed pandas cost dominated."""
+    if not len(bars):
+        return []
+    arrived = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True))
+    order = np.argsort(epoch_ns(arrived), kind="stable")
+    ts = arrived[order]
+    ns = epoch_ns(ts)
+    events: list[DQEvent] = []
+    dup = np.zeros(len(ns), dtype=bool)
+    dup[:-1] = ns[:-1] == ns[1:]                  # sorted: a stamp seen again later (duplicated(keep="last"))
+    if dup.any():
+        events.append(DQEvent(ts_utc=ts[dup][0], check="duplicate_ts", severity="error", detail=f"{int(dup.sum())} duplicate bar timestamps"))
+    ask, bid = bars["ask_close"].to_numpy()[order], bars["bid_close"].to_numpy()[order]
+    bad = (ask < bid) | (bars["spread_mean"].to_numpy()[order] < 0)
+    if bad.any():
+        events.append(DQEvent(ts_utc=ts[bad][0], check="bid_gt_ask", severity="error", detail=f"{int(bad.sum())} bars with bid>ask"))
+    mono = np.diff(epoch_ns(arrived)) < 0
+    if mono.any():
+        events.append(DQEvent(ts_utc=arrived[1:][mono][0], check="non_monotonic", severity="error",
+                              detail=f"{int(mono.sum())} bars arrived out of time order"))
+    return events
+
+
 def stale_feed(last_tick_utc: pd.Timestamp, now_utc: pd.Timestamp, *, limit_seconds: int = 90,
                sessions: SessionTable = DEFAULT_SESSIONS) -> bool:
     if not sessions.is_open(pd.DatetimeIndex([now_utc]))[0]:
