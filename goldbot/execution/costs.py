@@ -63,6 +63,16 @@ class CostTable(FrozenRecord):
         commission = 2 * self.commission_per_lot_side_usd / CONTRACT_OZ
         return float(spread + 2 * max(slip_usd, 0.0) + commission)
 
+    def round_trip_ex_spread_atr(self, session: str, atr_usd: float, order_type: str = "market") -> float | None:
+        """Entry and exit slippage plus commission both sides, in ATR (the spread excluded: labels and the model's p
+        already pay it). None when no spread was measured (no table to speak of) or ATR is unusable."""
+        full = self.round_trip_usd_per_oz(session, order_type)
+        if full is None or not np.isfinite(atr_usd) or atr_usd <= 0:
+            return None
+        sp = self.spread.get(session)
+        spread = sp.median if sp is not None else max(s.median for s in self.spread.values())
+        return (full - spread) / atr_usd
+
     def round_trip_atr(self, session: str, atr_usd: float, order_type: str = "market") -> float | None:
         usd = self.round_trip_usd_per_oz(session, order_type)
         if usd is None or not np.isfinite(atr_usd) or atr_usd <= 0:

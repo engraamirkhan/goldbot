@@ -277,10 +277,11 @@ class Engine:
         dec, m, X, a = fr.dec, fr.m, fr.X, fr.atr
         decisions = []
         last = len(dec) - 1
-        cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)
+        cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)            # full round trip: the RiskGate's checks
+        hurdle_atr = self._cost_atr(float(a.iloc[last]), close_ts, ex_spread=True)   # p already pays the spread
         cands_by_agent = {agent.agent_id: agent.candidates(m, X) for agent in agents}
         if self.shadow is not None:
-            self._shadow_step(tf, dec, X, agents, cands_by_agent, float(a.iloc[last]), cost_atr)
+            self._shadow_step(tf, dec, X, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
         for agent in agents:
             cands = cands_by_agent[agent.agent_id]
             if cands.empty or int(cands["idx"].iloc[-1]) != last:
@@ -300,11 +301,11 @@ class Engine:
             p = float(model.predict(feats[[c for c in cols if c in feats.columns]] if model.feature_names else feats)[0])
             ls = agent.label_spec
             w = fam_w.get(agent.family, 0.0) * share
-            mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, cost_atr)[0])
+            mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, hurdle_atr)[0])
             price = last_tick.ask if side > 0 else last_tick.bid
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
                             multiplier=mult if mult > 0 else 0.0, price=price)
-            if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02:
+            if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, hurdle_atr) + 0.02:
                 decisions.append(self._record(agent, close_ts, p, mult, "below_threshold"))
                 continue
             gd = self.gate.check(intent, self.state)
@@ -644,8 +645,10 @@ class Engine:
         self.store.append("ticks", df, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
         self._tick_log = []
 
-    def _cost_atr(self, atr_usd: float, ts: pd.Timestamp) -> float:
-        """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one."""
+    def _cost_atr(self, atr_usd: float, ts: pd.Timestamp, ex_spread: bool = False) -> float:
+        """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one.
+        ex_spread: slippage and commission only, for the probability threshold and size multiplier (the model's p is
+        trained on labels that already pay the spread); the fallback stays the full configured cost (conservative)."""
         path = Path(self.cfg.state_dir, f"costs_{self.cfg.account_id}.json")
         mtime = path.stat().st_mtime if path.exists() else -1.0
         if mtime != self._cost_cache[0]:
@@ -657,7 +660,7 @@ class Engine:
         if table is None:
             return self.cfg.cost_atr
         session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([ts]))[0])
-        c = table.round_trip_atr(session, atr_usd)
+        c = table.round_trip_ex_spread_atr(session, atr_usd) if ex_spread else table.round_trip_atr(session, atr_usd)
         return c if c is not None else self.cfg.cost_atr
 
     def _account_class(self) -> str:

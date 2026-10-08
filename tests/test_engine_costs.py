@@ -33,6 +33,17 @@ def test_cost_comes_from_the_table_by_session(tmp_path):
     assert eng._cost_atr(2.0, pd.Timestamp("2025-03-04 15:00", tz="UTC")) == asia
 
 
+def test_threshold_cost_excludes_the_spread_the_labels_already_pay(tmp_path):
+    eng = _engine(tmp_path)
+    ts = pd.Timestamp("2025-03-04 09:00", tz="UTC")
+    assert eng._cost_atr(2.0, ts, ex_spread=True) == 0.10                               # no table: full fallback
+    _table().save(tmp_path / "costs_icm-demo.json")
+    # london: 2 x 0.05 slippage + 2 x 3.5 / 100 commission = 0.17 $/oz (the 0.12 spread is in the labels already)
+    assert abs(eng._cost_atr(2.0, ts, ex_spread=True) - 0.17 / 2.0) < 1e-9
+    assert abs(eng._cost_atr(2.0, ts) - eng._cost_atr(2.0, ts, ex_spread=True) - 0.12 / 2.0) < 1e-9   # gate: full
+    assert _table().round_trip_ex_spread_atr("london", 0.0) is None
+
+
 def test_unreadable_table_falls_back(tmp_path):
     eng = _engine(tmp_path)
     (tmp_path / "costs_icm-demo.json").write_text("{not json")
