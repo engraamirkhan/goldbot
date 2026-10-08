@@ -112,6 +112,7 @@ class SchedulerSettings(_Section):
     saturday_retrain: ScheduleSettings
     model_watch: ScheduleSettings
     tournament: ScheduleSettings
+    research_director: ScheduleSettings
     agents_daily: ScheduleSettings
     agents_weekly: ScheduleSettings
     monthly_research: ScheduleSettings
@@ -125,6 +126,7 @@ class ResearchSettings(_Section):
     trial_budget_quarter: int = Field(20, ge=1, le=500)   # pre-registered trials per calendar quarter, all families
     holdout_from: date | None = date(2025, 10, 1)          # research never sees this window unless scoring it
     holdout_to: date | None = date(2026, 9, 30)            # inclusive
+    director_floor: int = Field(2, ge=0, le=200)        # research director: exploration trials per family per month
     label_grid_step: float = Field(0.25, gt=0, lt=1)
     cost_window_days: int = Field(30, ge=1)
     fills_window_days: int = Field(180, ge=1)

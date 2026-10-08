@@ -3,8 +3,10 @@ trial counter. The counter feeds the deflated-Sharpe correction, so the more we 
 the bar. Stored as JSON lines so it is diffable and survives without a database server.
 
 Research discipline (docs/proposals/2026-10-design-improvements.md, P2):
-* a quarterly budget of pre-registered trials: `check_budget` refuses a run that would exceed it; trials recorded with
-  `budget_quarter` count against that quarter (rows from before the budget existed do not);
+* a quarterly budget of pre-registered trials (research.trial_budget_quarter): `check_budget` refuses a run that would
+  exceed it. The count is every registry row stamped in the quarter, whatever its status (each one was a look at the
+  data); the research director plans from the same count (`quarter_trials`), so there is one cap and one count.
+  Check, run and record happen under `locked()` so two writers cannot both pass the last free slot;
 * a held-out window is scored at most once per configuration (`holdout_scored`, rows with status "holdout");
 * the population's shadow -> live promotion needs a research trial of the configuration that passed the design's
   gates (`passed_gates`)."""
@@ -12,9 +14,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+LOCK_STALE_S = 4 * 3600          # a lock older than this was left by a crashed writer (a trial runs well under it)
+LOCK_WAIT_S = 6 * 3600
 
 
 class TrialBudgetExceeded(ValueError):
@@ -27,7 +35,24 @@ def config_hash(config: dict) -> str:
 
 def quarter_of(ts: datetime | None = None) -> str:
     ts = ts or datetime.now(timezone.utc)
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(timezone.utc)
     return f"{ts.year}Q{(ts.month - 1) // 3 + 1}"
+
+
+def quarter_trials(rows: list[dict[str, Any]], quarter: str) -> int:
+    """Registry rows stamped (`ts`, UTC) in `quarter`, whatever their status: the one count the budget uses."""
+    n = 0
+    for r in rows:
+        try:
+            ts = datetime.fromisoformat(str(r.get("ts")))
+        except ValueError:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if quarter_of(ts) == quarter:
+            n += 1
+    return n
 
 
 class TrialRegistry:
@@ -67,10 +92,11 @@ class TrialRegistry:
 
     # ------------------------------------------------------------------ research discipline
     def budget_used(self, quarter: str) -> int:
-        return sum(1 for r in self._rows() if r.get("budget_quarter") == quarter)
+        return quarter_trials(self._rows(), quarter)
 
     def check_budget(self, n_new: int, cap: int, now: datetime | None = None) -> str:
-        """Raise TrialBudgetExceeded if `n_new` more trials would exceed this quarter's cap; returns the quarter."""
+        """Raise TrialBudgetExceeded if `n_new` more trials would exceed the cap of the quarter they will be recorded in
+        (the wall clock's: rows are stamped when written); returns the quarter."""
         q = quarter_of(now)
         used = self.budget_used(q)
         if used + n_new > cap:
@@ -90,3 +116,30 @@ class TrialRegistry:
         h = config_hash(config)
         return any(r.get("status") == "evaluated" and r.get("family") == family and r.get("config_hash") == h
                    and ((r.get("results") or {}).get("gates") or {}).get("passed") is True for r in self._rows())
+
+    @contextmanager
+    def locked(self, wait_s: float = LOCK_WAIT_S, stale_s: float = LOCK_STALE_S) -> Iterator[None]:
+        """Exclusive lock beside the registry file, portable (Windows VPS and Linux runners): created with
+        O_CREAT | O_EXCL, removed on exit; a lock older than `stale_s` is taken over (its writer crashed)."""
+        lock = self.path.with_suffix(self.path.suffix + ".lock")
+        deadline = time.monotonic() + wait_s
+        while True:
+            try:
+                fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                break
+            except FileExistsError:
+                try:
+                    if time.time() - lock.stat().st_mtime > stale_s:
+                        lock.unlink(missing_ok=True)
+                        continue
+                except FileNotFoundError:
+                    continue
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"trial registry lock {lock} held for more than {wait_s:.0f}s") from None
+                time.sleep(0.5)
+        try:
+            os.write(fd, f"{os.getpid()} {datetime.now(timezone.utc).isoformat()}".encode())
+            os.close(fd)
+            yield
+        finally:
+            lock.unlink(missing_ok=True)

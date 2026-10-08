@@ -54,7 +54,8 @@ class NewsCollector:
         if not frames:
             return out
         items = pd.concat(frames, ignore_index=True).drop_duplicates("item_id")
-        seen = self.store.read("news", start=now - pd.Timedelta(days=7), columns=["item_id"])
+        # from the oldest item in the feeds, not a fixed window: press-release feeds keep items for weeks
+        seen = self.store.read("news", start=items["ts_utc"].min(), columns=["item_id"])
         if not seen.empty:
             items = items[~items["item_id"].isin(set(seen["item_id"]))]
         if items.empty:
@@ -68,8 +69,9 @@ class NewsCollector:
                 break
             try:
                 s, usage = score_batch(self.client, self.model, todo.iloc[start:start + BATCH])
-            except Exception as exc:                     # API trouble: store unscored, try again next round
+            except Exception as exc:                     # API trouble: keep these unstored, try again next round
                 out["error"] = f"{type(exc).__name__}: {exc}"[:200]
+                items = items[~items["item_id"].isin(set(todo["item_id"].iloc[start:]))]
                 break
             _, usd = cost_of(usage)
             self._add_spend(now, usd)

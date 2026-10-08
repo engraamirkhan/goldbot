@@ -68,6 +68,26 @@ ROLES: dict[str, Role] = {r.name: r for r in [
          task="Write the weekly trading journal review: what was proposed, approved, rejected (with reason codes) "
               "and expired over the last 7 days, outcomes of executed trades, whether the owner's vetoes added value "
               "versus the shadow book, and one or two habits to keep or change. Be specific and kind."),
+    # runs before the improvement agent and the research analyst in the same weekly job (roles run in this order),
+    # after the research_director scheduler job has written this week's plan
+    Role(name="research_director", title="research director", cadence="weekly",
+         tools=("read_research_plan", "read_research_registry", "read_shadow_stats", "read_state", "read_hypotheses",
+                "file_hypothesis"),
+         task="Explain this week's research plan (read_research_plan) in plain language. The plan is computed by code "
+              "from recorded evidence and spends only what is left of the quarter's trial budget (every trial raises "
+              "the deflated-Sharpe bar, so fewer, pre-registered trials with a written rationale beat grid variants). "
+              "Say how much of the quarter's budget is used, and for each specialist family how many trials it gets "
+              "(and how many of those the label grid may use) and why, "
+              "using the plan's own numbers (OOF AUC margin and z-score, best deflated Sharpe and its trade count, "
+              "shadow t-stat, flags such as lookahead or too few candidates per fold); you may check them against the "
+              "research registry and shadow stats. Then say what evidence would change the plan (for example a clean "
+              "lookahead check, a trial with enough model-filtered trades, a shadow record past the ranking minimum). "
+              "Optionally file at most two hypotheses (read_hypotheses first to avoid duplicates) aimed at the plan's "
+              "focus families or at what blocks a family; each must state the single metric that will decide it. "
+              "Never use or ask for results on the held-out year named in the plan. You cannot change the plan, a "
+              "budget, a model or any setting, and nothing is promoted or traded by your opinion: promotion stays "
+              "with the gates.",
+         max_cost_usd=1.50, max_turns=12, effort="medium"),
     Role(name="improvement_agent", title="improvement agent", cadence="weekly", tools=tuple(READ_ALL + ["file_hypothesis"]),
          task="Score the system on three scorecards: expectancy after costs, hit rate against the model's own "
               "predicted probability (calibration), and precision of approved versus rejected entries. Find where "
@@ -77,8 +97,12 @@ ROLES: dict[str, Role] = {r.name: r for r in [
          max_cost_usd=2.00, max_turns=16, effort="high"),
     # runs after the improvement agent in the same weekly job (roles run in this order)
     Role(name="research_analyst", title="research analyst", cadence="weekly",
-         tools=("read_hypotheses", "read_research_registry", "read_shadow_stats", "run_trial", "update_hypothesis"),
-         task="Take the oldest hypotheses whose status is 'proposed'. For each, decide whether the evidence justifies a "
+         tools=("read_hypotheses", "read_research_registry", "read_shadow_stats", "read_research_plan", "run_trial",
+                "update_hypothesis"),
+         task="Read the research plan (read_research_plan) first. Take the oldest hypotheses whose status is 'proposed', "
+              "preferring those in the plan's focus families (highest rank first) and never spending a trial on a family "
+              "the plan marks blocked (lookahead) unless the hypothesis is the fix, nor more trials on a family than "
+              "its budget in the plan (none at all when the plan's quarter budget is used up). For each, decide whether the evidence justifies a "
               "trial; if it does, translate it into at most one run_trial with numeric overrides of the family's settings "
               "(you may run two trials in total this run), then compare the trial's model_filtered metrics and deflated SR "
               "with the baseline trials of the same family in the research registry. Record a verdict with "

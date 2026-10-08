@@ -25,7 +25,7 @@ from goldbot.ops.jobs import (
 from goldbot.research.model_registry import ModelRegistry
 from goldbot.research.population import Population
 from goldbot.research.promotion import PerfStats
-from goldbot.research.registry import TrialRegistry
+from goldbot.research.registry import TrialRegistry, quarter_of
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import AgentIdentity
 
@@ -111,7 +111,7 @@ def test_monthly_research_is_bounded_and_counted(bars_store, tmp_path):
     out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
     # the budget is per specialist; every family's trials count towards one registry total
     assert all(out[f]["trials"] == 1 for f in SPECIALISTS) and ctx.trials.n_trials == len(SPECIALISTS)
-    assert ctx.trials.budget_used("2025Q3") == len(SPECIALISTS)       # and towards the quarter's trial budget
+    assert ctx.trials.budget_used(quarter_of()) == len(SPECIALISTS)   # and towards the quarter's trial budget
     report = Path(out["report"]).read_text()
     assert "Research loop 2025-09" in report and report.count("\n| ") >= 3
 
@@ -133,7 +133,8 @@ def test_build_scheduler_registers_every_job(tmp_path):
     sch = build_scheduler(ctx, clock=lambda: pd.Timestamp("2026-10-02 12:00", tz="UTC"))
     nxt = {k: v["next_slot"] for k, v in sch.status()["jobs"].items()}
     assert nxt == {"nightly_costs": "2026-10-02T23:10:00+00:00", "saturday_retrain": "2026-10-03T06:00:00+00:00",
-                   "tournament": "2026-10-03T12:00:00+00:00", "model_watch": "2026-10-02T23:30:00+00:00",
+                   "tournament": "2026-10-03T12:00:00+00:00", "research_director": "2026-10-03T12:30:00+00:00",
+                   "model_watch": "2026-10-02T23:30:00+00:00",
                    "agents_daily": "2026-10-02T23:45:00+00:00", "agents_weekly": "2026-10-03T13:00:00+00:00",
                    "monthly_research": "2026-10-04T08:00:00+00:00", "calendar_archive": "2026-10-03T06:10:00+00:00",
                    "agents_presession": "2026-10-05T06:30:00+00:00"}
@@ -148,7 +149,7 @@ def test_research_analyst_trial_is_recorded_in_the_registry(bars_store, tmp_path
     assert "gates" in out and out["gates"]["passed"] is False and out["rule_only"]["gross"]["n"] > 0
     row = ctx.trials._rows()[0]
     assert row["config"]["asia_range_max_atr_d"] == 1.2 and row["rationale"].startswith("research analyst")
-    assert row["budget_quarter"] == "2025Q3"
+    assert row["budget_quarter"] == quarter_of()                     # rows are charged to the quarter they are written in
     # the quarter's pre-registered budget is enforced for the analyst too
     capped = make_trial_runner(_ctx(bars_store, tmp_path, trial_budget_quarter=1), now=lambda: pd.Timestamp("2025-09-30", tz="UTC"))
     assert "trial budget exceeded" in capped("session_open", {}, "one too many")["error"]

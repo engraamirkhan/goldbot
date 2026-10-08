@@ -14,6 +14,7 @@ from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.costs import CONTRACT_OZ, prior_extra_cost_usd, settings_extra_cost_usd
 from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.features.registry import side_align, signed_neutral
+from goldbot.research.director import quarter_usage
 from goldbot.research.gates import MIN_CANDIDATES, MIN_TEST_FOLD, research_gates
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR, expectancy, summarize
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, PlattCalibrator, fit_calibrator
@@ -147,18 +148,38 @@ def _row(reg: TrialRegistry, *, quarter: str | None = None, status: str = "evalu
 
 
 def test_quarterly_trial_budget_is_enforced_with_a_clear_message(tmp_path):
+    import json
     reg = TrialRegistry(tmp_path / "r.jsonl")
     q = quarter_of(NOW)
     assert q == "2026Q4"
-    for _ in range(3):
-        _row(reg)                                                       # before the budget existed: not counted
-    for _ in range(18):
-        _row(reg, quarter=q)
-    _row(reg, quarter="2026Q3")
-    assert reg.budget_used(q) == 18
+    stamps = ["2026-09-30T23:59:00+00:00"] + ["2026-10-02T10:00:00+00:00"] * 15 + ["2026-12-31T23:00:00+00:00"] * 3 \
+        + ["2027-01-01T00:00:00+00:00", "not a time"]
+    reg.path.write_text("".join(json.dumps({"ts": t, "status": st}) + "\n"
+                                for t, st in zip(stamps, ["evaluated"] * 16 + ["holdout", "dry_run", "evaluated"] + ["x"] * 2)))
+    # every row stamped in the quarter counts, whatever its status: the director plans from the same number
+    assert reg.budget_used(q) == 18 and quarter_usage(reg._rows(), pd.Timestamp(NOW), 20) == (q, 18, 2)
     assert reg.check_budget(2, 20, NOW) == q
     with pytest.raises(TrialBudgetExceeded, match=r"2026Q4 allows 20 pre-registered trials, 18 already run, 3 requested"):
         reg.check_budget(3, 20, NOW)
+
+
+def test_registry_lock_is_exclusive_and_recovers_from_a_stale_lock(tmp_path):
+    import os
+    import time
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    lock = tmp_path / "r.jsonl.lock"
+    with reg.locked():
+        assert lock.exists()
+        with pytest.raises(TimeoutError):
+            with reg.locked(wait_s=0.6):
+                pass
+    assert not lock.exists()
+    lock.write_text("crashed writer")
+    old = time.time() - 10
+    os.utime(lock, (old, old))
+    with reg.locked(stale_s=5):                                          # taken over: its writer is gone
+        assert lock.read_text().split()[0] == str(os.getpid())
+    assert not lock.exists()
 
 
 def test_holdout_is_scored_once_and_gates_are_looked_up_by_exact_config(tmp_path):

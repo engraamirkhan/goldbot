@@ -119,6 +119,13 @@ class ReadOnlyTools:
                                        _schema({"last_n": {"type": "integer", "description": "1-100"}}, ["last_n"]),
                                        self.read_research_registry),
             "read_hypotheses": ("Hypotheses already filed (to avoid duplicates).", _schema({}), self.read_hypotheses),
+            "read_research_plan": ("The research director's current plan (state/research_plan.json, computed by code each "
+                                   "Saturday): what is left of the quarter's trial budget split per specialist family (and the label "
+                                   "grid's share of it), the held-out window it never reads, the ranked focus "
+                                   "list with reasons, the evidence table per family (OOF AUC and its z-score, best "
+                                   "deflated Sharpe, model-filtered trade counts, shadow t-stat, lookahead flags) and the "
+                                   "allocation rule. Read-only; agents cannot change it.",
+                                   _schema({}), self.read_research_plan),
             "file_hypothesis": ("File a hypothesis for the research analyst to test. It changes nothing by itself.",
                                 _schema({"title": {"type": "string"}, "family": {"type": "string"},
                                          "rationale": {"type": "string", "description": "one paragraph: what, why, expected effect"},
@@ -250,6 +257,13 @@ class ReadOnlyTools:
         f = self.state / "research_registry.jsonl"
         rows = [json.loads(line) for line in f.read_text().splitlines() if line.strip()] if f.exists() else []
         return rows[-min(max(int(last_n), 1), 100):]
+
+    def read_research_plan(self) -> dict[str, Any]:
+        f = self.state / "research_plan.json"
+        if not f.exists():
+            return {"missing": "research_plan", "note": "no plan yet (scheduler job research_director, Saturdays)"}
+        plan: dict[str, Any] = json.loads(f.read_text())
+        return plan
 
     def begin_run(self) -> None:
         """Called by the runner at the start of each agent run (per-run limits reset)."""

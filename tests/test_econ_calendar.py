@@ -6,7 +6,7 @@ import pytest
 
 from goldbot.agents.tools import ReadOnlyTools
 from goldbot.config import load_settings
-from goldbot.data.econ_calendar import blackout_window, parse_ff_week
+from goldbot.data.econ_calendar import blackout_window, parse_ff_week, tier_of
 from goldbot.data.store import Store
 from goldbot.engine import Engine, EngineConfig
 from goldbot.execution.broker import Tick
@@ -46,6 +46,15 @@ def test_feed_is_parsed_into_utc_events_with_the_design_tiers():
     assert df["event_id"].is_unique
     # the same feed fetched again yields the same ids (the archive replaces, never duplicates)
     assert set(parse_ff_week(FEED, NOW + pd.Timedelta(days=1), TIER1)["event_id"]) == set(df["event_id"])
+
+
+def test_only_the_fomc_statement_presser_and_rate_decision_are_tier1():
+    """Design blackout list: FOMC statement and press conference (and the rate decision row). Fed speakers and the
+    minutes are not tier 1, otherwise every FOMC member's speech blocks entries for 45 minutes."""
+    for title in ("FOMC Statement", "FOMC Press Conference", "Federal Funds Rate"):
+        assert tier_of("USD", title, "High", TIER1) == 1, title
+    assert tier_of("USD", "FOMC Member Waller Speaks", "Medium", TIER1) == 3
+    assert tier_of("USD", "FOMC Meeting Minutes", "High", TIER1) == 2
 
 
 def test_blackout_window_is_15_minutes_before_to_30_after_a_tier1_event():

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
+import zlib
 from pathlib import Path
 from typing import Protocol
 
@@ -27,6 +29,7 @@ from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.econ_calendar import blackout_window
 from goldbot.data.news import shock_window
+from goldbot.data.quality import DQEvent, check_bars, events_frame, stale_feed
 from goldbot.data.resample import BAR_COLUMNS, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import feature_day, floor_tf
@@ -39,7 +42,7 @@ from goldbot.features.technical import atr
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
-from goldbot.risk.gate import Stage
+from goldbot.risk.gate import REARM_PHRASE, Stage, new_day
 from goldbot.risk.supervisor import Supervisor
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
@@ -83,6 +86,9 @@ class EngineConfig(Record):
     blackout_after_min: int = 30
     shock_blackout_min: int = 30             # after a high-relevance unscheduled news shock (store table news)
     shock_min_relevance: float = 0.7
+    # production: tick age and feed staleness are measured against the wall clock (replays and tests use tick time)
+    live_clock: bool = False
+    stale_feed_s: int = 90                   # no tick for this long in an open session -> data-quality error
 
 
 class _Frame(Record):
@@ -139,13 +145,26 @@ class Engine:
         self.set_shadow_models(shadow_models or {})
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
         self.center.on_decision = self._on_decision
+        # data quality: errors since the last bar close, and those the last bar close was decided with
+        self._last_tick: Tick | None = None
+        self._dq_pending: list[DQEvent] = []
+        self._dq_bar_errors: list[DQEvent] = []
+        # risk periods and the owner's re-arm survive a restart (state/risk_<account>.json)
+        self._last_reset: pd.Timestamp | None = None
+        self._rearm_seen: str | None = None
+        self._load_risk_state()
 
     # ------------------------------------------------------------------ ticks and bars
     def on_tick(self, t: Tick) -> list[dict]:
         """Feed a tick; returns any decisions made at a bar close."""
+        self.center.poll_bus()          # approvals from the dashboard / Telegram service, applied within a tick
+        self._poll_rearm()
+        if not self._tick_ok(t):
+            return []                   # crossed or out-of-order quote: never enters the bars; entries blocked
+        self._last_tick = t
         self.ticks.append(t)
         self._log_tick(t)
-        self.center.poll_bus()          # approvals from the dashboard / Telegram service, applied within a tick
+        self._roll_risk_period(t.ts_utc)
         if hasattr(self.broker, "on_tick"):
             self.broker.on_tick(t)  # paper broker fills
         sec = tf_seconds(self.cfg.decision_tf)
@@ -182,6 +201,7 @@ class Engine:
         last_minute = new["ts_utc"].iloc[-1]
         done = new[new["ts_utc"] < last_minute]          # the current minute may still receive ticks
         if not done.empty:
+            self._check_new_bars(done)
             self.bars_1m = pd.concat([self.bars_1m, done]).drop_duplicates("ts_utc", keep="last").tail(self.cfg.max_bars_in_memory).reset_index(drop=True) \
                 if not self.bars_1m.empty else done.reset_index(drop=True)
         self.ticks = [x for x in self.ticks if x.ts_utc >= last_minute]
@@ -219,6 +239,10 @@ class Engine:
         """Runs on every base (decision_tf) bar. Each agent decides on its own timeframe, so a 1h agent is
         evaluated only at closes that complete a 1h bar; position management stays on the base clock."""
         self._rebuild_bars()
+        self._dq_bar_errors, self._dq_pending = self._dq_pending, []   # this close decides on the bars it just saw
+        if self._dq_bar_errors and self.store is not None:
+            self.store.append("dq_events", events_frame(self._dq_bar_errors), source=self.cfg.account_id,
+                              symbol=self.cfg.symbol, dedupe=False)
         complete = self.bars_1m[self.bars_1m["visible_at"] <= close_ts]
         if len(complete) < 400:
             return []
@@ -323,7 +347,7 @@ class Engine:
         self._write_state()
 
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float) -> None:
-        magic = self.cfg.magic_base + (abs(hash(agent.family)) % 100)
+        magic = self._magic(agent.family)
         oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
         self.sent_ids.add(prop.proposal_id)   # written BEFORE sending: never double-send
@@ -365,18 +389,130 @@ class Engine:
         st = self.state
         st.equity = acc.equity
         st.margin_used = acc.margin
+        self._roll_risk_period(tick.ts_utc)
         if st.balance_closed_hwm == 0:
-            st.balance_closed_hwm = st.day_start_equity = st.week_start_equity = acc.balance
+            st.balance_closed_hwm = acc.balance
+        if st.day_start_equity == 0:            # normally set by the risk-period roll on the first tick
+            st.day_start_equity = acc.balance
+        if st.week_start_equity == 0:
+            st.week_start_equity = acc.balance
         st.balance_closed_hwm = max(st.balance_closed_hwm, acc.balance)
         st.open_positions = len(self.broker.positions())
         st.spread_points = (tick.ask - tick.bid) / 0.01
-        st.last_tick_age_s = 0.0
+        now = self._now(tick)
+        st.last_tick_age_s = max(0.0, (now - tick.ts_utc).total_seconds())
+        stale = stale_feed(tick.ts_utc, now, limit_seconds=self.cfg.stale_feed_s)
+        st.dq_error = stale or bool(self._dq_bar_errors or self._dq_pending)
         if self.cfg.halt_checks:
             st.supervisor_halt, _ = Supervisor.engine_should_halt(self.cfg.state_dir)
             st.owner_halt = self.center.bus.control().halted if self.center.bus is not None else False
         if self.cfg.news_blackout:
             st.in_blackout = self._blackout(tick.ts_utc) is not None
-        self.gate.update_stage(st)
+        stage = st.stage
+        if self.gate.update_stage(st) != stage:
+            self._save_risk_state()             # a drawdown stage change survives a restart at once
+        if st.stage == Stage.HALTED:
+            self._kill_switch(everything=stage != Stage.HALTED)
+
+    def _kill_switch(self, *, everything: bool) -> None:
+        """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
+        approve. On the trip every position on the account is closed; while halted, any of this engine's positions
+        (its magic range) that is still open, e.g. after a failed close, is closed again on each refresh."""
+        self.cfg.approval_mode = "propose"
+        for p in self.broker.positions():
+            if everything or self.cfg.magic_base <= p.magic < self.cfg.magic_base + 100:
+                res = self.broker.close(p.position_id)
+                self.open.pop(p.position_id, None)
+                self.decisions.append({"ts": time.time(), "action": "kill_switch_close", "position": p.position_id,
+                                       "ok": res.ok, "retcode": res.retcode, "price": res.price})
+        self.state.open_positions = len(self.broker.positions())
+
+    def _now(self, tick: Tick) -> pd.Timestamp:
+        return pd.Timestamp.now("UTC") if self.cfg.live_clock else tick.ts_utc
+
+    # ------------------------------------------------------------------ data quality
+    def _tick_ok(self, t: Tick) -> bool:
+        """Tick-level checks: a crossed or non-positive quote, or a tick older than the previous one, is a
+        data-quality error (recorded; the tick is dropped)."""
+        prev = self._last_tick
+        if t.bid <= 0 or t.ask < t.bid:
+            ev = DQEvent(ts_utc=t.ts_utc, check="bid_gt_ask", severity="error", detail=f"bid {t.bid} ask {t.ask}")
+        elif prev is not None and t.ts_utc < prev.ts_utc:
+            ev = DQEvent(ts_utc=t.ts_utc, check="non_monotonic", severity="error",
+                         detail=f"tick at {t.ts_utc} after {prev.ts_utc}")
+        else:
+            return True
+        self._dq_pending.append(ev)
+        return False
+
+    def _check_new_bars(self, done: pd.DataFrame) -> None:
+        """The ingest checks (goldbot.data.quality.check_bars) on newly completed 1m bars, joined to the last stored
+        bar so a duplicate or out-of-order minute across the boundary is caught; errors block entries."""
+        tail = self.bars_1m.tail(1) if not self.bars_1m.empty else self.bars_1m
+        joined = pd.concat([tail, done]).reset_index(drop=True) if not tail.empty else done
+        mono = len(joined) > 1 and not pd.DatetimeIndex(joined["ts_utc"]).is_monotonic_increasing
+        _, events = check_bars(joined)
+        errs = [e for e in events if e.severity == "error"]
+        if mono and not any(e.check == "non_monotonic" for e in errs):   # check_bars sorts before testing order
+            errs.append(DQEvent(ts_utc=pd.Timestamp(done["ts_utc"].iloc[0]), check="non_monotonic", severity="error",
+                                detail="completed bar not after the last stored bar"))
+        self._dq_pending += errs
+
+    # ------------------------------------------------------------------ risk periods and re-arm
+    def _roll_risk_period(self, now: pd.Timestamp) -> None:
+        """Daily and weekly loss caps roll over at the risk-day / risk-week boundary (gate.new_day); the reset time
+        is persisted so a restart neither resets twice in one day nor skips a boundary."""
+        last = self._last_reset
+        if last is not None and now.tz_convert("UTC").date() == last.tz_convert("UTC").date():
+            return
+        self.state.equity = self.broker.account().equity
+        if new_day(self.state, now, last):
+            self._last_reset = now
+            self._save_risk_state()
+
+    def _poll_rearm(self) -> None:
+        """An owner re-arm on the dashboard (owner role + TOTP) writes a new rearm id to control.json; seen once,
+        it clears this engine's drawdown halt. Nothing else clears it, and a restart does not."""
+        if self.center.bus is None:
+            return
+        c = self.center.bus.control()
+        if c.rearm_id is None or c.rearm_id == self._rearm_seen:
+            return
+        self._rearm_seen = c.rearm_id
+        if self.state.stage == Stage.HALTED:
+            self.state.equity = self.broker.account().equity
+            if self.gate.rearm(self.state, REARM_PHRASE):
+                self.decisions.append({"ts": time.time(), "action": "rearm", "by": c.rearm_by, "rearm_id": c.rearm_id})
+        self._save_risk_state()
+
+    def _risk_path(self) -> Path:
+        return Path(self.cfg.state_dir, f"risk_{self.cfg.account_id}.json")   # not engine_*: the supervisor globs those
+
+    def _save_risk_state(self) -> None:
+        st = self.state
+        payload = {"last_reset": self._last_reset.isoformat() if self._last_reset is not None else None,
+                   "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
+                   "balance_closed_hwm": st.balance_closed_hwm, "stage": Stage(st.stage).value,
+                   "rearm_seen": self._rearm_seen}
+        path = self._risk_path()
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(payload))
+        os.replace(tmp, path)
+
+    def _load_risk_state(self) -> None:
+        path = self._risk_path()
+        if not path.exists():
+            # first start: an earlier re-arm on the bus is not a re-arm of this engine
+            self._rearm_seen = self.center.bus.control().rearm_id if self.center.bus is not None else None
+            return
+        d = json.loads(path.read_text())          # unreadable -> fail loudly rather than forget a drawdown halt
+        st = self.state
+        self._last_reset = pd.Timestamp(d["last_reset"]) if d.get("last_reset") else None
+        st.day_start_equity = float(d.get("day_start_equity", 0.0))
+        st.week_start_equity = float(d.get("week_start_equity", 0.0))
+        st.balance_closed_hwm = float(d.get("balance_closed_hwm", 0.0))
+        st.stage = Stage(d.get("stage", Stage.NORMAL.value))
+        self._rearm_seen = d.get("rearm_seen")
 
     def _regime(self, X: pd.DataFrame) -> Regime:
         row = X.iloc[-1]
@@ -418,9 +554,16 @@ class Engine:
         return any(t.agent_id == agent_id for t in self.open.values()) or \
             any(a.agent_id == agent_id for _, _, a in self.pending.values())
 
+    def _magic(self, family: str) -> int:
+        """Per-family magic number; crc32 is stable across processes (str hash() is salted per process), so a
+        restarted engine reconciles its own positions to the same family."""
+        return self.cfg.magic_base + zlib.crc32(family.encode()) % 100
+
     def _base_bars(self, agent: Specialist) -> int:
-        """The agent's time barrier in base bars (position management runs on the decision_tf clock)."""
-        return int(agent.label_spec.max_bars * tf_seconds(agent.timeframe) // tf_seconds(self.cfg.decision_tf))
+        """The agent's time barrier in base bars (position management runs on the decision_tf clock). The labels
+        (triple_barrier) exit at the close of the (max_bars + 1)-th bar after the signal bar, so the live trade is
+        held for max_bars + 1 bars of the agent's timeframe, as the models were trained."""
+        return int((agent.label_spec.max_bars + 1) * tf_seconds(agent.timeframe) // tf_seconds(self.cfg.decision_tf))
 
     def _proposal_id(self, agent_id: str, close_ts: pd.Timestamp) -> str:
         h = hashlib.sha1(f"{self.cfg.account_id}|{agent_id}|{close_ts.isoformat()}".encode()).hexdigest()[:10]
@@ -533,5 +676,10 @@ class Engine:
             "open_positions": st.open_positions, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
             "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
             "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,
+            "dq_error": st.dq_error, "dq_checks": sorted({e.check for e in self._dq_bar_errors + self._dq_pending}),
         }
-        Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json").write_text(json.dumps(payload))
+        path = Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json")
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")       # the supervisor never reads a half-written file
+        tmp.write_text(json.dumps(payload))
+        os.replace(tmp, path)
+        self._save_risk_state()
