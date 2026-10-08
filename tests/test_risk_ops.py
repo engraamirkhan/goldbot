@@ -159,14 +159,27 @@ def test_owner_rearm_on_the_bus_clears_the_drawdown_halt(tmp_path):
     assert _stage(restarted) == Stage.HALTED
     c = bus.owner_rearm(by="dashboard:o@x.io")                   # the API calls this after owner role + TOTP
     assert not c.halted and c.rearm_id
-    restarted.on_tick(_tick("2025-03-03 09:03"))
+    restarted.on_tick(_tick("2025-03-03 09:03"))                 # too early: 10 trading days of positive shadow first
+    assert _stage(restarted) == Stage.HALTED
+    assert any(d.get("action") == "rearm_refused" for d in restarted.decisions)
+    from goldbot.engine.shadow import ShadowBook
+    book = ShadowBook(tmp_path)
+    book.track("v1", pd.Timestamp("2025-03-03", tz="UTC"))
+    t = book.open_trade(version="v1", agent_id="a", side=1, bar_ts=pd.Timestamp("2025-03-05 10:00", tz="UTC"), entry=2400.0,
+                        atr_usd=4.0, target_atr=1.0, stop_atr=1.0, max_bars=4, p=0.6)
+    assert t is not None
+    book._close(t, pd.Timestamp("2025-03-05 11:00", tz="UTC"), 2404.0, "target")
+    book.books["v1"].closed, book.books["v1"].open = [t], []
+    book.save(pd.Timestamp("2025-03-05 11:00", tz="UTC"))
+    c = bus.owner_rearm(by="dashboard:o@x.io")
+    restarted.on_tick(_tick("2025-03-17 09:03"))
     assert _stage(restarted) == Stage.NORMAL and restarted.state.balance_closed_hwm == 8_700
     assert any(d.get("action") == "rearm" for d in restarted.decisions)
     # the same re-arm is not replayed against a later halt, nor after another restart
     b.eq = 7_600
-    restarted._refresh_account(_tick("2025-03-03 10:00"))
+    restarted._refresh_account(_tick("2025-03-17 10:00"))
     assert _stage(restarted) == Stage.HALTED
-    restarted.on_tick(_tick("2025-03-03 10:01"))
+    restarted.on_tick(_tick("2025-03-31 10:01"))
     assert _stage(restarted) == Stage.HALTED
     bus.set_halt(True, by="telegram:1")
     assert bus.control().rearm_id == c.rearm_id                   # a halt keeps the last re-arm id

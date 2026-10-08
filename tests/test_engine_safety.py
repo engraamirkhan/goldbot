@@ -318,3 +318,62 @@ def test_entries_resume_only_after_sixty_seconds_of_healthy_data(tmp_path):
     eng._refresh_account(_tick(T0 + pd.Timedelta(seconds=66)))                # 61 s of healthy data
     assert not eng.state.data_recovering
     assert eng.gate.check(_intent(), eng.state).allowed
+
+
+# ---------------------------------------------------------------------------------------------- 8. re-arm after the 12% halt
+def _shadow_record(tmp_path: Path, closed: list[tuple[str, float]]) -> None:
+    from goldbot.engine.shadow import ShadowBook, ShadowTrade
+    book = ShadowBook(tmp_path)
+    book.track("session_open-v1", pd.Timestamp("2025-03-01", tz="UTC"))
+    book.books["session_open-v1"].closed = [
+        ShadowTrade(version="session_open-v1", agent_id="a", side=1, entry_ts=pd.Timestamp(ts, tz="UTC") - pd.Timedelta(hours=1),
+                    entry=2400.0, stop=2390.0, target=2420.0, max_bars=4, p=0.6, exit_ts=pd.Timestamp(ts, tz="UTC"),
+                    exit=2400.0 * (1 + r), barrier="target" if r > 0 else "stop", ret=r) for ts, r in closed]
+    book.save(pd.Timestamp(closed[-1][0], tz="UTC") if closed else pd.Timestamp("2025-03-01", tz="UTC"))
+
+
+def test_rearm_after_the_kill_switch_needs_ten_trading_days_of_positive_shadow_then_thirty_days_propose_only(tmp_path):
+    from goldbot.risk.gate import Stage
+    from goldbot.telegram.bus import ApprovalBus
+    bus = ApprovalBus(tmp_path)
+    halt_t = pd.Timestamp("2025-03-03 09:00", tz="UTC")                      # Monday
+    pb = PaperBroker(equity=10_000)
+    pb.on_tick(_tick(halt_t, 2400.0))
+
+    def start() -> Engine:
+        return Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), owner_user_id=OWNER,
+                                   approval_mode="auto"), pb, [], {}, ApprovalCenter({OWNER}, bus=bus))
+    eng = start()
+    eng._refresh_account(pb.last_tick("XAUUSD"))
+    pb.place_order(OrderIntent(client_order_id="big", symbol="XAUUSD", side=1, lots=1.0, sl=2300.0, tp=2500.0, magic=260150,
+                               comment="big"))
+    pb.on_tick(_tick(halt_t + pd.Timedelta(minutes=1), 2387.0))              # 13% drawdown
+    eng._refresh_account(pb.last_tick("XAUUSD"))
+    assert eng.state.stage == Stage.HALTED and eng.cfg.approval_mode == "propose"
+
+    def rearm_at(ts: str) -> dict:
+        bus.owner_rearm(by="dashboard:o@x.io")
+        eng.on_tick(_tick(pd.Timestamp(ts, tz="UTC"), 2387.0))
+        return eng.decisions[-1]
+
+    d = rearm_at("2025-03-04 09:00")                                         # the next day: too early
+    assert eng.state.stage == Stage.HALTED and d["action"] == "rearm_refused"
+    assert "10 trading days" in d["reason"] and "1 so far" in d["reason"]
+    _shadow_record(tmp_path, [("2025-03-05 10:00", 0.004), ("2025-03-12 10:00", -0.006)])
+    d = rearm_at("2025-03-17 09:00")                                         # 10 trading days, shadow negative
+    assert eng.state.stage == Stage.HALTED and d["action"] == "rearm_refused" and "positive" in d["reason"]
+    _shadow_record(tmp_path, [("2025-03-02 10:00", 0.05),                    # before the halt: does not count
+                              ("2025-03-05 10:00", 0.004), ("2025-03-12 10:00", 0.002)])
+    eng = start()                                                            # the halt and its start survive a restart
+    d = rearm_at("2025-03-17 09:05")
+    assert eng.state.stage == Stage.NORMAL and d["action"] == "rearm"
+    # then 30 days propose-and-approve: auto is not honoured, across a restart too
+    eng = start()
+    eng._refresh_account(_tick(pd.Timestamp("2025-04-10 09:00", tz="UTC"), 2387.0))
+    assert eng.cfg.approval_mode == "propose"
+    eng._write_state()
+    st = json.loads((tmp_path / "engine_icm-demo.json").read_text())
+    assert pd.Timestamp(st["propose_only_until"]) == pd.Timestamp("2025-04-16 09:05", tz="UTC")
+    eng = start()
+    eng._refresh_account(_tick(pd.Timestamp("2025-04-17 09:00", tz="UTC"), 2387.0))
+    assert eng.cfg.approval_mode == "auto"                                    # the lock has run out; mode as configured

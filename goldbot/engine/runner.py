@@ -95,6 +95,10 @@ class EngineConfig(Record):
     state_every_s: int = 10
     stale_feed_s: int = 90                   # no tick for this long in an open session -> data-quality error
     healthy_resume_s: int = 60               # after stale data or a data-quality error, entries wait this long healthy
+    # 12% re-arm (design: Drawdown kill switch): the owner's TOTP re-arm is honoured only after this many trading days
+    # of positive paper shadow since the halt, and is followed by this many days of propose-and-approve
+    rearm_shadow_days: int = 10
+    rearm_propose_days: int = 30
     reconcile_every_s: int = 30              # broker reconciliation (tick time), besides every bar close and the start
     orphan_stop_atr: float = 1.5             # an adopted orphan without a stop gets one this many ATR from entry
     server_tz: str = "Europe/Athens"         # broker server clock: rollover (00:00 +-5 min) and the Friday 21:30 rule
@@ -183,6 +187,9 @@ class Engine:
         self._last_reset: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
         self._weekend_done: str | None = None        # server date of the last Friday the weekend rule ran
+        self._halted_at: pd.Timestamp | None = None  # when the 12% kill switch tripped (re-arm conditions count from it)
+        self._propose_only_until: pd.Timestamp | None = None   # after a re-arm: no auto entries before this
+        self._rearm_refused: str | None = None       # why the last owner re-arm was refused (engine state, dashboard)
         self._load_risk_state()
         self._load_orders()
         self._last_state_write: pd.Timestamp | None = None
@@ -209,7 +216,7 @@ class Engine:
     def on_tick(self, t: Tick) -> list[dict]:
         """Feed a tick; returns any decisions made at a bar close."""
         self.center.poll_bus()          # approvals from the dashboard / Telegram service, applied within a tick
-        self._poll_rearm()
+        self._poll_rearm(self._now(t))
         if not self._tick_ok(t):
             return []                   # crossed or out-of-order quote: never enters the bars; entries blocked
         self._last_tick = t
@@ -557,9 +564,13 @@ class Engine:
         self._server_clock(now, tick)
         stage = st.stage
         if self.gate.update_stage(st) != stage:
+            if st.stage == Stage.HALTED:
+                self._halted_at = now
             self._save_risk_state()             # a drawdown stage change survives a restart at once
         if st.stage == Stage.HALTED:
             self._kill_switch(everything=stage != Stage.HALTED)
+        if self._propose_only_until is not None and now < self._propose_only_until:
+            self.cfg.approval_mode = "propose"  # 30 days propose-and-approve after a re-arm
 
     def _kill_switch(self, *, everything: bool) -> None:
         """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
@@ -653,9 +664,11 @@ class Engine:
             self._last_reset = now
             self._save_risk_state()
 
-    def _poll_rearm(self) -> None:
-        """An owner re-arm on the dashboard (owner role + TOTP) writes a new rearm id to control.json; seen once,
-        it clears this engine's drawdown halt. Nothing else clears it, and a restart does not."""
+    def _poll_rearm(self, now: pd.Timestamp) -> None:
+        """An owner re-arm on the dashboard (owner role + TOTP) writes a new rearm id to control.json; seen once, it
+        clears this engine's drawdown halt if the design's conditions hold (`_rearm_conditions`), and starts the
+        propose-only period. A refused re-arm is used up: the owner re-arms again once the conditions are met.
+        Nothing else clears the halt, and a restart does not."""
         if self.center.bus is None:
             return
         c = self.center.bus.control()
@@ -663,10 +676,36 @@ class Engine:
             return
         self._rearm_seen = c.rearm_id
         if self.state.stage == Stage.HALTED:
-            self.state.equity = self.broker.account().equity
-            if self.gate.rearm(self.state, REARM_PHRASE):
-                self.decisions.append({"ts": time.time(), "action": "rearm", "by": c.rearm_by, "rearm_id": c.rearm_id})
+            refused = self._rearm_conditions(now)
+            if refused is not None:
+                self._rearm_refused = refused
+                self.decisions.append({"ts": time.time(), "action": "rearm_refused", "by": c.rearm_by,
+                                       "rearm_id": c.rearm_id, "reason": refused})
+            else:
+                self.state.equity = self.broker.account().equity
+                if self.gate.rearm(self.state, REARM_PHRASE):
+                    self._rearm_refused, self._halted_at = None, None
+                    self._propose_only_until = now + pd.Timedelta(days=self.cfg.rearm_propose_days)
+                    self.cfg.approval_mode = "propose"
+                    self.decisions.append({"ts": time.time(), "action": "rearm", "by": c.rearm_by, "rearm_id": c.rearm_id,
+                                           "propose_only_until": self._propose_only_until.isoformat()})
         self._save_risk_state()
+
+    def _rearm_conditions(self, now: pd.Timestamp) -> str | None:
+        """None when a 12% halt may be re-armed: at least `rearm_shadow_days` trading days since the halt and a
+        positive paper-shadow record (sum of closed shadow returns, all versions) over them; else the reason."""
+        if self._halted_at is None:
+            self._halted_at = now                 # halt time unknown (older state file): the conditions start now
+        days = int(np.busday_count(self._halted_at.date(), now.date()))
+        if days < self.cfg.rearm_shadow_days:
+            return (f"re-arm needs {self.cfg.rearm_shadow_days} trading days of positive paper shadow since the halt "
+                    f"at {self._halted_at.isoformat()}; {days} so far")
+        book = self.shadow if self.shadow is not None else ShadowBook(self.cfg.state_dir)
+        rets = [r for v in book.books for r in book.returns_since(v, self._halted_at)]
+        if not rets or sum(rets) <= 0:
+            return (f"re-arm needs positive paper shadow since the halt: {len(rets)} closed shadow trades, "
+                    f"total return {sum(rets):+.4f}")
+        return None
 
     # ------------------------------------------------------------------ pending_orders and restart reconciliation
     def _orders_path(self) -> Path:
@@ -733,7 +772,10 @@ class Engine:
         payload = {"last_reset": self._last_reset.isoformat() if self._last_reset is not None else None,
                    "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
                    "balance_closed_hwm": st.balance_closed_hwm, "stage": Stage(st.stage).value,
-                   "rearm_seen": self._rearm_seen, "weekend_done": self._weekend_done}
+                   "rearm_seen": self._rearm_seen, "weekend_done": self._weekend_done,
+                   "halted_at": self._halted_at.isoformat() if self._halted_at is not None else None,
+                   "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
+                   "rearm_refused": self._rearm_refused}
         path = self._risk_path()
         tmp = path.with_suffix(f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(payload))
@@ -754,6 +796,9 @@ class Engine:
         st.stage = Stage(d.get("stage", Stage.NORMAL.value))
         self._rearm_seen = d.get("rearm_seen")
         self._weekend_done = d.get("weekend_done")
+        self._halted_at = pd.Timestamp(d["halted_at"]) if d.get("halted_at") else None
+        self._propose_only_until = pd.Timestamp(d["propose_only_until"]) if d.get("propose_only_until") else None
+        self._rearm_refused = d.get("rearm_refused")
 
     def _regime(self, X: pd.DataFrame) -> Regime:
         row = X.iloc[-1]
@@ -921,7 +966,8 @@ class Engine:
             "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
             "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,
             "dq_error": st.dq_error, "stale_bars": st.stale_bars, "data_recovering": st.data_recovering, "dq_checks": sorted({e.check for e in self._dq_bar_errors + self._dq_pending}),
-            "foreign_positions": self._foreign,
+            "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
+            "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
         }
         path = Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json")
         tmp = path.with_suffix(f".{os.getpid()}.tmp")       # the supervisor never reads a half-written file
