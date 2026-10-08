@@ -27,6 +27,7 @@ class FeatureSpec(Record):
     version: str = "1"
     lookback: int = 0
     tags: tuple[str, ...] = Field(default_factory=tuple)
+    signed: dict[str, float] = Field(default_factory=dict)    # directional column patterns -> neutral value
 
 
 FEATURES: dict[str, FeatureSpec] = {}
@@ -45,14 +46,20 @@ def feature(name: str, family: str, *, version: str = "1", lookback: int = 0, ta
         if name in FEATURES:
             raise ValueError(f"feature {name!r} already registered")
         SIGNED.update(signed or {})
-        FEATURES[name] = FeatureSpec(name=name, family=family, fn=fn, version=version, lookback=lookback, tags=tags)
+        FEATURES[name] = FeatureSpec(name=name, family=family, fn=fn, version=version, lookback=lookback, tags=tags,
+                                     signed=dict(signed or {}))
         return fn
     return deco
 
 
 def feature_version(names: list[str]) -> str:
-    """Deterministic version string for a chosen feature set (names + versions)."""
-    key = "|".join(f"{n}@{FEATURES[n].version}" for n in sorted(names))
+    """Deterministic version string for a chosen feature set: names, versions and the signed-column patterns (a
+    side-aligned model reads those columns through side_align, so changing a pattern or neutral value changes what
+    the model sees and must change the version)."""
+    def one(n: str) -> str:
+        sg = FEATURES[n].signed
+        return f"{n}@{FEATURES[n].version}" + (f"#{sorted(sg.items())}" if sg else "")
+    key = "|".join(one(n) for n in sorted(names))
     return "f-" + hashlib.sha1(key.encode()).hexdigest()[:10]
 
 

@@ -303,3 +303,45 @@ def test_declared_feature_lists_exist_and_fit_the_cap(family, bars_1m):
     assert cols[0] == "side" and cols[1:] == declared and len(cols) <= MAX_FEATURES
     clone = model_inputs(cls(feature_seed=5), [c for c in X.columns if c != "ts_utc"])
     assert clone[0] == "side" and len(clone) == MAX_FEATURES and clone[1:] != declared
+
+
+def test_tournament_sees_a_passed_trial_that_exists_only_in_the_release_registry(tmp_path):
+    """H2: research.yml writes trials to the release copy; the weekly tournament syncs before it looks them up."""
+    from goldbot.data.store import Store
+    from goldbot.ops.jobs import JobContext, tournament
+    from goldbot.research.model_registry import ModelRegistry
+    from goldbot.research.registry_sync import merge_files
+    from tests.test_population import _add_trades, _good
+
+    remote = TrialRegistry(tmp_path / "release.jsonl")
+    cfg = dict(SPECIALISTS["session_open"].default_config, asia_range_max_atr_d=1.0)
+    remote.record(agent_id="x", family="session_open", config=cfg, feature_version="f", rationale="research.yml",
+                  results={"gates": {"passed": True, "checks": []}})
+    now = pd.Timestamp(NOW)
+    pop = Population(tmp_path / "pop.json")
+    pop.members["strong"] = Member(agent_id="strong", family="session_open", config=cfg, generation=1,
+                                   created_utc=now - pd.Timedelta(days=200), status_since_utc=now - pd.Timedelta(days=200))
+    book = ShadowBook(tmp_path)
+    _add_trades(book, "strong", _good(150))
+    book.save(now)
+
+    def ctx(sync: bool) -> JobContext:
+        return JobContext(settings=load_settings(), store=Store(tmp_path / "data"), state_dir=tmp_path,
+                          models=ModelRegistry(tmp_path / "models"), trials=TrialRegistry(tmp_path / "local.jsonl"),
+                          accounts=[], population=pop,
+                          sync_trials=(lambda p: merge_files(p, p, tmp_path / "release.jsonl")) if sync else None)
+    out = tournament(ctx(sync=False), now)
+    assert out["awaiting_research"] == ["strong"] and pop.members["strong"].status == "shadow"
+    out = tournament(ctx(sync=True), now)
+    assert out["promoted"] == ["strong"] and out["registry_sync"] == 1 and pop.members["strong"].status in ("live",)
+
+
+def test_feature_version_changes_with_the_signed_patterns(monkeypatch):
+    from goldbot.features.registry import FEATURES, feature_version
+    names = ["returns", "atr"]
+    before = feature_version(names)
+    spec = FEATURES["returns"]
+    monkeypatch.setitem(FEATURES, "returns", spec.model_copy(update={"signed": {r"ret_\d+": 0.5}}))
+    assert feature_version(names) != before                              # a new neutral value is a new feature set
+    monkeypatch.setitem(FEATURES, "returns", spec)
+    assert feature_version(names) == before and spec.signed == {r"ret_\d+": 0.0}
