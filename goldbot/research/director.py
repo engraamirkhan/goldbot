@@ -52,6 +52,7 @@ from pydantic import Field
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.research.population import DSR_PROMOTE, MIN_RANK_TRADES
 from goldbot.research.promotion import MIN_SHADOW_TRADES, PerfStats
+from goldbot.research.registry import quarter_of, quarter_trials
 
 Z_FULL = 3.0                     # three standard errors above chance counts as full evidence
 DSR_BAR = DSR_PROMOTE            # 0.95: the deflated-Sharpe bar the gates use
@@ -169,7 +170,12 @@ def quarter_budget(research: Any) -> int:
 
 
 def holdout_window(research: Any) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """[start, end) of the held-out year: research.holdout_from when set, else DEFAULT_HOLDOUT_FROM; 12 months long."""
+    """[start, end) of the held-out year: the settings' own window (ResearchSettings.holdout_window, the one the
+    pipeline excludes) when there is one, else DEFAULT_HOLDOUT_FROM plus 12 months."""
+    own = getattr(research, "holdout_window", None)
+    if callable(own) and own() is not None:
+        w = own()
+        return pd.Timestamp(w[0]), pd.Timestamp(w[1])
     v = getattr(research, "holdout_from", None)
     start = pd.Timestamp(str(v) if v else DEFAULT_HOLDOUT_FROM)
     start = start.tz_localize("UTC") if start.tzinfo is None else start.tz_convert("UTC")
@@ -178,20 +184,11 @@ def holdout_window(research: Any) -> tuple[pd.Timestamp, pd.Timestamp]:
 
 def quarter_usage(trials: list[dict[str, Any]], now: pd.Timestamp, budget: int) -> tuple[str, int, int]:
     """(quarter label, trials recorded in `now`'s calendar quarter, remaining budget). Every registry row counts,
-    whatever its status: each one was a look at the data."""
-    q = now.tz_convert("UTC").tz_localize(None).to_period("Q")
-    start = q.start_time.tz_localize("UTC")
-    end = (q + 1).start_time.tz_localize("UTC")
-    used = 0
-    for r in trials:
-        try:
-            ts = pd.Timestamp(str(r.get("ts")))
-        except ValueError:
-            continue
-        ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
-        if start <= ts < end:
-            used += 1
-    return str(q), used, max(budget - used, 0)
+    whatever its status: each one was a look at the data. The count is registry.quarter_trials, the same one
+    TrialRegistry.check_budget enforces."""
+    q = quarter_of(now.tz_convert("UTC").to_pydatetime())
+    used = quarter_trials(trials, q)
+    return q, used, max(budget - used, 0)
 
 
 def grid_allowance(budget: dict[str, int], trial_budget_per_month: int) -> dict[str, int]:

@@ -1,7 +1,7 @@
 """Account classifier: Raw / Standard / Unknown, measured not assumed.
 
 Decisive test: commission on past deals => Raw. Otherwise session-filtered median spread:
-< $0.20 floating => Raw, >= $0.30 => Standard, between => Unknown. The last classification is
+< $0.20 floating with no deal history => Raw, >= $0.30 => Standard, between => Unknown. The last classification is
 persisted and only changes after two consecutive disagreeing runs. On Standard, 15m specialists are
 disabled; on Unknown, the engine trades paper and alerts.
 """
@@ -42,11 +42,12 @@ def classify(ticks: pd.DataFrame, deals: pd.DataFrame, *, raw_spread_max: float 
     spread = (t["ask"] - t["bid"]).to_numpy()
     med, p90 = float(np.median(spread)), float(np.percentile(spread, 90))
     floating = float(np.std(spread)) > 1e-6
-    if med < raw_spread_max and floating:
+    if med < raw_spread_max and floating and deals.empty:
         return Classification(account_class="raw", median_spread=med, p90_spread=p90, commission_seen=False, n_ticks=len(t), reason="tight floating spread")
     if med >= std_spread_min:
         return Classification(account_class="standard", median_spread=med, p90_spread=p90, commission_seen=False, n_ticks=len(t), reason="wide spread, no commission")
-    return Classification(account_class="unknown", median_spread=med, p90_spread=p90, commission_seen=False, n_ticks=len(t), reason="spread in dead band")
+    reason = "tight spread but zero-commission deal history" if med < raw_spread_max else "spread in dead band"
+    return Classification(account_class="unknown", median_spread=med, p90_spread=p90, commission_seen=False, n_ticks=len(t), reason=reason)
 
 
 class PersistentClassifier:

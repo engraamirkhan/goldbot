@@ -8,6 +8,7 @@
   python -m goldbot.ops.run telegram
   python -m goldbot.ops.run news
   python -m goldbot.ops.run record-gate <gate_name> --evidence <path or text>   # appends to state/phase_state.json
+  python -m goldbot.ops.run health [--json] [--static] [--out FILE] [--baseline FILE]   (exit 1 on a fail)
 """
 from __future__ import annotations
 
@@ -89,7 +90,7 @@ def run_engine(account_id: str) -> None:
 
     agents, live_shares = population_view()
     eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, approval_mode="propose", symbol=acc.symbol,
-                              magic_base=acc.magic_base, state_dir="state", data_root=settings.data_root,
+                              magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host, halt_checks=True, news_blackout=True,
                               blackout_before_min=settings.risk.blackout.before_min,
                               blackout_after_min=settings.risk.blackout.after_min,
@@ -286,6 +287,9 @@ if __name__ == "__main__":
         run_news()
     elif cmd == "record-gate":
         sys.exit(record_gate_cli(sys.argv[2:]))
+    elif cmd == "health":
+        from goldbot.ops.health import main as health_main
+        sys.exit(health_main(sys.argv[2:]))
     else:
         print(__doc__)
         sys.exit(1)

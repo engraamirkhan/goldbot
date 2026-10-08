@@ -89,6 +89,10 @@ news:                                # headline collector (VPS service goldbot-n
 
 research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
+  label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
+  trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
+  holdout_from: 2025-10-01           # held-out year: research never sees it; a passing config is scored on it once
+  holdout_to: 2026-09-30             #   (scripts/research_pass.py --score-holdout), inclusive
   director_floor: 2                  # research director: every unblocked family gets at least this many of the
                                      # month's trials; the rest of (budget x families) follows evidence of signal
   label_grid_step: 0.25              # +-25% on target/stop/max_bars

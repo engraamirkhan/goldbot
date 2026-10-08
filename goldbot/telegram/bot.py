@@ -6,6 +6,7 @@ import asyncio
 import logging
 
 from goldbot.ops import accounts
+from goldbot.ops.health import HealthContext, HealthWatch, run_checks
 from goldbot.telegram.approvals import Proposal
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.outbox import Outbox
@@ -26,6 +27,7 @@ except ImportError:  # pragma: no cover
     Application = None
 
 
+HEALTH_EVERY_S = 300              # health checks + alert dedupe (the Scheduler's finest grain is daily)
 OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED_UNAPPROVED": "⌛ EXPIRED"}
 
 
@@ -42,6 +44,8 @@ class TelegramBot:  # pragma: no cover - needs network + token
         self.outbox = Outbox(state_dir, self.bus)
         self.owner_ids = owner_ids
         self.poll_s = poll_s
+        self.state_dir = state_dir
+        self.health = HealthWatch(state_dir)
         self.app = Application.builder().token(token).post_init(self._start_pump).build()
         self.app.add_handler(CallbackQueryHandler(self._on_button))
         for c in ("status", "halt", "rearm"):
@@ -74,8 +78,23 @@ class TelegramBot:  # pragma: no cover - needs network + token
                             await self.app.bot.send_message(uid, text)
             except Exception:
                 log.exception("telegram pump")
+            if n % max(int(HEALTH_EVERY_S / self.poll_s), 1) == 0:
+                await self._health_pass()
             n += 1
             await asyncio.sleep(self.poll_s)
+
+    async def _health_pass(self) -> None:
+        """Run the health checks and tell the owner about checks that turned fail or recovered (dedupe in
+        state/health_last.json, see goldbot.ops.health.HealthWatch)."""
+        try:
+            report = await asyncio.to_thread(lambda: run_checks(HealthContext.from_runtime(self.state_dir)))
+            text = self.health.alert(report)
+            if text:
+                for uid in self.owner_ids:
+                    await self.app.bot.send_message(uid, text)
+            self.health.record(report)          # only after delivery: a failed send is retried next pass
+        except Exception:
+            log.exception("health pass")
 
     async def send_proposal(self, p: Proposal) -> list[tuple[int, int]]:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"ok:{p.proposal_id}")],

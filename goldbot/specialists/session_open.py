@@ -32,6 +32,15 @@ class SessionOpenSpecialist(Specialist):
         "max_bars": 16,
         "min_body_pct": 0.3,
     }
+    # declared meta-model inputs, chosen by rationale (strength of the opening move, the overnight setting, volatility regime and higher-timeframe trend); the model adds `side`, <= 40 in all
+    model_features = (
+        "ret_1", "ret_4", "ret_16", "ret_96", "atr14_pct", "atr_ratio_14_100", "rv_ratio", "vol_tercile",
+        "parkinson_20", "dist_ema20_atr", "dist_ema50_atr", "dist_ema200_atr", "slope_ema50", "ribbon_state", "adx14",
+        "donchian_pos_20", "bb_z_20", "rsi14", "range_width_24_atr", "range_width_96_atr", "compression_8_96",
+        "tick_vol_ratio_20", "spread_atr", "tick_count_z_48", "gap_atr", "after_break", "body_pct", "session_id",
+        "min_since_london_open", "dow", "us_dst", "h1_adx14", "h1_slope_ema50", "h4_dist_ema50_atr", "h4_slope_ema50",
+        "h4_ribbon_state", "d1_dist_ema50_atr", "d1_slope_ema50", "d1_atr_ratio_14_100",
+    )
 
     @property
     def label_spec(self) -> BarrierSpec:

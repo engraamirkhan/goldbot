@@ -7,7 +7,7 @@ on:
     inputs:
       from_year: { description: "first year", default: "2010" }
       to_year:   { description: "last year (inclusive)", default: "2026" }
-      full_refresh: { description: "download every month again (published bars stay as fallback)", type: boolean, default: false }
+      full_refresh: { description: "download every month again (published bars stay as fallback). Costs hours of runner time per year of data: on the free tier this can use the whole month's 2,000 minutes", type: boolean, default: false }
   schedule:
     - cron: "17 3 * * 6"   # Saturdays 03:17 UTC: refresh the current year
 permissions:

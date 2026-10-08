@@ -81,6 +81,7 @@ def _pend(eng: Engine, center: ApprovalCenter, pid: str) -> None:
 
 def test_an_approved_entry_is_sized_again_and_sent_once(tmp_path):
     eng, pb, center = _engine(tmp_path)
+    eng.bars_1m = pd.DataFrame({"ts_utc": [T0 - pd.Timedelta(minutes=1)], "visible_at": [T0]})   # fresh data
     _pend(eng, center, "icm-demo-1-a")
     assert eng._busy(SPECIALISTS["session_open"]().agent_id)               # one pending proposal per agent
     center.decide("icm-demo-1-a", OWNER, True)
@@ -168,3 +169,32 @@ def test_twelve_percent_drawdown_closes_everything_at_market(tmp_path):
     eng.on_bar_close(close_ts, crash)
     assert eng.state.stage == Stage.HALTED
     assert pb.positions() == []
+
+
+def test_kill_switch_and_state_heartbeat_act_between_bar_closes(tmp_path):
+    eng, pb, _ = _engine(tmp_path)
+    t = T0.floor("15min") + pd.Timedelta(minutes=1)
+    eng.on_tick(_tick(t, 2400.0))                                    # first tick: account refreshed, state written
+    first = (tmp_path / "engine_icm-demo.json").stat().st_mtime_ns
+    _open(pb, "big", lots=1.0, sl=2300.0, tp=2500.0)
+    eng.on_tick(_tick(t + pd.Timedelta(seconds=5), 2399.0))           # inside state_every_s: no refresh yet
+    assert len(pb.positions()) == 1
+    crash = t + pd.Timedelta(seconds=11)                              # same 15m bar, 11 s later
+    eng.on_tick(_tick(crash, 2387.0))                                 # -$1,300 on $10k: 13% drawdown
+    assert eng.state.stage == Stage.HALTED and pb.positions() == []  # closed within seconds, not at the bar close
+    assert (tmp_path / "engine_icm-demo.json").stat().st_mtime_ns >= first
+
+
+def test_expired_proposals_of_this_account_are_archived_on_start(tmp_path):
+    bus = ApprovalBus(tmp_path)
+    old: dict[str, Any] = {"account_id": "icm-demo", "agent_id": "a", "side": 1, "lots": 0.1, "entry": 2400.0, "stop": 2396.0,
+           "target": 2406.0, "p": 0.6, "ev_r": 0.1, "spread_points": 20, "top_features": []}
+    mine = Proposal(proposal_id="icm-demo-1-aaaa", created=time.time() - 3600, **old)
+    other = Proposal(proposal_id="vantage-demo-1-bbbb", created=time.time() - 3600, **{**old, "account_id": "vantage-demo"})
+    live = Proposal(proposal_id="icm-demo-2-cccc", **old)                # still inside its window
+    for p in (mine, other, live):
+        bus.publish(p)
+    _engine(tmp_path, bus=True)
+    left = {p.name for p in bus.pending_dir.glob("*.json")}
+    assert left == {"vantage-demo-1-bbbb.json", "icm-demo-2-cccc.json"}
+    assert (bus.done_dir / "icm-demo-1-aaaa.json").exists()

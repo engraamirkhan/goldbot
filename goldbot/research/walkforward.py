@@ -26,6 +26,7 @@ class Fold(Record):
     test_idx: np.ndarray
     test_start: pd.Timestamp
     test_end: pd.Timestamp
+    complete: bool = True        # the data covers the whole test window (a truncated last fold is not)
 
 
 def walk_forward_splits(labels: pd.DataFrame, *, train_months: int, test_months: int, step_months: int,
@@ -51,7 +52,8 @@ def walk_forward_splits(labels: pd.DataFrame, *, train_months: int, test_months:
         train_mask = (in_window & no_overlap) | (after_embargo & False)
         tr, tst = np.flatnonzero(train_mask), np.flatnonzero(test_mask)
         if len(tr) >= min_train and len(tst) > 0:
-            yield Fold(k=k, train_idx=tr, test_idx=tst, test_start=t0, test_end=t1)
+            full = t0 + pd.DateOffset(months=test_months) <= end + pd.Timedelta(seconds=1)
+            yield Fold(k=k, train_idx=tr, test_idx=tst, test_start=t0, test_end=t1, complete=bool(full))
             k += 1
         t0 = t0 + pd.DateOffset(months=step_months)
 
