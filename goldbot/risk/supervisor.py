@@ -69,13 +69,27 @@ class Supervisor:
         if self.unreadable:
             reasons.append("engine_state_unreadable")     # fail closed: its equity cannot be counted
         stale = [e["account"] for e in engines if time.time() - e.get("ts", 0) > self.limits.heartbeat_max_age_s]
-        state = {"ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
+        # combined exposure: engines block entries that would take the sum past the cap (RiskGate)
+        exposure = {str(e.get("account")): {"lots": float(e.get("open_lots", 0.0)), "notional": float(e.get("open_notional", 0.0)),
+                                            "equity": float(e.get("equity", 0.0))} for e in engines}
+        state = {"combined_open_lots": round(sum(x["lots"] for x in exposure.values()), 6),
+                 "combined_open_notional": sum(x["notional"] for x in exposure.values()), "exposure": exposure,
+                 "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
                  "unreadable_engines": self.unreadable}
         tmp = self.dir / "supervisor.json.tmp"
         tmp.write_text(json.dumps(state))
         os.replace(tmp, self.dir / "supervisor.json")      # engines never read a half-written file
         return state
+
+    @staticmethod
+    def read_state(state_dir: str | Path) -> dict:
+        """The last published supervisor state; {} when missing or unreadable (halt checks fail closed separately)."""
+        try:
+            d = json.loads((Path(state_dir) / "supervisor.json").read_text())
+        except (ValueError, OSError):
+            return {}
+        return d if isinstance(d, dict) else {}
 
     @staticmethod
     def engine_should_halt(state_dir: str | Path, max_age_s: int = 60) -> tuple[bool, str]:

@@ -18,13 +18,14 @@ import time
 import zlib
 from pathlib import Path
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator
-from goldbot.base import Record
+from goldbot.base import Record, UtcTimestamp
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.econ_calendar import blackout_window
@@ -57,6 +58,7 @@ class ConstantModel(Record):
     """Stand-in until a trained MetaLabelModel is loaded: returns a fixed probability."""
     p: float = 0.6
     feature_names: list[str] = Field(default_factory=list)
+    feature_version: str = ""        # empty: an unversioned stand-in (a trained model always carries its version)
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         return np.full(len(X), self.p)
@@ -92,6 +94,16 @@ class EngineConfig(Record):
     # this often (tick time), so the supervisor's combined caps and the 12% kill switch act within seconds
     state_every_s: int = 10
     stale_feed_s: int = 90                   # no tick for this long in an open session -> data-quality error
+    healthy_resume_s: int = 60               # after stale data or a data-quality error, entries wait this long healthy
+    # 12% re-arm (design: Drawdown kill switch): the owner's TOTP re-arm is honoured only after this many trading days
+    # of positive paper shadow since the halt, and is followed by this many days of propose-and-approve
+    rearm_shadow_days: int = 10
+    rearm_propose_days: int = 30
+    reconcile_every_s: int = 30              # broker reconciliation (tick time), besides every bar close and the start
+    orphan_stop_atr: float = 1.5             # an adopted orphan without a stop gets one this many ATR from entry
+    server_tz: str = "Europe/Athens"         # broker server clock: rollover (00:00 +-5 min) and the Friday 21:30 rule
+    rollover_min: int = 5
+    weekend_cut: str = "21:30"               # Friday, server time: close losers, tighten winners, no new entries
 
 
 class _Frame(Record):
@@ -106,9 +118,26 @@ class OpenTrade(Record):
     agent_id: str
     side: int
     lots: float
-    entry_bar_ts: pd.Timestamp
+    entry_bar_ts: UtcTimestamp
     max_bars: int
     bars_held: int = 0
+    sl: float | None = None           # the protection this engine expects at the broker (reinstated if lost)
+    tp: float | None = None
+
+
+class SentOrder(Record):
+    """One row of the pending_orders table (state/orders_<account>.json), written BEFORE order_send."""
+    client_order_id: str
+    ts_utc: UtcTimestamp
+    agent_id: str
+    side: int
+    magic: int
+    lots: float
+    max_bars: int
+    sl: float
+    tp: float
+    status: str = "sending"         # sending -> filled | rejected | unfilled (restart found no fill)
+    position_id: int | None = None
 
 
 class Engine:
@@ -130,6 +159,7 @@ class Engine:
         self.open: dict[int, OpenTrade] = {}
         self.pending: dict[str, tuple[Intent, Proposal, Specialist]] = {}
         self.sent_ids: set[str] = set()
+        self._orders: dict[str, SentOrder] = {}     # pending_orders: every id ever sent (pruned after a week)
         self.last_bar_close: pd.Timestamp | None = None
         self.state = AccountState(equity=0, balance_closed_hwm=0, day_start_equity=0, week_start_equity=0,
                                   open_positions=0, margin_used=0, last_tick_age_s=0, spread_points=0)
@@ -152,11 +182,20 @@ class Engine:
         self._last_tick: Tick | None = None
         self._dq_pending: list[DQEvent] = []
         self._dq_bar_errors: list[DQEvent] = []
+        self._unhealthy_at: pd.Timestamp | None = None    # last time the data was seen stale or in error
         # risk periods and the owner's re-arm survive a restart (state/risk_<account>.json)
         self._last_reset: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
+        self._weekend_done: str | None = None        # server date of the last Friday the weekend rule ran
+        self._halted_at: pd.Timestamp | None = None  # when the 12% kill switch tripped (re-arm conditions count from it)
+        self._propose_only_until: pd.Timestamp | None = None   # after a re-arm: no auto entries before this
+        self._rearm_refused: str | None = None       # why the last owner re-arm was refused (engine state, dashboard)
         self._load_risk_state()
+        self._load_orders()
         self._last_state_write: pd.Timestamp | None = None
+        self._last_reconcile: pd.Timestamp | None = None
+        self._last_atr: float | None = None          # decision-tf ATR at the last bar close (orphan stops)
+        self._foreign: list[int] = []                # positions with unknown magic (manual trades): listed, never touched
         self._archive_stale_proposals()
 
     def _archive_stale_proposals(self) -> None:
@@ -177,7 +216,7 @@ class Engine:
     def on_tick(self, t: Tick) -> list[dict]:
         """Feed a tick; returns any decisions made at a bar close."""
         self.center.poll_bus()          # approvals from the dashboard / Telegram service, applied within a tick
-        self._poll_rearm()
+        self._poll_rearm(self._now(t))
         if not self._tick_ok(t):
             return []                   # crossed or out-of-order quote: never enters the bars; entries blocked
         self._last_tick = t
@@ -186,6 +225,8 @@ class Engine:
         self._roll_risk_period(t.ts_utc)
         if hasattr(self.broker, "on_tick"):
             self.broker.on_tick(t)  # paper broker fills
+        if self._last_reconcile is None or (t.ts_utc - self._last_reconcile).total_seconds() >= self.cfg.reconcile_every_s:
+            self._reconcile(t.ts_utc)
         sec = tf_seconds(self.cfg.decision_tf)
         bar_close = pd.Timestamp((int(t.ts_utc.timestamp()) // sec) * sec, unit="s", tz="UTC")
         out: list[dict] = []
@@ -193,6 +234,7 @@ class Engine:
             out = self.on_bar_close(self.last_bar_close + pd.Timedelta(seconds=sec), t)
             self._last_state_write = t.ts_utc
         elif self._last_state_write is None or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:
+            self._rebuild_bars()            # completed minutes join the bars between closes, so their age is current
             self._refresh_account(t)
             self._write_state()
             self._last_state_write = t.ts_utc
@@ -239,10 +281,12 @@ class Engine:
             return None
         m = mid(dec)
         X = build_features(m, DEFAULT_FEATURE_NAMES)
+        version = X.attrs["feature_version"]
         for ctf in context_tfs(tf):
             hit = self._context(complete, ctf, close_ts)
             if hit is not None:
                 X = merge_higher_tf(X, hit[1], hit[0], TF_LABEL[ctf])
+        X.attrs["feature_version"] = version          # as research stamps it (pipeline.build_decision_frame)
         return _Frame(dec=dec, m=m, X=X, atr=atr(m, 14))
 
     def _context(self, complete: pd.DataFrame, tf: str, close_ts: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame] | None:
@@ -273,6 +317,7 @@ class Engine:
         base = self._frame(complete, self.cfg.decision_tf, close_ts)
         if base is None:
             return []
+        self._last_atr = float(base.atr.iloc[-1]) if np.isfinite(base.atr.iloc[-1]) else self._last_atr
         self._refresh_account(last_tick)
         self._manage_open(base.dec)
         self.center.sweep_expired()
@@ -319,6 +364,13 @@ class Engine:
                 continue      # shadow-only member of the population: the shadow book trades it, not the broker
             if self._busy(agent.agent_id):
                 continue      # one position (or pending proposal) per agent, as its labels were built
+            mv, fv = getattr(model, "feature_version", ""), X.attrs.get("feature_version")
+            if mv and mv != fv:
+                # design: a model only ever scores the feature frame it was trained on
+                d = self._record(agent, close_ts, 0.0, 0.0, "feature_version_mismatch")
+                d.update(p=None, model_feature_version=mv, frame_feature_version=fv)     # not scored
+                decisions.append(d)
+                continue
             feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
             feats["side"] = side          # side-aligned models (features include `side`) align signed inputs themselves
             cols = model.feature_names or [c for c in feats.columns]
@@ -372,14 +424,24 @@ class Engine:
         self._write_state()
 
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float) -> None:
+        if prop.proposal_id in self.sent_ids:       # sent before (this process or before a restart): never again
+            self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "duplicate_suppressed",
+                                   "proposal": prop.proposal_id})
+            return
         magic = self._magic(agent.family)
         oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
-        self.sent_ids.add(prop.proposal_id)   # written BEFORE sending: never double-send
+        # pending_orders row persisted BEFORE sending: a crash between send and result is reconciled on restart
+        self._orders_record(prop.proposal_id, agent_id=agent.agent_id, side=prop.side, magic=magic, lots=lots,
+                            max_bars=self._base_bars(agent), sl=oi.sl, tp=oi.tp, ts=pd.Timestamp.now("UTC"))
         res = self.broker.place_order(oi)
+        rec = self._orders[prop.proposal_id]
+        rec.status, rec.position_id = ("filled", res.position_id) if res.ok and res.position_id is not None else ("rejected", None)
         if res.ok and res.position_id is not None:
             self.open[res.position_id] = OpenTrade(position_id=res.position_id, agent_id=agent.agent_id, side=prop.side, lots=res.filled_lots,
-                                                  entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=self._base_bars(agent))
+                                                  entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=self._base_bars(agent),
+                                                  sl=oi.sl, tp=oi.tp)
+        self._save_orders()
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order", "ok": res.ok,
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots})
         if self.store is not None and res.ok and res.price is not None:
@@ -402,11 +464,58 @@ class Engine:
                 self.broker.close(pid)
                 self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "time_exit", "position": pid})
                 del self.open[pid]
-        # reconciliation: adopt orphans with our magic range
-        for p in self.broker.positions():
-            if p.position_id not in self.open and self.cfg.magic_base <= p.magic < self.cfg.magic_base + 100:
-                self.open[p.position_id] = OpenTrade(position_id=p.position_id, agent_id="orphan", side=p.side, lots=p.lots, entry_bar_ts=p.open_time_utc, max_bars=48)
+        self._reconcile(self.last_bar_close)
+
+    def _own(self, magic: int) -> bool:
+        return self.cfg.magic_base <= magic < self.cfg.magic_base + 100
+
+    def _reconcile(self, now: pd.Timestamp | None) -> None:
+        """Broker positions are the source of truth (design: Reconciliation), on start, every bar close and every
+        `reconcile_every_s` of tick time: an orphan in this engine's magic range is adopted and, without a stop, given
+        one `orphan_stop_atr` x ATR from entry; a stop or target missing at the broker, or a stop looser than the one
+        this engine set, is reinstated. Positions with unknown magic numbers are listed and never touched."""
+        if now is not None:
+            self._last_reconcile = now
+        positions = self.broker.positions()
+        self._foreign = sorted(p.position_id for p in positions if not self._own(p.magic))
+        for p in positions:
+            if not self._own(p.magic):
+                continue
+            tr = self.open.get(p.position_id)
+            if tr is None:
+                tr = self.open[p.position_id] = OpenTrade(position_id=p.position_id, agent_id="orphan", side=p.side, lots=p.lots,
+                                                          entry_bar_ts=p.open_time_utc, max_bars=48, sl=p.sl, tp=p.tp)
                 self.decisions.append({"ts": time.time(), "action": "adopt_orphan", "position": p.position_id})
+            if tr.sl is None and p.sl is None:
+                a = self._atr_now()
+                if a is None:
+                    self.decisions.append({"ts": time.time(), "action": "orphan_stop_pending", "position": p.position_id})
+                    continue                  # no ATR yet (no bars): retried on the next pass
+                tr.sl = round(p.open_price - p.side * self.cfg.orphan_stop_atr * a, 2)
+                res = self.broker.modify(p.position_id, tr.sl, p.tp)
+                self.decisions.append({"ts": time.time(), "action": "orphan_stop", "position": p.position_id, "sl": tr.sl,
+                                       "ok": res.ok, "retcode": res.retcode})
+                continue
+            loose = tr.sl is not None and (p.sl is None or p.side * (tr.sl - p.sl) > 1e-9)
+            lost_tp = tr.tp is not None and p.tp is None
+            if loose or lost_tp:
+                sl = tr.sl if loose else p.sl
+                tp = tr.tp if lost_tp else p.tp
+                res = self.broker.modify(p.position_id, sl, tp)
+                self.decisions.append({"ts": time.time(), "action": "reinstate_stops", "position": p.position_id, "sl": sl,
+                                       "tp": tp, "ok": res.ok, "retcode": res.retcode})
+            elif tr.sl is None and p.sl is not None:
+                tr.sl = p.sl                  # adopted with a stop: that stop is the floor from now on
+
+    def _atr_now(self) -> float | None:
+        """Decision-timeframe ATR(14): the last bar close's, else computed from the 1m history (after a restart)."""
+        if self._last_atr is not None:
+            return self._last_atr
+        if len(self.bars_1m) < 15 * tf_seconds(self.cfg.decision_tf) // 60:
+            return None
+        a = atr(mid(resample_bars(self.bars_1m, self.cfg.decision_tf).reset_index(drop=True)), 14)
+        v = float(a.iloc[-1]) if len(a) else float("nan")
+        return v if np.isfinite(v) and v > 0 else None
 
     # ------------------------------------------------------------------ helpers
     def _refresh_account(self, tick: Tick) -> None:
@@ -422,22 +531,48 @@ class Engine:
         if st.week_start_equity == 0:
             st.week_start_equity = acc.balance
         st.balance_closed_hwm = max(st.balance_closed_hwm, acc.balance)
-        st.open_positions = len(self.broker.positions())
+        positions = self.broker.positions()
+        st.open_positions = len(positions)
+        st.open_lots = round(sum(p.lots for p in positions), 6)       # every position on the account is exposure
+        st.open_notional = st.open_lots * 100.0 * (tick.bid + tick.ask) / 2
         st.spread_points = (tick.ask - tick.bid) / 0.01
         now = self._now(tick)
         st.last_tick_age_s = max(0.0, (now - tick.ts_utc).total_seconds())
         stale = stale_feed(tick.ts_utc, now, limit_seconds=self.cfg.stale_feed_s)
         st.dq_error = stale or bool(self._dq_bar_errors or self._dq_pending)
+        # stale data (design): the last completed bar must be under one decision period old; no bars is stale
+        if self.bars_1m.empty:
+            st.stale_bars = True
+        else:
+            seen = pd.Timestamp(self.bars_1m["visible_at"].iloc[-1])
+            st.stale_bars = (now - seen).total_seconds() > tf_seconds(self.cfg.decision_tf)
+        if st.dq_error or st.stale_bars or st.last_tick_age_s > self.gate.limits.stale_tick_seconds:
+            self._unhealthy_at = now
+            st.data_recovering = False        # the error itself blocks; recovery starts when it clears
+        else:
+            st.data_recovering = self._unhealthy_at is not None and \
+                (now - self._unhealthy_at).total_seconds() < self.cfg.healthy_resume_s
         if self.cfg.halt_checks:
             st.supervisor_halt, _ = Supervisor.engine_should_halt(self.cfg.state_dir)
+            sup = Supervisor.read_state(self.cfg.state_dir)
+            others = [v for k, v in (sup.get("exposure") or {}).items() if k != self.cfg.account_id]
+            st.other_lots = sum(float(v.get("lots", 0.0)) for v in others)
+            st.other_notional = sum(float(v.get("notional", 0.0)) for v in others)
+            st.other_equity = sum(float(v.get("equity", 0.0)) for v in others)
+            st.combined_size_down = bool(sup.get("size_down", False))
             st.owner_halt = self.center.bus.control().halted if self.center.bus is not None else False
         if self.cfg.news_blackout:
             st.in_blackout = self._blackout(tick.ts_utc) is not None
+        self._server_clock(now, tick)
         stage = st.stage
         if self.gate.update_stage(st) != stage:
+            if st.stage == Stage.HALTED:
+                self._halted_at = now
             self._save_risk_state()             # a drawdown stage change survives a restart at once
         if st.stage == Stage.HALTED:
             self._kill_switch(everything=stage != Stage.HALTED)
+        if self._propose_only_until is not None and now < self._propose_only_until:
+            self.cfg.approval_mode = "propose"  # 30 days propose-and-approve after a re-arm
 
     def _kill_switch(self, *, everything: bool) -> None:
         """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
@@ -450,6 +585,42 @@ class Engine:
                 self.open.pop(p.position_id, None)
                 self.decisions.append({"ts": time.time(), "action": "kill_switch_close", "position": p.position_id,
                                        "ok": res.ok, "retcode": res.retcode, "price": res.price})
+        self.state.open_positions = len(self.broker.positions())
+
+    def _server_clock(self, now: pd.Timestamp, tick: Tick) -> None:
+        """Rollover (+-rollover_min of 00:00 server: no entries) and weekend (Friday weekend_cut server until the week
+        reopens: no entries; at the cut, once per Friday, this engine's losers are closed and winners' stops tightened)."""
+        srv = now.tz_convert(ZoneInfo(self.cfg.server_tz))
+        mins = srv.hour * 60 + srv.minute + srv.second / 60
+        self.state.in_rollover = min(mins, 1440 - mins) <= self.cfg.rollover_min
+        h, m = (int(x) for x in self.cfg.weekend_cut.split(":"))
+        friday_cut = srv.weekday() == 4 and mins >= h * 60 + m
+        self.state.weekend = friday_cut or srv.weekday() >= 5
+        if friday_cut and self._weekend_done != srv.date().isoformat():
+            self._weekend_done = srv.date().isoformat()
+            self._weekend_rule(tick)
+            self._save_risk_state()
+
+    def _weekend_rule(self, tick: Tick) -> None:
+        """Design: weekend gaps blow through stops, so losers are closed and winners' stops moved to lock in half the
+        open profit (never loosened). Exits are automatic and never gated."""
+        for p in self.broker.positions():
+            if not self._own(p.magic):
+                continue
+            px = tick.bid if p.side > 0 else tick.ask
+            if p.side * (px - p.open_price) <= 0:
+                res = self.broker.close(p.position_id)
+                self.open.pop(p.position_id, None)
+                self.decisions.append({"ts": time.time(), "action": "weekend_close_loser", "position": p.position_id,
+                                       "ok": res.ok, "retcode": res.retcode, "price": res.price})
+                continue
+            sl = round(p.open_price + 0.5 * (px - p.open_price), 2)
+            if p.sl is None or p.side * (sl - p.sl) > 0:
+                res = self.broker.modify(p.position_id, sl, p.tp)
+                if p.position_id in self.open:
+                    self.open[p.position_id].sl = sl
+                self.decisions.append({"ts": time.time(), "action": "weekend_tighten", "position": p.position_id, "sl": sl,
+                                       "ok": res.ok, "retcode": res.retcode})
         self.state.open_positions = len(self.broker.positions())
 
     def _now(self, tick: Tick) -> pd.Timestamp:
@@ -495,9 +666,11 @@ class Engine:
             self._last_reset = now
             self._save_risk_state()
 
-    def _poll_rearm(self) -> None:
-        """An owner re-arm on the dashboard (owner role + TOTP) writes a new rearm id to control.json; seen once,
-        it clears this engine's drawdown halt. Nothing else clears it, and a restart does not."""
+    def _poll_rearm(self, now: pd.Timestamp) -> None:
+        """An owner re-arm on the dashboard (owner role + TOTP) writes a new rearm id to control.json; seen once, it
+        clears this engine's drawdown halt if the design's conditions hold (`_rearm_conditions`), and starts the
+        propose-only period. A refused re-arm is used up: the owner re-arms again once the conditions are met.
+        Nothing else clears the halt, and a restart does not."""
         if self.center.bus is None:
             return
         c = self.center.bus.control()
@@ -505,10 +678,93 @@ class Engine:
             return
         self._rearm_seen = c.rearm_id
         if self.state.stage == Stage.HALTED:
-            self.state.equity = self.broker.account().equity
-            if self.gate.rearm(self.state, REARM_PHRASE):
-                self.decisions.append({"ts": time.time(), "action": "rearm", "by": c.rearm_by, "rearm_id": c.rearm_id})
+            refused = self._rearm_conditions(now)
+            if refused is not None:
+                self._rearm_refused = refused
+                self.decisions.append({"ts": time.time(), "action": "rearm_refused", "by": c.rearm_by,
+                                       "rearm_id": c.rearm_id, "reason": refused})
+            else:
+                self.state.equity = self.broker.account().equity
+                if self.gate.rearm(self.state, REARM_PHRASE):
+                    self._rearm_refused, self._halted_at = None, None
+                    self._propose_only_until = now + pd.Timedelta(days=self.cfg.rearm_propose_days)
+                    self.cfg.approval_mode = "propose"
+                    self.decisions.append({"ts": time.time(), "action": "rearm", "by": c.rearm_by, "rearm_id": c.rearm_id,
+                                           "propose_only_until": self._propose_only_until.isoformat()})
         self._save_risk_state()
+
+    def _rearm_conditions(self, now: pd.Timestamp) -> str | None:
+        """None when a 12% halt may be re-armed: at least `rearm_shadow_days` trading days since the halt and a
+        positive paper-shadow record (sum of closed shadow returns, all versions) over them; else the reason."""
+        if self._halted_at is None:
+            self._halted_at = now                 # halt time unknown (older state file): the conditions start now
+        days = int(np.busday_count(self._halted_at.date(), now.date()))
+        if days < self.cfg.rearm_shadow_days:
+            return (f"re-arm needs {self.cfg.rearm_shadow_days} trading days of positive paper shadow since the halt "
+                    f"at {self._halted_at.isoformat()}; {days} so far")
+        book = self.shadow if self.shadow is not None else ShadowBook(self.cfg.state_dir)
+        rets = [r for v in book.books for r in book.returns_since(v, self._halted_at)]
+        if not rets or sum(rets) <= 0:
+            return (f"re-arm needs positive paper shadow since the halt: {len(rets)} closed shadow trades, "
+                    f"total return {sum(rets):+.4f}")
+        return None
+
+    # ------------------------------------------------------------------ pending_orders and restart reconciliation
+    def _orders_path(self) -> Path:
+        return Path(self.cfg.state_dir, f"orders_{self.cfg.account_id}.json")   # not engine_*: the supervisor globs those
+
+    def _orders_record(self, cid: str, *, agent_id: str, side: int, magic: int, lots: float, max_bars: int, sl: float,
+                       tp: float, ts: pd.Timestamp) -> None:
+        """Write the id to the pending_orders table (atomically, on disk) before order_send."""
+        self.sent_ids.add(cid)
+        self._orders[cid] = SentOrder(client_order_id=cid, ts_utc=ts, agent_id=agent_id, side=side, magic=magic, lots=lots,
+                                      max_bars=max_bars, sl=sl, tp=tp)
+        self._save_orders()
+
+    def _save_orders(self) -> None:
+        keep_after = pd.Timestamp.now("UTC") - pd.Timedelta(days=7)
+        self._orders = {k: o for k, o in self._orders.items() if o.ts_utc >= keep_after or o.status == "sending"}
+        payload = {"sent": {k: o.model_dump(mode="json") for k, o in self._orders.items()},
+                   "open": {str(k): t.model_dump(mode="json") for k, t in self.open.items()}}
+        path = self._orders_path()
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(payload))
+        os.replace(tmp, path)
+
+    def _load_orders(self) -> None:
+        """On start: reload the pending_orders table and the open trades, then reconcile them with the broker: an id
+        whose send was never confirmed is looked up in the broker's positions and deals (by client id / MT5 comment);
+        a fill is adopted with its own agent, no fill marks it unfilled. Every id stays in sent_ids, so a restart never
+        re-sends. Open trades the broker no longer has were closed while the engine was down."""
+        path = self._orders_path()
+        if not path.exists():
+            return
+        d = json.loads(path.read_text())          # unreadable -> fail loudly rather than forget what was sent
+        self._orders = {k: SentOrder.model_validate(v) for k, v in d.get("sent", {}).items()}
+        self.sent_ids = set(self._orders)
+        self.open = {int(k): OpenTrade.model_validate(v) for k, v in d.get("open", {}).items()}
+        positions = {p.position_id: p for p in self.broker.positions()}
+        self.open = {k: t for k, t in self.open.items() if k in positions}
+        for cid, rec in self._orders.items():
+            if rec.status != "sending":
+                continue
+            pos = next((p for p in positions.values() if p.comment == cid[-31:] or p.comment == cid), None)
+            deals = self.broker.deals_since(rec.ts_utc - pd.Timedelta(minutes=5))
+            dealt = not deals.empty and (
+                ("client_order_id" in deals.columns and bool((deals["client_order_id"] == cid).any()))
+                or ("comment" in deals.columns and bool(deals["comment"].isin([cid, cid[-31:]]).any())))
+            if pos is not None:
+                rec.status, rec.position_id = "filled", pos.position_id
+                self.open[pos.position_id] = OpenTrade(position_id=pos.position_id, agent_id=rec.agent_id, side=pos.side,
+                                                       lots=pos.lots, entry_bar_ts=pos.open_time_utc, max_bars=rec.max_bars,
+                                                       sl=rec.sl, tp=rec.tp)
+                self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_adopt_sent",
+                                       "proposal": cid, "position": pos.position_id})
+            else:
+                rec.status = "filled" if dealt else "unfilled"     # filled and already closed, or never filled
+                self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": f"reconcile_sent_{rec.status}",
+                                       "proposal": cid})
+        self._save_orders()
 
     def _risk_path(self) -> Path:
         return Path(self.cfg.state_dir, f"risk_{self.cfg.account_id}.json")   # not engine_*: the supervisor globs those
@@ -518,7 +774,10 @@ class Engine:
         payload = {"last_reset": self._last_reset.isoformat() if self._last_reset is not None else None,
                    "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
                    "balance_closed_hwm": st.balance_closed_hwm, "stage": Stage(st.stage).value,
-                   "rearm_seen": self._rearm_seen}
+                   "rearm_seen": self._rearm_seen, "weekend_done": self._weekend_done,
+                   "halted_at": self._halted_at.isoformat() if self._halted_at is not None else None,
+                   "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
+                   "rearm_refused": self._rearm_refused}
         path = self._risk_path()
         tmp = path.with_suffix(f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(payload))
@@ -538,6 +797,10 @@ class Engine:
         st.balance_closed_hwm = float(d.get("balance_closed_hwm", 0.0))
         st.stage = Stage(d.get("stage", Stage.NORMAL.value))
         self._rearm_seen = d.get("rearm_seen")
+        self._weekend_done = d.get("weekend_done")
+        self._halted_at = pd.Timestamp(d["halted_at"]) if d.get("halted_at") else None
+        self._propose_only_until = pd.Timestamp(d["propose_only_until"]) if d.get("propose_only_until") else None
+        self._rearm_refused = d.get("rearm_refused")
 
     def _regime(self, X: pd.DataFrame) -> Regime:
         row = X.iloc[-1]
@@ -622,6 +885,9 @@ class Engine:
                 if agent_key not in (agent.agent_id, agent.family) or cands.empty or int(cands["idx"].iloc[-1]) != last:
                     continue
                 side = int(cands["side"].iloc[-1])
+                mv = getattr(model, "feature_version", "")
+                if mv and mv != X.attrs.get("feature_version"):
+                    continue          # a model only scores the frame version it was trained on, in shadow too
                 feats["side"] = side
                 cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
                 p = float(model.predict(feats[cols])[0])
@@ -700,13 +966,17 @@ class Engine:
             "account": self.cfg.account_id, "broker": self.cfg.broker_name, "mode": self.cfg.mode, "ts": time.time(),
             "equity": st.equity, "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
-            "open_positions": st.open_positions, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
+            "open_positions": st.open_positions, "open_lots": st.open_lots, "open_notional": st.open_notional,
+            "combined_size_down": st.combined_size_down, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
             "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
             "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,
-            "dq_error": st.dq_error, "dq_checks": sorted({e.check for e in self._dq_bar_errors + self._dq_pending}),
+            "dq_error": st.dq_error, "stale_bars": st.stale_bars, "data_recovering": st.data_recovering, "dq_checks": sorted({e.check for e in self._dq_bar_errors + self._dq_pending}),
+            "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
+            "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
         }
         path = Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json")
         tmp = path.with_suffix(f".{os.getpid()}.tmp")       # the supervisor never reads a half-written file
         tmp.write_text(json.dumps(payload))
         os.replace(tmp, path)
         self._save_risk_state()
+        self._save_orders()

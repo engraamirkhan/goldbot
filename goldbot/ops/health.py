@@ -248,6 +248,8 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     if stage == "halted":
         statuses.append("fail")
         parts.append("stage HALTED (drawdown stage 2): no entries until re-armed")
+        if e.get("rearm_refused"):
+            parts.append(f"last re-arm refused: {e['rearm_refused']}")
     elif stage == "size_down":
         statuses.append("warn")
         parts.append("stage size_down")
@@ -258,6 +260,9 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     if market and tick_age > stale_tick:
         statuses.append("warn")
         parts.append(f"last tick {_age(tick_age)} old (> {stale_tick} s)")
+    if market and e.get("stale_bars"):
+        statuses.append("warn")
+        parts.append("last bar older than one decision period: entries blocked")
     if e.get("dq_error"):
         statuses.append("fail")
         checks = ", ".join(e.get("dq_checks") or []) or "stale feed"

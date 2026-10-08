@@ -41,6 +41,10 @@ class RiskLimits(Record):
     min_target_over_cost: float = 2.5
     margin_level_floor: float = 3.0      # 300%
     leverage_cap: float = 20.0           # FCA retail gold
+    # combined exposure across all accounts, treated as one position: at most this many lots, and open notional at
+    # most this fraction of what the combined equity can carry at the leverage cap (30% x 20 = 6x combined equity)
+    max_combined_lots: float = 3.0
+    max_combined_notional_frac: float = 0.30
 
     @classmethod
     def from_settings(cls, risk: RiskSettings, *, tiny_live: bool) -> RiskLimits:
@@ -67,6 +71,16 @@ class AccountState(Record):
     owner_halt: bool = False          # /halt from Telegram or the dashboard (state/control.json)
     in_blackout: bool = False
     dq_error: bool = False
+    stale_bars: bool = False          # the last completed bar is more than one decision period old
+    data_recovering: bool = False     # data was unhealthy within the last 60 s (design: reset after 60 s healthy)
+    in_rollover: bool = False         # +-5 min of 00:00 broker server time
+    weekend: bool = False             # from Friday 21:30 server until the week reopens
+    open_lots: float = 0.0            # this account's open exposure
+    open_notional: float = 0.0
+    other_lots: float = 0.0           # the other accounts' exposure and equity, as the supervisor last published them
+    other_notional: float = 0.0
+    other_equity: float = 0.0
+    combined_size_down: bool = False  # the supervisor's 8% combined drawdown stage
 
 
 class Intent(Record):
@@ -133,8 +147,14 @@ class RiskGate:
             reasons.append("data_quality_error")
         if st.in_blackout:
             reasons.append("news_blackout")
-        if st.last_tick_age_s > L.stale_tick_seconds:
+        if st.in_rollover:
+            reasons.append("rollover")
+        if st.weekend:
+            reasons.append("weekend")
+        if st.last_tick_age_s > L.stale_tick_seconds or st.stale_bars:
             reasons.append("stale_data")
+        if st.data_recovering:
+            reasons.append("data_recovering")
         if st.spread_points > L.max_spread_points:
             reasons.append("spread_too_wide")
         if st.open_positions >= L.max_positions:
@@ -158,7 +178,7 @@ class RiskGate:
         lo, hi = L.multiplier_bounds
         mult = min(max(intent.multiplier, lo), hi)
         risk_frac = L.risk_per_trade
-        if st.stage == Stage.SIZE_DOWN:
+        if st.stage == Stage.SIZE_DOWN or st.combined_size_down:
             risk_frac *= 0.5
             mult = min(mult, 0.5)
         # per-trade risk is capped after the multiplier (design Hard limits: 1% max, clamped, not rejected)
@@ -173,12 +193,18 @@ class RiskGate:
         realised_risk = lots * stop_distance * intent.contract_oz / st.equity
         if realised_risk > 1.2 * risk_frac * mult and lots_raw < intent.volume_min:
             return GateDecision(allowed=False, reasons=["min_lot_exceeds_risk"], stop_distance=stop_distance)
-        # margin at FCA cap
         notional = lots * intent.contract_oz * intent.price
+        # margin at FCA cap
         margin_needed = notional / L.leverage_cap
         level_after = st.equity / max(st.margin_used + margin_needed, 1e-9)
         if level_after < L.margin_level_floor:
             return GateDecision(allowed=False, reasons=["margin_level_floor"], stop_distance=stop_distance)
+        # combined exposure cap: both accounts trade one instrument, so their positions are one position
+        comb_lots = st.open_lots + st.other_lots + lots
+        comb_notional = st.open_notional + st.other_notional + notional
+        if comb_lots > L.max_combined_lots + 1e-9 or \
+                comb_notional > L.max_combined_notional_frac * L.leverage_cap * (st.equity + st.other_equity):
+            return GateDecision(allowed=False, reasons=["combined_exposure_cap"], stop_distance=stop_distance)
         return GateDecision(allowed=True, lots=round(lots, 2), risk_fraction=realised_risk, stop_distance=stop_distance)
 
 
