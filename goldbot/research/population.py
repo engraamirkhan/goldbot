@@ -86,8 +86,8 @@ def agent_trades(book: ShadowBook) -> dict[str, pd.DataFrame]:
     rows: dict[str, list[dict[str, Any]]] = {}
     for vb in book.books.values():
         for t in vb.closed:
-            if t.ret is None or t.exit_ts is None:
-                continue
+            if not t.taken or t.ret is None or t.exit_ts is None:
+                continue          # counterfactual (not-taken) candidates are not trades
             risk = abs(t.entry - t.stop) / t.entry
             rows.setdefault(t.agent_id, []).append({"ret": t.ret, "r": t.ret / risk if risk > 0 else 0.0, "p": t.p,
                                                     "target_hit": int(t.barrier == "target"), "exit_ts": t.exit_ts})

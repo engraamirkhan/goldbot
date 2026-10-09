@@ -8,6 +8,15 @@ target_atr/stop_atr x ATR, stop assumed first when both are touched in one bar, 
 (max_bars + 1)-th bar after entry, return = side x (exit - entry) / entry.
 
 One engine hosts the book (the account on the canonical-cost broker), so trades are never counted twice.
+
+Counterfactual outcomes (proposal P9): every candidate a version scores is recorded with its p, the threshold at the
+time and whether the version would trade it (`taken`), so its calibration can be refitted on an unbiased sample
+(`outcomes`; research/model.py `recalibrate`). One position per agent applies over every candidate, taken or not,
+exactly as research thins candidates (`labels.one_at_a_time`) before the model filters them, so the taken trades are
+the backtest's model-filtered set. Trading statistics (`stats`, `returns_since`, the population) count taken trades
+only. A book written before this change loads unchanged: its trades are taken (they were only ever the selected
+ones) and carry no threshold, which keeps them out of `outcomes` (a selected-only sample is biased); a candidate
+recorded with its threshold comes from a book that records every candidate.
 """
 from __future__ import annotations
 
@@ -34,6 +43,9 @@ class ShadowTrade(Record):
     max_bars: int                     # in bars of `timeframe`
     timeframe: str = "15m"
     p: float
+    threshold: float | None = None    # the version's entry threshold when the candidate fired (None: older book)
+    taken: bool = True                # p cleared the threshold (would have traded); False = counterfactual only
+    p_raw: float | None = None        # the model's uncalibrated score, so a recalibration can re-map it
     bars_held: int = 0
     exit_ts: UtcTimestamp | None = None
     exit: float | None = None
@@ -63,17 +75,18 @@ class ShadowBook:
             self.books[version] = VersionBook(version=version, started_utc=now)
 
     def open_trade(self, *, version: str, agent_id: str, side: int, bar_ts: pd.Timestamp, entry: float, atr_usd: float,
-                   target_atr: float, stop_atr: float, max_bars: int, p: float, timeframe: str = "15m") -> ShadowTrade | None:
+                   target_atr: float, stop_atr: float, max_bars: int, p: float, timeframe: str = "15m",
+                   threshold: float | None = None, taken: bool = True, p_raw: float | None = None) -> ShadowTrade | None:
         if not np.isfinite(atr_usd) or atr_usd <= 0:
             return None
         book = self.books[version]
         if any(t.entry_ts == bar_ts for t in book.open) or any(t.entry_ts == bar_ts for t in book.closed[-5:]):
             return None   # one shadow entry per version per signal bar, even if the bar is replayed
         if any(t.agent_id == agent_id for t in book.open):
-            return None   # one position per agent at a time, as the labels it was trained on (one_at_a_time)
+            return None   # one position per agent at a time (taken or not), as the labels it was trained on
         t = ShadowTrade(version=version, agent_id=agent_id, side=side, entry_ts=bar_ts, entry=entry,
                         stop=entry - side * stop_atr * atr_usd, target=entry + side * target_atr * atr_usd,
-                        max_bars=max_bars, p=p, timeframe=timeframe)
+                        max_bars=max_bars, p=p, timeframe=timeframe, threshold=threshold, taken=taken, p_raw=p_raw)
         book.open.append(t)
         return t
 
@@ -116,7 +129,7 @@ class ShadowBook:
     def stats(self, version: str, now: pd.Timestamp) -> PerfStats:
         book = self.books[version]
         weeks = max((now - book.started_utc).total_seconds() / (7 * 86400), 0.0)
-        rets = pd.DataFrame({"ret": [t.ret for t in book.closed]})
+        rets = pd.DataFrame({"ret": [t.ret for t in book.closed if t.taken]})
         if rets.empty:
             return PerfStats(n_trades=0, sharpe_ann=0.0, hit_rate=0.0, max_dd=0.0, trades_per_week=0.0, weeks=weeks)
         per_week = len(rets) / max(weeks, 1 / 7)
@@ -128,7 +141,18 @@ class ShadowBook:
         book = self.books.get(version)
         if book is None:
             return []
-        return [t.ret for t in book.closed if t.ret is not None and t.exit_ts is not None and t.exit_ts >= since]
+        return [t.ret for t in book.closed
+                if t.taken and t.ret is not None and t.exit_ts is not None and t.exit_ts >= since]
+
+    def outcomes(self, version: str, since: pd.Timestamp | None = None) -> list[ShadowTrade]:
+        """Closed candidates of `version` recorded with their threshold (every candidate, taken or not), exited at or
+        after `since`: the unbiased sample a recalibration may use. Trades of an older book (selected ones only, no
+        threshold) are left out."""
+        book = self.books.get(version)
+        if book is None:
+            return []
+        return [t for t in book.closed if t.threshold is not None and t.exit_ts is not None
+                and (since is None or t.exit_ts >= since)]
 
     def save(self, now: pd.Timestamp) -> None:
         tmp = self.path.with_suffix(".tmp")

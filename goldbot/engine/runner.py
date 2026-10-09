@@ -57,6 +57,16 @@ class Model(Protocol):
     def predict(self, X: pd.DataFrame) -> np.ndarray: ...
 
 
+def _score(model: Model, X: pd.DataFrame) -> tuple[float, float | None]:
+    """(calibrated p, raw score or None) for one row: a MetaLabelModel exposes its raw score, so the shadow book can
+    keep it for later recalibration; any other model gives p only."""
+    raw_fn, cal_fn = getattr(model, "predict_raw", None), getattr(model, "calibrated", None)
+    if raw_fn is None or cal_fn is None:
+        return float(model.predict(X)[0]), None
+    raw = np.asarray(raw_fn(X), dtype=float)
+    return float(np.asarray(cal_fn(raw), dtype=float)[0]), float(raw[0])
+
+
 class ConstantModel(Record):
     """Stand-in until a trained MetaLabelModel is loaded: returns a fixed probability."""
     p: float = 0.6
@@ -926,13 +936,15 @@ class Engine:
                     continue          # a model only scores the frame version it was trained on, in shadow too
                 feats["side"] = side
                 cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
-                p = float(model.predict(feats[cols])[0])
+                p, p_raw = _score(model, feats[cols])
                 ls = agent.label_spec
-                if p <= breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02:
-                    continue
+                threshold = breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02
+                # every candidate is recorded (P9 counterfactual shadow): the ones below the threshold too, flagged
+                # not taken, so a recalibration sees an unbiased sample; only taken ones count as shadow trades
                 self.shadow.open_trade(version=version, agent_id=agent.agent_id, side=side, bar_ts=pd.Timestamp(bar["ts_utc"]),
                                        entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
-                                       target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p, timeframe=tf)
+                                       target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p, timeframe=tf,
+                                       threshold=threshold, taken=p > threshold, p_raw=p_raw)
 
     def flush_journal(self) -> None:
         """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the

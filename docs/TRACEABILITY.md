@@ -17,12 +17,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 113 |
+| implemented | 114 |
 | partial | 18 |
 | missing | 13 |
 | deviates | 9 |
 | in review | 6 |
-| **total** | **159** |
+| **total** | **160** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -187,6 +187,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | M32 | Meta-model inputs (side, trigger features, context) | in review | proposal P3 | untested |
 | M33 | Primary-signal screen before any model: rule-only gross mean R > 0, t >= 2, >= 1,000 events (proposal P4); each screened configuration is a trial | implemented | goldbot/research/screen.py; scripts/research_pass.py (`--skip-screen`, status `screened`) | tests/test_screen_pool.py::test_screen_passes_only_a_positive_significant_rule_on_enough_events; tests/test_research_pass_integration.py::test_a_rule_that_fails_the_screen_gets_no_model_but_is_a_recorded_trial |
 | M34 | Pooled meta-model per decision timeframe with family and side inputs, same calibration and gates, pooled-vs-local log-loss (proposal P5) | implemented (research only) | goldbot/research/pipeline.py `run_pool`; scripts/research_pass.py `--pooled`; the engine and model registry do not serve a pooled model yet | tests/test_research_pass_integration.py::test_pooled_meta_model_is_one_trial_over_every_family_on_the_timeframe; tests/test_screen_pool.py |
+| M35 | Counterfactual shadow: every candidate's barrier outcome recorded with its p, threshold and decision (proposal P9), so calibration data is unbiased; trading statistics count taken trades only | implemented | goldbot/engine/shadow.py (`ShadowTrade.taken/threshold/p_raw`, `outcomes`; one position per agent over every candidate, as research thins before the model filter); goldbot/engine/runner.py `_shadow_step`; older books load as taken and are not outcomes | tests/test_shadow.py::test_every_candidate_is_recorded_with_its_decision_and_only_taken_ones_count_as_trades; ::test_an_older_book_loads_as_taken_and_only_candidates_with_a_threshold_are_outcomes; tests/test_engine.py::test_shadow_book_records_candidates_below_the_threshold_as_not_taken |
 
 ## Execution and broker [Broker abstraction, Order lifecycle, Reconciliation, Account classifier]
 
