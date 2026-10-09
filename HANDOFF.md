@@ -125,6 +125,31 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   job's output.
   Deferred (L4): a `preregistered` status written before a trial runs, an `eval_version` field on registry rows,
   bootstrap confidence intervals on expectancy, and a seeded no-signal test (100 seeds, DSR < 0.5 in >= 95).
+- Primary-signal screen and new families (proposal P4, 2026-10-09): `research/screen.py` measures the rule alone
+  (every candidate, one position at a time, mid prices) over the research window (holdout excluded) and passes it
+  only with gross mean R > 0, t >= 2.0 and >= 1,000 events; net R is reported, not a criterion. `research_pass.py`
+  screens every configuration first and fits no model for one that fails (registry status `screened`) unless
+  `--skip-screen` (recorded as `screen_skipped`). **A screen is a trial**: it selects rules on data, so each screened
+  configuration is one registry row, charged to the quarter's budget and counted by the deflated Sharpe whether it
+  passes or not; when it passes, the walk-forward that follows is the same trial (one row). New families, both
+  registered and founders in the population: `tsmom` (1h, 4h option; vol-scaled trailing return over 24/120/480 h,
+  on a fixed 4-hour schedule, barriers 3.0/1.5 ATR, 48 bars) and `intraday_momentum` (15m; at mid-session on the
+  London or New York local clock, DST by zoneinfo, enter in the direction of the move since the session open, exit at
+  the session close, stop 2.0 / target 3.0 ATR). Their features (`tsmom`, `intraday_session`, family `momentum`) are
+  versioned registry features and pass the lookahead check; adding them changes `feature_version` for every family
+  (no champion exists, so nothing live is affected; retrains pick it up). Known gap: swap is not in the labels yet
+  (tsmom holds up to two days: net overstated by roughly 0.02-0.05 R; the gross screen is unaffected). 4h is
+  research-only: `saturday_retrain` skips timeframes without a settings walk-forward window.
+- Pooled meta-model (P5): `research_pass.py --pooled 15m|1h` fits ONE model over the union of every family whose
+  default timeframe it is (15m: intraday_momentum, mean_reversion, session_open; 1h: breakout, trend, tsmom), with
+  one indicator column per family, `side` and a declared pooled list (`pipeline.POOLED_FEATURES`, <= 40 inputs in
+  all), the same cross-fitted calibration, per-candidate thresholds (each family's own barriers) and gates, uniqueness
+  weights across the pool; the screen is applied to the union (members shown alone too). Recorded as family
+  `pooled_<tf>` (one trial). The report adds a per-family table with P5's deciding comparison: pooled vs the
+  family's own model, OOF log-loss on the same rows of the same folds. Research only: the engine and model registry
+  do not serve a pooled model yet (needed only if one passes). session_open now trains on an expanding window with
+  6-month test folds (`Specialist.walkforward`); at ~95 candidates a year a 6-month fold holds ~47, so its per-fold
+  gate still needs denser filters or 9-month folds.
 
 ## Next steps (no owner input needed unless marked)
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.
@@ -134,6 +159,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
    (`docs/proposals/2026-10-design-improvements.md`) found the evaluation itself biased (calibration and threshold
    chosen on the test rows, spread charged twice, design gates not enforced), so the variant batches are on hold
    until that fix (P1-P3) lands; then the four families are re-run once as pre-registered trials. Until an agent passes the gates the engines propose nothing (by design).
+   Update 2026-10-09: the evaluation fix landed and the four families were re-run (issues #37, #39, #40, #41; summary
+   #34): no gross edge (rule gross t -1.58..+1.31), net -0.14..-0.39 R per trade, OOF AUC 0.47-0.53. All four fail
+   the P4 screen on those numbers, so they are retired from model research (not re-screened: that would spend trials).
+   Pre-registered next batch (P4 + P5, at most 6 trials, `research.yml` dispatches, in this order):
+   a. `specialist=tsmom`, `variants=[{}, {"timeframe": "4h", "max_bars": 12}]` (2 trials);
+   b. `specialist=intraday_momentum`, `variants=[{}, {"session": "london"}]` (2 trials);
+   c. `pooled=1h` only if a tsmom configuration passed its screen; `pooled=15m` only if an intraday_momentum one did
+      (1 trial each; skipped otherwise, which saves the budget). `skip_screen` stays false throughout.
+   A configuration that passes the screen goes straight on to the walk-forward and the design's gates in the same run.
 2. On the VPS, check `state/news_feeds.json` after the first hour: the feed URLs in `settings.yaml: news` could not be
    verified from a Claude sandbox. Fix any that fail; the collector skips broken feeds.
 3. VPS (step by step in `docs/RUNBOOK.md`): provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in
@@ -146,7 +180,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
    `telegram:` section yet; add it).
 4. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
 5. Session-open has about 90 candidates a year, so most 24-month training windows miss the walk-forward's 200-trade
-   training minimum (9 folds in trial #11); the session_open variant batch loosens its filters for more candidates.
+   training minimum (9 folds in trial #11); it now trains on an expanding window with 6-month test folds (P5), and
+   fails the P4 screen anyway (gross t 1.31), so no model is fitted for it unless a later rule change passes.
 6. Gaps found while writing `docs/RUNBOOK.md` (code changes, through CI): the bootstrap does not build `web/dist`
    (the API serves nothing without it) and registers services under NSSM's default account, which may not see
    secrets stored in the owner's Windows Credential Manager; `run_engine` passes no `RiskLimits`, so

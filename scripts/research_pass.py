@@ -12,8 +12,16 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P1/P2):
   beyond it; the holdout window (research.holdout_from/to) is excluded unless `--score-holdout`, which scores a
   configuration on it exactly once.
 
+Primary-signal screen (P4, goldbot/research/screen.py): before any model, the rule's own gross expectancy over the
+research window must be positive with t >= 2 on >= 1,000 events. A configuration that fails is recorded with status
+"screened" (it is a trial: a screen selects rules on data) and no model is fitted, unless `--skip-screen`.
+
+Pooled meta-model (P5): `--pooled 15m|1h` fits ONE model over the union of every family deciding on that timeframe
+(family indicators and `side` among its inputs), screened, gated and recorded as family "pooled_<tf>" (one trial).
+
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
-      [--specialist session_open] [--from-year 2010] [--to-year 2026] [--rationale "..."] [--score-holdout]
+      [--specialist session_open | --pooled 15m] [--from-year 2010] [--to-year 2026] [--rationale "..."] \
+      [--variants '[{}]'] [--skip-screen] [--score-holdout]
 """
 from __future__ import annotations
 
@@ -22,7 +30,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -33,9 +41,21 @@ from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
 from goldbot.execution.costs import settings_extra_cost_usd  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
-from goldbot.research.pipeline import ResearchResult, lookahead_check, run_specialist  # noqa: E402
+from goldbot.research.pipeline import (  # noqa: E402
+    POOLED_FEATURES,
+    ResearchResult,
+    build_decision_frame,
+    evaluate,
+    lookahead_check,
+    pool_identity,
+    pooled_family,
+    pooled_members,
+    prepare,
+    run_pool,
+)
 from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry  # noqa: E402
-from goldbot.specialists import SPECIALISTS  # noqa: E402
+from goldbot.research.screen import screen, screen_lines  # noqa: E402
+from goldbot.specialists import SPECIALISTS, Specialist  # noqa: E402
 
 
 def load_bars(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
@@ -95,7 +115,9 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
              f"- runtime {meta['seconds']:.0f}s", ""]
+    lines += screen_lines(m.get("screen"), bool(m.get("screen_skipped")))
     lines += _gates_lines(m.get("gates")) + _holdout_lines(m.get("holdout_verdict")) + _rule_only_lines(m.get("rule_only"))
+    lines += _by_family_lines(m.get("by_family"))
     if "all_candidates" in m:
         lines += ["### Out of fold", "",
                   "| set | n | hit rate | mean ret | profit factor | Sharpe (ann.) | max DD | deflated SR |",
@@ -149,6 +171,25 @@ def _holdout_lines(v: dict[str, Any] | None) -> list[str]:
             f"- {v['n']} model-filtered trades, mean R {v['mean_r']:.3f}, t-stat {v['t_stat']:.2f}", ""]
 
 
+def _by_family_lines(b: dict[str, Any] | None) -> list[str]:
+    """Pooled trials: each member family under the shared model, and pooled vs the family's own model (P5's test)."""
+    if not b:
+        return []
+    out = ["### Pooled model by family", "",
+           "| family | candidates | gross mean R (t) | OOF AUC | model n | model mean R | log-loss pooled | log-loss local |",
+           "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for fam, e in b.items():
+        g = (e.get("rule_only") or {}).get("gross") or {}
+        mf = e.get("model_filtered") or {}
+        ll = e.get("logloss") or {}
+        out.append(f"| {fam} | {e['n_candidates']:,} | "
+                   + (f"{g['mean_r']:+.3f} ({g['t_stat']:.2f})" if g.get("n") else "—") + f" | {_fmt(e.get('oof_auc'))} | "
+                   f"{mf.get('n', 0)} | " + (f"{mf['mean_r']:+.3f}" if mf.get("n") else "—") + " | "
+                   f"{_fmt(ll.get('pooled'))} | {_fmt(ll.get('local'))} |")
+    return out + ["", "Log-loss on the same out-of-fold rows; the local model is the family's own (its declared inputs) "
+                      "trained on its rows of the same folds. Lower is better.", ""]
+
+
 def _rule_only_lines(r: dict[str, Any] | None) -> list[str]:
     if not r:
         return []
@@ -186,14 +227,39 @@ def parse_variants(family: str, raw: str) -> list[dict[str, Any]]:
 
 
 def summary_table(rows: list[dict[str, Any]]) -> str:
-    out = ["| trial | overrides | candidates | OOF AUC | gates | model n | model hit | model PF | DSR |",
-           "|---:|---|---:|---:|---|---:|---:|---:|---:|"]
+    out = ["| trial | overrides | candidates | screen | OOF AUC | gates | model n | model hit | model PF | DSR |",
+           "|---:|---|---:|---|---:|---|---:|---:|---:|---:|"]
     for r in rows:
         mf = r["metrics"].get("model_filtered") or {}
-        out.append(f"| {r['trial']} | `{json.dumps(r['overrides']) if r['overrides'] else 'defaults'}` | {r['n']:,} | "
+        scr = r["metrics"].get("screen")
+        scr_txt = "—" if not scr else ("pass" if scr["passed"] else ("fail (skipped)" if r["metrics"].get("screen_skipped") else "**fail**"))
+        out.append(f"| {r['trial']} | `{json.dumps(r['overrides']) if r['overrides'] else 'defaults'}` | {r['n']:,} | {scr_txt} | "
                    f"{_fmt(r['metrics'].get('oof_auc'))} | {'pass' if (r['metrics'].get('gates') or {}).get('passed') else 'fail'} | {mf.get('n', 0)} | {_fmt(mf.get('hit_rate', float('nan')))} | "
                    f"{_fmt(mf.get('profit_factor', float('nan')))} | {_fmt(mf.get('dsr'))} |")
     return "\n".join(out)
+
+
+class Job(NamedTuple):
+    """One recorded trial: a family configuration, or a pooled model over every family on a timeframe."""
+    family: str                      # registry family ("pooled_<tf>" for a pooled trial)
+    config: dict[str, Any]
+    overrides: dict[str, Any]
+    specs: list[Specialist]
+    timeframe: str
+    pooled: bool
+
+
+def make_jobs(args: argparse.Namespace, variants: list[dict[str, Any]]) -> list[Job]:
+    if args.pooled:
+        tf = args.pooled
+        specs = [SPECIALISTS[f]() for f in pooled_members(tf)]
+        cfg = {"timeframe": tf, "families": {s.family: s.config for s in specs}}
+        return [Job(pooled_family(tf), cfg, {}, specs, tf, True)]
+    jobs = []
+    for v in variants:
+        spec = SPECIALISTS[args.specialist](**v)
+        jobs.append(Job(args.specialist, spec.config, v, [spec], spec.timeframe, False))
+    return jobs
 
 
 def main() -> int:
@@ -210,8 +276,14 @@ def main() -> int:
                     help="round-trip slippage + commission per oz beyond the spread (default: settings prior + commission)")
     ap.add_argument("--score-holdout", action="store_true",
                     help="score the configurations on the held-out window (once per configuration, ever)")
+    ap.add_argument("--skip-screen", action="store_true",
+                    help="fit the model even when the rule fails the primary-signal screen (the screen is still recorded)")
+    ap.add_argument("--pooled", default="", choices=["", *sorted(POOLED_FEATURES)],
+                    help="one meta-model over every family deciding on this timeframe (one trial, family pooled_<tf>)")
     args = ap.parse_args()
-    variants = parse_variants(args.specialist, args.variants)
+    if args.pooled and json.loads(args.variants) not in ([{}], {}):
+        raise SystemExit("--pooled runs every member family at its defaults; --variants does not apply")
+    variants = [{}] if args.pooled else parse_variants(args.specialist, args.variants)
     settings = load_settings()
     extra_cost = settings_extra_cost_usd(settings) if args.extra_cost_usd is None else float(args.extra_cost_usd)
     holdout = settings.research.holdout_window()
@@ -219,74 +291,107 @@ def main() -> int:
     b1 = load_bars(Path(args.bars), args.from_year, args.to_year)      # fails fast, before any registry file exists
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
-        return _run(args, variants, settings, extra_cost, holdout, b1, reg, t0)
+        return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings)
 
 
-def _run(args: argparse.Namespace, variants: list[dict[str, Any]], settings: Any, extra_cost: float,
-         holdout: tuple[pd.Timestamp, pd.Timestamp] | None, b1: pd.DataFrame, reg: TrialRegistry, t0: float) -> int:
+def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
+         b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any) -> int:
     if args.score_holdout:
         if holdout is None:
             raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
-        for v in variants:
-            cfg = SPECIALISTS[args.specialist](**v).config
-            label = json.dumps(v) if v else "defaults"
-            if reg.holdout_scored(args.specialist, cfg):
-                raise SystemExit(f"{args.specialist} {label} was already scored on the holdout; "
+        for job in jobs:
+            label = json.dumps(job.overrides) if job.overrides else "defaults"
+            if reg.holdout_scored(job.family, job.config):
+                raise SystemExit(f"{job.family} {label} was already scored on the holdout; "
                                  "that result is final for this configuration")
-            if not reg.passed_gates(args.specialist, cfg):
-                raise SystemExit(f"{args.specialist} {label} has no research trial that passed the design's gates; "
+            if not reg.passed_gates(job.family, job.config):
+                raise SystemExit(f"{job.family} {label} has no research trial that passed the design's gates; "
                                  "only a passing configuration is scored on the holdout")
-    try:                                  # a holdout scoring is a look at the data too: it is charged like any trial
-        quarter = reg.check_budget(len(variants), settings.research.trial_budget_quarter)
+    try:                                  # a holdout scoring or a screen is a look at the data too: charged like any trial
+        quarter = reg.check_budget(len(jobs), settings.research.trial_budget_quarter)
     except TrialBudgetExceeded as exc:
         raise SystemExit(str(exc)) from None
     years_span = (b1["ts_utc"].iloc[-1] - b1["ts_utc"].iloc[0]).days / 365.25
     zero_volume = float((b1["tick_count"].astype(float) <= 0).mean())
     print(f"1m bars: {len(b1):,} ({b1['ts_utc'].iloc[0]:%Y-%m-%d} -> {b1['ts_utc'].iloc[-1]:%Y-%m-%d}), "
           f"zero tick volume in {zero_volume:.1%}", flush=True)
-    frames: dict[str, tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, Any]]] = {}
+    frames: dict[str, tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, Any], tuple[pd.DataFrame, pd.DataFrame]]] = {}
     sections, rows = [], []
-    for overrides in variants:
-        spec = SPECIALISTS[args.specialist](**overrides)
-        tf = spec.timeframe
-        if tf not in frames:                       # bars, context and the lookahead check once per timeframe
+    title = jobs[0].family
+    for job in jobs:
+        tf = job.timeframe
+        if tf not in frames:                       # bars, context, decision frame and lookahead check once per timeframe
             b_dec = resample_bars(b1, tf)
             context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
             leak = lookahead_check(b_dec, context)
-            frames[tf] = (b_dec, context, leak)
+            frames[tf] = (b_dec, context, leak, build_decision_frame(b_dec.reset_index(drop=True), context))
             sizes = "  ".join(f"{k} {len(v):,}" for k, v in context.items())
             print(f"{tf} {len(b_dec):,}  {sizes}; lookahead check: {len(leak['lookahead_columns'])} of "
                   f"{leak['columns_checked']} columns differ [{time.time() - t0:.0f}s]", flush=True)
-        b_dec, context, leak = frames[tf]
+        b_dec, context, leak, frame = frames[tf]
         n_trials = reg.n_trials + 1
-        res = run_specialist(spec, b_dec, context=context, n_trials=n_trials, extra_cost_usd=extra_cost,
-                             holdout=holdout, score_holdout=args.score_holdout)
-        trades_per_year = res.n_candidates / years_span if years_span > 0 else 0.0
-        print(f"{json.dumps(overrides) or 'defaults'}: candidates {res.n_candidates}  folds {res.n_folds}  "
-              f"[{time.time() - t0:.0f}s]", flush=True)
-        results = {**res.metrics, "lookahead": leak, "trades_per_year": trades_per_year,
-                   "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1])}
-        rationale = args.rationale + (f" | overrides {json.dumps(overrides, sort_keys=True)}" if overrides else "")
-        row = reg.record(agent_id=res.agent_id, family=spec.family, config=spec.config, feature_version=res.feature_version,
-                         rationale=rationale, results=results, status="holdout" if args.score_holdout else "evaluated",
-                         budget_quarter=quarter)
-        years = per_year(res.oof, res.metrics.get("threshold"))
-        meta = {"specialist": args.specialist, "from_year": int(b1["ts_utc"].iloc[0].year),
+        preps = [prepare(s, b_dec, context, extra_cost_usd=extra_cost, holdout=holdout, score_holdout=args.score_holdout,
+                         frame=frame) for s in job.specs]
+        scr = None if args.score_holdout else screen(preps if job.pooled else preps[0])
+        skipped = bool(scr is not None and not scr["passed"] and args.skip_screen)
+        agent_id = pool_identity(tf, preps).agent_id if job.pooled else job.specs[0].agent_id
+        version = preps[0].feature_version
+        meta = {"specialist": job.family, "from_year": int(b1["ts_utc"].iloc[0].year),
                 "to_year": int(b1["ts_utc"].iloc[-1].year), "n_1m": len(b1), "n_dec": len(b_dec), "tf": tf,
-                "zero_volume": zero_volume, "trial": row["trial"], "seconds": time.time() - t0}
-        text = render_report(res, years, leak, meta)
-        if overrides:
-            text = text.replace("\n\n", f"\n\n- config overrides: `{json.dumps(overrides, sort_keys=True)}`\n", 1)
+                "zero_volume": zero_volume}
+        common = {"lookahead": leak, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
+                  "screen": scr, "screen_skipped": skipped}
+        rationale = args.rationale + (f" | overrides {json.dumps(job.overrides, sort_keys=True)}" if job.overrides else "")
+        if scr is not None and not scr["passed"] and not args.skip_screen:
+            n = int(sum(len(p.labels) for p in preps))
+            metrics: dict[str, Any] = {"n_candidates": n, "rule_only": scr["rule_only"],
+                                       "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
+            row = reg.record(agent_id=agent_id, family=job.family, config=job.config, feature_version=version,
+                             rationale=rationale, results=metrics, status="screened", budget_quarter=quarter)
+            print(f"{json.dumps(job.overrides) or 'defaults'}: screen failed ({n} events) [{time.time() - t0:.0f}s]", flush=True)
+            text = render_screen_failed(scr, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0, "n": n})
+        else:
+            if job.pooled:
+                res = run_pool(preps, tf, n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
+                               score_holdout=args.score_holdout)
+            else:
+                res = evaluate(preps[0], n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
+                               score_holdout=args.score_holdout)
+            n = res.n_candidates
+            print(f"{json.dumps(job.overrides) or 'defaults'}: candidates {n}  folds {res.n_folds}  "
+                  f"[{time.time() - t0:.0f}s]", flush=True)
+            metrics = {**res.metrics, "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
+            row = reg.record(agent_id=res.agent_id, family=job.family, config=job.config, feature_version=res.feature_version,
+                             rationale=rationale, results=metrics, status="holdout" if args.score_holdout else "evaluated",
+                             budget_quarter=quarter)
+            res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped}
+            years = per_year(res.oof, res.metrics.get("threshold"))
+            text = render_report(res, years, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0})
+        if job.overrides:
+            text = text.replace("\n\n", f"\n\n- config overrides: `{json.dumps(job.overrides, sort_keys=True)}`\n", 1)
         sections.append(text)
-        rows.append({"trial": row["trial"], "overrides": overrides, "n": res.n_candidates, "metrics": res.metrics})
-        print(json.dumps({"trial": row["trial"], "agent_id": res.agent_id}), flush=True)
-    head = [] if len(rows) == 1 else [f"## {args.specialist}: {len(rows)} variants", "", summary_table(rows), "",
-                                      "Each variant is one recorded trial; the deflated SR of every later trial counts "
-                                      "them all.", ""]
+        rows.append({"trial": row["trial"], "overrides": job.overrides, "n": n, "metrics": metrics})
+        print(json.dumps({"trial": row["trial"], "agent_id": agent_id, "status": row["status"]}), flush=True)
+    head = [] if len(rows) == 1 else [f"## {title}: {len(rows)} variants", "", summary_table(rows), "",
+                                      "Each variant is one recorded trial (a configuration that fails the screen too); "
+                                      "the deflated SR of every later trial counts them all.", ""]
     report = "\n".join(head) + "\n\n".join(sections)
     Path(args.report).write_text(report)
     print(report)
     return 0
+
+
+def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[str, Any]) -> str:
+    lines = [f"## {meta['specialist']} primary-signal screen on real bars ({meta['from_year']}-{meta['to_year']})", "",
+             f"- bars: {meta['n_1m']:,} 1m -> {meta['n_dec']:,} {meta['tf']} decision bars",
+             f"- events {meta['n']:,} (one position at a time, holdout excluded), registry trial #{meta['trial']} "
+             f"(a screen counts as a trial)",
+             f"- lookahead check: {'clean' if not leak['lookahead_columns'] else str(len(leak['lookahead_columns'])) + ' columns use future data'}",
+             f"- runtime {meta['seconds']:.0f}s", ""]
+    lines += screen_lines(scr) + _rule_only_lines(scr["rule_only"])
+    lines += ["Screen failed: no model was fitted. The rule is retired from model research (it may still serve as a "
+              "feature); `--skip-screen` fits a model anyway and is recorded as such."]
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

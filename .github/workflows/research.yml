@@ -11,6 +11,8 @@ on:
       rationale:  { description: "why this trial (recorded in the registry)", default: "baseline walk-forward on Dukascopy 1m bars" }
       variants:   { description: "JSON list of config overrides, one trial each (charged to the quarter's trial budget)", default: "[{}]" }
       score_holdout: { description: "score these configurations on the held-out year (once per configuration, final)", type: boolean, default: false }
+      skip_screen: { description: "fit the model even if the rule fails the primary-signal screen (recorded as skipped)", type: boolean, default: false }
+      pooled:     { description: "15m or 1h: one pooled meta-model over every family on that timeframe (ignores specialist and variants)", default: "" }
 permissions:
   contents: write
   issues: write
@@ -41,11 +43,14 @@ jobs:
           RATIONALE: ${{ inputs.rationale }}
           VARIANTS: ${{ inputs.variants }}
           SCORE_HOLDOUT: ${{ inputs.score_holdout && '--score-holdout' || '' }}
+          SKIP_SCREEN: ${{ inputs.skip_screen && '--skip-screen' || '' }}
+          POOLED: ${{ inputs.pooled }}
         run: |
           set -o pipefail
+          if [ -n "$POOLED" ]; then TARGET=(--pooled "$POOLED"); else TARGET=(--specialist "$SPECIALIST" --variants "$VARIANTS"); fi
           python scripts/research_pass.py --bars raw --registry registry.jsonl --report report.md \
-            --specialist "$SPECIALIST" --from-year "$FROM_YEAR" --to-year "$TO_YEAR" --rationale "$RATIONALE" \
-            --variants "$VARIANTS" $SCORE_HOLDOUT 2>&1 | tee research.log
+            "${TARGET[@]}" --from-year "$FROM_YEAR" --to-year "$TO_YEAR" --rationale "$RATIONALE" \
+            $SCORE_HOLDOUT $SKIP_SCREEN 2>&1 | tee research.log
       - name: save the registry
         run: |
           # union with whatever the VPS monthly loop pushed while this ran, so no trial is dropped
@@ -57,7 +62,7 @@ jobs:
       - name: post the report to an issue
         if: always()
         env:
-          SPECIALIST: ${{ inputs.specialist }}
+          SPECIALIST: ${{ inputs.pooled != '' && format('pooled_{0}', inputs.pooled) || inputs.specialist }}
         run: |
           python - <<'EOF'
           import json, os, pathlib, urllib.request
