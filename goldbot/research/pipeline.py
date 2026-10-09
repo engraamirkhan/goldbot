@@ -16,7 +16,7 @@ from goldbot.features import FEATURES, build_features
 from goldbot.features.mtf import merge_higher_tf
 from goldbot.features.technical import atr
 from goldbot.labels import SwapSpec, one_at_a_time, triple_barrier, uniqueness_weights
-from goldbot.research.gates import holdout_verdict, research_gates
+from goldbot.research.gates import RULE_ONLY_LABEL, holdout_verdict, research_gates
 from goldbot.research.metrics import expectancy, summarize
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, fit_calibrator
 from goldbot.research.walkforward import Fold, splits_for, window_for
@@ -311,9 +311,22 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     else:
         metrics["gates"] = research_gates(int(len(labels)), metrics["complete_fold_test_sizes"], taken[["ts_utc", "ret"]],
                                           metrics.get("model_filtered"))
+        metrics["rule_only_gates"] = rule_only_gates(oof, metrics["complete_fold_test_sizes"], n_trials, trades_per_year)
     imp = last_model.importance() if last_model is not None else None
     return ResearchResult(agent_id=agent_id, n_candidates=len(labels), n_folds=len(folds), oof=oof, metrics=metrics,
                           feature_version=version, importance=imp, model=last_model if "threshold" in metrics else None)
+
+
+def rule_only_gates(net: pd.DataFrame, fold_test_sizes: list[int], n_trials: int,
+                    trades_per_year: float | None = None) -> dict[str, Any]:
+    """The design's gates applied to the rule alone: every candidate's net result (spread, slippage, commission, swap)
+    in the research window, no model filter, the same candidates and folds, the DSR with the same trial count.
+    Informational (RULE_ONLY_LABEL): a passed trial still needs the model path's gates."""
+    rows = net[["ts_utc", "ret"]]
+    tpy = trades_per_year if trades_per_year is not None else (_per_year(rows) if len(rows) else 0.0)
+    summary = summarize(rows, tpy, n_trials)
+    out = research_gates(int(len(net)), fold_test_sizes, rows, summary, subject="rule-only")
+    return {**out, "label": RULE_ONLY_LABEL, "n_trades": int(len(net)), "summary": summary}
 
 
 def _swap_summary(swap: SwapSpec | None, labels: pd.DataFrame) -> dict[str, Any] | None:

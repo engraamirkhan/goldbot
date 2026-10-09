@@ -119,7 +119,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
              f"- runtime {meta['seconds']:.0f}s", ""]
     lines += screen_lines(m.get("screen"), bool(m.get("screen_skipped")))
-    lines += _gates_lines(m.get("gates")) + _holdout_lines(m.get("holdout_verdict")) + _rule_only_lines(m.get("rule_only"))
+    lines += _gates_lines(m.get("gates")) + _rule_gates_lines(m.get("rule_only_gates")) + _holdout_lines(m.get("holdout_verdict")) + _rule_only_lines(m.get("rule_only"))
     lines += _by_family_lines(m.get("by_family"))
     if "all_candidates" in m:
         lines += ["### Out of fold", "",
@@ -174,6 +174,15 @@ def _gates_lines(g: dict[str, Any] | None) -> list[str]:
     if not g:
         return []
     out = [f"### Design gates: {'**PASS**' if g['passed'] else '**FAIL**'}", ""]
+    out += [f"- {'pass' if c['passed'] else 'FAIL'} {c['name']}: {c['detail']}" for c in g["checks"]]
+    return out + [""]
+
+
+def _rule_gates_lines(g: dict[str, Any] | None) -> list[str]:
+    """The same gates on every candidate without the model (informational; promotion still requires the model path)."""
+    if not g:
+        return []
+    out = [f"### Design gates, {g['label']}: {'pass' if g['passed'] else 'fail'}", ""]
     out += [f"- {'pass' if c['passed'] else 'FAIL'} {c['name']}: {c['detail']}" for c in g["checks"]]
     return out + [""]
 

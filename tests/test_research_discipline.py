@@ -345,3 +345,31 @@ def test_feature_version_changes_with_the_signed_patterns(monkeypatch):
     assert feature_version(names) != before                              # a new neutral value is a new feature set
     monkeypatch.setitem(FEATURES, "returns", spec)
     assert feature_version(names) == before and spec.signed == {r"ret_\d+": 0.0}
+
+
+# ---------------------------------------------------------------------------------------------- rule-only gates
+def test_rule_only_gates_apply_the_same_checks_to_every_candidate_and_never_promote(tmp_path):
+    from goldbot.research.gates import RULE_ONLY_LABEL
+    from goldbot.research.pipeline import evaluate, prepare
+    b1 = ticks_to_1m(synthetic_ticks("2023-01-01", "2025-01-01", ticks_per_minute=1, seed=4))
+    spec = SPECIALISTS["tsmom"]()
+    dec = resample_bars(b1, "1h").reset_index(drop=True)
+    context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs("1h")}
+    res = evaluate(prepare(spec, dec, context, extra_cost_usd=0.3), n_trials=3)
+    m = res.metrics
+    rg, mg = m["rule_only_gates"], m["gates"]
+    assert rg["label"] == RULE_ONLY_LABEL == "rule-only (informational; promotion still requires the model path)"
+    assert [c["name"] for c in rg["checks"]] == [c["name"] for c in mg["checks"]] == ["candidates", "per_fold",
+                                                                                       "positive_years", "dsr"]
+    assert rg["checks"][0] == mg["checks"][0] and rg["checks"][1] == mg["checks"][1]    # same candidates, same folds
+    # positive years and the DSR are judged on every candidate's net result (no model filter)
+    oof = res.oof
+    expect = research_gates(len(oof), m["complete_fold_test_sizes"], oof[["ts_utc", "ret"]],
+                            summarize(oof, len(oof) / ((oof["ts_utc"].max() - oof["ts_utc"].min()).days / 365.25), 3))
+    assert rg["checks"][2]["passed"] == expect["checks"][2]["passed"] and "rule-only" in rg["checks"][2]["detail"]
+    assert rg["n_trades"] == len(oof) and rg["summary"]["n"] == len(oof)
+    # a registry row whose rule-only gates pass but model gates fail is not a passed trial
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    reg.record(agent_id="a", family="tsmom", config=spec.config, feature_version="f", rationale="r", status="evaluated",
+               results={"gates": {"passed": False, "checks": []}, "rule_only_gates": {"passed": True, "checks": []}})
+    assert not reg.passed_gates("tsmom", spec.config)

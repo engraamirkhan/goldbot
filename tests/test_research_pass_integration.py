@@ -189,6 +189,10 @@ def test_a_rule_that_passes_the_screen_goes_on_to_the_walk_forward(release_dir, 
     sw = row["results"]["swap"]
     assert sw["long_usd_per_lot"] == -60.0 and sw["triple_weekday"] == 2 and sw["mean_nights"] > 0
     assert "- swap: long -60.00 / short +0.00 USD per lot per night, x3 on Wed" in report.read_text()
+    # the same gates on the rule alone, next to the model's, labelled as informational
+    rg = row["results"]["rule_only_gates"]
+    assert [c["name"] for c in rg["checks"]] == ["candidates", "per_fold", "positive_years", "dsr"]
+    assert "### Design gates, rule-only (informational; promotion still requires the model path):" in report.read_text()
 
 
 def test_pooled_meta_model_is_one_trial_over_every_family_on_the_timeframe(release_dir, tmp_path, monkeypatch):

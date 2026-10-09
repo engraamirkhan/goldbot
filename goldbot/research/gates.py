@@ -10,6 +10,9 @@ A specialist configuration passes only when
 * the model-filtered trades number at least MIN_TRADES_FOR_DSR and their deflated Sharpe (with the registry's trial
   count) is at least DSR_BAR (design: Validation).
 
+The same checks are also reported on the rule alone (every candidate, net of costs, no model filter) as
+`rule_only_gates`, labelled RULE_ONLY_LABEL: informational, since promotion still requires the model path.
+
 Only complete walk-forward folds count for the per-fold minimum: a last fold the data does not cover is a stub.
 The population's shadow -> live promotion requires a passed research trial for the agent's exact configuration
 (TrialRegistry.passed_gates).
@@ -33,12 +36,14 @@ MIN_TRADES_PER_YEAR = 10
 CHOP_YEARS = (2021, 2022)
 DSR_BAR = 0.95                  # design: deflated Sharpe ratio of 0.95 or better
 HOLDOUT_MIN_T = 1.65            # one-sided 5% on the held-out year's mean R
+RULE_ONLY_LABEL = "rule-only (informational; promotion still requires the model path)"
 
 
 def research_gates(n_candidates: int, fold_test_sizes: list[int], taken: pd.DataFrame,
-                   model_filtered: dict[str, Any] | None = None) -> dict[str, Any]:
+                   model_filtered: dict[str, Any] | None = None, subject: str = "model-filtered") -> dict[str, Any]:
     """fold_test_sizes: candidates per complete test fold; taken: the model-filtered out-of-fold trades (ts_utc, ret);
-    model_filtered: their summary (n, dsr). Returns {"passed": bool, "checks": [...]}."""
+    model_filtered: their summary (n, dsr); subject: what `taken` is, for the details ("rule-only" for every
+    candidate). Returns {"passed": bool, "checks": [...]}."""
     checks: list[dict[str, Any]] = [
         {"name": "candidates", "passed": n_candidates >= MIN_CANDIDATES,
          "detail": f"{n_candidates:,} labelled candidates (need {MIN_CANDIDATES:,})"},
@@ -54,12 +59,12 @@ def research_gates(n_candidates: int, fold_test_sizes: list[int], taken: pd.Data
                 positive.append(int(str(y)))
     chop = any(y in CHOP_YEARS for y in positive)
     checks.append({"name": "positive_years", "passed": len(positive) >= MIN_POSITIVE_YEARS and chop,
-                   "detail": f"positive model-filtered years (>= {MIN_TRADES_PER_YEAR} trades each): "
+                   "detail": f"positive {subject} years (>= {MIN_TRADES_PER_YEAR} trades each): "
                              f"{positive or 'none'}; need {MIN_POSITIVE_YEARS} incl. one of {list(CHOP_YEARS)}"})
     mf = model_filtered or {}
     n_mf, dsr = int(mf.get("n") or 0), mf.get("dsr")
     checks.append({"name": "dsr", "passed": n_mf >= MIN_TRADES_FOR_DSR and dsr is not None and float(dsr) >= DSR_BAR,
-                   "detail": f"deflated Sharpe {'n/a' if dsr is None else f'{float(dsr):.3f}'} on {n_mf} model-filtered "
+                   "detail": f"deflated Sharpe {'n/a' if dsr is None else f'{float(dsr):.3f}'} on {n_mf} {subject} "
                              f"trades (need {MIN_TRADES_FOR_DSR}+ trades and {DSR_BAR})"})
     return {"passed": all(c["passed"] for c in checks), "checks": checks}
 

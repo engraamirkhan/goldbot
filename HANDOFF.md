@@ -149,7 +149,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   trading days / (mean hold + 1), ~500 in 15.75 years. The per-fold gate fails too (12-month folds hold 23-38; the
   first fold starts 2018-05 because the 200-row training minimum takes ~7 years to fill). The 1d trial's verdict is the
   event floor; its gross R is still reported. tsmom 4h with swap: 2,289 events, 79% held overnight, 1.78 nights per
-  trade. 4h is
+  trade. Every walk-forward report also shows the design's gates applied to the rule alone (`rule_only_gates`: every
+  candidate net of all costs, same folds and trial count), labelled "rule-only (informational; promotion still
+  requires the model path)"; `passed_gates` reads only the model path's `gates`. 4h is
   research-only: `saturday_retrain` skips timeframes without a settings walk-forward window.
 - Pooled meta-model (P5): `research_pass.py --pooled 15m|1h` fits ONE model over the union of every family whose
   default timeframe it is (15m: intraday_momentum, mean_reversion, session_open; 1h: breakout, trend, tsmom), with
