@@ -317,7 +317,8 @@ def test_cost_table_age(tmp_path):
     assert health.check_costs(ctx, "icm-demo").status == "warn"
     f = tmp_path / "costs_icm-demo.json"
     for days, status in ((1, "ok"), (5, "warn"), (10, "fail")):
-        write(f, {"account_id": "icm-demo", "built_utc": (NOW - pd.Timedelta(days=days)).isoformat()})
+        write(f, {"account_id": "icm-demo", "built_utc": (NOW - pd.Timedelta(days=days)).isoformat(),
+                  "swap_long_usd_per_lot": -48.0, "swap_short_usd_per_lot": 9.0})
         assert health.check_costs(ctx, "icm-demo").status == status, days
     f.write_text("{}")
     assert health.check_costs(ctx, "icm-demo").status == "fail"
@@ -387,7 +388,8 @@ def healthy_state(tmp_path: Path) -> None:
     sch = Scheduler(tmp_path / "scheduler.json", clock=lambda: NOW)
     for name in type(SETTINGS.scheduler).model_fields:
         sch.add(name, Schedule(kind="daily", at="23:00"), lambda slot: None)
-    write(tmp_path / "costs_icm-demo.json", {"built_utc": (NOW - pd.Timedelta(hours=14)).isoformat()})
+    write(tmp_path / "costs_icm-demo.json", {"built_utc": (NOW - pd.Timedelta(hours=14)).isoformat(),
+                                             "swap_long_usd_per_lot": -48.0, "swap_short_usd_per_lot": 9.0})
     write(tmp_path / "news_feeds.json", {"a": {"ok": True, "ts": NOW.isoformat()}})
     HealthWatch(tmp_path).record(HealthReport(ts=NOW, status="ok", checks=[]))
 

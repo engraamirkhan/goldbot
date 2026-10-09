@@ -429,7 +429,8 @@ def check_costs(ctx: HealthContext, account_id: str) -> Check:
     if not f.exists():
         return Check(name=name, status="warn", reason="no cost table yet (nightly_costs has not run): engine uses priors")
     try:
-        built = pd.Timestamp(_read_json(f)["built_utc"])
+        raw = _read_json(f)
+        built = pd.Timestamp(raw["built_utc"])
         built = built.tz_localize("UTC") if built.tzinfo is None else built
     except (ValueError, OSError, KeyError) as exc:
         return Check(name=name, status="fail", reason=f"cost table unreadable: {exc}")
@@ -439,6 +440,9 @@ def check_costs(ctx: HealthContext, account_id: str) -> Check:
         return Check(name=name, status="fail", reason=msg + f" (> {COSTS_FAIL_DAYS:.0f} d)")
     if days > COSTS_WARN_DAYS:
         return Check(name=name, status="warn", reason=msg)
+    if raw.get("swap_long_usd_per_lot") is None or raw.get("swap_short_usd_per_lot") is None:
+        # research and retraining then charge the settings' swap prior (see state/broker_terms_<account>.json)
+        return Check(name=name, status="warn", reason=msg + "; no measured swap from the terminal: swap prior in use")
     return Check(name=name, status="ok", reason=msg)
 
 

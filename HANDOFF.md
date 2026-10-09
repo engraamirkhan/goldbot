@@ -153,6 +153,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   candidate net of all costs, same folds and trial count), labelled "rule-only (informational; promotion still
   requires the model path)"; `passed_gates` reads only the model path's `gates`. 4h is
   research-only: `saturday_retrain` skips timeframes without a settings walk-forward window.
+- Measured broker costs (2026-10-09): the engine reads swap (symbol_info swap_long/short/mode/rollover3days,
+  converted to USD per lot per night: points via tick value, base/margin/deposit money via price when the currency is
+  XAU, interest % of the current price x 100 oz / 360; reopen modes and non-USD deposits are not converted and fall
+  back to the `costs.swap_*` prior with a logged reason) and commission (per lot round trip, commission + fees over
+  the last 90 days' closed positions) from the MT5 terminal every 6 hours (`mt5_adapter.broker_terms` ->
+  `state/broker_terms_<account>.json`); `nightly_costs` puts them into the cost table (`CostTable.swap_*`,
+  `commission_measured`; readings older than 7 days are ignored), so `live_swap` / `live_extra_cost_usd` charge them
+  in retraining. `run.py export-costs --out FILE` writes the canonical broker's table; `research_pass.py --cost-table
+  FILE` uses it (research.yml passes `config/costs_measured.json` when committed). Health warns while a table has no
+  measured swap. None of this is verified against a real terminal yet (the conversions are tested on a fake mt5).
 - Pooled meta-model (P5): `research_pass.py --pooled 15m|1h` fits ONE model over the union of every family whose
   default timeframe it is (15m: intraday_momentum, mean_reversion, session_open; 1h: breakout, trend, tsmom), with
   one indicator column per family, `side` and a declared pooled list (`pipeline.POOLED_FEATURES`, <= 40 inputs in
@@ -175,9 +185,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
      -0.079 R (1h), -0.014 R (4h, before swap). tsmom 1d cannot reach the screen's 1,000 events (454).
    - Meta-models add no skill: OOF AUC ~0.50 per family and pooled (pooled_1h, #53).
    Q1 2027 plan (first pre-registered trial): `specialist=tsmom`, `variants=[{"timeframe": "4h", "max_bars": 12}]`,
-   rationale "horizon study: tsmom 4h with swap" (refused on 2026-10-09 by the budget guard). Before it, record the
-   broker's measured swap and commission in the cost table from the VPS so the net uses real costs, not the prior
-   (swap prior: long -60, short 0 USD/lot/night, x3 Wednesday). If net stays <= 0, the next option (other
+   rationale "horizon study: tsmom 4h with swap" (refused on 2026-10-09 by the budget guard). Before it, OWNER on the VPS:
+   once `state\costs_icm-demo.json` carries measured swap (the health check stops warning "no measured swap"), run
+   `python -m goldbot.ops.run export-costs --out config\costs_measured.json` and commit the file (docs/RUNBOOK.md
+   section 4); research.yml then charges the measured swap, commission and slippage instead of the priors (swap
+   prior: long -60, short 0 USD/lot/night, x3 Wednesday). If net stays <= 0, the next option (other
    instruments) is an OWNER decision. Raising `research.trial_budget_quarter` is an OWNER decision.
    Until an agent passes the gates the engines propose nothing (by design).
 2. On the VPS, check `state/news_feeds.json` after the first hour: the feed URLs in `settings.yaml: news` could not be

@@ -9,12 +9,14 @@
   python -m goldbot.ops.run news
   python -m goldbot.ops.run record-gate <gate_name> --evidence <path or text>   # appends to state/phase_state.json
   python -m goldbot.ops.run health [--json] [--static] [--out FILE] [--baseline FILE]   (exit 1 on a fail)
+  python -m goldbot.ops.run export-costs --out config/costs_measured.json   # canonical broker's measured cost table
 """
 from __future__ import annotations
 
 import logging
 import sys
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:   # service entry points import lazily; these are for annotations only
@@ -157,6 +159,35 @@ def record_gate_cli(argv: list[str]) -> int:
     return 0
 
 
+def export_costs_cli(argv: list[str], accounts: list[Account] | None = None, state_dir: str | Path = "state") -> int:
+    """export-costs --out FILE: the canonical-cost broker's nightly cost table (state/costs_<account>.json, with the
+    terminal's swap and commission) copied to FILE, for `scripts/research_pass.py --cost-table` on GitHub (commit it
+    as config/costs_measured.json; research.yml passes it when present). Exit 1 when no table exists yet."""
+    import argparse
+
+    from goldbot.config import load_settings
+    from goldbot.ops import accounts as acc_mod
+    from goldbot.ops.jobs import canonical_cost_table
+    ap = argparse.ArgumentParser(prog="python -m goldbot.ops.run export-costs")
+    ap.add_argument("--out", required=True, help="where to write the cost table JSON")
+    args = ap.parse_args(argv)
+    accs = accounts if accounts is not None else list(acc_mod.load_accounts().values())
+    found = canonical_cost_table(load_settings(), accs, Path(state_dir))
+    if found is None:
+        print("no cost table for an account on the canonical-cost broker yet: run the scheduler's nightly_costs first")
+        return 1
+    table, acc = found
+    table.save(args.out)
+    swap = ("swap measured: long {:+.2f} / short {:+.2f} USD per lot per night".format(
+        table.swap_long_usd_per_lot, table.swap_short_usd_per_lot)
+        if table.swap_long_usd_per_lot is not None and table.swap_short_usd_per_lot is not None
+        else "WARNING: no measured swap (research will charge the settings prior)")
+    print(f"wrote {args.out}: {acc.account_id} built {table.built_utc:%Y-%m-%d %H:%M} UTC, commission "
+          f"{table.commission_per_lot_side_usd:.2f} USD per lot per side "
+          f"({'measured' if table.commission_measured else 'settings'}), {swap}")
+    return 0
+
+
 def run_api() -> None:
     import uvicorn
 
@@ -287,6 +318,8 @@ if __name__ == "__main__":
         run_news()
     elif cmd == "record-gate":
         sys.exit(record_gate_cli(sys.argv[2:]))
+    elif cmd == "export-costs":
+        sys.exit(export_costs_cli(sys.argv[2:]))
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))

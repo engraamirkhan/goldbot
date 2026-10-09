@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import time
 import zlib
@@ -47,6 +48,8 @@ from goldbot.risk.gate import REARM_PHRASE, Stage, new_day
 from goldbot.risk.supervisor import Supervisor
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
+
+log = logging.getLogger("goldbot.engine")
 
 
 class Model(Protocol):
@@ -104,6 +107,10 @@ class EngineConfig(Record):
     server_tz: str = "Europe/Athens"         # broker server clock: rollover (00:00 +-5 min) and the Friday 21:30 rule
     rollover_min: int = 5
     weekend_cut: str = "21:30"               # Friday, server time: close losers, tighten winners, no new entries
+    # measured costs: a broker that reports its swap and commission (MT5Broker.broker_terms) is read this often (tick
+    # time) and written to state/broker_terms_<account>.json for the nightly cost job; commission from this many days
+    broker_terms_every_s: int = 6 * 3600
+    commission_window_days: int = 90
 
 
 class _Frame(Record):
@@ -198,6 +205,7 @@ class Engine:
         self._last_state_write: pd.Timestamp | None = None
         self._last_reconcile: pd.Timestamp | None = None
         self._last_atr: float | None = None          # decision-tf ATR at the last bar close (orphan stops)
+        self._last_terms: pd.Timestamp | None = None  # last broker-terms reading (swap, commission)
         self._foreign: list[int] = []                # positions with unknown magic (manual trades): listed, never touched
         self._archive_stale_proposals()
 
@@ -225,6 +233,7 @@ class Engine:
         self._last_tick = t
         self.ticks.append(t)
         self._log_tick(t)
+        self._refresh_broker_terms(t.ts_utc)
         self._roll_risk_period(t.ts_utc)
         if hasattr(self.broker, "on_tick"):
             self.broker.on_tick(t)  # paper broker fills
@@ -961,6 +970,22 @@ class Engine:
                            "ask": [x.ask for x in self._tick_log]})
         self.store.append("ticks", df, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
         self._tick_log = []
+
+    def _refresh_broker_terms(self, now: pd.Timestamp) -> None:
+        """Swap and commission as the terminal reports them -> state/broker_terms_<account>.json (nightly_costs puts
+        them in the cost table). Only brokers that measure them (MT5); a failure is logged and never stops trading."""
+        measure = getattr(self.broker, "broker_terms", None)
+        if measure is None:
+            return
+        last = self._last_terms
+        if last is not None and (now - last).total_seconds() < self.cfg.broker_terms_every_s:
+            return
+        self._last_terms = now
+        try:
+            terms = measure(self.cfg.account_id, now - pd.Timedelta(days=self.cfg.commission_window_days), now)
+            terms.save(Path(self.cfg.state_dir, f"broker_terms_{self.cfg.account_id}.json"))
+        except Exception:
+            log.exception("broker terms not refreshed for %s; the last reading stays", self.cfg.account_id)
 
     def _cost_atr(self, atr_usd: float, ts: pd.Timestamp, ex_spread: bool = False) -> float:
         """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one.

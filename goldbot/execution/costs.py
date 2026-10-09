@@ -5,6 +5,9 @@ One nightly job per terminal fits
 * a slippage table from the engine's own fills (filled minus requested price, signed so that positive is worse
   for us, $/oz) by session and order type, seeded with a conservative prior until `min_fills` fills exist,
 plus the broker's commission and, when the terminal reports them, its swap rates (USD per lot per night, triple day).
+Swap and commission are measured by the engine on the terminal (`BrokerTerms`, written by
+`mt5_adapter.MT5Broker.broker_terms` to state/broker_terms_<account>.json); without fresh terms the table keeps the
+settings' commission and no swap (research then charges the settings' swap prior).
 The engine converts the round trip for the current session into ATR units for
 the RiskGate and the probability threshold; without a table it keeps its configured fallback.
 """
@@ -42,6 +45,39 @@ class SlippageStat(FrozenRecord):
     from_prior: bool
 
 
+class BrokerTerms(FrozenRecord):
+    """The broker's charges as the terminal reports them (engine-side, read nightly by the cost job): swap per lot
+    (100 oz) per night in USD, broker sign (negative = paid), and the commission paid per lot round trip on recent
+    closed positions. None = not measured (unsupported swap mode, no closed positions yet); `notes` says why."""
+    account_id: str
+    measured_utc: UtcTimestamp
+    swap_long_usd_per_lot: float | None = None
+    swap_short_usd_per_lot: float | None = None
+    swap_triple_weekday: int | None = Field(None, ge=0, le=4)    # 0 = Monday
+    swap_mode: int | None = None                                 # the terminal's SYMBOL_SWAP_MODE, for the record
+    commission_per_lot_round_trip_usd: float | None = None       # commission + fees, both sides, per lot
+    commission_lots: float = 0.0                                 # lots of closed positions it was measured on
+    notes: list[str] = Field(default_factory=list)
+
+    def swap_spec(self, server_tz: str, default_triple_weekday: int = 2) -> SwapSpec | None:
+        if self.swap_long_usd_per_lot is None or self.swap_short_usd_per_lot is None:
+            return None
+        triple = default_triple_weekday if self.swap_triple_weekday is None else self.swap_triple_weekday
+        return SwapSpec(long_usd_per_lot=self.swap_long_usd_per_lot, short_usd_per_lot=self.swap_short_usd_per_lot,
+                        triple_weekday=triple, server_tz=server_tz)
+
+    def save(self, path: str | Path) -> None:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(path).with_suffix(".tmp")
+        tmp.write_text(self.model_dump_json(indent=1))
+        tmp.replace(path)
+
+    @classmethod
+    def load(cls, path: str | Path) -> "BrokerTerms | None":
+        p = Path(path)
+        return cls.model_validate(json.loads(p.read_text())) if p.exists() else None
+
+
 class CostTable(FrozenRecord):
     account_id: str
     built_utc: UtcTimestamp
@@ -56,6 +92,13 @@ class CostTable(FrozenRecord):
     swap_long_usd_per_lot: float | None = None
     swap_short_usd_per_lot: float | None = None
     swap_triple_weekday: int | None = Field(None, ge=0, le=4)
+    commission_measured: bool = False          # commission from the terminal's deals (else the settings value)
+
+    def extra_cost_usd(self) -> float:
+        """Round-trip cost per oz beyond the quoted spread: entry and exit slippage (mean of the market-order cells,
+        measured or the prior) plus commission both sides. What research labels pay on top of the bar spread."""
+        slips = [max(s.mean, 0.0) for k, s in self.slippage.items() if k.endswith(":market")] or [self.slippage_prior_usd]
+        return float(2 * (sum(slips) / len(slips)) + 2 * self.commission_per_lot_side_usd / CONTRACT_OZ)
 
     def swap_spec(self, server_tz: str, default_triple_weekday: int = 2) -> SwapSpec | None:
         """The broker's measured swap as a SwapSpec, or None when the table has no swap rates (keep the prior)."""
@@ -148,16 +191,18 @@ def slippage_table(fills: pd.DataFrame, *, prior_usd: float, min_fills: int = 50
 
 def build_cost_table(account_id: str, ticks: pd.DataFrame, fills: pd.DataFrame, *, commission_per_lot_side_usd: float,
                      slippage_prior_usd: float, min_fills: int = 50, now: UtcTimestamp | None = None,
-                     swap: SwapSpec | None = None) -> CostTable:
+                     swap: SwapSpec | None = None, commission_measured: bool = False,
+                     notes: list[str] | None = None) -> CostTable:
     sp = spread_table(ticks)
-    notes = [] if sp else ["no in-session ticks: no round-trip cost; the engine keeps its configured fallback"]
+    notes = list(notes or []) + ([] if sp else ["no in-session ticks: no round-trip cost; the engine keeps its configured fallback"])
     return CostTable(account_id=account_id, built_utc=now or pd.Timestamp.now("UTC"), spread=sp,
                      slippage=slippage_table(fills, prior_usd=slippage_prior_usd, min_fills=min_fills),
                      commission_per_lot_side_usd=commission_per_lot_side_usd, slippage_prior_usd=slippage_prior_usd,
                      n_ticks=len(ticks), n_fills=len(fills), notes=notes,
                      swap_long_usd_per_lot=None if swap is None else swap.long_usd_per_lot,
                      swap_short_usd_per_lot=None if swap is None else swap.short_usd_per_lot,
-                     swap_triple_weekday=None if swap is None else swap.triple_weekday)
+                     swap_triple_weekday=None if swap is None else swap.triple_weekday,
+                     commission_measured=commission_measured)
 
 
 def prior_extra_cost_usd(slippage_prior_usd: float, commission_per_lot_side_usd: float) -> float:
@@ -182,3 +227,18 @@ def settings_swap(settings: "Settings") -> SwapSpec:
     return SwapSpec(long_usd_per_lot=c.swap_long_usd_per_lot, short_usd_per_lot=c.swap_short_usd_per_lot,
                     triple_weekday=c.swap_triple_weekday, server_tz=canonical[0] if canonical else "Europe/Athens",
                     contract_oz=CONTRACT_OZ)
+
+
+def research_costs(settings: "Settings", table: CostTable | None) -> tuple[float, SwapSpec, str]:
+    """(extra cost per oz beyond the spread, swap, a line naming the source) for research: the canonical broker's
+    measured cost table when given (`run.py export-costs` -> config/costs_measured.json), each part falling back to the
+    settings prior when the table has not measured it. The swap runs on the canonical broker's server clock."""
+    prior = settings_swap(settings)
+    if table is None:
+        return settings_extra_cost_usd(settings), prior, "settings priors (no measured cost table)"
+    swap = table.swap_spec(prior.server_tz, prior.triple_weekday)
+    parts = [f"cost table {table.account_id} built {table.built_utc:%Y-%m-%d}",
+             "commission measured" if table.commission_measured else "commission from settings",
+             "swap measured" if swap is not None else "swap prior (table has no measured swap)",
+             f"slippage from {sum(not s.from_prior for s in table.slippage.values())} measured cells"]
+    return table.extra_cost_usd(), swap or prior, ", ".join(parts)
