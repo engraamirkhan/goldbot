@@ -5,7 +5,8 @@ data_root: data            # Parquet root; DuckDB views sit over it
 # The three "days" (see design: Data architecture / Time and calendar)
 feature_day_anchor: { tz: America/New_York, time: "13:30" }   # COMEX settlement -> daily bars & features
 risk_day_anchor:    { tz: UTC,              time: "00:00" }   # loss caps reset
-# swap-day is read from each broker terminal at runtime, never configured here.
+# swap-day (the broker's server-midnight rollover) follows each broker's server_tz; the swap rates and triple day in
+# `costs` are research priors until the broker's cost table reports its own.
 
 timeframes:
   decision: [15m, 1h]
@@ -56,6 +57,13 @@ risk:
 costs:
   slippage_prior_usd: 0.15           # per oz, used until 50 real fills exist
   commission_per_lot_side_usd: { icm: 3.5, vantage: 3.0 }
+  # Swap, USD per lot (100 oz) per night, negative = paid. Prior; replace with the broker cost table. Long -60 is the
+  # 2024-25 retail level at ~5% USD rates (~9-11% a year at $2,000-2,500 gold), so it overcharges the low-rate
+  # 2010-2021 years (conservative). Short 0: the positive short swap of 2023-25 was negative before the 2022 hikes,
+  # so no credit is assumed. Triple swap on Wednesday's rollover (0 = Monday).
+  swap_long_usd_per_lot: -60.0
+  swap_short_usd_per_lot: 0.0
+  swap_triple_weekday: 2
 
 # Research scheduler (VPS service `goldbot-scheduler`). Times are UTC; gold's daily break is 21:00-22:00 UTC in
 # summer and 22:00-23:00 in winter, so the nightly job sits after both. Weekdays 0=Mon .. 6=Sun.

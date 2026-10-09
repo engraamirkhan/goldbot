@@ -6,6 +6,8 @@ posted to an issue and the registry is kept as a release asset so the deflated S
 Research discipline (docs/proposals/2026-10-design-improvements.md, P1/P2):
 * selection is cross-fitted (no calibrator or threshold sees the fold it selects from); costs are the bar spread
   (in the labels) plus slippage and commission (`--extra-cost-usd`, default: the settings' prior and commission);
+* overnight financing (swap, `costs.swap_*` in settings, a prior until the broker's cost table reports its own) is
+  charged in the net labels for every server-day rollover a trade is held through, three times on the triple day;
 * every report states the design's gates (1,500 candidates, 60 per test fold, three positive years incl. 2021-22)
   and the rule's own gross and net expectancy; the deflated Sharpe is shown only from 200 trades;
 * each run is charged to the quarter's pre-registered trial budget (research.trial_budget_quarter) and refused
@@ -38,7 +40,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
-from goldbot.execution.costs import settings_extra_cost_usd  # noqa: E402
+from goldbot.execution.costs import settings_extra_cost_usd, settings_swap  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
@@ -111,6 +113,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
                 f"{', '.join(leak['lookahead_columns'][:10])}**") if leak else "- lookahead check: n/a",
              f"- out-of-fold AUC of the model (0.5 = no skill): {_fmt(res.metrics.get('oof_auc'))}",
              f"- costs: bar spread in every label plus {m.get('extra_cost_usd', 0.0):.2f} $/oz round trip (slippage and commission)",
+             _swap_line(m.get("swap")),
              _holdout_line(m.get("holdout")),
              f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
@@ -145,6 +148,18 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
         lines += ["### Top features (gain, last fold)", "", "```", res.importance.head(15).to_string(), "```", ""]
     lines += ["Promotion still needs the design's gates (deflated SR, per-regime stability, shadow period); this is one trial."]
     return "\n".join(lines)
+
+
+def _swap_line(sw: dict[str, Any] | None) -> str:
+    if not sw:
+        return "- swap: not charged"
+    days = ("Mon", "Tue", "Wed", "Thu", "Fri")
+    out = (f"- swap: long {sw['long_usd_per_lot']:+.2f} / short {sw['short_usd_per_lot']:+.2f} USD per lot per night, "
+           f"x3 on {days[int(sw['triple_weekday'])]}, rollover at {sw['server_tz']} midnight")
+    if "mean_nights" in sw:
+        out += (f"; {sw['share_held_overnight']:.0%} of trades held overnight, {sw['mean_nights']:.2f} nights and "
+                f"{sw['mean_r']:+.3f} R per trade")
+    return out
 
 
 def _holdout_line(h: dict[str, Any] | None) -> str:
@@ -195,7 +210,7 @@ def _rule_only_lines(r: dict[str, Any] | None) -> list[str]:
         return []
     out = ["### The rule alone (every candidate, no model)", "",
            "| costs | n | hit rate | mean ret | mean R | t-stat (R) |", "|---|---:|---:|---:|---:|---:|"]
-    for name, label in (("gross", "gross (mid prices, no costs)"), ("net", "net (spread + slippage + commission)")):
+    for name, label in (("gross", "gross (mid prices, no costs)"), ("net", "net (spread + slippage + commission + swap)")):
         s = r.get(name) or {}
         if not s.get("n"):
             out.append(f"| {label} | 0 | | | | |")
@@ -296,6 +311,7 @@ def main() -> int:
 
 def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
          b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any) -> int:
+    swap = settings_swap(settings)
     if args.score_holdout:
         if holdout is None:
             raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
@@ -331,7 +347,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         b_dec, context, leak, frame = frames[tf]
         n_trials = reg.n_trials + 1
         preps = [prepare(s, b_dec, context, extra_cost_usd=extra_cost, holdout=holdout, score_holdout=args.score_holdout,
-                         frame=frame) for s in job.specs]
+                         frame=frame, swap=swap) for s in job.specs]
         scr = None if args.score_holdout else screen(preps if job.pooled else preps[0])
         skipped = bool(scr is not None and not scr["passed"] and args.skip_screen)
         agent_id = pool_identity(tf, preps).agent_id if job.pooled else job.specs[0].agent_id
@@ -344,12 +360,13 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         rationale = args.rationale + (f" | overrides {json.dumps(job.overrides, sort_keys=True)}" if job.overrides else "")
         if scr is not None and not scr["passed"] and not args.skip_screen:
             n = int(sum(len(p.labels) for p in preps))
-            metrics: dict[str, Any] = {"n_candidates": n, "rule_only": scr["rule_only"],
+            metrics: dict[str, Any] = {"n_candidates": n, "rule_only": scr["rule_only"], "swap": swap.model_dump(),
                                        "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
             row = reg.record(agent_id=agent_id, family=job.family, config=job.config, feature_version=version,
                              rationale=rationale, results=metrics, status="screened", budget_quarter=quarter)
             print(f"{json.dumps(job.overrides) or 'defaults'}: screen failed ({n} events) [{time.time() - t0:.0f}s]", flush=True)
-            text = render_screen_failed(scr, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0, "n": n})
+            text = render_screen_failed(scr, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0, "n": n,
+                                                    "swap": swap.model_dump()})
         else:
             if job.pooled:
                 res = run_pool(preps, tf, n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
@@ -387,6 +404,7 @@ def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[s
              f"- events {meta['n']:,} (one position at a time, holdout excluded), registry trial #{meta['trial']} "
              f"(a screen counts as a trial)",
              f"- lookahead check: {'clean' if not leak['lookahead_columns'] else str(len(leak['lookahead_columns'])) + ' columns use future data'}",
+             _swap_line(meta.get("swap")),
              f"- runtime {meta['seconds']:.0f}s", ""]
     lines += screen_lines(scr) + _rule_only_lines(scr["rule_only"])
     lines += ["Screen failed: no model was fitted. The rule is retired from model research (it may still serve as a "

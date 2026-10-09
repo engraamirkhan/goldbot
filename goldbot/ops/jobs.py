@@ -41,6 +41,7 @@ from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.classifier import PersistentClassifier, classify
 from goldbot.execution.costs import build_cost_table
 from goldbot.features.mtf import TF_LABEL, context_tfs
+from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.research.director import (
@@ -132,6 +133,25 @@ def live_extra_cost_usd(ctx: JobContext) -> float:
     return settings_extra_cost_usd(ctx.settings)
 
 
+def live_swap(ctx: JobContext) -> SwapSpec:
+    """Swap the canonical-cost broker charges, from its nightly cost table when the table carries the terminal's swap
+    rates; otherwise the settings prior (`costs.swap_*`)."""
+    from goldbot.execution.costs import CostTable, settings_swap
+    prior = settings_swap(ctx.settings)
+    canonical = {b for b, cfg in ctx.settings.brokers.items() if cfg.canonical_costs}
+    for acc in ctx.accounts:
+        if acc.broker not in canonical:
+            continue
+        try:
+            table = CostTable.load(ctx.state_dir / f"costs_{acc.account_id}.json")
+        except ValueError:
+            table = None
+        spec = table.swap_spec(acc.server_tz, prior.triple_weekday) if table is not None else None
+        if spec is not None:
+            return spec
+    return prior
+
+
 def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int, n_trials: int = 1,
                   holdout: tuple[pd.Timestamp, pd.Timestamp] | None = None) -> ResearchResult | None:
     """Walk-forward on the store. Research trials pass the settings' holdout window (never seen); the Saturday retrain
@@ -145,7 +165,7 @@ def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: 
     years = max((pd.to_datetime(dec["ts_utc"].iloc[-1]) - pd.to_datetime(dec["ts_utc"].iloc[0])).days / 365.25, 1e-9)
     # learn against what the broker actually charges: the live cost table's slippage and commission
     res = run_specialist(spec, dec, context=context, n_trials=n_trials, extra_cost_usd=live_extra_cost_usd(ctx),
-                         holdout=holdout)
+                         holdout=holdout, swap=live_swap(ctx))
     if res.n_candidates:
         res.metrics["trades_per_year"] = res.n_candidates / years
     return res

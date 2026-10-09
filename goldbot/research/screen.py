@@ -7,7 +7,7 @@ at a time, with exactly the labels the walk-forward would use:
 
     pass  <=>  gross mean R > 0,  t-stat of the gross mean R >= MIN_T (2.0),  at least MIN_EVENTS (1,000) events.
 
-Net expectancy (spread + slippage + commission) is reported next to it but does not decide: a positive gross edge is
+Net expectancy (spread + slippage + commission + swap) is reported next to it but does not decide: a positive gross edge is
 what a meta-model can filter towards a positive net one.
 
 The screen is a look at the data that selects rules, so each screened configuration is one trial in the registry

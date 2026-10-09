@@ -12,7 +12,8 @@ time (`labels.one_at_a_time`) keeps the trades from overlapping.
 
 Barriers: target 3.0 x ATR(1h), stop 1.5 x ATR(1h), 48 bars (two days). A 1h ATR on gold is several dollars against a
 round trip of well under one dollar, so the target is many times the cost. Holding two days crosses up to two
-rollovers; swap is not in the labels yet (gross screen unaffected; net overstated by about 0.02-0.05 R).
+rollovers (four on a Wednesday triple); the net labels pay swap for each (settings `costs.swap_*`), the gross screen
+does not.
 
 Timeframes: 1h (default) or 4h. Horizons are in hours, converted to bars of the decision timeframe; on 4h set
 `max_bars` to 12 for the same two-day horizon (the population's timeframe mutation rescales it automatically).

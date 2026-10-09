@@ -137,8 +137,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   London or New York local clock, DST by zoneinfo, enter in the direction of the move since the session open, exit at
   the session close, stop 2.0 / target 3.0 ATR). Their features (`tsmom`, `intraday_session`, family `momentum`) are
   versioned registry features and pass the lookahead check; adding them changes `feature_version` for every family
-  (no champion exists, so nothing live is affected; retrains pick it up). Known gap: swap is not in the labels yet
-  (tsmom holds up to two days: net overstated by roughly 0.02-0.05 R; the gross screen is unaffected). 4h is
+  (no champion exists, so nothing live is affected; retrains pick it up). Swap (2026-10-09, horizon study): net research
+  labels pay overnight financing for every broker server-day rollover held through (`triple_barrier(swap=...)`, x3 on
+  `costs.swap_triple_weekday`), from `costs.swap_long/short_usd_per_lot` (prior -60 / 0 USD per lot per night;
+  replace with the broker cost table, `CostTable.swap_*`, which `live_swap` prefers when present); the gross screen
+  carries no cost. 4h is
   research-only: `saturday_retrain` skips timeframes without a settings walk-forward window.
 - Pooled meta-model (P5): `research_pass.py --pooled 15m|1h` fits ONE model over the union of every family whose
   default timeframe it is (15m: intraday_momentum, mean_reversion, session_open; 1h: breakout, trend, tsmom), with
