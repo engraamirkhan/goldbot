@@ -2,7 +2,9 @@
 
 Windows per timeframe (design decision): 15m train 24 / test 3 / step 3 months, purge 2 d, embargo 1 d;
 1h train 36 / test 6 / step 6 months, purge 5 d, embargo 2 d; 4h (proposal P4) train 48 / test 6 / step 6 months,
-purge 10 d, embargo 4 d. `expanding=True` trains on everything since the first label instead of the trailing
+purge 10 d, embargo 4 d; 1d (horizon study) train 60 / test 12 / step 12 months on an expanding window, purge 20 d,
+embargo 10 d (a daily rule fires a few dozen times a year, so a fold needs a year to reach the 60-candidate gate and the
+training set grows with every fold). `expanding=True` trains on everything since the first label instead of the trailing
 `train_months` (the first test fold still starts `train_months` in): a family with few candidates a year, such as
 session_open (proposal P5), then has enough training rows, and with 6-month test folds every fold can reach the
 60-candidate gate. A specialist declares such overrides in its `walkforward` attribute. Purge removes any training label whose
@@ -22,6 +24,7 @@ WINDOWS = {
     "15m": dict(train_months=24, test_months=3, step_months=3, purge_days=2, embargo_days=1),
     "1h": dict(train_months=36, test_months=6, step_months=6, purge_days=5, embargo_days=2),
     "4h": dict(train_months=48, test_months=6, step_months=6, purge_days=10, embargo_days=4),
+    "1d": dict(train_months=60, test_months=12, step_months=12, purge_days=20, embargo_days=10, expanding=True),
 }
 
 

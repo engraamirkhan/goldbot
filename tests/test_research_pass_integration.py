@@ -216,3 +216,19 @@ def test_pooled_meta_model_is_one_trial_over_every_family_on_the_timeframe(relea
     monkeypatch.setattr(sys, "argv", argv + ["--variants", '[{"band_z": 1.5}]'])
     with pytest.raises(SystemExit, match="--variants does not apply"):
         rp.main()
+
+
+def test_tsmom_daily_variant_is_screened_on_daily_bars(release_dir, tmp_path, monkeypatch):
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "tsmom",
+                                      "--variants", '[{"timeframe": "1d"}]'])
+    assert rp.main() == 0
+    row = _rows(registry)[0]
+    assert row["config"]["timeframe"] == "1d" and row["config"]["max_bars"] == 10 and row["config"]["lb_slow_h"] == 2880
+    # three years of daily bars give a few dozen events: the screen's 1,000-event floor fails it, no model is fitted
+    events = {c["name"]: c for c in row["results"]["screen"]["checks"]}["events"]
+    assert row["status"] == "screened" and not events["passed"]
+    assert row["results"]["lookahead"]["lookahead_columns"] == []
+    text = report.read_text()
+    assert "1d decision bars" in text and "- swap: long -60.00" in text

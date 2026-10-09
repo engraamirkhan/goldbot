@@ -15,8 +15,17 @@ round trip of well under one dollar, so the target is many times the cost. Holdi
 rollovers (four on a Wednesday triple); the net labels pay swap for each (settings `costs.swap_*`), the gross screen
 does not.
 
-Timeframes: 1h (default) or 4h. Horizons are in hours, converted to bars of the decision timeframe; on 4h set
-`max_bars` to 12 for the same two-day horizon (the population's timeframe mutation rescales it automatically).
+Timeframes: 1h (default), 4h or 1d. Horizons are in hours (24 per trading day), converted to bars of the decision
+timeframe; on 4h set `max_bars` to 12 for the same two-day horizon (the population's timeframe mutation rescales it
+automatically).
+
+Daily option (horizon study, `timeframe: "1d"`): the decision bar is the feature-day (COMEX settlement to settlement,
+13:30 New York), with no higher context timeframe (`features.mtf.context_tfs`). Its own defaults
+(`timeframe_defaults`): vol-scaled returns over 20, 60 and 120 trading days with 60-day volatility, evaluated at every
+settlement (a daily bar is its own schedule), target 3.0 x ATR(daily), stop 1.5 x ATR(daily), 10 bars (two weeks),
+one position at a time; walk-forward train 60 / test 12 / step 12 months on an expanding window
+(`research.walkforward.WINDOWS["1d"]`). Holding up to ten days pays up to ~14 nights of swap, charged in the net
+labels.
 """
 from __future__ import annotations
 
@@ -35,7 +44,7 @@ from goldbot.specialists.base import Specialist, register
 class TimeSeriesMomentumSpecialist(Specialist):
     family = "tsmom"
     timeframe = "1h"
-    timeframes = ("4h",)
+    timeframes = ("4h", "1d")
     default_config = {
         "lb_fast_h": 24,
         "lb_mid_h": 120,
@@ -46,6 +55,10 @@ class TimeSeriesMomentumSpecialist(Specialist):
         "target_atr": 3.0,
         "stop_atr": 1.5,
         "max_bars": 48,
+    }
+    timeframe_defaults = {
+        "1d": {"lb_fast_h": 20 * 24, "lb_mid_h": 60 * 24, "lb_slow_h": 120 * 24, "vol_window_h": 60 * 24,
+               "schedule_h": 24, "target_atr": 3.0, "stop_atr": 1.5, "max_bars": 10},
     }
     # declared meta-model inputs, chosen by rationale (the momentum signal at each horizon and how much they agree,
     # the volatility regime, trend quality on the bar and on the 4h/daily bars, stretch and nearby levels); the model
@@ -74,10 +87,14 @@ class TimeSeriesMomentumSpecialist(Specialist):
         c = self.config
         horizons = tuple(self._bars(c[k]) for k in ("lb_fast_h", "lb_mid_h", "lb_slow_h"))
         score = tsmom_score(mid_bars["close"].reset_index(drop=True), horizons, max(2, self._bars(c["vol_window_h"])))
-        # schedule: the bar's close (open + timeframe) falls on a whole multiple of schedule_h UTC hours
+        # schedule: the bar's close (open + timeframe) falls on a whole multiple of schedule_h UTC hours; a bar as long as
+        # the schedule (4h with schedule_h 4, a daily bar closing at settlement) is on it every time
         close_ts = pd.DatetimeIndex(pd.to_datetime(mid_bars["ts_utc"], utc=True)) + pd.Timedelta(seconds=tf_seconds(self.timeframe))
         step = int(c["schedule_h"])
-        on_schedule = np.asarray((close_ts.minute == 0) & (close_ts.hour % max(step, 1) == 0))
+        if tf_seconds(self.timeframe) >= max(step, 1) * 3600:
+            on_schedule = np.ones(len(close_ts), dtype=bool)
+        else:
+            on_schedule = np.asarray((close_ts.minute == 0) & (close_ts.hour % max(step, 1) == 0))
         s = score.to_numpy(dtype=float)
         side = np.where(s >= c["min_score"], 1, np.where(s <= -c["min_score"], -1, 0))
         hit = on_schedule & (side != 0) & np.isfinite(s)
