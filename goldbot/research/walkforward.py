@@ -1,13 +1,17 @@
 """Purged, embargoed walk-forward splits over labelled candidates.
 
 Windows per timeframe (design decision): 15m train 24 / test 3 / step 3 months, purge 2 d, embargo 1 d;
-1h train 36 / test 6 / step 6 months, purge 5 d, embargo 2 d. Purge removes any training label whose
+1h train 36 / test 6 / step 6 months, purge 5 d, embargo 2 d; 4h (proposal P4) train 48 / test 6 / step 6 months,
+purge 10 d, embargo 4 d. `expanding=True` trains on everything since the first label instead of the trailing
+`train_months` (the first test fold still starts `train_months` in): a family with few candidates a year, such as
+session_open (proposal P5), then has enough training rows, and with 6-month test folds every fold can reach the
+60-candidate gate. A specialist declares such overrides in its `walkforward` attribute. Purge removes any training label whose
 [entry, exit] interval overlaps the test window (extended by `purge`); embargo drops training labels
 that start within `embargo` after the test window ends.
 """
 from __future__ import annotations
 
-from typing import Iterator
+from typing import Any, Iterator
 
 import numpy as np
 import pandas as pd
@@ -17,6 +21,7 @@ from goldbot.base import Record
 WINDOWS = {
     "15m": dict(train_months=24, test_months=3, step_months=3, purge_days=2, embargo_days=1),
     "1h": dict(train_months=36, test_months=6, step_months=6, purge_days=5, embargo_days=2),
+    "4h": dict(train_months=48, test_months=6, step_months=6, purge_days=10, embargo_days=4),
 }
 
 
@@ -30,7 +35,8 @@ class Fold(Record):
 
 
 def walk_forward_splits(labels: pd.DataFrame, *, train_months: int, test_months: int, step_months: int,
-                        purge_days: int, embargo_days: int, min_train: int = 200) -> Iterator[Fold]:
+                        purge_days: int, embargo_days: int, min_train: int = 200,
+                        expanding: bool = False) -> Iterator[Fold]:
     """labels needs ts_utc (signal time) and ts_exit (label end)."""
     ts = pd.DatetimeIndex(pd.to_datetime(labels["ts_utc"], utc=True))
     te = pd.DatetimeIndex(pd.to_datetime(labels["ts_exit"], utc=True))
@@ -42,7 +48,7 @@ def walk_forward_splits(labels: pd.DataFrame, *, train_months: int, test_months:
     while t0 < end:
         t1 = min(t0 + pd.DateOffset(months=test_months), end + pd.Timedelta(seconds=1))
         test_mask = (ts >= t0) & (ts < t1)
-        train_lo = t0 - pd.DateOffset(months=train_months)
+        train_lo = start if expanding else t0 - pd.DateOffset(months=train_months)
         in_window = (ts >= train_lo) & (ts < t0)
         # purge: label interval must end before the test window (minus purge) ...
         no_overlap = te < (t0 - purge)
@@ -58,6 +64,10 @@ def walk_forward_splits(labels: pd.DataFrame, *, train_months: int, test_months:
         t0 = t0 + pd.DateOffset(months=step_months)
 
 
-def splits_for(labels: pd.DataFrame, timeframe: str, **overrides: int) -> list[Fold]:
-    cfg = {**WINDOWS[timeframe], **overrides}
-    return list(walk_forward_splits(labels, **cfg))
+def window_for(timeframe: str, **overrides: Any) -> dict[str, Any]:
+    """The walk-forward settings of a timeframe with a specialist's overrides (e.g. expanding, test_months)."""
+    return {**WINDOWS[timeframe], **overrides}
+
+
+def splits_for(labels: pd.DataFrame, timeframe: str, **overrides: Any) -> list[Fold]:
+    return list(walk_forward_splits(labels, **window_for(timeframe, **overrides)))

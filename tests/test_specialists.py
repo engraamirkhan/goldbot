@@ -26,7 +26,8 @@ def _frame(bars_1m: pd.DataFrame, tf: str) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def test_every_design_family_is_registered_on_its_timeframe():
     assert {k: v.timeframe for k, v in SPECIALISTS.items()} == {
-        "breakout": "1h", "mean_reversion": "15m", "session_open": "15m", "trend": "1h"}
+        "breakout": "1h", "mean_reversion": "15m", "session_open": "15m", "trend": "1h",
+        "tsmom": "1h", "intraday_momentum": "15m"}
 
 
 def test_context_is_every_longer_timeframe():
@@ -68,19 +69,23 @@ def test_breakout_needs_a_tight_range_and_volume():
     assert c["idx"].tolist() == [9] and c["side"].tolist() == [1]
 
 
-@pytest.mark.parametrize("family", ["trend", "mean_reversion", "breakout"])
+@pytest.mark.parametrize("family", ["trend", "mean_reversion", "breakout", "tsmom", "tsmom_4h", "intraday_momentum",
+                                    "intraday_momentum_london"])
 def test_candidates_use_no_future_bars(bars_1m, family):
-    cls = SPECIALISTS[family]
-    loose: dict[str, Any] = {"trend": {"adx_min": 0.0, "pullback_atr": 5.0}, "mean_reversion": {"band_z": 1.0, "rsi_low": 45.0,
-             "rsi_high": 55.0, "max_vol_tercile": 2}, "breakout": {"max_range_atr": 5.0, "min_tick_ratio": 0.0}}[family]
+    configs: dict[str, dict[str, Any]] = {"trend": {"adx_min": 0.0, "pullback_atr": 5.0}, "mean_reversion": {"band_z": 1.0, "rsi_low": 45.0,
+             "rsi_high": 55.0, "max_vol_tercile": 2}, "breakout": {"max_range_atr": 5.0, "min_tick_ratio": 0.0},
+             "tsmom": {}, "tsmom_4h": {"timeframe": "4h", "max_bars": 12}, "intraday_momentum": {},
+             "intraday_momentum_london": {"session": "london"}}
+    loose = configs[family]
+    cls = SPECIALISTS[family.removesuffix("_4h").removesuffix("_london")]
     spec = cls(**loose)
-    m, X = _frame(bars_1m, cls.timeframe)
+    m, X = _frame(bars_1m, spec.timeframe)
     full = spec.candidates(m, X)
     assert len(full) > 10 and set(full["side"]) <= {-1, 1}
     # recomputing on a prefix of the history (features included) gives the same signals up to the cut
     cut = len(m) * 2 // 3
-    bars_cut = bars_1m[bars_1m["visible_at"] <= pd.Timestamp(m["ts_utc"].iloc[cut]) + pd.Timedelta(cls.timeframe)]
-    m2, X2 = _frame(bars_cut, cls.timeframe)
+    bars_cut = bars_1m[bars_1m["visible_at"] <= pd.Timestamp(m["ts_utc"].iloc[cut]) + pd.Timedelta(spec.timeframe)]
+    m2, X2 = _frame(bars_cut, spec.timeframe)
     part = spec.candidates(m2, X2)
     upto = full[full["idx"] < len(m2)].reset_index(drop=True)
     pd.testing.assert_frame_equal(part.reset_index(drop=True), upto, check_dtype=False)
@@ -119,3 +124,69 @@ def test_lookahead_check_passes_the_real_features_and_catches_a_leaky_one(bars_1
         assert out["lookahead_columns"] == ["close_over_sample_mean"]
     finally:
         del FEATURES["test_leaky_zscore"]
+
+
+def _bars_15m(days: list[str]) -> pd.DataFrame:
+    ts = pd.DatetimeIndex([t for d in days for t in pd.date_range(d, periods=96, freq="15min", tz="UTC")])
+    close = 2000.0 + np.arange(len(ts)) * 0.1
+    return pd.DataFrame({"ts_utc": ts, "open": close - 0.1, "high": close + 0.2, "low": close - 0.3, "close": close})
+
+
+def test_intraday_momentum_decides_at_mid_session_on_the_local_clock_and_exits_at_the_close():
+    m = _bars_15m(["2024-01-10", "2024-07-10", "2024-07-11"])
+    m = m[m["ts_utc"] != pd.Timestamp("2024-07-11 12:30", tz="UTC")].reset_index(drop=True)   # 08:30 EDT bar missing
+    X = pd.DataFrame({"atr14": np.ones(len(m))})
+    spec = SPECIALISTS["intraday_momentum"]()
+    assert spec.config["session"] == "newyork" and spec.label_spec.max_bars == 14
+    c = spec.candidates(m, X)
+    ts = pd.DatetimeIndex(m["ts_utc"].iloc[c["idx"]])
+    # the decision bar opens at 12:00 New York time (closes 12:15): 17:00 UTC in winter, 16:00 UTC in summer; the
+    # day whose opening bar is missing is skipped
+    assert list(ts) == [pd.Timestamp("2024-01-10 17:00", tz="UTC"), pd.Timestamp("2024-07-10 16:00", tz="UTC")]
+    assert c["side"].tolist() == [1, 1]                                       # up since the open: long
+    last = pd.DatetimeIndex(m["ts_utc"].iloc[c["idx"] + 1 + spec.label_spec.max_bars]).tz_convert("America/New_York")
+    assert [t.strftime("%H:%M") for t in last] == ["15:45", "15:45"]          # time barrier: the bar closing at 16:00
+    falling = m.assign(close=m["close"].iloc[::-1].to_numpy(), open=m["open"].iloc[::-1].to_numpy())
+    assert spec.candidates(falling, X)["side"].tolist() == [-1, -1]
+    small = SPECIALISTS["intraday_momentum"](min_move_atr=1.0).candidates(m, X.assign(atr14=1000.0))
+    assert small.empty                                                        # move below min_move_atr x ATR
+    ldn = SPECIALISTS["intraday_momentum"](session="london")
+    lt = pd.DatetimeIndex(m["ts_utc"].iloc[ldn.candidates(m, X)["idx"]]).tz_convert("Europe/London")
+    assert [t.strftime("%H:%M") for t in lt] == ["12:00"] * 3 and ldn.label_spec.max_bars == 16
+    with pytest.raises(ValueError, match="unknown session"):
+        SPECIALISTS["intraday_momentum"](session="tokyo")
+
+
+def test_tsmom_trades_the_trailing_trend_on_a_four_hour_schedule():
+    n = 900
+    ts = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")
+    rng = np.random.default_rng(3)
+    m = pd.DataFrame({"ts_utc": ts, "close": 2000.0 * np.exp(np.cumsum(0.002 + rng.normal(0, 0.001, n)))})
+    none = pd.DataFrame(index=m.index)
+    spec = SPECIALISTS["tsmom"]()
+    c = spec.candidates(m, none)
+    assert len(c) > 50 and set(c["side"]) == {1}
+    assert c["idx"].min() >= 480                                              # the 20-day horizon needs its history
+    close_hours = (pd.DatetimeIndex(m["ts_utc"].iloc[c["idx"]]) + pd.Timedelta("1h")).hour
+    assert set(close_hours % 4) == {0}                                        # at most once per 4 hours
+    down = m.assign(close=2000.0 * np.exp(np.cumsum(-0.002 + rng.normal(0, 0.001, n))))
+    assert set(spec.candidates(down, none)["side"]) == {-1}
+    assert SPECIALISTS["tsmom"](min_score=50.0).candidates(m, none).empty
+    from goldbot.specialists.time_series_momentum import TimeSeriesMomentumSpecialist
+    four = TimeSeriesMomentumSpecialist(timeframe="4h", max_bars=12)
+    assert four._bars(four.config["lb_slow_h"]) == 120 and four.label_spec.max_bars == 12
+
+
+@pytest.mark.parametrize("family", ["tsmom", "intraday_momentum"])
+def test_new_families_fire_often_enough_for_the_screen(bars_1m, family):
+    """The screen needs 1,000 events in 2010-2025 (15.75 years): about 64 a year after one position at a time."""
+    from goldbot.features.technical import atr
+    from goldbot.labels import one_at_a_time, triple_barrier
+    spec = SPECIALISTS[family]()
+    dec = resample_bars(bars_1m, spec.timeframe).reset_index(drop=True)
+    m, X = _frame(bars_1m, spec.timeframe)
+    labels = one_at_a_time(triple_barrier(dec, spec.candidates(m, X), spec.label_spec, atr(m, 14)))
+    ts = pd.DatetimeIndex(m["ts_utc"])
+    warmup = 480 / (24 * 5 / 7) / 365.25 if family == "tsmom" else 0.0       # 480 trading hours of history first
+    years = (ts[-1] - ts[0]).days / 365.25 - warmup
+    assert len(labels) / years > 1.5 * 1000 / 15.75
