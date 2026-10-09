@@ -190,3 +190,42 @@ def test_new_families_fire_often_enough_for_the_screen(bars_1m, family):
     warmup = 480 / (24 * 5 / 7) / 365.25 if family == "tsmom" else 0.0       # 480 trading hours of history first
     years = (ts[-1] - ts[0]).days / 365.25 - warmup
     assert len(labels) / years > 1.5 * 1000 / 15.75
+
+
+def test_tsmom_daily_option_sizes_lookbacks_and_barriers_for_days():
+    from goldbot.research.walkforward import window_for
+    from goldbot.specialists.time_series_momentum import TimeSeriesMomentumSpecialist
+    d = TimeSeriesMomentumSpecialist(timeframe="1d")
+    assert d.timeframe == "1d"
+    # 20 / 60 / 120 trading days of vol-scaled return (60-day volatility), 3 ATR target, 1.5 ATR stop, 10 days
+    assert [d._bars(d.config[k]) for k in ("lb_fast_h", "lb_mid_h", "lb_slow_h", "vol_window_h")] == [20, 60, 120, 60]
+    ls = d.label_spec
+    assert (ls.target_atr, ls.stop_atr, ls.max_bars) == (3.0, 1.5, 10)
+    assert TimeSeriesMomentumSpecialist(timeframe="1d", max_bars=7).label_spec.max_bars == 7   # overrides still win
+    assert TimeSeriesMomentumSpecialist().config["max_bars"] == 48                            # 1h defaults unchanged
+    assert TimeSeriesMomentumSpecialist(timeframe="4h", max_bars=12).config["lb_slow_h"] == 480
+    # a clone rebuilt from its identity keeps exactly its configuration (and agent id)
+    again = TimeSeriesMomentumSpecialist(identity=d.identity)
+    assert again.config == d.config and again.agent_id == d.agent_id
+    # walk-forward on daily bars: train 60 / test 12 / step 12 months on an expanding window
+    w = window_for("1d")
+    assert (w["train_months"], w["test_months"], w["step_months"], w["expanding"]) == (60, 12, 12, True)
+    assert w["purge_days"] >= 14                                   # a 10-day hold spans two calendar weeks
+
+
+def test_tsmom_daily_fires_on_every_settled_bar_without_lookahead():
+    # daily bars open and close at COMEX settlement (13:30 New York), never on a whole UTC hour
+    n = 400
+    days = pd.bdate_range("2023-01-02", periods=n)
+    ts = pd.DatetimeIndex([pd.Timestamp(f"{d:%Y-%m-%d} 13:30", tz="America/New_York").tz_convert("UTC") for d in days])
+    rng = np.random.default_rng(5)
+    m = pd.DataFrame({"ts_utc": ts, "close": 2000.0 * np.exp(np.cumsum(0.004 + rng.normal(0, 0.01, n)))})
+    none = pd.DataFrame(index=m.index)
+    spec = SPECIALISTS["tsmom"](timeframe="1d")
+    c = spec.candidates(m, none)
+    assert c["idx"].min() >= 120                                   # the 120-day horizon needs its history
+    assert len(c) > 0.8 * (n - 120) and set(c["side"]) <= {-1, 1}  # a steady uptrend signals on nearly every bar
+    assert (c["side"] == 1).mean() > 0.9
+    cut = 300
+    part = spec.candidates(m.iloc[:cut].reset_index(drop=True), none.iloc[:cut])
+    pd.testing.assert_frame_equal(part, c[c["idx"] < cut].reset_index(drop=True), check_dtype=False)

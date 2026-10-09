@@ -154,6 +154,7 @@ def test_a_rule_that_fails_the_screen_gets_no_model_but_is_a_recorded_trial(rele
     assert rows[0]["budget_quarter"] and rows[1]["config"]["session"] == "london"
     text = report.read_text()
     assert "screen failed, no model fitted" in text and "| all_candidates |" not in text
+    assert rows[0]["results"]["swap"]["server_tz"] == "Europe/Athens" and "- swap: long -60.00" in text
     assert "intraday_momentum: 2 variants" in text and "**fail**" in text
 
     # --skip-screen fits the model anyway and says so; the screen is still recorded
@@ -184,6 +185,14 @@ def test_a_rule_that_passes_the_screen_goes_on_to_the_walk_forward(release_dir, 
     assert row["results"]["screen_skipped"] is False and "gates" in row["results"]
     assert row["results"]["walkforward"]["train_months"] == 36
     assert "### Primary-signal screen: **PASS**" in report.read_text()
+    # swap from the settings prior is charged in the net labels and stated in the report
+    sw = row["results"]["swap"]
+    assert sw["long_usd_per_lot"] == -60.0 and sw["triple_weekday"] == 2 and sw["mean_nights"] > 0
+    assert "- swap: long -60.00 / short +0.00 USD per lot per night, x3 on Wed" in report.read_text()
+    # the same gates on the rule alone, next to the model's, labelled as informational
+    rg = row["results"]["rule_only_gates"]
+    assert [c["name"] for c in rg["checks"]] == ["candidates", "per_fold", "positive_years", "dsr"]
+    assert "### Design gates, rule-only (informational; promotion still requires the model path):" in report.read_text()
 
 
 def test_pooled_meta_model_is_one_trial_over_every_family_on_the_timeframe(release_dir, tmp_path, monkeypatch):
@@ -211,3 +220,19 @@ def test_pooled_meta_model_is_one_trial_over_every_family_on_the_timeframe(relea
     monkeypatch.setattr(sys, "argv", argv + ["--variants", '[{"band_z": 1.5}]'])
     with pytest.raises(SystemExit, match="--variants does not apply"):
         rp.main()
+
+
+def test_tsmom_daily_variant_is_screened_on_daily_bars(release_dir, tmp_path, monkeypatch):
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "tsmom",
+                                      "--variants", '[{"timeframe": "1d"}]'])
+    assert rp.main() == 0
+    row = _rows(registry)[0]
+    assert row["config"]["timeframe"] == "1d" and row["config"]["max_bars"] == 10 and row["config"]["lb_slow_h"] == 2880
+    # three years of daily bars give a few dozen events: the screen's 1,000-event floor fails it, no model is fitted
+    events = {c["name"]: c for c in row["results"]["screen"]["checks"]}["events"]
+    assert row["status"] == "screened" and not events["passed"]
+    assert row["results"]["lookahead"]["lookahead_columns"] == []
+    text = report.read_text()
+    assert "1d decision bars" in text and "- swap: long -60.00" in text

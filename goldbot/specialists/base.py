@@ -58,11 +58,16 @@ class Specialist(ABC):
     # walk-forward overrides of the timeframe's windows (research.walkforward.WINDOWS), e.g. an expanding training
     # window and longer test folds for a family with few candidates a year. An evaluation setting, not trade config.
     walkforward: dict[str, Any] = {}
+    # defaults layered over default_config on another decision timeframe (e.g. lookbacks and barriers sized for daily
+    # bars); explicit overrides still win, and they become part of the configuration (and its agent id)
+    timeframe_defaults: dict[str, dict[str, Any]] = {}
 
     def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
-        cfg = {**self.default_config, **overrides}
+        asked = (identity.config if identity is not None else overrides).get(TIMEFRAME_KEY, type(self).timeframe)
+        base = {**self.default_config, **self.timeframe_defaults.get(asked, {})}
+        cfg = {**base, **overrides}
         self.identity = identity or AgentIdentity(family=self.family, config=cfg)
-        self.config = {**self.default_config, **self.identity.config}
+        self.config = {**base, **self.identity.config}
         tf = self.config.get(TIMEFRAME_KEY, type(self).timeframe)
         if tf != type(self).timeframe and tf not in self.timeframes:
             raise ValueError(f"{self.family} does not run on {tf}; allowed: {(type(self).timeframe, *self.timeframes)}")

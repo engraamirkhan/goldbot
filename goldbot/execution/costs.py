@@ -4,7 +4,8 @@ One nightly job per terminal fits
 * a spread table by session from that terminal's own ticks (median and p90 of ask - bid, $/oz), and
 * a slippage table from the engine's own fills (filled minus requested price, signed so that positive is worse
   for us, $/oz) by session and order type, seeded with a conservative prior until `min_fills` fills exist,
-plus the broker's commission. The engine converts the round trip for the current session into ATR units for
+plus the broker's commission and, when the terminal reports them, its swap rates (USD per lot per night, triple day).
+The engine converts the round trip for the current session into ATR units for
 the RiskGate and the probability threshold; without a table it keeps its configured fallback.
 """
 from __future__ import annotations
@@ -19,6 +20,7 @@ from pydantic import Field
 
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
+from goldbot.labels.triple_barrier import SwapSpec
 
 if TYPE_CHECKING:
     from goldbot.config import Settings
@@ -50,6 +52,18 @@ class CostTable(FrozenRecord):
     n_ticks: int = 0
     n_fills: int = 0
     notes: list[str] = Field(default_factory=list)
+    # the broker's swap per lot (100 oz) per night, broker sign (negative = paid); None until the terminal reports it
+    swap_long_usd_per_lot: float | None = None
+    swap_short_usd_per_lot: float | None = None
+    swap_triple_weekday: int | None = Field(None, ge=0, le=4)
+
+    def swap_spec(self, server_tz: str, default_triple_weekday: int = 2) -> SwapSpec | None:
+        """The broker's measured swap as a SwapSpec, or None when the table has no swap rates (keep the prior)."""
+        if self.swap_long_usd_per_lot is None or self.swap_short_usd_per_lot is None:
+            return None
+        triple = default_triple_weekday if self.swap_triple_weekday is None else self.swap_triple_weekday
+        return SwapSpec(long_usd_per_lot=self.swap_long_usd_per_lot, short_usd_per_lot=self.swap_short_usd_per_lot,
+                        triple_weekday=triple, server_tz=server_tz)
 
     def round_trip_usd_per_oz(self, session: str, order_type: str = "market") -> float | None:
         """Spread + entry and exit slippage + commission both sides, in $/oz; None when no spread was measured.
@@ -133,13 +147,17 @@ def slippage_table(fills: pd.DataFrame, *, prior_usd: float, min_fills: int = 50
 
 
 def build_cost_table(account_id: str, ticks: pd.DataFrame, fills: pd.DataFrame, *, commission_per_lot_side_usd: float,
-                     slippage_prior_usd: float, min_fills: int = 50, now: UtcTimestamp | None = None) -> CostTable:
+                     slippage_prior_usd: float, min_fills: int = 50, now: UtcTimestamp | None = None,
+                     swap: SwapSpec | None = None) -> CostTable:
     sp = spread_table(ticks)
     notes = [] if sp else ["no in-session ticks: no round-trip cost; the engine keeps its configured fallback"]
     return CostTable(account_id=account_id, built_utc=now or pd.Timestamp.now("UTC"), spread=sp,
                      slippage=slippage_table(fills, prior_usd=slippage_prior_usd, min_fills=min_fills),
                      commission_per_lot_side_usd=commission_per_lot_side_usd, slippage_prior_usd=slippage_prior_usd,
-                     n_ticks=len(ticks), n_fills=len(fills), notes=notes)
+                     n_ticks=len(ticks), n_fills=len(fills), notes=notes,
+                     swap_long_usd_per_lot=None if swap is None else swap.long_usd_per_lot,
+                     swap_short_usd_per_lot=None if swap is None else swap.short_usd_per_lot,
+                     swap_triple_weekday=None if swap is None else swap.triple_weekday)
 
 
 def prior_extra_cost_usd(slippage_prior_usd: float, commission_per_lot_side_usd: float) -> float:
@@ -154,3 +172,13 @@ def settings_extra_cost_usd(settings: "Settings") -> float:
     canonical = [b for b, cfg in settings.brokers.items() if cfg.canonical_costs]
     commission = max((settings.costs.commission_per_lot_side_usd.get(b, 0.0) for b in canonical), default=0.0)
     return prior_extra_cost_usd(settings.costs.slippage_prior_usd, commission)
+
+
+def settings_swap(settings: "Settings") -> SwapSpec:
+    """The swap prior from settings (`costs.swap_*`) on the canonical-cost broker's server clock: what research and
+    the VPS jobs charge before a cost table reports the broker's own rates."""
+    canonical = [cfg.server_tz for cfg in settings.brokers.values() if cfg.canonical_costs]
+    c = settings.costs
+    return SwapSpec(long_usd_per_lot=c.swap_long_usd_per_lot, short_usd_per_lot=c.swap_short_usd_per_lot,
+                    triple_weekday=c.swap_triple_weekday, server_tz=canonical[0] if canonical else "Europe/Athens",
+                    contract_oz=CONTRACT_OZ)

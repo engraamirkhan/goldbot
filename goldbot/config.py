@@ -96,6 +96,11 @@ class RiskSettings(_Section):
 class CostSettings(_Section):
     slippage_prior_usd: float = Field(ge=0)
     commission_per_lot_side_usd: dict[str, float]
+    # overnight financing per lot (100 oz) per night, broker sign (negative = paid): a prior until the canonical
+    # broker's cost table reports its own (CostTable.swap_*); charged per server-day rollover, x3 on the triple day
+    swap_long_usd_per_lot: float = -60.0
+    swap_short_usd_per_lot: float = 0.0
+    swap_triple_weekday: int = Field(2, ge=0, le=4)      # 0 = Monday; Wednesday for XAUUSD at most brokers
 
 
 class ScheduleSettings(_Section):

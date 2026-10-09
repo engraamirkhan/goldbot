@@ -15,8 +15,8 @@ from goldbot.data.resample import mid
 from goldbot.features import FEATURES, build_features
 from goldbot.features.mtf import merge_higher_tf
 from goldbot.features.technical import atr
-from goldbot.labels import one_at_a_time, triple_barrier, uniqueness_weights
-from goldbot.research.gates import holdout_verdict, research_gates
+from goldbot.labels import SwapSpec, one_at_a_time, triple_barrier, uniqueness_weights
+from goldbot.research.gates import RULE_ONLY_LABEL, holdout_verdict, research_gates
 from goldbot.research.metrics import expectancy, summarize
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, fit_calibrator
 from goldbot.research.walkforward import Fold, splits_for, window_for
@@ -159,18 +159,22 @@ class Prepared(Record):
     feats: pd.DataFrame             # decision-frame features of each label's signal bar, plus `side`
     feature_version: str
     n_bars: int
+    swap: SwapSpec | None = None    # overnight financing charged in `labels` (None: not charged)
 
 
 def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None = None,
             feature_names: list[str] | None = None, ctx: dict | None = None, extra_cost_usd: float = 0.0,
             holdout: Window | None = None, score_holdout: bool = False,
-            frame: tuple[pd.DataFrame, pd.DataFrame] | None = None) -> Prepared:
+            frame: tuple[pd.DataFrame, pd.DataFrame] | None = None, swap: SwapSpec | None = None) -> Prepared:
     """Features, candidates and labels (one position at a time) for one configuration. `frame`: the decision frame
     (build_decision_frame's output) when several configurations share a timeframe, so it is built once.
 
     extra_cost_usd: round-trip cost per oz beyond the bar spread (entry and exit slippage plus commission). Labels
     already pay the spread (entry at the ask, exit at the bid), so the spread is not charged again: the extra cost is
     taken off every label's return and enters the break-even probability per candidate (extra / ATR at the signal).
+
+    swap: overnight financing for every server-day rollover a net label is held through (triple_barrier); the gross
+    labels (the screen's) carry no cost. Unknown at the signal (it depends on the hold), so it is not in the threshold.
 
     holdout: unless score_holdout, every candidate that has not exited before the holdout starts is dropped: the window
     itself and everything after it (bars past the holdout would otherwise form stub test folds)."""
@@ -180,7 +184,7 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
     cands = spec.candidates(m, X)
     a = atr(m, 14)
     ls = spec.label_spec
-    labels = one_at_a_time(triple_barrier(bars_dec, cands, ls, a))
+    labels = one_at_a_time(triple_barrier(bars_dec, cands, ls, a, swap=swap))
     gross = one_at_a_time(triple_barrier(_zero_spread(bars_dec), cands, ls, a))
     if holdout is not None and not score_holdout:
         if not labels.empty:
@@ -199,7 +203,8 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
         feats["side"] = labels["side"].to_numpy()
     if not gross.empty:
         gross["risk"] = _risk_fraction(gross, a, ls.stop_atr)
-    return Prepared(spec=spec, labels=labels, gross=gross, feats=feats, feature_version=version, n_bars=len(bars_dec))
+    return Prepared(spec=spec, labels=labels, gross=gross, feats=feats, feature_version=version, n_bars=len(bars_dec),
+                    swap=swap)
 
 
 def rule_only(gross: pd.DataFrame, net: pd.DataFrame) -> dict[str, Any]:
@@ -217,9 +222,9 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
                    feature_names: list[str] | None = None, model_features: list[str] | None = None,
                    n_trials: int = 1, trades_per_year: float | None = None, ctx: dict | None = None,
                    extra_cost_usd: float = 0.0, holdout: Window | None = None,
-                   score_holdout: bool = False) -> ResearchResult:
+                   score_holdout: bool = False, swap: SwapSpec | None = None) -> ResearchResult:
     """Walk-forward one specialist configuration: `prepare` then `evaluate` (see both)."""
-    prep = prepare(spec, bars_dec, context, feature_names, ctx, extra_cost_usd, holdout, score_holdout)
+    prep = prepare(spec, bars_dec, context, feature_names, ctx, extra_cost_usd, holdout, score_holdout, swap=swap)
     return evaluate(prep, model_features=model_features, n_trials=n_trials, trades_per_year=trades_per_year,
                     extra_cost_usd=extra_cost_usd, holdout=holdout, score_holdout=score_holdout)
 
@@ -247,13 +252,13 @@ def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: 
     folds = splits_for(labels, spec.timeframe, **spec.walkforward)
     return _walk_forward(spec.agent_id, labels, prep.gross, prep.feats, cols, folds, prep.feature_version,
                          n_trials=n_trials, trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd,
-                         holdout=holdout, score_holdout=score_holdout, window=window)
+                         holdout=holdout, score_holdout=score_holdout, window=window, swap=prep.swap)
 
 
 def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feats: pd.DataFrame, cols: list[str],
                   folds: list[Fold], version: str, *, n_trials: int, trades_per_year: float | None,
                   extra_cost_usd: float, holdout: Window | None, score_holdout: bool,
-                  window: dict[str, Any]) -> ResearchResult:
+                  window: dict[str, Any], swap: SwapSpec | None = None) -> ResearchResult:
     """Shared by the per-family and the pooled walk-forward: fit per fold, cross-fitted calibration, per-candidate
     threshold from its own barriers, metrics, rule-only expectancy and the design's gates (or the holdout rule).
     `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it."""
@@ -286,6 +291,7 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
         "complete_fold_test_sizes": [int(len(f.test_idx)) for f in folds if f.complete],
         "walkforward": window,
         "extra_cost_usd": float(extra_cost_usd), "evaluation": "cross-fitted",
+        "swap": _swap_summary(swap, oof[in_hold]),
         "holdout": None if holdout is None else {"from": str(holdout[0]), "to": str(holdout[1]), "scored": score_holdout},
         "rule_only": rule_only(gross_eval, oof[in_hold]),
     }
@@ -305,9 +311,36 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     else:
         metrics["gates"] = research_gates(int(len(labels)), metrics["complete_fold_test_sizes"], taken[["ts_utc", "ret"]],
                                           metrics.get("model_filtered"))
+        metrics["rule_only_gates"] = rule_only_gates(oof, metrics["complete_fold_test_sizes"], n_trials, trades_per_year)
     imp = last_model.importance() if last_model is not None else None
     return ResearchResult(agent_id=agent_id, n_candidates=len(labels), n_folds=len(folds), oof=oof, metrics=metrics,
                           feature_version=version, importance=imp, model=last_model if "threshold" in metrics else None)
+
+
+def rule_only_gates(net: pd.DataFrame, fold_test_sizes: list[int], n_trials: int,
+                    trades_per_year: float | None = None) -> dict[str, Any]:
+    """The design's gates applied to the rule alone: every candidate's net result (spread, slippage, commission, swap)
+    in the research window, no model filter, the same candidates and folds, the DSR with the same trial count.
+    Informational (RULE_ONLY_LABEL): a passed trial still needs the model path's gates."""
+    rows = net[["ts_utc", "ret"]]
+    tpy = trades_per_year if trades_per_year is not None else (_per_year(rows) if len(rows) else 0.0)
+    summary = summarize(rows, tpy, n_trials)
+    out = research_gates(int(len(net)), fold_test_sizes, rows, summary, subject="rule-only")
+    return {**out, "label": RULE_ONLY_LABEL, "n_trades": int(len(net)), "summary": summary}
+
+
+def _swap_summary(swap: SwapSpec | None, labels: pd.DataFrame) -> dict[str, Any] | None:
+    """The swap charged in the net labels: its rates and, per trade, the mean nights and mean charge in R."""
+    if swap is None:
+        return None
+    out: dict[str, Any] = swap.model_dump()
+    if "swap_nights" in labels and len(labels):
+        out["mean_nights"] = float(labels["swap_nights"].mean())
+        out["share_held_overnight"] = float((labels["swap_nights"] > 0).mean())
+        risk = labels["risk"].to_numpy(dtype=float) if "risk" in labels else np.ones(len(labels))
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out["mean_r"] = float(np.nanmean(np.where(risk > 0, labels["swap_ret"].to_numpy(dtype=float) / risk, np.nan)))
+    return out
 
 
 def _per_year(rows: pd.DataFrame) -> float:
@@ -419,7 +452,8 @@ def run_pool(preps: list[Prepared], timeframe: str, n_trials: int = 1, trades_pe
     folds = splits_for(labels, timeframe)
     res = _walk_forward(ident.agent_id, labels, gross, feats, cols, folds, version, n_trials=n_trials,
                         trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd, holdout=holdout,
-                        score_holdout=score_holdout, window=window_for(timeframe))
+                        score_holdout=score_holdout, window=window_for(timeframe),
+                        swap=preps[0].swap if preps else None)
     local = _local_predictions(preps, labels, feats, folds, version) if compare_local else {}
     res.metrics["by_family"] = _by_family(res.oof, gross, local, holdout if score_holdout else None)
     res.metrics["families"] = families
