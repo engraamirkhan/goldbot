@@ -55,6 +55,9 @@ class Specialist(ABC):
     # the meta-model's declared inputs (column names, h1_/h4_/d1_ context included; at most 39 so `side` fits in 40).
     # Empty: the first eligible columns. Columns missing on a clone's timeframe (e.g. h1_ on 1h) are skipped.
     model_features: tuple[str, ...] = ()
+    # walk-forward overrides of the timeframe's windows (research.walkforward.WINDOWS), e.g. an expanding training
+    # window and longer test folds for a family with few candidates a year. An evaluation setting, not trade config.
+    walkforward: dict[str, Any] = {}
 
     def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
         cfg = {**self.default_config, **overrides}

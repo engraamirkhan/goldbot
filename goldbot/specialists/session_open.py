@@ -32,6 +32,9 @@ class SessionOpenSpecialist(Specialist):
         "max_bars": 16,
         "min_body_pct": 0.3,
     }
+    # ~90 candidates a year: a rolling 24-month window holds fewer than the 200 training rows a fold needs and a 3-month
+    # test fold far fewer than the gate's 60, so train on everything before each fold and test 6 months (proposal P5)
+    walkforward = {"expanding": True, "test_months": 6, "step_months": 6}
     # declared meta-model inputs, chosen by rationale (strength of the opening move, the overnight setting, volatility regime and higher-timeframe trend); the model adds `side`, <= 40 in all
     model_features = (
         "ret_1", "ret_4", "ret_16", "ret_96", "atr14_pct", "atr_ratio_14_100", "rv_ratio", "vol_tercile",
