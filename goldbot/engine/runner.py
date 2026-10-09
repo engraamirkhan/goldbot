@@ -30,10 +30,10 @@ from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.econ_calendar import blackout_window
 from goldbot.data.news import shock_window
-from goldbot.data.quality import DQEvent, check_bars, events_frame, stale_feed
-from goldbot.data.resample import BAR_COLUMNS, mid, resample_bars, ticks_to_1m
+from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
+from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
-from goldbot.data.timeutil import feature_day, floor_tf
+from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.broker import Broker, OrderIntent, Tick
 from goldbot.execution.costs import CostTable
@@ -169,6 +169,9 @@ class Engine:
         self._journaled = 0                  # decisions already written to the store's journal
         self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)
         self._ctx_cache: dict[str, tuple[pd.Timestamp, tuple[pd.DataFrame, pd.DataFrame] | None]] = {}
+        # per timeframe: completed 1m bars -> bars, re-aggregating only the groups that changed since the last close
+        self._resamplers: dict[str, IncrementalResampler] = {}
+        self._bars_clean: pd.DataFrame | None = None      # bars_1m as last built by _append_bars (duplicate-free)
         self._calendar: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         self._blackout_event: dict | None = None
         self._news: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
@@ -260,6 +263,8 @@ class Engine:
         """Incremental: only ticks since the last completed minute are aggregated; bars accumulate."""
         if not self.ticks:
             return
+        if self.ticks[0].ts_utc.floor("min") == self.ticks[-1].ts_utc.floor("min"):
+            return      # every tick is in the current minute (ticks arrive in time order): no minute has completed
         tdf = pd.DataFrame({"ts_utc": [x.ts_utc for x in self.ticks], "bid": [x.bid for x in self.ticks], "ask": [x.ask for x in self.ticks]})
         new = ticks_to_1m(tdf, DEFAULT_SESSIONS)
         if new.empty:
@@ -268,14 +273,30 @@ class Engine:
         done = new[new["ts_utc"] < last_minute]          # the current minute may still receive ticks
         if not done.empty:
             self._check_new_bars(done)
-            self.bars_1m = pd.concat([self.bars_1m, done]).drop_duplicates("ts_utc", keep="last").tail(self.cfg.max_bars_in_memory).reset_index(drop=True) \
-                if not self.bars_1m.empty else done.reset_index(drop=True)
+            self.bars_1m = self._append_bars(done)
         self.ticks = [x for x in self.ticks if x.ts_utc >= last_minute]
+
+    def _append_bars(self, done: pd.DataFrame) -> pd.DataFrame:
+        """bars_1m + newly completed minutes, de-duplicated on ts_utc (last wins) and capped at max_bars_in_memory.
+        When the buffer is one this method built (so already duplicate-free) and every new minute is later than its
+        last bar, de-duplication cannot drop a row and is skipped: the same frame without hashing 60000 stamps on
+        every 10-second refresh."""
+        b, cap = self.bars_1m, self.cfg.max_bars_in_memory
+        if b.empty:
+            out = done.reset_index(drop=True)
+        else:
+            new_ts = epoch_ns(pd.DatetimeIndex(done["ts_utc"]))
+            clean = b is self._bars_clean and len(new_ts) and bool((np.diff(new_ts) > 0).all()) \
+                and new_ts[0] > epoch_ns(pd.DatetimeIndex(b["ts_utc"].iloc[-1:]))[0]
+            joined = pd.concat([b, done])
+            out = (joined if clean else joined.drop_duplicates("ts_utc", keep="last")).tail(cap).reset_index(drop=True)
+        self._bars_clean = out          # duplicate-free by construction on every path above
+        return out
 
     # ------------------------------------------------------------------ main step
     def _frame(self, complete: pd.DataFrame, tf: str, close_ts: pd.Timestamp) -> _Frame | None:
         """Completed bars of one decision timeframe with features and its context (the same rule as research)."""
-        dec = resample_bars(complete, tf).reset_index(drop=True)
+        dec = self._resample(complete, tf)
         dec = dec[dec["visible_at"] <= close_ts].tail(self.cfg.feature_window).reset_index(drop=True)
         if len(dec) < 120:
             return None
@@ -289,6 +310,13 @@ class Engine:
         X.attrs["feature_version"] = version          # as research stamps it (pipeline.build_decision_frame)
         return _Frame(dec=dec, m=m, X=X, atr=atr(m, 14))
 
+    def _resample(self, complete: pd.DataFrame, tf: str) -> pd.DataFrame:
+        """resample_bars(complete, tf), incrementally (identical output; see IncrementalResampler)."""
+        rs = self._resamplers.get(tf)
+        if rs is None:
+            rs = self._resamplers[tf] = IncrementalResampler(tf)
+        return rs(complete)
+
     def _context(self, complete: pd.DataFrame, tf: str, close_ts: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame] | None:
         """Completed context bars and their features, rebuilt only when a new bar of `tf` has completed: the key is
         the period close_ts falls in (UTC floor intraday, the feature-day for 1d), which changes at a bar's visible_at."""
@@ -297,7 +325,7 @@ class Engine:
         cached = self._ctx_cache.get(tf)
         if cached is not None and cached[0] == key:
             return cached[1]
-        hb = resample_bars(complete, tf).reset_index(drop=True)
+        hb = self._resample(complete, tf)
         hb = hb[hb["visible_at"] <= close_ts].reset_index(drop=True)
         out = None if len(hb) < 30 else (hb, build_features(mid(hb), ["atr", "trend_strength", "moving_averages", "realised_vol"]))
         self._ctx_cache[tf] = (key, out)
@@ -647,8 +675,7 @@ class Engine:
         tail = self.bars_1m.tail(1) if not self.bars_1m.empty else self.bars_1m
         joined = pd.concat([tail, done]).reset_index(drop=True) if not tail.empty else done
         mono = len(joined) > 1 and not pd.DatetimeIndex(joined["ts_utc"]).is_monotonic_increasing
-        _, events = check_bars(joined)
-        errs = [e for e in events if e.severity == "error"]
+        errs = bar_errors(joined)                       # = the error events of check_bars(joined)
         if mono and not any(e.check == "non_monotonic" for e in errs):   # check_bars sorts before testing order
             errs.append(DQEvent(ts_utc=pd.Timestamp(done["ts_utc"].iloc[0]), check="non_monotonic", severity="error",
                                 detail="completed bar not after the last stored bar"))

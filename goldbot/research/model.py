@@ -63,6 +63,14 @@ DEFAULT_PARAMS = dict(
 )
 
 
+# LightGBM threads for fit and predict unless `params` names n_jobs. The training sets are a few hundred to a few
+# thousand candidates, where OpenMP's per-iteration thread start-up and spin-waiting cost far more than they save,
+# catastrophically so on a busy machine (measured on 300 rows x 40 features with the CPU shared: 40 s with all cores,
+# 0.09 s with one). One thread also fixes the histogram summation order, so the trees are reproducible bit for bit
+# (multi-threaded row-wise histograms may sum in a different order); predictions were identical in every test.
+FIT_THREADS = 1
+
+
 class MetaLabelModel(Record):
     feature_names: list[str]
     params: dict[str, Any] = Field(default_factory=lambda: dict(DEFAULT_PARAMS))
@@ -84,7 +92,7 @@ class MetaLabelModel(Record):
             raise ValueError(f"live models are capped at {MAX_FEATURES} features (design: Features and labels)")
         if lgb is None:
             raise RuntimeError("lightgbm not installed")
-        self.model = lgb.LGBMClassifier(**self.params)
+        self.model = lgb.LGBMClassifier(**{"n_jobs": FIT_THREADS, **self.params})
         self.model.fit(self.design(X), y, sample_weight=None if w is None else w.to_numpy())
         return self
 
