@@ -166,21 +166,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 
 ## Next steps (no owner input needed unless marked)
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.
-1. Research status (2026-10-06, bars re-pulled with real volumes, lookahead check clean on all 163 features):
-   baselines (trials #8-#11) show no model skill except a weak one in mean_reversion (OOF AUC 0.54, 16 model trades
-   in 15 years, DSR 0.991: far below the trade-count gates). The design review
-   (`docs/proposals/2026-10-design-improvements.md`) found the evaluation itself biased (calibration and threshold
-   chosen on the test rows, spread charged twice, design gates not enforced), so the variant batches are on hold
-   until that fix (P1-P3) lands; then the four families are re-run once as pre-registered trials. Until an agent passes the gates the engines propose nothing (by design).
-   Update 2026-10-09: the evaluation fix landed and the four families were re-run (issues #37, #39, #40, #41; summary
-   #34): no gross edge (rule gross t -1.58..+1.31), net -0.14..-0.39 R per trade, OOF AUC 0.47-0.53. All four fail
-   the P4 screen on those numbers, so they are retired from model research (not re-screened: that would spend trials).
-   Pre-registered next batch (P4 + P5, at most 6 trials, `research.yml` dispatches, in this order):
-   a. `specialist=tsmom`, `variants=[{}, {"timeframe": "4h", "max_bars": 12}]` (2 trials);
-   b. `specialist=intraday_momentum`, `variants=[{}, {"session": "london"}]` (2 trials);
-   c. `pooled=1h` only if a tsmom configuration passed its screen; `pooled=15m` only if an intraday_momentum one did
-      (1 trial each; skipped otherwise, which saves the budget). `skip_screen` stays false throughout.
-   A configuration that passes the screen goes straight on to the walk-forward and the design's gates in the same run.
+1. Research status (2026-10-09, Q4 2026 trial budget spent: 20/20, research stops until 2027-01-01). Evaluation is
+   cross-fitted, spread charged once, design gates and the P4 screen enforced, holdout 2025-10..2026-09 untouched,
+   lookahead check clean on every run (reports: issues #37 #39 #40 #41 #51 #52 #53; summaries on #34).
+   - No gross edge: mean_reversion, session_open, trend, breakout, intraday_momentum (NY, London). Retired from model
+     research.
+   - tsmom (vol-scaled time-series momentum) has a small gross edge: +0.06 R/trade, t 2.6 (1h), 2.4 (4h); net of costs
+     -0.079 R (1h), -0.014 R (4h, before swap). tsmom 1d cannot reach the screen's 1,000 events (454).
+   - Meta-models add no skill: OOF AUC ~0.50 per family and pooled (pooled_1h, #53).
+   Q1 2027 plan (first pre-registered trial): `specialist=tsmom`, `variants=[{"timeframe": "4h", "max_bars": 12}]`,
+   rationale "horizon study: tsmom 4h with swap" (refused on 2026-10-09 by the budget guard). Before it, record the
+   broker's measured swap and commission in the cost table from the VPS so the net uses real costs, not the prior
+   (swap prior: long -60, short 0 USD/lot/night, x3 Wednesday). If net stays <= 0, the next option (other
+   instruments) is an OWNER decision. Raising `research.trial_budget_quarter` is an OWNER decision.
+   Until an agent passes the gates the engines propose nothing (by design).
 2. On the VPS, check `state/news_feeds.json` after the first hour: the feed URLs in `settings.yaml: news` could not be
    verified from a Claude sandbox. Fix any that fail; the collector skips broken feeds.
 3. VPS (step by step in `docs/RUNBOOK.md`): provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in
