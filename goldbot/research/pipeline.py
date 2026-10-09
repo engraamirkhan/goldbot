@@ -19,8 +19,8 @@ from goldbot.labels import one_at_a_time, triple_barrier, uniqueness_weights
 from goldbot.research.gates import holdout_verdict, research_gates
 from goldbot.research.metrics import expectancy, summarize
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, fit_calibrator
-from goldbot.research.walkforward import splits_for
-from goldbot.specialists.base import FEATURE_SEED_KEY, Specialist
+from goldbot.research.walkforward import Fold, splits_for, window_for
+from goldbot.specialists.base import FEATURE_SEED_KEY, AgentIdentity, Specialist
 
 DEFAULT_FEATURE_NAMES = [n for n in FEATURES if n not in ("macro", "calendar_events")]
 
@@ -150,27 +150,32 @@ def _cross_fitted(p_raw: np.ndarray, y: np.ndarray, folds: list[Any]) -> np.ndar
     return p
 
 
-def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None = None,
-                   feature_names: list[str] | None = None, model_features: list[str] | None = None,
-                   n_trials: int = 1, trades_per_year: float | None = None, ctx: dict | None = None,
-                   extra_cost_usd: float = 0.0, holdout: Window | None = None,
-                   score_holdout: bool = False) -> ResearchResult:
-    """Walk-forward one specialist configuration.
+class Prepared(Record):
+    """One specialist configuration labelled on one decision timeframe, before any model: the input of the primary-signal
+    screen (research.screen), of the per-family walk-forward (`evaluate`) and of the pooled one (`run_pool`)."""
+    spec: Any                       # Specialist
+    labels: pd.DataFrame            # net labels (spread in the fills, extra cost taken off `ret`) with risk and barriers
+    gross: pd.DataFrame             # the same candidates on mid prices: the rule's outcome before any cost
+    feats: pd.DataFrame             # decision-frame features of each label's signal bar, plus `side`
+    feature_version: str
+    n_bars: int
+
+
+def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None = None,
+            feature_names: list[str] | None = None, ctx: dict | None = None, extra_cost_usd: float = 0.0,
+            holdout: Window | None = None, score_holdout: bool = False,
+            frame: tuple[pd.DataFrame, pd.DataFrame] | None = None) -> Prepared:
+    """Features, candidates and labels (one position at a time) for one configuration. `frame`: the decision frame
+    (build_decision_frame's output) when several configurations share a timeframe, so it is built once.
 
     extra_cost_usd: round-trip cost per oz beyond the bar spread (entry and exit slippage plus commission). Labels
     already pay the spread (entry at the ask, exit at the bid), so the spread is not charged again: the extra cost is
     taken off every label's return and enters the break-even probability per candidate (extra / ATR at the signal).
 
-    Selection is cross-fitted: fold k's calibrator comes from earlier folds' out-of-fold predictions only, and the
-    threshold uses only information at the signal, so `model_filtered` never selects on the outcome it reports.
-
-    holdout: [start, end) window the research loop never sees. By default every candidate that has not exited before
-    the holdout starts is dropped before the walk-forward: the window itself and everything after it (bars past the
-    holdout would otherwise form stub test folds). With score_holdout=True the walk-forward runs over everything and
-    the metrics are computed on the holdout candidates only, judged by the holdout rule (gates.holdout_verdict)
-    instead of the walk-forward gates (scored once per configuration; see TrialRegistry.holdout_scored)."""
+    holdout: unless score_holdout, every candidate that has not exited before the holdout starts is dropped: the window
+    itself and everything after it (bars past the holdout would otherwise form stub test folds)."""
     bars_dec = bars_dec.reset_index(drop=True)
-    m, X = build_decision_frame(bars_dec, context, feature_names, ctx)
+    m, X = frame if frame is not None else build_decision_frame(bars_dec, context, feature_names, ctx)
     version = X.attrs["feature_version"]
     cands = spec.candidates(m, X)
     a = atr(m, 14)
@@ -182,19 +187,77 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
             labels = labels[_before(labels, holdout[0])].reset_index(drop=True)
         if not gross.empty:
             gross = gross[_before(gross, holdout[0])].reset_index(drop=True)
-    if labels.empty:
-        return ResearchResult(agent_id=spec.agent_id, n_candidates=0, n_folds=0, oof=labels, metrics={"n": 0},
-                              feature_version=version, importance=None)
-    if extra_cost_usd > 0:
-        labels["ret"] = labels["ret"] - extra_cost_usd / labels["entry"].astype(float)
-    labels["risk"] = _risk_fraction(labels, a, ls.stop_atr)
-    labels["weight"] = uniqueness_weights(labels, len(bars_dec)).to_numpy()
-    feats = X.drop(columns=["ts_utc"]).iloc[labels["idx"].to_numpy()].reset_index(drop=True)
-    feats = feats.replace([np.inf, -np.inf], np.nan)
-    feats["side"] = labels["side"].to_numpy()
-    cols = model_features or model_inputs(spec, [c for c in feats.columns if feats[c].notna().mean() > 0.8])
+    feats = pd.DataFrame()
+    if not labels.empty:
+        if extra_cost_usd > 0:
+            labels["ret"] = labels["ret"] - extra_cost_usd / labels["entry"].astype(float)
+        labels["risk"] = _risk_fraction(labels, a, ls.stop_atr)
+        labels["atr_sig"] = a.to_numpy()[labels["idx"].to_numpy()]
+        labels["target_atr"], labels["stop_atr"], labels["family"] = ls.target_atr, ls.stop_atr, spec.family
+        feats = X.drop(columns=["ts_utc"]).iloc[labels["idx"].to_numpy()].reset_index(drop=True)
+        feats = feats.replace([np.inf, -np.inf], np.nan)
+        feats["side"] = labels["side"].to_numpy()
+    if not gross.empty:
+        gross["risk"] = _risk_fraction(gross, a, ls.stop_atr)
+    return Prepared(spec=spec, labels=labels, gross=gross, feats=feats, feature_version=version, n_bars=len(bars_dec))
+
+
+def rule_only(gross: pd.DataFrame, net: pd.DataFrame) -> dict[str, Any]:
+    """The rule's own expectancy in R over every candidate (no model): gross on mid prices, net of every cost."""
+    return {"gross": expectancy(gross["ret"].to_numpy(), gross["risk"].to_numpy()) if len(gross) else {"n": 0},
+            "net": expectancy(net["ret"].to_numpy(), net["risk"].to_numpy()) if len(net) else {"n": 0}}
+
+
+def eligible_columns(feats: pd.DataFrame) -> list[str]:
+    """Columns populated on more than 80% of the candidates (the model's candidates for inputs)."""
+    return [c for c in feats.columns if feats[c].notna().mean() > 0.8]
+
+
+def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None = None,
+                   feature_names: list[str] | None = None, model_features: list[str] | None = None,
+                   n_trials: int = 1, trades_per_year: float | None = None, ctx: dict | None = None,
+                   extra_cost_usd: float = 0.0, holdout: Window | None = None,
+                   score_holdout: bool = False) -> ResearchResult:
+    """Walk-forward one specialist configuration: `prepare` then `evaluate` (see both)."""
+    prep = prepare(spec, bars_dec, context, feature_names, ctx, extra_cost_usd, holdout, score_holdout)
+    return evaluate(prep, model_features=model_features, n_trials=n_trials, trades_per_year=trades_per_year,
+                    extra_cost_usd=extra_cost_usd, holdout=holdout, score_holdout=score_holdout)
+
+
+def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: int = 1,
+             trades_per_year: float | None = None, extra_cost_usd: float = 0.0, holdout: Window | None = None,
+             score_holdout: bool = False) -> ResearchResult:
+    """Purged walk-forward of one prepared configuration with the specialist's declared inputs and its walk-forward
+    windows (the timeframe's, with the specialist's `walkforward` overrides).
+
+    Selection is cross-fitted: fold k's calibrator comes from earlier folds' out-of-fold predictions only, and the
+    threshold uses only information at the signal, so `model_filtered` never selects on the outcome it reports.
+
+    holdout: with score_holdout=True the walk-forward runs over everything and the metrics are computed on the holdout
+    candidates only, judged by the holdout rule (gates.holdout_verdict) instead of the walk-forward gates (scored once
+    per configuration; see TrialRegistry.holdout_scored)."""
+    spec = prep.spec
+    if prep.labels.empty:
+        return ResearchResult(agent_id=spec.agent_id, n_candidates=0, n_folds=0, oof=prep.labels, metrics={"n": 0},
+                              feature_version=prep.feature_version, importance=None)
+    labels = prep.labels.copy()
+    labels["weight"] = uniqueness_weights(labels, prep.n_bars).to_numpy()
+    cols = model_features or model_inputs(spec, eligible_columns(prep.feats))
+    window = window_for(spec.timeframe, **spec.walkforward)
+    folds = splits_for(labels, spec.timeframe, **spec.walkforward)
+    return _walk_forward(spec.agent_id, labels, prep.gross, prep.feats, cols, folds, prep.feature_version,
+                         n_trials=n_trials, trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd,
+                         holdout=holdout, score_holdout=score_holdout, window=window)
+
+
+def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feats: pd.DataFrame, cols: list[str],
+                  folds: list[Fold], version: str, *, n_trials: int, trades_per_year: float | None,
+                  extra_cost_usd: float, holdout: Window | None, score_holdout: bool,
+                  window: dict[str, Any]) -> ResearchResult:
+    """Shared by the per-family and the pooled walk-forward: fit per fold, cross-fitted calibration, per-candidate
+    threshold from its own barriers, metrics, rule-only expectancy and the design's gates (or the holdout rule).
+    `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it."""
     y = labels["target_hit"].astype(int)
-    folds = splits_for(labels, spec.timeframe)
     oof_pred = np.full(len(labels), np.nan)
     last_model = None
     for f in folds:
@@ -205,10 +268,11 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
     oof = labels.copy()
     oof["p_raw"] = oof_pred
     oof["p"] = _cross_fitted(oof_pred, y.to_numpy(), folds)
-    # break-even + margin per candidate, from what is known at the signal: barriers and the extra cost in its ATR
-    atr_sig = a.to_numpy()[labels["idx"].to_numpy()]
+    # break-even + margin per candidate, from what is known at the signal: its barriers and the extra cost in its ATR
+    atr_sig = labels["atr_sig"].to_numpy(dtype=float)
     cost_atr = np.where(atr_sig > 0, extra_cost_usd / np.where(atr_sig > 0, atr_sig, 1.0), 0.0)
-    oof["threshold"] = (ls.stop_atr + cost_atr) / (ls.target_atr + ls.stop_atr) + THRESHOLD_MARGIN   # metrics.breakeven_prob
+    stop, target = labels["stop_atr"].to_numpy(dtype=float), labels["target_atr"].to_numpy(dtype=float)
+    oof["threshold"] = (stop + cost_atr) / (target + stop) + THRESHOLD_MARGIN   # metrics.breakeven_prob
     oof["taken"] = oof["p"].notna() & (oof["p"] > oof["threshold"])
 
     in_hold = _in_window(oof, holdout) if holdout is not None and score_holdout else np.ones(len(oof), dtype=bool)
@@ -216,17 +280,14 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
     calibrated = scored[scored["p"].notna()]
     taken = calibrated[calibrated["taken"]]
     gross_eval = gross[_in_window(gross, holdout)] if holdout is not None and score_holdout and not gross.empty else gross
-    net_eval = oof[in_hold]
     metrics: dict[str, Any] = {
         "n_candidates": int(len(labels)), "n_folds": len(folds),
         "fold_test_sizes": [int(len(f.test_idx)) for f in folds],
         "complete_fold_test_sizes": [int(len(f.test_idx)) for f in folds if f.complete],
+        "walkforward": window,
         "extra_cost_usd": float(extra_cost_usd), "evaluation": "cross-fitted",
         "holdout": None if holdout is None else {"from": str(holdout[0]), "to": str(holdout[1]), "scored": score_holdout},
-        "rule_only": {
-            "gross": expectancy(gross_eval["ret"].to_numpy(), _risk_fraction(gross_eval, a, ls.stop_atr)) if len(gross_eval) else {"n": 0},
-            "net": expectancy(net_eval["ret"].to_numpy(), net_eval["risk"].to_numpy()),
-        },
+        "rule_only": rule_only(gross_eval, oof[in_hold]),
     }
     if len(scored) > 20 and last_model is not None:
         # the deployed model (last fold) is calibrated on every out-of-fold prediction: all of them precede its use
@@ -245,7 +306,7 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
         metrics["gates"] = research_gates(int(len(labels)), metrics["complete_fold_test_sizes"], taken[["ts_utc", "ret"]],
                                           metrics.get("model_filtered"))
     imp = last_model.importance() if last_model is not None else None
-    return ResearchResult(agent_id=spec.agent_id, n_candidates=len(labels), n_folds=len(folds), oof=oof, metrics=metrics,
+    return ResearchResult(agent_id=agent_id, n_candidates=len(labels), n_folds=len(folds), oof=oof, metrics=metrics,
                           feature_version=version, importance=imp, model=last_model if "threshold" in metrics else None)
 
 
@@ -254,3 +315,170 @@ def _per_year(rows: pd.DataFrame) -> float:
     ts = pd.DatetimeIndex(pd.to_datetime(rows["ts_utc"], utc=True))
     years = max((ts.max() - ts.min()).days / 365.25, 7 / 365.25)
     return len(rows) / years
+
+
+# ---------------------------------------------------------------------------------------------- pooled (P5)
+FAMILY_PREFIX = "family_"
+# The pooled meta-model's declared inputs per decision timeframe (proposal P5): context every family's candidates
+# share (volatility regime, trend and stretch on the bar and the higher timeframes, momentum, flow, session), after
+# `side` and one indicator column per family. At most 40 in all (pooled_inputs checks).
+POOLED_FEATURES: dict[str, tuple[str, ...]] = {
+    "15m": (
+        "ret_1", "ret_4", "ret_16", "ret_96", "tsmom_z_24", "tsmom_score", "atr14_pct", "atr_ratio_14_100",
+        "rv_ratio", "vol_tercile", "dist_ema20_atr", "dist_ema50_atr", "slope_ema50", "ribbon_state", "adx14",
+        "donchian_pos_20", "bb_z_20", "rsi14", "range_width_24_atr", "tick_vol_ratio_20", "spread_atr",
+        "dist_res_atr", "dist_sup_atr", "session_id", "dow", "im_ny_ret_atr", "im_ldn_ret_atr", "h1_adx14",
+        "h4_slope_ema50", "h4_dist_ema50_atr", "d1_dist_ema50_atr", "d1_slope_ema50",
+    ),
+    "1h": (
+        "ret_1", "ret_4", "ret_16", "ret_96", "tsmom_z_24", "tsmom_z_120", "tsmom_score", "atr14_pct",
+        "atr_ratio_14_100", "rv_ratio", "vol_tercile", "dist_ema20_atr", "dist_ema50_atr", "dist_ema200_atr",
+        "slope_ema50", "ribbon_state", "adx14", "donchian_pos_20", "bb_z_20", "rsi14", "range_width_8_atr",
+        "range_width_96_atr", "tick_vol_ratio_20", "dist_res_atr", "dist_sup_atr", "session_id", "dow",
+        "h4_adx14", "h4_slope_ema50", "h4_dist_ema50_atr", "d1_dist_ema50_atr", "d1_slope_ema50",
+    ),
+}
+
+
+def pooled_family(timeframe: str) -> str:
+    return f"pooled_{timeframe}"
+
+
+def pooled_members(timeframe: str) -> list[str]:
+    """The families a pooled model on `timeframe` unites: every registered family whose default timeframe it is."""
+    from goldbot.specialists import SPECIALISTS
+    return sorted(f for f, cls in SPECIALISTS.items() if cls.timeframe == timeframe)
+
+
+def pooled_inputs(timeframe: str, families: list[str], eligible: list[str]) -> list[str]:
+    """`side`, one indicator per family, then the timeframe's declared pooled features present and eligible."""
+    if timeframe not in POOLED_FEATURES:
+        raise ValueError(f"no pooled feature list for {timeframe}; known: {sorted(POOLED_FEATURES)}")
+    ok = set(eligible)
+    cols = ["side", *[f"{FAMILY_PREFIX}{f}" for f in sorted(families)], *[c for c in POOLED_FEATURES[timeframe] if c in ok]]
+    if len(cols) > MAX_FEATURES:
+        raise ValueError(f"pooled {timeframe} model would have {len(cols)} inputs; the cap is {MAX_FEATURES}")
+    return cols
+
+
+def pool_identity(timeframe: str, preps: list[Prepared]) -> AgentIdentity:
+    """Registry identity of a pooled trial: its timeframe and every member's family and full config."""
+    return AgentIdentity(family=pooled_family(timeframe),
+                         config={"timeframe": timeframe, "families": {p.spec.family: p.spec.config for p in preps}})
+
+
+def pool_frames(preps: list[Prepared]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """The union of the members' labels (each family one position at a time, as each agent trades) in signal-time
+    order, their features with one indicator column per family (row-aligned), and their gross labels."""
+    fams = sorted({p.spec.family for p in preps})
+    labs, feats, gross = [], [], []
+    for p in preps:
+        if not p.gross.empty:
+            gross.append(p.gross.assign(family=p.spec.family))
+        if p.labels.empty:
+            continue
+        f = p.feats.copy()
+        for fam in fams:
+            f[f"{FAMILY_PREFIX}{fam}"] = float(fam == p.spec.family)
+        labs.append(p.labels)
+        feats.append(f)
+    gr = pd.concat(gross, ignore_index=True) if gross else pd.DataFrame()
+    if not labs:
+        return pd.DataFrame(), pd.DataFrame(), gr
+    lab = pd.concat(labs, ignore_index=True)
+    fe = pd.concat(feats, ignore_index=True)
+    order = np.argsort(pd.DatetimeIndex(pd.to_datetime(lab["ts_utc"], utc=True)).to_numpy(), kind="stable")
+    return lab.iloc[order].reset_index(drop=True), fe.iloc[order].reset_index(drop=True), gr
+
+
+MIN_LOCAL_TRAIN = 100            # a family's own model in a pooled fold needs this many training rows (else no local score)
+
+
+def run_pool(preps: list[Prepared], timeframe: str, n_trials: int = 1, trades_per_year: float | None = None,
+             extra_cost_usd: float = 0.0, holdout: Window | None = None, score_holdout: bool = False,
+             compare_local: bool = True) -> ResearchResult:
+    """Walk-forward ONE meta-model over the union of every member's candidates on `timeframe` (proposal P5), with
+    family indicators and `side` among its inputs, and the same cross-fitted calibration, thresholds (each candidate's
+    own barriers) and gates as a single family (`_walk_forward`). Uniqueness weights are computed across the pool (all
+    members share the decision bars) and the purge sees every member's labels. Folds use the timeframe's windows.
+
+    `by_family` reports each family's share, and with compare_local the deciding comparison of P5: per family, the
+    out-of-fold log-loss of the pooled model against the family's own model (its declared inputs) trained on the
+    family's rows of the same training folds and scored on the same test rows."""
+    if any(p.spec.timeframe != timeframe for p in preps):
+        raise ValueError(f"every pooled member must decide on {timeframe}")
+    ident = pool_identity(timeframe, preps)
+    version = preps[0].feature_version if preps else ""
+    labels, feats, gross = pool_frames(preps)
+    if labels.empty:
+        return ResearchResult(agent_id=ident.agent_id, n_candidates=0, n_folds=0, oof=labels, metrics={"n": 0},
+                              feature_version=version, importance=None)
+    labels["weight"] = uniqueness_weights(labels, max(p.n_bars for p in preps)).to_numpy()
+    families = sorted({p.spec.family for p in preps})
+    cols = pooled_inputs(timeframe, families, eligible_columns(feats))
+    folds = splits_for(labels, timeframe)
+    res = _walk_forward(ident.agent_id, labels, gross, feats, cols, folds, version, n_trials=n_trials,
+                        trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd, holdout=holdout,
+                        score_holdout=score_holdout, window=window_for(timeframe))
+    local = _local_predictions(preps, labels, feats, folds, version) if compare_local else {}
+    res.metrics["by_family"] = _by_family(res.oof, gross, local, holdout if score_holdout else None)
+    res.metrics["families"] = families
+    return res
+
+
+def _local_predictions(preps: list[Prepared], labels: pd.DataFrame, feats: pd.DataFrame, folds: list[Fold],
+                       version: str) -> dict[str, np.ndarray]:
+    """Per family: raw out-of-fold predictions of its own model on its rows of each pooled fold (NaN where its
+    training rows were too few or one class)."""
+    out: dict[str, np.ndarray] = {}
+    y = labels["target_hit"].astype(int)
+    fam = labels["family"].to_numpy()
+    for p in preps:
+        mine = fam == p.spec.family
+        pred = np.full(len(labels), np.nan)
+        cols = model_inputs(p.spec, eligible_columns(feats.loc[mine, list(p.feats.columns)])) if mine.any() else []
+        for f in folds:
+            tr, te = f.train_idx[mine[f.train_idx]], f.test_idx[mine[f.test_idx]]
+            if len(tr) < MIN_LOCAL_TRAIN or len(te) == 0 or y.iloc[tr].nunique() < 2:
+                continue
+            mdl = MetaLabelModel(feature_names=cols, feature_version=version).fit(
+                feats.iloc[tr], y.iloc[tr], labels["weight"].iloc[tr])
+            pred[te] = mdl.predict_raw(feats.iloc[te])
+        out[p.spec.family] = pred
+    return out
+
+
+def _log_loss(y: np.ndarray, p: np.ndarray) -> float:
+    q = np.clip(p, 1e-6, 1 - 1e-6)
+    return float(-np.mean(y * np.log(q) + (1 - y) * np.log(1 - q)))
+
+
+def _by_family(oof: pd.DataFrame, gross: pd.DataFrame, local: dict[str, np.ndarray],
+               holdout: Window | None) -> dict[str, Any]:
+    """Per member family: rule-only expectancy, out-of-fold AUC under the pooled model, the model-filtered
+    expectancy, and pooled vs local log-loss on the rows both scored (when the local models ran)."""
+    in_hold = _in_window(oof, holdout) if holdout is not None else np.ones(len(oof), dtype=bool)
+    out: dict[str, Any] = {}
+    for fam in sorted(oof["family"].unique()):
+        mine = (oof["family"] == fam).to_numpy() & in_hold
+        rows = oof[mine]
+        g = gross[gross["family"] == fam] if not gross.empty else gross
+        if holdout is not None and not g.empty:
+            g = g[_in_window(g, holdout)]
+        scored = rows[rows["p_raw"].notna()]
+        taken = scored[scored["p"].notna() & scored["taken"]]
+        entry: dict[str, Any] = {
+            "n_candidates": int(len(rows)), "rule_only": rule_only(g, rows),
+            "oof_auc": _auc(scored["target_hit"].to_numpy(), scored["p_raw"].to_numpy()) if len(scored) else None,
+            "model_filtered": expectancy(taken["ret"].to_numpy(), taken["risk"].to_numpy()),
+        }
+        lp = local.get(str(fam))
+        if lp is not None:
+            both = np.isfinite(lp[mine]) & rows["p_raw"].notna().to_numpy()
+            if both.any():
+                yv = rows["target_hit"].to_numpy(dtype=float)[both]
+                entry["logloss"] = {"n": int(both.sum()),
+                                    "pooled": _log_loss(yv, rows["p_raw"].to_numpy(dtype=float)[both]),
+                                    "local": _log_loss(yv, lp[mine][both])}
+        out[str(fam)] = entry
+    return out

@@ -115,7 +115,7 @@ def test_lookahead_dirty_family_gets_nothing_and_its_share_goes_elsewhere():
 
 def test_allocation_edge_cases_cap_zero_evidence_and_small_budget():
     flat, _ = allocate([_score(f, 0.0) for f in FAMILIES], 48, floor=2)
-    assert set(flat.values()) == {12}
+    assert set(flat.values()) == {48 // len(FAMILIES)}           # an even split when no family has evidence
     capped, left = allocate([_score("trend", 5.0), _score("breakout", 0.1)], 48, floor=2, cap=26)
     assert capped == {"trend": 26, "breakout": 22} and left == 0
     full, left = allocate([_score("trend", 5.0), _score("breakout", 0.1)], 60, floor=2, cap=26)
@@ -192,7 +192,7 @@ def test_monthly_research_honours_the_plan_the_quarter_budget_and_the_holdout(tm
     ENDS.clear()
     ctx = _ctx(tmp_path, trial_budget_per_month=6, label_grid_paused=False)   # the grid is paused by default
     slot = pd.Timestamp.now("UTC").floor("min")      # the registry stamps rows with the wall clock: same quarter
-    grid = {"breakout": 0, "mean_reversion": 5, "session_open": 1, "trend": 2}
+    grid = {"breakout": 0, "intraday_momentum": 0, "mean_reversion": 5, "session_open": 1, "trend": 2, "tsmom": 0}
     _plan(slot - pd.Timedelta(days=1), grid).save(tmp_path / PLAN_FILE)
     out = monthly_research(ctx, slot)
     assert {f: out[f]["trials"] for f in FAMILIES} == grid
@@ -202,7 +202,8 @@ def test_monthly_research_honours_the_plan_the_quarter_budget_and_the_holdout(tm
     _plan(slot - pd.Timedelta(days=30), {f: 0 for f in FAMILIES}).save(tmp_path / PLAN_FILE)
     out = monthly_research(ctx, slot)
     assert out["plan"] is None and ctx.trials.n_trials == 20
-    assert [out[f]["trials"] for f in FAMILIES] == [6, 6, 0, 0] and out["session_open"]["quarter_budget_spent"]
+    assert [out[f]["trials"] for f in FAMILIES] == [6, 6] + [0] * (len(FAMILIES) - 2)   # in family order
+    assert out["session_open"]["quarter_budget_spent"]
     assert "quarter's trial budget (20) is spent" in Path(out["report"]).read_text()
     (tmp_path / PLAN_FILE).write_text("{not json")
     assert jobs.current_plan(ctx, slot) is None

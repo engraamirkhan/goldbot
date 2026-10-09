@@ -33,7 +33,8 @@ def release_dir(tmp_path_factory) -> Path:
 
 def test_research_pass_reports_and_records_trials(release_dir, tmp_path, monkeypatch, capsys):
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
-    argv = ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry), "--report", str(report)]
+    argv = ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry), "--report", str(report),
+            "--skip-screen"]
     monkeypatch.setattr(sys, "argv", argv)
     assert rp.main() == 0
     text = report.read_text()
@@ -60,7 +61,7 @@ def test_variants_are_separate_trials_and_typos_fail(release_dir, tmp_path, monk
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
     variants = '[{}, {"asia_range_max_atr_d": 1.2}]'
     monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
-                                      "--report", str(report), "--variants", variants])
+                                      "--report", str(report), "--variants", variants, "--skip-screen"])
     assert rp.main() == 0
     rows = [json.loads(line) for line in registry.read_text().splitlines()]
     assert [r["trial"] for r in rows] == [1, 2] and rows[1]["config"]["asia_range_max_atr_d"] == 1.2
@@ -76,7 +77,7 @@ def test_variants_are_separate_trials_and_typos_fail(release_dir, tmp_path, monk
 def test_reports_carry_gates_rule_only_and_the_cost_line(release_dir, tmp_path, monkeypatch):
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
     monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
-                                      "--report", str(report), "--extra-cost-usd", "0.3"])
+                                      "--report", str(report), "--extra-cost-usd", "0.3", "--skip-screen"])
     assert rp.main() == 0
     text = report.read_text()
     assert "### Design gates: **FAIL**" in text and "FAIL candidates" in text      # 3 synthetic years: far too few
@@ -131,3 +132,82 @@ def test_research_stops_at_the_holdout_and_ignores_truncated_folds(release_dir):
     assert len(m["complete_fold_test_sizes"]) == len(m["fold_test_sizes"]) - 1   # the last fold is truncated
     per_fold = next(c for c in m["gates"]["checks"] if c["name"] == "per_fold")
     assert f"{len(m['complete_fold_test_sizes'])} test folds" in per_fold["detail"]
+
+
+def _rows(registry: Path) -> list[dict]:
+    return [json.loads(line) for line in registry.read_text().splitlines()]
+
+
+def test_a_rule_that_fails_the_screen_gets_no_model_but_is_a_recorded_trial(release_dir, tmp_path, monkeypatch):
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    argv = ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry), "--report", str(report),
+            "--specialist", "intraday_momentum", "--variants", '[{}, {"session": "london"}]']
+    monkeypatch.setattr(sys, "argv", argv)
+    assert rp.main() == 0                    # three synthetic years: far fewer than 1,000 events, so both fail
+    rows = _rows(registry)
+    assert [r["status"] for r in rows] == ["screened", "screened"] and [r["trial"] for r in rows] == [1, 2]
+    scr = rows[0]["results"]["screen"]
+    assert scr["passed"] is False and scr["n"] == rows[0]["results"]["n_candidates"] > 0
+    assert {c["name"] for c in scr["checks"]} == {"events", "gross_mean_r", "gross_t"}
+    assert "gates" not in rows[0]["results"] and "oof_auc" not in rows[0]["results"]
+    assert rows[0]["results"]["lookahead"]["lookahead_columns"] == []
+    assert rows[0]["budget_quarter"] and rows[1]["config"]["session"] == "london"
+    text = report.read_text()
+    assert "screen failed, no model fitted" in text and "| all_candidates |" not in text
+    assert "intraday_momentum: 2 variants" in text and "**fail**" in text
+
+    # --skip-screen fits the model anyway and says so; the screen is still recorded
+    monkeypatch.setattr(sys, "argv", argv[:-2] + ["--skip-screen"])
+    assert rp.main() == 0
+    last = _rows(registry)[-1]
+    assert last["status"] == "evaluated" and last["results"]["screen_skipped"] is True
+    assert last["results"]["screen"]["passed"] is False and "gates" in last["results"]
+    assert "(skipped with --skip-screen)" in report.read_text()
+
+
+def test_a_rule_that_passes_the_screen_goes_on_to_the_walk_forward(release_dir, tmp_path, monkeypatch):
+    from goldbot.research import screen as screen_mod
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    monkeypatch.setattr(screen_mod, "MIN_EVENTS", 1)
+    monkeypatch.setattr(screen_mod, "MIN_T", -1e9)
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "tsmom"])
+    real = screen_mod.screen_verdict
+
+    def lenient(rule):                  # synthetic random walks have no edge: accept any sign for this test
+        out = real({**rule, "gross": {**rule["gross"], "mean_r": abs(rule["gross"].get("mean_r", 0.0)) + 1e-9}})
+        return {**out, "rule_only": rule}
+    monkeypatch.setattr(screen_mod, "screen_verdict", lenient)
+    assert rp.main() == 0
+    row = _rows(registry)[0]
+    assert row["status"] == "evaluated" and row["family"] == "tsmom" and row["results"]["screen"]["passed"] is True
+    assert row["results"]["screen_skipped"] is False and "gates" in row["results"]
+    assert row["results"]["walkforward"]["train_months"] == 36
+    assert "### Primary-signal screen: **PASS**" in report.read_text()
+
+
+def test_pooled_meta_model_is_one_trial_over_every_family_on_the_timeframe(release_dir, tmp_path, monkeypatch):
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    argv = ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry), "--report", str(report),
+            "--pooled", "15m"]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert rp.main() == 0                                                  # the union fails the screen too
+    rows = _rows(registry)
+    assert len(rows) == 1 and rows[0]["family"] == "pooled_15m" and rows[0]["status"] == "screened"
+    assert set(rows[0]["results"]["screen"]["members"]) == {"intraday_momentum", "mean_reversion", "session_open"}
+
+    monkeypatch.setattr(sys, "argv", argv + ["--skip-screen"])
+    assert rp.main() == 0
+    row = _rows(registry)[-1]
+    res = row["results"]
+    assert row["family"] == "pooled_15m" and row["status"] == "evaluated" and row["agent_id"].startswith("pooled_15m-")
+    assert set(row["config"]["families"]) == {"intraday_momentum", "mean_reversion", "session_open"}
+    assert res["families"] == ["intraday_momentum", "mean_reversion", "session_open"] and "gates" in res
+    assert res["n_candidates"] == sum(b["n_candidates"] for b in res["by_family"].values())
+    assert any("logloss" in b for b in res["by_family"].values())          # the pooled-vs-local comparison ran
+    text = report.read_text()
+    assert "## pooled_15m walk-forward" in text and "### Pooled model by family" in text
+
+    monkeypatch.setattr(sys, "argv", argv + ["--variants", '[{"band_z": 1.5}]'])
+    with pytest.raises(SystemExit, match="--variants does not apply"):
+        rp.main()
