@@ -59,3 +59,49 @@ class SessionTable(FrozenRecord):
 
 
 DEFAULT_SESSIONS = SessionTable()
+
+
+class LocalSession(FrozenRecord):
+    """A trading session on a local wall clock (DST follows the zone): New York 08:30-16:00 America/New_York is
+    13:30-21:00 UTC in winter and 12:30-20:00 UTC in summer. Used by rules that act at a fixed local time."""
+    name: str
+    tz: str
+    open: time
+    close: time
+
+    @property
+    def length_minutes(self) -> int:
+        return (self.close.hour * 60 + self.close.minute) - (self.open.hour * 60 + self.open.minute)
+
+    def clock(self, utc_ts: pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:
+        """(minutes from the session open to each bar's start, NaN outside [open, close) and on weekends; the local
+        date as yyyymmdd) for bars starting at `utc_ts`."""
+        local = pd.DatetimeIndex(utc_ts).tz_convert(ZoneInfo(self.tz))
+        cur = np.asarray(local.hour * 60 + local.minute, dtype=float)
+        since = cur - (self.open.hour * 60 + self.open.minute)
+        inside = (since >= 0) & (since < self.length_minutes) & np.asarray(local.dayofweek < 5)
+        day = np.asarray(local.year * 10000 + local.month * 100 + local.day, dtype=np.int64)
+        return np.where(inside, since, np.nan), day
+
+    def open_price(self, bars: pd.DataFrame) -> np.ndarray:
+        """On every in-session bar: the open of the bar that started exactly at that day's session open (NaN outside
+        the session and on days whose opening bar is missing). Uses only bars up to the current one."""
+        since, day = self.clock(pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True)))
+        inside = ~np.isnan(since)
+        out = np.full(len(bars), np.nan)
+        if not inside.any():
+            return out
+        frame = pd.DataFrame({"day": day[inside], "since": since[inside],
+                              "open": bars["open"].to_numpy(dtype=float)[inside]})
+        first = frame.groupby("day", sort=False)[["since", "open"]].transform("first")
+        ok = first["since"].to_numpy() == 0
+        out[np.flatnonzero(inside)[ok]] = first["open"].to_numpy()[ok]
+        return out
+
+
+LOCAL_SESSIONS: dict[str, LocalSession] = {
+    # London: LSE hours (both London gold auctions fall inside); New York: from the 08:30 US data releases to the
+    # equity close
+    "london": LocalSession(name="london", tz="Europe/London", open=time(8, 0), close=time(16, 30)),
+    "newyork": LocalSession(name="newyork", tz="America/New_York", open=time(8, 30), close=time(16, 0)),
+}
