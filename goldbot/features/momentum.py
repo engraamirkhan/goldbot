@@ -4,8 +4,9 @@
   Moskowitz, Ooi and Pedersen 2012 scale by volatility so horizons and regimes compare), their mean and how many agree
   in sign. The specialist computes its own trigger with the same function (`tsmom_score`).
 * `intraday_session`: for London and New York on their local wall clocks (DST handled by the zone), the minutes since
-  the session open and the move since that open in ATR (Gao, Han, Li and Zhou 2018 use the first part of the session
-  to predict the last). Outside the session both are NaN.
+  today's session open (negative before it) and the move since the most recent session open in ATR (Gao, Han, Li and
+  Zhou 2018 use the first part of the session to predict the last). Defined on every bar, so a pooled model can use
+  them on any family's candidates.
 
 Everything uses bars up to and including the current one (checked by the pipeline's lookahead check)."""
 from __future__ import annotations
@@ -64,9 +65,8 @@ def f_intraday_session(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     out = Columns(df.index)
     for name, p in SESSION_PREFIX.items():
         sess = LOCAL_SESSIONS[name]
-        since, _ = sess.clock(ts)
-        sopen = sess.open_price(df)
-        out[f"im_{p}_min"] = since
+        sopen = sess.last_open_price(df)
+        out[f"im_{p}_min"] = sess.minutes_from_open(ts)
         with np.errstate(invalid="ignore", divide="ignore"):
             out[f"im_{p}_ret_atr"] = np.where(a > 0, (close - sopen) / a, np.nan)
     return out.frame()

@@ -77,11 +77,24 @@ class LocalSession(FrozenRecord):
         """(minutes from the session open to each bar's start, NaN outside [open, close) and on weekends; the local
         date as yyyymmdd) for bars starting at `utc_ts`."""
         local = pd.DatetimeIndex(utc_ts).tz_convert(ZoneInfo(self.tz))
-        cur = np.asarray(local.hour * 60 + local.minute, dtype=float)
-        since = cur - (self.open.hour * 60 + self.open.minute)
+        since = self._from_open(local)
         inside = (since >= 0) & (since < self.length_minutes) & np.asarray(local.dayofweek < 5)
         day = np.asarray(local.year * 10000 + local.month * 100 + local.day, dtype=np.int64)
         return np.where(inside, since, np.nan), day
+
+    def _from_open(self, local: pd.DatetimeIndex) -> np.ndarray:
+        return np.asarray(local.hour * 60 + local.minute, dtype=float) - (self.open.hour * 60 + self.open.minute)
+
+    def minutes_from_open(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
+        """Local minutes of the day minus the open's (negative before today's open), defined on every bar."""
+        return self._from_open(pd.DatetimeIndex(utc_ts).tz_convert(ZoneInfo(self.tz)))
+
+    def last_open_price(self, bars: pd.DataFrame) -> np.ndarray:
+        """The open of the most recent bar that started exactly at a session open (today's after the open, the previous
+        trading day's before it), carried forward; NaN before the first one. Uses only bars up to the current one."""
+        since, _ = self.clock(pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True)))
+        at_open = np.where(since == 0, bars["open"].to_numpy(dtype=float), np.nan)
+        return pd.Series(at_open).ffill().to_numpy()
 
     def open_price(self, bars: pd.DataFrame) -> np.ndarray:
         """On every in-session bar: the open of the bar that started exactly at that day's session open (NaN outside
