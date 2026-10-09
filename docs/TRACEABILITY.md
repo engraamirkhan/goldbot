@@ -17,12 +17,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 109 |
+| implemented | 111 |
 | partial | 19 |
 | missing | 14 |
 | deviates | 9 |
 | in review | 6 |
-| **total** | **157** |
+| **total** | **159** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -165,7 +165,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | M10 | Learned allocator "trains only on stacked out-of-fold specialist predictions" | missing | rule table only (design allows it for the first three months) | untested |
 | M11 | "Size multiplier m = w * clip((p - p0)/0.20, 0, 1), p0 = (S + c)/(T + S)" | implemented | goldbot/research/metrics.py:44, 52 | untested |
 | M12 | "Probabilities are isotonic-calibrated on out-of-fold predictions; thresholds maximise out-of-sample profit factor net of costs, shaded up by 0.02" | in review | goldbot/research/model.py:46; threshold is breakeven + 0.02 (goldbot/research/pipeline.py, goldbot/engine/runner.py:306), not PF-optimised; cross-fitted calibration is proposal P1 | tests/test_research_pass_integration.py::test_research_pass_reports_and_records_trials |
-| M13 | Walk-forward windows "15m: train 24, test 3, step 3, purge 2 d, embargo 1 d; 1h: 36/6/6, purge 5 d, embargo 2 d" | implemented | goldbot/research/walkforward.py:17-20; config/settings.yaml:31-36 | tests/test_trace_data_exec.py::test_walk_forward_windows_match_design_and_settings |
+| M13 | Walk-forward windows "15m: train 24, test 3, step 3, purge 2 d, embargo 1 d; 1h: 36/6/6, purge 5 d, embargo 2 d" | implemented | goldbot/research/walkforward.py `WINDOWS`; config/settings.yaml:31-36. Additions (proposals P4/P5): 4h 48/6/6, purge 10 d, embargo 4 d; session_open trains on an expanding window with 6-month test folds (`Specialist.walkforward`) | tests/test_trace_data_exec.py::test_walk_forward_windows_match_design_and_settings |
 | M14 | "Purge is always at least the specialist's label horizon" | implemented | goldbot/research/walkforward.py:47 | tests/test_trace_data_exec.py::test_purge_is_at_least_every_label_horizon |
 | M15 | Walk-forward windows read from settings | partial | `splits_for` uses the `WINDOWS` constant; `settings.labels` purge/embargo are not read (values equal today) | tests/test_trace_data_exec.py::test_walk_forward_windows_match_design_and_settings |
 | M16 | "Combinatorial purged CV (6 groups, 2 test, 15 paths) runs quarterly" | missing | | untested |
@@ -185,6 +185,8 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | M30 | Bounded research loop: fixed monthly trial budget, +-25% label grid, every trial in the registry feeding DSR | implemented | goldbot/ops/jobs.py `monthly_research`; config/settings.yaml research; goldbot/research/registry_sync.py | tests/test_jobs_integration.py::test_monthly_research_is_bounded_and_counted; ::test_label_grid_is_the_26_neighbours_of_the_base |
 | M31 | "a held-out year the loop never scores" [Risks table] | in review | not in code; proposal P2 | untested |
 | M32 | Meta-model inputs (side, trigger features, context) | in review | proposal P3 | untested |
+| M33 | Primary-signal screen before any model: rule-only gross mean R > 0, t >= 2, >= 1,000 events (proposal P4); each screened configuration is a trial | implemented | goldbot/research/screen.py; scripts/research_pass.py (`--skip-screen`, status `screened`) | tests/test_screen_pool.py::test_screen_passes_only_a_positive_significant_rule_on_enough_events; tests/test_research_pass_integration.py::test_a_rule_that_fails_the_screen_gets_no_model_but_is_a_recorded_trial |
+| M34 | Pooled meta-model per decision timeframe with family and side inputs, same calibration and gates, pooled-vs-local log-loss (proposal P5) | implemented (research only) | goldbot/research/pipeline.py `run_pool`; scripts/research_pass.py `--pooled`; the engine and model registry do not serve a pooled model yet | tests/test_research_pass_integration.py::test_pooled_meta_model_is_one_trial_over_every_family_on_the_timeframe; tests/test_screen_pool.py |
 
 ## Execution and broker [Broker abstraction, Order lifecycle, Reconciliation, Account classifier]
 
