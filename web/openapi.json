@@ -438,6 +438,28 @@
     "title": "CalendarResponse",
     "type": "object"
    },
+   "ChangePasswordRequest": {
+    "description": "Logged in. Revokes the user's other sessions.",
+    "properties": {
+     "current_password": {
+      "default": "",
+      "title": "Current Password",
+      "type": "string"
+     },
+     "new_password": {
+      "default": "",
+      "title": "New Password",
+      "type": "string"
+     },
+     "totp": {
+      "default": "",
+      "title": "Totp",
+      "type": "string"
+     }
+    },
+    "title": "ChangePasswordRequest",
+    "type": "object"
+   },
    "DecidedProposal": {
     "description": "A proposal decided in the last few minutes, so its card can show what happened to it.\n\nsubmitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;\napproved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);\nrejected: with its reason code; expired: nobody decided within the window.",
     "properties": {
@@ -699,6 +721,28 @@
     "title": "FeedHealth",
     "type": "object"
    },
+   "ForgotPasswordRequest": {
+    "description": "Self-service reset with a current authenticator code. The same 403 for an unknown email or a wrong code.",
+    "properties": {
+     "email": {
+      "default": "",
+      "title": "Email",
+      "type": "string"
+     },
+     "new_password": {
+      "default": "",
+      "title": "New Password",
+      "type": "string"
+     },
+     "totp": {
+      "default": "",
+      "title": "Totp",
+      "type": "string"
+     }
+    },
+    "title": "ForgotPasswordRequest",
+    "type": "object"
+   },
    "HTTPValidationError": {
     "properties": {
      "detail": {
@@ -872,7 +916,6 @@
      "role": {
       "default": "viewer",
       "enum": [
-       "owner",
        "approver",
        "viewer"
       ],
@@ -1210,6 +1253,156 @@
     "title": "RearmRequest",
     "type": "object"
    },
+   "RecoveryCodesRequest": {
+    "properties": {
+     "password": {
+      "default": "",
+      "title": "Password",
+      "type": "string"
+     },
+     "totp": {
+      "default": "",
+      "title": "Totp",
+      "type": "string"
+     }
+    },
+    "title": "RecoveryCodesRequest",
+    "type": "object"
+   },
+   "RecoveryCodesResponse": {
+    "properties": {
+     "recovery_codes": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Recovery Codes",
+      "type": "array"
+     }
+    },
+    "required": [
+     "recovery_codes"
+    ],
+    "title": "RecoveryCodesResponse",
+    "type": "object"
+   },
+   "RecoveryLoginRequest": {
+    "description": "Owner only: a one-time recovery code in place of the authenticator code.",
+    "properties": {
+     "email": {
+      "default": "",
+      "title": "Email",
+      "type": "string"
+     },
+     "password": {
+      "default": "",
+      "title": "Password",
+      "type": "string"
+     },
+     "recovery_code": {
+      "default": "",
+      "title": "Recovery Code",
+      "type": "string"
+     }
+    },
+    "title": "RecoveryLoginRequest",
+    "type": "object"
+   },
+   "RecoveryLoginResponse": {
+    "properties": {
+     "email": {
+      "title": "Email",
+      "type": "string"
+     },
+     "expires_in": {
+      "title": "Expires In",
+      "type": "integer"
+     },
+     "recovery_codes_left": {
+      "title": "Recovery Codes Left",
+      "type": "integer"
+     },
+     "role": {
+      "enum": [
+       "owner",
+       "approver",
+       "viewer"
+      ],
+      "title": "Role",
+      "type": "string"
+     },
+     "token": {
+      "title": "Token",
+      "type": "string"
+     },
+     "totp_uri": {
+      "title": "Totp Uri",
+      "type": "string"
+     }
+    },
+    "required": [
+     "token",
+     "expires_in",
+     "role",
+     "email",
+     "totp_uri",
+     "recovery_codes_left"
+    ],
+    "title": "RecoveryLoginResponse",
+    "type": "object"
+   },
+   "ResetLinkResponse": {
+    "properties": {
+     "expires_h": {
+      "title": "Expires H",
+      "type": "integer"
+     },
+     "reset_token": {
+      "title": "Reset Token",
+      "type": "string"
+     }
+    },
+    "required": [
+     "reset_token",
+     "expires_h"
+    ],
+    "title": "ResetLinkResponse",
+    "type": "object"
+   },
+   "ResetRequest": {
+    "description": "Owner-issued one-time link: sets a new password and enrols a new authenticator.",
+    "properties": {
+     "new_password": {
+      "default": "",
+      "title": "New Password",
+      "type": "string"
+     },
+     "token": {
+      "default": "",
+      "title": "Token",
+      "type": "string"
+     }
+    },
+    "title": "ResetRequest",
+    "type": "object"
+   },
+   "RevokeResponse": {
+    "properties": {
+     "ok": {
+      "default": true,
+      "title": "Ok",
+      "type": "boolean"
+     },
+     "sessions": {
+      "title": "Sessions",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "sessions"
+    ],
+    "title": "RevokeResponse",
+    "type": "object"
+   },
    "RoleChange": {
     "properties": {
      "email": {
@@ -1218,7 +1411,6 @@
      },
      "role": {
       "enum": [
-       "owner",
        "approver",
        "viewer"
       ],
@@ -1254,6 +1446,28 @@
      "password"
     ],
     "title": "SetupRequest",
+    "type": "object"
+   },
+   "SetupResponse": {
+    "description": "The owner's authenticator and 10 one-time recovery codes. Shown once: only their hashes are stored.",
+    "properties": {
+     "recovery_codes": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Recovery Codes",
+      "type": "array"
+     },
+     "totp_uri": {
+      "title": "Totp Uri",
+      "type": "string"
+     }
+    },
+    "required": [
+     "totp_uri",
+     "recovery_codes"
+    ],
+    "title": "SetupResponse",
     "type": "object"
    },
    "Status": {
@@ -1341,19 +1555,6 @@
      "supervisor"
     ],
     "title": "Status",
-    "type": "object"
-   },
-   "TotpEnrolment": {
-    "properties": {
-     "totp_uri": {
-      "title": "Totp Uri",
-      "type": "string"
-     }
-    },
-    "required": [
-     "totp_uri"
-    ],
-    "title": "TotpEnrolment",
     "type": "object"
    },
    "UserRef": {
@@ -1686,6 +1887,249 @@
     "summary": "Logout"
    }
   },
+  "/api/auth/password/change": {
+   "post": {
+    "operationId": "change_password_api_auth_password_change_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ChangePasswordRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Ok"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Change Password"
+   }
+  },
+  "/api/auth/password/forgot": {
+   "post": {
+    "operationId": "forgot_password_api_auth_password_forgot_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ForgotPasswordRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Ok"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Forgot Password"
+   }
+  },
+  "/api/auth/recovery/codes": {
+   "post": {
+    "operationId": "recovery_codes_api_auth_recovery_codes_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RecoveryCodesRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RecoveryCodesResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Recovery Codes"
+   }
+  },
+  "/api/auth/recovery/login": {
+   "post": {
+    "operationId": "recovery_login_api_auth_recovery_login_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RecoveryLoginRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RecoveryLoginResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Recovery Login"
+   }
+  },
+  "/api/auth/reset": {
+   "post": {
+    "operationId": "reset_api_auth_reset_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ResetRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AcceptResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Reset"
+   }
+  },
+  "/api/auth/reset-link": {
+   "post": {
+    "operationId": "reset_link_api_auth_reset_link_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/UserRef"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ResetLinkResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Reset Link"
+   }
+  },
   "/api/auth/setup": {
    "post": {
     "operationId": "setup_api_auth_setup_post",
@@ -1704,7 +2148,7 @@
       "content": {
        "application/json": {
         "schema": {
-         "$ref": "#/components/schemas/TotpEnrolment"
+         "$ref": "#/components/schemas/SetupResponse"
         }
        }
       },
@@ -2208,6 +2652,92 @@
      }
     ],
     "summary": "Disable"
+   }
+  },
+  "/api/users/enable": {
+   "post": {
+    "operationId": "enable_api_users_enable_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/UserRef"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Ok"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Enable"
+   }
+  },
+  "/api/users/revoke-sessions": {
+   "post": {
+    "operationId": "revoke_sessions_api_users_revoke_sessions_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/UserRef"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RevokeResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Revoke Sessions"
    }
   },
   "/api/users/role": {

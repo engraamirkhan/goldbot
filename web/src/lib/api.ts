@@ -14,6 +14,7 @@ export type AgentRow = Schemas["AgentRow"];
 export type FeedHealth = Schemas["FeedHealth"];
 export type Status = Schemas["Status"];
 export type Role = Schemas["Me"]["role"];
+export type GrantableRole = Schemas["RoleChange"]["role"];   // the owner role is never granted
 export type Me = Schemas["Me"];
 export type UserRow = Schemas["UserRow"];
 export type JobRow = Schemas["JobRow"];
@@ -54,14 +55,24 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   authState: () => req<Schemas["AuthState"]>("/api/auth/state"),
-  setup: (setup_code: string, email: string, password: string) => req<Schemas["TotpEnrolment"]>("/api/auth/setup", { method: "POST", body: JSON.stringify({ setup_code, email, password }) }),
+  setup: (setup_code: string, email: string, password: string) => req<Schemas["SetupResponse"]>("/api/auth/setup", { method: "POST", body: JSON.stringify({ setup_code, email, password }) }),
   login: (email: string, password: string, totp: string) => req<Schemas["LoginResponse"]>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password, totp }) }),
   logout: () => req<Schemas["Ok"]>("/api/auth/logout", { method: "POST" }),
   accept: (token: string, password: string) => req<Schemas["AcceptResponse"]>("/api/auth/accept", { method: "POST", body: JSON.stringify({ token, password }) }),
-  invite: (email: string, role: Role) => req<Schemas["InviteResponse"]>("/api/auth/invite", { method: "POST", body: JSON.stringify({ email, role }) }),
+  invite: (email: string, role: GrantableRole) => req<Schemas["InviteResponse"]>("/api/auth/invite", { method: "POST", body: JSON.stringify({ email, role }) }),
   users: () => req<UserRow[]>("/api/users"),
-  setRole: (email: string, role: Role) => req<Schemas["Ok"]>("/api/users/role", { method: "POST", body: JSON.stringify({ email, role }) }),
+  setRole: (email: string, role: GrantableRole) => req<Schemas["Ok"]>("/api/users/role", { method: "POST", body: JSON.stringify({ email, role }) }),
   disable: (email: string) => req<Schemas["Ok"]>("/api/users/disable", { method: "POST", body: JSON.stringify({ email }) }),
+  enable: (email: string) => req<Schemas["Ok"]>("/api/users/enable", { method: "POST", body: JSON.stringify({ email }) }),
+  revokeSessions: (email: string) => req<Schemas["RevokeResponse"]>("/api/users/revoke-sessions", { method: "POST", body: JSON.stringify({ email }) }),
+  resetLink: (email: string) => req<Schemas["ResetLinkResponse"]>("/api/auth/reset-link", { method: "POST", body: JSON.stringify({ email }) }),
+  reset: (token: string, new_password: string) => req<Schemas["AcceptResponse"]>("/api/auth/reset", { method: "POST", body: JSON.stringify({ token, new_password }) }),
+  changePassword: (current_password: string, totp: string, new_password: string) =>
+    req<Schemas["Ok"]>("/api/auth/password/change", { method: "POST", body: JSON.stringify({ current_password, totp, new_password }) }),
+  forgotPassword: (email: string, totp: string, new_password: string) =>
+    req<Schemas["Ok"]>("/api/auth/password/forgot", { method: "POST", body: JSON.stringify({ email, totp, new_password }) }),
+  recoveryLogin: (email: string, password: string, recovery_code: string) =>
+    req<Schemas["RecoveryLoginResponse"]>("/api/auth/recovery/login", { method: "POST", body: JSON.stringify({ email, password, recovery_code }) }),
   status: () => req<Status>("/api/status"),
   accounts: () => req<AccountSummary[]>("/api/accounts"),
   proposals: () => req<Proposal[]>("/api/proposals"),

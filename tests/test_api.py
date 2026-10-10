@@ -28,7 +28,7 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
     bus = ApprovalBus(tmp_path)                       # an engine (separate process) published two proposals
     bus.publish(Proposal(proposal_id="p1", account_id="icm-demo", agent_id="session_open-g0-x", side=1, lots=0.12, entry=2400, stop=2396, target=2406, p=0.61, ev_r=0.35, spread_points=22, top_features=[("a", 0.1)]))
     bus.publish(Proposal(proposal_id="p2", account_id="icm-demo", agent_id="session_open-g0-x", side=-1, lots=0.10, entry=2400, stop=2404, target=2394, p=0.58, ev_r=0.20, spread_points=22, top_features=[("a", 0.1)]))
-    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="aamir@x.io")
     c = TestClient(app)
     st = app.state.st
 
@@ -98,7 +98,7 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
 
 
 def test_lockout_after_five_failures(tmp_path):
-    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
     st = app.state.st
     c.post("/api/auth/setup", json={"setup_code": st.auth.setup_code, "email": "o@x.io", "password": "a long password here"})
@@ -118,7 +118,7 @@ def test_jobs_endpoint_reports_the_scheduler_state(tmp_path):
     now["t"] = pd.Timestamp("2026-10-02 23:11", tz="UTC")
     sch.run_pending()
 
-    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
     assert c.get("/api/jobs").status_code == 401
     uri = c.post("/api/auth/setup", json={"setup_code": app.state.st.auth.setup_code, "email": "o@x.io", "password": "a long password here"}).json()["totp_uri"]
@@ -142,7 +142,7 @@ def test_agent_runs_endpoint_serves_reports_from_the_state_dir_only(tmp_path):
             {"role": "data_steward", "started_utc": "2026-10-05T23:46:00+00:00", "status": "ok", "turns": 1, "cost_usd": 0.05,
              "detail": None, "report_path": str(outside)}]
     (tmp_path / "agent_runs.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\nnot json\n")
-    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
     uri = c.post("/api/auth/setup", json={"setup_code": app.state.st.auth.setup_code, "email": "o@x.io", "password": "a long password here"}).json()["totp_uri"]
     tok = c.post("/api/auth/login", json={"email": "o@x.io", "password": "a long password here", "totp": totp_code(_secret_from_uri(uri))}).json()["token"]
@@ -170,7 +170,7 @@ def test_spa_fallback_never_serves_files_outside_web_dist(tmp_path):
 def test_status_and_live_socket_need_a_session(tmp_path):
     from starlette.websockets import WebSocketDisconnect
     (tmp_path / "supervisor.json").write_text(json.dumps({"ts": 0, "combined_equity": 123456.0}))
-    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
     assert c.get("/api/status").status_code == 401                    # equity and halt details are not public
     with c.websocket_connect("/ws") as ws:                             # bad token: closed without any event
@@ -223,7 +223,7 @@ def test_calendar_and_news_endpoints(tmp_path):
              "received_utc": (now - pd.Timedelta(minutes=29)).isoformat()}
     (tmp_path / "engine_icm.json").write_text(json.dumps({"account": "icm-demo", "blackout": shock}))
     (tmp_path / "engine_vantage.json").write_text(json.dumps({"account": "vantage-demo", "blackout": shock}))
-    app = create_app(tmp_path, web_dist=tmp_path / "nodist", data_root=tmp_path / "data")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", owner_email="o@x.io")
     c = TestClient(app)
     assert c.get("/api/calendar").status_code == 401 and c.get("/api/news").status_code == 401
     h = _owner_headers(c, app)
@@ -252,7 +252,7 @@ def test_calendar_and_news_endpoints(tmp_path):
 
 
 def test_calendar_and_news_without_archive_or_engines(tmp_path):
-    app = create_app(tmp_path, web_dist=tmp_path / "nodist", data_root=tmp_path / "empty")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", data_root=tmp_path / "empty", owner_email="o@x.io")
     c = TestClient(app)
     h = _owner_headers(c, app)
     cal = c.get("/api/calendar", headers=h).json()
@@ -276,7 +276,7 @@ def test_recent_proposals_say_what_happened_to_each_card(tmp_path):
     bus.archive(_prop("refused", outcome=Outcome.APPROVED, gate_refusal=["owner_halt"], decided_by=111))
     bus.archive(_prop("rej", side=-1, outcome=Outcome.REJECTED, reason_code="cost"))
     bus.archive(_prop("exp", outcome=Outcome.EXPIRED))
-    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
     assert c.get("/api/proposals/recent").status_code == 401
     h = _owner_headers(c, app)
@@ -294,7 +294,7 @@ def test_status_carries_the_safety_strip(tmp_path):
     (tmp_path / "supervisor.json").write_text(json.dumps({"ts": 0, "halt": True, "reasons": ["combined_dd"]}))
     (tmp_path / "engine_icm.json").write_text(json.dumps({"account": "icm-demo", "blackout": {
         "kind": "calendar", "title": "US CPI", "ts_utc": "2026-10-10T12:30:00Z"}}))
-    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
     h = _owner_headers(c, app)
     s = c.get("/api/status", headers=h).json()

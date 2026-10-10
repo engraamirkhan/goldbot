@@ -25,6 +25,7 @@ async function signIn(page: Page, email: string, password: string, secret: strin
 test.describe.configure({ mode: "serial" });
 let ownerSecret = "";
 let inviteLink = "";
+let viewerSecret = "";
 
 test("first run creates the owner with an authenticator, then signs in", async ({ page }) => {
   await page.goto("/");
@@ -128,6 +129,7 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   await page.getByLabel("Password").fill(VIEWER.password);
   await page.getByRole("button", { name: "Accept invite" }).click();
   const secret = await enrolledSecret(page);
+  viewerSecret = secret;
 
   await signIn(page, VIEWER.email, VIEWER.password, secret);
   await expect(page.getByText(`${VIEWER.email} · viewer`)).toBeVisible();
@@ -143,4 +145,39 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
     data: { proposal_id: "e2e-long", action: "approve" }, headers: { authorization: `Bearer ${token}` },
   });
   expect(r.status()).toBe(403);
+});
+
+test("viewer resets a forgotten password with an authenticator code, then changes it while signed in", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Forgot password" }).click();
+  await page.getByLabel("Email").fill(VIEWER.email);
+  await page.getByLabel("New password").fill("forgotten viewer pw 1");
+  await page.getByLabel("Authenticator code").fill("000000");
+  await page.getByRole("button", { name: "Set new password" }).click();
+  await expect(page.locator(".err")).toContainText("invalid credentials");
+  await page.getByLabel("Authenticator code").fill(totp(viewerSecret));
+  await page.getByRole("button", { name: "Set new password" }).click();
+  await expect(page.getByText("Password changed. Sign in with the new password.")).toBeVisible();
+  await signIn(page, VIEWER.email, "forgotten viewer pw 1", viewerSecret);
+
+  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await page.getByLabel("Current password").fill("forgotten viewer pw 1");
+  await page.getByLabel("Authenticator code").fill(totp(viewerSecret));
+  await page.getByLabel("New password (12+ characters)").fill(VIEWER.password);
+  await page.getByRole("button", { name: "Change password" }).click();
+  await expect(page.getByText("Password changed. Your other sessions were signed out.")).toBeVisible();
+});
+
+test("owner manages a user's access and never offers the owner role", async ({ page }) => {
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await page.getByRole("button", { name: "Users" }).click();
+  await expect(page.locator("form.inline option[value=owner]")).toHaveCount(0);
+  const row = page.locator("tr", { hasText: VIEWER.email });
+  await row.getByRole("button", { name: "Reset link" }).click();
+  await expect(page.locator("code.mono")).toContainText("/?reset=");
+  await row.getByRole("button", { name: "Disable" }).click();
+  await expect(row.getByRole("button", { name: "Enable" })).toBeVisible();
+  await row.getByRole("button", { name: "Enable" }).click();
+  await expect(row.getByRole("button", { name: "Disable" })).toBeVisible();
 });

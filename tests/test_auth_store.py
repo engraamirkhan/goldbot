@@ -14,6 +14,7 @@ import pytest
 from goldbot.api.auth import AuthStore, Invite, User, hash_password, new_totp_secret, totp_code, totp_uri
 
 PW = "a long password here"
+OWNER = "o@x.io"
 
 
 def _secret(uri: str) -> str:
@@ -21,15 +22,15 @@ def _secret(uri: str) -> str:
 
 
 def _owner(tmp_path) -> tuple[AuthStore, str]:
-    store = AuthStore(tmp_path)
-    secret = _secret(store.bootstrap_owner(store.setup_code or "", "o@x.io", PW))
+    store = AuthStore(tmp_path, owner_email=OWNER)
+    secret = _secret(store.bootstrap_owner(store.setup_code or "", "o@x.io", PW).totp_uri)
     return store, secret
 
 
 def test_sessions_survive_a_new_auth_store_instance(tmp_path):
     store, secret = _owner(tmp_path)
     tok = store.login("o@x.io", PW, totp_code(secret))
-    restarted = AuthStore(tmp_path)                                        # an API restart or deploy
+    restarted = AuthStore(tmp_path, owner_email=OWNER)                                        # an API restart or deploy
     u = restarted.session_user(tok)
     assert u is not None and u.email == "o@x.io" and u.role == "owner"
     assert restarted.setup_code is None                                    # an owner exists: no new setup code
@@ -40,7 +41,7 @@ def test_logout_and_disable_revoke_sessions_in_every_instance(tmp_path):
     store, secret = _owner(tmp_path)
     inv = store.create_invite("o@x.io", "v@x.io", "viewer")
     _, uri = store.accept_invite(inv, "viewer password 123")
-    other = AuthStore(tmp_path)                                            # e.g. a second API worker
+    other = AuthStore(tmp_path, owner_email=OWNER)                                            # e.g. a second API worker
     tok_o = store.login("o@x.io", PW, totp_code(secret))
     tok_v = store.login("v@x.io", "viewer password 123", totp_code(_secret(uri)))
     other.logout(tok_o)
@@ -85,7 +86,7 @@ def test_imports_an_existing_users_json_once_and_leaves_it_untouched(tmp_path):
     (tmp_path / "audit.jsonl").write_text("\n".join(json.dumps(e) for e in old_audit) + "\nnot json\n")
     before = {p: p.read_bytes() for p in (tmp_path / "users.json", tmp_path / "audit.jsonl")}
 
-    store = AuthStore(tmp_path)
+    store = AuthStore(tmp_path, owner_email=OWNER)
     assert store.setup_code is None                                        # imported owner: no bootstrap
     assert {u["email"]: u["enabled"] for u in store.list_users()} == {"o@x.io": True, "v@x.io": False}
     tok = store.login("o@x.io", PW, totp_code(secret))                     # same password and authenticator
@@ -95,18 +96,18 @@ def test_imports_an_existing_users_json_once_and_leaves_it_untouched(tmp_path):
 
     store.set_role("o@x.io", "v@x.io", "approver")
     n_audit = len(store.audit_events())
-    again = AuthStore(tmp_path)                                            # restart: no second import
+    again = AuthStore(tmp_path, owner_email=OWNER)                                            # restart: no second import
     assert (av := again.get_user("v@x.io")) is not None and av.role == "approver"
     assert len(again.audit_events()) == n_audit
     assert {p: p.read_bytes() for p in before} == before                   # backup files never written
 
 
 def test_bootstrap_race_creates_one_owner(tmp_path):
-    a, b = AuthStore(tmp_path), AuthStore(tmp_path)                        # both started with no users
-    a.bootstrap_owner(a.setup_code or "", "first@x.io", PW)
+    a, b = AuthStore(tmp_path, owner_email=OWNER), AuthStore(tmp_path, owner_email=OWNER)                        # both started with no users
+    a.bootstrap_owner(a.setup_code or "", "o@x.io", PW)
     with pytest.raises(PermissionError):
-        b.bootstrap_owner(b.setup_code or "", "second@x.io", PW)
-    assert [u["email"] for u in a.list_users()] == ["first@x.io"]
+        b.bootstrap_owner(b.setup_code or "", "o@x.io", "another long password")
+    assert [u["email"] for u in a.list_users()] == ["o@x.io"]
 
 
 def test_concurrent_threads_do_not_corrupt_the_store(tmp_path):
@@ -115,7 +116,7 @@ def test_concurrent_threads_do_not_corrupt_the_store(tmp_path):
 
     def worker(i: int) -> None:
         try:
-            s = AuthStore(tmp_path)
+            s = AuthStore(tmp_path, owner_email=OWNER)
             for j in range(20):
                 s.audit("probe", by=f"t{i}", n=j)
                 s.create_invite("o@x.io", f"u{i}-{j}@x.io", "viewer")
@@ -136,7 +137,7 @@ def test_concurrent_threads_do_not_corrupt_the_store(tmp_path):
 _CHILD = textwrap.dedent("""
     import sys
     from goldbot.api.auth import AuthStore
-    s = AuthStore(sys.argv[1])
+    s = AuthStore(sys.argv[1], owner_email="o@x.io")
     for j in range(25):
         s.audit("probe", by=sys.argv[2], n=j)
         s.create_invite("o@x.io", f"{sys.argv[2]}-{j}@x.io", "viewer")
@@ -173,7 +174,7 @@ def test_existing_behaviour_lockout_roles_and_one_time_invites(tmp_path):
         store.accept_invite(inv, "viewer password 123")
     with pytest.raises(PermissionError):
         store.create_invite("v@x.io", "x@x.io", "viewer")                  # only the owner invites
-    with pytest.raises(ValueError, match="last owner"):
+    with pytest.raises(ValueError, match="demote the owner"):
         store.set_role("o@x.io", "o@x.io", "viewer")
     with pytest.raises(KeyError):
         store.set_role("o@x.io", "nobody@x.io", "viewer")

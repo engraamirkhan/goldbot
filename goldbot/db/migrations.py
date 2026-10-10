@@ -74,6 +74,24 @@ AUX: tuple[Migration, ...] = (
         """CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit
            BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END""",
     )),
+    Migration(version=3, name="auth_recovery", statements=(
+        # owner-issued one-time links that set a new password and a new authenticator (token hashes only)
+        f"""CREATE TABLE password_resets (
+               token_sha256 TEXT PRIMARY KEY,
+               email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+               expires_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+        "CREATE INDEX password_resets_email ON password_resets(email)",
+        # the owner's one-time recovery codes (hashes only); used_ns is set when a code is spent
+        """CREATE TABLE recovery_codes (
+               code_sha256 TEXT PRIMARY KEY,
+               email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+               created_ns INTEGER NOT NULL,
+               used_ns INTEGER
+           ) STRICT""",
+        "CREATE INDEX recovery_codes_email ON recovery_codes(email)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (_IMPORTS,)      # steps 5-7 (halts, approvals, orders) append here

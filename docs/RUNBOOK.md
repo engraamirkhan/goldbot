@@ -340,17 +340,43 @@ a service is running; if one keeps restarting, read its `.err` file in the logs 
 
 ### 2.10 Dashboard first run: create the owner account
 
+0. Before the first start of `goldbot-api`, name the owner in the server's own settings file (never in
+   `config\settings.yaml`: the repository is public). Create or edit `C:\goldbot\config\settings.local.yaml`
+   (not tracked by Git) and add:
+   ```yaml
+   auth: {owner_email: you@yourdomain}
+   ```
+   Then `nssm restart goldbot-api`. Without it the setup form refuses with "auth.owner_email is not set", and any
+   other email is refused. Only this address can ever hold the owner role. If the address in the file and the
+   owner account in `state\aux.db` ever differ, the API log warns "dashboard owner account(s) do not match
+   auth.owner_email" and changes nothing: correct the file.
 1. While no user exists, the API prints a one-time setup code at every start. Open
    `C:\goldbot\logs\goldbot-api.log` and find the latest line
    `goldbot first-run: open the dashboard and create the owner account with setup code <code>`.
    The code changes every time the API restarts, so always use the newest line.
 2. Open your tunnel hostname in a browser. The login page offers the setup form: enter the **Setup code**, your
-   email and a password, then **Create owner account**.
-3. The page shows an authenticator enrolment (an `otpauth://` link/QR). Add it to your authenticator app; every
-   later sign-in, and every re-arm, needs the 6-digit code from it.
-4. Other people: **Users** tab (owner only) -> email + role (`viewer`, `approver` or `owner`) -> **Create invite
-   link**, and send them the link. Approvers can approve, reject and halt; only the owner can re-arm and manage
-   users.
+   email (the `owner_email` above) and a password of 12+ characters, then **Create owner account**.
+3. The page shows an authenticator enrolment (an `otpauth://` link/QR) and **10 recovery codes**. Add the
+   enrolment to your authenticator app; every later sign-in, and every re-arm, needs the 6-digit code from it.
+   Copy the recovery codes into your password manager now: they are shown once (only their hashes are stored).
+   Each one signs you in once if the authenticator is lost.
+4. Other people: **Users** tab (owner only) -> email + role (`viewer` or `approver`; the owner role is never
+   granted) -> **Create invite link**, and send them the link (72 h, single use). Approvers can approve, reject
+   and halt; only the owner can re-arm, invite, change roles and manage users. Nobody can create an account any
+   other way.
+
+**Passwords and lost authenticators**
+
+| Situation | What to do |
+| --- | --- |
+| Anyone wants a new password | Signed in: **Account** tab -> current password + authenticator code + new password (12+ characters, different from the current one). Their other sessions are signed out. |
+| Someone forgot their password but has the authenticator | Login page -> **Forgot password** -> email, a current code, new password. All their sessions are signed out. Five wrong attempts lock that email for 15 minutes. |
+| An approver or viewer lost the authenticator | Owner: **Users** -> **Reset link** on their row, and send them the link (24 h, single use). It sets a new password and a new authenticator and signs them out everywhere. |
+| You (the owner) lost the authenticator | Login page -> **Use a recovery code** -> email, password and one unused recovery code. Enrol the new authenticator it shows; the old one stops working. Then get 10 fresh codes (`POST /api/auth/recovery/codes` with password + new code; there is no button yet). The old codes stop working. |
+| You lost the authenticator and every recovery code | On the server: stop `goldbot-api` and ask a Claude session to reset the owner in `state\aux.db`. There is no remote path, by design. |
+| Someone should lose access | Owner: **Users** -> **Disable** (signs them out at once) or **Sign out everywhere**; **Enable** restores the account. The owner cannot be disabled or demoted. |
+
+Every one of these is recorded in the audit log (`state\aux.db`, table `audit`; the state-files table in section 3 shows how to read it).
 
 ---
 
@@ -422,7 +448,7 @@ Each report arrives on Telegram, appears on the dashboard **Agents** tab, and is
 | Trained models and champions | `C:\goldbot\models\registry.json` |
 | Trial registry | `state\research_registry.jsonl` |
 | Monthly research summary | `state\research_<YYYY-MM>.md` |
-| Dashboard users, invites, sessions and audit log | `state\aux.db` (SQLite; tables `users`, `invites`, `sessions`, `audit`). Latest audit entries: `python -c "import sqlite3; [print(b) for (b,) in sqlite3.connect('state/aux.db').execute('SELECT body FROM audit ORDER BY id DESC LIMIT 20')]"`. Logins survive an API restart or deploy (12 h sessions). `state\users.json` and `state\audit.jsonl` from before 2026-10-10 were imported once and are kept untouched as a backup; delete them only after a verified backup of aux.db. Copy aux.db (with its `-wal` file) only while `goldbot-api` is stopped: a plain copy of a live WAL database may be inconsistent. |
+| Dashboard users, invites, sessions and audit log | `state\aux.db` (SQLite; tables `users`, `invites`, `sessions`, `password_resets`, `recovery_codes`, `audit`; tokens and codes as hashes only). Latest audit entries: `python -c "import sqlite3; [print(b) for (b,) in sqlite3.connect('state/aux.db').execute('SELECT body FROM audit ORDER BY id DESC LIMIT 20')]"`. Logins survive an API restart or deploy (12 h sessions). `state\users.json` and `state\audit.jsonl` from before 2026-10-10 were imported once and are kept untouched as a backup; delete them only after a verified backup of aux.db. Copy aux.db (with its `-wal` file) only while `goldbot-api` is stopped: a plain copy of a live WAL database may be inconsistent. |
 | Market data, ticks, fills, decisions journal, news, calendar | `C:\goldbot\data` (Parquet) |
 | Phase gate | `state\phase_state.json` (section 5) |
 | Service logs | `C:\goldbot\logs\<service>.log` / `.err` |

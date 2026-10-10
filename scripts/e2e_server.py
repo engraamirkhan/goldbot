@@ -66,7 +66,7 @@ def main() -> None:
     state = tempfile.mkdtemp(prefix="goldbot-e2e-")
     seed_proposals(state)
     seed_store(str(Path(state) / "data"))
-    app = create_app(state, web_dist=ROOT / "web" / "dist", data_root=Path(state) / "data")
+    app = create_app(state, web_dist=ROOT / "web" / "dist", data_root=Path(state) / "data", owner_email="owner@example.com")
     Path(args.info).parent.mkdir(parents=True, exist_ok=True)
     Path(args.info).write_text(json.dumps({"setup_code": app.state.st.auth.setup_code, "state_dir": state}))
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")

@@ -19,7 +19,15 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
-from goldbot.api.auth import AuthStore, User, env_setup_code_hint, has_role, totp_verify
+from goldbot.api.auth import (
+    RESET_TTL_H,
+    SESSION_TTL_H,
+    AuthStore,
+    User,
+    env_setup_code_hint,
+    has_role,
+    totp_verify,
+)
 from goldbot.api.schema import (
     AcceptRequest,
     AcceptResponse,
@@ -30,10 +38,12 @@ from goldbot.api.schema import (
     AuthState,
     CalendarEvent,
     CalendarResponse,
+    ChangePasswordRequest,
     DecidedProposal,
     Decision,
     DecisionResult,
     FeedHealth,
+    ForgotPasswordRequest,
     HaltRequest,
     Headline,
     InviteRequest,
@@ -45,11 +55,18 @@ from goldbot.api.schema import (
     Ok,
     Proposal,
     RearmRequest,
+    RecoveryCodesRequest,
+    RecoveryCodesResponse,
+    RecoveryLoginRequest,
+    RecoveryLoginResponse,
+    ResetLinkResponse,
+    ResetRequest,
+    RevokeResponse,
     Role,
     RoleChange,
     SetupRequest,
+    SetupResponse,
     Status,
-    TotpEnrolment,
     UserRef,
     UserRow,
 )
@@ -64,10 +81,10 @@ bearer = HTTPBearer(auto_error=False)
 
 
 class State:
-    def __init__(self, state_dir: str | Path, data_root: str | Path | None = None):
+    def __init__(self, state_dir: str | Path, data_root: str | Path | None = None, owner_email: str | None = None):
         self.dir = Path(state_dir)
         self.bus = ApprovalBus(self.dir)
-        self.auth = AuthStore(self.dir)
+        self.auth = AuthStore(self.dir, owner_email=owner_email)
         self.ws_clients: set[WebSocket] = set()
         self._data_root = data_root
         self._tools: ReadOnlyTools | None = None
@@ -170,9 +187,20 @@ class State:
             self.ws_clients.discard(ws)
 
 
+def _settings_owner_email() -> str | None:
+    """auth.owner_email from settings (settings.local.yaml on the server); unreadable settings mean unset."""
+    try:
+        from goldbot.config import load_settings
+        return load_settings().auth.owner_email
+    except Exception as exc:                    # noqa: BLE001 - the API still serves; bootstrap stays refused
+        print(f"goldbot api: settings unreadable, auth.owner_email unset: {exc}", flush=True)
+        return None
+
+
 def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist",
-               data_root: str | Path | None = None) -> FastAPI:
-    st = State(state_dir, data_root)
+               data_root: str | Path | None = None, owner_email: str | None = None) -> FastAPI:
+    """owner_email: the dashboard owner; None reads `auth.owner_email` from settings."""
+    st = State(state_dir, data_root, owner_email if owner_email is not None else _settings_owner_email())
     app = FastAPI(title="goldbot api", version="0.2")
     app.state.st = st
     hint = env_setup_code_hint(st.auth)
@@ -198,12 +226,14 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return AuthState(needs_setup=st.auth.setup_code is not None, users=st.auth.user_count())
 
     @app.post("/api/auth/setup")
-    def setup(body: SetupRequest) -> TotpEnrolment:
+    def setup(body: SetupRequest) -> SetupResponse:
         try:
-            uri = st.auth.bootstrap_owner(body.setup_code, body.email, body.password)
+            e = st.auth.bootstrap_owner(body.setup_code, body.email, body.password)
         except PermissionError as exc:
             raise HTTPException(403, str(exc))
-        return TotpEnrolment(totp_uri=uri)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return SetupResponse(totp_uri=e.totp_uri, recovery_codes=e.recovery_codes)
 
     @app.post("/api/auth/login")
     def login(body: LoginRequest) -> LoginResponse:
@@ -238,6 +268,62 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             raise HTTPException(400, str(exc))
         return AcceptResponse(email=email, totp_uri=uri)
 
+    @app.post("/api/auth/password/change")
+    def change_password(body: ChangePasswordRequest, creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Ok:
+        if creds is None or st.auth.session_user(creds.credentials) is None:
+            raise HTTPException(401, "login required")
+        try:
+            st.auth.change_password(creds.credentials, body.current_password, body.totp, body.new_password)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return Ok()
+
+    @app.post("/api/auth/password/forgot")
+    def forgot_password(body: ForgotPasswordRequest) -> Ok:
+        try:
+            st.auth.forgot_password(body.email, body.totp, body.new_password)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return Ok()
+
+    @app.post("/api/auth/reset-link")
+    def reset_link(body: UserRef, u: User = Depends(need("owner"))) -> ResetLinkResponse:
+        try:
+            tok = st.auth.create_reset_link(u.email, body.email)
+        except (KeyError, PermissionError) as exc:
+            raise HTTPException(400, f"no such user: {exc}" if isinstance(exc, KeyError) else str(exc))
+        return ResetLinkResponse(reset_token=tok, expires_h=RESET_TTL_H)
+
+    @app.post("/api/auth/reset")
+    def reset(body: ResetRequest) -> AcceptResponse:
+        try:
+            e = st.auth.use_reset_link(body.token, body.new_password)
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(400, str(exc))
+        return AcceptResponse(email=e.email, totp_uri=e.totp_uri)
+
+    @app.post("/api/auth/recovery/login")
+    def recovery_login(body: RecoveryLoginRequest) -> RecoveryLoginResponse:
+        try:
+            r = st.auth.recovery_login(body.email, body.password, body.recovery_code)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        return RecoveryLoginResponse(token=r.token, expires_in=SESSION_TTL_H * 3600, role=r.role, email=r.email,
+                                     totp_uri=r.totp_uri, recovery_codes_left=r.recovery_codes_left)
+
+    @app.post("/api/auth/recovery/codes")
+    def recovery_codes(body: RecoveryCodesRequest, u: User = Depends(need("owner")),
+                       creds: HTTPAuthorizationCredentials = Depends(bearer)) -> RecoveryCodesResponse:
+        try:
+            codes = st.auth.regenerate_recovery_codes(creds.credentials, body.password, body.totp)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        return RecoveryCodesResponse(recovery_codes=codes)
+
     @app.get("/api/users")
     def users(u: User = Depends(need("owner"))) -> list[UserRow]:
         return [UserRow.model_validate(r) for r in st.auth.list_users()]
@@ -257,6 +343,22 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         except (ValueError, KeyError) as exc:
             raise HTTPException(400, str(exc))
         return Ok()
+
+    @app.post("/api/users/enable")
+    def enable(body: UserRef, u: User = Depends(need("owner"))) -> Ok:
+        try:
+            st.auth.enable(u.email, body.email)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(400, str(exc))
+        return Ok()
+
+    @app.post("/api/users/revoke-sessions")
+    def revoke_sessions(body: UserRef, u: User = Depends(need("owner"))) -> RevokeResponse:
+        try:
+            n = st.auth.revoke_sessions(u.email, body.email)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(400, str(exc))
+        return RevokeResponse(sessions=n)
 
     @app.get("/api/me")
     def me(u: User = Depends(auth)) -> Me:

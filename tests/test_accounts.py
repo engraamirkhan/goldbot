@@ -66,7 +66,7 @@ def test_secret_and_user_files_are_never_readable_by_others(isolated, tmp_path, 
     try:
         acc_mod.set_secret("mt5-icm-demo", "pw1")
         acc_mod.set_secret("telegram-bot-token", "tok")
-        store = AuthStore(tmp_path / "auth")
+        store = AuthStore(tmp_path / "auth", owner_email="o@x.io")
         store.bootstrap_owner(store.setup_code or "", "o@x.io", "a long password here")
     finally:
         os.umask(old)

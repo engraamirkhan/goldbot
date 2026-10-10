@@ -263,6 +263,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   an empty DB it imports users.json and audit.jsonl once and never writes them again (backup). Failed-login
   counters stay in memory. Not done: `run.py migrate`/`import-state` wiring, `state_db` health check (step 0
   leftovers, files owned elsewhere); the API migrates aux.db on open until then. Steps 2-8 not started.
+- Dashboard accounts (2026-10-10, owner request): the owner is the sole admin. `auth.owner_email` (Settings
+  `AuthSettings`, default None; set only in the server's `config/settings.local.yaml`, never in the public repo)
+  is required for bootstrap and is the only address that can hold the owner role. Invites and `set_role` grant
+  only approver/viewer (`GrantableRole` in the contract; "owner" gets 422); the owner cannot be demoted or disabled;
+  an invite never overwrites an existing account; the only user-creating paths are bootstrap and invites. A stored
+  owner that differs from the setting is logged and left alone; `auth.owner_health_note(state_dir, owner_email)`
+  is ready for health.py (not wired: health is owned elsewhere). Password policy: 12+ characters, different from the
+  current one. Endpoints: `POST /api/auth/setup` now returns `SetupResponse` with 10 one-time recovery codes
+  (hashes stored, aux.db migration 3); `/api/auth/password/change` (logged in; password + TOTP; other sessions
+  revoked); `/api/auth/password/forgot` (email + TOTP + new password; same 403 for unknown email or wrong code;
+  shares the 5-in-15-min lockout; all sessions revoked); `/api/auth/reset-link` (owner; 24 h single-use token,
+  hash stored) and `/api/auth/reset` (new password + new TOTP, all sessions revoked); `/api/auth/recovery/login`
+  (owner: password + recovery code, re-enrols TOTP, returns a session) and `/api/auth/recovery/codes` (owner,
+  regenerate); `/api/users/enable` and `/api/users/revoke-sessions` (owner). All audited. Minimal UI: Forgot
+  password / recovery-code / reset-link modes on the login page, recovery codes shown after setup, an Account tab
+  (change password), Enable / Sign out everywhere / Reset link on Users. No button yet for regenerating recovery
+  codes.
 
 ## Next steps (no owner input needed unless marked)
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.
