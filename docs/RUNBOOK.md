@@ -453,21 +453,26 @@ Back up the state folder and `config\` regularly; they are not in Git.
    and `swap_short_usd_per_lot` (the health check warns "no measured swap" otherwise; read the `notes` in
    `state\broker_terms_<account>.json` for the reason, e.g. a swap mode the conversion does not support). The
    commission becomes `"commission_measured": true` after the first closed demo position.
-2. **Export the measured costs for research** (once the swap is measured, and again whenever the broker changes its
-   swap, at least before each quarter's first research trial). On the VPS, in `C:\goldbot`:
+2. **Publish the measured costs for research** (nothing is committed to the repo). Once the swap is measured, set
+   `costs.publish_release: true` in `config\settings.yaml` and restart `goldbot-scheduler`
+   (`nssm restart goldbot-scheduler`). The `github-token` must be in the keyring
+   (`python -m goldbot.ops.accounts set github-token`). From then on, every weekday right after `nightly_costs`, the
+   scheduler uploads the IC Markets table as `costs_measured.json` to the GitHub release `costs-v1`. It holds costs
+   only: spread, slippage, commission and swap per lot, with `measured_at` and, per field, "measured" or "prior" and
+   the tick, fill or lot count behind it. It never holds an account id, login, balance or equity. The upload is
+   refused, and nothing is published, while the swap is unmeasured or there are fewer than 50 fills, so a prior is
+   never published as a measurement. To publish at once, or to check the file first:
 
    ```powershell
-   .\.venv\Scripts\python -m goldbot.ops.run export-costs --out config\costs_measured.json
-   git add config\costs_measured.json
-   git commit -m "costs: measured IC Markets cost table"
-   git push
+   .\.venv\Scripts\python -m goldbot.ops.run publish-costs                  # upload now
+   .\.venv\Scripts\python -m goldbot.ops.run publish-costs --out $env:TEMP\costs.json   # look, don't upload
    ```
 
-   The command prints the swap and commission it exported and warns if the swap is still the prior. The research
-   workflow (`research.yml`) passes `--cost-table config/costs_measured.json` whenever that file exists on the
-   branch it runs from, so the trial's net results use the broker's measured swap, commission and slippage instead
-   of the settings priors (the report's "cost source" line says which were used). If the VPS cannot push, copy the
-   file to your computer and commit it there, or paste its contents into a new file on GitHub.
+   The research workflow (`research.yml`) downloads that asset when it exists and passes `--cost-table`, so the
+   trial's net results use the broker's measured swap, commission and slippage. Without it, research charges the
+   settings priors and the report's "cost source" line starts with "PRIORS ONLY". With publishing on, the health
+   check `costs:published` warns when the table was never published or is older than 8 days; its reason includes
+   the last refusal or upload error (also in `state\costs_published.json`).
 3. **Scheduled jobs:** `nightly_costs`, `model_watch` and `agents_daily` show "ok"; `calendar_archive` shows
    "ok" after 06:10. A "failed" job shows its first error line in "Last error".
 4. **Supervisor heartbeat:** `state\supervisor.json` has a current `ts`, `"halt": false` and an empty

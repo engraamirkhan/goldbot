@@ -5,7 +5,7 @@ import json
 from collections import namedtuple
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 import pytest
@@ -16,6 +16,9 @@ from goldbot.execution import mt5_adapter
 from goldbot.execution.costs import (
     BrokerTerms,
     CostTable,
+    SlippageStat,
+    SpreadStat,
+    load_research_cost_table,
     research_costs,
     settings_extra_cost_usd,
     settings_swap,
@@ -186,23 +189,126 @@ def test_health_warns_until_the_cost_table_has_measured_swap(tmp_path):
     assert health.check_costs(ctx, "icm-demo").status == "ok"
 
 
-# ------------------------------------------------------------------------------------------------ export and research
-def test_export_costs_writes_the_canonical_table_and_research_uses_it(tmp_path, capsys):
-    from goldbot.ops.run import export_costs_cli
+# ------------------------------------------------------------------------------------------------ publish and research
+def _measured_table(**kw: Any) -> CostTable:
+    base: dict[str, Any] = dict(
+        account_id="icm-demo", built_utc=NOW, spread={"london": SpreadStat(median=0.2, p90=0.3, n=5000)},
+        slippage={"london:market": SlippageStat(mean=0.05, n=80, from_prior=False),
+                  "asia:market": SlippageStat(mean=0.15, n=4, from_prior=True)},
+        commission_per_lot_side_usd=3.0, slippage_prior_usd=0.15, n_ticks=5000, n_fills=84,
+        notes=["broker terms measured for account icm-demo login 51234567"], swap_long_usd_per_lot=-48.0,
+        swap_short_usd_per_lot=9.0, swap_triple_weekday=4, commission_measured=True, commission_lots=3.0)
+    return CostTable(**{**base, **kw})
+
+
+def _keys(obj: Any) -> set[str]:
+    if isinstance(obj, dict):
+        return set(obj) | {k for v in obj.values() for k in _keys(v)}
+    if isinstance(obj, list):
+        return {k for v in obj for k in _keys(v)}
+    return set()
+
+
+def _sink(sent: list[bytes]) -> Callable[[bytes], str]:
+    def upload(data: bytes) -> str:
+        sent.append(data)
+        return "https://example.invalid/costs_measured.json"
+    return upload
+
+
+def test_the_published_cost_table_holds_costs_only_no_account_identifier_or_equity(tmp_path):
+    from goldbot.ops.jobs import publish_costs
+    _measured_table().save(tmp_path / "costs_icm-demo.json")
+    sent: list[bytes] = []
+    res = publish_costs(SETTINGS, [ACC], tmp_path, _sink(sent), NOW)
+    assert res["published"] is True and len(sent) == 1
+    text = sent[0].decode()
+    raw = json.loads(text)
+    banned = ("account", "login", "server", "balance", "equity", "margin", "profit", "note")
+    assert not [k for k in _keys(raw) if any(b in k.lower() for b in banned)]
+    assert "icm-demo" not in text and "51234567" not in text and "ICMarketsSC" not in text
+    assert raw["broker"] == "icm" and raw["measured_at"].startswith("2026-10-08")
+    assert {k: v["source"] for k, v in raw["fields"].items()} == {
+        "spread": "measured", "slippage": "measured", "commission": "measured", "swap": "measured"}
+    assert raw["fields"]["slippage"]["n"] == 84 and raw["fields"]["commission"]["n"] == 3.0
+    rec = json.loads((tmp_path / "costs_published.json").read_text())
+    assert rec["published_utc"] == NOW.isoformat() and rec["last_result"] == "ok"
+
+
+@pytest.mark.parametrize("kw, why", [({"swap_long_usd_per_lot": None}, "swap not measured"),
+                                     ({"n_fills": 49}, "49 fills, fewer than 50")])
+def test_publishing_is_refused_while_a_prior_would_pass_as_a_measurement(tmp_path, kw, why):
+    from goldbot.ops.jobs import publish_costs
+    _measured_table(**kw).save(tmp_path / "costs_icm-demo.json")
+    sent: list[bytes] = []
+    res = publish_costs(SETTINGS, [ACC], tmp_path, _sink(sent), NOW)
+    assert res == {"published": False, "reason": res["reason"]} and why in res["reason"] and not sent
+    rec = json.loads((tmp_path / "costs_published.json").read_text())
+    assert "published_utc" not in rec and why in rec["last_result"]
+
+
+def test_an_upload_failure_is_recorded_and_the_cost_job_stays_green(tmp_path):
+    ctx = _ctx(tmp_path)
+    _measured_table().save(tmp_path / "costs_icm-demo.json")
+
+    def down(_: bytes) -> str:
+        raise OSError("network unreachable")
+    ctx.upload_costs = down
+    _terms().save(tmp_path / "broker_terms_icm-demo.json")
+    out = nightly_costs(ctx, NOW)        # rebuilds the table from the empty store (0 fills): refused, no upload
+    assert out["publish"]["published"] is False and "fewer than 50" in out["publish"]["reason"]
+    from goldbot.ops.jobs import publish_costs
+    _measured_table().save(tmp_path / "costs_icm-demo.json")
+    res = publish_costs(SETTINGS, [ACC], tmp_path, down, NOW)
+    assert res["published"] is False and "upload failed: OSError: network unreachable" in res["reason"]
+
+
+def test_health_warns_when_the_published_table_is_missing_or_older_than_8_days(tmp_path):
+    on = SETTINGS.model_copy(update={"costs": SETTINGS.costs.model_copy(update={"publish_release": True})})
+    ctx = health.HealthContext(state_dir=tmp_path, now=NOW, settings=on, accounts=[], get_secret=lambda k: "x")
+    c = health.check_costs_published(ctx)
+    assert c.status == "warn" and "never published" in c.reason and "priors" in c.reason
+    rec = tmp_path / "costs_published.json"
+    rec.write_text(json.dumps({"published_utc": (NOW - pd.Timedelta(days=2)).isoformat(), "last_result": "ok"}))
+    assert health.check_costs_published(ctx).status == "ok"
+    rec.write_text(json.dumps({"published_utc": (NOW - pd.Timedelta(days=9)).isoformat(),
+                               "last_result": "swap not measured by the terminal yet"}))
+    c = health.check_costs_published(ctx)
+    assert c.status == "warn" and "> 8 d" in c.reason and "swap not measured" in c.reason
+    assert "costs:published" in {x.name for x in health.run_checks(ctx).checks}
+    off = ctx.model_copy(update={"settings": SETTINGS})                         # publishing off: no check at all
+    assert "costs:published" not in {x.name for x in health.run_checks(off).checks}
+
+
+def test_publish_costs_out_writes_the_published_json_and_research_uses_it(tmp_path):
+    from goldbot.ops.run import publish_costs_cli
     vantage = ACC.model_copy(update={"account_id": "vantage-demo", "broker": "vantage"})
     out = tmp_path / "costs_measured.json"
-    assert export_costs_cli(["--out", str(out)], accounts=[vantage, ACC], state_dir=tmp_path) == 1   # no table yet
-    ctx = _ctx(tmp_path)
-    _terms().save(tmp_path / "broker_terms_icm-demo.json")
-    nightly_costs(ctx, NOW)
-    assert export_costs_cli(["--out", str(out)], accounts=[vantage, ACC], state_dir=tmp_path) == 0
-    table = CostTable.load(out)
-    assert table is not None and table.account_id == "icm-demo" and table.swap_long_usd_per_lot == -48.0
+    assert publish_costs_cli(["--out", str(out)], accounts=[vantage, ACC], state_dir=tmp_path) == 1   # no table yet
+    _measured_table().save(tmp_path / "costs_icm-demo.json")
+    assert publish_costs_cli(["--out", str(out)], accounts=[vantage, ACC], state_dir=tmp_path) == 0
+    assert "icm-demo" not in out.read_text()
+    table = load_research_cost_table(out)
+    assert table is not None and table.swap_long_usd_per_lot == -48.0 and table.commission_measured
     extra, swap, source = research_costs(SETTINGS, table)
-    assert extra == pytest.approx(2 * SETTINGS.costs.slippage_prior_usd + 6.0 / 100) and swap.long_usd_per_lot == -48.0
-    assert swap.server_tz == settings_swap(SETTINGS).server_tz and "icm-demo" in source
-    extra, swap, source = research_costs(SETTINGS, None)                     # no file: the settings priors
-    assert extra == settings_extra_cost_usd(SETTINGS) and swap == settings_swap(SETTINGS) and "prior" in source
+    assert extra == pytest.approx(2 * (0.05 + 0.15) / 2 + 6.0 / 100) and swap.long_usd_per_lot == -48.0
+    assert swap.server_tz == settings_swap(SETTINGS).server_tz
+    assert "cost table icm (published) built 2026-10-08" in source and "commission measured, swap measured" in source
+    assert load_research_cost_table(tmp_path / "absent.json") is None
+    extra, swap, source = research_costs(SETTINGS, None)                     # no asset: the settings priors, said so
+    assert extra == settings_extra_cost_usd(SETTINGS) and swap == settings_swap(SETTINGS)
+    assert source.startswith("PRIORS ONLY") and "costs-v1" in source
+
+
+def test_publish_costs_uploads_with_the_given_uploader(tmp_path):
+    from goldbot.ops.run import publish_costs_cli
+    _measured_table().save(tmp_path / "costs_icm-demo.json")
+    sent: list[bytes] = []
+    assert publish_costs_cli([], accounts=[ACC], state_dir=tmp_path, upload=_sink(sent)) == 0
+    assert json.loads(sent[0])["broker"] == "icm"
+    _measured_table(n_fills=3).save(tmp_path / "costs_icm-demo.json")
+    assert publish_costs_cli([], accounts=[ACC], state_dir=tmp_path, upload=_sink(sent)) == 1
+    assert len(sent) == 1
 
 
 def test_the_engine_writes_the_terminal_terms_every_few_hours_and_survives_a_failure(tmp_path):

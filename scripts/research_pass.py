@@ -8,9 +8,10 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P1/P2):
   (in the labels) plus slippage and commission (`--extra-cost-usd`, default: the settings' prior and commission);
 * overnight financing (swap, `costs.swap_*` in settings, a prior until the broker's cost table reports its own) is
   charged in the net labels for every server-day rollover a trade is held through, three times on the triple day;
-* `--cost-table FILE` (the canonical broker's measured cost table, exported on the VPS with
-  `python -m goldbot.ops.run export-costs --out config/costs_measured.json`) replaces the priors: slippage and
-  commission from the table (unless `--extra-cost-usd`), swap from the table when it has measured swap;
+* `--cost-table FILE` (the canonical broker's measured cost table, `costs_measured.json` on release costs-v1, which
+  the VPS publishes; research.yml downloads it when present) replaces the priors: slippage and commission from the
+  table (unless `--extra-cost-usd`), swap from the table when it has measured swap. Without it the report's cost
+  source says PRIORS ONLY;
 * every report states the design's gates (1,500 candidates, 60 per test fold, three positive years incl. 2021-22)
   and the rule's own gross and net expectancy; the deflated Sharpe is shown only from 200 trades;
 * each run is charged to the quarter's pre-registered trial budget (research.trial_budget_quarter) and refused
@@ -33,7 +34,7 @@ pass runs without them.
 
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
       [--specialist session_open | --pooled 15m] [--from-year 2010] [--to-year 2026] [--rationale "..."] \
-      [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table config/costs_measured.json] [--macro macro/]
+      [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table costs_measured.json] [--macro macro/]
 """
 from __future__ import annotations
 
@@ -51,7 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.release import read_macro_files  # noqa: E402
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
-from goldbot.execution.costs import CostTable, SwapSpec, research_costs  # noqa: E402
+from goldbot.execution.costs import SwapSpec, load_research_cost_table, research_costs  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
@@ -330,7 +331,7 @@ def main() -> int:
     ap.add_argument("--extra-cost-usd", type=float, default=None,
                     help="round-trip slippage + commission per oz beyond the spread (default: settings prior + commission)")
     ap.add_argument("--cost-table", default="",
-                    help="measured cost table JSON (run.py export-costs); default: the settings priors")
+                    help="measured cost table JSON (release costs-v1 asset costs_measured.json); default: the settings priors")
     ap.add_argument("--score-holdout", action="store_true",
                     help="score the configurations on the held-out window (once per configuration, ever)")
     ap.add_argument("--skip-screen", action="store_true",
@@ -346,7 +347,7 @@ def main() -> int:
     settings = load_settings()
     table = None
     if args.cost_table:
-        table = CostTable.load(args.cost_table)
+        table = load_research_cost_table(args.cost_table)
         if table is None:
             raise SystemExit(f"--cost-table {args.cost_table}: file not found")
     extra_cost, swap, cost_source = research_costs(settings, table)

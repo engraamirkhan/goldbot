@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover
 
 
 DEPLOY_EVERY_S = 600             # new version on main with CI passed -> offered to the owner (one click)
-HEALTH_EVERY_S = 300              # health checks + alert dedupe (the Scheduler's finest grain is daily)
+HEALTH_EVERY_S = 60               # health checks + alert dedupe: a silent service is reported within ~6 min (S5)
 OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED_UNAPPROVED": "⌛ EXPIRED"}
 
 

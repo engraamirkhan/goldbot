@@ -5,6 +5,8 @@
                     the engine; settings commission and the swap prior while missing or older than
                     BROKER_TERMS_MAX_AGE_DAYS) -> state/costs_<account>.json (read by the engine every bar).
                     On Fridays it also re-runs the account classifier (two consecutive disagreements to change).
+                    With `costs.publish_release` and a github-token it then publishes the canonical broker's table
+                    (costs only) to release costs-v1 for research.yml (`publish_costs`).
 * saturday_retrain  refresh bars from the data release (best effort), then per specialist: evaluate any challenger
                     that has a shadow record against the promotion gates (promote automatically when all pass),
                     and retrain on the rolling window. A family keeps at most one challenger in shadow; a new one
@@ -51,7 +53,7 @@ from goldbot.config import DecisionTimeframe, Settings
 from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.classifier import PersistentClassifier, classify
-from goldbot.execution.costs import BrokerTerms, CostTable, build_cost_table
+from goldbot.execution.costs import BrokerTerms, CostTable, build_cost_table, publishable
 from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops.accounts import Account
@@ -98,6 +100,7 @@ class JobContext(Record):
     population: Population
     agent_runner: AgentRunner | None = None                      # None when no Anthropic API key is in the keyring
     fetch_calendar: Callable[[], str] | None = None              # Forex Factory weekly JSON (network, VPS only)
+    upload_costs: Callable[[bytes], str] | None = None           # published cost table -> release costs-v1 (VPS only)
 
 
 # ---------------------------------------------------------------------------------------------- nightly costs
@@ -117,6 +120,8 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                                  slippage_prior_usd=ctx.settings.costs.slippage_prior_usd,
                                  min_fills=r.min_fills_for_slippage, now=slot, swap=swap, commission_measured=measured,
                                  notes=notes)
+        if measured and terms is not None:
+            table = table.model_copy(update={"commission_lots": terms.commission_lots})
         table.save(ctx.state_dir / f"costs_{acc.account_id}.json")
         row: dict[str, Any] = {"ticks": len(ticks), "fills": len(fills),
                                "round_trip_usd": {s: table.round_trip_usd_per_oz(s) for s in ("asia", "london", "newyork")},
@@ -126,7 +131,43 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             row["account_class"] = PersistentClassifier(ctx.state_dir / f"classifier_{acc.account_id}.json").update(c)
             row["classifier_reason"] = c.reason
         out[acc.account_id] = row
+    if ctx.upload_costs is not None:            # costs.publish_release and a github-token: research reads it
+        out["publish"] = publish_costs(ctx.settings, ctx.accounts, ctx.state_dir, ctx.upload_costs, slot)
     return out
+
+
+COSTS_PUBLISHED_FILE = "costs_published.json"    # state: when the table last reached release costs-v1 (health reads it)
+
+
+def publish_costs(settings: Settings, accounts: list[Account], state_dir: Path, upload: Callable[[bytes], str],
+                  now: pd.Timestamp) -> dict[str, Any]:
+    """Upload the canonical broker's cost table to release costs-v1 (asset costs_measured.json) for research.yml.
+    Costs only (`PublishedCostTable`: no account id, login, balance or equity). Refused while swap is unmeasured or
+    there are fewer than `research.min_fills_for_slippage` fills, so a prior is never published as a measurement; an
+    upload failure is recorded, never raised (the cost table itself is already saved). state/costs_published.json
+    keeps the last success and the last attempt for the health check."""
+    path = state_dir / COSTS_PUBLISHED_FILE
+    try:
+        rec: dict[str, Any] = json.loads(path.read_text()) if path.exists() else {}
+    except (ValueError, OSError):
+        rec = {}
+    found = canonical_cost_table(settings, accounts, state_dir)
+    if found is None:
+        pub, reason = None, "no cost table on the canonical-cost broker yet"
+    else:
+        pub, reason = publishable(found[0], found[1].broker, min_fills=settings.research.min_fills_for_slippage)
+    result: dict[str, Any] = {"published": False, "reason": reason}
+    if pub is not None:
+        try:
+            url = upload(pub.model_dump_json(indent=1).encode())
+            result = {"published": True, "reason": "ok", "measured_at": pub.measured_at.isoformat(), "url": url}
+            rec.update(published_utc=now.isoformat(), measured_at=pub.measured_at.isoformat())
+        except Exception as exc:                # network or GitHub error: keep the cost job green, report it
+            log.warning("cost table upload failed: %s", exc)
+            result = {"published": False, "reason": f"upload failed: {type(exc).__name__}: {exc}"[:300]}
+    rec.update(last_attempt_utc=now.isoformat(), last_result=result["reason"])
+    write_atomic(path, json.dumps(rec), durable=False)
+    return result
 
 
 def _broker_terms(ctx: JobContext, account_id: str, slot: pd.Timestamp) -> tuple[BrokerTerms | None, list[str]]:

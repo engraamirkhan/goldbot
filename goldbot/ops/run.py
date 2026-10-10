@@ -9,7 +9,7 @@
   python -m goldbot.ops.run news
   python -m goldbot.ops.run record-gate <gate_name> --evidence <path or text>   # appends to state/phase_state.json
   python -m goldbot.ops.run health [--json] [--static] [--out FILE] [--baseline FILE]   (exit 1 on a fail)
-  python -m goldbot.ops.run export-costs --out config/costs_measured.json   # canonical broker's measured cost table
+  python -m goldbot.ops.run publish-costs [--out FILE]   # canonical broker's measured costs -> release costs-v1
 """
 from __future__ import annotations
 
@@ -32,10 +32,13 @@ log = logging.getLogger("goldbot.run")
 
 def run_supervisor() -> None:
     from goldbot.config import load_settings
+    from goldbot.ops.health import Heartbeat
     from goldbot.risk.supervisor import Supervisor, SupervisorLimits
     sup = Supervisor("state", SupervisorLimits.from_settings(load_settings().risk))
+    hb = Heartbeat("state", "supervisor")          # S5: every service writes state/heartbeat_<service>.json
     while True:
         st = sup.evaluate()
+        hb.beat()
         if st["halt"]:
             log.warning("HALT %s", st["reasons"])
         time.sleep(5)
@@ -171,33 +174,55 @@ def record_gate_cli(argv: list[str]) -> int:
     return 0
 
 
-def export_costs_cli(argv: list[str], accounts: list[Account] | None = None, state_dir: str | Path = "state") -> int:
-    """export-costs --out FILE: the canonical-cost broker's nightly cost table (state/costs_<account>.json, with the
-    terminal's swap and commission) copied to FILE, for `scripts/research_pass.py --cost-table` on GitHub (commit it
-    as config/costs_measured.json; research.yml passes it when present). Exit 1 when no table exists yet."""
+def costs_uploader(token: str) -> Callable[[bytes], str]:
+    """Upload the published cost table to release costs-v1 as costs_measured.json with the github-token."""
+    from goldbot.data.release import upload_asset
+    from goldbot.execution.costs import COSTS_ASSET, COSTS_TAG
+    return lambda data: upload_asset(
+        token, COSTS_TAG, COSTS_ASSET, data, title="Measured broker costs",
+        notes="costs_measured.json: the canonical broker's measured spread, slippage, commission and swap (costs only), "
+              "published by the VPS after nightly_costs. research.yml uses it; without it research charges the priors.")
+
+
+def publish_costs_cli(argv: list[str], accounts: list[Account] | None = None, state_dir: str | Path = "state",
+                      upload: Callable[[bytes], str] | None = None) -> int:
+    """publish-costs [--out FILE]: publish the canonical-cost broker's nightly cost table (costs only, no account id,
+    login, balance or equity) to release costs-v1 with the keyring's github-token, as nightly_costs does when
+    `costs.publish_release` is on. `--out FILE` writes the same JSON locally instead (no upload; never commit it).
+    Exit 1 when refused (no table, swap unmeasured, too few fills) or the upload fails."""
     import argparse
 
+    import pandas as pd
+
     from goldbot.config import load_settings
+    from goldbot.execution.costs import publishable
     from goldbot.ops import accounts as acc_mod
-    from goldbot.ops.jobs import canonical_cost_table
-    ap = argparse.ArgumentParser(prog="python -m goldbot.ops.run export-costs")
-    ap.add_argument("--out", required=True, help="where to write the cost table JSON")
+    from goldbot.ops.jobs import canonical_cost_table, publish_costs
+    ap = argparse.ArgumentParser(prog="python -m goldbot.ops.run publish-costs")
+    ap.add_argument("--out", default="", help="write the published JSON here instead of uploading it")
     args = ap.parse_args(argv)
+    settings = load_settings()
     accs = accounts if accounts is not None else list(acc_mod.load_accounts().values())
-    found = canonical_cost_table(load_settings(), accs, Path(state_dir))
-    if found is None:
-        print("no cost table for an account on the canonical-cost broker yet: run the scheduler's nightly_costs first")
-        return 1
-    table, acc = found
-    table.save(args.out)
-    swap = ("swap measured: long {:+.2f} / short {:+.2f} USD per lot per night".format(
-        table.swap_long_usd_per_lot, table.swap_short_usd_per_lot)
-        if table.swap_long_usd_per_lot is not None and table.swap_short_usd_per_lot is not None
-        else "WARNING: no measured swap (research will charge the settings prior)")
-    print(f"wrote {args.out}: {acc.account_id} built {table.built_utc:%Y-%m-%d %H:%M} UTC, commission "
-          f"{table.commission_per_lot_side_usd:.2f} USD per lot per side "
-          f"({'measured' if table.commission_measured else 'settings'}), {swap}")
-    return 0
+    if args.out:
+        found = canonical_cost_table(settings, accs, Path(state_dir))
+        pub, reason = (None, "no cost table on the canonical-cost broker yet: run the scheduler's nightly_costs first") \
+            if found is None else publishable(found[0], found[1].broker, min_fills=settings.research.min_fills_for_slippage)
+        if pub is None:
+            print(f"refused: {reason}")
+            return 1
+        Path(args.out).write_text(pub.model_dump_json(indent=1))
+        print(f"wrote {args.out}: {pub.broker} measured {pub.measured_at:%Y-%m-%d %H:%M} UTC, "
+              + ", ".join(f"{k} {v.source}" for k, v in pub.fields.items()))
+        return 0
+    if upload is None:
+        token = acc_mod.get_secret("github-token")
+        if not token:
+            print("no github-token in the keyring: python -m goldbot.ops.accounts set github-token")
+            return 1
+        upload = costs_uploader(token)
+    res = publish_costs(settings, accs, Path(state_dir), upload, pd.Timestamp.now("UTC"))
+    print(("published " + str(res.get("url", ""))) if res["published"] else f"refused: {res['reason']}")
+    return 0 if res["published"] else 1
 
 
 def drift_review_cli(argv: list[str], state_dir: str | Path = "state") -> int:
@@ -253,6 +278,8 @@ def run_api() -> None:
     import uvicorn
 
     from goldbot.api.app import create_app
+    from goldbot.ops.health import start_heartbeat
+    start_heartbeat("state", "api")
     uvicorn.run(create_app("state"), host="127.0.0.1", port=8787)
 
 
@@ -308,9 +335,16 @@ def run_scheduler() -> None:
                      sync_bars=lambda store: sync_release(store, token=gh_token),   # bars (data-v1) + macro (macro-v1)
                      sync_trials=(lambda path: sync_registry(path, gh_token)) if gh_token else None,
                      population=Population(Path("state") / "population.json"))
+    if settings.costs.publish_release:          # measured costs for research.yml (release costs-v1)
+        if gh_token:
+            ctx.upload_costs = costs_uploader(gh_token)
+        else:
+            log.warning("costs.publish_release is on but there is no github-token: the cost table is not published")
     ctx.agent_runner = _agent_runner(settings, ctx.store, trial_runner=make_trial_runner(ctx))
     from goldbot.data.econ_calendar import fetch_ff_week
     ctx.fetch_calendar = fetch_ff_week
+    from goldbot.ops.health import start_heartbeat
+    start_heartbeat("state", "scheduler")         # a thread: a retrain blocks the loop for hours
     sch = build_scheduler(ctx)
     for name, st in sch.status()["jobs"].items():
         log.info("scheduler: %s next at %s", name, st["next_slot"])
@@ -320,6 +354,7 @@ def run_scheduler() -> None:
 def run_telegram() -> None:
     from goldbot.config import load_settings
     from goldbot.ops import accounts
+    from goldbot.ops.health import start_heartbeat
     from goldbot.telegram.bot import TelegramBot
     settings = load_settings()
     token = accounts.get_secret("telegram-bot-token")
@@ -327,6 +362,7 @@ def run_telegram() -> None:
         raise SystemExit("no telegram-bot-token in the keyring: python -m goldbot.ops.accounts set telegram-bot-token")
     if not settings.telegram.allowed_user_ids:
         raise SystemExit("settings.yaml telegram.allowed_user_ids is empty: add your Telegram user id")
+    start_heartbeat("state", "telegram")
     TelegramBot(token, "state", set(settings.telegram.allowed_user_ids)).run()
 
 
@@ -342,7 +378,9 @@ def run_news() -> None:
     from goldbot.data.news_collector import NewsCollector
     from goldbot.data.store import Store
     from goldbot.ops import accounts
+    from goldbot.ops.health import start_heartbeat
     settings = load_settings()
+    start_heartbeat("state", "news")              # a thread: the poll sleeps poll_seconds (300 s) between rounds
     key = accounts.get_secret("anthropic-api-key")
     client = None
     if key:
@@ -383,8 +421,8 @@ if __name__ == "__main__":
         run_news()
     elif cmd == "record-gate":
         sys.exit(record_gate_cli(sys.argv[2:]))
-    elif cmd == "export-costs":
-        sys.exit(export_costs_cli(sys.argv[2:]))
+    elif cmd == "publish-costs":
+        sys.exit(publish_costs_cli(sys.argv[2:]))
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))

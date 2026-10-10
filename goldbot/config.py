@@ -101,6 +101,9 @@ class CostSettings(_Section):
     swap_long_usd_per_lot: float = -60.0
     swap_short_usd_per_lot: float = 0.0
     swap_triple_weekday: int = Field(2, ge=0, le=4)      # 0 = Monday; Wednesday for XAUUSD at most brokers
+    # nightly_costs publishes the canonical broker's table (costs only) to release costs-v1 for research.yml;
+    # needs the github-token in the keyring. Health warns when the published table is older than 8 days.
+    publish_release: bool = False
 
 
 class ScheduleSettings(_Section):

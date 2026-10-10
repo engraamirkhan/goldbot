@@ -162,9 +162,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the last 90 days' closed positions) from the MT5 terminal every 6 hours (`mt5_adapter.broker_terms` ->
   `state/broker_terms_<account>.json`); `nightly_costs` puts them into the cost table (`CostTable.swap_*`,
   `commission_measured`; readings older than 7 days are ignored), so `live_swap` / `live_extra_cost_usd` charge them
-  in retraining. `run.py export-costs --out FILE` writes the canonical broker's table; `research_pass.py --cost-table
-  FILE` uses it (research.yml passes `config/costs_measured.json` when committed). Health warns while a table has no
-  measured swap. None of this is verified against a real terminal yet (the conversions are tested on a fake mt5).
+  in retraining. With `costs.publish_release` on and the github-token in the keyring, `nightly_costs` then publishes
+  the canonical broker's table to release `costs-v1` as `costs_measured.json` (`jobs.publish_costs`, via
+  `release.upload_asset`; by hand `run.py publish-costs [--out FILE]`). The published format
+  (`costs.PublishedCostTable`) holds costs only: spread, slippage, commission and swap per lot, `measured_at`, and per
+  field measured/prior with its tick, fill or lot count. No account id, login, balance, equity or free-text notes
+  (tested). Publishing is refused while swap is unmeasured or there are fewer than 50 fills. research.yml downloads
+  the asset when present and passes `--cost-table`; without it the report's cost source says "PRIORS ONLY". Nothing
+  is committed to the repo. Health warns while a table has no measured swap and, with publishing on, when the
+  published copy is missing or older than 8 days (`costs:published`). None of this is verified against a real
+  terminal or a real upload yet (the conversions are tested on a fake mt5, the upload on a fake uploader).
 - Live data into learning (P9, 2026-10-09): the shadow book records EVERY candidate a champion/challenger scores
   with its p, raw score, the threshold at the time and `taken` (p > threshold); one position per agent applies over
   all candidates (as research thins before the model filter), and promotion stats, the CUSUM, re-arm and the
@@ -254,6 +261,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   invalidated) and feature-seeded clones now draw from a larger column pool.
 
 ## Next steps (no owner input needed unless marked)
+- Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write
+  `state/heartbeat_<service>.json` every minute (`goldbot.ops.health.Heartbeat` / `start_heartbeat`); health fails a
+  service silent for 5 min, warns on a tripped daily/weekly loss cap per account and on each order that failed after
+  the retries (orders_<account>.json `rejected`/`unfilled`, retcode from the decisions journal), and fails a bridge
+  that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
+  health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
+  owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.
 1. Research status (2026-10-09, Q4 2026 trial budget spent: 20/20, research stops until 2027-01-01). Evaluation is
    cross-fitted, spread charged once, design gates and the P4 screen enforced, holdout 2025-10..2026-09 untouched,
@@ -266,8 +280,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
    Q1 2027 plan (first pre-registered trial): `specialist=tsmom`, `variants=[{"timeframe": "4h", "max_bars": 12}]`,
    rationale "horizon study: tsmom 4h with swap" (refused on 2026-10-09 by the budget guard). Before it, OWNER on the VPS:
    once `state\costs_icm-demo.json` carries measured swap (the health check stops warning "no measured swap"), run
-   `python -m goldbot.ops.run export-costs --out config\costs_measured.json` and commit the file (docs/RUNBOOK.md
-   section 4); research.yml then charges the measured swap, commission and slippage instead of the priors (swap
+   set `costs.publish_release: true` and restart the scheduler (or run `python -m goldbot.ops.run publish-costs`;
+   docs/RUNBOOK.md section 4); research.yml then charges the measured swap, commission and slippage instead of the priors (swap
    prior: long -60, short 0 USD/lot/night, x3 Wednesday). If net stays <= 0, the next option (other
    instruments) is an OWNER decision. Raising `research.trial_budget_quarter` is an OWNER decision.
    Until an agent passes the gates the engines propose nothing (by design).

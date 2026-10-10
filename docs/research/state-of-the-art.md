@@ -113,7 +113,7 @@ come from price. Do not retry meta-models until a primary passes P4 on its own.
   - Swap is charged ×3 on Wednesday.
   - Costs are fixed in USD per lot while R scales with price and volatility, so cost in R is time-varying. It was
     roughly 2–3× higher in R in low-volatility 2012–2019 than in 2024–26.
-- Use measured fills (`export-costs`) rather than priors. Report net R by year and by volatility tercile.
+- Use measured fills (`run.py publish-costs` -> release `costs-v1`) rather than priors. Report net R by year and by volatility tercile.
 
 ### A8. Overfitting controls
 
