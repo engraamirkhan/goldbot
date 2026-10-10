@@ -178,6 +178,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   version/status, `recalibrations` row with before/after ECE; also `state/recalibration.jsonl`). It promotes and
   retires nothing. The ECE after is in-sample. Not done from P9: the monthly refit / drift-triggered refit, recency
   weighting and the replay trial; owner vetoes are not in the shadow book (it is the model's own decision).
+- Drift and health (M26/M27, 2026-10-10): every fitted model stores its training distribution per input
+  (`feature_ref`); the daily `drift_watch` job (23:40) rebuilds the last 30 days of candidates as in training and
+  computes PSI on the top-10 inputs by gain (0.1 warns, 0.25 sizes the agent to 50%), ECE/Brier on the trailing 100
+  taken shadow trades (ECE > 0.08 sizes down), a residual CUSUM (halts the agent) and each agent's 30-day drawdown;
+  two halted agents or a drawdown > 1.5x backtest halt the system. Output `state/drift.json`; halts are sticky per
+  champion version until the owner runs `python -m goldbot.ops.run drift-review --clear "<note>"`. The engine reads
+  it (missing = no restriction, unreadable = halt), the gate reason is `drift_system_halt`, health check `drift`.
+  Entries only; exits unaffected. Models trained before this have no reference: PSI is skipped for them.
 - Free hosting without Windows (2026-10-10, owner: MT5 + $0 hosting, Mac only): two Oracle Cloud Always Free VMs.
   The MT5 terminal runs under Wine on an x86 E2.1.Micro with the bridge (`goldbot/execution/bridge.py`,
   `run.py bridge <account>`); everything else runs on an Ampere A1 (4 OCPU / 24 GB) under systemd

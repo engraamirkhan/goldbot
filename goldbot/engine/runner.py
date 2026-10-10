@@ -186,6 +186,7 @@ class Engine:
         self._journaled = 0                  # decisions already written to the store's journal
         self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)
         self._class_cache: tuple[float, str] = (-2.0, "unknown")
+        self._drift_cache: tuple[float, dict] = (-2.0, {})
         self._ctx_cache: dict[str, tuple[pd.Timestamp, tuple[pd.DataFrame, pd.DataFrame] | None]] = {}
         # per timeframe: completed 1m bars -> bars, re-aggregating only the groups that changed since the last close
         self._resamplers: dict[str, IncrementalResampler] = {}
@@ -412,6 +413,10 @@ class Engine:
                 continue      # shadow-only member of the population: the shadow book trades it, not the broker
             if self._busy(agent.agent_id):
                 continue      # one position (or pending proposal) per agent, as its labels were built
+            drift = self._drift()
+            if agent.agent_id in (drift.get("halted") or {}):
+                decisions.append(self._record(agent, close_ts, 0.0, 0.0, "drift_halt"))   # CUSUM: entries stop
+                continue
             mv, fv = getattr(model, "feature_version", ""), X.attrs.get("feature_version")
             if mv and mv != fv:
                 # design: a model only ever scores the feature frame it was trained on
@@ -424,7 +429,7 @@ class Engine:
             cols = model.feature_names or [c for c in feats.columns]
             p = float(model.predict(feats[[c for c in cols if c in feats.columns]] if model.feature_names else feats)[0])
             ls = agent.label_spec
-            w = fam_w.get(agent.family, 0.0) * share
+            w = fam_w.get(agent.family, 0.0) * share * float((drift.get("size_factor") or {}).get(agent.agent_id, 1.0))
             mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, hurdle_atr)[0])
             price = last_tick.ask if side > 0 else last_tick.bid
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
@@ -614,6 +619,7 @@ class Engine:
         # design (Account classifier): a broker account trades by its measured class; Unknown (incl. not classified
         # yet) trades nothing, Standard is restricted in the gate. The paper broker has no account to classify.
         st.account_class = "raw" if self.cfg.mode == "paper" else self._account_class()
+        st.drift_halt = bool(self._drift().get("system_halt"))
         self._server_clock(now, tick)
         stage = st.stage
         if self.gate.update_stage(st) != stage:
@@ -1020,6 +1026,19 @@ class Engine:
         session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([ts]))[0])
         c = table.round_trip_ex_spread_atr(session, atr_usd) if ex_spread else table.round_trip_atr(session, atr_usd)
         return c if c is not None else self.cfg.cost_atr
+
+    def _drift(self) -> dict:
+        """state/drift.json from the daily drift_watch job (cached by mtime): halted agents, size factors and the system
+        halt. Missing (the job has not run yet) restricts nothing; unreadable halts entries (fail closed)."""
+        path = Path(self.cfg.state_dir, "drift.json")
+        mtime = path.stat().st_mtime if path.exists() else -1.0
+        if mtime != self._drift_cache[0]:
+            try:
+                d = json.loads(path.read_text()) if path.exists() else {}
+            except (ValueError, OSError):
+                d = {"system_halt": {"reasons": ["drift.json unreadable"]}}
+            self._drift_cache = (mtime, d if isinstance(d, dict) else {"system_halt": {"reasons": ["drift.json invalid"]}})
+        return self._drift_cache[1]
 
     def _account_class(self) -> str:
         """The classifier's stored class (state/classifier_<account>.json); unknown when missing or unreadable."""

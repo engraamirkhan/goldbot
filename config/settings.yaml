@@ -79,6 +79,7 @@ scheduler:
   calendar_archive: { kind: daily,   at: "06:10", max_late_hours: 20 }                  # Forex Factory week -> calendar_events
   agents_presession: { kind: daily,  at: "06:30", weekdays: [0, 1, 2, 3, 4], max_late_hours: 1 }   # macro/news briefing before London
   recalibrate:      { kind: weekly,  at: "11:30", weekday: 5, max_late_hours: 30 }   # P9: bounded calibrator refit after the retrain
+  drift_watch:      { kind: daily,   at: "23:40", max_late_hours: 20 }                  # PSI, calibration, CUSUM halts (M26/M27)
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -114,3 +115,18 @@ research:
   recal_window_days: 182             #   outcomes (every candidate, taken or not) exited within this window
   registry: state/research_registry.jsonl
   models_dir: models
+
+drift:                               # design: Drift and health (goldbot/research/drift.py)
+  psi_warn: 0.1                      # PSI on a top-10 feature that warns
+  psi_size_down: 0.25                #   ... that sizes the agent down to size_down_factor
+  top_features: 10                   # by gain importance until per-decision TreeSHAP is stored
+  ece_size_down: 0.08                # ECE on the trailing calib_trades taken shadow trades that sizes down
+  calib_trades: 100
+  min_calib_trades: 30
+  size_down_factor: 0.5
+  window_days: 30                    # recent candidates compared with the training distribution
+  min_rows: 50
+  cusum_k: 0.5                       # residual CUSUM (fixed; not yet tuned to 5% quarterly false alarms, row M25)
+  cusum_h: 4.0
+  dd_mult: 1.5                       # an agent's 30-day drawdown above 1.5x backtest halts the system pending review
+  dd_window_days: 30

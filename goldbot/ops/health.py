@@ -22,13 +22,13 @@ import json
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, cast
 
 import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord, Record, UtcTimestamp
-from goldbot.config import DEFAULT_SETTINGS, Settings, load_yaml
+from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 
 Status = Literal["ok", "warn", "fail"]
@@ -100,7 +100,7 @@ class HealthContext(Record):
         from goldbot.ops import accounts
         settings, s_err, accs, a_err = None, None, [], None
         try:
-            settings = Settings.model_validate(load_yaml(settings_path))
+            settings = Settings.model_validate(settings_dict(settings_path))
         except Exception as exc:
             s_err = f"{type(exc).__name__}: {exc}"
         try:
@@ -476,6 +476,33 @@ def check_data_quality(ctx: HealthContext) -> Check:
                  reason=f"{len(errs)} error events in {DQ_WINDOW_HOURS} h ({kinds}): rows quarantined, see bars_quarantine")
 
 
+def check_drift(ctx: HealthContext) -> Check:
+    """state/drift.json (daily drift_watch): system halt fails, agent halts and size-downs warn, a stale file warns."""
+    f = ctx.state_dir / "drift.json"
+    if not f.exists():
+        return Check(name="drift", status="ok", reason="no drift report yet (no champion, or drift_watch not run)")
+    try:
+        d = _read_json(f)
+    except (ValueError, OSError) as exc:
+        return Check(name="drift", status="fail", reason=f"drift.json unreadable (entries halted): {exc}")
+    if d.get("system_halt"):
+        why = "; ".join(d["system_halt"].get("reasons") or [])
+        return Check(name="drift", status="fail",
+                     reason=f"SYSTEM HALT pending review ({why}): python -m goldbot.ops.run drift-review")
+    parts, status = [], "ok"
+    if d.get("halted"):
+        status = "warn"
+        parts.append(f"halted agents: {', '.join(sorted(d['halted']))}")
+    if d.get("size_factor"):
+        status = "warn"
+        parts.append(f"sized down: {', '.join(sorted(d['size_factor']))}")
+    age_h = (ctx.now - pd.Timestamp(d.get("ts"))).total_seconds() / 3600 if d.get("ts") else float("inf")
+    if age_h > 72:
+        status = "warn"
+        parts.append(f"report {age_h:.0f} h old")
+    return Check(name="drift", status=cast(Status, status), reason="; ".join(parts) or "no drift")
+
+
 def check_news(ctx: HealthContext) -> Check:
     if ctx.settings is not None and not ctx.settings.news.feeds:
         return Check(name="news", status="ok", reason="no feeds configured")
@@ -572,7 +599,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += [check_engine(ctx, a.account_id), check_risk_state(ctx, a.account_id)]
         checks += check_scheduler(ctx)
         checks += [check_costs(ctx, a.account_id) for a in ctx.accounts]
-        checks += [check_data_quality(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
+        checks += [check_data_quality(ctx), check_drift(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
 

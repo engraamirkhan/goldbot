@@ -137,7 +137,7 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "model_watch": "2026-10-02T23:30:00+00:00",
                    "agents_daily": "2026-10-02T23:45:00+00:00", "agents_weekly": "2026-10-03T13:00:00+00:00",
                    "monthly_research": "2026-10-04T08:00:00+00:00", "calendar_archive": "2026-10-03T06:10:00+00:00",
-                   "agents_presession": "2026-10-05T06:30:00+00:00", "recalibrate": "2026-10-03T11:30:00+00:00"}
+                   "agents_presession": "2026-10-05T06:30:00+00:00", "recalibrate": "2026-10-03T11:30:00+00:00", "drift_watch": "2026-10-02T23:40:00+00:00"}
 
 
 def test_research_analyst_trial_is_recorded_in_the_registry(bars_store, tmp_path):

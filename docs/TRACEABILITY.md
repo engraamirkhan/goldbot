@@ -17,9 +17,9 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 117 |
-| partial | 17 |
-| missing | 12 |
+| implemented | 119 |
+| partial | 16 |
+| missing | 11 |
 | deviates | 9 |
 | in review | 6 |
 | **total** | **161** |
@@ -178,8 +178,8 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | M23 | "Specialist promotion is automatic when all gates pass" | implemented | goldbot/ops/jobs.py `_decide_challengers` | tests/test_jobs_integration.py::test_retrain_challenger_shadow_promotion_cycle |
 | M24 | "previous champion is kept and restored automatically if the new one trips the CUSUM alarm in its first two weeks" | implemented | goldbot/ops/jobs.py `model_watch`; goldbot/research/promotion.py:78 | tests/test_shadow.py::test_model_watch_restores_the_previous_champion_on_a_cusum_alarm |
 | M25 | CUSUM "tuned to a 5% quarterly false-alarm rate" | deviates | fixed k = 0.5, h = 4.0 sd (goldbot/research/promotion.py:78), not calibrated to a false-alarm rate | tests/test_cov_research.py::test_cusum_alarms_on_a_sustained_drop_but_not_on_the_expected_record |
-| M26 | Drift: "Daily PSI per feature ... above 0.1 warns, above 0.25 sizes down to 50%"; "ECE above 0.08 sizes down" | missing | | untested |
-| M27 | CUSUM "halts the affected specialist; two specialists halted at once, or a 30-day drawdown above 1.5x backtest, halts the system" | partial | model watch restores the previous champion; no specialist halt, no system halt | untested |
+| M26 | Drift: "Daily PSI per feature ... above 0.1 warns, above 0.25 sizes down to 50%"; "ECE above 0.08 sizes down" | implemented | goldbot/research/drift.py (`reference_bins` stored on every model at fit, `psi`, `assess`); goldbot/research/model.py `MetaLabelModel.feature_ref`; goldbot/ops/jobs.py `drift_watch` (daily 23:40, recent candidates rebuilt as in training) -> state/drift.json `size_factor`; goldbot/engine/runner.py `_drift` scales the allocator weight; config `drift:`. Reading taken: "top-10 SHAP" is top-10 by gain importance until TreeSHAP is stored (M28); ECE on the trailing 100 taken shadow trades, judged from 30 | tests/test_drift.py::test_psi_is_small_for_the_same_distribution_and_large_for_a_shift; ::test_assess_sizes_down_on_feature_drift_or_bad_calibration_and_halts_on_cusum; ::test_every_fitted_model_carries_its_training_reference |
+| M27 | CUSUM "halts the affected specialist; two specialists halted at once, or a 30-day drawdown above 1.5x backtest, halts the system" | implemented | goldbot/research/drift.py `trade_residuals` + `residual_cusum` (realised R minus the R the model's p implied, standardised), `system_halt_reasons`; `drift_watch` keeps halts sticky per champion version until `python -m goldbot.ops.run drift-review --clear "<note>"`; the engine skips halted agents (`drift_halt`) and the gate blocks all entries on a system halt (`drift_system_halt`); unreadable drift.json halts (fail closed); health `drift` fails on a system halt. Exits unaffected. CUSUM k/h still fixed (M25) | tests/test_drift.py::test_cusum_alarms_on_persistent_underperformance_only; ::test_system_halts_on_two_halted_agents_or_a_drawdown_beyond_one_and_a_half_backtest; ::test_drift_watch_halts_an_underperforming_champion_and_keeps_it_halted_until_review; ::test_the_gate_blocks_entries_during_a_system_halt; ::test_engine_reads_the_drift_report_and_fails_closed_on_a_corrupt_one; ::test_health_fails_on_a_system_halt_and_warns_on_agent_halts |
 | M28 | "TreeSHAP is stored for every live, shadow and rejected decision" | missing | decisions are journalled (goldbot/engine/runner.py `flush_journal`) without SHAP | untested |
 | M29 | "Retired specialists keep running in shadow" | implemented | goldbot/research/population.py:47 (182 days) | tests/test_population.py::test_retirement_by_confidence_bound_and_the_six_month_shadow_tail |
 | M30 | Bounded research loop: fixed monthly trial budget, +-25% label grid, every trial in the registry feeding DSR | implemented | goldbot/ops/jobs.py `monthly_research`; config/settings.yaml research; goldbot/research/registry_sync.py | tests/test_jobs_integration.py::test_monthly_research_is_bounded_and_counted; ::test_label_grid_is_the_26_neighbours_of_the_base |
@@ -266,7 +266,7 @@ Larger gaps, by priority (effort: S < 1 day, M 1-3 days, L > 3 days):
 9. ~~R16 re-arm probation~~ (done).
 10. **M3/M6/M7 live exit policies**: trend trail, breakout scale-out and trail, session-open hard flat (M).
 11. ~~D22 quarantine of error batches~~ (done).
-12. **M26/M27 drift and health**: PSI per feature, ECE sizing, specialist and system halts (M-L).
+12. ~~M26/M27 drift and health~~ (done).
 13. **A10 auto-mode offer** after 100 proposals with the veto comparison (S-M).
 14. **R21 blackout early close if p < 0.5**, which needs re-scoring open positions (M).
 15. **M28 TreeSHAP per decision**, and A5 per-trade SHAP in proposals (M).
