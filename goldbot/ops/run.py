@@ -27,14 +27,48 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:   # service entry points import lazily; these are for annotations only
+    import pandas as pd
+
     from goldbot.agents.runner import AgentRunner
     from goldbot.config import Settings
+    from goldbot.data.calendar import SessionTable
     from goldbot.data.store import Store
     from goldbot.ops.accounts import Account
     from goldbot.risk import RiskLimits
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("goldbot.run")
+
+
+SESSIONS_TIMEOUT_S = 5.0     # a session read slower than this keeps the last table (the bridge RPC times out at 10 s)
+
+
+def refresh_sessions(source: Any, now: "pd.Timestamp", current: "SessionTable | None",
+                     timeout_s: float = SESSIONS_TIMEOUT_S) -> "SessionTable | None":
+    """The engine's next session table (D13) from `source.table(now)` (BrokerSessions), outside the tick path. A read
+    that raises or takes longer than `timeout_s` keeps `current`; so does a static fallback while `current` is a broker
+    table that still covers `now` (a failed re-read must not throw away a holiday schedule already read)."""
+    import threading
+    box: dict[str, Any] = {}
+
+    def work() -> None:
+        try:
+            box["table"] = source.table(now)
+        except Exception as exc:              # the type only: a bridge error can name the tunnel endpoint
+            box["error"] = type(exc).__name__
+    th = threading.Thread(target=work, name="sessions-refresh", daemon=True)
+    th.start()
+    th.join(timeout_s)
+    if th.is_alive() or "table" not in box:
+        log.warning("session table refresh %s; keeping the last table",
+                    f"failed ({box['error']})" if "error" in box else f"took over {timeout_s:g} s")
+        return current
+    new = box["table"]
+    if new.source != "broker" and current is not None and current.source == "broker" \
+            and current.covers_until is not None and now < current.covers_until:
+        log.warning("session table fell back to static (%s); keeping the broker table read earlier", new.note)
+        return current
+    return new
 
 
 def run_supervisor() -> None:
@@ -123,6 +157,11 @@ def run_engine(account_id: str) -> None:
                               approval_window_s=settings.risk.approval_window_seconds), broker, agents,
                  champions(), center, limits=limits, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares)
+    from goldbot.data.calendar import BrokerSessions, SessionTable
+    sessions = BrokerSessions(broker, acc.symbol, fallback=SessionTable(server_tz=acc.server_tz))
+    table = refresh_sessions(sessions, pd.Timestamp.now("UTC"), None)
+    if table is not None:
+        eng.set_sessions(table)
     warm = eng.warm_start(pd.Timestamp.now("UTC"))
     log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f", account_id,
              type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade)
@@ -139,6 +178,12 @@ def run_engine(account_id: str) -> None:
             pass
         if time.time() - last_check > 60:          # promotions by the scheduler take effect without a restart
             last_check = time.time()
+            try:                                   # D13: re-read once per server day; never on the tick path
+                table = refresh_sessions(sessions, pd.Timestamp.now("UTC"), eng.sessions)
+                if table is not None:
+                    eng.set_sessions(table)
+            except Exception:
+                log.exception("session refresh failed; keeping the last table")
             now_m = mtimes()
             if now_m != seen:
                 seen = now_m

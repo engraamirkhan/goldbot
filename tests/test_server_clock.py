@@ -1,6 +1,7 @@
 """Server clock zones (Europe/Athens vs NY+7) across the US-EU gap weeks, and the offset probe that measures which one
 the broker runs (goldbot/data/timeutil.py, goldbot/ops/server_clock.py, health.check_server_clock, preflight)."""
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -130,14 +131,14 @@ def test_probe_flags_athens_configured_on_a_ny7_broker_in_the_gap_as_an_entry_bl
     tick = broker_tick(NOW, NY_PLUS_7, ATHENS)
     p = server_clock.assess("icm-demo", ATHENS, tick.ts_utc, NOW)
     assert p.status == "mismatch" and p.configured_offset_h == 2 and p.inferred_offset_h == 3
-    assert "reads UTC+3 but Europe/Athens gives UTC+2" in p.reason and "exits unaffected" in p.reason
+    assert "reads UTC+3, which is NY+7 now, but Europe/Athens gives UTC+2" in p.reason and "exits unaffected" in p.reason
     assert (tick.ts_utc - NOW) > pd.Timedelta(minutes=55)      # the tick looks an hour in the FUTURE: stale-tick rule blind
     assert "server clock mismatch" in (server_clock.entry_block(p) or "")
 
 
 def test_probe_flags_ny7_configured_on_an_athens_broker_in_the_gap():
     p = server_clock.assess("icm-demo", NY_PLUS_7, broker_tick(NOW, ATHENS, NY_PLUS_7).ts_utc, NOW)
-    assert p.status == "mismatch" and p.inferred_offset_h == 2 and "reads UTC+2 but NY+7 gives UTC+3" in p.reason
+    assert p.status == "mismatch" and p.inferred_offset_h == 2 and "reads UTC+2, which is Europe/Athens now, but NY+7 gives UTC+3" in p.reason
 
 
 def test_probe_cannot_tell_the_zones_apart_outside_the_gap_and_says_ok():
@@ -148,7 +149,7 @@ def test_probe_cannot_tell_the_zones_apart_outside_the_gap_and_says_ok():
 
 def test_probe_reports_a_stale_tick_while_trading_as_a_mismatch_not_an_offset():
     p = server_clock.assess("icm-demo", ATHENS, broker_tick(NOW, ATHENS, ATHENS, lag_s=20 * 60).ts_utc, NOW)
-    assert p.status == "mismatch" and "stale by 20 min" in p.reason
+    assert p.status == "mismatch" and "20 min behind the host clock" in p.reason and "host clock or feed" in p.reason
 
 
 def test_probe_does_not_guess_with_the_market_closed():
@@ -198,3 +199,65 @@ def test_health_server_clock_check_is_quiet_without_a_bridge_and_never_quotes_er
     closed = hctx(tmp_path, lambda a, s: broker_tick(SATURDAY, ATHENS, ATHENS, lag_s=12 * 3600), now=SATURDAY)
     c_closed = health.check_server_clock(closed, closed.accounts[0])
     assert c_closed is not None and c_closed.status == "ok"                  # weekend: no alert noise
+
+
+def test_an_hour_off_outside_the_gap_is_called_host_clock_or_feed_not_a_zone():
+    july = pd.Timestamp("2026-07-15 12:00", tz="UTC")                 # both zones are UTC+3: neither explains +1 h
+    p = server_clock.assess("icm-demo", ATHENS, july + pd.Timedelta(hours=1), july)
+    assert p.status == "mismatch" and "host clock or feed" in p.reason and "chronyc tracking" in p.reason
+    assert "server_tz is wrong" not in p.reason
+
+
+def test_server_wall_refuses_naive_stamps():
+    with pytest.raises(ValueError, match="tz-aware"):
+        server_wall(pd.DatetimeIndex([pd.Timestamp("2026-03-18 12:00")]), ATHENS)
+
+
+def test_mt5_requests_get_the_server_wall_clock_labelled_utc_whatever_the_host_zone():
+    from types import SimpleNamespace
+
+    from goldbot.execution.mt5_adapter import MT5Broker
+    fake: Any = SimpleNamespace(server_tz=NY_PLUS_7)
+    got = MT5Broker._mt5_time(fake, pd.Timestamp("2026-10-28 09:00", tz="UTC"))
+    assert got.replace(tzinfo=None) == datetime(2026, 10, 28, 12, 0) and got.utcoffset() == timedelta(0)
+
+
+def test_rollover_nights_follow_the_ny7_midnight_in_the_gap_week():
+    from goldbot.labels.triple_barrier import rollover_nights
+    entry = pd.DatetimeIndex([pd.Timestamp("2026-10-27 21:30", tz="UTC")])   # NY+7: Wed 00:30 (after midnight)
+    exit_ = pd.DatetimeIndex([pd.Timestamp("2026-10-27 23:00", tz="UTC")])
+    assert rollover_nights(entry, exit_, NY_PLUS_7, 2)[0] == 0
+    assert rollover_nights(entry, exit_, ATHENS, 2)[0] == 1                    # Athens: midnight is 22:00 UTC
+
+
+def test_health_reads_the_engines_cached_broker_session_table(tmp_path):
+    import json
+
+    from goldbot.data.calendar import session_table_cache
+    close = NOW - pd.Timedelta(hours=1)                                       # the broker closed early today
+    table = SessionTable(server_tz=ATHENS).model_copy(update={
+        "broker_windows": ((close - pd.Timedelta(hours=8), close),), "covers_from": close - pd.Timedelta(days=1),
+        "covers_until": close + pd.Timedelta(days=6), "source": "broker"})
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"sessions": session_table_cache(table)}))
+    stale = hctx(tmp_path, lambda a, s: broker_tick(NOW, ATHENS, ATHENS, lag_s=3600))
+    c = health.check_server_clock(stale, stale.accounts[0])
+    assert c is not None and c.status == "ok" and "market closed" in c.reason   # the static table alone would alert
+
+
+def test_the_bridge_reports_its_server_tz_on_health():
+    import threading
+    from http.server import HTTPServer
+
+    from goldbot.execution.bridge import GuardedBroker, bridge_server_tz, make_handler
+    from goldbot.execution.paper import PaperBroker
+
+    class Terminal(PaperBroker):
+        server_tz = NY_PLUS_7
+    httpd = HTTPServer(("127.0.0.1", 0), make_handler(GuardedBroker(Terminal(equity=1), magic_base=1), "t" * 40))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        assert bridge_server_tz(f"http://127.0.0.1:{httpd.server_address[1]}") == NY_PLUS_7
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert bridge_server_tz("http://127.0.0.1:9", timeout_s=0.5) is None

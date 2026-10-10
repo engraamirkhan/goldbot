@@ -238,6 +238,31 @@ class BrokerSessions:
         return self.table(now).entry_block(now)
 
 
+def session_table_cache(t: SessionTable) -> dict[str, Any]:
+    """The parts of a session table another process needs (engine state -> health): zone, source and the broker's
+    windows as ISO strings; the static rule's fields stay at their defaults."""
+    def iso(x: pd.Timestamp | None) -> str | None:
+        return None if x is None else pd.Timestamp(x).isoformat()
+    return {"server_tz": t.server_tz, "source": t.source, "note": t.note,
+            "covers_from": iso(t.covers_from), "covers_until": iso(t.covers_until),
+            "broker_windows": None if t.broker_windows is None else [[iso(a), iso(b)] for a, b in t.broker_windows]}
+
+
+def session_table_from_cache(d: Any) -> SessionTable | None:
+    """Inverse of `session_table_cache`; None when `d` is missing or malformed (the caller uses the static table)."""
+    try:
+        win = d.get("broker_windows")
+        base = SessionTable(server_tz=str(d["server_tz"]))
+        if win is None:
+            return base
+        return base.model_copy(update={
+            "broker_windows": tuple((pd.Timestamp(a), pd.Timestamp(b)) for a, b in win),
+            "covers_from": pd.Timestamp(d["covers_from"]), "covers_until": pd.Timestamp(d["covers_until"]),
+            "source": str(d.get("source", "broker")), "note": str(d.get("note", ""))})
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
 class LocalSession(FrozenRecord):
     """A trading session on a local wall clock (DST follows the zone): New York 08:30-16:00 America/New_York is
     13:30-21:00 UTC in winter and 12:30-20:00 UTC in summer. Used by rules that act at a fixed local time."""

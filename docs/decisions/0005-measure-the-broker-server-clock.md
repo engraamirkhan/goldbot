@@ -1,4 +1,4 @@
-# 0004: Measure the broker's server clock; support NY+7 alongside Europe/Athens
+# 0005: Measure the broker's server clock; support NY+7 alongside Europe/Athens
 
 Status: accepted (SRE, 2026-10-10)
 
@@ -17,12 +17,14 @@ the session table, the rollover gate, the Friday weekend rule and every timestam
 - Never trust either zone: a read-only probe (`goldbot/ops/server_clock.py`) compares the broker's latest tick with
   host UTC while the market is open and reports a > 5 min mismatch in health (fail, alerted) and preflight (blocking).
   A mismatch is an entry-only block; exits are never gated.
-- Keep `Europe/Athens` in accounts.yaml for now: the engine's `_server_clock` (runner.py, another lane) cannot resolve
-  `NY+7` yet, and the probe has not yet measured our terminal in a gap week.
+- The engine resolves `NY+7` (`server_wall`), runs the probe on every refresh with no extra broker call, and refuses
+  entries on a mismatch (`server_clock_mismatch`) or a tick stamped > 5 s in the future (`tick_from_future`); exits are
+  never gated. It also reads the broker's session table (D13) outside the tick path (`market_closed`).
+- Keep `Europe/Athens` in accounts.yaml until the probe has measured our terminal in a gap week.
 
 ## Consequences
-- The first measurement is possible on Mon 26 Oct 2026; the owner halts entries for the gap week if it fails, until
-  the runner change lands and `server_tz: NY+7` is deployed (HANDOFF).
+- The first measurement is possible on Mon 26 Oct 2026. If it shows UTC+3, the engine already refuses entries; the
+  owner then sets `server_tz: NY+7` on both hosts (RUNBOOK "Server clock").
 - What would change this: a gap-week measurement showing UTC+2 on ICMarketsSC (then Athens stays), or IC Markets
   changing its policy (the probe would catch it).
 - The probe relies on host time sync (chrony/w32tm, preflight `time_sync`); a host clock off by minutes reads as a

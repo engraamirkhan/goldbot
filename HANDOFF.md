@@ -684,28 +684,29 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   ops check above). Research: IC Markets' own notices say its MT4/MT5 server time "is based on '5 pm New York'" and
   moves GMT+2 -> GMT+3 on the US DST start (10 Mar 2024, 9 Mar 2025) and back on the US DST end (4 Nov 2018), so
   ICMarketsSC most likely runs NY+7, not Europe/Athens; not yet measured on our terminal. `goldbot/data/timeutil.py`
-  adds `NY+7` (`NewYorkPlus7` tzinfo, `server_zone`, `server_wall`, `server_utc_offset`; `server_to_utc` handles it
-  via America/New_York + 7 h because pandas treats a custom tzinfo as a fixed offset, so `utc_to_server` refuses
-  NY+7). `Account.server_tz` is validated at load (a typo fails instead of shifting stamps). The session table and
-  the MT5 adapter's server-time requests use `server_wall`. `goldbot/ops/server_clock.py` compares the broker's latest
-  tick (read-only `last_tick` via the bridge) with host UTC, infers the server offset and flags a > 5 min mismatch
-  while trading; `health.check_server_clock` (`server_clock:<account>`, fail = Telegram alert) and preflight
-  (`server_clock`, blocking on a measured mismatch) report it. A wrong Athens on a NY+7 broker makes ticks look an
-  hour in the FUTURE, which the stale-tick rule cannot see (the engine clamps negative ages to 0). accounts.yaml
-  stays on Europe/Athens until both items below land. RUNBOOK "Server clock (US-EU DST gap weeks)": the next gap
-  is Mon 26 - Fri 30 Oct 2026, then 15-26 Mar 2027. **Open, for the engine lane (runner.py was off-limits):**
-  (1) `goldbot/engine/runner.py:1102` `_server_clock` uses `ZoneInfo(self.cfg.server_tz)`: change it to
-  `goldbot.data.timeutil.server_wall(now, self.cfg.server_tz)` (naive server wall clock) before any account is set to
-  `NY+7`, or the engine raises on its first tick; (2) entry hook: probe once per bar while the market is open
-  (`server_clock.measure(broker, account_id, symbol, server_tz, now, sessions)`; the engine already holds the
-  broker), keep the latest `ServerClockProbe`, and add `server_clock.entry_block(probe)` as an entry-only reason
-  (never on the exit path), e.g. a `server_clock_mismatch` RiskGate reason; also write it to engine_<account>.json.
-  (3) `settings.yaml` `brokers.*.server_tz` (research rollover nights, `labels/triple_barrier._server_days`) still
-  takes IANA names only; switch to `server_wall` there with a quant review if research should use NY+7.
+  adds `NY+7` (`NewYorkPlus7`, `server_zone`, `server_wall` (tz-aware input only), `server_utc_offset`; pandas treats
+  a custom tzinfo as a fixed offset, so `utc_to_server` refuses NY+7). `Account.server_tz` is validated at load.
+  Every server-clock reader uses `server_wall`: session table, engine `_server_clock` (rollover, Friday cut),
+  `labels.triple_barrier._server_days` (rollover nights, also reached from jobs.py SwapSpec and research attribution),
+  MT5 adapter requests (now tz-aware UTC-labelled datetimes: MT5 reads naive ones in the host zone).
+  `goldbot/ops/server_clock.py` compares a tick with host UTC; a mismatch is called a zone error only when the other
+  known zone explains it, else "host clock or feed". Engine (`_refresh_account`, no extra RPC): signed tick age,
+  `tick_ahead_s` -> gate `tick_from_future` (> 5 s, `RiskLimits.max_tick_ahead_s`), abs age for stale tick/feed/bars,
+  probe -> `server_clock_mismatch`, both start `data_recovering` when they clear; D13 `BrokerSessions` built in
+  run.py, refreshed beside the 60 s model reload (`refresh_sessions`: a raising, slow (> 5 s) or fallback read keeps
+  the last broker table), `eng.set_sessions` -> gate `market_closed`, the same table for stale feed and the probe.
+  Approval-time re-run refreshes the state, so a mismatch or close between proposal and click refuses it. None of
+  these are on the exit path (`_tick_ok` unchanged). engine_<account>.json carries `tick_ahead_s`, `market_closed`,
+  `session_source`, `sessions` (cached table, read by health) and `server_clock`. Health `server_clock:<account>` and
+  preflight `server_clock` (blocking on a mismatch) measure it independently; preflight `bridge_server_tz` blocks when
+  the bridge (`/health` now reports its zone) converts with another zone than the brain. accounts.yaml stays on
+  Europe/Athens. RUNBOOK "Server clock (US-EU DST gap weeks)" and new gate-reason rows; ADR 0005. Not done: settings
+  `brokers.*.server_tz` is not validated at load (triple_barrier raises on a bad name); a pre-existing `_regime`
+  crash on a perfectly flat price series (`pd.qcut` NaN in runner `_regime`) was seen in a test and left alone.
   **Needs the owner:** on Mon 26 Oct 2026 during market hours run `goldbot run health` and read
-  `server_clock:icm-demo`; if it reads UTC+3 vs Athens UTC+2, halt entries for that week (RUNBOOK step 4) until the
-  runner change lands and `server_tz: NY+7` is deployed. Vantage's help centre also puts server midnight at 5 pm New
-  York (likely NY+7) but publishes no switch dates: measure it the same way.
+  `server_clock:icm-demo`; if it reads UTC+3 (NY+7) vs Athens UTC+2, the engine is already refusing entries: set
+  `server_tz: NY+7` for icm accounts on the brain and the MT5 box (RUNBOOK steps 3-4). Vantage's help centre also puts
+  server midnight at 5 pm New York (likely NY+7) but publishes no switch dates: measure it the same way.
 - Starting account and daily target (2026-10-10, owner delegated; `docs/decisions/0004-starting-account-and-daily-target.md`):
   at £50 (~$66.50 at GBPUSD 1.33) RiskGate refuses every trade on every timeframe (0.01 lot risks 16.4% on 15m up to
   354% on 1w at gold $4,150 and estimated ATRs; the 1:20 margin floor alone needs ~£470). £50/day is +100%/day;

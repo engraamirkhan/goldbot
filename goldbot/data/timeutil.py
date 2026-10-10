@@ -77,8 +77,8 @@ def server_zone(server_tz: str) -> tzinfo:
 def server_wall(utc_ts: pd.DatetimeIndex | pd.Timestamp, server_tz: str) -> pd.DatetimeIndex:
     """Naive server wall-clock values for UTC instants (what the MT5 terminal displays and expects in requests)."""
     idx = pd.DatetimeIndex([utc_ts] if isinstance(utc_ts, pd.Timestamp) else utc_ts)
-    if idx.tz is None:
-        idx = idx.tz_localize(UTC)
+    if idx.tz is None:      # a naive stamp could already be server time: guessing UTC would shift it silently
+        raise ValueError("server_wall needs tz-aware UTC instants")
     if server_tz == NY_PLUS_7:
         return idx.tz_convert(NEW_YORK).tz_localize(None) + pd.Timedelta(_NY_SHIFT)
     return idx.tz_convert(ZoneInfo(server_tz)).tz_localize(None)

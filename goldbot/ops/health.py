@@ -40,7 +40,7 @@ from pydantic import Field
 
 from goldbot.base import FrozenRecord, Record, UtcTimestamp, write_atomic
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
-from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
+from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
 from goldbot.data.crossfeed import check_reconciliation
 
 Status = Literal["ok", "warn", "fail"]
@@ -118,6 +118,7 @@ class HealthContext(Record):
     sessions: SessionTable = DEFAULT_SESSIONS
     bridge_probe: Callable[[str], str | None] | None = None   # url -> None when /health answers, else why not
     tick_reader: Callable[[str, str], Any] | None = None      # (account_id, symbol) -> broker Tick (read-only); None: no bridge
+    clock: Callable[[], pd.Timestamp] | None = None           # host UTC read after a network probe; None: use `now`
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -139,6 +140,7 @@ class HealthContext(Record):
         return cls(state_dir=Path(state_dir), now=now if now is not None else pd.Timestamp.now("UTC"),
                    settings=settings, settings_error=s_err, accounts=accs, accounts_error=a_err,
                    get_secret=accounts.get_secret, bridge_probe=lambda url: probe_health(url, BRIDGE_TIMEOUT_S),
+                   clock=lambda: pd.Timestamp.now("UTC"),
                    tick_reader=bridge_tick_reader)
 
 
@@ -993,12 +995,23 @@ def check_bridge(ctx: HealthContext, account_id: str) -> Check | None:
     return Check(name=name, status="ok", reason="bridge answers /health")
 
 
+def _engine_sessions(ctx: HealthContext, account_id: str) -> SessionTable:
+    """The broker session table the engine last wrote to engine_<account>.json (D13), else `ctx.sessions`."""
+    try:
+        cached = _read_json(ctx.state_dir / f"engine_{account_id}.json").get("sessions")
+    except (ValueError, OSError, AttributeError):
+        cached = None
+    table = session_table_from_cache(cached) if cached else None
+    return table if table is not None else ctx.sessions
+
+
 def check_server_clock(ctx: HealthContext, account: AccountRef) -> Check | None:
     """The broker's real UTC offset against the configured server_tz (goldbot/ops/server_clock.py). Fails on a
     mismatch over 5 min while the market is open: an entry must not open on a clock that is an hour off (session
     table, rollover gate, Friday cut, tick and bar stamps); exits are never gated by it. Omitted without a tick reader,
-    a server_tz or a bridge for the account. The tick-age part of check_engine stays the feed-staleness signal; this
-    check adds the direction it cannot see (the engine clamps a tick from the future to age 0)."""
+    a server_tz or a bridge for the account. The engine runs the same assessment on every refresh (entry gate
+    `server_clock_mismatch`); this check measures it independently of the engine. "Now" is read AFTER the tick
+    (`ctx.clock`), and the market-open test uses the engine's cached broker session table when it has one."""
     if ctx.tick_reader is None or account.server_tz is None:
         return None
     from goldbot.ops import server_clock
@@ -1009,7 +1022,12 @@ def check_server_clock(ctx: HealthContext, account: AccountRef) -> Check | None:
         return Check(name=name, status="warn", reason=f"not measured: latest tick unreadable ({type(exc).__name__})")
     if tick is None:
         return None
-    p = server_clock.assess(account.account_id, account.server_tz, tick.ts_utc, ctx.now, ctx.sessions)
+    now = ctx.clock() if ctx.clock is not None else ctx.now
+    try:
+        p = server_clock.assess(account.account_id, account.server_tz, tick.ts_utc, now,
+                                _engine_sessions(ctx, account.account_id))
+    except Exception as exc:
+        return Check(name=name, status="warn", reason=f"not measured: probe failed ({type(exc).__name__})")
     status: Status = "fail" if p.status == "mismatch" else "ok"     # market closed: not measurable, no alert noise
     return Check(name=name, status=status, reason=p.reason)
 

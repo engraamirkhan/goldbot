@@ -87,6 +87,11 @@ def _last_tick(url: str, token: str, symbol: str) -> Any:
     return RemoteBroker(url, token, name="preflight").last_tick(symbol)     # read-only RPC; never an order call
 
 
+def _bridge_tz(url: str) -> str | None:
+    from goldbot.execution.bridge import bridge_server_tz
+    return bridge_server_tz(url, health.BRIDGE_TIMEOUT_S)
+
+
 def _load_accounts() -> dict[str, Any]:
     from goldbot.ops import accounts
     return dict(accounts.load_accounts())
@@ -102,6 +107,7 @@ class PreflightContext(Record):
     bridge_probe: Callable[[str], str | None] | None = None        # url -> None when /health answers
     terminal_account: Callable[[str, str], Any] = _terminal_account
     tick_reader: Callable[[str, str, str], Any] = _last_tick        # (url, token, symbol) -> latest Tick
+    bridge_tz: Callable[[str], str | None] = _bridge_tz             # url -> the bridge's server_tz (None: not reported)
     load_accounts: Callable[[], dict[str, Any]] = _load_accounts
     disk_usage: Callable[[str], Any] = shutil.disk_usage
     meminfo: Callable[[], dict[str, int]] = read_meminfo
@@ -124,7 +130,7 @@ def _has(ctx: PreflightContext, key: str) -> bool:
 def _health_ctx(ctx: PreflightContext, settings: Settings | None, err: str | None) -> health.HealthContext:
     return health.HealthContext(state_dir=ctx.state_dir, now=pd.Timestamp.now("UTC"), settings=settings,
                                 settings_error=err, get_secret=ctx.get_secret, disk_usage=ctx.disk_usage,
-                                bridge_probe=ctx.bridge_probe)
+                                bridge_probe=ctx.bridge_probe, clock=lambda: pd.Timestamp.now("UTC"))
 
 
 def _from_check(c: health.Check, name: str, fix: str, *, blocking: bool = True) -> Item:
@@ -203,6 +209,7 @@ def run_preflight(ctx: PreflightContext) -> list[Item]:
                           detail="not checked: the bridge does not answer yet"))
     else:
         items.append(_terminal_item(ctx, url, token, acc_fix))
+        items.append(_bridge_tz_item(ctx, url))
         items.append(_server_clock_item(ctx, url, token, hctx))
 
     # 6. dashboard build
@@ -256,6 +263,28 @@ def _terminal_item(ctx: PreflightContext, url: str, token: str, fix: str) -> Ite
         return Item(name="terminal_account", status="fail", fix=fix, detail=why)
     return Item(name="terminal_account", status="ok", fix=fix,
                 detail=f"terminal logged in to the registered {acc.mode} account on {acc.server}")
+
+
+def _bridge_tz_item(ctx: PreflightContext, url: str) -> Item:
+    """The MT5 box converts MT5 stamps with ITS accounts.yaml server_tz; it must equal this brain's (an engine on the
+    brain reads the session table, rollover and Friday cut with its own). Differing zones block."""
+    fix = ("make server_tz for this account identical in config/accounts.yaml on the brain and the MT5 box (deploy the "
+           f"same commit to both), then `sudo systemctl restart goldbot-bridge@{ctx.account_id}`")
+    try:
+        acc = ctx.load_accounts().get(ctx.account_id)
+    except Exception as exc:
+        return Item(name="bridge_server_tz", status="warn", blocking=False, fix=fix,
+                    detail=f"not checked: config/accounts.yaml does not load ({type(exc).__name__})")
+    if acc is None:
+        return Item(name="bridge_server_tz", status="warn", blocking=False, fix=fix, detail="not checked: account unknown")
+    theirs = ctx.bridge_tz(url)
+    if theirs is None:
+        return Item(name="bridge_server_tz", status="warn", blocking=False, fix=fix + " (update the MT5 box first: "
+                    "this bridge does not report its server_tz)", detail="the bridge does not report its server_tz")
+    if theirs != acc.server_tz:
+        return Item(name="bridge_server_tz", status="fail", fix=fix,
+                    detail=f"the bridge converts with {theirs}, this brain uses {acc.server_tz}")
+    return Item(name="bridge_server_tz", status="ok", fix=fix, detail=f"bridge and brain both use {theirs}")
 
 
 def _server_clock_item(ctx: PreflightContext, url: str, token: str, hctx: health.HealthContext) -> Item:

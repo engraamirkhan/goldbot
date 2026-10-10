@@ -7,7 +7,8 @@
 # server_tz: the broker's MT5 server clock. `Europe/Athens` = UTC+2/+3 switching on EU dates; `NY+7` = UTC+2/+3
 # switching on US dates ("midnight = 5 pm New York", which IC Markets documents). They differ by one hour in the
 # US-EU gap weeks; the `server_clock:<account>` health check measures which one the broker runs (RUNBOOK "Server
-# clock"). Keep Europe/Athens until the engine resolves NY+7 (HANDOFF) and the check confirms it.
+# clock"). Keep Europe/Athens until the check confirms UTC+3 in a gap week (next: 26-30 Oct 2026); same value on
+# the brain and the MT5 box.
 #
 # mode: demo | live.  Phases 0-2 run only on demo accounts; live accounts are enabled by the
 # phase gate plus a typed confirmation, never by editing this file alone.

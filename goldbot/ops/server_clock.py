@@ -32,10 +32,11 @@ import pandas as pd
 
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
-from goldbot.data.timeutil import server_utc_offset
+from goldbot.data.timeutil import NY_PLUS_7, server_utc_offset
 
 MISMATCH_TOLERANCE = pd.Timedelta(minutes=5)
 OFFSET_ROUND = pd.Timedelta(hours=1)          # MT5 server clocks run whole-hour offsets (UTC+2/+3)
+KNOWN_ZONES = ("Europe/Athens", NY_PLUS_7)     # a mismatch is called a zone error only when the other one explains it
 
 ProbeStatus = Literal["ok", "mismatch", "not_measured"]
 
@@ -82,14 +83,17 @@ def assess(account_id: str, server_tz: str, tick_utc: pd.Timestamp, now: pd.Time
                                     reason=f"market closed: last tick {lag.total_seconds() / 60:.0f} min old, "
                                            f"offset not measurable ({server_tz} gives {cfg})")
     offset_gap = pd.Timedelta(configured) - inferred          # == lag when the only error is the zone
-    if inferred != pd.Timedelta(configured) and abs(lag - offset_gap) <= MISMATCH_TOLERANCE:
-        hint = f"server clock reads {_fmt(_hours(inferred))} but {server_tz} gives {cfg}"
+    zone = next((z for z in KNOWN_ZONES if z != server_tz and pd.Timedelta(server_utc_offset(z, now)) == inferred), None)
+    if zone is not None and inferred != pd.Timedelta(configured) and abs(lag - offset_gap) <= MISMATCH_TOLERANCE:
+        hint = (f"server clock reads {_fmt(_hours(inferred))}, which is {zone} now, but {server_tz} gives {cfg} "
+                f"(US-EU DST gap week): server_tz is wrong")
     else:
-        way = "from the future" if lag < pd.Timedelta(0) else "stale"
-        hint = (f"tick {way} by {abs(lag).total_seconds() / 60:.0f} min (stale feed, wrong server_tz or host clock; "
-                f"{server_tz} gives {cfg})")
+        way = "ahead of" if lag < pd.Timedelta(0) else "behind"
+        hint = (f"last tick {abs(lag).total_seconds() / 60:.0f} min {way} the host clock and no known server zone "
+                f"explains it: host clock or feed (check `chronyc tracking` / `w32tm /query /status`; {server_tz} "
+                f"gives {cfg})")
     return ServerClockProbe(status="mismatch", **base,
-                            reason=f"{hint}: entries blocked until server_tz matches (RUNBOOK: server clock); "
+                            reason=f"{hint}; the engine refuses entries while this lasts (server_clock_mismatch), "
                                    f"exits unaffected")
 
 

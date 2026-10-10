@@ -761,7 +761,10 @@ nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what
 | `supervisor_halt` | The supervisor halted on combined limits (`combined_daily_cap`, `combined_weekly_cap`, `combined_drawdown_halt` in `state\supervisor.json`), **or** its heartbeat is missing/older than 60 s, or `supervisor.json` is unreadable. | Check `nssm status goldbot-supervisor` and the Feeds tab heartbeat; restart it if stopped. For a cap halt see the `daily_cap` row. |
 | `drawdown_halt` | This account's equity fell 12% below its high-water mark. | Investigate before anything else. The dashboard Re-arm clears only the owner halt; the code has no command that clears this stage (an engine restart resets it, because the stage is kept in memory). |
 | `news_blackout` | Within 15 min before to 30 min after a tier-1 event (CPI, NFP, FOMC, PCE), or 30 min after a high-relevance news shock. The active event is in `state\engine_<account>.json` under `blackout`. | Wait. If it never clears, check `calendar_archive` on the Feeds tab. |
-| `stale_data` | The last tick is older than 20 s. | Check the MT5 terminal is open, logged in and connected; the Feeds tab shows "Last tick". |
+| `stale_data` | The last tick is older than 20 s (either way: a tick stamped in the future counts too). | Check the MT5 terminal is open, logged in and connected; the Feeds tab shows "Last tick". |
+| `tick_from_future` | The last tick is stamped more than 5 s ahead of this server's clock: wrong `server_tz` in a DST gap week, or a host or broker clock fault. | See "Server clock (US-EU DST gap weeks)" below. |
+| `server_clock_mismatch` | The broker's measured UTC offset differs from `server_tz` by more than 5 min while gold trades (`server_clock` in `engine_<account>.json`). Clears after 60 s of agreeing ticks. | See "Server clock (US-EU DST gap weeks)" below. |
+| `market_closed` | The broker's session table (read once per server day; static hours if the read fails) says the market is closed, e.g. a holiday early close. | Wait for the reopen; `session_source` in `engine_<account>.json` says whether the broker's own hours are used. |
 | `spread_too_wide` | Spread above 45 points ($0.45). | Usually rollover or news; wait. |
 | `max_positions` | Two positions already open on this account. | Normal. |
 | `daily_cap` / `weekly_cap` | This account lost 2% / 5% measured from its equity when the engine started. | The engine does not yet reset its day/week starting equity at 00:00 UTC (`new_day` in `goldbot/risk/gate.py` is not called), so these clear only when the engine restarts. Review the losses before restarting. |
@@ -835,21 +838,27 @@ Next gap trading days (check on one of them, during market hours):
 | March 2027 | Mon 15 Mar - Fri 26 Mar 2027 | UTC+3 | UTC+2 |
 | Oct/Nov 2027 | Mon 1 Nov - Fri 5 Nov 2027 | UTC+3 | UTC+2 |
 
-Steps on the brain (or the VPS), on a gap day while the market is open:
-1. `goldbot run health` (or `python -m goldbot.ops.run health`) and read the `server_clock:<account>` line.
-   `ok ... server clock UTC+3 matches NY+7` means the configured zone is right.
-2. A `fail ... server clock reads UTC+3 but Europe/Athens gives UTC+2` means the zone is wrong. Cross-check by eye:
-   the MT5 terminal's Market Watch shows the server time; subtract the real UTC time (`date -u` on the brain).
-3. Fix: set `server_tz` for that account in `config/accounts.yaml` to the zone the broker runs (`NY+7` or
-   `Europe/Athens`) on the brain AND on the MT5 box (the bridge converts with its own copy), commit it, deploy, then
-   restart the bridge and the engine. Run `goldbot run health` again until the line is `ok`.
-4. Until the engine reads this check itself (see HANDOFF), stop new entries with a halt on the dashboard while the
-   line fails; exits are automatic and are not affected.
+The engine runs the same comparison on every account refresh and refuses entries while it fails (gate reason
+`server_clock_mismatch`, plus `tick_from_future` when ticks are stamped more than 5 s ahead of this server's
+clock); exits (stops, time exits, the weekend rule, the kill switch) are never held back by it.
 
-`NY+7` needs the engine change listed in HANDOFF (`goldbot/engine/runner.py` `_server_clock` must resolve the zone
-with `goldbot.data.timeutil.server_zone`); until it lands, keep `server_tz: Europe/Athens` and use the halt in
-step 4 during the gap days. `goldbot run preflight` runs the same measurement (`server_clock`, blocking on a
-measured mismatch).
+Steps on the brain (or the VPS), on a gap day while the market is open:
+1. `goldbot run preflight` first: its `time_sync` line must be ✅ (chrony synchronised); a host clock that is off
+   reads as a mismatch too. Then `goldbot run health` (or `python -m goldbot.ops.run health`) and read the
+   `server_clock:<account>` line. `ok ... server clock UTC+3 matches NY+7` means the configured zone is right.
+2. `fail ... server clock reads UTC+3, which is NY+7 now, but Europe/Athens gives UTC+2 (US-EU DST gap week)`
+   means the zone is wrong. Any other `fail` ("no known server zone explains it: host clock or feed") is NOT a zone
+   problem: check the host clock (`chronyc tracking` on the brain, `w32tm /query /status` on Windows; the offset must
+   be well under a second) and the feed. Cross-check by eye: the MT5 terminal's Market Watch shows the server time;
+   subtract the real UTC time (`date -u` on the brain).
+3. Fix a wrong zone: set `server_tz` for that account in `config/accounts.yaml` to the zone the broker runs (`NY+7`
+   or `Europe/Athens`) on the brain AND on the MT5 box (the bridge converts with its own copy; preflight's
+   `bridge_server_tz` line blocks when the two differ), commit it, deploy, then restart the bridge and the engine.
+   Run `goldbot run health` again until the line is `ok`.
+4. Set `NY+7` only on a gap day when the probe has shown UTC+3 against Athens' UTC+2 (step 2), never on the
+   research alone. Outside the gap weeks the two zones are identical and nothing can be learned.
+
+`goldbot run preflight` runs the same measurement (`server_clock`, blocking on a measured mismatch).
 
 ### Updating the VPS to a new version
 
