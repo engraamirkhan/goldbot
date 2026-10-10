@@ -76,6 +76,8 @@ from goldbot.research.director import (
     ShadowEvidence,
     build_plan,
     holdout_window,
+    load_attribution,
+    load_hypotheses,
     quarter_budget,
 )
 from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
@@ -546,7 +548,8 @@ def research_director(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     r = ctx.settings.research
     plan = build_plan(slot, sorted(SPECIALISTS), read_rows(ctx.trials.path), shadow, agents,
                       quarter_budget=quarter_budget(r), monthly_total=budget, trial_budget_per_month=r.trial_budget_per_month,
-                      floor=r.director_floor, cap=cap, holdout=holdout_window(r))
+                      floor=r.director_floor, cap=cap, holdout=holdout_window(r),
+                      attribution=load_attribution(ctx.state_dir), hypotheses=load_hypotheses())
     plan.save(ctx.state_dir / PLAN_FILE)
     return {"quarter": plan.quarter, "quarter_used": plan.quarter_used, "budget": plan.budget,
             "grid_budget": plan.grid_budget, "unallocated": plan.unallocated, "focus": [f.family for f in plan.focus],

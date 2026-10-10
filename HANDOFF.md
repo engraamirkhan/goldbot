@@ -66,6 +66,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   budget without a plan under 21 days old) and stops when the quarter's budget is spent. The `research_director` staff
   agent explains the plan (`read_research_plan`) and may file two hypotheses; the analyst prefers the plan's focus
   families. Boundary: it decides what to research, never what is promoted or traded; promotion stays with the gates.
+  Two more inputs (2026-10-10): (1) the daily attribution report (`state/attribution.json`): only family cells not
+  marked noise, from a report dated at or before the plan and at most 14 days old (champion-path shadow trades, out of
+  sample by construction); the net-R t-stat is shrunk by n/(n+100), clipped to +-1 at t = 3, and tilts each family's
+  evidence share of the pool by at most +-25% (the `director_floor` is never tilted; no report = the evidence-only
+  plan, bit for bit). (2) `docs/research/hypotheses.md` section B, parsed read-only: a family whose row is "retired"
+  gets 0 unless it carries new out-of-sample evidence (attribution or shadow t-stat >= 2). With today's file that
+  retires breakout, intraday_momentum, mean_reversion, session_open and trend, so tsmom gets the whole planned budget
+  (owner-visible on the research page). The plan records `evidence_budget` (evidence only) and `moves` (which input
+  moved which family's budget and share, by how much).
 - Approvals across processes (`telegram/bus.py`): engines, the API and the Telegram service are separate services,
   so engines publish proposals to `state/approvals/pending/`, the dashboard or Telegram writes a decision file
   (created exclusively: first decision wins), and the engine applies it on its next tick, re-running the RiskGate,
@@ -214,8 +223,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   table cell. Cells under `attribution.min_trades` (30) are "noise". Champion-path trades only in the breakdowns
   (challengers apart). The improvement agent and research analyst read it first via `read_attribution`; hypotheses
   still go only through `file_hypothesis`; gap_watch caps unchanged. Reporting only: nothing is traded or changed.
-  Open: live realised R per position (needs the engine trade record, item 8), the research director's priority input
-  and a dashboard view (item 12's other criteria).
+  Open: live realised R per position (needs the engine trade record, item 8) and a dashboard view (item 12's other
+  criteria). The research director now reads it as a capped, noise-aware input (see the director bullet).
 - Macro data pipeline (2026-10-10, TRADER_LIFECYCLE gap 2): `.github/workflows/data-macro.yml` (Tuesdays 04:41 UTC
   and by hand) pulls DFII10, T10YIE, DTWEXBGS, GVZCLS and DGS2 from FRED's public fredgraph CSV (no key) via
   `scripts/fred_macro.py` and publishes `macro_fred.parquet` on release `macro-v1`. Rows carry value_date, vintage

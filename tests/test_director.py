@@ -1,6 +1,7 @@
 """Research director: evidence per family, the budget allocation rule, the plan file, and monthly_research using it."""
 import json
 import math
+import random
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,10 @@ from goldbot.config import load_settings
 from goldbot.data.store import Store
 from goldbot.ops import jobs
 from goldbot.ops.jobs import JobContext, monthly_research, research_budget, research_director
+from goldbot.research.attribution import REPORT_FILE
 from goldbot.research.director import (
+    ATTRIBUTION_FILE,
+    ATTRIBUTION_MAX_AGE_DAYS,
     DEFAULT_HOLDOUT_FROM,
     DEFAULT_QUARTER_BUDGET,
     PLAN_FILE,
@@ -24,9 +28,13 @@ from goldbot.research.director import (
     allocate,
     build_plan,
     holdout_window,
+    load_attribution,
+    load_hypotheses,
     quarter_budget,
     quarter_usage,
+    retired_families,
     score_family,
+    tilted_shares,
 )
 from goldbot.research.model_registry import ModelRegistry
 from goldbot.research.pipeline import ResearchResult
@@ -162,7 +170,8 @@ def _fake_walk_forward(ctx: JobContext, spec: Any, end: pd.Timestamp, months: in
                                                     "all_candidates": {"n": 400}, "model_filtered": {"n": 30, "dsr": 0.3}})
 
 
-def test_research_director_job_writes_the_plan_from_the_registry(tmp_path):
+def test_research_director_job_writes_the_plan_from_the_registry(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "load_hypotheses", lambda: None)     # the real portfolio retires families: see below
     ctx = _ctx(tmp_path)
     ctx.trials.record(agent_id="a", family="trend", config={}, feature_version="f1", rationale="r",
                       results={"oof_auc": 0.6, "all_candidates": {"n": 500}, "model_filtered": {"n": 90, "dsr": 0.8}})
@@ -242,3 +251,152 @@ def test_director_role_reads_the_plan_and_runs_before_the_research_agents(tmp_pa
     d = tools.definitions(["read_research_plan"])[0]
     assert d["strict"] is True and d["input_schema"] == {"type": "object", "properties": {}, "required": [],
                                                          "additionalProperties": False}
+
+
+# ------------------------------------------------------------------------------------------- attribution and retirement
+HYP = """# Hypothesis portfolio
+
+## A. Ranked portfolio
+
+| Rank | ID | Hypothesis | Status |
+|---|---|---|---|
+| 1 | H-01 | **Slow TSMOM** | proposed |
+
+## B. Retired: do not re-test without new evidence
+
+| ID | Idea | Status | Trials | Result | Reason retired |
+|---|---|---|---|---|---|
+| R-01 | mean_reversion (15m; RSI fades) | retired | #3 | none | no edge |
+| R-04 | range breakout (1h) | retired | #6 | none | no edge |
+| R-06 | tsmom at 1h/4h horizons | failed; superseded by H-01 | #16 | none | costs |
+| R-08 | Pre-FOMC drift | retired from the literature (never trialled) | none | - | gone |
+
+## C. Ledger
+"""
+
+
+def _rich_trials() -> list[dict[str, Any]]:
+    """Registry evidence for every family, unequal, so the evidence split is not flat."""
+    aucs = {"breakout": 0.53, "intraday_momentum": 0.52, "mean_reversion": 0.55, "session_open": 0.54, "trend": 0.56,
+            "tsmom": 0.57}
+    return [_trial(i + 1, f, auc=a, n_oof=400) for i, (f, a) in enumerate(sorted(aucs.items()))]
+
+
+def _report(cells: dict[str, tuple[int, float, str]], as_of: pd.Timestamp = NOW - pd.Timedelta(days=1),
+            min_trades: int = 30) -> dict[str, Any]:
+    fam = {f: {"n": n, "mean_r_net": 0.05 if t > 0 else -0.05, "t_stat": t, "verdict": v} for f, (n, t, v) in cells.items()}
+    return {"as_of": as_of.isoformat(), "min_trades": min_trades, "breakdowns": {"family": fam}}
+
+
+def _plan_with(**kw: Any) -> ResearchPlan:
+    trials = kw.pop("trials", None) or _rich_trials()
+    return build_plan(NOW, FAMILIES, trials, [], [], quarter_budget=100, monthly_total=60, trial_budget_per_month=0,
+                      floor=2, cap=None, **kw)
+
+
+def test_attribution_shift_is_capped_at_25_percent_of_the_evidence_split_and_the_floor_is_untouched():
+    extreme = _report({"tsmom": (10_000, 60.0, "positive"), "trend": (10_000, -60.0, "negative"),
+                       "breakout": (5_000, 40.0, "positive")})
+    base, plan = _plan_with(), _plan_with(attribution=extreme)
+    assert plan.evidence_budget == base.budget and sum(plan.budget.values()) == 60
+    assert plan.budget["tsmom"] > base.budget["tsmom"] and plan.budget["trend"] < base.budget["trend"]
+    att = [m for m in plan.moves if m.source == "attribution"]
+    assert {m.family for m in att} == set(FAMILIES)        # every share in the pool moved; each one is recorded
+    pool = 60 - 2 * len(FAMILIES)
+    for m in att:
+        assert m.shift_pct is not None and abs(m.shift_pct) <= 25.0 + 1e-6
+        assert m.share_before is not None and m.share_after is not None
+        assert abs(m.share_after - m.share_before) <= 0.25 * m.share_before + 1e-6
+        # in trials: within 25% of the evidence-based pool share, plus one unit of rounding
+        assert abs(m.budget_after - m.budget_before) <= 0.25 * m.share_before * pool + 1
+    assert sum(m.share_after or 0.0 for m in att) == pytest.approx(1.0)
+    assert all(v >= 2 for v in plan.budget.values())       # director_floor is never tilted
+    # the bound holds for any terms, not just this case
+    rng = random.Random(7)
+    for _ in range(200):
+        ev = {f: rng.choice([0.0, rng.random() * 3]) for f in FAMILIES}
+        b, t = tilted_shares(ev, {f: rng.uniform(-1, 1) for f in FAMILIES})
+        assert sum(t.values()) == pytest.approx(1.0)
+        assert all(abs(t[f] - b[f]) <= 0.25 * b[f] + 1e-12 for f in FAMILIES)
+
+
+def test_noise_cells_stale_or_future_reports_are_ignored():
+    base = _plan_with()
+    noise = _report({"tsmom": (29, 9.0, "noise"), "trend": (500, -9.0, "noise")})
+    future = _report({"tsmom": (500, 9.0, "positive")}, as_of=NOW + pd.Timedelta(hours=1))
+    stale = _report({"tsmom": (500, 9.0, "positive")}, as_of=NOW - pd.Timedelta(days=ATTRIBUTION_MAX_AGE_DAYS + 1))
+    for rep in (noise, future, stale):
+        plan = _plan_with(attribution=rep)
+        assert plan.budget == base.budget and plan.moves == []
+        assert all(s.attribution is not None and not s.attribution.used and s.attribution.term == 0.0
+                   for s in plan.evidence)
+    assert "after the plan" in (_plan_with(attribution=future).attribution_note or "")
+    # a noise cell cannot revive a retired family either
+    plan = _plan_with(attribution=_report({"mean_reversion": (29, 9.0, "noise")}), hypotheses=HYP)
+    assert plan.budget["mean_reversion"] == 0
+
+
+def test_retired_family_gets_zero_unless_it_carries_new_out_of_sample_evidence():
+    assert retired_families(HYP, FAMILIES) == {"mean_reversion": ("R-01", "retired"), "breakout": ("R-04", "retired")}
+    plan = _plan_with(hypotheses=HYP)
+    assert plan.budget["mean_reversion"] == 0 and plan.budget["breakout"] == 0 and sum(plan.budget.values()) == 60
+    assert plan.budget["tsmom"] > 0                          # "failed; superseded" is not retired
+    retired_moves = {m.family: m for m in plan.moves if m.source == "hypotheses_retired"}
+    assert retired_moves["mean_reversion"].budget_after == 0 and retired_moves["mean_reversion"].budget_before > 0
+    assert any("retired" in r for f in plan.focus if f.family == "breakout" for r in f.reasons)
+    # new evidence: a non-noise attribution cell with t >= 2 brings it back
+    revived = _plan_with(hypotheses=HYP, attribution=_report({"mean_reversion": (300, 2.5, "positive")}))
+    mr = next(s for s in revived.evidence if s.family == "mean_reversion")
+    assert revived.budget["mean_reversion"] >= 2 and not mr.retired and mr.new_evidence
+    weak = _plan_with(hypotheses=HYP, attribution=_report({"mean_reversion": (300, 1.5, "indistinguishable from zero")}))
+    assert weak.budget["mean_reversion"] == 0
+    # a lookahead-dirty family stays at 0 whatever its attribution
+    dirty = _rich_trials() + [_trial(99, "trend", auc=0.6, lookahead=["x"])]
+    assert _plan_with(trials=dirty, attribution=_report({"trend": (900, 8.0, "positive")})).budget["trend"] == 0
+
+
+def test_real_hypotheses_doc_is_parsed_read_only():
+    text = load_hypotheses()
+    assert text is not None
+    retired = retired_families(text, FAMILIES)
+    assert set(retired) == {"breakout", "intraday_momentum", "mean_reversion", "session_open", "trend"}
+    assert "tsmom" not in retired and load_hypotheses("/nonexistent/hypotheses.md") is None
+    assert ATTRIBUTION_FILE == REPORT_FILE
+
+
+def test_plan_is_deterministic_for_the_same_inputs():
+    kw: dict[str, Any] = {"attribution": _report({"tsmom": (400, 3.1, "positive"), "trend": (120, -2.2, "negative")}),
+                          "hypotheses": HYP}
+    a, b = _plan_with(**kw), _plan_with(**kw)
+    assert a.model_dump_json() == b.model_dump_json() and a.moves
+    shuffled = build_plan(NOW, list(reversed(FAMILIES)), list(reversed(_rich_trials())), [], [], quarter_budget=100,
+                          monthly_total=60, trial_budget_per_month=0, floor=2, cap=None, **kw)
+    assert shuffled.model_dump_json() == a.model_dump_json()
+
+
+def test_missing_attribution_leaves_the_plan_unchanged(tmp_path):
+    base = _plan_with()
+    for missing in (None, {}, {"as_of": "garbage"}, load_attribution(tmp_path)):
+        plan = _plan_with(attribution=missing)
+        assert plan.budget == base.budget == plan.evidence_budget and plan.moves == []
+        assert [f.model_dump() for f in plan.focus] == [f.model_dump() for f in base.focus]
+    (tmp_path / ATTRIBUTION_FILE).write_text("{broken")
+    assert load_attribution(tmp_path) is None
+    # a plan file written before these fields existed still loads
+    old = json.loads(base.model_dump_json())
+    for k in ("evidence_budget", "moves", "attribution_as_of", "attribution_note", "hypotheses_note"):
+        old.pop(k)
+    assert ResearchPlan.model_validate(old).moves == []
+
+
+def test_research_director_job_reads_attribution_and_the_hypothesis_portfolio(tmp_path):
+    ctx = _ctx(tmp_path)
+    now = pd.Timestamp.now("UTC")
+    report = _report({"tsmom": (400, 3.0, "positive")}, as_of=now - pd.Timedelta(hours=1))
+    (tmp_path / ATTRIBUTION_FILE).write_text(json.dumps(report))
+    research_director(ctx, now)
+    plan = ResearchPlan.load(tmp_path / PLAN_FILE)
+    assert plan is not None and plan.attribution_as_of is not None and plan.hypotheses_note is not None
+    for f in ("breakout", "intraday_momentum", "mean_reversion", "session_open", "trend"):
+        assert plan.budget[f] == 0                         # retired in docs/research/hypotheses.md section B
+    assert plan.budget["tsmom"] == sum(plan.budget.values()) > 0
