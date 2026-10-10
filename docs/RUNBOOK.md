@@ -107,8 +107,18 @@ log. If the bridge is unreachable the engine exits and restarts every 10 s; it t
 positions keep their broker-side stop and target.
 
 ### 0.5 Daily use
-Only your Mac's browser (the dashboard) and Telegram (the one-click Approve). Updates:
-`cd /opt/goldbot && sudo -u goldbot git pull` on each VM, then `sudo systemctl restart 'goldbot-*'`.
+Only your Mac's browser (the dashboard) and Telegram (the one-click Approve).
+
+**Updates: one click on Telegram, or by hand.** Nothing is ever deployed without you.
+* When a new version is merged and has passed CI, Telegram shows *New version ready* with the list of changes and
+  **[Deploy] [Skip]**. Deploy restarts the services within a minute (never while an entry waits for your click; open
+  positions keep their broker-side stops and the engine reconciles on start), checks every service is still running
+  after 60 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
+* The MT5 box follows only versions you approved (needs `goldbot accounts set github-token` on the brain with
+  *Deployments: write*; without it, update the MT5 box by hand).
+* By hand on either VM: `sudo goldbot-deploy latest` (or a specific commit id). Same checks, same rollback.
+* The health check `deploy` shows the last result. If the deploy script itself changed, review it and run
+  `sudo install -m 755 -o root -g root /opt/goldbot/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy`.
 
 ---
 

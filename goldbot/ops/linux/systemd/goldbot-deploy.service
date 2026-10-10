@@ -1,0 +1,9 @@
+[Unit]
+Description=goldbot deploy: apply a version the owner approved (Telegram one click) or follow approved versions (MT5 box)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# root-owned copy installed by the bootstrap; the repo copy is never executed as root
+ExecStart=/usr/local/sbin/goldbot-deploy

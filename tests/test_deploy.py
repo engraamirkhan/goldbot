@@ -87,3 +87,15 @@ def test_marking_a_deployment_for_the_mt5_box(token, status, expected):
         status_code = status
     assert expected in mark_deployed(B, token, post=lambda *a, **k: R())
     assert mark_deployed("main", "t", post=lambda *a, **k: R()) == "invalid sha"
+
+
+def test_health_reports_the_last_deploy(tmp_path):
+    from goldbot.ops import health
+    from tests.test_health import make_ctx
+    ctx = make_ctx(tmp_path)
+    assert health.check_deploy(ctx).status == "ok"
+    log = tmp_path / "deploys.jsonl"
+    for result, status in (("deployed", "ok"), ("rolled_back", "warn"), ("failed", "fail")):
+        with log.open("a") as f:
+            f.write(json.dumps({"result": result, "to": B, "role": "brain", "detail": "x"}) + "\n")
+        assert health.check_deploy(ctx).status == status

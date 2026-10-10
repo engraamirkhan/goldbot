@@ -10,7 +10,11 @@ from goldbot.base import create_exclusive, write_atomic
 def test_durable_write_fsyncs_the_file_and_the_directory(tmp_path, monkeypatch):
     calls: list[int] = []
     real = os.fsync
-    monkeypatch.setattr(os, "fsync", lambda fd: (calls.append(fd), real(fd))[1])
+
+    def counting(fd: int) -> None:
+        calls.append(fd)
+        real(fd)
+    monkeypatch.setattr(os, "fsync", counting)
     write_atomic(tmp_path / "orders.json", '{"sent": {}}')
     assert (tmp_path / "orders.json").read_text() == '{"sent": {}}'
     assert len(calls) == (1 if os.name == "nt" else 2)                  # file, then directory

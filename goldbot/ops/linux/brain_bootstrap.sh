@@ -70,6 +70,16 @@ chmod 755 /usr/local/bin/goldbot-tunnel
 echo "bridge tunnel key (authorise it on the MT5 box with: sudo goldbot-mt5-authorize '<this line>'):"
 cat /var/lib/goldbot/.ssh/id_ed25519.pub
 
+# Deploys: only versions the owner approves (Telegram [Deploy] or `sudo goldbot-deploy latest`), never by itself.
+# The script runs as root, so a root-owned copy is installed; the repo copy (writable by the service user) is never run
+# as root. After reviewing a change to it: sudo install -m 755 -o root -g root <repo>/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy
+mkdir -p /etc/goldbot
+echo brain > /etc/goldbot/role
+install -m 755 -o root -g root "$ROOT/goldbot/ops/linux/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
+install -m 644 "$ROOT/goldbot/ops/linux/systemd/goldbot-deploy.service" "$ROOT/goldbot/ops/linux/systemd/goldbot-deploy.timer" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable goldbot-deploy.timer
+
 # Cloudflare Tunnel client for the dashboard (the tunnel token is entered by the owner, see the runbook)
 if ! command -v cloudflared >/dev/null; then
   ARCH=$(dpkg --print-architecture)

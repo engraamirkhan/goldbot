@@ -178,6 +178,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   version/status, `recalibrations` row with before/after ECE; also `state/recalibration.jsonl`). It promotes and
   retires nothing. The ECE after is in-sample. Not done from P9: the monthly refit / drift-triggered refit, recency
   weighting and the replay trial; owner vetoes are not in the shadow book (it is the model's own decision).
+- Deploys (2026-10-10, owner chose one click + manual): never automatic. The Telegram service (GOLDBOT_DEPLOY=1 on
+  Linux) offers a new main commit that passed CI (backend + frontend check-runs) with [Deploy]/[Skip]
+  (`goldbot/ops/deploy.py`); the tap writes `state/deploy/approved.json` for that exact commit; the root-owned
+  `/usr/local/sbin/goldbot-deploy` (copy of `goldbot/ops/linux/goldbot-deploy.sh`, timer every minute) re-checks main,
+  fast-forward and CI, waits while an approval is pending, restarts (supervisor first), verifies every enabled service
+  after 60 s and rolls back otherwise; `sudo goldbot-deploy latest|<sha>` does the same by hand. Results in
+  `state/deploys.jsonl` (Telegram report, health `deploy`). After a brain deploy a GitHub Deployment (environment
+  `oracle`, needs github-token) lets the MT5 box follow approved versions only.
 - Drift and health (M26/M27, 2026-10-10): every fitted model stores its training distribution per input
   (`feature_ref`); the daily `drift_watch` job (23:40) rebuilds the last 30 days of candidates as in training and
   computes PSI on the top-10 inputs by gain (0.1 warns, 0.25 sizes the agent to 50%), ECE/Brier on the trailing 100
