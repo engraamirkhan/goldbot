@@ -67,7 +67,17 @@ def connect(path: str | Path, kind: DbKind, *, busy_timeout_ms: int = DEFAULT_BU
     conn = sqlite3.connect(p, isolation_level=None, timeout=busy_timeout_ms / 1000, check_same_thread=False)
     try:
         conn.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
-        mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        # switching to WAL needs a brief exclusive lock that busy_timeout does not always cover (several services
+        # starting at once): retry until the busy timeout is spent
+        deadline = time.monotonic() + busy_timeout_ms / 1000
+        while True:
+            try:
+                mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
         if str(mode).lower() != "wal":
             raise StateDbError(f"{p}: journal_mode is {mode}, WAL required (network filesystem?)")
         conn.execute(f"PRAGMA synchronous={SYNCHRONOUS[kind]}")
