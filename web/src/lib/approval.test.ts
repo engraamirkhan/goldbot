@@ -64,6 +64,11 @@ describe("blockers", () => {
     expect(blockers(s, [account({ stage: "halted", account_class: "unknown" })], "icm-demo")).toEqual(
       ["owner halt", "supervisor halt", "drift halt", "news blackout", "drawdown halt", "account class unknown"]);
   });
+  it("blocks when today's loss budget is spent", () => {
+    const spent = { limit: 15, used: 15, remaining: 0, binding: "account 2.0% cap", notes: [], caps: [] };
+    expect(blockers(status(), [account({ loss_budget: spent })], "icm-demo")).toEqual(["daily loss limit reached"]);
+    expect(blockers(status(), [account({ loss_budget: { ...spent, used: 5, remaining: 10 } })], "icm-demo")).toEqual([]);
+  });
   it("scopes blackouts and account state to the proposal's account; paper ignores the class", () => {
     const s = status({ blackout: { kind: "news_shock", title: "x", ts_utc: null, received_utc: at(0), accounts: ["other"] } });
     expect(blockers(s, [account(), account({ account_id: "other", stage: "halted" })], "icm-demo")).toEqual([]);

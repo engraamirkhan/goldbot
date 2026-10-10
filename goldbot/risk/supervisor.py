@@ -75,7 +75,9 @@ class Supervisor:
                  "combined_open_notional": sum(x["notional"] for x in exposure.values()), "exposure": exposure,
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
-                 "unreadable_engines": self.unreadable}
+                 "unreadable_engines": self.unreadable,
+                 # the dashboard's daily loss budget (goldbot/ops/account_view.py): the combined cap and its base
+                 "daily_cap": self.limits.daily_cap, "combined_day_start_equity": day0}
         write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)   # heartbeat: never half-written
         return state
 

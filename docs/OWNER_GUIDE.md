@@ -35,6 +35,16 @@ If the wizard cannot be used, the manual commands are in [RUNBOOK 0.4](RUNBOOK.m
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)
 - **Deploy:** Telegram *New version ready* -> **[Deploy]**. Never while an entry waits; rolls back by itself if a service fails. [More](RUNBOOK.md#05-daily-use)
 - **Health tab:** each check reads ok, warn or fail with a reason, plus drift and drawdown per strategy.
+- **Your account (Overview):** once the engine is connected to the broker, each account card shows the **balance** and
+  **equity** in the account's currency (equity includes open trades), today's change since 00:00 UTC, the margin level,
+  **today's loss budget** (how much more can be lost today before new entries stop, and which limit decides it) and the
+  **next milestone** (the timeframes your balance can trade now and the balance the next one needs, with a progress
+  bar). The Approvals tab shows the loss budget too. "Pending broker terms" means the engine has not read the
+  broker's currency conversion yet, so no amount is guessed. A milestone allows a timeframe; a strategy still has to
+  pass its tests before it trades there.
+- **Monthly report:** `goldbot run monthly-report` (or `--month 2026-10`) prints the month's time-weighted return
+  (deposits are not counted as profit), R, largest drawdown, average per trading day, best days and milestone
+  progress. The morning digest carries a one-line month so far. It never sets a daily amount to reach.
 
 | Alert | Means | Do |
 |---|---|---|

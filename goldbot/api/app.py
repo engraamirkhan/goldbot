@@ -75,6 +75,7 @@ from goldbot.api.schema import (
     UserRef,
     UserRow,
 )
+from goldbot.ops.account_view import loss_budget, margin_level_pct, milestones
 from goldbot.telegram.approvals import Outcome
 from goldbot.telegram.approvals import Proposal as BusProposal
 from goldbot.telegram.bus import ApprovalBus
@@ -407,12 +408,19 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.get("/api/accounts", response_model=list[AccountSummary])
     def accounts(_: User = Depends(auth)) -> list[AccountSummary]:
         rows = []
-        for e in st.engines():
+        engines, sup = st.engines(), st.supervisor()
+        for e in engines:
             eq, d0, w0, hwm = e.get("equity", 0), e.get("day_start_equity", 0) or 1, e.get("week_start_equity", 0) or 1, e.get("balance_closed_hwm", 0) or 1
+            bal, ccy = e.get("balance"), e.get("currency")
             rows.append(AccountSummary(account_id=e["account"], broker=e.get("broker", ""), mode=e.get("mode", "paper"), equity=eq,
                                        day_pnl_pct=eq / d0 - 1, week_pnl_pct=eq / w0 - 1, drawdown_pct=1 - eq / hwm,
                                        stage=e.get("stage", "normal"), open_positions=e.get("open_positions", 0),
-                                       account_class=e.get("account_class", "unknown")))
+                                       account_class=e.get("account_class", "unknown"),
+                                       balance=bal if isinstance(bal, (int, float)) else None,
+                                       currency=ccy if isinstance(ccy, str) else None,
+                                       margin_level_pct=margin_level_pct(e),
+                                       day_pnl=eq - e["day_start_equity"] if e.get("day_start_equity") else None,
+                                       loss_budget=loss_budget(e, sup, engines), milestones=milestones(e)))
         return rows
 
     def card(p: BusProposal) -> dict[str, Any]:

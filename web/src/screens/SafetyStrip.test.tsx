@@ -50,6 +50,25 @@ describe("SafetyStrip", () => {
     expect(chip("Drawdown")).toHaveTextContent("no engines");
   });
 
+  it("shows today's loss budget left, amber under a quarter and red when spent", () => {
+    const budget = (remaining: number) => ({ limit: 15, used: 15 - remaining, remaining, binding: "combined 1.5% cap", notes: [], caps: [] });
+    const { rerender } = render(<SafetyStrip status={status()} accounts={[account({ currency: "GBP", loss_budget: budget(5) })]} />);
+    expect(chip("Loss budget")).toHaveTextContent("£5.00 left");
+    expect(chip("Loss budget")).toHaveTextContent("of £15.00 today");
+    expect(chip("Loss budget")).toHaveClass("ok");
+    rerender(<SafetyStrip status={status()} accounts={[account({ currency: "GBP", loss_budget: budget(3) })]} />);
+    expect(chip("Loss budget")).toHaveClass("warn");
+    rerender(<SafetyStrip status={status()} accounts={[account({ currency: "GBP", loss_budget: budget(0) })]} />);
+    expect(chip("Loss budget")).toHaveClass("bad");
+    expect(screen.getByRole("status")).toHaveTextContent("New entries blocked: daily loss limit reached");
+  });
+
+  it("shows the loss budget as not reported for an engine without it", () => {
+    render(<SafetyStrip status={status()} accounts={[account()]} />);
+    expect(chip("Loss budget")).toHaveTextContent("not reported");
+    expect(chip("Loss budget")).toHaveClass("idle");
+  });
+
   it("shows loading and error states", () => {
     const { rerender } = render(<SafetyStrip />);
     expect(screen.getByRole("status")).toHaveTextContent("Checking safety state");

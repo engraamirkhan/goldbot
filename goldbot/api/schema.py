@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from goldbot.ops.account_view import LossBudget, Milestones
+
 
 class AccountSummary(BaseModel):
     account_id: str
@@ -19,6 +21,14 @@ class AccountSummary(BaseModel):
     stage: Literal["normal", "size_down", "halted"]
     open_positions: int
     account_class: Literal["raw", "standard", "unknown"]
+    # the live account view (ADR 0004), from the engine's state file and the supervisor's; null from an engine that
+    # does not publish them yet. Money is in `currency` (the broker's account currency).
+    balance: float | None = None
+    currency: str | None = None
+    margin_level_pct: float | None = None   # equity / margin x 100; null with no margin in use
+    day_pnl: float | None = None            # equity - day-start equity (00:00 UTC), floating P&L included
+    loss_budget: LossBudget | None = None   # today's effective daily loss limit and what is used of it
+    milestones: Milestones | None = None    # timeframes the minimum lot fits now, and the equity the next one needs
 
 
 class Proposal(BaseModel):

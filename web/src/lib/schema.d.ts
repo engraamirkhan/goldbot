@@ -619,14 +619,24 @@ export interface components {
             account_class: "raw" | "standard" | "unknown";
             /** Account Id */
             account_id: string;
+            /** Balance */
+            balance?: number | null;
             /** Broker */
             broker: string;
+            /** Currency */
+            currency?: string | null;
+            /** Day Pnl */
+            day_pnl?: number | null;
             /** Day Pnl Pct */
             day_pnl_pct: number;
             /** Drawdown Pct */
             drawdown_pct: number;
             /** Equity */
             equity: number;
+            loss_budget?: components["schemas"]["LossBudget"] | null;
+            /** Margin Level Pct */
+            margin_level_pct?: number | null;
+            milestones?: components["schemas"]["Milestones"] | null;
             /**
              * Mode
              * @enum {string}
@@ -1240,6 +1250,35 @@ export interface components {
             /** Token */
             token: string;
         };
+        /** LossBudget */
+        LossBudget: {
+            /** Binding */
+            binding: string;
+            /** Caps */
+            caps: components["schemas"]["LossCap"][];
+            /** Limit */
+            limit: number;
+            /**
+             * Notes
+             * @default []
+             */
+            notes: string[];
+            /** Remaining */
+            remaining: number;
+            /** Used */
+            used: number;
+        };
+        /** LossCap */
+        LossCap: {
+            /** Limit */
+            limit: number;
+            /** Name */
+            name: string;
+            /** Remaining */
+            remaining: number;
+            /** Used */
+            used: number;
+        };
         /** Me */
         Me: {
             /** Email */
@@ -1249,6 +1288,34 @@ export interface components {
              * @enum {string}
              */
             role: "owner" | "approver" | "viewer";
+        };
+        /** MilestoneRung */
+        MilestoneRung: {
+            /** Equity Needed */
+            equity_needed?: number | null;
+            /** Pending */
+            pending?: string | null;
+            /** Reached */
+            reached?: boolean | null;
+            /** Timeframe */
+            timeframe: string;
+        };
+        /** Milestones */
+        Milestones: {
+            /** Next Equity */
+            next_equity?: number | null;
+            /** Next Timeframe */
+            next_timeframe?: string | null;
+            /** Pending */
+            pending?: string | null;
+            /** Progress */
+            progress?: number | null;
+            /** Rule */
+            rule: string;
+            /** Rungs */
+            rungs: components["schemas"]["MilestoneRung"][];
+            /** Tradeable */
+            tradeable: string[];
         };
         /** ModeChangeRequest */
         ModeChangeRequest: {

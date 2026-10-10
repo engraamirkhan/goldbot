@@ -727,6 +727,29 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   counted). `revoke-sessions` refuses a state directory without aux.db (exit 2, absolute path printed) instead of
   creating an empty one. Redaction removes quoted paths whole (spaces, Windows) and UNC `\\host\share` paths.
 
+- Live account view and monthly report (2026-10-10, TRACEABILITY V1-V5; ADR 0004, BACKLOG 26 backend): the engine
+  publishes in `engine_<account>.json` the broker's `balance`, `currency`, `margin`, `margin_free` (never login or
+  server), `price` (mid), `limits` (the RiskGate's risk per trade, multiplier bounds, daily/weekly caps, plus
+  `daily_loss_limit_abs`/`min_lot_risk_cap` once RiskLimits has them), `lot_terms` from `symbol_info` and
+  `ladder_atr` (ATR(14) of the mid per 15m/1h/4h/1d, refreshed at bar closes, null until 15 bars); the supervisor
+  adds `daily_cap` and `combined_day_start_equity`. `goldbot/ops/account_view.py` turns that into
+  `AccountSummary.balance/currency/margin_level_pct/day_pnl/loss_budget/milestones` (API contract regenerated).
+  Loss budget = min(account cap x day start, combined cap x combined day start, absolute); the binding cap is the one
+  with least left; the combined cap is skipped with a note on mixed currencies; the absolute limit appears only once
+  the engine publishes it (BACKLOG 29). Milestones: minimum lot at a 1.5 x ATR(14) stop within 1.2 x the target risk
+  (or `min_lot_risk_cap` once published), via `goldbot/risk/sizing.py`. **Contract for BACKLOG 28:** publish
+  `usd_to_account` (account currency per 1 USD of gold P&L, from `order_calc_profit`/tick value) in the engine
+  state; until then a non-USD account's ladder reads "pending broker terms" and shows no amounts. Dashboard:
+  Overview account cards (balance vs equity, today, margin level, loss-budget meter, milestone progress bar) and a
+  "Loss budget" chip on the safety strip; a spent budget is listed as "daily loss limit reached" in the blockers.
+  `python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]`: per account, time-weighted %
+  (chained trade returns on the balance before each trade, so deposits are not return), net R, R/trade with a 90%
+  t interval, max drawdown on closed trades, average per weekday elapsed, best 3 days, £50+ days (GBP only),
+  milestones; the digest adds "<Month> so far" once the month has a closed trade. Not done: BACKLOG 26's
+  by-timeframe split, opportunity-day capture, days lost to the cap, the dashboard monthly card and a scheduled job.
+  Engine change is reporting only (state publish and an ATR read at bar closes in a try/except); route it to
+  trading-safety review anyway since it touches goldbot/engine and goldbot/risk/supervisor.py.
+
 ## Next steps (no owner input needed unless marked)
 - Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;
   `docs/decisions/0004-starting-account-and-daily-target.md`): the IC Markets demo is **£1,000 GBP**, read from MT5

@@ -22,6 +22,8 @@
   python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]
                                                          # minimum equity for the minimum lot per family (G-7)
   python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)
+  python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]
+                                                         # time-weighted % return, R, drawdown, avg per day, milestones
 """
 from __future__ import annotations
 
@@ -477,6 +479,9 @@ if __name__ == "__main__":
     elif cmd == "ruin":
         from goldbot.research.ruin import main as ruin_main
         sys.exit(ruin_main(sys.argv[2:]))
+    elif cmd == "monthly-report":
+        from goldbot.ops.monthly_report import main as monthly_main
+        sys.exit(monthly_main(sys.argv[2:]))
     elif cmd == "sizing-feasibility":
         from goldbot.research.min_lot import main as feasibility_main
         sys.exit(feasibility_main(sys.argv[2:]))
