@@ -17,6 +17,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
+from goldbot.data.timeutil import server_wall
 from goldbot.labels.exit_policy import ExitPolicy, new_state, policy_label, policy_return, policy_step
 
 
@@ -35,7 +36,7 @@ class SwapSpec(FrozenRecord):
     long_usd_per_lot: float
     short_usd_per_lot: float
     triple_weekday: int = Field(2, ge=0, le=4)   # 0 = Monday; the rollover after this server day is charged 3 nights
-    server_tz: str = "Europe/Athens"             # the broker's server clock: its midnight is the rollover
+    server_tz: str = "Europe/Athens"             # the broker's server clock (IANA or NY+7): its midnight is the rollover
     contract_oz: float = Field(100.0, gt=0)
 
     def usd_per_oz(self, side: np.ndarray) -> np.ndarray:
@@ -44,7 +45,8 @@ class SwapSpec(FrozenRecord):
 
 
 def _server_days(ts: pd.DatetimeIndex, server_tz: str) -> np.ndarray:
-    return np.asarray(ts.tz_convert(server_tz).tz_localize(None).normalize().to_numpy().astype("datetime64[D]"))
+    """Server calendar day of each UTC stamp; `server_tz` is an IANA name or NY+7 (goldbot.data.timeutil)."""
+    return np.asarray(server_wall(ts, server_tz).normalize().to_numpy().astype("datetime64[D]"))
 
 
 def rollover_nights(entry_utc: pd.DatetimeIndex, exit_utc: pd.DatetimeIndex, server_tz: str,

@@ -26,7 +26,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
-from goldbot.data.timeutil import epoch_ns, server_to_utc
+from goldbot.data.timeutil import epoch_ns, server_to_utc, server_wall
 
 log = logging.getLogger("goldbot.calendar")
 
@@ -86,6 +86,57 @@ def resolve_server_sessions(template: Sequence[ServerSession], server_tz: str, f
     return out
 
 
+DAY_NS = DAY_S * 1_000_000_000
+_OFFSETS = (-2, -1, 0, 1)     # trading dates around a stamp's UTC date that can hold its window or its latest open
+
+
+class SessionWindow(FrozenRecord):
+    """A trading session on local exchange clocks: from `open` on `open_tz`'s wall clock to `close` on `close_tz`'s,
+    both on the same local calendar date (the session's trading date). Design rule (playbook D-1): session
+    boundaries are defined in local exchange time and converted per date, so London follows Europe/London and New
+    York follows America/New_York (they switch on different dates in March and October/November) while Tokyo, which
+    has no DST, stays fixed in UTC. The conversion uses only the date and the zone's rules, never other bars."""
+    open_tz: str
+    open: time
+    close_tz: str
+    close: time
+
+    def bounds_ns(self, days: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(open, close) in UTC epoch ns for each trading date given as days since 1970-01-01."""
+        o, c = _local_ns(days, self.open_tz, self.open), _local_ns(days, self.close_tz, self.close)
+        if len(days) and not ((c > o) & (c - o < DAY_NS)).all():
+            raise ValueError(f"session window {self.open_tz} {self.open} -> {self.close_tz} {self.close} is not a "
+                             "positive span shorter than a day on every date")
+        return o, c
+
+
+def _local_ns(days: np.ndarray, tz: str, t: time) -> np.ndarray:
+    """UTC epoch ns of wall-clock `t` in `tz` on each local date (days since the epoch). A wall time the zone skips
+    moves forward and a repeated one takes standard time; the default session times are never in a switch hour."""
+    tod = ((t.hour * 60 + t.minute) * 60 + t.second) * 1_000_000_000
+    naive = pd.DatetimeIndex(pd.to_datetime(days.astype(np.int64) * DAY_NS + tod, unit="ns"))
+    local = naive.tz_localize(ZoneInfo(tz), ambiguous=np.zeros(len(naive), dtype=bool), nonexistent="shift_forward")
+    return epoch_ns(local)
+
+
+def _day_grid(ns: np.ndarray) -> tuple[np.ndarray, int, np.ndarray]:
+    """(UTC day number per stamp, first day of a grid covering every stamp's day plus `_OFFSETS`, that grid)."""
+    day = ns // DAY_NS
+    first = int(day.min()) + min(_OFFSETS)
+    return day, first, np.arange(first, int(day.max()) + max(_OFFSETS) + 1, dtype=np.int64)
+
+
+DEFAULT_SESSION_WINDOWS: dict[str, SessionWindow] = {
+    # Asia: Tokyo 08:00 (23:00 UTC all year) to the London open; London: LSE open 08:00 to the 08:30 New York data
+    # slot; New York: 08:30 to the 17:00 New York COMEX daily close. On summer time (BST, EDT) this is the old fixed UTC
+    # table (07:00, 12:30, 21:00); on its own zone's winter time each boundary is an hour later in UTC.
+    "asia": SessionWindow(open_tz="Asia/Tokyo", open=time(8, 0), close_tz="Europe/London", close=time(8, 0)),
+    "london": SessionWindow(open_tz="Europe/London", open=time(8, 0), close_tz="America/New_York", close=time(8, 30)),
+    "newyork": SessionWindow(open_tz="America/New_York", open=time(8, 30), close_tz="America/New_York",
+                             close=time(17, 0)),
+}
+
+
 class _SessionSource(Protocol):
     def trading_sessions(self, symbol: str) -> list[TradingSession]: ...
 
@@ -97,14 +148,9 @@ class SessionTable(FrozenRecord):
     week_open_day: int = 0          # Monday (server time), after the break ends
     week_close_day: int = 4         # Friday
     week_close_time: time = time(23, 57)
-    # Trading sessions in UTC, used only for features (not for open/closed state)
-    sessions_utc: dict[str, tuple[time, time]] = Field(
-        default_factory=lambda: {
-            "asia": (time(23, 0), time(7, 0)),
-            "london": (time(7, 0), time(12, 30)),
-            "newyork": (time(12, 30), time(21, 0)),
-        }
-    )
+    # Trading sessions on local exchange clocks, used for features, session labels and the cost tables by session
+    # (not for open/closed state). Each runs until the next one opens; London and New York follow their own DST.
+    sessions_local: dict[str, SessionWindow] = Field(default_factory=lambda: dict(DEFAULT_SESSION_WINDOWS))
     # Runtime override from the broker (D13): sorted [start, end) UTC windows; inside [covers_from, covers_until)
     # only these are open, outside it the static rule above applies. None = static table only.
     broker_windows: tuple[tuple[pd.Timestamp, pd.Timestamp], ...] | None = None
@@ -166,7 +212,7 @@ class SessionTable(FrozenRecord):
         return np.where(covered, inside, static)
 
     def _static_open(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
-        local = pd.DatetimeIndex(utc_ts).tz_convert(ZoneInfo(self.server_tz))
+        local = server_wall(pd.DatetimeIndex(utc_ts), self.server_tz)
         dow = local.dayofweek.to_numpy()
         t = local.time
         tsec = np.array([x.hour * 3600 + x.minute * 60 + x.second for x in t])
@@ -179,14 +225,45 @@ class SessionTable(FrozenRecord):
         )
         return ~(in_break | weekend | fri_closed)
 
+    def session_windows(self, utc_ts: pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:
+        """(index into `sessions_local` of the session holding each stamp, -1 outside every window; the UTC start of
+        that session instance in epoch ns, -1 outside). Windows are [open, close), resolved per trading date from the
+        zones' rules alone, so a stamp's session depends only on its own date, never on other bars."""
+        ns = epoch_ns(pd.DatetimeIndex(utc_ts))
+        code = np.full(len(ns), -1, dtype=np.int64)
+        start = np.full(len(ns), -1, dtype=np.int64)
+        if not len(ns):
+            return code, start
+        day, first, days = _day_grid(ns)
+        for k, w in enumerate(self.sessions_local.values()):
+            o, c = w.bounds_ns(days)
+            for off in _OFFSETS:
+                j = day + off - first
+                inside = (ns >= o[j]) & (ns < c[j])
+                code[inside], start[inside] = k, o[j][inside]
+        return code, start
+
+    def last_open_ns(self, utc_ts: pd.DatetimeIndex, name: str) -> np.ndarray:
+        """UTC epoch ns of the latest open of session `name` at or before each stamp. An open exists on every calendar
+        date, weekends included, so consecutive opens are 23, 24 or 25 h apart around a DST switch."""
+        ns = epoch_ns(pd.DatetimeIndex(utc_ts))
+        if not len(ns):
+            return np.zeros(0, dtype=np.int64)
+        day, first, days = _day_grid(ns)
+        o, _ = self.sessions_local[name].bounds_ns(days)
+        best = np.full(len(ns), np.iinfo(np.int64).min, dtype=np.int64)
+        for off in _OFFSETS:
+            cand = o[day + off - first]
+            best = np.where(cand <= ns, np.maximum(best, cand), best)
+        return best
+
     def session_label(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
-        idx = pd.DatetimeIndex(utc_ts).tz_convert("UTC")
-        secs = idx.hour * 3600 + idx.minute * 60
-        out = np.full(len(idx), "asia", dtype=object)
-        for name, (a, b) in self.sessions_utc.items():
-            sa, sb = a.hour * 3600 + a.minute * 60, b.hour * 3600 + b.minute * 60
-            mask = (secs >= sa) & (secs < sb) if sa < sb else (secs >= sa) | (secs < sb)
-            out[np.asarray(mask)] = name
+        """Session name per stamp. Between the New York close and the Asia open (the thin hours around the daily
+        break) a stamp is labelled "asia", the session whose liquidity and costs it shares."""
+        code, _ = self.session_windows(utc_ts)
+        names = np.array(list(self.sessions_local), dtype=object)
+        out = np.full(len(code), "asia", dtype=object)
+        out[code >= 0] = names[code[code >= 0]]
         return out
 
 
@@ -226,7 +303,7 @@ class BrokerSessions:
         self._read_at: pd.Timestamp | None = None
 
     def table(self, now: pd.Timestamp) -> SessionTable:
-        day = pd.Timestamp(now).tz_convert(ZoneInfo(self.fallback.server_tz)).date()
+        day = server_wall(pd.Timestamp(now), self.fallback.server_tz)[0].date()
         retry = (self._table is not None and self._table.source != "broker" and self._read_at is not None
                  and now - self._read_at >= self.retry_after)
         if self._table is None or day != self._day or retry:
@@ -236,6 +313,31 @@ class BrokerSessions:
 
     def entry_block(self, now: pd.Timestamp) -> str | None:
         return self.table(now).entry_block(now)
+
+
+def session_table_cache(t: SessionTable) -> dict[str, Any]:
+    """The parts of a session table another process needs (engine state -> health): zone, source and the broker's
+    windows as ISO strings; the static rule's fields stay at their defaults."""
+    def iso(x: pd.Timestamp | None) -> str | None:
+        return None if x is None else pd.Timestamp(x).isoformat()
+    return {"server_tz": t.server_tz, "source": t.source, "note": t.note,
+            "covers_from": iso(t.covers_from), "covers_until": iso(t.covers_until),
+            "broker_windows": None if t.broker_windows is None else [[iso(a), iso(b)] for a, b in t.broker_windows]}
+
+
+def session_table_from_cache(d: Any) -> SessionTable | None:
+    """Inverse of `session_table_cache`; None when `d` is missing or malformed (the caller uses the static table)."""
+    try:
+        win = d.get("broker_windows")
+        base = SessionTable(server_tz=str(d["server_tz"]))
+        if win is None:
+            return base
+        return base.model_copy(update={
+            "broker_windows": tuple((pd.Timestamp(a), pd.Timestamp(b)) for a, b in win),
+            "covers_from": pd.Timestamp(d["covers_from"]), "covers_until": pd.Timestamp(d["covers_until"]),
+            "source": str(d.get("source", "broker")), "note": str(d.get("note", ""))})
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
 
 
 class LocalSession(FrozenRecord):

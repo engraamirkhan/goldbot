@@ -13,6 +13,8 @@ __pycache__/
 *.db-shm
 *.db-journal
 *.parquet
+# small checked-in test fixtures (synthetic bars, no market data)
+!tests/data/*.parquet
 .env
 web/node_modules/
 web/dist/

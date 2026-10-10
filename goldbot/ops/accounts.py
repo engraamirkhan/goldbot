@@ -33,10 +33,11 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 import yaml
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from goldbot.base import Record, write_private
 from goldbot.config import ROOT
+from goldbot.data.timeutil import server_zone
 
 ACCOUNTS_FILE = ROOT / "config" / "accounts.yaml"
 PHASE_FILE = ROOT / "state" / "phase_state.json"
@@ -64,6 +65,16 @@ class Account(Record):
     # BACKLOG 29 / ADR 0004: the owner's absolute daily loss limit for THIS account, in its own deposit currency
     # (icm-demo: 50 = £50). None = off. Per account because one number read in different currencies is not one limit
     daily_loss_limit_abs: float | None = Field(None, gt=0)
+
+    @field_validator("server_tz")
+    @classmethod
+    def _known_server_tz(cls, v: str) -> str:
+        """`NY+7` (US-switching UTC+2/+3) or an IANA name; a typo fails at load, never shifts timestamps silently."""
+        try:
+            server_zone(v)
+        except Exception as exc:
+            raise ValueError(f"server_tz {v!r} is neither NY+7 nor an IANA zone ({type(exc).__name__})") from exc
+        return v
 
     @property
     def is_live(self) -> bool:

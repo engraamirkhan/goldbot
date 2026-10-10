@@ -1,8 +1,8 @@
 """Session-open specialist (built first: fixed trigger times, most trades per month, exercises the
 daily-feature path).
 
-Trigger: at London open (07:00 UTC winter / 06:00 UTC summer -> we use the session table's London
-open in local time) and New York open (13:30 UK), when the first two 15m bars of the session close in
+Trigger: at London open (08:00 Europe/London: 08:00 UTC in winter, 07:00 UTC in summer) and New York open
+(08:30 America/New_York: 13:30 UTC in winter, 12:30 UTC in summer), both on local clocks, when the first two 15m bars of the session close in
 a common direction and the Asian range is narrower than `asia_range_max_atr_d` x daily ATR.
 Target 1.5 ATR(15m), stop 1.0 ATR, time limit 16 bars, hard flat 1 h before the next session.
 """
@@ -89,7 +89,8 @@ class SessionOpenSpecialist(Specialist):
             same &= sign.shift(i) == sign
             strong &= body_pct.shift(i) >= self.config["min_body_pct"]
         decision = pd.Series(self._open_mask(ts), index=mid_bars.index)
-        # Asian range filter: range of the last 32 bars (8h) before London vs daily ATR (from features if present)
+        # "Asian range" filter: range of the 32 bars (8 h) before the decision's session open (Asia before London; mostly
+        # London before New York) vs daily ATR (from features if present)
         asia_rng = (mid_bars["high"].rolling(32).max() - mid_bars["low"].rolling(32).min()).shift(k)
         atr_d = features["d1_atr14"] if "d1_atr14" in features.columns else features.get("atr14", pd.Series(np.nan, index=mid_bars.index)) * 8
         quiet = asia_rng < self.config["asia_range_max_atr_d"] * atr_d

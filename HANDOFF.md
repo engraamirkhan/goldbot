@@ -323,7 +323,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   for research to screen; no specialist declares them (its `model_features` are unchanged), so they reach a model only
   through the P4 screen and a pre-registered trial. `session_zones` (session high/low/open now and for the previous
   session, each zone's last high/low, previous feature-day and Sunday-week high/low, all (close - level)/ATR14;
-  sessions are the `DEFAULT_SESSIONS.sessions_utc` windows, 21:00-23:00 UTC belongs to none); `market_structure`
+  sessions are the DST-aware `DEFAULT_SESSIONS.sessions_local` windows, the New York close to 23:00 UTC belongs to none); `market_structure`
   (liquidity sweep = traded beyond the last confirmed swing, previous session or previous day high/low known at t-1
   and closed back inside; break of structure = first close beyond the last confirmed unbroken swing); `fair_value_gaps`
   (bullish if high[i-2] < low[i], known when bar i closes; partial fills shrink it, filled once a bar trades through
@@ -803,6 +803,40 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- Server clock offset probe and `NY+7` zone (2026-10-10, HIGH from the trading-safety review; answers the D13 open
+  ops check above). Research: IC Markets' own notices say its MT4/MT5 server time "is based on '5 pm New York'" and
+  moves GMT+2 -> GMT+3 on the US DST start (10 Mar 2024, 9 Mar 2025) and back on the US DST end (4 Nov 2018), so
+  ICMarketsSC most likely runs NY+7, not Europe/Athens; not yet measured on our terminal. `goldbot/data/timeutil.py`
+  adds `NY+7` (`NewYorkPlus7`, `server_zone`, `server_wall` (tz-aware input only), `server_utc_offset`; pandas treats
+  a custom tzinfo as a fixed offset, so `utc_to_server` refuses NY+7). `Account.server_tz` is validated at load.
+  Every server-clock reader uses `server_wall`: session table, engine `_server_clock` (rollover, Friday cut),
+  `labels.triple_barrier._server_days` (rollover nights, also reached from jobs.py SwapSpec and research attribution),
+  MT5 adapter requests (now tz-aware UTC-labelled datetimes: MT5 reads naive ones in the host zone).
+  `goldbot/ops/server_clock.py` compares a tick with host UTC; a mismatch is called a zone error only when the other
+  known zone explains it, else "host clock or feed". Engine (`_refresh_account`, no extra RPC): signed tick age,
+  `tick_ahead_s` -> gate `tick_from_future` (> 10 s = SKEW_BLOCK_S, `RiskLimits.max_tick_ahead_s`), abs age for stale tick/feed/bars,
+  probe -> `server_clock_mismatch`, both start `data_recovering` when they clear; D13 `BrokerSessions` built in
+  run.py, refreshed beside the 60 s model reload (`refresh_sessions`: a raising, slow (> 5 s) or fallback read keeps
+  the last broker table), `eng.set_sessions` -> gate `market_closed`, the same table for stale feed and the probe.
+  Approval-time re-run refreshes the state, so a mismatch or close between proposal and click refuses it. None of
+  these are on the exit path (`_tick_ok` unchanged). engine_<account>.json carries `tick_ahead_s`, `market_closed`,
+  `session_source`, `sessions` (cached table, read by health) and `server_clock`. Health `server_clock:<account>` and
+  preflight `server_clock` (blocking on a mismatch) measure it independently; preflight `bridge_server_tz` blocks when
+  the bridge (`/health` now reports its zone) converts with another zone than the brain. accounts.yaml stays on
+  Europe/Athens. RUNBOOK "Server clock (US-EU DST gap weeks)" and new gate-reason rows; ADR 0005. Not done: settings
+  `brokers.*.server_tz` is not validated at load (triple_barrier raises on a bad name); a pre-existing `_regime`
+  crash on a perfectly flat price series is fixed (`_regime` uses the middle bucket when the volatility window
+  is constant). Review fixes (b55f5d1 review): the run loop (`goldbot/ops/run.py` `engine_pass`) logs any exception
+  instead of crash-looping and sets `tick_error` (gate reason, health fail on `engine:<account>`, cleared after
+  `TICK_ERROR_CLEAR_TICKS` = 20 clean ticks); an approval or re-arm that raises inside `on_tick` is recorded the same
+  way and the tick's exits still run; sessions are read on a background thread (`SessionRefresher`: started every
+  60 s, collected on a later pass, never joined on the tick loop; its own bridge client); a broken session table
+  fails closed for entries (`market_closed`), never for exits. RUNBOOK: which of `clock_skew`, `tick_from_future`
+  and `server_clock_mismatch` owns which case.
+  **Needs the owner:** on Mon 26 Oct 2026 during market hours run `goldbot run health` and read
+  `server_clock:icm-demo`; if it reads UTC+3 (NY+7) vs Athens UTC+2, the engine is already refusing entries: set
+  `server_tz: NY+7` for icm accounts on the brain and the MT5 box (RUNBOOK steps 3-4). Vantage's help centre also puts
+  server midnight at 5 pm New York (likely NY+7) but publishes no switch dates: measure it the same way.
 - Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;
   `docs/decisions/0004-starting-account-and-daily-target.md`): the IC Markets demo is **£1,000 GBP**, read from MT5
   `account_info` (never config); **£50 is the owner's absolute daily loss limit**; **£50+/day is the north star**
@@ -845,6 +879,37 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   holiday/reopen rule, tier-2 releases, total open-risk cap, drawdown Monte Carlo, loss-streak throttle, min-lot
   feasibility, weekend gap risk, MAE/MFE, edge-linked sizing). BACKLOG items 16-24 and H-15 come from it. Open
   ops check from the D13 review: confirm whether the IC Markets server clock follows Europe/Athens or US DST dates.
+- DST-aware sessions (2026-10-10, playbook D-1, row F23): session windows are local-clock `SessionWindow`s in
+  `goldbot/data/calendar.py` (`DEFAULT_SESSION_WINDOWS`: Asia 08:00 Tokyo -> London open, London 08:00 London -> New
+  York open, New York 08:30-17:00 New York), converted to UTC per date from the zone rules only (no look-ahead).
+  `SessionTable.sessions_utc` is gone; use `session_windows`, `last_open_ns` or `session_label`. Summer (BST + EDT)
+  is unchanged; on London/New York winter time each boundary is an hour later in UTC than before, and the March and
+  October gap weeks now split London and New York correctly. **Feature versions bumped: `session` 2, `session_zones`
+  2, `market_structure` 2, all in `DEFAULT_FEATURE_NAMES`: the default feature version is now `f-079deacc61`
+  (was `f-1b8f723a67`; with macro `f-f999b359e2`).** Migration without downtime (quant review HIGH 1): the v1
+  implementations stay registered as legacy versions (`goldbot/features/legacy.py`, `registry.LEGACY_FEATURES`, never in
+  FEATURES), and the engine scores each champion and shadow challenger on the frame of its recorded feature version
+  (`Engine._scoring_frame`: `registry.versions_for` finds the per-feature versions that hash to it, `with_versions`
+  recomputes only those columns; cached per frame). So v1 champions keep trading and v1 challengers keep shadow
+  trading exactly as before (golden test against the pre-fix code), the blackout re-score works for them, retrains
+  and research build v2, and the normal shadow/promotion flow migrates. A version no registered implementation
+  reproduces is still not scored (`feature_version_mismatch`), and neither is one whose rebuild raises (logged, cached
+  per frame; the bar's policies, blackout closes and shadow save still run). Decisions and shadow trades record
+  `scored_feature_version`. drift_watch builds each champion's PSI inputs at its own feature version
+  (`_recent_candidates(..., feature_version)`; a macro-trained champion is rebuilt over the default set plus the macro
+  drivers with the store's macro rows; a version that cannot be rebuilt, or a macro model without macro rows, skips
+  PSI with a note). The health check `feature_versions` counts champions, challengers and previous champions
+  (rollback targets) per version (current incl. the macro set / legacy / cannot be rebuilt = warn): delete
+  `features/legacy.py` once it shows no legacy models. Research registry: `record` writes a `deviation` on a result
+  whose feature version differs from its pre-registration's; `passed_gates(..., feature_version=)` counts only rows of
+  that version (research_pass's holdout check passes it); `holdout_scored` stays version-agnostic on purpose (a
+  re-score after a bump is a second look). The tournament's `passed_gates` stays version-agnostic (ADR 0006; the
+  material feature version, BACKLOG 34, needs the owner's sign-off; the tournament summary does not yet show the
+  trial-vs-model version gap). Cost tables by session, slippage audit, the account classifier's London/NY ticks and
+  attribution by session all relabel automatically (the next nightly cost table uses the new labels; tables already
+  on disk keep the old ones until then). Open for quant review: `session_open`'s "Asian range" is the 32 bars (8 h) before the decision's
+  session open, which is the Asia session only before London; before New York it is mostly the London session
+  (unchanged here, as changing it changes the specialist's candidates).
 - COT positioning and GLD holdings, point in time (2026-10-10, indicator survey #67/#68, hypotheses H-09/H-12, row
   D26): `goldbot/data/positioning.py` + `scripts/positioning_data.py` + `.github/workflows/data-positioning.yml`
   (Saturdays 05:23 UTC) publish `positioning.parquet` on release `positioning-v1`: CFTC disaggregated futures-only

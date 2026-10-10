@@ -44,6 +44,10 @@ class RiskLimits(Record):
     max_spread_points: float = 45.0
     point: float = 0.01
     stale_tick_seconds: int = 20
+    # a tick stamped more than this far ahead of the host clock: wrong server_tz, broker clock or host clock (entries
+    # only; exits are never gated). Equal to the engine's clock_skew rule (runner.SKEW_BLOCK_S, a test keeps them
+    # equal), so a broker clock a few seconds fast is the skew rule's case and never refuses every entry on its own.
+    max_tick_ahead_s: float = 10.0
     min_target_over_cost: float = 2.5
     margin_level_floor: float = 3.0      # 300%
     leverage_cap: float = 20.0           # FCA retail gold
@@ -101,6 +105,10 @@ class AccountState(Record):
     combined_size_down: bool = False  # the supervisor's 8% combined drawdown stage
     account_class: str = "raw"        # raw | standard | unknown, from the classifier; a paper broker stays "raw"
     drift_halt: bool = False          # design: Drift and health -- system halt pending the owner's review
+    tick_ahead_s: float = 0.0         # how far the last tick is stamped ahead of the host clock (0 when behind)
+    clock_mismatch: bool = False      # the server-clock probe measured a > 5 min offset (goldbot/ops/server_clock.py)
+    market_closed: bool = False       # the broker session table (D13) says the market is closed now
+    tick_error: bool = False          # a tick raised in the engine; cleared after TICK_ERROR_CLEAR_TICKS clean ticks
 
 
 class Intent(Record):
@@ -256,6 +264,14 @@ class RiskGate:
             reasons.append("drift_system_halt")
         if st.last_tick_age_s > L.stale_tick_seconds or st.stale_bars:
             reasons.append("stale_data")
+        if st.tick_ahead_s > L.max_tick_ahead_s:
+            reasons.append("tick_from_future")
+        if st.clock_mismatch:
+            reasons.append("server_clock_mismatch")
+        if st.market_closed:
+            reasons.append("market_closed")
+        if st.tick_error:
+            reasons.append("tick_error")
         if st.data_recovering:
             reasons.append("data_recovering")
         if st.spread_points > L.max_spread_points:

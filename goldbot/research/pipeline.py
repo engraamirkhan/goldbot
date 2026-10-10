@@ -48,12 +48,14 @@ class ResearchResult(Record):
 
 
 def build_decision_frame(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None = None,
-                         feature_names: list[str] | None = None, ctx: dict | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+                         feature_names: list[str] | None = None, ctx: dict | None = None,
+                         versions: dict[str, str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Features on the decision timeframe plus higher-TF context merged without lookahead. Without `feature_names`:
-    research_feature_names(ctx) (the macro drivers join in when ctx carries macro rows)."""
+    research_feature_names(ctx) (the macro drivers join in when ctx carries macro rows). `versions`: per-feature legacy
+    overrides (`registry.versions_for`), to rebuild the frame an older model was trained on."""
     names = feature_names or research_feature_names(ctx)
     m = mid(bars_dec).reset_index(drop=True)
-    X = build_features(m, names, ctx)
+    X = build_features(m, names, ctx, versions=versions)
     version = X.attrs["feature_version"]
     for label, hbars in (context or {}).items():
         hm = mid(hbars).reset_index(drop=True)

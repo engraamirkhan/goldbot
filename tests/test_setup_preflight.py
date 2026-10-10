@@ -5,11 +5,12 @@ import stat
 from collections import deque
 from pathlib import Path
 
+import pandas as pd
 import pytest
 import yaml
 
 from goldbot.config import DEFAULT_SETTINGS
-from goldbot.execution.broker import AccountInfo
+from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.ops import accounts
 from goldbot.ops import preflight as pf
 from goldbot.ops import setup_wizard as sw
@@ -188,6 +189,8 @@ def server(tmp_path, cfg):
     def make(**over):
         kw = dict(root=root, state_dir=state, settings_path=cfg, get_secret=secrets.get, run_cmd=run,
                   bridge_probe=lambda url: None, terminal_account=lambda url, tok: terminal(),
+                  tick_reader=lambda url, tok, sym: Tick(ts_utc=pd.Timestamp.now("UTC"), bid=2000.0, ask=2000.3),
+                  bridge_tz=lambda url: "Europe/Athens",
                   load_accounts=registry, disk_usage=lambda p: (100e9, 50e9, 50e9),
                   meminfo=lambda: {"MemAvailable": 20_000_000, "MemTotal": 24_000_000})
         kw.update(over)
@@ -198,7 +201,7 @@ def server(tmp_path, cfg):
 
 
 EXPECTED = ["settings", "owner_email", "telegram_token", "telegram_allowlist", "tunnel_service", "bridge_config",
-            "bridge_health", "terminal_account", "web_dist", "db_files_private", "backups", "time_sync", "disk",
+            "bridge_health", "terminal_account", "bridge_server_tz", "server_clock", "web_dist", "db_files_private", "backups", "time_sync", "disk",
             "memory", "deploy_timer"]
 
 
@@ -244,6 +247,22 @@ def test_terminal_on_the_wrong_account_blocks(server):
         items = {i.name: i for i in pf.run_preflight(server(terminal_account=lambda u, t, info=info: info))}
         assert items["terminal_account"].status == "fail" and why in items["terminal_account"].detail
         assert "11111111" not in items["terminal_account"].detail and LOGIN not in items["terminal_account"].detail
+
+
+def test_server_clock_an_hour_off_blocks_preflight(server):
+    ahead = lambda url, tok, sym: Tick(ts_utc=pd.Timestamp.now("UTC") + pd.Timedelta(hours=1), bid=1.0, ask=1.1)  # noqa: E731
+    ctx = server(tick_reader=ahead)
+    item = {i.name: i for i in pf.run_preflight(ctx)}["server_clock"]
+    assert item.status == "fail" and item.blocking and "server_tz" in item.fix and "NY+7" in item.fix
+    assert pf.main([], ctx) == 1
+
+
+def test_bridge_converting_with_another_server_tz_blocks_preflight(server):
+    items = {i.name: i for i in pf.run_preflight(server(bridge_tz=lambda url: "NY+7"))}
+    item = items["bridge_server_tz"]
+    assert item.status == "fail" and item.blocking and "NY+7" in item.detail and "Europe/Athens" in item.detail
+    old = {i.name: i for i in pf.run_preflight(server(bridge_tz=lambda url: None))}["bridge_server_tz"]
+    assert old.status == "warn" and not old.blocking                  # an older bridge that does not report it
 
 
 def test_bridge_rpc_error_is_reported_without_the_url(server):

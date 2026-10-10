@@ -3,7 +3,7 @@ process to one running terminal; each broker account gets its own portable termi
 
 Everything broker-specific is read from symbol_info at startup: symbol suffix, digits, point, lot step,
 stops level, filling modes. The adapter refuses to start if the symbol cannot be selected.
-Times: MT5 returns server-clock epochs labelled UTC; converted here with the broker's IANA zone.
+Times: MT5 returns server-clock epochs labelled UTC; converted here with the account's server_tz (IANA or NY+7).
 
 Measured costs (`broker_terms`, written by the engine to state/broker_terms_<account>.json for the nightly cost job):
 * swap from symbol_info (swap_long/swap_short in the unit `swap_mode` names, triple day `swap_rollover3days`),
@@ -38,12 +38,13 @@ from __future__ import annotations
 import logging
 import math
 import time
+from datetime import datetime
 from typing import Any, AsyncIterator
 
 import pandas as pd
 
 from goldbot.data.calendar import SessionTable, TradingSession, resolve_server_sessions
-from goldbot.data.timeutil import server_to_utc
+from goldbot.data.timeutil import server_to_utc, server_wall
 from goldbot.execution.broker import (
     AccountInfo,
     OrderIntent,
@@ -208,6 +209,11 @@ class MT5Broker:
                            trade_mode=mode)
 
     # ------------------------------------------------------------------ data
+    def _mt5_time(self, utc: pd.Timestamp) -> datetime:
+        """A UTC instant as the datetime MT5 requests take: the server wall clock labelled UTC (tz-aware). MT5 reads a
+        naive datetime in the HOST's local zone, so a naive value would be right only on a UTC host (Wine box)."""
+        return server_wall(pd.Timestamp(utc), self.server_tz)[0].tz_localize("UTC").to_pydatetime()
+
     def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
         rates = mt5.copy_rates_from_pos(symbol, getattr(mt5, TF_MAP[tf]), 0, n)
         df = pd.DataFrame(rates)
@@ -216,8 +222,7 @@ class MT5Broker:
 
     def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
         # copy_ticks_from takes server time; convert the UTC request into server clock
-        since_server = since_utc.tz_convert(self.server_tz).tz_localize(None)
-        ticks = mt5.copy_ticks_from(symbol, since_server.to_pydatetime(), n, mt5.COPY_TICKS_ALL)
+        ticks = mt5.copy_ticks_from(symbol, self._mt5_time(since_utc), n, mt5.COPY_TICKS_ALL)
         df = pd.DataFrame(ticks)
         if df.empty:
             return df
@@ -286,7 +291,7 @@ class MT5Broker:
         if not self._sessions_noted:
             log.info("%s: MetaTrader5 Python exposes no session schedule; using the broker's documented hours", symbol)
             self._sessions_noted = True
-        today = pd.Timestamp.now(tz="UTC").tz_convert(self.server_tz).date()
+        today = server_wall(pd.Timestamp.now(tz="UTC"), self.server_tz)[0].date()
         return resolve_server_sessions(SessionTable(server_tz=self.server_tz).server_sessions(), self.server_tz, today)
 
     # ------------------------------------------------------------------ orders
@@ -360,9 +365,8 @@ class MT5Broker:
         return out
 
     def deals_since(self, since_utc: pd.Timestamp) -> pd.DataFrame:
-        since_server = since_utc.tz_convert(self.server_tz).tz_localize(None).to_pydatetime()
-        until_server = pd.Timestamp.now(self.server_tz).tz_localize(None) + pd.Timedelta(days=1)
-        deals = mt5.history_deals_get(since_server, until_server.to_pydatetime())
+        until = pd.Timestamp.now(tz="UTC") + pd.Timedelta(days=1)
+        deals = mt5.history_deals_get(self._mt5_time(since_utc), self._mt5_time(until))
         if deals is None:             # an error, not an empty history: never read as "no deals" (no fake closes)
             raise RuntimeError(f"history_deals_get failed: {mt5.last_error()}")
         df = pd.DataFrame([d._asdict() for d in deals]) if deals else pd.DataFrame()

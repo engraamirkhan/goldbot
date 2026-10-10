@@ -452,6 +452,15 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - It reuses item 30's descriptive base-rate report; it does not recompute it.
   - Golden test on a fixture. Not in the Telegram digest. The header says "diagnostic, not a target".
   - Depends on: 20, 26.
+- **34. Material feature version (ADR 0006; needs the owner's sign-off).** Value: a feature correction voids research
+  evidence and forces legacy rebuilds only for the models that read the corrected columns. Acceptance:
+  - A material version is hashed over a specialist's selected `model_features` and the versions of the features
+    that produce them. It is recorded on trial rows and model entries, beside today's `feature_version`.
+  - `passed_gates` in the tournament matches on the material version.
+  - Until then, the tournament summary shows any gap between the passing trial's `feature_version` and the live
+    model's.
+  - Tests: a bump of a feature no model reads leaves the material version unchanged; a bump of a read column
+    changes it.
 - **34. Open positions' remaining stop risk in the daily projection (trading-safety review MEDIUM-4).** Value: the
   absolute daily limit (29) projects the loss so far (equity, so open P&L included) plus the NEW trade's stop risk,
   but not what the positions already open could still lose down to their stops, so two open trades can each pass
@@ -477,6 +486,9 @@ These are never decided by the product owner or by agents.
   toolkit trials that compete with item 5 for Q1's 20.
 - **Going live.** Demo until the paper → tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
   and the typed phrase. Item 8 computes whether the gate is met. It never flips it.
+- **Research evidence across feature versions (ADR 0006, item 34).** For now the tournament accepts a gate pass
+  from another feature version, so the DST correction does not void every trial. Sign off the material feature
+  version as the principled fix, or rule that evidence must be re-run after any feature bump.
 - **Trader-playbook risk policy** (items 17–22; playbook section 7): the weekend rule (recommend flat for intraday
   families), tier-2 and holiday windows, throttle and heat-cap values, edge-linked sizing (G-10). The account size
   and tiny-live risk for H-01 were decided under your delegation in ADR 0004 (minimum-lot exception at ≤ 1%; H-01
