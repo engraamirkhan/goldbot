@@ -187,8 +187,8 @@ class GuardedBroker:
     that range. Closes are allowed for any position: closing only reduces risk, and the 12% kill switch closes
     everything on the account (design: Drawdown kill switch)."""
 
-    def __init__(self, broker: Any, *, magic_base: int) -> None:
-        self._b, self.magic_base = broker, magic_base
+    def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None) -> None:
+        self._b, self.magic_base, self._verify = broker, magic_base, verify
 
     def _ours(self, magic: int) -> bool:
         return self.magic_base <= int(magic) < self.magic_base + 100
@@ -202,6 +202,9 @@ class GuardedBroker:
             raise PermissionError(f"magic {intent.magic} outside {self.magic_base}..{self.magic_base + 99}")
         if not 0 < intent.lots <= MAX_ORDER_LOTS:
             raise PermissionError(f"{intent.lots} lots outside (0, {MAX_ORDER_LOTS}]")
+        why = self._verify(self._b.account()) if self._verify is not None else None
+        if why:                                        # the terminal was switched to another account after start
+            raise PermissionError(f"terminal account changed: {why}")
         return self._b.place_order(intent)
 
     def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult:

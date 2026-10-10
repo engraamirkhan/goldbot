@@ -227,3 +227,15 @@ def test_an_idle_connection_does_not_block_the_bridge(monkeypatch):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_an_order_is_refused_if_the_terminal_switched_account_after_start():
+    pb = PaperBroker(equity=10_000)
+    pb.on_tick(Tick(ts_utc=T0, bid=2400.0, ask=2400.2))
+    state: dict[str, str | None] = {"why": None}
+    g = GuardedBroker(pb, magic_base=260100, verify=lambda info: state["why"])
+    assert g.place_order(_intent()).ok
+    state["why"] = "terminal is logged in to another account than icm-demo"
+    with pytest.raises(PermissionError, match="account changed"):
+        g.place_order(_intent("icm-demo-2-b"))
+    assert len(pb.positions()) == 1

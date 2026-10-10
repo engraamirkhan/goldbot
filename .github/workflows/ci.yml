@@ -51,7 +51,7 @@ jobs:
         run: set -o pipefail; mypy 2>&1 | tee ci-out/backend-typecheck.txt || { echo backend-typecheck >> ci-out/failed-backend.list; exit 1; }
       - name: backend-unit
         if: success() || failure()
-        run: set -o pipefail; pytest -m "not integration" -q --tb=short --cov=goldbot --cov-report=term:skip-covered 2>&1 | tee ci-out/backend-unit.txt || { echo backend-unit >> ci-out/failed-backend.list; exit 1; }
+        run: set -o pipefail; pytest -m "not integration" -q -n auto --tb=short --cov=goldbot --cov-report=term:skip-covered 2>&1 | tee ci-out/backend-unit.txt || { echo backend-unit >> ci-out/failed-backend.list; exit 1; }
       - name: api-contract
         # the dashboard's types are generated from the backend's OpenAPI schema; both must be committed in sync
         if: success() || failure()
@@ -64,7 +64,7 @@ jobs:
         if: success() || failure()
         run: |
           set -o pipefail
-          { pytest -m integration -q --tb=short && python scripts/dry_run.py 1 | tail -40; } 2>&1 | tee ci-out/backend-integration.txt \
+          { pytest -m integration -q -n auto --tb=short && python scripts/dry_run.py 1 | tail -40; } 2>&1 | tee ci-out/backend-integration.txt \
             || { echo backend-integration >> ci-out/failed-backend.list; exit 1; }
       - uses: actions/upload-artifact@v4
         if: failure()

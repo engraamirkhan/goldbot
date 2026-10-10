@@ -214,13 +214,16 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
         raise SystemExit(f"store mt5-bridge-listen-{account_id} and {accounts.bridge_token_key(account_id)} first "
                          "(python -m goldbot.ops.accounts bridge-serve " + account_id + ")")
     host, port = listen.rsplit(":", 1)
+    if host not in ("127.0.0.1", "localhost"):     # the token must never cross a network in clear text
+        raise SystemExit(f"bridge must listen on 127.0.0.1 (reached through the SSH tunnel), not {host}")
     broker = MT5Broker(terminal_path=acc.terminal_path, login=None, password=None, server=acc.server,
                        server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id)
     why = accounts.verify_terminal_account(acc, broker.account())
     if why:                                        # e.g. the terminal's saved login is a live account
         broker.shutdown()
         raise SystemExit(f"refusing to serve {account_id}: {why}")
-    serve(GuardedBroker(broker, magic_base=acc.magic_base), host, int(port), token)
+    serve(GuardedBroker(broker, magic_base=acc.magic_base,
+                        verify=lambda info: accounts.verify_terminal_account(acc, info)), host, int(port), token)
 
 
 def run_api() -> None:
