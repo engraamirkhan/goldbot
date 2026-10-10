@@ -431,6 +431,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   groups `data-dukascopy` and `data-macro` (queue, never cancel). `.github/dependabot.yml` opens weekly grouped PRs
   for actions, pip and npm (`web/`). `actionlint` 1.7.12 (with shellcheck) is clean. Not exercised on GitHub yet:
   the first CI run on the PR is the check.
+- H-01 review fixes (2026-10-10, before any H-01 outcome was seen): the screen's event floor is configurable,
+  `research.screen_min_events` (1,000) with `research.screen_min_events_daily` (null = the same) for rules whose
+  signal is daily, passed by `research_pass.py`; behaviour unchanged until the owner sets it (ruling A, recommended
+  150). A screen that fails only on the event floor is now `inconclusive (event floor)`: still a recorded, charged
+  `screened` trial with no model, but the report says it cannot retire the hypothesis. The slow preset's daily
+  inputs (signal and ATR) drop the Friday stub bar (daily bars spanning under 12 trading hours), so lookbacks are
+  5-a-week trading days; `schedule_h` is left out of configurations with `signal_tf` (`Specialist.unused_config`),
+  so the slow agent id is now `tsmom-g0-c12c9afb24` (default tsmom ids unchanged, digest test green). Added an
+  unfiltered-context truncation test. Pre-registration H-01 now freezes the stub, Wilder ATR on mids, the score
+  formula, min_score 0.5, the time-barrier wording, costs and swap source, the short-swap bias (report long-only),
+  holdout-crossing labels dropped, 10 trades per positive year, the t-stat and DSR count, and the inconclusive
+  branch; it states H-01 can retire but not promote. Not done: the research report does not yet print the
+  long-only net R split the pre-registration asks for (a follow-up before the run); the 2,631 signal count predates
+  the stub fix (recount at the freeze). No research trial was run.
 
 ## Next steps (no owner input needed unless marked)
 - Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):

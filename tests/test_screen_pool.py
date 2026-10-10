@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from goldbot.config import ResearchSettings
 from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
 from goldbot.features.mtf import TF_LABEL, context_tfs
@@ -19,7 +20,16 @@ from goldbot.research.pipeline import (
     run_pool,
 )
 from goldbot.research.registry import TrialRegistry, quarter_of
-from goldbot.research.screen import MIN_EVENTS, MIN_T, screen, screen_lines, screen_verdict
+from goldbot.research.screen import (
+    INCONCLUSIVE,
+    MIN_EVENTS,
+    MIN_T,
+    min_events_for,
+    screen,
+    screen_lines,
+    screen_verdict,
+    signal_timeframe,
+)
 from goldbot.research.walkforward import WINDOWS, splits_for, window_for
 from goldbot.specialists import SPECIALISTS
 
@@ -39,6 +49,35 @@ def test_screen_passes_only_a_positive_significant_rule_on_enough_events():
     text = "\n".join(screen_lines(screen_verdict(_rule(10, -0.1, -1.0))))
     assert "screen failed, no model fitted" in text and "FAIL events" in text
     assert "(skipped with --skip-screen)" in "\n".join(screen_lines(screen_verdict(_rule(10, -0.1, -1.0)), skipped=True))
+
+
+def test_a_screen_failing_only_on_the_event_floor_is_inconclusive_not_a_plain_fail():
+    v = screen_verdict(_rule(MIN_EVENTS - 1, 0.05, 3.0))
+    assert v["passed"] is False and v["verdict"] == INCONCLUSIVE == "inconclusive (event floor)"
+    text = "\n".join(screen_lines(v))
+    assert "**INCONCLUSIVE (event floor)**" in text and "cannot retire the hypothesis" in text and "FAIL events" in text
+    # any other failing criterion, alone or with the floor, is a plain fail
+    for rule in (_rule(MIN_EVENTS - 1, -0.05, 3.0), _rule(MIN_EVENTS - 1, 0.05, 1.0), _rule(5000, 0.05, 1.0),
+                 {"gross": {"n": 0}, "net": {"n": 0}}):
+        assert screen_verdict(rule)["verdict"] == "fail"
+    assert screen_verdict(_rule(MIN_EVENTS, 0.05, MIN_T))["verdict"] == "pass"
+    # the floor is a parameter: 150 events pass a floor of 150, 149 are inconclusive
+    assert screen_verdict(_rule(150, 0.05, 2.0), 150)["passed"] is True
+    v149 = screen_verdict(_rule(149, 0.05, 2.0), 150)
+    assert v149["verdict"] == INCONCLUSIVE and v149["min_events"] == 150 and ">= 150 events" in v149["rule"]
+
+
+def test_screen_floor_comes_from_settings_with_an_optional_daily_signal_override():
+    default = ResearchSettings()
+    assert default.screen_min_events == MIN_EVENTS and default.screen_min_events_daily is None
+    assert min_events_for("1d", default) == min_events_for("4h", default) == 1000     # unchanged until the owner sets it
+    ruled = ResearchSettings(screen_min_events_daily=150)
+    assert min_events_for("1d", ruled) == 150 and min_events_for("4h", ruled) == 1000
+    assert min_events_for("15m", ResearchSettings(screen_min_events=800)) == 800
+    # the override follows the signal's timeframe: the slow preset (4h decisions, 1d signal) and the daily option
+    tsmom = SPECIALISTS["tsmom"]
+    assert signal_timeframe(tsmom(**tsmom.presets["slow"])) == "1d" == signal_timeframe(tsmom(timeframe="1d"))
+    assert signal_timeframe(tsmom(timeframe="4h")) == "4h"
 
 
 @pytest.fixture(scope="module")

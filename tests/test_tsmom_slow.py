@@ -15,7 +15,11 @@ from goldbot.labels import SwapSpec, triple_barrier
 from goldbot.research.pipeline import build_decision_frame, prepare
 from goldbot.research.walkforward import WINDOWS, splits_for, window_for
 from goldbot.specialists import SPECIALISTS
-from goldbot.specialists.time_series_momentum import TimeSeriesMomentumSpecialist
+from goldbot.specialists.time_series_momentum import (
+    TimeSeriesMomentumSpecialist,
+    drop_stub_days,
+    trading_hours,
+)
 
 SWAP = SwapSpec(long_usd_per_lot=-60.0, short_usd_per_lot=20.0)
 
@@ -68,6 +72,7 @@ def test_slow_preset_is_h01_exactly_as_preregistered():
     assert s.timeframe == "4h" and s.config["signal_tf"] == "1d" and s.config["atr_tf"] == "1d"
     # 20 / 60 / 120-day vol-scaled returns with 60-day volatility, counted in daily bars
     assert [s._bars(s.config[k], "1d") for k in ("lb_fast_h", "lb_mid_h", "lb_slow_h", "vol_window_h")] == [20, 60, 120, 60]
+    assert "schedule_h" not in s.config                            # inert under signal_tf: not in the config or id
     ls = s.label_spec
     assert (ls.target_atr, ls.stop_atr, ls.max_bars) == (3.0, 1.5, 124)     # 20 trading days x 31/5 four-hour bars
     w = window_for(s.timeframe, **s.walkforward)
@@ -104,7 +109,7 @@ def test_daily_signal_is_read_only_after_the_feature_day_close(two_years):
     m, X = build_decision_frame(dec, context)
     full = s.candidates_in_context(m, X, context)
     assert len(full) > 50
-    d1_vis = pd.DatetimeIndex(context["d1"]["visible_at"])
+    d1_vis = pd.DatetimeIndex(drop_stub_days(context["d1"])["visible_at"])     # the signal's daily bars (no stub)
     close = pd.DatetimeIndex(m["visible_at"])
     for i in full["idx"]:
         used = d1_vis[d1_vis <= close[i]].max()
@@ -127,7 +132,7 @@ def test_daily_signal_is_read_only_after_the_feature_day_close(two_years):
 def test_barriers_are_daily_atr_frozen_at_entry(prepared, two_years):
     dec, context, p = prepared
     lab = p.labels
-    d1 = mid(context["d1"].reset_index(drop=True))
+    d1 = mid(drop_stub_days(context["d1"].reset_index(drop=True)))
     d1_atr = atr(d1, 14).to_numpy()
     close = pd.DatetimeIndex(dec["visible_at"])
     vis = pd.DatetimeIndex(d1["visible_at"])
@@ -183,3 +188,74 @@ def test_triple_barrier_reads_the_atr_only_at_the_signal_bar():
     moving.iloc[3:] = 5.0                                         # ATR jumps after the signal bar
     pd.testing.assert_frame_equal(flat, triple_barrier(bars, sig, slow().label_spec, moving))
     assert flat["barrier_hit"].iloc[0] == "target"
+
+
+def test_friday_stub_is_dropped_so_lookbacks_count_five_trading_days_a_week(two_years):
+    d1 = resample_bars(two_years, "1d")
+    hours = trading_hours(d1)
+    weekday = pd.DatetimeIndex(d1["visible_at"]).tz_convert("America/New_York").dayofweek
+    # the feature-day after Friday's settlement: Friday 13:30-17:00 New York, 3.5 trading hours, settling on Saturday
+    assert (hours[weekday == 5] == 3.5).all() and (weekday == 5).sum() > 50
+    assert (hours[weekday != 5] >= 19.5).all()                    # Monday (from Sunday 18:00) and full weekdays
+    kept = drop_stub_days(d1)
+    kept_day = pd.DatetimeIndex(kept["visible_at"]).tz_convert("America/New_York")
+    assert len(kept) == (weekday != 5).sum() and set(kept_day.dayofweek) == {0, 1, 2, 3, 4}
+    # 20 daily bars back is four calendar weeks: 20 five-a-week trading days (no holidays in the synthetic data;
+    # DST moves a settlement by an hour)
+    vis = pd.DatetimeIndex(kept["visible_at"])
+    assert (pd.Series(vis[20:] - vis[:-20]).dt.round("1D") == pd.Timedelta(days=28)).all()
+    # the specialist's signal is tsmom_score on exactly those bars: a stub bar never fires a signal
+    s = slow()
+    dec = resample_bars(two_years, "4h").reset_index(drop=True)
+    context = _context(two_years, "4h")
+    m, X = build_decision_frame(dec, context)
+    fired = pd.DatetimeIndex(m["visible_at"])[s.candidates_in_context(m, X, context)["idx"]]
+    assert len(fired) > 50
+    latest = np.searchsorted(pd.DatetimeIndex(d1["visible_at"]), fired, side="right") - 1
+    assert not (weekday[latest] == 5).any()                       # no signal is read off a stub's settlement
+
+
+def test_daily_atr_has_no_friday_stub(prepared):
+    dec, context, _ = prepared
+    a = slow().barrier_atr(mid(dec), context)
+    assert a is not None
+    d1 = context["d1"].reset_index(drop=True)
+    clean, with_stub = atr(mid(drop_stub_days(d1)), 14).to_numpy(), atr(mid(d1), 14).to_numpy()
+    values = set(np.round(a.dropna().to_numpy(), 9))
+    assert values <= set(np.round(clean[np.isfinite(clean)], 9))  # every barrier ATR is the stub-free daily ATR
+    assert not values & set(np.round(with_stub[np.isfinite(with_stub)], 9))
+    assert np.nanmean(with_stub) < np.nanmean(clean)              # a 3.5-hour range would pull the ATR down
+
+
+def test_schedule_h_is_inert_under_signal_tf_and_left_out_of_the_agent_id():
+    s = slow()
+    assert "schedule_h" not in s.config and "schedule_h" not in TimeSeriesMomentumSpecialist.presets["slow"]
+    assert slow(schedule_h=24).agent_id == slow(schedule_h=4).agent_id == s.agent_id
+    assert slow(schedule_h=24).config == s.config
+    # the default tsmom (no signal_tf) keeps schedule_h, and a different schedule is a different agent
+    assert SPECIALISTS["tsmom"](schedule_h=8).agent_id != SPECIALISTS["tsmom"]().agent_id
+
+
+def test_a_partial_daily_bar_cannot_leak_without_any_visibility_filter_on_the_context(two_years):
+    s = slow()
+    dec = resample_bars(two_years, "4h").reset_index(drop=True)
+    context = _context(two_years, "4h")
+    m, X = build_decision_frame(dec, context)
+    full = s.candidates_in_context(m, X, context)
+    a_full = s.barrier_atr(m, context)
+    assert a_full is not None
+    # cuts on 4h closes before a Wednesday settlement (17:30 UTC) and inside the Friday stub (after 17:30 UTC Friday):
+    # the context is resampled from the cut history and NOT filtered on visible_at, so it ends in a partial daily bar
+    for cut in (pd.Timestamp("2023-06-14 16:00", tz="UTC"), pd.Timestamp("2023-06-16 20:00", tz="UTC"),
+                pd.Timestamp("2023-03-08 12:00", tz="UTC")):
+        b_cut = two_years[two_years["visible_at"] <= cut]
+        ctx_c = _context(b_cut, "4h")
+        assert pd.Timestamp(ctx_c["d1"]["visible_at"].iloc[-1]) > cut                # the partial bar is there
+        dec_c = resample_bars(b_cut, "4h").reset_index(drop=True)
+        m_c, X_c = build_decision_frame(dec_c, ctx_c)
+        part = s.candidates_in_context(m_c, X_c, ctx_c)
+        upto = full[full["idx"] < len(m_c)].reset_index(drop=True)
+        pd.testing.assert_frame_equal(part.reset_index(drop=True), upto, check_dtype=False)
+        a_cut = s.barrier_atr(m_c, ctx_c)
+        assert a_cut is not None
+        np.testing.assert_allclose(a_cut.to_numpy(), a_full.to_numpy()[: len(m_c)], equal_nan=True)
