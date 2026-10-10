@@ -31,7 +31,8 @@ const FULL: ResearchView = {
   plan: { created_utc: "2026-09-01T00:00:00Z", stale: true, quarter: "2026Q4", quarter_budget: 20, quarter_used: 2, total_budget: 18,
     budget: { tsmom: 10 }, grid_budget: { tsmom: 0 }, unallocated: 0, holdout_from: "2025-10-01", holdout_to: "2026-10-01",
     focus: [{ rank: 1, family: "tsmom", budget: 10, evidence: 1.2, reasons: ["gross t 2.63"] }],
-    evidence: [{ family: "tsmom", trials: 2, evidence: 1.2, blocked: false, flags: ["few_filtered_trades"], median_auc: 0.52, best_dsr: null, shadow_trades: 0 }] },
+    evidence: [{ family: "tsmom", trials: 2, evidence: 1.2, blocked: false, flags: ["few_filtered_trades"], median_auc: 0.52, best_dsr: null, shadow_trades: 0 }],
+    quarter_reserved: 0, retired: [], moves: [], hypotheses_changed: false, hypotheses_drift: [] },
   hypotheses: { path: "docs/research/hypotheses.md", updated_utc: "2026-10-10T00:00:00Z", note: null, tables: [
     { title: "A. Ranked portfolio", columns: ["Rank", "ID", "Hypothesis"], rows: [["1", "H-01", "Slow TSMOM: 1d signal"]] },
     { title: "B. Retired", columns: ["ID", "Idea"], rows: [["R-01", "mean_reversion"]] },
@@ -70,6 +71,34 @@ describe("Research", () => {
     expect(screen.getByText("few_filtered_trades")).toBeInTheDocument();
     expect(screen.getByText("Slow TSMOM: 1d signal")).toBeVisible();
     expect(screen.getByText("B. Retired")).toBeInTheDocument();
+  });
+
+  it("shows the director's reserved trials, retired families with their floor, the moves and the doc drift", async () => {
+    vi.spyOn(apiModule.api, "research").mockResolvedValue({ ...FULL, plan: { ...FULL.plan!,
+      quarter_reserved: 4, reservation: { setting: 6, run: 2, pending: 3, reserved: 4 }, reinstate_t: 2.61,
+      retired: [{ family: "mean_reversion", hypothesis_id: "R-01", since: "2026-07-01", reason: "net negative after costs", floor: 1, reinstated: false, new_evidence: [] },
+        { family: "breakout", hypothesis_id: "R-02", since: "2026-06-01", reason: "no edge", floor: 0, reinstated: true, new_evidence: ["attribution t 2.9 over 80 trades"] }],
+      moves: [{ family: "tsmom", source: "attribution", detail: "net-R t 2.1 over 60 trades", budget_before: 9, budget_after: 10, share_before: 0.5, share_after: 0.56, shift_pct: 12 }],
+      hypotheses_sha256: "aaaaaaaa11", hypotheses_sha256_now: "bbbbbbbb22", hypotheses_changed: true,
+      hypotheses_drift: ["R-03 in hypotheses.md but not in research.retired_families"] } });
+    renderResearch();
+    expect(await screen.findByText("4 trials reserved")).toBeInTheDocument();
+    expect(screen.getByText(/2 run, 3 pre-registered not yet run; setting 6/)).toBeInTheDocument();
+    const retired = screen.getByRole("heading", { name: "Retired families" }).nextElementSibling as HTMLElement;
+    const cards = within(retired).getAllByRole("listitem");
+    expect(cards[0]).toHaveTextContent("mean_reversion · R-01");
+    expect(within(cards[0]).getByText("retired")).toHaveClass("state", "warn");
+    expect(cards[0]).toHaveTextContent("1 trial this quarter, nothing from the evidence pool");
+    expect(within(cards[1]).getByText("reinstated")).toBeInTheDocument();
+    expect(cards[1]).toHaveTextContent("attribution t 2.9 over 80 trades");
+    expect(screen.getByText(/shrunk t of 2.61/)).toBeInTheDocument();
+    const move = within(screen.getAllByRole("table").find((t) => t.classList.contains("moves"))!).getAllByRole("row")[1];
+    expect(move).toHaveTextContent("out-of-sample attribution");
+    expect(move).toHaveTextContent("9 → 10");
+    expect(move).toHaveTextContent("50% → 56% (+12%)");
+    const note = screen.getByRole("note");
+    expect(note).toHaveTextContent("hypotheses.md changed since this plan (aaaaaaaa then, bbbbbbbb now)");
+    expect(note).toHaveTextContent("R-03 in hypotheses.md but not in research.retired_families");
   });
 
   it("reports a corrupt plan instead of the empty state", async () => {

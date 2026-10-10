@@ -202,3 +202,26 @@ td a { color: inherit; }
   .agents-health td::before { content: attr(data-label); color: var(--muted); font-size: 12px; }
   .agents-health td .state { white-space: normal; }
 }
+
+/* ------------------------------------------------------------------ owner controls: entry mode card, recovery codes */
+.mode-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 16px; background: var(--surface); min-width: 0; }
+.mode-card h2 { font-size: 16px; margin: 0; }
+.mode-card :focus-visible, .recovery :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.mode-card p { margin: 8px 0; } .mode-card .warn-note ul { margin: 4px 0 0; padding-left: 18px; }
+.state.idle { color: var(--muted); }
+.evidence { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 8px 0 0; }
+@media (min-width: 720px) { .evidence { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.evidence dt { font-size: 12px; color: var(--muted); } .evidence dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.evidence dd small { color: var(--muted); margin-left: 4px; }
+.mode-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+.mode-actions input, .recovery input:not([type="checkbox"]) { min-height: 44px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); font-size: 16px; }
+.mode-actions button, .recovery .row button { min-height: 44px; padding: 6px 14px; border-radius: 6px; border: 0; background: var(--accent); color: #fff; font-size: 15px; cursor: pointer; }
+.mode-actions button.secondary, .recovery .row button.secondary { background: none; border: 1px solid var(--line); color: var(--fg); }
+.mode-actions button:disabled, .recovery button:disabled { opacity: 0.6; cursor: not-allowed; }
+.h-fixed { color: var(--warn-fg); font-weight: 600; }
+.recovery { margin-top: 24px; } .recovery .login { margin: 8px 0; }
+.recovery .check { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 14px; }
+.recovery .check input { width: 20px; height: 20px; }
+.codes { columns: 2; padding-left: 28px; font-size: 16px; line-height: 1.8; }
+.moves td { vertical-align: top; }

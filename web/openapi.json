@@ -464,6 +464,149 @@
     "title": "AuthState",
     "type": "object"
    },
+   "AutoModeView": {
+    "properties": {
+     "approved": {
+      "title": "Approved",
+      "type": "integer"
+     },
+     "breaches": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Breaches",
+      "type": "array"
+     },
+     "can_enable": {
+      "title": "Can Enable",
+      "type": "boolean"
+     },
+     "decided": {
+      "title": "Decided",
+      "type": "integer"
+     },
+     "eligible": {
+      "title": "Eligible",
+      "type": "boolean"
+     },
+     "engine_modes": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "title": "Engine Modes",
+      "type": "object"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     },
+     "forced_propose": {
+      "items": {
+       "$ref": "#/components/schemas/ForcedPropose"
+      },
+      "title": "Forced Propose",
+      "type": "array"
+     },
+     "min_outcomes_per_side": {
+      "title": "Min Outcomes Per Side",
+      "type": "integer"
+     },
+     "min_proposals": {
+      "title": "Min Proposals",
+      "type": "integer"
+     },
+     "mode_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode By"
+     },
+     "mode_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode Reason"
+     },
+     "mode_since": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode Since"
+     },
+     "owner_mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "propose",
+         "auto"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Owner Mode"
+     },
+     "reasons": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Reasons",
+      "type": "array"
+     },
+     "rejected": {
+      "title": "Rejected",
+      "type": "integer"
+     },
+     "test": {
+      "$ref": "#/components/schemas/VetoTestView"
+     }
+    },
+    "required": [
+     "owner_mode",
+     "mode_by",
+     "mode_since",
+     "mode_reason",
+     "engine_modes",
+     "eligible",
+     "reasons",
+     "decided",
+     "approved",
+     "rejected",
+     "min_proposals",
+     "min_outcomes_per_side",
+     "breaches",
+     "test",
+     "forced_propose",
+     "can_enable"
+    ],
+    "title": "AutoModeView",
+    "type": "object"
+   },
    "CalendarEvent": {
     "description": "One archived economic-calendar event. Tier 1 (US CPI, NFP, FOMC, PCE) carries its entry-blackout window.",
     "properties": {
@@ -641,13 +784,49 @@
       "title": "Alarm",
       "type": "boolean"
      },
+     "false_alarm": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "False Alarm"
+     },
      "h": {
       "title": "H",
       "type": "number"
      },
+     "h_note": {
+      "default": "",
+      "title": "H Note",
+      "type": "string"
+     },
+     "h_source": {
+      "default": "fixed",
+      "enum": [
+       "calibrated",
+       "fixed"
+      ],
+      "title": "H Source",
+      "type": "string"
+     },
      "k": {
       "title": "K",
       "type": "number"
+     },
+     "p_mean": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P Mean"
      },
      "points": {
       "items": {
@@ -655,6 +834,17 @@
       },
       "title": "Points",
       "type": "array"
+     },
+     "trades_per_week": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Trades Per Week"
      },
      "version": {
       "title": "Version",
@@ -931,6 +1121,47 @@
      "supervisor_heartbeat_age_s"
     ],
     "title": "FeedHealth",
+    "type": "object"
+   },
+   "ForcedPropose": {
+    "description": "An engine override that keeps propose-and-approve whatever the owner's mode says.",
+    "properties": {
+     "account_id": {
+      "title": "Account Id",
+      "type": "string"
+     },
+     "detail": {
+      "title": "Detail",
+      "type": "string"
+     },
+     "kind": {
+      "enum": [
+       "rearm_lock",
+       "kill_switch",
+       "risk_unreadable"
+      ],
+      "title": "Kind",
+      "type": "string"
+     },
+     "until": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Until"
+     }
+    },
+    "required": [
+     "account_id",
+     "kind",
+     "detail"
+    ],
+    "title": "ForcedPropose",
     "type": "object"
    },
    "ForgotPasswordRequest": {
@@ -1563,6 +1794,46 @@
     "title": "Me",
     "type": "object"
    },
+   "ModeChangeRequest": {
+    "properties": {
+     "mode": {
+      "enum": [
+       "auto",
+       "propose"
+      ],
+      "title": "Mode",
+      "type": "string"
+     },
+     "totp": {
+      "default": "",
+      "maxLength": 16,
+      "title": "Totp",
+      "type": "string"
+     }
+    },
+    "required": [
+     "mode"
+    ],
+    "title": "ModeChangeRequest",
+    "type": "object"
+   },
+   "ModeChangeResult": {
+    "properties": {
+     "message": {
+      "title": "Message",
+      "type": "string"
+     },
+     "view": {
+      "$ref": "#/components/schemas/AutoModeView"
+     }
+    },
+    "required": [
+     "message",
+     "view"
+    ],
+    "title": "ModeChangeResult",
+    "type": "object"
+   },
    "Ok": {
     "properties": {
      "ok": {
@@ -1673,6 +1944,101 @@
      "reasons"
     ],
     "title": "PlanFocus",
+    "type": "object"
+   },
+   "PlanMove": {
+    "properties": {
+     "budget_after": {
+      "title": "Budget After",
+      "type": "integer"
+     },
+     "budget_before": {
+      "title": "Budget Before",
+      "type": "integer"
+     },
+     "detail": {
+      "title": "Detail",
+      "type": "string"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "share_after": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Share After"
+     },
+     "share_before": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Share Before"
+     },
+     "shift_pct": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Shift Pct"
+     },
+     "source": {
+      "title": "Source",
+      "type": "string"
+     }
+    },
+    "required": [
+     "family",
+     "source",
+     "detail",
+     "budget_before",
+     "budget_after"
+    ],
+    "title": "PlanMove",
+    "type": "object"
+   },
+   "PlanReservation": {
+    "description": "Trials of the quarter held for the pre-registered queue (research/director.py Reservation).",
+    "properties": {
+     "pending": {
+      "title": "Pending",
+      "type": "integer"
+     },
+     "reserved": {
+      "title": "Reserved",
+      "type": "integer"
+     },
+     "run": {
+      "title": "Run",
+      "type": "integer"
+     },
+     "setting": {
+      "title": "Setting",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "setting",
+     "run",
+     "pending",
+     "reserved"
+    ],
+    "title": "PlanReservation",
     "type": "object"
    },
    "Proposal": {
@@ -2050,6 +2416,17 @@
    "ResearchPlanView": {
     "description": "The research director's latest plan (state/research_plan.json).",
     "properties": {
+     "attribution_note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Attribution Note"
+     },
      "budget": {
       "additionalProperties": {
        "type": "integer"
@@ -2091,6 +2468,60 @@
       "title": "Holdout To",
       "type": "string"
      },
+     "hypotheses_changed": {
+      "default": false,
+      "title": "Hypotheses Changed",
+      "type": "boolean"
+     },
+     "hypotheses_drift": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Hypotheses Drift",
+      "type": "array"
+     },
+     "hypotheses_note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hypotheses Note"
+     },
+     "hypotheses_sha256": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hypotheses Sha256"
+     },
+     "hypotheses_sha256_now": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hypotheses Sha256 Now"
+     },
+     "moves": {
+      "default": [],
+      "items": {
+       "$ref": "#/components/schemas/PlanMove"
+      },
+      "title": "Moves",
+      "type": "array"
+     },
      "quarter": {
       "title": "Quarter",
       "type": "string"
@@ -2099,9 +2530,43 @@
       "title": "Quarter Budget",
       "type": "integer"
      },
+     "quarter_reserved": {
+      "default": 0,
+      "title": "Quarter Reserved",
+      "type": "integer"
+     },
      "quarter_used": {
       "title": "Quarter Used",
       "type": "integer"
+     },
+     "reinstate_t": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reinstate T"
+     },
+     "reservation": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/PlanReservation"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "retired": {
+      "default": [],
+      "items": {
+       "$ref": "#/components/schemas/RetiredFamilyView"
+      },
+      "title": "Retired",
+      "type": "array"
      },
      "stale": {
       "title": "Stale",
@@ -2225,6 +2690,73 @@
      }
     },
     "title": "ResetRequest",
+    "type": "object"
+   },
+   "RetiredFamilyView": {
+    "properties": {
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "floor": {
+      "title": "Floor",
+      "type": "integer"
+     },
+     "hypothesis_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hypothesis Id"
+     },
+     "new_evidence": {
+      "items": {
+       "type": "string"
+      },
+      "title": "New Evidence",
+      "type": "array"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "reinstated": {
+      "title": "Reinstated",
+      "type": "boolean"
+     },
+     "since": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Since"
+     }
+    },
+    "required": [
+     "family",
+     "hypothesis_id",
+     "since",
+     "reason",
+     "floor",
+     "reinstated",
+     "new_evidence"
+    ],
+    "title": "RetiredFamilyView",
     "type": "object"
    },
    "RevokeResponse": {
@@ -2696,6 +3228,107 @@
      "type"
     ],
     "title": "ValidationError",
+    "type": "object"
+   },
+   "VetoTestView": {
+    "description": "Welch's two-sample t-test of mean R, approved minus rejected (telegram/automode.py VetoTest).",
+    "properties": {
+     "alpha": {
+      "title": "Alpha",
+      "type": "number"
+     },
+     "ci_high": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ci High"
+     },
+     "ci_low": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ci Low"
+     },
+     "diff": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Diff"
+     },
+     "indistinguishable": {
+      "title": "Indistinguishable",
+      "type": "boolean"
+     },
+     "mean_r_approved": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mean R Approved"
+     },
+     "mean_r_rejected": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mean R Rejected"
+     },
+     "n_approved": {
+      "title": "N Approved",
+      "type": "integer"
+     },
+     "n_rejected": {
+      "title": "N Rejected",
+      "type": "integer"
+     },
+     "p_value": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P Value"
+     }
+    },
+    "required": [
+     "n_approved",
+     "n_rejected",
+     "mean_r_approved",
+     "mean_r_rejected",
+     "diff",
+     "ci_low",
+     "ci_high",
+     "p_value",
+     "alpha",
+     "indistinguishable"
+    ],
+    "title": "VetoTestView",
     "type": "object"
    }
   },
@@ -3232,6 +3865,70 @@
      }
     },
     "summary": "Auth State"
+   }
+  },
+  "/api/automode": {
+   "get": {
+    "operationId": "automode_get_api_automode_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AutoModeView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Automode Get"
+   },
+   "post": {
+    "operationId": "automode_set_api_automode_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ModeChangeRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ModeChangeResult"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Automode Set"
    }
   },
   "/api/calendar": {

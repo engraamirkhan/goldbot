@@ -7,25 +7,33 @@ Everything here reads files other processes write and never changes them:
 * state/agents.json (population league): the allocator's capital share per agent;
 * the deploy, data-quality and drift health checks (ops/health.py), evaluated on request;
 * state/research_registry.jsonl (trial registry), state/research_plan.json (research director);
-* docs/research/hypotheses.md (hypothesis portfolio): its markdown tables, parsed.
+* docs/research/hypotheses.md (hypothesis portfolio): its markdown tables, parsed;
+* models/registry.json (model registry): each champion's backtest trade rate, which sets its calibrated CUSUM h;
+* control.json, approvals/done, risk_<account>.json, engine_<account>.json: the auto-mode card (row A10), through the
+  same evidence check `/mode auto` runs (telegram/automode.py auto_mode_eligibility_from_state).
 
 Most of these files are absent until the VPS runs; every builder returns an empty, well-formed view then.
 """
 from __future__ import annotations
 
+import hashlib
+import importlib
 import json
+import math
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
 from goldbot.api.schema import (
     AgentHealthRow,
+    AutoModeView,
     CusumPoint,
     CusumTrace,
+    ForcedPropose,
     GateCheck,
     HealthCheckRow,
     HealthView,
@@ -33,16 +41,20 @@ from goldbot.api.schema import (
     HypothesisTable,
     PlanFamily,
     PlanFocus,
+    PlanMove,
+    PlanReservation,
     PsiHeatmap,
     ReliabilityBin,
     ReliabilityCurve,
     ResearchPlanView,
     ResearchView,
+    RetiredFamilyView,
     SystemHaltView,
     TrialBudget,
     TrialRow,
+    VetoTestView,
 )
-from goldbot.config import DriftSettings, Settings
+from goldbot.config import DriftSettings, Settings, TelegramSettings
 
 REVIEW_COMMAND = "python -m goldbot.ops.run drift-review"
 CLEAR_COMMAND = 'python -m goldbot.ops.run drift-review --clear "what you checked"'
@@ -145,9 +157,60 @@ def _reliability(agent_id: str, version: str | None, trades: list[Any]) -> Relia
     return ReliabilityCurve(agent_id=agent_id, version=version, n=int(len(p)), ece=ece, brier=brier, bins=bins)
 
 
-def _cusum(agent_id: str, version: str, trades: list[Any], k: float, h: float) -> CusumTrace:
-    """The drift watch's downward CUSUM (research/drift.py residual_cusum) on the same residuals, step by step."""
+def _trade_rates(settings: Settings | None) -> dict[str, float]:
+    """Backtest trade rate per model version from the model registry (read as a file: ModelRegistry() creates its
+    folder, and this view never writes)."""
+    root = Path(settings.research.models_dir) if settings is not None else Path("models")
+    try:
+        rows = _read(root / "registry.json") if (root / "registry.json").exists() else []
+    except (ValueError, OSError):
+        return {}
+    out: dict[str, float] = {}
+    for r in rows if isinstance(rows, list) else []:
+        tpw = _f(_d(_d(r).get("backtest")).get("trades_per_week"))
+        if tpw is not None and tpw > 0 and r.get("version"):
+            out[str(r["version"])] = tpw
+    return out
+
+
+def _mean_p(trades: list[Any]) -> float | None:
+    """Mean model p of the scored trades (research/drift.py mean_taken_p): the residuals' in-control win probability."""
+    ps = [min(max(float(t.p), 1e-3), 1 - 1e-3) for t in trades if t.exit is not None and abs(t.entry - t.stop) > 0]
+    return float(np.mean(ps)) if ps else None
+
+
+def cusum_h(trades: list[Any], trades_per_week: float | None,
+            ds: DriftSettings) -> tuple[float, Literal["calibrated", "fixed"], str, float | None]:
+    """(h, source, note, false-alarm rate) for one agent's trace. Row M25: h is research/cusum.py `calibrated_h` at the
+    agent's backtest trade rate and the mean p of its trades (5% false alarms per quarter of trading), the h the drift
+    watch alarms on. Falls back to the fixed `drift.cusum_h`, labelled, when the calibration module is not installed,
+    the backtest recorded no trade rate, or the calibration fails. Read-only: nothing is written."""
+    fixed = float(ds.cusum_h)
+    try:
+        cal = importlib.import_module("goldbot.research.cusum")
+    except ImportError:
+        return fixed, "fixed", f"fixed h {fixed:g}: CUSUM calibration (research/cusum.py) not installed", None
+    if trades_per_week is None:
+        return fixed, "fixed", f"fixed h {fixed:g}: the backtest recorded no trade rate to calibrate on", None
+    target: Any = getattr(ds, "cusum_false_alarm", None) or getattr(cal, "FALSE_ALARM_QUARTER", 0.05)
+    rate = float(target)
+    try:
+        h = float(cal.calibrated_h(trades_per_week, ds.cusum_k, rate, p=_mean_p(trades)))
+    except Exception as exc:                  # a calibration fault must not hide the trace
+        return fixed, "fixed", f"fixed h {fixed:g}: calibration failed ({type(exc).__name__})", None
+    if not math.isfinite(h) or h <= 0:
+        return fixed, "fixed", f"fixed h {fixed:g}: calibration returned no usable h", None
+    return round(h, 3), "calibrated", (f"h {h:.2f} calibrated to {rate:.0%} false alarms a quarter at "
+                                       f"{trades_per_week:.1f} trades/week"), rate
+
+
+def _cusum(agent_id: str, version: str, trades: list[Any], ds: DriftSettings,
+           trades_per_week: float | None = None) -> CusumTrace:
+    """The drift watch's downward CUSUM (research/drift.py residual_cusum) on the same residuals, step by step, against
+    the calibrated h (`cusum_h`)."""
     from goldbot.research.drift import trade_residuals
+    k = ds.cusum_k
+    h, source, note, rate = cusum_h(trades, trades_per_week, ds)
     s, alarm, pts = 0.0, False, []
     for t in trades:
         z = trade_residuals([t])
@@ -158,7 +221,10 @@ def _cusum(agent_id: str, version: str, trades: list[Any], k: float, h: float) -
         ts = _ts(t.exit_ts)
         if ts is not None:
             pts.append(CusumPoint(ts=ts, z=round(z[0], 4), s=round(s, 4)))
-    return CusumTrace(agent_id=agent_id, version=version, k=k, h=h, alarm=alarm, points=pts)
+    pm = _mean_p(trades)
+    return CusumTrace(agent_id=agent_id, version=version, k=k, h=h, alarm=alarm, points=pts, h_source=source,
+                      h_note=note, trades_per_week=trades_per_week, p_mean=round(pm, 4) if pm is not None else None,
+                      false_alarm=rate)
 
 
 def _checks(state: Path, settings: Settings | None) -> list[HealthCheckRow]:
@@ -223,7 +289,8 @@ def health_view(state: Path, settings: Settings | None) -> HealthView:
             pooled += tail
     if len(reliability) > 1:
         reliability.insert(0, _reliability("all", None, pooled))
-    cusum = [_cusum(aid, v, closed[v], ds.cusum_k, ds.cusum_h) for aid, v in pairs[:MAX_CURVES] if closed[v]]
+    rates = _trade_rates(settings)
+    cusum = [_cusum(aid, v, closed[v], ds, rates.get(v)) for aid, v in pairs[:MAX_CURVES] if closed[v]]
 
     sh = d.get("system_halt")
     if err:
@@ -284,7 +351,34 @@ def _trial(r: dict[str, Any], timeframes: dict[str, str]) -> TrialRow:
                     gates_passed=passed, gates=gates, rationale=str(r.get("rationale", "")))
 
 
-def _plan(state: Path) -> tuple[ResearchPlanView | None, str | None]:
+def _retired(p: dict[str, Any]) -> list[RetiredFamilyView]:
+    """Retired families from the plan's evidence rows (retired_id set: retired, or reinstated by new evidence) and its
+    retired_floor, with the exploration floor each keeps this quarter."""
+    floors = {str(k): int(v) for k, v in _d(p.get("retired_floor")).items()}
+    out: dict[str, RetiredFamilyView] = {}
+    for e in p.get("evidence") or []:
+        if isinstance(e, dict) and e.get("retired_id"):
+            fam = str(e["family"])
+            out[fam] = RetiredFamilyView(
+                family=fam, hypothesis_id=str(e["retired_id"]), since=str(e["retired_since"]) if e.get("retired_since") else None,
+                reason=str(e["retired_status"]) if e.get("retired_status") else None, floor=floors.get(fam, 0),
+                reinstated=not bool(e.get("retired")), new_evidence=[str(x) for x in e.get("new_evidence") or []])
+    for fam, f in floors.items():
+        out.setdefault(fam, RetiredFamilyView(family=fam, hypothesis_id=None, since=None, reason=None, floor=f,
+                                              reinstated=False, new_evidence=[]))
+    return [out[k] for k in sorted(out)]
+
+
+def _doc_sha(docs_dir: Path | None) -> str | None:
+    """sha256 of hypotheses.md as the director hashes it (research/director.py: the text, UTF-8)."""
+    f = docs_dir / "research" / "hypotheses.md" if docs_dir is not None else None
+    try:
+        return hashlib.sha256(f.read_text(encoding="utf-8").encode()).hexdigest() if f is not None and f.exists() else None
+    except OSError:
+        return None
+
+
+def _plan(state: Path, docs_dir: Path | None = None) -> tuple[ResearchPlanView | None, str | None]:
     f = state / "research_plan.json"
     if not f.exists():
         return None, None
@@ -293,6 +387,8 @@ def _plan(state: Path) -> tuple[ResearchPlanView | None, str | None]:
         created = _ts(p["created_utc"])
         if created is None:
             raise ValueError("created_utc missing")
+        sha = str(p["hypotheses_sha256"]) if p.get("hypotheses_sha256") else None
+        now_sha = _doc_sha(docs_dir)
         focus = [PlanFocus(rank=int(x["rank"]), family=str(x["family"]), budget=int(x["budget"]),
                            evidence=float(x["evidence"]), reasons=[str(s) for s in x.get("reasons") or []])
                  for x in p.get("focus") or []]
@@ -308,7 +404,19 @@ def _plan(state: Path) -> tuple[ResearchPlanView | None, str | None]:
             budget={str(k): int(v) for k, v in (p.get("budget") or {}).items()},
             grid_budget={str(k): int(v) for k, v in (p.get("grid_budget") or {}).items()},
             unallocated=int(p.get("unallocated") or 0), holdout_from=str(p.get("holdout_from", "")),
-            holdout_to=str(p.get("holdout_to", "")), focus=focus, evidence=evidence)
+            holdout_to=str(p.get("holdout_to", "")), focus=focus, evidence=evidence,
+            quarter_reserved=int(p.get("quarter_reserved") or 0),
+            reservation=PlanReservation.model_validate(p["reservation"]) if isinstance(p.get("reservation"), dict) else None,
+            retired=_retired(p), reinstate_t=_f(p.get("reinstate_t")),
+            moves=[PlanMove(family=str(m["family"]), source=str(m.get("source", "")), detail=str(m.get("detail", "")),
+                            budget_before=int(m.get("budget_before") or 0), budget_after=int(m.get("budget_after") or 0),
+                            share_before=_f(m.get("share_before")), share_after=_f(m.get("share_after")),
+                            shift_pct=_f(m.get("shift_pct"))) for m in p.get("moves") or [] if isinstance(m, dict)],
+            attribution_note=str(p["attribution_note"]) if p.get("attribution_note") else None,
+            hypotheses_note=str(p["hypotheses_note"]) if p.get("hypotheses_note") else None,
+            hypotheses_sha256=sha, hypotheses_sha256_now=now_sha,
+            hypotheses_changed=sha is not None and now_sha is not None and sha != now_sha,
+            hypotheses_drift=[str(x) for x in p.get("hypotheses_drift") or []])
     except (ValueError, OSError, KeyError, TypeError) as exc:
         return None, f"research_plan.json unreadable ({type(exc).__name__}: {exc})"[:300]
     return view, None
@@ -368,7 +476,70 @@ def research_view(state: Path, settings: Settings | None, docs_dir: Path) -> Res
     used = quarter_trials(rows, q)
     tfs = {k: str(v.timeframe) for k, v in SPECIALISTS.items()}
     trials = sorted((_trial(r, tfs) for r in rows), key=lambda t: -t.trial)[:MAX_TRIALS]
-    plan, plan_err = _plan(state)
+    plan, plan_err = _plan(state, docs_dir)
     return ResearchView(generated_utc=now, budget=TrialBudget(quarter=q, budget=cap, used=used, left=max(cap - used, 0)),
                         trials=trials, trials_total=len(rows), plan=plan, plan_error=plan_err,
                         hypotheses=_hypotheses(docs_dir))
+
+
+# ---------------------------------------------------------------------------------------------- auto mode (A10)
+def _forced_propose(state: Path, now: float) -> list[ForcedPropose]:
+    """Engine overrides that keep propose-and-approve whatever control.json says (engine/runner.py
+    `_refresh_account`): the 30-day propose-only lock after a re-arm, and the 12% kill switch while the account is
+    halted. An unreadable risk file is listed too: the evidence check fails closed on it."""
+    out: list[ForcedPropose] = []
+    for f in sorted(state.glob("risk_*.json")):
+        acct = f.stem.removeprefix("risk_")
+        try:
+            d = _d(_read(f))
+        except (ValueError, OSError):
+            out.append(ForcedPropose(account_id=acct, kind="risk_unreadable",
+                                     detail="risk state unreadable: auto mode is not offered until it is fixed"))
+            continue
+        until = _ts(d.get("propose_only_until"))
+        if until is not None and until.timestamp() > now:
+            out.append(ForcedPropose(account_id=acct, kind="rearm_lock", until=until,
+                                     detail="propose-and-approve for 30 days after a re-arm"))
+        if d.get("stage") == "halted":
+            out.append(ForcedPropose(account_id=acct, kind="kill_switch",
+                                     detail="12% drawdown kill switch: halted and back to propose until re-armed"))
+    return out
+
+
+def _engine_modes(state: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for f in sorted(state.glob("engine_*.json")):
+        try:
+            d = _d(_read(f))
+        except (ValueError, OSError):
+            continue
+        out[str(d.get("account") or f.stem.removeprefix("engine_"))] = str(d.get("approval_mode") or "propose")
+    return out
+
+
+def automode_view(state: Path, settings: Settings | None, is_owner: bool) -> AutoModeView:
+    """The auto-mode card: the owner's mode, what each engine runs, and the exact evidence check `/mode auto` runs
+    (telegram/automode.py auto_mode_eligibility_from_state), so the card and Telegram never disagree. Read-only."""
+    from goldbot.telegram import automode
+    from goldbot.telegram.bus import ApprovalBus
+    tg = settings.telegram if settings is not None else TelegramSettings()
+    c = ApprovalBus(state).control()
+    err: str | None = None
+    try:
+        e = automode.auto_mode_eligibility_from_state(state, tg)
+    except Exception as exc:                   # fail closed: an unreadable evidence base offers nothing
+        err = f"evidence unreadable ({type(exc).__name__}: {exc})"[:300]
+        e = automode.Eligibility(eligible=False, reasons=[err], since=c.mode_ts, decided=0, approved=0, rejected=0,
+                                 breaches=[], test=automode.VetoTest(n_approved=0, n_rejected=0, alpha=tg.auto_alpha))
+    t = e.test
+    return AutoModeView(
+        owner_mode=c.approval_mode, mode_by=c.mode_by,
+        mode_since=datetime.fromtimestamp(c.mode_ts, tz=timezone.utc) if c.mode_ts else None, mode_reason=c.mode_reason,
+        engine_modes=_engine_modes(state), eligible=e.eligible, reasons=list(e.reasons), decided=e.decided,
+        approved=e.approved, rejected=e.rejected, min_proposals=tg.auto_min_proposals,
+        min_outcomes_per_side=tg.auto_min_outcomes_per_side, breaches=list(e.breaches),
+        test=VetoTestView(n_approved=t.n_approved, n_rejected=t.n_rejected, mean_r_approved=t.mean_r_approved,
+                          mean_r_rejected=t.mean_r_rejected, diff=t.diff, ci_low=t.ci_low, ci_high=t.ci_high,
+                          p_value=t.p_value, alpha=t.alpha, indistinguishable=t.indistinguishable),
+        forced_propose=_forced_propose(state, datetime.now(timezone.utc).timestamp()),
+        can_enable=is_owner and e.eligible and c.approval_mode != "auto", error=err)

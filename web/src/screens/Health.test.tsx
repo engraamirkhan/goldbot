@@ -39,8 +39,11 @@ const FULL: HealthView = {
   psi: { features: ["atr_14", "adx_14"], agents: ["trend-g1", "tsmom-g0"], values: [[0.05, 0.31], [null, 0.12]], warn: 0.1, size_down: 0.25 },
   reliability: [{ agent_id: "tsmom-g0", version: "tsmom-v3", n: 12, ece: 0.15, brier: 0.1,
     bins: [{ lo: 0.3, hi: 0.4, n: 6, mean_p: 0.35, hit_rate: 0 }, { lo: 0.7, hi: 0.8, n: 6, mean_p: 0.7, hit_rate: 1 }] }],
-  cusum: [{ agent_id: "trend-g1", version: "trend-v1", k: 0.5, h: 4, alarm: true,
-    points: [{ ts: "2026-10-01T10:00:00Z", z: -2, s: 1.5 }, { ts: "2026-10-02T10:00:00Z", z: -3.5, s: 4.5 }] }],
+  cusum: [{ agent_id: "trend-g1", version: "trend-v1", k: 0.5, h: 4, alarm: true, h_source: "fixed",
+    h_note: "fixed h 4: the backtest recorded no trade rate to calibrate on",
+    points: [{ ts: "2026-10-01T10:00:00Z", z: -2, s: 1.5 }, { ts: "2026-10-02T10:00:00Z", z: -3.5, s: 4.5 }] },
+  { agent_id: "tsmom-g0", version: "tsmom-v3", k: 0.5, h: 2.37, alarm: false, h_source: "calibrated", h_note: "",
+    trades_per_week: 3.5, p_mean: 0.525, false_alarm: 0.05, points: [{ ts: "2026-10-01T10:00:00Z", z: 0.5, s: 0 }] }],
   checks: [{ name: "deploy", status: "warn", reason: "rolled_back abcdef12 on vps" }, ...EMPTY.checks.slice(1)],
 };
 
@@ -91,6 +94,10 @@ describe("Health", () => {
     expect(screen.getByRole("img", { name: /Reliability of tsmom-g0/ })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: /CUSUM of trend-g1 over 2 trades: now 4.50, halts above 4/ })).toBeInTheDocument();
     expect(screen.getByText("alarm: halted")).toBeInTheDocument();
+    // the threshold says where it comes from: calibrated per agent (row M25), or the labelled fixed fallback
+    expect(screen.getByText("Fixed threshold (not calibrated): fixed h 4: the backtest recorded no trade rate to calibrate on")).toHaveClass("h-fixed");
+    expect(screen.getByText("Threshold h 2.37 calibrated: 5% false alarms a quarter at 3.5 trades/week, mean p 0.53")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /CUSUM of tsmom-g0 over 1 trades: now 0.00, halts above 2.37 \(calibrated threshold\)/ })).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "trend-g1 30-day drawdown" })).toHaveAttribute("aria-valuetext", "9.0% of a 7.5% limit");
     expect(screen.getByText("9.0% of 7.5% limit: system halt")).toBeInTheDocument();
     expect(screen.getByText("warning")).toBeInTheDocument();

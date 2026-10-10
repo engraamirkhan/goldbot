@@ -12,6 +12,7 @@ const status = (over: Partial<apiModule.Status>): apiModule.Status => ({
 function renderOverview(role: apiModule.Role) {
   apiModule.setUser({ email: "a@x.io", role });
   vi.spyOn(apiModule.api, "accounts").mockResolvedValue([]);
+  vi.spyOn(apiModule.api, "automode").mockRejectedValue(new Error("not under test"));   // AutoMode.test.tsx covers the card
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={qc}><Overview /></QueryClientProvider>);
 }
