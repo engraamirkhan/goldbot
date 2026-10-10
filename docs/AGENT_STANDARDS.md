@@ -21,6 +21,16 @@ file. The product owner accepts work against them; the release manager does not 
 | S10 | **Owner decisions isolated.** Anything only the owner may decide (budget, instruments, going live, spending, deployment to servers, gate thresholds) is listed with options and a recommendation, never decided. | "Needs the owner" list |
 | S11 | **Concise.** Reports within the length the brief sets; tables over prose where they help. | Word count |
 
+## Workflow security (anyone editing `.github/workflows/`)
+- Pin every action to a full 40-hex commit SHA with the version as a trailing comment
+  (`uses: actions/checkout@<sha> # v5.1.0`). Resolve it with `gh api repos/<o>/<r>/git/ref/tags/<tag>` (dereference
+  an annotated tag with `.../git/tags/<sha>`); never guess or copy a SHA from memory. Dependabot bumps them weekly.
+- Top-level `permissions:` is `{}` or `contents: read`; write scopes are granted per job and commented with why.
+- Never interpolate `${{ github.event.* }}`, `${{ inputs.* }}` or matrix values into `run:` or an inline script:
+  pass them through `env:` and quote `"$VAR"`.
+- `actions/checkout` sets `persist-credentials: false` unless the job pushes with git.
+- Run `actionlint` (with shellcheck installed) before committing a workflow change; it must be clean.
+
 ## Leadership
 The `program-director` leads delivery (roadmap, waves, integration, risk register, owner reporting); the
 `product-owner` owns what is built and accepts it. Both report to the owner.
