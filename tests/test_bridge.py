@@ -1,7 +1,9 @@
 """MT5 broker bridge (goldbot/execution/bridge.py): the engine on one machine, the terminal on another (Oracle free
 tier: MT5 under Wine). A real HTTP bridge on localhost serves the paper broker; RemoteBroker must behave like the
 broker itself, authenticate every call, expose only the Broker methods and never retry an order."""
+import socket
 import threading
+import time
 from http.server import HTTPServer
 from typing import Any, Iterator
 
@@ -10,8 +12,9 @@ import pytest
 import requests
 
 from goldbot.engine import Engine, EngineConfig
-from goldbot.execution.bridge import BridgeError, BridgeUnavailable, RemoteBroker, make_handler
-from goldbot.execution.broker import OrderIntent, Tick
+from goldbot.execution import bridge as bridge_mod
+from goldbot.execution.bridge import BridgeError, BridgeUnavailable, GuardedBroker, RemoteBroker, make_handler
+from goldbot.execution.broker import AccountInfo, OrderIntent, Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.ops import accounts as acc_mod
 from goldbot.specialists import SPECIALISTS
@@ -131,3 +134,96 @@ def test_the_bridge_endpoint_comes_from_the_keyring(tmp_path, monkeypatch):
     assert acc_mod.bridge_endpoint("icm-demo") is None                # no token yet: not used
     acc_mod.set_secret(acc_mod.bridge_token_key("icm-demo"), TOKEN)
     assert acc_mod.bridge_endpoint("icm-demo") == ("http://10.0.0.5:8765", TOKEN)
+
+
+# ---------------------------------------------------------------------------------------------- review fixes
+def _acc(**kw: Any) -> acc_mod.Account:
+    base: dict[str, Any] = dict(account_id="icm-demo", broker="icm", mode="demo", server="ICMarketsSC-Demo", login=1234567,
+                                terminal_path="", server_tz="Europe/Athens", symbol="XAUUSD", magic_base=260100, enabled=True)
+    base.update(kw)
+    return acc_mod.Account(**base)
+
+
+def _info(**kw: Any) -> AccountInfo:
+    base: dict[str, Any] = dict(login=1234567, equity=1e4, balance=1e4, margin=0, margin_free=1e4, leverage=20,
+                                currency="USD", server="ICMarketsSC-Demo", trade_mode="demo")
+    base.update(kw)
+    return AccountInfo(**base)
+
+
+def _why(acc: acc_mod.Account, info: AccountInfo) -> str:
+    return acc_mod.verify_terminal_account(acc, info) or ""
+
+
+def test_the_terminal_must_be_logged_in_to_the_registry_account():
+    assert acc_mod.verify_terminal_account(_acc(), _info()) is None
+    assert "another account" in _why(_acc(), _info(login=7654321))
+    assert "server" in _why(_acc(), _info(server="ICMarketsSC-Live"))
+    # a live account in the terminal cannot be traded as the demo account (it would skip the phase gate)
+    assert "real" in _why(_acc(), _info(trade_mode="real"))
+    assert "unknown" in _why(_acc(), _info(trade_mode=None))
+    assert "no login" in _why(_acc(login=None), _info())
+    assert acc_mod.verify_terminal_account(_acc(mode="live", server="ICMarketsSC-Live"),
+                                           _info(server="ICMarketsSC-Live", trade_mode="real")) is None
+
+
+@pytest.fixture
+def guarded() -> Iterator[tuple[str, PaperBroker]]:
+    pb = PaperBroker(equity=10_000)
+    pb.on_tick(Tick(ts_utc=T0, bid=2400.0, ask=2400.2))
+    httpd = HTTPServer(("127.0.0.1", 0), make_handler(GuardedBroker(pb, magic_base=260100), TOKEN))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{httpd.server_address[1]}", pb
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_the_terminal_side_refuses_orders_goldbot_never_sends(guarded):
+    url, pb = guarded
+    rb = RemoteBroker(url, TOKEN)
+    with pytest.raises(BridgeError, match="magic"):
+        rb.place_order(_intent().model_copy(update={"magic": 999}))
+    with pytest.raises(BridgeError, match="lots"):
+        rb.place_order(_intent().model_copy(update={"lots": 3.5}))
+    assert pb.positions() == []
+    foreign = pb.place_order(_intent("manual").model_copy(update={"magic": 1}))     # the owner's own trade
+    with pytest.raises(BridgeError, match="not one of"):
+        rb.modify(int(foreign.position_id or 0), None, None)                   # nobody removes the stop of a foreign trade
+    assert rb.close(int(foreign.position_id or 0)).ok                          # closing is allowed (kill switch: everything)
+    ours = rb.place_order(_intent())
+    assert ours.ok and rb.modify(int(ours.position_id or 0), 2397.0, None).ok
+    assert rb.account() == pb.account()                              # reads pass through
+
+
+def test_a_stale_order_is_refused_but_a_stale_read_is_served(bridge):
+    url, pb = bridge
+    hdr = {"Authorization": f"Bearer {TOKEN}"}
+    order = {"method": "place_order", "args": [bridge_mod._encode(_intent())], "sent_at": time.time() - 30}
+    r = requests.post(f"{url}/rpc", json=order, headers=hdr, timeout=5)
+    assert r.status_code == 409 and pb.positions() == []            # the engine gave up on it long ago
+    r = requests.post(f"{url}/rpc", json={"method": "place_order", "args": order["args"]}, headers=hdr, timeout=5)
+    assert r.status_code == 409                                      # no timestamp: refused too
+    read = {"method": "last_tick", "args": ["XAUUSD"], "sent_at": time.time() - 30}
+    assert requests.post(f"{url}/rpc", json=read, headers=hdr, timeout=5).status_code == 200
+
+
+def test_an_idle_connection_does_not_block_the_bridge(monkeypatch):
+    monkeypatch.setattr(bridge_mod, "SOCKET_TIMEOUT_S", 0.5)
+    pb = PaperBroker(equity=10_000)
+    pb.on_tick(Tick(ts_utc=T0, bid=2400.0, ask=2400.2))
+    httpd = HTTPServer(("127.0.0.1", 0), make_handler(pb, TOKEN))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        addr = ("127.0.0.1", int(httpd.server_address[1]))
+        idle = socket.create_connection(addr)
+        idle.sendall(b"POST /rpc HTTP/1.1\r\nHost: x\r\n")                # never finishes its headers
+        r = requests.get(f"http://127.0.0.1:{httpd.server_address[1]}/health", timeout=5)
+        assert r.status_code == 200
+        idle.close()
+        raw = socket.create_connection(addr)
+        raw.sendall(f"POST /rpc HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\nContent-Length: abc\r\n\r\n".encode())
+        assert raw.recv(64).startswith(b"HTTP/1.0 400")                      # a malformed length is a clean 400
+        raw.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

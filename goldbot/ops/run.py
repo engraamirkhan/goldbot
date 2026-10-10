@@ -64,11 +64,17 @@ def run_engine(account_id: str) -> None:
         # service manager restarts it, so restart reconciliation settles any order whose result was lost (row X7)
         from goldbot.execution.bridge import RemoteBroker
         broker: Any = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}")
+        why = accounts.verify_terminal_account(acc, broker.account())
+        if why:
+            raise SystemExit(f"refusing to trade {account_id} through the bridge: {why}")
     elif sys.platform == "win32":
         from goldbot.execution.mt5_adapter import MT5Broker
         acc = accounts.ensure_login(acc)
         broker = MT5Broker(terminal_path=acc.terminal_path, login=acc.login, password=accounts.account_password(acc),
                            server=acc.server, server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id)
+        why = accounts.verify_terminal_account(acc, broker.account())
+        if why:
+            raise SystemExit(f"refusing to trade {account_id}: {why}")
     else:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
@@ -198,7 +204,7 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     """Serve the MT5 terminal on this machine to the engine (goldbot/execution/bridge.py). Run under the Wine (or
     Windows) Python next to the terminal. The terminal's saved login is used; the listen address and token come from
     the keyring (`mt5-bridge-listen-<account>` as host:port, `mt5-bridge-token-<account>`)."""
-    from goldbot.execution.bridge import serve
+    from goldbot.execution.bridge import GuardedBroker, serve
     from goldbot.execution.mt5_adapter import MT5Broker
     from goldbot.ops import accounts
     acc = accounts.load_accounts()[account_id]
@@ -210,7 +216,11 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     host, port = listen.rsplit(":", 1)
     broker = MT5Broker(terminal_path=acc.terminal_path, login=None, password=None, server=acc.server,
                        server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id)
-    serve(broker, host, int(port), token)
+    why = accounts.verify_terminal_account(acc, broker.account())
+    if why:                                        # e.g. the terminal's saved login is a live account
+        broker.shutdown()
+        raise SystemExit(f"refusing to serve {account_id}: {why}")
+    serve(GuardedBroker(broker, magic_base=acc.magic_base), host, int(port), token)
 
 
 def run_api() -> None:

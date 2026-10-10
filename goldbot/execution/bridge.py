@@ -16,6 +16,14 @@ the fill by its client order id in positions and deals (row X7), so an order is 
 are retried once. While the bridge is unreachable there are no ticks, so the gate's stale-data rule blocks entries;
 open positions keep their broker-side stop and target (sent with every order).
 
+Defence in depth on the terminal's side: requests time out after `SOCKET_TIMEOUT_S` (one stalled connection cannot
+hold the single-threaded server); an order call older than `ORDER_MAX_AGE_S` when it reaches the terminal is refused
+(the engine has already given up on it, and its price is stale); `GuardedBroker` refuses orders outside the account's
+magic range or above `MAX_ORDER_LOTS`, and stop/target changes on positions that are not goldbot's (closes stay allowed: the kill switch closes everything). The bridge listens on
+127.0.0.1 only and the engine reaches it through an SSH tunnel (goldbot/ops/linux), so the token never crosses the
+network in clear text. On start both ends check the terminal is logged in to the registry's account (login, server,
+demo vs real): `accounts.verify_terminal_account`.
+
 No credentials pass through the bridge: the terminal keeps its own saved login, and the URL and token live in the
 keyring of each machine (`mt5-bridge-url-<account>`, `mt5-bridge-token-<account>`), never in the repository.
 """
@@ -24,6 +32,7 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, AsyncIterator, Callable
 
@@ -53,6 +62,9 @@ METHODS: dict[str, tuple[str, bool]] = {
 _RECORDS: dict[str, type[BaseModel]] = {"SymbolInfo": SymbolInfo, "AccountInfo": AccountInfo, "Tick": Tick, "OrderResult": OrderResult,
             "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent}
 MAX_BODY = 1_000_000
+SOCKET_TIMEOUT_S = 5            # a connection that sends nothing for this long is dropped
+ORDER_MAX_AGE_S = 10.0          # an order call older than this when the terminal gets to it is refused
+MAX_ORDER_LOTS = 3.0            # the design's combined exposure cap; no single order may exceed it
 
 
 class BridgeUnavailable(ConnectionError):
@@ -110,6 +122,7 @@ def make_handler(broker: Any, token: str) -> type[BaseHTTPRequestHandler]:
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "goldbot-bridge"
+        timeout = SOCKET_TIMEOUT_S
 
         def log_message(self, fmt: str, *args: Any) -> None:     # requests go to the module log, not stderr
             log.debug("%s " + fmt, self.address_string(), *args)
@@ -133,15 +146,22 @@ def make_handler(broker: Any, token: str) -> type[BaseHTTPRequestHandler]:
             if self.path != "/rpc":
                 self._reply(404, {"error": "not found"})
                 return
-            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = 0
             if n <= 0 or n > MAX_BODY:
                 self._reply(400, {"error": "bad body"})
                 return
             try:
                 req = json.loads(self.rfile.read(n))
                 method = req["method"]
-                if method not in METHODS:
+                if not isinstance(method, str) or method not in METHODS:
                     self._reply(403, {"error": f"method {method!r} not allowed"})
+                    return
+                age = time.time() - float(req.get("sent_at", 0.0))
+                if not METHODS[method][1] and not -ORDER_MAX_AGE_S < age < ORDER_MAX_AGE_S:
+                    self._reply(409, {"error": f"{method} is {age:.1f} s old; refused (stale)"})
                     return
                 args = [_decode(a) for a in req.get("args", [])]
                 result = getattr(broker, method)(*args)
@@ -161,12 +181,48 @@ def serve(broker: Any, host: str, port: int, token: str) -> None:  # pragma: no 
     httpd.serve_forever()
 
 
+class GuardedBroker:
+    """The terminal-side broker behind the bridge, refusing what goldbot never sends: orders outside this account's
+    magic range (magic_base .. magic_base + 99) or above MAX_ORDER_LOTS, and stop/target changes on positions outside
+    that range. Closes are allowed for any position: closing only reduces risk, and the 12% kill switch closes
+    everything on the account (design: Drawdown kill switch)."""
+
+    def __init__(self, broker: Any, *, magic_base: int) -> None:
+        self._b, self.magic_base = broker, magic_base
+
+    def _ours(self, magic: int) -> bool:
+        return self.magic_base <= int(magic) < self.magic_base + 100
+
+    def _own_position(self, position_id: int) -> None:
+        if not any(p.position_id == position_id and self._ours(p.magic) for p in self._b.positions()):
+            raise PermissionError(f"position {position_id} is not one of this account's goldbot positions")
+
+    def place_order(self, intent: OrderIntent) -> OrderResult:
+        if not self._ours(intent.magic):
+            raise PermissionError(f"magic {intent.magic} outside {self.magic_base}..{self.magic_base + 99}")
+        if not 0 < intent.lots <= MAX_ORDER_LOTS:
+            raise PermissionError(f"{intent.lots} lots outside (0, {MAX_ORDER_LOTS}]")
+        return self._b.place_order(intent)
+
+    def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult:
+        self._own_position(position_id)
+        return self._b.modify(position_id, sl, tp)
+
+    def close(self, position_id: int, lots: float | None = None) -> OrderResult:
+        return self._b.close(position_id, lots)
+
+    def __getattr__(self, name: str) -> Any:          # read-only calls pass through
+        if name in METHODS and METHODS[name][1]:
+            return getattr(self._b, name)
+        raise AttributeError(name)
+
+
 # ---------------------------------------------------------------------------------------------- client
 class RemoteBroker:
     """The `Broker` protocol over the bridge. Read-only calls retry once; order calls never retry."""
 
     def __init__(self, url: str, token: str, *, name: str = "mt5-remote", timeout_s: float = 10.0,
-                 order_timeout_s: float = 20.0, post: Callable[..., Any] | None = None) -> None:
+                 order_timeout_s: float = 15.0, post: Callable[..., Any] | None = None) -> None:
         self.url, self.name = url.rstrip("/"), name
         self._token, self.timeout_s, self.order_timeout_s = token, timeout_s, order_timeout_s
         self._session = requests.Session()
@@ -175,9 +231,9 @@ class RemoteBroker:
     def _call(self, method: str, *args: Any) -> Any:
         _, retry = METHODS[method]
         attempts = 2 if retry else 1
-        body = json.dumps({"method": method, "args": [_encode(a) for a in args]})
         timeout = self.timeout_s if retry else self.order_timeout_s
         for i in range(attempts):
+            body = json.dumps({"method": method, "args": [_encode(a) for a in args], "sent_at": time.time()})
             try:
                 r = self._post(f"{self.url}/rpc", data=body, timeout=timeout,
                                headers={"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"})

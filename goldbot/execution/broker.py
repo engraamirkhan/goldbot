@@ -86,6 +86,7 @@ class AccountInfo(Record):
     leverage: int
     currency: str
     server: str
+    trade_mode: str | None = None   # demo | real | contest as the terminal reports it; None = not a broker terminal
 
 
 class Broker(Protocol):

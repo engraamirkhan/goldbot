@@ -169,7 +169,9 @@ class MT5Broker:
 
     def account(self) -> AccountInfo:
         a = mt5.account_info()
-        return AccountInfo(login=a.login, equity=a.equity, balance=a.balance, margin=a.margin, margin_free=a.margin_free, leverage=a.leverage, currency=a.currency, server=a.server)
+        mode = {0: "demo", 1: "contest", 2: "real"}.get(int(getattr(a, "trade_mode", -1)))   # ACCOUNT_TRADE_MODE_*
+        return AccountInfo(login=a.login, equity=a.equity, balance=a.balance, margin=a.margin, margin_free=a.margin_free, leverage=a.leverage, currency=a.currency, server=a.server,
+                           trade_mode=mode)
 
     # ------------------------------------------------------------------ data
     def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
