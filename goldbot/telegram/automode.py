@@ -243,12 +243,14 @@ class AutoModeOffer:
 
 
 # ----------------------------------------------------------------------------- /mode
-def owner_totp_ok(state_dir: str | Path, code: str) -> bool:
-    """The dashboard's TOTP check (goldbot/api/auth.py, RFC 6238, +-1 step) against the enabled owner accounts: the
-    same authenticator that re-arms on the dashboard. Read fresh each time, so a disabled owner stops working at once."""
-    from goldbot.api.auth import AuthStore, totp_verify
-    store = AuthStore(state_dir)
-    return any(u.enabled and u.role == "owner" and totp_verify(u.totp_secret, code) for u in store.users.values())
+def owner_totp_ok(state_dir: str | Path, code: str, owner_email: str | None = None) -> bool:
+    """The dashboard's TOTP check (goldbot/api/auth.py, RFC 6238, +-1 step) for the owner account pinned to
+    auth.owner_email (read from settings unless given; unset fails closed): the same authenticator that re-arms on
+    the dashboard. Each code is spent once, shared with the dashboard (a code used to sign in cannot also switch the
+    mode). Read fresh each time, so a disabled owner stops working at once."""
+    from goldbot.api.auth import AuthStore, _settings_owner_email
+    store = AuthStore(state_dir, owner_email=owner_email if owner_email is not None else _settings_owner_email())
+    return store.verify_owner_totp(code)
 
 
 def audit_to(state_dir: str | Path) -> Callable[..., None]:

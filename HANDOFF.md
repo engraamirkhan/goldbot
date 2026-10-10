@@ -329,6 +329,22 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   password / recovery-code / reset-link modes on the login page, recovery codes shown after setup, an Account tab
   (change password), Enable / Sign out everywhere / Reset link on Users. No button yet for regenerating recovery
   codes.
+- Account security review (2026-10-10, security-reviewer findings; `api/auth.py`, aux.db migration 4
+  `auth_hardening`; tests/test_auth_security.py): forgot-password for the OWNER now needs a recovery code (spent)
+  as well as the TOTP (`ForgotPasswordRequest.recovery_code`), so the phone or seed alone cannot take over the
+  admin; every successful forgot-password queues a Telegram notice to the owner (a row with role
+  `account_security` in state/agent_runs.jsonl, relayed by the Telegram outbox; email masked). Each TOTP step is
+  accepted once per user (`totp_steps`; login, password change, forgot, /rearm via `AuthStore.verify_totp`, /mode
+  via `verify_owner_totp`, shared counter). Login and recovery-login run scrypt against a dummy hash for unknown
+  emails. Owner-only actions (`_require("owner")`, the API's `need("owner")`, recovery codes, /mode) need
+  `email == auth.owner_email` and fail closed when it is unset; the users.json importer demotes a non-matching owner
+  to viewer (audit `import_owner_demoted`, warning; kept when owner_email is unset, since every owner action is then
+  refused anyway). Password change, forgot and disable delete the account's open reset links. Invite/reset links use
+  the URL fragment (`/#invite=`, `/#reset=`, read once and cleared, `web/src/lib/links.ts`) and every response sends
+  `Referrer-Policy: no-referrer`. Lockout counters live in aux.db (`auth_failures`, pruned to the 15-min window,
+  survive restarts): 5 per email, plus 20 per client IP across emails (CF-Connecting-IP trusted only from the
+  loopback tunnel peer). Known trade-off: anyone who knows an email can keep it locked out. DB files are chmod 0600
+  on every open. e2e codes come from `freshTotp` (waits for an unused step, so the suite takes ~3.5 min).
 - Bounded spawning (2026-10-10, BACKLOG 13, TRADER_LIFECYCLE section 3, TRACEABILITY G11): the daily `gap_watch`
   job (23:55 UTC, after drift_watch; `goldbot/ops/gap_watch.py`) detects gaps (uncovered family timeframe, all agents
   of a family retired, drift/system halts, a volatility tercile no champion trained on, error dq events on 3+ days in

@@ -930,7 +930,8 @@ export interface components {
         };
         /**
          * ForgotPasswordRequest
-         * @description Self-service reset with a current authenticator code. The same 403 for an unknown email or a wrong code.
+         * @description Self-service reset with a current authenticator code; the owner account also needs one of its recovery codes
+         *     (spent). The same 403 for an unknown email, a wrong code or a missing recovery code.
          */
         ForgotPasswordRequest: {
             /**
@@ -943,6 +944,11 @@ export interface components {
              * @default
              */
             new_password: string;
+            /**
+             * Recovery Code
+             * @default
+             */
+            recovery_code: string;
             /**
              * Totp
              * @default

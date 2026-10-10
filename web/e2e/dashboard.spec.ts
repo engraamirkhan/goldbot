@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { totp } from "./totp";
+import { freshTotp } from "./totp";
 
 const info = () => JSON.parse(readFileSync("e2e/.server.json", "utf8")) as { setup_code: string };
 const OWNER = { email: "owner@example.com", password: "owner password 123" };
@@ -16,13 +16,14 @@ async function enrolledSecret(page: Page): Promise<string> {
 async function signIn(page: Page, email: string, password: string, secret: string) {
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
-  await page.getByLabel("Authenticator code").fill(totp(secret));
+  await page.getByLabel("Authenticator code").fill(await freshTotp(secret));
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 }
 
 // One serial story: first run -> owner approves a trade -> halts and re-arms -> invites a viewer -> viewer sees but cannot act.
-test.describe.configure({ mode: "serial" });
+// each authenticator code is accepted once, so a sign-in may wait up to 30 s for a fresh time step (freshTotp)
+test.describe.configure({ mode: "serial", timeout: 90_000 });
 let ownerSecret = "";
 let inviteLink = "";
 let viewerSecret = "";
@@ -87,7 +88,7 @@ test("owner halts new entries and re-arms with an authenticator code", async ({ 
   await page.getByLabel("Authenticator code").fill("000000");
   await page.getByRole("button", { name: "Re-arm" }).click();
   await expect(page.locator(".err")).toContainText("authenticator code required");
-  await page.getByLabel("Authenticator code").fill(totp(ownerSecret));
+  await page.getByLabel("Authenticator code").fill(await freshTotp(ownerSecret));
   await page.getByRole("button", { name: "Re-arm" }).click();
   await expect(page.getByRole("button", { name: "Halt new entries" })).toBeVisible();
 });
@@ -141,7 +142,7 @@ test("owner invites a viewer", async ({ page }) => {
   await page.getByPlaceholder("email to invite").fill(VIEWER.email);
   await page.getByRole("button", { name: "Create invite link" }).click();
   inviteLink = (await page.locator("code.mono").textContent()) ?? "";
-  expect(inviteLink).toContain("/?invite=");
+  expect(inviteLink).toContain("/#invite=");
 });
 
 test("viewer accepts the invite and can watch but not approve or manage users", async ({ page }) => {
@@ -179,14 +180,14 @@ test("viewer resets a forgotten password with an authenticator code, then change
   await page.getByLabel("Authenticator code").fill("000000");
   await page.getByRole("button", { name: "Set new password" }).click();
   await expect(page.locator(".err")).toContainText("invalid credentials");
-  await page.getByLabel("Authenticator code").fill(totp(viewerSecret));
+  await page.getByLabel("Authenticator code").fill(await freshTotp(viewerSecret));
   await page.getByRole("button", { name: "Set new password" }).click();
   await expect(page.getByText("Password changed. Sign in with the new password.")).toBeVisible();
   await signIn(page, VIEWER.email, "forgotten viewer pw 1", viewerSecret);
 
   await page.getByRole("button", { name: "Account", exact: true }).click();
   await page.getByLabel("Current password").fill("forgotten viewer pw 1");
-  await page.getByLabel("Authenticator code").fill(totp(viewerSecret));
+  await page.getByLabel("Authenticator code").fill(await freshTotp(viewerSecret));
   await page.getByLabel("New password (12+ characters)").fill(VIEWER.password);
   await page.getByRole("button", { name: "Change password" }).click();
   await expect(page.getByText("Password changed. Your other sessions were signed out.")).toBeVisible();
@@ -199,7 +200,7 @@ test("owner manages a user's access and never offers the owner role", async ({ p
   await expect(page.locator("form.inline option[value=owner]")).toHaveCount(0);
   const row = page.locator("tr", { hasText: VIEWER.email });
   await row.getByRole("button", { name: "Reset link" }).click();
-  await expect(page.locator("code.mono")).toContainText("/?reset=");
+  await expect(page.locator("code.mono")).toContainText("/#reset=");
   await row.getByRole("button", { name: "Disable" }).click();
   await expect(row.getByRole("button", { name: "Enable" })).toBeVisible();
   await row.getByRole("button", { name: "Enable" }).click();
