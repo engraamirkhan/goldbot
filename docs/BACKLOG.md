@@ -18,20 +18,20 @@ Status: ready / in progress / in review / done / rejected.
 | # | Item | Stage · kind | Size | Status |
 | --- | --- | --- | --- | --- |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | ready |
-| 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | in review |
-| 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | in review (PR #60) |
-| 4 | FRED macro data pipeline | Market and macro preparation · FIND | M | in progress |
-| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | ready |
-| 6 | Live exit policies and blackout early close | Trade management, exit · FIND + RUN | M | ready |
-| 7 | Ops alerts: heartbeats, FAILED_EXEC, weekly cap | Operational resilience · RUN | S–M | ready |
-| 8 | Stop rule and gate thresholds in code | Capital and drawdown management · RUN | S | ready |
-| 9 | UI/UX approval card | Entry timing (owner approval) · RUN | M | in progress |
-| 10 | Trader-toolkit features (sessions, S/R, FVG, order blocks) | Idea generation · FIND | M | in progress |
-| 11 | Trader-toolkit evaluation as primary signals | Idea generation, confluence · FIND | S–M | ready (after 10) |
-| 12 | Deterministic attribution that feeds back into research | Performance attribution, learning · FIND | M | ready |
-| 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | ready |
-| 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | ready |
-| 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | ready |
+| 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | done (PR #62) |
+| 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | done (PR #60) |
+| 4 | FRED macro data pipeline | Market and macro preparation · FIND | M | done (PR #61) |
+| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (draft; freeze by 2026-12-31) |
+| 6 | Live exit policies and blackout early close | Trade management, exit · FIND + RUN | M | in review (safety fixes) |
+| 7 | Ops alerts: heartbeats, FAILED_EXEC, weekly cap | Operational resilience · RUN | S–M | done (PR #62) |
+| 8 | Stop rule and gate thresholds in code | Capital and drawdown management · RUN | S | in progress |
+| 9 | UI/UX approval card | Entry timing (owner approval) · RUN | M | done (PR #61) |
+| 10 | Trader-toolkit features (sessions, S/R, FVG, order blocks) | Idea generation · FIND | M | done (PR #61) |
+| 11 | Trader-toolkit evaluation as primary signals | Idea generation, confluence · FIND | S–M | ready (via H-02 in Q1) |
+| 12 | Deterministic attribution that feeds back into research | Performance attribution, learning · FIND | M | ready (ROADMAP wave 1, W1-7) |
+| 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | in progress |
+| 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | in progress |
+| 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | in progress |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
