@@ -18,8 +18,8 @@ Status values:
 | Status | Rows |
 | --- | --- |
 | implemented | 124 |
-| partial | 15 |
-| missing | 11 |
+| partial | 17 |
+| missing | 9 |
 | deviates | 9 |
 | in review | 6 |
 | **total** | **165** |
@@ -225,8 +225,8 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | P3 | "the engine refuses to return a live account unless the gate file agrees with the registry" | implemented | goldbot/ops/accounts.py:243-250; goldbot/ops/run.py `run_engine` | tests/test_accounts.py::test_registry_demo_first_and_live_locked |
 | P4 | Gates recorded in order with evidence | implemented | goldbot/ops/accounts.py:188 `record_gate` | tests/test_risk_ops.py::test_record_gate_appends_atomically_and_refuses_bad_names |
 | P5 | "Passwords, the webhook secret and the Telegram token live only in the operating-system keyring" | implemented | goldbot/ops/accounts.py (keyring; owner-only fallback file without a backend) | tests/test_accounts.py::test_prompt_stores_and_reuses_credential |
-| P6 | Stop rule: "after 18 months ... pooled trade count exceeds 500 and the lower 90% confidence bound on expectancy is still below zero, or any single incident produces a loss larger than the weekly cap" | missing | | untested |
-| P7 | Roadmap gate thresholds (trade-count and time gates "committed in writing before the first paper trade") | missing | `record_gate` records evidence; no code computes whether a gate is met | untested |
+| P6 | Stop rule: "after 18 months ... pooled trade count exceeds 500 and the lower 90% confidence bound on expectancy is still below zero, or any single incident produces a loss larger than the weekly cap" | partial | goldbot/ops/gates_phase.py `evaluate_stop_rule` (one-sided 90% bound on net per-trade return; incident = one trade losing > `risk.weekly_cap` of equity); goldbot/ops/health.py `check_stop_rule` FAILs and alerts, halts nothing. Missing: the engine does not yet append closed trades to `state/closed_trades.jsonl` | tests/test_phase_gates.py::test_stop_rule_needs_eighteen_months; ::test_stop_rule_needs_more_than_500_pooled_trades; ::test_stop_rule_needs_the_lower_bound_below_zero; ::test_single_loss_larger_than_the_weekly_cap_breaches_at_any_time; ::test_stop_rule_health_check_fails_with_what_it_does |
+| P7 | Roadmap gate thresholds (trade-count and time gates "committed in writing before the first paper trade") | partial | goldbot/ops/gates_phase.py `evaluate_gates`, `run.py gates`; thresholds in config/settings.yaml `gates:` (design numbers, plus PROPOSED values awaiting owner sign-off); never records a gate or unlocks live. Missing: owner sign-off; the closed-trade record (P6) | tests/test_phase_gates.py (a boundary test per threshold); ::test_nothing_here_records_a_gate_unlocks_live_or_touches_risk_state |
 
 ## Population and agents [Evolving the system]
 
@@ -277,7 +277,8 @@ Larger gaps, by priority (effort: S < 1 day, M 1-3 days, L > 3 days):
 16. **F10/D23 Dukascopy cross-feed check**, **D20 spike other-feed match** (M).
 17. **M16 combinatorial purged CV quarterly** (M); **M10 learned allocator** after three months (L).
 18. **F12 TradingView feature family** with NaN handling and 1% blanking (L); **D4 swap-day and swap costs** (M).
-19. **P6/P7 stop rule and gate thresholds in code** (S once the thresholds are written down).
+19. ~~P6/P7 stop rule and gate thresholds in code~~ (evaluated in `goldbot/ops/gates_phase.py`; left: owner sign-off of
+    the PROPOSED thresholds and the engine writing `state/closed_trades.jsonl`).
 20. Minor: **A2** engine window from settings, **M15** walk-forward reads settings, **G6** DSR >= 0.95, **U4**
     lock measured from the fifth failure, **M25** CUSUM calibrated to 5% quarterly false alarms, **D10** bar close
     by clock + 1.5 s grace.

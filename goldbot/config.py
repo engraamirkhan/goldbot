@@ -192,6 +192,28 @@ class DriftSettings(_Section):
     dd_window_days: int = Field(30, ge=7)
 
 
+class GateSettings(_Section):
+    """Design: Roadmap gates and the stop rule (goldbot/ops/gates_phase.py). Values without a comment are the design's
+    own numbers; the rest are proposals the owner must sign off before the first paper trade."""
+    shuffle_auc_tolerance: float = Field(0.02, gt=0, lt=0.5)      # PROPOSED: owner sign-off required ("at chance")
+    feed_max_mismatch_share: float = Field(0.01, ge=0, le=1)      # PROPOSED: owner sign-off required ("bars agree")
+    backtest_min_dsr: float = Field(0.95, gt=0, le=1)             # PROPOSED: owner sign-off required (roadmap 1.0 vs 0.95)
+    backtest_min_trades: int = Field(500, ge=1)
+    paper_min_trades: int = Field(150, ge=1)
+    paper_min_days: int = Field(182, ge=0)                        # PROPOSED: owner sign-off required (roadmap "6 months")
+    paper_expectancy_within: float = Field(0.5, gt=0, le=1)
+    paper_fills_within: float = Field(0.3, gt=0)
+    live_min_trades: int = Field(300, ge=1)
+    live_min_days: int = Field(365, ge=0)                         # PROPOSED: owner sign-off required (roadmap "12 months")
+    live_expectancy_within: float = Field(0.4, gt=0, le=1)
+    live_dd_mult: float = Field(1.5, gt=0)
+    brokers_within: float = Field(0.15, gt=0, le=1)
+    broker_min_trades: int = Field(50, ge=1)                      # PROPOSED: owner sign-off required
+    stop_after_months: float = Field(18, gt=0)
+    stop_min_pooled_trades: int = Field(500, ge=1)
+    stop_confidence: float = Field(0.90, gt=0.5, lt=1)
+
+
 class Settings(_Section):
     symbol: str
     data_root: str
@@ -210,6 +232,7 @@ class Settings(_Section):
     agents: AgentSettings = Field(default_factory=AgentSettings)
     news: NewsSettings = Field(default_factory=NewsSettings)
     drift: DriftSettings = Field(default_factory=DriftSettings)
+    gates: GateSettings = Field(default_factory=GateSettings)
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):

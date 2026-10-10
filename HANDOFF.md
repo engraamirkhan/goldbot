@@ -261,6 +261,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   invalidated) and feature-seeded clones now draw from a larger column pool.
 
 ## Next steps (no owner input needed unless marked)
+- Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):
+  `python -m goldbot.ops.run gates` prints each roadmap gate as met / not met with its evidence (trial registry DSR,
+  positive years and backtest trades; the nightly cost tables; `state/closed_trades.jsonl` for the paper and live
+  record; `state/gate_evidence.json` for the leakage audit and chaos drill, recorded with `run.py gate-evidence`) and
+  writes `state/gate_report.json`. Health adds `stop_rule` (FAIL on a breach: alerted once, recommends /halt, halts
+  nothing) and `phase_gates` (next gate, informational). Nothing records a gate or unlocks live. OWNER: sign off
+  the `gates:` values marked PROPOSED in `config/settings.yaml` before the first paper trade (DSR bar 0.95 vs the
+  roadmap's 1.0, shuffle AUC tolerance, feed mismatch share, minimum paper/live days, trades per broker). Follow-up
+  for the engine owner: append a `gates_phase.ClosedTrade` per closed position (`append_closed_trade`); until then the
+  paper/live record is empty, so gates 2-3 read "not met" and the stop rule cannot fire on expectancy.
 - Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write
   `state/heartbeat_<service>.json` every minute (`goldbot.ops.health.Heartbeat` / `start_heartbeat`); health fails a
   service silent for 5 min, warns on a tripped daily/weekly loss cap per account and on each order that failed after

@@ -483,16 +483,42 @@ Back up the state folder and `config\` regularly; they are not in Git.
 
 ## 5. Going live (demo -> tiny-live)
 
+**Is the gate met? Ask the code first.** It evaluates every roadmap gate from the evidence and records nothing:
+
+```powershell
+.\.venv\Scripts\python -m goldbot.ops.run gates            # each gate MET / NOT MET, item by item, plus the stop rule
+.\.venv\Scripts\python -m goldbot.ops.run gate-evidence chaos_drill --passed yes --detail "killed terminal mid-position, stops held"
+.\.venv\Scripts\python -m goldbot.ops.run gate-evidence shuffle_auc --value 0.503   # also asof_violations, feed_mismatch_share
+```
+
+`gates` prints each item with its evidence and the threshold from `config/settings.yaml` `gates:` and writes
+`state\gate_report.json`. The paper-to-tiny-live gate needs: the backtest-to-paper gate recorded, at least 150
+closed demo trades since it, at least 182 days of paper, paper expectancy no more than 50% below the backtest's,
+measured slippage within 30% of the modelled slippage, a passed chaos drill, and no single loss larger than the
+weekly cap. Values marked `PROPOSED` in `settings.yaml` (the DSR bar, the "at chance" tolerance, feed agreement,
+minimum days, trades per broker) must be signed off by you before the first paper trade; change them only before
+that, never to pass a gate. The paper and live record is `state\closed_trades.jsonl`; until the engine writes it,
+the paper and live items read "not met".
+
+**Stop rule.** `gates` and the health check `stop_rule` also evaluate the design's stop rule: after 18 months of
+paper plus live, more than 500 pooled trades with the lower 90% confidence bound on expectancy still below zero, or
+any single trade losing more than the weekly cap (5% of equity). A breach makes health FAIL with
+`STOP RULE BREACHED`, which Telegram announces once. It **does not** halt, close or resize anything; the RiskGate's
+caps and kill switch keep working as before. The design says the project stops: send `/halt` (or press Halt on the
+dashboard) and review before doing anything else.
+
 Live trading is locked in two independent places, and **both** must agree:
 
 1. **The phase gate file** `C:\goldbot\state\phase_state.json` must list the gate `paper_to_tiny_live` in
-   `gates_passed`. Without the file goldbot assumes `{"phase": 0, "gates_passed": []}`. No code writes this
-   file: you record the gate yourself, and only when the paper-to-tiny-live gate in the design's roadmap has
-   actually been met (the evidence comes from the paper record, the shadow book and the journal). Do not create
-   it to "try live". The only key the code reads is `gates_passed`. The recorded form is:
+   `gates_passed`. Without the file goldbot assumes `{"phase": 0, "gates_passed": []}`. Only
+   `python -m goldbot.ops.run record-gate <gate> --evidence state\gate_report.json` writes this file (gates in
+   order, with a timestamp and the evidence file's hash): you record the gate yourself, and only when `gates` shows
+   it MET. Neither `gates` nor the health check ever records a gate. Do not create the file to "try live". The
+   only key the unlock reads is `gates_passed`; the gate report reads `gate_log` timestamps for the phase clocks.
+   The recorded form is:
 
    ```json
-   {"phase": 3, "gates_passed": ["paper_to_tiny_live"]}
+   {"phase": 3, "gates_passed": ["foundation_to_backtest", "backtest_to_paper", "paper_to_tiny_live"], "gate_log": [...]}
    ```
 
    (`phase` is informational; the code does not read it.)
