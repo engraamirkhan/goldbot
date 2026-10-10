@@ -726,6 +726,31 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   checking (32-thread bursts get at most 5 checks; a refused new password with the right credentials is not
   counted). `revoke-sessions` refuses a state directory without aux.db (exit 2, absolute path printed) instead of
   creating an empty one. Redaction removes quoted paths whole (spaces, Windows) and UNC `\\host\share` paths.
+- Owner's manual trading record (2026-10-10, research seeds; security + quant review fixes the same day):
+  `python -m goldbot.ops.run owner-history [PATH]` (`goldbot/research/owner_history.py`) reads the owner's MT5 History
+  report (HTML, XLSX or a deals CSV; stdlib parsers, no new dependency; inputs and xlsx members over 50 MB refused)
+  from `~/Personal project/trade-history/` (newest file) and writes a Markdown report, a JSON summary (finite numbers
+  only, `allow_nan=False`) and a per-trade CSV (mode 0600) to that same private folder. Writing into ANY git work tree
+  is refused (`git_tree_reason`: a `.git` dir or file in the path, this checkout under any case spelling, or
+  `git rev-parse` succeeding). The header's account number, name, company and server are never kept (only the
+  currency); tickets are used only to match a position to its opening order. A pre-commit hook
+  (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` + digits, also in
+  UTF-16 and inside .xlsx). XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`, default Europe/Athens).
+  1R comes from the opening order's INITIAL stop (Orders section), else the report's S/L, which is the FINAL stop;
+  a stop at or beyond the entry is `sl_moved` and, like the no-stop proxy, kept out of the R statistics. The USD rate
+  is always implied from the trades (a "USD" account implying != 1 is flagged). Reported: R, win rate, expectancy
+  with t, profit factor, return on equity with t, daily P&L by UTC and London day with t and 95% CI and the share of
+  days >= `--targets` (default 30,50), sessions, hour, weekday, side, holding time, tier-1 news (if the store has
+  `calendar_events`), entries near session opens on each date's local clock against a base rate from the owner's
+  active hours, leverage vs equity, losing streak, drawdown from trading only (deposits/withdrawals excluded; % on a
+  flow-adjusted index), and risk of ruin with `goldbot.research.ruin`'s circular block bootstrap for both sizing
+  readings (compounding, fixed stakes) plus a zero-edge (demeaned) stress row; end equity is reported as a capped
+  log10. Ends with hypothesis seeds OH-01..06 in hypotheses.md format, labelled in-sample, not evidence, each phrased
+  as "test whether entries in X differ from the owner's other entries", stating K = slices examined and whether its
+  t clears the Bonferroni bar (slices under 10 trades are never said to clear it). Seeds quote R, % and counts only:
+  do not paste amounts into the repo. The MT5 layout was written from the documented report structure, not checked
+  against a real file (none may enter the repo): if the owner's export parses to 0 trades, look at `_ALIASES` /
+  `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
 - Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;

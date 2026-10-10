@@ -22,6 +22,7 @@
   python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]
                                                          # minimum equity for the minimum lot per family (G-7)
   python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)
+  python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds
 """
 from __future__ import annotations
 
@@ -471,6 +472,9 @@ if __name__ == "__main__":
     elif cmd == "revoke-sessions":
         from goldbot.api.auth import revoke_sessions_cli
         sys.exit(revoke_sessions_cli(sys.argv[2:]))
+    elif cmd == "owner-history":
+        from goldbot.research.owner_history import main as owner_history_main
+        sys.exit(owner_history_main(sys.argv[2:]))
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))
