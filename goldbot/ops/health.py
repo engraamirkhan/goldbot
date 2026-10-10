@@ -464,12 +464,15 @@ def _running(job: dict[str, Any]) -> pd.Timestamp | None:
 
 
 def check_scheduler(ctx: HealthContext) -> list[Check]:
-    """One heartbeat check plus one check per configured job."""
+    """One heartbeat check plus one check per configured job. Reads the heartbeat row in aux.db (state store step 3),
+    which a failed scheduler.json export cannot leave stale; the file only when aux.db has no heartbeat yet."""
+    from goldbot.db.bookkeeping import scheduler_status
     f = ctx.state_dir / "scheduler.json"
-    if not f.exists():
+    db_doc = scheduler_status(ctx.state_dir)
+    if db_doc is None and not f.exists():
         return [Check(name="scheduler", status="fail", reason="no scheduler.json: scheduler never started")]
     try:
-        raw = _read_json(f)
+        raw = db_doc if db_doc is not None else _read_json(f)
         hb = pd.Timestamp(raw["ts"])
         jobs: dict[str, dict[str, Any]] = raw.get("jobs", {})
     except (ValueError, OSError, KeyError) as exc:

@@ -699,7 +699,9 @@ def test_alerts_only_add_information(tmp_path):
     text = HealthWatch(tmp_path).poll(health.run_checks(make_ctx(tmp_path)))
     assert text is not None and "LOSS CAP" in text and "FAILED_EXEC" in text
     after = {f.relative_to(tmp_path): f.read_bytes() for f in tmp_path.rglob("*") if f.is_file()}
-    assert {k for k in after if before.get(k) != after[k]} <= {Path("health_last.json")}
+    # SQLite's -wal/-shm sidecars appear when the scheduler heartbeat is read from aux.db (read-only; no row changes)
+    assert {k for k in after if before.get(k) != after[k]} <= {Path("health_last.json"), Path("aux.db-wal"),
+                                                                Path("aux.db-shm")}
 
 
 def test_a_bridged_terminal_needs_the_bridge_token_not_the_mt5_password(tmp_path):
