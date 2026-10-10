@@ -328,9 +328,30 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   instead of being forgotten. Same change, safety-review follow-ups: `_stop_check` backs off a refused engine-stop
   close (30 s doubling to 900 s, reset on success; the broker's stop stays meanwhile) instead of a close per tick, and
   a raising `positions()` in `_stop_check`, `_scale_out`, `_reconcile`, `_manage_open` or `_refresh_account` is logged
-  and skipped (the account refresh then blocks entries via `dq_error`). Not done: `_kill_switch` and `_weekend_rule`
-  still call `positions()` unguarded; concurrent appends from two engines on Windows are not locked (one line per
-  write, rare); the paper broker's deals now also carry MT5-style `profit`/`commission`/`swap` columns.
+  and skipped (the account refresh then blocks entries via `dq_error`). Not done: concurrent appends from two engines
+  on Windows are not locked (one line per write, rare); the paper broker's deals now also carry MT5-style
+  `profit`/`commission`/`swap` columns. (The `_kill_switch`/`_weekend_rule` gap is closed by the review fix below.)
+- Closed-trade review fixes (2026-10-10, trading-safety findings, `engine/runner.py`, `execution/mt5_adapter.py`,
+  `ops/gates_phase.py`, `ops/health.py`, tests/test_closed_trade_review.py; TRACEABILITY X6, X8, P6, P7):
+  **no fake closes on a terminal fault**: MT5 `positions_get`/`history_deals_get` returning None now raise with
+  `mt5.last_error()` (and `close`/`modify` raise instead of reporting "no such position"; `order_send` None is a
+  refused result); in the engine an unreadable deal history never confirms a close and an empty one only after
+  `close_confirm_checks`, and nothing is recorded or forgotten from an unreadable book. **Unreadable-book check**:
+  consecutive failed reads (counted once per tick) set `positions_unreadable` in the engine state's `dq_checks`
+  (entries blocked, exits keep trying); health warns from the first failure and FAILs, so Telegram alerts, after
+  `risk.positions_unreadable_alert` (5) in a row. **Guarded kill switch and weekend rule**: each close in its own try;
+  a failed close is re-sent every tick (`_retry_closes`) and the kill switch re-runs every tick until this engine's
+  magic range reads flat; `weekend_done` is set only once every position was handled. **Close-confirmed
+  bookkeeping**: every exit path (kill switch, weekend, time exit, hard flat, trail, blackout, engine stop) drops a
+  trade only on `res.ok`; reconciliation re-adopting a trade this engine sent keeps the pending_orders row's agent,
+  initial stop and lots (R) and signal ATR, never the trailed stop. **Backoff only when the market is closed**:
+  10017/10018 back off (30 s doubling to 900 s); requotes, price changes and raising calls retry every tick on every
+  path. **Record retry**: a failed write stays queued (persisted in `orders_<account>.json` as `closing`), retried
+  every `reconcile_every_s` up to `closed_record_retries` (10), then reported lost (`closed_records_lost` in the
+  engine state, health FAIL, the record logged in full). **Torn writes**: the append completes short writes and starts
+  a new line after a torn tail; the loader skips bad lines, keeps the rest (so `_recorded` is complete) and the
+  engine shows a `closed_trades_unreadable` dq warning. Behaviour change the owner can see: the engine health line
+  now names an unreadable terminal and a lost record. Not verified: the real MT5 terminal (Windows only).
 - Feature discovery (2026-10-10, survey 4b, TRACEABILITY M37/M38; hypothesis H-02 tooling ready, not run):
   `research/discovery.py` + `research_pass.py --discover [--families [feature|family]] [--discover-config JSON]`
   screens every eligible column (may exceed 40) on one specialist's candidates as ONE trial. Inside each purged

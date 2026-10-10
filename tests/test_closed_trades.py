@@ -223,7 +223,7 @@ def test_a_trade_closed_while_the_engine_was_down_is_recorded_on_restart(tmp_pat
 
 
 def test_a_trade_the_broker_briefly_stops_listing_is_kept_until_its_exit_deal_is_seen(tmp_path, monkeypatch):
-    """A positions() reply that drops a live trade (MT5 returns None on an error): with no exit deal the trade is
+    """A positions() reply that drops a live trade (an incomplete reply): with no exit deal the trade is
     kept, not recorded, and carries on when it reappears."""
     eng, pb = _engine(tmp_path, TREND)
     pid = _enter(eng, pb, TREND)

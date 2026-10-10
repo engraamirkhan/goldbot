@@ -55,6 +55,7 @@ risk:
   blackout: { before_min: 15, after_min: 30, events: [CPI, NFP, FOMC, PCE] }
   min_target_over_cost: 2.5
   approval_window_seconds: 90
+  positions_unreadable_alert: 5      # failed broker reads in a row before health fails and Telegram alerts
 
 costs:
   slippage_prior_usd: 0.15           # per oz, used until 50 real fills exist

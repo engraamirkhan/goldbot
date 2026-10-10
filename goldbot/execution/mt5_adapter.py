@@ -56,6 +56,21 @@ RETCODE_DONE = 10009
 RETCODE_REQUOTE = 10004
 RETCODE_REJECT = 10006
 
+
+def _positions_get(**kw: Any) -> Any:
+    """mt5.positions_get, raising on None: None is a terminal error (disconnected, not initialised), never "no
+    positions", so the engine cannot mistake a fault for a flat book and record closes that did not happen."""
+    got = mt5.positions_get(**kw)
+    if got is None:
+        raise RuntimeError(f"positions_get failed: {mt5.last_error()}")
+    return got
+
+
+def _send_failed(position_id: int) -> OrderResult:
+    """order_send returned None (a terminal error): a refused result the engine retries, never a crash."""
+    return OrderResult(ok=False, retcode=-1, order_id=None, position_id=position_id, filled_lots=0.0, price=None,
+                       message=f"order_send failed: {mt5.last_error()}")
+
 log = logging.getLogger("goldbot.mt5")
 
 SWAP_MODES = {0: "disabled", 1: "points", 2: "base currency", 3: "margin currency", 4: "deposit currency",
@@ -256,17 +271,19 @@ class MT5Broker:
         return OrderResult(ok=False, retcode=-1, order_id=None, position_id=None, filled_lots=0.0, price=None, message="FAILED_EXEC")
 
     def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult:
-        pos = [p for p in mt5.positions_get() or [] if p.ticket == position_id]
+        pos = [p for p in _positions_get() if p.ticket == position_id]
         if not pos:
             return OrderResult(ok=False, retcode=10013, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="no such position")
         p = pos[0]
         req = {"action": mt5.TRADE_ACTION_SLTP, "symbol": p.symbol, "position": position_id,
                "sl": sl if sl is not None else p.sl, "tp": tp if tp is not None else p.tp}
         res = mt5.order_send(req)
+        if res is None:
+            return _send_failed(position_id)
         return OrderResult(ok=res.retcode == RETCODE_DONE, retcode=res.retcode, order_id=None, position_id=position_id, filled_lots=p.volume, price=None, message=res.comment)
 
     def close(self, position_id: int, lots: float | None = None) -> OrderResult:
-        pos = [p for p in mt5.positions_get() or [] if p.ticket == position_id]
+        pos = [p for p in _positions_get() if p.ticket == position_id]
         if not pos:
             return OrderResult(ok=False, retcode=10013, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="no such position")
         p = pos[0]
@@ -277,11 +294,13 @@ class MT5Broker:
                "price": tick.bid if is_buy else tick.ask, "deviation": 30, "magic": p.magic,
                "comment": "close", "type_filling": self._filling()}
         res = mt5.order_send(req)
+        if res is None:
+            return _send_failed(position_id)
         return OrderResult(ok=res.retcode == RETCODE_DONE, retcode=res.retcode, order_id=res.order, position_id=position_id, filled_lots=res.volume, price=res.price, message=res.comment)
 
     def positions(self, magic_prefix: int | None = None) -> list[Position]:
         out = []
-        for p in mt5.positions_get(symbol=self.symbol) or []:
+        for p in _positions_get(symbol=self.symbol):
             if magic_prefix is not None and not str(p.magic).startswith(str(magic_prefix)):
                 continue
             ts = server_to_utc(pd.Series(pd.to_datetime([p.time_msc], unit="ms")), self.server_tz)[0]
@@ -293,6 +312,8 @@ class MT5Broker:
         since_server = since_utc.tz_convert(self.server_tz).tz_localize(None).to_pydatetime()
         until_server = pd.Timestamp.now(self.server_tz).tz_localize(None) + pd.Timedelta(days=1)
         deals = mt5.history_deals_get(since_server, until_server.to_pydatetime())
+        if deals is None:             # an error, not an empty history: never read as "no deals" (no fake closes)
+            raise RuntimeError(f"history_deals_get failed: {mt5.last_error()}")
         df = pd.DataFrame([d._asdict() for d in deals]) if deals else pd.DataFrame()
         if not df.empty:
             df["ts_utc"] = server_to_utc(pd.to_datetime(df["time_msc"], unit="ms"), self.server_tz)

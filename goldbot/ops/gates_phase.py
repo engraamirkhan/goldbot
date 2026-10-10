@@ -140,40 +140,58 @@ class GateReport(FrozenRecord):
 
 # ---------------------------------------------------------------------------------------------- evidence readers
 def load_closed_trades(state_dir: Path) -> tuple[list[ClosedTrade], str | None]:
-    """The paper and live record; (trades, error). An unreadable line is an error, never silently dropped. A trade is
-    counted once: a later line with the same (account_id, position_id) is ignored (the engine writes once per position;
-    this keeps the count right even if a line were ever repeated)."""
+    """The paper and live record; (trades, error). An unreadable line (a torn write) is skipped and reported in the
+    error, never silently dropped, and the lines after it still count, so the engine's set of recorded positions is
+    never built from a truncated list. A trade is counted once: a later line with the same (account_id, position_id)
+    is ignored (the engine writes once per position; this keeps the count right even if a line were ever repeated)."""
     f = Path(state_dir) / CLOSED_TRADES_FILE
     if not f.exists():
         return [], None
     out: list[ClosedTrade] = []
     seen: set[tuple[str, int]] = set()
-    for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+    bad: list[str] = []
+    for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
         if not line.strip():
             continue
         try:
             t = ClosedTrade.model_validate_json(line)
         except ValueError as exc:
-            return out, f"{CLOSED_TRADES_FILE} line {i} unreadable: {str(exc).splitlines()[0][:120]}"
+            bad.append(f"line {i}: {str(exc).splitlines()[0][:120]}")
+            continue
         if t.position_id is not None:
             key = (t.account_id, t.position_id)
             if key in seen:
                 continue
             seen.add(key)
         out.append(t)
+    if bad:
+        return out, f"{CLOSED_TRADES_FILE}: {len(bad)} unreadable line(s) skipped ({bad[0]})"
     return out, None
 
 
 def append_closed_trade(state_dir: Path, trade: ClosedTrade) -> None:
     """Append one closed trade to the record (the writer the engine calls when a position closes), durably: the line
     goes out in one write on an O_APPEND descriptor and is fsynced (with the directory when the file is new) before
-    this returns, so a power cut never loses a recorded trade."""
+    this returns, so a power cut never loses a recorded trade. A short write is completed (os.write may write less
+    than asked), and a file whose last line was torn (no trailing newline) gets a newline first, so the new record is
+    never glued to the torn one."""
     f = Path(state_dir) / CLOSED_TRADES_FILE
     f.parent.mkdir(parents=True, exist_ok=True)
     new = not f.exists()
+    data = (trade.model_dump_json() + "\n").encode("utf-8")
+    if not new and f.stat().st_size > 0:
+        with open(f, "rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            if fh.read(1) != b"\n":
+                data = b"\n" + data
     fd = os.open(f, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
     try:
-        os.write(fd, (trade.model_dump_json() + "\n").encode("utf-8"))
+        view = memoryview(data)
+        while view:
+            n = os.write(fd, view)
+            if n <= 0:
+                raise OSError(f"short write to {CLOSED_TRADES_FILE}: {len(view)} bytes left")
+            view = view[n:]
         os.fsync(fd)
     finally:
         os.close(fd)
