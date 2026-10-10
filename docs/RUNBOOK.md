@@ -765,7 +765,11 @@ nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what
 | `supervisor_halt` | The supervisor halted on combined limits (`combined_daily_cap`, `combined_weekly_cap`, `combined_drawdown_halt` in `state\supervisor.json`), **or** its heartbeat is missing/older than 60 s, or `supervisor.json` is unreadable. | Check `nssm status goldbot-supervisor` and the Feeds tab heartbeat; restart it if stopped. For a cap halt see the `daily_cap` row. |
 | `drawdown_halt` | This account's equity fell 12% below its high-water mark. | Investigate before anything else. The dashboard Re-arm clears only the owner halt; the code has no command that clears this stage (an engine restart resets it, because the stage is kept in memory). |
 | `news_blackout` | Within 15 min before to 30 min after a tier-1 event (CPI, NFP, FOMC, PCE), or 30 min after a high-relevance news shock. The active event is in `state\engine_<account>.json` under `blackout`. | Wait. If it never clears, check `calendar_archive` on the Feeds tab. |
-| `stale_data` | The last tick is older than 20 s. | Check the MT5 terminal is open, logged in and connected; the Feeds tab shows "Last tick". |
+| `stale_data` | The last tick is older than 20 s (either way: a tick stamped in the future counts too). | Check the MT5 terminal is open, logged in and connected; the Feeds tab shows "Last tick". |
+| `tick_from_future` | The last tick is stamped more than 10 s ahead of this server's clock: wrong `server_tz` in a DST gap week, or a host or broker clock fault. | See "Server clock (US-EU DST gap weeks)" below. |
+| `tick_error` | Processing a tick raised (a terminal or bridge fault, a bug). The engine logged it and carries on; health fails `engine:<account>` with the error type. Clears after 20 clean ticks. | Read the engine log (`journalctl -u goldbot-engine@<account>` on the brain); if it repeats, restart the engine. Exits keep running. |
+| `server_clock_mismatch` | The broker's measured UTC offset differs from `server_tz` by more than 5 min while gold trades (`server_clock` in `engine_<account>.json`). Clears after 60 s of agreeing ticks. | See "Server clock (US-EU DST gap weeks)" below. |
+| `market_closed` | The broker's session table (read once per server day; static hours if the read fails) says the market is closed, e.g. a holiday early close. | Wait for the reopen; `session_source` in `engine_<account>.json` says whether the broker's own hours are used. |
 | `spread_too_wide` | Spread above 45 points ($0.45). | Usually rollover or news; wait. |
 | `max_positions` | Two positions already open on this account. | Normal. |
 | `daily_cap` / `weekly_cap` | This account lost 2% / 5% measured from its equity when the engine started. | The engine does not yet reset its day/week starting equity at 00:00 UTC (`new_day` in `goldbot/risk/gate.py` is not called), so these clear only when the engine restarts. Review the losses before restarting. |
@@ -815,11 +819,59 @@ Saturday run or a manual run of `data-dukascopy` retries it.
 
 `python -m goldbot.ops.run health` lists every check (settings, secrets present, disk, supervisor heartbeat, halt,
 phase gates, each engine's state, stage and data quality, risk state, scheduler jobs, cost tables, news feeds,
-agent spend, stuck approvals, backup age and the restore drill) as ok / warn / fail with a one-line reason, and exits 1 on any fail. `--json`,
+agent spend, stuck approvals, backup age, the restore drill and each account's measured server clock offset) as ok / warn / fail with a one-line reason, and exits 1 on any fail. `--json`,
 `--out FILE`, `--baseline FILE` (fail only on new fails) and `--static` (no running services needed) exist for the
 update script. The Telegram service runs the same checks every 5 minutes and messages you when a check turns fail
 and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service running; the `alerts` check shows
 when that loop has stopped).
+
+### Server clock (US-EU DST gap weeks)
+
+MT5 stamps every tick, bar and deal in the broker's *server time*; `server_tz` in `config/accounts.yaml` converts it
+to UTC. Two clocks are in use: `Europe/Athens` (UTC+2/+3, switching on EU dates) and `NY+7` (UTC+2/+3, switching on
+US dates: "midnight = 5 pm New York"). IC Markets documents the NY+7 clock. They agree except in the gap weeks,
+when a wrong zone shifts the session table, the rollover gate, the Friday 21:30 weekend rule and every timestamp by
+one hour. The `server_clock:<account>` health check measures it: it reads the broker's latest tick, compares it
+with this server's UTC clock and fails (Telegram alert) when they differ by more than 5 minutes while gold trades.
+Over a weekend it says "market closed: not measured", which is fine.
+
+Next gap trading days (check on one of them, during market hours):
+
+| Gap | Trading days | NY+7 | Europe/Athens |
+| --- | --- | --- | --- |
+| Oct/Nov 2026 | Mon 26 Oct - Fri 30 Oct 2026 | UTC+3 | UTC+2 |
+| March 2027 | Mon 15 Mar - Fri 26 Mar 2027 | UTC+3 | UTC+2 |
+| Oct/Nov 2027 | Mon 1 Nov - Fri 5 Nov 2027 | UTC+3 | UTC+2 |
+
+The engine runs the same comparison on every account refresh and refuses entries while it fails (gate reason
+`server_clock_mismatch`, plus `tick_from_future` when ticks are stamped more than 10 s ahead of this server's
+clock); exits (stops, time exits, the weekend rule, the kill switch) are never held back by it.
+
+Three rules look at the broker's clock; each owns one case (all block entries only):
+
+| Rule | Measures | Owns |
+| --- | --- | --- |
+| `clock_skew` (data-quality error) | rolling median of broker tick time minus this server's clock over 120 new ticks; blocks beyond 10 s | a broker or host clock drifting by seconds (bars would close before their last ticks) |
+| `tick_from_future` | the latest tick alone, more than 10 s ahead | a sudden jump ahead (wrong zone, clock step) before the median catches up; the same 10 s threshold, so a few seconds fast never trips it |
+| `server_clock_mismatch` | the latest tick against the configured `server_tz`, over 5 minutes while gold trades | a whole-hour zone error (the DST gap weeks) or a host clock far off; names the zone when the other known zone explains it |
+
+Steps on the brain (or the VPS), on a gap day while the market is open:
+1. `goldbot run preflight` first: its `time_sync` line must be ✅ (chrony synchronised); a host clock that is off
+   reads as a mismatch too. Then `goldbot run health` (or `python -m goldbot.ops.run health`) and read the
+   `server_clock:<account>` line. `ok ... server clock UTC+3 matches NY+7` means the configured zone is right.
+2. `fail ... server clock reads UTC+3, which is NY+7 now, but Europe/Athens gives UTC+2 (US-EU DST gap week)`
+   means the zone is wrong. Any other `fail` ("no known server zone explains it: host clock or feed") is NOT a zone
+   problem: check the host clock (`chronyc tracking` on the brain, `w32tm /query /status` on Windows; the offset must
+   be well under a second) and the feed. Cross-check by eye: the MT5 terminal's Market Watch shows the server time;
+   subtract the real UTC time (`date -u` on the brain).
+3. Fix a wrong zone: set `server_tz` for that account in `config/accounts.yaml` to the zone the broker runs (`NY+7`
+   or `Europe/Athens`) on the brain AND on the MT5 box (the bridge converts with its own copy; preflight's
+   `bridge_server_tz` line blocks when the two differ), commit it, deploy, then restart the bridge and the engine.
+   Run `goldbot run health` again until the line is `ok`.
+4. Set `NY+7` only on a gap day when the probe has shown UTC+3 against Athens' UTC+2 (step 2), never on the
+   research alone. Outside the gap weeks the two zones are identical and nothing can be learned.
+
+`goldbot run preflight` runs the same measurement (`server_clock`, blocking on a measured mismatch).
 
 ### Updating the VPS to a new version
 

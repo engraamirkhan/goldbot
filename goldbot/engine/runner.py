@@ -19,8 +19,7 @@ import time
 import zlib
 from collections import deque
 from pathlib import Path
-from typing import Protocol
-from zoneinfo import ZoneInfo
+from typing import Callable, Protocol
 
 import numpy as np
 import pandas as pd
@@ -29,13 +28,13 @@ from pydantic import Field
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
 from goldbot.base import Record, UtcTimestamp, write_atomic
 from goldbot.config import tf_seconds
-from goldbot.data.calendar import DEFAULT_SESSIONS
+from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_cache
 from goldbot.data.econ_calendar import blackout_window
 from goldbot.data.news import shock_window
 from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
-from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf
+from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.broker import Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
@@ -43,6 +42,7 @@ from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.technical import atr
 from goldbot.labels.exit_policy import ExitPolicy
+from goldbot.ops import server_clock
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
@@ -67,6 +67,9 @@ SKEW_WINDOW = 120            # new ticks in the rolling median of broker-vs-wall
 SKEW_BLOCK_S = 10.0
 SKEW_MIN_SAMPLES = 10
 LATE_BARS_BLOCK = 3
+# an exception while processing a tick (the run loop logs it and carries on) blocks entries until this many ticks in a
+# row are processed cleanly; exits never wait for it
+TICK_ERROR_CLEAR_TICKS = 20
 
 
 class Model(Protocol):
@@ -277,6 +280,14 @@ class Engine:
         # broker tick time minus the wall clock, seconds, over the last SKEW_WINDOW new ticks (median published)
         self._skew: deque[float] = deque(maxlen=SKEW_WINDOW)
         self._unhealthy_at: pd.Timestamp | None = None    # last time the data was seen stale or in error
+        # host UTC clock for the live clock (tests replace it); ticks are compared with it, never the reverse
+        self.clock: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now("UTC")
+        # D13 session table: the static rule on this account's server clock until run.py sets the broker's (it refreshes
+        # it outside the tick path, so on_tick never calls the broker for sessions); read with no I/O
+        self.sessions: SessionTable = SessionTable(server_tz=cfg.server_tz)
+        self.clock_probe: server_clock.ServerClockProbe | None = None   # latest server-clock measurement
+        self._clean_ticks = 0                          # ticks processed without an exception since the last one
+        self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)
         # risk periods and the owner's re-arm survive a restart (state/risk_<account>.json)
         self._last_reset: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
@@ -335,9 +346,34 @@ class Engine:
 
     # ------------------------------------------------------------------ ticks and bars
     def on_tick(self, t: Tick) -> list[dict]:
-        """Feed a tick; returns any decisions made at a bar close."""
-        self.center.poll_bus()          # approvals from the dashboard / Telegram service, applied within a tick
-        self._poll_rearm(self._now(t))
+        """Feed a tick; returns any decisions made at a bar close. An approval or re-arm that raises is recorded as a
+        tick error (entries blocked) and never stops this tick's exits."""
+        try:
+            self.center.poll_bus()      # approvals from the dashboard / Telegram service, applied within a tick
+            self._poll_rearm(self._now(t))
+        except Exception as exc:
+            self.note_tick_error(exc)
+        out = self._on_tick(t)
+        if self.state.tick_error and self._tick_error_detail is not None:
+            self._clean_ticks += 1      # this tick ran to the end
+            if self._clean_ticks >= TICK_ERROR_CLEAR_TICKS:
+                self.state.tick_error, self._tick_error_detail = False, None
+                self._write_state()
+        return out
+
+    def note_tick_error(self, exc: BaseException) -> None:
+        """A tick raised (the run loop or an approval): log it, block entries (`tick_error`) until
+        TICK_ERROR_CLEAR_TICKS clean ticks, and publish it in the engine state for the health alert."""
+        log.exception("tick processing failed (%s); entries blocked until %d clean ticks", type(exc).__name__,
+                      TICK_ERROR_CLEAR_TICKS, exc_info=exc)
+        self.state.tick_error, self._clean_ticks = True, -1   # the failing tick itself does not count as clean
+        self._tick_error_detail = type(exc).__name__
+        try:
+            self._write_state()
+        except Exception:
+            log.exception("engine state not written after a tick error")
+
+    def _on_tick(self, t: Tick) -> list[dict]:
         if not self._tick_ok(t):
             return []                   # crossed or out-of-order quote: never enters the bars; entries blocked
         prev, self._last_tick = self._last_tick, t
@@ -1082,8 +1118,19 @@ class Engine:
         st.open_notional = st.open_lots * 100.0 * (tick.bid + tick.ask) / 2
         st.spread_points = (tick.ask - tick.bid) / 0.01
         now = self._now(tick)
-        st.last_tick_age_s = max(0.0, (now - tick.ts_utc).total_seconds())
-        stale = stale_feed(tick.ts_utc, now, limit_seconds=self.cfg.stale_feed_s)
+        # signed: a tick stamped AFTER the host clock (wrong server_tz, broker or host clock) must not look fresh, so
+        # staleness uses the distance either way and the lead itself is an entry block (`tick_from_future`)
+        age = (now - tick.ts_utc).total_seconds()
+        st.last_tick_age_s = abs(age)
+        st.tick_ahead_s = max(0.0, -age)
+        sessions = self.sessions
+        try:
+            stale = stale_feed(now - pd.Timedelta(seconds=abs(age)), now, limit_seconds=self.cfg.stale_feed_s,
+                               sessions=sessions)
+            closed = sessions.entry_block(now) is not None
+        except Exception as exc:        # a broken session table fails closed for entries; exits never read it
+            log.warning("session table unusable (%s): entries blocked as market_closed", type(exc).__name__)
+            stale, closed = False, True
         st.dq_error = stale or bool(self._dq_errors() or self._dq_blocking()) or positions is None \
             or self._book_unreadable() > 0                                    # fail closed: positions_unreadable
         # stale data (design): the last completed bar must be under one decision period old; no bars is stale
@@ -1091,8 +1138,12 @@ class Engine:
             st.stale_bars = True
         else:
             seen = pd.Timestamp(self.bars_1m["visible_at"].iloc[-1])
-            st.stale_bars = (now - seen).total_seconds() > tf_seconds(self.cfg.decision_tf)
-        if st.dq_error or st.stale_bars or st.last_tick_age_s > self.gate.limits.stale_tick_seconds:
+            st.stale_bars = abs((now - seen).total_seconds()) > tf_seconds(self.cfg.decision_tf)
+        self.clock_probe = self._probe_clock(tick, now, sessions)
+        st.clock_mismatch = self.clock_probe.status == "mismatch"
+        st.market_closed = closed
+        if st.dq_error or st.stale_bars or st.last_tick_age_s > self.gate.limits.stale_tick_seconds \
+                or st.tick_ahead_s > self.gate.limits.max_tick_ahead_s or st.clock_mismatch:
             self._unhealthy_at = now
             st.data_recovering = False        # the error itself blocks; recovery starts when it clears
         else:
@@ -1127,6 +1178,23 @@ class Engine:
         if self._propose_only_until is not None and now < self._propose_only_until:
             self.cfg.approval_mode = "propose"  # 30 days propose-and-approve after a re-arm
 
+    def set_sessions(self, table: SessionTable) -> None:
+        """The broker session table (D13), refreshed by the run loop outside the tick path (goldbot/ops/run.py
+        `refresh_sessions`); used for market_closed, feed staleness and the server-clock probe."""
+        self.sessions = table
+
+    def _probe_clock(self, tick: Tick, now: pd.Timestamp, sessions: SessionTable) -> server_clock.ServerClockProbe:
+        """The server-clock probe on the tick this refresh already holds (no broker call): its stamp, converted with
+        server_tz, against the host clock. Any error is "not measured", which never blocks (stale and closed-market
+        rules cover those cases); a measured mismatch blocks entries only."""
+        try:
+            return server_clock.assess(self.cfg.account_id, self.cfg.server_tz, tick.ts_utc, now, sessions)
+        except Exception as exc:
+            log.warning("server clock probe failed (%s); not measured", type(exc).__name__)
+            return server_clock.ServerClockProbe(account_id=self.cfg.account_id, measured_utc=now,
+                                                 server_tz=self.cfg.server_tz, status="not_measured",
+                                                 reason=f"probe failed ({type(exc).__name__})")
+
     def _kill_switch(self, *, everything: bool) -> bool:
         """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
         approve. On the trip every position on the account is closed; while halted, any of this engine's positions
@@ -1158,7 +1226,7 @@ class Engine:
     def _server_clock(self, now: pd.Timestamp, tick: Tick) -> None:
         """Rollover (+-rollover_min of 00:00 server: no entries) and weekend (Friday weekend_cut server until the week
         reopens: no entries; at the cut, once per Friday, this engine's losers are closed and winners' stops tightened)."""
-        srv = now.tz_convert(ZoneInfo(self.cfg.server_tz))
+        srv = server_wall(now, self.cfg.server_tz)[0]        # naive server wall clock; any server_tz incl. NY+7
         mins = srv.hour * 60 + srv.minute + srv.second / 60
         self.state.in_rollover = min(mins, 1440 - mins) <= self.cfg.rollover_min
         h, m = (int(x) for x in self.cfg.weekend_cut.split(":"))
@@ -1208,7 +1276,7 @@ class Engine:
         return done
 
     def _now(self, tick: Tick) -> pd.Timestamp:
-        return pd.Timestamp.now("UTC") if self.cfg.live_clock else tick.ts_utc
+        return self.clock() if self.cfg.live_clock else tick.ts_utc
 
     # ------------------------------------------------------------------ data quality
     def _dq_errors(self) -> list[DQEvent]:
@@ -1646,7 +1714,9 @@ class Engine:
         row = X.iloc[-1]
         adx = float(row.get("h1_adx14", row.get("adx14", 20.0)) or 20.0)
         rv = X["h1_rv_20"] if "h1_rv_20" in X.columns else X.get("rv_20", pd.Series([np.nan]))
-        q = int(pd.qcut(rv.dropna().tail(60 * 24), 4, labels=False, duplicates="drop").iloc[-1]) if rv.notna().sum() > 40 else 1
+        win = rv.dropna().tail(60 * 24)
+        # a constant window has no quartiles (qcut yields NaN): middle bucket, as with too little history
+        q = int(pd.qcut(win, 4, labels=False, duplicates="drop").iloc[-1]) if len(win) > 40 and win.nunique() >= 2 else 1
         to_t1, since_t1 = tier1_minutes(self._calendar[1], close_ts) if self.cfg.news_blackout else (None, None)
         return Regime(adx_1h=adx, atr_1h_quartile=q, vol_tercile=int(row.get("vol_tercile", 1) or 1),
                       minutes_to_tier1=to_t1, minutes_since_tier1=since_t1)
@@ -1858,6 +1928,10 @@ class Engine:
             "closed_records_lost": self._records_lost, "closes_due": sorted(self._close_due),
             "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
             "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
+            "tick_ahead_s": st.tick_ahead_s, "market_closed": st.market_closed, "session_source": self.sessions.source,
+            "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail,
+            "sessions": session_table_cache(self.sessions),
+            "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
         }
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync
         write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps(payload), durable=False)

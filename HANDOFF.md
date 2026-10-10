@@ -753,6 +753,40 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- Server clock offset probe and `NY+7` zone (2026-10-10, HIGH from the trading-safety review; answers the D13 open
+  ops check above). Research: IC Markets' own notices say its MT4/MT5 server time "is based on '5 pm New York'" and
+  moves GMT+2 -> GMT+3 on the US DST start (10 Mar 2024, 9 Mar 2025) and back on the US DST end (4 Nov 2018), so
+  ICMarketsSC most likely runs NY+7, not Europe/Athens; not yet measured on our terminal. `goldbot/data/timeutil.py`
+  adds `NY+7` (`NewYorkPlus7`, `server_zone`, `server_wall` (tz-aware input only), `server_utc_offset`; pandas treats
+  a custom tzinfo as a fixed offset, so `utc_to_server` refuses NY+7). `Account.server_tz` is validated at load.
+  Every server-clock reader uses `server_wall`: session table, engine `_server_clock` (rollover, Friday cut),
+  `labels.triple_barrier._server_days` (rollover nights, also reached from jobs.py SwapSpec and research attribution),
+  MT5 adapter requests (now tz-aware UTC-labelled datetimes: MT5 reads naive ones in the host zone).
+  `goldbot/ops/server_clock.py` compares a tick with host UTC; a mismatch is called a zone error only when the other
+  known zone explains it, else "host clock or feed". Engine (`_refresh_account`, no extra RPC): signed tick age,
+  `tick_ahead_s` -> gate `tick_from_future` (> 10 s = SKEW_BLOCK_S, `RiskLimits.max_tick_ahead_s`), abs age for stale tick/feed/bars,
+  probe -> `server_clock_mismatch`, both start `data_recovering` when they clear; D13 `BrokerSessions` built in
+  run.py, refreshed beside the 60 s model reload (`refresh_sessions`: a raising, slow (> 5 s) or fallback read keeps
+  the last broker table), `eng.set_sessions` -> gate `market_closed`, the same table for stale feed and the probe.
+  Approval-time re-run refreshes the state, so a mismatch or close between proposal and click refuses it. None of
+  these are on the exit path (`_tick_ok` unchanged). engine_<account>.json carries `tick_ahead_s`, `market_closed`,
+  `session_source`, `sessions` (cached table, read by health) and `server_clock`. Health `server_clock:<account>` and
+  preflight `server_clock` (blocking on a mismatch) measure it independently; preflight `bridge_server_tz` blocks when
+  the bridge (`/health` now reports its zone) converts with another zone than the brain. accounts.yaml stays on
+  Europe/Athens. RUNBOOK "Server clock (US-EU DST gap weeks)" and new gate-reason rows; ADR 0005. Not done: settings
+  `brokers.*.server_tz` is not validated at load (triple_barrier raises on a bad name); a pre-existing `_regime`
+  crash on a perfectly flat price series is fixed (`_regime` uses the middle bucket when the volatility window
+  is constant). Review fixes (b55f5d1 review): the run loop (`goldbot/ops/run.py` `engine_pass`) logs any exception
+  instead of crash-looping and sets `tick_error` (gate reason, health fail on `engine:<account>`, cleared after
+  `TICK_ERROR_CLEAR_TICKS` = 20 clean ticks); an approval or re-arm that raises inside `on_tick` is recorded the same
+  way and the tick's exits still run; sessions are read on a background thread (`SessionRefresher`: started every
+  60 s, collected on a later pass, never joined on the tick loop; its own bridge client); a broken session table
+  fails closed for entries (`market_closed`), never for exits. RUNBOOK: which of `clock_skew`, `tick_from_future`
+  and `server_clock_mismatch` owns which case.
+  **Needs the owner:** on Mon 26 Oct 2026 during market hours run `goldbot run health` and read
+  `server_clock:icm-demo`; if it reads UTC+3 (NY+7) vs Athens UTC+2, the engine is already refusing entries: set
+  `server_tz: NY+7` for icm accounts on the brain and the MT5 box (RUNBOOK steps 3-4). Vantage's help centre also puts
+  server midnight at 5 pm New York (likely NY+7) but publishes no switch dates: measure it the same way.
 - Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;
   `docs/decisions/0004-starting-account-and-daily-target.md`): the IC Markets demo is **£1,000 GBP**, read from MT5
   `account_info` (never config); **£50 is the owner's absolute daily loss limit**; **£50+/day is the north star**

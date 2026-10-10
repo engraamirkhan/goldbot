@@ -26,7 +26,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
-from goldbot.data.timeutil import epoch_ns, server_to_utc
+from goldbot.data.timeutil import epoch_ns, server_to_utc, server_wall
 
 log = logging.getLogger("goldbot.calendar")
 
@@ -166,7 +166,7 @@ class SessionTable(FrozenRecord):
         return np.where(covered, inside, static)
 
     def _static_open(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
-        local = pd.DatetimeIndex(utc_ts).tz_convert(ZoneInfo(self.server_tz))
+        local = server_wall(pd.DatetimeIndex(utc_ts), self.server_tz)
         dow = local.dayofweek.to_numpy()
         t = local.time
         tsec = np.array([x.hour * 3600 + x.minute * 60 + x.second for x in t])
@@ -226,7 +226,7 @@ class BrokerSessions:
         self._read_at: pd.Timestamp | None = None
 
     def table(self, now: pd.Timestamp) -> SessionTable:
-        day = pd.Timestamp(now).tz_convert(ZoneInfo(self.fallback.server_tz)).date()
+        day = server_wall(pd.Timestamp(now), self.fallback.server_tz)[0].date()
         retry = (self._table is not None and self._table.source != "broker" and self._read_at is not None
                  and now - self._read_at >= self.retry_after)
         if self._table is None or day != self._day or retry:
@@ -236,6 +236,31 @@ class BrokerSessions:
 
     def entry_block(self, now: pd.Timestamp) -> str | None:
         return self.table(now).entry_block(now)
+
+
+def session_table_cache(t: SessionTable) -> dict[str, Any]:
+    """The parts of a session table another process needs (engine state -> health): zone, source and the broker's
+    windows as ISO strings; the static rule's fields stay at their defaults."""
+    def iso(x: pd.Timestamp | None) -> str | None:
+        return None if x is None else pd.Timestamp(x).isoformat()
+    return {"server_tz": t.server_tz, "source": t.source, "note": t.note,
+            "covers_from": iso(t.covers_from), "covers_until": iso(t.covers_until),
+            "broker_windows": None if t.broker_windows is None else [[iso(a), iso(b)] for a, b in t.broker_windows]}
+
+
+def session_table_from_cache(d: Any) -> SessionTable | None:
+    """Inverse of `session_table_cache`; None when `d` is missing or malformed (the caller uses the static table)."""
+    try:
+        win = d.get("broker_windows")
+        base = SessionTable(server_tz=str(d["server_tz"]))
+        if win is None:
+            return base
+        return base.model_copy(update={
+            "broker_windows": tuple((pd.Timestamp(a), pd.Timestamp(b)) for a, b in win),
+            "covers_from": pd.Timestamp(d["covers_from"]), "covers_until": pd.Timestamp(d["covers_until"]),
+            "source": str(d.get("source", "broker")), "note": str(d.get("note", ""))})
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
 
 
 class LocalSession(FrozenRecord):
