@@ -20,12 +20,13 @@ promotion.
   was picked from: the features screened (about 300) when survivors go forward as individual features (the default,
   `survivor_unit=feature`), the groups screened (about 10) only when whole groups go forward (`survivor_unit=group`).
   The unit is fixed in the pre-registration row before the run.
-- **Owner-acknowledged choice (conservative default):** H-02's K_eff is added to the DSR trial count of EVERY later
+- **Conservative default, pending the owner's confirmation:** H-02's K_eff is added to the DSR trial count of EVERY later
   trial, survivor or not (`registry.n_trials_effective`, used by `research_pass.py` for every trial), not only to trials
   of an H-02 survivor. This over-deflates trials unrelated to H-02 (their DSR is biased down, never up); it is kept
   because a per-trial "is this a survivor?" link is easy to get wrong and an error there would bias DSR up.
 - **Extra promotion rule for discovery survivors:** any H-02 survivor must, besides its own pre-registered trial and the
-  design's gates, also pass the holdout rule (one scoring of 2025-10-01 .. 2026-09-30, `--score-holdout`) before it
+  design's gates, also pass the holdout rule (one scoring of 2025-10-01 .. 2026-09-30, `--score-holdout`; enforced in
+  code: `TrialRegistry.passed_gates` requires it for configs tagged `from_discovery`) before it
   can be promoted.
 
 ## Order and budget (13 planned of 20; 7 reserve)
