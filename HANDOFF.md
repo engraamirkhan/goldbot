@@ -433,6 +433,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the first CI run on the PR is the check.
 
 ## Next steps (no owner input needed unless marked)
+- Broker margin in the gate and tick flags (2026-10-10, ROADMAP W2-2, rows R8/D11): brokers gain a read-only
+  `margin_required(symbol, side, lots, price)` (MT5 `order_calc_margin`, paper 1:20, bridge allow-list retry-safe);
+  `RiskGate.check(..., margin_required=...)` uses the larger of the broker figure and notional / 20 and keeps the
+  300% rule; a broker that cannot answer falls back to 1:20 with the reason in `GateDecision.margin_note` (never a
+  smaller margin). `Tick.flags` (default 0) and `tick_key` make the live dedup (time_msc, bid, ask, flags). Follow-up
+  for the engine owner (R8 stays partial until then): pass
+  `margin_required=broker_margin(self.broker, self.cfg.symbol)` to both `self.gate.check` calls in
+  goldbot/engine/runner.py (proposal and approval re-check).
 - Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):
   `python -m goldbot.ops.run gates` prints each roadmap gate as met / not met with its evidence (trial registry DSR,
   positive years and backtest trades; the nightly cost tables; `state/closed_trades.jsonl` for the paper and live

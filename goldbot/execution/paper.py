@@ -50,6 +50,10 @@ class PaperBroker:
         float_pl = sum(p.profit for p in self._positions.values())
         return AccountInfo(login=0, equity=self._balance + float_pl, balance=self._balance, margin=0.0, margin_free=self._balance + float_pl, leverage=20, currency="USD", server="paper")
 
+    def margin_required(self, symbol: str, side: int, lots: float, price: float) -> float | None:
+        """Paper margin at the FCA retail cap for gold, 1:20 (the paper account's leverage)."""
+        return lots * self.contract * price / 20.0
+
     def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:  # bars come from the store in paper mode
         return pd.DataFrame()
 

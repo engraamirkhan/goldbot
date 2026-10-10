@@ -14,6 +14,13 @@ class Tick(Record):
     ts_utc: pd.Timestamp
     bid: float
     ask: float
+    flags: int = 0                # MT5 TICK_FLAG_* bits; 0 where the source has none (paper, replay, older payloads)
+
+
+def tick_key(t: Tick) -> tuple[pd.Timestamp, float, float, int]:
+    """The live collector's dedup key (design: Live collector "dedups on (time_msc, bid, ask, flags)"): two ticks in
+    the same millisecond at the same prices but with different flags (e.g. a last/volume update) are both kept."""
+    return t.ts_utc, t.bid, t.ask, t.flags
 
 
 class Bar(Record):
@@ -97,6 +104,10 @@ class Broker(Protocol):
     def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame: ...
     def last_tick(self, symbol: str) -> Tick: ...
     def stream_ticks(self, symbol: str) -> AsyncIterator[Tick]: ...
+    def margin_required(self, symbol: str, side: int, lots: float, price: float) -> float | None:
+        """Margin in the account currency the broker would take for this order (MT5 `order_calc_margin`); None when
+        the broker cannot say. Read-only; the RiskGate uses the larger of this and the 1:20 figure."""
+        ...
     def place_order(self, intent: OrderIntent) -> OrderResult: ...
     def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult: ...
     def close(self, position_id: int, lots: float | None = None) -> OrderResult: ...
