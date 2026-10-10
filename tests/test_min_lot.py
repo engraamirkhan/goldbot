@@ -2,6 +2,7 @@
 sized at the minimum lot, and the risk the minimum lot really takes at a given equity."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -99,20 +100,63 @@ def test_cli_with_arguments(capsys: pytest.CaptureFixture[str], tmp_path: Path):
                  "--out", str(out)]) == 0
     text = capsys.readouterr().out
     assert "12,500" in text
-    rows = [Feasibility.model_validate(r) for r in __import__("json").loads(out.read_text())]
+    rows = [Feasibility.model_validate(r) for r in json.loads(out.read_text())]
     assert rows[0].min_equity_gate == pytest.approx(12_500.0)
 
 
-def test_cli_reads_bars_per_family_and_timeframe_from_the_store(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+def _store_bars(n: int, close: float, rng_usd: float, freq: str, spread: float = 0.2) -> pd.DataFrame:
+    """The store's bar schema (bid/ask OHLC, as scripts/fetch_data_release.py loads them); mid = close."""
+    ts = pd.date_range("2026-01-01", periods=n, freq=freq, tz="UTC")
+    c = np.full(n, close)
+    out: dict[str, Any] = {"ts_utc": ts}
+    for side, sgn in (("bid", -1), ("ask", 1)):
+        out[f"{side}_open"] = out[f"{side}_close"] = c + sgn * spread / 2
+        out[f"{side}_high"] = c + rng_usd / 2 + sgn * spread / 2
+        out[f"{side}_low"] = c - rng_usd / 2 + sgn * spread / 2
+    return pd.DataFrame(out).assign(volume=1.0, spread_mean=spread)
+
+
+def test_cli_reads_bars_per_family_timeframe_and_preset_from_the_store(tmp_path: Path,
+                                                                      capsys: pytest.CaptureFixture[str]):
     from goldbot.data.store import Store
     store = Store(tmp_path)
-    b = _bars(60, 4000.0, 80.0).assign(volume=1.0)
-    store.append("bars_1d", b, source="dukascopy")
-    assert main(["--data-root", str(tmp_path), "--timeframes", "1d", "--equity", "25000"]) == 0
+    store.append("bars_1d", _store_bars(60, 4000.0, 80.0, "D"), source="dukascopy")
+    store.append("bars_4h", _store_bars(200, 4000.0, 20.0, "4h"), source="dukascopy")
+    out = tmp_path / "rows.json"
+    assert main(["--data-root", str(tmp_path), "--timeframes", "1d", "4h", "--equity", "25000",
+                 "--out", str(out)]) == 0
     text = capsys.readouterr().out
-    assert "tsmom" in text and "1d" in text
+    assert "tsmom:slow" in text and "mid" in text                        # the preset row and the price basis
+    rows = [Feasibility.model_validate(r) for r in json.loads(out.read_text())]
+    slow = next(r for r in rows if r.preset == "slow")
+    # H-01 slow preset: decides on 4h, sizes its stop on the daily ATR (atr_tf = 1d)
+    assert (slow.timeframe, slow.atr_timeframe) == ("4h", "1d")
+    assert slow.atr_usd == pytest.approx(80.0) and slow.stop_distance == pytest.approx(120.0)
+    daily = next(r for r in rows if r.family == "tsmom" and r.timeframe == "1d" and r.preset is None)
+    assert daily.atr_usd == pytest.approx(80.0) and daily.price == pytest.approx(4000.0)
+    h4 = next(r for r in rows if r.family == "tsmom" and r.timeframe == "4h" and r.preset is None)
+    assert h4.atr_usd == pytest.approx(20.0)
     assert main(["--data-root", str(tmp_path / "empty"), "--timeframes", "1d"]) == 2
     assert "no bars" in capsys.readouterr().err
+
+
+def test_size_down_sizes_at_a_quarter_of_the_risk_like_the_gate():
+    f = min_lot_feasibility(price=4000.0, stop_distance=75.0, risk_fraction=0.005, size_down=True)
+    assert f.risk_fraction == pytest.approx(0.00125)
+    assert f.min_equity_gate == pytest.approx(75 / (1.2 * 0.00125))
+
+
+def test_the_multiplier_is_clamped_like_the_gate():
+    assert min_lot_feasibility(price=4000.0, stop_distance=75.0, risk_fraction=0.005,
+                               multiplier=3.0).risk_fraction == pytest.approx(0.0075)
+    assert min_lot_feasibility(price=4000.0, stop_distance=75.0, risk_fraction=0.008,
+                               multiplier=3.0).risk_fraction == pytest.approx(0.01)       # hard 1% maximum
+
+
+def test_the_stop_is_floored_at_the_stops_level_plus_spread():
+    f = min_lot_feasibility(price=4000.0, atr_usd=0.1, stop_atr=1.0, risk_fraction=0.005, stops_level_points=50.0,
+                            spread_points=20.0)
+    assert f.stop_distance == pytest.approx(0.7)
 
 
 def test_run_py_dispatches_both_reports():

@@ -68,10 +68,12 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 
 Risk analytics (reporting tools, not design rows, so the counts are unchanged): `goldbot/research/ruin.py`
 (`run.py ruin`, playbook G-5) simulates R against the R9/R11/R13/R14 limits read from `config/settings.yaml`, applying
-them as `RiskGate` does (tests/test_ruin.py::test_stage_one_halves_risk_and_stage_two_halts_the_path,
-::test_daily_cap_stops_the_day_and_the_week_carries_on); `goldbot/research/min_lot.py` (`run.py sizing-feasibility`,
+them as `RiskGate` does (tests/test_ruin.py::test_stage_one_quarters_the_risk_like_the_gate_and_stage_two_halts_the_path,
+::test_daily_cap_stops_the_day_and_the_next_day_starts_again); `goldbot/research/min_lot.py` (`run.py sizing-feasibility`,
 G-7) reports the equity at which R5's minimum-lot rule lets a stop be sized
-(tests/test_min_lot.py::test_agrees_with_the_risk_gate_on_whether_the_minimum_lot_is_allowed).
+(tests/test_min_lot.py::test_agrees_with_the_risk_gate_on_whether_the_minimum_lot_is_allowed). Both size through
+`goldbot/risk/sizing.py`, the R2/R4/R5/R6/R14 arithmetic as pure functions, held equal to `RiskGate` by
+tests/test_sizing_parity.py::test_sizing_module_matches_the_gate and ::test_stage_machine_matches_update_stage.
 
 ## Supervisor [Execution and risk: Supervisor]
 
