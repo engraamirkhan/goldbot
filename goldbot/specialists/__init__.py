@@ -1,4 +1,5 @@
 from goldbot.specialists import (  # noqa: F401  (registers specialists)
+    asia_drift,
     breakout,
     intraday_momentum,
     mean_reversion,

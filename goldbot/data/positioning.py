@@ -13,9 +13,16 @@ COT (source cftc, series_id 088691 = GOLD - COMMODITY EXCHANGE INC.): the disagg
   15:30 ET. `cot_available_utc` stamps that Friday (20:30 UTC, 19:30 UTC in US daylight time, via zoneinfo). In a week
   with a US federal holiday (Monday of the report week to the Friday) the CFTC releases later, so the stamp moves to
   the next US business day after the Friday, 15:30 ET (conservative: the actual release is never later than that in a
-  normal holiday week). Government shutdowns stopped the report for weeks; SHUTDOWN_FLOORS holds conservative
+  normal holiday week). Unscheduled federal closures (national days of mourning, CLOSURE_DAYS) count as holidays too;
+  a closure the calendar misses only risks a stamp that is too early, so the list errs on the side of including one.
+  Government shutdowns stopped the report for weeks; SHUTDOWN_FLOORS holds conservative
   not-before times for those report dates, and `merge_releases` catches any future delay (a row that should have been
   in an earlier download but was not is stamped no earlier than the download that first saw it).
+  Schedule assumption: the Saturday 05:23 UTC workflow run expects the annual zip (fut_disagg_txt_<year>.zip) to already
+  carry Friday's report (in a holiday week the report may come after the run and is picked up a week later). If the
+  CFTC updates the zip later than that, the report is missing from that run and the next run treats it as late
+  (`merge_releases`: its rule stamp is before the previous successful download) and stamps it no earlier than the
+  download that first saw it. A lag therefore only makes the features staler; it never moves a value earlier.
 
 GLD (source spdr): the issuer's public historical archive,
   https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv (no key). Series gld_tonnes: the trust's
@@ -39,8 +46,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
 from pandas.tseries.holiday import USFederalHolidayCalendar
-
-from goldbot.data.macro import US_BDAY
+from pandas.tseries.offsets import CustomBusinessDay
 
 ET = ZoneInfo("America/New_York")
 COLUMNS = ("series", "series_id", "value_date", "value", "vintage", "available_utc", "ts_utc", "source")
@@ -52,14 +58,34 @@ COT_HIST_URL = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_hist_2006_
 COT_YEAR_URL = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
 COT_RELEASE_ET = time(15, 30)
 COT_SERIES = ("cot_mm_long", "cot_mm_short", "cot_mm_net", "cot_open_interest", "cot_comm_net")
+# Unscheduled federal closures (executive orders; federal offices and the CFTC closed, markets closed): treated as
+# federal holidays for both the COT holiday-week rule and the next-business-day stamps. Add new ones here; a missing
+# one can stamp a release too early, an extra one only makes it later.
+CLOSURE_DAYS = pd.DatetimeIndex([
+    "2018-12-05",   # national day of mourning, President George H. W. Bush
+    "2025-01-09",   # national day of mourning, President Jimmy Carter
+])
+_HOLIDAYS = USFederalHolidayCalendar().holidays(pd.Timestamp("1990-01-01"), pd.Timestamp("2100-12-31")).union(CLOSURE_DAYS)
+US_CLOSED_BDAY = CustomBusinessDay(holidays=list(_HOLIDAYS))   # US business day: federal holidays and CLOSURE_DAYS skipped
+
+
+def us_holidays(start: pd.Timestamp, end: pd.Timestamp) -> pd.DatetimeIndex:
+    """Federal holidays (observed) plus CLOSURE_DAYS between start and end, inclusive."""
+    return _HOLIDAYS[(_HOLIDAYS >= start) & (_HOLIDAYS <= end)]
+
+
 # Government shutdowns (CFTC stopped publishing; the backlog came out on a catch-up schedule afterwards): report dates
 # in [first, last] are not treated as public before `not_before`. The dates are deliberately late (end of the catch-up
-# as best known, rounded up); being late only makes the features staler for those weeks. UNVERIFIED against the CFTC
-# press releases (HANDOFF.md, positioning bullet); confirm them before reading COT results for those weeks.
+# as best known, rounded up); being late only makes the features staler for those weeks. The 2013 and 2018-19 rows are
+# UNVERIFIED against the CFTC press releases (HANDOFF.md, positioning bullet); confirm them before reading COT results
+# for those weeks. 2025: CFTC release 9147-25 (9 Dec 2025) accelerated the catch-up so that the last delayed report
+# (as of 23 Dec 2025) was published 29 Dec 2025 and publication returned to the normal schedule (the 23 Dec 2025 CFTC
+# update published the 16 Dec data on schedule); the floor is that date plus a margin, 3 Jan 2026. The report of
+# 30 Dec 2025 onwards follows the normal rule (a New Year holiday week: Monday 5 Jan 2026).
 SHUTDOWN_FLOORS: tuple[tuple[str, str, str], ...] = (
     ("2013-09-30", "2013-11-19", "2013-11-30 00:00"),
     ("2018-12-24", "2019-03-05", "2019-03-11 00:00"),
-    ("2025-09-30", "2026-01-27", "2026-01-31 00:00"),
+    ("2025-09-30", "2025-12-23", "2026-01-03 00:00"),
 )
 
 
@@ -77,9 +103,9 @@ def cot_available_utc(report_date: pd.Series | pd.DatetimeIndex) -> pd.DatetimeI
         return pd.DatetimeIndex([], tz="UTC")
     friday = d + pd.to_timedelta((4 - d.dayofweek) % 7, unit="D")
     monday = friday - pd.Timedelta(days=4)
-    hol = USFederalHolidayCalendar().holidays(monday.min(), friday.max())
+    hol = us_holidays(monday.min(), friday.max())
     holiday_week = np.array([bool(((hol >= m) & (hol <= f)).any()) for m, f in zip(monday, friday)])
-    release = pd.DatetimeIndex([f + US_BDAY if h else f for f, h in zip(friday, holiday_week)])
+    release = pd.DatetimeIndex([f + US_CLOSED_BDAY if h else f for f, h in zip(friday, holiday_week)])
     local = release + pd.Timedelta(hours=COT_RELEASE_ET.hour, minutes=COT_RELEASE_ET.minute)
     out = local.tz_localize(ET).tz_convert("UTC")
     for first, last, not_before in SHUTDOWN_FLOORS:
@@ -128,7 +154,13 @@ def parse_cot(text_or_bytes: str | bytes) -> pd.DataFrame:
 
 
 def cot_frame(parsed: pd.DataFrame, vintage: pd.Timestamp) -> pd.DataFrame:
-    """parse_cot rows -> long release rows (COLUMNS), one per series and report date."""
+    """parse_cot rows -> long release rows (COLUMNS), one per series and report date.
+
+    Known look-ahead in the backfill: the CFTC history files hold the current (corrected) value for each report date,
+    not the value first published. The first run (2006 onwards) therefore stamps those corrected values with the
+    first-release available_utc. CFTC revisions of past reports are rare and small, so this is a small, accepted
+    look-ahead for the backfilled history only; from the first published file on, `merge_releases` records a later
+    revision as a new row available no earlier than the download that saw it, and first-release values are kept."""
     if parsed.empty:
         return pd.DataFrame(columns=list(COLUMNS))
     days = _naive_days(parsed["report_date"])
@@ -187,9 +219,9 @@ class GldSourceUnavailable(RuntimeError):
 
 
 def gld_available_utc(value_date: pd.Series | pd.DatetimeIndex) -> pd.DatetimeIndex:
-    """The next US business day (federal holidays skipped) after value_date, 14:00 UTC."""
+    """The next US business day (federal holidays and CLOSURE_DAYS skipped) after value_date, 14:00 UTC."""
     d = _naive_days(value_date)
-    return (pd.DatetimeIndex([x + US_BDAY for x in d]) + GLD_AVAILABLE_AT_UTC).tz_localize("UTC").as_unit("ns")
+    return (pd.DatetimeIndex([x + US_CLOSED_BDAY for x in d]) + GLD_AVAILABLE_AT_UTC).tz_localize("UTC").as_unit("ns")
 
 
 def parse_gld_csv(text: str) -> pd.DataFrame:
@@ -272,6 +304,36 @@ def merge_releases(prev: pd.DataFrame | None, fresh: pd.DataFrame, retrieved_utc
         out = pd.concat([prev, m[new | revised].drop(columns=["prev_value"])], ignore_index=True)
     out["ts_utc"] = out["available_utc"]
     return out[list(COLUMNS)].sort_values(["series", "value_date", "available_utc"]).reset_index(drop=True)
+
+
+class HistoryLoss(ValueError):
+    """A frame about to be published would drop or change rows of the previously published file."""
+
+
+def check_keeps_history(prev: pd.DataFrame | None, merged: pd.DataFrame) -> None:
+    """Raise HistoryLoss unless `merged` keeps every previously published row unchanged and has, for each source, at
+    least as many rows as `prev`. The publish step overwrites the release asset, so this is the last line that keeps
+    revision rows, late-release stamps and source history (GLD while its site is blocked) from being lost."""
+    if prev is None or prev.empty:
+        return
+    for src, n_prev in prev.groupby("source").size().items():
+        n_new = int((merged["source"] == src).sum())
+        if n_new < n_prev:
+            raise HistoryLoss(f"{src}: {n_new:,} rows would replace {n_prev:,} published rows")
+    key = ["series", "value_date", "available_utc", "value"]
+
+    def norm(df: pd.DataFrame) -> pd.DataFrame:
+        out = df[key].copy()
+        out["value_date"] = _naive_days(out["value_date"])
+        out["available_utc"] = pd.DatetimeIndex(pd.to_datetime(out["available_utc"], utc=True)).as_unit("ns")
+        out["value"] = out["value"].astype(float).round(9)
+        return out
+
+    m = norm(prev).merge(norm(merged).drop_duplicates(), on=key, how="left", indicator=True)
+    lost = m[m["_merge"] == "left_only"]
+    if len(lost):
+        sample = lost.head(3)[key].to_dict("records")
+        raise HistoryLoss(f"{len(lost):,} published rows missing or changed, e.g. {sample}")
 
 
 # --------------------------------------------------------------------------------------------------- the file

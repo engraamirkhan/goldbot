@@ -33,7 +33,10 @@ file. The product owner accepts work against them; the release manager does not 
 
 ## Leadership
 The `program-director` leads delivery (roadmap, waves, integration, risk register, owner reporting); the
-`product-owner` owns what is built and accepts it. Both report to the owner.
+`product-owner` owns what is built and accepts it. The `research-director` leads the research team
+(strategy-researcher, performance-analyst, evaluator) toward the owner's north-star: £50 or more on days the market
+offers opportunity, less or nothing when it does not (ADR 0004); it owns the research agenda, trial budget and the
+monthly scorecard. All three report to the owner.
 
 ## Review routing (who must sign off)
 
