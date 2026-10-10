@@ -17,16 +17,18 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 143 |
+| implemented | 144 |
+| partial | 18 |
+| implemented | 144 |
 | partial | 18 |
 | missing | 4 |
-| deviates | 9 |
+| deviates | 8 |
 | in review | 6 |
 | **total** | **180** |
-| implemented | 143 |
+| implemented | 144 |
 | partial | 18 |
 | missing | 4 |
-| deviates | 9 |
+| deviates | 8 |
 | in review | 6 |
 | **total** | **180** |
 
@@ -188,7 +190,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | M12 | "Probabilities are isotonic-calibrated on out-of-fold predictions; thresholds maximise out-of-sample profit factor net of costs, shaded up by 0.02" | in review | goldbot/research/model.py:46; threshold is breakeven + 0.02 (goldbot/research/pipeline.py, goldbot/engine/runner.py:306), not PF-optimised; cross-fitted calibration is proposal P1 | tests/test_research_pass_integration.py::test_research_pass_reports_and_records_trials |
 | M14 | "Purge is always at least the specialist's label horizon" | implemented | goldbot/research/walkforward.py:47; a tsmom hold longer than its window's purge (the H-01 `slow` preset, 124 4h bars) raises the purge to the hold in calendar days (goldbot/specialists/time_series_momentum.py `hold_calendar_days`, 31 days) | tests/test_trace_data_exec.py::test_purge_is_at_least_every_label_horizon; tests/test_tsmom_slow.py::test_purge_covers_every_label_life |
 | M13 | Walk-forward windows "15m: train 24, test 3, step 3, purge 2 d, embargo 1 d; 1h: 36/6/6, purge 5 d, embargo 2 d" | implemented | goldbot/research/walkforward.py `WINDOWS`; config/settings.yaml:31-39. Additions (proposals P4/P5): 4h 48/6/6, purge 10 d, embargo 4 d, now also in settings (`walkforward.4h`, `labels` 4h purge/embargo) so the Saturday retrain trains 4h agents; 1d (60/12/12 expanding, purge 20 d, embargo 10 d) stays research-only in `WINDOWS`, since the engine holds ~40 trading days of 1m bars, short of the 120 daily bars a frame needs; session_open trains on an expanding window with 6-month test folds (`Specialist.walkforward`) | tests/test_trace_data_exec.py::test_walk_forward_windows_match_design_and_settings |
-| M15 | Walk-forward windows read from settings | partial | `splits_for` uses the `WINDOWS` constant; `settings.labels` purge/embargo are not read (values equal today, 15m/1h/4h). Settings decide which timeframes the Saturday retrain trains (`saturday_retrain`, gap_watch's founder check) and the length of history it loads; `Settings` rejects a walk-forward timeframe without purge and embargo, and `DecisionTimeframe` (15m, 1h, 4h) rejects a 1d window | tests/test_trace_data_exec.py::test_walk_forward_windows_match_design_and_settings; tests/test_config.py::test_4h_walkforward_window_matches_the_research_window; ::test_1d_walkforward_window_is_rejected; ::test_walkforward_timeframe_without_purge_or_embargo_is_rejected; tests/test_jobs_integration.py::test_a_4h_agent_retrains_into_a_challenger |
+| M15 | Walk-forward windows read from settings | partial | goldbot/research/walkforward.py `window_for`/`splits_for` take an optional `settings`: its `walkforward` months and `labels` purge/embargo replace the `WINDOWS` default (1d, absent from settings, keeps the constant); the research callers (`pipeline.run_specialist`/`run_pool`, `discovery.discover`) do not pass it yet and use `WINDOWS` (values equal today, 15m/1h/4h). Settings decide which timeframes the Saturday retrain trains (`saturday_retrain`, gap_watch's founder check) and the length of history it loads; `Settings` rejects a walk-forward timeframe without purge and embargo, and `DecisionTimeframe` (15m, 1h, 4h) rejects a 1d window | tests/test_trace_data_exec.py::test_walk_forward_windows_match_design_and_settings; ::test_walk_forward_splits_follow_settings_and_the_defaults_equal_the_design; tests/test_config.py::test_4h_walkforward_window_matches_the_research_window; ::test_1d_walkforward_window_is_rejected; ::test_walkforward_timeframe_without_purge_or_embargo_is_rejected; tests/test_jobs_integration.py::test_a_4h_agent_retrains_into_a_challenger |
 | M16 | "Combinatorial purged CV (6 groups, 2 test, 15 paths) runs quarterly" | missing | | untested |
 | M17 | "at least 1,500 labelled candidates overall and 60 per fold" | in review | not enforced on `main`; proposal P1 adds the gates | untested |
 | M18 | "positive expectancy in at least three non-overlapping calendar years including the 2021-2022 chop" | in review | per-year table printed (scripts/research_pass.py), not enforced; P1 | untested |
@@ -256,7 +258,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | G3 | Cloning "two or three mutated children ... a parent is never duplicated unchanged" | implemented | goldbot/research/population.py:48, 180 | tests/test_population.py::test_winners_are_cloned_into_mutated_shadow_children; tests/test_features_labels.py::test_agent_identity_clone_must_differ |
 | G4 | Retirement "lower 80% confidence bound on expectancy is below zero after 100 trades, or bottom quarter of its generation for two consecutive months"; retired kept in shadow six months | implemented | goldbot/research/population.py:42-47 | tests/test_population.py::test_retirement_by_confidence_bound_and_the_six_month_shadow_tail; ::test_two_bottom_quartile_months_retire_an_agent |
 | G5 | "capped (initially 12 live, 24 in shadow)" | implemented | goldbot/research/population.py:45-46 | tests/test_population.py::test_shadow_and_live_caps |
-| G6 | "promotion from shadow to live still passes the deflated-Sharpe gate with the population size as the trial count" | deviates (minor) | goldbot/research/population.py `tournament` promotes on DSR > 0.95; the design's "0.95 or better" is >= | tests/test_population.py::test_strong_shadow_record_is_promoted_and_a_weak_one_is_not |
+| G6 | "promotion from shadow to live still passes the deflated-Sharpe gate with the population size as the trial count" | implemented | goldbot/research/population.py `tournament` promotes on DSR >= 0.95 (`DSR_PROMOTE`), the design's "0.95 or better" | tests/test_population.py::test_strong_shadow_record_is_promoted_and_a_weak_one_is_not; ::test_shadow_is_promoted_at_a_deflated_sharpe_of_exactly_0_95_and_not_just_below |
 | G7 | "Total live risk never exceeds the RiskGate limits however many agents are funded" | implemented | every order passes RiskGate (R29); `max_positions` per account | tests/test_cov_risk.py::test_each_account_condition_blocks_entries_on_its_own |
 | G8 | Staff agents: "none can place, modify or close a trade"; read-only tools; the only write is a hypothesis | implemented | goldbot/agents/tools.py; goldbot/agents/roles.py | tests/test_agents.py::test_tools_outside_the_role_are_refused_and_not_run; ::test_improvement_agent_files_a_hypothesis |
 | G9 | "every run is logged with its inputs, outputs and cost, and their total monthly spend is capped" | implemented | goldbot/agents/runner.py; config/settings.yaml agents.monthly_cap_usd | tests/test_agents.py::test_monthly_cap_blocks_the_run_without_calling_the_api; ::test_per_run_budget_stops_before_spending_more |
@@ -300,6 +302,7 @@ Larger gaps, by priority (effort: S < 1 day, M 1-3 days, L > 3 days):
 18. **F12 TradingView feature family** with NaN handling and 1% blanking (L); **D4 swap-day and swap costs** (M).
 19. ~~P6/P7 stop rule and gate thresholds in code~~ (evaluated in `goldbot/ops/gates_phase.py`; left: owner sign-off of
     the PROPOSED thresholds and the engine writing `state/closed_trades.jsonl`).
-20. Minor: **A2** engine window from settings, **M15** walk-forward reads settings, **G6** DSR >= 0.95, **U4**
+20. Minor: **A2** engine window from settings, **M15** research callers pass settings to `splits_for` (it accepts
+    them now), ~~**G6** DSR >= 0.95~~ (done), **U4**
     lock measured from the fifth failure, **M25** CUSUM calibrated to 5% quarterly false alarms, **D10** bar close
     by clock + 1.5 s grace.

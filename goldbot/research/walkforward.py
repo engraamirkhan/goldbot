@@ -13,12 +13,15 @@ that start within `embargo` after the test window ends.
 """
 from __future__ import annotations
 
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 import numpy as np
 import pandas as pd
 
 from goldbot.base import Record
+
+if TYPE_CHECKING:
+    from goldbot.config import Settings
 
 WINDOWS = {
     "15m": dict(train_months=24, test_months=3, step_months=3, purge_days=2, embargo_days=1),
@@ -67,10 +70,24 @@ def walk_forward_splits(labels: pd.DataFrame, *, train_months: int, test_months:
         t0 = t0 + pd.DateOffset(months=step_months)
 
 
-def window_for(timeframe: str, **overrides: Any) -> dict[str, Any]:
-    """The walk-forward settings of a timeframe with a specialist's overrides (e.g. expanding, test_months)."""
-    return {**WINDOWS[timeframe], **overrides}
+def window_for(timeframe: str, settings: Settings | None = None, **overrides: Any) -> dict[str, Any]:
+    """The walk-forward settings of a timeframe with a specialist's overrides (e.g. expanding, test_months).
+
+    `WINDOWS` is the default; with `settings` its `walkforward` window (train/test/step months) and its `labels`
+    purge/embargo days for the timeframe replace the constant's, and a timeframe settings do not carry (1d, which is
+    research-only) keeps the constant. A specialist's overrides apply last."""
+    window: dict[str, Any] = dict(WINDOWS[timeframe])
+    if settings is not None:
+        wf = settings.walkforward.get(timeframe)  # type: ignore[call-overload]
+        if wf is not None:
+            window.update(train_months=wf.train_months, test_months=wf.test_months, step_months=wf.step_months)
+        for key in ("purge_days", "embargo_days"):
+            days = getattr(settings.labels, key).get(timeframe)
+            if days is not None:
+                window[key] = days
+    return {**window, **overrides}
 
 
-def splits_for(labels: pd.DataFrame, timeframe: str, **overrides: Any) -> list[Fold]:
-    return list(walk_forward_splits(labels, **window_for(timeframe, **overrides)))
+def splits_for(labels: pd.DataFrame, timeframe: str, settings: Settings | None = None, **overrides: Any) -> list[Fold]:
+    """Walk-forward folds of a timeframe; windows from `settings` when given, else the `WINDOWS` constant."""
+    return list(walk_forward_splits(labels, **window_for(timeframe, settings, **overrides)))
