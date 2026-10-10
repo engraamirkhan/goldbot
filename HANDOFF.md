@@ -477,6 +477,34 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   before the trial. Note for quant review: feature-day bars include a Friday-evening stub bar (settlement to the
   Friday close, visible Saturday), so "20 daily bars" is about 3.3 weeks, as for the existing 1d option. Run inputs:
   `docs/research/preregistration-2027Q1.md` H-01. No research trial was run.
+- CPCV and CUSUM calibration (2026-10-10, rows M16/M25): `goldbot/research/cpcv.py` runs combinatorial purged CV
+  (6 equal-duration groups of the research window, holdout excluded; 15 purged/embargoed splits of 2 test groups; 5
+  rebuilt backtest paths) with the walk-forward's own cross-fitted calibration and threshold per path, reports the
+  path Sharpe / mean R distribution and, across several configurations, PBO (CSCV). It is evidence on an existing
+  trial (`<registry>.evidence.jsonl`), not a trial: no budget slot, no deflated-Sharpe count. Run it with
+  `scripts/research_pass.py --cpcv <trial#> [...]`; the scheduler job `cpcv_quarterly` (first Sunday of each quarter,
+  14:00 UTC, new `months` filter on schedules) does every gate-passing trial against its family's other trials ->
+  `state/cpcv_<quarter>.md`. The evidence sidecar is not yet unioned by `registry_sync` with the release copy, and
+  research.yml does not upload it. CUSUM: `goldbot/research/cusum.py` picks h by simulation so in-control residuals
+  alarm within a quarter's expected trades with 5% probability (settings `drift.cusum_k`, `drift.cusum_false_alarm`;
+  `cusum_h` 4.0 only without a backtest trade rate); `drift_watch` and `model_watch` pass the champion's
+  `trades_per_week`. At 1 trade a week h is 3.46 (more sensitive than the old 4.0), at 5 a week 5.21 (fewer false
+  halts). `goldbot/api/explain.py` still draws the CUSUM trace with the fixed `cusum_h` (API lane: should read the
+  `cusum_h` now stored per agent in drift.json).
+- CUSUM/CPCV review fixes (2026-10-10, rows M16/M25, quant review): CUSUM h is now simulated on two-point trade
+  residuals (win +sqrt((1-p)/p), loss -sqrt(p/(1-p))) at the mean taken p in 0.01 buckets, choosing the most
+  sensitive attained h whose false-alarm rate is <= 5% at 95% confidence (outcomes are discrete). Realised quarterly
+  rates at p 0.4/0.5/0.6 and 2/5/15 trades a week: 3.4-4.8% (normal-based h gave 0.3-0.5% at p 0.4); a drop from
+  p 0.4 to 0.3 is caught within a quarter 18-33% of the time against 4-6% before. The drift watch uses the shadow
+  trades' mean p; the new-champion watch (`model_watch`) now calibrates for its own window (trades/week x 2) at the
+  backtest hit rate, so it can actually fire inside two weeks (at ~2 or fewer trades a week it cannot alarm at 5%).
+  ADR docs/decisions/0002: CPCV/PBO can only veto (fragile when PBO > 0.5 or most paths negative, recorded as
+  `verdict` in evidence and report, not yet wired into `passed_gates`: owner decision, recommended after the first
+  quarterly run); `research_pass --cpcv` refuses gate-failed trials unless `--diagnostic` ("diagnostic, not
+  evidence"). PBO drops the never-traded group 0 (5 groups, 2 vs 3 both ways) and is labelled a lower bound of the
+  selection set (every registered family trial on the timeframe, screened included). `cpcv_quarterly` skips trials
+  whose feature version differs from what the bars build now. The evidence sidecar stays local-only (documented, not
+  synced). Not done: `goldbot/api/explain.py` still draws the CUSUM trace with the fixed `cusum_h`.
 - GitHub Actions supply chain hardened (2026-10-10, security): every action in `.github/workflows/*.yml` is pinned
   to a full commit SHA with the version as a comment (checkout v5.1.0, setup-python v6.3.0, setup-node v5.0.0, cache
   v4.3.0, upload-artifact v4.6.2, download-artifact v4.3.0; resolved via the GitHub API, not guessed). Token scopes:

@@ -25,18 +25,21 @@ from goldbot.base import FrozenRecord, Record, UtcTimestamp
 
 log = logging.getLogger("goldbot.scheduler")
 
+LOOK_DAYS = 370                 # slot search horizon: a schedule limited to one month a year still finds its slot
 JobFn = Callable[[pd.Timestamp], dict[str, Any] | None]
 
 
 class Schedule(FrozenRecord):
     """daily: every listed weekday at `at`; weekly: `weekday` at `at`; monthly: the first `weekday` of the month
-    (or calendar `day` when weekday is None) at `at`. Weekdays are 0=Monday .. 6=Sunday."""
+    (or calendar `day` when weekday is None) at `at`. Weekdays are 0=Monday .. 6=Sunday. `months` (1..12) limits any
+    kind to those calendar months: a monthly schedule on months 1, 4, 7, 10 runs quarterly."""
 
     kind: Literal["daily", "weekly", "monthly"]
     at: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     weekdays: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6)
     weekday: int | None = Field(None, ge=0, le=6)
     day: int | None = Field(None, ge=1, le=28)
+    months: tuple[int, ...] = tuple(range(1, 13))
     max_late_hours: float = 12.0
 
     @model_validator(mode="after")
@@ -45,10 +48,14 @@ class Schedule(FrozenRecord):
             raise ValueError("weekly schedule needs weekday")
         if self.kind == "monthly" and (self.weekday is None) == (self.day is None):
             raise ValueError("monthly schedule needs exactly one of weekday (first <weekday> of month) or day")
+        if not self.months or any(m < 1 or m > 12 for m in self.months):
+            raise ValueError("months must be calendar months 1..12")
         return self
 
     def _slot_on(self, d: pd.Timestamp) -> pd.Timestamp | None:
         """The slot on calendar day `d` (UTC midnight), if this schedule has one that day."""
+        if d.month not in self.months:
+            return None
         hh, mm = (int(x) for x in self.at.split(":"))
         slot = d + pd.Timedelta(hours=hh, minutes=mm)
         if self.kind == "daily":
@@ -60,9 +67,9 @@ class Schedule(FrozenRecord):
         return slot if d.dayofweek == self.weekday and d.day <= 7 else None
 
     def last_slot(self, now: pd.Timestamp) -> pd.Timestamp | None:
-        """Most recent slot at or before `now` (looks back far enough for monthly schedules)."""
+        """Most recent slot at or before `now` (looks back far enough for monthly and quarterly schedules)."""
         today = now.tz_convert("UTC").normalize()
-        for back in range(0, 40):
+        for back in range(0, LOOK_DAYS):
             s = self._slot_on(today - pd.Timedelta(days=back))
             if s is not None and s <= now:
                 return s
@@ -70,11 +77,11 @@ class Schedule(FrozenRecord):
 
     def next_slot(self, now: pd.Timestamp) -> pd.Timestamp:
         today = now.tz_convert("UTC").normalize()
-        for ahead in range(0, 40):
+        for ahead in range(0, LOOK_DAYS):
             s = self._slot_on(today + pd.Timedelta(days=ahead))
             if s is not None and s > now:
                 return s
-        raise ValueError("no slot within 40 days")  # unreachable for valid schedules
+        raise ValueError(f"no slot within {LOOK_DAYS} days")  # unreachable for valid schedules
 
 
 class JobState(Record):

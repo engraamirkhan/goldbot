@@ -90,6 +90,7 @@ scheduler:
   gap_watch:        { kind: daily,   at: "23:55", max_late_hours: 20 }                  # gaps -> shadow founders / on-demand staff runs
   backup:           { kind: daily,   at: "22:15", max_late_hours: 20 }                  # restic -> Oracle Object Storage (ops/backup.py)
   restore_drill:    { kind: weekly,  at: "10:00", weekday: 6, max_late_hours: 30 }      # Sunday: restore latest to a temp dir and verify
+  cpcv_quarterly:   { kind: monthly, at: "14:00", weekday: 6, months: [1, 4, 7, 10], max_late_hours: 30 }   # M16: CPCV + PBO of gate-passing trials, first Sunday of each quarter
   attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
 
   feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day
@@ -144,8 +145,9 @@ drift:                               # design: Drift and health (goldbot/researc
   size_down_factor: 0.5
   window_days: 30                    # recent candidates compared with the training distribution
   min_rows: 50
-  cusum_k: 0.5                       # residual CUSUM (fixed; not yet tuned to 5% quarterly false alarms, row M25)
-  cusum_h: 4.0
+  cusum_k: 0.5                       # residual CUSUM allowance (sd); h is simulated for this k (research/cusum.py, M25)
+  cusum_false_alarm: 0.05            #   design: at most 5% chance of a false alarm within a quarter (two-point trade residuals at the mean p)
+  cusum_h: 4.0                       #   fallback h only when the backtest has no trade rate
   dd_mult: 1.5                       # an agent's 30-day drawdown above 1.5x backtest halts the system pending review
   dd_window_days: 30
 
