@@ -7,11 +7,10 @@ rolls at the risk-day (00:00 UTC) and risk-week (Sunday 00:00 UTC) boundaries, s
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 
-from goldbot.base import Record
+from goldbot.base import Record, write_atomic
 from goldbot.config import RiskSettings
 
 
@@ -77,9 +76,7 @@ class Supervisor:
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
                  "unreadable_engines": self.unreadable}
-        tmp = self.dir / "supervisor.json.tmp"
-        tmp.write_text(json.dumps(state))
-        os.replace(tmp, self.dir / "supervisor.json")      # engines never read a half-written file
+        write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)   # heartbeat: never half-written
         return state
 
     @staticmethod

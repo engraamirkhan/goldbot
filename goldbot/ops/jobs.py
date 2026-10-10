@@ -46,7 +46,7 @@ import pandas as pd
 
 from goldbot.agents.roles import ROLES
 from goldbot.agents.runner import AgentRunner
-from goldbot.base import Record
+from goldbot.base import Record, write_atomic
 from goldbot.config import DecisionTimeframe, Settings
 from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowBook
@@ -432,9 +432,7 @@ def drift_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     out = {"ts": slot.isoformat(), "agents": {h.agent_id: h.model_dump() for h in health}, "halted": halted,
            "size_factor": {h.agent_id: h.size_factor for h in health if h.size_factor < 1}, "system_halt": system,
            "errors": errors}
-    tmp = ctx.state_dir / "drift.json.tmp"
-    tmp.write_text(json.dumps(out, default=str))
-    tmp.replace(ctx.state_dir / "drift.json")
+    write_atomic(ctx.state_dir / "drift.json", json.dumps(out, default=str))
     return {"agents": len(health), "halted": sorted(halted), "size_down": sorted(out["size_factor"]),
             "system_halt": bool(system), "errors": errors}
 

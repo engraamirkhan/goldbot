@@ -38,6 +38,58 @@ UtcTimestamp = Annotated[pd.Timestamp, BeforeValidator(_to_utc_timestamp),
                          PlainSerializer(lambda t: t.isoformat(), return_type=str, when_used="json")]
 
 
+def _fsync_dir(d: Path) -> None:
+    """Make a rename in `d` durable (POSIX); Windows has no directory fsync and NTFS journals renames."""
+    if os.name == "nt":
+        return
+    fd = os.open(d, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def write_atomic(path: Path, text: str, *, durable: bool = True) -> None:
+    """Replace `path` with `text` so a reader never sees a half-written file. durable: the data and the rename reach
+    the disk before returning (fsync file and directory), so a power cut leaves the old or the new content, never an
+    empty file. Use it for state a restart depends on (orders, risk, approvals, halts); heartbeats rewritten every few
+    seconds may pass durable=False."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            if durable:
+                fh.flush()
+                os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        if durable:
+            _fsync_dir(path.parent)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def create_exclusive(path: Path, text: str) -> bool:
+    """Create `path` with `text` only if it does not exist yet, durably and all at once: the content is written and
+    fsynced under a temporary name, then hard-linked into place (fails if `path` exists). A crash can no longer leave
+    an empty file that blocks the decision forever. False if the file already existed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            return False
+        _fsync_dir(path.parent)
+        return True
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def write_private(path: Path, text: str) -> None:
     """Write a file only the owner can read (secrets, users), atomically: the temp file is created 0600, so the
     content is never readable by others even for a moment or when chmod is unsupported, and a crash mid-write

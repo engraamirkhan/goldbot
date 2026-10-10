@@ -17,12 +17,11 @@ reachable on the VPS.
 """
 from __future__ import annotations
 
-import os
 import time
 import uuid
 from pathlib import Path
 
-from goldbot.base import Record
+from goldbot.base import Record, create_exclusive, write_atomic
 from goldbot.telegram.approvals import REASON_CODES, Proposal
 
 
@@ -45,10 +44,7 @@ class Control(Record):
 
 
 def _write_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-    tmp.write_text(text)
-    os.replace(tmp, path)
+    write_atomic(path, text)                    # durable: proposals, outcomes and the owner's halt survive a power cut
 
 
 class ApprovalBus:
@@ -110,12 +106,9 @@ class ApprovalBus:
             raise KeyError("proposal expired")
         d = BusDecision(proposal_id=proposal_id, approve=approve, reason_code=None if approve else reason_code, by=by,
                         ts=time.time())
-        try:
-            fd = os.open(self.decisions_dir / f"{proposal_id}.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            raise KeyError("already decided") from None
-        with os.fdopen(fd, "w") as fh:
-            fh.write(d.model_dump_json())
+        # first decision wins, and it is written whole before it becomes visible (no empty decision after a crash)
+        if not create_exclusive(self.decisions_dir / f"{proposal_id}.json", d.model_dump_json()):
+            raise KeyError("already decided")
         return d
 
     def outcome(self, proposal_id: str) -> str | None:

@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import time
 import zlib
 from pathlib import Path
@@ -26,7 +25,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator
-from goldbot.base import Record, UtcTimestamp
+from goldbot.base import Record, UtcTimestamp, write_atomic
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.econ_calendar import blackout_window
@@ -782,10 +781,7 @@ class Engine:
         self._orders = {k: o for k, o in self._orders.items() if o.ts_utc >= keep_after or o.status == "sending"}
         payload = {"sent": {k: o.model_dump(mode="json") for k, o in self._orders.items()},
                    "open": {str(k): t.model_dump(mode="json") for k, t in self.open.items()}}
-        path = self._orders_path()
-        tmp = path.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(payload))
-        os.replace(tmp, path)
+        write_atomic(self._orders_path(), json.dumps(payload))     # durable: restart reconciliation reads it
 
     def _load_orders(self) -> None:
         """On start: reload the pending_orders table and the open trades, then reconcile them with the broker: an id
@@ -834,10 +830,7 @@ class Engine:
                    "halted_at": self._halted_at.isoformat() if self._halted_at is not None else None,
                    "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
                    "rearm_refused": self._rearm_refused}
-        path = self._risk_path()
-        tmp = path.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(payload))
-        os.replace(tmp, path)
+        write_atomic(self._risk_path(), json.dumps(payload))       # durable: halts and stages survive a power cut
 
     def _load_risk_state(self) -> None:
         path = self._risk_path()
@@ -1066,9 +1059,7 @@ class Engine:
             "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
             "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
         }
-        path = Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json")
-        tmp = path.with_suffix(f".{os.getpid()}.tmp")       # the supervisor never reads a half-written file
-        tmp.write_text(json.dumps(payload))
-        os.replace(tmp, path)
+        # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync
+        write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps(payload), durable=False)
         self._save_risk_state()
         self._save_orders()
