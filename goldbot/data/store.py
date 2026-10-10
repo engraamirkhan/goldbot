@@ -2,7 +2,7 @@
 
 Layout: data/{table}/source=X/symbol=XAUUSD/year=YYYY/month=MM/part-*.parquet
 Every table carries `ts_utc` (tz-aware UTC). Tables whose rows become known later than the
-event they describe (macro, news, tv_signals) also carry `available_utc`, and every join to
+event they describe (macro, positioning, news, tv_signals) also carry `available_utc`, and every join to
 bars uses `available_utc`, never the nominal time. `asof_join` enforces this.
 """
 from __future__ import annotations
@@ -22,12 +22,14 @@ TABLES = {
     "trades", "decisions", "dq_events", "cost_tables", "fills",
     "bars_quarantine",                         # 1m rows with an error-severity dq_flag, kept out of the bar tables
     "bars_1m_broker",                          # the broker's own M1 as its terminal reports it (D12/D23), never blended
+    "positioning",                             # COT and GLD holdings (release positioning-v1), point in time
 }
 
 KEY_COLUMNS = {
     "ticks": ["ts_utc", "bid", "ask"],
     "tv_signals": ["signal_hash"],
     "macro": ["series", "value_date", "vintage"],
+    "positioning": ["series", "value_date", "vintage"],
     "fills": ["ts_utc", "client_order_id"],
     "calendar_events": ["event_id"],          # a re-fetched event replaces the earlier copy (forecast revisions)
     "news": ["item_id"],                       # headlines often share a published minute; ts_utc is not a key

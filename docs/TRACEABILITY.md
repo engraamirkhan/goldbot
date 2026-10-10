@@ -18,11 +18,13 @@ Status values:
 | Status | Rows |
 | --- | --- |
 | implemented | 152 |
+| implemented | 149 |
 | partial | 15 |
 | missing | 3 |
 | deviates | 7 |
 | in review | 6 |
 | **total** | **183** |
+| **total** | **182** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -137,6 +139,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | D23 | "Dukascopy ... kept separate and tagged"; "every signal must survive on both feeds" | partial | `source=` partitions in the store, broker M1 in its own table `bars_1m_broker`; survival check goldbot/data/crossfeed.py `survival_check` + scripts/crossfeed_check.py (rule-only screen on each feed over the common period outside the holdout; survives = Dukascopy mean R > 0, t >= 2.0 and broker mean R > 0, t >= 1.0; < 90 days or < 100 events per feed = insufficient overlap, not a pass). Missing: not yet a promotion gate (broker history is accumulating on the VPS) | tests/test_crossfeed.py::test_survival_verdict_bands; ::test_overlap_cuts_out_the_holdout; ::test_survival_reports_insufficient_overlap_without_broker_history; ::test_crossfeed_script_exits_nonzero_on_insufficient_overlap; ::test_identical_feeds_agree_over_a_long_overlap |
 | D24 | "CFD volume is tick count and is never labelled otherwise" | implemented | goldbot/data/resample.py BAR_COLUMNS (`tick_count`) | tests/test_dukascopy_year.py::test_fractional_dukascopy_volumes_are_kept |
 | D25 | Timestamps via `epoch_ns`, never `.asi8` (CLAUDE.md) | implemented | goldbot/data/timeutil.py:22 | tests/test_data_layer.py::test_epoch_ns_is_unit_independent |
+| D26 | Positioning data (COT, ETF holdings) carries `value_date`, `available_utc`, `vintage`, source; joins as-of on available_utc only (design: macro tables rule; indicator survey #67/#68) | implemented | goldbot/data/positioning.py `cot_available_utc` (Friday 15:30 ET via zoneinfo, next business day in a holiday week, shutdown floors), `gld_available_utc` (next US business day 14:00 UTC), `merge_releases` (revisions add rows, late rows stamped at first sight); .github/workflows/data-positioning.yml (release positioning-v1); goldbot/features/positioning.py (opt-in, `enable()`). Source gap: GLD archive may be blocked to scripts, then reported as unavailable | tests/test_positioning.py::test_cot_is_public_friday_1530_new_york_time_in_both_seasons; ::test_cot_holiday_weeks_move_to_the_next_business_day_after_friday; ::test_cot_shutdown_backlogs_are_not_public_before_the_catch_up; ::test_a_seeded_future_release_is_never_seen_before_its_available_utc; ::test_positioning_features_on_a_truncated_release_match_the_full_one_before_the_cut; ::test_revisions_add_rows_and_the_first_release_is_kept; ::test_opt_in_leaves_the_default_feature_version_unchanged; ::test_research_pass_positioning_frame_passes_the_lookahead_check |
 
 ## Features and labels [Features and labels]
 

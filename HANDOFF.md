@@ -609,6 +609,22 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (75 -> 96 kB gzip), mostly React 19. Deferred: TypeScript 7 and @types/node 26 (Node 22 is the runtime).
 
 ## Next steps (no owner input needed unless marked)
+- COT positioning and GLD holdings, point in time (2026-10-10, indicator survey #67/#68, hypotheses H-09/H-12, row
+  D26): `goldbot/data/positioning.py` + `scripts/positioning_data.py` + `.github/workflows/data-positioning.yml`
+  (Saturdays 05:23 UTC) publish `positioning.parquet` on release `positioning-v1`: CFTC disaggregated futures-only
+  COMEX gold (088691) managed-money long/short/net, open interest, commercials net (producer/merchant + swap dealers),
+  and GLD tonnes from the issuer archive (`GLD_US_archive_EN.csv`). COT is stamped Friday 15:30 ET (zoneinfo: 20:30
+  UTC, 19:30 in US DST), the next business day after the Friday in a federal-holiday week, never before the shutdown
+  catch-up floors (2013, 2018-19, 2025; dates conservative and UNVERIFIED against CFTC notices); GLD the next US business
+  day 14:00 UTC. Revisions add rows (first release kept); a row missing from the previous successful download is
+  stamped at the run that first saw it (catches future delays). GLD blocked/reformatted -> "source unavailable",
+  published rows kept, run still green (reported in the step summary), no scraping. Opt-in features
+  (`goldbot/features/positioning.py`, `research_pass.py --positioning DIR`, not with `--discover`): MM net % OI, its
+  52-report z-score and 4-report change, GLD 5/20-day % change; registered only by `enable()`, so the default feature
+  version is unchanged. `fetch_data_release.py --positioning` loads the store table `positioning`. The old unused
+  `macro.fetch_cot_gold` / `gld_holdings_from_csv` (no holiday rule, GLD stamped 06:30 ET) are removed. Not yet: the
+  workflow has never run (Actions -> data-positioning -> Run workflow); `research.yml` has no positioning input; the
+  cleaner opt-in home is `goldbot/research/pipeline.py` OPT_IN_FEATURES (outside this lane).
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
   `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
   stays partial until the research callers (`pipeline.run_specialist`/`run_pool`, `discovery.discover`) pass it
