@@ -178,6 +178,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   version/status, `recalibrations` row with before/after ECE; also `state/recalibration.jsonl`). It promotes and
   retires nothing. The ECE after is in-sample. Not done from P9: the monthly refit / drift-triggered refit, recency
   weighting and the replay trial; owner vetoes are not in the shadow book (it is the model's own decision).
+- Deploys (2026-10-10, owner chose one click + manual): never automatic. The Telegram service (GOLDBOT_DEPLOY=1 on
+  Linux) offers a new main commit that passed CI (backend + frontend check-runs) with [Deploy]/[Skip]
+  (`goldbot/ops/deploy.py`); the tap writes `state/deploy/approved.json` for that exact commit; the root-owned
+  `/usr/local/sbin/goldbot-deploy` (copy of `goldbot/ops/linux/goldbot-deploy.sh`, timer every minute) re-checks main,
+  fast-forward and CI, waits while an approval is pending, restarts (supervisor first), verifies every enabled service
+  after 60 s and rolls back otherwise; `sudo goldbot-deploy latest|<sha>` does the same by hand. Results in
+  `/var/lib/goldbot-deploy/deploys.jsonl` (root only), published read-only to `state/deploys.jsonl` by rename (Telegram
+  report, health `deploy`). The MT5 box is updated by hand only. Hardened after the security review: root never writes
+  or follows anything in a service-user-writable directory (symlink-to-root attack), approval file opened O_NOFOLLOW
+  and owner-checked, any failure after checkout rolls back, stability = no systemd restart for 90 s plus a
+  supervisor heartbeat written after the restart (engines write only on ticks), copy in state/ written as the service
+  user, approval opened O_NONBLOCK, CI read from the latest GitHub Actions runs only, no CLI approve.
 - Drift and health (M26/M27, 2026-10-10): every fitted model stores its training distribution per input
   (`feature_ref`); the daily `drift_watch` job (23:40) rebuilds the last 30 days of candidates as in training and
   computes PSI on the top-10 inputs by gain (0.1 warns, 0.25 sizes the agent to 50%), ECE/Brier on the trailing 100
@@ -186,6 +198,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   champion version until the owner runs `python -m goldbot.ops.run drift-review --clear "<note>"`. The engine reads
   it (missing = no restriction, unreadable = halt), the gate reason is `drift_system_halt`, health check `drift`.
   Entries only; exits unaffected. Models trained before this have no reference: PSI is skipped for them.
+- Macro data pipeline (2026-10-10, TRADER_LIFECYCLE gap 2): `.github/workflows/data-macro.yml` (Tuesdays 04:41 UTC
+  and by hand) pulls DFII10, T10YIE, DTWEXBGS, GVZCLS and DGS2 from FRED's public fredgraph CSV (no key) via
+  `scripts/fred_macro.py` and publishes `macro_fred.parquet` on release `macro-v1`. Rows carry value_date, vintage
+  (retrieval date) and a conservative available_utc (`data/macro.py: fred_available_utc`): next US business day 23:00
+  UTC for daily H.15/GVZ values, the business day after the following Monday for the weekly H.10 dollar. Published
+  history is never rewritten; a revision is a new row dated from the day it was seen. Feature `macro_drivers`
+  (`features/macro.py`): 20-obs real-yield change, 1-year real-yield z-score, 20-obs dollar change, GVZ level and
+  20-obs change, from first releases only, joined via `asof_join` on available_utc. It is opt-in
+  (`pipeline.OPT_IN_FEATURES`): the default feature version and every declared `model_features` are unchanged.
+  `research_pass.py --macro DIR` (workflow input `macro`) adds it and reports "macro features: on/off (reason)"; a
+  missing release runs without it. The VPS Saturday retrain and `fetch_data_release.py --macro` load the release
+  into the store's `macro` table (`release.sync_release_macro`; 0 rows until the workflow has run). Not done: the
+  live engine does not build `macro_drivers`, so a model trained with `--macro` gets a different feature version
+  and is refused live (`feature_version_mismatch`) until the engine passes the store's macro rows; COT and GLD are
+  not pulled. The workflow has not run yet (first run: Actions -> data-macro -> Run workflow).
 - Free hosting without Windows (2026-10-10, owner: MT5 + $0 hosting, Mac only): two Oracle Cloud Always Free VMs.
   The MT5 terminal runs under Wine on an x86 E2.1.Micro with the bridge (`goldbot/execution/bridge.py`,
   `run.py bridge <account>`); everything else runs on an Ampere A1 (4 OCPU / 24 GB) under systemd
@@ -211,6 +238,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   do not serve a pooled model yet (needed only if one passes). session_open now trains on an expanding window with
   6-month test folds (`Specialist.walkforward`); at ~95 candidates a year a 6-month fold holds ~47, so its per-fold
   gate still needs denser filters or 9-month folds.
+- Trader-toolkit features (2026-10-10, `goldbot/features/trader.py`, TRACEABILITY F13-F16): four registry families
+  for research to screen; no specialist declares them (its `model_features` are unchanged), so they reach a model only
+  through the P4 screen and a pre-registered trial. `session_zones` (session high/low/open now and for the previous
+  session, each zone's last high/low, previous feature-day and Sunday-week high/low, all (close - level)/ATR14;
+  sessions are the `DEFAULT_SESSIONS.sessions_utc` windows, 21:00-23:00 UTC belongs to none); `market_structure`
+  (liquidity sweep = traded beyond the last confirmed swing, previous session or previous day high/low known at t-1
+  and closed back inside; break of structure = first close beyond the last confirmed unbroken swing); `fair_value_gaps`
+  (bullish if high[i-2] < low[i], known when bar i closes; partial fills shrink it, filled once a bar trades through
+  its far edge; >= 0.1 ATR); `order_blocks` (last opposite-colour candle within 5 bars before a displacement with body
+  > 1.0 ATR closing beyond the last confirmed swing; invalidated by a close through it). Warm-up: ATR 13 bars, the
+  first completed session/day/week; nearest gap/block columns are NaN while none is active (counts 0). Every value at
+  bar t uses only bars closed by t (truncated-history test + pipeline lookahead check). They are in
+  `DEFAULT_FEATURE_NAMES`, so the default `feature_version` changes (expected: no champions exist, nothing is
+  invalidated) and feature-seeded clones now draw from a larger column pool.
 
 ## Next steps (no owner input needed unless marked)
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
+from goldbot.config import ROOT
 from goldbot.ops import accounts
+from goldbot.ops.deploy import DeployWatch
 from goldbot.ops.health import HealthContext, HealthWatch, run_checks
 from goldbot.telegram.approvals import Proposal
 from goldbot.telegram.bus import ApprovalBus
@@ -27,8 +30,15 @@ except ImportError:  # pragma: no cover
     Application = None
 
 
+DEPLOY_EVERY_S = 600             # new version on main with CI passed -> offered to the owner (one click)
 HEALTH_EVERY_S = 300              # health checks + alert dedupe (the Scheduler's finest grain is daily)
 OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED_UNAPPROVED": "⌛ EXPIRED"}
+
+
+def outcome_text(outcome: str) -> str:
+    if outcome.startswith("GATE_REFUSED"):
+        return "🛑 NOT PLACED: approved, but the risk check refused it at approval (" + outcome.partition(": ")[2] + ")"
+    return OUTCOME_TEXT.get(outcome, outcome)
 
 
 class TelegramBot:  # pragma: no cover - needs network + token
@@ -46,6 +56,8 @@ class TelegramBot:  # pragma: no cover - needs network + token
         self.poll_s = poll_s
         self.state_dir = state_dir
         self.health = HealthWatch(state_dir)
+        # one-click deploys (Linux servers; the systemd unit sets GOLDBOT_DEPLOY=1): goldbot/ops/deploy.py
+        self.deploy = DeployWatch(state_dir, ROOT) if os.environ.get("GOLDBOT_DEPLOY") == "1" else None
         self.app = Application.builder().token(token).post_init(self._start_pump).build()
         self.app.add_handler(CallbackQueryHandler(self._on_button))
         for c in ("status", "halt", "rearm"):
@@ -68,7 +80,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
                     for chat, mid in msgs:
                         try:
                             await self.app.bot.edit_message_reply_markup(chat, mid, reply_markup=None)
-                            await self.app.bot.send_message(chat, f"{pid}: {OUTCOME_TEXT.get(outcome, outcome)}",
+                            await self.app.bot.send_message(chat, f"{pid}: {outcome_text(outcome)}",
                                                             reply_parameters=ReplyParameters(message_id=mid))
                         except Exception as exc:
                             log.warning("could not update %s: %s", pid, exc)
@@ -80,6 +92,9 @@ class TelegramBot:  # pragma: no cover - needs network + token
                 log.exception("telegram pump")
             if n % max(int(HEALTH_EVERY_S / self.poll_s), 1) == 0:
                 await self._health_pass()
+            if self.deploy is not None:
+                await self._deploy_pass(offer=n % max(int(DEPLOY_EVERY_S / self.poll_s), 1) == 0,
+                                        report=n % max(int(30 / self.poll_s), 1) == 0)
             n += 1
             await asyncio.sleep(self.poll_s)
 
@@ -95,6 +110,30 @@ class TelegramBot:  # pragma: no cover - needs network + token
             self.health.record(report)          # only after delivery: a failed send is retried next pass
         except Exception:
             log.exception("health pass")
+
+    async def _deploy_pass(self, *, offer: bool, report: bool) -> None:
+        """Offer a new version that passed CI ([Deploy] [Skip]); report results of the root deploy script."""
+        assert self.deploy is not None
+        try:
+            if offer:
+                new = await asyncio.to_thread(self.deploy.check)
+                if new:
+                    more = f"\n… and {new['n_commits'] - len(new['subjects'])} more" if new["n_commits"] > len(new["subjects"]) else ""
+                    text = (f"🚀 New version ready ({new['sha'][:8]}, CI passed):\n"
+                            + "\n".join(f"• {s}" for s in new["subjects"]) + more
+                            + "\n\nDeploy restarts the services (open positions keep their stops; the engine reconciles).")
+                    kb = InlineKeyboardMarkup([[InlineKeyboardButton("Deploy", callback_data=f"dep:{new['sha']}"),
+                                                InlineKeyboardButton("Skip", callback_data=f"skp:{new['sha']}")]])
+                    for uid in self.owner_ids:
+                        await self.app.bot.send_message(uid, text, reply_markup=kb)
+            if report:
+                for r in self.deploy.new_results():
+                    icon = {"deployed": "✅", "rolled_back": "↩️", "failed": "🛑", "refused": "⛔"}.get(r.get("result", ""), "ℹ️")
+                    text = f"{icon} deploy {r.get('result')} on {r.get('role')}: {str(r.get('to', ''))[:8]} — {r.get('detail', '')}"
+                    for uid in self.owner_ids:
+                        await self.app.bot.send_message(uid, text)
+        except Exception:
+            log.exception("deploy pass")
 
     async def send_proposal(self, p: Proposal) -> list[tuple[int, int]]:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"ok:{p.proposal_id}")],
@@ -116,6 +155,13 @@ class TelegramBot:  # pragma: no cover - needs network + token
             await q.answer("not allowed", show_alert=True)
             return
         parts = q.data.split(":")
+        if parts[0] in ("dep", "skp") and self.deploy is not None:
+            ok = self.deploy.approve(parts[1], by=uid) if parts[0] == "dep" else self.deploy.skip(parts[1])
+            await q.answer("ok" if ok else "no longer on offer", show_alert=not ok)
+            if ok:
+                await q.edit_message_text(q.message.text + ("\n\n→ deploying within a minute; you will get the result"
+                                                            if parts[0] == "dep" else "\n\n→ skipped"))
+            return
         try:
             approve = parts[0] == "ok"
             self.bus.submit(parts[1], approve, None if approve else parts[2], by=f"telegram:{uid}")

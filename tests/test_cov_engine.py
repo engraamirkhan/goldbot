@@ -101,6 +101,8 @@ def test_approval_re_runs_the_risk_gate_and_a_halt_meanwhile_blocks_the_entry(tm
     assert pb.positions() == []
     assert any(str(d.get("action")).startswith("gate_at_approval:") and "owner_halt" in str(d["action"])
                for d in eng.decisions)
+    archived = ApprovalBus(tmp_path).get("icm-demo-2-a")                  # the dashboard shows the refusal
+    assert archived is not None and archived.outcome == Outcome.APPROVED and "owner_halt" in (archived.gate_refusal or [])
 
 
 @pytest.mark.parametrize("approve", [False, None])

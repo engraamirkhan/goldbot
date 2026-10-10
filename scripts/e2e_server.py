@@ -35,7 +35,7 @@ def seed_proposals(state: str) -> None:
         bus.publish(Proposal(
             proposal_id=pid, account_id="icm-demo", agent_id="session_open-g0-e2e", side=side, lots=0.05,
             entry=entry, stop=entry - side * 4.0, target=entry + side * 6.0, p=0.62, ev_r=0.31, spread_points=22.0,
-            top_features=[("atr_14", 0.4), ("adx_14", -0.2)], created=time.time(), window_s=3600))
+            top_features=[("atr_14", 0.4), ("adx_14", -0.2)], risk_usd=20.0, created=time.time(), window_s=3600))
 
 
 def seed_store(data_root: str) -> None:

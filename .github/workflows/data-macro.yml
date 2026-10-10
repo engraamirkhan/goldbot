@@ -1,0 +1,62 @@
+name: data-macro
+# Downloads gold's macro drivers from FRED's public CSV endpoint (no API key; Claude sandboxes cannot reach FRED,
+# GitHub's runners can) and publishes one point-in-time Parquet, macro_fred.parquet, on the rolling release tag
+# `macro-v1`: DFII10 (10y real yield), T10YIE (breakeven), DTWEXBGS (broad dollar), GVZCLS (gold VIX), DGS2.
+# Every row carries value_date, vintage and a conservative available_utc (goldbot/data/macro.py). The previously
+# published file is kept as is; only new dates and revisions are added. Research (research.yml input `macro`) and the
+# VPS (Saturday retrain, scripts/fetch_data_release.py --macro) load it from there.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 4 * * 2"   # Tuesdays 04:41 UTC: after Monday's weekly H.10 dollar release
+permissions:
+  contents: write   # release asset upload
+  issues: write     # failure report
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -e .
+      - name: fetch the previously published file (its rows are kept as published)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p prev
+          gh release download macro-v1 -p macro_fred.parquet -D prev || echo "no previous file"
+      - name: download FRED series
+        run: |
+          set -o pipefail
+          python scripts/fred_macro.py --out macro_fred.parquet --existing prev/macro_fred.parquet 2>&1 | tee report.txt
+      - name: publish to release macro-v1
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f macro_fred.parquet ] || exit 0
+          # same retry pattern as data-dukascopy (create/upload can race or hit transient API errors)
+          for i in 1 2 3 4 5; do
+            { gh release view macro-v1 >/dev/null 2>&1 || gh release create macro-v1 --title "Macro data (rolling)" --notes "FRED macro series with available_utc, built by the data-macro workflow" --latest=false; } &&
+            gh release upload macro-v1 macro_fred.parquet --clobber && exit 0
+            sleep $((i * 15))
+          done
+          exit 1
+      - name: report failure to issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'EOF'
+          import json, os, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]
+          run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          try: body = open("report.txt").read()[-60000:]
+          except FileNotFoundError: body = "(no report file; failure before the download step)"
+          payload = {"title": "data-macro failure", "body": f"Run: {run_url}\n\n```\n{body}\n```", "labels": ["ci", "data"]}
+          req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues", data=json.dumps(payload).encode(),
+                                       headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"})
+          print(urllib.request.urlopen(req).status)
+          EOF

@@ -1,4 +1,11 @@
-from goldbot.features import momentum, session, structure, technical  # noqa: F401  (registers features)
+from goldbot.features import (  # noqa: F401  (registers features)
+    macro,
+    momentum,
+    session,
+    structure,
+    technical,
+    trader,
+)
 from goldbot.features.registry import (  # noqa: F401
     FEATURES,
     build_features,

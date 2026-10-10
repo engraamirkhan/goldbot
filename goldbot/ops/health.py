@@ -503,6 +503,21 @@ def check_drift(ctx: HealthContext) -> Check:
     return Check(name="drift", status=cast(Status, status), reason="; ".join(parts) or "no drift")
 
 
+def check_deploy(ctx: HealthContext) -> Check:
+    """The last deploy attempt (state/deploys.jsonl, written by goldbot-deploy): a rollback warns, a failed rollback
+    fails; a deploy is only ever started by the owner (Telegram [Deploy] or `sudo goldbot-deploy`)."""
+    f = ctx.state_dir / "deploys.jsonl"
+    if not f.exists():
+        return Check(name="deploy", status="ok", reason="no deploy recorded yet")
+    try:
+        last = json.loads(f.read_text().splitlines()[-1])
+    except (ValueError, OSError, IndexError) as exc:
+        return Check(name="deploy", status="warn", reason=f"deploys.jsonl unreadable: {exc}")
+    msg = f"{last.get('result')} {str(last.get('to', ''))[:8]} on {last.get('role')} at {last.get('ts')}: {last.get('detail', '')}"
+    status = {"failed": "fail", "rolled_back": "warn", "refused": "warn"}.get(str(last.get("result")), "ok")
+    return Check(name="deploy", status=cast(Status, status), reason=msg)
+
+
 def check_news(ctx: HealthContext) -> Check:
     if ctx.settings is not None and not ctx.settings.news.feeds:
         return Check(name="news", status="ok", reason="no feeds configured")
@@ -599,7 +614,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += [check_engine(ctx, a.account_id), check_risk_state(ctx, a.account_id)]
         checks += check_scheduler(ctx)
         checks += [check_costs(ctx, a.account_id) for a in ctx.accounts]
-        checks += [check_data_quality(ctx), check_drift(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
+        checks += [check_data_quality(ctx), check_drift(ctx), check_deploy(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
 

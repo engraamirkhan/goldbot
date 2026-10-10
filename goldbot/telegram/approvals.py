@@ -44,25 +44,30 @@ class Proposal(Record):
     ev_r: float
     spread_points: float
     top_features: list[tuple[str, float]]
+    risk_usd: float | None = None        # account currency lost if the stop is hit: lots x stop distance x 100 oz
     created: float = Field(default_factory=time.time)
     window_s: int = 90
     outcome: Outcome | None = None
     reason_code: str | None = None
     decided_by: int | None = None
     decided_via: str | None = None       # "telegram:<id>" | "dashboard:<email>" for decisions from the bus
+    gate_refusal: list[str] | None = None    # approved, but the RiskGate re-check at approval time refused the order
 
     @property
     def expired(self) -> bool:
         return self.outcome is None and time.time() > self.created + self.window_s
 
     def text(self) -> str:
-        side = "LONG" if self.side > 0 else "SHORT"
+        """The Telegram message: the same essentials, in the same order, as the dashboard approval card."""
+        side = "🟢 LONG" if self.side > 0 else "🔵 SHORT"
+        risk = f"  ·  risk ${self.risk_usd:,.0f}" if self.risk_usd is not None else ""
         feats = ", ".join(f"{n} {v:+.2f}" for n, v in self.top_features[:3])
-        return (f"{self.account_id} · {side} {self.lots:.2f} lots XAUUSD\n"
+        return (f"{side} {self.lots:.2f} lots XAUUSD{risk}\n"
                 f"entry {self.entry:.2f}  stop {self.stop:.2f}  target {self.target:.2f}\n"
                 f"p={self.p:.2f}  EV={self.ev_r:+.2f}R  spread {self.spread_points:.0f}pt\n"
-                f"agent {self.agent_id}\nwhy: {feats}\n"
-                f"approve within {self.window_s}s or it expires")
+                f"why: {feats or 'no feature importances'}\n"
+                f"{self.account_id} · {self.agent_id}\n"
+                f"⏱ approve within {self.window_s}s or it expires · exits are automatic")
 
 
 class ApprovalCenter:

@@ -17,12 +17,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 119 |
+| implemented | 123 |
 | partial | 16 |
 | missing | 11 |
 | deviates | 9 |
 | in review | 6 |
-| **total** | **161** |
+| **total** | **165** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -119,7 +119,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | D11 | Live collector "polls copy_ticks_from every 250 ms, dedups on (time_msc, bid, ask, flags)" | partial | goldbot/execution/mt5_adapter.py `stream_ticks` polls every 0.25 s and dedups on (ts, bid, ask); `flags` not used | untested |
 | D12 | "daily reconciliation against the broker's own M1 logs any divergence" | missing | | untested |
 | D13 | Session state "from symbol_info().session_deals, not from silence" | partial | goldbot/data/calendar.py SessionTable (static defaults); runtime override from session_deals not wired | tests/test_data_layer.py::test_sessions_closed_on_weekend_and_daily_break |
-| D14 | Macro tables carry `value_date`, `available_utc`, `vintage`; "features join with merge_asof on available_utc only", with a unit test seeding a fake release | implemented | goldbot/data/store.py:145 `asof_join` (refuses frames without `available_utc`); goldbot/data/macro.py | tests/test_data_layer.py::test_asof_join_never_leaks_future_release; tests/test_cov_labels_store.py::test_asof_join_never_uses_a_row_before_it_was_available |
+| D14 | Macro tables carry `value_date`, `available_utc`, `vintage`; "features join with merge_asof on available_utc only", with a unit test seeding a fake release | implemented | goldbot/data/store.py:145 `asof_join` (refuses frames without `available_utc`); goldbot/data/macro.py (`fred_available_utc`, `merge_vintages`, `driver_frames`); .github/workflows/data-macro.yml + scripts/fred_macro.py (FRED DFII10/T10YIE/DTWEXBGS/GVZCLS/DGS2 -> release macro-v1); goldbot/data/release.py `sync_release_macro`; goldbot/features/macro.py `macro_drivers` (opt-in: research_pass `--macro`; not built by the live engine yet). COT and GLD loaders exist but are not pulled | tests/test_data_layer.py::test_asof_join_never_leaks_future_release; tests/test_data_layer.py::test_a_fake_macro_release_never_reaches_a_bar_before_its_available_utc; tests/test_cov_labels_store.py::test_asof_join_never_uses_a_row_before_it_was_available; tests/test_macro.py |
 | D15 | Multi-timeframe rule "visible only if open_TF + TF <= t ... no 1h feature at 10:15 contains the 10:00-11:00 bar" | implemented | goldbot/features/mtf.py:12 | tests/test_features_labels.py::test_mtf_merge_has_no_lookahead |
 | D16 | News features "join as-of on received_utc"; "a high-relevance unscheduled shock triggers a 30-minute entry blackout" | implemented | goldbot/data/news.py:167 `shock_window`; goldbot/engine/runner.py:535 | tests/test_news.py::test_shock_blocks_entries_for_30_minutes |
 | D17 | Quality on every ingest: duplicate timestamps, bid > ask as errors | implemented | goldbot/data/quality.py:34-42 | tests/test_trace_data_exec.py::test_duplicate_timestamps_are_an_error; tests/test_data_layer.py::test_quality_checks_flag_spike_and_bid_gt_ask |
@@ -148,6 +148,10 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | F10 | "a Dukascopy cross-check: a signal that only works on broker-fed bars is ... dropped" | missing | | untested |
 | F11 | TradingView alerts "with fired_at - bar_time < tf are flagged intrabar and excluded from training" | partial | flagged (goldbot/webhook/app.py:56); no TV features reach training yet, so exclusion is moot | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar |
 | F12 | "about 1% of alerts randomly blanked" in training; "a missed alert sets the feature to NaN" | missing | no TradingView feature family in the registry | untested |
+| F13 | Trader toolkit, session structure (strategy-researcher; point-in-time, "a level ... is known only once its defining bars have closed"): session zones Tokyo/Asia, London, New York | implemented | goldbot/features/trader.py `session_zones` (family `session`): current session high/low/open, previous session high/low/open, each zone's last completed high/low, previous feature-day and week high/low as (close - level)/ATR14, `prev_sess_pos` (+1 above / -1 below / 0 inside the previous session's range); windows from `DEFAULT_SESSIONS.sessions_utc`, 21:00-23:00 UTC belongs to none | tests/test_trader_features.py::test_session_zones_report_current_and_previous_session_levels_known_at_each_bar; ::test_previous_week_levels_appear_only_once_the_week_is_over |
+| F14 | Trader toolkit, market structure: liquidity sweeps of prior highs/lows, breaks of structure | implemented | goldbot/features/trader.py `market_structure` (family `structure`): `sweep_high/low/dir` against the last confirmed swing, previous session and previous day levels known at t-1; `bos_event/bos_dir/bars_since_bos`, each confirmed swing broken at most once by a close; distances to the last confirmed swings stay in the `swings` family | tests/test_trader_features.py::test_sweep_and_break_of_structure_on_a_known_sequence; ::test_a_swing_is_broken_only_once |
+| F15 | Trader toolkit, fair value gaps (three-bar imbalance) | implemented | goldbot/features/trader.py `fair_value_gaps` (family `smc`): nearest unfilled bullish/bearish gap distance, age, unfilled size (ATR) and count; partial fills shrink the gap, a bar through the far edge fills it; gaps < 0.1 ATR ignored, > 400 bars dropped | tests/test_trader_features.py::test_fair_value_gap_forms_on_the_third_bar_shrinks_on_partial_fill_and_is_dropped_when_filled |
+| F16 | Trader toolkit, order blocks (last opposite candle before a structure-breaking displacement, body > k x ATR) | implemented | goldbot/features/trader.py `order_blocks` (family `smc`): nearest active bullish/bearish block distance (negative inside), age and count; invalidated by a close through the block; k = 1.0, search 5 bars | tests/test_trader_features.py::test_order_block_is_the_last_opposite_candle_before_a_structure_breaking_displacement; ::test_no_order_block_without_a_break_of_structure; no look-ahead for F13-F16: ::test_no_trader_feature_changes_when_future_bars_are_appended; ::test_trader_features_pass_the_pipeline_lookahead_check |
 
 ## Modelling, validation and promotion [Modelling]
 

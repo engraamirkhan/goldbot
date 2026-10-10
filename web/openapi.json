@@ -438,6 +438,169 @@
     "title": "CalendarResponse",
     "type": "object"
    },
+   "DecidedProposal": {
+    "description": "A proposal decided in the last few minutes, so its card can show what happened to it.\n\nsubmitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;\napproved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);\nrejected: with its reason code; expired: nobody decided within the window.",
+    "properties": {
+     "account_id": {
+      "title": "Account Id",
+      "type": "string"
+     },
+     "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+     },
+     "decided_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Decided By"
+     },
+     "entry": {
+      "title": "Entry",
+      "type": "number"
+     },
+     "ev_r": {
+      "title": "Ev R",
+      "type": "number"
+     },
+     "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+     },
+     "lots": {
+      "title": "Lots",
+      "type": "number"
+     },
+     "p": {
+      "title": "P",
+      "type": "number"
+     },
+     "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+     },
+     "reason_code": {
+      "anyOf": [
+       {
+        "enum": [
+         "news",
+         "cost",
+         "discretion",
+         "duplicate",
+         "other"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason Code"
+     },
+     "refusal": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Refusal",
+      "type": "array"
+     },
+     "risk_usd": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Usd"
+     },
+     "side": {
+      "enum": [
+       "long",
+       "short"
+      ],
+      "title": "Side",
+      "type": "string"
+     },
+     "spread_points": {
+      "title": "Spread Points",
+      "type": "number"
+     },
+     "status": {
+      "enum": [
+       "submitted",
+       "approved",
+       "rejected",
+       "expired",
+       "refused"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "stop": {
+      "title": "Stop",
+      "type": "number"
+     },
+     "target": {
+      "title": "Target",
+      "type": "number"
+     },
+     "top_features": {
+      "items": {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "type": "array"
+      },
+      "title": "Top Features",
+      "type": "array"
+     },
+     "tradingview_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tradingview Url"
+     }
+    },
+    "required": [
+     "proposal_id",
+     "account_id",
+     "agent_id",
+     "side",
+     "lots",
+     "entry",
+     "stop",
+     "target",
+     "p",
+     "ev_r",
+     "spread_points",
+     "top_features",
+     "expires_at",
+     "status"
+    ],
+    "title": "DecidedProposal",
+    "type": "object"
+   },
    "Decision": {
     "properties": {
      "action": {
@@ -956,6 +1119,17 @@
       "title": "Proposal Id",
       "type": "string"
      },
+     "risk_usd": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Usd"
+     },
      "side": {
       "enum": [
        "long",
@@ -1084,6 +1258,29 @@
    },
    "Status": {
     "properties": {
+     "blackout": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ActiveBlackout"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "drift_halt": {
+      "default": false,
+      "title": "Drift Halt",
+      "type": "boolean"
+     },
+     "drift_reasons": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Drift Reasons",
+      "type": "array"
+     },
      "halt_reason": {
       "anyOf": [
        {
@@ -1122,6 +1319,19 @@
       "additionalProperties": true,
       "title": "Supervisor",
       "type": "object"
+     },
+     "supervisor_halt": {
+      "default": false,
+      "title": "Supervisor Halt",
+      "type": "boolean"
+     },
+     "supervisor_reasons": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Supervisor Reasons",
+      "type": "array"
      }
     },
     "required": [
@@ -1834,6 +2044,34 @@
      }
     ],
     "summary": "Proposals"
+   }
+  },
+  "/api/proposals/recent": {
+   "get": {
+    "description": "Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it.",
+    "operationId": "recent_proposals_api_proposals_recent_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/DecidedProposal"
+         },
+         "title": "Response Recent Proposals Api Proposals Recent Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Recent Proposals"
    }
   },
   "/api/rearm": {

@@ -258,3 +258,53 @@ def test_calendar_and_news_without_archive_or_engines(tmp_path):
     cal = c.get("/api/calendar", headers=h).json()
     assert cal["events"] == [] and cal["active_blackout"] is None and "no calendar archived" in cal["note"]
     assert c.get("/api/news", headers=h).json() == []
+
+
+def _prop(pid: str, side: int = 1, **kw) -> Proposal:
+    return Proposal(proposal_id=pid, account_id="icm-demo", agent_id="session_open-g0-x", side=side, lots=0.12, entry=2400,
+                    stop=2400 - side * 4, target=2400 + side * 6, p=0.61, ev_r=0.35, spread_points=22,
+                    top_features=[("adx_14", 31.2)], risk_usd=48.0, **kw)
+
+
+def test_recent_proposals_say_what_happened_to_each_card(tmp_path):
+    bus = ApprovalBus(tmp_path)
+    for pid in ("sub", "rej-pending"):
+        bus.publish(_prop(pid))
+    bus.submit("sub", True, None, by="dashboard:o@x.io")                       # the engine has not applied it yet
+    bus.submit("rej-pending", False, "news", by="telegram:111")
+    bus.archive(_prop("ok", outcome=Outcome.APPROVED, decided_via="dashboard:o@x.io"))
+    bus.archive(_prop("refused", outcome=Outcome.APPROVED, gate_refusal=["owner_halt"], decided_by=111))
+    bus.archive(_prop("rej", side=-1, outcome=Outcome.REJECTED, reason_code="cost"))
+    bus.archive(_prop("exp", outcome=Outcome.EXPIRED))
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    c = TestClient(app)
+    assert c.get("/api/proposals/recent").status_code == 401
+    h = _owner_headers(c, app)
+    assert c.get("/api/proposals", headers=h).json() == []                      # both open ones are decided
+    rows = {r["proposal_id"]: r for r in c.get("/api/proposals/recent", headers=h).json()}
+    assert {k: v["status"] for k, v in rows.items()} == {"sub": "submitted", "rej-pending": "rejected", "ok": "approved",
+                                                         "refused": "refused", "rej": "rejected", "exp": "expired"}
+    assert rows["rej-pending"]["reason_code"] == "news" and rows["rej"]["reason_code"] == "cost"
+    assert rows["refused"]["refusal"] == ["owner_halt"] and rows["refused"]["decided_by"] == "telegram:111"
+    assert rows["sub"]["decided_by"] == "dashboard:o@x.io" and rows["ok"]["risk_usd"] == 48.0
+    assert rows["rej"]["side"] == "short"
+
+
+def test_status_carries_the_safety_strip(tmp_path):
+    (tmp_path / "supervisor.json").write_text(json.dumps({"ts": 0, "halt": True, "reasons": ["combined_dd"]}))
+    (tmp_path / "engine_icm.json").write_text(json.dumps({"account": "icm-demo", "blackout": {
+        "kind": "calendar", "title": "US CPI", "ts_utc": "2026-10-10T12:30:00Z"}}))
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist")
+    c = TestClient(app)
+    h = _owner_headers(c, app)
+    s = c.get("/api/status", headers=h).json()
+    assert s["supervisor_halt"] is True and s["supervisor_reasons"] == ["combined_dd"]
+    assert s["drift_halt"] is False and s["drift_reasons"] == []                # drift watch has not run: no halt
+    assert s["blackout"]["title"] == "US CPI" and s["blackout"]["accounts"] == ["icm-demo"]
+    (tmp_path / "drift.json").write_text(json.dumps({"system_halt": {"reasons": ["calibration ECE 0.12 > 0.08"]}}))
+    s = c.get("/api/status", headers=h).json()
+    assert s["drift_halt"] is True and s["drift_reasons"] == ["calibration ECE 0.12 > 0.08"]
+    (tmp_path / "drift.json").write_text("{not json")                           # fail closed, as the engines do
+    assert c.get("/api/status", headers=h).json()["drift_reasons"] == ["drift.json unreadable"]
+    (tmp_path / "drift.json").write_text(json.dumps({"system_halt": None}))
+    assert c.get("/api/status", headers=h).json()["drift_halt"] is False

@@ -80,4 +80,13 @@ cd /opt/goldbot && exec sudo -u mt5 -H env DISPLAY=:99 WINEDEBUG=-all PYTHON_KEY
 WRAP
 chmod 755 /usr/local/bin/goldbot-mt5
 systemctl enable goldbot-bridge@icm-demo
+
+# Deploys: only versions the owner approves (Telegram [Deploy] or `sudo goldbot-deploy latest`), never by itself.
+# The script runs as root, so a root-owned copy is installed; the repo copy (writable by the service user) is never run
+# as root. After reviewing a change to it: sudo install -m 755 -o root -g root <repo>/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy
+mkdir -p /etc/goldbot
+echo mt5 > /etc/goldbot/role
+install -m 755 -o root -g root "$ROOT/goldbot/ops/linux/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
+# the MT5 box is updated by hand only (sudo goldbot-deploy latest): no deploy timer here
+
 echo "MT5 box installed. Next: log in to MT5 once over VNC, then bridge-serve (docs/RUNBOOK.md)."

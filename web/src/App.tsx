@@ -20,7 +20,11 @@ export function App() {
   useEffect(() => {
     if (!authed) return;
     return liveSocket((e) => {
-      if (e.type === "decision" || e.type === "proposal") qc.invalidateQueries({ queryKey: ["proposals"] });
+      if (e.type === "decision" || e.type === "proposal") {
+        qc.invalidateQueries({ queryKey: ["proposals"] });
+        qc.invalidateQueries({ queryKey: ["proposals-recent"] });
+      }
+      if (e.type === "halt") qc.invalidateQueries({ queryKey: ["status"] });
     });
   }, [authed, qc]);
 

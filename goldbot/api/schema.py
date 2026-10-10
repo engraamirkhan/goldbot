@@ -36,6 +36,19 @@ class Proposal(BaseModel):
     top_features: list[tuple[str, float]]
     expires_at: datetime
     tradingview_url: str | None = None
+    risk_usd: float | None = None           # account currency lost at the stop (lots x stop distance x 100 oz)
+
+
+class DecidedProposal(Proposal):
+    """A proposal decided in the last few minutes, so its card can show what happened to it.
+
+    submitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;
+    approved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);
+    rejected: with its reason code; expired: nobody decided within the window."""
+    status: Literal["submitted", "approved", "rejected", "expired", "refused"]
+    reason_code: Literal["news", "cost", "discretion", "duplicate", "other"] | None = None
+    refusal: list[str] = []
+    decided_by: str | None = None
 
 
 class Decision(BaseModel):
@@ -163,6 +176,11 @@ class Status(BaseModel):
     halt_reason: str | None = None
     pending: int
     supervisor: dict[str, Any]
+    supervisor_halt: bool = False           # combined drawdown / heartbeat halt from state/supervisor.json
+    supervisor_reasons: list[str] = []
+    drift_halt: bool = False                # system halt from the drift watch (state/drift.json); unreadable halts
+    drift_reasons: list[str] = []
+    blackout: ActiveBlackout | None = None  # entry blackout an engine is enforcing now
 
 
 class JobRow(BaseModel):
@@ -234,3 +252,6 @@ class Headline(BaseModel):
     dollar: Literal["positive", "negative", "neutral"] | None
     surprise: Literal["beat", "miss", "inline", "none"] | None
     shock: bool
+
+
+Status.model_rebuild()          # `blackout` refers to ActiveBlackout, defined after Status

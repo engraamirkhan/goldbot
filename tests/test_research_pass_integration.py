@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -257,3 +258,36 @@ def test_tsmom_daily_variant_is_screened_on_daily_bars(release_dir, tmp_path, mo
     assert row["results"]["lookahead"]["lookahead_columns"] == []
     text = report.read_text()
     assert "1d decision bars" in text and "- swap: long -60.00" in text
+
+
+def test_macro_release_adds_point_in_time_features_and_a_missing_one_degrades_clearly(release_dir, tmp_path, monkeypatch,
+                                                                                       capsys):
+    """--macro with the release: the macro columns are in the frame, the leakage check (macro truncated at the cut
+    too) is clean, and the trial records it. Without the release the pass runs as before and says why."""
+    from goldbot.data.macro import US_BDAY, fred_frame
+    days = pd.date_range("2021-01-04", "2025-10-01", freq=US_BDAY)
+    rng = np.random.default_rng(5)
+    series = (("DFII10", 1.5), ("DTWEXBGS", 120.0), ("GVZCLS", 16.0), ("T10YIE", 2.3), ("DGS2", 4.0))
+    rel = pd.concat([fred_frame(sid, pd.DataFrame({"value_date": days,
+                                                   "value": base + rng.normal(0, 0.05, len(days)).cumsum()}),
+                                pd.Timestamp("2025-10-02")) for sid, base in series], ignore_index=True)
+    mdir = tmp_path / "macro"
+    mdir.mkdir()
+    rel.to_parquet(mdir / "macro_fred.parquet", index=False)
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    argv = ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry), "--report", str(report),
+            "--skip-screen", "--variants", '[{"feature_seed": 3}]']
+    monkeypatch.setattr(sys, "argv", argv + ["--macro", str(mdir)])
+    assert rp.main() == 0
+    row = _rows(registry)[0]
+    assert row["results"]["macro"]["used"] is True and "gold_vix" in row["results"]["macro"]["series"]
+    assert row["results"]["lookahead"]["lookahead_columns"] == []
+    assert "- macro features: on: " in report.read_text()
+
+    monkeypatch.setattr(sys, "argv", argv + ["--macro", str(tmp_path / "nothing-here")])
+    assert rp.main() == 0
+    out = capsys.readouterr().out
+    assert "no macro release at" in out and "ran without macro features" in out
+    second = _rows(registry)[1]
+    assert second["results"]["macro"]["used"] is False
+    assert second["feature_version"] != row["feature_version"]          # the macro columns are part of the version
