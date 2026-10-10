@@ -596,6 +596,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   each section degrades on its own. Sent once per slot (`state/telegram_digest.json`, recorded after delivery); a
   slot missed while the service was down goes out on start if under 6 h late. Reporting only.
 
+- Web stack upgrade (2026-10-10, four `chore(web)` commits replacing #65): React 19.3.0, react-dom 19.3.0,
+  @types/react(-dom) 19.3.0, lightweight-charts 5.2.1, Vite 8.3.1, @vitejs/plugin-react 6.1.1, Vitest 5.0.2,
+  @vitest/coverage-v8 5.0.2, jsdom 30.1.1, TanStack Query 5.104.1, Playwright 1.64.0, ESLint 10.12.0,
+  typescript-eslint 8.71.1; TypeScript stays 5.9.3 (openapi-typescript 7.13 needs TS 5). Vite/plugin-react/Vitest/
+  jsdom are the newest releases at least two weeks old (8.3.4, 6.1.2, 5.0.3, 30.1.2 were days old; no GitHub
+  advisory affects the chosen versions). Nothing imports lightweight-charts yet (Health charts are inline SVG), so
+  there was no series code to port; new price/equity charts must use the v5 `chart.addSeries(LineSeries, ...)` API.
+  Vitest 5 and jsdom 30 need Node 22 (`engines` already says so; Node 20 fails to start the workers). The lockfile
+  was regenerated (npm 10 hit ERESOLVE/an arborist crash moving off the Vite 5 tree); `npm ci` on npm 10 is clean.
+  `npm audit` (prod and dev) reports 0 vulnerabilities, down from 7 dev ones. Production JS bundle 245 -> 318 kB
+  (75 -> 96 kB gzip), mostly React 19. Deferred: TypeScript 7 and @types/node 26 (Node 22 is the runtime).
+
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
   `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
