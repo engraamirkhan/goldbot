@@ -254,6 +254,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   invalidated) and feature-seeded clones now draw from a larger column pool.
 
 ## Next steps (no owner input needed unless marked)
+- Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write
+  `state/heartbeat_<service>.json` every minute (`goldbot.ops.health.Heartbeat` / `start_heartbeat`); health fails a
+  service silent for 5 min, warns on a tripped daily/weekly loss cap per account and on each order that failed after
+  the retries (orders_<account>.json `rejected`/`unfilled`, retcode from the decisions journal), and fails a bridge
+  that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
+  health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
+  owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.
 1. Research status (2026-10-09, Q4 2026 trial budget spent: 20/20, research stops until 2027-01-01). Evaluation is
    cross-fitted, spread charged once, design gates and the P4 screen enforced, holdout 2025-10..2026-09 untouched,

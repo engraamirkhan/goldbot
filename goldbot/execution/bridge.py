@@ -221,6 +221,22 @@ class GuardedBroker:
 
 
 # ---------------------------------------------------------------------------------------------- client
+def probe_health(url: str, timeout_s: float = 5.0, get: Callable[..., Any] = requests.get) -> str | None:
+    """None when the bridge answers GET /health with {"ok": true}; otherwise why not (no URL or token in the text).
+    Used by the brain's health checks; no token is needed and nothing reaches the terminal."""
+    try:
+        r = get(f"{url.rstrip('/')}/health", timeout=timeout_s)
+    except requests.RequestException as exc:
+        return f"unreachable ({type(exc).__name__})"
+    if r.status_code != 200:
+        return f"HTTP {r.status_code}"
+    try:
+        ok = r.json().get("ok")
+    except (ValueError, AttributeError):
+        return "answered, but not with the bridge's JSON"
+    return None if ok is True else "answered without ok"
+
+
 class RemoteBroker:
     """The `Broker` protocol over the bridge. Read-only calls retry once; order calls never retry."""
 

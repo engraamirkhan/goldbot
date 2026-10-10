@@ -8,7 +8,7 @@ import pytest
 
 from goldbot.config import ROOT, TelegramSettings, load_settings
 from goldbot.ops import accounts, health
-from goldbot.ops.health import AccountRef, Check, HealthContext, HealthReport, HealthWatch
+from goldbot.ops.health import AccountRef, Check, HealthContext, HealthReport, HealthWatch, Heartbeat
 from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.telegram.approvals import Proposal
 from goldbot.telegram.bus import ApprovalBus
@@ -391,6 +391,8 @@ def healthy_state(tmp_path: Path) -> None:
     write(tmp_path / "costs_icm-demo.json", {"built_utc": (NOW - pd.Timedelta(hours=14)).isoformat(),
                                              "swap_long_usd_per_lot": -48.0, "swap_short_usd_per_lot": 9.0})
     write(tmp_path / "news_feeds.json", {"a": {"ok": True, "ts": NOW.isoformat()}})
+    for svc in health.HEARTBEAT_SERVICES:
+        write(health.heartbeat_path(tmp_path, svc), {"service": svc, "ts": ago(30)})
     HealthWatch(tmp_path).record(HealthReport(ts=NOW, status="ok", checks=[]))
 
 
@@ -398,7 +400,8 @@ def test_full_report_healthy_and_static_subset(tmp_path):
     healthy_state(tmp_path)
     r = health.run_checks(make_ctx(tmp_path))
     assert r.status == "ok", health.render(r)
-    assert {"supervisor", "engine:icm-demo", "risk:icm-demo", "job:monthly_research", "news", "alerts"} <= {c.name for c in r.checks}
+    assert {"supervisor", "engine:icm-demo", "risk:icm-demo", "job:monthly_research", "news", "alerts",
+            "heartbeat:telegram", "weekly_cap:icm-demo", "daily_cap:icm-demo"} <= {c.name for c in r.checks}
     s = health.run_checks(make_ctx(tmp_path), static_only=True)
     assert [c.name for c in s.checks] == ["settings", "accounts", "secrets", "disk"]
     assert health.exit_code(r) == 0
@@ -511,3 +514,186 @@ def test_bootstrap_service_commands_exist_in_run_py():
 @pytest.mark.parametrize("cmd", ["health"])
 def test_run_py_dispatches_health(cmd):
     assert cmd in _run_commands()
+
+
+# ------------------------------------------------------------------------------------------------ operational alerts
+class FakeClock:
+    def __init__(self, t: float):
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def test_heartbeat_writes_at_most_once_a_minute(tmp_path):
+    clock = FakeClock(ago(0))
+    hb = Heartbeat(tmp_path, "supervisor", clock=clock)
+    assert hb.beat() and not hb.beat()                       # the supervisor loops every 5 s: one write a minute
+    clock.t += 61
+    assert hb.beat()
+    saved = json.loads(health.heartbeat_path(tmp_path, "supervisor").read_text())
+    assert saved == {"service": "supervisor", "ts": clock.t}
+
+
+def test_a_heartbeat_write_error_never_stops_the_service(tmp_path):
+    (tmp_path / "state").write_text("a file where the state dir should be")
+    assert Heartbeat(tmp_path / "state", "news").beat() is False
+
+
+def test_a_service_silent_for_five_minutes_alerts_once_and_recovers(tmp_path):
+    """S5 with a fake clock: the telegram heartbeat stops; 5 minutes later the check fails, the alert fires once and a
+    recovery message follows the next beat."""
+    clock = FakeClock(ago(0))
+    hb = Heartbeat(tmp_path, "telegram", clock=clock)
+    assert health.check_heartbeat(make_ctx(tmp_path), "telegram").status == "warn"     # never started
+    hb.beat()
+
+    def at(s: float) -> HealthContext:
+        return make_ctx(tmp_path, now=NOW + pd.Timedelta(seconds=s))
+
+    def rep(ctx: HealthContext) -> HealthReport:
+        return HealthReport(ts=ctx.now, status="ok", checks=[health.check_heartbeat(ctx, s) for s in health.HEARTBEAT_SERVICES])
+    assert health.check_heartbeat(at(4 * 60), "telegram").status == "ok"
+    c = health.check_heartbeat(at(5 * 60 + 1), "telegram")
+    assert c.status == "fail" and "silent for 5 min" in c.reason
+    w = HealthWatch(tmp_path)
+    text = w.poll(rep(at(6 * 60)))
+    assert text is not None and "FAIL heartbeat:telegram" in text
+    assert w.poll(rep(at(7 * 60))) is None                                          # once per incident
+    clock.t += 8 * 60
+    hb.beat()
+    text = w.poll(rep(at(8 * 60)))
+    assert text is not None and "recovered: heartbeat:telegram (ok)" in text
+    health.heartbeat_path(tmp_path, "telegram").write_text("{")
+    assert health.check_heartbeat(make_ctx(tmp_path), "telegram").status == "fail"
+
+
+def test_every_service_has_a_heartbeat_check_and_run_py_writes_it(tmp_path):
+    names = {c.name for c in health.run_checks(make_ctx(tmp_path)).checks}
+    assert {f"heartbeat:{s}" for s in health.HEARTBEAT_SERVICES} <= names
+    run_py = (OPS / "run.py").read_text()
+    written = set(re.findall(r'(?:start_heartbeat|Heartbeat)\("state", "([a-z]+)"\)', run_py))
+    assert written == set(health.HEARTBEAT_SERVICES)
+
+
+def engine_equity(tmp_path: Path, equity: float, day0: float, week0: float) -> None:
+    engine(tmp_path, 60, equity=equity, day_start_equity=day0, week_start_equity=week0)
+
+
+def test_loss_caps_warn_and_are_announced_once(tmp_path):
+    """R11: a tripped daily or weekly cap warns with the loss; the alert path announces it (a warn that notifies)
+    once, and the weekly notice stays quiet until the cap clears (the risk week rolls)."""
+    ctx = make_ctx(tmp_path)
+    assert health.check_loss_caps(ctx, "icm-demo") == []                                # engine never ran
+    engine_equity(tmp_path, 10_000, 10_000, 10_000)
+    caps = by_name(health.check_loss_caps(ctx, "icm-demo"))
+    assert caps["daily_cap:icm-demo"].status == "ok" and caps["weekly_cap:icm-demo"].status == "ok"
+    weekly = SETTINGS.risk.weekly_cap
+    engine_equity(tmp_path, 10_000 * (1 - weekly), 10_000 * (1 - weekly) * 1.001, 10_000)
+    caps = by_name(health.check_loss_caps(ctx, "icm-demo"))
+    assert caps["daily_cap:icm-demo"].status == "ok"
+    c = caps["weekly_cap:icm-demo"]
+    assert c.status == "warn" and "WEEKLY LOSS CAP" in c.reason and "icm-demo" in c.reason
+    w = HealthWatch(tmp_path)
+
+    def report_of() -> HealthReport:
+        return HealthReport(ts=NOW, status="warn", checks=health.check_loss_caps(ctx, "icm-demo"))
+    text = w.poll(report_of())
+    assert text is not None and "WARN weekly_cap:icm-demo" in text and "notice" in text
+    assert w.poll(report_of()) is None                                                 # once per week per account
+    engine_equity(tmp_path, 10_000, 10_000, 10_000)                                   # new risk week
+    text = w.poll(report_of())
+    assert text is not None and "recovered: weekly_cap:icm-demo (ok)" in text
+    daily = SETTINGS.risk.daily_cap
+    engine_equity(tmp_path, 10_000 * (1 - daily), 10_000, 10_000 * (1 - daily) * 0.9)
+    caps = by_name(health.check_loss_caps(ctx, "icm-demo"))
+    assert caps["daily_cap:icm-demo"].status == "warn" and caps["weekly_cap:icm-demo"].status == "ok"
+
+
+def test_plain_warnings_are_still_not_announced():
+    assert health.alert_text({}, report(news="warn", supervisor="warn")) is None
+
+
+def orders_file(tmp_path: Path, rows: dict) -> None:
+    write(tmp_path / "orders_icm-demo.json", {"sent": rows, "open": {}})
+
+
+def order_row(status: str, ts: pd.Timestamp, side: int = 1, lots: float = 0.2) -> dict:
+    return {"client_order_id": "x", "ts_utc": ts.isoformat(), "agent_id": "trend-0", "side": side, "magic": 260101,
+            "lots": lots, "max_bars": 8, "sl": 2390.0, "tp": 2420.0, "status": status, "position_id": None}
+
+
+def test_failed_orders_are_listed_one_check_each_and_announced(tmp_path):
+    """X6: a send that failed after the retries (row `rejected`) or that a restart found unfilled warns with account,
+    side, lots; each failed order is announced once; one older than the window drops out quietly."""
+    ctx = make_ctx(tmp_path)
+    assert health.check_failed_orders(ctx, "icm-demo") == []
+    orders_file(tmp_path, {"p-ok": order_row("filled", NOW - pd.Timedelta("1h")),
+                           "p-bad": order_row("rejected", NOW - pd.Timedelta("1h"), side=-1, lots=0.3),
+                           "p-old": order_row("rejected", NOW - pd.Timedelta("30h"))})
+    out = health.check_failed_orders(ctx, "icm-demo")
+    assert [c.name for c in out] == ["order_failed:icm-demo:p-bad"]
+    c = out[0]
+    assert c.status == "warn" and "FAILED_EXEC" in c.reason and "SELL 0.3 lots" in c.reason and "account icm-demo" in c.reason
+    w = HealthWatch(tmp_path)
+
+    def rep(at: HealthContext = ctx) -> HealthReport:
+        return HealthReport(ts=at.now, status="warn", checks=health.check_failed_orders(at, "icm-demo"))
+    text = w.poll(rep())
+    assert text is not None and "WARN order_failed:icm-demo:p-bad" in text
+    assert w.poll(rep()) is None
+    rows = json.loads((tmp_path / "orders_icm-demo.json").read_text())["sent"]
+    rows["p-gone"] = order_row("unfilled", NOW - pd.Timedelta("5min"))
+    orders_file(tmp_path, rows)
+    text = w.poll(rep())
+    assert text is not None and "p-gone" in text and "never filled" in text and "p-bad" not in text
+    assert w.poll(rep(make_ctx(tmp_path, now=NOW + pd.Timedelta(days=2)))) is None    # aged out: no "recovered" noise
+    (tmp_path / "orders_icm-demo.json").write_text("{")
+    assert health.check_failed_orders(ctx, "icm-demo")[0].status == "fail"
+
+
+def test_failed_order_retcode_comes_from_the_decisions_journal(tmp_path):
+    from goldbot.data.store import Store
+    s = SETTINGS.model_copy(update={"data_root": str(tmp_path / "data")})
+    sent = NOW - pd.Timedelta("1h")
+    orders_file(tmp_path, {"p-bad": order_row("rejected", sent)})
+    journal = pd.DataFrame([{"ts_utc": sent + pd.Timedelta(seconds=2), "account_id": "icm-demo", "agent_id": "trend-0",
+                             "action": "order", "p": None, "mult": None, "proposal_id": None,
+                             "detail": json.dumps({"ok": False, "retcode": 10006, "price": None, "lots": 0.0})}])
+    Store(s.data_root).append("decisions", journal, source="icm-demo", symbol=s.symbol, dedupe=False)
+    c = health.check_failed_orders(make_ctx(tmp_path, settings=s), "icm-demo")[0]
+    assert "retcode 10006" in c.reason
+
+
+def test_bridge_health_through_the_tunnel(tmp_path):
+    secrets = {"mt5-bridge-url-icm-demo": "http://127.0.0.1:18812"}
+
+    def get(k: str) -> str | None:
+        return secrets.get(k)
+    assert health.check_bridge(make_ctx(tmp_path), "icm-demo") is None                  # no bridge configured
+    assert health.check_bridge(make_ctx(tmp_path, get_secret=get), "icm-demo") is None  # no probe configured
+    seen: list[str] = []
+
+    def probe(url: str) -> str | None:
+        seen.append(url)
+        return None
+    c = health.check_bridge(make_ctx(tmp_path, get_secret=get, bridge_probe=probe), "icm-demo")
+    assert c is not None and c.status == "ok" and seen == ["http://127.0.0.1:18812"]
+    c = health.check_bridge(make_ctx(tmp_path, get_secret=get, bridge_probe=lambda u: "unreachable (ConnectionError)"), "icm-demo")
+    assert c is not None and c.status == "fail" and "ConnectionError" in c.reason and "18812" not in c.reason
+    r = health.run_checks(make_ctx(tmp_path, get_secret=get, bridge_probe=lambda u: "HTTP 502"))
+    assert by_name(r.checks)["bridge:icm-demo"].status == "fail"
+
+
+def test_alerts_only_add_information(tmp_path):
+    """Running every check and the alert pass changes no order, risk, control or engine file: alerts never change
+    orders, sizing or halts."""
+    healthy_state(tmp_path)
+    engine_equity(tmp_path, 9_000, 10_000, 10_000)
+    orders_file(tmp_path, {"p-bad": order_row("rejected", NOW - pd.Timedelta("1h"))})
+    ApprovalBus(tmp_path).set_halt(False, by="test", reason="")
+    before = {f.relative_to(tmp_path): f.read_bytes() for f in tmp_path.rglob("*") if f.is_file()}
+    text = HealthWatch(tmp_path).poll(health.run_checks(make_ctx(tmp_path)))
+    assert text is not None and "LOSS CAP" in text and "FAILED_EXEC" in text
+    after = {f.relative_to(tmp_path): f.read_bytes() for f in tmp_path.rglob("*") if f.is_file()}
+    assert {k for k in after if before.get(k) != after[k]} <= {Path("health_last.json")}
