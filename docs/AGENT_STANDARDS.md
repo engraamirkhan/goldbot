@@ -21,6 +21,10 @@ file. The product owner accepts work against them; the release manager does not 
 | S10 | **Owner decisions isolated.** Anything only the owner may decide (budget, instruments, going live, spending, deployment to servers, gate thresholds) is listed with options and a recommendation, never decided. | "Needs the owner" list |
 | S11 | **Concise.** Reports within the length the brief sets; tables over prose where they help. | Word count |
 
+## Leadership
+The `program-director` leads delivery (roadmap, waves, integration, risk register, owner reporting); the
+`product-owner` owns what is built and accepts it. Both report to the owner.
+
 ## Review routing (who must sign off)
 
 | Change touches | Required reviewers before release |

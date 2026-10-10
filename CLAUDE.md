@@ -15,6 +15,7 @@ Owner: Aamir (engraamirkhan on GitHub). Personal project; keep everything inside
   the VPS keyring (`python -m goldbot.ops.accounts add <account>`); `config/accounts.yaml` keeps `login: null`.
 
 ## Lifecycle agents (`.claude/agents/`)
+The `program-director` leads the program (roadmap, waves of parallel agents, integration, risks, status on #34).
 All agents operate at principal level in their domain (see each file's "Principal-level expectations").
 Every work cycle starts with the `product-owner` (ranked docs/BACKLOG.md, acceptance criteria) and runs through:
 `architect` (software architect: plan against DESIGN/TRACEABILITY, read-only) -> `ui-ux-designer` for any screen or
