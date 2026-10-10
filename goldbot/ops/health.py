@@ -645,6 +645,40 @@ def check_model_watch(ctx: HealthContext) -> Check:
     return Check(name="model_watch", status="ok", reason=f"{len(agents)} champion(s) watched")
 
 
+def check_feature_versions(ctx: HealthContext) -> Check:
+    """Active models (champions and challengers in the model registry) per feature version: current, legacy (rebuilt
+    by goldbot/features/legacy.py) or cannot be rebuilt (never scored: warns). goldbot/features/legacy.py can be deleted
+    once no legacy count remains. The registry file is read, never created."""
+    if ctx.settings is None:
+        return _skipped("feature_versions", "settings unreadable")
+    f = Path(ctx.settings.research.models_dir) / "registry.json"
+    if not f.exists():
+        return Check(name="feature_versions", status="ok", reason="no model registry yet")
+    try:
+        rows = [r for r in (_read_json(f) or []) if r.get("status") in ("champion", "challenger")]
+    except (ValueError, OSError, AttributeError) as exc:
+        return Check(name="feature_versions", status="warn", reason=f"model registry unreadable: {exc}"[:300])
+    from goldbot.features.registry import feature_version, versions_for
+    from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
+    current = feature_version(DEFAULT_FEATURE_NAMES)
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[str(r.get("feature_version") or "")] = counts.get(str(r.get("feature_version") or ""), 0) + 1
+    parts, status = [], "ok"
+    for fv, n in sorted(counts.items()):
+        if fv == current:
+            kind = "current"
+        elif fv == "":
+            kind = "unversioned"
+        elif versions_for(DEFAULT_FEATURE_NAMES, fv) is not None:
+            kind = "legacy"
+        else:
+            kind, status = "cannot be rebuilt: not scored", "warn"
+        parts.append(f"{fv or '-'} ({kind}) {n}")
+    return Check(name="feature_versions", status=cast(Status, status),
+                 reason="active models by feature version: " + ("; ".join(parts) or "none"))
+
+
 def check_deploy(ctx: HealthContext) -> Check:
     """The last deploy attempt (state/deploys.jsonl, written by goldbot-deploy): a rollback warns, a failed rollback
     fails; a deploy is only ever started by the owner (Telegram [Deploy] or `sudo goldbot-deploy`)."""
@@ -1000,7 +1034,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
         checks += [check_reconciliation(ctx, a.account_id) for a in ctx.accounts]   # D12 (goldbot/data/crossfeed.py)
         if ctx.settings is not None and ctx.settings.costs.publish_release:
             checks.append(check_costs_published(ctx))
-        checks += [check_data_quality(ctx), check_drift(ctx), check_model_watch(ctx), check_deploy(ctx), check_backup_age(ctx), check_backup_prune(ctx), check_restore_drill(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
+        checks += [check_data_quality(ctx), check_drift(ctx), check_model_watch(ctx), check_feature_versions(ctx), check_deploy(ctx), check_backup_age(ctx), check_backup_prune(ctx), check_restore_drill(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
 

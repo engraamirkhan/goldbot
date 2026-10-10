@@ -475,13 +475,18 @@ class Engine:
         the features the model was trained on rebuilt by their registered older implementations (sessions v1 after
         the DST fix: features/legacy.py), so a champion or shadow challenger keeps scoring exactly what it was
         trained on until the normal shadow/promotion flow replaces it. None (not scored, as before) when no
-        registered implementation reproduces the model's version."""
+        registered implementation reproduces the model's version, or when the rebuild itself fails (logged, cached for
+        this frame): the model is not scored, and the bar's other work (policies, blackout closes, shadow) runs on."""
         mv = getattr(model, "feature_version", "")
         if not mv or mv == fr.X.attrs.get("feature_version"):
             return fr.X
         if mv not in fr.by_version:
-            over = versions_for(DEFAULT_FEATURE_NAMES, mv)
-            fr.by_version[mv] = None if over is None else with_versions(fr.X, fr.m, DEFAULT_FEATURE_NAMES, over)
+            try:
+                over = versions_for(DEFAULT_FEATURE_NAMES, mv)
+                fr.by_version[mv] = None if over is None else with_versions(fr.X, fr.m, DEFAULT_FEATURE_NAMES, over)
+            except Exception:                         # fail closed: an unscored model, never a crashed bar
+                log.exception("rebuilding the frame at feature version %s failed: models of it are not scored", mv)
+                fr.by_version[mv] = None
         return fr.by_version[mv]
 
     def _resample(self, complete: pd.DataFrame, tf: str) -> pd.DataFrame:
@@ -583,6 +588,7 @@ class Engine:
                          frame_feature_version=X.attrs.get("feature_version"))     # not scored
                 decisions.append(d)
                 continue
+            sfv = str(Xm.attrs.get("feature_version", ""))
             feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
             feats["side"] = side          # side-aligned models (features include `side`) align signed inputs themselves
             cols = model.feature_names or [c for c in feats.columns]
@@ -594,11 +600,11 @@ class Engine:
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
                             multiplier=mult if mult > 0 else 0.0, price=price, timeframe=tf, family=agent.family)
             if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, hurdle_atr) + 0.02:
-                decisions.append(self._record(agent, close_ts, p, mult, "below_threshold"))
+                decisions.append(self._record(agent, close_ts, p, mult, "below_threshold", scored_fv=sfv))
                 continue
             gd = self.gate.check(intent, self.state, margin_required=broker_margin(self.broker, self.cfg.symbol))
             if not gd.allowed:
-                decisions.append(self._record(agent, close_ts, p, mult, "gate:" + ",".join(gd.reasons)))
+                decisions.append(self._record(agent, close_ts, p, mult, "gate:" + ",".join(gd.reasons), scored_fv=sfv))
                 continue
             pid = self._proposal_id(agent.agent_id, close_ts)
             if pid in self.sent_ids:
@@ -611,11 +617,11 @@ class Engine:
                             risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2))
             if self.cfg.approval_mode == "auto":
                 self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
-                decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid))
+                decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid, scored_fv=sfv))
             else:
                 self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
                 self.center.propose(prop)
-                decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid))
+                decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid, scored_fv=sfv))
         return decisions
 
     # ------------------------------------------------------------------ approvals -> orders
@@ -1715,8 +1721,11 @@ class Engine:
         h = hashlib.sha1(f"{self.cfg.account_id}|{agent_id}|{close_ts.isoformat()}".encode()).hexdigest()[:10]
         return f"{self.cfg.account_id}-{int(close_ts.timestamp())}-{h}"
 
-    def _record(self, agent: Specialist, ts: pd.Timestamp, p: float, mult: float, action: str, pid: str | None = None) -> dict:
+    def _record(self, agent: Specialist, ts: pd.Timestamp, p: float, mult: float, action: str, pid: str | None = None,
+                scored_fv: str | None = None) -> dict:
         d = {"ts": ts.isoformat(), "agent": agent.agent_id, "p": round(p, 4), "mult": round(mult, 3), "action": action, "proposal": pid}
+        if scored_fv is not None:
+            d["scored_feature_version"] = scored_fv      # the frame version the model scored (legacy rebuilds included)
         self.decisions.append(d)
         return d
 
@@ -1758,7 +1767,8 @@ class Engine:
                                        entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
                                        target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p, timeframe=tf,
                                        threshold=threshold, taken=p > threshold, p_raw=p_raw, policy=agent.exit_spec,
-                                       signal_close=pd.Timestamp(bar["visible_at"]))
+                                       signal_close=pd.Timestamp(bar["visible_at"]),
+                                       scored_feature_version=str(Xm.attrs.get("feature_version", "")))
 
     def flush_journal(self) -> None:
         """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the

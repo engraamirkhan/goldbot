@@ -130,6 +130,7 @@ def test_a_v1_shadow_challenger_keeps_paper_trading_on_its_own_features(tmp_path
     books = eng.shadow.books
     [t] = books["old"].open + books["old"].closed
     assert t.p == pytest.approx(0.30 + before / 10_000)
+    assert t.scored_feature_version == PRE_FIX_DEFAULT_VERSION
     assert "unknown" not in books or not (books["unknown"].open + books["unknown"].closed)
 
 
@@ -194,3 +195,84 @@ def test_a_holdout_look_on_any_feature_version_still_spends_the_configurations_o
     reg.record(agent_id="a", family="trend", config={"k": 1}, feature_version="f-v1v1v1v1v1", rationale="r",
                results={"holdout_verdict": {"passed": False}}, status="holdout")
     assert reg.holdout_scored("trend", {"k": 1})
+
+
+# --------------------------------------------------------------------------- re-review: fail closed, PSI, records
+def test_a_legacy_rebuild_that_raises_leaves_the_model_unscored_and_the_bar_running(tmp_path, monkeypatch):
+    def boom(df: pd.DataFrame, ctx: dict) -> pd.DataFrame:
+        raise RuntimeError("legacy implementation broke")
+    spec = LEGACY_FEATURES[("session", "1")]
+    monkeypatch.setitem(LEGACY_FEATURES, ("session", "1"), spec.model_copy(update={"fn": boom}))
+    _, fr, out = _decide_once(tmp_path, _ProbeModel(feature_version=PRE_FIX_DEFAULT_VERSION))   # does not raise
+    assert _decision_p(out) == ("feature_version_mismatch", None)
+    assert fr.by_version[PRE_FIX_DEFAULT_VERSION] is None                       # cached: not retried on every agent
+
+
+def test_decision_and_shadow_records_carry_the_feature_version_they_scored(tmp_path):
+    _, _, out = _decide_once(tmp_path, _ProbeModel(feature_version=PRE_FIX_DEFAULT_VERSION))
+    [d] = out
+    assert d["scored_feature_version"] == PRE_FIX_DEFAULT_VERSION
+    _, _, out = _decide_once(tmp_path / "v2", _ProbeModel(feature_version=feature_version(DEFAULT_FEATURE_NAMES)))
+    assert out[0]["scored_feature_version"] == feature_version(DEFAULT_FEATURE_NAMES)
+
+
+class _EveryBar:
+    """A specialist stand-in for the drift job: a long candidate on every bar."""
+    timeframe = "15m"
+
+    def candidates(self, m: pd.DataFrame, X: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame({"idx": np.arange(len(m)), "side": np.ones(len(m), dtype=int)})
+
+
+def _drift_bars(monkeypatch: Any) -> pd.Timestamp:
+    from goldbot.data.resample import resample_bars, ticks_to_1m
+    from goldbot.data.synthetic import synthetic_ticks
+    from goldbot.ops import jobs
+    b1 = ticks_to_1m(synthetic_ticks("2025-02-24", "2025-03-10", ticks_per_minute=1, seed=4))
+    by_tf = {tf: resample_bars(b1, tf) for tf in ("15m", "1h", "4h", "1d")}
+    monkeypatch.setattr(jobs, "_bars", lambda ctx, tf, start, end: by_tf[tf][by_tf[tf]["ts_utc"] < end])
+    return pd.Timestamp("2025-03-10", tz="UTC")
+
+
+def test_a_v1_champions_drift_inputs_are_built_on_its_v1_columns(monkeypatch):
+    from goldbot.ops.jobs import _recent_candidates
+    slot = _drift_bars(monkeypatch)
+    v1 = _recent_candidates(None, _EveryBar(), slot, 3, feature_version=PRE_FIX_DEFAULT_VERSION)  # type: ignore[arg-type]
+    v2 = _recent_candidates(None, _EveryBar(), slot, 3, feature_version=feature_version(DEFAULT_FEATURE_NAMES))  # type: ignore[arg-type]
+    assert v1 is not None and v2 is not None and len(v1) == len(v2) > 50       # 3 days incl. a weekend
+    from goldbot.ops import jobs
+    dec = jobs._bars(None, "15m", slot, slot)  # type: ignore[arg-type]
+    ts = pd.DatetimeIndex(pd.to_datetime(dec["ts_utc"], utc=True))
+    ts = ts[ts >= slot - pd.Timedelta(days=3)]
+    before = ((ts.hour + ts.minute / 60 - 7) % 24) * 60                  # v1: minutes since a fixed 07:00 UTC open
+    np.testing.assert_allclose(v1["min_since_london_open"].to_numpy(), np.asarray(before, dtype=float))
+    assert (v1["min_since_london_open"] != v2["min_since_london_open"]).any()     # early March: London winter time
+
+
+def test_drift_skips_psi_with_a_note_when_a_champions_version_cannot_be_rebuilt(monkeypatch):
+    from goldbot.ops.jobs import _recent_candidates
+    slot = _drift_bars(monkeypatch)
+    assert _recent_candidates(None, _EveryBar(), slot, 3, feature_version="f-0000000000") is None  # type: ignore[arg-type]
+
+
+def test_health_counts_models_per_feature_version(tmp_path):
+    import json
+
+    from goldbot.ops.health import check_feature_versions
+    from tests.test_health import SETTINGS, make_ctx
+    models = tmp_path / "models"
+    models.mkdir()
+    cur = feature_version(DEFAULT_FEATURE_NAMES)
+    rows = [{"version": f"v{i}", "family": "trend", "agent_id": f"a{i}", "status": st, "feature_version": fv,
+             "created_utc": "2026-10-01T00:00:00+00:00", "feature_names": [], "artefact": "x", "sha256": "0"}
+            for i, (st, fv) in enumerate([("champion", PRE_FIX_DEFAULT_VERSION), ("challenger", PRE_FIX_DEFAULT_VERSION),
+                                          ("challenger", cur), ("retired", PRE_FIX_DEFAULT_VERSION)])]
+    (models / "registry.json").write_text(json.dumps(rows))
+    settings = SETTINGS.model_copy(update={"research": SETTINGS.research.model_copy(update={"models_dir": str(models)})})
+    c = check_feature_versions(make_ctx(tmp_path, settings=settings))
+    assert c.status == "ok"
+    assert f"{PRE_FIX_DEFAULT_VERSION} (legacy) 2" in c.reason and f"{cur} (current) 1" in c.reason
+    rows[2]["feature_version"] = "f-0000000000"
+    (models / "registry.json").write_text(json.dumps(rows))
+    c = check_feature_versions(make_ctx(tmp_path, settings=settings))
+    assert c.status == "warn" and "f-0000000000 (cannot be rebuilt: not scored) 1" in c.reason

@@ -809,15 +809,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   recomputes only those columns; cached per frame). So v1 champions keep trading and v1 challengers keep shadow
   trading exactly as before (golden test against the pre-fix code), the blackout re-score works for them, retrains
   and research build v2, and the normal shadow/promotion flow migrates. A version no registered implementation
-  reproduces is still not scored (`feature_version_mismatch`). Delete `features/legacy.py` once no registry holds a
-  model of `f-1b8f723a67`. Research registry: `record` writes a `deviation` on a result whose feature version differs
-  from its pre-registration's; `passed_gates(..., feature_version=)` counts only rows of that version (research_pass's
-  holdout check passes it); `holdout_scored` stays version-agnostic on purpose (a re-score after a bump is a second
-  look). Hook not wired (jobs.py, ops lane): the promotion check (`jobs.py` `research_passed=...passed_gates(...)`)
-  could pass the model's `feature_version`, but no trial has run on v2 yet, so doing so blocks every v2 promotion
-  until a v2 trial passes: a quant/owner call. Cost tables by session, slippage audit, the account classifier's
-  London/NY ticks and attribution by session all relabel automatically (the next nightly cost table uses the new labels; tables already on disk keep the old ones
-  until then). Open for quant review: `session_open`'s "Asian range" is the 32 bars (8 h) before the decision's
+  reproduces is still not scored (`feature_version_mismatch`), and neither is one whose rebuild raises (logged, cached
+  per frame; the bar's policies, blackout closes and shadow save still run). Decisions and shadow trades record
+  `scored_feature_version`. drift_watch builds each champion's PSI inputs at its own feature version
+  (`_recent_candidates(..., feature_version)`; a version that cannot be rebuilt skips PSI with a note). The health
+  check `feature_versions` counts active models per version (current / legacy / cannot be rebuilt = warn): delete
+  `features/legacy.py` once it shows no legacy models. Research registry: `record` writes a `deviation` on a result
+  whose feature version differs from its pre-registration's; `passed_gates(..., feature_version=)` counts only rows of
+  that version (research_pass's holdout check passes it); `holdout_scored` stays version-agnostic on purpose (a
+  re-score after a bump is a second look). The tournament's `passed_gates` stays version-agnostic (ADR 0006; the
+  material feature version, BACKLOG 34, needs the owner's sign-off; the tournament summary does not yet show the
+  trial-vs-model version gap). Cost tables by session, slippage audit, the account classifier's London/NY ticks and
+  attribution by session all relabel automatically (the next nightly cost table uses the new labels; tables already
+  on disk keep the old ones until then). Open for quant review: `session_open`'s "Asian range" is the 32 bars (8 h) before the decision's
   session open, which is the Asia session only before London; before New York it is mostly the London session
   (unchanged here, as changing it changes the specialist's candidates).
 - COT positioning and GLD holdings, point in time (2026-10-10, indicator survey #67/#68, hypotheses H-09/H-12, row
