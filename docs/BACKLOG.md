@@ -20,7 +20,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | # | Item | Stage · kind | Size | Status |
 | --- | --- | --- | --- | --- |
 | 28 | Currency-correct sizing, margin and R on a non-USD account (ADR 0004, audit A3–A8) | Position sizing, safety · RUN | S–M | **in review** (built 2026-10-10; trading-safety review; approval-card currency label open for ui-ux) |
-| 25 | Minimum-lot exception in RiskGate (ADR 0004) | Position sizing · RUN | S | **ready, priority 2** (with or after 28; trading-safety review) |
+| 25 | Minimum-lot exception in RiskGate (ADR 0004) | Position sizing · RUN | S | **in review** (built 2026-10-10, off by default; trading-safety review; owner enables on the demo server) |
 | 29 | Absolute daily loss limit `risk.daily_loss_limit_abs` (ADR 0004) | Capital and drawdown management · RUN | S | ready, priority 3 (trading-safety review) |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | ready |
 | 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | done (PR #62) |
@@ -305,6 +305,9 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - Reviews: trading-safety, code; DESIGN Sizing paragraph and TRACEABILITY row updated in the same change.
   Depends on: 28 at £1,000 (without it the min lot computes as 1.09% and is refused). 19 (heat cap) must count
   exception trades in full when it lands.
+  Status (2026-10-10): built (TRACEABILITY R33; tests/test_min_lot_exception.py), `null` in settings.yaml because
+  settings have no per-account section; the owner sets `risk: { min_lot_risk_cap: 0.01 }` in the demo server's
+  settings.local.yaml. Open: the approval card's risk line does not show the exception (ui-ux).
 - **26. Milestone ladder and monthly north-star report.** Value: reports progress the way ADR 0004 decided:
   monthly averages and distributions, never a daily quota (Performance review · RUN). Acceptance:
   - A monthly report (job + dashboard card + one Telegram line) with time-weighted % return net of deposits and

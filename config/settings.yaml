@@ -55,6 +55,11 @@ risk:
   blackout: { before_min: 15, after_min: 30, events: [CPI, NFP, FOMC, PCE] }
   min_target_over_cost: 2.5
   approval_window_seconds: 90
+  # Minimum-lot exception (BACKLOG 25, ADR 0004): null = off (the design's 1.2x rule only). Settings are global, not
+  # per account, so it stays off here; to enable it on one server (the £1,000 demo needs it to trade 15m at 0.01 lot,
+  # 0.82%), put `risk: { min_lot_risk_cap: 0.01 }` in that server's config/settings.local.yaml (not in the repo).
+  # Maximum 0.01 (the per-trade hard limit); halved in the 8% size-down stage.
+  min_lot_risk_cap: null
   positions_unreadable_alert: 5      # failed broker reads in a row before health fails and Telegram alerts
 
 costs:

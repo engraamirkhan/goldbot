@@ -694,6 +694,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   therefore halts entries on both until a conversion is built. Not changed: the approval card's `risk_usd` stays USD
   (ui-ux follow-up: show the account-currency risk from `GateDecision.risk_amount`); the approval re-check reuses the
   conversion read at proposal time (90 s at most).
+- Minimum-lot exception (2026-10-10, BACKLOG 25, ADR 0004 decision 2, row R33; needs trading-safety review):
+  `risk.min_lot_risk_cap` (null = off, the design's 1.2x rule alone; validated 0 < x <= 0.01). When the sized lots
+  fall below the minimum lot, RiskGate places exactly the minimum lot if its realised risk in the account currency is
+  within the cap (clamped to the 1% maximum, halved in the 8% stage or the combined size-down), then runs the margin
+  floor and combined-exposure checks as usual; an allowed exception carries `min_lot_exception` and the engine journals
+  `sizing`, `risk_fraction` and `risk_per_trade` on the decision. Settings are global (no per-account section), so it
+  is **off in settings.yaml**. Owner: to let the £1,000 demo trade 15m at 0.01 lot (0.82%), add
+  `risk: { min_lot_risk_cap: 0.01 }` to the demo server's `config/settings.local.yaml` and restart the engine. The
+  approval card does not show the exception yet (ui-ux follow-up).
 
 ## Next steps (no owner input needed unless marked)
 - Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;

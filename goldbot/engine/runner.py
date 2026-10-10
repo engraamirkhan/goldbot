@@ -654,6 +654,9 @@ class Engine:
                 self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
                 self.center.propose(prop)
                 decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid))
+            if gd.reasons:      # an allowed decision's notes (BACKLOG 25 min_lot_exception): the journal shows the risk
+                decisions[-1].update(sizing=list(gd.reasons), risk_fraction=round(gd.risk_fraction, 5),
+                                     risk_per_trade=self.gate.limits.risk_per_trade)
         return decisions
 
     # ------------------------------------------------------------------ approvals -> orders

@@ -16,6 +16,9 @@ owner.
 **Implementation status (2026-10-10, all pending trading-safety review):**
 - BACKLOG 28, currency-correct sizing (decision 1, audit A3-A8): implemented (TRACEABILITY R32, S6). Mixed-currency
   accounts are not combined: the supervisor halts instead (section 1, A8).
+- BACKLOG 25, minimum-lot exception (decision 2): implemented, **off by default** (`risk.min_lot_risk_cap: null`;
+  TRACEABILITY R33). Settings have no per-account section, so the owner enables it on the demo server with
+  `risk: { min_lot_risk_cap: 0.01 }` in its `config/settings.local.yaml`. Until then nothing trades at £1,000.
 
 ## Owner summary
 - **North star:** £50 or more on good days, less or nothing on poor ones. We chase it by being selective and
