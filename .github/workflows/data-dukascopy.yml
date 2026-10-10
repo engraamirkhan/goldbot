@@ -10,9 +10,12 @@ on:
       full_refresh: { description: "download every month again (published bars stay as fallback). Costs hours of runner time per year of data: on the free tier this can use the whole month's 2,000 minutes", type: boolean, default: false }
   schedule:
     - cron: "17 3 * * 6"   # Saturdays 03:17 UTC: refresh the current year
-permissions:
-  contents: write
-  issues: write
+# Least privilege: the token has no scopes by default; only build-year may upload release assets and write issues.
+# Workflow inputs and matrix values reach shell/Python only through env:, never interpolated into a script.
+permissions: {}
+concurrency:
+  group: data-dukascopy   # one build at a time: parallel runs would race on the same release assets
+  cancel-in-progress: false
 jobs:
   plan:
     runs-on: ubuntu-latest
@@ -20,26 +23,36 @@ jobs:
       years: ${{ steps.years.outputs.years }}
     steps:
       - id: years
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FROM_YEAR: ${{ inputs.from_year }}
+          TO_YEAR: ${{ inputs.to_year }}
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "years=[$(date -u +%Y)]" >> $GITHUB_OUTPUT
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            echo "years=[$(date -u +%Y)]" >> "$GITHUB_OUTPUT"
           else
-            python3 -c "import json;print('years='+json.dumps(list(range(int('${{ inputs.from_year }}'), int('${{ inputs.to_year }}')+1))))" >> $GITHUB_OUTPUT
+            python3 -c "import json,os;print('years='+json.dumps(list(range(int(os.environ['FROM_YEAR']), int(os.environ['TO_YEAR'])+1))))" >> "$GITHUB_OUTPUT"
           fi
   build-year:
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 340
+    permissions:
+      contents: write   # release asset upload
+      issues: write     # coverage and failure issues
     strategy:
       fail-fast: false
       max-parallel: 2   # Dukascopy throttles; the 3-way run lost whole months
       matrix:
         year: ${{ fromJson(needs.plan.outputs.years) }}
+    env:
+      YEAR: ${{ matrix.year }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with: { python-version: "3.11" }
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with: { node-version: "22" }
       - run: pip install -e .
       - name: fetch the previously published year (complete months are kept unless full_refresh)
@@ -47,22 +60,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p prev
-          gh release download data-v1 -p xauusd_1m_dukascopy_${{ matrix.year }}.parquet -D prev || echo "no previous file"
+          gh release download data-v1 -p "xauusd_1m_dukascopy_${YEAR}.parquet" -D prev || echo "no previous file"
       - name: download and build 1m bars for ${{ matrix.year }}
+        env:
+          REFETCH: ${{ inputs.full_refresh == true && '--refetch-all' || '' }}
         run: |
           set -o pipefail
-          python scripts/dukascopy_year.py ${{ matrix.year }} --report coverage-${{ matrix.year }}.md \
-            --existing prev/xauusd_1m_dukascopy_${{ matrix.year }}.parquet ${{ inputs.full_refresh == true && '--refetch-all' || '' }} 2>&1 | tee report-${{ matrix.year }}.txt
+          # REFETCH is a constant flag or empty (empty must expand to no argument), so it stays unquoted
+          # shellcheck disable=SC2086
+          python scripts/dukascopy_year.py "$YEAR" --report "coverage-${YEAR}.md" \
+            --existing "prev/xauusd_1m_dukascopy_${YEAR}.parquet" $REFETCH 2>&1 | tee "report-${YEAR}.txt"
       - name: publish to release data-v1
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          [ -f xauusd_1m_dukascopy_${{ matrix.year }}.parquet ] || exit 0
+          [ -f "xauusd_1m_dukascopy_${YEAR}.parquet" ] || exit 0
           # parallel matrix jobs race on create/upload: retry with backoff
           for i in 1 2 3 4 5; do
             { gh release view data-v1 >/dev/null 2>&1 || gh release create data-v1 --title "Market data (rolling)" --notes "1m XAUUSD bars built by the data-dukascopy workflow" --latest=false; } &&
-            gh release upload data-v1 xauusd_1m_dukascopy_${{ matrix.year }}.parquet --clobber && exit 0
+            gh release upload data-v1 "xauusd_1m_dukascopy_${YEAR}.parquet" --clobber && exit 0
             sleep $((i * 15))
           done
           exit 1
@@ -73,13 +90,13 @@ jobs:
         run: |
           python - <<'EOF'
           import json, os, urllib.request
-          repo = os.environ["GITHUB_REPOSITORY"]
+          repo = os.environ["GITHUB_REPOSITORY"]; year = os.environ["YEAR"]
           hdr = {"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"}
-          try: cov = open("coverage-${{ matrix.year }}.md").read()
+          try: cov = open(f"coverage-{year}.md").read()
           except FileNotFoundError: cov = "(no coverage table; the download step crashed)"
           run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
           body = f"Run: {run_url}\n\n{cov}"
-          title = "data coverage ${{ matrix.year }}"
+          title = f"data coverage {year}"
           # update the existing coverage issue for this year if there is one
           q = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues?labels=data-coverage&state=open&per_page=50", headers=hdr)
           existing = [i for i in json.load(urllib.request.urlopen(q)) if i["title"] == title]
@@ -96,11 +113,11 @@ jobs:
         run: |
           python - <<'EOF'
           import json, os, urllib.request
-          repo = os.environ["GITHUB_REPOSITORY"]
+          repo = os.environ["GITHUB_REPOSITORY"]; year = os.environ["YEAR"]
           run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-          try: body = open("report-${{ matrix.year }}.txt").read()[-60000:]
+          try: body = open(f"report-{year}.txt").read()[-60000:]
           except FileNotFoundError: body = "(no report file; failure before the download step)"
-          payload = {"title": "data-dukascopy failure for ${{ matrix.year }}", "body": f"Run: {run_url}\n\n```\n{body}\n```", "labels": ["ci", "data"]}
+          payload = {"title": f"data-dukascopy failure for {year}", "body": f"Run: {run_url}\n\n```\n{body}\n```", "labels": ["ci", "data"]}
           req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues", data=json.dumps(payload).encode(),
                                        headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"})
           print(urllib.request.urlopen(req).status)

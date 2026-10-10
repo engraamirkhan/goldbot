@@ -410,6 +410,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   before the trial. Note for quant review: feature-day bars include a Friday-evening stub bar (settlement to the
   Friday close, visible Saturday), so "20 daily bars" is about 3.3 weeks, as for the existing 1d option. Run inputs:
   `docs/research/preregistration-2027Q1.md` H-01. No research trial was run.
+- GitHub Actions supply chain hardened (2026-10-10, security): every action in `.github/workflows/*.yml` is pinned
+  to a full commit SHA with the version as a comment (checkout v5.1.0, setup-python v6.3.0, setup-node v5.0.0, cache
+  v4.3.0, upload-artifact v4.6.2, download-artifact v4.3.0; resolved via the GitHub API, not guessed). Token scopes:
+  `ci.yml` is `contents: read` with `issues: write` only on `report-failure`; the data and research workflows are
+  `permissions: {}` with `contents: write` + `issues: write` granted only to the job that publishes. Workflow inputs,
+  `github.event_name` and matrix values reach scripts only through `env:` (data-dukascopy, research). Every checkout
+  sets `persist-credentials: false` (no job pushes with git; releases and issues use `GH_TOKEN`). New concurrency
+  groups `data-dukascopy` and `data-macro` (queue, never cancel). `.github/dependabot.yml` opens weekly grouped PRs
+  for actions, pip and npm (`web/`). `actionlint` 1.7.12 (with shellcheck) is clean. Not exercised on GitHub yet:
+  the first CI run on the PR is the check.
 
 ## Next steps (no owner input needed unless marked)
 - Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):
