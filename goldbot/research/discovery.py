@@ -37,6 +37,7 @@ survivor beat every screened column, not just every group), `n_groups_screened` 
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 import numpy as np
@@ -236,13 +237,18 @@ def _permutation_importance(X: pd.DataFrame, y: np.ndarray, w: np.ndarray, ts: p
     return out
 
 
+GROUP_TOP_K_FLOOR = 3          # groups a subsample selects at least (when that many exist)
+
+
 def group_top_k(cfg: DiscoveryConfig, n_features: int, n_groups: int) -> int:
     """Groups a subsample "selects" by summed importance: cfg.group_top_k, else top_k's share of the pool applied to
-    the groups (round(top_k * n_groups / n_features), at least 1), so a group's per-subsample selection rate equals a
-    feature's and column mode reproduces the feature frequencies."""
+    the groups (ceil(top_k * n_groups / n_features)), with a floor of GROUP_TOP_K_FLOOR when several groups exist: with
+    one group per subsample the frequencies would sum to at most 1 and a second real group could never survive the
+    0.6 threshold (quant review of dab47c7)."""
     if cfg.group_top_k is not None:
         return max(1, min(cfg.group_top_k, n_groups))
-    return max(1, min(n_groups, int(round(cfg.top_k * n_groups / max(n_features, 1)))))
+    share = math.ceil(cfg.top_k * n_groups / max(n_features, 1))
+    return max(1, min(n_groups, max(share, GROUP_TOP_K_FLOOR)))
 
 
 def select_in_fold(feats: pd.DataFrame, labels: pd.DataFrame, fold: Fold, pool: list[str], cfg: DiscoveryConfig,

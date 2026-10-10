@@ -171,10 +171,12 @@ class ChangePasswordRequest(BaseModel):
 
 
 class ForgotPasswordRequest(BaseModel):
-    """Self-service reset with a current authenticator code. The same 403 for an unknown email or a wrong code."""
+    """Self-service reset with a current authenticator code; the owner account also needs one of its recovery codes
+    (spent). The same 403 for an unknown email, a wrong code or a missing recovery code."""
     email: str = ""
     totp: str = ""
     new_password: str = ""
+    recovery_code: str = ""
 
 
 class ResetLinkResponse(BaseModel):

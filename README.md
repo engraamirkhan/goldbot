@@ -1,5 +1,7 @@
 # goldbot — evolving XAUUSD trading assistant
 
+**Owner? Start with the one-page [owner guide](docs/OWNER_GUIDE.md).**
+
 Phase 0 codebase for the design in *Gold Trading System — Design*. Research runs on a Mac; live execution
 runs on a Windows VPS beside MT5 terminals (IC Markets, Vantage). Aamir confirms entries on Telegram;
 everything after entry is automatic under a RiskGate no model can override.

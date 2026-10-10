@@ -934,7 +934,7 @@
     "type": "object"
    },
    "ForgotPasswordRequest": {
-    "description": "Self-service reset with a current authenticator code. The same 403 for an unknown email or a wrong code.",
+    "description": "Self-service reset with a current authenticator code; the owner account also needs one of its recovery codes\n(spent). The same 403 for an unknown email, a wrong code or a missing recovery code.",
     "properties": {
      "email": {
       "default": "",
@@ -944,6 +944,11 @@
      "new_password": {
       "default": "",
       "title": "New Password",
+      "type": "string"
+     },
+     "recovery_code": {
+      "default": "",
+      "title": "Recovery Code",
       "type": "string"
      },
      "totp": {

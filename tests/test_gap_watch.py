@@ -12,7 +12,7 @@ import pytest
 
 from goldbot.agents.runner import AgentRunner, SpendLedger
 from goldbot.agents.tools import ReadOnlyTools
-from goldbot.config import GapSettings
+from goldbot.config import GapSettings, load_settings
 from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
 from goldbot.ops import gap_watch as G
@@ -22,7 +22,7 @@ from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import TIMEFRAME_KEY, AgentIdentity
 
 NOW = pd.Timestamp("2026-10-10 23:55", tz="UTC")
-WF = {"15m", "1h"}
+WF: set[str] = set(load_settings().walkforward)        # 15m, 1h, 4h: the timeframes the Saturday retrain trains
 
 
 # ---------------------------------------------------------------------------------------------- helpers
@@ -201,6 +201,22 @@ def test_a_gap_founder_reaches_live_only_through_the_research_and_dsr_gates(tmp_
     assert pop.members[m.agent_id].capital_weight == 0.0
 
 
+def test_a_4h_founder_is_spawned_for_an_uncovered_4h_timeframe_and_1d_stays_refused(tmp_path):
+    # settings.walkforward has a 4h window (proposal P4), so the retrain can train a 4h agent: gap_watch spawns the
+    # family's default on 4h as a zero-capital shadow founder; 1d has no window and is still refused with a suggestion
+    pop = _pop(tmp_path)
+    rep = _run(tmp_path, pop, settings=GapSettings(founders_per_month=4))
+    by_gap = {a.gap_ids[0]: a for a in rep.actions if a.action == "spawn_founder"}
+    m = pop.members[by_gap["uncovered_timeframe:tsmom:4h"].target]
+    assert m.family == "tsmom" and m.config[TIMEFRAME_KEY] == "4h" and m.specialist().timeframe == "4h"
+    assert m.config["max_bars"] == 12                                  # the 1h default's two-day horizon in 4h bars
+    assert m.status == "shadow" and m.capital_weight == 0 and m.gap_id == "uncovered_timeframe:tsmom:4h"
+    reasons = {r.gap_ids[0]: r.reason for r in rep.refused}
+    assert "no walk-forward window for 1d" in reasons["uncovered_timeframe:tsmom:1d"]
+    assert "uncovered_timeframe:tsmom:4h" not in reasons
+    assert any(a.action == "suggest" and "1d walk-forward window" in a.detail for a in rep.actions)
+
+
 # ---------------------------------------------------------------------------------------------- the job's logic
 def test_gap_watch_spawns_shadow_founders_within_the_monthly_cap_and_writes_gaps_json(tmp_path):
     pop = _pop(tmp_path)
@@ -209,7 +225,8 @@ def test_gap_watch_spawns_shadow_founders_within_the_monthly_cap_and_writes_gaps
     assert len(spawned) == 1 and spawned[0].gap_ids == ["uncovered_timeframe:breakout:15m"]
     reasons = {r.gap_ids[0]: r.reason for r in rep.refused}
     assert "monthly cap" in reasons["uncovered_timeframe:mean_reversion:1h"]
-    assert "no walk-forward window for 4h" in reasons["uncovered_timeframe:tsmom:4h"]
+    assert "monthly cap" in reasons["uncovered_timeframe:tsmom:4h"]
+    assert "no walk-forward window for 1d" in reasons["uncovered_timeframe:tsmom:1d"]
     saved = json.loads((tmp_path / G.GAPS_FILE).read_text())
     assert {"gaps", "actions", "refused", "already_handled", "limits"} <= set(saved)
     assert saved["limits"]["founders_per_month"] == 1 and saved["limits"]["reserved_shadow_slots"] == 4

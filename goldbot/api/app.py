@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -27,7 +27,6 @@ from goldbot.api.auth import (
     User,
     env_setup_code_hint,
     has_role,
-    totp_verify,
 )
 from goldbot.api.schema import (
     AcceptRequest,
@@ -201,6 +200,21 @@ def _settings_owner_email() -> str | None:
         return None
 
 
+LOOPBACK = {"127.0.0.1", "::1"}
+
+
+def client_ip(request: Request) -> str | None:
+    """The caller's address for the per-IP lockout. The API listens on 127.0.0.1 behind the Cloudflare tunnel, so a
+    loopback peer is cloudflared and the visitor's address is its CF-Connecting-IP header; any other peer is used as
+    is (a header from a non-local peer is never trusted)."""
+    host = request.client.host if request.client else None
+    if host in LOOPBACK:
+        fwd = request.headers.get("cf-connecting-ip", "").strip()
+        if fwd:
+            return fwd[:64]
+    return host
+
+
 def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist",
                data_root: str | Path | None = None, docs_dir: str | Path | None = None,
                owner_email: str | None = None) -> FastAPI:
@@ -219,11 +233,19 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return u
 
     def need(role: Role) -> Callable[[User], User]:
+        """By rank; "owner" also needs the account to be auth.owner_email (AuthStore.is_owner, fails closed)."""
         def dep(u: User = Depends(auth)) -> User:
-            if not has_role(u, role):
+            if not has_role(u, role) or (role == "owner" and not st.auth.is_owner(u)):
                 raise HTTPException(403, f"{role} role required")
             return u
         return dep
+
+    @app.middleware("http")
+    async def no_referrer(request: Request, call_next: Callable[[Request], Any]) -> Response:
+        # invite and reset links carry their token in the URL fragment; this also keeps any URL out of Referer
+        response: Response = await call_next(request)
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     # ------------------------------------------------------------- auth endpoints
     @app.get("/api/auth/state")
@@ -241,9 +263,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return SetupResponse(totp_uri=e.totp_uri, recovery_codes=e.recovery_codes)
 
     @app.post("/api/auth/login")
-    def login(body: LoginRequest) -> LoginResponse:
+    def login(body: LoginRequest, request: Request) -> LoginResponse:
         try:
-            tok = st.auth.login(body.email, body.password, body.totp)
+            tok = st.auth.login(body.email, body.password, body.totp, ip=client_ip(request))
         except PermissionError as exc:
             raise HTTPException(403, str(exc))
         u = st.auth.session_user(tok)
@@ -286,9 +308,10 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return Ok()
 
     @app.post("/api/auth/password/forgot")
-    def forgot_password(body: ForgotPasswordRequest) -> Ok:
+    def forgot_password(body: ForgotPasswordRequest, request: Request) -> Ok:
         try:
-            st.auth.forgot_password(body.email, body.totp, body.new_password)
+            st.auth.forgot_password(body.email, body.totp, body.new_password, recovery_code=body.recovery_code or None,
+                                    ip=client_ip(request))
         except PermissionError as exc:
             raise HTTPException(403, str(exc))
         except ValueError as exc:
@@ -312,9 +335,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return AcceptResponse(email=e.email, totp_uri=e.totp_uri)
 
     @app.post("/api/auth/recovery/login")
-    def recovery_login(body: RecoveryLoginRequest) -> RecoveryLoginResponse:
+    def recovery_login(body: RecoveryLoginRequest, request: Request) -> RecoveryLoginResponse:
         try:
-            r = st.auth.recovery_login(body.email, body.password, body.recovery_code)
+            r = st.auth.recovery_login(body.email, body.password, body.recovery_code, ip=client_ip(request))
         except PermissionError as exc:
             raise HTTPException(403, str(exc))
         return RecoveryLoginResponse(token=r.token, expires_in=SESSION_TTL_H * 3600, role=r.role, email=r.email,
@@ -432,7 +455,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
     @app.post("/api/rearm")
     async def rearm(body: RearmRequest, u: User = Depends(need("owner"))) -> Status:
-        if not totp_verify(u.totp_secret, body.totp):
+        if not st.auth.verify_totp(u.email, body.totp):           # each code once (replay refused)
             st.auth.audit("rearm_failed", by=u.email)
             raise HTTPException(403, "authenticator code required to re-arm")
         c = st.bus.owner_rearm(by=f"dashboard:{u.email}")      # also clears the engines' drawdown halts

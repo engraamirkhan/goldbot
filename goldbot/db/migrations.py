@@ -92,6 +92,21 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX recovery_codes_email ON recovery_codes(email)",
     )),
+    Migration(version=4, name="auth_hardening", statements=(
+        # the newest TOTP time step each user has spent: a code is accepted once (RFC 6238 section 5.2)
+        """CREATE TABLE totp_steps (
+               email TEXT PRIMARY KEY REFERENCES users(email) ON DELETE CASCADE,
+               last_step INTEGER NOT NULL
+           ) STRICT""",
+        # failed sign-in attempts for the lockout, keyed 'email:<address>' or 'ip:<address>'; rows older than the
+        # lockout window are pruned on every insert, so the table stays bounded and survives a restart
+        """CREATE TABLE auth_failures (
+               key TEXT NOT NULL,
+               ts_ns INTEGER NOT NULL
+           ) STRICT""",
+        "CREATE INDEX auth_failures_key ON auth_failures(key, ts_ns)",
+        "CREATE INDEX auth_failures_ts ON auth_failures(ts_ns)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (_IMPORTS,)      # steps 5-7 (halts, approvals, orders) append here
