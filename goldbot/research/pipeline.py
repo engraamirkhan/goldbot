@@ -165,6 +165,15 @@ def _cross_fitted(p_raw: np.ndarray, y: np.ndarray, folds: list[Any]) -> np.ndar
     return p
 
 
+def candidate_threshold(labels: pd.DataFrame, extra_cost_usd: float) -> np.ndarray:
+    """Break-even + THRESHOLD_MARGIN per candidate, from what is known at the signal: its barriers and the extra cost
+    in its ATR (metrics.breakeven_prob). A candidate is taken when its calibrated p is above it."""
+    atr_sig = labels["atr_sig"].to_numpy(dtype=float)
+    cost_atr = np.where(atr_sig > 0, extra_cost_usd / np.where(atr_sig > 0, atr_sig, 1.0), 0.0)
+    stop, target = labels["stop_atr"].to_numpy(dtype=float), labels["target_atr"].to_numpy(dtype=float)
+    return (stop + cost_atr) / (target + stop) + THRESHOLD_MARGIN
+
+
 class Prepared(Record):
     """One specialist configuration labelled on one decision timeframe, before any model: the input of the primary-signal
     screen (research.screen), of the per-family walk-forward (`evaluate`) and of the pooled one (`run_pool`)."""
@@ -198,7 +207,7 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
     bars_dec = bars_dec.reset_index(drop=True)
     m, X = frame if frame is not None else build_decision_frame(bars_dec, context, feature_names, ctx)
     version = X.attrs["feature_version"]
-    cands = spec.candidates_in_context(m, X, context)
+    cands = spec.complete_windows(bars_dec, spec.candidates_in_context(m, X, context))   # sample rule (asia_drift)
     own_atr = spec.barrier_atr(m, context)        # e.g. ATR(1d) for a daily signal executed on 4h bars
     a = atr(m, 14) if own_atr is None else own_atr
     ls = spec.label_spec
@@ -295,11 +304,7 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     oof = labels.copy()
     oof["p_raw"] = oof_pred
     oof["p"] = _cross_fitted(oof_pred, y.to_numpy(), folds)
-    # break-even + margin per candidate, from what is known at the signal: its barriers and the extra cost in its ATR
-    atr_sig = labels["atr_sig"].to_numpy(dtype=float)
-    cost_atr = np.where(atr_sig > 0, extra_cost_usd / np.where(atr_sig > 0, atr_sig, 1.0), 0.0)
-    stop, target = labels["stop_atr"].to_numpy(dtype=float), labels["target_atr"].to_numpy(dtype=float)
-    oof["threshold"] = (stop + cost_atr) / (target + stop) + THRESHOLD_MARGIN   # metrics.breakeven_prob
+    oof["threshold"] = candidate_threshold(labels, extra_cost_usd)
     oof["taken"] = oof["p"].notna() & (oof["p"] > oof["threshold"])
 
     in_hold = _in_window(oof, holdout) if holdout is not None and score_holdout else np.ones(len(oof), dtype=bool)
@@ -400,9 +405,10 @@ def pooled_family(timeframe: str) -> str:
 
 
 def pooled_members(timeframe: str) -> list[str]:
-    """The families a pooled model on `timeframe` unites: every registered family whose default timeframe it is."""
+    """The families a pooled model on `timeframe` unites: every registered family whose default timeframe it is, except
+    a family still under its pre-registered screen (`Specialist.screening`), so adding one leaves the pools unchanged."""
     from goldbot.specialists import SPECIALISTS
-    return sorted(f for f, cls in SPECIALISTS.items() if cls.timeframe == timeframe)
+    return sorted(f for f, cls in SPECIALISTS.items() if cls.timeframe == timeframe and not cls.screening)
 
 
 def pooled_inputs(timeframe: str, families: list[str], eligible: list[str]) -> list[str]:

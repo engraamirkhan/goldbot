@@ -11,12 +11,17 @@ new edge cheaply (**FIND**), and work that must exist before the system runs una
 expected-impact figure below is uncertain. None of these items is expected to create profit on its own.
 
 Rank = expected impact on net profit and safety ÷ effort. Size: S < 1 day, M 1–3 days, L > 3 days.
-Status: ready / in progress / in review / done / rejected.
+Status: ready / in progress / in review / done / rejected. Item numbers are stable ids; the order of the table is
+the rank. **Top priority (ADR 0004 amended, 2026-10-10):** 28 (currency-correct sizing, HIGH), then 25 (minimum-lot
+exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP demo without 28 and 25.
 
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
 | --- | --- | --- | --- | --- |
+| 28 | Currency-correct sizing, margin and R on a non-USD account (ADR 0004, audit A3–A8) | Position sizing, safety · RUN | S–M | **ready, top priority (HIGH; trading-safety review)** |
+| 25 | Minimum-lot exception in RiskGate (ADR 0004) | Position sizing · RUN | S | **ready, priority 2** (with or after 28; trading-safety review) |
+| 29 | Absolute daily loss limit `risk.daily_loss_limit_abs` (ADR 0004) | Capital and drawdown management · RUN | S | ready, priority 3 (trading-safety review) |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | ready |
 | 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | done (PR #62) |
 | 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | done (PR #60) |
@@ -32,6 +37,19 @@ Status: ready / in progress / in review / done / rejected.
 | 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | in review (gap_watch and the 4h retrain path done; 1d research-only) |
 | 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | done (2026-10-10; promotion gate once 90 days of broker M1 exist) |
 | 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | in review |
+| 16 | Swap in the live EV check (playbook G-1) | Capital management, costs · RUN | S | proposed |
+| 17 | Holiday, daily-reopen and Monday-open entry rules (G-2) | Operational risk · RUN | S–M | proposed (owner: windows) |
+| 18 | Tier-2 event blackout and proximity feature (G-3) | Market and macro preparation · RUN | S | proposed (owner: adopt) |
+| 19 | Open-risk (heat) cap and same-direction stacking (G-4) | Capital and drawdown management · RUN | S | proposed (owner: value) |
+| 20 | Drawdown / risk-of-ruin Monte Carlo report (G-5) | Capital and drawdown management · RUN | S | tool built (results need data) |
+| 21 | Per-agent loss-streak and entry-rate throttle (G-6) | Discipline (system analogue) · RUN | S | proposed (owner: thresholds) |
+| 22 | Min-lot sizing-feasibility report (G-7) | Position sizing · RUN | S | tool built (results need data; account size answered: £1,000 GBP) |
+| 23 | MAE/MFE in closed-trade and shadow records (G-9) | Post-trade review · FIND | S | proposed |
+| 24 | DST-aware sessions and deterministic calendars (D-1, D-2) | Idea generation (honesty) · FIND | M | proposed |
+| 26 | Milestone ladder and monthly north-star / % / R report (ADR 0004) | Performance review, capital growth · RUN | S–M | ready |
+| 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | ready (after 1) |
+| 30 | Opportunity-day detection: day-type / regime classifier (ADR 0004 north star) | Market preparation, selectivity · FIND | M | proposed (hypothesis via the trial registry; no trials spent) |
+| 31 | Runner exits: let winners run on opportunity days (ADR 0004 north star) | Trade management, exit · FIND | S–M | proposed (after 6; hypothesis via the trial registry) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -218,6 +236,125 @@ Acceptance: `/mode auto` is refused until 100 proposals with no RiskGate breach 
 distinguishable difference between approved and rejected outcomes. The test covers 99 vs 100 and the difference
 test on both sides. The offer is a message. Switching still needs TOTP. Row: A10.
 
+### 16–24. From the XAUUSD trader playbook (strategy researcher, 2026-10-10)
+Source and evidence: `docs/research/xauusd-trader-playbook.md` section 6 (gap ids in brackets). Ranked by the
+researcher. The product owner re-ranks against items 1–15. None of these uses trial budget. Engine, risk and
+execution items need trading-safety review. Feature items need quant review.
+- **16 (G-1).** The gate's EV adds expected swap in ATR (side, nights implied by `max_bars`, triple Wednesday).
+  Test: a 4h long whose EV is positive before swap and negative after is refused; shorts are unchanged.
+- **17 (G-2).** Holiday calendar (US, UK, JP, CN, 24 Dec–2 Jan, early closes): no entries on those days. No
+  entries for 15 min after each daily reopen and 30 min after the weekly open. Fake-clock tests. Exits are untouched.
+- **18 (G-3).** Tier-2 USD events (PPI, retail sales, ISM, GDP, JOLTS, claims, FOMC minutes, Fed chair) get a
+  −5/+15 min entry blackout from config, plus a `min_to_next_tier2` feature. A test per tier.
+- **19 (G-4).** Sum of open risk in R per account and combined ≤ the configured cap. Same-side positions of
+  different agents count as one bet. Gate test on each side of the cap.
+- **20 (G-5).** Monthly bootstrap of shadow or backtest R at live risk settings: P(8%), P(12%), P(weekly cap) in
+  6 and 12 months. Reporting only. Golden test on a fixed seed.
+- **21 (G-6).** After 3 consecutive full stop-outs in a risk day, or more than N entries in a session, an agent
+  makes no entries until the next session. Logged and alerted. Never affects exits.
+- **22 (G-7).** `run.py sizing-feasibility`: per agent, the minimum equity at which the minimum lot stays within
+  1.2× target risk at the current ATR and phase risk rate. Written as phase-gate evidence.
+- **23 (G-9).** Maximum adverse and favourable excursion in R on every shadow and closed trade, shown by exit
+  type in attribution.
+- **24 (D-1, D-2).** Session windows, zones and cost-table sessions follow London and New York local time.
+  Deterministic calendars become PIT features: holidays, COMEX option expiry and first notice, Lunar New Year,
+  Indian festivals, month and quarter end. Truncation test. Must land before H-04 and H-14 run.
+
+### 25–31. From ADR 0004 (amended 2026-10-10: £1,000 GBP account, £50 daily loss limit, £50+/day north star)
+Source: `docs/decisions/0004-starting-account-and-daily-target.md`. The IC Markets demo is £1,000 GBP, read from
+MT5. At £1,000 only a 15m minimum lot fits (0.82% true risk), and only once 28 and 25 land. The audit found the
+gate treats USD amounts as GBP (HIGH). None of these items uses trial budget or touches the holdout; 30 and 31 are
+hypotheses that go through the trial registry in a future quarter's budget.
+- **28. Currency-correct sizing (HIGH, top priority; trading-safety review).** Value: today every trade on the GBP
+  account is sized at ~0.75× intended and the computed realised risk is 1.33× the true figure, so the 15m min lot
+  (true 0.82%) is refused at £1,000 even with 25; closed-trade R is understated 1.33× (ADR 0004 section 1, A3–A8:
+  `goldbot/risk/gate.py:249-268`, `goldbot/engine/runner.py:576-577`, `:1591-1602`). Acceptance:
+  - Stop risk per lot in the account currency comes from MT5 `order_calc_profit` (side, symbol, 1 lot, entry,
+    stop), falling back to `trade_tick_value / trade_tick_size × stop`; both exposed through the broker protocol
+    and the bridge (read-only, retry-safe). The paper broker answers in its own currency.
+  - RiskGate sizes `lots_raw = equity × risk × m / risk_per_lot_acct`; realised risk, the 1:20 margin figure, the
+    margin level and the combined-notional cap all compare like with like in the account currency. Tests on a
+    GBP account at GBPUSD 1.33: £1,000, 15m stop $10.90 → realised 0.82%; a USD account gives decisions identical
+    to today on a grid of equities and stops.
+  - Fail closed: on a non-USD account with no conversion (None, error, non-finite, ≤ 0), entries are refused with
+    `fx_conversion_unavailable`; exits are untouched (test: the exit path never calls the gate).
+  - `Intent` gets `contract_oz`, `volume_min`, `volume_step`, `volume_max` and `stops_level_points` from
+    `symbol_info` (A6), with a test that a 10-oz contract changes the lots.
+  - Closed-trade `r` and `ret` use risk and notional in the account currency (A5); a test on a GBP fixture.
+  - The supervisor and `other_equity` convert each engine's equity to one reporting currency or refuse to combine
+    mixed currencies, failing closed (A8).
+  - DESIGN Sizing paragraph, TRACEABILITY row and the approval card's risk line (currency label) in the same
+    change. Reviews: trading-safety, code, ui-ux (card label).
+  Depends on: nothing. 25's tests are restated in account currency on top of it.
+- **25. Minimum-lot exception (needs trading-safety review).** Value: lets tiny-live trade one minimum lot at small
+  equity without loosening any limit (Position sizing · RUN). Acceptance:
+  - New `risk.min_lot_risk_cap` in settings (validated 0 < x ≤ `max_risk_per_trade`, or null). With null, every
+    existing gate test passes unchanged and a test shows decisions identical to today on a grid of equities and
+    stops.
+  - Applies only when `lots_raw < volume_min`: the gate allows exactly `volume_min` iff its realised risk ≤ the cap
+    (half the cap in `SIZE_DOWN` or combined size-down), else refuses `min_lot_exceeds_risk`. Tests, tiny-live, 15m
+    stop $10.90, GBP account at GBPUSD 1.33 (after 28): equity £1,000 allowed at 0.01 lot (0.82%); £700 refused
+    (1.17%); £1,000 in `SIZE_DOWN` refused (cap 0.5%); a USD account at $1,000 refused (1.09%); `lots_raw ≥
+    volume_min` unchanged; never more than `volume_min` under the exception.
+  - Margin (max(broker, 1:20), 300% floor), combined notional, caps, stages, blackouts and spread checks still run
+    after it: a test at $600 equity with a stop that fits the cap is refused `margin_level_floor`.
+  - An allowed exception decision carries reason `min_lot_exception`, realised risk and the phase rate; it reaches
+    the decisions log and the approval card's risk line. Exits untouched (test: exit path never calls the gate).
+  - Reviews: trading-safety, code; DESIGN Sizing paragraph and TRACEABILITY row updated in the same change.
+  Depends on: 28 at £1,000 (without it the min lot computes as 1.09% and is refused). 19 (heat cap) must count
+  exception trades in full when it lands.
+- **26. Milestone ladder and monthly north-star report.** Value: reports progress the way ADR 0004 decided:
+  monthly averages and distributions, never a daily quota (Performance review · RUN). Acceptance:
+  - A monthly report (job + dashboard card + one Telegram line) with time-weighted % return net of deposits and
+    withdrawals, net R, R/trade with trade count and 90% interval, max drawdown %, all by timeframe; golden test on a
+    fixture with a mid-month deposit (the deposit is not counted as return).
+  - The milestone ladder (equity at which the minimum lot fits 15m/1h/4h/1d at the 1% cap and at 0.5%) is computed
+    from the sizing-feasibility report (item 22) at the current price and measured ATR, not hard-coded; test that a
+    50% higher ATR raises every threshold by 50%.
+  - North-star KPIs (ADR 0004 section 6): monthly average £/day and %, the daily P&L distribution (count of £50+
+    days, best-day histogram in R and £), % of opportunity days captured (classifier-flagged days and days with
+    range ≥ 1.5 × ATR(1d) on which the book made ≥ 1 R), max drawdown % and days lost to the daily cap. Golden test.
+  - No per-day target, countdown or "behind target" wording in the report, card or digest (test on the rendered
+    text): a missed £50 day never prompts more risk.
+  - Reviews: code, ui-ux (screen and Telegram), quant (the R interval). Read-only: no trading-safety review.
+  Depends on: 22.
+- **27. Broker contract terms recorded.** Value: replaces the ADR's unverified leverage, minimum lot, step, contract
+  size and stop-out level with the terminal's own values (Execution · RUN). Acceptance:
+  - On the demo terminal, `state/broker_terms_<account>.json` records `volume_min`, `volume_step`, contract size,
+    account leverage, margin for 0.01 lot at the current price (`order_calc_margin`) and the stop-out level, with a
+    timestamp; no login, balance or account number.
+  - ADR 0004's assumptions table is updated with the measured values (or a note that they matched).
+  - Reviews: code, sre. Read-only on the broker: no trading-safety review.
+  Depends on: 1.
+- **29. Absolute daily loss limit (trading-safety review).** Value: makes the owner's £50 outer limit a hard rail
+  as the account grows; the 2% / 1.5% caps stay and bind first below £2,500 / ~£3,333 (Capital management · RUN).
+  Acceptance:
+  - New `risk.daily_loss_limit_abs` (account currency; validated > 0 or null; `50` in settings.yaml). Null keeps
+    every gate decision identical to today (grid test).
+  - Projected check, entries only: refuse `daily_loss_limit_abs` when (day-start equity − equity) + this trade's
+    full stop risk in account currency (from 28) > the limit. Tests: £5,000 equity, £40 lost, a £15-risk entry is
+    refused and a £9 one allowed; at £1,000 equity the 1.5% supervisor cap still stops entries first.
+  - The supervisor applies the same absolute to the combined day loss (one currency, from 28) and writes HALT.
+  - Exits, stops and closes never consult it (test). Health and the approval card show the remaining daily
+    allowance. DESIGN Hard limits and TRACEABILITY updated. Reviews: trading-safety, code, ui-ux.
+  Depends on: 28.
+- **30. Opportunity-day detection (hypothesis; quant review).** Value: the north star depends on trading more on
+  days the market offers moves and standing aside otherwise (FIND). Acceptance:
+  - The strategy-researcher registers a pre-registered hypothesis in `docs/research/hypotheses.md` and the trial
+    registry (id assigned there) for a point-in-time day-type classifier: tier-1/tier-2 news day, volatility
+    expansion (realised or HAR-forecast range vs ATR(1d)), London–New York overlap. The reading rule, written in
+    advance, is net R per trade and the share of ≥ 1 ATR(1d) days captured, flagged vs unflagged.
+  - A read-only descriptive report from `data-v1` (no trial): frequency of days with range ≥ 1 and ≥ 1.5 × ATR(1d)
+    by weekday and session, so ADR 0004's "a few such days a month" is measured. Truncation test on every feature.
+  - No trial runs until a quarter's budget is available; the Q1 queue (item 5) is not displaced without the
+    owner's say. Depends on: 24 (DST-aware sessions), 18 (tier-2 events).
+- **31. Runner exits (hypothesis; quant and trading-safety review).** Value: a £50 day at £1,000 is a ~6 R winner;
+  only trailing or scale-out exits catch those (FIND). Acceptance:
+  - A pre-registered variant set (scale-out at 1–1.5 R plus an ATR trail, held only on flagged opportunity days)
+    registered through the trial registry, judged on net R and the right tail (share of ≥ 3 R trades), with
+    shadow-book parity to the labels.
+  - Exits stay automatic and are never gated. Depends on: 6 (live exit policies), 30.
+
 ## Needs the owner
 These are never decided by the product owner or by agents.
 - **Automatic deployment to the trading servers (CD).** CI runs on every change. Deploying to the Oracle VMs
@@ -231,6 +368,14 @@ These are never decided by the product owner or by agents.
   toolkit trials that compete with item 5 for Q1's 20.
 - **Going live.** Demo until the paper → tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
   and the typed phrase. Item 8 computes whether the gate is met. It never flips it.
+- **Trader-playbook risk policy** (items 17–22; playbook section 7): the weekend rule (recommend flat for intraday
+  families), tier-2 and holiday windows, throttle and heat-cap values, edge-linked sizing (G-10). The account size
+  and tiny-live risk for H-01 were decided under your delegation in ADR 0004 (minimum-lot exception at ≤ 1%; H-01
+  stays in shadow until equity reaches ~£7,900).
+- **Account and goal (ADR 0004, amended).** The demo is £1,000 GBP (answered); £50 is your absolute daily loss
+  limit (item 29); £50+/day is the north star, realistic as a monthly average at ~£21k–£53k. Yours: an optional
+  deposit plan (deposits climb the ladder faster than returns: 1h at ~£1,650), and confirm the demo is a Raw Spread
+  account (on Standard nothing trades at £1,000).
 - Also yours: sign off the P7 threshold values (item 8); commit or approve the first measured cost table until
   item 2 lands; VM provisioning and every credential (item 1).
 

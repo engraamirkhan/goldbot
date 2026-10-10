@@ -1,4 +1,7 @@
 """Shared fixtures."""
+from datetime import timedelta
+from typing import Any, Callable
+
 import pytest
 
 
@@ -23,3 +26,19 @@ def real_totp_clock(monkeypatch):
     """The wall clock for TOTP: two codes made within the same 30 s are the same code."""
     import goldbot.api.auth as auth
     monkeypatch.setattr(auth, "_totp_now", auth.time.time)
+
+
+@pytest.fixture
+def queued_prereg(monkeypatch: pytest.MonkeyPatch) -> Callable[..., dict[str, Any]]:
+    """`queued_prereg(registry, **preregister_kwargs)`: write a row of the pre-registered queue of the current quarter.
+    A queued row must be written before its target quarter starts and `preregister` stamps the registry's own clock
+    (no backdating), so the clock is set to the day before the quarter for that one call."""
+    from goldbot.research import registry as registry_mod
+    q = registry_mod.quarter_of()
+
+    def write(reg: Any, **kw: Any) -> dict[str, Any]:
+        with monkeypatch.context() as m:
+            m.setattr(registry_mod, "_utcnow", lambda: registry_mod.quarter_start(q) - timedelta(days=1))
+            row: dict[str, Any] = reg.preregister(queue=True, target_quarter=q, **kw)
+        return row
+    return write

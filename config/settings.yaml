@@ -90,6 +90,7 @@ scheduler:
   gap_watch:        { kind: daily,   at: "23:55", max_late_hours: 20 }                  # gaps -> shadow founders / on-demand staff runs
   backup:           { kind: daily,   at: "22:15", max_late_hours: 20 }                  # restic -> Oracle Object Storage (ops/backup.py)
   restore_drill:    { kind: weekly,  at: "10:00", weekday: 6, max_late_hours: 30 }      # Sunday: restore latest to a temp dir and verify
+  cpcv_quarterly:   { kind: monthly, at: "14:00", weekday: 6, months: [1, 4, 7, 10], max_late_hours: 30 }   # M16: CPCV + PBO of gate-passing trials, first Sunday of each quarter
   attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
 
   feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day
@@ -114,6 +115,24 @@ research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
   label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
+  reserved_trials_quarter: 13        # held for the pre-registered queue (docs/research/preregistration-2027Q1.md: 13 planned
+                                     #   of 20): the director, the label grid and the research analyst spend only 20 - used
+                                     #   - reserved. Each trial run against a `preregistered` registry row uses one up (only
+                                     #   such a trial may draw on the reservation); revisit each quarter
+  retired_families:                  # mirrors docs/research/hypotheses.md section B (a test checks they agree). The retired
+                                     #   families SHARE 1 exploration trial a quarter (best post-retirement evidence, else a
+                                     #   rotation) and each is reinstated only by out-of-sample attribution after its
+                                     #   retirement date (research/director.py)
+    - { family: mean_reversion, hypothesis_id: R-01, retired: 2026-10-10, trials: [3],
+        reason: "no gross edge; no cost-surviving evidence for short-horizon reversion in gold" }
+    - { family: session_open, hypothesis_id: R-02, retired: 2026-10-10, trials: [1, 7, 11, 13],
+        reason: "gross +0.042 R, t 1.31 on 1,498 events, fails P4; about 90 events a year" }
+    - { family: trend, hypothesis_id: R-03, retired: 2026-10-10, trials: [2],
+        reason: "no gross edge; small-tick contracts lost short-term trend after 2009" }
+    - { family: breakout, hypothesis_id: R-04, retired: 2026-10-10, trials: [6, 8, 15],
+        reason: "gross +0.015 R, t 0.38; same reason as trend" }
+    - { family: intraday_momentum, hypothesis_id: R-05, retired: 2026-10-10, trials: [18, 19],
+        reason: "NY -0.006 R, London -0.028 R gross; mechanism absent in spot XAUUSD" }
   holdout_from: 2025-10-01           # held-out year: research never sees it; a passing config is scored on it once
   holdout_to: 2026-09-30             #   (scripts/research_pass.py --score-holdout), inclusive
   screen_min_events: 1000            # primary-signal screen (P4): events a rule needs; any screen with fewer events
@@ -144,8 +163,9 @@ drift:                               # design: Drift and health (goldbot/researc
   size_down_factor: 0.5
   window_days: 30                    # recent candidates compared with the training distribution
   min_rows: 50
-  cusum_k: 0.5                       # residual CUSUM (fixed; not yet tuned to 5% quarterly false alarms, row M25)
-  cusum_h: 4.0
+  cusum_k: 0.5                       # residual CUSUM allowance (sd); h is simulated for this k (research/cusum.py, M25)
+  cusum_false_alarm: 0.05            #   design: at most 5% chance of a false alarm within a quarter (two-point trade residuals at the mean p)
+  cusum_h: 4.0                       #   fallback h only when the backtest has no trade rate
   dd_mult: 1.5                       # an agent's 30-day drawdown above 1.5x backtest halts the system pending review
   dd_window_days: 30
 
@@ -185,6 +205,9 @@ gaps:                                # bounded spawning (goldbot/ops/gap_watch.p
   dq_min_error_days: 3               #   this many distinct UTC days within the window
   regime_window_days: 20             # recent realised volatility = mean of the last 20 daily values
   regime_history_days: 3650          # volatility terciles cut from up to ten years of 1h bars
+
+telegram:                            # owner user ids go in config/settings.local.yaml (per server), never here
+  digest_at: "06:45"                 # daily owner digest at this UTC time, before London (goldbot/telegram/digest.py)
 
 attribution:                         # daily deterministic attribution (goldbot/research/attribution.py, BACKLOG 12); reporting only
   window_days: 180                   # closed shadow trades exited in the last 180 days

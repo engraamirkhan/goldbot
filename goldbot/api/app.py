@@ -36,6 +36,7 @@ from goldbot.api.schema import (
     AgentRow,
     AgentRunRow,
     AuthState,
+    AutoModeView,
     CalendarEvent,
     CalendarResponse,
     ChangePasswordRequest,
@@ -53,6 +54,8 @@ from goldbot.api.schema import (
     LoginRequest,
     LoginResponse,
     Me,
+    ModeChangeRequest,
+    ModeChangeResult,
     Ok,
     Proposal,
     RearmRequest,
@@ -532,6 +535,44 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     def research_view(_: User = Depends(auth)) -> ResearchView:
         return explain.research_view(st.dir, view_settings(), docs)
     # ============================================================== end Health and Research screens
+
+    # ============================================================== auto mode (A10): card for any role, switch owner-only
+    # The switch runs telegram/automode.py `mode_command`, the code behind Telegram's /mode, with the same checks:
+    # the owner pinned to auth.owner_email (need("owner") + verify_owner_totp), each authenticator code spent once
+    # (the replay guard shared with sign-in, re-arm and /mode), then the evidence check. Every outcome is audited by
+    # mode_command. The engines still force propose under the 30-day re-arm lock and the 12% kill switch.
+    @app.get("/api/automode", response_model=AutoModeView)
+    def automode_get(u: User = Depends(auth)) -> AutoModeView:
+        return explain.automode_view(st.dir, view_settings(), st.auth.is_owner(u))
+
+    @app.post("/api/automode", response_model=ModeChangeResult)
+    async def automode_set(body: ModeChangeRequest, u: User = Depends(need("owner"))) -> ModeChangeResult:
+        from goldbot.config import TelegramSettings
+        from goldbot.telegram import automode
+        s = view_settings()
+        tg = s.telegram if s is not None else TelegramSettings()
+        seen: dict[str, bool] = {}
+
+        def totp_ok(code: str) -> bool:
+            seen["totp"] = st.auth.verify_owner_totp(code)
+            return seen["totp"]
+
+        def eligibility() -> automode.Eligibility:
+            e = automode.auto_mode_eligibility_from_state(st.dir, tg)
+            seen["eligible"] = e.eligible
+            return e
+
+        code = body.totp.strip()
+        arg = "propose" if body.mode == "propose" else ("auto " + code if code.isdigit() else "auto")
+        msg = await asyncio.to_thread(automode.mode_command, st.bus, arg, f"dashboard:{u.email}", totp_ok=totp_ok,
+                                      eligibility=eligibility, audit=st.auth.audit)
+        if body.mode == "auto" and not seen.get("totp"):
+            raise HTTPException(403, "authenticator code required to enable auto mode")
+        if body.mode == "auto" and not seen.get("eligible"):
+            raise HTTPException(409, msg)
+        await st.broadcast({"type": "mode", "mode": body.mode})
+        return ModeChangeResult(message=msg, view=explain.automode_view(st.dir, s, True))
+    # ============================================================== end auto mode
 
     def current_status() -> Status:
         modes = sorted({str(e.get("approval_mode", "propose")) for e in st.engines()})

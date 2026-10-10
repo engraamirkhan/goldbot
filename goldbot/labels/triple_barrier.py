@@ -25,6 +25,9 @@ class BarrierSpec(FrozenRecord):
     stop_atr: float
     max_bars: int
     name: str = "custom"
+    # False for a time-exit rule whose target is set out of reach (asia_drift): the barrier EV p x target - (1 - p) x
+    # stop does not describe it, so the RiskGate refuses its intents (`time_exit_ev_unsupported`, fail closed)
+    has_target: bool = True
 
 
 class SwapSpec(FrozenRecord):

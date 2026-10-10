@@ -28,6 +28,7 @@ export function App() {
         qc.invalidateQueries({ queryKey: ["proposals-recent"] });
       }
       if (e.type === "halt") qc.invalidateQueries({ queryKey: ["status"] });
+      if (e.type === "mode") { qc.invalidateQueries({ queryKey: ["automode"] }); qc.invalidateQueries({ queryKey: ["status"] }); }
     });
   }, [authed, qc]);
 

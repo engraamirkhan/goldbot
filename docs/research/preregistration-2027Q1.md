@@ -31,6 +31,31 @@ promotion.
 
 ## Order and budget (13 planned of 20; 7 reserve)
 
+**Reserved in code:** `research.reserved_trials_quarter: 13` (config/settings.yaml) holds these 13 trials before the
+research director or the monthly label grid can spend any of the quarter's 20 (`research/director.py`
+`reserved_trials`). Each trial run against its `preregistered` registry row uses one up; a queued preregistered row is
+always covered. The director and the grid get at most 20 - used - reserved (7 if nothing else runs first).
+
+**Who may spend the reservation (decided 2026-10-10, quant review).** Every path that records a trial checks the same
+reservation (`TrialRegistry.check_budget_reserved`, `research_pass.py` and `--discover` included): only a run whose
+family and config hash match a pending `preregistered` row of the quarter uses a reserved trial, and its result row is
+linked to that row. Anything else (an ad-hoc variant, a primary-signal screen, a pooled run, a discovery that wrote
+its own pre-registration just before running) must fit in 20 - used - reserved. **Holdout scorings** (`--score-holdout`)
+are trials charged to the budget and follow the same rule: they come out of the unreserved remainder unless a
+`preregistered` row for that exact configuration is pending (the row that pre-registered the walk-forward trial is
+already used by it, so a holdout scoring needs its own row). CPCV re-evaluations are evidence, not trials (ADR 0003):
+no budget slot, no reservation. H-02 uses its reserved slot only when its exact discovery config (including the bars
+range) was pre-registered before the run.
+
+**Writing the queued rows (2026-10-10, batch review).** Each row above is written with
+`TrialRegistry.preregister(..., queue=True, target_quarter="2027Q1")` before 2027-01-01 (a queued row written once its
+quarter is under way is refused, and a hand-written one is treated as ad hoc). It then holds the 2027Q1 reservation
+and is used up by its trial whenever that runs. Without `target_quarter` the default is the quarter of the writing
+date, or the next quarter within 14 days of its start (from 2026-12-18 for 2027Q1). The row is stamped with the
+registry's clock (it cannot be backdated). **H-01 and H-02 must not run before 2027-01-01:** every runner (research
+analyst, `research_pass.py`, `--discover`, the label grid) refuses a config queued for a later quarter, and a trial
+stamped before its row's quarter would never use the row up.
+
 | # | ID | Trial | Depends on | Trials |
 |---|---|---|---|---|
 | 1 | H-13 | Volatility-forecast cost filter, applied as a reporting overlay to every trial below (net R with / without) | none | 0 |
@@ -172,7 +197,77 @@ promotion.
 - Config: long at 00:00 UTC, exit 07:00 UTC (flat before London), stop 1.5 ATR(1h), every trading day, Data before
   2025-10 only (press figures for H1 2026 fall in the holdout).
 - Reading rule: **continue** if gross t >= 2.0 on >= 1,000 events AND net mean R > 0. Expected thin: <= 0.03% per
-  session against ~0.01% round trip, so a pass needs the measured cost table.
+  session against a round trip of about 0.025-0.03% (the frozen 0.37 $/oz plus the spread at ~$2,000-2,500; corrected
+  2026-10-11 from "~0.01%" after the quant review, before any outcome was seen; the rule itself is unchanged), so a
+  pass needs the measured cost table and the net test is likely to bind.
+- Implemented as the specialist `asia_drift` (`goldbot/specialists/asia_drift.py`, `tests/test_asia_drift.py`), agent
+  id `asia_drift-g0-98dc13a518`. Research only: `Specialist.screening` keeps it out of the default population founders,
+  the pooled 1h model, the research director's plan, the label grid, the monthly loop and the research analyst
+  (`jobs.research_families`), so the pre-registered run below is its only trial; it is active (not in
+  `research.retired_families`). The RiskGate refuses its intents (`time_exit_ev_unsupported`) until the EV of a
+  time-exit rule is implemented (HANDOFF, "before live").
+- **Frozen parameters (written 2026-10-11, BEFORE any H-04 outcome was seen; no label, return or outcome was
+  computed on real data).** Each is enforced in code or stated as the reading of the run:
+  - *Entry:* long only, at 00:00 UTC: the decision bar is the 1h bar closing at 00:00 UTC (23:00-00:00), entry at its
+    close on the ask (the open of the first 1h bar at or after 00:00 UTC). No entry when that bar is missing, when the
+    session calendar is closed at 00:00 UTC (`DEFAULT_SESSIONS.is_open`: weekend, daily break on the Europe/Athens
+    server clock), or on 25 December / 1 January (UTC dates). So entries are Monday to Friday, at most one a day.
+  - *Exit:* time barrier at the close of the 7th 1h bar after entry (`max_bars` 6), 07:00 UTC, in both DST regimes
+    (London opens 08:00 UTC in winter, 07:00 UTC in summer: flat before or at the open). A plain barrier, no exit
+    policy, so labels, shadow book and live count the same bars (`test_shadow_book_reproduces_the_labels_time_barrier`).
+    `max_bars` above 6 is refused by the constructor (never past 07:00 UTC).
+  - *Sample rule (added 2026-10-11 after the quant review, before any outcome was seen):* an entry is kept only when
+    the bar closing its time barrier closes exactly 7 h after the entry, i.e. every 1h bar 00:00-07:00 UTC is in the
+    data (`AsiaDriftSpecialist.complete_windows`, applied in `research.pipeline.prepare` before labelling; bar
+    timestamps only, no prices; `test_research_drops_entries_whose_window_is_not_exactly_00_to_07_utc`). This drops
+    gap days and closures not in the calendar (e.g. Good Friday) whose bar-counted exit would land after 07:00 UTC.
+    Live and shadow have no such rule (they cannot see the window ahead): on such a day they would exit at the 7th
+    bar; the report states how many entries the rule dropped (the owed data count below).
+  - *Stop:* 1.5 x Wilder ATR(14) of the 1h mid bars, the value at the decision bar's close (completed bars only),
+    frozen for the trade; R = that stop distance. *No target* (`target_atr` 50, out of reach in 7 hourly bars).
+  - *One position at a time* (`labels.one_at_a_time`); a 7-hour hold never overlaps the next day's entry.
+  - *Swap:* none. 00:00-07:00 UTC is 02:00-09:00 (winter) / 03:00-10:00 (summer) server time, so no server midnight
+    is held through (`test_no_trade_is_held_through_the_server_rollover`: `swap_nights` 0 in both regimes).
+  - *Costs:* extra_cost_usd = 0.37 $/oz round trip beyond the spread (as H-01), the spread paid in the labels (ask in,
+    bid out); replaced by the measured `costs-v1` table if it exists at run time (the report states which).
+  - *Event floor:* `research.screen_min_events` (1,000, an intraday rule: the daily override does not apply). Fewer
+    events is `inconclusive (event floor)` whatever the sign or t.
+  - *t-stat, net test, positive years, holdout, DSR count:* as frozen for H-01 (mean R / sd x sqrt(n), gross for the
+    screen, rule-only net R over every candidate for "net mean R > 0"; holdout-crossing labels dropped; DSR count =
+    `n_trials_effective` + 1). Long only, so no long/short split is read.
+  - *No walk-forward, no model (quant review M2):* the no-target labels make `target_hit` 0 on every row, so a
+    meta-model would fit y = 0. `research_pass.py` never runs the model stage for a `screening` family, pass or fail,
+    with or without `skip_screen`: the screen is recorded as one charged trial with status `screened` (the report
+    says "rule-only screen: no model was fitted"; `test_a_screening_family_that_passes_its_screen_is_recorded_and_
+    never_fits_a_model`). The reading rule above is read on that screen alone; a "continue" means only that model
+    research on H-04 (with a time-exit meta-label) may be pre-registered.
+  - *Swap spec:* the run passes the settings' SwapSpec (as every research_pass run); `swap_nights` is 0 by
+    construction, and the screened row records the SwapSpec.
+  - *Live subset (quant review L4):* a live entry at 00:00 UTC needs the owner's click within 90 s at about 01:00
+    London time (00:00 GMT / 01:00 BST), so live will trade a subset of the shadow and research events (the
+    unconfirmed days are shadow-only candidates). Any later live comparison is on the confirmed subset.
+- Run (Actions -> research -> Run workflow), exactly these inputs:
+
+  | input | value |
+  |---|---|
+  | specialist | `asia_drift` |
+  | from_year | `2010` |
+  | to_year | `2026` |
+  | rationale | `H-04 Asia-session drift (preregistration-2027Q1.md, commit <freeze commit>)` |
+  | variants | `[{}]` |
+  | score_holdout | false |
+  | skip_screen | false |
+  | pooled | (empty) |
+  | macro | false |
+
+  `[{}]` is the default configuration `{"stop_atr": 1.5, "target_atr": 50.0, "max_bars": 6}`. One trial.
+- Event count (2026-10-11, on `00c16d7` plus this change, the commit that adds `asia_drift`; counting only, no prices, labels or outcomes): **data-v1 is not
+  available on this machine, so no data count was made.** Calendar upper bound for the research window
+  2010-01-01 .. 2025-09-30: **4,087** entry days (4,108 weekdays open at 00:00 UTC on the session calendar, less 21
+  weekday 25 Dec / 1 Jan), about 260 a year. The data count (days whose 23:00 UTC bar exists, less the ATR warm-up,
+  less the entries the sample rule drops) can only be lower; to be recorded here before the freeze by a run with
+  data-v1 present, together with **the number of candidate entries whose 7th bar does not close exactly 7 h after
+  entry (exit - entry != 7 h)**, which the sample rule drops.
 
 ### tsmom 4h with swap (continuity)
 - Config: `variants=[{"timeframe": "4h", "max_bars": 12}]`, as refused on 2026-10-09.

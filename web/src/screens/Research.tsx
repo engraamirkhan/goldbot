@@ -60,6 +60,84 @@ function Trials({ rows, total }: { rows: TrialRow[]; total: number }) {
   );
 }
 
+const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 8) : "—");
+
+// hypotheses.md mirrors research.retired_families; the plan records the doc's hash, so an edit since the plan, or a
+// disagreement with the settings, is shown. The doc never moves a trial by itself.
+function DocDrift({ p }: { p: ResearchPlanView }) {
+  if (!p.hypotheses_changed && p.hypotheses_drift.length === 0) return null;
+  return (
+    <div className="warn-note" role="note">
+      {p.hypotheses_changed && (
+        <p>
+          hypotheses.md changed since this plan (<span className="mono">{short(p.hypotheses_sha256)}</span> then,{" "}
+          <span className="mono">{short(p.hypotheses_sha256_now)}</span> now). The director reads the new version on its next run; editing the doc never moves a trial by itself.
+        </p>
+      )}
+      {p.hypotheses_drift.length > 0 && (
+        <>
+          <p>hypotheses.md disagrees with the retired list in settings (research.retired_families, which is what counts):</p>
+          <ul>{p.hypotheses_drift.map((d) => <li key={d}>{d}</li>)}</ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Retired({ p }: { p: ResearchPlanView }) {
+  if (p.retired.length === 0) return null;
+  return (
+    <>
+      <h3 className="section-title">Retired families</h3>
+      <ul className="hyp-cards" aria-label="Retired families">
+        {p.retired.map((r) => (
+          <li key={r.family} className="hyp-card">
+            <p className="hyp-head">
+              {r.family}{r.hypothesis_id && <span className="muted"> · {r.hypothesis_id}</span>}{" "}
+              {r.reinstated ? <span className="state ok">reinstated</span> : <span className="state warn">retired</span>}
+            </p>
+            <dl>
+              {r.since && <div><dt>Retired on</dt><dd>{r.since}</dd></div>}
+              {r.reason && <div><dt>Why</dt><dd>{r.reason}</dd></div>}
+              <div><dt>Exploration floor</dt><dd>{r.floor} trial{r.floor === 1 ? "" : "s"} this quarter, nothing from the evidence pool</dd></div>
+              {r.new_evidence.length > 0 && <div><dt>Reinstated by</dt><dd>{r.new_evidence.join("; ")}</dd></div>}
+            </dl>
+          </li>
+        ))}
+      </ul>
+      {p.reinstate_t != null && (
+        <p className="muted small">A retired family comes back only when its out-of-sample trades since retirement reach a shrunk t of {p.reinstate_t.toFixed(2)} (corrected for the number of retired families).</p>
+      )}
+    </>
+  );
+}
+
+const share = (x: number | null | undefined) => (x == null ? "—" : `${(x * 100).toFixed(0)}%`);
+
+function Moves({ p }: { p: ResearchPlanView }) {
+  if (p.moves.length === 0) return null;
+  return (
+    <>
+      <h3 className="section-title">What moved the budget</h3>
+      <p className="muted small">Each row compares this plan with the evidence-only plan: which input changed which family's trials or share of the evidence pool.</p>
+      <div className="scroll"><table className="moves">
+        <thead><tr><th>Family</th><th>Input</th><th>Trials</th><th>Share of pool</th><th>Evidence</th></tr></thead>
+        <tbody>
+          {p.moves.map((m, i) => (
+            <tr key={`${m.family}-${m.source}-${i}`}>
+              <td>{m.family}</td>
+              <td>{m.source === "attribution" ? "out-of-sample attribution" : m.source === "retired_families" ? "retirement" : m.source}</td>
+              <td className="nowrap">{m.budget_before} → {m.budget_after}</td>
+              <td className="nowrap">{m.share_before == null && m.share_after == null ? "—" : `${share(m.share_before)} → ${share(m.share_after)}`}{m.shift_pct != null && ` (${m.shift_pct >= 0 ? "+" : "−"}${Math.abs(m.shift_pct).toFixed(0)}%)`}</td>
+              <td>{m.detail}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
+    </>
+  );
+}
+
 function Plan({ p }: { p: ResearchPlanView }) {
   return (
     <div className="plan">
@@ -68,6 +146,13 @@ function Plan({ p }: { p: ResearchPlanView }) {
         used then, {p.total_budget} planned{p.unallocated ? `, ${p.unallocated} unallocated` : ""}. Holdout {p.holdout_from} to {p.holdout_to} is never read.
       </p>
       {p.stale && <p className="warn-note">This plan is more than 21 days old: the monthly loop uses the flat budget until the director runs again (Saturdays).</p>}
+      <DocDrift p={p} />
+      {p.reservation && (
+        <p className="small">
+          <strong>{p.reservation.reserved} trial{p.reservation.reserved === 1 ? "" : "s"} reserved</strong> for this quarter's pre-registered
+          queue before anything is planned ({p.reservation.run} run, {p.reservation.pending} pre-registered not yet run; setting {p.reservation.setting}).
+        </p>
+      )}
       {p.focus.length === 0 ? <p className="muted">No focus families in this plan.</p> : (
         <ol className="focus">
           {p.focus.map((f) => (
@@ -78,6 +163,8 @@ function Plan({ p }: { p: ResearchPlanView }) {
           ))}
         </ol>
       )}
+      <Retired p={p} />
+      <Moves p={p} />
       {p.evidence.length > 0 && (
         <details className="as-table">
           <summary>Evidence per family</summary>

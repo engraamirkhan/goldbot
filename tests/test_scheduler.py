@@ -37,8 +37,18 @@ def test_weekly_and_monthly_slots():
     assert fifth.last_slot(ts("2026-11-04 00:00")) == ts("2026-10-05 00:30")
 
 
+def test_a_monthly_schedule_limited_to_quarter_months_runs_quarterly():
+    quarterly = Schedule(kind="monthly", at="14:00", weekday=6, months=(1, 4, 7, 10))
+    assert quarterly.next_slot(ts("2026-10-02 00:00")) == ts("2026-10-04 14:00")      # first Sunday of October
+    assert quarterly.next_slot(ts("2026-10-04 14:00")) == ts("2027-01-03 14:00")      # skips November and December
+    assert quarterly.last_slot(ts("2026-12-31 00:00")) == ts("2026-10-04 14:00")      # found 88 days back
+    assert quarterly.last_slot(ts("2027-01-03 13:59")) == ts("2026-10-04 14:00")
+
+
 @pytest.mark.parametrize("kw", [dict(kind="weekly", at="06:00"), dict(kind="monthly", at="06:00"),
-                                dict(kind="monthly", at="06:00", weekday=1, day=3), dict(kind="daily", at="25:00")])
+                                dict(kind="monthly", at="06:00", weekday=1, day=3), dict(kind="daily", at="25:00"),
+                                dict(kind="monthly", at="06:00", weekday=6, months=(0,)),
+                                dict(kind="monthly", at="06:00", weekday=6, months=())])
 def test_invalid_schedules_are_rejected(kw):
     with pytest.raises(ValidationError):
         Schedule(**kw)

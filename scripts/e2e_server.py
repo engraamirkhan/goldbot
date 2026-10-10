@@ -100,7 +100,46 @@ def seed_health_research(state: str) -> None:
         "cap": 20, "budget": {"tsmom": 12, "trend": 6}, "grid_budget": {"tsmom": 0, "trend": 0}, "unallocated": 0,
         "holdout_from": "2025-10-01", "holdout_to": "2026-10-01", "holdout_trials_ignored": 0,
         "focus": [{"rank": 1, "family": "tsmom", "budget": 12, "evidence": 1.1, "reasons": ["gross t 2.63 but net negative"]}],
-        "evidence": [], "rule": "e2e"}))
+        "evidence": [{"family": "mean_reversion", "trials": 3, "evidence": 0.0, "blocked": False, "flags": [],
+                      "median_auc": None, "best_dsr": None, "shadow_trades": 0, "retired_id": "R-01",
+                      "retired_status": "net negative after costs", "retired_since": "2026-07-01", "retired": True}],
+        "rule": "e2e", "quarter_reserved": 4, "reservation": {"setting": 6, "run": 2, "pending": 3, "reserved": 4},
+        "retired_floor": {"mean_reversion": 1}, "reinstate_t": 2.61, "hypotheses_sha256": "0" * 64,
+        "moves": [{"family": "tsmom", "source": "attribution", "detail": "net-R t 2.1 over 60 trades", "budget_before": 11,
+                   "budget_after": 12, "share_before": 0.5, "share_after": 0.56, "shift_pct": 12.0}]}))
+
+
+def seed_automode(state: str) -> None:
+    """Auto-mode evidence that holds (row A10): 100 decided proposals, archived long ago (so the Approvals screen's
+    decided list ignores them), each with its closed shadow trade, approved and rejected outcomes drawn from one
+    distribution. Kept in a shadow version no champion uses, so the Health charts are unaffected."""
+    import os
+
+    import numpy as np
+
+    from goldbot.engine.shadow import ShadowTrade, VersionBook
+    from goldbot.telegram.approvals import Outcome
+    t0 = 1_740_000_000
+    rs = list(np.random.default_rng(1).normal(0.1, 1.0, 100))
+    bus = ApprovalBus(state)
+    trades = []
+    for i, rr in enumerate(rs):
+        close, approve = t0 + i * 3600, i % 2 == 0
+        p = Proposal(proposal_id=f"icm-demo-{close}-auto{i}", account_id="icm-demo", agent_id="trend-g0-auto", side=1,
+                     lots=0.1, entry=2400.0, stop=2390.0, target=2420.0, p=0.6, ev_r=0.2, spread_points=20,
+                     top_features=[], created=float(close), outcome=Outcome.APPROVED if approve else Outcome.REJECTED,
+                     reason_code=None if approve else "discretion")
+        bus.archive(p)
+        os.utime(bus.done_dir / f"{p.proposal_id}.json", (close, close))
+        trades.append(ShadowTrade(version="auto-v1", agent_id="trend-g0-auto", side=1,
+                                  entry_ts=pd.Timestamp(close - 900, unit="s", tz="UTC"), entry=2400.0, stop=2390.0,
+                                  target=2420.0, max_bars=4, p=0.6, threshold=0.55, taken=approve,
+                                  exit_ts=pd.Timestamp(close + 3600, unit="s", tz="UTC"), exit=2400.0 + 10 * rr,
+                                  barrier="time", ret=10 * rr / 2400.0))
+    book = ShadowBook(state)
+    book.books["auto-v1"] = VersionBook(version="auto-v1", started_utc=pd.Timestamp(t0 - 9000, unit="s", tz="UTC"),
+                                        closed=trades)
+    book.save(pd.Timestamp.now("UTC"))
 
 
 def main() -> None:
@@ -112,7 +151,8 @@ def main() -> None:
     seed_proposals(state)
     seed_store(str(Path(state) / "data"))
     seed_health_research(state)
-    app = create_app(state, web_dist=ROOT / "web" / "dist", data_root=Path(state) / "data", owner_email="owner@example.com")
+    seed_automode(state)
+    app =create_app(state, web_dist=ROOT / "web" / "dist", data_root=Path(state) / "data", owner_email="owner@example.com")
     Path(args.info).parent.mkdir(parents=True, exist_ok=True)
     Path(args.info).write_text(json.dumps({"setup_code": app.state.st.auth.setup_code, "state_dir": state}))
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")

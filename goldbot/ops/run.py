@@ -15,6 +15,12 @@
   python -m goldbot.ops.run backup [--init]              # encrypted restic backup now (--init: create the repository once)
   python -m goldbot.ops.run restore --latest --to DIR    # restore the latest backup into an empty DIR and verify it
   python -m goldbot.ops.run restore-drill                # the weekly restore drill, now
+  python -m goldbot.ops.run setup [--account ID]         # guided setup of secrets and server settings (re-runnable)
+  python -m goldbot.ops.run preflight [--account ID]     # read-only checklist before starting services (exit 1 on a blocker)
+  python -m goldbot.ops.run ruin --trades-per-week N (--closed-trades state | --shadow state | --r-file F | --win-rate ..)
+                                                         # drawdown / risk-of-ruin Monte Carlo at the live limits (G-5)
+  python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]
+                                                         # minimum equity for the minimum lot per family (G-7)
 """
 from __future__ import annotations
 
@@ -117,7 +123,8 @@ def run_engine(account_id: str) -> None:
                               blackout_before_min=settings.risk.blackout.before_min,
                               blackout_after_min=settings.risk.blackout.after_min,
                               shock_blackout_min=settings.news.shock_blackout_min,
-                              shock_min_relevance=settings.news.shock_min_relevance, live_clock=True), broker, agents,
+                              shock_min_relevance=settings.news.shock_min_relevance, live_clock=True,
+                              approval_window_s=settings.risk.approval_window_seconds), broker, agents,
                  champions(), center, limits=limits, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares)
     warm = eng.warm_start(pd.Timestamp.now("UTC"))
@@ -454,9 +461,21 @@ if __name__ == "__main__":
     elif cmd in ("backup", "restore", "restore-drill"):
         from goldbot.ops.backup import main as backup_main
         sys.exit(backup_main(sys.argv[1:]))
+    elif cmd == "setup":
+        from goldbot.ops.setup_wizard import main as setup_main
+        sys.exit(setup_main(sys.argv[2:]))
+    elif cmd == "preflight":
+        from goldbot.ops.preflight import main as preflight_main
+        sys.exit(preflight_main(sys.argv[2:]))
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))
+    elif cmd == "ruin":
+        from goldbot.research.ruin import main as ruin_main
+        sys.exit(ruin_main(sys.argv[2:]))
+    elif cmd == "sizing-feasibility":
+        from goldbot.research.min_lot import main as feasibility_main
+        sys.exit(feasibility_main(sys.argv[2:]))
     else:
         print(__doc__)
         sys.exit(1)

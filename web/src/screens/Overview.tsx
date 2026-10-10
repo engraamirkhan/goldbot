@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, hasRole, type Status } from "../lib/api";
+import { AutoModeCard } from "./AutoMode";
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
 
@@ -15,6 +16,7 @@ export function Overview() {
         <div className="tile"><span>Pending approvals</span><strong>{status.data?.pending ?? "…"}</strong></div>
       </div>
       {status.data && <HaltControl status={status.data} />}
+      <AutoModeCard />
       <table>
         <thead><tr><th>Account</th><th>Mode</th><th>Class</th><th>Equity</th><th>Today</th><th>Week</th><th>Drawdown</th><th>Stage</th><th>Open</th></tr></thead>
         <tbody>

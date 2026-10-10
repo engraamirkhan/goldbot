@@ -93,6 +93,43 @@ test("owner halts new entries and re-arms with an authenticator code", async ({ 
   await expect(page.getByRole("button", { name: "Halt new entries" })).toBeVisible();
 });
 
+test("owner enables auto mode with an authenticator code on the evidence, then switches back to propose", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });                     // phone first
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  const card = page.getByRole("region", { name: /Entry mode/ });
+  await expect(card.getByRole("heading", { name: /Entry mode: Propose-and-approve/ })).toBeVisible();
+  await expect(card.getByText("auto mode offered")).toBeVisible();             // 100 seeded decided proposals, no difference
+  const box = await card.boundingBox();
+  expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);           // fits the phone without sideways scroll
+  await card.getByLabel("Code to enable auto mode").fill("000000");
+  await card.getByRole("button", { name: "Enable auto mode" }).click();
+  await expect(card.getByRole("alert")).toContainText("authenticator code required");
+  await card.getByLabel("Code to enable auto mode").fill(await freshTotp(ownerSecret));
+  await card.getByRole("button", { name: "Enable auto mode" }).click();
+  await expect(card.getByRole("heading", { name: /Entry mode: Auto/ })).toBeVisible();
+  await expect(card.getByRole("status")).toContainText("Mode: AUTO");
+  await card.getByRole("button", { name: "Switch to propose" }).click();
+  await expect(card.getByRole("heading", { name: /Entry mode: Propose-and-approve/ })).toBeVisible();
+  await expect(card.getByText(/Set .* by dashboard:owner@example.com \(owner\)/)).toBeVisible();
+});
+
+test("owner regenerates the recovery codes with password and authenticator code; they are shown once", async ({ page }) => {
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await page.getByLabel("Your password").fill(OWNER.password);
+  await page.getByLabel("Code from your authenticator app").fill(await freshTotp(ownerSecret));
+  const generate = page.getByRole("button", { name: "Generate new recovery codes" });
+  await expect(generate).toBeDisabled();
+  await page.getByLabel(/My current recovery codes will stop working/).check();
+  await generate.click();
+  await expect(page.getByRole("heading", { name: "Your new recovery codes" })).toBeVisible();
+  await expect(page.locator("ol.codes li")).toHaveCount(10);
+  await page.getByRole("button", { name: "I have saved them" }).click();
+  await expect(page.locator("ol.codes")).toHaveCount(0);
+});
+
 test("news tab shows the calendar with blackout windows and the scored headlines", async ({ page }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
@@ -121,6 +158,7 @@ test("health tab shows agent halts, PSI bands and the charts; research tab the b
   await expect(page.getByTitle(/tsmom-g0 · atr_14: PSI 0.310 \(sized down\)/)).toHaveClass(/bad/);
   await expect(page.getByRole("img", { name: /Reliability of tsmom-g0/ })).toBeVisible();
   await expect(page.getByRole("img", { name: /CUSUM of tsmom-g0 over 8 trades/ })).toBeVisible();
+  await expect(page.getByText(/^Fixed threshold \(not calibrated\)|^Threshold h .* calibrated/)).toBeVisible();
   await expect(page.getByRole("meter", { name: "trend-g1 30-day drawdown" })).toBeVisible();
   await expect(page.getByRole("list", { name: "Health checks" })).toContainText("Deploy");
   await expect(page.getByRole("alert")).toHaveCount(0);                       // no system halt seeded
@@ -132,6 +170,10 @@ test("health tab shows agent halts, PSI bands and the charts; research tab the b
   await expect(trials.locator("tbody tr").first()).toContainText("+0.061 (t 2.63)");
   await expect(trials.getByText("failed: dsr").first()).toBeVisible();
   await expect(page.getByText("gross t 2.63 but net negative")).toBeVisible();
+  await expect(page.getByText("4 trials reserved")).toBeVisible();
+  await expect(page.getByRole("list", { name: "Retired families" }).getByRole("listitem").first()).toContainText("1 trial this quarter");
+  await expect(page.locator("table.moves tbody tr").first()).toContainText("11 → 12");
+  await expect(page.getByRole("note")).toContainText("hypotheses.md changed since this plan");
   await expect(page.locator("details.hyp").first()).toContainText("H-01");    // the real docs/research/hypotheses.md
 });
 
@@ -170,6 +212,8 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
     data: { proposal_id: "e2e-long", action: "approve" }, headers: { authorization: `Bearer ${token}` },
   });
   expect(r.status()).toBe(403);
+  const mode = await page.request.post("/api/automode", { data: { mode: "propose" }, headers: { authorization: `Bearer ${token}` } });
+  expect(mode.status()).toBe(403);                                            // the mode switch is owner-only
 });
 
 test("viewer resets a forgotten password with an authenticator code, then changes it while signed in", async ({ page }) => {

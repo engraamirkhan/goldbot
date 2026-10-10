@@ -1,0 +1,99 @@
+name: data-positioning
+# Downloads COMEX gold Commitments of Traders (CFTC disaggregated futures-only, public zip, no key) and SPDR Gold Shares
+# (GLD) holdings (the issuer's public archive CSV) and publishes one point-in-time Parquet, positioning.parquet, on the
+# rolling release tag `positioning-v1` (Claude sandboxes cannot reach cftc.gov or spdrgoldshares.com; runners can).
+# Every row carries value_date, vintage, source and a conservative available_utc (goldbot/data/positioning.py). The
+# previously published file is kept as is; only new dates and revisions are added. Only a release or asset that is
+# confirmed missing counts as a first run; any other error fetching the previous file fails the run, and the script
+# refuses (exit 2, no output) a frame that would drop published rows, so --clobber never replaces history. Research (scripts/research_pass.py
+# --positioning) and scripts/fetch_data_release.py --positioning load it from there.
+# Cost: about 2 runner-minutes a week (first run ~4: COT since 2006, ~40 MB of zips); the asset is well under 1 MB.
+on:
+  workflow_dispatch:
+    inputs:
+      from_year:
+        description: "first COT year to (re)download (empty: last year, or 2006 on the first run)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "23 5 * * 6"   # Saturdays 05:23 UTC: after Friday's 15:30 ET COT release (Monday/Tuesday after holiday weeks)
+    # assumes the annual CFTC zip already holds Friday's report by then; if it lags, the report is picked up (and
+    # stamped no earlier than that download) a week later: staler features, never earlier ones (positioning.py)
+permissions: {}   # least privilege: the token has no scopes unless a job grants them
+concurrency:
+  group: data-positioning   # one publisher at a time for positioning-v1
+  cancel-in-progress: false
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write   # release asset upload
+      issues: write     # failure report
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11" }
+      - run: pip install -e .
+      - name: fetch the previously published file (its rows are kept as published)
+        id: prev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p prev
+          # first run only when the release (or its asset) is confirmed missing; any other error (API, auth, network)
+          # fails here instead of rebuilding from scratch and clobbering the published history
+          if ! assets=$(gh release view positioning-v1 --json assets --jq '.assets[].name' 2> view.err); then
+            cat view.err
+            if grep -qi "release not found" view.err; then
+              echo "first run: release positioning-v1 does not exist"; echo "first_run=true" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            echo "::error::cannot read release positioning-v1; refusing to treat this as a first run"; exit 1
+          fi
+          if ! grep -qx "positioning.parquet" <<< "$assets"; then
+            echo "first run: release positioning-v1 has no positioning.parquet"; echo "first_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh release download positioning-v1 -p positioning.parquet -D prev
+          test -s prev/positioning.parquet
+      - name: download COT and GLD
+        env:
+          FROM_YEAR: ${{ inputs.from_year }}
+          FIRST_RUN: ${{ steps.prev.outputs.first_run }}
+        run: |
+          set -o pipefail
+          args=(--out positioning.parquet --existing prev/positioning.parquet)
+          if [ "$FIRST_RUN" = "true" ]; then args+=(--first-run); fi
+          if [ -n "$FROM_YEAR" ]; then args+=(--from-year "$FROM_YEAR"); fi
+          python scripts/positioning_data.py "${args[@]}" 2>&1 | tee report.txt
+      - name: publish to release positioning-v1
+        if: always() && steps.prev.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f positioning.parquet ] || exit 0
+          # same retry pattern as data-macro (create/upload can race or hit transient API errors)
+          for i in 1 2 3 4 5; do
+            { gh release view positioning-v1 >/dev/null 2>&1 || gh release create positioning-v1 --title "Positioning data (rolling)" --notes "CFTC COT (COMEX gold) and GLD holdings with available_utc, built by the data-positioning workflow" --latest=false; } &&
+            gh release upload positioning-v1 positioning.parquet --clobber && exit 0
+            sleep $((i * 15))
+          done
+          exit 1
+      - name: report failure to issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'EOF'
+          import json, os, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]
+          run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          try: body = open("report.txt").read()[-60000:]
+          except FileNotFoundError: body = "(no report file; failure before the download step)"
+          payload = {"title": "data-positioning failure", "body": f"Run: {run_url}\n\n```\n{body}\n```", "labels": ["ci", "data"]}
+          req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues", data=json.dumps(payload).encode(),
+                                       headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"})
+          print(urllib.request.urlopen(req).status)
+          EOF

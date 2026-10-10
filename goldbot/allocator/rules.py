@@ -3,12 +3,27 @@
 
 Weights per design: trend 1.0 when ADX(14,1h) > 25 else 0; mean-reversion 1.0 when ADX < 18 else 0;
 breakout 1.0 when 1h ATR is in its bottom quartile over 60 days else 0, with mean-reversion + breakout
-capped at a summed weight of 1.0; session-open always 0.75; everything 0 within 30 minutes of a tier-1 event.
+capped at a summed weight of 1.0; session-open always 0.75; everything 0 for 30 minutes either side of a tier-1
+event (deliberately stricter than the RiskGate's -15/+30 min entry block; changing it is the owner's decision).
 Also exposes the population view: each agent's weight = allocator family weight x agent fitness share.
 """
 from __future__ import annotations
 
+import pandas as pd
+
 from goldbot.base import Record
+
+
+def tier1_minutes(events: pd.DataFrame, now: pd.Timestamp) -> tuple[float | None, float | None]:
+    """(minutes to the next tier-1 event at or after `now`, minutes since the last one before it) from a calendar
+    frame (ts_utc, tier), as the engine's news blackout reads it; None where there is no such event."""
+    if events.empty or "tier" not in events.columns:
+        return None, None
+    ts = pd.DatetimeIndex(pd.to_datetime(events.loc[events["tier"] == 1, "ts_utc"], utc=True))
+    ahead, behind = ts[ts >= now], ts[ts < now]
+    to_next = (ahead.min() - now).total_seconds() / 60 if len(ahead) else None
+    since = (now - behind.max()).total_seconds() / 60 if len(behind) else None
+    return to_next, since
 
 
 class Regime(Record):

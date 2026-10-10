@@ -66,6 +66,69 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   budget without a plan under 21 days old) and stops when the quarter's budget is spent. The `research_director` staff
   agent explains the plan (`read_research_plan`) and may file two hypotheses; the analyst prefers the plan's focus
   families. Boundary: it decides what to research, never what is promoted or traded; promotion stays with the gates.
+  Two more inputs (2026-10-10, revised after the quant review): (1) the daily attribution report
+  (`state/attribution.json`): the director rebuilds each family's cell from the report's per-trade rows, counting only
+  trades entered on or after their model version's promotion (model registry; an unpromoted version counts nothing),
+  from a report dated at or before the plan and at most 14 days old; under `attribution.min_trades` is noise. The
+  net-R t-stat is shrunk by n/(n+100), clipped to +-1 at t = 3, and tilts the evidence share of the pool by at most
+  +-25%, only for a family with no shadow t-stat (the same shadow trades are never counted twice; the
+  `director_floor` is never tilted). (2) Retired families are governance in settings, `research.retired_families`
+  (family, hypothesis id, retired date, reason, registry trials); `docs/research/hypotheses.md` section B mirrors it,
+  a test checks they agree, and the plan stores the doc's sha256 and any drift (`hypotheses_drift`) but the doc never
+  moves a trial. The retired families SHARE one exploration trial a quarter (none once any of them had a trial this
+  quarter; after the live families' floors), given to the clean retired family with the best positive
+  post-retirement attribution, else by a deterministic rotation over quarters (`retired_explore` in the plan); each
+  is reinstated only by attribution trades after its retirement date with shrunk t >= 2
+  Bonferroni-corrected for retired families x sources (5 families: 2.61). (3) The pre-registered queue is reserved
+  first: `research.reserved_trials_quarter: 13` (docs/research/preregistration-2027Q1.md) minus trials run against a
+  `preregistered` registry row, at least the queued preregistered rows; the director and `monthly_research` spend
+  only budget - used - reserved, and the plan's grid share is 0 while `research.label_grid_paused` (it is). With
+  today's settings in Q1 2027: 20 - 13 = 7 planned trials, tsmom 6 and 1 shared by the five retired families. The
+  plan records `evidence_budget`, `moves`, `quarter_reserved`, `reservation`, `retired_floor`, `retired_explore` and
+  `reinstate_t`.
+- Director re-verify fixes: the research analyst's trial runner (`jobs.make_trial_runner`) now spends only budget -
+  used - reserved like the director and the grid; only a trial of a configuration with a pending `preregistered` row
+  of the quarter may use the reservation, and its registry row is linked to that pre-registration
+  (`director.pending_preregistration`). `monthly_research` reads the reservation of the slot's quarter, not the wall
+  clock's.
+- Reservation on the manual paths (quant review MEDIUM, 2026-10-10): `scripts/research_pass.py` (ad-hoc variants,
+  screens, pooled runs, holdout scorings) and `--discover` now check through `TrialRegistry.check_budget_reserved`
+  (same `reserved_trials`/`pending_preregistration` as the director): a run matching a pending queued
+  `preregistered` row (family + config hash) may use the reservation and is linked to that row; anything else must fit
+  in budget - used - reserved. An ad-hoc discovery's own just-in-time pre-registration is written with `queue: false`
+  and no longer counts as a queue trial run. A run's link to its pre-registration now also matches the row's
+  timestamp (two rows can share a trial number). Holdout scorings come out of the unreserved remainder unless
+  pre-registered (preregistration-2027Q1.md). CPCV stays evidence, uncharged (ADR 0003). To spend the reserved H-02
+  slot, pre-register the discovery's exact config (incl. bars range) before running it.
+- Batch review fixes (2026-10-10): the research analyst (`jobs.make_trial_runner`) refuses a retired, non-reinstated
+  family (research.retired_families; reinstatement read from the director's current plan, none without one) once the
+  quarter's ONE shared retired-family exploration trial is used (`director.retired_quarter_trials`), unless a pending
+  pre-registration covers that exact config. Queued pre-registrations now carry `target_quarter` (default
+  `registry.planned_quarter`: the next quarter when written within 14 days of its start) and count in that quarter's
+  reservation; a trial uses one up whichever quarter it runs in (a row written 2026-12-30 and run 2027-01-04 is run in
+  2027Q1). `preregister` defaults to `queue=False`; `queue=True` must be written before its target quarter starts
+  (ValueError otherwise), and a hand-written row claiming a quarter already under way is ad hoc
+  (`director.is_queued`). Rows without `target_quarter` keep the quarter of their timestamp. The digest's
+  "next pre-registered trial" and budget line use the director's matching and show reserved/open. Preflight skips a
+  `*.db-wal`/`*.db-shm` that vanishes between glob and stat.
+- Reservations cannot move quarters or be backdated (quant re-review, 2026-10-10): a trial stamped before its
+  pre-registration's quarter starts never uses that row up (an early Q4 run of H-01's config left Q1 at 12), and every
+  runner (analyst, `research_pass.py`/`--discover` via `check_budget_reserved` -> `PreregisteredForLaterQuarter`, the
+  label grid, which skips the variant) refuses a config queued for a later quarter (`director.later_preregistration`).
+  An unlinked trial prefers the row of its own quarter. `preregister` has no `now=` (stamped by `registry._utcnow`), and
+  `target_quarter` without `queue=True` is a ValueError. The digest adds "next quarter: N queued".
+  For the owner / backlog (no code change): L2 research.reserved_trials_quarter (13) applies every quarter, so 2026Q4
+  is also held to 7 open trials although its 13 queued trials are planned for 2027Q1 (owner decision: a per-quarter
+  setting or 0 for 2026Q4); L4 the retired-family exploration limit is enforced only on the research-analyst path
+  (research_pass.py, discovery and the label grid do not check research.retired_families).
+- CUSUM re-verify fixes (M24/M25): h now sits halfway between the chosen reachable value of the statistic and the
+  next higher one (`cusum.decision_interval`: same rate, but unrounded live sums can no longer turn a tie into an
+  alarm); the drift watch calibrates on the agent's actual taken p values resampled per trade (`ps`), not their mean.
+  Live false-alarm rates (production `residual_cusum` arithmetic, 200k paths, p spread per trade): 4.84-4.96% at p
+  0.35-0.55 and 0.30-0.70 (the mean-p h gave 5.7-6.3% at 0.35-0.55; champion watch 2.6-2.9%). The new-champion watch runs two weeks or the
+  first 12 trades, whichever is later, capped at 8 weeks, with h calibrated for that count (`cusum.watch_trades`);
+  when the count cannot reach h it reports `cannot_alarm` (job output, `state/model_watch.json`, health warning
+  `model_watch`) instead of a silent "ok": such slow agents rely on drift_watch and the drawdown halt.
 - Approvals across processes (`telegram/bus.py`): engines, the API and the Telegram service are separate services,
   so engines publish proposals to `state/approvals/pending/`, the dashboard or Telegram writes a decision file
   (created exclusively: first decision wins), and the engine applies it on its next tick, re-running the RiskGate,
@@ -214,8 +277,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   table cell. Cells under `attribution.min_trades` (30) are "noise". Champion-path trades only in the breakdowns
   (challengers apart). The improvement agent and research analyst read it first via `read_attribution`; hypotheses
   still go only through `file_hypothesis`; gap_watch caps unchanged. Reporting only: nothing is traded or changed.
-  Open: live realised R per position (needs the engine trade record, item 8), the research director's priority input
-  and a dashboard view (item 12's other criteria).
+  Open: live realised R per position (needs the engine trade record, item 8) and a dashboard view (item 12's other
+  criteria). The research director now reads it as a capped, noise-aware input (see the director bullet).
 - Macro data pipeline (2026-10-10, TRADER_LIFECYCLE gap 2): `.github/workflows/data-macro.yml` (Tuesdays 04:41 UTC
   and by hand) pulls DFII10, T10YIE, DTWEXBGS, GVZCLS and DGS2 from FRED's public fredgraph CSV (no key) via
   `scripts/fred_macro.py` and publishes `macro_fred.parquet` on release `macro-v1`. Rows carry value_date, vintage
@@ -477,6 +540,34 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   before the trial. Note for quant review: feature-day bars include a Friday-evening stub bar (settlement to the
   Friday close, visible Saturday), so "20 daily bars" is about 3.3 weeks, as for the existing 1d option. Run inputs:
   `docs/research/preregistration-2027Q1.md` H-01. No research trial was run.
+- CPCV and CUSUM calibration (2026-10-10, rows M16/M25): `goldbot/research/cpcv.py` runs combinatorial purged CV
+  (6 equal-duration groups of the research window, holdout excluded; 15 purged/embargoed splits of 2 test groups; 5
+  rebuilt backtest paths) with the walk-forward's own cross-fitted calibration and threshold per path, reports the
+  path Sharpe / mean R distribution and, across several configurations, PBO (CSCV). It is evidence on an existing
+  trial (`<registry>.evidence.jsonl`), not a trial: no budget slot, no deflated-Sharpe count. Run it with
+  `scripts/research_pass.py --cpcv <trial#> [...]`; the scheduler job `cpcv_quarterly` (first Sunday of each quarter,
+  14:00 UTC, new `months` filter on schedules) does every gate-passing trial against its family's other trials ->
+  `state/cpcv_<quarter>.md`. The evidence sidecar is not yet unioned by `registry_sync` with the release copy, and
+  research.yml does not upload it. CUSUM: `goldbot/research/cusum.py` picks h by simulation so in-control residuals
+  alarm within a quarter's expected trades with 5% probability (settings `drift.cusum_k`, `drift.cusum_false_alarm`;
+  `cusum_h` 4.0 only without a backtest trade rate); `drift_watch` and `model_watch` pass the champion's
+  `trades_per_week`. At 1 trade a week h is 3.46 (more sensitive than the old 4.0), at 5 a week 5.21 (fewer false
+  halts). `goldbot/api/explain.py` still draws the CUSUM trace with the fixed `cusum_h` (API lane: should read the
+  `cusum_h` now stored per agent in drift.json).
+- CUSUM/CPCV review fixes (2026-10-10, rows M16/M25, quant review): CUSUM h is now simulated on two-point trade
+  residuals (win +sqrt((1-p)/p), loss -sqrt(p/(1-p))) at the mean taken p in 0.01 buckets, choosing the most
+  sensitive attained h whose false-alarm rate is <= 5% at 95% confidence (outcomes are discrete). Realised quarterly
+  rates at p 0.4/0.5/0.6 and 2/5/15 trades a week: 3.4-4.8% (normal-based h gave 0.3-0.5% at p 0.4); a drop from
+  p 0.4 to 0.3 is caught within a quarter 18-33% of the time against 4-6% before. The drift watch uses the shadow
+  trades' mean p; the new-champion watch (`model_watch`) now calibrates for its own window (trades/week x 2) at the
+  backtest hit rate, so it can actually fire inside two weeks (at ~2 or fewer trades a week it cannot alarm at 5%).
+  ADR docs/decisions/0002: CPCV/PBO can only veto (fragile when PBO > 0.5 or most paths negative, recorded as
+  `verdict` in evidence and report, not yet wired into `passed_gates`: owner decision, recommended after the first
+  quarterly run); `research_pass --cpcv` refuses gate-failed trials unless `--diagnostic` ("diagnostic, not
+  evidence"). PBO drops the never-traded group 0 (5 groups, 2 vs 3 both ways) and is labelled a lower bound of the
+  selection set (every registered family trial on the timeframe, screened included). `cpcv_quarterly` skips trials
+  whose feature version differs from what the bars build now. The evidence sidecar stays local-only (documented, not
+  synced). Not done: `goldbot/api/explain.py` still draws the CUSUM trace with the fixed `cusum_h`.
 - GitHub Actions supply chain hardened (2026-10-10, security): every action in `.github/workflows/*.yml` is pinned
   to a full commit SHA with the version as a comment (checkout v5.1.0, setup-python v6.3.0, setup-node v5.0.0, cache
   v4.3.0, upload-artifact v4.6.2, download-artifact v4.3.0; resolved via the GitHub API, not guessed). Token scopes:
@@ -508,8 +599,149 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   signals (1,466 long / 688 short), one-at-a-time lower bound 154 events, first signal 2010-06-18. Owner ruling A
   (recommended floor 150 for daily signals, can retire not promote) must be committed as
   `research.screen_min_events_daily` before the run.
+- H-04 Asia-session drift (2026-10-11, specialist `asia_drift`, TRACEABILITY M39): long at 00:00 UTC (decision bar =
+  the 1h bar closing 00:00, entry at its close on the ask), time exit 07:00 UTC as a plain 1h time barrier
+  (`max_bars` 6; labels, shadow book and live count the same bars), stop 1.5 x ATR(1h) frozen at entry, no target, long
+  only, Monday-Friday; no entry when the 23:00 bar is missing, the session calendar is closed or on 25 Dec / 1 Jan; no
+  server rollover is ever held (swap 0, proved in both DST regimes). New `Specialist.screening`: a family under its
+  pre-registered screen is not seeded as a default founder and not pooled (pooled_1h unchanged); a passed trial still
+  becomes a shadow founder through gap_watch. It is active, not retired. Frozen parameters and
+  the exact `research.yml` inputs: `docs/research/preregistration-2027Q1.md` H-04. data-v1 is not on this machine, so
+  only the calendar bound was counted (4,087 entry days 2010-01..2025-09); the data count is due before the freeze.
+  No research trial was run.
+- asia_drift quant-review fixes (2026-10-11): a `screening` family gets no trials from the research director, the
+  label grid, the monthly loop or the research analyst (`jobs.research_families`; tsmom keeps its 6 free trials);
+  `research_pass.py` never fits a model for it (the screen row is recorded, pass or fail); `max_bars` > 6 is refused;
+  research drops entries whose 00:00-07:00 UTC window is not complete in the data (`complete_windows`, timestamps
+  only). **RiskGate guard (fail closed):** any intent whose label spec has no reachable target
+  (`BarrierSpec.has_target` False, `Intent.has_target`, or the family's spec looked up by family / agent id) is refused
+  with `time_exit_ev_unsupported`. **Before a time-exit family can trade live** (owner + trading-safety review):
+  (a) its meta-label is the time-exit outcome (ret > 0 net), not `target_hit`; (b) EV, breakeven and size use
+  EV_R = p x E[R | win] - (1 - p) x E[|R| | loss] - cost_R, with the out-of-fold averages stored in the model
+  artefact, in `goldbot/risk/gate.py` (the EV / standard-edge block of `RiskGate.check`) and
+  `goldbot/engine/runner.py` (size_multiplier / breakeven gate at the entry decision, `ev_r` on the proposal, the
+  shadow threshold); (c) the target-over-cost floor uses E[R | win] instead of `target_atr`. Live 00:00 UTC entries
+  need an owner click at about 01:00 London, so live will be a subset of shadow.
+
+- Dependencies (2026-10-11): Dependabot groups minor/patch updates per ecosystem; majors come as separate PRs to be
+  hand-tested (the 15-package web group #65 was closed: TypeScript 7 broke `npm ci` through openapi-typescript, and
+  React 19 / lightweight-charts 5 / Vite 8 / Vitest 5 need code changes). TypeScript majors are ignored until
+  openapi-typescript supports them. Actions now run on node24 (PR #64): a self-hosted runner (`vars.CI_RUNNER`) must
+  be Actions Runner >= 2.327.1.
+- CI install failures reported (2026-10-10, closes the loop on issue #66, `npm ci` ERESOLVE shown as "no runner was
+  assigned"): the backend and frontend install steps tee into `ci-out/<job>-install.txt` and add `<job>-install` to
+  the failed list, so `report-failure` posts the install output. "No runner was assigned" is now said only when no
+  artifact exists at all. `actionlint` + shellcheck clean; the first failing run on GitHub is the real check.
+- Daily owner digest (2026-10-10, `goldbot/telegram/digest.py`, TRACEABILITY A12): the Telegram service sends one
+  message a day at `telegram.digest_at` (default 06:45 UTC): health status (failing/warning checks named), yesterday's
+  proposals by outcome, closed trades (net $ and R), open positions, drawdown stage and cap use, halts, the next
+  pre-registered trial or quarter budget, the attribution best/worst non-noise cell, and what waits for the owner
+  (approvals, ROADMAP decision count, deploy on offer). Units and UTC on every number, no identifiers, under 15 lines;
+  each section degrades on its own. Sent once per slot (`state/telegram_digest.json`, recorded after delivery); a
+  slot missed while the service was down goes out on start if under 6 h late. Reporting only.
+
+- Web stack upgrade (2026-10-10, four `chore(web)` commits replacing #65): React 19.3.0, react-dom 19.3.0,
+  @types/react(-dom) 19.3.0, lightweight-charts 5.2.1, Vite 8.3.1, @vitejs/plugin-react 6.1.1, Vitest 5.0.2,
+  @vitest/coverage-v8 5.0.2, jsdom 30.1.1, TanStack Query 5.104.1, Playwright 1.64.0, ESLint 10.12.0,
+  typescript-eslint 8.71.1; TypeScript stays 5.9.3 (openapi-typescript 7.13 needs TS 5). Vite/plugin-react/Vitest/
+  jsdom are the newest releases at least two weeks old (8.3.4, 6.1.2, 5.0.3, 30.1.2 were days old; no GitHub
+  advisory affects the chosen versions). Nothing imports lightweight-charts yet (Health charts are inline SVG), so
+  there was no series code to port; new price/equity charts must use the v5 `chart.addSeries(LineSeries, ...)` API.
+  Vitest 5 and jsdom 30 need Node 22 (`engines` already says so; Node 20 fails to start the workers). The lockfile
+  was regenerated (npm 10 hit ERESOLVE/an arborist crash moving off the Vite 5 tree); `npm ci` on npm 10 is clean.
+  `npm audit` (prod and dev) reports 0 vulnerabilities, down from 7 dev ones. Production JS bundle 245 -> 318 kB
+  (75 -> 96 kB gzip), mostly React 19. Deferred: TypeScript 7 and @types/node 26 (Node 22 is the runtime).
+- Trading sessions from the broker (2026-10-10, TRACEABILITY D13, still partial): read-only broker method
+  `trading_sessions(symbol)` (paper: static hours; RemoteBroker via the bridge allow-list) returns 7 server days of
+  sessions resolved to UTC per date (Athens DST tested); `SessionTable.from_broker` makes the runtime table (reported
+  days: only reported sessions open, so early closes and holidays block entries; an unreadable list falls back to the
+  static defaults with a logged reason) and `BrokerSessions` refreshes it per server day. Finding: the MetaTrader5
+  Python package has no session schedule (`session_deals` is a deal count), so MT5 reports the documented hours; real
+  holiday hours need an MQL5 `SymbolInfoSessionTrade` helper. Engine hook for the runner lane (not wired):
+  `self._sessions = BrokerSessions(broker, symbol, fallback=SessionTable(server_tz=...))` at start, then
+  `why = self._sessions.entry_block(now)` as an entry-blocking reason. Exits are unaffected.
+- Engine wave 3 (2026-10-10, rows D10, A2, M9): a decision bar is finalised by clock at close + 1.5 s
+  (`runner.BAR_CLOSE_GRACE_S`; the wall clock in production) even when no tick follows it, or at once by a tick at
+  or after the close; each close runs once (`_closed_through`), a tick older than a bar the clock already finalised
+  never revises it, and a repeated poll of the same quote (the run loop's 0.25 s poll) is no longer appended as a new
+  tick (tick counts and the tick log were inflated in quiet markets). Proposals carry
+  `EngineConfig.approval_window_s`, set from `settings.risk.approval_window_seconds` in `ops/run.py` (default 90).
+  The allocator's tier-1 distances come from the calendar the RiskGate's news blackout reads, so its 30-minute
+  zeroing now acts live (weight 0 inside -30/+30 min). Exits are unchanged: they run on every tick before any bar logic.
+- Wave-3 review fixes (2026-10-10, rows D10, M8, M9): a late tick (stamped before a bar the clock already finalised)
+  is still kept out of the live bars but no longer silently: a `late_tick` data-quality warning (at most one a minute,
+  stored with the bar's dq_events) and the running count `late_ticks` in the engine state; a lone warning never blocks
+  entries (`dq_error` and `dq_checks` count error-severity events only). The engine publishes `clock_skew_s` (broker
+  tick time minus wall clock, median of the last 120 new ticks); health warns above the 1.5 s bar-close grace. It
+  escalates to a blocking data-quality error (entries only; exits never gated) when |skew| > 10 s (`clock_skew`) or
+  when late ticks hit 3 consecutive decision bars (`late_ticks`, cleared by a bar with none), because such bars drift
+  from the training and shadow bars. The allocator keeps its design window, 0 for 30 min either side of tier-1
+  events (`RuleAllocator()` defaults), deliberately stricter than the RiskGate's -15/+30 entry block; the gate window
+  from settings never narrows it (an allocator rule change is the owner's decision).
 
 ## Next steps (no owner input needed unless marked)
+- Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;
+  `docs/decisions/0004-starting-account-and-daily-target.md`): the IC Markets demo is **£1,000 GBP**, read from MT5
+  `account_info` (never config); **£50 is the owner's absolute daily loss limit**; **£50+/day is the north star**
+  (variable by day, not a quota; realistic as a monthly average at ~£21k–£53k). Read-only audit: equity, caps and
+  stages use broker equity correctly, but **RiskGate treats USD amounts as GBP (HIGH)** (`goldbot/risk/gate.py:249-268`):
+  trades are sized at ~0.75× intended, realised risk reads 1.33× too high (15m min lot 1.09% vs true 0.82%, so it is
+  refused even with the min-lot exception), closed-trade R is understated 1.33× (`goldbot/engine/runner.py:1591-1602`),
+  `Intent` takes no contract terms from `symbol_info` (`runner.py:576-577`), and the supervisor sums mixed-currency
+  equities. Top priority: BACKLOG 28 (currency-correct sizing), then 25 (min-lot exception), then 29
+  (`risk.daily_loss_limit_abs: 50`, projected, entries only); all need trading-safety review. At £1,000 only 15m
+  trades (0.01 lot, 0.82%, Raw account), one position at a time (notional cap), at most two full losses a day
+  (1.5% supervisor cap, worst day ~£17), and the 8% stage is in effect a stop. Ladder: 1h ~£1,650, 4h ~£3,270,
+  1d ~£7,900. North-star KPIs (monthly £/day average, best days, opportunity days captured, max drawdown) are in
+  BACKLOG 26; opportunity-day detection (30) and runner exits (31) are hypotheses for the trial registry (no trials
+  spent). Owner: optional deposit plan; confirm the demo is Raw Spread.
+- Risk analytics for playbook G-5 and G-7 (2026-10-10, BACKLOG 20 and 22; tools built, results need data):
+  `python -m goldbot.ops.run ruin --trades-per-week N (--shadow state [--version V | --agent A | --pool-versions] |
+  --closed-trades state | --r-file trades.csv | --win-rate W --avg-win A --avg-loss L) [--tiny-live] [--multiplier M]
+  [--r-haircut H | --demean] [--out F]` is a seeded circular-block-bootstrap Monte Carlo (`goldbot/research/ruin.py`)
+  at the live limits (built from gate.RiskLimits/SupervisorLimits.from_settings), sized with the gate's arithmetic
+  (8% stage = a quarter of the risk at m = 1) and enforcing the caps and stages as RiskGate does: P(each limit trips)
+  within 26/52 weeks, median time to the first trip, max drawdown median/95th/99th (also at twice the block length)
+  and risk of ruin. The report names the shadow version (one version only, default the agent's champion; pooling
+  only with `--pool-versions`) and the cost basis (shadow = spread only, optimistic; closed trades = net; file =
+  unknown), and warns when `--trades-per-week` is more than 25% off the observed rate.
+  `python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--size-down]` (`goldbot/research/min_lot.py`)
+  gives, per family, decision timeframe and registered preset (tsmom `slow` = H-01: 4h decisions, daily ATR), the
+  equity at which 0.01 lot fits the risk (strict and the gate's 1.2x) and the real risk at a given equity, on the mid
+  of the store's bars; `--price P --stop-distance D` without data. Neither has been run on real bars or trades yet
+  (the Mac VM has no store data); run both on the VPS/brain and attach to phase-gate evidence and the H-01
+  account-size decision.
+- **Follow-up once the gate lanes merge:** `goldbot/risk/sizing.py` holds RiskGate's sizing arithmetic and stage
+  machine as pure functions (`effective_risk`, `size_lots`, `stop_distance`, `next_stage`, `MIN_LOT_TOLERANCE`), used
+  by the two reports above; `goldbot/risk/gate.py` still has its own copy (it was being edited by other lanes) and
+  should call `sizing.py`. Until then `tests/test_sizing_parity.py` runs `RiskGate.check`/`update_stage` against it
+  across stages, multipliers and the min-lot boundary, so the copies cannot drift silently.
+- XAUUSD trader playbook (2026-10-10, owner request): `docs/research/xauusd-trader-playbook.md` lists ~70 things a
+  professional gold trader considers (drivers, CFD microstructure, technicals, risk management, process), each with
+  sources, evidence grade and goldbot status, then a ranked gap list (risk gaps G-1..G-10 first: swap in live EV,
+  holiday/reopen rule, tier-2 releases, total open-risk cap, drawdown Monte Carlo, loss-streak throttle, min-lot
+  feasibility, weekend gap risk, MAE/MFE, edge-linked sizing). BACKLOG items 16-24 and H-15 come from it. Open
+  ops check from the D13 review: confirm whether the IC Markets server clock follows Europe/Athens or US DST dates.
+- COT positioning and GLD holdings, point in time (2026-10-10, indicator survey #67/#68, hypotheses H-09/H-12, row
+  D26): `goldbot/data/positioning.py` + `scripts/positioning_data.py` + `.github/workflows/data-positioning.yml`
+  (Saturdays 05:23 UTC) publish `positioning.parquet` on release `positioning-v1`: CFTC disaggregated futures-only
+  COMEX gold (088691) managed-money long/short/net, open interest, commercials net (producer/merchant + swap dealers),
+  and GLD tonnes from the issuer archive (`GLD_US_archive_EN.csv`). COT is stamped Friday 15:30 ET (zoneinfo: 20:30
+  UTC, 19:30 in US DST), the next business day after the Friday in a federal-holiday week, never before the shutdown
+  catch-up floors (2013, 2018-19 conservative and UNVERIFIED against CFTC notices; 2025 from CFTC 9147-25: reports to
+  23 Dec 2025 not before 3 Jan 2026); unscheduled closures (mourning days 2018-12-05, 2025-01-09) count as holidays;
+  GLD the next US business day 14:00 UTC. Publishing never loses history: only a confirmed-missing release/asset is a
+  first run, and the script refuses (exit 2, nothing published) a frame with fewer rows per source or any published
+  row missing. The 2006+ backfill carries current corrected COT values with first-release stamps (rare, small
+  revisions: accepted look-ahead, documented in `cot_frame`). Revisions add rows (first release kept); a row missing from the previous successful download is
+  stamped at the run that first saw it (catches future delays). GLD blocked/reformatted -> "source unavailable",
+  published rows kept, run still green (reported in the step summary), no scraping. Opt-in features
+  (`goldbot/features/positioning.py`, `research_pass.py --positioning DIR`, not with `--discover`): MM net % OI, its
+  52-report z-score and 4-report change, GLD 5/20-day % change; registered only by `enable()`, so the default feature
+  version is unchanged. `fetch_data_release.py --positioning` loads the store table `positioning`. The old unused
+  `macro.fetch_cot_gold` / `gld_holdings_from_csv` (no holiday rule, GLD stamped 06:30 ET) are removed. Not yet: the
+  workflow has never run (Actions -> data-positioning -> Run workflow); `research.yml` has no positioning input; the
+  cleaner opt-in home is `goldbot/research/pipeline.py` OPT_IN_FEATURES (outside this lane).
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
   `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
   stays partial until the research callers (`pipeline.run_specialist`/`run_pool`, `discovery.discover`) pass it
@@ -556,6 +788,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- FYI for the OWNER (no decision needed, 2026-10-10): `research.reserved_trials_quarter: 13` holds the 13 trials
+  of the Q1 2027 pre-registration (`docs/research/preregistration-2027Q1.md`) before the research director and the
+  label grid can spend any; the budget itself (20) is unchanged. Revisit the number with each quarter's
+  pre-registration. Residual: the research analyst's `run_trial` tool still checks the full quarter budget, not the
+  reservation (left out of this change's scope).
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.
 1. Research status (2026-10-09, Q4 2026 trial budget spent: 20/20, research stops until 2027-01-01). Evaluation is
    cross-fitted, spread charged once, design gates and the P4 screen enforced, holdout 2025-10..2026-09 untouched,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AccountSummary(BaseModel):
@@ -387,6 +387,13 @@ class CusumTrace(BaseModel):
     h: float                                # alarm threshold: the agent halts when s exceeds it
     alarm: bool
     points: list[CusumPoint]
+    # where h comes from (row M25, research/cusum.py): "calibrated" = tuned to a 5% quarterly false-alarm rate at the
+    # agent's backtest trade rate and mean taken p; "fixed" = drift.cusum_h, with `h_note` saying why
+    h_source: Literal["calibrated", "fixed"] = "fixed"
+    h_note: str = ""
+    trades_per_week: float | None = None    # the backtest's trade rate the calibration used
+    p_mean: float | None = None             # mean model p of the trades in the trace (the residuals' win probability)
+    false_alarm: float | None = None        # target false-alarm rate per quarter of trading
 
 
 class SystemHaltView(BaseModel):
@@ -476,6 +483,47 @@ class ResearchPlanView(BaseModel):
     holdout_to: str
     focus: list[PlanFocus]
     evidence: list[PlanFamily]
+    # the director's governance fields (absent from plans written before them: defaults then)
+    quarter_reserved: int = 0               # trials held for the quarter's pre-registered queue
+    reservation: PlanReservation | None = None
+    retired: list[RetiredFamilyView] = []
+    reinstate_t: float | None = None        # Bonferroni-corrected bar on the shrunk attribution t to reinstate
+    moves: list[PlanMove] = []              # which input moved which family's budget / share vs the evidence-only plan
+    attribution_note: str | None = None
+    hypotheses_note: str | None = None
+    hypotheses_sha256: str | None = None    # hypotheses.md as the director read it
+    hypotheses_sha256_now: str | None = None  # hypotheses.md as the API reads it now
+    hypotheses_changed: bool = False        # the doc changed since the plan (both hashes known and different)
+    hypotheses_drift: list[str] = []        # where the doc disagrees with research.retired_families
+
+
+class PlanReservation(BaseModel):
+    """Trials of the quarter held for the pre-registered queue (research/director.py Reservation)."""
+    setting: int                            # research.reserved_trials_quarter
+    run: int                                # trials already run against the quarter's preregistered rows
+    pending: int                            # preregistered rows not yet run
+    reserved: int                           # max(setting - run, pending)
+
+
+class RetiredFamilyView(BaseModel):
+    family: str
+    hypothesis_id: str | None               # its row in hypotheses.md section B
+    since: str | None                       # retirement date (ISO)
+    reason: str | None
+    floor: int                              # exploration trials it keeps this quarter (never from the evidence pool)
+    reinstated: bool                        # attribution trades after the retirement date cleared the bar
+    new_evidence: list[str]                 # what reinstated it
+
+
+class PlanMove(BaseModel):
+    family: str
+    source: str                             # "retired_families" | "attribution"
+    detail: str
+    budget_before: int                      # trials in the evidence-only plan
+    budget_after: int
+    share_before: float | None = None       # share of the evidence pool before / after the tilt
+    share_after: float | None = None
+    shift_pct: float | None = None          # (after / before - 1) x 100, at most +-25
 
 
 class HypothesisTable(BaseModel):
@@ -503,4 +551,59 @@ class ResearchView(BaseModel):
 # ============================================================================= end Health and Research screens
 
 
+# ============================================================================= auto mode (A10)
+class VetoTestView(BaseModel):
+    """Welch's two-sample t-test of mean R, approved minus rejected (telegram/automode.py VetoTest)."""
+    n_approved: int
+    n_rejected: int
+    mean_r_approved: float | None
+    mean_r_rejected: float | None
+    diff: float | None
+    ci_low: float | None
+    ci_high: float | None
+    p_value: float | None
+    alpha: float
+    indistinguishable: bool                 # p >= alpha AND the (1 - alpha) interval spans 0
+
+
+class ForcedPropose(BaseModel):
+    """An engine override that keeps propose-and-approve whatever the owner's mode says."""
+    account_id: str
+    kind: Literal["rearm_lock", "kill_switch", "risk_unreadable"]
+    detail: str
+    until: datetime | None = None           # rearm_lock: propose-only until then
+
+
+class AutoModeView(BaseModel):
+    owner_mode: Literal["propose", "auto"] | None    # control.json; None: never set (engines use their configured mode)
+    mode_by: str | None
+    mode_since: datetime | None             # last mode change: the evidence counts from here
+    mode_reason: str | None
+    engine_modes: dict[str, str]            # account -> the mode the engine is running now
+    eligible: bool                          # the exact check /mode auto runs (auto_mode_eligibility_from_state)
+    reasons: list[str]                      # why not, when not eligible
+    decided: int
+    approved: int
+    rejected: int
+    min_proposals: int
+    min_outcomes_per_side: int
+    breaches: list[str]
+    test: VetoTestView
+    forced_propose: list[ForcedPropose]
+    can_enable: bool                        # this user is the owner, the evidence holds and the mode is not auto
+    error: str | None = None                # the evidence could not be read (fails closed: not eligible)
+
+
+class ModeChangeRequest(BaseModel):
+    mode: Literal["auto", "propose"]
+    totp: str = Field("", max_length=16)    # auto only: the owner's one-time authenticator code
+
+
+class ModeChangeResult(BaseModel):
+    message: str
+    view: AutoModeView
+# ============================================================================= end auto mode
+
+
+ResearchPlanView.model_rebuild()   # refers to models defined after it
 Status.model_rebuild()          # `blackout` refers to ActiveBlackout, defined after Status

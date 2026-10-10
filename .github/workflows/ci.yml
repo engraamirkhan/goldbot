@@ -2,7 +2,7 @@ name: ci
 # Gates every PR and every push to main. GitHub's free tier gives a private repo 2,000 runner-minutes a month and bills
 # each job rounded up to the minute, so the checks run in two jobs (backend, frontend) instead of ten, once per change
 # (pull_request, plus push to main for the merge commit) and not for docs-only changes. Every check step runs even
-# after an earlier one failed, so one run reports all failures. Any failure is posted as one GitHub issue labelled
+# after an earlier one failed, so one run reports all failures; install steps are captured the same way (<job>-install). Any failure is posted as one GitHub issue labelled
 # `ci` with the tail of each failed check's output, because Claude sandboxes cannot download Actions logs.
 # Runner: repository variable CI_RUNNER (e.g. "self-hosted") moves the jobs to a self-hosted runner, which costs no
 # minutes; unset means GitHub's ubuntu-latest.
@@ -41,7 +41,12 @@ jobs:
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: web/package-lock.json }
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with: { path: ~/.cache/pre-commit, key: "pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}" }
-      - run: pip install -e ".[dev]" pre-commit && npm --prefix web ci && mkdir -p ci-out
+      - name: backend-install
+        run: |
+          set -o pipefail
+          mkdir -p ci-out
+          { pip install -e ".[dev]" pre-commit && npm --prefix web ci; } 2>&1 | tee ci-out/backend-install.txt \
+            || { echo backend-install >> ci-out/failed-backend.list; exit 1; }
       - name: pre-commit
         if: success() || failure()
         run: set -o pipefail; pre-commit run --all-files --show-diff-on-failure --color never 2>&1 | tee ci-out/pre-commit.txt || { echo pre-commit >> ci-out/failed-backend.list; exit 1; }
@@ -84,7 +89,12 @@ jobs:
         with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: web/package-lock.json }
-      - run: pip install -e . && npm --prefix web ci && mkdir -p ci-out
+      - name: frontend-install
+        run: |
+          set -o pipefail
+          mkdir -p ci-out
+          { pip install -e . && npm --prefix web ci; } 2>&1 | tee ci-out/frontend-install.txt \
+            || { echo frontend-install >> ci-out/failed-frontend.list; exit 1; }
       - name: frontend-lint
         if: success() || failure()
         working-directory: web
@@ -141,7 +151,10 @@ jobs:
           for p in failed:
               parts.append(f"### {p.stem}\n```\n{p.read_text(errors='replace')[-budget:]}\n```")
           if not failed:
-              parts.append("(no output captured: the jobs failed before any check ran, e.g. no runner was assigned)")
+              if out.exists() and any(out.iterdir()):
+                  parts.append("(a job failed but wrote no output for the failed steps; see the run URL)")
+              else:
+                  parts.append("(no artifact exists: the jobs failed before running any step, e.g. no runner was assigned)")
           payload = {"title": f"CI failure on {sha[:7]} ({', '.join(names)})", "body": "\n".join(parts), "labels": ["ci"]}
           req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues", data=json.dumps(payload).encode(),
                                        headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"})

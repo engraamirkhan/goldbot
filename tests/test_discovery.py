@@ -312,3 +312,48 @@ def test_a_discovery_survivor_needs_a_passed_holdout_before_it_counts_as_passed(
     plain = {"x": 1}
     rows.append({"status": "evaluated", "family": "tsmom", "config_hash": config_hash(plain), "results": {"gates": {"passed": True}}})
     assert reg.passed_gates("tsmom", plain)                                           # ordinary trials unchanged
+
+
+def test_check_budget_reserved_lets_only_a_pending_queued_preregistration_spend_the_reservation(tmp_path, queued_prereg):
+    from goldbot.research.director import reserved_trials
+    from goldbot.research.registry import TrialBudgetExceeded
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    q = quarter_of()
+    reg.record(agent_id="a", family="trend", config={}, feature_version="v", rationale="", results={})
+    # budget 3, 2 held for the queue, 1 used: nothing left for a run that is not pre-registered
+    with pytest.raises(TrialBudgetExceeded, match="held for the pre-registered queue"):
+        reg.check_budget_reserved([("tsmom", {"x": 1})], 3, 2)
+    pre = queued_prereg(reg, agent_id="b", family="tsmom", config={"x": 1}, feature_version="v", rationale="r",
+                          reading_rule="continue if ...")
+    quarter, (match,) = reg.check_budget_reserved([("tsmom", {"x": 1})], 3, 2)
+    assert quarter == q and match == pre
+    with pytest.raises(TrialBudgetExceeded):                     # another config does not match it
+        reg.check_budget_reserved([("tsmom", {"x": 2})], 3, 2)
+    with pytest.raises(TrialBudgetExceeded):                     # one pre-registered row covers one run
+        reg.check_budget_reserved([("tsmom", {"x": 1}), ("tsmom", {"x": 1})], 3, 2)
+    reg.record(agent_id="b", family="tsmom", config={"x": 1}, feature_version="v", rationale="r", results={},
+               preregistration=match)
+    assert reserved_trials(reg._rows(), q, 2).reserved == 1      # the reservation went down by one
+    # a pre-registration a run writes for itself is not part of the queue: it neither holds nor uses the reservation
+    jit = reg.preregister(agent_id="c", family="discovery_tsmom", config={"y": 1}, feature_version="v", rationale="r",
+                          reading_rule="continue if ...", queue=False)
+    assert jit["queue"] is False and reserved_trials(reg._rows(), q, 2).reserved == 1
+    reg.record(agent_id="c", family="discovery_tsmom", config={"y": 1}, feature_version="v", rationale="r",
+               results={}, status=DISCOVERY, preregistration=jit)
+    assert reserved_trials(reg._rows(), q, 2).reserved == 1
+    assert reg.check_budget_reserved([("discovery_tsmom", {"y": 1})], 5, 2)[1] == [None]   # never matched again
+
+
+def test_a_link_to_a_preregistration_matches_its_timestamp_not_only_its_number(tmp_path, queued_prereg):
+    from goldbot.research.director import reserved_trials
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    q = quarter_of()
+    queued = queued_prereg(reg, agent_id="a", family="tsmom", config={"x": 1}, feature_version="v", rationale="r",
+                             reading_rule="r")
+    jit = reg.preregister(agent_id="b", family="discovery_tsmom", config={"y": 1}, feature_version="v",
+                          rationale="r", reading_rule="r", queue=False)
+    assert queued["trial"] == jit["trial"] == 1                 # both take the next trial number
+    reg.record(agent_id="b", family="discovery_tsmom", config={"y": 1}, feature_version="v", rationale="r",
+               results={}, status=DISCOVERY, preregistration=jit)
+    r = reserved_trials(reg._rows(), q, 0)
+    assert (r.run, r.pending, r.reserved) == (0, 1, 1)           # the queued row is still pending

@@ -8,6 +8,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import Record
+from goldbot.data.calendar import TradingSession
 
 
 class Tick(Record):
@@ -107,6 +108,10 @@ class Broker(Protocol):
     def margin_required(self, symbol: str, side: int, lots: float, price: float) -> float | None:
         """Margin in the account currency the broker would take for this order (MT5 `order_calc_margin`); None when
         the broker cannot say. Read-only; the RiskGate uses the larger of this and the 1:20 figure."""
+        ...
+    def trading_sessions(self, symbol: str) -> list[TradingSession]:
+        """The symbol's trading sessions for SESSION_DAYS server days from today, each resolved to UTC for its own
+        date (TRACEABILITY D13; `SessionTable.from_broker` builds the runtime table from it). Read-only."""
         ...
     def place_order(self, intent: OrderIntent) -> OrderResult: ...
     def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult: ...

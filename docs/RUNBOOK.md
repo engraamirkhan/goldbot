@@ -86,17 +86,53 @@ On the MT5 box: `sudo goldbot-mt5-authorize '<that ssh-ed25519 line>'` (the key 
 Back on the brain:
 ```bash
 sudo goldbot-tunnel <mt5 private ip>
-goldbot accounts bridge-use icm-demo           # your MT5 login, http://127.0.0.1:8765, the token from 0.3
-goldbot accounts set telegram-bot-token        # from @BotFather (section 2.8)
-goldbot accounts set anthropic-api-key         # optional: staff agents and headline scoring
-goldbot accounts set github-token              # optional: bar sync and the shared trial registry
+goldbot run setup                              # guided: every secret and setting, in order (below)
 ```
-Secrets on these VMs are kept in `/opt/goldbot/state/.secrets.json`, readable only by the `goldbot` service user
-(a server has no desktop keyring); Oracle encrypts the disk at rest. Edit `/opt/goldbot/config/settings.yaml` for
-the Telegram allow-list as in section 2.4 (on the VM only, never committed).
+`goldbot run setup` walks through eight steps. Each one says what the value is, where to get it, and what happens
+without it. Secrets are hidden as you type and never shown again. Press Enter to keep a value that is already set, or
+to skip an optional step. You can run it again at any time: it only asks about what you choose to change.
+
+| Step | What | Where to get it |
+| --- | --- | --- |
+| 1 | MT5 demo login number and password (`icm-demo`) | IC Markets welcome email, or MT5 -> File -> Login to Trade Account |
+| 2 | Bridge address (press Enter for `http://127.0.0.1:8765`) and bridge token | the token printed once by `bridge-serve` in 0.3 |
+| 3 | Telegram bot token | @BotFather -> /newbot (section 2.8) |
+| 4 | Your Telegram user id (the only user who may approve) | message @userinfobot |
+| 5 | Dashboard owner email | your own address |
+| 6, 7 | optional: `anthropic-api-key`, `github-token` | console.anthropic.com; GitHub fine-grained token, Contents: read and write |
+| 8 | Backups: namespace, region, bucket, restic password, writer keys | the console steps in 0.6 (skip now, run setup again later) |
+
+Secrets go only into the secret store: on these VMs `/opt/goldbot/state/.secrets.json`, readable only by the
+`goldbot` service user (a server has no desktop keyring); Oracle encrypts the disk at rest. Steps 4 and 5 are
+written to `/opt/goldbot/config/settings.local.yaml` (mode 0600, on the VM only, never committed); the wizard
+keeps every other line already in that file.
 
 Dashboard: create the Cloudflare tunnel as in section 2.7, then on the brain `sudo cloudflared service install
 <tunnel token>`.
+
+Check everything **before** starting the services:
+```bash
+goldbot run preflight
+```
+It changes nothing. Each line is ✅, ⚠️ or ❌; every ❌ prints the exact command that fixes it. It checks: the
+settings load, the owner email, the Telegram token and allow-list, the tunnel service, the bridge address and token,
+the bridge answering through the tunnel, the terminal logged in to the registered demo account (login, server, demo),
+the dashboard build (`web/dist`), the database files being private (0600), backups (a warning only), the clock
+(chrony), disk and memory, and the deploy timer. Fix and repeat until the last line says **READY**; it exits 1
+while anything blocking is left.
+
+By hand (if the wizard cannot be used), the same values:
+```bash
+goldbot accounts add icm-demo                  # MT5 login number, then password
+goldbot accounts bridge-use icm-demo           # http://127.0.0.1:8765, the token from 0.3
+goldbot accounts set telegram-bot-token        # from @BotFather (section 2.8)
+goldbot accounts set anthropic-api-key         # optional: staff agents and headline scoring
+goldbot accounts set github-token              # optional: bar sync and the shared trial registry
+sudo -u goldbot nano /opt/goldbot/config/settings.local.yaml
+#   auth: {owner_email: <you>}
+#   telegram: {allowed_user_ids: [<your id>]}
+```
+then `sudo chmod 600 /opt/goldbot/config/settings.local.yaml`, and the backup keys as in 0.6.
 
 Start everything (supervisor first):
 ```bash
@@ -110,6 +146,21 @@ positions keep their broker-side stop and target.
 
 ### 0.5 Daily use
 Only your Mac's browser (the dashboard) and Telegram (the one-click Approve).
+
+**Morning digest.** Every day at 06:45 UTC (before London; change it with `telegram.digest_at: "HH:MM"` in
+`config/settings.local.yaml`) Telegram sends one short message:
+* **status:** ✅ all good, or ⚠️ attention with the failing and warning health checks named (details: `goldbot run health`);
+* **yesterday** (the previous UTC day): proposals approved / rejected / expired, trades closed with net $ and R, open
+  positions now;
+* **risk:** drawdown stage and % from peak, daily and weekly loss against the caps, and any halt (yours, drift,
+  supervisor, drawdown);
+* **research:** the next pre-registered trial or the quarter's trial budget, and the best and worst attribution cell
+  that is not noise;
+* **for you:** approvals pending, the number of owner decisions open (see OWNER_GUIDE), and a deploy on offer.
+
+It is sent once a day. If the Telegram service was down at 06:45 it sends the digest when it starts, if that is
+within 6 hours; later than that it skips the day. A file it cannot read shows as "could not read" on that line
+and the rest still arrives. It never contains account numbers or emails.
 
 **Updates: one click on Telegram, or by hand.** Nothing is ever deployed without you.
 * When a new version is merged and has passed CI, Telegram shows *New version ready* with the list of changes and
@@ -166,7 +217,9 @@ its key cannot wipe the backup history, and the bucket keeps every overwritten o
 4. In your password manager, generate a long random **restic password** and save it there *first*. Without it no
    backup can ever be restored, and the brain is the only other place that holds it.
 
-**On the brain** (each command asks for its value; nothing is echoed):
+**On the brain**: `goldbot run setup` (step 8) asks for the namespace, region, bucket, password and the writer key,
+and stores the four `restic-*` keys; then run the last four commands below. By hand instead (each command asks for
+its value; nothing is echoed):
 ```bash
 goldbot accounts set restic-repository     # s3:https://<namespace>.compat.objectstorage.<region>.oraclecloud.com/goldbot-backup/goldbot
 goldbot accounts set restic-password       # the password from your password manager
@@ -248,6 +301,7 @@ Tailscale is optional.
 | --- | --- | --- | --- |
 | `data-dukascopy.yml` | Saturdays 03:17 UTC (current year), or by hand | Downloads Dukascopy ticks, builds 1m bars, publishes Parquet files to the release `data-v1`. | Issues `data coverage <year>` (label `data-coverage`); failures as `data-dukascopy failure for <year>` (labels `ci`, `data`). |
 | `data-macro.yml` | Tuesdays 04:41 UTC, or by hand | Downloads the FRED macro series (10y real yield, breakeven, broad dollar, gold VIX, 2y yield) and publishes `macro_fred.parquet` to the release `macro-v1`. | Failures as issue `data-macro failure` (labels `ci`, `data`). |
+| `data-positioning.yml` | Saturdays 05:23 UTC, or by hand (input `from_year` re-downloads COT from that year) | Downloads COMEX gold Commitments of Traders (CFTC) and GLD holdings (SPDR archive) and publishes `positioning.parquet` to the release `positioning-v1`, each row with a conservative `available_utc`. If the GLD archive is blocked, the run stays green, keeps the published GLD rows and says `GLD SOURCE UNAVAILABLE` in its summary. | Failures (COT download or upload) as issue `data-positioning failure` (labels `ci`, `data`). |
 | `research.yml` | By hand only (Actions -> research -> Run workflow; inputs `specialist`, `from_year`, `to_year`, `rationale`, `macro`) | Walk-forward research for one specialist family (`session_open`, `mean_reversion`, `trend`, `breakout`) on the `data-v1` bars; with `macro` ticked, adds the macro features from `macro-v1`. Keeps the trial registry on release `research-v1`. | Issue `research: <specialist>` (label `research`). |
 | `ci.yml` | Every push, pull request, or by hand | Pre-commit, backend lint/types/unit/integration, frontend lint/types/unit, API contract, browser end-to-end tests. | On a failed push, one issue `CI failure on <commit> (<jobs>)` labelled `ci`, with each failed job's output. |
 
@@ -376,7 +430,9 @@ before it can decide. The Saturday retrain refreshes them, but load them once no
 ```
 
 `--macro` also loads the macro series (release `macro-v1`) into the store; it prints `macro 0` until the
-`data-macro` workflow has run once. The engines do not use them yet; research does.
+`data-macro` workflow has run once. The engines do not use them yet; research does. Add `--positioning` to load the
+COT and GLD holdings rows (release `positioning-v1`, table `positioning`); it prints `positioning 0` until the
+`data-positioning` workflow has run once. Research only (`research_pass.py --positioning`); the engines do not use them.
 
 If the repository is private this needs a GitHub token. The script has a `--token` option, but do not type a
 token on the command line (it stays in the PowerShell history); skip this step instead and let the first Saturday

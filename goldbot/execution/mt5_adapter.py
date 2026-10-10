@@ -24,6 +24,14 @@ Measured costs (`broker_terms`, written by the engine to state/broker_terms_<acc
 * commission from the deals of recent closed positions on the symbol: -(commission + fee) summed over every deal of
   each position that was opened and closed inside the window (reversals excluded), divided by the lots opened:
   USD per lot round trip. Swap and profit are not commission. Needs a USD deposit.
+
+Trading sessions (TRACEABILITY D13): the MetaTrader5 Python package has no equivalent of MQL5's
+SymbolInfoSessionTrade/SymbolInfoSessionQuote, and `symbol_info()` carries no schedule: `session_deals`,
+`session_open`, `session_close` and the other `session_*` fields are statistics of the current session (deal count,
+open/close prices, volumes), not its hours. `trading_sessions` therefore reports the broker's documented hours (the
+static `SessionTable` defaults, IC Markets / Vantage XAUUSD) resolved to UTC per date with the server zone, and logs
+that once. Holidays and early closes are not visible this way; reading the real schedule needs an MQL5 helper in the
+terminal that writes SymbolInfoSessionTrade to a file (not built).
 """
 from __future__ import annotations
 
@@ -33,6 +41,7 @@ from typing import Any, AsyncIterator
 
 import pandas as pd
 
+from goldbot.data.calendar import SessionTable, TradingSession, resolve_server_sessions
 from goldbot.data.timeutil import server_to_utc
 from goldbot.execution.broker import (
     AccountInfo,
@@ -177,6 +186,7 @@ class MT5Broker:
             mt5.shutdown()
             raise RuntimeError(f"symbol_info({symbol}) returned None; refusing to start")
         self._info = info
+        self._sessions_noted = False
 
     # ------------------------------------------------------------------ info
     def symbol_info(self, symbol: str) -> SymbolInfo:
@@ -237,6 +247,15 @@ class MT5Broker:
             log.warning("order_calc_margin(%s, %s lots) returned None: %s", symbol, lots, mt5.last_error())
             return None
         return float(m)
+
+    def trading_sessions(self, symbol: str) -> list[TradingSession]:
+        """The broker's documented hours for the week from today's server date, resolved to UTC per date (the Python
+        package exposes no session schedule: see the module docstring)."""
+        if not self._sessions_noted:
+            log.info("%s: MetaTrader5 Python exposes no session schedule; using the broker's documented hours", symbol)
+            self._sessions_noted = True
+        today = pd.Timestamp.now(tz="UTC").tz_convert(self.server_tz).date()
+        return resolve_server_sessions(SessionTable(server_tz=self.server_tz).server_sessions(), self.server_tz, today)
 
     # ------------------------------------------------------------------ orders
     def _filling(self) -> int:

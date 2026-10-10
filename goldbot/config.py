@@ -118,6 +118,7 @@ class ScheduleSettings(_Section):
     weekdays: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4, 5, 6])
     weekday: int | None = Field(None, ge=0, le=6)
     day: int | None = Field(None, ge=1, le=28)
+    months: list[int] = Field(default_factory=lambda: list(range(1, 13)))   # e.g. [1, 4, 7, 10]: quarterly
     max_late_hours: float = Field(12.0, gt=0)
 
 
@@ -141,6 +142,8 @@ class SchedulerSettings(_Section):
     # on Sunday while the market is closed
     backup: ScheduleSettings = ScheduleSettings(kind="daily", at="22:15", max_late_hours=20)
     restore_drill: ScheduleSettings = ScheduleSettings(kind="weekly", at="10:00", weekday=6, max_late_hours=30)
+    cpcv_quarterly: ScheduleSettings = ScheduleSettings(kind="monthly", at="14:00", weekday=6, months=[1, 4, 7, 10],
+                                                        max_late_hours=30)
     attribution: ScheduleSettings = ScheduleSettings(kind="daily", at="23:50", max_late_hours=20)
 
 
@@ -180,10 +183,25 @@ class AttributionSettings(_Section):
     trade_rows: int = Field(300, ge=0, le=5000)           # most recent per-trade cost rows kept in the JSON
 
 
+class RetiredFamily(_Section):
+    """A specialist family the strategy researcher retired (docs/research/hypotheses.md section B mirrors this list;
+    tests/test_director.py checks they agree). Governance lives here, not in the markdown: editing the doc never
+    changes the research director's allocation by itself."""
+    family: str                           # specialist family name (goldbot/specialists)
+    hypothesis_id: str                    # its row in hypotheses.md section B, e.g. "R-01"
+    retired: date                         # reinstatement reads only out-of-sample trades entered on or after this day
+    reason: str
+    trials: list[int] = Field(default_factory=list)       # registry trial numbers that retired it
+
+
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
     trial_budget_quarter: int = Field(20, ge=1, le=500)   # pre-registered trials per calendar quarter, all families
+    # trials of the quarter held for the pre-registered queue (director.reserved_trials): the research director and
+    # the monthly label grid spend only budget - used - reserved
+    reserved_trials_quarter: int = Field(0, ge=0, le=500)
+    retired_families: list[RetiredFamily] = Field(default_factory=list)
     holdout_from: date | None = date(2025, 10, 1)          # research never sees this window unless scoring it
     holdout_to: date | None = date(2026, 9, 30)            # inclusive
     # primary-signal screen event floor (research.screen, P4); changing it is an owner decision, set before the run
@@ -231,6 +249,8 @@ class TelegramSettings(_Section):
     auto_min_proposals: int = Field(100, ge=100)
     auto_alpha: float = Field(0.10, gt=0, le=0.5)
     auto_min_outcomes_per_side: int = Field(10, ge=2)   # fewer matched outcomes on a side: no evidence (fail closed)
+    # daily owner digest (goldbot/telegram/digest.py): sent once a day at this UTC time ("HH:MM"), before London
+    digest_at: str = Field("06:45", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 class AuthSettings(_Section):
@@ -250,8 +270,9 @@ class DriftSettings(_Section):
     size_down_factor: float = Field(0.5, gt=0, le=1)
     window_days: int = Field(30, ge=7)               # recent candidates for PSI
     min_rows: int = Field(50, ge=10)                 # fewer recent candidates: PSI not computed
-    cusum_k: float = Field(0.5, ge=0)
-    cusum_h: float = Field(4.0, gt=0)
+    cusum_k: float = Field(0.5, ge=0)                # CUSUM allowance in sd (row M25: h is tuned for this k)
+    cusum_false_alarm: float = Field(0.05, gt=0, lt=1)   # design: alarm probability per quarter on in-control trades
+    cusum_h: float = Field(4.0, gt=0)                # fallback h when the backtest has no trade rate
     dd_mult: float = Field(1.5, gt=1)                # 30-day drawdown above this x backtest halts the system
     dd_window_days: int = Field(30, ge=7)
 

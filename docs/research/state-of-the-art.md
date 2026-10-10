@@ -2,6 +2,10 @@
 
 Written 2026-10-10, before the Q1 2027 trial budget resets. Refresh each quarter.
 
+Companion: [`xauusd-trader-playbook.md`](xauusd-trader-playbook.md) is the full checklist of what a professional
+XAUUSD trader considers (drivers, microstructure, technicals, risk management, process). Each item has its evidence
+and goldbot's status, and it ends with a ranked gap list.
+
 **How to read this.** **R** = replicated across independent samples or authors. **S** = single study, or practitioner
 evidence only. "Net" means the source charges realistic costs. "Gross" means it does not. "?" means the source does not
 say, or we could not check. A URL marked *(unverified)* was cited from memory and not fetched for this review. Treat

@@ -23,6 +23,9 @@ export type CalendarResponse = Schemas["CalendarResponse"];
 export type CalendarEvent = Schemas["CalendarEvent"];
 export type ActiveBlackout = Schemas["ActiveBlackout"];
 export type Headline = Schemas["Headline"];
+export type AutoModeView = Schemas["AutoModeView"];
+export type ModeChangeResult = Schemas["ModeChangeResult"];
+export type ApprovalMode = Schemas["ModeChangeRequest"]["mode"];
 export type CalendarQuery = NonNullable<operations["calendar_api_calendar_get"]["parameters"]["query"]>;
 export type NewsQuery = NonNullable<operations["news_api_news_get"]["parameters"]["query"]>;
 
@@ -73,7 +76,11 @@ export const api = {
     req<Schemas["Ok"]>("/api/auth/password/forgot", { method: "POST", body: JSON.stringify({ email, totp, new_password, recovery_code }) }),
   recoveryLogin: (email: string, password: string, recovery_code: string) =>
     req<Schemas["RecoveryLoginResponse"]>("/api/auth/recovery/login", { method: "POST", body: JSON.stringify({ email, password, recovery_code }) }),
+  recoveryCodes: (password: string, totp: string) =>
+    req<Schemas["RecoveryCodesResponse"]>("/api/auth/recovery/codes", { method: "POST", body: JSON.stringify({ password, totp }) }),
   status: () => req<Status>("/api/status"),
+  automode: () => req<AutoModeView>("/api/automode"),
+  setMode: (mode: ApprovalMode, totp = "") => req<ModeChangeResult>("/api/automode", { method: "POST", body: JSON.stringify({ mode, totp }) }),
   accounts: () => req<AccountSummary[]>("/api/accounts"),
   proposals: () => req<Proposal[]>("/api/proposals"),
   recentProposals: () => req<DecidedProposal[]>("/api/proposals/recent"),

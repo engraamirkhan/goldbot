@@ -128,9 +128,15 @@ export function CusumChart({ trace }: { trace: CusumTrace }) {
       <figcaption className="chart-title">
         <strong>{trace.agent_id}</strong> <span className="muted">{trace.version}</span>{" "}
         {trace.alarm ? <span className="state bad">alarm: halted</span> : <span className="state ok">below threshold</span>}
+        <br />
+        <span className={`small ${trace.h_source === "fixed" ? "h-fixed" : "muted"}`}>
+          {trace.h_source === "calibrated"
+            ? `Threshold h ${trace.h} calibrated: ${trace.false_alarm != null ? `${Math.round(trace.false_alarm * 100)}%` : "5%"} false alarms a quarter at ${trace.trades_per_week?.toFixed(1)} trades/week${trace.p_mean != null ? `, mean p ${trace.p_mean.toFixed(2)}` : ""}`
+            : `Fixed threshold (not calibrated): ${trace.h_note || `h ${trace.h}`}`}
+        </span>
       </figcaption>
       <svg viewBox={`0 0 ${CW} ${CH}`} role="img" aria-labelledby={`${id}-t`} className="svg-chart">
-        <title id={`${id}-t`}>{`CUSUM of ${trace.agent_id} over ${n} trades: now ${last ? last.s.toFixed(2) : 0}, halts above ${trace.h}`}</title>
+        <title id={`${id}-t`}>{`CUSUM of ${trace.agent_id} over ${n} trades: now ${last ? last.s.toFixed(2) : 0}, halts above ${trace.h} (${trace.h_source} threshold)`}</title>
         <line className="grid" x1={CM.l} x2={CW - CM.r} y1={y(0)} y2={y(0)} />
         <text className="tick" x={CM.l - 6} y={y(0) + 4} textAnchor="end">0</text>
         <line className="limit" x1={CM.l} x2={CW - CM.r} y1={y(trace.h)} y2={y(trace.h)} />
