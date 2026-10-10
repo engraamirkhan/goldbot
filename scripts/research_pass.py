@@ -32,9 +32,14 @@ for a trial that declares them, a seeded clone, or a specialist without a declar
 includes them, so such a model scores only frames built with macro. A missing or empty release is reported and the
 pass runs without them.
 
+Positioning (opt-in): `--positioning DIR` (the release positioning-v1, from the data-positioning workflow) adds the
+point-in-time COT and GLD columns (goldbot/features/positioning.py: managed-money net % of OI, its 52-week z-score and
+4-week change, GLD tonnes 5/20-day % change) to the candidate frame and the leakage check, under the same rules as
+macro (the feature version includes them). Not available with --discover.
+
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
       [--specialist session_open | --pooled 15m] [--from-year 2010] [--to-year 2026] [--rationale "..."] \
-      [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table costs_measured.json] [--macro macro/]
+      [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table costs_measured.json] [--macro macro/] [--positioning positioning/]
 """
 from __future__ import annotations
 
@@ -50,9 +55,10 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
-from goldbot.data.release import read_macro_files  # noqa: E402
+from goldbot.data.release import read_macro_files, read_positioning_files  # noqa: E402
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
 from goldbot.execution.costs import SwapSpec, load_research_cost_table, research_costs  # noqa: E402
+from goldbot.features import positioning as positioning_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
@@ -65,6 +71,7 @@ from goldbot.research.pipeline import (  # noqa: E402
     pooled_family,
     pooled_members,
     prepare,
+    research_feature_names,
     run_pool,
 )
 from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry  # noqa: E402
@@ -115,6 +122,33 @@ def _macro_line(info: dict[str, Any] | None) -> str:
     return f"- macro features: {info['detail']}" if info else "- macro features: off"
 
 
+def load_positioning(path: str) -> tuple[pd.DataFrame | None, dict[str, Any]]:
+    """The positioning release for ctx["positioning"], or None with the reason (recorded in the trial and reported)."""
+    if not path:
+        return None, {"used": False, "detail": "off (no --positioning)"}
+    df = read_positioning_files(Path(path))
+    if df.empty:
+        return None, {"used": False, "detail": f"off: no positioning release at {path} (run the data-positioning "
+                                                f"workflow; `gh release download positioning-v1 -D {path}`)"}
+    series = sorted(df["series"].unique())
+    return df, {"used": True, "series": series,
+                "detail": f"on: {', '.join(series)}; value dates {df['value_date'].min():%Y-%m-%d} .. "
+                          f"{df['value_date'].max():%Y-%m-%d}, joined as of available_utc"}
+
+
+def _positioning_line(info: dict[str, Any] | None) -> str:
+    return f"- positioning features: {info['detail']}" if info else "- positioning features: off"
+
+
+def feature_ctx(macro: pd.DataFrame | None, positioning: pd.DataFrame | None) -> tuple[dict | None, list[str] | None]:
+    """ctx for the features and the explicit feature list: None (the pipeline's default, with macro when passed)
+    unless positioning is on, which registers and appends the opt-in positioning feature."""
+    ctx = {k: v for k, v in (("macro", macro), ("positioning", positioning)) if v is not None}
+    if positioning is None:
+        return ctx or None, None
+    return ctx, [*research_feature_names(ctx), positioning_features.enable()]
+
+
 def per_year(oof: pd.DataFrame, threshold: float | None) -> pd.DataFrame:
     """Out-of-fold trades per calendar year: every candidate vs the model-filtered (cross-fitted) subset."""
     if oof.empty or "p_raw" not in oof:
@@ -154,6 +188,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              _swap_line(m.get("swap")),
              f"- cost source: {m.get('cost_source', 'settings priors')}",
              _macro_line(m.get("macro")),
+             _positioning_line(m.get("positioning")),
              _holdout_line(m.get("holdout")),
              f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
@@ -359,6 +394,8 @@ def main() -> int:
                     help="one meta-model over every family deciding on this timeframe (one trial, family pooled_<tf>)")
     ap.add_argument("--macro", default="",
                     help="folder or Parquet of the macro-v1 release: adds the point-in-time macro features")
+    ap.add_argument("--positioning", default="",
+                    help="folder or Parquet of the positioning-v1 release: adds the opt-in COT/GLD features")
     _discovery_args(ap)
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
@@ -378,18 +415,24 @@ def main() -> int:
     b1 = load_bars(Path(args.bars), args.from_year, args.to_year)      # fails fast, before any registry file exists
     macro, macro_info = load_macro(args.macro)
     print(_macro_line(macro_info)[2:], flush=True)
+    positioning, positioning_info = load_positioning(args.positioning)
+    print(_positioning_line(positioning_info)[2:], flush=True)
+    if args.discover and positioning is not None:
+        raise SystemExit("--positioning is not wired into --discover yet; run it without --discover")
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
         if args.discover:
             return _discover(args, variants, b1, reg, settings, extra_cost, swap, holdout, cost_source, macro)
         return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings, swap=swap,
-                    cost_source=cost_source, macro=macro, macro_info=macro_info)
+                    cost_source=cost_source, macro=macro, macro_info=macro_info, positioning=positioning,
+                    positioning_info=positioning_info)
 
 
 def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
          b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any, *, swap: SwapSpec, cost_source: str,
-         macro: pd.DataFrame | None = None, macro_info: dict[str, Any] | None = None) -> int:
-    feat_ctx = {"macro": macro} if macro is not None else None
+         macro: pd.DataFrame | None = None, macro_info: dict[str, Any] | None = None,
+         positioning: pd.DataFrame | None = None, positioning_info: dict[str, Any] | None = None) -> int:
+    feat_ctx, feat_names = feature_ctx(macro, positioning)
     if args.score_holdout:
         if holdout is None:
             raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
@@ -417,8 +460,9 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         if tf not in frames:                       # bars, context, decision frame and lookahead check once per timeframe
             b_dec = resample_bars(b1, tf)
             context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
-            leak = lookahead_check(b_dec, context, ctx=feat_ctx)
-            frames[tf] = (b_dec, context, leak, build_decision_frame(b_dec.reset_index(drop=True), context, ctx=feat_ctx))
+            leak = lookahead_check(b_dec, context, feature_names=feat_names, ctx=feat_ctx)
+            frames[tf] = (b_dec, context, leak, build_decision_frame(b_dec.reset_index(drop=True), context,
+                                                                     feature_names=feat_names, ctx=feat_ctx))
             sizes = "  ".join(f"{k} {len(v):,}" for k, v in context.items())
             print(f"{tf} {len(b_dec):,}  {sizes}; lookahead check: {len(leak['lookahead_columns'])} of "
                   f"{leak['columns_checked']} columns differ [{time.time() - t0:.0f}s]", flush=True)
@@ -442,7 +486,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         split = None if args.score_holdout else rule_only_split(pd.concat([p.labels for p in preps], ignore_index=True))
         common = {"lookahead": leak, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
                   "screen": scr, "screen_skipped": skipped, "cost_source": cost_source, "macro": macro_info,
-                  "rule_only_split": split}
+                  "positioning": positioning_info, "rule_only_split": split}
         rationale = args.rationale + (f" | overrides {json.dumps(job.overrides, sort_keys=True)}" if job.overrides else "")
         if scr is not None and not scr["passed"] and not args.skip_screen:
             n = int(sum(len(p.labels) for p in preps))
@@ -469,7 +513,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                              rationale=rationale, results=metrics, status="holdout" if args.score_holdout else "evaluated",
                              budget_quarter=quarter)
             res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped, "cost_source": cost_source,
-                           "macro": macro_info, "rule_only_split": split}
+                           "macro": macro_info, "positioning": positioning_info, "rule_only_split": split}
             years = per_year(res.oof, res.metrics.get("threshold"))
             text = render_report(res, years, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0})
         if job.overrides:

@@ -248,6 +248,7 @@ Tailscale is optional.
 | --- | --- | --- | --- |
 | `data-dukascopy.yml` | Saturdays 03:17 UTC (current year), or by hand | Downloads Dukascopy ticks, builds 1m bars, publishes Parquet files to the release `data-v1`. | Issues `data coverage <year>` (label `data-coverage`); failures as `data-dukascopy failure for <year>` (labels `ci`, `data`). |
 | `data-macro.yml` | Tuesdays 04:41 UTC, or by hand | Downloads the FRED macro series (10y real yield, breakeven, broad dollar, gold VIX, 2y yield) and publishes `macro_fred.parquet` to the release `macro-v1`. | Failures as issue `data-macro failure` (labels `ci`, `data`). |
+| `data-positioning.yml` | Saturdays 05:23 UTC, or by hand (input `from_year` re-downloads COT from that year) | Downloads COMEX gold Commitments of Traders (CFTC) and GLD holdings (SPDR archive) and publishes `positioning.parquet` to the release `positioning-v1`, each row with a conservative `available_utc`. If the GLD archive is blocked, the run stays green, keeps the published GLD rows and says `GLD SOURCE UNAVAILABLE` in its summary. | Failures (COT download or upload) as issue `data-positioning failure` (labels `ci`, `data`). |
 | `research.yml` | By hand only (Actions -> research -> Run workflow; inputs `specialist`, `from_year`, `to_year`, `rationale`, `macro`) | Walk-forward research for one specialist family (`session_open`, `mean_reversion`, `trend`, `breakout`) on the `data-v1` bars; with `macro` ticked, adds the macro features from `macro-v1`. Keeps the trial registry on release `research-v1`. | Issue `research: <specialist>` (label `research`). |
 | `ci.yml` | Every push, pull request, or by hand | Pre-commit, backend lint/types/unit/integration, frontend lint/types/unit, API contract, browser end-to-end tests. | On a failed push, one issue `CI failure on <commit> (<jobs>)` labelled `ci`, with each failed job's output. |
 
@@ -376,7 +377,9 @@ before it can decide. The Saturday retrain refreshes them, but load them once no
 ```
 
 `--macro` also loads the macro series (release `macro-v1`) into the store; it prints `macro 0` until the
-`data-macro` workflow has run once. The engines do not use them yet; research does.
+`data-macro` workflow has run once. The engines do not use them yet; research does. Add `--positioning` to load the
+COT and GLD holdings rows (release `positioning-v1`, table `positioning`); it prints `positioning 0` until the
+`data-positioning` workflow has run once. Research only (`research_pass.py --positioning`); the engines do not use them.
 
 If the repository is private this needs a GitHub token. The script has a `--token` option, but do not type a
 token on the command line (it stays in the PowerShell history); skip this step instead and let the first Saturday

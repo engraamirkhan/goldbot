@@ -2,13 +2,13 @@
 
 Every row has value_date (what the number is about), available_utc (when the system could have
 known it) and vintage (the realtime_start FRED reports, the retrieval date for the public fredgraph CSV that the
-data-macro workflow publishes on release `macro-v1`, or the publication time for COT/GLD).
+data-macro workflow publishes on release `macro-v1`). COT positioning and GLD holdings live in
+goldbot/data/positioning.py (release `positioning-v1`).
 Features only ever join on available_utc via `store.asof_join`.
 """
 from __future__ import annotations
 
 import io
-import zipfile
 from datetime import time
 from zoneinfo import ZoneInfo
 
@@ -206,44 +206,6 @@ def driver_frames(macro: pd.DataFrame) -> dict[str, pd.DataFrame]:
         # several observations can become public at once (a week of H.10 dollar values on one Tuesday): the latest
         # observation is the current value, so keep one row per stamp (an as-of join would pick among ties arbitrarily)
         out[col] = f.drop_duplicates("available_utc", keep="last").dropna().reset_index(drop=True)
-    return out
-
-
-def fetch_cot_gold(year: int) -> pd.DataFrame:
-    """CFTC disaggregated futures-only, COMEX gold (088691). Report date Tuesday, published Friday 15:30 ET."""
-    url = f"https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
-    r = requests.get(url, timeout=60)
-    r.raise_for_status()
-    z = zipfile.ZipFile(io.BytesIO(r.content))
-    name = [n for n in z.namelist() if n.lower().endswith(".txt")][0]
-    df = pd.read_csv(z.open(name), low_memory=False)
-    df.columns = [c.strip() for c in df.columns]
-    g = df[df["CFTC_Contract_Market_Code"].astype(str).str.strip() == "088691"].copy()
-    report = pd.to_datetime(g["Report_Date_as_YYYY-MM-DD"])
-    publish = (report + pd.offsets.Day(3)).dt.normalize() + pd.Timedelta(hours=15, minutes=30)
-    avail = pd.DatetimeIndex(publish).tz_localize(ET, ambiguous="NaT", nonexistent="shift_forward").tz_convert("UTC")
-    out = pd.DataFrame({
-        "series": "cot_mm_net",
-        "value_date": report,
-        "value": g["M_Money_Positions_Long_All"].astype(float) - g["M_Money_Positions_Short_All"].astype(float),
-        "open_interest": g["Open_Interest_All"].astype(float),
-        "vintage": report,
-        "available_utc": avail,
-    })
-    out["ts_utc"] = out["available_utc"]
-    return out.sort_values("available_utc").reset_index(drop=True)
-
-
-def gld_holdings_from_csv(path: str) -> pd.DataFrame:
-    """SPDR Gold Shares historical data CSV (Date, Tonnes). Published next business day ~06:30 NY."""
-    df = pd.read_csv(path)
-    cols = {c.lower(): c for c in df.columns}
-    date = pd.to_datetime(df[cols["date"]])
-    tonnes = df[[c for c in df.columns if "tonne" in c.lower()][0]].astype(float)
-    avail = _next_business_day_at(date, time(6, 30), ET)
-    out = pd.DataFrame({"series": "gld_tonnes", "value_date": date, "value": tonnes, "vintage": date,
-                        "available_utc": avail})
-    out["ts_utc"] = out["available_utc"]
     return out
 
 

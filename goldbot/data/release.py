@@ -1,7 +1,8 @@
 """Load the 1m bars the data-dukascopy workflow publishes on release `data-v1` into the store, and derive the
 higher timeframes. Used by scripts/fetch_data_release.py and by the Saturday retrain on the VPS (best effort:
 without network the retrain uses what the store already holds). The macro series the data-macro workflow publishes
-on release `macro-v1` load the same way into the `macro` table. `upload_asset` is the VPS's way back: it puts the
+on release `macro-v1` load the same way into the `macro` table, and the COT/GLD positioning rows the data-positioning
+workflow publishes on release `positioning-v1` into the `positioning` table. `upload_asset` is the VPS's way back: it puts the
 canonical broker's measured cost table on release `costs-v1` (goldbot/ops/jobs.py `publish_costs`)."""
 from __future__ import annotations
 
@@ -142,6 +143,57 @@ def sync_release_macro(store: Store, *, raw_dir: Path = Path("raw-macro"), token
         raise
     files = [download(a, raw_dir, token) for a in assets]
     return sum(load_macro_into_store(store, read_macro_files(f)) for f in files)
+
+
+# ------------------------------------------------------------------ positioning (data-positioning workflow, release positioning-v1)
+POSITIONING_TAG = "positioning-v1"
+POSITIONING_COLUMNS = ("series", "value_date", "value", "vintage", "available_utc", "source")
+
+
+def read_positioning_files(path: Path) -> pd.DataFrame:
+    """The positioning release as one long frame (goldbot/data/positioning.py COLUMNS): `path` is a Parquet file or a
+    folder of them. Empty when nothing is there; a file without the point-in-time columns is refused."""
+    files = [path] if path.is_file() else sorted(path.glob("*.parquet")) if path.is_dir() else []
+    if not files:
+        return pd.DataFrame(columns=list(POSITIONING_COLUMNS))
+    df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    missing = [c for c in POSITIONING_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"positioning release {path} lacks {missing}")
+    df["available_utc"] = pd.to_datetime(df["available_utc"], utc=True)
+    df["ts_utc"] = df["available_utc"]
+    return (df.drop_duplicates(["series", "value_date", "vintage"], keep="last").sort_values("available_utc")
+            .reset_index(drop=True))
+
+
+def load_positioning_into_store(store: Store, df: pd.DataFrame) -> int:
+    """Append to the `positioning` table, partitioned by each row's source (cftc, spdr); de-duplicated on series,
+    value_date, vintage."""
+    return sum(store.append("positioning", g.drop(columns=["source"]), source=str(src))
+               for src, g in df.groupby("source")) if len(df) else 0
+
+
+def store_positioning(store: Store) -> pd.DataFrame:
+    """The positioning rows the store holds (what research passes as ctx["positioning"]), with their source."""
+    df = store.read("positioning")
+    if df.empty:
+        return df
+    df["available_utc"] = pd.to_datetime(df["available_utc"], utc=True)
+    return df.drop(columns=[c for c in ("symbol", "year", "month") if c in df.columns])
+
+
+def sync_release_positioning(store: Store, *, raw_dir: Path = Path("raw-positioning"), token: str | None = None) -> int:
+    """Download the positioning release and load it into the store. 0 when the release does not exist yet (the
+    data-positioning workflow has not run); other network errors propagate."""
+    token = token or os.environ.get("GH_TOKEN")
+    try:
+        assets = list_assets(token, tag=POSITIONING_TAG)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return 0
+        raise
+    files = [download(a, raw_dir, token) for a in assets]
+    return sum(load_positioning_into_store(store, read_positioning_files(f)) for f in files)
 
 
 def sync_release(store: Store, *, token: str | None = None) -> dict[str, int]:
