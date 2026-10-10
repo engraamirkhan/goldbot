@@ -246,3 +246,9 @@ td a { color: inherit; }
 .budget.bad { color: var(--bad-fg); } .budget.bad .bar span { background: var(--bad-fill); }
 .budget.idle { border-top: 1px solid var(--line); padding-top: 10px; }
 .notes { margin: 0; padding-left: 18px; }
+.milestone details summary { cursor: pointer; min-height: 24px; }
+.acct.skeleton { border-left-color: var(--line); }
+.sk { display: block; background: var(--line); border-radius: 4px; height: 14px; }
+.sk-title { width: 40%; height: 18px; } .sk-fig { height: 36px; } .sk-line { width: 80%; }
+@media (prefers-reduced-motion: no-preference) { .sk { animation: sk-pulse 1.4s ease-in-out infinite; } }
+@keyframes sk-pulse { 50% { opacity: 0.5; } }

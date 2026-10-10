@@ -37,7 +37,8 @@ If the wizard cannot be used, the manual commands are in [RUNBOOK 0.4](RUNBOOK.m
 - **Health tab:** each check reads ok, warn or fail with a reason, plus drift and drawdown per strategy.
 - **Your account (Overview):** once the engine is connected to the broker, each account card shows the **balance** and
   **equity** in the account's currency (equity includes open trades), today's change since 00:00 UTC, the margin level,
-  **today's loss budget** (how much more can be lost today before new entries stop, and which limit decides it) and the
+  the **loss budget** (how much more can be lost before new entries stop, and which limit decides it: today's or
+  this week's, this account's or all accounts together) and the
   **next milestone** (the timeframes your balance can trade now and the balance the next one needs, with a progress
   bar). The Approvals tab shows the loss budget too. "Pending broker terms" means the engine has not read the
   broker's currency conversion yet, so no amount is guessed. A milestone allows a timeframe; a strategy still has to

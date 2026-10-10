@@ -65,7 +65,7 @@ describe("blockers", () => {
       ["owner halt", "supervisor halt", "drift halt", "news blackout", "drawdown halt", "account class unknown"]);
   });
   it("blocks when today's loss budget is spent", () => {
-    const spent = { limit: 15, used: 15, remaining: 0, binding: "account 2.0% cap", notes: [], caps: [] };
+    const spent = { limit: 15, used: 15, remaining: 0, binding: "account 2.0% daily cap", binding_label: "this account (2.0% of today's start)", period: "today" as const, notes: [], caps: [] };
     expect(blockers(status(), [account({ loss_budget: spent })], "icm-demo")).toEqual(["daily loss limit reached"]);
     expect(blockers(status(), [account({ loss_budget: { ...spent, used: 5, remaining: 10 } })], "icm-demo")).toEqual([]);
   });

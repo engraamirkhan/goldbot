@@ -2,6 +2,7 @@
 P&L in account currency, the daily loss budget and the milestone ladder, read from engine_<account>.json and
 supervisor.json. An engine file from before these fields existed still renders (they are null)."""
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -43,13 +44,22 @@ def _get(tmp_path, engine: dict, supervisor: dict | None = None) -> dict:
 
 
 def test_accounts_show_balance_currency_margin_level_and_todays_pnl_in_account_currency(tmp_path):
-    row = _get(tmp_path, ENGINE, {"daily_cap": 0.015, "combined_day_start_equity": 1000.0, "combined_equity": 990.0})
+    row = _get(tmp_path, ENGINE, {"daily_cap": 0.015, "combined_day_start_equity": 1000.0, "weekly_cap": 0.04,
+                                  "combined_week_start_equity": 1000.0, "combined_equity": 990.0, "ts": time.time()})
     assert (row["balance"], row["equity"], row["currency"]) == (1000.0, 990.0, "GBP")
     assert row["margin_level_pct"] == pytest.approx(990.0 / 156.0 * 100)
     assert row["day_pnl"] == pytest.approx(-10.0)
     b = row["loss_budget"]
     assert (b["limit"], b["used"], b["remaining"], b["binding"]) == (pytest.approx(15.0), pytest.approx(10.0),
-                                                                    pytest.approx(5.0), "combined 1.5% cap")
+                                                                    pytest.approx(5.0), "combined 1.5% daily cap")
+    assert b["binding_label"] == "all accounts together (1.5% of today's start)" and b["period"] == "today"
+
+
+def test_a_torn_supervisor_file_or_junk_engine_fields_never_break_the_accounts_list(tmp_path):
+    (tmp_path / "supervisor.json").write_text('{"daily_cap": 0.0')                  # half-written
+    row = _get(tmp_path, {**ENGINE, "limits": {"daily_cap": "x", "risk_per_trade": None}, "ladder_atr": "junk",
+                          "lot_terms": [1, 2], "week_start_equity": "?"})
+    assert row["equity"] == 990.0 and row["milestones"] is None and row["loss_budget"] is None
 
 
 def test_a_gbp_account_ladder_waits_for_the_engines_currency_factor(tmp_path):

@@ -80,7 +80,7 @@ function build(s: Status, accounts: AccountSummary[]): Chip[] {
   return chips;
 }
 
-/** Today's loss budget left (ADR 0004): the account with the least left as a share of its limit. */
+/** The loss budget left (ADR 0004; daily and weekly caps): the account with the least left as a share of its limit. */
 function budgetChip(accounts: AccountSummary[]): Chip {
   const withBudget = accounts.filter((a) => a.loss_budget);
   if (withBudget.length === 0) return { key: "budget", label: "Loss budget", value: "not reported", tone: "idle" };
@@ -89,5 +89,5 @@ function budgetChip(accounts: AccountSummary[]): Chip {
   const b = a.loss_budget!;
   const who = accounts.length > 1 ? `${a.account_id}: ` : "";
   return { key: "budget", label: "Loss budget", value: `${who}${cash(b.remaining, a.currency)} left`,
-           detail: `of ${cash(b.limit, a.currency)} today`, tone: budgetTone(b), title: b.binding };
+           detail: `limit ${cash(b.limit, a.currency)} ${b.period}`, tone: budgetTone(b), title: `Limit set by: ${b.binding_label}` };
 }

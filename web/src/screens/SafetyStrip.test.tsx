@@ -51,10 +51,10 @@ describe("SafetyStrip", () => {
   });
 
   it("shows today's loss budget left, amber under a quarter and red when spent", () => {
-    const budget = (remaining: number) => ({ limit: 15, used: 15 - remaining, remaining, binding: "combined 1.5% cap", notes: [], caps: [] });
+    const budget = (remaining: number) => ({ limit: 15, used: 15 - remaining, remaining, binding: "combined 1.5% daily cap", binding_label: "all accounts together (1.5% of today's start)", period: "today" as const, notes: [], caps: [] });
     const { rerender } = render(<SafetyStrip status={status()} accounts={[account({ currency: "GBP", loss_budget: budget(5) })]} />);
     expect(chip("Loss budget")).toHaveTextContent("£5.00 left");
-    expect(chip("Loss budget")).toHaveTextContent("of £15.00 today");
+    expect(chip("Loss budget")).toHaveTextContent("limit £15.00 today");
     expect(chip("Loss budget")).toHaveClass("ok");
     rerender(<SafetyStrip status={status()} accounts={[account({ currency: "GBP", loss_budget: budget(3) })]} />);
     expect(chip("Loss budget")).toHaveClass("warn");

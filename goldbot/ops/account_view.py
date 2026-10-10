@@ -1,27 +1,37 @@
-"""The live account view (owner request; ADR 0004 sections 3 and 4): today's daily loss budget and the milestone
-ladder, computed from what the engine publishes in state/engine_<account>.json and the supervisor in
-state/supervisor.json. Nothing here reads config: balances, currency, limits, price, ATR and lot terms are the engine's
-live values, so the view shows what the RiskGate is acting on. Reporting only: nothing here sizes or gates an order.
+"""The live account view (owner request; ADR 0004 sections 3 and 4): the loss budget and the milestone ladder,
+computed from what the engine publishes in state/engine_<account>.json and the supervisor in state/supervisor.json.
+Nothing here reads config: balances, currency, limits, price, ATR and lot terms are the engine's live values, so the
+view shows what the RiskGate is acting on. Reporting only: nothing here sizes or gates an order.
 
-Daily loss budget. The effective daily loss limit is min(account cap x day-start equity, combined cap x combined
-day-start equity, absolute limit) in account currency (ADR 0004 section 3). Each cap is listed with its own use so
-far; the binding one is the cap with the least left. The combined cap is only added when every engine reports the
-same currency (summing pounds and dollars would be wrong: ADR 0004 audit A8). The absolute limit is listed only once
-the engine publishes it (`limits.daily_loss_limit_abs`, BACKLOG 29): until the RiskGate enforces it, showing it as a
-limit would claim a protection that is not there.
+Loss budget. Every loss cap that stops new entries is listed with its limit, its use and what is left, in account
+currency: the account's daily 2% and weekly 5% (gate.py, on day- and week-start equity), the supervisor's combined
+daily 1.5% and weekly 4% (supervisor.py, on combined start equity) and the owner's absolute daily limit (ADR 0004
+section 3). The budget shown is the cap with least left (a bad week can bind on a quiet day). Notes:
+* each cap is on the loss from its period's start, as the gate computes it, so a profitable day adds room;
+* the combined caps need a supervisor report under 60 s old and one currency across accounts (summing pounds and
+  dollars would be wrong: ADR 0004 audit A8); otherwise they are left out with a note;
+* the absolute limit is listed only once the engine publishes `limits.daily_loss_limit_abs` (account currency, per
+  account; the currency lane, BACKLOG 28/29): until the RiskGate enforces it, showing it would claim a protection
+  that is not there. Its check is projected, so when the engine also publishes `limits.min_lot_risk_account` (the
+  smallest trade's stop risk) that amount is reserved: the limit reads as spent once less than the next trade's
+  stop is left;
+* the caps are checked before an entry against the loss so far, so a day can still end one stop past a cap.
 
 Milestone ladder. A timeframe is tradeable when its minimum lot fits the RiskGate's sizing rule at the current equity
-(goldbot/risk/sizing.py): the stop is 1.5 x ATR(14) of that timeframe (design "Sizing"), floored at the stops level
-plus the spread; the minimum lot's loss at that stop in account currency must be within 1.2 x the target risk
+(goldbot/risk/sizing.py): the stop is 1.5 x ATR(14) of that timeframe (design "Sizing"; a specialist's own stop can be
+1.0-1.5 x ATR, so this is the design default, not every strategy's), floored at the stops level plus the spread; the
+minimum lot's loss at that stop in account currency must be within 1.2 x the target risk at normal conviction
 (risk per trade x multiplier 1, after the 8% stage), or within `min_lot_risk_cap` (halved in the 8% stage) once the
 engine publishes it (BACKLOG 25). The stop is in USD per ounce; on a non-USD account the loss is converted with the
 engine's own `usd_to_account` factor (BACKLOG 28, from the broker). Without that factor, or without the symbol's lot
-terms from the broker, the ladder says "pending broker terms" and shows no amounts: it never guesses a rate.
+terms from the broker, the ladder says "pending broker terms" and shows no amounts: it never guesses a rate. ATR is
+the engine's mid-price ATR of its own bars (1d on the feature-day), so it can differ slightly from a broker chart's.
 """
 from __future__ import annotations
 
 import math
-from typing import Any
+import time
+from typing import Any, Callable, Literal
 
 from goldbot.base import FrozenRecord
 from goldbot.risk.sizing import MIN_LOT_TOLERANCE, effective_risk, stop_distance
@@ -29,13 +39,17 @@ from goldbot.risk.sizing import MIN_LOT_TOLERANCE, effective_risk, stop_distance
 LADDER_TIMEFRAMES = ("15m", "1h", "4h", "1d")   # ADR 0004 section 4: M1 15m, M2 1h, M3 4h, M4 1d
 LADDER_STOP_ATR = 1.5                            # design "Sizing": stop = 1.5 x ATR(14) of the decision timeframe
 PENDING_BROKER_TERMS = "pending broker terms"
+Period = Literal["today", "this week"]
+SUPERVISOR_MAX_AGE_S = 60.0                     # the engines' own heartbeat rule (SupervisorLimits.heartbeat_max_age_s)
 
 
 class LossCap(FrozenRecord):
-    name: str                  # "account 2.0% cap", "combined 1.5% cap", "absolute limit"
+    name: str                  # "account 2.0% daily cap", "combined 4.0% weekly cap", "absolute daily limit"
+    label: str                 # the same in plain words for the owner: "all accounts together (1.5% of today's start)"
+    period: Period
     limit: float               # account currency
-    used: float                # lost since the day started (00:00 UTC), floating P&L included; >= 0
-    remaining: float           # >= 0
+    used: float                # lost since the period started (00:00 UTC / Sunday 00:00 UTC), floating P&L included
+    remaining: float           # max(0, limit - loss since the start [- the next trade's stop]); today's gains add room
 
 
 class LossBudget(FrozenRecord):
@@ -43,6 +57,8 @@ class LossBudget(FrozenRecord):
     used: float
     remaining: float
     binding: str
+    binding_label: str
+    period: Period
     caps: list[LossCap]
     notes: list[str] = []
 
@@ -98,42 +114,72 @@ def _pct(x: float) -> str:
     return f"{100 * x:.1f}%"
 
 
-def loss_budget(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[dict[str, Any]]) -> LossBudget | None:
-    """Today's loss budget for this engine's account; None when the engine does not publish its limits or day start."""
+def loss_budget(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[dict[str, Any]], *,
+                now: float | None = None) -> LossBudget | None:
+    """The loss budget for this engine's account; None when the engine does not publish its limits or day start.
+
+    Each cap is on the loss from its period's start equity (the gate's `1 - equity / start >= cap`), so a profitable
+    day adds room: left = max(0, limit - (start - equity)). The binding cap is the one with least left. The combined
+    caps need a fresh supervisor report (heartbeat within SUPERVISOR_MAX_AGE_S) and one currency across accounts."""
     limits = engine.get("limits")
     eq, day0 = _num(engine.get("equity")), _pos(engine.get("day_start_equity"))
     if not isinstance(limits, dict) or eq is None or day0 is None:
         return None
+    week0 = _pos(engine.get("week_start_equity"))
     caps: list[LossCap] = []
     notes: list[str] = []
 
-    def add(name: str, limit: float, used: float) -> None:
-        used = max(0.0, used)
-        caps.append(LossCap(name=name, limit=limit, used=used, remaining=max(0.0, limit - used)))
+    def add(name: str, label: str, period: Period, limit: float, start: float, current: float,
+            reserve: float = 0.0) -> None:
+        loss = start - current
+        caps.append(LossCap(name=name, label=label, period=period, limit=limit, used=max(0.0, loss),
+                            remaining=max(0.0, limit - loss - reserve)))
 
-    daily = _pos(limits.get("daily_cap"))
+    daily, weekly = _pos(limits.get("daily_cap")), _pos(limits.get("weekly_cap"))
     if daily is not None:
-        add(f"account {_pct(daily)} cap", daily * day0, day0 - eq)
-    sup_cap, sup_d0 = _pos(supervisor.get("daily_cap")), _pos(supervisor.get("combined_day_start_equity"))
-    sup_eq = _num(supervisor.get("combined_equity"))
-    if sup_cap is None or sup_d0 is None or sup_eq is None:
-        notes.append("combined cap: the supervisor is not reporting it yet")
-    else:
-        ccys = {e.get("currency") for e in engines} | {engine.get("currency")}
-        if len(ccys) != 1 or None in ccys:
-            notes.append("combined cap not shown: the accounts report mixed currencies (BACKLOG 28)")
-        else:
-            add(f"combined {_pct(sup_cap)} cap", sup_cap * sup_d0, sup_d0 - sup_eq)
+        add(f"account {_pct(daily)} daily cap", f"this account ({_pct(daily)} of today's start)", "today",
+            daily * day0, day0, eq)
+    if weekly is not None and week0 is not None:
+        add(f"account {_pct(weekly)} weekly cap", f"this account this week ({_pct(weekly)} of the week's start)",
+            "this week", weekly * week0, week0, eq)
+    _combined(engine, supervisor, engines, time.time() if now is None else now, add, notes)
     absolute = _pos(limits.get("daily_loss_limit_abs"))
     if absolute is not None:
-        add("absolute limit", absolute, day0 - eq)
+        nxt = _pos(limits.get("min_lot_risk_account"))
+        label = "your absolute daily limit" + (" (includes the next trade's stop)" if nxt is not None else "")
+        add("absolute daily limit", label, "today", absolute, day0, eq, reserve=nxt or 0.0)
     else:
         notes.append("the absolute daily loss limit (ADR 0004) is not enforced by the risk check yet (BACKLOG 29)")
     if not caps:
         return None
     bind = min(caps, key=lambda c: c.remaining)
-    return LossBudget(limit=bind.limit, used=bind.used, remaining=bind.remaining, binding=bind.name, caps=caps,
-                      notes=notes)
+    return LossBudget(limit=bind.limit, used=bind.used, remaining=bind.remaining, binding=bind.name,
+                      binding_label=bind.label, period=bind.period, caps=caps, notes=notes)
+
+
+def _combined(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[dict[str, Any]], now: float,
+              add: Callable[..., None], notes: list[str]) -> None:
+    """The supervisor's combined daily and weekly caps, when its report is fresh and every account shares a currency."""
+    sup_eq = _num(supervisor.get("combined_equity"))
+    sup_d0, sup_w0 = _pos(supervisor.get("combined_day_start_equity")), _pos(supervisor.get("combined_week_start_equity"))
+    sup_day, sup_week = _pos(supervisor.get("daily_cap")), _pos(supervisor.get("weekly_cap"))
+    ts = _num(supervisor.get("ts"))
+    if sup_eq is None or sup_day is None or sup_d0 is None:
+        notes.append("combined caps: the supervisor is not reporting them yet")
+        return
+    if ts is None or now - ts > SUPERVISOR_MAX_AGE_S:
+        notes.append("combined caps not shown: the supervisor's last report is stale")
+        return
+    ccys = {e.get("currency") for e in engines} | {engine.get("currency")}
+    if len(ccys) != 1 or None in ccys:
+        notes.append("combined caps not shown: the accounts report mixed currencies (BACKLOG 28)")
+        return
+    add(f"combined {_pct(sup_day)} daily cap", f"all accounts together ({_pct(sup_day)} of today's start)", "today",
+        sup_day * sup_d0, sup_d0, sup_eq)
+    if sup_week is not None and sup_w0 is not None:
+        add(f"combined {_pct(sup_week)} weekly cap",
+            f"all accounts together this week ({_pct(sup_week)} of the week's start)", "this week",
+            sup_week * sup_w0, sup_w0, sup_eq)
 
 
 class _Limits(FrozenRecord):
@@ -157,13 +203,12 @@ def milestones(engine: dict[str, Any]) -> Milestones | None:
     cap = _pos(limits.get("min_lot_risk_cap"))
     if cap is not None:
         frac = cap / 2 if size_down else cap
-        rule = f"minimum lot risks at most {100 * frac:.2f}% of equity (minimum-lot rule)"
+        rule = f"the smallest trade (minimum lot) risks at most {100 * frac:.2f}% of equity (minimum-lot rule)"
     else:
-        target = effective_risk(lim, size_down, 1.0).target
-        frac = MIN_LOT_TOLERANCE * target
-        rule = f"minimum lot risks at most {MIN_LOT_TOLERANCE:g} x {100 * target:.2f}% of equity"
+        frac = MIN_LOT_TOLERANCE * effective_risk(lim, size_down, 1.0).target
+        rule = f"the smallest trade (minimum lot) risks at most {100 * frac:.2f}% of equity at normal conviction"
     if size_down:
-        rule += ", halved in the 8% size-down stage"
+        rule += " (halved: the account is in the 8% size-down stage)"
     rule += f"; stop {LADDER_STOP_ATR:g} x ATR(14) of the timeframe"
     lot: dict[str, Any] = engine["lot_terms"] if isinstance(engine.get("lot_terms"), dict) else {}
     fx = usd_to_account(engine)

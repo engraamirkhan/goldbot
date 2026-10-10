@@ -80,3 +80,54 @@ def test_supervisor_publishes_its_daily_cap_and_the_combined_day_start_equity(tm
             "balance_closed_hwm": d0, "ts": 9e12}))
     st = Supervisor(tmp_path).evaluate()
     assert st["daily_cap"] == 0.015 and st["combined_day_start_equity"] == 3000.0
+    assert st["weekly_cap"] == 0.04 and st["combined_week_start_equity"] == 3000.0
+
+
+def test_a_failing_ladder_update_or_symbol_info_never_stops_the_bar_close(tmp_path, caplog):
+    from goldbot.data.resample import ticks_to_1m
+    from goldbot.data.synthetic import synthetic_ticks
+
+    class _NoInfo(PaperBroker):
+        def symbol_info(self, symbol):
+            raise RuntimeError("terminal busy")
+
+    ticks = synthetic_ticks("2025-03-03", "2025-03-05", ticks_per_minute=1, seed=5)
+    last = pd.Timestamp(ticks["ts_utc"].iloc[-1])
+    px = float(ticks["bid"].iloc[-1])
+    pb = _NoInfo(equity=10_000.0)
+    pb.on_tick(Tick(ts_utc=last, bid=px, ask=px + 0.2))
+    eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), owner_user_id=1),
+                 pb, [], {}, ApprovalCenter({1}))
+    eng.bars_1m = ticks_to_1m(ticks)
+
+    def boom(_complete):
+        raise ValueError("bad bars")
+
+    eng._update_ladder = boom  # type: ignore[method-assign]
+    close_ts = (last + pd.Timedelta(minutes=15)).floor("15min")
+    with caplog.at_level("WARNING", logger="goldbot.engine"):
+        eng.on_bar_close(close_ts, pb.last_tick("XAUUSD"))
+        eng._refresh_account(pb.last_tick("XAUUSD"))          # symbol_info raises again: no second warning
+    st = json.loads((tmp_path / "engine_icm-demo.json").read_text())
+    assert st["lot_terms"] is None and st["balance"] == 10_000.0      # the bar close completed and wrote state
+    assert sum("milestone ATR not updated" in r.message for r in caplog.records) == 1
+    assert sum("symbol info unavailable" in r.message for r in caplog.records) == 1
+
+
+def test_a_ladder_timeframe_that_failed_is_retried_at_the_next_close(tmp_path, monkeypatch):
+    eng = _engine(tmp_path, PaperBroker(equity=10_000.0))
+    calls = {"n": 0}
+    real = eng._resample
+
+    def flaky(complete, tf):
+        calls["n"] += 1
+        if tf == "1h" and calls["n"] < 3:
+            raise RuntimeError("once")
+        return real(complete, tf)
+
+    monkeypatch.setattr(eng, "_resample", flaky)
+    bars = _bars(5, 1.0)
+    with pytest.raises(RuntimeError):
+        eng._update_ladder(bars)
+    eng._update_ladder(bars)                                  # same bars: 1h was not marked done, so it is computed
+    assert eng._ladder["ladder_atr"]["1h"] is not None

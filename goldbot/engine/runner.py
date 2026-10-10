@@ -55,6 +55,7 @@ from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 
 log = logging.getLogger("goldbot.engine")
+LOT_TERMS_WARN_S = 600.0     # the account view's symbol-info warning, at most this often
 # MT5 trade retcodes that mean the market will not take an order now (10017 TRADE_DISABLED, 10018 MARKET_CLOSED): a
 # close refused with one of these is backed off; any other failure (requote 10004/10021, price changed 10020, a
 # raising call) is retried on the next tick, so an exit is never delayed by a transient refusal
@@ -267,6 +268,7 @@ class Engine:
         # bars: ATR(14) per ladder timeframe, refreshed at bar closes
         self._account_view: dict = {"balance": None, "currency": None, "margin": None, "margin_free": None}
         self._price: float | None = None
+        self._lot_terms_warned = -LOT_TERMS_WARN_S
         self._ladder: dict = {"ladder_atr": {tf: None for tf in LADDER_TIMEFRAMES}, "lot_terms": None}
         self._news: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         # shadow book: version -> (family, model); champions and challengers paper-trade without orders
@@ -1138,34 +1140,37 @@ class Engine:
         try:
             info = self.broker.symbol_info(self.cfg.symbol)
         except Exception as exc:                 # noqa: BLE001 - reporting only; trading never depends on it
-            log.warning("symbol info unavailable for the account view: %s", type(exc).__name__)
+            now = time.monotonic()               # retried every refresh (seconds apart): warn at most every 10 min
+            if now - self._lot_terms_warned >= LOT_TERMS_WARN_S:
+                self._lot_terms_warned = now
+                log.warning("symbol info unavailable for the account view: %s", type(exc).__name__)
             return None
         return {"contract_oz": info.contract_size, "volume_min": info.volume_min, "volume_step": info.volume_step,
                 "volume_max": info.volume_max, "stops_level_points": info.stops_level_points}
 
     def _update_ladder(self, complete: pd.DataFrame) -> None:
         """ATR(14) on the mid of each ladder timeframe's completed bars (None until 15 bars exist), at a bar close.
-        Each timeframe is recomputed only when a new bar of it can have completed (1d: once per UTC day, over the
-        whole buffer); intraday timeframes read a bounded tail."""
+        Each timeframe is recomputed only when a new bar of it can have completed (1d: once per feature-day), from the
+        engine's incremental resamplers (the same bars the decision frames use; 1d is the feature-day bar), and is
+        marked done only once its ATR is computed, so a failure is retried at the next close."""
         if complete.empty:
             return
         last = pd.Timestamp(complete["visible_at"].iloc[-1])
         out = self._ladder["ladder_atr"]
-        seen: dict[str, int] = self._ladder.setdefault("computed_at", {})
+        seen: dict[str, object] = self._ladder.setdefault("computed_at", {})
+        at = pd.DatetimeIndex([last])
         for tf in LADDER_TIMEFRAMES:
-            sec = tf_seconds(tf)
-            key = int(last.timestamp()) // sec
+            key = feature_day(at)[0] if tf == "1d" else floor_tf(at, tf_seconds(tf))[0]   # as _context keys it
             if seen.get(tf) == key:
                 continue
-            seen[tf] = key
-            src = complete if tf == "1d" else complete.tail(40 * sec // 60)
-            bars = resample_bars(src, tf)
+            bars = self._resample(complete, tf)
             bars = bars[pd.to_datetime(bars["visible_at"], utc=True) <= last].reset_index(drop=True)
             if len(bars) < 15:
                 out[tf] = None
-                continue
-            v = float(atr(mid(bars), 14).iloc[-1])
-            out[tf] = v if np.isfinite(v) and v > 0 else None
+            else:
+                v = float(atr(mid(bars.tail(200).reset_index(drop=True)), 14).iloc[-1])
+                out[tf] = v if np.isfinite(v) and v > 0 else None
+            seen[tf] = key
 
     # ------------------------------------------------------------------ helpers
     def _refresh_account(self, tick: Tick) -> None:

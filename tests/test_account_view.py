@@ -19,18 +19,26 @@ LOT = {"contract_oz": 100.0, "volume_min": 0.01, "volume_step": 0.01, "volume_ma
 ATR = {"15m": 10.90 / 1.5, "1h": 21.90 / 1.5, "4h": 43.50 / 1.5, "1d": 105.0 / 1.5}   # ADR 0004 section 2 stops
 
 
+NOW = 1_800_000_000.0
+
+
 def _engine(**over):
     e = {"account": "icm-demo", "equity": 990.0, "balance": 1000.0, "currency": "GBP", "margin": 0.0,
-         "day_start_equity": 1000.0, "stage": "normal", "limits": dict(LIMITS), "price": 4150.0, "spread_points": 0.0,
-         "ladder_atr": dict(ATR), "lot_terms": dict(LOT)}
+         "day_start_equity": 1000.0, "week_start_equity": 1000.0, "stage": "normal", "limits": dict(LIMITS),
+         "price": 4150.0, "spread_points": 0.0, "ladder_atr": dict(ATR), "lot_terms": dict(LOT)}
     e.update(over)
     return e
 
 
 def _sup(**over):
-    s = {"daily_cap": 0.015, "combined_day_start_equity": 1000.0, "combined_equity": 990.0, "ts": 0}
+    s = {"daily_cap": 0.015, "combined_day_start_equity": 1000.0, "weekly_cap": 0.04,
+         "combined_week_start_equity": 1000.0, "combined_equity": 990.0, "ts": NOW - 5}
     s.update(over)
     return s
+
+
+def _budget(e, s, engines=None):
+    return loss_budget(e, s, [e] if engines is None else engines, now=NOW)
 
 
 # ---------------------------------------------------------------------------------------------- margin and currency
@@ -49,53 +57,82 @@ def test_the_usd_factor_is_one_on_a_usd_account_and_only_the_engines_own_factor_
     assert usd_to_account(_engine(currency=None)) is None
 
 
-# ---------------------------------------------------------------------------------------------- daily loss budget
+# ---------------------------------------------------------------------------------------------- loss budget
 def test_at_1000_the_combined_one_and_a_half_percent_cap_binds_before_the_account_cap():
-    b = loss_budget(_engine(), _sup(), [_engine()])
+    b = _budget(_engine(), _sup())
     assert b is not None
     caps = {c.name: c for c in b.caps}
-    assert caps["account 2.0% cap"].limit == pytest.approx(20.0)
-    assert caps["combined 1.5% cap"].limit == pytest.approx(15.0)
+    assert caps["account 2.0% daily cap"].limit == pytest.approx(20.0)
+    assert caps["combined 1.5% daily cap"].limit == pytest.approx(15.0)
+    assert caps["account 5.0% weekly cap"].limit == pytest.approx(50.0)
+    assert caps["combined 4.0% weekly cap"].limit == pytest.approx(40.0)
     assert (b.limit, b.used, b.remaining) == pytest.approx((15.0, 10.0, 5.0))
-    assert b.binding == "combined 1.5% cap"
-    assert any("BACKLOG 29" in n for n in b.notes)                # the £50 absolute limit is not enforced yet
+    assert b.binding == "combined 1.5% daily cap"
+    assert b.binding_label == "all accounts together (1.5% of today's start)"
+    assert b.period == "today"
+    assert any("BACKLOG 29" in n for n in b.notes)                # the absolute limit is not published yet
 
 
-def test_the_absolute_limit_binds_once_the_engine_enforces_it_and_the_account_passes_2500():
-    lim = {**LIMITS, "daily_loss_limit_abs": 50.0}
-    e = _engine(equity=4960.0, balance=5000.0, day_start_equity=5000.0, limits=lim)
-    b = loss_budget(e, _sup(combined_day_start_equity=5000.0, combined_equity=4960.0), [e])
+def test_a_bad_week_makes_the_weekly_cap_bind_even_on_a_quiet_day():
+    e = _engine(equity=962.0, day_start_equity=965.0, week_start_equity=1000.0)   # £3 today, £38 this week
+    b = _budget(e, _sup(combined_day_start_equity=965.0, combined_equity=962.0))
     assert b is not None
-    assert (b.limit, b.used, b.remaining) == pytest.approx((50.0, 40.0, 10.0)) and b.binding == "absolute limit"
+    assert b.binding == "combined 4.0% weekly cap" and b.period == "this week"
+    assert b.remaining == pytest.approx(2.0) and b.used == pytest.approx(38.0)
+    assert b.binding_label == "all accounts together this week (4.0% of the week's start)"
+
+
+def test_the_absolute_limit_reserves_the_next_trades_stop_once_the_engine_publishes_both():
+    lim = {**LIMITS, "daily_loss_limit_abs": 50.0, "min_lot_risk_account": 8.2}
+    e = _engine(equity=4960.0, balance=5000.0, day_start_equity=5000.0, week_start_equity=5000.0, limits=lim)
+    b = _budget(e, _sup(combined_day_start_equity=5000.0, combined_week_start_equity=5000.0, combined_equity=4960.0))
+    assert b is not None
+    assert b.binding == "absolute daily limit"
+    assert (b.limit, b.used, b.remaining) == pytest.approx((50.0, 40.0, 1.8))   # 50 - 40 - 8.20 for the next stop
+    assert "includes the next trade's stop" in b.binding_label
     assert not any("BACKLOG 29" in n for n in b.notes)
+    spent = _engine(equity=4955.0, balance=5000.0, day_start_equity=5000.0, week_start_equity=5000.0, limits=lim)
+    b = _budget(spent, _sup(combined_day_start_equity=5000.0, combined_week_start_equity=5000.0, combined_equity=4955.0))
+    assert b is not None and b.remaining == 0.0                   # £5 left < £8.20 for the smallest trade
 
 
-def test_a_profitable_day_uses_none_of_the_budget_and_an_exhausted_one_has_none_left():
-    up = _engine(equity=1012.0)
-    b = loss_budget(up, _sup(combined_equity=1012.0), [up])
-    assert b is not None and b.used == 0.0 and b.remaining == pytest.approx(15.0)
+def test_the_absolute_limit_without_the_next_trades_risk_counts_the_loss_so_far_only():
+    lim = {**LIMITS, "daily_loss_limit_abs": 50.0}
+    e = _engine(equity=4960.0, balance=5000.0, day_start_equity=5000.0, week_start_equity=5000.0, limits=lim)
+    b = _budget(e, _sup(combined_day_start_equity=5000.0, combined_week_start_equity=5000.0, combined_equity=4960.0))
+    assert b is not None and b.binding == "absolute daily limit" and b.remaining == pytest.approx(10.0)
+    assert "next trade" not in b.binding_label
+
+
+def test_todays_gains_add_room_before_the_cap_and_an_exhausted_budget_has_none_left():
+    up = _engine(equity=1012.0)                                   # the cap is on the loss from today's start
+    b = _budget(up, _sup(combined_equity=1012.0))
+    assert b is not None and b.used == 0.0 and b.remaining == pytest.approx(27.0) and b.limit == pytest.approx(15.0)
     down = _engine(equity=975.0)
-    b = loss_budget(down, _sup(combined_equity=975.0), [down])
+    b = _budget(down, _sup(combined_equity=975.0))
     assert b is not None and b.remaining == 0.0 and b.used == pytest.approx(25.0)
 
 
-def test_mixed_currencies_leave_the_combined_cap_out_with_a_note_instead_of_adding_pounds_to_dollars():
+def test_mixed_currencies_leave_the_combined_caps_out_with_a_note_instead_of_adding_pounds_to_dollars():
     other = _engine(account="vantage-demo", currency="USD", equity=10_000.0, day_start_equity=10_000.0)
-    b = loss_budget(_engine(), _sup(combined_day_start_equity=11_000.0, combined_equity=10_990.0), [_engine(), other])
+    b = _budget(_engine(), _sup(combined_day_start_equity=11_000.0, combined_equity=10_990.0), [_engine(), other])
     assert b is not None
-    assert [c.name for c in b.caps] == ["account 2.0% cap"]
+    assert [c.name for c in b.caps] == ["account 2.0% daily cap", "account 5.0% weekly cap"]
     assert any("mixed currencies" in n for n in b.notes)
 
 
-def test_no_supervisor_figures_keeps_the_account_cap_and_says_the_combined_cap_is_not_reported():
-    b = loss_budget(_engine(), {}, [_engine()])
-    assert b is not None and b.binding == "account 2.0% cap" and b.limit == pytest.approx(20.0)
+def test_a_stale_or_missing_supervisor_report_keeps_the_account_caps_with_a_note():
+    b = _budget(_engine(), _sup(ts=NOW - 600))
+    assert b is not None and b.binding == "account 2.0% daily cap" and b.limit == pytest.approx(20.0)
+    assert any("stale" in n for n in b.notes)
+    b = _budget(_engine(), {})
+    assert b is not None and b.binding == "account 2.0% daily cap"
     assert any("supervisor" in n for n in b.notes)
 
 
 def test_an_engine_file_without_limits_or_day_start_gives_no_budget_rather_than_a_guess():
-    assert loss_budget({"account": "a", "equity": 1.0}, _sup(), []) is None
-    assert loss_budget(_engine(day_start_equity=0), _sup(), []) is None
+    assert loss_budget({"account": "a", "equity": 1.0}, _sup(), [], now=NOW) is None
+    assert loss_budget(_engine(day_start_equity=0), _sup(), [], now=NOW) is None
 
 
 # ---------------------------------------------------------------------------------------------- milestone ladder
@@ -112,6 +149,8 @@ def test_a_usd_account_ladder_is_the_min_lot_risk_over_the_gates_tolerance_at_ea
     n15 = need["15m"]
     assert n15 is not None and m.next_timeframe == "15m" and m.next_equity == pytest.approx(n15)
     assert m.progress == pytest.approx(1330.0 / n15)
+    assert "at most 0.60% of equity at normal conviction" in m.rule      # the effective figure, not 1.2 x 0.50%
+    assert " x 0.50%" not in m.rule
 
 
 def test_fifty_percent_higher_atr_raises_every_threshold_by_fifty_percent():

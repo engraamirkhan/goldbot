@@ -749,6 +749,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   by-timeframe split, opportunity-day capture, days lost to the cap, the dashboard monthly card and a scheduled job.
   Engine change is reporting only (state publish and an ATR read at bar closes in a try/except); route it to
   trading-safety review anyway since it touches goldbot/engine and goldbot/risk/supervisor.py.
+- Account view review fixes (2026-10-10, TRACEABILITY V2-V5): the loss budget now also lists the weekly caps
+  (account 5% on week-start equity, combined 4%; the supervisor publishes `weekly_cap` and
+  `combined_week_start_equity`); left = max(0, limit - loss since the start), so a profitable day adds room; the
+  combined caps are skipped with a note when supervisor.json is over 60 s old, and /api/accounts never fails on a
+  torn supervisor file or junk engine fields. **Contract with the currency lane (BACKLOG 28/29):** read
+  `limits.daily_loss_limit_abs` (account currency, per account) and `limits.min_lot_risk_account` (the smallest
+  trade's stop risk); the absolute cap reserves that amount and is labelled "(includes the next trade's stop)", and
+  the "not enforced yet" note goes once the limit is published. Every cap carries a plain-language `label`
+  (`binding_label`, `period`) for the card ("Limit set by: all accounts together (1.5% of today's start)"). Monthly
+  report: R carries "R understated on non-USD accounts until BACKLOG 28" until the engine publishes
+  `usd_to_account`, the return is labelled a chained closed-trade return with "approximate: positions overlapped"
+  when they did, and the digest's month so far counts trades closed before today only. Engine: ladder ATR from the
+  incremental resamplers, a timeframe marked done only after its ATR is computed (retried otherwise), the
+  symbol-info warning at most every 10 min. Dashboard copy in plain words (timeframes as "15-minute trades", the
+  rule inside "How this is worked out", the day start in local time plus UTC) and a loading placeholder.
+  **Owner decision, unchanged behaviour:** viewers see balances and the loss budget, as they already see equity;
+  restricting money figures to the owner is the owner's call.
 - Owner's manual trading record (2026-10-10, research seeds; security + quant review fixes the same day):
   `python -m goldbot.ops.run owner-history [PATH]` (`goldbot/research/owner_history.py`) reads the owner's MT5 History
   report (HTML, XLSX or a deals CSV; stdlib parsers, no new dependency; inputs and xlsx members over 50 MB refused)

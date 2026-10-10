@@ -264,7 +264,8 @@ test("once the engine reports, Overview shows the live balance, today's loss bud
     lot_terms: { contract_oz: 100, volume_min: 0.01, volume_step: 0.01, volume_max: 50, stops_level_points: 0 },
   }));
   writeFileSync(join(dir, "supervisor.json"), JSON.stringify({
-    ts: Date.now() / 1000, halt: false, reasons: [], daily_cap: 0.015, combined_day_start_equity: 1500, combined_equity: 1490,
+    ts: Date.now() / 1000 + 3600, halt: false, reasons: [], daily_cap: 0.015, combined_day_start_equity: 1500, weekly_cap: 0.04,
+    combined_week_start_equity: 1500, combined_equity: 1490,
   }));
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto("/");
@@ -273,8 +274,8 @@ test("once the engine reports, Overview shows the live balance, today's loss bud
   await expect(card.getByText("£1,500.00")).toBeVisible();                     // balance from the broker, in pounds
   await expect(card.getByText("£12.50 left")).toBeVisible();                   // 1.5% of £1,500 less £10 lost today
   await expect(card.getByRole("meter", { name: "Daily loss budget used" })).toBeVisible();
-  await expect(card.getByText(/Next: 1h at £2,7/)).toBeVisible();
-  await expect(card.getByRole("progressbar", { name: "Progress to the 1h milestone" })).toBeVisible();
+  await expect(card.getByText(/Next: 1-hour trades at £2,7/)).toBeVisible();
+  await expect(card.getByRole("progressbar", { name: "Progress to 1-hour trades" })).toBeVisible();
   const box = await card.boundingBox();
   expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);           // fits the phone
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);   // no sideways scroll

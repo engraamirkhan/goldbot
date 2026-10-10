@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, hasRole, type Status } from "../lib/api";
 import { AutoModeCard } from "./AutoMode";
-import { BalanceCard } from "./BalanceCard";
+import { BalanceCard, BalanceCardSkeleton } from "./BalanceCard";
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
 
@@ -18,7 +18,7 @@ export function Overview() {
       </div>
       {status.data && <HaltControl status={status.data} />}
       <AutoModeCard />
-      {(accounts.data?.length ?? 0) > 0 && (
+      {accounts.isLoading ? <div className="accts"><BalanceCardSkeleton /></div> : (accounts.data?.length ?? 0) > 0 && (
         <div className="accts">{accounts.data!.map((a) => <BalanceCard key={a.account_id} a={a} />)}</div>
       )}
       <div className="scroll"><table>

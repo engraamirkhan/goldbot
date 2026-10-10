@@ -131,3 +131,49 @@ def test_the_daily_digest_carries_the_month_so_far_line_under_its_line_budget(tm
     text = build_digest(tmp_path, pd.Timestamp("2026-10-10 06:45", tz="UTC"), roadmap=tmp_path / "none.md")
     assert "• October so far: +2.97% time-weighted · 4 trades · +3.00R" in text
     assert len(text.splitlines()) <= 15
+
+
+# ---------------------------------------------------------------------------------------------- review fixes
+R_NOTE = "R understated on non-USD accounts until BACKLOG 28"
+
+
+def test_r_on_a_gbp_account_is_flagged_until_the_engine_publishes_its_currency_factor(tmp_path):
+    _seed(tmp_path)
+    [a] = build_monthly_report(tmp_path, month="2026-10", now=NOW).accounts
+    assert a.r_note == R_NOTE
+    assert R_NOTE in format_report(build_monthly_report(tmp_path, month="2026-10", now=NOW))
+    [line] = month_to_date_line(tmp_path, pd.Timestamp("2026-10-10 06:45", tz="UTC"))
+    assert f"+3.00R ({R_NOTE})" in line
+    _seed(tmp_path, engine={"usd_to_account": 1 / 1.33})
+    [a] = build_monthly_report(tmp_path, month="2026-10", now=NOW).accounts
+    assert a.r_note is None
+    _seed(tmp_path, currency="USD")
+    [a] = build_monthly_report(tmp_path, month="2026-10", now=NOW).accounts
+    assert a.r_note is None
+
+
+def test_overlapping_positions_mark_the_chained_return_as_approximate(tmp_path):
+    for i, (entry, exit_) in enumerate((("2026-10-01 09:00", "2026-10-01 15:00"), ("2026-10-01 12:00", "2026-10-01 16:00"))):
+        append_closed_trade(tmp_path, ClosedTrade(
+            account_id="icm-demo", broker="icm", mode="demo", exit_utc=pd.Timestamp(exit_, tz="UTC"),
+            entry_utc=pd.Timestamp(entry, tz="UTC"), ret=0.0, pnl=10.0, equity_before=1000.0 + 10 * i, r=1.0,
+            position_id=i + 1))
+    rep = build_monthly_report(tmp_path, month="2026-10", now=NOW)
+    assert rep.accounts[0].overlapped is True
+    assert "approximate: positions overlapped" in format_report(rep)
+    (tmp_path / "solo").mkdir()
+    _seed(tmp_path / "solo")
+    solo = build_monthly_report(tmp_path / "solo", month="2026-10", now=NOW)
+    assert solo.accounts[0].overlapped is False and "overlapped" not in format_report(solo)
+
+
+def test_the_digest_counts_only_trades_closed_before_today(tmp_path):
+    _seed(tmp_path)
+    [line] = month_to_date_line(tmp_path, pd.Timestamp("2026-10-06 06:45", tz="UTC") - pd.Timedelta(days=1))
+    assert "2 trades" in line                                      # the 6 and 7 Oct closes are not counted yet
+
+
+def test_labels_say_what_the_figures_are(tmp_path):
+    _seed(tmp_path)
+    text = format_report(build_monthly_report(tmp_path, month="2026-10", now=NOW))
+    assert "chained closed-trade return" in text and "Max drawdown on closed trades" in text

@@ -1254,6 +1254,8 @@ export interface components {
         LossBudget: {
             /** Binding */
             binding: string;
+            /** Binding Label */
+            binding_label: string;
             /** Caps */
             caps: components["schemas"]["LossCap"][];
             /** Limit */
@@ -1263,6 +1265,11 @@ export interface components {
              * @default []
              */
             notes: string[];
+            /**
+             * Period
+             * @enum {string}
+             */
+            period: "today" | "this week";
             /** Remaining */
             remaining: number;
             /** Used */
@@ -1270,10 +1277,17 @@ export interface components {
         };
         /** LossCap */
         LossCap: {
+            /** Label */
+            label: string;
             /** Limit */
             limit: number;
             /** Name */
             name: string;
+            /**
+             * Period
+             * @enum {string}
+             */
+            period: "today" | "this week";
             /** Remaining */
             remaining: number;
             /** Used */

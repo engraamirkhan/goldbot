@@ -1842,6 +1842,10 @@
       "title": "Binding",
       "type": "string"
      },
+     "binding_label": {
+      "title": "Binding Label",
+      "type": "string"
+     },
      "caps": {
       "items": {
        "$ref": "#/components/schemas/LossCap"
@@ -1861,6 +1865,14 @@
       "title": "Notes",
       "type": "array"
      },
+     "period": {
+      "enum": [
+       "today",
+       "this week"
+      ],
+      "title": "Period",
+      "type": "string"
+     },
      "remaining": {
       "title": "Remaining",
       "type": "number"
@@ -1875,6 +1887,8 @@
      "used",
      "remaining",
      "binding",
+     "binding_label",
+     "period",
      "caps"
     ],
     "title": "LossBudget",
@@ -1883,12 +1897,24 @@
    "LossCap": {
     "additionalProperties": false,
     "properties": {
+     "label": {
+      "title": "Label",
+      "type": "string"
+     },
      "limit": {
       "title": "Limit",
       "type": "number"
      },
      "name": {
       "title": "Name",
+      "type": "string"
+     },
+     "period": {
+      "enum": [
+       "today",
+       "this week"
+      ],
+      "title": "Period",
       "type": "string"
      },
      "remaining": {
@@ -1902,6 +1928,8 @@
     },
     "required": [
      "name",
+     "label",
+     "period",
      "limit",
      "used",
      "remaining"

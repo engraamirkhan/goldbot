@@ -76,8 +76,9 @@ class Supervisor:
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
                  "unreadable_engines": self.unreadable,
-                 # the dashboard's daily loss budget (goldbot/ops/account_view.py): the combined cap and its base
-                 "daily_cap": self.limits.daily_cap, "combined_day_start_equity": day0}
+                 # the dashboard's loss budget (goldbot/ops/account_view.py): the combined caps and their bases
+                 "daily_cap": self.limits.daily_cap, "combined_day_start_equity": day0,
+                 "weekly_cap": self.limits.weekly_cap, "combined_week_start_equity": wk0}
         write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)   # heartbeat: never half-written
         return state
 

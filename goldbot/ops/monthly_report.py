@@ -4,13 +4,17 @@
     python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]
 
 Per account, for one calendar month (UTC; default the current one):
-* time-weighted % return: the product of (1 + pnl / equity before the trade) over the month's trades, minus 1. Each
-  trade's return is measured on the balance just before it, so a deposit or withdrawal between trades moves no
-  return (ADR 0004: deposits excluded). Trades that overlap in time are chained in exit order (an approximation:
-  each one's base is the balance when it closed less its own P&L);
-* net R, R per trade with the trade count and a 90% Student-t interval (trades with a recorded R only);
+* % return as a chained closed-trade return (time-weighted; deposits excluded): the product of
+  (1 + pnl / equity before the trade) over the month's trades, minus 1. Each trade's return is measured on the
+  balance just before it, so a deposit or withdrawal between trades moves no return (ADR 0004). When positions
+  overlapped in time the chain (in exit order) is approximate, and the report says "approximate: positions
+  overlapped";
+* net R, R per trade with the trade count and a 90% Student-t interval (trades with a recorded R only). R is as the
+  engine recorded it: on a non-USD account it is understated (the risk is in USD, the P&L in the account currency;
+  ADR 0004 audit A5) until the engine publishes its currency factor (BACKLOG 28), and the report says so beside R;
 * max drawdown % on the closed-trade return index (closed trades only: floating losses inside a trade are not seen);
-* net P&L and the average per trading day (Monday-Friday days of the month elapsed so far, traded or not);
+* net P&L and the average per trading day (Monday-Friday days of the month elapsed so far, traded or not; trades
+  closed after the report's day are left out, so the digest's "so far" is up to yesterday);
 * the three best days by net P&L (with their R), and the number of days at £50 or more on a GBP account;
 * the milestone ladder at the engine's live equity (goldbot/ops/account_view.py).
 
@@ -31,11 +35,12 @@ import numpy as np
 import pandas as pd
 
 from goldbot.base import FrozenRecord
-from goldbot.ops.account_view import Milestones, milestones
+from goldbot.ops.account_view import Milestones, milestones, usd_to_account
 from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades
 
 NORTH_STAR_DAY_GBP = 50.0         # ADR 0004 section 6: days at £50+ are counted, never aimed at
 BEST_DAYS = 3
+R_NOTE = "R understated on non-USD accounts until BACKLOG 28"
 SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€"}
 
 
@@ -63,6 +68,8 @@ class AccountMonth(FrozenRecord):
     days_50_plus: int | None = None    # GBP accounts only
     equity_now: float | None = None
     milestones: Milestones | None = None
+    r_note: str | None = None          # why the R figures are not to be trusted yet (non-USD account, BACKLOG 28)
+    overlapped: bool = False           # positions overlapped: the chained return is approximate
 
 
 class MonthlyReport(FrozenRecord):
@@ -121,13 +128,15 @@ def account_month(account: str, trades: list[ClosedTrade], start: pd.Timestamp, 
     n_days = _weekdays(start, end)
     pnl = sum(t.pnl for t in trades)
     eq = engine.get("equity")
+    overlapped = any(b.entry_utc is not None and b.entry_utc < a.exit_utc for a, b in zip(trades, trades[1:]))
     return AccountMonth(
         account_id=account, currency=ccy, trades=len(trades), twr_pct=100 * (idx - 1), pnl=pnl,
         net_r=sum(rs) if rs else None, r_per_trade=float(np.mean(rs)) if rs else None, r_trades=len(rs),
         r_ci90=_ci90(rs), max_drawdown_pct=100 * dd, trading_days=n_days, avg_per_day=pnl / n_days if n_days else 0.0,
         best_days=best,
         days_50_plus=sum(d.pnl >= NORTH_STAR_DAY_GBP for d in per_day) if ccy == "GBP" else None,
-        equity_now=float(eq) if isinstance(eq, (int, float)) else None, milestones=milestones(engine))
+        equity_now=float(eq) if isinstance(eq, (int, float)) else None, milestones=milestones(engine),
+        r_note=R_NOTE if rs and usd_to_account(engine) is None else None, overlapped=overlapped)
 
 
 def build_monthly_report(state_dir: str | Path, *, month: str | None = None,
@@ -140,7 +149,7 @@ def build_monthly_report(state_dir: str | Path, *, month: str | None = None,
     trades, err = load_closed_trades(sd)
     by_acc: dict[str, list[ClosedTrade]] = {}
     for t in trades:
-        if start <= t.exit_utc < end:
+        if start <= t.exit_utc < upto:
             by_acc.setdefault(t.account_id, []).append(t)
     rows = [account_month(a, ts, start, upto, _engine(sd, a)) for a, ts in sorted(by_acc.items())]
     return MonthlyReport(month=month, as_of_utc=now.isoformat(), accounts=rows, errors=[err] if err else [])
@@ -175,14 +184,16 @@ def format_report(rep: MonthlyReport) -> str:
         c = a.currency
         lines.append("")
         lines.append(f"{a.account_id} ({c or 'currency not reported'})")
-        lines.append(f"  Return {a.twr_pct:+.2f}% time-weighted (deposits and withdrawals excluded) · "
-                     f"net {money(a.pnl, c)} over {a.trades} trade{'s' if a.trades != 1 else ''}")
+        approx = " · approximate: positions overlapped" if a.overlapped else ""
+        lines.append(f"  Return {a.twr_pct:+.2f}% (chained closed-trade return, time-weighted; deposits excluded"
+                     f"{approx}) · net {money(a.pnl, c)} over {a.trades} trade{'s' if a.trades != 1 else ''}")
         if a.net_r is not None:
             ci = f", 90% interval {a.r_ci90[0]:+.2f} to {a.r_ci90[1]:+.2f}" if a.r_ci90 else ""
-            lines.append(f"  R {a.net_r:+.2f} net · {a.r_per_trade:+.2f} R/trade over {a.r_trades} with R{ci}")
+            note = f" ({a.r_note})" if a.r_note else ""
+            lines.append(f"  R {a.net_r:+.2f} net · {a.r_per_trade:+.2f} R/trade over {a.r_trades} with R{ci}{note}")
         else:
             lines.append("  R: not recorded")
-        lines.append(f"  Max drawdown {a.max_drawdown_pct:.2f}% (closed trades) · average {money(a.avg_per_day, c)} "
+        lines.append(f"  Max drawdown on closed trades {a.max_drawdown_pct:.2f}% · average {money(a.avg_per_day, c)} "
                      f"per trading day over {a.trading_days} weekdays")
         best = " · ".join(f"{pd.Timestamp(d.day):%a %d %b} {money(d.pnl, c)}"
                           + (f" ({d.r:+.1f}R)" if d.r is not None else "") for d in a.best_days)
@@ -204,7 +215,7 @@ def month_to_date_line(state_dir: str | Path, now: pd.Timestamp) -> list[str]:
     parts = []
     for a in rep.accounts:
         who = f"{a.account_id} " if len(rep.accounts) > 1 else ""
-        r = f" · {a.net_r:+.2f}R" if a.net_r is not None else ""
+        r = f" · {a.net_r:+.2f}R" + (f" ({a.r_note})" if a.r_note else "") if a.net_r is not None else ""
         parts.append(f"{who}{a.twr_pct:+.2f}% time-weighted · {a.trades} trade{'s' if a.trades != 1 else ''}{r} · "
                      f"avg {money(a.avg_per_day, a.currency)}/trading day")
     return [f"• {name} so far: " + " | ".join(parts)]
