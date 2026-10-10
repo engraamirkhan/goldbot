@@ -169,8 +169,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   population count taken trades only. Books written before this load unchanged (trades taken, no threshold) and are
   never calibration data. Weekly `recalibrate` job (Saturday 11:30, after the retrain, before the tournament) refits
   only the probability map of each champion/challenger on `ShadowBook.outcomes` of the last 182 days: a Platt layer
-  on logit(p) with pseudo-outcomes equal to the current p worth 200 trades (`research.recal_prior_trades`), no
-  update below 50 outcomes, p moves at most 0.05 per run; stored as a minor version (new checksummed artefact, same
+  on logit(p) with pseudo-outcomes equal to the validated p worth 200 trades (`research.recal_prior_trades`), no
+  update below 50 outcomes, p at most 0.05 from the validated calibrator. Each run REPLACES the layer, refitted from
+  the validated map (stacking layers on overlapping 182-day windows compounded: an independent review measured a
+  -0.166 total move against a 0.05 cap after 8 weeks); rows without a raw score are not used; stored as a minor version (new checksummed artefact, same
   version/status, `recalibrations` row with before/after ECE; also `state/recalibration.jsonl`). It promotes and
   retires nothing. The ECE after is in-sample. Not done from P9: the monthly refit / drift-triggered refit, recency
   weighting and the replay trial; owner vetoes are not in the shadow book (it is the model's own decision).

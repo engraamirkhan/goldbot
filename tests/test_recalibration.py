@@ -67,19 +67,29 @@ def test_a_well_calibrated_model_stays_put():
     assert fit is not None and abs(fit.coef - 1) < 0.15 and abs(fit.intercept) < 0.1 and fit.max_abs_shift < 0.03
 
 
-def test_layers_stack_on_the_validated_calibrator_and_pickle():
+def test_a_new_layer_replaces_the_last_one_on_the_validated_calibrator_and_pickles():
     base = PlattCalibrator()
     base.coef, base.intercept = 0.8, -0.1
     fit = fit_recalibration(*_overconfident(500), prior_weight=200, max_shift=0.05, min_samples=50)
     assert fit is not None
-    once = RecalibratedCalibrator.on_top(base, fit.layer())
-    twice = RecalibratedCalibrator.on_top(once, fit.layer())
-    assert twice.base is base and len(twice.layers) == 2           # flat: the validated calibrator plus the layers
+    once = RecalibratedCalibrator.replacing(base, fit.layer())
+    twice = RecalibratedCalibrator.replacing(once, fit.layer())
+    assert twice.base is base and len(twice.layers) == 1           # never stacked: one layer on the validated map
+    assert RecalibratedCalibrator.validated(twice) is base and RecalibratedCalibrator.validated(base) is base
     raw = np.linspace(0.1, 0.9, 9)
-    assert np.all(np.abs(once.predict(raw) - base.predict(raw)) <= 0.05 + 1e-12)
-    assert np.all(np.abs(twice.predict(raw) - once.predict(raw)) <= 0.05 + 1e-12)
+    assert np.all(np.abs(twice.predict(raw) - base.predict(raw)) <= 0.05 + 1e-12)
     assert np.allclose(pickle.loads(pickle.dumps(twice)).predict(raw), twice.predict(raw))
-    assert np.allclose(RecalibratedCalibrator.on_top(None, fit.layer()).predict(raw), fit.layer().apply(raw))
+    assert np.allclose(RecalibratedCalibrator.replacing(None, fit.layer()).predict(raw), fit.layer().apply(raw))
+
+
+def test_a_near_separable_sample_stays_finite_and_keeps_the_order():
+    p = np.r_[np.full(40, 0.9999), np.full(40, 0.0001)]
+    y = np.r_[np.zeros(40), np.ones(40)]                            # perfectly wrong at the clip edges
+    fit = fit_recalibration(p, y, prior_weight=1e-6, max_shift=0.05, min_samples=50)
+    assert fit is not None and np.isfinite([fit.coef, fit.intercept]).all() and fit.coef > 0
+    y1 = np.ones(80)                                                 # every outcome a win
+    fit1 = fit_recalibration(np.linspace(0.3, 0.7, 80), y1, prior_weight=1e-6, max_shift=0.05, min_samples=50)
+    assert fit1 is not None and abs(fit1.intercept) < 10
 
 
 # ------------------------------------------------------------------------------------------------ the weekly job
@@ -157,3 +167,31 @@ def test_weekly_job_refits_only_the_calibrator_on_every_candidate_and_promotes_n
     assert np.all(after.calibrated(raw) <= raw)                            # overconfident: p comes down
     log = (tmp_path / "recalibration.jsonl").read_text().splitlines()
     assert len(log) == 1 and champ.version in log[0]
+
+
+def test_weekly_runs_on_overlapping_windows_do_not_compound_past_the_cap(tmp_path):
+    ctx = _ctx(tmp_path)
+    e = ctx.models.add_challenger(MetaLabelModel(feature_names=["x"]), family="tsmom", agent_id="agent-x", backtest={},
+                                  now=NOW - pd.Timedelta(days=120))
+    _record_outcomes(tmp_path, e.version, 400)
+    raw = np.linspace(0.3, 0.8, 11)
+    for week in range(6):                                  # the same outcomes stay inside the 182-day window
+        out = recalibrate(ctx, NOW + pd.Timedelta(days=7 * week))
+        assert out[e.version]["action"] == "recalibrated"
+    entry = ctx.models.get(e.version)
+    model = ctx.models.load(entry)
+    assert len(entry.recalibrations) == 6 and len(model.calibrator.layers) == 1
+    assert np.abs(model.calibrated(raw) - raw).max() <= SETTINGS.research.recal_max_shift + 1e-12
+
+
+def test_a_model_that_cannot_be_loaded_is_reported_and_the_others_still_run(tmp_path):
+    ctx = _ctx(tmp_path)
+    bad = ctx.models.add_challenger(MetaLabelModel(feature_names=["x"]), family="tsmom", agent_id="agent-x",
+                                    backtest={}, now=NOW - pd.Timedelta(days=120))
+    good = ctx.models.add_challenger(MetaLabelModel(feature_names=["x"]), family="tsmom", agent_id="agent-y",
+                                     backtest={}, now=NOW - pd.Timedelta(days=119))
+    _record_outcomes(tmp_path, bad.version, 200, seed=4)
+    _record_outcomes(tmp_path, good.version, 200, seed=5)
+    (tmp_path / "models" / bad.artefact).write_bytes(b"tampered")       # checksum no longer matches
+    out = recalibrate(ctx, NOW)
+    assert out[bad.version]["action"] == "error" and out[good.version]["action"] == "recalibrated"

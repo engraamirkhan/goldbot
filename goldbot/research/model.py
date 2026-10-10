@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from pydantic import Field
+from scipy.special import expit
 from sklearn.isotonic import IsotonicRegression
 
 from goldbot.base import Record
@@ -64,17 +65,22 @@ class RecalLayer(Record):
 
 
 class RecalibratedCalibrator:
-    """The calibrator a model was validated with (`base`; None = identity) followed by the weekly recalibration
-    layers in order. Kept flat: stacking on a recalibrated calibrator appends a layer to the same base."""
+    """The calibrator a model was validated with (`base`; None = identity) followed by one recalibration layer.
+    Each weekly run replaces the layer, fitted again from the validated map: layers are never stacked, because the
+    outcome windows of consecutive runs overlap and stacked layers would refit the same rows, compounding past both
+    the prior's shrinkage and the per-run cap. So p never moves more than `max_shift` from the validated map."""
 
     def __init__(self, base: Any, layers: list[RecalLayer]) -> None:
         self.base, self.layers = base, list(layers)
 
+    @staticmethod
+    def validated(current: Any) -> Any:
+        """The calibrator the model was validated with, under any recalibration layer."""
+        return current.base if isinstance(current, RecalibratedCalibrator) else current
+
     @classmethod
-    def on_top(cls, current: Any, layer: RecalLayer) -> "RecalibratedCalibrator":
-        if isinstance(current, RecalibratedCalibrator):
-            return cls(current.base, [*current.layers, layer])
-        return cls(current, [layer])
+    def replacing(cls, current: Any, layer: RecalLayer) -> "RecalibratedCalibrator":
+        return cls(cls.validated(current), [layer])
 
     def predict(self, p_raw: np.ndarray) -> np.ndarray:
         p = np.asarray(self.base.predict(p_raw) if self.base is not None else p_raw, dtype=float)
@@ -107,15 +113,16 @@ def fit_recalibration(p: np.ndarray, y: np.ndarray, *, prior_weight: float, max_
     `min_samples` outcomes (no update)."""
     p, y = np.asarray(p, dtype=float), np.asarray(y, dtype=float)
     n = len(p)
+    ridge = 1.0                                      # a weak pull to the identity keeps near-separable samples finite
     if n < max(min_samples, 1):
         return None
     t = (n * y + prior_weight * p) / (n + prior_weight)
     X = np.column_stack([np.ones(n), PlattCalibrator._logit(p)])
     beta = np.array([0.0, 1.0])                      # start at the prior's mode: the identity map
     for _ in range(100):                             # Newton on the convex soft-label log-loss
-        q = 1 / (1 + np.exp(-(X @ beta)))
-        g = X.T @ (q - t)
-        H = (X * (q * (1 - q))[:, None]).T @ X + 1e-9 * np.eye(2)
+        q = expit(X @ beta)
+        g = X.T @ (q - t) + ridge * (beta - np.array([0.0, 1.0]))
+        H = (X * (q * (1 - q))[:, None]).T @ X + ridge * np.eye(2)
         step = np.linalg.solve(H, g)
         beta = beta - step
         if np.abs(step).max() < 1e-10:

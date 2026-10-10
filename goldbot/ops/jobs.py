@@ -304,33 +304,38 @@ def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 # ---------------------------------------------------------------------------------------------- recalibration
 def recalibrate(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Weekly bounded recalibration (proposal P9). For every champion and challenger: the closed shadow candidates of
-    the last `recal_window_days` that were recorded with their decision (taken or not, so the sample is not selected
-    by the model's own threshold), re-scored through the current calibrator from their raw score; with at least
-    `recal_min_samples` of them a Platt layer shrunk toward the current map (prior worth `recal_prior_trades`) and
-    capped at +-`recal_max_shift` is stacked on the calibrator and stored as a minor version. The trees, features,
-    status and shadow record are untouched; promotion stays with the gates."""
+    the last `recal_window_days` that were recorded with their decision and raw score (taken or not, so the sample is
+    not selected by the model's own threshold), re-scored through the VALIDATED calibrator; with at least
+    `recal_min_samples` of them a Platt layer shrunk toward the validated map (prior worth `recal_prior_trades`) and
+    capped at +-`recal_max_shift` replaces any earlier layer and is stored as a minor version. Refitting from the
+    validated map each week keeps overlapping windows from compounding. The trees, features, status and shadow record
+    are untouched; promotion stays with the gates. A model that cannot be loaded is reported and skipped."""
     r = ctx.settings.research
     book = ShadowBook(ctx.state_dir)            # read-only view of the engine's shadow book
     since = slot - pd.Timedelta(days=r.recal_window_days)
     out: dict[str, Any] = {}
     for e in [x for x in ctx.models.entries if x.status in ("champion", "challenger")]:
-        sample = book.outcomes(e.version, since)
+        sample = [t for t in book.outcomes(e.version, since) if t.p_raw is not None]
         if len(sample) < r.recal_min_samples:
             out[e.version] = {"action": "skipped", "n": len(sample),
                               "reason": f"fewer than {r.recal_min_samples} recorded outcomes in {r.recal_window_days} days"}
             continue
-        model = ctx.models.load(e)
-        raw = np.array([np.nan if t.p_raw is None else t.p_raw for t in sample])
-        p_now = np.array([t.p for t in sample], dtype=float)
-        has_raw = ~np.isnan(raw)
-        if has_raw.any():                       # the probability the current calibrator gives (after earlier layers)
-            p_now[has_raw] = model.calibrated(raw[has_raw])
+        try:
+            model = ctx.models.load(e)
+        except (ValueError, TypeError, OSError) as exc:
+            log.error("recalibrate: %s not loaded: %s", e.version, exc)
+            out[e.version] = {"action": "error", "reason": str(exc)}
+            continue
+        validated = RecalibratedCalibrator.validated(model.calibrator)
+        raw = np.array([t.p_raw for t in sample], dtype=float)
+        p_val = np.asarray(validated.predict(raw) if validated is not None else raw, dtype=float)
         y = np.array([t.barrier == "target" for t in sample], dtype=float)
-        fit = fit_recalibration(p_now, y, prior_weight=r.recal_prior_trades, max_shift=r.recal_max_shift,
+        fit = fit_recalibration(p_val, y, prior_weight=r.recal_prior_trades, max_shift=r.recal_max_shift,
                                 min_samples=r.recal_min_samples)
         if fit is None:
+            out[e.version] = {"action": "skipped", "n": len(sample), "reason": "no fit"}
             continue
-        model.calibrator = RecalibratedCalibrator.on_top(model.calibrator, fit.layer())
+        model.calibrator = RecalibratedCalibrator.replacing(model.calibrator, fit.layer())
         n_taken = int(sum(t.taken for t in sample))
         record = {"ts": slot.isoformat(), **fit.model_dump(), "n_taken": n_taken, "n_not_taken": len(sample) - n_taken,
                   "window_from": since.isoformat()}

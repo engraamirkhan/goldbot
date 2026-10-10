@@ -109,8 +109,8 @@ research:
   fills_window_days: 180             # fills used for the slippage table
   min_fills_for_slippage: 50         # below this a session keeps the slippage prior
   recal_min_samples: 50              # weekly recalibration (P9): no update below this many recent shadow outcomes
-  recal_prior_trades: 200            #   the current calibration counts as this many trades (prior weight)
-  recal_max_shift: 0.05              #   a probability moves at most this much per weekly run
+  recal_prior_trades: 200            #   the validated calibration counts as this many trades (prior weight)
+  recal_max_shift: 0.05              #   a probability is at most this far from the validated calibrator
   recal_window_days: 182             #   outcomes (every candidate, taken or not) exited within this window
   registry: state/research_registry.jsonl
   models_dir: models
