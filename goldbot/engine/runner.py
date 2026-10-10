@@ -46,7 +46,7 @@ from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_close
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
-from goldbot.risk.gate import REARM_PHRASE, Stage, new_day
+from goldbot.risk.gate import REARM_PHRASE, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
@@ -483,7 +483,7 @@ class Engine:
             if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, hurdle_atr) + 0.02:
                 decisions.append(self._record(agent, close_ts, p, mult, "below_threshold"))
                 continue
-            gd = self.gate.check(intent, self.state)
+            gd = self.gate.check(intent, self.state, margin_required=broker_margin(self.broker, self.cfg.symbol))
             if not gd.allowed:
                 decisions.append(self._record(agent, close_ts, p, mult, "gate:" + ",".join(gd.reasons)))
                 continue
@@ -514,7 +514,8 @@ class Engine:
         if p.outcome == Outcome.APPROVED:
             tick = self.broker.last_tick(self.cfg.symbol)
             self._refresh_account(tick)
-            gd = self.gate.check(intent, self.state)  # re-check at approval time
+            gd = self.gate.check(intent, self.state,  # re-check at approval time
+                                 margin_required=broker_margin(self.broker, self.cfg.symbol))
             if gd.allowed:
                 price = tick.ask if prop.side > 0 else tick.bid
                 self._execute(prop, agent, gd.lots, price - prop.side * gd.stop_distance,
