@@ -78,6 +78,7 @@ scheduler:
   monthly_research: { kind: monthly, at: "08:00", weekday: 6, max_late_hours: 30 }   # first Sunday of the month
   calendar_archive: { kind: daily,   at: "06:10", max_late_hours: 20 }                  # Forex Factory week -> calendar_events
   agents_presession: { kind: daily,  at: "06:30", weekdays: [0, 1, 2, 3, 4], max_late_hours: 1 }   # macro/news briefing before London
+  recalibrate:      { kind: weekly,  at: "11:30", weekday: 5, max_late_hours: 30 }   # P9: bounded calibrator refit after the retrain
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -107,5 +108,9 @@ research:
   cost_window_days: 30               # ticks used for the nightly spread table
   fills_window_days: 180             # fills used for the slippage table
   min_fills_for_slippage: 50         # below this a session keeps the slippage prior
+  recal_min_samples: 50              # weekly recalibration (P9): no update below this many recent shadow outcomes
+  recal_prior_trades: 200            #   the validated calibration counts as this many trades (prior weight)
+  recal_max_shift: 0.05              #   a probability is at most this far from the validated calibrator
+  recal_window_days: 182             #   outcomes (every candidate, taken or not) exited within this window
   registry: state/research_registry.jsonl
   models_dir: models

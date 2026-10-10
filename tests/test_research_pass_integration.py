@@ -166,6 +166,27 @@ def test_a_rule_that_fails_the_screen_gets_no_model_but_is_a_recorded_trial(rele
     assert "(skipped with --skip-screen)" in report.read_text()
 
 
+def test_a_measured_cost_table_replaces_the_priors(release_dir, tmp_path, monkeypatch):
+    from goldbot.execution.costs import CostTable, SlippageStat
+    registry, report, costs = tmp_path / "registry.jsonl", tmp_path / "report.md", tmp_path / "costs_measured.json"
+    CostTable(account_id="icm-demo", built_utc=pd.Timestamp("2027-01-04", tz="UTC"), spread={},
+              slippage={"london:market": SlippageStat(mean=0.05, n=80, from_prior=False)}, commission_per_lot_side_usd=3.0,
+              slippage_prior_usd=0.15, swap_long_usd_per_lot=-48.0, swap_short_usd_per_lot=9.0, swap_triple_weekday=4,
+              commission_measured=True).save(costs)
+    argv = ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry), "--report", str(report),
+            "--specialist", "intraday_momentum", "--cost-table", str(costs)]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert rp.main() == 0
+    row = _rows(registry)[0]
+    assert row["results"]["swap"]["long_usd_per_lot"] == -48.0 and row["results"]["swap"]["triple_weekday"] == 4
+    assert "cost table icm-demo built 2027-01-04" in row["results"]["cost_source"]
+    text = report.read_text()
+    assert "- swap: long -48.00" in text and "commission measured, swap measured" in text
+    monkeypatch.setattr(sys, "argv", argv[:-1] + [str(tmp_path / "missing.json")])
+    with pytest.raises(SystemExit, match="not found"):
+        rp.main()
+
+
 def test_a_rule_that_passes_the_screen_goes_on_to_the_walk_forward(release_dir, tmp_path, monkeypatch):
     from goldbot.research import screen as screen_mod
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"

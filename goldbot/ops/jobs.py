@@ -1,7 +1,9 @@
 """The scheduler's jobs (design: Retraining and promotion, Bounded research loop, Execution costs).
 
 * nightly_costs     per enabled account: spread table from its own ticks, slippage table from its own fills,
-                    commission from settings -> state/costs_<account>.json (read by the engine every bar).
+                    swap and commission as the terminal reports them (state/broker_terms_<account>.json, written by
+                    the engine; settings commission and the swap prior while missing or older than
+                    BROKER_TERMS_MAX_AGE_DAYS) -> state/costs_<account>.json (read by the engine every bar).
                     On Fridays it also re-runs the account classifier (two consecutive disagreements to change).
 * saturday_retrain  refresh bars from the data release (best effort), then per specialist: evaluate any challenger
                     that has a shadow record against the promotion gates (promote automatically when all pass),
@@ -15,6 +17,10 @@
                     the gates. Trials scored on the held-out year are never used as evidence.
 * model_watch       daily: a champion promoted in the last CUSUM_WINDOW_DAYS whose shadow returns trip the CUSUM
                     alarm against its backtest is replaced by the previous champion (design: Retraining and promotion).
+* recalibrate       weekly after the retrain (proposal P9): refits only the probability map of every champion and
+                    challenger on its recent counterfactual shadow outcomes (every candidate, taken or not), shrunk
+                    toward the current calibration and capped per run; a minor version in the model registry with
+                    before/after ECE (also state/recalibration.jsonl). Promotes and retires nothing.
 * monthly_research  bounded search: label-grid variants (+-step on target, stop and time limit) per specialist, as
                     many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
                     fresh plan), never past the quarter's trial budget and never into the held-out year, each a
@@ -30,6 +36,7 @@ import random
 from pathlib import Path
 from typing import Any, Callable, cast
 
+import numpy as np
 import pandas as pd
 
 from goldbot.agents.roles import ROLES
@@ -39,7 +46,7 @@ from goldbot.config import DecisionTimeframe, Settings
 from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.classifier import PersistentClassifier, classify
-from goldbot.execution.costs import build_cost_table
+from goldbot.execution.costs import BrokerTerms, CostTable, build_cost_table
 from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops.accounts import Account
@@ -53,6 +60,7 @@ from goldbot.research.director import (
     holdout_window,
     quarter_budget,
 )
+from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import ResearchResult, run_specialist
 from goldbot.research.population import Population
@@ -68,6 +76,7 @@ CHALLENGER_MAX_WEEKS = 8
 CLASSIFIER_WEEKDAY = 4          # Friday's nightly run re-classifies (design: weekly, from the nightly cost job)
 CONTEXT_EXTRA_MONTHS = 2        # daily/4h/1h context needs history before the decision window starts
 CUSUM_WINDOW_DAYS = 14          # a new champion is watched for its first two weeks
+BROKER_TERMS_MAX_AGE_DAYS = 7     # older terminal readings are not trusted (the engine refreshes them every few hours)
 PLAN_MAX_AGE_DAYS = 21          # an older research plan is stale evidence: monthly_research falls back to the flat budget
 
 
@@ -92,19 +101,43 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     for acc in ctx.accounts:
         ticks = ctx.store.read("ticks", source=acc.account_id, symbol=acc.symbol, start=slot - pd.Timedelta(days=r.cost_window_days))
         fills = ctx.store.read("fills", source=acc.account_id, symbol=acc.symbol, start=slot - pd.Timedelta(days=r.fills_window_days))
-        table = build_cost_table(acc.account_id, ticks, fills,
-                                 commission_per_lot_side_usd=ctx.settings.costs.commission_per_lot_side_usd.get(acc.broker, 0.0),
+        terms, notes = _broker_terms(ctx, acc.account_id, slot)
+        commission = ctx.settings.costs.commission_per_lot_side_usd.get(acc.broker, 0.0)
+        measured = terms is not None and terms.commission_per_lot_round_trip_usd is not None
+        if terms is not None and terms.commission_per_lot_round_trip_usd is not None:
+            commission = terms.commission_per_lot_round_trip_usd / 2
+        swap = terms.swap_spec(acc.server_tz, ctx.settings.costs.swap_triple_weekday) if terms is not None else None
+        table = build_cost_table(acc.account_id, ticks, fills, commission_per_lot_side_usd=commission,
                                  slippage_prior_usd=ctx.settings.costs.slippage_prior_usd,
-                                 min_fills=r.min_fills_for_slippage, now=slot)
+                                 min_fills=r.min_fills_for_slippage, now=slot, swap=swap, commission_measured=measured,
+                                 notes=notes)
         table.save(ctx.state_dir / f"costs_{acc.account_id}.json")
         row: dict[str, Any] = {"ticks": len(ticks), "fills": len(fills),
-                               "round_trip_usd": {s: table.round_trip_usd_per_oz(s) for s in ("asia", "london", "newyork")}}
+                               "round_trip_usd": {s: table.round_trip_usd_per_oz(s) for s in ("asia", "london", "newyork")},
+                               "swap_measured": swap is not None, "commission_measured": measured}
         if slot.dayofweek == CLASSIFIER_WEEKDAY:
             c = classify(ticks, fills)
             row["account_class"] = PersistentClassifier(ctx.state_dir / f"classifier_{acc.account_id}.json").update(c)
             row["classifier_reason"] = c.reason
         out[acc.account_id] = row
     return out
+
+
+def _broker_terms(ctx: JobContext, account_id: str, slot: pd.Timestamp) -> tuple[BrokerTerms | None, list[str]]:
+    """The engine's latest terminal reading of swap and commission, if fresh; else None and the reason."""
+    path = ctx.state_dir / f"broker_terms_{account_id}.json"
+    try:
+        terms = BrokerTerms.load(path)
+    except ValueError as exc:
+        log.warning("%s unreadable, using the settings costs: %s", path.name, exc)
+        return None, [f"broker terms unreadable ({exc}): settings commission and swap prior"]
+    if terms is None:
+        return None, ["no broker terms from the terminal yet: settings commission and swap prior"]
+    age = slot - terms.measured_utc
+    if age > pd.Timedelta(days=BROKER_TERMS_MAX_AGE_DAYS):
+        log.warning("%s is %s old, using the settings costs", path.name, age)
+        return None, [f"broker terms stale (measured {terms.measured_utc:%Y-%m-%d %H:%M}): settings commission and swap prior"]
+    return terms, [f"broker terms measured {terms.measured_utc:%Y-%m-%d %H:%M}: " + "; ".join(terms.notes)]
 
 
 # ---------------------------------------------------------------------------------------------- retrain
@@ -117,39 +150,35 @@ def live_extra_cost_usd(ctx: JobContext) -> float:
     entry and exit slippage (the measured mean, or the conservative prior until enough fills exist) plus commission
     both sides. Before the first table exists: the configured slippage prior plus commission (never 0, so research and
     retraining are always charged more than the spread)."""
-    from goldbot.execution.costs import CONTRACT_OZ, CostTable, settings_extra_cost_usd
-    canonical = {b for b, cfg in ctx.settings.brokers.items() if cfg.canonical_costs}
-    for acc in ctx.accounts:
+    from goldbot.execution.costs import settings_extra_cost_usd
+    found = canonical_cost_table(ctx.settings, ctx.accounts, ctx.state_dir)
+    return found[0].extra_cost_usd() if found is not None else settings_extra_cost_usd(ctx.settings)
+
+
+def canonical_cost_table(settings: Settings, accounts: list[Account], state_dir: Path) -> tuple[CostTable, Account] | None:
+    """The first readable nightly cost table of an account on the canonical-cost broker (design: IC Markets' tables
+    are the canonical ones for backtests), with its account; None before one exists."""
+    canonical = {b for b, cfg in settings.brokers.items() if cfg.canonical_costs}
+    for acc in accounts:
         if acc.broker not in canonical:
             continue
         try:
-            table = CostTable.load(ctx.state_dir / f"costs_{acc.account_id}.json")
+            table = CostTable.load(state_dir / f"costs_{acc.account_id}.json")
         except ValueError:
             table = None
-        if table is None:
-            continue
-        slips = [max(s.mean, 0.0) for k, s in table.slippage.items() if k.endswith(":market")] or [table.slippage_prior_usd]
-        return float(2 * (sum(slips) / len(slips)) + 2 * table.commission_per_lot_side_usd / CONTRACT_OZ)
-    return settings_extra_cost_usd(ctx.settings)
+        if table is not None:
+            return table, acc
+    return None
 
 
 def live_swap(ctx: JobContext) -> SwapSpec:
     """Swap the canonical-cost broker charges, from its nightly cost table when the table carries the terminal's swap
     rates; otherwise the settings prior (`costs.swap_*`)."""
-    from goldbot.execution.costs import CostTable, settings_swap
+    from goldbot.execution.costs import settings_swap
     prior = settings_swap(ctx.settings)
-    canonical = {b for b, cfg in ctx.settings.brokers.items() if cfg.canonical_costs}
-    for acc in ctx.accounts:
-        if acc.broker not in canonical:
-            continue
-        try:
-            table = CostTable.load(ctx.state_dir / f"costs_{acc.account_id}.json")
-        except ValueError:
-            table = None
-        spec = table.swap_spec(acc.server_tz, prior.triple_weekday) if table is not None else None
-        if spec is not None:
-            return spec
-    return prior
+    found = canonical_cost_table(ctx.settings, ctx.accounts, ctx.state_dir)
+    spec = found[0].swap_spec(found[1].server_tz, prior.triple_weekday) if found is not None else None
+    return spec if spec is not None else prior
 
 
 def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int, n_trials: int = 1,
@@ -269,6 +298,53 @@ def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             out[agent_id] = {"version": ch.version, "action": "restored_previous", "restored": restored.version, "trades": len(rets)}
         else:
             out[agent_id] = {"version": ch.version, "action": "ok", "trades": len(rets)}
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- recalibration
+def recalibrate(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Weekly bounded recalibration (proposal P9). For every champion and challenger: the closed shadow candidates of
+    the last `recal_window_days` that were recorded with their decision and raw score (taken or not, so the sample is
+    not selected by the model's own threshold), re-scored through the VALIDATED calibrator; with at least
+    `recal_min_samples` of them a Platt layer shrunk toward the validated map (prior worth `recal_prior_trades`) and
+    capped at +-`recal_max_shift` replaces any earlier layer and is stored as a minor version. Refitting from the
+    validated map each week keeps overlapping windows from compounding. The trees, features, status and shadow record
+    are untouched; promotion stays with the gates. A model that cannot be loaded is reported and skipped."""
+    r = ctx.settings.research
+    book = ShadowBook(ctx.state_dir)            # read-only view of the engine's shadow book
+    since = slot - pd.Timedelta(days=r.recal_window_days)
+    out: dict[str, Any] = {}
+    for e in [x for x in ctx.models.entries if x.status in ("champion", "challenger")]:
+        sample = [t for t in book.outcomes(e.version, since) if t.p_raw is not None]
+        if len(sample) < r.recal_min_samples:
+            out[e.version] = {"action": "skipped", "n": len(sample),
+                              "reason": f"fewer than {r.recal_min_samples} recorded outcomes in {r.recal_window_days} days"}
+            continue
+        try:
+            model = ctx.models.load(e)
+        except (ValueError, TypeError, OSError) as exc:
+            log.error("recalibrate: %s not loaded: %s", e.version, exc)
+            out[e.version] = {"action": "error", "reason": str(exc)}
+            continue
+        validated = RecalibratedCalibrator.validated(model.calibrator)
+        raw = np.array([t.p_raw for t in sample], dtype=float)
+        p_val = np.asarray(validated.predict(raw) if validated is not None else raw, dtype=float)
+        y = np.array([t.barrier == "target" for t in sample], dtype=float)
+        fit = fit_recalibration(p_val, y, prior_weight=r.recal_prior_trades, max_shift=r.recal_max_shift,
+                                min_samples=r.recal_min_samples)
+        if fit is None:
+            out[e.version] = {"action": "skipped", "n": len(sample), "reason": "no fit"}
+            continue
+        model.calibrator = RecalibratedCalibrator.replacing(model.calibrator, fit.layer())
+        n_taken = int(sum(t.taken for t in sample))
+        record = {"ts": slot.isoformat(), **fit.model_dump(), "n_taken": n_taken, "n_not_taken": len(sample) - n_taken,
+                  "window_from": since.isoformat()}
+        entry = ctx.models.recalibrate(e.version, model, record)
+        with open(ctx.state_dir / "recalibration.jsonl", "a") as f:
+            f.write(json.dumps({"version": e.version, "agent_id": e.agent_id, "status": entry.status, **record}) + "\n")
+        out[e.version] = {"action": "recalibrated", "minor": len(entry.recalibrations), "n": fit.n, "n_taken": n_taken,
+                          "n_not_taken": len(sample) - n_taken, "ece_before": fit.ece_before,
+                          "ece_after": fit.ece_after, "max_abs_shift": fit.max_abs_shift}
     return out
 
 
@@ -515,6 +591,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "monthly_research": monthly_research,
     "calendar_archive": calendar_archive,
     "agents_presession": agents_presession,
+    "recalibrate": recalibrate,
 }
 
 

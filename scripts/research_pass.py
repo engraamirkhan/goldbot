@@ -8,6 +8,9 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P1/P2):
   (in the labels) plus slippage and commission (`--extra-cost-usd`, default: the settings' prior and commission);
 * overnight financing (swap, `costs.swap_*` in settings, a prior until the broker's cost table reports its own) is
   charged in the net labels for every server-day rollover a trade is held through, three times on the triple day;
+* `--cost-table FILE` (the canonical broker's measured cost table, exported on the VPS with
+  `python -m goldbot.ops.run export-costs --out config/costs_measured.json`) replaces the priors: slippage and
+  commission from the table (unless `--extra-cost-usd`), swap from the table when it has measured swap;
 * every report states the design's gates (1,500 candidates, 60 per test fold, three positive years incl. 2021-22)
   and the rule's own gross and net expectancy; the deflated Sharpe is shown only from 200 trades;
 * each run is charged to the quarter's pre-registered trial budget (research.trial_budget_quarter) and refused
@@ -23,7 +26,7 @@ Pooled meta-model (P5): `--pooled 15m|1h` fits ONE model over the union of every
 
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
       [--specialist session_open | --pooled 15m] [--from-year 2010] [--to-year 2026] [--rationale "..."] \
-      [--variants '[{}]'] [--skip-screen] [--score-holdout]
+      [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table config/costs_measured.json]
 """
 from __future__ import annotations
 
@@ -40,7 +43,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
-from goldbot.execution.costs import settings_extra_cost_usd, settings_swap  # noqa: E402
+from goldbot.execution.costs import CostTable, SwapSpec, research_costs  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
@@ -114,6 +117,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              f"- out-of-fold AUC of the model (0.5 = no skill): {_fmt(res.metrics.get('oof_auc'))}",
              f"- costs: bar spread in every label plus {m.get('extra_cost_usd', 0.0):.2f} $/oz round trip (slippage and commission)",
              _swap_line(m.get("swap")),
+             f"- cost source: {m.get('cost_source', 'settings priors')}",
              _holdout_line(m.get("holdout")),
              f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
@@ -298,6 +302,8 @@ def main() -> int:
     ap.add_argument("--variants", default="[{}]", help="JSON list of config overrides; each is one recorded trial")
     ap.add_argument("--extra-cost-usd", type=float, default=None,
                     help="round-trip slippage + commission per oz beyond the spread (default: settings prior + commission)")
+    ap.add_argument("--cost-table", default="",
+                    help="measured cost table JSON (run.py export-costs); default: the settings priors")
     ap.add_argument("--score-holdout", action="store_true",
                     help="score the configurations on the held-out window (once per configuration, ever)")
     ap.add_argument("--skip-screen", action="store_true",
@@ -309,18 +315,25 @@ def main() -> int:
         raise SystemExit("--pooled runs every member family at its defaults; --variants does not apply")
     variants = [{}] if args.pooled else parse_variants(args.specialist, args.variants)
     settings = load_settings()
-    extra_cost = settings_extra_cost_usd(settings) if args.extra_cost_usd is None else float(args.extra_cost_usd)
+    table = None
+    if args.cost_table:
+        table = CostTable.load(args.cost_table)
+        if table is None:
+            raise SystemExit(f"--cost-table {args.cost_table}: file not found")
+    extra_cost, swap, cost_source = research_costs(settings, table)
+    if args.extra_cost_usd is not None:
+        extra_cost, cost_source = float(args.extra_cost_usd), cost_source + f"; --extra-cost-usd {args.extra_cost_usd}"
     holdout = settings.research.holdout_window()
     t0 = time.time()
     b1 = load_bars(Path(args.bars), args.from_year, args.to_year)      # fails fast, before any registry file exists
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
-        return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings)
+        return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings, swap=swap,
+                    cost_source=cost_source)
 
 
 def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
-         b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any) -> int:
-    swap = settings_swap(settings)
+         b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any, *, swap: SwapSpec, cost_source: str) -> int:
     if args.score_holdout:
         if holdout is None:
             raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
@@ -365,7 +378,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                 "to_year": int(b1["ts_utc"].iloc[-1].year), "n_1m": len(b1), "n_dec": len(b_dec), "tf": tf,
                 "zero_volume": zero_volume}
         common = {"lookahead": leak, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
-                  "screen": scr, "screen_skipped": skipped}
+                  "screen": scr, "screen_skipped": skipped, "cost_source": cost_source}
         rationale = args.rationale + (f" | overrides {json.dumps(job.overrides, sort_keys=True)}" if job.overrides else "")
         if scr is not None and not scr["passed"] and not args.skip_screen:
             n = int(sum(len(p.labels) for p in preps))
@@ -375,7 +388,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                              rationale=rationale, results=metrics, status="screened", budget_quarter=quarter)
             print(f"{json.dumps(job.overrides) or 'defaults'}: screen failed ({n} events) [{time.time() - t0:.0f}s]", flush=True)
             text = render_screen_failed(scr, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0, "n": n,
-                                                    "swap": swap.model_dump()})
+                                                    "swap": swap.model_dump(), "cost_source": cost_source})
         else:
             if job.pooled:
                 res = run_pool(preps, tf, n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
@@ -390,7 +403,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             row = reg.record(agent_id=res.agent_id, family=job.family, config=job.config, feature_version=res.feature_version,
                              rationale=rationale, results=metrics, status="holdout" if args.score_holdout else "evaluated",
                              budget_quarter=quarter)
-            res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped}
+            res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped, "cost_source": cost_source}
             years = per_year(res.oof, res.metrics.get("threshold"))
             text = render_report(res, years, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0})
         if job.overrides:
@@ -414,6 +427,7 @@ def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[s
              f"(a screen counts as a trial)",
              f"- lookahead check: {'clean' if not leak['lookahead_columns'] else str(len(leak['lookahead_columns'])) + ' columns use future data'}",
              _swap_line(meta.get("swap")),
+             f"- cost source: {meta.get('cost_source', 'settings priors')}",
              f"- runtime {meta['seconds']:.0f}s", ""]
     lines += screen_lines(scr) + _rule_only_lines(scr["rule_only"])
     lines += ["Screen failed: no model was fitted. The rule is retired from model research (it may still serve as a "

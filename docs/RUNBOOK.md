@@ -60,10 +60,11 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | --- | --- | --- |
 | `calendar_archive` | Daily 06:10 | Stores the Forex Factory week in the `calendar_events` table (feeds the news blackout). |
 | `agents_presession` | Mon-Fri 06:30 | Macro and news analyst writes the pre-session briefing. |
-| `nightly_costs` | Mon-Fri 23:10 | Builds each account's spread/slippage cost table `state\costs_<account>.json`; on Fridays also re-runs the account classifier (`state\classifier_<account>.json`). |
+| `nightly_costs` | Mon-Fri 23:10 | Builds each account's spread/slippage cost table `state\costs_<account>.json`, with the swap and commission the terminal reports (`state\broker_terms_<account>.json`, written by the engine every 6 hours); on Fridays also re-runs the account classifier (`state\classifier_<account>.json`). |
 | `model_watch` | Daily 23:30 | CUSUM check on any newly promoted champion; restores the previous champion on an alarm. |
 | `agents_daily` | Mon-Fri 23:45 | Data steward, risk officer, execution auditor. |
 | `saturday_retrain` | Saturday 06:00 | Refreshes bars from `data-v1`, decides waiting challengers (promote/retire), retrains new challengers. |
+| `recalibrate` | Saturday 11:30 | Refits only the probability map of each champion and challenger on its recent shadow outcomes (every candidate, taken or not), bounded to +-0.05 per week; logged in `state\recalibration.jsonl`. Promotes nothing. |
 | `tournament` | Saturday 12:00 | Population round: fitness, retirement, promotion to live, cloning, capital shares -> `state\agents.json`. |
 | `agents_weekly` | Saturday 13:00 | Journal coach, improvement agent, research analyst. |
 | `monthly_research` | First Sunday of the month 08:00 | Bounded label-grid research; summary in `state\research_<YYYY-MM>.md`. |
@@ -299,12 +300,14 @@ Each report arrives on Telegram, appears on the dashboard **Agents** tab, and is
 | Owner halt | `state\control.json` |
 | Proposals and decisions | `state\approvals\pending\`, `state\approvals\decisions\`, `state\approvals\done\` |
 | Cost tables (per account, nightly) | `state\costs_<account>.json` |
+| Swap and commission read from the terminal | `state\broker_terms_<account>.json` (notes say why a value fell back to settings) |
 | Account classifier | `state\classifier_<account>.json` |
 | Scheduler job states | `state\scheduler.json` (also on the **Feeds** tab) |
 | News feed health | `state\news_feeds.json` |
 | Agent spend | `state\agent_spend.json` (monthly), `state\news_spend.json` (headline scoring per day) |
 | Population / league table | `state\population.json`, `state\agents.json` |
-| Shadow records | `state\shadow_<model version>.json` |
+| Shadow records | `state\shadow_<model version>.json`; every candidate with its decision in `state\shadow_book.json` |
+| Weekly recalibrations (before/after ECE) | `state\recalibration.jsonl`; also `recalibrations` in `models\registry.json` |
 | Trained models and champions | `C:\goldbot\models\registry.json` |
 | Trial registry | `state\research_registry.jsonl` |
 | Monthly research summary | `state\research_<YYYY-MM>.md` |
@@ -335,12 +338,30 @@ Back up the state folder and `config\` regularly; they are not in Git.
 **After the first day (after 23:10 UTC on a weekday)**
 
 1. **Cost tables:** `state\costs_icm-demo.json` and `state\costs_vantage-demo.json` exist. Until 50 real fills
-   exist, slippage uses the prior from `costs.slippage_prior_usd`.
-2. **Scheduled jobs:** `nightly_costs`, `model_watch` and `agents_daily` show "ok"; `calendar_archive` shows
+   exist, slippage uses the prior from `costs.slippage_prior_usd`. Each table should carry `swap_long_usd_per_lot`
+   and `swap_short_usd_per_lot` (the health check warns "no measured swap" otherwise; read the `notes` in
+   `state\broker_terms_<account>.json` for the reason, e.g. a swap mode the conversion does not support). The
+   commission becomes `"commission_measured": true` after the first closed demo position.
+2. **Export the measured costs for research** (once the swap is measured, and again whenever the broker changes its
+   swap, at least before each quarter's first research trial). On the VPS, in `C:\goldbot`:
+
+   ```powershell
+   .\.venv\Scripts\python -m goldbot.ops.run export-costs --out config\costs_measured.json
+   git add config\costs_measured.json
+   git commit -m "costs: measured IC Markets cost table"
+   git push
+   ```
+
+   The command prints the swap and commission it exported and warns if the swap is still the prior. The research
+   workflow (`research.yml`) passes `--cost-table config/costs_measured.json` whenever that file exists on the
+   branch it runs from, so the trial's net results use the broker's measured swap, commission and slippage instead
+   of the settings priors (the report's "cost source" line says which were used). If the VPS cannot push, copy the
+   file to your computer and commit it there, or paste its contents into a new file on GitHub.
+3. **Scheduled jobs:** `nightly_costs`, `model_watch` and `agents_daily` show "ok"; `calendar_archive` shows
    "ok" after 06:10. A "failed" job shows its first error line in "Last error".
-3. **Supervisor heartbeat:** `state\supervisor.json` has a current `ts`, `"halt": false` and an empty
+4. **Supervisor heartbeat:** `state\supervisor.json` has a current `ts`, `"halt": false` and an empty
    `stale_engines` list.
-4. **Agent reports** arrived on Telegram and the **Agents** tab (only with `anthropic-api-key`).
+5. **Agent reports** arrived on Telegram and the **Agents** tab (only with `anthropic-api-key`).
 
 ---
 

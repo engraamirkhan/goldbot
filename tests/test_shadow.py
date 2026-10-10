@@ -165,3 +165,76 @@ def test_model_watch_leaves_a_healthy_or_settled_champion_alone(tmp_path):
     _shadow_rets(tmp_path, b, promoted, [-0.006] * 12)
     assert model_watch(ctx, promoted + pd.Timedelta(days=20)) == {}  # past the two-week window: not watched
     assert ctx.models.champion("agent-x").version == b               # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------------------------- counterfactual (P9)
+def test_every_candidate_is_recorded_with_its_decision_and_only_taken_ones_count_as_trades(tmp_path):
+    bars = _bars(seed=1)
+    atr = pd.Series(np.full(len(bars), 2.0))
+    spec = BarrierSpec(target_atr=1.5, stop_atr=1.0, max_bars=16)
+    idx = np.arange(20, 360, 7)
+    signals = pd.DataFrame({"idx": idx, "side": np.where(idx % 2 == 0, 1, -1)})
+    labels = one_at_a_time(triple_barrier(bars, signals, spec, atr)).set_index("idx")
+    p_of = {int(i): (0.62 if k % 3 == 0 else 0.41) for k, i in enumerate(idx)}     # a third above the threshold
+    book = ShadowBook(tmp_path)
+    book.track("v1", bars["ts_utc"].iloc[0])
+    sig = dict(zip(signals["idx"], signals["side"]))
+    opened = {}
+    for i in range(len(bars)):
+        bar = bars.iloc[i]
+        book.on_bar(bar)
+        if i in sig:
+            p = p_of[i]
+            opened[i] = book.open_trade(version="v1", agent_id="a", side=int(sig[i]), bar_ts=bar["ts_utc"],
+                                        entry=float(bar["ask_close"] if sig[i] > 0 else bar["bid_close"]), atr_usd=2.0,
+                                        target_atr=1.5, stop_atr=1.0, max_bars=16, p=p, threshold=0.5, taken=p > 0.5,
+                                        p_raw=p - 0.01)
+    recorded = {i for i, t in opened.items() if t is not None}
+    # the whole candidate stream is the research label set (one position at a time over every candidate, as
+    # pipeline.prepare thins before the model filters), so the counterfactual outcomes are the labels themselves
+    assert recorded == set(labels.index)
+    for i in recorded:
+        t = opened[i]
+        assert t is not None and t.barrier == labels.loc[i, "barrier_hit"] and t.threshold == 0.5
+        assert t.p_raw == pytest.approx(t.p - 0.01)
+    taken = [t for t in book.books["v1"].closed if t.taken]
+    skipped = [t for t in book.books["v1"].closed if not t.taken]
+    assert taken and skipped
+    # outcomes for recalibration: taken and not taken alike
+    assert len(book.outcomes("v1")) == len(book.books["v1"].closed)
+    # trading statistics, the CUSUM and the population see only the taken trades
+    now = bars["ts_utc"].iloc[-1]
+    assert book.stats("v1", now).n_trades == len(taken)
+    assert book.returns_since("v1", bars["ts_utc"].iloc[0]) == [t.ret for t in taken]
+    from goldbot.research.population import agent_trades
+    assert len(agent_trades(book)["a"]) == len(taken)
+
+
+def test_an_older_book_loads_as_taken_and_only_candidates_with_a_threshold_are_outcomes(tmp_path):
+    import json
+    t0 = pd.Timestamp("2026-09-01", tz="UTC")
+    old_trade = {"version": "v1", "agent_id": "a", "side": 1, "entry_ts": t0.isoformat(), "entry": 2400.0, "stop": 2398.0,
+                 "target": 2403.0, "max_bars": 4, "timeframe": "15m", "p": 0.6, "bars_held": 2,
+                 "exit_ts": (t0 + pd.Timedelta(minutes=30)).isoformat(), "exit": 2403.0, "barrier": "target",
+                 "ret": 3 / 2400}
+    (tmp_path / "shadow_book.json").write_text(json.dumps(
+        {"v1": {"version": "v1", "started_utc": t0.isoformat(), "open": [], "closed": [old_trade]}}))
+    book = ShadowBook(tmp_path)
+    t = book.books["v1"].closed[0]
+    assert t.taken and t.threshold is None and t.p_raw is None
+    assert book.outcomes("v1") == []             # selected trades only: a biased sample, never used for calibration
+    assert book.stats("v1", t0 + pd.Timedelta(weeks=1)).n_trades == 1     # but still a shadow trade of its record
+    # the engine now records every candidate with its threshold, taken or not
+    book.track("v1", t0)
+    t1 = t0 + pd.Timedelta(days=3)
+    new = book.open_trade(version="v1", agent_id="a", side=1, bar_ts=t1, entry=2400.0, atr_usd=2.0, target_atr=1.5,
+                          stop_atr=1.0, max_bars=4, p=0.4, threshold=0.55, taken=False)
+    assert new is not None
+    ShadowBook._close(new, t1 + pd.Timedelta(minutes=45), new.stop, "stop")
+    book.books["v1"].open.remove(new)
+    book.books["v1"].closed.append(new)
+    book.save(t1 + pd.Timedelta(hours=1))
+    again = ShadowBook(tmp_path)
+    assert [x.threshold for x in again.outcomes("v1")] == [0.55]
+    assert again.outcomes("v1", since=t1 + pd.Timedelta(hours=1)) == []
+    assert again.stats("v1", t1 + pd.Timedelta(hours=1)).n_trades == 1

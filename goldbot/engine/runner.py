@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import time
 import zlib
@@ -48,10 +49,22 @@ from goldbot.risk.supervisor import Supervisor
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 
+log = logging.getLogger("goldbot.engine")
+
 
 class Model(Protocol):
     feature_names: list[str]
     def predict(self, X: pd.DataFrame) -> np.ndarray: ...
+
+
+def _score(model: Model, X: pd.DataFrame) -> tuple[float, float | None]:
+    """(calibrated p, raw score or None) for one row: a MetaLabelModel exposes its raw score, so the shadow book can
+    keep it for later recalibration; any other model gives p only."""
+    raw_fn, cal_fn = getattr(model, "predict_raw", None), getattr(model, "calibrated", None)
+    if raw_fn is None or cal_fn is None:
+        return float(model.predict(X)[0]), None
+    raw = np.asarray(raw_fn(X), dtype=float)
+    return float(np.asarray(cal_fn(raw), dtype=float)[0]), float(raw[0])
 
 
 class ConstantModel(Record):
@@ -104,6 +117,10 @@ class EngineConfig(Record):
     server_tz: str = "Europe/Athens"         # broker server clock: rollover (00:00 +-5 min) and the Friday 21:30 rule
     rollover_min: int = 5
     weekend_cut: str = "21:30"               # Friday, server time: close losers, tighten winners, no new entries
+    # measured costs: a broker that reports its swap and commission (MT5Broker.broker_terms) is read this often (tick
+    # time) and written to state/broker_terms_<account>.json for the nightly cost job; commission from this many days
+    broker_terms_every_s: int = 6 * 3600
+    commission_window_days: int = 90
 
 
 class _Frame(Record):
@@ -198,6 +215,7 @@ class Engine:
         self._last_state_write: pd.Timestamp | None = None
         self._last_reconcile: pd.Timestamp | None = None
         self._last_atr: float | None = None          # decision-tf ATR at the last bar close (orphan stops)
+        self._last_terms: pd.Timestamp | None = None  # last broker-terms reading (swap, commission)
         self._foreign: list[int] = []                # positions with unknown magic (manual trades): listed, never touched
         self._archive_stale_proposals()
 
@@ -225,6 +243,7 @@ class Engine:
         self._last_tick = t
         self.ticks.append(t)
         self._log_tick(t)
+        self._refresh_broker_terms(t.ts_utc)
         self._roll_risk_period(t.ts_utc)
         if hasattr(self.broker, "on_tick"):
             self.broker.on_tick(t)  # paper broker fills
@@ -917,13 +936,15 @@ class Engine:
                     continue          # a model only scores the frame version it was trained on, in shadow too
                 feats["side"] = side
                 cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
-                p = float(model.predict(feats[cols])[0])
+                p, p_raw = _score(model, feats[cols])
                 ls = agent.label_spec
-                if p <= breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02:
-                    continue
+                threshold = breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02
+                # every candidate is recorded (P9 counterfactual shadow): the ones below the threshold too, flagged
+                # not taken, so a recalibration sees an unbiased sample; only taken ones count as shadow trades
                 self.shadow.open_trade(version=version, agent_id=agent.agent_id, side=side, bar_ts=pd.Timestamp(bar["ts_utc"]),
                                        entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
-                                       target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p, timeframe=tf)
+                                       target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p, timeframe=tf,
+                                       threshold=threshold, taken=p > threshold, p_raw=p_raw)
 
     def flush_journal(self) -> None:
         """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the
@@ -961,6 +982,22 @@ class Engine:
                            "ask": [x.ask for x in self._tick_log]})
         self.store.append("ticks", df, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
         self._tick_log = []
+
+    def _refresh_broker_terms(self, now: pd.Timestamp) -> None:
+        """Swap and commission as the terminal reports them -> state/broker_terms_<account>.json (nightly_costs puts
+        them in the cost table). Only brokers that measure them (MT5); a failure is logged and never stops trading."""
+        measure = getattr(self.broker, "broker_terms", None)
+        if measure is None:
+            return
+        last = self._last_terms
+        if last is not None and (now - last).total_seconds() < self.cfg.broker_terms_every_s:
+            return
+        self._last_terms = now
+        try:
+            terms = measure(self.cfg.account_id, now - pd.Timedelta(days=self.cfg.commission_window_days), now)
+            terms.save(Path(self.cfg.state_dir, f"broker_terms_{self.cfg.account_id}.json"))
+        except Exception:
+            log.exception("broker terms not refreshed for %s; the last reading stays", self.cfg.account_id)
 
     def _cost_atr(self, atr_usd: float, ts: pd.Timestamp, ex_spread: bool = False) -> float:
         """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one.

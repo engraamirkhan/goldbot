@@ -26,7 +26,6 @@ import random
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-import numpy as np
 import pandas as pd
 from pydantic import Field
 from scipy import stats
@@ -34,7 +33,7 @@ from scipy import stats
 from goldbot.base import Record, UtcTimestamp
 from goldbot.config import tf_seconds
 from goldbot.engine.shadow import ShadowBook
-from goldbot.research.metrics import deflated_sharpe, max_drawdown
+from goldbot.research.metrics import calibration_ece, deflated_sharpe, max_drawdown
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import FEATURE_SEED_KEY, TIMEFRAME_KEY, AgentIdentity, Specialist
 
@@ -86,25 +85,14 @@ def agent_trades(book: ShadowBook) -> dict[str, pd.DataFrame]:
     rows: dict[str, list[dict[str, Any]]] = {}
     for vb in book.books.values():
         for t in vb.closed:
-            if t.ret is None or t.exit_ts is None:
-                continue
+            if not t.taken or t.ret is None or t.exit_ts is None:
+                continue          # counterfactual (not-taken) candidates are not trades
             risk = abs(t.entry - t.stop) / t.entry
             rows.setdefault(t.agent_id, []).append({"ret": t.ret, "r": t.ret / risk if risk > 0 else 0.0, "p": t.p,
                                                     "target_hit": int(t.barrier == "target"), "exit_ts": t.exit_ts})
     return {a: pd.DataFrame(r).sort_values("exit_ts").reset_index(drop=True) for a, r in rows.items()}
 
 
-def calibration_ece(p: np.ndarray, y: np.ndarray, bins: int = 10) -> float:
-    if len(p) == 0:
-        return 1.0
-    edges = np.linspace(0, 1, bins + 1)
-    idx = np.clip(np.digitize(p, edges) - 1, 0, bins - 1)
-    ece = 0.0
-    for b in range(bins):
-        m = idx == b
-        if m.any():
-            ece += m.mean() * abs(p[m].mean() - y[m].mean())
-    return float(ece)
 
 
 def weekly_returns(trades: pd.DataFrame) -> pd.Series:

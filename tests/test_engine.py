@@ -17,7 +17,7 @@ pytestmark = pytest.mark.integration
 
 
 def _run(approval_mode: str, tmp_path: Path, days: int = 5, data_root: str | None = None, shadow: bool = False,
-         live_shares: dict[str, float] | None = None):
+         live_shares: dict[str, float] | None = None, shadow_p: float = 0.65):
     ticks = synthetic_ticks("2025-03-03", f"2025-03-{3 + days:02d}", ticks_per_minute=1, seed=5)
     pb = PaperBroker(equity=10_000)
     center = ApprovalCenter({111})
@@ -25,7 +25,7 @@ def _run(approval_mode: str, tmp_path: Path, days: int = 5, data_root: str | Non
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", approval_mode=approval_mode, state_dir=str(tmp_path), owner_user_id=111,
                               data_root=data_root, shadow_host=shadow),
                  pb, [spec], {"session_open": ConstantModel(p=0.65)}, center,
-                 shadow_models={"session_open-test-v1": (spec.agent_id, ConstantModel(p=0.65))} if shadow else None,
+                 shadow_models={"session_open-test-v1": (spec.agent_id, ConstantModel(p=shadow_p))} if shadow else None,
                  live_shares=live_shares)
     decisions = []
     for ts, bid, ask in zip(ticks["ts_utc"], ticks["bid"].to_numpy(float), ticks["ask"].to_numpy(float)):
@@ -53,6 +53,7 @@ def test_engine_auto_mode_places_orders_and_writes_state(tmp_path):
     book = eng.shadow.books["session_open-test-v1"]
     shadow_entries = len(book.open) + len(book.closed)
     assert shadow_entries >= len(executed) >= 1 and book.closed
+    assert all(t.taken and t.threshold is not None and t.p > t.threshold for t in book.open + book.closed)
     st = PerfStats.model_validate_json((tmp_path / "shadow_session_open-test-v1.json").read_text())
     assert st.n_trades == len(book.closed)
     assert len(pb.deals_since(pd.Timestamp("2025-01-01", tz="UTC"))) == len(deals)   # shadow placed no orders
@@ -89,6 +90,19 @@ def test_shadow_only_member_never_reaches_the_broker(tmp_path):
     book = eng.shadow.books["session_open-test-v1"]
     assert book.closed or book.open
     assert {t.agent_id for t in book.closed + book.open} == set(eng.agents)   # trades carry the member's agent_id
+
+
+def test_shadow_book_records_candidates_below_the_threshold_as_not_taken(tmp_path):
+    # P9 counterfactual shadow: a version whose p never clears its threshold still has every candidate's outcome
+    # recorded (with p and the threshold), but no shadow trade counts for its record
+    eng, pb, center, decisions = _run("auto", tmp_path, days=3, shadow=True, shadow_p=0.30)
+    assert eng.shadow is not None
+    book = eng.shadow.books["session_open-test-v1"]
+    recorded = book.open + book.closed
+    assert recorded and all(not t.taken and t.threshold is not None and t.p < t.threshold for t in recorded)
+    assert book.closed and len(eng.shadow.outcomes("session_open-test-v1")) == len(book.closed)
+    st = PerfStats.model_validate_json((tmp_path / "shadow_session_open-test-v1.json").read_text())
+    assert st.n_trades == 0
 
 
 def test_hourly_agent_decides_only_on_hour_closes(tmp_path):

@@ -48,9 +48,11 @@ jobs:
         run: |
           set -o pipefail
           if [ -n "$POOLED" ]; then TARGET=(--pooled "$POOLED"); else TARGET=(--specialist "$SPECIALIST" --variants "$VARIANTS"); fi
+          # the canonical broker's measured costs, exported on the VPS (docs/RUNBOOK.md); the settings priors without it
+          COSTS=(); if [ -f config/costs_measured.json ]; then COSTS=(--cost-table config/costs_measured.json); fi
           python scripts/research_pass.py --bars raw --registry registry.jsonl --report report.md \
             "${TARGET[@]}" --from-year "$FROM_YEAR" --to-year "$TO_YEAR" --rationale "$RATIONALE" \
-            $SCORE_HOLDOUT $SKIP_SCREEN 2>&1 | tee research.log
+            "${COSTS[@]}" $SCORE_HOLDOUT $SKIP_SCREEN 2>&1 | tee research.log
       - name: save the registry
         run: |
           # union with whatever the VPS monthly loop pushed while this ran, so no trial is dropped
