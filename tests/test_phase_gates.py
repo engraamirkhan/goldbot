@@ -34,11 +34,12 @@ def trades_over(n: int, ret: float | list[float], first_days_ago: float, last_da
 
 
 def write_trades(state: Path, trades: list[ClosedTrade]) -> None:
-    (state / gates_phase.CLOSED_TRADES_FILE).unlink(missing_ok=True)
+    for f in gates_phase.closed_trade_files(state):
+        f.unlink()
     if trades:
         gates_phase.append_closed_trade(state, trades[0])          # the writer's format ...
-    with open(state / gates_phase.CLOSED_TRADES_FILE, "a", encoding="utf-8") as fh:   # ... the rest in one write
-        fh.writelines(t.model_dump_json() + "\n" for t in trades[1:])
+        with open(gates_phase.closed_trade_file(state, trades[0].account_id), "a", encoding="utf-8") as fh:
+            fh.writelines(t.model_dump_json() + "\n" for t in trades[1:])   # ... the rest in one write
 
 
 def write_phase(state: Path, recorded: dict[str, pd.Timestamp]) -> None:
@@ -336,7 +337,8 @@ def test_stop_rule_health_check_fails_with_what_it_does(tmp_path):
     assert c.status == "fail" and c.reason.startswith("STOP RULE BREACHED")
     assert "/halt" in c.reason and "Nothing was halted automatically" in c.reason
     assert "stop_rule" in health.run_checks(ctx(tmp_path)).failing()
-    (tmp_path / gates_phase.CLOSED_TRADES_FILE).write_text("{not json\n")
+    for f in gates_phase.closed_trade_files(tmp_path):
+        f.write_text("{not json\n")                                    # an unreadable record: warn, never "ok"
     assert health.check_stop_rule(ctx(tmp_path)).status == "warn"
 
 

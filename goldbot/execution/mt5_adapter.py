@@ -34,7 +34,15 @@ from typing import Any, AsyncIterator
 import pandas as pd
 
 from goldbot.data.timeutil import server_to_utc
-from goldbot.execution.broker import AccountInfo, OrderIntent, OrderResult, Position, SymbolInfo, Tick
+from goldbot.execution.broker import (
+    AccountInfo,
+    OrderIntent,
+    OrderResult,
+    Position,
+    SymbolInfo,
+    Tick,
+    tick_key,
+)
 from goldbot.execution.costs import BrokerTerms
 
 try:  # pragma: no cover - Windows only
@@ -47,6 +55,21 @@ TF_MAP = {"1m": "TIMEFRAME_M1", "5m": "TIMEFRAME_M5", "15m": "TIMEFRAME_M15", "1
 RETCODE_DONE = 10009
 RETCODE_REQUOTE = 10004
 RETCODE_REJECT = 10006
+
+
+def _positions_get(**kw: Any) -> Any:
+    """mt5.positions_get, raising on None: None is a terminal error (disconnected, not initialised), never "no
+    positions", so the engine cannot mistake a fault for a flat book and record closes that did not happen."""
+    got = mt5.positions_get(**kw)
+    if got is None:
+        raise RuntimeError(f"positions_get failed: {mt5.last_error()}")
+    return got
+
+
+def _send_failed(position_id: int) -> OrderResult:
+    """order_send returned None (a terminal error): a refused result the engine retries, never a crash."""
+    return OrderResult(ok=False, retcode=-1, order_id=None, position_id=position_id, filled_lots=0.0, price=None,
+                       message=f"order_send failed: {mt5.last_error()}")
 
 log = logging.getLogger("goldbot.mt5")
 
@@ -193,17 +216,27 @@ class MT5Broker:
     def last_tick(self, symbol: str) -> Tick:
         t = mt5.symbol_info_tick(symbol)
         ts = server_to_utc(pd.Series(pd.to_datetime([t.time_msc], unit="ms")), self.server_tz)[0]
-        return Tick(ts_utc=ts, bid=t.bid, ask=t.ask)
+        return Tick(ts_utc=ts, bid=t.bid, ask=t.ask, flags=int(getattr(t, "flags", 0)))
 
     async def stream_ticks(self, symbol: str) -> AsyncIterator[Tick]:  # pragma: no cover
         import asyncio
         last = None
         while True:
             t = self.last_tick(symbol)
-            if last is None or (t.ts_utc, t.bid, t.ask) != last:
-                last = (t.ts_utc, t.bid, t.ask)
+            if last is None or tick_key(t) != last:      # (time_msc, bid, ask, flags), design: Live collector
+                last = tick_key(t)
                 yield t
             await asyncio.sleep(0.25)
+
+    def margin_required(self, symbol: str, side: int, lots: float, price: float) -> float | None:
+        """`order_calc_margin` for a market order of this side and size at this price, in the account currency; None
+        when the terminal cannot answer (the gate then falls back to the 1:20 figure and records why)."""
+        action = mt5.ORDER_TYPE_BUY if side > 0 else mt5.ORDER_TYPE_SELL
+        m = mt5.order_calc_margin(action, symbol, float(lots), float(price))
+        if m is None:
+            log.warning("order_calc_margin(%s, %s lots) returned None: %s", symbol, lots, mt5.last_error())
+            return None
+        return float(m)
 
     # ------------------------------------------------------------------ orders
     def _filling(self) -> int:
@@ -238,17 +271,19 @@ class MT5Broker:
         return OrderResult(ok=False, retcode=-1, order_id=None, position_id=None, filled_lots=0.0, price=None, message="FAILED_EXEC")
 
     def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult:
-        pos = [p for p in mt5.positions_get() or [] if p.ticket == position_id]
+        pos = [p for p in _positions_get() if p.ticket == position_id]
         if not pos:
             return OrderResult(ok=False, retcode=10013, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="no such position")
         p = pos[0]
         req = {"action": mt5.TRADE_ACTION_SLTP, "symbol": p.symbol, "position": position_id,
                "sl": sl if sl is not None else p.sl, "tp": tp if tp is not None else p.tp}
         res = mt5.order_send(req)
+        if res is None:
+            return _send_failed(position_id)
         return OrderResult(ok=res.retcode == RETCODE_DONE, retcode=res.retcode, order_id=None, position_id=position_id, filled_lots=p.volume, price=None, message=res.comment)
 
     def close(self, position_id: int, lots: float | None = None) -> OrderResult:
-        pos = [p for p in mt5.positions_get() or [] if p.ticket == position_id]
+        pos = [p for p in _positions_get() if p.ticket == position_id]
         if not pos:
             return OrderResult(ok=False, retcode=10013, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="no such position")
         p = pos[0]
@@ -259,11 +294,13 @@ class MT5Broker:
                "price": tick.bid if is_buy else tick.ask, "deviation": 30, "magic": p.magic,
                "comment": "close", "type_filling": self._filling()}
         res = mt5.order_send(req)
+        if res is None:
+            return _send_failed(position_id)
         return OrderResult(ok=res.retcode == RETCODE_DONE, retcode=res.retcode, order_id=res.order, position_id=position_id, filled_lots=res.volume, price=res.price, message=res.comment)
 
     def positions(self, magic_prefix: int | None = None) -> list[Position]:
         out = []
-        for p in mt5.positions_get(symbol=self.symbol) or []:
+        for p in _positions_get(symbol=self.symbol):
             if magic_prefix is not None and not str(p.magic).startswith(str(magic_prefix)):
                 continue
             ts = server_to_utc(pd.Series(pd.to_datetime([p.time_msc], unit="ms")), self.server_tz)[0]
@@ -275,6 +312,8 @@ class MT5Broker:
         since_server = since_utc.tz_convert(self.server_tz).tz_localize(None).to_pydatetime()
         until_server = pd.Timestamp.now(self.server_tz).tz_localize(None) + pd.Timedelta(days=1)
         deals = mt5.history_deals_get(since_server, until_server.to_pydatetime())
+        if deals is None:             # an error, not an empty history: never read as "no deals" (no fake closes)
+            raise RuntimeError(f"history_deals_get failed: {mt5.last_error()}")
         df = pd.DataFrame([d._asdict() for d in deals]) if deals else pd.DataFrame()
         if not df.empty:
             df["ts_utc"] = server_to_utc(pd.to_datetime(df["time_msc"], unit="ms"), self.server_tz)

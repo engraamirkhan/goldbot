@@ -10,7 +10,7 @@ from goldbot.data.resample import ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
 from goldbot.execution.classifier import classify
 from goldbot.research.model import MetaLabelModel
-from goldbot.research.walkforward import WINDOWS
+from goldbot.research.walkforward import WINDOWS, splits_for, window_for
 from goldbot.specialists import SPECIALISTS
 from goldbot.telegram.approvals import REASON_CODES, Proposal
 
@@ -85,6 +85,34 @@ def test_walk_forward_windows_match_design_and_settings():
         cfg = s.walkforward[tf]  # type: ignore[index]
         assert (cfg.train_months, cfg.test_months, cfg.step_months) == (tr, te, st)
         assert (s.labels.purge_days[tf], s.labels.embargo_days[tf]) == (purge, emb)  # type: ignore[index]
+
+
+def _daily_labels(years: int = 6, hold_days: int = 3) -> pd.DataFrame:
+    ts = pd.date_range("2018-01-01", periods=365 * years, freq="D", tz="UTC")
+    return pd.DataFrame({"ts_utc": ts, "ts_exit": ts + pd.Timedelta(days=hold_days)})
+
+
+def test_walk_forward_splits_follow_settings_and_the_defaults_equal_the_design():
+    s, labels = load_settings(), _daily_labels()
+    for tf in s.walkforward:                                  # shipped settings == WINDOWS == design numbers
+        assert window_for(tf, s) == window_for(tf) == WINDOWS[tf]
+    default = splits_for(labels, "15m")
+    assert [(f.test_start, f.test_end) for f in splits_for(labels, "15m", s)] == [(f.test_start, f.test_end) for f in default]
+    assert default[1].test_start == default[0].test_start + pd.DateOffset(months=3)      # design: 15m step 3 months
+
+    wf, lab = s.walkforward["15m"], s.labels
+    changed = s.model_copy(update={
+        "walkforward": {**s.walkforward, "15m": wf.model_copy(update={"test_months": 6, "step_months": 6})},
+        "labels": lab.model_copy(update={"purge_days": {**lab.purge_days, "15m": 30}})})
+    folds = splits_for(labels, "15m", changed)
+    assert len(folds) < len(default)                          # 6-month steps -> fewer folds over the same data
+    first = folds[0]
+    assert first.test_end == first.test_start + pd.DateOffset(months=6)
+    ts_exit = labels["ts_exit"].iloc[first.train_idx]
+    assert ts_exit.max() < first.test_start - pd.Timedelta(days=30)          # the 30-day purge from settings
+    assert labels["ts_exit"].iloc[default[0].train_idx].max() >= default[0].test_start - pd.Timedelta(days=30)
+    assert window_for("1d", changed) == WINDOWS["1d"]          # a timeframe settings do not carry keeps the constant
+    assert window_for("15m", changed, expanding=True)["expanding"] is True   # a specialist's overrides apply last
 
 
 def test_purge_is_at_least_every_label_horizon():

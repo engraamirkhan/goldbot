@@ -14,7 +14,8 @@ NODE_MAJOR=22                       # match CI (.github/workflows/ci.yml NODE_VE
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 
 apt-get update -y
-DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates chrony build-essential xz-utils
+# restic: encrypted off-host backups of the state (goldbot/ops/backup.py, run by the scheduler as user goldbot)
+DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates chrony build-essential xz-utils restic
 systemctl enable --now chrony
 
 id goldbot >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/goldbot --shell /usr/sbin/nologin goldbot

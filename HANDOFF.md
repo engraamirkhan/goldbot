@@ -312,6 +312,46 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   payoff, while a policy's exits pay a distribution (trail, flat, scaled). Recommended fix: an EV hurdle from the
   policy's realised payoff distribution in the walk-forward (mean win and mean loss in R per family), or train on
   sign(ret) and size from the empirical payoffs; a quant-reviewer decision before any policy model trades.
+- Closed-trade record (2026-10-10, `engine/runner.py`, `ops/gates_phase.py`, TRACEABILITY P6/P7): the engine now
+  appends one `ClosedTrade` per fully closed position to `state/closed_trades.jsonl` (single O_APPEND write + fsync)
+  for every exit: broker target/stop/stop-out (found at the bar close by `_sweep_closed`), time exit, hard flat,
+  trail close, engine stop close, blackout close, kill switch, weekend loser, and trades that closed while the engine
+  was down (restart). Fields: account, mode (demo for paper/demo engines), agent, side, lots at entry, entry/exit
+  time and price, exit reason, net P&L, R against the initial stop, commission and swap (from the broker's deals;
+  None when only the engine's fills are known), client order id, position id. **Scale-outs are folded into the final
+  record** (`partial_lots`, lots-weighted exit price, summed P&L): one record = one labelled trade, so the gates'
+  trade counts compare with the backtest's; `load_closed_trades` also counts a repeated (account, position) once.
+  Idempotent across restarts (recorded position ids are read back from the file). Records are queued and written
+  after the tick's exits and before the open-trade table is saved; a failure is logged and journalled
+  (`closed_trade_record_failed`) and never blocks or raises from an exit. A trade the broker stops listing without an
+  exit deal (MT5 `positions_get` returning None) is kept and re-checked for `close_confirm_checks` (8) bar closes
+  instead of being forgotten. Same change, safety-review follow-ups: `_stop_check` backs off a refused engine-stop
+  close (30 s doubling to 900 s, reset on success; the broker's stop stays meanwhile) instead of a close per tick, and
+  a raising `positions()` in `_stop_check`, `_scale_out`, `_reconcile`, `_manage_open` or `_refresh_account` is logged
+  and skipped (the account refresh then blocks entries via `dq_error`). Not done: concurrent appends from two engines
+  on Windows are not locked (one line per write, rare); the paper broker's deals now also carry MT5-style
+  `profit`/`commission`/`swap` columns. (The `_kill_switch`/`_weekend_rule` gap is closed by the review fix below.)
+- Closed-trade review fixes (2026-10-10, trading-safety findings, `engine/runner.py`, `execution/mt5_adapter.py`,
+  `ops/gates_phase.py`, `ops/health.py`, tests/test_closed_trade_review.py; TRACEABILITY X6, X8, P6, P7):
+  **no fake closes on a terminal fault**: MT5 `positions_get`/`history_deals_get` returning None now raise with
+  `mt5.last_error()` (and `close`/`modify` raise instead of reporting "no such position"; `order_send` None is a
+  refused result); in the engine an unreadable deal history never confirms a close and an empty one only after
+  `close_confirm_checks`, and nothing is recorded or forgotten from an unreadable book. **Unreadable-book check**:
+  consecutive failed reads (counted once per tick) set `positions_unreadable` in the engine state's `dq_checks`
+  (entries blocked, exits keep trying); health warns from the first failure and FAILs, so Telegram alerts, after
+  `risk.positions_unreadable_alert` (5) in a row. **Guarded kill switch and weekend rule**: each close in its own try;
+  a failed close is re-sent every tick (`_retry_closes`) and the kill switch re-runs every tick until this engine's
+  magic range reads flat; `weekend_done` is set only once every position was handled. **Close-confirmed
+  bookkeeping**: every exit path (kill switch, weekend, time exit, hard flat, trail, blackout, engine stop) drops a
+  trade only on `res.ok`; reconciliation re-adopting a trade this engine sent keeps the pending_orders row's agent,
+  initial stop and lots (R) and signal ATR, never the trailed stop. **Backoff only when the market is closed**:
+  10017/10018 back off (30 s doubling to 900 s); requotes, price changes and raising calls retry every tick on every
+  path. **Record retry**: a failed write stays queued (persisted in `orders_<account>.json` as `closing`), retried
+  every `reconcile_every_s` up to `closed_record_retries` (10), then reported lost (`closed_records_lost` in the
+  engine state, health FAIL, the record logged in full). **Torn writes**: the append completes short writes and starts
+  a new line after a torn tail; the loader skips bad lines, keeps the rest (so `_recorded` is complete) and the
+  engine shows a `closed_trades_unreadable` dq warning. Behaviour change the owner can see: the engine health line
+  now names an unreadable terminal and a lost record. Not verified: the real MT5 terminal (Windows only).
 - Feature discovery (2026-10-10, survey 4b, TRACEABILITY M37/M38; hypothesis H-02 tooling ready, not run):
   `research/discovery.py` + `research_pass.py --discover [--families [feature|family]] [--discover-config JSON]`
   screens every eligible column (may exceed 40) on one specialist's candidates as ONE trial. Inside each purged
@@ -462,7 +502,43 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   long-only net R split the pre-registration asks for (a follow-up before the run); the 2,631 signal count predates
   the stub fix (recount at the freeze). No research trial was run.
 
+- H-01 pre-freeze (2026-10-11): any primary-signal screen below the event floor is "inconclusive (event floor)",
+  whatever its sign; "screen passes but net t < 1.65 or < 3 positive years (incl. 2021/22)" is inconclusive too.
+  Reports carry long-only and short-only net R. Recount after the Friday-stub fix (data-v1, events only): 2,154 daily
+  signals (1,466 long / 688 short), one-at-a-time lower bound 154 events, first signal 2010-06-18. Owner ruling A
+  (recommended floor 150 for daily signals, can retire not promote) must be committed as
+  `research.screen_min_events_daily` before the run.
+
 ## Next steps (no owner input needed unless marked)
+- Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
+  `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
+  stays partial until the research callers (`pipeline.run_specialist`/`run_pool`, `discovery.discover`) pass it
+  (values equal today, so folds do not change); the tournament promotes shadow -> live at DSR >= 0.95 (row G6).
+- Encrypted off-host backups (2026-10-10, state-store step 2, row P8, `goldbot/ops/backup.py`): scheduler job
+  `backup` (daily 22:15 UTC) snapshots every `state/*.db` with the online backup API (integrity-checked before upload),
+  the state JSON, trial registry, models and the brain's own Parquet (not release sources, not features/labels, not
+  `.secrets.json`) with a SHA-256 manifest, saves them with restic to Oracle Object Storage (secrets only in restic's
+  environment, masked in errors) and writes `state/backup_last.json`. The brain only appends: retention
+  (`forget --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune`) runs monthly from the owner's Mac with a second
+  key (`scripts/backup_retention.sh`, refuses on a server; uploads a marker the brain records, health `backup_prune`
+  warns after 45 days). Staging and restore dirs are 0700 under umask 077; JSONL copies end at the last newline; a
+  month partition caught mid-dedupe is retried, then listed in `skipped_partitions`; `verify_restore` refuses symlinks
+  and paths outside the restore dir. Decision record docs/decisions/0002-backup-scope-and-thresholds.md (renumbered
+  from 0001, which is the auth ADR); `restore_drill` (Sunday 10:00) restores to a temp dir and re-verifies everything
+  (`state/restore_drill_last.json`). Health `backup_age` warns at 26 h (Telegram once), fails at 72 h; `restore_drill`
+  fails on a failed drill. `run.py backup [--init] | restore --latest --to DIR | restore-drill`; brain_bootstrap.sh
+  installs restic. OWNER: create the bucket with Object Versioning and a 30-day previous-version lifecycle rule, a
+  no-delete writer key for the brain and a retention key for the Mac, store the four `restic-*` keys on the brain and
+  the four Keychain items on the Mac, and run the retention script monthly (RUNBOOK 0.6).
+  Not verified against a real restic or Oracle endpoint from here (restic is not installed in the sandbox; the
+  integration test runs where it is).
+- Broker margin in the gate and tick flags (2026-10-10, ROADMAP W2-2, rows R8/D11): brokers gain a read-only
+  `margin_required(symbol, side, lots, price)` (MT5 `order_calc_margin`, paper 1:20, bridge allow-list retry-safe);
+  `RiskGate.check(..., margin_required=...)` uses the larger of the broker figure and notional / 20 and keeps the
+  300% rule; a broker that cannot answer falls back to 1:20 with the reason in `GateDecision.margin_note` (never a
+  smaller margin). `Tick.flags` (default 0) and `tick_key` make the live dedup (time_msc, bid, ask, flags). The engine
+  passes `margin_required=broker_margin(self.broker, self.cfg.symbol)` to both `self.gate.check` calls
+  (proposal and approval re-check; tests/test_engine_margin.py), so R8 is implemented.
 - Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):
   `python -m goldbot.ops.run gates` prints each roadmap gate as met / not met with its evidence (trial registry DSR,
   positive years and backtest trades; the nightly cost tables; `state/closed_trades.jsonl` for the paper and live
