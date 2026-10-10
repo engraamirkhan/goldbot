@@ -17,6 +17,7 @@
   python -m goldbot.ops.run restore-drill                # the weekly restore drill, now
   python -m goldbot.ops.run setup [--account ID]         # guided setup of secrets and server settings (re-runnable)
   python -m goldbot.ops.run preflight [--account ID]     # read-only checklist before starting services (exit 1 on a blocker)
+  python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)
 """
 from __future__ import annotations
 
@@ -462,6 +463,9 @@ if __name__ == "__main__":
     elif cmd == "preflight":
         from goldbot.ops.preflight import main as preflight_main
         sys.exit(preflight_main(sys.argv[2:]))
+    elif cmd == "revoke-sessions":
+        from goldbot.api.auth import revoke_sessions_cli
+        sys.exit(revoke_sessions_cli(sys.argv[2:]))
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))

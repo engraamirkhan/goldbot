@@ -608,15 +608,22 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `npm audit` (prod and dev) reports 0 vulnerabilities, down from 7 dev ones. Production JS bundle 245 -> 318 kB
   (75 -> 96 kB gzip), mostly React 19. Deferred: TypeScript 7 and @types/node 26 (Node 22 is the runtime).
 - Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
-  `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded`, inside the login lockout (5 wrong
-  codes per account in 15 minutes, keyed on the owner email plus client IP; events `mode_failed`/`mode_locked`,
-  `rearm_failed`/`rearm_locked`). The counter is the account's login counter, shared by both channels, so a locked
-  owner also cannot sign in for 15 minutes (fail closed; `/mode propose` and `/halt` still work). The failure that
-  reaches the limit queues one Telegram notice (agent_runs.jsonl relay, no code or address). `mode_by` on the
+  `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
+  minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both
+  channels; see the re-review bullet below for the counter key and atomicity). `mode_by` on the
   auto-mode card is the full `dashboard:<email>`/`telegram:<uid>` only for the verified owner; other roles see the
   channel. Health, Research and auto-mode error text shows the exception type only (detail logged server-side).
   Every `/api/` response carries `Cache-Control: no-store`. The unused `lightweight-charts` dependency is removed
   (new price charts will need it added back).
+- Dashboard security re-review (2026-10-10, TRACEABILITY U13, U15, U17, U18): no reset link can be made or used for
+  the owner account (a stolen owner session could otherwise reset password and authenticator); the owner recovers
+  with a recovery code. Lockout check-and-count is one BEGIN IMMEDIATE transaction (`_reserve`, login and codes),
+  so a 32-thread burst gets at most 5 checks. Code failures count under `code:<email>`: they lock re-arm and auto
+  mode but never sign-in; failed sign-ins lock both (fails safe). The notice fires on crossing the limit, at most once
+  an hour, and names the new server command `python -m goldbot.ops.run revoke-sessions` (signs every account out).
+  The lockout never gates `/api/halt`, Telegram /halt or /mode propose (tested). Health check reasons, drift errors,
+  system-halt reasons and `/api/jobs` errors are whole for the owner and redacted for other roles (type only, paths
+  as `<path>`, in the API layer); `account_security` rows in `/api/agent-runs` are owner-only. RUNBOOK updated.
 
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional

@@ -60,6 +60,18 @@ from goldbot.config import DriftSettings, Settings, TelegramSettings
 log = logging.getLogger(__name__)
 
 
+# "OSError: [Errno 2] ..." -> "OSError"; then any absolute path (POSIX, ~/ or a Windows drive) -> "<path>"
+_EXC_TEXT = re.compile(r"\b([A-Z][A-Za-z0-9_]*(?:Error|Exception|Exit|Interrupt|Warning))\b: .*", re.S)
+_PATH = re.compile(r"(?<![\w.])(?:[A-Za-z]:\\|~/|/)[^\s'\",;)]+")
+
+
+def redact(text: str) -> str:
+    """Fault text for a non-owner role: the first line, an exception's type without its message, no paths. The
+    services write the full text (scheduler job errors, drift errors, health reasons); the owner reads it whole."""
+    first = text.splitlines()[0] if text else ""
+    return _PATH.sub("<path>", _EXC_TEXT.sub(r"\1", first))
+
+
 def _fault(what: str, exc: BaseException) -> str:
     """Every role reads these views: show the exception type only and log the detail (paths, values) server-side."""
     log.warning("%s: %s: %s", what, type(exc).__name__, exc)
@@ -236,7 +248,9 @@ def _cusum(agent_id: str, version: str, trades: list[Any], ds: DriftSettings,
                       false_alarm=rate)
 
 
-def _checks(state: Path, settings: Settings | None) -> list[HealthCheckRow]:
+def _checks(state: Path, settings: Settings | None, is_owner: bool = False) -> list[HealthCheckRow]:
+    """The health checks the Health screen shows. A check that handles its own fault may put the exception text
+    in its reason (goldbot/ops/health.py): kept for the owner, redacted for every other role."""
     from goldbot.ops.health import HealthContext, check_data_quality, check_deploy, check_drift
     ctx = HealthContext(state_dir=state, now=pd.Timestamp.now("UTC"), settings=settings,
                         settings_error=None if settings else "settings unreadable", get_secret=lambda _k: None)
@@ -244,14 +258,17 @@ def _checks(state: Path, settings: Settings | None) -> list[HealthCheckRow]:
     for fn in (check_deploy, check_data_quality, check_drift):
         try:
             c = fn(ctx)
-            out.append(HealthCheckRow(name=c.name, status=c.status, reason=c.reason))
+            out.append(HealthCheckRow(name=c.name, status=c.status, reason=c.reason if is_owner else redact(c.reason)))
         except Exception as exc:                 # one broken check must not hide the others
             out.append(HealthCheckRow(name=fn.__name__.removeprefix("check_"), status="warn",
                                       reason=_fault("check failed", exc)))
     return out
 
 
-def health_view(state: Path, settings: Settings | None) -> HealthView:
+def health_view(state: Path, settings: Settings | None, is_owner: bool = False) -> HealthView:
+    """is_owner: fault text (drift errors, system-halt reasons, check reasons) whole; other roles get `redact`."""
+    def say(text: str) -> str:
+        return text if is_owner else redact(text)
     ds = settings.drift if settings is not None else DriftSettings()
     d, err = _drift(state)
     raw_agents = _d(d.get("agents"))
@@ -307,14 +324,14 @@ def health_view(state: Path, settings: Settings | None) -> HealthView:
     elif sh:
         reasons = sh.get("reasons") if isinstance(sh, dict) else None
         system = SystemHaltView(since=_ts(sh.get("since")) if isinstance(sh, dict) else None,
-                                reasons=[str(r) for r in reasons] if isinstance(reasons, list) and reasons
+                                reasons=[say(str(r)) for r in reasons] if isinstance(reasons, list) and reasons
                                 else ["drift system halt"], review_command=REVIEW_COMMAND, clear_command=CLEAR_COMMAND)
     else:
         system = None
     errors = _d(d.get("errors"))
     return HealthView(generated_utc=_now(), drift_ts=_ts(d.get("ts")), drift_error=err, system_halt=system,
                       agents=agents, psi=psi, reliability=reliability, cusum=cusum, dd_mult=ds.dd_mult,
-                      checks=_checks(state, settings), errors={str(k): str(v) for k, v in errors.items()})
+                      checks=_checks(state, settings, is_owner), errors={str(k): say(str(v)) for k, v in errors.items()})
 
 
 # ---------------------------------------------------------------------------------------------- research

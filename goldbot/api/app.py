@@ -204,6 +204,7 @@ def _settings_owner_email() -> str | None:
 
 
 LOOPBACK = {"127.0.0.1", "::1"}
+CODES_LOCKED = "too many attempts: re-arm and auto mode are locked for 15 minutes; /halt still works"
 
 
 def client_ip(request: Request) -> str | None:
@@ -242,6 +243,11 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                 raise HTTPException(403, f"{role} role required")
             return u
         return dep
+
+    def shown(u: User, text: str) -> str:
+        """Fault text from the services (job errors): the owner reads it whole; other roles get the exception type
+        and no paths (explain.redact)."""
+        return text if st.auth.is_owner(u) else explain.redact(text)
 
     @app.middleware("http")
     async def no_referrer(request: Request, call_next: Callable[[Request], Any]) -> Response:
@@ -461,11 +467,13 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
     @app.post("/api/rearm")
     async def rearm(body: RearmRequest, request: Request, u: User = Depends(need("owner"))) -> Status:
-        # each code once (replay refused); wrong codes count towards the login lockout (rearm_failed / rearm_locked)
+        # each code once (replay refused); wrong codes count towards the code lockout (`code:<email>`, shared with
+        # /mode; rearm_failed / rearm_locked). The SQLite work runs off the event loop.
         try:
-            ok = st.auth.verify_code_guarded(body.totp, "rearm", email=u.email, ip=client_ip(request))
-        except PermissionError as exc:
-            raise HTTPException(403, str(exc))
+            ok = await asyncio.to_thread(st.auth.verify_code_guarded, body.totp, "rearm", email=u.email,
+                                         ip=client_ip(request))
+        except PermissionError:
+            raise HTTPException(403, CODES_LOCKED)
         if not ok:
             raise HTTPException(403, "authenticator code required to re-arm")
         c = st.bus.owner_rearm(by=f"dashboard:{u.email}")      # also clears the engines' drawdown halts
@@ -486,21 +494,22 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                            supervisor_heartbeat_age_s=age) for e in st.engines()]
 
     @app.get("/api/jobs", response_model=list[JobRow])
-    def jobs(_: User = Depends(auth)) -> list[JobRow]:
+    def jobs(u: User = Depends(auth)) -> list[JobRow]:
         sch = st.scheduler()
         if not sch:
             return []
         age = max(0.0, time.time() - datetime.fromisoformat(sch["ts"]).timestamp())   # clamp clock skew
         return [JobRow(name=n, last_slot=j.get("last_slot"), last_finished=j.get("last_finished"), last_ok=j.get("last_ok"),
-                       last_error=(j.get("last_error") or "").splitlines()[0] if j.get("last_error") else None,
+                       last_error=shown(u, (j.get("last_error") or "").splitlines()[0]) if j.get("last_error") else None,
                        next_slot=j.get("next_slot"), runs=j.get("runs", 0), failures=j.get("failures", 0), heartbeat_age_s=age)
                 for n, j in sorted(sch.get("jobs", {}).items())]
 
     @app.get("/api/agent-runs", response_model=list[AgentRunRow])
-    def agent_runs(_: User = Depends(auth)) -> list[AgentRunRow]:
+    def agent_runs(u: User = Depends(auth)) -> list[AgentRunRow]:
+        owner = st.auth.is_owner(u)                 # account-security notices are the owner's alone
         return [AgentRunRow(role=r["role"], started_utc=r["started_utc"], status=r["status"], turns=r.get("turns", 0),
                             cost_usd=r.get("cost_usd", 0.0), detail=r.get("detail"), report=r.get("report"))
-                for r in st.agent_runs()]
+                for r in st.agent_runs() if owner or r.get("role") != "account_security"]
 
     @app.get("/api/calendar", response_model=CalendarResponse)
     def calendar(days: int = 7, max_tier: int = 2, _: User = Depends(auth)) -> CalendarResponse:
@@ -535,8 +544,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return s.model_copy(update={"data_root": str(data_root)}) if data_root is not None else s
 
     @app.get("/api/health", response_model=HealthView)
-    def health_view(_: User = Depends(auth)) -> HealthView:
-        return explain.health_view(st.dir, view_settings())
+    def health_view(u: User = Depends(auth)) -> HealthView:
+        return explain.health_view(st.dir, view_settings(), is_owner=st.auth.is_owner(u))
 
     @app.get("/api/research", response_model=ResearchView)
     def research_view(_: User = Depends(auth)) -> ResearchView:
@@ -546,8 +555,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     # ============================================================== auto mode (A10): card for any role, switch owner-only
     # The switch runs telegram/automode.py `mode_command`, the code behind Telegram's /mode, with the same checks:
     # the owner pinned to auth.owner_email (need("owner") + verify_owner_totp), each authenticator code spent once
-    # (the replay guard shared with sign-in, re-arm and /mode) inside the owner's lockout (verify_code_guarded:
-    # mode_failed / mode_locked, shared with Telegram /mode), then the evidence check. Every outcome is audited by
+    # (the replay guard shared with sign-in, re-arm and /mode) inside the code lockout (verify_code_guarded, key
+    # `code:<email>`, shared with re-arm and Telegram /mode; mode_failed / mode_locked; it never locks sign-in, and
+    # failed sign-ins lock it too), then the evidence check. Switching to propose needs no code and is never locked. Every outcome is audited by
     # mode_command. The engines still force propose under the 30-day re-arm lock and the 12% kill switch.
     @app.get("/api/automode", response_model=AutoModeView)
     def automode_get(u: User = Depends(auth)) -> AutoModeView:
@@ -581,7 +591,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         msg = await asyncio.to_thread(automode.mode_command, st.bus, arg, f"dashboard:{u.email}", totp_ok=totp_ok,
                                       eligibility=eligibility, audit=st.auth.audit)
         if seen.get("locked"):
-            raise HTTPException(403, "too many attempts; wait 15 minutes")
+            raise HTTPException(403, CODES_LOCKED)
         if body.mode == "auto" and not seen.get("totp"):
             raise HTTPException(403, "authenticator code required to enable auto mode")
         if body.mode == "auto" and not seen.get("eligible"):

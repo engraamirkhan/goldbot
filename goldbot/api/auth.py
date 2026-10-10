@@ -31,9 +31,16 @@
 * Lockout: 5 failures per email or 20 per client IP in 15 minutes, counted in aux.db (survives a restart, pruned to
   the window). Trade-off: anyone who knows an email can keep that account locked out by failing on purpose; the
   per-IP limit slows that down but a distributed attacker can still do it. The owner can always recover from the
-  server (the lockout clears 15 minutes after the last failure). The authenticator codes of /rearm and /mode
-  (dashboard and Telegram) count towards the same per-account counter (`verify_code_guarded`), so a stolen session
-  cannot guess codes without limit; reaching the limit sends the owner a notice.
+  server (the lockout clears 15 minutes after the last failure). Login reserves its failure row before checking
+  (`_reserve`, one BEGIN IMMEDIATE transaction), so a concurrent burst gets at most 5 checks, not 5 per thread.
+* Authenticator codes for /rearm and /mode (dashboard and Telegram, `verify_code_guarded`) are counted under their
+  own key, `code:<email>`: 5 wrong codes lock re-arm and auto mode (both channels) for 15 minutes but never sign-in,
+  so a thief guessing codes from a stolen session cannot lock the owner out. Failed sign-ins lock both, so someone
+  failing logins on purpose can also block re-arm and auto mode for a while (fails safe: entries stay
+  propose-and-approve, /halt and /mode propose are never gated). Crossing the limit sends the owner one notice
+  (at most one an hour) naming the server-side `python -m goldbot.ops.run revoke-sessions`.
+* The owner account is never reset by a reset link (`create_reset_link`/`use_reset_link` refuse it): a stolen
+  owner session must not set a new password and authenticator. The owner recovers with a recovery code.
 * Sessions: random bearer tokens with 12 h expiry, stored server-side as SHA-256 hashes, so they can be revoked
   and survive an API restart.
 * Audit: every login, failed login, invite, role change, password or authenticator change and decision is appended
@@ -61,7 +68,7 @@ from typing import Any, NoReturn
 from pydantic import Field
 
 from goldbot.api.schema import Role
-from goldbot.base import Record
+from goldbot.base import FrozenRecord, Record
 from goldbot.db import Database, RecordRepo, db_path
 
 log = logging.getLogger(__name__)
@@ -72,6 +79,8 @@ ROLE_RANK = {r: i for i, r in enumerate(reversed(ROLES))}  # viewer 0, approver 
 MIN_PASSWORD = 12
 LOCKOUT_FAILURES, LOCKOUT_WINDOW_S = 5, 900
 IP_LOCKOUT_FAILURES = 20                 # failures per client IP per window, across emails
+LOCK_NOTICE_EVERY_S = 3600             # at most one code-lockout notice to the owner per hour
+OWNER_RESET_REFUSED = "the owner account cannot be reset with a link; sign in with a recovery code instead"
 SESSION_TTL_H, INVITE_TTL_H, RESET_TTL_H = 12, 72, 24
 RECOVERY_CODES = 10
 
@@ -302,14 +311,24 @@ def owner_health_note(state_dir: str | Path, owner_email: str | None) -> str | N
             n = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
         finally:
             conn.close()
-    except sqlite3.Error as exc:
-        return f"aux.db unreadable: {exc}"
+    except sqlite3.Error as exc:                    # the type only: health reasons reach every dashboard role
+        log.warning("aux.db unreadable: %s", exc)
+        return f"aux.db unreadable ({type(exc).__name__})"
     return owner_conflict(owners, n, owner_email)
 
 
 # ----------------------------------------------------------------------------- store
 class _Refused(Exception):
     """Inside a write transaction: roll it back (nothing spent), then fail as invalid credentials."""
+
+
+class _Reservation(FrozenRecord):
+    """An attempt already counted as a failure (`AuthStore._reserve`): its counter key, the rows to delete on a
+    success, and the counter before and after it."""
+    key: str
+    rows: list[int]
+    prev: int
+    new: int
 
 
 def _mask(email: str) -> str:
@@ -436,29 +455,77 @@ class AuthStore:
         self._record_failure(email, event, ip)
         raise PermissionError("invalid credentials")
 
+    def _reserve(self, email: str, locked_event: str, ip: str | None = None, *, code: bool = False) -> _Reservation:
+        """Check the lockout and count this attempt as a failure in ONE write transaction (BEGIN IMMEDIATE), before
+        the password or code is checked: concurrent attempts serialise here, so a burst gets at most
+        LOCKOUT_FAILURES checks. Raises PermissionError while locked. Login counts under `email:<e>`; a code
+        (code=True) under `code:<e>`, and is also refused while `email:<e>` is locked (failed sign-ins lock both).
+        The caller keeps the rows on a failure and deletes them on a success (`_release`)."""
+        key = f"code:{email}" if code else f"email:{email}"
+        now = time.time_ns()
+        with self.db.write() as conn:
+            conn.execute("DELETE FROM auth_failures WHERE ts_ns <= ?", (now - LOCKOUT_WINDOW_S * 10**9,))
+
+            def n(k: str) -> int:
+                return int(conn.execute("SELECT COUNT(*) FROM auth_failures WHERE key = ?", (k,)).fetchone()[0])
+            prev = n(key)
+            locked = (prev >= LOCKOUT_FAILURES or (code and n(f"email:{email}") >= LOCKOUT_FAILURES)
+                      or (ip is not None and n(f"ip:{ip}") >= IP_LOCKOUT_FAILURES))
+            rows: list[int] = []
+            if locked:
+                _audit(conn, locked_event, email=email, **({"ip": ip} if ip else {}))
+            else:
+                for k in [key] + ([f"ip:{ip}"] if ip else []):
+                    cur = conn.execute("INSERT INTO auth_failures (key, ts_ns) VALUES (?, ?)", (k, now))
+                    rows.append(int(cur.lastrowid or 0))
+        if locked:
+            raise PermissionError("too many attempts; wait 15 minutes")
+        return _Reservation(key=key, rows=rows, prev=prev, new=prev + 1)
+
+    @staticmethod
+    def _release(conn: sqlite3.Connection, r: _Reservation) -> None:
+        """Inside the success's write transaction: the attempt was not a failure; clear its counter (not the IP's)."""
+        conn.executemany("DELETE FROM auth_failures WHERE rowid = ?", [(i,) for i in r.rows])
+        conn.execute("DELETE FROM auth_failures WHERE key = ?", (r.key,))
+
     def verify_code_guarded(self, code: str, action: str, *, email: str | None = None, ip: str | None = None) -> bool:
-        """An authenticator code for an authority-raising action ("rearm", "mode") inside the login lockout: refused
-        with PermissionError while the account is locked (event `<action>_locked`); a wrong code counts one failure
-        (`<action>_failed`, keyed on the email plus the IP like login); a right one clears the account's counter. The
-        failure that reaches the limit queues one owner notice (no code, no address). email None: the owner pinned to
-        auth.owner_email (unset fails closed, uncounted). Telegram /mode and the dashboard share this counter."""
+        """An authenticator code for an authority-raising action ("rearm", "mode"), counted under `code:<email>`
+        (`_reserve`, atomic): refused with PermissionError while locked (event `<action>_locked`), a wrong code
+        stays counted (`<action>_failed`), a right one clears the code counter. Code failures never lock sign-in.
+        Crossing the limit queues an owner notice (`_lock_notice`). email None: the owner pinned to auth.owner_email
+        (unset fails closed, uncounted). Telegram /mode and the dashboard share this counter."""
         target = email.strip().lower() if email is not None else self.owner_email
         if target is None:
             return False
-        self._check_lockout(target, f"{action}_locked", ip)
+        r = self._reserve(target, f"{action}_locked", ip, code=True)
         ok = self.verify_totp(target, code) if email is not None else self.verify_owner_totp(code)
         if ok:
             with self.db.write() as conn:
-                self._clear_failures(conn, target)
+                self._release(conn, r)
             return True
-        if self._record_failure(target, f"{action}_failed", ip) == LOCKOUT_FAILURES:
-            what = {"mode": "switching to auto mode", "rearm": "re-arming"}.get(action, action)
-            self._notify_owner(f"{LOCKOUT_FAILURES} wrong authenticator codes for {what} within "
-                               f"{LOCKOUT_WINDOW_S // 60} minutes (at {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}"
-                               f"); code checks for the owner account are locked for {LOCKOUT_WINDOW_S // 60} minutes. "
-                               f"If this was not you, revoke every session on the dashboard (Users), change your "
-                               f"password and check the audit trail.")
+        self.audit(f"{action}_failed", email=target, **({"ip": ip} if ip else {}))
+        if r.prev < LOCKOUT_FAILURES <= r.new:
+            self._lock_notice(action)
         return False
+
+    def _lock_notice(self, action: str) -> None:
+        """One owner notice when the code counter crosses the limit, at most one per LOCK_NOTICE_EVERY_S (the audit
+        row `code_lock_notice` is the rate limit): no code, no address; names what still works and the server-side
+        revoke command, since the thief already holds a signed-in session."""
+        now = time.time_ns()
+        with self.db.write() as conn:
+            last = conn.execute("SELECT MAX(ts_ns) FROM audit WHERE event = 'code_lock_notice'").fetchone()[0]
+            if last is not None and now - int(last) < LOCK_NOTICE_EVERY_S * 10**9:
+                return
+            _audit(conn, "code_lock_notice", action=action)
+        what = {"mode": "switching to auto mode", "rearm": "re-arming"}.get(action, action)
+        mins = LOCKOUT_WINDOW_S // 60
+        self._notify_owner(f"{LOCKOUT_FAILURES} wrong authenticator codes for {what} within {mins} minutes (at "
+                           f"{time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}); re-arm and auto mode are locked "
+                           f"for {mins} minutes. /halt and /mode propose still work, and you can still sign in. If "
+                           f"this was not you, someone holds a signed-in session: sign everyone out on the server "
+                           f"with `python -m goldbot.ops.run revoke-sessions`, then change your password and check "
+                           f"the audit trail.")
 
     @staticmethod
     def _clear_failures(conn: sqlite3.Connection, email: str) -> None:
@@ -541,7 +608,7 @@ class AuthStore:
 
     def login(self, email: str, password: str, code: str, ttl_h: int = SESSION_TTL_H, ip: str | None = None) -> str:
         email = email.strip().lower()
-        self._check_lockout(email, "login_locked", ip)
+        r = self._reserve(email, "login_locked", ip)          # counted before the check: a burst gets 5 checks
         u = self.get_user(email)
         # scrypt runs whether or not the account exists, so the response time does not reveal it
         pw_ok = verify_password(password, u.password_hash if u is not None else _dummy_hash())
@@ -551,10 +618,11 @@ class AuthStore:
                 cur = _USERS.get(conn, email)
                 if cur is not None and cur.enabled and self._spend_totp(conn, cur, code):
                     tok = self._new_session(conn, email, ttl_h)
-                    self._clear_failures(conn, email)
+                    self._release(conn, r)
                     _audit(conn, "login", email=email)
         if tok is None:
-            self._fail(email, "login_failed", ip)
+            self.audit("login_failed", email=email, **({"ip": ip} if ip else {}))
+            raise PermissionError("invalid credentials")
         return tok
 
     def session_user(self, token: str | None) -> User | None:
@@ -671,13 +739,17 @@ class AuthStore:
             log.warning("could not queue the owner notice: %s", exc)
 
     def create_reset_link(self, by_email: str, email: str, ttl_h: int = RESET_TTL_H) -> str:
-        """Owner only: a one-time token (24 h) that sets a new password and enrols a new authenticator."""
+        """Owner only: a one-time token (24 h) that sets a new password and enrols a new authenticator. Never for an
+        owner account: a stolen owner session could otherwise take the account over with no authenticator code."""
         self._require(by_email, "owner")
         email = email.strip().lower()
         token = secrets.token_urlsafe(24)
         with self.db.write() as conn:
-            if _USERS.get(conn, email) is None:
+            u = _USERS.get(conn, email)
+            if u is None:
                 raise KeyError(email)
+            if u.role == "owner" or email == self.owner_email:
+                raise PermissionError(OWNER_RESET_REFUSED)
             _RESETS.upsert(conn, PasswordReset(token_hash=_token_hash(token), email=email,
                                                expires=time.time() + ttl_h * 3600, created_by=by_email))
             _audit(conn, "reset_link", by=by_email, email=email)
@@ -690,6 +762,11 @@ class AuthStore:
             u0 = _USERS.get(conn, r0.email) if r0 is not None else None
         if r0 is None or r0.expires < time.time() or u0 is None:
             raise PermissionError("reset link invalid or expired")
+        if u0.role == "owner" or u0.email == self.owner_email:      # a link stored before the refusal existed
+            with self.db.write() as conn:
+                conn.execute("DELETE FROM password_resets WHERE email = ?", (u0.email,))
+                _audit(conn, "reset_link_refused", email=u0.email, reason="owner account")
+            raise PermissionError(OWNER_RESET_REFUSED)
         check_password_policy(new_password, u0.password_hash)
         secret = new_totp_secret()
         pw_hash = hash_password(new_password)
@@ -832,6 +909,13 @@ class AuthStore:
             _audit(conn, "revoke_sessions", by=by_email, email=email, sessions=n)
         return int(n)
 
+    def revoke_all_sessions(self, by: str) -> int:
+        """Sign every account out (the server-side recovery when an owner session may be stolen); audited."""
+        with self.db.write() as conn:
+            n = int(conn.execute("DELETE FROM sessions").rowcount)
+            _audit(conn, "revoke_all_sessions", by=by, sessions=n)
+        return n
+
     def list_users(self) -> list[dict]:
         return [{"email": u.email, "role": u.role, "enabled": u.enabled, "last_login": u.last_login} for u in self.users.values()]
 
@@ -846,6 +930,18 @@ def env_setup_code_hint(store: AuthStore) -> str | None:
         missing = "" if store.owner_email else " (first set auth.owner_email in config/settings.local.yaml and restart)"
         return f"goldbot first-run: open the dashboard and create the owner account with setup code {store.setup_code}{missing}"
     return None
+
+
+def revoke_sessions_cli(argv: list[str]) -> int:
+    """`python -m goldbot.ops.run revoke-sessions [--state DIR]`: run on the server, needs no dashboard sign-in."""
+    import argparse
+    ap = argparse.ArgumentParser(prog="python -m goldbot.ops.run revoke-sessions",
+                                 description="Sign every dashboard account out (all sessions).")
+    ap.add_argument("--state", default="state", help="the state directory holding aux.db (default: state)")
+    args = ap.parse_args(argv)
+    n = AuthStore(args.state).revoke_all_sessions(by="server:revoke-sessions")
+    print(f"revoked {n} session{'s' if n != 1 else ''}; every account must sign in again")
+    return 0
 
 
 __all__ = ["AuthStore", "User", "Invite", "PasswordReset", "Enrolment", "RecoveryLogin", "import_users", "import_users_json",

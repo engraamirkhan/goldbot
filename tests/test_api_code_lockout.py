@@ -136,6 +136,13 @@ def test_a_failing_health_check_shows_the_type_only(tmp_path, monkeypatch):
     rows = explain._checks(tmp_path, None)
     assert any(r.reason == "check failed (RuntimeError)" for r in rows)
     assert not any("/srv" in (r.reason or "") for r in rows)
+    # the handled path: a check that catches its own fault puts the exception text (a path here) in its reason;
+    # the API keeps it for the owner and redacts it for every other role
+    (tmp_path / "deploys.jsonl").mkdir()                     # reading a directory: IsADirectoryError with the path
+    full = {r.name: r.reason for r in explain._checks(tmp_path, None, is_owner=True)}["deploy"]
+    assert str(tmp_path) in full
+    shown = {r.name: r.reason for r in explain._checks(tmp_path, None, is_owner=False)}["deploy"]
+    assert str(tmp_path) not in shown and shown.startswith("deploys.jsonl unreadable") and "<path>" in shown
 
 
 def test_auth_responses_are_never_cached(app_client):

@@ -247,8 +247,9 @@ def owner_totp_ok(state_dir: str | Path, code: str, owner_email: str | None = No
     """The dashboard's TOTP check (goldbot/api/auth.py, RFC 6238, +-1 step) for the owner account pinned to
     auth.owner_email (read from settings unless given; unset fails closed): the same authenticator that re-arms on
     the dashboard. Each code is spent once, shared with the dashboard (a code used to sign in cannot also switch the
-    mode). Read fresh each time, so a disabled owner stops working at once. Wrong codes count towards the owner's
-    lockout, shared with the dashboard (AuthStore.verify_code_guarded); while locked it raises PermissionError."""
+    mode). Read fresh each time, so a disabled owner stops working at once. Wrong codes count towards the owner's code
+    lockout (`code:<email>`, shared with the dashboard, AuthStore.verify_code_guarded); while locked it raises
+    PermissionError."""
     from goldbot.api.auth import AuthStore, _settings_owner_email
     store = AuthStore(state_dir, owner_email=owner_email if owner_email is not None else _settings_owner_email())
     return store.verify_code_guarded(code, "mode")
@@ -261,7 +262,8 @@ def audit_to(state_dir: str | Path) -> Callable[..., None]:
 
 
 MODE_USAGE = "usage: /mode propose  |  /mode auto <6-digit code>"
-MODE_LOCKED = "Too many wrong authenticator codes: code checks are locked for 15 minutes. /mode propose still works."
+MODE_LOCKED = ("Too many wrong authenticator codes: auto mode and re-arm are locked for 15 minutes. /halt still works, "
+               "and so does /mode propose.")
 
 
 def mode_command(bus: ApprovalBus, arg: str | None, by: str, *, totp_ok: Callable[[str], bool],
