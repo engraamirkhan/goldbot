@@ -6,7 +6,19 @@ Decision document for the owner. Date: 2026-10-10. Status: step 0 (foundation) a
 readings in docs/decisions/0002-backup-scope-and-thresholds.md: backup_age fails at 72 h not 36 h, the drill checks
 checksums, integrity, user_version and row counts against a manifest rather than against a `backups` table, no email
 yet, Telegram on the first warning; after the security review the brain only appends and retention runs monthly from
-the owner's Mac with a second key on a versioned bucket, health `backup_prune`); steps 3-8 not started. Step 0 leftovers: `run.py migrate` /
+the owner's Mac with a second key on a versioned bucket, health `backup_prune`); step 3 implemented 2026-10-10 for the
+agent run log and spend, the scheduler and the Telegram outbox (`goldbot/db/bookkeeping.py`, aux.db migration 5:
+`agent_runs`, `agent_spend`, `scheduler_jobs`, `scheduler_heartbeat`, `outbox_sent`, `outbox_cursor`). Readings: each
+file is imported once into an empty table; files still read outside step 3 (scheduler.json, agent_spend.json by
+api/app.py, ops/health.py, agents/tools.py, ops/vps_update.ps1; agent_runs.jsonl by api/app.py and written by
+api/auth.py owner notices) are regenerated from the DB after each write, with the original copied once to
+`state/pre-db/`; agents reserve their per-run budget before the first call and settle afterwards, so concurrent runs
+cannot overspend; owner notices are still relayed from agent_runs.jsonl. After the trading-safety review: exports
+run after the commit and never raise; telegram_outbox.json is dual-written in the old format for one release; a file
+another release wrote is merged back once and counted in `state_fallback`; additive migrations record
+`compat_back_to` so older code opens a newer file (vps_update.ps1 steps aux.db back from 5 to 4 when it installs the
+release before step 3); health and vps_update.ps1 read the scheduler heartbeat from aux.db. Step 3 not done: news_spend.json
+(data/news_collector.py), hypotheses, health dedupe, news feeds, recalibrations. Steps 4-8 not started. Step 0 leftovers: `run.py migrate` /
 `import-state` are `python -m goldbot.db migrate|import-state` for now, no `state_db` health check yet, and the API
 migrates aux.db on open until `run.py migrate` exists (concurrent migrators are safe: each step re-reads the version
 under the write lock). Versions are rows of a `schema_version` table, mirrored in `PRAGMA user_version`.

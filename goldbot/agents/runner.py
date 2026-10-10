@@ -1,8 +1,9 @@
 """Runs one staff agent: a tool-use loop over ReadOnlyTools with a per-run and a monthly spending cap.
 
 The loop is written out (rather than the SDK's beta tool runner) because the spending cap must be enforced between
-turns and the whole run must be testable without the network. Every run is logged to state/agent_runs.jsonl with its
-inputs, tool calls, usage and cost, and its report is written to state/agent_reports/<role>/<UTC time>.md.
+turns and the whole run must be testable without the network. Every run is logged to aux.db table agent_runs (mirrored
+to state/agent_runs.jsonl for the dashboard) with its inputs, tool calls, usage and cost, and its report is written
+to state/agent_reports/<role>/<UTC time>.md.
 
 Model and request shape follow the Claude API guidance for this SDK (anthropic 1.x): Claude Opus 5.5 with thinking on
 (it cannot be disabled; depth is set by `effort`), automatic prompt caching of the stable system prompt and tools, and
@@ -11,7 +12,7 @@ failing the job. A run that still ends in a refusal is logged with its category,
 """
 from __future__ import annotations
 
-import json
+import logging
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -21,6 +22,20 @@ from pydantic import Field
 from goldbot.agents.roles import Role
 from goldbot.agents.tools import ReadOnlyTools
 from goldbot.base import Record, UtcTimestamp
+from goldbot.db import Database
+from goldbot.db.bookkeeping import (
+    AGENT_SPEND,
+    AgentRunLog,
+    add_spend,
+    all_spend,
+    dual_read,
+    export_spend,
+    merge_agent_spend_json,
+    month_spent,
+    reserve_spend,
+)
+
+log = logging.getLogger(__name__)
 
 MODEL = "claude-opus-5-5"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -59,24 +74,54 @@ def cost_of(usage: Any) -> tuple[dict[str, int], float]:
 
 
 class SpendLedger:
-    """Month -> USD spent by all agents (design: their total monthly spend is capped)."""
+    """Month -> USD spent by all agents (design: their total monthly spend is capped), in aux.db table agent_spend
+    (state store step 3; state/agent_spend.json is imported once, then regenerated after every commit for
+    ops/health.py and a rolled-back release, whose own writes to it are merged back by the larger amount per month).
+    `path` names that file; the database is aux.db in the same folder. A failed export never undoes a booking.
+
+    Agents reserve their per-run budget up front (`reserve`) and settle the real cost afterwards (`settle`): the
+    cap check and the booking commit together under BEGIN IMMEDIATE, so concurrent runs (and the headline scorer,
+    which shares this ledger) are never granted more than the cap between them. A run that dies mid-way (an
+    exception out of the loop, or a killed process) keeps its reservation booked: unknown spend counts as spent
+    (fails closed on money)."""
 
     def __init__(self, path: str | Path, monthly_cap_usd: float):
         self.path = Path(path)
+        self.dir = self.path.parent
         self.cap = monthly_cap_usd
-        self.spent: dict[str, float] = json.loads(self.path.read_text()) if self.path.exists() else {}
+        self.db = Database.open(self.dir, "aux")
+        if dual_read(self.db, AGENT_SPEND, self.dir, merge_agent_spend_json):
+            export_spend(self.db, self.dir)
+
+    @property
+    def spent(self) -> dict[str, float]:
+        with self.db.connection() as conn:
+            return all_spend(conn)
 
     def month_spent(self, now: pd.Timestamp) -> float:
-        return float(self.spent.get(f"{now:%Y-%m}", 0.0))
+        with self.db.connection() as conn:
+            return month_spent(conn, f"{now:%Y-%m}")
 
     def remaining(self, now: pd.Timestamp) -> float:
         return max(self.cap - self.month_spent(now), 0.0)
 
     def add(self, now: pd.Timestamp, usd: float) -> None:
-        key = f"{now:%Y-%m}"
-        self.spent[key] = round(self.spent.get(key, 0.0) + usd, 6)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.spent, indent=1))
+        """Book spend that has already happened (no cap check: the money is gone)."""
+        with self.db.write() as conn:
+            add_spend(conn, f"{now:%Y-%m}", usd)
+        export_spend(self.db, self.dir)
+
+    def reserve(self, now: pd.Timestamp, usd: float) -> float:
+        """Grant and book min(usd, remaining) atomically; returns the grant (0 when the cap is used up)."""
+        with self.db.write() as conn:
+            granted = reserve_spend(conn, f"{now:%Y-%m}", usd, self.cap)
+        export_spend(self.db, self.dir)
+        return granted
+
+    def settle(self, now: pd.Timestamp, reserved: float, actual: float) -> None:
+        """Replace a reservation by the real cost (releases what was not used; books an overrun of the last turn)."""
+        if reserved != actual:
+            self.add(now, actual - reserved)
 
 
 class AgentRunner:
@@ -87,10 +132,31 @@ class AgentRunner:
 
     def run(self, role: Role, now: pd.Timestamp, extra_context: str = "") -> AgentRun:
         run = AgentRun(role=role.name, started_utc=now)
-        budget = min(role.max_cost_usd, self.ledger.remaining(now))
+        budget = self.ledger.reserve(now, role.max_cost_usd)
         if budget < 0.05:
+            self._settle(now, budget, 0.0)
             run.status, run.detail = "monthly_cap", f"monthly agent budget {self.ledger.cap:.2f} USD used up"
             return self._finish(run, now)
+        try:
+            self._loop(role, now, extra_context, run, budget)
+        except BaseException:
+            # the loop catches API errors itself; anything escaping (interrupt, bug) leaves the cost unknown, so the
+            # whole reservation stays booked (fails closed on money)
+            log.warning("agent run %s died mid-loop: its %.2f USD reservation stays booked", role.name, budget)
+            raise
+        self._settle(now, budget, run.cost_usd)
+        return self._finish(run, now)
+
+    def _settle(self, now: pd.Timestamp, reserved: float, actual: float) -> None:
+        """A failed settle (aux.db busy or broken) leaves the reservation booked, which errs towards stopping; the
+        run is still logged and its report kept."""
+        try:
+            self.ledger.settle(now, reserved, actual)
+        except Exception as exc:                          # noqa: BLE001
+            log.warning("could not settle the agent spend (reservation %.2f, cost %.2f USD stays reserved): %s",
+                        reserved, actual, exc)
+
+    def _loop(self, role: Role, now: pd.Timestamp, extra_context: str, run: AgentRun, budget: float) -> None:
         self.tools.begin_run()
         tools = self.tools.definitions(list(role.tools))
         prompt = f"Current UTC time: {now.isoformat()}.\n\n{role.task}" + (f"\n\nContext:\n{extra_context}" if extra_context else "")
@@ -134,8 +200,6 @@ class AgentRunner:
                 messages.append({"role": "user", "content": results})   # all results in one message
         except Exception as exc:     # API or network trouble: logged, the scheduler's next slot tries again
             run.status, run.detail = "error", f"{type(exc).__name__}: {exc}"
-        self.ledger.add(now, run.cost_usd)
-        return self._finish(run, now)
 
     def _finish(self, run: AgentRun, now: pd.Timestamp) -> AgentRun:
         run.finished_utc = now if run.finished_utc is None else run.finished_utc
@@ -145,7 +209,5 @@ class AgentRunner:
             path = d / f"{now:%Y%m%dT%H%M%S}.md"
             path.write_text(f"<!-- {run.role} {now.isoformat()} status={run.status} cost=${run.cost_usd:.3f} -->\n{run.report}\n")
             run.report_path = str(path)
-        self.state.mkdir(parents=True, exist_ok=True)
-        with open(self.state / "agent_runs.jsonl", "a", encoding="utf-8") as fh:
-            fh.write(run.model_dump_json(exclude={"report"}) + "\n")
+        AgentRunLog(self.state).append(run.model_dump_json(exclude={"report"}))
         return run

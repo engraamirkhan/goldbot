@@ -14,6 +14,7 @@ is imported at most once, so a re-run never duplicates its lines.
 from __future__ import annotations
 
 import hashlib
+import shutil
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -29,6 +30,7 @@ class ImportSpec(FrozenRecord):
     kind: DbKind
     loader: Loader
     once: bool = False     # append-only source: never import a second time, even if the file changed
+    backup: bool = False   # the file keeps being rewritten as an export of the DB: copy the original to pre-db/ first
 
 
 class ImportResult(FrozenRecord):
@@ -48,6 +50,16 @@ def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def keep_backup(path: Path) -> Path:
+    """Copy `path` once to `<dir>/pre-db/<name>` (never overwritten): the untouched original of a file that the DB
+    now regenerates as a compatibility export."""
+    dst = path.parent / "pre-db" / path.name
+    if not dst.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, dst)
+    return dst
+
+
 def import_file(db: Database, spec: ImportSpec, path: Path, *, dry_run: bool = False) -> ImportResult:
     if not path.exists():
         return ImportResult(source=spec.source, kind=spec.kind, status="missing")
@@ -60,6 +72,8 @@ def import_file(db: Database, spec: ImportSpec, path: Path, *, dry_run: bool = F
             rows = spec.loader(path, conn)
             if dry_run:
                 raise _DryRun(rows)                      # rolls the transaction back
+            if rows and spec.backup:
+                keep_backup(path)
             conn.execute("INSERT INTO imports (source, sha256, rows, imported_ns) VALUES (?, ?, ?, ?) "
                          "ON CONFLICT(source) DO UPDATE SET sha256=excluded.sha256, rows=excluded.rows, "
                          "imported_ns=excluded.imported_ns", (spec.source, sha, rows, now_ns()))
@@ -71,8 +85,13 @@ def import_file(db: Database, spec: ImportSpec, path: Path, *, dry_run: bool = F
 def importers() -> list[ImportSpec]:
     """Every registered importer, in dependency order. Imported lazily: goldbot.db never imports its callers."""
     from goldbot.api.auth import import_audit_jsonl, import_users_json
+    from goldbot.db.bookkeeping import AGENT_RUNS, AGENT_SPEND
+    from goldbot.ops.scheduler import SCHEDULER_IMPORT
+    from goldbot.telegram.outbox import OUTBOX_IMPORT
     return [ImportSpec(source="users.json", kind="aux", loader=import_users_json),
-            ImportSpec(source="audit.jsonl", kind="aux", loader=import_audit_jsonl, once=True)]
+            ImportSpec(source="audit.jsonl", kind="aux", loader=import_audit_jsonl, once=True),
+            AGENT_RUNS, AGENT_SPEND, SCHEDULER_IMPORT,
+            OUTBOX_IMPORT]                       # after AGENT_RUNS: its line offset maps onto imported run ids
 
 
 def import_state(state_dir: str | Path, *, dry_run: bool = False) -> list[ImportResult]:
@@ -87,4 +106,4 @@ def import_state(state_dir: str | Path, *, dry_run: bool = False) -> list[Import
     return out
 
 
-__all__ = ["ImportSpec", "ImportResult", "import_file", "importers", "import_state", "file_sha256"]
+__all__ = ["ImportSpec", "ImportResult", "import_file", "keep_backup", "importers", "import_state", "file_sha256"]
