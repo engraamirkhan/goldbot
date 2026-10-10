@@ -615,8 +615,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   COMEX gold (088691) managed-money long/short/net, open interest, commercials net (producer/merchant + swap dealers),
   and GLD tonnes from the issuer archive (`GLD_US_archive_EN.csv`). COT is stamped Friday 15:30 ET (zoneinfo: 20:30
   UTC, 19:30 in US DST), the next business day after the Friday in a federal-holiday week, never before the shutdown
-  catch-up floors (2013, 2018-19, 2025; dates conservative and UNVERIFIED against CFTC notices); GLD the next US business
-  day 14:00 UTC. Revisions add rows (first release kept); a row missing from the previous successful download is
+  catch-up floors (2013, 2018-19 conservative and UNVERIFIED against CFTC notices; 2025 from CFTC 9147-25: reports to
+  23 Dec 2025 not before 3 Jan 2026); unscheduled closures (mourning days 2018-12-05, 2025-01-09) count as holidays;
+  GLD the next US business day 14:00 UTC. Publishing never loses history: only a confirmed-missing release/asset is a
+  first run, and the script refuses (exit 2, nothing published) a frame with fewer rows per source or any published
+  row missing. The 2006+ backfill carries current corrected COT values with first-release stamps (rare, small
+  revisions: accepted look-ahead, documented in `cot_frame`). Revisions add rows (first release kept); a row missing from the previous successful download is
   stamped at the run that first saw it (catches future delays). GLD blocked/reformatted -> "source unavailable",
   published rows kept, run still green (reported in the step summary), no scraping. Opt-in features
   (`goldbot/features/positioning.py`, `research_pass.py --positioning DIR`, not with `--discover`): MM net % OI, its

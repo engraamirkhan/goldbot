@@ -12,6 +12,8 @@ from goldbot.data.macro import US_BDAY
 from goldbot.data.positioning import (
     COT_GOLD_CODE,
     GldSourceUnavailable,
+    HistoryLoss,
+    check_keeps_history,
     cot_available_utc,
     cot_frame,
     gld_available_utc,
@@ -66,8 +68,8 @@ def test_cot_is_public_friday_1530_new_york_time_in_both_seasons():
                          _utc("2025-07-11 19:30"),     # EDT: 19:30 UTC
                          _utc("2025-03-07 20:30"),     # DST starts Sunday 9 March: the Friday before is still EST
                          _utc("2025-03-14 19:30"),
-                         _utc("2026-01-31 00:00"),     # 2025 shutdown floor (see the next test)
-                         _utc("2026-01-31 00:00")]
+                         _utc("2026-01-03 00:00"),     # 2025 shutdown floor (see the next test)
+                         _utc("2026-01-03 00:00")]
     winter_summer = cot_available_utc(pd.DatetimeIndex(["2024-10-29", "2024-11-05"]))
     assert list(winter_summer) == [_utc("2024-11-01 19:30"), _utc("2024-11-08 20:30")]   # DST ends 3 Nov 2024
     assert all(t.tz_convert("America/New_York").strftime("%H:%M") == "15:30" for t in winter_summer)
@@ -89,11 +91,25 @@ def test_cot_holiday_weeks_move_to_the_next_business_day_after_friday():
 
 
 def test_cot_shutdown_backlogs_are_not_public_before_the_catch_up():
-    got = cot_available_utc(pd.DatetimeIndex(["2018-12-24", "2019-01-08", "2019-03-12", "2025-09-23", "2025-10-14"]))
+    got = cot_available_utc(pd.DatetimeIndex(["2018-12-24", "2019-01-08", "2019-03-12", "2025-09-23", "2025-10-14",
+                                              "2025-12-23", "2025-12-30"]))
     assert got[0] == got[1] == _utc("2019-03-11 00:00")
     assert got[2] == _utc("2019-03-15 19:30")          # after the floor window: the normal rule (DST from 10 March)
     assert got[3] == _utc("2025-09-26 19:30")          # before the shutdown: normal
-    assert got[4] == _utc("2026-01-31 00:00")
+    # CFTC 9147-25: the last delayed report (23 Dec 2025) came out 29 Dec 2025; floor 3 Jan 2026 (margin)
+    assert got[4] == got[5] == _utc("2026-01-03 00:00")
+    assert got[6] == _utc("2026-01-05 20:30")          # back to normal: New Year week -> Monday 5 Jan 2026
+
+
+def test_unscheduled_federal_closures_count_as_holidays():
+    # Bush day of mourning Wednesday 5 Dec 2018: report of Tuesday 4 Dec moves from Friday 7 Dec to Monday 10 Dec
+    # Carter day of mourning Thursday 9 Jan 2025: report of Tuesday 7 Jan moves from Friday 10 Jan to Monday 13 Jan
+    got = cot_available_utc(pd.DatetimeIndex(["2018-12-04", "2025-01-07", "2018-11-27", "2025-01-14"]))
+    assert list(got) == [_utc("2018-12-10 20:30"), _utc("2025-01-13 20:30"),
+                         _utc("2018-11-30 20:30"), _utc("2025-01-17 20:30")]     # neighbouring weeks unchanged
+    # GLD: the next business day skips the closure (conservative: a later stamp)
+    gld = gld_available_utc(pd.DatetimeIndex(["2018-12-04", "2025-01-08", "2025-01-10"]))
+    assert list(gld) == [_utc("2018-12-06 14:00"), _utc("2025-01-10 14:00"), _utc("2025-01-13 14:00")]
 
 
 # --------------------------------------------------------------------------- parsing
@@ -287,6 +303,68 @@ def _script():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def test_check_keeps_history_refuses_fewer_rows_or_changed_published_rows():
+    prev = merge_releases(None, pd.concat([_cot(n=4), _gld(n=6)], ignore_index=True), _utc("2025-06-01"))
+    check_keeps_history(None, prev)
+    check_keeps_history(prev, prev)
+    grown = merge_releases(prev, pd.concat([_cot(n=6, vintage="2025-07-01"), _gld(n=6)], ignore_index=True),
+                           _utc("2025-07-01"), {"cftc": _utc("2025-06-01"), "spdr": _utc("2025-06-01")})
+    check_keeps_history(prev, grown)
+    with pytest.raises(HistoryLoss, match="spdr"):                      # GLD rows dropped (blocked source rebuilt)
+        check_keeps_history(prev, prev[prev["source"] == "cftc"])
+    with pytest.raises(HistoryLoss, match="cftc"):                      # fewer COT rows than published
+        check_keeps_history(prev, pd.concat([prev[prev["source"] == "spdr"], _cot(n=3)], ignore_index=True))
+    # same row count, but a published late stamp replaced by the rule stamp (a rebuild loses late-release stamps)
+    changed = prev.copy()
+    stamps = pd.DatetimeIndex(changed["available_utc"])
+    changed["available_utc"] = stamps.where(np.arange(len(stamps)) != 0, stamps[0] - pd.Timedelta(days=3))
+    with pytest.raises(HistoryLoss, match="missing or changed"):
+        check_keeps_history(prev, changed)
+
+
+def test_workflow_script_refuses_a_missing_previous_file_without_first_run(tmp_path, monkeypatch, capsys):
+    mod = _script()
+    cot = pd.DataFrame({"report_date": pd.date_range("2024-01-02", periods=4, freq="7D"), "mm_long": 1.0,
+                        "mm_short": 0.0, "open_interest": 10.0, "comm_net": -1.0})
+    years: list[list[int]] = []
+
+    def fetch(y: list[int]) -> pd.DataFrame:
+        years.append(y)
+        return cot
+    monkeypatch.setattr(mod, "fetch_cot", fetch)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    out = tmp_path / "out.parquet"
+    missing = tmp_path / "prev" / "positioning.parquet"
+    assert mod.main(["--out", str(out), "--existing", str(missing), "--skip-gld"]) == 2
+    assert not out.exists() and not years and "REFUSED" in capsys.readouterr().out
+    assert mod.main(["--out", str(out), "--existing", str(missing), "--skip-gld", "--first-run"]) == 0
+    assert out.exists() and years[0][0] == 2006
+
+
+def test_workflow_script_never_publishes_a_frame_that_loses_history(tmp_path, monkeypatch, capsys):
+    mod = _script()
+    prev = tmp_path / "prev.parquet"
+    write_release(pd.concat([_cot(n=3), _gld(n=5)], ignore_index=True), str(prev), {"cftc": _utc("2025-06-01")})
+    cot = pd.DataFrame({"report_date": pd.date_range("2024-01-02", periods=4, freq="7D"), "mm_long": 1.0,
+                        "mm_short": 0.0, "open_interest": 10.0, "comm_net": -1.0})
+    monkeypatch.setattr(mod, "fetch_cot", lambda years: cot)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    def lossy(prev_df, fresh, now, last_ok):                             # a merge bug that drops the GLD history
+        return fresh
+    monkeypatch.setattr(mod, "merge_releases", lossy)
+    out = tmp_path / "out.parquet"
+    assert mod.main(["--out", str(out), "--existing", str(prev), "--skip-gld"]) == 2
+    assert not out.exists() and "REFUSED" in capsys.readouterr().out
+
+
+def test_workflow_treats_only_a_missing_release_as_a_first_run():
+    wf = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "data-positioning.yml").read_text()
+    assert '|| echo "no previous file"' not in wf
+    assert "release not found" in wf and "--first-run" in wf
+    assert "steps.prev.outcome == 'success'" in wf                     # no publish when the previous file was unreadable
 
 
 def test_workflow_script_keeps_gld_rows_when_the_source_is_unavailable(tmp_path, monkeypatch, capsys):
