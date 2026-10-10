@@ -15,12 +15,14 @@ Owner: Aamir (engraamirkhan on GitHub). Personal project; keep everything inside
   the VPS keyring (`python -m goldbot.ops.accounts add <account>`); `config/accounts.yaml` keeps `login: null`.
 
 ## Lifecycle agents (`.claude/agents/`)
+All agents operate at principal level in their domain (see each file's "Principal-level expectations").
 Every work cycle starts with the `product-owner` (ranked docs/BACKLOG.md, acceptance criteria) and runs through:
 `architect` (software architect: plan against DESIGN/TRACEABILITY, read-only) -> `ui-ux-designer` for any screen or
 Telegram change -> `implementer`
 (failing tests first) -> `test-engineer` (all gates below) -> reviews: `code-reviewer` always, `quant-reviewer` for
 research/labels/features/costs/gates, `trading-safety-reviewer` for engine/risk/execution/approvals,
-`security-reviewer` before every push -> `release-manager` (PR, CI, merge when green, progress on issue #34) -> `product-owner` accepts against the criteria. Independent items run in parallel,
+`security-reviewer` before every push, `sre` for ops/deploy/backups/alerts, `data-engineer` for data and
+pipelines, -> `release-manager` (PR, CI, merge when green, progress on issue #34) -> `product-owner` accepts against the criteria. Independent items run in parallel,
 each agent in its own git worktree. Quality bar: every agent's "Definition of done" plus the shared standards,
 review routing and acceptance scorecard in `docs/AGENT_STANDARDS.md`.
 Trading improvement loop: `performance-analyst` (shadow/live trades by timeframe, family, session, costs) ->

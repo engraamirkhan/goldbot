@@ -1,6 +1,8 @@
 # Agent quality standards
 
-Every agent in `.claude/agents/` meets these shared standards in addition to the "Definition of done" in its own
+Every agent in `.claude/agents/` operates at principal level in its domain ("Principal-level expectations" in its
+file: owns outcomes, sets the standard, raises risks unasked, decides with evidence and records decisions in
+`docs/decisions/`, multiplies the team, escalates owner-only decisions). Every agent meets these shared standards in addition to the "Definition of done" in its own
 file. The product owner accepts work against them; the release manager does not ship work that misses one.
 
 ## Shared standards (all agents)
@@ -28,6 +30,8 @@ file. The product owner accepts work against them; the release manager does not 
 | auth, accounts/keyring, deploy or bootstrap scripts, workflows, anything run as root | security-reviewer |
 | everything | code-reviewer (correctness), test-engineer (gates) |
 | any screen or Telegram message | ui-ux-designer |
+| goldbot/ops/linux, systemd, deploy, backups, health/alerts | sre |
+| goldbot/data, data workflows, release loaders, feature inputs | data-engineer |
 
 A HIGH or CRITICAL finding blocks release until fixed and re-verified by the same reviewer.
 
