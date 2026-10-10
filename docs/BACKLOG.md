@@ -18,7 +18,7 @@ Status: ready / in progress / in review / done / rejected.
 | # | Item | Stage · kind | Size | Status |
 | --- | --- | --- | --- | --- |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | ready |
-| 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | ready |
+| 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | in review |
 | 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | in review (PR #60) |
 | 4 | FRED macro data pipeline | Market and macro preparation · FIND | M | in progress |
 | 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | ready |

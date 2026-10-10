@@ -93,6 +93,7 @@ class CostTable(FrozenRecord):
     swap_short_usd_per_lot: float | None = None
     swap_triple_weekday: int | None = Field(None, ge=0, le=4)
     commission_measured: bool = False          # commission from the terminal's deals (else the settings value)
+    commission_lots: float = 0.0               # lots of closed positions the measured commission rests on
 
     def extra_cost_usd(self) -> float:
         """Round-trip cost per oz beyond the quoted spread: entry and exit slippage (mean of the market-order cells,
@@ -231,14 +232,97 @@ def settings_swap(settings: "Settings") -> SwapSpec:
 
 def research_costs(settings: "Settings", table: CostTable | None) -> tuple[float, SwapSpec, str]:
     """(extra cost per oz beyond the spread, swap, a line naming the source) for research: the canonical broker's
-    measured cost table when given (`run.py export-costs` -> config/costs_measured.json), each part falling back to the
-    settings prior when the table has not measured it. The swap runs on the canonical broker's server clock."""
+    measured cost table when given (the VPS publishes it on release costs-v1; research.yml downloads it), each part
+    falling back to the settings prior when the table has not measured it. The swap runs on the canonical broker's
+    server clock."""
     prior = settings_swap(settings)
     if table is None:
-        return settings_extra_cost_usd(settings), prior, "settings priors (no measured cost table)"
+        return settings_extra_cost_usd(settings), prior, (
+            f"PRIORS ONLY: no measured cost table (release {COSTS_TAG} has no {COSTS_ASSET}); slippage prior "
+            f"{settings.costs.slippage_prior_usd:.2f} $/oz, commission from settings, swap prior")
     swap = table.swap_spec(prior.server_tz, prior.triple_weekday)
     parts = [f"cost table {table.account_id} built {table.built_utc:%Y-%m-%d}",
              "commission measured" if table.commission_measured else "commission from settings",
              "swap measured" if swap is not None else "swap prior (table has no measured swap)",
              f"slippage from {sum(not s.from_prior for s in table.slippage.values())} measured cells"]
     return table.extra_cost_usd(), swap or prior, ", ".join(parts)
+
+
+# ------------------------------------------------------------------ the published table (release costs-v1, research)
+COSTS_TAG = "costs-v1"
+COSTS_ASSET = "costs_measured.json"
+
+
+class FieldSource(FrozenRecord):
+    """Where one cost component comes from: the broker's measurement or the settings prior, and the count it rests on
+    (ticks for the spread, fills for slippage, lots for commission; None for swap, the terminal's quoted rate)."""
+    source: Literal["measured", "prior"]
+    n: float | None = None
+
+
+class PublishedCostTable(FrozenRecord):
+    """The canonical broker's measured costs as research reads them (asset `costs_measured.json` on release
+    `costs-v1`, published by the VPS). Costs only: the broker's short name, never an account id, login, server,
+    balance or equity, and no free-text notes (they could quote one). `fields` says per component whether the value is
+    measured or a prior, so a prior is never mistaken for a measurement."""
+    schema_version: Literal[1] = 1
+    broker: str
+    measured_at: UtcTimestamp
+    spread: dict[str, SpreadStat]
+    slippage: dict[str, SlippageStat]          # key "<session>:<order_type>"
+    slippage_prior_usd: float
+    commission_per_lot_side_usd: float
+    swap_long_usd_per_lot: float | None
+    swap_short_usd_per_lot: float | None
+    swap_triple_weekday: int | None = Field(None, ge=0, le=4)
+    n_ticks: int
+    n_fills: int
+    fields: dict[str, FieldSource]             # spread, slippage, commission, swap
+
+    @classmethod
+    def from_table(cls, table: CostTable, broker: str) -> "PublishedCostTable":
+        swap_ok = table.swap_long_usd_per_lot is not None and table.swap_short_usd_per_lot is not None
+        slip_ok = any(not s.from_prior for s in table.slippage.values())
+        return cls(broker=broker, measured_at=table.built_utc, spread=table.spread, slippage=table.slippage,
+                   slippage_prior_usd=table.slippage_prior_usd,
+                   commission_per_lot_side_usd=table.commission_per_lot_side_usd,
+                   swap_long_usd_per_lot=table.swap_long_usd_per_lot, swap_short_usd_per_lot=table.swap_short_usd_per_lot,
+                   swap_triple_weekday=table.swap_triple_weekday, n_ticks=table.n_ticks, n_fills=table.n_fills,
+                   fields={"spread": FieldSource(source="measured" if table.spread else "prior", n=table.n_ticks),
+                           "slippage": FieldSource(source="measured" if slip_ok else "prior", n=table.n_fills),
+                           "commission": FieldSource(source="measured" if table.commission_measured else "prior",
+                                                     n=table.commission_lots),
+                           "swap": FieldSource(source="measured" if swap_ok else "prior")})
+
+    def to_cost_table(self) -> CostTable:
+        """The research view: a CostTable labelled with the broker (research_costs names it in the report)."""
+        commission = self.fields.get("commission")
+        return CostTable(account_id=f"{self.broker} (published)", built_utc=self.measured_at, spread=self.spread,
+                         slippage=self.slippage, commission_per_lot_side_usd=self.commission_per_lot_side_usd,
+                         slippage_prior_usd=self.slippage_prior_usd, n_ticks=self.n_ticks, n_fills=self.n_fills,
+                         swap_long_usd_per_lot=self.swap_long_usd_per_lot,
+                         swap_short_usd_per_lot=self.swap_short_usd_per_lot, swap_triple_weekday=self.swap_triple_weekday,
+                         commission_measured=commission is not None and commission.source == "measured",
+                         commission_lots=(commission.n or 0.0) if commission is not None else 0.0)
+
+
+def publishable(table: CostTable, broker: str, *, min_fills: int) -> tuple[PublishedCostTable | None, str]:
+    """The table to publish, or None and why not. Refused while swap is unmeasured or fewer than `min_fills` fills
+    exist, so a prior is never published as a measurement (research then keeps the settings priors and says so)."""
+    if table.swap_long_usd_per_lot is None or table.swap_short_usd_per_lot is None:
+        return None, "swap not measured by the terminal yet"
+    if table.n_fills < min_fills:
+        return None, f"{table.n_fills} fills, fewer than {min_fills}"
+    return PublishedCostTable.from_table(table, broker), "ok"
+
+
+def load_research_cost_table(path: str | Path) -> CostTable | None:
+    """A cost table for research from `path`: the published format (release costs-v1) or a local CostTable file.
+    None when the file does not exist."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    raw = json.loads(p.read_text())
+    if isinstance(raw, dict) and "broker" in raw and "schema_version" in raw:
+        return PublishedCostTable.model_validate(raw).to_cost_table()
+    return CostTable.model_validate(raw)

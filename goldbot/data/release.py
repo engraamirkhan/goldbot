@@ -1,7 +1,8 @@
 """Load the 1m bars the data-dukascopy workflow publishes on release `data-v1` into the store, and derive the
 higher timeframes. Used by scripts/fetch_data_release.py and by the Saturday retrain on the VPS (best effort:
 without network the retrain uses what the store already holds). The macro series the data-macro workflow publishes
-on release `macro-v1` load the same way into the `macro` table."""
+on release `macro-v1` load the same way into the `macro` table. `upload_asset` is the VPS's way back: it puts the
+canonical broker's measured cost table on release `costs-v1` (goldbot/ops/jobs.py `publish_costs`)."""
 from __future__ import annotations
 
 import json
@@ -43,6 +44,35 @@ def download(asset: dict, dest_dir: Path, token: str | None = None) -> Path:
     req = urllib.request.Request(asset["url"], headers={**_headers(token), "Accept": "application/octet-stream"})
     dest.write_bytes(urllib.request.urlopen(req, timeout=600).read())
     return dest
+
+
+# ------------------------------------------------------------------ uploads (VPS side, github-token from the keyring)
+def _api(url: str, token: str, *, method: str = "GET", data: bytes | None = None, ctype: str | None = None) -> object:
+    hdr = _headers(token) | ({"Content-Type": ctype} if ctype else {})
+    req = urllib.request.Request(url, data=data, headers=hdr, method=method)
+    with urllib.request.urlopen(req, timeout=120) as r:
+        body = r.read()
+    return json.loads(body) if body else None
+
+
+def upload_asset(token: str, tag: str, name: str, data: bytes, *, title: str, notes: str, repo: str = REPO,
+                 ctype: str = "application/json") -> str:
+    """Replace asset `name` on release `tag` (created, not marked latest, when missing). Returns the asset's
+    download URL. Network errors propagate."""
+    try:
+        rel = _api(f"https://api.github.com/repos/{repo}/releases/tags/{tag}", token)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+        rel = _api(f"https://api.github.com/repos/{repo}/releases", token, method="POST", ctype="application/json",
+                   data=json.dumps({"tag_name": tag, "name": title, "body": notes, "make_latest": "false"}).encode())
+    if not isinstance(rel, dict):
+        raise ValueError(f"unexpected GitHub response for release {tag}")
+    for a in rel.get("assets", []):
+        if a["name"] == name:
+            _api(f"https://api.github.com/repos/{repo}/releases/assets/{a['id']}", token, method="DELETE")
+    up = _api(rel["upload_url"].split("{")[0] + f"?name={name}", token, method="POST", data=data, ctype=ctype)
+    return str(up.get("browser_download_url", "")) if isinstance(up, dict) else ""
 
 
 def load_into_store(store: Store, files: list[Path], *, source: str = "dukascopy") -> dict[str, int]:

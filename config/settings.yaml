@@ -64,6 +64,10 @@ costs:
   swap_long_usd_per_lot: -60.0
   swap_short_usd_per_lot: 0.0
   swap_triple_weekday: 2
+  # After nightly_costs, publish the canonical broker's measured table (costs only: no account id, login, balance or
+  # equity) as costs_measured.json on release costs-v1, which research.yml downloads. Needs the github-token in the
+  # keyring; refused while swap is unmeasured or fewer than 50 fills exist. Turn on once the demo terminal runs.
+  publish_release: false
 
 # Research scheduler (VPS service `goldbot-scheduler`). Times are UTC; gold's daily break is 21:00-22:00 UTC in
 # summer and 22:00-23:00 in winter, so the nightly job sits after both. Weekdays 0=Mon .. 6=Sun.

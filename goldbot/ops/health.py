@@ -44,6 +44,7 @@ JOB_OVERDUE_GRACE_S = 15 * 60
 JOB_RUNNING_FAIL_H = 12.0         # a job "running" this long means the scheduler died mid-job
 COSTS_WARN_DAYS = 4.0             # nightly on weekdays: Friday -> Monday is 3 days
 COSTS_FAIL_DAYS = 8.0
+COSTS_PUBLISHED_WARN_DAYS = 8.0   # the release costs-v1 copy research.yml reads (costs.publish_release only)
 DQ_WINDOW_HOURS = 24              # data-quality error events within this window raise a warning
 NEWS_STALE_POLLS = 3              # feed health older than this many poll intervals: the news service is down
 SPEND_WARN_FRACTION = 0.8
@@ -454,6 +455,29 @@ def check_costs(ctx: HealthContext, account_id: str) -> Check:
     return Check(name=name, status="ok", reason=msg)
 
 
+def check_costs_published(ctx: HealthContext) -> Check:
+    """With `costs.publish_release` on, research.yml charges the table on release costs-v1: warn when it was never
+    published or is older than COSTS_PUBLISHED_WARN_DAYS (research is then on stale costs or the priors)."""
+    name = "costs:published"
+    f = ctx.state_dir / "costs_published.json"     # goldbot.ops.jobs.COSTS_PUBLISHED_FILE
+    try:
+        raw = _read_json(f) if f.exists() else {}
+    except (ValueError, OSError) as exc:
+        return Check(name=name, status="warn", reason=f"publish record unreadable: {exc}")
+    last = f"; last attempt: {raw['last_result']}" if raw.get("last_result") else ""
+    if not raw.get("published_utc"):
+        return Check(name=name, status="warn",
+                     reason="cost table never published to release costs-v1: research charges the priors" + last)
+    published = pd.Timestamp(raw["published_utc"])
+    published = published.tz_localize("UTC") if published.tzinfo is None else published
+    days = (ctx.now - published).total_seconds() / 86400
+    msg = f"published {days:.1f} d ago"
+    if days > COSTS_PUBLISHED_WARN_DAYS:
+        return Check(name=name, status="warn", reason=msg + f" (> {COSTS_PUBLISHED_WARN_DAYS:.0f} d): research uses a "
+                                                            "stale table" + last)
+    return Check(name=name, status="ok", reason=msg)
+
+
 def check_data_quality(ctx: HealthContext) -> Check:
     """Design (Data quality): errors quarantine the batch and alert. Error-severity events (duplicate stamps, bid >
     ask, out-of-order bars) recorded by the loaders or the engines in the last DQ_WINDOW_HOURS warn here; their rows
@@ -614,6 +638,8 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += [check_engine(ctx, a.account_id), check_risk_state(ctx, a.account_id)]
         checks += check_scheduler(ctx)
         checks += [check_costs(ctx, a.account_id) for a in ctx.accounts]
+        if ctx.settings is not None and ctx.settings.costs.publish_release:
+            checks.append(check_costs_published(ctx))
         checks += [check_data_quality(ctx), check_drift(ctx), check_deploy(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
