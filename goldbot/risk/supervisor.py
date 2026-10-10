@@ -3,7 +3,13 @@ per-account caps because both engines trade the same instrument) and writes a HA
 closed if the supervisor heartbeat is older than 60 s.
 
 The combined caps keep no period state of their own: they sum the engines' day/week-start equity, which each engine
-rolls at the risk-day (00:00 UTC) and risk-week (Sunday 00:00 UTC) boundaries, so they roll with the engines."""
+rolls at the risk-day (00:00 UTC) and risk-week (Sunday 00:00 UTC) boundaries, so they roll with the engines.
+
+Currencies (BACKLOG 28, ADR 0004 A8): equities are summed only when every engine reports the same deposit currency.
+Engines in different currencies (or one that does not say, next to others) are not combined: the supervisor halts
+(`mixed_account_currencies`), failing closed. Converting would need an FX rate the supervisor does not have, and a
+stale or wrong rate would silently loosen the combined caps; a halt is visible and safe. Running a GBP and a USD
+account together therefore needs a conversion here first (not built)."""
 from __future__ import annotations
 
 import json
@@ -51,6 +57,8 @@ class Supervisor:
 
     def evaluate(self) -> dict:
         engines = self.read_engines()
+        currencies = {str(e.get("account")): str(e.get("currency") or "").strip().upper() or None for e in engines}
+        mixed = len(engines) > 1 and len({c or "?" for c in currencies.values()}) > 1
         eq = sum(e.get("equity", 0.0) for e in engines)
         day0 = sum(e.get("day_start_equity", 0.0) for e in engines)
         wk0 = sum(e.get("week_start_equity", 0.0) for e in engines)
@@ -67,6 +75,8 @@ class Supervisor:
             reasons.append("combined_drawdown_halt")
         if self.unreadable:
             reasons.append("engine_state_unreadable")     # fail closed: its equity cannot be counted
+        if mixed:
+            reasons.append("mixed_account_currencies")    # fail closed: GBP and USD equity are never summed
         stale = [e["account"] for e in engines if time.time() - e.get("ts", 0) > self.limits.heartbeat_max_age_s]
         # combined exposure: engines block entries that would take the sum past the cap (RiskGate)
         exposure = {str(e.get("account")): {"lots": float(e.get("open_lots", 0.0)), "notional": float(e.get("open_notional", 0.0)),
@@ -75,7 +85,7 @@ class Supervisor:
                  "combined_open_notional": sum(x["notional"] for x in exposure.values()), "exposure": exposure,
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
-                 "unreadable_engines": self.unreadable}
+                 "unreadable_engines": self.unreadable, "currencies": currencies}
         write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)   # heartbeat: never half-written
         return state
 

@@ -19,7 +19,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 
 | # | Item | Stage · kind | Size | Status |
 | --- | --- | --- | --- | --- |
-| 28 | Currency-correct sizing, margin and R on a non-USD account (ADR 0004, audit A3–A8) | Position sizing, safety · RUN | S–M | **ready, top priority (HIGH; trading-safety review)** |
+| 28 | Currency-correct sizing, margin and R on a non-USD account (ADR 0004, audit A3–A8) | Position sizing, safety · RUN | S–M | **in review** (built 2026-10-10; trading-safety review; approval-card currency label open for ui-ux) |
 | 25 | Minimum-lot exception in RiskGate (ADR 0004) | Position sizing · RUN | S | **ready, priority 2** (with or after 28; trading-safety review) |
 | 29 | Absolute daily loss limit `risk.daily_loss_limit_abs` (ADR 0004) | Capital and drawdown management · RUN | S | ready, priority 3 (trading-safety review) |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | ready |
@@ -286,6 +286,8 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - DESIGN Sizing paragraph, TRACEABILITY row and the approval card's risk line (currency label) in the same
     change. Reviews: trading-safety, code, ui-ux (card label).
   Depends on: nothing. 25's tests are restated in account currency on top of it.
+  Status (2026-10-10): built (TRACEABILITY R32, S6; tests/test_currency_sizing.py). The supervisor refuses mixed
+  currencies (halt) rather than converting. Open: the approval card still shows `risk_usd` (ui-ux label change).
 - **25. Minimum-lot exception (needs trading-safety review).** Value: lets tiny-live trade one minimum lot at small
   equity without loosening any limit (Position sizing · RUN). Acceptance:
   - New `risk.min_lot_risk_cap` in settings (validated 0 < x ≤ `max_risk_per_trade`, or null). With null, every

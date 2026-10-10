@@ -17,12 +17,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 157 |
+| implemented | 159 |
 | partial | 13 |
 | missing | 3 |
 | deviates | 6 |
 | in review | 6 |
-| **total** | **185** |
+| **total** | **187** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -63,6 +63,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | R29 | "RiskGate is the only path to an order" (CLAUDE.md) and gate re-run at approval | implemented | goldbot/engine/runner.py:309 (gate before proposal), :331-345 `_on_decision` re-checks | tests/test_cov_engine.py::test_approval_re_runs_the_risk_gate_and_a_halt_meanwhile_blocks_the_entry |
 | R30 | Data-quality error blocks entries ("never opens a position on a flagged bar") | implemented | goldbot/risk/gate.py:132-133; goldbot/engine/runner.py:404, 433, 447 | tests/test_risk_ops.py::test_crossed_and_out_of_order_ticks_set_dq_error_until_a_clean_bar; ::test_bar_checks_and_stale_feed_set_dq_error |
 | R31 | Numbers in settings.yaml and code defaults equal the design's | implemented | config/settings.yaml:46-63; goldbot/risk/gate.py:26-42; goldbot/risk/supervisor.py:18-23 | tests/test_trace_risk.py::test_design_numbers_in_settings_and_code_defaults |
+| R32 | Sizing, realised risk, the 1:20 margin figure, the margin level and the combined-notional cap in the account currency; contract terms from the terminal; no conversion on a non-USD account = no entry (ADR 0004 A3-A6, BACKLOG 28) | implemented | goldbot/risk/sizing.py `account_fx` (USD account = 1, a broker figure off by > 1% refused; other currencies need the broker's finite positive figure), `size_lots(acct_per_usd=)`; goldbot/risk/gate.py `check` calls sizing.py for the arithmetic, refuses `fx_conversion_unavailable`, notional x fx, open notional (USD) x fx, `GateDecision.risk_amount`; brokers: `loss_per_lot` on the protocol, MT5 `order_calc_profit` then `trade_tick_value_loss`/`trade_tick_value` per `trade_tick_size` (goldbot/execution/mt5_adapter.py), paper USD (factor 1), bridge allow-list read-only retry-safe, RemoteBroker; goldbot/engine/runner.py `_sizing_terms` (contract, volume min/step, volume max capped at the engine's 2.0, stops level, currency, conversion; unreadable terminal = currency unknown = refused) into `Intent`, `_record_closed` R and return with the same conversion (R left empty when none exists; the exit and its record are never blocked) | tests/test_currency_sizing.py (GBP £1,000 at 1.33, $10.90 stop -> 0.01 lot at 0.82%; USD grid identical to the pre-fix gate; refusals for None/0/negative/NaN/inf/unknown currency; margin and combined notional in GBP; 10-oz contract; MT5 profit/tick-value/None; bridge; engine terms; closed-trade R on a GBP fixture; exits with no conversion never call the gate); tests/test_sizing_parity.py::test_sizing_module_matches_the_gate (now also at a GBP factor: 1,620 cases) |
 
 Risk analytics (reporting tools, not design rows, so the counts are unchanged): `goldbot/research/ruin.py`
 (`run.py ruin`, playbook G-5) simulates R against the R9/R11/R13/R14 limits read from `config/settings.yaml`, applying
@@ -81,6 +82,7 @@ tests/test_sizing_parity.py::test_sizing_module_matches_the_gate and ::test_stag
 | S2 | "writes a HALT flag each engine checks every cycle" | implemented | goldbot/risk/supervisor.py:72-76; goldbot/engine/runner.py:405-406 | tests/test_cov_engine.py::test_production_engines_fail_closed_without_a_supervisor_and_obey_the_owner_halt |
 | S3 | "if the supervisor heartbeat is older than 60 seconds they stop entering" | implemented | goldbot/risk/supervisor.py:81 | tests/test_cov_risk.py::test_engines_fail_closed_without_a_fresh_readable_supervisor_heartbeat |
 | S4 | Unreadable engine state counts as a fault (fail closed) | implemented | goldbot/risk/supervisor.py:69-70 | tests/test_risk_ops.py::test_engine_state_is_written_atomically_and_an_unreadable_one_halts |
+| S6 | Combined caps never sum equities in different currencies (ADR 0004 A8, BACKLOG 28) | implemented | engines publish `currency` (goldbot/engine/runner.py `_write_state`); goldbot/risk/supervisor.py `evaluate` halts `mixed_account_currencies` when engines report different currencies (an engine without one counts as unknown next to others), publishes `currencies`; the gate's `other_equity` therefore only ever combines one currency. Converting instead was rejected: the supervisor has no FX rate and a stale one would loosen the caps silently | tests/test_currency_sizing.py::test_the_supervisor_refuses_to_combine_accounts_in_different_currencies, ::test_the_supervisor_treats_an_engine_without_a_currency_as_unknown_when_combining, ::test_one_currency_combines_as_before, ::test_the_engine_publishes_its_account_currency |
 | S5 | "a heartbeat alert fires if any service has been silent for five minutes" [Infrastructure] | partial | engines: engine_<account>.json (check_engine); supervisor, scheduler, telegram, news and api write state/heartbeat_<service>.json every minute (goldbot/ops/health.py:628 `Heartbeat`, `start_heartbeat`; calls in goldbot/ops/run.py) and `check_heartbeat` (:665) fails after 5 min of silence, which the Telegram health pass alerts once with a recovery message. Missing: the health pass runs every 300 s (goldbot/telegram/bot.py HEALTH_EVERY_S), so the alert can come up to 10 min after the last beat, not 6; the bridge is checked from the brain (`check_bridge`, /health through the tunnel) rather than by a heartbeat file; a dead Telegram service cannot alert about itself | tests/test_health.py::test_a_service_silent_for_five_minutes_alerts_once_and_recovers, tests/test_health.py::test_every_service_has_a_heartbeat_check_and_run_py_writes_it, tests/test_health.py::test_bridge_health_through_the_tunnel |
 
 ## Approval flow and Telegram [Operating mode, Telegram rights]

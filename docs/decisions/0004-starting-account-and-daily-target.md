@@ -13,6 +13,10 @@ owner.
 > It is not a daily quota. Every number below is redone for £1,000. The superseded £50-account analysis is
 > summarised in section 8.
 
+**Implementation status (2026-10-10, all pending trading-safety review):**
+- BACKLOG 28, currency-correct sizing (decision 1, audit A3-A8): implemented (TRACEABILITY R32, S6). Mixed-currency
+  accounts are not combined: the supervisor halts instead (section 1, A8).
+
 ## Owner summary
 - **North star:** £50 or more on good days, less or nothing on poor ones. We chase it by being selective and
   letting winners run. Bigger bets are never the route. As a monthly *average* it becomes realistic at about

@@ -15,11 +15,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import time
 import zlib
 from collections import deque
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -46,7 +47,7 @@ from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
-from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
+from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, sizing
 from goldbot.risk.gate import REARM_PHRASE, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
 from goldbot.specialists.base import Specialist
@@ -302,6 +303,7 @@ class Engine:
                                     if t.account_id == cfg.account_id and t.position_id is not None}
         self._closes: list[PendingClose] = []
         self._records_lost: list[int] = []           # records given up after closed_record_retries failed writes
+        self._currency = ""                          # the deposit currency, read once from the broker (BACKLOG 28)
         self._unconfirmed: dict[int, int] = {}
         # position -> (consecutive market-closed refusals, next attempt): closes back off only when the market is closed
         self._close_backoff: dict[int, tuple[int, pd.Timestamp]] = {}
@@ -531,6 +533,58 @@ class Engine:
         self.flush_journal()
         return decisions
 
+    def _account_currency(self) -> str:
+        """The deposit currency as the broker reports it, upper case; "" while unreadable. Read once: the terminal's
+        account is verified at start and on every order (accounts.verify_terminal_account), so it cannot change."""
+        if not self._currency:
+            try:
+                self._currency = str(self.broker.account().currency or "").strip().upper()
+            except Exception as exc:                  # unreadable: "" (entries refused), tried again next time
+                log.warning("account currency unreadable (%s: %s)", type(exc).__name__, exc)
+        return self._currency
+
+    def _usd_to_account(self, side: int, price: float, distance: float) -> float | None:
+        """Account currency per USD of XAUUSD P&L from the broker's loss on one lot over `distance` (BACKLOG 28):
+        loss_per_lot / (distance x contract). None when the broker has no answer (or no such method), the answer is not
+        finite and positive, or the contract is unknown; the caller never substitutes a guess."""
+        fn = getattr(self.broker, "loss_per_lot", None)
+        if not callable(fn) or not (math.isfinite(distance) and distance > 0):
+            return None
+        try:
+            contract = float(self.broker.symbol_info(self.cfg.symbol).contract_size)
+            loss = fn(self.cfg.symbol, side, price, distance)
+            fx = float(loss) / (distance * contract) if loss is not None and contract > 0 else math.nan
+        except Exception as exc:
+            log.warning("broker conversion unavailable (%s: %s)", type(exc).__name__, exc)
+            return None
+        return fx if math.isfinite(fx) and fx > 0 else None
+
+    def _sizing_terms(self, side: int, price: float, stop_distance: float) -> dict[str, Any]:
+        """Intent fields read from the terminal (BACKLOG 28, ADR 0004 A3/A6): contract size, minimum lot, lot step,
+        maximum lot (never above the engine's per-order ceiling, Intent's 2.0 default), stops level, the deposit currency
+        and the broker's conversion of the USD stop into it. When the terminal cannot answer, or answers nonsense, the
+        currency is left unknown and the conversion empty, so the RiskGate refuses the entry (fx_conversion_unavailable)
+        instead of sizing on assumed terms. Exits never come here."""
+        unknown: dict[str, Any] = {"account_currency": "", "acct_per_usd": None}
+        try:
+            info = self.broker.symbol_info(self.cfg.symbol)
+            terms = {"contract_oz": float(info.contract_size), "volume_min": float(info.volume_min),
+                     "volume_step": float(info.volume_step),
+                     "volume_max": min(float(info.volume_max), float(Intent.model_fields["volume_max"].default)),
+                     "stops_level_points": float(info.stops_level_points)}
+        except Exception as exc:
+            log.warning("symbol_info unavailable (%s: %s): entries refused", type(exc).__name__, exc)
+            return unknown
+        positive = ("contract_oz", "volume_min", "volume_step", "volume_max")
+        if not all(math.isfinite(terms[k]) and terms[k] > 0 for k in positive) or \
+                not (math.isfinite(terms["stops_level_points"]) and terms["stops_level_points"] >= 0):
+            log.warning("symbol_info has unusable contract terms %s: entries refused", terms)
+            return unknown
+        currency = self._account_currency()
+        if not currency:
+            return unknown
+        return {**terms, "account_currency": currency, "acct_per_usd": self._usd_to_account(side, price, stop_distance)}
+
     def _decide(self, tf: str, fr: _Frame, agents: list[Specialist], fam_w: dict[str, float], close_ts: pd.Timestamp,
                 last_tick: Tick) -> list[dict]:
         dec, m, X, a = fr.dec, fr.m, fr.X, fr.atr
@@ -573,11 +627,13 @@ class Engine:
             w = fam_w.get(agent.family, 0.0) * share * float((drift.get("size_factor") or {}).get(agent.agent_id, 1.0))
             mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, hurdle_atr)[0])
             price = last_tick.ask if side > 0 else last_tick.bid
-            intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
-                            multiplier=mult if mult > 0 else 0.0, price=price, timeframe=tf, family=agent.family)
             if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, hurdle_atr) + 0.02:
                 decisions.append(self._record(agent, close_ts, p, mult, "below_threshold"))
                 continue
+            # the terminal's contract terms and the USD -> account currency conversion (BACKLOG 28)
+            terms = self._sizing_terms(side, price, ls.stop_atr * float(a.iloc[last]))
+            intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
+                            multiplier=mult, price=price, timeframe=tf, family=agent.family, **terms)
             gd = self.gate.check(intent, self.state, margin_required=broker_margin(self.broker, self.cfg.symbol))
             if not gd.allowed:
                 decisions.append(self._record(agent, close_ts, p, mult, "gate:" + ",".join(gd.reasons)))
@@ -1570,25 +1626,41 @@ class Engine:
             raise ValueError("entry price unknown")
         lots = float(tr.initial_lots or known.get("lots") or round(tr.lots + tr.scaled_lots, 8))
         contract = 100.0
-        if info is not None:
+        try:
+            contract = float(self.broker.symbol_info(self.cfg.symbol).contract_size) or contract
+        except Exception:
+            log.warning("symbol info unavailable; position %s recorded at contract size %s", pid, contract)
+        # BACKLOG 28 (ADR 0004 A5): risk and notional are USD (price x lots x contract); the broker's P&L is in the
+        # deposit currency. fx converts USD into it (1 on a USD account); None when the broker cannot say
+        dist = abs(entry - tr.initial_sl) if tr.initial_sl is not None else 0.0
+        fx = sizing.account_fx(self._account_currency(), self._usd_to_account(tr.side, entry, dist or 1.0))
+        risk_usd, notional_usd = dist * lots * contract, entry * lots * contract
+        if info is not None:                           # pnl from the broker's deals, in the account currency
             exit_px, exit_utc, pnl = info["exit_price"], info["exit_utc"], info["pnl"]
             commission, swap = info["commission"], info["swap"]
             if reason == "broker_close" and info["reason"]:
                 reason = info["reason"]
-        else:
-            try:
-                contract = float(self.broker.symbol_info(self.cfg.symbol).contract_size) or contract
-            except Exception:
-                log.warning("symbol info unavailable; position %s recorded at contract size %s", pid, contract)
+            if fx is not None:
+                r = pnl / (risk_usd * fx) if risk_usd > 0 else None
+                ret = pnl / (notional_usd * fx)
+            else:                                      # no conversion: R unknown (never a wrong R); gross price return
+                log.warning("position %s: no USD -> %s conversion; R left empty, return from prices", pid,
+                            self._account_currency() or "account currency")
+                r, ret = None, tr.side * (exit_px - entry) / entry
+        else:                                          # the engine's own fills: pnl in USD, converted for the record
             if px is None:
                 tick = self.broker.last_tick(self.cfg.symbol)
                 px = tick.bid if tr.side > 0 else tick.ask
             legs = [(tr.lots, px)] + ([(tr.scaled_lots, tr.scaled_price)] if tr.scaled_price is not None else [])
             done = sum(n for n, _ in legs)
             exit_px = sum(n * p for n, p in legs) / done if done > 0 else px
-            pnl = sum(tr.side * (p - entry) * n * contract for n, p in legs)
+            pnl_usd = sum(tr.side * (p - entry) * n * contract for n, p in legs)
+            r = pnl_usd / risk_usd if risk_usd > 0 else None
+            ret = pnl_usd / notional_usd
+            if fx is None:
+                log.warning("position %s: no USD -> account currency conversion; P&L recorded in USD", pid)
+            pnl = pnl_usd * (fx if fx is not None else 1.0)
             exit_utc, commission, swap = at, None, None
-        risk = abs(entry - tr.initial_sl) * lots * contract if tr.initial_sl is not None else 0.0
         equity = tr.equity_before
         if equity is None or equity <= 0:
             equity = self.broker.account().balance - pnl       # the balance before this trade's P&L was realised
@@ -1596,10 +1668,10 @@ class Engine:
                 equity = self.state.equity
         rec = ClosedTrade(account_id=self.cfg.account_id, broker=self.cfg.broker_name,
                           mode="live" if self.cfg.mode == "live" else "demo", exit_utc=exit_utc,
-                          ret=pnl / (entry * lots * contract), pnl=pnl, equity_before=equity, position_id=pid,
+                          ret=ret, pnl=pnl, equity_before=equity, position_id=pid,
                           client_order_id=tr.client_order_id, agent_id=tr.agent_id, side=tr.side, lots=lots,
                           entry_utc=tr.opened_utc or tr.entry_bar_ts, entry_price=entry, exit_price=exit_px,
-                          exit_reason=reason, r=pnl / risk if risk > 0 else None, commission=commission, swap=swap,
+                          exit_reason=reason, r=r, commission=commission, swap=swap,
                           partial_lots=tr.scaled_lots)
         append_closed_trade(Path(self.cfg.state_dir), rec)
         self._recorded.add(pid)
@@ -1841,6 +1913,8 @@ class Engine:
         st = self.state
         payload = {
             "account": self.cfg.account_id, "broker": self.cfg.broker_name, "mode": self.cfg.mode, "ts": time.time(),
+            # the deposit currency: the supervisor refuses to combine engines in different currencies (BACKLOG 28, A8)
+            "currency": self._account_currency() or None,
             "equity": st.equity, "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "open_lots": st.open_lots, "open_notional": st.open_notional,

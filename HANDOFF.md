@@ -678,6 +678,22 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   from the training and shadow bars. The allocator keeps its design window, 0 for 30 min either side of tier-1
   events (`RuleAllocator()` defaults), deliberately stricter than the RiskGate's -15/+30 entry block; the gate window
   from settings never narrows it (an allocator rule change is the owner's decision).
+- Currency-correct sizing (2026-10-10, BACKLOG 28, ADR 0004 A3-A8, rows R32 and S6; needs trading-safety review):
+  RiskGate now sizes in the account currency. One lot's stop risk is stop x contract x fx, fx being the broker's
+  account currency per USD: `loss_per_lot` on the broker protocol (MT5 `order_calc_profit` for the stop move on one
+  lot, else `trade_tick_value_loss`/`trade_tick_value` per `trade_tick_size`; paper = USD, factor 1; bridge allow-list
+  read-only; RemoteBroker). The 1:20 margin figure, margin level and combined-notional cap compare account currency
+  with account equity. A non-USD account with no usable conversion refuses entries (`fx_conversion_unavailable`); a USD
+  account is 1 by definition and a broker figure more than 1% off is refused. The engine passes the terminal's
+  contract size, minimum lot, lot step, stops level and the conversion into `Intent` (`runner._sizing_terms`; volume
+  max stays capped at the engine's 2.0 per order; an unreadable terminal leaves the currency unknown, so no entry).
+  gate.py calls goldbot/risk/sizing.py for the arithmetic (the parity test now also runs at a GBP factor). Closed-trade
+  R and return use the same conversion; with none, R is left empty and the return comes from prices (the record is
+  never blocked). The supervisor refuses to combine engines in different currencies (`mixed_account_currencies`, a
+  halt): converting would need an FX rate it does not have. Running `vantage-demo` (USD?) next to `icm-demo` (GBP)
+  therefore halts entries on both until a conversion is built. Not changed: the approval card's `risk_usd` stays USD
+  (ui-ux follow-up: show the account-currency risk from `GateDecision.risk_amount`); the approval re-check reuses the
+  conversion read at proposal time (90 s at most).
 
 ## Next steps (no owner input needed unless marked)
 - Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;

@@ -109,6 +109,11 @@ class Broker(Protocol):
         """Margin in the account currency the broker would take for this order (MT5 `order_calc_margin`); None when
         the broker cannot say. Read-only; the RiskGate uses the larger of this and the 1:20 figure."""
         ...
+    def loss_per_lot(self, symbol: str, side: int, price: float, distance: float) -> float | None:
+        """Account-currency loss of ONE lot of this side when the price moves `distance` against it from `price` (MT5
+        `order_calc_profit`, else tick value / tick size); None when the broker cannot say. Read-only. The engine divides
+        it by distance x contract to get the conversion the RiskGate sizes with (BACKLOG 28)."""
+        ...
     def trading_sessions(self, symbol: str) -> list[TradingSession]:
         """The symbol's trading sessions for SESSION_DAYS server days from today, each resolved to UTC for its own
         date (TRACEABILITY D13; `SessionTable.from_broker` builds the runtime table from it). Read-only."""

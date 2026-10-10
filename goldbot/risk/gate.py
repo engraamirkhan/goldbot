@@ -17,6 +17,7 @@ from pydantic import Field
 from goldbot.base import Record
 from goldbot.config import RiskSettings
 from goldbot.data.timeutil import floor_tf, risk_day
+from goldbot.risk import sizing
 
 log = logging.getLogger("goldbot.risk")
 
@@ -103,11 +104,17 @@ class Intent(Record):
     cost_atr: float           # round-trip cost in ATR
     multiplier: float         # from allocator x bet sizing, before bounds
     price: float
+    # contract terms: the engine passes the terminal's symbol_info (runner `_sizing_terms`); volume_max is also the
+    # engine's per-order ceiling (the smaller of the broker's maximum and 2.0)
     contract_oz: float = 100.0
     volume_step: float = 0.01
     volume_min: float = 0.01
     volume_max: float = 2.0
     stops_level_points: float = 0.0
+    # BACKLOG 28: the deposit currency and the broker's conversion of USD P&L into it (account currency per USD,
+    # from loss_per_lot); a non-USD account without it refuses entries (fx_conversion_unavailable)
+    account_currency: str = "USD"
+    acct_per_usd: float | None = None
     timeframe: str = ""       # the agent's decision timeframe and family, for the account-class rules
     family: str = ""
     has_target: bool = True   # False: a time-exit label spec (BarrierSpec.has_target); the barrier EV does not apply
@@ -119,7 +126,8 @@ class GateDecision(Record):
     reasons: list[str] = Field(default_factory=list)
     risk_fraction: float = 0.0
     stop_distance: float = 0.0
-    margin_needed: float = 0.0     # the margin the level check used: max(broker figure, 1:20 figure)
+    margin_needed: float = 0.0     # account currency: the margin the level check used, max(broker figure, 1:20 figure)
+    risk_amount: float = 0.0       # account currency lost at the stop by the allowed lots
     margin_note: str = ""          # which figure won, or why the broker's could not be used (fallback to 1:20)
 
 
@@ -175,8 +183,8 @@ class RiskGate:
     def margin_for(self, intent: Intent, lots: float, notional: float,
                    margin_required: MarginFn | None) -> tuple[float, str]:
         """Design (Hard limits): margin is "checked with order_calc_margin and against the FCA retail cap of 1:20".
-        The larger of the broker's figure and notional / 20 is used; when the broker cannot answer (no source, None,
-        a non-finite or negative figure, or an error) the 1:20 figure is used and the reason recorded. Never smaller
+        `notional` is in the account currency (BACKLOG 28), as is the broker's figure. The larger of the broker's
+        figure and notional / 20 is used; when the broker cannot answer (no source, None, a non-finite or negative figure, or an error) the 1:20 figure is used and the reason recorded. Never smaller
         than 1:20, so a broker fault can only make the check stricter-or-equal, never fail open."""
         cap = notional / self.limits.leverage_cap
         if margin_required is None:
@@ -255,41 +263,39 @@ class RiskGate:
         if reasons:
             return GateDecision(allowed=False, reasons=reasons)
 
-        # sizing
-        lo, hi = L.multiplier_bounds
-        mult = min(max(intent.multiplier, lo), hi)
-        risk_frac = L.risk_per_trade
-        if st.stage == Stage.SIZE_DOWN or st.combined_size_down:
-            risk_frac *= 0.5
-            mult = min(mult, 0.5)
+        # sizing, in the account currency (design Sizing; BACKLOG 28): the stop is USD per oz, so one lot's risk is
+        # stop x contract x fx, fx being the broker's account currency per USD. The arithmetic is goldbot/risk/sizing.py
+        fx = sizing.account_fx(intent.account_currency, intent.acct_per_usd)
+        if fx is None:                       # a non-USD account without a usable conversion: never sized on a guess
+            return GateDecision(allowed=False, reasons=["fx_conversion_unavailable"])
         # per-trade risk is capped after the multiplier (design Hard limits: 1% max, clamped, not rejected)
-        if risk_frac * mult > L.max_risk_per_trade:
-            mult = L.max_risk_per_trade / risk_frac
-        stop_distance = max(intent.stop_atr * intent.atr_usd, intent.stops_level_points * L.point + st.spread_points * L.point)
-        risk_usd = st.equity * risk_frac * mult
-        lots_raw = risk_usd / (stop_distance * intent.contract_oz)
-        steps = math.floor(lots_raw / intent.volume_step + 1e-9)   # 0.25 // 0.01 == 24.0 in floats: not here
-        lots = max(intent.volume_min, steps * intent.volume_step)
-        lots = min(lots, intent.volume_max)
-        realised_risk = lots * stop_distance * intent.contract_oz / st.equity
-        if realised_risk > 1.2 * risk_frac * mult and lots_raw < intent.volume_min:
+        eff = sizing.effective_risk(L, st.stage == Stage.SIZE_DOWN or st.combined_size_down, intent.multiplier)
+        stop_distance = sizing.stop_distance(intent.stop_atr, intent.atr_usd, stops_level_points=intent.stops_level_points,
+                                             spread_points=st.spread_points, point=L.point)
+        sz = sizing.size_lots(equity=st.equity, risk=eff, stop_distance=stop_distance, contract_oz=intent.contract_oz,
+                              volume_min=intent.volume_min, volume_step=intent.volume_step,
+                              volume_max=intent.volume_max, acct_per_usd=fx)
+        if sz.refused:
             return GateDecision(allowed=False, reasons=["min_lot_exceeds_risk"], stop_distance=stop_distance)
-        notional = lots * intent.contract_oz * intent.price
+        lots, realised_risk = sz.lots, sz.realised_risk
+        notional = lots * intent.contract_oz * intent.price * fx          # account currency
         # margin: the stricter of the broker's order_calc_margin and the FCA cap (1:20); level must stay >= 300%
         margin_needed, margin_note = self.margin_for(intent, lots, notional, margin_required)
         level_after = st.equity / max(st.margin_used + margin_needed, 1e-9)
         if level_after < L.margin_level_floor:
             return GateDecision(allowed=False, reasons=["margin_level_floor"], stop_distance=stop_distance,
                                 margin_needed=margin_needed, margin_note=margin_note)
-        # combined exposure cap: both accounts trade one instrument, so their positions are one position
+        # combined exposure cap: both accounts trade one instrument, so their positions are one position. Open notional
+        # is published in USD (lots x contract x price); converted here so it meets equity in the account currency
+        # (the supervisor halts accounts of mixed currencies, so other_equity is in this one)
         comb_lots = st.open_lots + st.other_lots + lots
-        comb_notional = st.open_notional + st.other_notional + notional
+        comb_notional = (st.open_notional + st.other_notional) * fx + notional
         if comb_lots > L.max_combined_lots + 1e-9 or \
                 comb_notional > L.max_combined_notional_frac * L.leverage_cap * (st.equity + st.other_equity):
             return GateDecision(allowed=False, reasons=["combined_exposure_cap"], stop_distance=stop_distance,
                                 margin_needed=margin_needed, margin_note=margin_note)
         return GateDecision(allowed=True, lots=round(lots, 2), risk_fraction=realised_risk, stop_distance=stop_distance,
-                            margin_needed=margin_needed, margin_note=margin_note)
+                            margin_needed=margin_needed, margin_note=margin_note, risk_amount=lots * sz.risk_per_lot)
 
 
 def _risk_week(ts: pd.Timestamp) -> pd.Timestamp:

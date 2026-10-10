@@ -7,11 +7,12 @@ This mirrors goldbot/risk/gate.py `RiskGate.check` (the "sizing" block) line for
   so at m = 1 the real risk is a quarter of the normal rate;
 * risk per trade x multiplier is capped at `max_risk_per_trade` after the multiplier (clamped, not rejected);
 * stop distance = max(stop_atr x ATR, stops level + spread);
-* lots = equity x risk x m / (stop distance x contract), rounded down to the lot step, at least the minimum lot, at
+* lots = equity x risk x m / (stop distance x contract x fx), rounded down to the lot step, at least the minimum lot, at
   most the maximum; the trade is skipped when the minimum lot would risk more than 1.2x the target.
-tests/test_sizing_parity.py runs RiskGate.check against these functions so the two cannot drift apart. gate.py does not
-call this module yet (other work is changing it); once that lands it should, and the parity test then guards a
-single implementation.
+* fx (BACKLOG 28, ADR 0004 A3) is the account currency per USD of P&L: the stop is a USD amount (XAUUSD P&L is in
+  USD), equity is in the deposit currency. 1 on a USD account; the broker's conversion otherwise (`account_fx`).
+RiskGate.check calls these functions for its arithmetic; tests/test_sizing_parity.py runs the gate against them so a
+second copy (the analytics) cannot drift.
 """
 from __future__ import annotations
 
@@ -45,8 +46,23 @@ class EffectiveRisk(FrozenRecord):
 class LotSize(FrozenRecord):
     lots_raw: float
     lots: float               # unrounded steps x step (the gate reports round(lots, 2))
-    realised_risk: float      # lots x stop x contract / equity
+    realised_risk: float      # lots x stop x contract x fx / equity
     refused: bool             # min_lot_exceeds_risk
+    risk_per_lot: float = 0.0  # stop x contract x fx: account currency lost at the stop by one lot
+
+
+USD_FX_TOLERANCE = 0.01      # a USD account's broker conversion must be 1 within 1%: anything else is not XAUUSD terms
+
+
+def account_fx(account_currency: str, acct_per_usd: float | None) -> float | None:
+    """Account currency per USD of XAUUSD P&L, or None when it is not known (the gate then refuses the entry with
+    `fx_conversion_unavailable`; it never guesses). A USD account is 1 by definition, and a broker figure that
+    disagrees by more than 1% means the symbol or contract is not what the sizing assumes, so it is refused too. Any
+    other currency needs the broker's figure (finite and > 0)."""
+    fx = float(acct_per_usd) if acct_per_usd is not None and math.isfinite(acct_per_usd) and acct_per_usd > 0 else None
+    if account_currency.strip().upper() == "USD":
+        return None if fx is not None and abs(fx - 1.0) > USD_FX_TOLERANCE else 1.0
+    return fx
 
 
 def effective_risk(limits: SizingLimits, size_down: bool, mult: float) -> EffectiveRisk:
@@ -70,17 +86,20 @@ def stop_distance(stop_atr: float, atr_usd: float, *, stops_level_points: float 
 
 
 def size_lots(*, equity: float, risk: EffectiveRisk, stop_distance: float, contract_oz: float, volume_min: float,
-              volume_step: float, volume_max: float) -> LotSize:
-    """Lots for a trade sized to lose risk.target x equity at `stop_distance`. The products keep the gate's operand
-    order (equity x risk_frac x mult, 1.2 x risk_frac x mult) so boundary cases round the same way."""
-    risk_usd = equity * risk.risk_frac * risk.mult
-    lots_raw = risk_usd / (stop_distance * contract_oz)
+              volume_step: float, volume_max: float, acct_per_usd: float = 1.0) -> LotSize:
+    """Lots for a trade sized to lose risk.target x equity (account currency) at `stop_distance` (USD per oz).
+    `acct_per_usd` converts the USD stop into the account currency (1 on a USD account; `account_fx`). The products
+    keep the pre-conversion operand order (equity x risk_frac x mult, stop x contract, then x fx) so a USD account
+    (fx = 1.0, an exact multiply) rounds every boundary case as before."""
+    risk_amount = equity * risk.risk_frac * risk.mult
+    risk_per_lot = stop_distance * contract_oz * acct_per_usd
+    lots_raw = risk_amount / risk_per_lot
     steps = math.floor(lots_raw / volume_step + 1e-9)   # 0.25 // 0.01 == 24.0 in floats: not here
     lots = max(volume_min, steps * volume_step)
     lots = min(lots, volume_max)
-    realised = lots * stop_distance * contract_oz / equity
+    realised = lots * stop_distance * contract_oz * acct_per_usd / equity
     refused = realised > MIN_LOT_TOLERANCE * risk.risk_frac * risk.mult and lots_raw < volume_min
-    return LotSize(lots_raw=lots_raw, lots=lots, realised_risk=realised, refused=refused)
+    return LotSize(lots_raw=lots_raw, lots=lots, realised_risk=realised, refused=refused, risk_per_lot=risk_per_lot)
 
 
 def next_stage(stage: str, dd: float, stage1: float, stage2: float, clear: float) -> str:
