@@ -8,6 +8,8 @@
   python -m goldbot.ops.run telegram
   python -m goldbot.ops.run news
   python -m goldbot.ops.run record-gate <gate_name> --evidence <path or text>   # appends to state/phase_state.json
+  python -m goldbot.ops.run gates [--json] [--no-write]   # each roadmap gate met / not met + the stop rule (records nothing)
+  python -m goldbot.ops.run gate-evidence <name> (--value X | --passed yes|no) [--detail TEXT]   # leakage audit, chaos drill
   python -m goldbot.ops.run health [--json] [--static] [--out FILE] [--baseline FILE]   (exit 1 on a fail)
   python -m goldbot.ops.run publish-costs [--out FILE]   # canonical broker's measured costs -> release costs-v1
 """
@@ -421,6 +423,12 @@ if __name__ == "__main__":
         run_news()
     elif cmd == "record-gate":
         sys.exit(record_gate_cli(sys.argv[2:]))
+    elif cmd == "gates":
+        from goldbot.ops.gates_phase import main as gates_main
+        sys.exit(gates_main(sys.argv[2:]))
+    elif cmd == "gate-evidence":
+        from goldbot.ops.gates_phase import evidence_main
+        sys.exit(evidence_main(sys.argv[2:]))
     elif cmd == "publish-costs":
         sys.exit(publish_costs_cli(sys.argv[2:]))
     elif cmd == "health":

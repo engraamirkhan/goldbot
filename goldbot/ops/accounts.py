@@ -240,7 +240,10 @@ def phase_state() -> dict:
 def record_gate(gate: str, evidence: str, path: Path | None = None) -> dict:
     """Record a passed roadmap gate in phase_state.json (atomically): appended to `gates_passed`, with a timestamp and
     the evidence (a file path is recorded with its sha256) in `gate_log`. Refuses unknown names, a gate recorded twice
-    and a gate whose predecessor has not passed. Raises ValueError on refusal."""
+    and a gate whose predecessor has not passed. Raises ValueError on refusal.
+
+    Recording only: it does not check the thresholds (`run.py gates`, goldbot/ops/gates_phase.py, shows whether the
+    evidence meets them) and it never enables a live account; that still needs `unlock_live` and the typed phrase."""
     path = path or PHASE_FILE
     if gate not in GATES:
         raise ValueError(f"unknown gate {gate!r}; known: {', '.join(GATES)}")

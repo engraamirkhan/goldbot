@@ -24,7 +24,7 @@ Status: ready / in progress / in review / done / rejected.
 | 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (draft; freeze by 2026-12-31) |
 | 6 | Live exit policies and blackout early close | Trade management, exit · FIND + RUN | M | in review (safety fixes) |
 | 7 | Ops alerts: heartbeats, FAILED_EXEC, weekly cap | Operational resilience · RUN | S–M | done (PR #62) |
-| 8 | Stop rule and gate thresholds in code | Capital and drawdown management · RUN | S | in progress |
+| 8 | Stop rule and gate thresholds in code | Capital and drawdown management · RUN | S | done (owner sign-off and engine trade record open) |
 | 9 | UI/UX approval card | Entry timing (owner approval) · RUN | M | done (PR #61) |
 | 10 | Trader-toolkit features (sessions, S/R, FVG, order blocks) | Idea generation · FIND | M | done (PR #61) |
 | 11 | Trader-toolkit evaluation as primary signals | Idea generation, confluence · FIND | S–M | ready (via H-02 in Q1) |
@@ -128,6 +128,15 @@ Acceptance:
 - The dashboard shows the stop-rule and gate status (API schema regenerated).
 
 Depends on: the owner signs off the threshold values. Rows: P6, P7.
+
+Status (2026-10-10): done in `goldbot/ops/gates_phase.py`, `run.py gates` / `gate-evidence`, health checks
+`stop_rule` and `phase_gates`, `settings.yaml` `gates:`; tests in tests/test_phase_gates.py. Differences from the
+acceptance above, as briefed for this change: a stop-rule breach is a health FAIL and a Telegram alert that
+recommends /halt; it does not set the system halt (the RiskGate's caps are unchanged). The report goes to
+`state/gate_report.json`, not into `phase_state.json`, so a report can never be read as a recorded gate. The health
+pass (every 60 s) evaluates it, so no scheduler job was added. Open: owner sign-off of the PROPOSED values; the
+engine appending `ClosedTrade` rows to `state/closed_trades.jsonl` (engine owner); the dashboard card (api/web
+owners; the report JSON is ready to serve).
 
 ### 9. UI/UX approval card (in progress)
 Value: the owner's one click is the only manual step, so the card must carry everything needed to decide in 90 s

@@ -141,3 +141,24 @@ drift:                               # design: Drift and health (goldbot/researc
 # created; the owner role belongs only to this address.
 # auth:
 #   owner_email: owner@example.com
+
+gates:                               # design: Roadmap gates and stop rule (goldbot/ops/gates_phase.py; `run.py gates`)
+  # The design wants these "committed in writing before the first paper trade". Uncommented values are the design's
+  # own numbers; every PROPOSED line needs the owner's sign-off. Evaluating a gate never records it or unlocks live.
+  shuffle_auc_tolerance: 0.02        # PROPOSED: owner sign-off required. Leakage audit "shuffle test at chance": |AUC-0.5| <= this
+  feed_max_mismatch_share: 0.01      # PROPOSED: owner sign-off required. "broker and Dukascopy bars agree": share of bars that differ
+  backtest_min_dsr: 0.95             # PROPOSED: owner sign-off required. Roadmap figure says DSR >= 1.0, Validation says 0.95; DSR is a probability, 1.0 is unreachable
+  backtest_min_trades: 500           # ">= 500 backtest trades" (model-filtered, best evaluated trial)
+  paper_min_trades: 150              # ">= 150 paper trades" (closed demo-account trades since backtest_to_paper)
+  paper_min_days: 182                # PROPOSED: owner sign-off required. Roadmap Phase 2 duration "6 months" as a minimum
+  paper_expectancy_within: 0.5       # "expectancy within 50% of backtest" (no more than 50% below)
+  paper_fills_within: 0.3            # "fills within 30% of target": measured slippage <= 1.3x the modelled slippage
+  live_min_trades: 300               # ">= 300 live trades"
+  live_min_days: 365                 # PROPOSED: owner sign-off required. Roadmap Phase 3 duration "12 months" as a minimum
+  live_expectancy_within: 0.4        # "expectancy within 40% of paper"
+  live_dd_mult: 1.5                  # "drawdown under 1.5x backtest"
+  brokers_within: 0.15               # "brokers within 15%": the two brokers' live expectancy
+  broker_min_trades: 50              # PROPOSED: owner sign-off required. Live trades per broker before they are compared
+  stop_after_months: 18              # stop rule: "after 18 months of paper plus live"
+  stop_min_pooled_trades: 500        #   "the pooled trade count exceeds 500"
+  stop_confidence: 0.90              #   "the lower 90% confidence bound on expectancy is still below zero" (one-sided)
