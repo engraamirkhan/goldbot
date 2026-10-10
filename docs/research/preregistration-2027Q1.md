@@ -16,7 +16,17 @@ promotion.
 - Gates (unchanged, `research/gates.py`): >= 1,500 candidates, >= 60 per complete test fold, positive expectancy in
   >= 3 calendar years including one of 2021/2022, DSR >= 0.95 on >= 200 model-filtered trades with the real trial count.
 - Rule-only gates are reported alongside (informational).
-- DSR trial count: 20 (Q4 2026) + Q1 trials run so far, + K_eff (clusters screened) for any trial of an H-02 survivor.
+- DSR trial count: 20 (Q4 2026) + Q1 trials run so far + K_eff of H-02. K_eff is the number of units a survivor
+  was picked from: the features screened (about 300) when survivors go forward as individual features (the default,
+  `survivor_unit=feature`), the groups screened (about 10) only when whole groups go forward (`survivor_unit=group`).
+  The unit is fixed in the pre-registration row before the run.
+- **Owner-acknowledged choice (conservative default):** H-02's K_eff is added to the DSR trial count of EVERY later
+  trial, survivor or not (`registry.n_trials_effective`, used by `research_pass.py` for every trial), not only to trials
+  of an H-02 survivor. This over-deflates trials unrelated to H-02 (their DSR is biased down, never up); it is kept
+  because a per-trial "is this a survivor?" link is easy to get wrong and an error there would bias DSR up.
+- **Extra promotion rule for discovery survivors:** any H-02 survivor must, besides its own pre-registered trial and the
+  design's gates, also pass the holdout rule (one scoring of 2025-10-01 .. 2026-09-30, `--score-holdout`) before it
+  can be promoted.
 
 ## Order and budget (13 planned of 20; 7 reserve)
 
@@ -36,7 +46,8 @@ promotion.
 ### H-02 Feature discovery
 - Config: label = 4h triple barrier, target 3.0 ATR / stop 1.5 ATR / 12 bars (tsmom 4h defaults), candidates = every 4h
   bar (no rule), side from the sign of the 20-day vol-scaled return; features = every registered family (incl.
-  trader-toolkit, survey and macro), grouped into clusters by family for K_eff.
+  trader-toolkit, survey and macro), grouped by family (`--families`); survivors go forward as features, so K_eff =
+  features screened (group stability is reported by summed member importance per subsample, top-k over groups).
 - Method: stability selection inside each training fold only (50 subsamples x 50%), top-40 by gain; permutation
   importance on an inner split as a tie-break.
 - Reading rule (decided now): a feature cluster **survives** if its selection stability >= 0.6 across folds AND the

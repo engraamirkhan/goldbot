@@ -177,3 +177,113 @@ def test_a_preregistration_precedes_its_result_and_is_neither_a_trial_nor_a_budg
     # the release merge numbers trials only; the pre-registration keeps its result's number
     merged = merge_rows(rows)
     assert [r["trial"] for r in merged] == [1, 2, 2]
+
+
+# ---------------------------------------------------------------------------------------------- review fixes
+def test_family_mode_with_feature_survivors_pays_for_every_feature_screened_and_group_survivors_for_groups():
+    folds = list(walk_forward_splits(_synthetic()[0], **WINDOW))
+    labels, gross, feats = _synthetic()
+    groups = {c: ("fam_a" if c in ("info", "noise_0", "noise_1") else "fam_b" if c.startswith("noise") else "fam_c")
+              for c in POOL}
+    n_groups = len(set(groups.values()))
+    d = run_discovery("synthetic-3", labels, gross, feats, folds, "f-test", WINDOW, POOL, CFG, groups, "family")
+    disc = d.result.metrics["discovery"]
+    assert d.survivor_unit == "feature" and disc["survivor_unit"] == "feature"
+    assert disc["n_features_screened"] == len(POOL) and disc["n_groups_screened"] == n_groups == 3
+    assert disc["k_eff"] == len(POOL) and d.k_eff == len(POOL)       # feature survivors pay for the features
+    assert "info" in d.selected and "survivors are features" in d.verdict["rule"]
+    row = {"status": DISCOVERY, "results": {"discovery": disc}}
+    assert n_trials_effective([row]) == 1 + len(POOL)
+    g = run_discovery("synthetic-4", labels, gross, feats, folds, "f-test", WINDOW, POOL,
+                      CFG.model_copy(update={"survivor_unit": "group"}), groups, "family")
+    gd = g.result.metrics["discovery"]
+    assert gd["survivor_unit"] == "group" and gd["k_eff"] == n_groups
+    assert "fam_a" in g.survivor_groups and set(g.selected) <= {c for c in POOL if groups[c] in g.survivor_groups}
+    assert "survivors are whole groups" in g.verdict["rule"]
+    assert n_trials_effective([{"status": DISCOVERY, "results": {"discovery": gd}}]) == 1 + n_groups
+
+
+def test_a_legacy_discovery_row_without_k_eff_pays_for_its_features_when_it_recorded_them():
+    legacy = {"status": DISCOVERY, "results": {"discovery": {"n_features_screened": 300, "n_groups_screened": 10}}}
+    assert n_trials_effective([legacy]) == 1 + 300
+    grp = {"status": DISCOVERY, "results": {"discovery": {"n_features_screened": 300, "n_groups_screened": 10,
+                                                           "survivor_unit": "group"}}}
+    assert n_trials_effective([grp]) == 1 + 10
+
+
+def test_correlated_near_copies_no_longer_deflate_their_group():
+    """Five near-copies of the informative feature split its importance; ranked by summed importance their group is
+    still the most frequent, where the best single member's frequency would rank it below a weaker lone feature."""
+    labels, _, feats = _synthetic()
+    rng = np.random.default_rng(5)
+    copies = [f"copy_{i}" for i in range(5)]
+    for c in copies:
+        feats[c] = feats["info"] + 0.05 * rng.normal(size=len(feats))
+    y = labels["target_hit"].to_numpy()
+    feats["weak"] = 0.6 * (y - 0.5) + rng.normal(size=len(feats))
+    pool = [*copies, "weak", *NOISE]
+    groups = {c: ("info_group" if c in copies else c) for c in pool}
+    f = list(walk_forward_splits(labels, **WINDOW))[0]
+    cfg = CFG.model_copy(update={"top_k": 1, "group_top_k": 1})
+    sel = select_in_fold(feats, labels, f, pool, cfg, groups, purge_days=2)
+    best_member = max(sel.frequency[c] for c in copies)
+    assert sel.group_frequency["info_group"] >= 0.9
+    assert sel.group_frequency["info_group"] > sel.group_frequency["weak"]
+    assert best_member < sel.group_frequency["info_group"]          # the old "max member" rule deflated it
+    assert sum(sel.group_frequency.values()) == pytest.approx(1.0)  # one group per subsample with group_top_k 1
+
+
+def test_group_top_k_defaults_to_the_top_k_share_of_groups():
+    from goldbot.research.discovery import group_top_k
+    assert group_top_k(CFG.model_copy(update={"top_k": 10}), n_features=300, n_groups=10) == 1
+    assert group_top_k(CFG.model_copy(update={"top_k": 10}), n_features=40, n_groups=40) == 10   # column mode
+    assert group_top_k(CFG.model_copy(update={"top_k": 10}), n_features=120, n_groups=35) == 3
+    assert group_top_k(CFG.model_copy(update={"top_k": 10, "group_top_k": 4}), n_features=300, n_groups=10) == 4
+
+
+def test_column_groups_never_read_a_holdout_bar(monkeypatch):
+    from goldbot.features import FEATURES
+    from goldbot.features.registry import FeatureSpec
+    seen: list[pd.Timestamp] = []
+
+    def spy(m: pd.DataFrame, ctx: dict) -> pd.DataFrame:
+        seen.extend(pd.to_datetime(m["ts_utc"], utc=True))
+        return pd.DataFrame({"spy_col": np.zeros(len(m))})
+
+    monkeypatch.setitem(FEATURES, "spy", FeatureSpec(name="spy", family="spyfam", fn=spy))
+    ts = pd.date_range("2025-01-01", periods=5000, freq="1h", tz="UTC")
+    m = pd.DataFrame({"ts_utc": ts, "close": 1.0})
+    start = pd.Timestamp("2025-04-01", tz="UTC")
+    g = column_groups(["spy_col", "h4_spy_col"], "family", m, ["spy"], holdout_start=start)
+    assert g == {"spy_col": "spyfam", "h4_spy_col": "spyfam"}
+    assert seen and max(seen) < start and len(seen) == 2000         # the 2000 bars before the holdout, none in it
+    with pytest.raises(ValueError):
+        column_groups(["spy_col"], "family", m[ts >= start], ["spy"], holdout_start=start)
+
+
+def test_inner_split_purges_training_labels_that_outlive_the_validation_gap():
+    from goldbot.research.discovery import inner_split
+    ts = pd.DatetimeIndex(pd.date_range("2022-01-01", periods=400, freq="12h", tz="UTC"))
+    te = ts + pd.Timedelta(days=10)                                 # labels live 10 days; the gap is 2
+    fit, val = inner_split(ts, te, inner_val_frac=0.2, purge_days=2)
+    cut = ts[int(len(ts) * 0.8)]
+    before = np.asarray(ts < cut)
+    dropped = before & ~fit
+    assert val.sum() == len(ts) - int(len(ts) * 0.8) and not (fit & val).any()
+    assert dropped.sum() == 24                                      # 12 days of 12h bars end within cut - 2d
+    assert (te[fit] < cut - pd.Timedelta(days=2)).all() and (te[dropped] >= cut - pd.Timedelta(days=2)).all()
+
+
+def test_merge_renumbering_rewrites_the_results_preregistration_link():
+    pre = {"status": PREREGISTERED, "ts": "2026-10-10T10:00:00+00:00", "agent_id": "b", "config_hash": "h2",
+           "feature_version": "v", "trial": 1}
+    res: dict[str, Any] = {"status": DISCOVERY, "ts": "2026-10-10T11:00:00+00:00", "agent_id": "b", "config_hash": "h2",
+           "feature_version": "v", "trial": 1,
+           "preregistration": {"ts": pre["ts"], "trial": 1, "config_hash": "h2"}}
+    other = {"status": "evaluated", "ts": "2026-10-09T09:00:00+00:00", "agent_id": "a", "config_hash": "h1",
+             "feature_version": "v", "trial": 1}                    # recorded on the VPS, earlier in time
+    merged = merge_rows([pre, res], [other])
+    assert [r["trial"] for r in merged] == [1, 2, 2]
+    assert merged[2]["preregistration"]["trial"] == 2 == merged[1]["trial"]
+    assert res["preregistration"]["trial"] == 1                     # the input rows are not mutated
+    assert merge_rows(merged, [other]) == merged
