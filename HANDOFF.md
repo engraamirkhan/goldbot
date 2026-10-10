@@ -259,6 +259,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   bar t uses only bars closed by t (truncated-history test + pipeline lookahead check). They are in
   `DEFAULT_FEATURE_NAMES`, so the default `feature_version` changes (expected: no champions exist, nothing is
   invalidated) and feature-seeded clones now draw from a larger column pool.
+- Bounded spawning (2026-10-10, BACKLOG 13, TRADER_LIFECYCLE section 3, TRACEABILITY G11): the daily `gap_watch`
+  job (23:55 UTC, after drift_watch; `goldbot/ops/gap_watch.py`) detects gaps (uncovered family timeframe, all agents
+  of a family retired, drift/system halts, a volatility tercile no champion trained on, error dq events on 3+ days in
+  7, planned family without a founder, a passed trial without an agent) and writes `state/gaps.json` with the actions
+  taken and refused (with reasons). Trading: `Population.spawn_founder` only, zero-capital SHADOW founders of
+  registered families (default on another timeframe, or a passed trial's config), at most `gaps.founders_per_month`
+  (2), only into 4 reserved slots inside the 24 shadow cap (clones now stop at 20), never during a system halt or a
+  drawdown stage, never in a lookahead-blocked family; lineage in `gap_id`/`origin`/`notes`. Live still needs the
+  tournament's DSR and a passed trial of the exact config. Staff: on-demand runs of the existing read-only
+  `data_steward` / `risk_officer` only, 3 per rolling week, once per gap, refused when the month's agent budget is
+  below the role's per-run cap. Regime and dead-family gaps file at most 2 hypotheses per run; a new family, role or
+  untrainable timeframe (4h/1d: no walk-forward window in settings, so the retrain cannot train them) is a BACKLOG
+  suggestion only. Not done: the 4h founder path in `saturday_retrain`.
 
 ## Next steps (no owner input needed unless marked)
 - Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write

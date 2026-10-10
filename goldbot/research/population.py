@@ -13,7 +13,15 @@ record, and capital share. The tournament (run weekly by the scheduler) applies 
 * winners (top quartile, live, positive fitness) are cloned into 2-3 mutated children that start in shadow with zero
   capital; a parent is never duplicated unchanged (AgentIdentity.mutate refuses);
 * caps: LIVE_CAP live and SHADOW_CAP shadow agents; capital within a family is split by fitness share (the allocator
-  multiplies by its family weight).
+  multiplies by its family weight). GAP_RESERVED_SLOTS of the shadow slots are kept for gap founders: clones stop
+  GAP_RESERVED_SLOTS short of SHADOW_CAP, and gap founders may use only the reserved slots.
+
+Gap founders (`spawn_founder`, called by the daily gap_watch job, docs/TRADER_LIFECYCLE.md section 3): a generation-0
+agent of a REGISTERED family whose configuration comes from the family itself (its default on another of its
+timeframes) or from a passed research trial, never new code. It always starts in shadow with zero capital, at most
+`max_per_month` a calendar month and only into the reserved slots, and it records the gap that caused it and where its
+configuration came from. Promotion to live is the same as for every agent: DSR above DSR_PROMOTE with the population
+size as the trial count (each founder raises that count) and a passed research trial of its exact configuration.
 
 Mutations (mutate_agent): perturbed barriers or trigger thresholds, a different feature subset within the 40-feature
 cap (`feature_seed`), or a different decision timeframe for families that allow one (holding horizon kept).
@@ -47,6 +55,9 @@ RETIRED_SHADOW_DAYS = 182
 CHILDREN_PER_WINNER = (2, 3)
 MAX_LIVE_CHILDREN = 3               # a winner with this many children alive is not cloned again
 MUTATION_FACTORS = (0.8, 0.9, 1.1, 1.25)
+GAP_RESERVED_SLOTS = 4              # shadow slots inside SHADOW_CAP that only gap founders may fill
+GAP_FOUNDERS_PER_MONTH = 2          # default monthly cap on gap founders (settings gaps.founders_per_month)
+FOUNDER_MAX_CHANGE = 0.5            # a founder's numeric setting stays within +-50% of its timeframe's default
 DD_HAIRCUT_AT = 0.30                # a 30% shadow drawdown halves fitness
 
 AgentStatus = Literal["shadow", "live", "retired"]
@@ -67,6 +78,8 @@ class Member(Record):
     capital_weight: float = 0.0                        # share of its family's capital
     stats: dict[str, Any] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
+    gap_id: str | None = None                          # gap founders: the gap that caused the spawn (state/gaps.json)
+    origin: str | None = None                          # gap founders: where the configuration came from
 
     def identity(self) -> AgentIdentity:
         return AgentIdentity(family=self.family, config=self.config, parent_id=self.parent_id, generation=self.generation)
@@ -188,6 +201,56 @@ def mutate_agent(family: str, base: dict[str, Any], rng: random.Random) -> tuple
     return "params", mutate_config(base, rng)
 
 
+# ---------------------------------------------------------------------------------------------- gap founders
+class SpawnRefused(ValueError):
+    """A gap founder was not created; the message is the reason recorded in state/gaps.json."""
+
+
+def founder_base(family: str, timeframe: str) -> dict[str, Any]:
+    """The family's default configuration on `timeframe`: its timeframe defaults over default_config, and a `max_bars`
+    without a timeframe default rescaled so the holding horizon in hours stays the same (as in mutate_agent)."""
+    cls = SPECIALISTS[family]
+    tf_defaults = cls.timeframe_defaults.get(timeframe, {})
+    base = {**cls.default_config, **tf_defaults}
+    if timeframe != cls.timeframe:
+        if "max_bars" in cls.default_config and "max_bars" not in tf_defaults:
+            base["max_bars"] = max(1, int(round(cls.default_config["max_bars"] * tf_seconds(cls.timeframe)
+                                                / tf_seconds(timeframe))))
+        base[TIMEFRAME_KEY] = timeframe
+    return base
+
+
+def check_founder_config(family: str, config: dict[str, Any]) -> dict[str, Any]:
+    """validate_overrides-style bounds for a founder: only the family's own settings with their types, numeric values
+    within +-FOUNDER_MAX_CHANGE of the default for the founder's timeframe, and a timeframe the family allows."""
+    cls = SPECIALISTS[family]
+    tf = config.get(TIMEFRAME_KEY, cls.timeframe)
+    if tf != cls.timeframe and tf not in cls.timeframes:
+        raise SpawnRefused(f"{family} does not run on {tf}; allowed: {(cls.timeframe, *cls.timeframes)}")
+    base = founder_base(family, tf)
+    unknown = set(config) - set(base) - {TIMEFRAME_KEY, FEATURE_SEED_KEY}
+    if unknown:
+        raise SpawnRefused(f"not settings of {family}: {sorted(unknown)}")
+    for k, v in config.items():
+        if k in (TIMEFRAME_KEY, FEATURE_SEED_KEY):
+            continue
+        b = base[k]
+        if isinstance(b, bool) or not isinstance(b, (int, float)):
+            if v != b:
+                raise SpawnRefused(f"{k}={v!r}: only numeric settings may differ from the default ({b!r})")
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise SpawnRefused(f"{k}={v!r} is not numeric")
+        lo, hi = sorted((b * (1 - FOUNDER_MAX_CHANGE), b * (1 + FOUNDER_MAX_CHANGE)))
+        if not lo <= float(v) <= hi:
+            raise SpawnRefused(f"{k}={v} is outside +-{FOUNDER_MAX_CHANGE:.0%} of its default {b} on {tf}")
+    try:
+        cls(identity=AgentIdentity(family=family, config=dict(config)))
+    except (ValueError, TypeError) as exc:
+        raise SpawnRefused(f"{family} rejects the configuration: {exc}") from exc
+    return dict(config)
+
+
 # ---------------------------------------------------------------------------------------------- population
 class Population:
     def __init__(self, path: str | Path):
@@ -205,6 +268,45 @@ class Population:
                                                       created_utc=now, status_since_utc=now, notes=["founder"])
                 added.append(ident.agent_id)
         return added
+
+    def clone_slot_free(self) -> bool:
+        """Clones stop GAP_RESERVED_SLOTS short of SHADOW_CAP: those slots are kept for gap founders."""
+        shadow = self.active("shadow")
+        others = [m for m in shadow if m.gap_id is None]
+        return len(shadow) < SHADOW_CAP and len(others) < SHADOW_CAP - GAP_RESERVED_SLOTS
+
+    def gap_founders_this_month(self, now: pd.Timestamp) -> list[Member]:
+        month = f"{now:%Y-%m}"
+        return [m for m in self.members.values() if m.gap_id is not None and f"{m.created_utc:%Y-%m}" == month]
+
+    def spawn_founder(self, family: str, config: dict[str, Any], now: pd.Timestamp, *, gap_id: str, origin: str,
+                      max_per_month: int = GAP_FOUNDERS_PER_MONTH, blocked: frozenset[str] = frozenset()) -> Member:
+        """Add a gap founder in shadow with zero capital, or raise SpawnRefused with the reason.
+
+        There is deliberately no status argument: a founder can only start in shadow, and only the tournament's gates
+        move it to live. `blocked` holds the families the research plan flags (lookahead)."""
+        if not gap_id:
+            raise SpawnRefused("a founder needs the gap that caused it")
+        if family not in SPECIALISTS:
+            raise SpawnRefused(f"{family!r} is not a registered family: a new family goes by PR, never automatically")
+        if family in blocked:
+            raise SpawnRefused(f"{family} is blocked by the research plan (lookahead): no founder until a clean check")
+        cfg = check_founder_config(family, config)
+        aid = AgentIdentity(family=family, config=cfg).agent_id
+        if aid in self.members:
+            raise SpawnRefused(f"{aid} already exists ({self.members[aid].status})")
+        if len(self.gap_founders_this_month(now)) >= max_per_month:
+            raise SpawnRefused(f"monthly cap reached: {max_per_month} gap founders in {now:%Y-%m}")
+        shadow = self.active("shadow")
+        if len([m for m in shadow if m.gap_id is not None]) >= GAP_RESERVED_SLOTS:
+            raise SpawnRefused(f"reserved shadow slots full: {GAP_RESERVED_SLOTS} gap founders in shadow")
+        if len(shadow) >= SHADOW_CAP:
+            raise SpawnRefused(f"shadow cap reached: {SHADOW_CAP} agents in shadow")
+        m = Member(agent_id=aid, family=family, config=cfg, parent_id=None, generation=0, status="shadow",
+                   capital_weight=0.0, created_utc=now, status_since_utc=now, gap_id=gap_id, origin=origin,
+                   notes=[f"gap founder: {gap_id} ({origin})"])
+        self.members[aid] = m
+        return m
 
     def active(self, *statuses: AgentStatus) -> list[Member]:
         return [m for m in self.members.values() if m.status in statuses]
@@ -286,7 +388,7 @@ class Population:
             alive_children = [c for c in self.members.values() if c.parent_id == w.agent_id and c.status != "retired"]
             want = rng.randint(*CHILDREN_PER_WINNER)
             for _ in range(max(0, min(want, MAX_LIVE_CHILDREN - len(alive_children)))):
-                if len(self.active("shadow")) >= SHADOW_CAP:
+                if not self.clone_slot_free():
                     break
                 for _attempt in range(10):
                     kind, cfg = mutate_agent(w.family, w.config, rng)
