@@ -443,6 +443,33 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   an empty DB it imports users.json and audit.jsonl once and never writes them again (backup). Failed-login
   counters stay in memory. Not done: `run.py migrate`/`import-state` wiring, `state_db` health check (step 0
   leftovers, files owned elsewhere); the API migrates aux.db on open until then. Steps 2-8 not started.
+- State store step 3 (2026-10-10): staff-agent runs and monthly spend, scheduler job state and the Telegram outbox are
+  in aux.db (`goldbot/db/bookkeeping.py`, migration 5). Each old file is imported once on first open (or by
+  `python -m goldbot.db import-state`) into an empty table. scheduler.json and agent_spend.json stay as exports
+  regenerated after each write (dashboard, health, read_state tool and vps_update.ps1 still read them; originals in
+  `state/pre-db/`); agent_runs.jsonl stays an append-only mirror (dashboard; API owner notices are still relayed from
+  it); telegram_outbox.json is never written again. `SpendLedger.reserve` books the per-run budget under BEGIN
+  IMMEDIATE before the first API call and `settle` books the real cost, so concurrent runs never pass the cap (the
+  old ledger cached the file and the news and agents processes overwrote each other). Not done: news_spend.json
+  (`data/news_collector.py` was out of scope), switching api/app.py to query aux.db.
+  Trading-safety review fixes (same day): exports run after the commit and never raise (a locked file on Windows no
+  longer undoes a spend booking or stops a scheduler job); concurrent exporters converge through `exports.seq`.
+  Rollback safety: telegram_outbox.json is rewritten in its old format for one release; a file another release
+  wrote (hash differs from this code's last export) is merged back once (spend: larger per month; scheduler: newer
+  slot; outbox: its sent list and offset; runs appended only to the file are adopted) and counted in
+  `state_fallback`. Migrations can be `additive`: `schema_version.compat_back_to` lets older code open a newer
+  aux.db; the release before step 3 needs the one-time downgrade in RUNBOOK (updating the VPS). Health and
+  vps_update.ps1 read the scheduler status from aux.db (`python -m goldbot.db scheduler-status`), the file only as
+  fallback. Telegram: aux.db is opened inside the pump (a broken file no longer stops the bot), a proposal whose
+  mark_sent fails is not re-sent (`SendGuard`, retry with backoff), and reports are acknowledged only after delivery
+  (at least once). A run that dies mid-loop keeps its reservation; a failed settle is logged and the run still logged.
+  Re-verification: the heartbeat is read with a plain read-only connection (an `immutable` read tore under a
+  writer); export hashes are recorded before the write and the last 16 kept (`exports.hashes`), so our own file is
+  never taken as foreign; a file missing at the first open is recorded as imported (empty), so a later file is only
+  merged; the outbox merge is a union (DB proposals still pending kept) with the further report cursor; a report
+  batch failing for one recipient is acknowledged after 3 passes (`ReportRetry`); vps_update.ps1 steps aux.db back
+  from schema 5 to 4 by itself when installing a commit without `compat_back_to` (`Sync-AuxSchema`, refuses any
+  other version) and stops the scheduler first, re-checking for a running job before stopping the rest.
 - Dashboard accounts (2026-10-10, owner request): the owner is the sole admin. `auth.owner_email` (Settings
   `AuthSettings`, default None; set only in the server's `config/settings.local.yaml`, never in the public repo)
   is required for bootstrap and is the only address that can hold the owner role. Invites and `set_role` grant

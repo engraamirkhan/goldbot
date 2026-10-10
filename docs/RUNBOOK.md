@@ -598,7 +598,8 @@ place, change or close a trade.
 | research analyst | Saturday 13:00 | runs up to two bounded trials on filed hypotheses and gives a verdict (promotes nothing) |
 
 Each report arrives on Telegram, appears on the dashboard **Agents** tab, and is saved as
-`state\agent_reports\<role>\<UTC time>.md`. Every run (cost, status) is logged in `state\agent_runs.jsonl`.
+`state\agent_reports\<role>\<UTC time>.md`. Every run (cost, status) is logged in `state\aux.db` (table `agent_runs`)
+and copied to `state\agent_runs.jsonl`.
 
 ### Where things live
 
@@ -611,9 +612,11 @@ Each report arrives on Telegram, appears on the dashboard **Agents** tab, and is
 | Cost tables (per account, nightly) | `state\costs_<account>.json` |
 | Swap and commission read from the terminal | `state\broker_terms_<account>.json` (notes say why a value fell back to settings) |
 | Account classifier | `state\classifier_<account>.json` |
-| Scheduler job states | `state\scheduler.json` (also on the **Feeds** tab) |
+| Scheduler job states | `state\aux.db` table `scheduler_jobs`; readable copy `state\scheduler.json` (also on the **Feeds** tab) |
 | News feed health | `state\news_feeds.json` |
-| Agent spend | `state\agent_spend.json` (monthly), `state\news_spend.json` (headline scoring per day) |
+| Agent spend | `state\aux.db` table `agent_spend` (monthly; readable copy `state\agent_spend.json`), `state\news_spend.json` (headline scoring per day) |
+| Telegram outbox (what was sent) | `state\aux.db` tables `outbox_sent`, `outbox_cursor` |
+| Files as they were before the database took over | `state\pre-db\` (kept, never written again) |
 | Population / league table | `state\population.json`, `state\agents.json` |
 | Shadow records | `state\shadow_<model version>.json`; every candidate with its decision in `state\shadow_book.json` |
 | Weekly recalibrations (before/after ECE) | `state\recalibration.jsonl`; also `recalibrations` in `models\registry.json` |
@@ -833,3 +836,20 @@ fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back,
 * Proposals open during an update expire. Positions keep their broker-side stop and target while engines are down.
 * If the new commit changes `config/accounts.yaml` or `config/settings.yaml` that you edited on the VPS, the
   checkout fails and the script restores the old version untouched: merge those files by hand.
+* Rolling back to a version from before the agent/scheduler/outbox bookkeeping moved into `state\aux.db`
+  (2026-10-10): the new version keeps `scheduler.json`, `agent_spend.json`, `telegram_outbox.json` and
+  `agent_runs.jsonl` up to date, so the old version carries on where it left off, and the new version merges what
+  the old one wrote when you update again. The old version's dashboard would refuse the newer `aux.db`, so the
+  script steps `aux.db` back from schema 5 to 4 by itself when it installs such a version (rows kept; the next
+  update re-applies 5). Only if you check out an old version by hand, stop the services and run the same step:
+
+  ```powershell
+  cd C:\goldbot
+  foreach ($s in "goldbot-scheduler","goldbot-webhook","goldbot-news","goldbot-api","goldbot-telegram","goldbot-supervisor","goldbot-engine-icm","goldbot-engine-vantage") { nssm stop $s }
+  .\.venv\Scripts\python.exe -c "import sqlite3; c = sqlite3.connect(r'state\aux.db'); v = c.execute('SELECT MAX(version) FROM schema_version').fetchone()[0]; assert v == 5, f'schema {v}: do not run this'; c.execute('DELETE FROM schema_version WHERE version = 5'); c.execute('PRAGMA user_version = 4'); c.commit()"
+  ```
+
+  It refuses unless the file is at schema 5. Later versions record which older versions can still open the file,
+  so this step is not needed again for changes that only add tables.
+* The script stops the scheduler first and checks again that no job started in between; if one did, it was
+  interrupted by the stop: the script starts the scheduler again, stops nothing else and refuses the update.
