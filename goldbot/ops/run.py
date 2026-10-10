@@ -17,6 +17,10 @@
   python -m goldbot.ops.run restore-drill                # the weekly restore drill, now
   python -m goldbot.ops.run setup [--account ID]         # guided setup of secrets and server settings (re-runnable)
   python -m goldbot.ops.run preflight [--account ID]     # read-only checklist before starting services (exit 1 on a blocker)
+  python -m goldbot.ops.run ruin --trades-per-week N (--closed-trades state | --shadow state | --r-file F | --win-rate ..)
+                                                         # drawdown / risk-of-ruin Monte Carlo at the live limits (G-5)
+  python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]
+                                                         # minimum equity for the minimum lot per family (G-7)
 """
 from __future__ import annotations
 
@@ -466,6 +470,12 @@ if __name__ == "__main__":
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))
+    elif cmd == "ruin":
+        from goldbot.research.ruin import main as ruin_main
+        sys.exit(ruin_main(sys.argv[2:]))
+    elif cmd == "sizing-feasibility":
+        from goldbot.research.min_lot import main as feasibility_main
+        sys.exit(feasibility_main(sys.argv[2:]))
     else:
         print(__doc__)
         sys.exit(1)

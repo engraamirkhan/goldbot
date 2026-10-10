@@ -695,6 +695,27 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   1d ~£7,900. North-star KPIs (monthly £/day average, best days, opportunity days captured, max drawdown) are in
   BACKLOG 26; opportunity-day detection (30) and runner exits (31) are hypotheses for the trial registry (no trials
   spent). Owner: optional deposit plan; confirm the demo is Raw Spread.
+- Risk analytics for playbook G-5 and G-7 (2026-10-10, BACKLOG 20 and 22; tools built, results need data):
+  `python -m goldbot.ops.run ruin --trades-per-week N (--shadow state [--version V | --agent A | --pool-versions] |
+  --closed-trades state | --r-file trades.csv | --win-rate W --avg-win A --avg-loss L) [--tiny-live] [--multiplier M]
+  [--r-haircut H | --demean] [--out F]` is a seeded circular-block-bootstrap Monte Carlo (`goldbot/research/ruin.py`)
+  at the live limits (built from gate.RiskLimits/SupervisorLimits.from_settings), sized with the gate's arithmetic
+  (8% stage = a quarter of the risk at m = 1) and enforcing the caps and stages as RiskGate does: P(each limit trips)
+  within 26/52 weeks, median time to the first trip, max drawdown median/95th/99th (also at twice the block length)
+  and risk of ruin. The report names the shadow version (one version only, default the agent's champion; pooling
+  only with `--pool-versions`) and the cost basis (shadow = spread only, optimistic; closed trades = net; file =
+  unknown), and warns when `--trades-per-week` is more than 25% off the observed rate.
+  `python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--size-down]` (`goldbot/research/min_lot.py`)
+  gives, per family, decision timeframe and registered preset (tsmom `slow` = H-01: 4h decisions, daily ATR), the
+  equity at which 0.01 lot fits the risk (strict and the gate's 1.2x) and the real risk at a given equity, on the mid
+  of the store's bars; `--price P --stop-distance D` without data. Neither has been run on real bars or trades yet
+  (the Mac VM has no store data); run both on the VPS/brain and attach to phase-gate evidence and the H-01
+  account-size decision.
+- **Follow-up once the gate lanes merge:** `goldbot/risk/sizing.py` holds RiskGate's sizing arithmetic and stage
+  machine as pure functions (`effective_risk`, `size_lots`, `stop_distance`, `next_stage`, `MIN_LOT_TOLERANCE`), used
+  by the two reports above; `goldbot/risk/gate.py` still has its own copy (it was being edited by other lanes) and
+  should call `sizing.py`. Until then `tests/test_sizing_parity.py` runs `RiskGate.check`/`update_stage` against it
+  across stages, multipliers and the min-lot boundary, so the copies cannot drift silently.
 - XAUUSD trader playbook (2026-10-10, owner request): `docs/research/xauusd-trader-playbook.md` lists ~70 things a
   professional gold trader considers (drivers, CFD microstructure, technicals, risk management, process), each with
   sources, evidence grade and goldbot status, then a ranked gap list (risk gaps G-1..G-10 first: swap in live EV,
