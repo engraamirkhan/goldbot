@@ -119,3 +119,71 @@ def events_frame(events: list[DQEvent]) -> pd.DataFrame:
     if not events:
         return pd.DataFrame(columns=["ts_utc", "check", "severity", "detail"])
     return pd.DataFrame([e.model_dump() for e in events])
+
+
+def _mid_series(bars: pd.DataFrame) -> pd.Series:
+    """Mid close per minute stamp (bid/ask closes; a bid-only frame such as the broker's own M1 uses its close)."""
+    if bars.empty:
+        return pd.Series(dtype=float)
+    ts = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True)).as_unit("ns")
+    if "bid_close" in bars.columns and "ask_close" in bars.columns:
+        mid = (bars["bid_close"].astype(float) + bars["ask_close"].astype(float)) / 2
+    else:
+        mid = bars["close"].astype(float)
+    s = pd.Series(mid.to_numpy(), index=ts)
+    return s[~s.index.duplicated(keep="last")].sort_index()
+
+
+SPIKE_MATCH_FRACTION = 0.5     # the other feed's move must be at least this share of the spike, in the same direction
+SPIKE_MATCH_MINUTES = 1        # ... within this many minutes of the spike's minute
+
+
+def spike_matched(r_spike: float, other_mid: pd.Series, ts: pd.Timestamp, *, window_minutes: int = SPIKE_MATCH_MINUTES,
+                  match_frac: float = SPIKE_MATCH_FRACTION, tf_seconds: int = 60) -> bool:
+    """True when the other feed shows a matching move: a log mid return in the same direction of at least
+    `match_frac` x |r_spike|, either in one minute within +-window_minutes of `ts` or over the whole window
+    (close of ts - window - 1 to close of ts + window, so a move the other feed spread over two minutes counts).
+    Minutes the other feed lacks count as no move."""
+    if other_mid.empty or not np.isfinite(r_spike) or r_spike == 0:
+        return False
+    step = pd.Timedelta(seconds=tf_seconds)
+    t = pd.Timestamp(ts).tz_convert("UTC") if pd.Timestamp(ts).tzinfo else pd.Timestamp(ts, tz="UTC")
+    grid = pd.date_range(t - (window_minutes + 1) * step, t + window_minutes * step, freq=step).as_unit("ns")
+    m = other_mid.reindex(grid)
+    r = np.log(m.to_numpy(dtype=float))
+    moves = list(np.diff(r)) + [r[-1] - r[0]]
+    need = match_frac * abs(r_spike)
+    return any(np.isfinite(x) and np.sign(x) == np.sign(r_spike) and abs(x) >= need for x in moves)
+
+
+def confirm_spikes(bars: pd.DataFrame, events: list[DQEvent], other: pd.DataFrame, *,
+                   window_minutes: int = SPIKE_MATCH_MINUTES, match_frac: float = SPIKE_MATCH_FRACTION,
+                   tf_seconds: int = 60) -> tuple[pd.DataFrame, list[DQEvent]]:
+    """Design (Data quality, D20): a spike is ">12 sigma of trailing hour with no match on the other feed". Where both
+    feeds are available, a spike check_bars flagged on `bars` stays a warning only if `other` shows no matching move
+    (`spike_matched`) in the same minute +-window_minutes; a matched spike is a real market move, so its event is
+    dropped and `warning:spike` is removed from the bar's dq_flag. Every other event and flag is returned unchanged.
+    With one feed only, call check_bars alone (its behaviour does not change)."""
+    spikes = [e for e in events if e.check == "spike"]
+    if not spikes or bars.empty:
+        return bars, list(events)
+    mid = _mid_series(bars)
+    r = np.log(mid).diff()
+    other_mid = _mid_series(other)
+    out = bars.copy()
+    stamps = pd.DatetimeIndex(pd.to_datetime(out["ts_utc"], utc=True)).as_unit("ns")
+    kept: list[DQEvent] = []
+    for e in events:
+        if e.check != "spike":
+            kept.append(e)
+            continue
+        t = pd.Timestamp(e.ts_utc).tz_convert("UTC")
+        rs = float(r.get(t.as_unit("ns"), np.nan))
+        if not spike_matched(rs, other_mid, t, window_minutes=window_minutes, match_frac=match_frac,
+                             tf_seconds=tf_seconds):
+            kept.append(e)
+            continue
+        for i in np.flatnonzero(stamps == t):
+            flags = [f for f in str(out.at[int(i), "dq_flag"]).split(";") if f and f != "warning:spike"]
+            out.at[int(i), "dq_flag"] = ";".join(flags)
+    return out, kept

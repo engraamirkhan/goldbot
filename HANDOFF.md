@@ -355,6 +355,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   propose, and the kill switch writes propose back to control.json (so the evidence restarts). Known limits: breaches
   are read from the engines' current risk files (a size-down that recovered before the check is not seen); the
   dashboard has no /mode control yet (goldbot/api untouched).
+- Cross-feed checks (2026-10-10, `goldbot/data/crossfeed.py`, TRACEABILITY D12/D20/D23/F10, BACKLOG item 14).
+  `feed_reconcile` (scheduler, Mon-Fri 23:20 UTC) rebuilds each account's 1m bars from its stored ticks and compares the
+  last day with the broker's own M1 (`get_bars`; bridge `RemoteBroker`, or on Windows the terminal's saved login via
+  `run._job_broker`): close off by > 2 points, or a minute on one side only, diverges; > 0.5% of broker minutes warns,
+  > 5% (or no engine ticks at all) is an error -> dq_events, state/reconcile_<account>.json, health check
+  `reconcile:<account>` (warn/fail; stale after 96 h). The broker's M1 is kept in the new store table `bars_1m_broker`,
+  so broker history accumulates. Spikes (D20): `quality.confirm_spikes` drops a check_bars spike when the other feed
+  moves the same way by >= half of it within +-1 minute; used by the reconcile run, check_bars alone is unchanged.
+  Survival (D23/F10): `scripts/crossfeed_check.py --specialist X --account A` runs the rule-only screen on Dukascopy and
+  on `bars_1m_broker` over the common period outside the holdout; survives = Dukascopy mean R > 0 with t >= 2.0 AND
+  broker mean R > 0 with t >= 1.0; broker-only significance = feed artefact, dropped; < 90 days or < 100 events per
+  feed = insufficient overlap (not a pass, the current state). Not a trial (it can only discard). Not yet a promotion
+  gate: wire it in once broker history reaches 90 days. Known limit: ticks sharing a millisecond can come back from
+  the store in another order, so a minute's close may differ (absorbed by the 0.5% warning band).
 
 ## Next steps (no owner input needed unless marked)
 - Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):

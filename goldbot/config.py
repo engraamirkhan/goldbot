@@ -128,6 +128,7 @@ class SchedulerSettings(_Section):
     agents_presession: ScheduleSettings
     recalibrate: ScheduleSettings
     drift_watch: ScheduleSettings
+    feed_reconcile: ScheduleSettings
     gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
 
 
