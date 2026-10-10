@@ -190,19 +190,51 @@ def test_a_measured_cost_table_replaces_the_priors(release_dir, tmp_path, monkey
         rp.main()
 
 
-def test_a_rule_that_passes_the_screen_goes_on_to_the_walk_forward(release_dir, tmp_path, monkeypatch):
-    from goldbot.research import screen as screen_mod
-    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
-    monkeypatch.setattr(screen_mod, "MIN_EVENTS", 1)
-    monkeypatch.setattr(screen_mod, "MIN_T", -1e9)
-    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
-                                      "--report", str(report), "--specialist", "tsmom"])
-    real = screen_mod.screen_verdict
+def _research_settings(monkeypatch, **research) -> None:
+    settings = rp.load_settings()
+    patched = settings.model_copy(update={"research": settings.research.model_copy(update=research)})
+    monkeypatch.setattr(rp, "load_settings", lambda: patched)
 
-    def lenient(rule):                  # synthetic random walks have no edge: accept any sign for this test
-        out = real({**rule, "gross": {**rule["gross"], "mean_r": abs(rule["gross"].get("mean_r", 0.0)) + 1e-9}})
+
+def _lenient_screen(monkeypatch, expect_floor: int) -> None:
+    """Synthetic random walks have no edge: accept any sign and t, and check the floor research_pass passed."""
+    from goldbot.research import screen as screen_mod
+    real = screen_mod.screen_verdict
+    monkeypatch.setattr(screen_mod, "MIN_T", -1e9)
+
+    def lenient(rule, min_events=screen_mod.MIN_EVENTS):
+        assert min_events == expect_floor                 # the settings floor reaches the screen
+        out = real({**rule, "gross": {**rule["gross"], "mean_r": abs(rule["gross"].get("mean_r", 0.0)) + 1e-9}},
+                   min_events)
         return {**out, "rule_only": rule}
     monkeypatch.setattr(screen_mod, "screen_verdict", lenient)
+
+
+def test_a_screen_short_only_of_the_daily_signal_floor_is_an_inconclusive_recorded_trial(release_dir, tmp_path,
+                                                                                         monkeypatch):
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    # the daily-signal override applies to the slow preset (1d signal on 4h bars), not to the 4h default
+    _research_settings(monkeypatch, screen_min_events=1, screen_min_events_daily=100_000)
+    _lenient_screen(monkeypatch, expect_floor=100_000)
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "tsmom", "--variants", '["slow"]'])
+    assert rp.main() == 0
+    row = _rows(registry)[0]
+    scr = row["results"]["screen"]
+    assert row["status"] == "screened" and row["trial"] == 1 and row["budget_quarter"]      # charged like any trial
+    assert scr["passed"] is False and scr["verdict"] == "inconclusive (event floor)" and scr["min_events"] == 100_000
+    assert "gates" not in row["results"]                                                   # no model fitted
+    text = report.read_text()
+    assert "**INCONCLUSIVE (event floor)**" in text and "cannot retire the hypothesis" in text
+    assert "The rule is retired" not in text
+
+
+def test_a_rule_that_passes_the_screen_goes_on_to_the_walk_forward(release_dir, tmp_path, monkeypatch):
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    _research_settings(monkeypatch, screen_min_events=1)
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "tsmom"])
+    _lenient_screen(monkeypatch, expect_floor=1)
     assert rp.main() == 0
     row = _rows(registry)[0]
     assert row["status"] == "evaluated" and row["family"] == "tsmom" and row["results"]["screen"]["passed"] is True
@@ -262,6 +294,30 @@ def test_tsmom_daily_variant_is_screened_on_daily_bars(release_dir, tmp_path, mo
     assert row["results"]["lookahead"]["lookahead_columns"] == []
     text = report.read_text()
     assert "1d decision bars" in text and "- swap: long -60.00" in text
+
+
+def test_slow_tsmom_preset_runs_as_one_h01_trial_on_4h_bars(release_dir, tmp_path, monkeypatch):
+    from goldbot.specialists import SPECIALISTS
+    preset = SPECIALISTS["tsmom"].presets["slow"]
+    assert rp.parse_variants("tsmom", '["slow"]') == [preset]
+    assert rp.parse_variants("tsmom", json.dumps([preset])) == [preset]       # spelled out, the same configuration
+    with pytest.raises(SystemExit, match="unknown tsmom preset"):
+        rp.parse_variants("tsmom", '["fast"]')
+    with pytest.raises(SystemExit, match="context timeframe"):
+        rp.parse_variants("tsmom", '[{"timeframe": "4h", "signal_tf": "1h"}]')
+    with pytest.raises(SystemExit, match="unknown trend settings"):
+        rp.parse_variants("trend", '[{"signal_tf": "1d"}]')                    # optional settings are per family
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "tsmom", "--variants", '["slow"]'])
+    assert rp.main() == 0
+    rows = _rows(registry)
+    assert len(rows) == 1                                                       # one preset, one trial
+    row = rows[0]
+    cfg = row["config"]
+    assert (cfg["timeframe"], cfg["signal_tf"], cfg["atr_tf"], cfg["max_bars"]) == ("4h", "1d", "1d", 124)
+    assert row["results"]["screen"]["n"] > 0 and row["results"]["lookahead"]["lookahead_columns"] == []
+    assert "4h decision bars" in report.read_text()
 
 
 def test_macro_release_adds_point_in_time_features_and_a_missing_one_degrades_clearly(release_dir, tmp_path, monkeypatch,

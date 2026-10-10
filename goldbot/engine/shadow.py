@@ -7,7 +7,9 @@ entry at the signal bar's close on the paying side (ask for longs, bid for short
 target_atr/stop_atr x ATR, stop assumed first when both are touched in one bar, time exit at the close of the
 (max_bars + 1)-th bar after entry, return = side x (exit - entry) / entry. A trade opened with its specialist's exit
 policy (trail, scale-out, hard flat) advances through `labels.exit_policy.policy_step`, the step the labels use, so
-the shadow outcome of each policy equals its label; `stop` stays the initial stop (the trade's risk).
+the shadow outcome of each policy equals its label; `stop` stays the initial stop (the trade's risk). Like the labels,
+a stop is filled at the stop even when a bar gaps through it (optimistic; the live broker fills a gap at the market:
+see labels.exit_policy), so on a gap the shadow return overstates the live one by the gap.
 
 One engine hosts the book (the account on the canonical-cost broker), so trades are never counted twice.
 

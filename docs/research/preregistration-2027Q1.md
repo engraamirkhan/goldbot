@@ -20,12 +20,13 @@ promotion.
   was picked from: the features screened (about 300) when survivors go forward as individual features (the default,
   `survivor_unit=feature`), the groups screened (about 10) only when whole groups go forward (`survivor_unit=group`).
   The unit is fixed in the pre-registration row before the run.
-- **Owner-acknowledged choice (conservative default):** H-02's K_eff is added to the DSR trial count of EVERY later
+- **Conservative default, pending the owner's confirmation:** H-02's K_eff is added to the DSR trial count of EVERY later
   trial, survivor or not (`registry.n_trials_effective`, used by `research_pass.py` for every trial), not only to trials
   of an H-02 survivor. This over-deflates trials unrelated to H-02 (their DSR is biased down, never up); it is kept
   because a per-trial "is this a survivor?" link is easy to get wrong and an error there would bias DSR up.
 - **Extra promotion rule for discovery survivors:** any H-02 survivor must, besides its own pre-registered trial and the
-  design's gates, also pass the holdout rule (one scoring of 2025-10-01 .. 2026-09-30, `--score-holdout`) before it
+  design's gates, also pass the holdout rule (one scoring of 2025-10-01 .. 2026-09-30, `--score-holdout`; enforced in
+  code: `TrialRegistry.passed_gates` requires it for configs tagged `from_discovery`) before it
   can be promoted.
 
 ## Order and budget (13 planned of 20; 7 reserve)
@@ -58,9 +59,88 @@ promotion.
 - Config: `specialist=tsmom`, signal from 1d bars (20/60/120-day vol-scaled returns, 60-day vol), execution and
   labels on 4h bars, target 3.0 ATR(1d) / stop 1.5 ATR(1d), time barrier 20 trading days, long and short, swap
   charged.
+- Implemented as the tsmom preset `slow` (`goldbot/specialists/time_series_momentum.py`; tsmom's default
+  configuration and labels unchanged, `tests/test_tsmom_slow.py`). Signal on the feature-day bars (d1 context), read on
+  the first 4h bar whose close is at or after the settlement, entry at that bar's close (the open of the first 4h bar
+  after the signal is visible), at most one signal per daily bar; target/stop frozen at entry (R = one 1.5 x ATR(1d)
+  stop); one position at a time; swap per rollover in the net labels. Walk-forward: the 4h window (train 48 / test 6 /
+  step 6 months, embargo 4 days) with purge raised from 10 to 31 days, because the label lives up to 28 calendar days
+  plus holidays (M14). Agent id `tsmom-g0-c12c9afb24` (was `tsmom-g0-cf39165431` before `schedule_h` was dropped; see
+  below).
+- **Frozen parameters (added 2026-10-10 after the quant review, BEFORE any H-01 outcome was seen; only events were
+  ever counted, no label or return).** Each is enforced in code or stated as the reading of the run:
+  - *Friday stub:* the feature-day after Friday's settlement (Friday 13:30-17:00 New York, 3.5 trading hours) is
+    dropped from the signal's and the ATR's daily inputs: every daily bar spanning under 12 trading hours (the weekend
+    closure Friday 17:00 to Sunday 18:00 New York not counted) is removed (`time_series_momentum.drop_stub_days`). So
+    20/60/120 days are 5-a-week trading days (4/12/24 weeks), and Monday's return and true range run from Friday's
+    settlement close (`tests/test_tsmom_slow.py::test_friday_stub_is_dropped_so_lookbacks_count_five_trading_days_a_week`,
+    `::test_daily_atr_has_no_friday_stub`).
+  - *ATR:* Wilder ATR(14) (`features.technical.atr`: true range = max(high - low, |high - prev close|, |low - prev
+    close|), exponential mean with alpha 1/14) on the **mid** prices of the stub-free daily bars, the value last
+    visible at the signal bar's close.
+  - *tsmom_score:* on the stub-free daily mid closes, z_h = (ln C_t - ln C_{t-h}) / (sigma_60 x sqrt(h)) for h = 20,
+    60, 120, where sigma_60 is the sample standard deviation (ddof 1) of the last 60 daily log returns; score = mean of
+    the three z_h (NaN until 120 + 1 closes exist).
+  - *min_score 0.5 is binding:* long when score >= 0.5, short when <= -0.5; no other value is tried under H-01.
+  - *Time barrier:* 124 four-hour decision bars after the entry bar (≈20 weekdays, ≈28 calendar days; holidays extend
+    it).
+  - *`schedule_h` dropped:* it does nothing under `signal_tf` and is left out of the configuration and agent id
+    (`Specialist.unused_config`); tsmom's default id is unchanged.
+  - *Costs:* extra_cost_usd = 0.37 $/oz round trip beyond the spread (2 x slippage prior 0.15 + 2 x commission 3.5 USD
+    per lot side on the canonical broker / 100 oz: `execution.costs.settings_extra_cost_usd`); the spread is paid in
+    the labels (ask in, bid out). Replaced by the measured `costs-v1` table if published before the run (the report states which). Swap source: the
+    settings priors `costs.swap_long_usd_per_lot: -60.0`, `swap_short_usd_per_lot: 0.0`, triple on Wednesday, on the
+    canonical broker's server clock (Europe/Athens), or the measured table's swap if it has one.
+  - *Swap bias:* the short swap prior of 0 flatters shorts for 2010-2021 (when short swap was negative) by about
+    0.1 R per 28-night hold. The report gives net mean R for both sides together, with and without the short trades
+    (that is, long-only), and the reading rule is read on both sides together AND on long-only; a pass that exists only
+    with shorts is reported as such and does not continue the hypothesis.
+  - *Holdout:* every label that has not exited before 2025-10-01 is dropped (`pipeline.prepare`), including trades
+    entered in the research window that would exit into the holdout.
+  - *Positive year:* a calendar year (by entry time) counts as positive only with at least 10 trades
+    (`gates.MIN_TRADES_PER_YEAR`) and positive mean net R.
+  - *t-stat:* mean R / (sample std of R, ddof 1) x sqrt(n) over every trade in the research window
+    (`metrics.expectancy`), gross for the screen and net for the reading rule; one-sided thresholds as written below.
+  - *DSR trial count:* the registry's `n_trials_effective` + 1 at run time (every recorded Q4 2026 and Q1 2027 trial
+    plus H-02's K_eff, per "Fixed for every trial").
+  - *Inconclusive branch:* if the screen fails ONLY on the event floor (gross mean R > 0 and t >= 2.0 on fewer events
+    than the floor), the verdict is `inconclusive (event floor)` (`research.screen`, recorded with status `screened`,
+    charged to the budget): no model, and it neither retires nor continues slow TSMOM. Any other screen failure is a
+    plain fail.
+- **What H-01 can and cannot decide.** At the expected 165-400 events no walk-forward fold reaches the design's model
+  gates (>= 1,500 candidates, >= 60 per complete test fold, DSR on >= 200 model-filtered trades), so the model gates
+  cannot apply: H-01 is evidence about the rule alone. It can **retire** slow TSMOM; it cannot **promote** it.
+  Promotion needs separate, pre-registered model research that meets the unchanged gates.
+- Run (Actions -> research -> Run workflow), exactly these inputs:
+
+  | input | value |
+  |---|---|
+  | specialist | `tsmom` |
+  | from_year | `2010` |
+  | to_year | `2026` |
+  | rationale | `H-01 slow TSMOM (preregistration-2027Q1.md, commit <freeze commit>)` |
+  | variants | `["slow"]` |
+  | score_holdout | false |
+  | skip_screen | false |
+  | pooled | (empty) |
+  | macro | false |
+
+  `["slow"]` expands to `[{"timeframe": "4h", "signal_tf": "1d", "atr_tf": "1d", "lb_fast_h": 480, "lb_mid_h": 1440,
+  "lb_slow_h": 2880, "vol_window_h": 1440, "min_score": 0.5, "target_atr": 3.0, "stop_atr": 1.5, "max_bars": 124}]`
+  (either spelling is the same configuration and agent id; a `schedule_h` added to it is ignored). One trial. The
+  floor ruled in A is set in `config/settings.yaml` (`research.screen_min_events_daily`) and committed before the run.
+- Event count on data-v1 (2026-10-10, counted without labels or any outcome; research window, holdout excluded):
+  2,631 daily signals (1,760 long, 871 short); one position at a time, if every trade ran to the 20-day time
+  barrier, 165 events. The true count lies between, below the ~450 estimated for the 10-day daily option, and
+  probably below the 400 floor first proposed in ruling A: **ruling A must be decided on this count**. The 2,631 was
+  counted before the Friday stub was dropped (about one daily bar in six fewer now); the 165 lower bound is set by
+  the time barrier and does not change. Recount (events only) at the freeze.
 - Reading rule: **continue** if the P4 screen passes (gross mean R > 0, t >= 2.0, on the event floor ruled in A) AND
-  net mean R > 0 with t >= 1.65 AND positive net years >= 3 incl. 2021 or 2022. **Stop slow trend in gold** if net
-  mean R <= 0 (the literature's best case then does not survive our costs).
+  net mean R > 0 with t >= 1.65 AND positive net years >= 3 incl. 2021 or 2022, on both sides together and on
+  long-only (swap bias above). **Stop slow trend in gold** if net mean R <= 0 (the literature's best case then does
+  not survive our costs), or if the screen fails on anything but the event floor. **Inconclusive** if the screen
+  fails only on the event floor: recorded and charged, cannot retire the hypothesis. A "continue" means only that
+  model research on slow TSMOM may be pre-registered; it is not a promotion.
 - Expected: gross +0.05..0.10 R; net depends on the short side because longs pay swap.
 
 ### H-06 Macro-conditioned slow TSMOM
@@ -80,10 +160,12 @@ promotion.
 - Reading rule: if net mean R <= 0, the 4h tsmom horizon is retired (H-01 supersedes it).
 
 ## Needs the owner (before freezing)
-- **A. Event floor for daily-signal families.** The P4 screen needs >= 1,000 events; slow TSMOM produces ~450 in
-  15.75 years (one position at a time). Options: keep 1,000 (H-01 cannot pass by construction), or a floor of 400
-  for families whose signal is daily, with the t >= 2.0 requirement unchanged. This changes a design gate, so it is
-  yours to decide.
+- **A. Event floor for daily-signal families (owner's decision; not yet decided).** The P4 screen needs >= 1,000
+  events; slow TSMOM produces 165-2,631 in 15.75 years (one position at a time; see H-01). **Recommendation (quant
+  review):** floor 150 rule-only events, gross t >= 2.0 unchanged, set in code before the run
+  (`research.screen_min_events_daily: 150`); H-01 can retire, not promote; < 150 = inconclusive. Until you decide,
+  the code keeps 1,000 for every rule (`screen_min_events_daily: null`), under which H-01 can at best be
+  inconclusive.
 - **B. Trial budget.** 13 planned + 7 reserve fits the default 20; raising it is yours to decide.
 - **C. Paid economic-calendar consensus feed** (H-11 needs surprises); otherwise H-11 stays blocked.
 - **D. Other instruments** (large-tick futures where trend still works) are out of scope unless you decide otherwise.

@@ -23,6 +23,8 @@ MAX_RESULT_CHARS = 20_000
 MAX_TRIALS_PER_RUN = 2
 MAX_OVERRIDE_CHANGE = 0.5          # a trial may move a numeric setting at most +-50% from its default
 HYPOTHESIS_STATUSES = ["tested_promising", "tested_rejected", "inconclusive"]
+ATTRIBUTION_SECTIONS = ["summary", "overall", "timeframe", "family", "agent", "session", "side", "regime", "decision",
+                        "exit", "costs", "calibration", "live", "trades"]
 STATE_NAME = re.compile(r"(?:supervisor|scheduler|population|agents|(?:costs|classifier|engine)_[A-Za-z0-9][A-Za-z0-9_-]*)")
 
 # (family, overrides, rationale) -> trial summary; injected so tests and the sandbox need no bars or models
@@ -126,6 +128,15 @@ class ReadOnlyTools:
                                    "deflated Sharpe, model-filtered trade counts, shadow t-stat, lookahead flags) and the "
                                    "allocation rule. Read-only; agents cannot change it.",
                                    _schema({}), self.read_research_plan),
+            "read_attribution": ("Daily performance attribution computed by code (state/attribution.json): expectancy in R "
+                                 "gross and net with count, t-stat, 95% interval, hit rate and profit factor by timeframe, "
+                                 "family, agent, session, side, volatility regime, decision and exit; cost per trade "
+                                 "(spread, slippage vs the cost table, commission, swap); calibration of p on taken and "
+                                 "untaken candidates; live fills vs the cost table. Cells marked 'noise' are below the "
+                                 "minimum trade count and are not evidence. section 'summary' is the markdown overview; "
+                                 "the others return that part of the JSON.",
+                                 _schema({"section": {"type": "string", "enum": ATTRIBUTION_SECTIONS}}, ["section"]),
+                                 self.read_attribution),
             "file_hypothesis": ("File a hypothesis for the research analyst to test. It changes nothing by itself.",
                                 _schema({"title": {"type": "string"}, "family": {"type": "string"},
                                          "rationale": {"type": "string", "description": "one paragraph: what, why, expected effect"},
@@ -264,6 +275,24 @@ class ReadOnlyTools:
             return {"missing": "research_plan", "note": "no plan yet (scheduler job research_director, Saturdays)"}
         plan: dict[str, Any] = json.loads(f.read_text())
         return plan
+
+    def read_attribution(self, section: str) -> dict[str, Any]:
+        from goldbot.research.attribution import SUMMARY_FILE, load_report
+        if section not in ATTRIBUTION_SECTIONS:
+            raise ValueError(f"section must be one of {ATTRIBUTION_SECTIONS}")
+        rep = load_report(self.state)
+        if rep is None:
+            return {"missing": "attribution", "note": "no report yet (scheduler job attribution, daily 23:50 UTC)"}
+        head = {"as_of": rep["as_of"], "min_trades": rep["min_trades"]}
+        if section == "summary":
+            md = self.state / SUMMARY_FILE
+            return {**head, "summary": md.read_text() if md.exists() else ""}
+        if section == "overall":
+            return {**head, "overall": rep["overall"], "challengers": rep["challengers"],
+                    "n_candidates": rep["n_candidates"], "n_taken": rep["n_taken"], "notes": rep["notes"]}
+        key = {"exit": "exits"}.get(section, section)
+        return {**head, section: rep["breakdowns"][section] if section in rep["breakdowns"] and section != "exit"
+                else rep[key]}
 
     def begin_run(self) -> None:
         """Called by the runner at the start of each agent run (per-run limits reset)."""

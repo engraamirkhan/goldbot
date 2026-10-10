@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -26,7 +26,10 @@ TF_SECONDS: dict[str, int] = {
 
 
 Timeframe = Literal["1m", "5m", "15m", "1h", "4h", "1d", "1w"]
-DecisionTimeframe = Literal["15m", "1h"]
+# Timeframes an agent may decide on live: each needs a walk-forward window (the Saturday retrain) and the engine must
+# hold enough 1m history for 120 of its bars. 1d is research-only: the engine keeps ~40 trading days of 1m bars
+# (EngineConfig.max_bars_in_memory), so a daily agent would never get a frame.
+DecisionTimeframe = Literal["15m", "1h", "4h"]
 
 
 class _Section(BaseModel):
@@ -135,6 +138,7 @@ class SchedulerSettings(_Section):
     # on Sunday while the market is closed
     backup: ScheduleSettings = ScheduleSettings(kind="daily", at="22:15", max_late_hours=20)
     restore_drill: ScheduleSettings = ScheduleSettings(kind="weekly", at="10:00", weekday=6, max_late_hours=30)
+    attribution: ScheduleSettings = ScheduleSettings(kind="daily", at="23:50", max_late_hours=20)
 
 
 class BackupSettings(_Section):
@@ -161,12 +165,25 @@ class GapSettings(_Section):
     regime_history_days: int = Field(3650, ge=365)        # history the volatility terciles are cut from
 
 
+class AttributionSettings(_Section):
+    """Daily performance attribution (goldbot/research/attribution.py, BACKLOG item 12). Reporting only: it changes
+    no trading, setting or model; the staff agents read it and file hypotheses through the bounded path."""
+    window_days: int = Field(180, ge=7, le=3650)          # closed shadow trades exited in this window
+    min_trades: int = Field(30, ge=2)                     # a cell with fewer trades is reported as noise
+    calibration_bins: int = Field(10, ge=2, le=50)        # equal-width bins of p
+    calibration_min_bin: int = Field(10, ge=1)            # a calibration bin with fewer candidates is noise
+    trade_rows: int = Field(300, ge=0, le=5000)           # most recent per-trade cost rows kept in the JSON
+
+
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
     trial_budget_quarter: int = Field(20, ge=1, le=500)   # pre-registered trials per calendar quarter, all families
     holdout_from: date | None = date(2025, 10, 1)          # research never sees this window unless scoring it
     holdout_to: date | None = date(2026, 9, 30)            # inclusive
+    # primary-signal screen event floor (research.screen, P4); changing it is an owner decision, set before the run
+    screen_min_events: int = Field(1000, ge=1)
+    screen_min_events_daily: int | None = Field(None, ge=1)   # rules whose signal is on daily bars; None: the floor above
     director_floor: int = Field(2, ge=0, le=200)        # research director: exploration trials per family per month
     label_grid_step: float = Field(0.25, gt=0, lt=1)
     cost_window_days: int = Field(30, ge=1)
@@ -278,6 +295,17 @@ class Settings(_Section):
     gates: GateSettings = Field(default_factory=GateSettings)
     gaps: GapSettings = Field(default_factory=GapSettings)
     backup: BackupSettings = Field(default_factory=BackupSettings)
+    attribution: AttributionSettings = Field(default_factory=AttributionSettings)
+
+    @model_validator(mode="after")
+    def _walkforward_has_purge_and_embargo(self) -> Settings:
+        """Every walk-forward timeframe the retrain trains on has its purge and embargo (design: purged, embargoed
+        walk-forward), so a window added without them fails at load."""
+        for key in ("purge_days", "embargo_days"):
+            missing = sorted(set(self.walkforward) - set(getattr(self.labels, key)))
+            if missing:
+                raise ValueError(f"labels.{key} has no value for walk-forward timeframe(s) {', '.join(missing)}")
+        return self
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
