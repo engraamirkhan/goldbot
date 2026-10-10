@@ -41,9 +41,9 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 17 | Holiday, daily-reopen and Monday-open entry rules (G-2) | Operational risk · RUN | S–M | proposed (owner: windows) |
 | 18 | Tier-2 event blackout and proximity feature (G-3) | Market and macro preparation · RUN | S | proposed (owner: adopt) |
 | 19 | Open-risk (heat) cap and same-direction stacking (G-4) | Capital and drawdown management · RUN | S | proposed (owner: value) |
-| 20 | Drawdown / risk-of-ruin Monte Carlo report (G-5) | Capital and drawdown management · RUN | S | proposed |
+| 20 | Drawdown / risk-of-ruin Monte Carlo report (G-5) | Capital and drawdown management · RUN | S | tool built (results need data) |
 | 21 | Per-agent loss-streak and entry-rate throttle (G-6) | Discipline (system analogue) · RUN | S | proposed (owner: thresholds) |
-| 22 | Min-lot sizing-feasibility report (G-7) | Position sizing · RUN | S | proposed (account size answered: £1,000 GBP) |
+| 22 | Min-lot sizing-feasibility report (G-7) | Position sizing · RUN | S | tool built (results need data; account size answered: £1,000 GBP) |
 | 23 | MAE/MFE in closed-trade and shadow records (G-9) | Post-trade review · FIND | S | proposed |
 | 24 | DST-aware sessions and deterministic calendars (D-1, D-2) | Idea generation (honesty) · FIND | M | proposed |
 | 26 | Milestone ladder and monthly north-star / % / R report (ADR 0004) | Performance review, capital growth · RUN | S–M | ready |
