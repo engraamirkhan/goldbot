@@ -678,6 +678,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   from the training and shadow bars. The allocator keeps its design window, 0 for 30 min either side of tier-1
   events (`RuleAllocator()` defaults), deliberately stricter than the RiskGate's -15/+30 entry block; the gate window
   from settings never narrows it (an allocator rule change is the owner's decision).
+- Owner's manual trading record (2026-10-10, research seeds): `python -m goldbot.ops.run owner-history [PATH]`
+  (`goldbot/research/owner_history.py`) reads the owner's MT5 History report (HTML, XLSX or a deals CSV; stdlib
+  parsers, no new dependency) from `~/Personal project/trade-history/` (newest file) and writes a Markdown report, a
+  JSON summary and a per-trade CSV (mode 0600) to that same private folder; writing inside the repo is refused. The
+  header's account number, name, company and server are never kept (only the currency); tickets become a sequence
+  number. XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`, default Europe/Athens), risk from the stop
+  x lots x 100 oz x the USD rate implied by the trades themselves (no stop: average-loss-per-lot proxy, flagged and
+  kept out of R stats), R, win rate, expectancy with t, profit factor, daily P&L (UTC close day) with the share of
+  days >= `--targets` (default 30,50), sessions (DEFAULT_SESSIONS), hour, weekday, side, holding time, tier-1 news
+  (if the store has `calendar_events`), leverage vs equity, losing streak, drawdown, and a bootstrap risk of ruin for
+  both readings of the owner's sizing (compounding, fixed stakes; there is no `research.ruin` module). Ends with
+  "hypothesis seeds" OH-01..06 in hypotheses.md format, labelled in-sample, not evidence: the research director
+  pre-registers any of them. The MT5 layout was written from the documented report structure, not checked against a
+  real file (none may enter the repo): if the owner's export parses to 0 trades, the column map in `_ALIASES` /
+  `POSITION_COLS` is the place to look. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
 - Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;

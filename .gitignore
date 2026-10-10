@@ -34,3 +34,9 @@ logs/
 .secrets.json
 /config/settings.local.yaml
 /.claude/worktrees/
+
+# the owner's MT5 trade history and its analysis contain personal account data: never in this public repo
+trade-history/
+*.mt5report.*
+ReportHistory-*
+owner_history_*

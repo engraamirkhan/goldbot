@@ -17,6 +17,7 @@
   python -m goldbot.ops.run restore-drill                # the weekly restore drill, now
   python -m goldbot.ops.run setup [--account ID]         # guided setup of secrets and server settings (re-runnable)
   python -m goldbot.ops.run preflight [--account ID]     # read-only checklist before starting services (exit 1 on a blocker)
+  python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds
 """
 from __future__ import annotations
 
@@ -463,6 +464,9 @@ if __name__ == "__main__":
     elif cmd == "preflight":
         from goldbot.ops.preflight import main as preflight_main
         sys.exit(preflight_main(sys.argv[2:]))
+    elif cmd == "owner-history":
+        from goldbot.research.owner_history import main as owner_history_main
+        sys.exit(owner_history_main(sys.argv[2:]))
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))
