@@ -443,6 +443,33 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   an empty DB it imports users.json and audit.jsonl once and never writes them again (backup). Failed-login
   counters stay in memory. Not done: `run.py migrate`/`import-state` wiring, `state_db` health check (step 0
   leftovers, files owned elsewhere); the API migrates aux.db on open until then. Steps 2-8 not started.
+- State store step 3 (2026-10-10): staff-agent runs and monthly spend, scheduler job state and the Telegram outbox are
+  in aux.db (`goldbot/db/bookkeeping.py`, migration 5). Each old file is imported once on first open (or by
+  `python -m goldbot.db import-state`) into an empty table. scheduler.json and agent_spend.json stay as exports
+  regenerated after each write (dashboard, health, read_state tool and vps_update.ps1 still read them; originals in
+  `state/pre-db/`); agent_runs.jsonl stays an append-only mirror (dashboard; API owner notices are still relayed from
+  it); telegram_outbox.json is never written again. `SpendLedger.reserve` books the per-run budget under BEGIN
+  IMMEDIATE before the first API call and `settle` books the real cost, so concurrent runs never pass the cap (the
+  old ledger cached the file and the news and agents processes overwrote each other). Not done: news_spend.json
+  (`data/news_collector.py` was out of scope), switching api/app.py to query aux.db.
+  Trading-safety review fixes (same day): exports run after the commit and never raise (a locked file on Windows no
+  longer undoes a spend booking or stops a scheduler job); concurrent exporters converge through `exports.seq`.
+  Rollback safety: telegram_outbox.json is rewritten in its old format for one release; a file another release
+  wrote (hash differs from this code's last export) is merged back once (spend: larger per month; scheduler: newer
+  slot; outbox: its sent list and offset; runs appended only to the file are adopted) and counted in
+  `state_fallback`. Migrations can be `additive`: `schema_version.compat_back_to` lets older code open a newer
+  aux.db; the release before step 3 needs the one-time downgrade in RUNBOOK (updating the VPS). Health and
+  vps_update.ps1 read the scheduler status from aux.db (`python -m goldbot.db scheduler-status`), the file only as
+  fallback. Telegram: aux.db is opened inside the pump (a broken file no longer stops the bot), a proposal whose
+  mark_sent fails is not re-sent (`SendGuard`, retry with backoff), and reports are acknowledged only after delivery
+  (at least once). A run that dies mid-loop keeps its reservation; a failed settle is logged and the run still logged.
+  Re-verification: the heartbeat is read with a plain read-only connection (an `immutable` read tore under a
+  writer); export hashes are recorded before the write and the last 16 kept (`exports.hashes`), so our own file is
+  never taken as foreign; a file missing at the first open is recorded as imported (empty), so a later file is only
+  merged; the outbox merge is a union (DB proposals still pending kept) with the further report cursor; a report
+  batch failing for one recipient is acknowledged after 3 passes (`ReportRetry`); vps_update.ps1 steps aux.db back
+  from schema 5 to 4 by itself when installing a commit without `compat_back_to` (`Sync-AuxSchema`, refuses any
+  other version) and stops the scheduler first, re-checking for a running job before stopping the rest.
 - Dashboard accounts (2026-10-10, owner request): the owner is the sole admin. `auth.owner_email` (Settings
   `AuthSettings`, default None; set only in the server's `config/settings.local.yaml`, never in the public repo)
   is required for bootstrap and is the only address that can hold the owner role. Invites and `set_role` grant
@@ -678,18 +705,90 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   from the training and shadow bars. The allocator keeps its design window, 0 for 30 min either side of tier-1
   events (`RuleAllocator()` defaults), deliberately stricter than the RiskGate's -15/+30 entry block; the gate window
   from settings never narrows it (an allocator rule change is the owner's decision).
+- Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
+  `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
+  minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both
+  channels; see the re-review bullet below for the counter key and atomicity). `mode_by` on the
+  auto-mode card is the full `dashboard:<email>`/`telegram:<uid>` only for the verified owner; other roles see the
+  channel. Health, Research and auto-mode error text shows the exception type only (detail logged server-side).
+  Every `/api/` response carries `Cache-Control: no-store`. The unused `lightweight-charts` dependency is removed
+  (new price charts will need it added back).
+- Dashboard security re-review (2026-10-10, TRACEABILITY U13, U15, U17, U18): no reset link can be made or used for
+  the owner account (a stolen owner session could otherwise reset password and authenticator); the owner recovers
+  with a recovery code. Lockout check-and-count is one BEGIN IMMEDIATE transaction (`_reserve`, login and codes),
+  so a 32-thread burst gets at most 5 checks. Code failures count under `code:<email>`: they lock re-arm and auto
+  mode but never sign-in; failed sign-ins lock both (fails safe). The notice fires on crossing the limit, at most once
+  an hour, and names the new server command `python -m goldbot.ops.run revoke-sessions` (signs every account out).
+  The lockout never gates `/api/halt`, Telegram /halt or /mode propose (tested). Health check reasons, drift errors,
+  system-halt reasons and `/api/jobs` errors are whole for the owner and redacted for other roles (type only, paths
+  as `<path>`, in the API layer); `account_security` rows in `/api/agent-runs` are owner-only. RUNBOOK updated.
+  Follow-up: forgot-password, recovery login, password change and recovery-code regeneration also reserve before
+  checking (32-thread bursts get at most 5 checks; a refused new password with the right credentials is not
+  counted). `revoke-sessions` refuses a state directory without aux.db (exit 2, absolute path printed) instead of
+  creating an empty one. Redaction removes quoted paths whole (spaces, Windows) and UNC `\\host\share` paths.
+- Owner's manual trading record (2026-10-10, research seeds; security + quant review fixes the same day):
+  `python -m goldbot.ops.run owner-history [PATH]` (`goldbot/research/owner_history.py`) reads the owner's MT5 History
+  report (HTML, XLSX or a deals CSV; stdlib parsers, no new dependency; inputs and xlsx members over 50 MB refused)
+  from `~/Personal project/trade-history/` (newest file) and writes a Markdown report, a JSON summary (finite numbers
+  only, `allow_nan=False`) and a per-trade CSV (mode 0600) to that same private folder. Writing into ANY git work tree
+  is refused (`git_tree_reason`: a `.git` dir or file in the path, this checkout under any case spelling, or
+  `git rev-parse` succeeding). The header's account number, name, company and server are never kept (only the
+  currency); tickets are used only to match a position to its opening order. A pre-commit hook
+  (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` + digits, also in
+  UTF-16 and inside .xlsx). XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`, default Europe/Athens).
+  1R comes from the opening order's INITIAL stop (Orders section), else the report's S/L, which is the FINAL stop;
+  a stop at or beyond the entry is `sl_moved` and, like the no-stop proxy, kept out of the R statistics. The USD rate
+  is always implied from the trades (a "USD" account implying != 1 is flagged). Reported: R, win rate, expectancy
+  with t, profit factor, return on equity with t, daily P&L by UTC and London day with t and 95% CI and the share of
+  days >= `--targets` (default 30,50), sessions, hour, weekday, side, holding time, tier-1 news (if the store has
+  `calendar_events`), entries near session opens on each date's local clock against a base rate from the owner's
+  active hours, leverage vs equity, losing streak, drawdown from trading only (deposits/withdrawals excluded; % on a
+  flow-adjusted index), and risk of ruin with `goldbot.research.ruin`'s circular block bootstrap for both sizing
+  readings (compounding, fixed stakes) plus a zero-edge (demeaned) stress row; end equity is reported as a capped
+  log10. Ends with hypothesis seeds OH-01..06 in hypotheses.md format, labelled in-sample, not evidence, each phrased
+  as "test whether entries in X differ from the owner's other entries", stating K = slices examined and whether its
+  t clears the Bonferroni bar (slices under 10 trades are never said to clear it). Seeds quote R, % and counts only:
+  do not paste amounts into the repo. The MT5 layout was written from the documented report structure, not checked
+  against a real file (none may enter the repo): if the owner's export parses to 0 trades, look at `_ALIASES` /
+  `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
-- Starting account and daily target (2026-10-10, owner delegated; `docs/decisions/0004-starting-account-and-daily-target.md`):
-  at £50 (~$66.50 at GBPUSD 1.33) RiskGate refuses every trade on every timeframe (0.01 lot risks 16.4% on 15m up to
-  354% on 1w at gold $4,150 and estimated ATRs; the 1:20 margin floor alone needs ~£470). £50/day is +100%/day;
-  realistic only at ~£19k–38k equity (0.5% risk, 0.1–0.2 R, 15m + 1h). Decided: demo continues at a demo balance
-  equal to the first milestone; minimum-lot exception rule for RiskGate at ≤ 1% realised risk (BACKLOG 25, needs
-  trading-safety review, ships inert with `min_lot_risk_cap: null`); milestones ~£825 (15m), £1,650 (1h), £3,270
-  (4h), £7,900 (1d, also needs 1d as a decision TF); H-01 stays in shadow until the 1d milestone; progress reported
-  as monthly % and R (BACKLOG 26), never £/day; broker terms to be measured (BACKLOG 27). Ruin and feasibility
-  numbers came from the G-5/G-7 tools on unmerged commit 08e654a (run from an extract; re-run from main after merge;
-  its post-8% sizing caveat makes the halt probabilities upper bounds). Owner: deposit plan and demo balance.
+- Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;
+  `docs/decisions/0004-starting-account-and-daily-target.md`): the IC Markets demo is **£1,000 GBP**, read from MT5
+  `account_info` (never config); **£50 is the owner's absolute daily loss limit**; **£50+/day is the north star**
+  (variable by day, not a quota; realistic as a monthly average at ~£21k–£53k). Read-only audit: equity, caps and
+  stages use broker equity correctly, but **RiskGate treats USD amounts as GBP (HIGH)** (`goldbot/risk/gate.py:249-268`):
+  trades are sized at ~0.75× intended, realised risk reads 1.33× too high (15m min lot 1.09% vs true 0.82%, so it is
+  refused even with the min-lot exception), closed-trade R is understated 1.33× (`goldbot/engine/runner.py:1591-1602`),
+  `Intent` takes no contract terms from `symbol_info` (`runner.py:576-577`), and the supervisor sums mixed-currency
+  equities. Top priority: BACKLOG 28 (currency-correct sizing), then 25 (min-lot exception), then 29
+  (`risk.daily_loss_limit_abs: 50`, projected, entries only); all need trading-safety review. At £1,000 only 15m
+  trades (0.01 lot, 0.82%, Raw account), one position at a time (notional cap), at most two full losses a day
+  (1.5% supervisor cap, worst day ~£17), and the 8% stage is in effect a stop. Ladder: 1h ~£1,650, 4h ~£3,270,
+  1d ~£7,900. North-star KPIs (monthly £/day average, best days, opportunity days captured, max drawdown) are in
+  BACKLOG 26; opportunity-day detection (30) and runner exits (31) are hypotheses for the trial registry (no trials
+  spent). Owner: optional deposit plan; confirm the demo is Raw Spread.
+- Risk analytics for playbook G-5 and G-7 (2026-10-10, BACKLOG 20 and 22; tools built, results need data):
+  `python -m goldbot.ops.run ruin --trades-per-week N (--shadow state [--version V | --agent A | --pool-versions] |
+  --closed-trades state | --r-file trades.csv | --win-rate W --avg-win A --avg-loss L) [--tiny-live] [--multiplier M]
+  [--r-haircut H | --demean] [--out F]` is a seeded circular-block-bootstrap Monte Carlo (`goldbot/research/ruin.py`)
+  at the live limits (built from gate.RiskLimits/SupervisorLimits.from_settings), sized with the gate's arithmetic
+  (8% stage = a quarter of the risk at m = 1) and enforcing the caps and stages as RiskGate does: P(each limit trips)
+  within 26/52 weeks, median time to the first trip, max drawdown median/95th/99th (also at twice the block length)
+  and risk of ruin. The report names the shadow version (one version only, default the agent's champion; pooling
+  only with `--pool-versions`) and the cost basis (shadow = spread only, optimistic; closed trades = net; file =
+  unknown), and warns when `--trades-per-week` is more than 25% off the observed rate.
+  `python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--size-down]` (`goldbot/research/min_lot.py`)
+  gives, per family, decision timeframe and registered preset (tsmom `slow` = H-01: 4h decisions, daily ATR), the
+  equity at which 0.01 lot fits the risk (strict and the gate's 1.2x) and the real risk at a given equity, on the mid
+  of the store's bars; `--price P --stop-distance D` without data. Neither has been run on real bars or trades yet
+  (the Mac VM has no store data); run both on the VPS/brain and attach to phase-gate evidence and the H-01
+  account-size decision.
+- **Follow-up once the gate lanes merge:** `goldbot/risk/sizing.py` holds RiskGate's sizing arithmetic and stage
+  machine as pure functions (`effective_risk`, `size_lots`, `stop_distance`, `next_stage`, `MIN_LOT_TOLERANCE`), used
+  by the two reports above; `goldbot/risk/gate.py` still has its own copy (it was being edited by other lanes) and
+  should call `sizing.py`. Until then `tests/test_sizing_parity.py` runs `RiskGate.check`/`update_stage` against it
+  across stages, multipliers and the min-lot boundary, so the copies cannot drift silently.
 - XAUUSD trader playbook (2026-10-10, owner request): `docs/research/xauusd-trader-playbook.md` lists ~70 things a
   professional gold trader considers (drivers, CFD microstructure, technicals, risk management, process), each with
   sources, evidence grade and goldbot status, then a ranked gap list (risk gaps G-1..G-10 first: swap in live EV,

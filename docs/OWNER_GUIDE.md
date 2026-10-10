@@ -60,6 +60,23 @@ Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decisio
 | Paid calendar feed (C) | Not for Q1 |
 | Other instruments (D) | Defer until the slow-TSMOM verdict |
 
+## 4a. Share your own trading record (private)
+The research team turns how you trade by hand into hypotheses it can test. Your MT5 report holds your account
+number and name, so it **never goes into the repo or GitHub**: it stays in a private folder on your Mac.
+
+1. In the MT5 desktop terminal open the **History** tab (Toolbox, `Ctrl+T`), right-click and pick the period
+   (**All History** or the last 3-6 months).
+2. Right-click again -> **Report** -> **HTML** (or **Open XML (MS Office Excel 2007)** for `.xlsx`).
+3. Save it in `~/Personal project/trade-history/` (create the folder; it is outside the repo).
+4. Run `python -m goldbot.ops.run owner-history` from the repo (add `--server-tz <zone>` if your broker is not on
+   Athens time, `--start-balance 50` if the report has no deposit row). It reads the newest report in that folder and
+   writes `owner_history_*.md`, `.json` and `.trades.csv` next to it; the console prints a short summary.
+
+Only the account currency is read from the report header. The "hypothesis seeds" at the end are patterns in your own
+past trades, not proof of an edge: the research director pre-registers any that are worth a trial. The tool refuses to
+write into any git folder, and a commit check rejects a report file. **Do not paste amounts into the repo** (or
+GitHub issues): share the seeds, which use R, percentages and counts only.
+
 ## 5. What is honest to expect
 **No strategy is profitable yet.** Dates are earliest-possible.
 
@@ -71,7 +88,7 @@ Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decisio
 | First real money, tiny size | earliest 2027-10, realistically **2028**, only if gates pass |
 | Full size | earliest 2028-10 |
 
-**Starting account ([ADR 0004](decisions/0004-starting-account-and-daily-target.md)):** £50 cannot place a trade under the safety rules (the smallest gold trade risks 16%+ of it), so it waits while the demo runs; real trades start only after the paper gate, at about £825 (15m), £1,650 (1h), £3,300 (4h), £7,900 (daily), and £50/day is a realistic average only around £19k–38k. Progress is reported as monthly % and R, not £/day.
+**Account, loss limit and goal ([ADR 0004](decisions/0004-starting-account-and-daily-target.md)):** your IC Markets demo is £1,000 GBP, and goldbot reads the balance from the broker. You never lose more than £50 in a day. The tighter design caps apply first (about £15–£20 at £1,000: two losing trades stop new entries for the day), and exits are never blocked. The goal is £50 or more on good days and less on poor ones. As a monthly *average* it is realistic at about £21k–£53k. At £1,000 only 15-minute strategies can trade, at the smallest size (about £8 of risk). That needs two fixes first: a currency bug in sizing and the small-account rule. 1h opens at about £1,650, 4h at £3,300 and daily at £7,900. Progress is reported monthly: average £/day, % return, best days and drawdown.
 
 ## 6. Never do
 - Paste passwords, tokens, MT5 logins, IPs or recovery codes into chat, GitHub or a repo file. **The repo is public.**

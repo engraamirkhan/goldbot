@@ -23,3 +23,9 @@ repos:
       - id: ruff-check
         args: [--fix, --exit-non-zero-on-fix]
         files: ^(goldbot|tests|scripts)/
+  - repo: local
+    hooks:
+      - id: no-mt5-report             # the owner's MT5 history holds account data; this repo is public
+        name: no MT5 trade-history reports
+        entry: python scripts/check_no_mt5_report.py
+        language: python

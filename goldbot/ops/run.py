@@ -17,6 +17,12 @@
   python -m goldbot.ops.run restore-drill                # the weekly restore drill, now
   python -m goldbot.ops.run setup [--account ID]         # guided setup of secrets and server settings (re-runnable)
   python -m goldbot.ops.run preflight [--account ID]     # read-only checklist before starting services (exit 1 on a blocker)
+  python -m goldbot.ops.run ruin --trades-per-week N (--closed-trades state | --shadow state | --r-file F | --win-rate ..)
+                                                         # drawdown / risk-of-ruin Monte Carlo at the live limits (G-5)
+  python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]
+                                                         # minimum equity for the minimum lot per family (G-7)
+  python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)
+  python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds
 """
 from __future__ import annotations
 
@@ -463,9 +469,21 @@ if __name__ == "__main__":
     elif cmd == "preflight":
         from goldbot.ops.preflight import main as preflight_main
         sys.exit(preflight_main(sys.argv[2:]))
+    elif cmd == "revoke-sessions":
+        from goldbot.api.auth import revoke_sessions_cli
+        sys.exit(revoke_sessions_cli(sys.argv[2:]))
+    elif cmd == "owner-history":
+        from goldbot.research.owner_history import main as owner_history_main
+        sys.exit(owner_history_main(sys.argv[2:]))
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))
+    elif cmd == "ruin":
+        from goldbot.research.ruin import main as ruin_main
+        sys.exit(ruin_main(sys.argv[2:]))
+    elif cmd == "sizing-feasibility":
+        from goldbot.research.min_lot import main as feasibility_main
+        sys.exit(feasibility_main(sys.argv[2:]))
     else:
         print(__doc__)
         sys.exit(1)
