@@ -295,3 +295,29 @@ def test_macro_release_adds_point_in_time_features_and_a_missing_one_degrades_cl
     second = _rows(registry)[1]
     assert second["results"]["macro"]["used"] is False
     assert second["feature_version"] != row["feature_version"]          # the macro columns are part of the version
+
+
+def test_discover_is_one_preregistered_trial_and_later_trials_count_the_groups_screened(release_dir, tmp_path, monkeypatch):
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "session_open", "--discover",
+                                      "--families", "--discover-config", '{"n_subsamples": 4, "top_k": 5}'])
+    assert rp.main() == 0
+    rows = _rows(registry)
+    assert [r["status"] for r in rows] == ["preregistered", "discovery"]       # written before the result
+    pre, res = rows
+    assert pre["trial"] == res["trial"] == 1 and pre["config_hash"] == res["config_hash"]
+    assert pre["reading_rule"].startswith("continue if") and pre["results"] == {}
+    assert res["preregistration"]["ts"] == pre["ts"] and res["family"] == "discovery_session_open"
+    d = res["results"]["discovery"]
+    assert d["group_mode"] == "family" and 0 < d["n_groups_screened"] < d["n_features_screened"]
+    assert len(d["selected"]) <= 39 and len(d["folds"]) == res["results"]["n_folds"] >= 1
+    assert "gates" in res["results"] and d["reading_verdict"]["decision"] in ("continue", "inconclusive", "stop")
+    text = report.read_text()
+    assert "## Feature discovery on session_open" in text and "### Stability by group" in text
+    assert "### Reading rule (pre-registered)" in text and "### Design gates:" in text
+
+    from goldbot.research.registry import TrialRegistry, quarter_of
+    reg = TrialRegistry(registry)
+    assert reg.n_trials == 1 and reg.budget_used(quarter_of()) == 1           # one trial, one budget slot
+    assert reg.n_trials_effective == 1 + d["n_groups_screened"]

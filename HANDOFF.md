@@ -125,7 +125,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Rule: a clone (new config hash) needs its OWN passed research trial before shadow -> live; nothing is inherited
   from its parent (the design counts real trials). Held-back agents show as `awaiting_research` in the tournament
   job's output.
-  Deferred (L4): a `preregistered` status written before a trial runs, an `eval_version` field on registry rows,
+  Deferred (L4): ~~a `preregistered` status written before a trial runs~~ (done 2026-10-10, discovery), an `eval_version` field on registry rows,
   bootstrap confidence intervals on expectancy, and a seeded no-signal test (100 seeds, DSR < 0.5 in >= 95).
 - Primary-signal screen and new families (proposal P4, 2026-10-09): `research/screen.py` measures the rule alone
   (every candidate, one position at a time, mid prices) over the research window (holdout excluded) and passes it
@@ -284,6 +284,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   p < 0.5 are closed. Consequences: labels of trend/breakout/session-open changed, so their earlier research
   verdicts were on plain barriers and any model of theirs must be retrained before it trades; the entry threshold
   and sizing still assume the binary target/stop payoff.
+- Feature discovery (2026-10-10, survey 4b, TRACEABILITY M37/M38; hypothesis H-02 tooling ready, not run):
+  `research/discovery.py` + `research_pass.py --discover [--families [feature|family]] [--discover-config JSON]`
+  screens every eligible column (may exceed 40) on one specialist's candidates as ONE trial. Inside each purged
+  walk-forward fold, on its training rows only: stability selection (50 weekly-block half-samples, shallow LightGBM
+  gain or L1-logistic, top-k frequency), optional permutation confirmation on an inner purged time split; each fold's
+  model uses its own selection (<= 39 + `side`), then the usual cross-fitted calibration, thresholds and gates
+  (`_walk_forward(fold_cols=...)`). Report: group and feature frequency per fold, stability (share of folds at
+  frequency >= 0.6), survivors (stability >= 0.7, capped at 39), the gates and the pre-registered reading rule
+  (continue: AUC >= 0.53, bootstrap lower bound > 0.50, >= 1,000 scored, net mean R of model-filtered trades > 0;
+  stop: AUC < 0.52). Registry: a `preregistered` row (config, reading rule, plan) is written before the run (closes
+  L4's first item); it is not a trial (`registry.is_trial`: no budget slot, no DSR count; the release merge numbers
+  trials only). The result row has status `discovery`, family `discovery_<specialist>` (never promotable, not director
+  evidence) and `n_groups_screened`. `registry.n_trials_effective` = trials + every discovery's groups screened;
+  research_pass now uses it for every trial's deflated Sharpe (equal to the old count while no discovery exists).
+  Deviations from 4b: the label is the specialist's (no primary-free 4h label yet), groups are registry
+  features/families instead of |Spearman| > 0.7 medoid clusters, and the trade rule is the existing break-even +
+  margin threshold, not the top-tercile cut.
 
 ## Next steps (no owner input needed unless marked)
 - Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write

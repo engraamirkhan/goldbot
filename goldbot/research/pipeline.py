@@ -273,15 +273,19 @@ def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: 
 def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feats: pd.DataFrame, cols: list[str],
                   folds: list[Fold], version: str, *, n_trials: int, trades_per_year: float | None,
                   extra_cost_usd: float, holdout: Window | None, score_holdout: bool,
-                  window: dict[str, Any], swap: SwapSpec | None = None) -> ResearchResult:
+                  window: dict[str, Any], swap: SwapSpec | None = None,
+                  fold_cols: dict[int, list[str]] | None = None) -> ResearchResult:
     """Shared by the per-family and the pooled walk-forward: fit per fold, cross-fitted calibration, per-candidate
     threshold from its own barriers, metrics, rule-only expectancy and the design's gates (or the holdout rule).
-    `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it."""
+    `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it.
+    fold_cols: per fold number, the inputs selected from that fold's training rows only (feature discovery);
+    folds not in it use `cols`."""
     y = labels["target_hit"].astype(int)
     oof_pred = np.full(len(labels), np.nan)
     last_model = None
     for f in folds:
-        mdl = MetaLabelModel(feature_names=cols, feature_version=version).fit(
+        fc = (fold_cols or {}).get(f.k, cols)
+        mdl = MetaLabelModel(feature_names=fc, feature_version=version).fit(
             feats.iloc[f.train_idx], y.iloc[f.train_idx], labels["weight"].iloc[f.train_idx])
         oof_pred[f.test_idx] = mdl.predict_raw(feats.iloc[f.test_idx])
         last_model = mdl

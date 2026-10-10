@@ -16,6 +16,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from goldbot.research.registry import is_trial
+
 REPO = "engraamirkhan/goldbot"
 TAG = "research-v1"
 ASSET = "registry.jsonl"
@@ -37,7 +39,14 @@ def merge_rows(*sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for r in rows:
             seen.setdefault(_key(r), r)
     merged = sorted(seen.values(), key=lambda r: (str(r.get("ts")), str(r.get("agent_id"))))
-    return [{**r, "trial": i + 1} for i, r in enumerate(merged)]
+    out, n = [], 0
+    for r in merged:              # a pre-registration is not a trial: it carries the number its result row will take
+        if is_trial(r):
+            n += 1
+            out.append({**r, "trial": n})
+        else:
+            out.append({**r, "trial": n + 1})
+    return out
 
 
 def write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -50,7 +59,7 @@ def write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
 def merge_files(out: Path, *inputs: Path) -> int:
     rows = merge_rows(*(read_rows(p) for p in inputs))
     write_rows(out, rows)
-    return len(rows)
+    return sum(1 for r in rows if is_trial(r))
 
 
 # ------------------------------------------------------------------ release copy (VPS side)
@@ -101,7 +110,7 @@ def sync(local: Path, token: str, repo: str = REPO) -> int:
     rows = merge_rows(read_rows(local), pull_release(token, repo))
     write_rows(local, rows)
     push_release(token, rows, repo)
-    return len(rows)
+    return sum(1 for r in rows if is_trial(r))
 
 
 def main() -> None:
