@@ -17,6 +17,9 @@ accounts:
     symbol: XAUUSD
     magic_base: 260100
     enabled: true
+    # ADR 0004: the owner's absolute daily loss limit, in this account's deposit currency (GBP: £50). Entries only;
+    # exits are never gated. Per account, never global: one number read in two currencies is not one limit.
+    daily_loss_limit_abs: 50
   vantage-demo:
     broker: vantage
     mode: demo
@@ -26,7 +29,9 @@ accounts:
     server_tz: Europe/Athens
     symbol: XAUUSD  # may be XAUUSD+ ; the adapter resolves from symbol_info
     magic_base: 260200
-    enabled: true
+    # owner trades the ICM demo; re-enable once its currency is confirmed — a USD account next to GBP halts entries
+    # by design (the supervisor never sums equities in different currencies: mixed_account_currencies)
+    enabled: false
   icm-live:
     broker: icm
     mode: live

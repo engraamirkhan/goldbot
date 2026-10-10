@@ -21,7 +21,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | --- | --- | --- | --- | --- |
 | 28 | Currency-correct sizing, margin and R on a non-USD account (ADR 0004, audit A3–A8) | Position sizing, safety · RUN | S–M | **in review** (built 2026-10-10; trading-safety review; approval-card currency label open for ui-ux) |
 | 25 | Minimum-lot exception in RiskGate (ADR 0004) | Position sizing · RUN | S | **in review** (built 2026-10-10, off by default; trading-safety review; owner enables on the demo server) |
-| 29 | Absolute daily loss limit `risk.daily_loss_limit_abs` (ADR 0004) | Capital and drawdown management · RUN | S | **in review** (built 2026-10-10, 50 in settings; trading-safety review; approval-card allowance open for ui-ux) |
+| 29 | Absolute daily loss limit `daily_loss_limit_abs` per account (ADR 0004) | Capital and drawdown management · RUN | S | **in review** (built 2026-10-10, 50 in settings; trading-safety review; approval-card allowance open for ui-ux) |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | ready |
 | 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | done (PR #62) |
 | 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | done (PR #60) |
@@ -52,6 +52,8 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 31 | Runner exits: let winners run on opportunity days (ADR 0004 north star) | Trade management, exit · FIND | S–M | proposed (after 6; hypothesis via the trial registry) |
 | 32 | Gate EV for exit-policy trades uses the measured mean winner (G-12) | Capital management · RUN | S | proposed (trading-safety review) |
 | 33 | Opportunity-day evaluation for research trials (£/day distribution, days captured) | Performance review · FIND | S–M | proposed (after 20, 26) |
+| 34 | Open positions' remaining stop risk in the daily £ projection (review MEDIUM-4) | Capital and drawdown management · RUN | S | proposed (after 29; trading-safety review) |
+| 35 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | proposed (after 29; trading-safety review) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -343,7 +345,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
 - **29. Absolute daily loss limit (trading-safety review).** Value: makes the owner's £50 outer limit a hard rail
   as the account grows; the 2% / 1.5% caps stay and bind first below £2,500 / ~£3,333 (Capital management · RUN).
   Acceptance:
-  - New `risk.daily_loss_limit_abs` (account currency; validated > 0 or null; `50` in settings.yaml). Null keeps
+  - New `daily_loss_limit_abs` (account currency; validated > 0 or null; per account in accounts.yaml after review, `50` on icm-demo). Null keeps
     every gate decision identical to today (grid test).
   - Projected check, entries only: refuse `daily_loss_limit_abs` when (day-start equity − equity) + this trade's
     full stop risk in account currency (from 28) > the limit. Tests: £5,000 equity, £40 lost, a £15-risk entry is
@@ -363,8 +365,10 @@ hypotheses that go through the trial registry in a future quarter's budget.
     - Exits untouched.
     - Owner: adopt or not. At £1,000 it means at most one full loss a day; the alternative is a worst day of ~£17.
   Depends on: 28.
-  Status (2026-10-10): built (TRACEABILITY R34; tests/test_daily_loss_abs.py), 50 in settings.yaml; engine state and
-  health show the limit and what is left. Open: the approval card's remaining allowance (ui-ux).
+  Status (2026-10-10): built (TRACEABILITY R34; tests/test_daily_loss_abs.py). After the trading-safety review it is
+  per account, `daily_loss_limit_abs: 50` on icm-demo in config/accounts.yaml (its currency, GBP), not a global
+  setting; the paper broker standing in for an account drops it. Engine state (`limits.daily_loss_limit_abs`) and
+  health show the limit and what is left. Open: the approval card's remaining allowance (ui-ux); 34 and 35.
 - **30. Opportunity-day detection (hypothesis; quant review).** Value: the north star depends on trading more on
   days the market offers moves and standing aside otherwise (FIND). Acceptance:
   - The strategy-researcher registers a pre-registered hypothesis in `docs/research/hypotheses.md` and the trial
@@ -448,6 +452,17 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - It reuses item 30's descriptive base-rate report; it does not recompute it.
   - Golden test on a fixture. Not in the Telegram digest. The header says "diagnostic, not a target".
   - Depends on: 20, 26.
+- **34. Open positions' remaining stop risk in the daily projection (trading-safety review MEDIUM-4).** Value: the
+  absolute daily limit (29) projects the loss so far (equity, so open P&L included) plus the NEW trade's stop risk,
+  but not what the positions already open could still lose down to their stops, so two open trades can each pass
+  and together carry the day past £50 (Capital management · RUN). Acceptance: the projection adds, per open
+  position, max(0, loss from the current price to its stop) x lots x contract x fx; a test with one open position
+  whose remaining stop risk plus the new trade's exceeds the limit is refused; exits never consult it. Relates to
+  19 (heat cap); trading-safety review.
+- **35. Costs in the daily projection (trading-safety review LOW-6).** Value: a full stop-out also pays the
+  spread, commission and (overnight) swap, about £0.25 on a 0.01 lot, so the projection understates a full loss by
+  ~3% at £1,000 (RUN). Acceptance: the projected risk adds the round-trip cost in account currency from the cost
+  table (`_cost_atr` x ATR x lots x contract x fx); boundary test. Trading-safety review.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.

@@ -26,13 +26,14 @@ class SupervisorLimits(Record):
     dd_stage1: float = 0.08
     dd_stage2: float = 0.12
     heartbeat_max_age_s: int = 60
-    daily_loss_limit_abs: float | None = None   # BACKLOG 29: combined day loss (account currency) that halts; None = off
+    # BACKLOG 29: an explicit combined day-loss limit (account currency); the effective one is the smallest of this and
+    # the per-account limits the engines publish (accounts.yaml). None and none published = off
+    daily_loss_limit_abs: float | None = None
 
     @classmethod
     def from_settings(cls, risk: RiskSettings) -> SupervisorLimits:
         return cls(daily_cap=risk.supervisor_daily_cap, weekly_cap=risk.supervisor_weekly_cap,
-                   dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2,
-                   daily_loss_limit_abs=risk.daily_loss_limit_abs)
+                   dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2)
 
 
 class Supervisor:
@@ -52,6 +53,7 @@ class Supervisor:
                 d = json.loads(f.read_text())
                 if not isinstance(d, dict):
                     raise ValueError("not an object")
+                d["_file"] = f.name                     # named in the mixed-currency halt (health, Telegram)
                 out.append(d)
             except (ValueError, OSError):
                 self.unreadable.append(f.name)
@@ -59,8 +61,13 @@ class Supervisor:
 
     def evaluate(self) -> dict:
         engines = self.read_engines()
-        currencies = {str(e.get("account")): str(e.get("currency") or "").strip().upper() or None for e in engines}
-        mixed = len(engines) > 1 and len({c or "?" for c in currencies.values()}) > 1
+        # the currency check counts only engines that are running (heartbeat fresh): a file left by an engine that no
+        # longer runs must not halt the book (review MEDIUM-1); its equity is still summed below, as before
+        now = time.time()
+        fresh = [e for e in engines if now - float(e.get("ts", 0) or 0) <= self.limits.heartbeat_max_age_s]
+        currencies = {str(e.get("account")): str(e.get("currency") or "").strip().upper() or None for e in fresh}
+        currency_files = {str(e.get("account")): str(e.get("_file", "")) for e in fresh}
+        mixed = len(fresh) > 1 and len({c or "?" for c in currencies.values()}) > 1
         eq = sum(e.get("equity", 0.0) for e in engines)
         day0 = sum(e.get("day_start_equity", 0.0) for e in engines)
         wk0 = sum(e.get("week_start_equity", 0.0) for e in engines)
@@ -75,7 +82,11 @@ class Supervisor:
             reasons.append("combined_weekly_cap")
         # the owner's absolute daily limit on the combined loss so far (one currency: mixed currencies halt below)
         day_loss_amount = day0 - eq
-        if self.limits.daily_loss_limit_abs is not None and day_loss_amount >= self.limits.daily_loss_limit_abs - 1e-9:
+        published = [float(e["daily_loss_limit_abs"]) for e in engines if e.get("daily_loss_limit_abs") is not None]
+        explicit = [self.limits.daily_loss_limit_abs] if self.limits.daily_loss_limit_abs is not None else []
+        abs_limit = min(explicit + published) if explicit or published else None
+        # halts when the loss REACHES the limit (>=); the gate's projection refuses only when it would EXCEED it
+        if abs_limit is not None and day_loss_amount >= abs_limit - 1e-9:
             reasons.append("combined_daily_loss_abs")
         if dd >= self.limits.dd_stage2:
             reasons.append("combined_drawdown_halt")
@@ -91,8 +102,8 @@ class Supervisor:
                  "combined_open_notional": sum(x["notional"] for x in exposure.values()), "exposure": exposure,
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
-                 "unreadable_engines": self.unreadable, "currencies": currencies, "day_loss_amount": day_loss_amount,
-                 "daily_loss_limit_abs": self.limits.daily_loss_limit_abs}
+                 "unreadable_engines": self.unreadable, "currencies": currencies, "currency_files": currency_files,
+                 "day_loss_amount": day_loss_amount, "daily_loss_limit_abs": abs_limit}
         write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)   # heartbeat: never half-written
         return state
 

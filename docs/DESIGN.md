@@ -114,7 +114,7 @@ A `RiskGate` that no model output can override sits between the allocator and th
 | --- | --- | --- | --- |
 | Per-trade risk | 1% max | Clamped, not rejected | n/a |
 | Daily loss cap | 2% of own equity per account; supervisor cap 1.5% of combined equity | No new entries; open positions keep stops | 00:00 UTC (risk-day) |
-| Absolute daily loss limit (ADR 0004) | `risk.daily_loss_limit_abs` in account currency (£50): an entry is refused when the day's loss so far plus its full stop risk would exceed min(2% × day-start equity, the limit); supervisor halts when the combined day loss reaches it | No new entries; exits never gated | 00:00 UTC (risk-day) |
+| Absolute daily loss limit (ADR 0004) | Per account, in that account's currency (`daily_loss_limit_abs` in config/accounts.yaml; £50 on the IC Markets demo): an entry is refused when the day's loss so far plus its full stop risk would exceed min(2% × day-start equity, the limit), exactly equal being allowed; the supervisor halts when the combined day loss reaches the smallest published limit | No new entries; exits never gated | 00:00 UTC (risk-day) |
 | Weekly loss cap | 5% per account; supervisor cap 4% of combined equity | No new entries; owner told | Sunday 17:00 New York |
 | Drawdown kill switch | Staged: 8% and 12% mark-to-market drawdown from the closed-equity high-water mark, per account and on combined equity | 8%: multiplier ceiling 0.5 and risk per trade halved. 12%: close everything at market immediately, no new entries | 8% clears when drawdown < 5%. 12%: /rearm with TOTP, then 10 trading days of positive paper shadow, then 30 days propose-and-approve |
 | Open positions | 2 per account | Entry skipped | Automatic |

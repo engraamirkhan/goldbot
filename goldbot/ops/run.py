@@ -73,7 +73,6 @@ def run_engine(account_id: str) -> None:
     settings = load_settings()
     if acc.is_live and acc not in accounts.enabled_accounts("live"):
         raise SystemExit("live account not unlocked by the phase gate")
-    limits = engine_limits(settings, acc)
     bridge = accounts.bridge_endpoint(account_id)
     if bridge is not None:
         # terminal on another machine (Oracle free tier: MT5 under Wine); a bridge failure ends this process and the
@@ -95,6 +94,7 @@ def run_engine(account_id: str) -> None:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
         log.warning("not on Windows: running %s against the paper broker", account_id)
+    limits = engine_limits(settings, acc, paper=getattr(broker, "name", "") == "paper")
     # proposals go to the approval bus in state/; the dashboard and the Telegram service decide through it
     center = ApprovalCenter(set(settings.telegram.allowed_user_ids), bus=ApprovalBus("state"))
     registry_file = Path(settings.research.models_dir) / "registry.json"
@@ -162,12 +162,15 @@ def run_engine(account_id: str) -> None:
         time.sleep(0.25)
 
 
-def engine_limits(settings: Settings, acc: Account) -> RiskLimits:
+def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> RiskLimits:
     """RiskLimits from settings.yaml `risk:`; a live account before the full-size gate (or with an unreadable phase
-    file) gets the tiny-live risk per trade."""
+    file) gets the tiny-live risk per trade (and no minimum-lot exception). The account's own absolute daily loss
+    limit (accounts.yaml, its deposit currency) applies only against its real terminal: `paper=True` (the paper broker
+    standing in for it, a USD book) drops it, so paper and shadow evidence are not changed by a £ figure."""
     from goldbot.ops import accounts
     from goldbot.risk import RiskLimits
-    return RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
+    limits = RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
+    return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs})
 
 
 def record_gate_cli(argv: list[str]) -> int:

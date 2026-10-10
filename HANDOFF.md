@@ -737,6 +737,24 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`combined_daily_loss_abs`) when the combined day loss reaches 50. Exits never consult it. engine_<account>.json
   carries `daily_loss_limit` and `daily_loss_remaining`; health shows them on the daily cap line and warns when none
   is left. Not done: the approval card's "remaining daily allowance" (ui-ux follow-up).
+- Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
+  applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
+  tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on
+  icm-demo in config/accounts.yaml, its currency), no longer in settings.yaml; `ops.run.engine_limits(paper=True)`
+  drops it when the paper broker stands in, so the $10k USD paper book and shadow evidence are unchanged. Engines
+  publish it (`daily_loss_limit_abs` and, for the dashboard, `limits.daily_loss_limit_abs` plus
+  `limits.min_lot_risk_account`, the minimum lot's stop risk in account currency at the latest ATR stop or null);
+  the supervisor applies the smallest published limit to the combined loss. Currency rollout: the startup-error file
+  carries `currency`; the supervisor's currency check counts only engines with a fresh heartbeat (equity is still
+  summed as before) and publishes `currency_files`; health fails with "HALT mixed_account_currencies" naming each
+  file and currency; vantage-demo is `enabled: false` until its currency is confirmed; RUNBOOK "Currency rollout"
+  gives the one-time stop-all/delete/deploy/restart/check steps. A P&L the engine records from its own fills
+  without a conversion stays USD with `ClosedTrade.pnl_currency = "USD"` and is left out of the digest's money sum
+  (the stop rule keeps it as recorded: conservative on a GBP deposit). Open notional uses the terminal's contract
+  size. symbol_info and the conversion are read once per decision cycle (per side), and the approval re-check reads
+  the terms and conversion again (a lost conversion refuses, fail closed). Gate boundary documented: exceeding the
+  daily limit is refused, exactly equal allowed; the supervisor halts on reaching it. BACKLOG 34 (open positions'
+  remaining stop risk) and 35 (costs) added for the daily projection.
 - Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
   `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
   minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both

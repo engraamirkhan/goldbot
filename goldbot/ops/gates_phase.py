@@ -101,6 +101,9 @@ class ClosedTrade(FrozenRecord):
     commission: float | None = None    # cost in account currency (positive), entry and exit; None when not reported
     swap: float | None = None          # account currency, broker sign; None when not reported
     partial_lots: float = 0.0          # lots closed by a scale-out before the final close
+    # set only when `pnl` is NOT in the account currency: "USD" when the engine recorded its own fills without a
+    # conversion (BACKLOG 28 review LOW-1). Such a P&L is never summed with account-currency money
+    pnl_currency: str | None = None
 
 
 class GateItem(FrozenRecord):
@@ -330,6 +333,8 @@ def evaluate_stop_rule(trades: list[ClosedTrade], paper_start: pd.Timestamp | No
     if months >= cfg.stop_after_months and len(pooled) > cfg.stop_min_pooled_trades and lb is not None and lb < 0:
         reasons.append(f"after {months:.1f} months and {len(pooled)} pooled trades the lower {cfg.stop_confidence:.0%} "
                        f"bound on expectancy is {lb:.5f} (< 0)")
+    # a USD-flagged P&L (pnl_currency) is kept here as recorded, never dropped: on a GBP or EUR deposit it overstates
+    # the loss fraction (conservative for the stop rule); it is kept out of money sums elsewhere
     losses = [(-t.pnl / t.equity_before, t) for t in trades]
     worst = max(losses, key=lambda x: x[0]) if losses else None
     over = [x for x in losses if x[0] > weekly_cap]

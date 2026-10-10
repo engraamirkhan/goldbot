@@ -244,6 +244,14 @@ def check_supervisor(ctx: HealthContext) -> Check:
     if age > SUPERVISOR_FAIL_S:
         return Check(name="supervisor", status="fail",
                      reason=f"heartbeat {_age(age)} old (> {SUPERVISOR_FAIL_S} s): engines block entries")
+    if "mixed_account_currencies" in (s.get("reasons") or []):
+        # BACKLOG 28: equities in different currencies are never summed, so every engine's entries are halted; name
+        # the files so the owner can stop the wrong engine or delete a leftover file (RUNBOOK: currency rollout)
+        cur, files = s.get("currencies") or {}, s.get("currency_files") or {}
+        named = ", ".join(f"{files.get(a) or f'engine_{a}.json'} ({c or 'no currency'})" for a, c in sorted(cur.items()))
+        return Check(name="supervisor", status="fail",
+                     reason=f"HALT mixed_account_currencies: {named}. Entries are blocked on every account until only "
+                            "one currency runs (stop the other engine or delete its leftover engine_*.json)")
     if s.get("halt"):
         return Check(name="supervisor", status="warn",
                      reason=f"combined-cap HALT: {', '.join(s.get('reasons') or [])}; heartbeat {_age(age)}")

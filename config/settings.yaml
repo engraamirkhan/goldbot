@@ -58,12 +58,10 @@ risk:
   # Minimum-lot exception (BACKLOG 25, ADR 0004): null = off (the design's 1.2x rule only). Settings are global, not
   # per account, so it stays off here; to enable it on one server (the £1,000 demo needs it to trade 15m at 0.01 lot,
   # 0.82%), put `risk: { min_lot_risk_cap: 0.01 }` in that server's config/settings.local.yaml (not in the repo).
-  # Maximum 0.01 (the per-trade hard limit); halved in the 8% size-down stage.
+  # Maximum 0.01 (the per-trade hard limit); halved in the 8% size-down stage; never applied in tiny-live.
+  # The absolute daily loss limit (ADR 0004, the owner's £50) is per account, in that account's currency:
+  # `daily_loss_limit_abs` in config/accounts.yaml.
   min_lot_risk_cap: null
-  # Absolute daily loss limit in the account currency (ADR 0004: the owner's £50). Entries only, projected: no entry
-  # whose full stop risk would take the day's loss past min(daily_cap x day-start equity, this); the 2% / 1.5% caps
-  # bind first below ~£2,500. The supervisor halts the combined book when its day loss reaches it. Exits never gated.
-  daily_loss_limit_abs: 50
   positions_unreadable_alert: 5      # failed broker reads in a row before health fails and Telegram alerts
 
 costs:

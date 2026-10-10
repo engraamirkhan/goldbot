@@ -112,7 +112,7 @@ def min_lot_feasibility(*, price: float, risk_fraction: float, stop_distance: fl
         price_basis=price_basis, price=price, atr_usd=atr_usd, stop_atr=stop_atr, stop_distance=stop,
         risk_per_trade=risk_fraction, multiplier=eff.mult, size_down=size_down, risk_fraction=eff.target, lot=lot,
         min_lot_risk_usd=min_risk_usd, min_equity_strict=min_risk_usd / eff.target,
-        min_equity_gate=min_risk_usd / (MIN_LOT_TOLERANCE * eff.target))
+        min_equity_gate=min_risk_usd / min(MIN_LOT_TOLERANCE * eff.target, eff.max_risk))   # the gate's tolerance
     if equity is not None:
         sz = size_lots(equity=equity, risk=eff, stop_distance=stop, contract_oz=lot.contract_oz,
                        volume_min=lot.volume_min, volume_step=lot.volume_step, volume_max=lot.volume_max)

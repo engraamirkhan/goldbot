@@ -304,6 +304,12 @@ class Engine:
         self._closes: list[PendingClose] = []
         self._records_lost: list[int] = []           # records given up after closed_record_retries failed writes
         self._currency = ""                          # the deposit currency, read once from the broker (BACKLOG 28)
+        # symbol_info and the conversion, read once per decision cycle (bar close); the last contract size seen
+        self._sym_cache: tuple[pd.Timestamp | None, SymbolInfo] | None = None
+        self._fx_cache: dict[tuple[pd.Timestamp | None, int], float | None] = {}
+        self._contract: float | None = None
+        self._contract_tried = False
+        self._min_lot_risk: float | None = None      # minimum lot's stop risk, account currency, at the latest stop
         self._unconfirmed: dict[int, int] = {}
         # position -> (consecutive market-closed refusals, next attempt): closes back off only when the market is closed
         self._close_backoff: dict[int, tuple[int, pd.Timestamp]] = {}
@@ -543,31 +549,65 @@ class Engine:
                 log.warning("account currency unreadable (%s: %s)", type(exc).__name__, exc)
         return self._currency
 
-    def _usd_to_account(self, side: int, price: float, distance: float) -> float | None:
+    def _symbol_info(self, cycle: pd.Timestamp | None = None) -> SymbolInfo:
+        """The terminal's symbol_info, read once per decision cycle (`cycle` = the bar close; None = read now). Raises
+        when the terminal cannot answer. Remembers the contract size for the exposure figures (`_contract_size`)."""
+        if cycle is not None and self._sym_cache is not None and self._sym_cache[0] == cycle:
+            return self._sym_cache[1]
+        info = self.broker.symbol_info(self.cfg.symbol)
+        self._sym_cache = (cycle, info) if cycle is not None else self._sym_cache
+        size = float(info.contract_size)
+        if math.isfinite(size) and size > 0:
+            self._contract = size
+        return info
+
+    def _contract_size(self) -> float:
+        """Contract size for open notional (review LOW-2): the last one the terminal reported, read once if none yet;
+        100 oz (the design's XAUUSD contract) only while the terminal has never answered."""
+        if self._contract is None and not self._contract_tried:
+            self._contract_tried = True
+            try:
+                self._symbol_info()
+            except Exception as exc:
+                log.warning("symbol_info unavailable for the contract size (%s: %s); 100 oz until it answers",
+                            type(exc).__name__, exc)
+        return self._contract if self._contract is not None else 100.0
+
+    def _usd_to_account(self, side: int, price: float, distance: float, cycle: pd.Timestamp | None = None) -> float | None:
         """Account currency per USD of XAUUSD P&L from the broker's loss on one lot over `distance` (BACKLOG 28):
         loss_per_lot / (distance x contract). None when the broker has no answer (or no such method), the answer is not
-        finite and positive, or the contract is unknown; the caller never substitutes a guess."""
+        finite and positive, or the contract is unknown; the caller never substitutes a guess. Within one decision
+        cycle the figure is read once per side (it is linear in the distance)."""
         fn = getattr(self.broker, "loss_per_lot", None)
         if not callable(fn) or not (math.isfinite(distance) and distance > 0):
             return None
+        key = (cycle, 1 if side > 0 else -1)
+        if cycle is not None and key in self._fx_cache:
+            return self._fx_cache[key]
         try:
-            contract = float(self.broker.symbol_info(self.cfg.symbol).contract_size)
+            contract = float(self._symbol_info(cycle).contract_size)
             loss = fn(self.cfg.symbol, side, price, distance)
             fx = float(loss) / (distance * contract) if loss is not None and contract > 0 else math.nan
         except Exception as exc:
             log.warning("broker conversion unavailable (%s: %s)", type(exc).__name__, exc)
             return None
-        return fx if math.isfinite(fx) and fx > 0 else None
+        out = fx if math.isfinite(fx) and fx > 0 else None
+        if cycle is not None:
+            self._fx_cache = {k: v for k, v in self._fx_cache.items() if k[0] == cycle}
+            self._fx_cache[key] = out
+        return out
 
-    def _sizing_terms(self, side: int, price: float, stop_distance: float) -> dict[str, Any]:
+    def _sizing_terms(self, side: int, price: float, stop_distance: float,
+                      cycle: pd.Timestamp | None = None) -> dict[str, Any]:
         """Intent fields read from the terminal (BACKLOG 28, ADR 0004 A3/A6): contract size, minimum lot, lot step,
         maximum lot (never above the engine's per-order ceiling, Intent's 2.0 default), stops level, the deposit currency
         and the broker's conversion of the USD stop into it. When the terminal cannot answer, or answers nonsense, the
         currency is left unknown and the conversion empty, so the RiskGate refuses the entry (fx_conversion_unavailable)
-        instead of sizing on assumed terms. Exits never come here."""
+        instead of sizing on assumed terms. Exits never come here. `cycle` (the bar close) reads the terminal once per
+        decision cycle; the approval re-check passes None and reads it again."""
         unknown: dict[str, Any] = {"account_currency": "", "acct_per_usd": None}
         try:
-            info = self.broker.symbol_info(self.cfg.symbol)
+            info = self._symbol_info(cycle)
             terms = {"contract_oz": float(info.contract_size), "volume_min": float(info.volume_min),
                      "volume_step": float(info.volume_step),
                      "volume_max": min(float(info.volume_max), float(Intent.model_fields["volume_max"].default)),
@@ -583,7 +623,26 @@ class Engine:
         currency = self._account_currency()
         if not currency:
             return unknown
-        return {**terms, "account_currency": currency, "acct_per_usd": self._usd_to_account(side, price, stop_distance)}
+        return {**terms, "account_currency": currency,
+                "acct_per_usd": self._usd_to_account(side, price, stop_distance, cycle)}
+
+    def _note_min_lot_risk(self, terms: dict[str, Any], stop_distance: float) -> None:
+        """The minimum lot's stop risk in the account currency at the latest ATR stop (volume_min x stop x contract x
+        fx), published as `limits.min_lot_risk_account`; None when the terms or the conversion are unknown."""
+        fx = sizing.account_fx(str(terms.get("account_currency", "")), terms.get("acct_per_usd"))
+        vmin, contract = terms.get("volume_min"), terms.get("contract_oz")
+        if fx is None or vmin is None or contract is None or not (math.isfinite(stop_distance) and stop_distance > 0):
+            self._min_lot_risk = None
+            return
+        self._min_lot_risk = float(vmin) * stop_distance * float(contract) * fx
+
+    def _published_limits(self) -> dict[str, float | None]:
+        """`limits` in engine_<account>.json (dashboard contract): the account's absolute daily loss limit (from
+        accounts.yaml through engine_limits, account currency) and the minimum lot's stop risk in the account currency
+        at the latest ATR stop (null when unknown)."""
+        mlr = self._min_lot_risk
+        return {"daily_loss_limit_abs": getattr(self.gate.limits, "daily_loss_limit_abs", None),
+                "min_lot_risk_account": round(mlr, 2) if mlr is not None and math.isfinite(mlr) else None}
 
     def _decide(self, tf: str, fr: _Frame, agents: list[Specialist], fam_w: dict[str, float], close_ts: pd.Timestamp,
                 last_tick: Tick) -> list[dict]:
@@ -631,7 +690,8 @@ class Engine:
                 decisions.append(self._record(agent, close_ts, p, mult, "below_threshold"))
                 continue
             # the terminal's contract terms and the USD -> account currency conversion (BACKLOG 28)
-            terms = self._sizing_terms(side, price, ls.stop_atr * float(a.iloc[last]))
+            terms = self._sizing_terms(side, price, ls.stop_atr * float(a.iloc[last]), cycle=close_ts)
+            self._note_min_lot_risk(terms, ls.stop_atr * float(a.iloc[last]))
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
                             multiplier=mult, price=price, timeframe=tf, family=agent.family, **terms)
             gd = self.gate.check(intent, self.state, margin_required=broker_margin(self.broker, self.cfg.symbol))
@@ -668,6 +728,11 @@ class Engine:
         if p.outcome == Outcome.APPROVED:
             tick = self.broker.last_tick(self.cfg.symbol)
             self._refresh_account(tick)
+            # contract terms and the conversion read again from the terminal (review LOW-5): one it can no longer give
+            # leaves the currency unknown, so the re-check refuses (fail closed); never the proposal-time figure
+            now_px = tick.ask if prop.side > 0 else tick.bid
+            intent = intent.model_copy(update={**self._sizing_terms(intent.side, now_px, intent.stop_atr * intent.atr_usd),
+                                               "price": now_px})
             gd = self.gate.check(intent, self.state,  # re-check at approval time
                                  margin_required=broker_margin(self.broker, self.cfg.symbol))
             if gd.allowed:
@@ -1138,7 +1203,7 @@ class Engine:
         if positions is not None:
             st.open_positions = len(positions)
             st.open_lots = round(sum(p.lots for p in positions), 6)   # every position on the account is exposure
-        st.open_notional = st.open_lots * 100.0 * (tick.bid + tick.ask) / 2
+        st.open_notional = st.open_lots * self._contract_size() * (tick.bid + tick.ask) / 2   # USD, terminal contract
         st.spread_points = (tick.ask - tick.bid) / 0.01
         now = self._now(tick)
         st.last_tick_age_s = max(0.0, (now - tick.ts_utc).total_seconds())
@@ -1441,6 +1506,7 @@ class Engine:
             # terminal instead of a merely stale engine (trading-safety review)
             write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps({
                 "account": self.cfg.account_id, "ts": time.time(), "dq_error": True,
+                "currency": self._account_currency() or None,     # the supervisor's currency check (review MEDIUM-1)
                 "dq_checks": ["positions_unreadable"], "stage": "unknown",
                 "startup_error": f"{type(exc).__name__}: {exc}"[:300]}), durable=False)
             raise
@@ -1638,6 +1704,7 @@ class Engine:
         dist = abs(entry - tr.initial_sl) if tr.initial_sl is not None else 0.0
         fx = sizing.account_fx(self._account_currency(), self._usd_to_account(tr.side, entry, dist or 1.0))
         risk_usd, notional_usd = dist * lots * contract, entry * lots * contract
+        pnl_currency: str | None = None                # set only when pnl is NOT in the account currency
         if info is not None:                           # pnl from the broker's deals, in the account currency
             exit_px, exit_utc, pnl = info["exit_price"], info["exit_utc"], info["pnl"]
             commission, swap = info["commission"], info["swap"]
@@ -1660,13 +1727,16 @@ class Engine:
             pnl_usd = sum(tr.side * (p - entry) * n * contract for n, p in legs)
             r = pnl_usd / risk_usd if risk_usd > 0 else None
             ret = pnl_usd / notional_usd
-            if fx is None:
+            if fx is None:                             # never read as factor 1: recorded in USD and flagged (LOW-1)
                 log.warning("position %s: no USD -> account currency conversion; P&L recorded in USD", pid)
-            pnl = pnl_usd * (fx if fx is not None else 1.0)
+                pnl, pnl_currency = pnl_usd, "USD"
+            else:
+                pnl = pnl_usd * fx
             exit_utc, commission, swap = at, None, None
         equity = tr.equity_before
         if equity is None or equity <= 0:
-            equity = self.broker.account().balance - pnl       # the balance before this trade's P&L was realised
+            # the balance before this trade's P&L was realised (a USD-flagged P&L is not subtracted from a £ balance)
+            equity = self.broker.account().balance - (pnl if pnl_currency is None else 0.0)
             if equity <= 0:
                 equity = self.state.equity
         rec = ClosedTrade(account_id=self.cfg.account_id, broker=self.cfg.broker_name,
@@ -1674,7 +1744,7 @@ class Engine:
                           ret=ret, pnl=pnl, equity_before=equity, position_id=pid,
                           client_order_id=tr.client_order_id, agent_id=tr.agent_id, side=tr.side, lots=lots,
                           entry_utc=tr.opened_utc or tr.entry_bar_ts, entry_price=entry, exit_price=exit_px,
-                          exit_reason=reason, r=r, commission=commission, swap=swap,
+                          exit_reason=reason, r=r, commission=commission, swap=swap, pnl_currency=pnl_currency,
                           partial_lots=tr.scaled_lots)
         append_closed_trade(Path(self.cfg.state_dir), rec)
         self._recorded.add(pid)
@@ -1930,6 +2000,9 @@ class Engine:
             "currency": self._account_currency() or None,
             # BACKLOG 29: the effective daily loss limit (account currency) and what is left of it today
             **self._daily_allowance(),
+            # this account's absolute limit (accounts.yaml): the supervisor applies the smallest published one
+            "daily_loss_limit_abs": self.gate.limits.daily_loss_limit_abs,
+            "limits": self._published_limits(),
             "equity": st.equity, "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "open_lots": st.open_lots, "open_notional": st.open_notional,

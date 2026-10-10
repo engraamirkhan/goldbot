@@ -16,11 +16,11 @@ from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
 from goldbot.risk.gate import Stage
 
 GBP = 1 / 1.33
-TINY = 0.001                          # tiny-live risk per trade
+RISK = 0.005                          # the demo's normal risk per trade (tiny-live never takes the exception)
 CAP = 0.01
 
 
-def _limits(cap: float | None = CAP, risk: float = TINY) -> RiskLimits:
+def _limits(cap: float | None = CAP, risk: float = RISK) -> RiskLimits:
     return RiskLimits(risk_per_trade=risk, min_lot_risk_cap=cap)
 
 
@@ -89,7 +89,7 @@ def test_the_cap_never_exceeds_the_hard_one_percent_per_trade_maximum():
     with pytest.raises(ValidationError):
         RiskSettings.model_validate({**_risk_section(), "min_lot_risk_cap": 0.0})
     # a RiskLimits built by hand with a larger cap is still clamped to max_risk_per_trade (1%)
-    d = RiskGate(RiskLimits(risk_per_trade=TINY, min_lot_risk_cap=0.05)).check(_intent(10.0, gbp=False), _state(999.99))
+    d = RiskGate(RiskLimits(risk_per_trade=RISK, min_lot_risk_cap=0.05)).check(_intent(10.0, gbp=False), _state(999.99))
     assert not d.allowed
 
 
@@ -148,7 +148,8 @@ def test_the_setting_is_off_by_default_and_reaches_the_gate():
     assert load_settings().risk.min_lot_risk_cap is None
     assert RiskLimits().min_lot_risk_cap is None
     risk = RiskSettings.model_validate({**_risk_section(), "min_lot_risk_cap": 0.01})
-    assert RiskLimits.from_settings(risk, tiny_live=True).min_lot_risk_cap == 0.01
+    assert RiskLimits.from_settings(risk, tiny_live=False).min_lot_risk_cap == 0.01
+    assert RiskLimits.from_settings(risk, tiny_live=True).min_lot_risk_cap is None          # review MEDIUM-2
     assert RiskLimits.from_settings(load_settings().risk, tiny_live=False).min_lot_risk_cap is None
 
 

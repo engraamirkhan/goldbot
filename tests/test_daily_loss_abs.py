@@ -80,15 +80,17 @@ def test_the_boundary_is_inclusive():
     assert _gate().check(_usd(5.0, 0.6), _state(5_100.0, 5_000.0)).allowed       # up 100 today, 15.3 risk
 
 
-def test_the_setting_is_validated_and_reaches_the_gate_and_the_supervisor():
-    assert load_settings().risk.daily_loss_limit_abs == 50
-    raw = load_settings().risk.model_dump()
+def test_the_limit_is_per_account_and_validated():
+    # review MEDIUM-3: not a global setting (one number read in each account's currency); accounts.yaml per account
+    assert "daily_loss_limit_abs" not in RiskSettings.model_fields
+    assert RiskLimits.from_settings(load_settings().risk, tiny_live=False).daily_loss_limit_abs is None
+    assert SupervisorLimits.from_settings(load_settings().risk).daily_loss_limit_abs is None
+    from goldbot.ops import accounts
+    assert accounts.load_accounts()["icm-demo"].daily_loss_limit_abs == 50
     for bad in (0, -5):
         with pytest.raises(ValidationError):
-            RiskSettings.model_validate({**raw, "daily_loss_limit_abs": bad})
-    assert RiskSettings.model_validate({**raw, "daily_loss_limit_abs": None}).daily_loss_limit_abs is None
-    assert RiskLimits.from_settings(load_settings().risk, tiny_live=False).daily_loss_limit_abs == 50
-    assert SupervisorLimits.from_settings(load_settings().risk).daily_loss_limit_abs == 50
+            accounts.Account(account_id="a", broker="icm", mode="demo", server="s", login=None, terminal_path="t",
+                             server_tz="UTC", symbol="XAUUSD", magic_base=1, enabled=True, daily_loss_limit_abs=bad)
 
 
 # ---------------------------------------------------------------------------------------------- the supervisor

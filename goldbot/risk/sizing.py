@@ -8,7 +8,8 @@ This mirrors goldbot/risk/gate.py `RiskGate.check` (the "sizing" block) line for
 * risk per trade x multiplier is capped at `max_risk_per_trade` after the multiplier (clamped, not rejected);
 * stop distance = max(stop_atr x ATR, stops level + spread);
 * lots = equity x risk x m / (stop distance x contract x fx), rounded down to the lot step, at least the minimum lot, at
-  most the maximum; the trade is skipped when the minimum lot would risk more than 1.2x the target.
+  most the maximum; the trade is skipped when the minimum lot would risk more than 1.2x the target, and never more
+  than the per-trade maximum (1%) whatever the target.
 * fx (BACKLOG 28, ADR 0004 A3) is the account currency per USD of P&L: the stop is a USD amount (XAUUSD P&L is in
   USD), equity is in the deposit currency. 1 on a USD account; the broker's conversion otherwise (`account_fx`).
 RiskGate.check calls these functions for its arithmetic; tests/test_sizing_parity.py runs the gate against them so a
@@ -41,6 +42,8 @@ class EffectiveRisk(FrozenRecord):
     risk_frac: float          # risk per trade after the stage
     mult: float               # multiplier after the bounds, the stage cap and the hard maximum
     target: float             # risk_frac x mult: the fraction of equity the trade is sized to lose at the stop
+    # the minimum lot's 1.2x tolerance never goes above this (design Hard limits: 1% per trade; review LOW-4)
+    max_risk: float = math.inf
 
 
 class LotSize(FrozenRecord):
@@ -76,7 +79,7 @@ def effective_risk(limits: SizingLimits, size_down: bool, mult: float) -> Effect
         m = min(m, SIZE_DOWN_MULT_CAP)
     if risk_frac * m > limits.max_risk_per_trade:
         m = limits.max_risk_per_trade / risk_frac
-    return EffectiveRisk(risk_frac=risk_frac, mult=m, target=risk_frac * m)
+    return EffectiveRisk(risk_frac=risk_frac, mult=m, target=risk_frac * m, max_risk=limits.max_risk_per_trade)
 
 
 def stop_distance(stop_atr: float, atr_usd: float, *, stops_level_points: float = 0.0, spread_points: float = 0.0,
@@ -98,7 +101,7 @@ def size_lots(*, equity: float, risk: EffectiveRisk, stop_distance: float, contr
     lots = max(volume_min, steps * volume_step)
     lots = min(lots, volume_max)
     realised = lots * stop_distance * contract_oz * acct_per_usd / equity
-    refused = realised > MIN_LOT_TOLERANCE * risk.risk_frac * risk.mult and lots_raw < volume_min
+    refused = realised > min(MIN_LOT_TOLERANCE * risk.risk_frac * risk.mult, risk.max_risk) and lots_raw < volume_min
     return LotSize(lots_raw=lots_raw, lots=lots, realised_risk=realised, refused=refused, risk_per_lot=risk_per_lot)
 
 

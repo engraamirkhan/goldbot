@@ -19,7 +19,14 @@ owner.
 - BACKLOG 25, minimum-lot exception (decision 2): implemented, **off by default** (`risk.min_lot_risk_cap: null`;
   TRACEABILITY R33). Settings have no per-account section, so the owner enables it on the demo server with
   `risk: { min_lot_risk_cap: 0.01 }` in its `config/settings.local.yaml`. Until then nothing trades at £1,000.
-- BACKLOG 29, absolute daily loss limit (decision 3): implemented, `risk.daily_loss_limit_abs: 50` (TRACEABILITY R34).
+  Trading-safety review: never applied in tiny-live (a 0.1% phase must not place a lot risking up to 1%), and the
+  design's 1.2x minimum-lot tolerance is now capped at the 1% maximum.
+- BACKLOG 29, absolute daily loss limit (decision 3): implemented (TRACEABILITY R34). After the trading-safety review
+  it is **per account**: `daily_loss_limit_abs: 50` on icm-demo in `config/accounts.yaml`, in that account's currency,
+  not the global `risk.daily_loss_limit_abs: 50` of section 3 (one global number read in each account's currency
+  limited the $10k USD paper book at $50 and changed paper/shadow evidence). Boundary: the gate refuses only when the
+  projection would EXCEED the limit (exactly £50 is allowed); the supervisor halts when the combined loss REACHES it.
+  vantage-demo is disabled until its currency is confirmed (a USD account next to GBP halts by design).
   Note: the projection uses min(2% x day-start equity, £50), so the 2% account cap is now also checked with the new
   trade's risk (stricter than section 3's "loss so far" reading of the percentage cap; at £1,000 a third full loss
   is refused by the account gate as well as the supervisor).

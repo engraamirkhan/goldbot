@@ -770,7 +770,10 @@ nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what
 | `max_positions` | Two positions already open on this account. | Normal. |
 | `daily_cap` / `weekly_cap` | This account lost 2% / 5% measured from its equity when the engine started. | The engine does not yet reset its day/week starting equity at 00:00 UTC (`new_day` in `goldbot/risk/gate.py` is not called), so these clear only when the engine restarts. Review the losses before restarting. |
 | `negative_ev`, `target_below_cost_floor` | After costs the trade has no edge, or the target is below 2.5x the round-trip cost. | Normal filtering; check the cost table if it happens to every candidate. |
-| `min_lot_exceeds_risk`, `margin_level_floor` | Minimum lot would risk too much, or margin level would fall below 300%. | Account too small for the stop; normal on small demos. |
+| `min_lot_exceeds_risk`, `margin_level_floor` | Minimum lot would risk too much, or margin level would fall below 300%. | Account too small for the stop; normal on small demos. On the £1,000 demo, 15m needs the minimum-lot exception: `risk: { min_lot_risk_cap: 0.01 }` in `config\settings.local.yaml` (never applies in tiny-live). |
+| `fx_conversion_unavailable` | The account is not in USD and the terminal gave no USD -> account-currency conversion (`order_calc_profit` / tick value), or the terminal's symbol info was unreadable. | Check the terminal is logged in and XAUUSD is in Market Watch; entries resume when it answers. Exits are unaffected. |
+| `daily_loss_limit_abs` | Today's loss plus this trade's full stop risk would exceed min(2% of the day-start equity, the account's `daily_loss_limit_abs` in `config\accounts.yaml`, e.g. £50 on icm-demo). Equal is allowed; the supervisor halts once the combined loss reaches the limit. | Normal; clears at 00:00 UTC. `engine_<account>.json` shows `daily_loss_limit` and `daily_loss_remaining`. |
+| `supervisor_halt` with `mixed_account_currencies` | Running engines report different deposit currencies (e.g. GBP and USD); equities are never summed across currencies. Health names the files. | Stop the engine that should not run (or delete its leftover `engine_<account>.json`), see "Currency rollout" below. |
 | `data_quality_error` | Reserved; the engine does not set it today. | - |
 
 ### Telegram is silent
@@ -820,6 +823,20 @@ agent spend, stuck approvals, backup age and the restore drill) as ok / warn / f
 update script. The Telegram service runs the same checks every 5 minutes and messages you when a check turns fail
 and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service running; the `alerts` check shows
 when that loop has stopped).
+
+### Currency rollout (one time: the update that brings currency-correct sizing, BACKLOG 28/25/29)
+
+Engines now publish their deposit currency and the supervisor halts every account when running engines disagree
+(`mixed_account_currencies`). Do this update with every engine stopped, not engine by engine:
+
+1. Stop all engines (`nssm stop goldbot-engine-icm-demo`, and any other engine service), then the supervisor.
+2. Delete `state\engine_<account>.json` of every account that will not run (with this release `vantage-demo` is
+   `enabled: false` in `config\accounts.yaml`; a file older than 60 s is ignored by the currency check anyway, but
+   an old file without a currency would otherwise be read as "unknown" next to a fresh one).
+3. Deploy (`vps_update.ps1`, below).
+4. Start the supervisor, then all engines together.
+5. Check `state\supervisor.json`: `"halt": false` and `"currencies": {"icm-demo": "GBP"}`. If it shows
+   `mixed_account_currencies`, the health check names the offending file.
 
 ### Updating the VPS to a new version
 

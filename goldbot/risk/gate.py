@@ -63,14 +63,16 @@ class RiskLimits(Record):
 
     @classmethod
     def from_settings(cls, risk: RiskSettings, *, tiny_live: bool) -> RiskLimits:
-        """The `risk:` section of settings.yaml; `tiny_live` selects the tiny-live phase's risk per trade."""
+        """The `risk:` section of settings.yaml; `tiny_live` selects the tiny-live phase's risk per trade. Tiny-live
+        never takes the minimum-lot exception (trading-safety review MEDIUM-2: a 0.1% phase must not place a lot that
+        risks up to 1%). The absolute daily loss limit is per account (accounts.yaml), set by ops.run.engine_limits."""
         return cls(risk_per_trade=risk.risk_per_trade_tiny_live if tiny_live else risk.risk_per_trade,
                    multiplier_bounds=risk.multiplier_bounds, daily_cap=risk.daily_cap, weekly_cap=risk.weekly_cap,
                    dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2,
                    dd_stage1_clear=risk.drawdown_stage1_clear, max_positions=risk.max_positions_per_account,
                    max_spread_points=risk.max_spread_points, stale_tick_seconds=risk.stale_tick_seconds,
-                   min_target_over_cost=risk.min_target_over_cost, min_lot_risk_cap=risk.min_lot_risk_cap,
-                   daily_loss_limit_abs=risk.daily_loss_limit_abs)
+                   min_target_over_cost=risk.min_target_over_cost,
+                   min_lot_risk_cap=None if tiny_live else risk.min_lot_risk_cap)
 
 
 class AccountState(Record):
@@ -327,7 +329,9 @@ class RiskGate:
                 comb_notional > L.max_combined_notional_frac * L.leverage_cap * (st.equity + st.other_equity):
             return GateDecision(allowed=False, reasons=["combined_exposure_cap"], stop_distance=stop_distance,
                                 margin_needed=margin_needed, margin_note=margin_note)
-        # absolute daily loss limit (BACKLOG 29, ADR 0004): projected with this trade's full stop risk, entries only
+        # absolute daily loss limit (BACKLOG 29, ADR 0004): projected with this trade's full stop risk, entries only.
+        # Strict boundary (review LOW-3): refused only when the projection EXCEEDS the limit; exactly equal is allowed
+        # (1e-9 absorbs float noise). The supervisor, which sees no trade, halts when the loss so far REACHES it
         risk_amount = lots * sz.risk_per_lot
         if L.daily_loss_limit_abs is not None:
             lost = max(0.0, st.day_start_equity - st.equity)
