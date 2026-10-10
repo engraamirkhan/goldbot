@@ -587,7 +587,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   each section degrades on its own. Sent once per slot (`state/telegram_digest.json`, recorded after delivery); a
   slot missed while the service was down goes out on start if under 6 h late. Reporting only.
 
-- Engine wave 3 (2026-10-11, rows D10, A2, M9): a decision bar is finalised by clock at close + 1.5 s
+- Engine wave 3 (2026-10-10, rows D10, A2, M9): a decision bar is finalised by clock at close + 1.5 s
   (`runner.BAR_CLOSE_GRACE_S`; the wall clock in production) even when no tick follows it, or at once by a tick at
   or after the close; each close runs once (`_closed_through`), a tick older than a bar the clock already finalised
   never revises it, and a repeated poll of the same quote (the run loop's 0.25 s poll) is no longer appended as a new
@@ -595,14 +595,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `EngineConfig.approval_window_s`, set from `settings.risk.approval_window_seconds` in `ops/run.py` (default 90).
   The allocator's tier-1 distances come from the calendar the RiskGate's news blackout reads, so its 30-minute
   zeroing now acts live (weight 0 inside -30/+30 min). Exits are unchanged: they run on every tick before any bar logic.
-- Wave-3 review fixes (2026-10-11, rows D10, M9): a late tick (stamped before a bar the clock already finalised) is
-  still kept out of the live bars but no longer silently: a `late_tick` data-quality warning (at most one a minute,
-  stored with the bar's dq_events) and the running count `late_ticks` in the engine state; warnings never block
-  entries (`dq_error` and `dq_checks` now count error-severity events only). The engine publishes `clock_skew_s`
-  (broker tick time minus wall clock, median of the last 120 new ticks); health warns when it exceeds the 1.5 s
-  bar-close grace, without blocking entries (the stale-feed and stale-bar rules still apply). The allocator is built
-  from `EngineConfig.blackout_before_min/after_min` (settings `risk.blackout`, 15/30), so its zeroing window is the
-  RiskGate's: weight 0 inside -15/+30 min instead of -30/+30.
+- Wave-3 review fixes (2026-10-10, rows D10, M8, M9): a late tick (stamped before a bar the clock already finalised)
+  is still kept out of the live bars but no longer silently: a `late_tick` data-quality warning (at most one a minute,
+  stored with the bar's dq_events) and the running count `late_ticks` in the engine state; a lone warning never blocks
+  entries (`dq_error` and `dq_checks` count error-severity events only). The engine publishes `clock_skew_s` (broker
+  tick time minus wall clock, median of the last 120 new ticks); health warns above the 1.5 s bar-close grace. It
+  escalates to a blocking data-quality error (entries only; exits never gated) when |skew| > 10 s (`clock_skew`) or
+  when late ticks hit 3 consecutive decision bars (`late_ticks`, cleared by a bar with none), because such bars drift
+  from the training and shadow bars. The allocator keeps its design window, 0 for 30 min either side of tier-1
+  events (`RuleAllocator()` defaults), deliberately stricter than the RiskGate's -15/+30 entry block; the gate window
+  from settings never narrows it (an allocator rule change is the owner's decision).
 
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional

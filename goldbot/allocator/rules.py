@@ -3,7 +3,8 @@
 
 Weights per design: trend 1.0 when ADX(14,1h) > 25 else 0; mean-reversion 1.0 when ADX < 18 else 0;
 breakout 1.0 when 1h ATR is in its bottom quartile over 60 days else 0, with mean-reversion + breakout
-capped at a summed weight of 1.0; session-open always 0.75; everything 0 within 30 minutes of a tier-1 event.
+capped at a summed weight of 1.0; session-open always 0.75; everything 0 for 30 minutes either side of a tier-1
+event (deliberately stricter than the RiskGate's -15/+30 min entry block; changing it is the owner's decision).
 Also exposes the population view: each agent's weight = allocator family weight x agent fitness share.
 """
 from __future__ import annotations

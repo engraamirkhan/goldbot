@@ -61,6 +61,12 @@ MARKET_CLOSED_RETCODES = frozenset({10017, 10018})
 BAR_CLOSE_GRACE_S = 1.5
 LATE_TICK_WARN_S = 60.0      # at most one late_tick data-quality warning per this many seconds (every one is counted)
 SKEW_WINDOW = 120            # new ticks in the rolling median of broker-vs-wall clock skew
+# escalation to a blocking data-quality error: bars finalised without their last ticks drift from the training and
+# shadow bars. |median skew| above SKEW_BLOCK_S (once SKEW_MIN_SAMPLES ticks are measured) -> `clock_skew`; late ticks
+# on LATE_BARS_BLOCK consecutive decision bars -> `late_ticks` (cleared by a decision bar with none)
+SKEW_BLOCK_S = 10.0
+SKEW_MIN_SAMPLES = 10
+LATE_BARS_BLOCK = 3
 
 
 class Model(Protocol):
@@ -222,8 +228,10 @@ class Engine:
         # population: agent_id -> share of its family's capital; None = every agent trades at the family weight
         self.live_shares = live_shares
         self.center = center or ApprovalCenter({cfg.owner_user_id})
-        # design (News blackout, row M9): the allocator zeroes weights on the same window the RiskGate blocks entries on
-        self.allocator = allocator or RuleAllocator(cfg.blackout_before_min, cfg.blackout_after_min)
+        # design (Regime allocator): weights are 0 for 30 min either side of tier-1 events (RuleAllocator's defaults),
+        # deliberately stricter than the RiskGate's -15/+30 entry block (blackout_before_min/after_min); changing the
+        # allocator rule is the owner's decision (allocator/promotion.py), so the gate window never narrows it
+        self.allocator = allocator or RuleAllocator()
         self.gate = RiskGate(limits)
         self.ticks: list[Tick] = []
         self.bars_1m = pd.DataFrame()
@@ -258,12 +266,14 @@ class Engine:
         # data quality: errors since the last bar close, and those the last bar close was decided with
         self._last_tick: Tick | None = None
         self._dq_pending: list[DQEvent] = []
-        self._dq_bar_errors: list[DQEvent] = []
+        self._dq_bar_events: list[DQEvent] = []
         # late ticks (stamped before a bar the clock already finalised): dropped from the live bars but still logged,
         # so the nightly store has them; counted, and warned at most every LATE_TICK_WARN_S (wall clock)
         self._late_ticks = 0
         self._late_since_warn = 0
         self._late_warned_at: pd.Timestamp | None = None
+        self._late_bar: pd.Timestamp | None = None   # close of the latest decision bar that got a late tick
+        self._late_streak = 0                        # consecutive decision bars with late ticks, up to _late_bar
         # broker tick time minus the wall clock, seconds, over the last SKEW_WINDOW new ticks (median published)
         self._skew: deque[float] = deque(maxlen=SKEW_WINDOW)
         self._unhealthy_at: pd.Timestamp | None = None    # last time the data was seen stale or in error
@@ -482,9 +492,9 @@ class Engine:
         """Runs on every base (decision_tf) bar. Each agent decides on its own timeframe, so a 1h agent is
         evaluated only at closes that complete a 1h bar; position management stays on the base clock."""
         self._rebuild_bars()
-        self._dq_bar_errors, self._dq_pending = self._dq_pending, []   # this close decides on the bars it just saw
-        if self._dq_bar_errors and self.store is not None:
-            self.store.append("dq_events", events_frame(self._dq_bar_errors), source=self.cfg.account_id,
+        self._dq_bar_events, self._dq_pending = self._dq_pending, []   # this close decides on the bars it just saw
+        if self._dq_bar_events and self.store is not None:
+            self.store.append("dq_events", events_frame(self._dq_bar_events), source=self.cfg.account_id,
                               symbol=self.cfg.symbol, dedupe=False)
         complete = self.bars_1m[self.bars_1m["visible_at"] <= close_ts]
         if len(complete) < 400:
@@ -1074,7 +1084,7 @@ class Engine:
         now = self._now(tick)
         st.last_tick_age_s = max(0.0, (now - tick.ts_utc).total_seconds())
         stale = stale_feed(tick.ts_utc, now, limit_seconds=self.cfg.stale_feed_s)
-        st.dq_error = stale or bool(self._dq_errors()) or positions is None \
+        st.dq_error = stale or bool(self._dq_errors() or self._dq_blocking()) or positions is None \
             or self._book_unreadable() > 0                                    # fail closed: positions_unreadable
         # stale data (design): the last completed bar must be under one decision period old; no bars is stale
         if self.bars_1m.empty:
@@ -1203,7 +1213,7 @@ class Engine:
     # ------------------------------------------------------------------ data quality
     def _dq_errors(self) -> list[DQEvent]:
         """Blocking data-quality events since (and decided at) the last bar close; warnings never block entries."""
-        return [e for e in self._dq_bar_errors + self._dq_pending if e.severity == "error"]
+        return [e for e in self._dq_bar_events + self._dq_pending if e.severity == "error"]
 
     def _late_tick(self, t: Tick) -> None:
         """A tick stamped before a bar close the clock already processed (D10: close plus BAR_CLOSE_GRACE_S): it is
@@ -1213,6 +1223,11 @@ class Engine:
         (`clock_skew_s`, warned by health)."""
         self._late_ticks += 1
         self._late_since_warn += 1
+        bar = self._closed_through
+        if bar is not None and bar != self._late_bar:
+            prev = bar - pd.Timedelta(seconds=tf_seconds(self.cfg.decision_tf))
+            self._late_streak = self._late_streak + 1 if self._late_bar == prev else 1
+            self._late_bar = bar
         now = self._now(t)
         if self._late_warned_at is not None and (now - self._late_warned_at).total_seconds() < LATE_TICK_WARN_S:
             return
@@ -1222,10 +1237,24 @@ class Engine:
                    f"close through {self._closed_through}: kept out of the live bars, still in the tick log"))
         self._late_warned_at, self._late_since_warn = now, 0
 
+    def _dq_blocking(self) -> set[str]:
+        """Clock data-quality errors that block entries (exits are never gated): a broker clock more than
+        SKEW_BLOCK_S off the wall clock (`clock_skew`), or late ticks on LATE_BARS_BLOCK consecutive decision bars
+        (`late_ticks`), until a whole decision bar passes without one. Either way bars are being finalised without
+        their last ticks and drift from the bars the models were trained and shadow-scored on."""
+        out: set[str] = set()
+        skew = self.clock_skew_s()
+        if skew is not None and len(self._skew) >= SKEW_MIN_SAMPLES and abs(skew) > SKEW_BLOCK_S:
+            out.add("clock_skew")
+        if self._late_streak >= LATE_BARS_BLOCK and self._late_bar is not None and self._closed_through is not None \
+                and (self._closed_through - self._late_bar).total_seconds() <= tf_seconds(self.cfg.decision_tf):
+            out.add("late_ticks")
+        return out
+
     def clock_skew_s(self) -> float | None:
         """Broker tick time minus the wall clock (s), rolling median over the last SKEW_WINDOW new ticks; None before
-        the first. Below -BAR_CLOSE_GRACE_S, bars close by clock before their last ticks arrive (late ticks). Only
-        reported (health warns): entries are not blocked for skew alone; the stale-feed and stale-bar rules apply."""
+        the first. Below -BAR_CLOSE_GRACE_S, bars close by clock before their last ticks arrive (late ticks): health
+        warns above the grace, and beyond SKEW_BLOCK_S it is a blocking data-quality error (`_dq_blocking`)."""
         return round(float(np.median(self._skew)), 3) if self._skew else None
 
     def _tick_ok(self, t: Tick) -> bool:
@@ -1612,8 +1641,8 @@ class Engine:
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the
         RiskGate's news blackout already reads (`_blackout`, refreshed by `_refresh_account` just before), so the
-        allocator's zeroing (the same blackout_before_min/after_min window) acts live; without `news_blackout` there is
-        no calendar and no zeroing."""
+        allocator's own 30-minute zeroing (either side; stricter than the gate's -15/+30) acts live; without
+        `news_blackout` there is no calendar and no zeroing."""
         row = X.iloc[-1]
         adx = float(row.get("h1_adx14", row.get("adx14", 20.0)) or 20.0)
         rv = X["h1_rv_20"] if "h1_rv_20" in X.columns else X.get("rv_20", pd.Series([np.nan]))
@@ -1819,12 +1848,12 @@ class Engine:
             "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
             "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,
             "dq_error": st.dq_error, "stale_bars": st.stale_bars, "data_recovering": st.data_recovering,
-            "dq_checks": sorted({e.check for e in self._dq_errors()}
+            "dq_checks": sorted({e.check for e in self._dq_errors()} | self._dq_blocking()
                                 | ({"positions_unreadable"} if self._book_unreadable() else set())),
             # consecutive failed broker reads (health alerts after broker.positions_unreadable_alert in a row)
             "positions_unreadable": self._book_unreadable(),
             "dq_warnings": [f"{e.check}: {e.detail}" for e in self._dq_warnings
-                            + [e for e in self._dq_bar_errors + self._dq_pending if e.severity != "error"]],
+                            + [e for e in self._dq_bar_events + self._dq_pending if e.severity != "error"]],
             "late_ticks": self._late_ticks, "clock_skew_s": self.clock_skew_s(), "bar_close_grace_s": BAR_CLOSE_GRACE_S,
             "closed_records_lost": self._records_lost, "closes_due": sorted(self._close_due),
             "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
