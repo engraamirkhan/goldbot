@@ -18,20 +18,20 @@ Status: ready / in progress / in review / done / rejected.
 | # | Item | Stage · kind | Size | Status |
 | --- | --- | --- | --- | --- |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | ready |
-| 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | in review |
-| 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | in review (PR #60) |
-| 4 | FRED macro data pipeline | Market and macro preparation · FIND | M | in progress |
-| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | ready |
-| 6 | Live exit policies and blackout early close | Trade management, exit · FIND + RUN | M | ready |
-| 7 | Ops alerts: heartbeats, FAILED_EXEC, weekly cap | Operational resilience · RUN | S–M | ready |
-| 8 | Stop rule and gate thresholds in code | Capital and drawdown management · RUN | S | ready |
-| 9 | UI/UX approval card | Entry timing (owner approval) · RUN | M | in progress |
-| 10 | Trader-toolkit features (sessions, S/R, FVG, order blocks) | Idea generation · FIND | M | in progress |
-| 11 | Trader-toolkit evaluation as primary signals | Idea generation, confluence · FIND | S–M | ready (after 10) |
-| 12 | Deterministic attribution that feeds back into research | Performance attribution, learning · FIND | M | ready |
-| 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | ready |
-| 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | ready |
-| 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | ready |
+| 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | done (PR #62) |
+| 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | done (PR #60) |
+| 4 | FRED macro data pipeline | Market and macro preparation · FIND | M | done (PR #61) |
+| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (draft; freeze by 2026-12-31) |
+| 6 | Live exit policies and blackout early close | Trade management, exit · FIND + RUN | M | in review (safety fixes) |
+| 7 | Ops alerts: heartbeats, FAILED_EXEC, weekly cap | Operational resilience · RUN | S–M | done (PR #62) |
+| 8 | Stop rule and gate thresholds in code | Capital and drawdown management · RUN | S | done (owner sign-off and engine trade record open) |
+| 9 | UI/UX approval card | Entry timing (owner approval) · RUN | M | done (PR #61) |
+| 10 | Trader-toolkit features (sessions, S/R, FVG, order blocks) | Idea generation · FIND | M | done (PR #61) |
+| 11 | Trader-toolkit evaluation as primary signals | Idea generation, confluence · FIND | S–M | ready (via H-02 in Q1) |
+| 12 | Deterministic attribution that feeds back into research | Performance attribution, learning · FIND | M | in review (daily report + staff-agent feedback done; director input and dashboard open) |
+| 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | in review (gap_watch and the 4h retrain path done; 1d research-only) |
+| 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | done (2026-10-10; promotion gate once 90 days of broker M1 exist) |
+| 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | in review |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -92,7 +92,7 @@ Acceptance:
 
 Depends on: 2 (costs), 4 (variant 3). The daily-family event floor is an owner decision (below).
 
-### 6. Live exit policies and blackout early close
+### 6. Live exit policies and blackout early close (in review)
 Value: momentum edges are made in the exits. Labels cannot test exits the engine cannot run, and exits are never
 gated, so they must work unattended (FIND + RUN).
 Acceptance:
@@ -128,6 +128,15 @@ Acceptance:
 - The dashboard shows the stop-rule and gate status (API schema regenerated).
 
 Depends on: the owner signs off the threshold values. Rows: P6, P7.
+
+Status (2026-10-10): done in `goldbot/ops/gates_phase.py`, `run.py gates` / `gate-evidence`, health checks
+`stop_rule` and `phase_gates`, `settings.yaml` `gates:`; tests in tests/test_phase_gates.py. Differences from the
+acceptance above, as briefed for this change: a stop-rule breach is a health FAIL and a Telegram alert that
+recommends /halt; it does not set the system halt (the RiskGate's caps are unchanged). The report goes to
+`state/gate_report.json`, not into `phase_state.json`, so a report can never be read as a recorded gate. The health
+pass (every 60 s) evaluates it, so no scheduler job was added. Open: owner sign-off of the PROPOSED values; the
+engine appending `ClosedTrade` rows to `state/closed_trades.jsonl` (engine owner); the dashboard card (api/web
+owners; the report JSON is ready to serve).
 
 ### 9. UI/UX approval card (in progress)
 Value: the owner's one click is the only manual step, so the card must carry everything needed to decide in 90 s
@@ -168,6 +177,14 @@ Acceptance:
 
 Rows: lifecycle "Performance attribution"; G2.
 
+Status (2026-10-10): in review. Done: daily (not weekly) job `attribution` -> `state/attribution.json` and `.md`
+(goldbot/research/attribution.py) from the shadow book, fills, orders and the cost table, by family, agent,
+timeframe, session, side, regime, decision, exit and cost component, small cells marked noise; tests on a synthetic
+shadow book (tests/test_attribution.py) instead of a golden file (determinism is tested: same book, same bytes); the
+improvement agent and research analyst read it (`read_attribution`). Open: `research_director` priority input (a
+change to research budget allocation, so it needs quant review and its own test), the dashboard view (goldbot/api
+and web/ were out of scope), live realised R (item 8's engine trade record). Row G12.
+
 ### 13. Bounded spawning and the 4h founder path
 Value: explores uncovered timeframes and regimes unattended, under the same gates, so the system keeps evolving
 without a live winner to clone (FIND).
@@ -178,7 +195,17 @@ Acceptance: as in TRADER_LIFECYCLE section 3, with these tests passing:
 
 Also: `saturday_retrain` covers 4h, every spawn raises `n_pop`, and every spawn is logged with its gap id.
 
-Rows: G3, G6; new rows.
+Status (2026-10-10): `gap_watch` and `Population.spawn_founder` are in review with the three tests above (G11).
+4h founder path (2026-10-10): settings carry a 4h walk-forward window (48/6/6, purge 10 d, embargo 4 d), so
+`saturday_retrain` trains 4h agents into challengers and gap_watch spawns 4h founders
+(`tests/test_jobs_integration.py::test_a_4h_agent_retrains_into_a_challenger`,
+`tests/test_gap_watch.py::test_a_4h_founder_is_spawned_for_an_uncovered_4h_timeframe_and_1d_stays_refused`); the
+engine needed no change (`tests/test_engine.py::test_4h_agent_decides_only_on_4h_closes_and_its_shadow_trades_count_4h_bars`).
+Still open: 1d. The engine keeps ~40 trading days of 1m bars (`EngineConfig.max_bars_in_memory`), short of the 120
+daily bars a frame needs, so a daily agent would never decide; gap_watch keeps refusing 1d founders with a BACKLOG
+suggestion until the engine holds daily history (an engine change, trading-safety review).
+
+Rows: G3, G6, G11.
 
 ### 14. Cross-feed check
 Value: stops a broker-feed artefact being "found" as an edge once broker data accumulates (FIND, honesty).
@@ -225,7 +252,7 @@ Item 1 needs the owner's VM, so it runs as an owner step alongside the wave.
 ## Later (parked)
 - M28 TreeSHAP per decision, A5 per-trade SHAP, and a post-trade review after each exit.
 - R8 `order_calc_margin` (touches the broker protocol; schedule after item 6).
-- D10 bar close by clock, A2 window from settings, M9 allocator blackout input, D12 daily M1 reconciliation, D11
+- D10 bar close by clock, A2 window from settings, M9 allocator blackout input, D11
   `flags` dedup, D13 session state from `session_deals`, D7 4h bars across the daily break.
 - M25 CUSUM calibrated to 5% quarterly false alarms; M15 walk-forward reads settings; U4 lockout timing.
 - M16 CPCV quarterly; M10 learned allocator (after three months of data); F12 TradingView feature family.

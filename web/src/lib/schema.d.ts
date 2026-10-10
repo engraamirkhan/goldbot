@@ -123,6 +123,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/password/change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change Password */
+        post: operations["change_password_api_auth_password_change_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/password/forgot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Forgot Password */
+        post: operations["forgot_password_api_auth_password_forgot_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/recovery/codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recovery Codes */
+        post: operations["recovery_codes_api_auth_recovery_codes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/recovery/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recovery Login */
+        post: operations["recovery_login_api_auth_recovery_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset */
+        post: operations["reset_api_auth_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/reset-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset Link */
+        post: operations["reset_link_api_auth_reset_link_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/setup": {
         parameters: {
             query?: never;
@@ -219,6 +321,23 @@ export interface paths {
         put?: never;
         /** Halt */
         post: operations["halt_api_halt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Health View */
+        get: operations["health_view_api_health_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -330,6 +449,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Research View */
+        get: operations["research_view_api_research_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/status": {
         parameters: {
             query?: never;
@@ -375,6 +511,40 @@ export interface paths {
         put?: never;
         /** Disable */
         post: operations["disable_api_users_disable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enable */
+        post: operations["enable_api_users_enable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/revoke-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Sessions */
+        post: operations["revoke_sessions_api_users_revoke_sessions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -472,6 +642,48 @@ export interface components {
             title: string;
             /** Ts Utc */
             ts_utc: string | null;
+        };
+        /**
+         * AgentHealthRow
+         * @description One champion's drift and health (state/drift.json, research/drift.py AgentHealth) with its halt state.
+         */
+        AgentHealthRow: {
+            /** Agent Id */
+            agent_id: string;
+            /** Backtest Dd */
+            backtest_dd: number | null;
+            /** Brier */
+            brier: number | null;
+            /** Capital Weight */
+            capital_weight: number | null;
+            /** Cusum */
+            cusum: number;
+            /** Cusum Alarm */
+            cusum_alarm: boolean;
+            /** Dd 30D */
+            dd_30d: number;
+            /** Ece */
+            ece: number | null;
+            /** Halt Reasons */
+            halt_reasons: string[];
+            /** Halted */
+            halted: boolean;
+            /** Halted Since */
+            halted_since: string | null;
+            /** N Calib */
+            n_calib: number;
+            /** N Live Rows */
+            n_live_rows: number;
+            /** Notes */
+            notes: string[];
+            /** Psi Size Down */
+            psi_size_down: string[];
+            /** Psi Warn */
+            psi_warn: string[];
+            /** Size Factor */
+            size_factor: number;
+            /** Version */
+            version: string;
         };
         /** AgentRow */
         AgentRow: {
@@ -574,6 +786,54 @@ export interface components {
             now: string;
         };
         /**
+         * ChangePasswordRequest
+         * @description Logged in. Revokes the user's other sessions.
+         */
+        ChangePasswordRequest: {
+            /**
+             * Current Password
+             * @default
+             */
+            current_password: string;
+            /**
+             * New Password
+             * @default
+             */
+            new_password: string;
+            /**
+             * Totp
+             * @default
+             */
+            totp: string;
+        };
+        /** CusumPoint */
+        CusumPoint: {
+            /** S */
+            s: number;
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+            /** Z */
+            z: number;
+        };
+        /** CusumTrace */
+        CusumTrace: {
+            /** Agent Id */
+            agent_id: string;
+            /** Alarm */
+            alarm: boolean;
+            /** H */
+            h: number;
+            /** K */
+            k: number;
+            /** Points */
+            points: components["schemas"]["CusumPoint"][];
+            /** Version */
+            version: string;
+        };
+        /**
          * DecidedProposal
          * @description A proposal decided in the last few minutes, so its card can show what happened to it.
          *
@@ -668,6 +928,42 @@ export interface components {
             /** Webhook P99 Latency S */
             webhook_p99_latency_s: number | null;
         };
+        /**
+         * ForgotPasswordRequest
+         * @description Self-service reset with a current authenticator code; the owner account also needs one of its recovery codes
+         *     (spent). The same 403 for an unknown email, a wrong code or a missing recovery code.
+         */
+        ForgotPasswordRequest: {
+            /**
+             * Email
+             * @default
+             */
+            email: string;
+            /**
+             * New Password
+             * @default
+             */
+            new_password: string;
+            /**
+             * Recovery Code
+             * @default
+             */
+            recovery_code: string;
+            /**
+             * Totp
+             * @default
+             */
+            totp: string;
+        };
+        /** GateCheck */
+        GateCheck: {
+            /** Detail */
+            detail: string;
+            /** Name */
+            name: string;
+            /** Passed */
+            passed: boolean;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -714,6 +1010,72 @@ export interface components {
              */
             ts_utc: string;
         };
+        /**
+         * HealthCheckRow
+         * @description One deterministic health check (goldbot/ops/health.py), evaluated when the view is requested.
+         */
+        HealthCheckRow: {
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "warn" | "fail";
+        };
+        /** HealthView */
+        HealthView: {
+            /** Agents */
+            agents: components["schemas"]["AgentHealthRow"][];
+            /** Checks */
+            checks: components["schemas"]["HealthCheckRow"][];
+            /** Cusum */
+            cusum: components["schemas"]["CusumTrace"][];
+            /** Dd Mult */
+            dd_mult: number;
+            /** Drift Error */
+            drift_error: string | null;
+            /** Drift Ts */
+            drift_ts: string | null;
+            /** Errors */
+            errors: {
+                [key: string]: string;
+            };
+            /**
+             * Generated Utc
+             * Format: date-time
+             */
+            generated_utc: string;
+            psi: components["schemas"]["PsiHeatmap"];
+            /** Reliability */
+            reliability: components["schemas"]["ReliabilityCurve"][];
+            system_halt: components["schemas"]["SystemHaltView"] | null;
+        };
+        /**
+         * HypothesisDoc
+         * @description The hypothesis portfolio (docs/research/hypotheses.md), its tables parsed, read-only.
+         */
+        HypothesisDoc: {
+            /** Note */
+            note: string | null;
+            /** Path */
+            path: string;
+            /** Tables */
+            tables: components["schemas"]["HypothesisTable"][];
+            /** Updated Utc */
+            updated_utc: string | null;
+        };
+        /** HypothesisTable */
+        HypothesisTable: {
+            /** Columns */
+            columns: string[];
+            /** Rows */
+            rows: string[][];
+            /** Title */
+            title: string;
+        };
         /** InviteRequest */
         InviteRequest: {
             /** Email */
@@ -723,7 +1085,7 @@ export interface components {
              * @default viewer
              * @enum {string}
              */
-            role: "owner" | "approver" | "viewer";
+            role: "approver" | "viewer";
         };
         /** InviteResponse */
         InviteResponse: {
@@ -806,6 +1168,38 @@ export interface components {
              */
             ok: boolean;
         };
+        /** PlanFamily */
+        PlanFamily: {
+            /** Best Dsr */
+            best_dsr: number | null;
+            /** Blocked */
+            blocked: boolean;
+            /** Evidence */
+            evidence: number;
+            /** Family */
+            family: string;
+            /** Flags */
+            flags: string[];
+            /** Median Auc */
+            median_auc: number | null;
+            /** Shadow Trades */
+            shadow_trades: number;
+            /** Trials */
+            trials: number;
+        };
+        /** PlanFocus */
+        PlanFocus: {
+            /** Budget */
+            budget: number;
+            /** Evidence */
+            evidence: number;
+            /** Family */
+            family: string;
+            /** Rank */
+            rank: number;
+            /** Reasons */
+            reasons: string[];
+        };
         /** Proposal */
         Proposal: {
             /** Account Id */
@@ -848,10 +1242,203 @@ export interface components {
             /** Tradingview Url */
             tradingview_url?: string | null;
         };
+        /**
+         * PsiHeatmap
+         * @description PSI of the top features (rows) per agent (columns); null where the agent does not use the feature.
+         */
+        PsiHeatmap: {
+            /** Agents */
+            agents: string[];
+            /** Features */
+            features: string[];
+            /** Size Down */
+            size_down: number;
+            /** Values */
+            values: (number | null)[][];
+            /** Warn */
+            warn: number;
+        };
         /** RearmRequest */
         RearmRequest: {
             /** Totp */
             totp: string;
+        };
+        /** RecoveryCodesRequest */
+        RecoveryCodesRequest: {
+            /**
+             * Password
+             * @default
+             */
+            password: string;
+            /**
+             * Totp
+             * @default
+             */
+            totp: string;
+        };
+        /** RecoveryCodesResponse */
+        RecoveryCodesResponse: {
+            /** Recovery Codes */
+            recovery_codes: string[];
+        };
+        /**
+         * RecoveryLoginRequest
+         * @description Owner only: a one-time recovery code in place of the authenticator code.
+         */
+        RecoveryLoginRequest: {
+            /**
+             * Email
+             * @default
+             */
+            email: string;
+            /**
+             * Password
+             * @default
+             */
+            password: string;
+            /**
+             * Recovery Code
+             * @default
+             */
+            recovery_code: string;
+        };
+        /** RecoveryLoginResponse */
+        RecoveryLoginResponse: {
+            /** Email */
+            email: string;
+            /** Expires In */
+            expires_in: number;
+            /** Recovery Codes Left */
+            recovery_codes_left: number;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "owner" | "approver" | "viewer";
+            /** Token */
+            token: string;
+            /** Totp Uri */
+            totp_uri: string;
+        };
+        /** ReliabilityBin */
+        ReliabilityBin: {
+            /** Hi */
+            hi: number;
+            /** Hit Rate */
+            hit_rate: number;
+            /** Lo */
+            lo: number;
+            /** Mean P */
+            mean_p: number;
+            /** N */
+            n: number;
+        };
+        /**
+         * ReliabilityCurve
+         * @description Predicted p (10 equal bins) against the realised target-hit rate of closed, taken shadow trades.
+         */
+        ReliabilityCurve: {
+            /** Agent Id */
+            agent_id: string;
+            /** Bins */
+            bins: components["schemas"]["ReliabilityBin"][];
+            /** Brier */
+            brier: number | null;
+            /** Ece */
+            ece: number | null;
+            /** N */
+            n: number;
+            /** Version */
+            version: string | null;
+        };
+        /**
+         * ResearchPlanView
+         * @description The research director's latest plan (state/research_plan.json).
+         */
+        ResearchPlanView: {
+            /** Budget */
+            budget: {
+                [key: string]: number;
+            };
+            /**
+             * Created Utc
+             * Format: date-time
+             */
+            created_utc: string;
+            /** Evidence */
+            evidence: components["schemas"]["PlanFamily"][];
+            /** Focus */
+            focus: components["schemas"]["PlanFocus"][];
+            /** Grid Budget */
+            grid_budget: {
+                [key: string]: number;
+            };
+            /** Holdout From */
+            holdout_from: string;
+            /** Holdout To */
+            holdout_to: string;
+            /** Quarter */
+            quarter: string;
+            /** Quarter Budget */
+            quarter_budget: number;
+            /** Quarter Used */
+            quarter_used: number;
+            /** Stale */
+            stale: boolean;
+            /** Total Budget */
+            total_budget: number;
+            /** Unallocated */
+            unallocated: number;
+        };
+        /** ResearchView */
+        ResearchView: {
+            budget: components["schemas"]["TrialBudget"];
+            /**
+             * Generated Utc
+             * Format: date-time
+             */
+            generated_utc: string;
+            hypotheses: components["schemas"]["HypothesisDoc"];
+            plan: components["schemas"]["ResearchPlanView"] | null;
+            /** Plan Error */
+            plan_error: string | null;
+            /** Trials */
+            trials: components["schemas"]["TrialRow"][];
+            /** Trials Total */
+            trials_total: number;
+        };
+        /** ResetLinkResponse */
+        ResetLinkResponse: {
+            /** Expires H */
+            expires_h: number;
+            /** Reset Token */
+            reset_token: string;
+        };
+        /**
+         * ResetRequest
+         * @description Owner-issued one-time link: sets a new password and enrols a new authenticator.
+         */
+        ResetRequest: {
+            /**
+             * New Password
+             * @default
+             */
+            new_password: string;
+            /**
+             * Token
+             * @default
+             */
+            token: string;
+        };
+        /** RevokeResponse */
+        RevokeResponse: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Sessions */
+            sessions: number;
         };
         /** RoleChange */
         RoleChange: {
@@ -861,7 +1448,7 @@ export interface components {
              * Role
              * @enum {string}
              */
-            role: "owner" | "approver" | "viewer";
+            role: "approver" | "viewer";
         };
         /** SetupRequest */
         SetupRequest: {
@@ -874,6 +1461,16 @@ export interface components {
              * @default
              */
             setup_code: string;
+        };
+        /**
+         * SetupResponse
+         * @description The owner's authenticator and 10 one-time recovery codes. Shown once: only their hashes are stored.
+         */
+        SetupResponse: {
+            /** Recovery Codes */
+            recovery_codes: string[];
+            /** Totp Uri */
+            totp_uri: string;
         };
         /** Status */
         Status: {
@@ -913,10 +1510,62 @@ export interface components {
              */
             supervisor_reasons: string[];
         };
-        /** TotpEnrolment */
-        TotpEnrolment: {
-            /** Totp Uri */
-            totp_uri: string;
+        /** SystemHaltView */
+        SystemHaltView: {
+            /** Clear Command */
+            clear_command: string;
+            /** Reasons */
+            reasons: string[];
+            /** Review Command */
+            review_command: string;
+            /** Since */
+            since: string | null;
+        };
+        /** TrialBudget */
+        TrialBudget: {
+            /** Budget */
+            budget: number;
+            /** Left */
+            left: number;
+            /** Quarter */
+            quarter: string;
+            /** Used */
+            used: number;
+        };
+        /**
+         * TrialRow
+         * @description One research-registry trial (state/research_registry.jsonl). R figures are the rule's own expectancy over
+         *     every candidate: gross on mid prices, net of every cost.
+         */
+        TrialRow: {
+            /** Agent Id */
+            agent_id: string;
+            /** Family */
+            family: string;
+            /** Gates */
+            gates: components["schemas"]["GateCheck"][];
+            /** Gates Passed */
+            gates_passed: boolean | null;
+            /** Gross R */
+            gross_r: number | null;
+            /** Gross T */
+            gross_t: number | null;
+            /** N */
+            n: number | null;
+            /** Net R */
+            net_r: number | null;
+            /** Net T */
+            net_t: number | null;
+            /** Rationale */
+            rationale: string;
+            /** Status */
+            status: string;
+            /** Timeframe */
+            timeframe: string | null;
+            /** Trial */
+            trial: number;
+            /** Ts */
+            ts: string | null;
         };
         /** UserRef */
         UserRef: {
@@ -1138,6 +1787,204 @@ export interface operations {
             };
         };
     };
+    change_password_api_auth_password_change_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    forgot_password_api_auth_password_forgot_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForgotPasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recovery_codes_api_auth_recovery_codes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryCodesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recovery_login_api_auth_recovery_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryLoginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_api_auth_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_link_api_auth_reset_link_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserRef"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResetLinkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     setup_api_auth_setup_post: {
         parameters: {
             query?: never;
@@ -1157,7 +2004,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TotpEnrolment"];
+                    "application/json": components["schemas"]["SetupResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1309,6 +2156,26 @@ export interface operations {
             };
         };
     };
+    health_view_api_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthView"];
+                };
+            };
+        };
+    };
     jobs_api_jobs_get: {
         parameters: {
             query?: never;
@@ -1454,6 +2321,26 @@ export interface operations {
             };
         };
     };
+    research_view_api_research_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchView"];
+                };
+            };
+        };
+    };
     status_api_status_get: {
         parameters: {
             query?: never;
@@ -1514,6 +2401,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Ok"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enable_api_users_enable_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserRef"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_sessions_api_users_revoke_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserRef"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokeResponse"];
                 };
             };
             /** @description Validation Error */

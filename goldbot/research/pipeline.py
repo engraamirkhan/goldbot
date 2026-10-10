@@ -182,7 +182,9 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
             holdout: Window | None = None, score_holdout: bool = False,
             frame: tuple[pd.DataFrame, pd.DataFrame] | None = None, swap: SwapSpec | None = None) -> Prepared:
     """Features, candidates and labels (one position at a time) for one configuration. `frame`: the decision frame
-    (build_decision_frame's output) when several configurations share a timeframe, so it is built once.
+    (build_decision_frame's output) when several configurations share a timeframe, so it is built once. Candidates
+    and the barrier ATR come from `Specialist.candidates_in_context` / `barrier_atr`, which see the context bars (a
+    daily signal executed on 4h bars).
 
     extra_cost_usd: round-trip cost per oz beyond the bar spread (entry and exit slippage plus commission). Labels
     already pay the spread (entry at the ask, exit at the bid), so the spread is not charged again: the extra cost is
@@ -196,11 +198,12 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
     bars_dec = bars_dec.reset_index(drop=True)
     m, X = frame if frame is not None else build_decision_frame(bars_dec, context, feature_names, ctx)
     version = X.attrs["feature_version"]
-    cands = spec.candidates(m, X)
-    a = atr(m, 14)
+    cands = spec.candidates_in_context(m, X, context)
+    own_atr = spec.barrier_atr(m, context)        # e.g. ATR(1d) for a daily signal executed on 4h bars
+    a = atr(m, 14) if own_atr is None else own_atr
     ls = spec.label_spec
-    labels = one_at_a_time(triple_barrier(bars_dec, cands, ls, a, swap=swap))
-    gross = one_at_a_time(triple_barrier(_zero_spread(bars_dec), cands, ls, a))
+    labels = one_at_a_time(triple_barrier(bars_dec, cands, ls, a, swap=swap, policy=spec.exit_spec))
+    gross = one_at_a_time(triple_barrier(_zero_spread(bars_dec), cands, ls, a, policy=spec.exit_spec))
     if holdout is not None and not score_holdout:
         if not labels.empty:
             labels = labels[_before(labels, holdout[0])].reset_index(drop=True)
@@ -273,15 +276,19 @@ def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: 
 def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feats: pd.DataFrame, cols: list[str],
                   folds: list[Fold], version: str, *, n_trials: int, trades_per_year: float | None,
                   extra_cost_usd: float, holdout: Window | None, score_holdout: bool,
-                  window: dict[str, Any], swap: SwapSpec | None = None) -> ResearchResult:
+                  window: dict[str, Any], swap: SwapSpec | None = None,
+                  fold_cols: dict[int, list[str]] | None = None) -> ResearchResult:
     """Shared by the per-family and the pooled walk-forward: fit per fold, cross-fitted calibration, per-candidate
     threshold from its own barriers, metrics, rule-only expectancy and the design's gates (or the holdout rule).
-    `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it."""
+    `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it.
+    fold_cols: per fold number, the inputs selected from that fold's training rows only (feature discovery);
+    folds not in it use `cols`."""
     y = labels["target_hit"].astype(int)
     oof_pred = np.full(len(labels), np.nan)
     last_model = None
     for f in folds:
-        mdl = MetaLabelModel(feature_names=cols, feature_version=version).fit(
+        fc = (fold_cols or {}).get(f.k, cols)
+        mdl = MetaLabelModel(feature_names=fc, feature_version=version).fit(
             feats.iloc[f.train_idx], y.iloc[f.train_idx], labels["weight"].iloc[f.train_idx])
         oof_pred[f.test_idx] = mdl.predict_raw(feats.iloc[f.test_idx])
         last_model = mdl

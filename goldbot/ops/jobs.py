@@ -28,10 +28,20 @@
                     30-day drawdown against backtest -> state/drift.json (size factors, halted agents, system halt).
                     Halts are sticky until the owner clears them (`run.py drift-review --clear`) or a new champion
                     version replaces the halted one. Entries only: exits are never affected.
+* gap_watch         daily after drift_watch (TRADER_LIFECYCLE section 3): deterministic gap detectors -> zero-capital
+                    shadow founders (capped a month, reserved slots), on-demand runs of existing read-only staff roles
+                    (capped a week, inside the monthly agent budget), hypotheses, BACKLOG suggestions ->
+                    state/gaps.json (ops/gap_watch.py). Creates no live agent and no new family or role.
 * monthly_research  bounded search: label-grid variants (+-step on target, stop and time limit) per specialist, as
                     many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
                     fresh plan), never past the quarter's trial budget and never into the held-out year, each a
                     walk-forward recorded in the trial registry whose count feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
+* attribution       daily (BACKLOG 12, G12): deterministic attribution of the shadow book, engine fills and orders
+                    against the canonical cost table -> state/attribution.json + attribution.md, which the improvement
+                    agent and research analyst read (`read_attribution`). Reporting only: changes nothing.
+* feed_reconcile    daily (D12): per account, the engine's tick-built 1m bars against the broker's own M1 for the last
+                    day; divergence and unconfirmed spikes -> dq_events, broker M1 -> bars_1m_broker, report ->
+                    state/reconcile_<account>.json (health check reconcile:<account>). Skipped without a broker.
 """
 from __future__ import annotations
 
@@ -56,6 +66,7 @@ from goldbot.execution.classifier import PersistentClassifier, classify
 from goldbot.execution.costs import BrokerTerms, CostTable, build_cost_table, publishable
 from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.labels.triple_barrier import SwapSpec
+from goldbot.ops import gap_watch as gap_watch_mod
 from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.research.director import (
@@ -101,6 +112,7 @@ class JobContext(Record):
     agent_runner: AgentRunner | None = None                      # None when no Anthropic API key is in the keyring
     fetch_calendar: Callable[[], str] | None = None              # Forex Factory weekly JSON (network, VPS only)
     upload_costs: Callable[[bytes], str] | None = None           # published cost table -> release costs-v1 (VPS only)
+    broker_for: Callable[[Account], Any] | None = None           # read-only Broker per account (feed_reconcile), or None
 
 
 # ---------------------------------------------------------------------------------------------- nightly costs
@@ -304,11 +316,11 @@ def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             out[m.agent_id] = agent
             continue
         spec = m.specialist()
-        if spec.timeframe not in ("15m", "1h"):
+        if spec.timeframe not in ctx.settings.walkforward:   # settings.walkforward: 15m, 1h, 4h (1d research-only)
             agent["retrain"] = f"skipped: no walk-forward window configured for {spec.timeframe}"
             out[m.agent_id] = agent
             continue
-        wf = ctx.settings.walkforward[cast(DecisionTimeframe, spec.timeframe)]
+        wf = ctx.settings.walkforward[spec.timeframe]
         # rolling train window plus enough test history for out-of-fold backtest stats
         res = _walk_forward(ctx, spec, slot, wf.train_months + 4 * wf.test_months)
         if res is None or res.model is None:
@@ -709,6 +721,118 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- gap watch
+def champion_windows(ctx: JobContext) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Each champion's training window as the Saturday retrain builds it: train_months + 4 x test_months up to the
+    day its model was fitted (the 1h window for a timeframe without its own)."""
+    out = []
+    for e in ctx.models.entries:
+        if e.status != "champion":
+            continue
+        m = ctx.population.members.get(e.agent_id)
+        tf = gap_watch_mod.member_timeframe(m.family, m.config) if m is not None else "1h"
+        wf = ctx.settings.walkforward.get(cast(DecisionTimeframe, tf)) or ctx.settings.walkforward["1h"]
+        end = e.created_utc
+        out.append((end - pd.DateOffset(months=wf.train_months + 4 * wf.test_months), end))
+    return out
+
+
+def gap_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily after drift_watch (docs/TRADER_LIFECYCLE.md section 3): detects gaps and answers them within the caps
+    (ops/gap_watch.py) -> state/gaps.json. Spawns zero-capital shadow founders only; promotion stays with the gates."""
+    g = ctx.settings.gaps
+    try:
+        dq = ctx.store.read("dq_events", start=slot - pd.Timedelta(days=g.dq_window_days), end=slot)
+    except (ValueError, OSError) as exc:
+        log.warning("gap_watch: dq_events unreadable: %s", exc)
+        dq = pd.DataFrame()
+    try:
+        vol = gap_watch_mod.daily_realised_vol(_bars(ctx, "1h", slot - pd.Timedelta(days=g.regime_history_days), slot))
+    except (ValueError, OSError, KeyError) as exc:
+        log.warning("gap_watch: 1h bars unreadable: %s", exc)
+        vol = pd.Series(dtype=float)
+    stages = {f.stem.removeprefix("engine_"): str(_read_json(f).get("stage", "normal"))
+              for f in sorted(ctx.state_dir.glob("engine_*.json"))}
+    report = gap_watch_mod.run_gap_watch(
+        now=slot, settings=g, population=ctx.population, state_dir=ctx.state_dir,
+        walkforward_tfs=set(ctx.settings.walkforward), drift=_read_json(ctx.state_dir / "drift.json"), dq=dq,
+        daily_vol=vol, champion_windows=champion_windows(ctx), plan=_read_json(ctx.state_dir / PLAN_FILE) or None,
+        trials=read_rows(ctx.trials.path), engine_stages=stages, runner=ctx.agent_runner)
+    if report.spawned:
+        ctx.population.save(ctx.state_dir / "agents.json")
+    return {"gaps": [x.gap_id for x in report.gaps], "spawned": report.spawned,
+            "staff_runs": [a.target for a in report.actions if a.action == "staff_run"],
+            "refused": [f"{r.action} {r.target}: {r.reason}" for r in report.refused]}
+
+
+
+# ---------------------------------------------------------------------------------------------- attribution (BACKLOG 12)
+def attribution(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily deterministic attribution (research/attribution.py) -> state/attribution.json and attribution.md.
+    Reads the shadow book, every account's fills and pending_orders table, the cost tables and 1h bars (regime);
+    writes nothing else, so no trade, setting, model or budget changes. A missing input degrades the report (it
+    says so in its notes), never the job."""
+    from goldbot.execution.costs import settings_swap
+    from goldbot.research.attribution import CostModel, VersionRole, build_report, save_report
+    a = ctx.settings.attribution
+    since = slot - pd.Timedelta(days=a.window_days)
+    trades = [t for b in ShadowBook(ctx.state_dir).books.values() for t in b.closed]
+    found = canonical_cost_table(ctx.settings, ctx.accounts, ctx.state_dir)
+    costs = CostModel.from_table(found[0], live_swap(ctx)) if found is not None else CostModel.from_settings(ctx.settings)
+    try:
+        vol = gap_watch_mod.daily_realised_vol(_bars(ctx, "1h", since - pd.Timedelta(days=365), slot))
+    except (ValueError, OSError, KeyError) as exc:
+        log.warning("attribution: 1h bars unreadable, regime unknown: %s", exc)
+        vol = pd.Series(dtype=float)
+    fills, orders, tables = {}, {}, {}
+    for acc in ctx.accounts:
+        try:
+            fills[acc.account_id] = ctx.store.read("fills", source=acc.account_id, start=since, end=slot)
+        except (ValueError, OSError) as exc:
+            log.warning("attribution: fills of %s unreadable: %s", acc.account_id, exc)
+            fills[acc.account_id] = pd.DataFrame()
+        orders[acc.account_id] = _read_json(ctx.state_dir / f"orders_{acc.account_id}.json")
+        try:
+            table = CostTable.load(ctx.state_dir / f"costs_{acc.account_id}.json")
+        except ValueError:
+            table = None
+        tables[acc.account_id] = CostModel.from_table(table, settings_swap(ctx.settings)) if table is not None else None
+    roles = {e.version: VersionRole(status=e.status, promoted_utc=e.promoted_utc) for e in ctx.models.entries}
+    rep = build_report(trades, now=slot, costs=costs, settings=a, daily_vol=vol, roles=roles, fills=fills,
+                       orders=orders, tables=tables)
+    save_report(rep, ctx.state_dir)
+    return {"taken": rep.n_taken, "candidates": rep.n_candidates, "net_r": rep.overall.mean_r_net,
+            "verdict": rep.overall.verdict, "costs": costs.source}
+
+
+# ---------------------------------------------------------------------------------------------- feed reconcile (D12)
+def feed_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily (design: Data architecture, D12/D20): per enabled account, the engine's tick-built 1m bars against the
+    broker's own M1 over the last day (goldbot/data/crossfeed.py) -> dq_events, bars_1m_broker, state/reconcile_<acc>.json."""
+    from goldbot.data.crossfeed import reconcile_account
+    if ctx.broker_for is None:
+        return {"skipped": "no broker connection configured for the scheduler"}
+    out: dict[str, Any] = {}
+    failed: list[str] = []
+    for acc in ctx.accounts:
+        broker = None
+        try:                                  # one unreachable terminal does not stop the other account's check
+            broker = ctx.broker_for(acc)
+            if broker is None:
+                out[acc.account_id] = {"skipped": "no read-only broker connection for this account"}
+                continue
+            rep = reconcile_account(ctx.store, broker, acc.account_id, acc.symbol, slot, state_dir=ctx.state_dir)
+            out[acc.account_id] = rep.model_dump(mode="json", exclude={"account_id"})
+        except Exception as exc:
+            failed.append(f"{acc.account_id}: {type(exc).__name__}: {exc}")
+        finally:
+            if broker is not None and hasattr(broker, "shutdown"):
+                broker.shutdown()
+    if failed:                                # the scheduler records the failure (health: scheduler check)
+        raise RuntimeError("feed_reconcile failed for " + "; ".join(failed) + f" (done: {sorted(out)})")
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- wiring
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
@@ -723,6 +847,9 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "agents_presession": agents_presession,
     "recalibrate": recalibrate,
     "drift_watch": drift_watch,
+    "gap_watch": gap_watch,
+    "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
+    "attribution": attribution,                   # BACKLOG 12: daily attribution for the staff agents (reporting only)
 }
 
 

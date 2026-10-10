@@ -1,5 +1,7 @@
 # goldbot runbook (owner's guide)
 
+**Start with the one-page [owner guide](OWNER_GUIDE.md) (setup checklist, daily use, decisions); this runbook has the detail.**
+
 This is the step-by-step guide for running goldbot on the Windows VPS. It is written for the owner, not for a
 developer. Every command, service name, file and setting below exists in this repository; where a step depends
 on something outside the repository (Windows, Cloudflare, Telegram, Node.js) the guide says so.
@@ -340,17 +342,45 @@ a service is running; if one keeps restarting, read its `.err` file in the logs 
 
 ### 2.10 Dashboard first run: create the owner account
 
+0. Before the first start of `goldbot-api`, name the owner in the server's own settings file (never in
+   `config\settings.yaml`: the repository is public). Create or edit `C:\goldbot\config\settings.local.yaml`
+   (not tracked by Git) and add:
+   ```yaml
+   auth: {owner_email: you@yourdomain}
+   ```
+   Then `nssm restart goldbot-api`. Without it the setup form refuses with "auth.owner_email is not set", and any
+   other email is refused. Only this address can ever hold the owner role. If the address in the file and the
+   owner account in `state\aux.db` ever differ, the API log warns "dashboard owner account(s) do not match
+   auth.owner_email" and changes nothing: correct the file.
 1. While no user exists, the API prints a one-time setup code at every start. Open
    `C:\goldbot\logs\goldbot-api.log` and find the latest line
    `goldbot first-run: open the dashboard and create the owner account with setup code <code>`.
    The code changes every time the API restarts, so always use the newest line.
 2. Open your tunnel hostname in a browser. The login page offers the setup form: enter the **Setup code**, your
-   email and a password, then **Create owner account**.
-3. The page shows an authenticator enrolment (an `otpauth://` link/QR). Add it to your authenticator app; every
-   later sign-in, and every re-arm, needs the 6-digit code from it.
-4. Other people: **Users** tab (owner only) -> email + role (`viewer`, `approver` or `owner`) -> **Create invite
-   link**, and send them the link. Approvers can approve, reject and halt; only the owner can re-arm and manage
-   users.
+   email (the `owner_email` above) and a password of 12+ characters, then **Create owner account**.
+3. The page shows an authenticator enrolment (an `otpauth://` link/QR) and **10 recovery codes**. Add the
+   enrolment to your authenticator app; every later sign-in, and every re-arm, needs the 6-digit code from it.
+   Copy the recovery codes into your password manager now: they are shown once (only their hashes are stored).
+   Each one signs you in once if the authenticator is lost.
+4. Other people: **Users** tab (owner only) -> email + role (`viewer` or `approver`; the owner role is never
+   granted) -> **Create invite link**, and send them the link (72 h, single use). Approvers can approve, reject
+   and halt; only the owner can re-arm, invite, change roles and manage users. Nobody can create an account any
+   other way.
+
+**Passwords and lost authenticators**
+
+| Situation | What to do |
+| --- | --- |
+| Anyone wants a new password | Signed in: **Account** tab -> current password + authenticator code + new password (12+ characters, different from the current one). Their other sessions are signed out. |
+| An approver or viewer forgot their password but has the authenticator | Login page -> **Forgot password** -> email, a current code, new password. All their sessions are signed out and you get a Telegram notice; if you did not expect it, **Disable** the account. Five wrong attempts lock that email for 15 minutes (20 from one network address lock that address). |
+| You (the owner) forgot your password | Login page -> **Forgot password** -> email, a current authenticator code, new password **and one unused recovery code** (the code is spent). The authenticator alone never resets the owner. You get a Telegram notice either way. |
+| An approver or viewer lost the authenticator | Owner: **Users** -> **Reset link** on their row, and send them the link (24 h, single use). It sets a new password and a new authenticator and signs them out everywhere. |
+| You (the owner) lost the authenticator | Login page -> **Use a recovery code** -> email, password and one unused recovery code. Enrol the new authenticator it shows; the old one stops working. Then get 10 fresh codes (`POST /api/auth/recovery/codes` with password + new code; there is no button yet). The old codes stop working. |
+| You lost the authenticator and every recovery code, or the password and the authenticator | On the server: stop `goldbot-api` and ask a Claude session to reset the owner in `state\aux.db`. There is no remote path, by design. |
+| A sign-in says "too many attempts" | Wait 15 minutes after the last failure; the counter is kept in `state\aux.db`, so restarting the API does not clear it. Someone who knows your email can keep it locked this way; the audit log shows the failures and their address. |
+| Someone should lose access | Owner: **Users** -> **Disable** (signs them out at once) or **Sign out everywhere**; **Enable** restores the account. The owner cannot be disabled or demoted. |
+
+Every one of these is recorded in the audit log (`state\aux.db`, table `audit`; the state-files table in section 3 shows how to read it).
 
 ---
 
@@ -382,7 +412,22 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   authenticator code -> **Re-arm**. Telegram `/rearm` only tells you to use the dashboard. The same re-arm also
   clears an engine's 12% drawdown halt (the kill switch, which closes every position at market when it trips); each
   engine applies it once, and a restart does not clear the halt.
-* `/status` on Telegram shows whether entries are halted and how many proposals are pending.
+* `/status` on Telegram shows whether entries are halted, the approval mode and how many proposals are pending.
+
+
+### Auto mode (entries without your click)
+
+* By default every entry waits for your click (propose-and-approve). **Auto mode** means an entry that passes the
+  RiskGate is placed without asking you. Every cap, stop and exit works exactly as before; only the click goes.
+* It is never switched on by itself. Telegram sends one message, "Auto mode can be enabled: evidence ...; reply
+  /mode auto <TOTP>", only after at least 100 proposals you approved or rejected since the last mode change, with no
+  RiskGate breach (no 8% size-down, no 12% kill switch) and no measurable difference between the outcomes of the
+  trades you approved and the ones you rejected (your veto is not adding value). The message quotes the numbers.
+* To switch on: `/mode auto 123456` with your current authenticator code (the dashboard one). It is refused if the
+  evidence no longer holds or the code is wrong. Telegram deletes the message with the code.
+* To switch off at any time: `/mode propose` (no code needed), or `/halt` to stop new entries altogether.
+* It switches back to propose-and-approve on its own after a 12% kill switch, and stays propose for the 30 days after
+  any re-arm. `/status` shows the current approval mode; every change is in `state\audit.jsonl`.
 
 ### Staff-agent reports
 
@@ -422,7 +467,7 @@ Each report arrives on Telegram, appears on the dashboard **Agents** tab, and is
 | Trained models and champions | `C:\goldbot\models\registry.json` |
 | Trial registry | `state\research_registry.jsonl` |
 | Monthly research summary | `state\research_<YYYY-MM>.md` |
-| Dashboard users and audit log | `state\users.json`, `state\audit.jsonl` |
+| Dashboard users, invites, sessions and audit log | `state\aux.db` (SQLite; tables `users`, `invites`, `sessions`, `password_resets`, `recovery_codes`, `audit`; tokens and codes as hashes only). Latest audit entries: `python -c "import sqlite3; [print(b) for (b,) in sqlite3.connect('state/aux.db').execute('SELECT body FROM audit ORDER BY id DESC LIMIT 20')]"`. Logins survive an API restart or deploy (12 h sessions). `state\users.json` and `state\audit.jsonl` from before 2026-10-10 were imported once and are kept untouched as a backup; delete them only after a verified backup of aux.db. Copy aux.db (with its `-wal` file) only while `goldbot-api` is stopped: a plain copy of a live WAL database may be inconsistent. |
 | Market data, ticks, fills, decisions journal, news, calendar | `C:\goldbot\data` (Parquet) |
 | Phase gate | `state\phase_state.json` (section 5) |
 | Service logs | `C:\goldbot\logs\<service>.log` / `.err` |
@@ -483,16 +528,42 @@ Back up the state folder and `config\` regularly; they are not in Git.
 
 ## 5. Going live (demo -> tiny-live)
 
+**Is the gate met? Ask the code first.** It evaluates every roadmap gate from the evidence and records nothing:
+
+```powershell
+.\.venv\Scripts\python -m goldbot.ops.run gates            # each gate MET / NOT MET, item by item, plus the stop rule
+.\.venv\Scripts\python -m goldbot.ops.run gate-evidence chaos_drill --passed yes --detail "killed terminal mid-position, stops held"
+.\.venv\Scripts\python -m goldbot.ops.run gate-evidence shuffle_auc --value 0.503   # also asof_violations, feed_mismatch_share
+```
+
+`gates` prints each item with its evidence and the threshold from `config/settings.yaml` `gates:` and writes
+`state\gate_report.json`. The paper-to-tiny-live gate needs: the backtest-to-paper gate recorded, at least 150
+closed demo trades since it, at least 182 days of paper, paper expectancy no more than 50% below the backtest's,
+measured slippage within 30% of the modelled slippage, a passed chaos drill, and no single loss larger than the
+weekly cap. Values marked `PROPOSED` in `settings.yaml` (the DSR bar, the "at chance" tolerance, feed agreement,
+minimum days, trades per broker) must be signed off by you before the first paper trade; change them only before
+that, never to pass a gate. The paper and live record is `state\closed_trades.jsonl`; until the engine writes it,
+the paper and live items read "not met".
+
+**Stop rule.** `gates` and the health check `stop_rule` also evaluate the design's stop rule: after 18 months of
+paper plus live, more than 500 pooled trades with the lower 90% confidence bound on expectancy still below zero, or
+any single trade losing more than the weekly cap (5% of equity). A breach makes health FAIL with
+`STOP RULE BREACHED`, which Telegram announces once. It **does not** halt, close or resize anything; the RiskGate's
+caps and kill switch keep working as before. The design says the project stops: send `/halt` (or press Halt on the
+dashboard) and review before doing anything else.
+
 Live trading is locked in two independent places, and **both** must agree:
 
 1. **The phase gate file** `C:\goldbot\state\phase_state.json` must list the gate `paper_to_tiny_live` in
-   `gates_passed`. Without the file goldbot assumes `{"phase": 0, "gates_passed": []}`. No code writes this
-   file: you record the gate yourself, and only when the paper-to-tiny-live gate in the design's roadmap has
-   actually been met (the evidence comes from the paper record, the shadow book and the journal). Do not create
-   it to "try live". The only key the code reads is `gates_passed`. The recorded form is:
+   `gates_passed`. Without the file goldbot assumes `{"phase": 0, "gates_passed": []}`. Only
+   `python -m goldbot.ops.run record-gate <gate> --evidence state\gate_report.json` writes this file (gates in
+   order, with a timestamp and the evidence file's hash): you record the gate yourself, and only when `gates` shows
+   it MET. Neither `gates` nor the health check ever records a gate. Do not create the file to "try live". The
+   only key the unlock reads is `gates_passed`; the gate report reads `gate_log` timestamps for the phase clocks.
+   The recorded form is:
 
    ```json
-   {"phase": 3, "gates_passed": ["paper_to_tiny_live"]}
+   {"phase": 3, "gates_passed": ["foundation_to_backtest", "backtest_to_paper", "paper_to_tiny_live"], "gate_log": [...]}
    ```
 
    (`phase` is informational; the code does not read it.)

@@ -15,6 +15,8 @@ probe, the MT5 bridge's /health through the tunnel, is injected (`HealthContext.
 Operational alerts (design S5, R11, X6) are checks too: a service heartbeat silent for 5 minutes fails, and a tripped
 daily or weekly loss cap and an order that failed after the retries warn with `NOTIFY_ON_WARN`, so the Telegram alert
 path tells the owner once per incident. Alerts only add information: nothing here changes orders, sizing or halts.
+The design's stop rule (P6) is a check too: a breach fails `stop_rule`, which alerts; it recommends stopping and halts
+nothing by itself. `phase_gates` shows whether the next roadmap gate is met (P7); it records nothing.
 
 `HealthWatch` is the alert half: fed a report, it returns the Telegram text for checks that turned fail (and the ones
 that recovered) since the last report, and persists the last statuses in state/health_last.json so a restart of the
@@ -38,6 +40,7 @@ from pydantic import Field
 from goldbot.base import FrozenRecord, Record, UtcTimestamp, write_atomic
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
+from goldbot.data.crossfeed import check_reconciliation
 
 Status = Literal["ok", "warn", "fail"]
 _RANK: dict[str, int] = {"ok": 0, "warn": 1, "fail": 2}
@@ -376,6 +379,49 @@ def check_phase(ctx: HealthContext) -> Check:
         return Check(name="phase", status="fail",
                      reason=f"gates out of order or unknown: {passed} (record with `python -m goldbot.ops.run record-gate`)")
     return Check(name="phase", status="ok", reason=f"phase {phase}, gates passed: {', '.join(passed) or 'none'}")
+
+
+def check_stop_rule(ctx: HealthContext) -> Check:
+    """P6, the design's stop rule (goldbot/ops/gates_phase.py): FAIL when, after 18 months of paper plus live, more than
+    500 pooled trades still have a lower 90% bound on expectancy below zero, or when any single trade lost more than the
+    weekly cap. The FAIL is the whole action: the alert loop tells the owner once, and the health CLI exits 1. It does
+    not halt, close or resize anything (the RiskGate's own caps are unchanged); stopping is the owner's /halt."""
+    from goldbot.ops import gates_phase as gp
+    if ctx.settings is None:
+        return _skipped("stop_rule", "settings do not load")
+    trades, err = gp.load_closed_trades(ctx.state_dir)
+    _, when, perr = gp.phase_record(ctx.state_dir)
+    s = gp.evaluate_stop_rule(trades, when.get("backtest_to_paper"), ctx.settings.risk.weekly_cap, ctx.settings.gates, ctx.now)
+    if s.breached:
+        return Check(name="stop_rule", status="fail",
+                     reason=("STOP RULE BREACHED: the design says the project stops; send /halt to stop entries. Nothing "
+                             "was halted automatically (RiskGate caps still apply). " + "; ".join(s.reasons))[:600])
+    problems = "; ".join(e for e in (err, perr) if e)
+    if problems:
+        return Check(name="stop_rule", status="warn", reason=f"record partly unreadable ({problems}); {s.detail}"[:400])
+    return Check(name="stop_rule", status="ok", reason=s.detail)
+
+
+def check_phase_gates(ctx: HealthContext) -> Check:
+    """P7: the next unrecorded roadmap gate, met or not, from the evidence (`run.py gates` prints the detail).
+    Informational: a gate is recorded only by `run.py record-gate`, and live needs unlock-live plus the typed phrase."""
+    from goldbot.ops import gates_phase as gp
+    if ctx.settings is None:
+        return _skipped("phase_gates", "settings do not load")
+    try:
+        rep = gp.evaluate_gates(ctx.state_dir, ctx.settings, ctx.now)
+    except Exception as exc:                 # evidence files are best effort here; the gate report shows the detail
+        return Check(name="phase_gates", status="warn", reason=f"gate evaluation failed: {type(exc).__name__}: {exc}"[:300])
+    nxt = next((g for g in rep.gates if not g.recorded), None)
+    if nxt is None:
+        return Check(name="phase_gates", status="ok", reason="every roadmap gate recorded")
+    req = [i for i in nxt.items if i.required]
+    missing = [i.name for i in req if not i.met]
+    if nxt.met:
+        return Check(name="phase_gates", status="ok",
+                     reason=f"next gate {nxt.gate}: MET on the evidence; the owner records it with run.py record-gate")
+    return Check(name="phase_gates", status="ok",
+                 reason=f"next gate {nxt.gate}: not met ({len(req) - len(missing)}/{len(req)} items; missing {', '.join(missing)})"[:400])
 
 
 def _running(job: dict[str, Any]) -> pd.Timestamp | None:
@@ -803,6 +849,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
         checks.append(check_supervisor(ctx))
         checks.append(check_halt(ctx))
         checks.append(check_phase(ctx))
+        checks += [check_stop_rule(ctx), check_phase_gates(ctx)]
         for a in ctx.accounts:
             checks += [check_engine(ctx, a.account_id), check_risk_state(ctx, a.account_id)]
             checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
@@ -811,6 +858,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
         checks += [check_heartbeat(ctx, s) for s in HEARTBEAT_SERVICES]
         checks += check_scheduler(ctx)
         checks += [check_costs(ctx, a.account_id) for a in ctx.accounts]
+        checks += [check_reconciliation(ctx, a.account_id) for a in ctx.accounts]   # D12 (goldbot/data/crossfeed.py)
         if ctx.settings is not None and ctx.settings.costs.publish_release:
             checks.append(check_costs_published(ctx))
         checks += [check_data_quality(ctx), check_drift(ctx), check_deploy(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]

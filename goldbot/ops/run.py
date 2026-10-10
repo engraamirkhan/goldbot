@@ -8,6 +8,8 @@
   python -m goldbot.ops.run telegram
   python -m goldbot.ops.run news
   python -m goldbot.ops.run record-gate <gate_name> --evidence <path or text>   # appends to state/phase_state.json
+  python -m goldbot.ops.run gates [--json] [--no-write]   # each roadmap gate met / not met + the stop rule (records nothing)
+  python -m goldbot.ops.run gate-evidence <name> (--value X | --passed yes|no) [--detail TEXT]   # leakage audit, chaos drill
   python -m goldbot.ops.run health [--json] [--static] [--out FILE] [--baseline FILE]   (exit 1 on a fail)
   python -m goldbot.ops.run publish-costs [--out FILE]   # canonical broker's measured costs -> release costs-v1
 """
@@ -311,6 +313,22 @@ def _agent_runner(settings: Settings, store: Store,
                        model=settings.agents.model)
 
 
+def _job_broker(acc: Any) -> Any:
+    """A read-only Broker for the scheduler's feed_reconcile (D12): the account's bridge when one is configured, else
+    on Windows the terminal's own saved login (attach without logging in, as the bridge does); None elsewhere. Only
+    get_bars and symbol_info are called on it."""
+    from goldbot.ops import accounts
+    bridge = accounts.bridge_endpoint(acc.account_id)
+    if bridge is not None:
+        from goldbot.execution.bridge import RemoteBroker
+        return RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{acc.account_id}")
+    if sys.platform == "win32":
+        from goldbot.execution.mt5_adapter import MT5Broker
+        return MT5Broker(terminal_path=acc.terminal_path, login=None, password=None, server=acc.server,
+                         server_tz=acc.server_tz, symbol=acc.symbol, account_label=acc.account_id)
+    return None
+
+
 def run_scheduler() -> None:
     from pathlib import Path
 
@@ -334,7 +352,8 @@ def run_scheduler() -> None:
                      accounts=accounts.enabled_accounts(),   # live accounts only once the phase gate has passed
                      sync_bars=lambda store: sync_release(store, token=gh_token),   # bars (data-v1) + macro (macro-v1)
                      sync_trials=(lambda path: sync_registry(path, gh_token)) if gh_token else None,
-                     population=Population(Path("state") / "population.json"))
+                     population=Population(Path("state") / "population.json"),
+                     broker_for=_job_broker)       # feed_reconcile: engine bars vs the broker's own M1 (D12)
     if settings.costs.publish_release:          # measured costs for research.yml (release costs-v1)
         if gh_token:
             ctx.upload_costs = costs_uploader(gh_token)
@@ -363,7 +382,7 @@ def run_telegram() -> None:
     if not settings.telegram.allowed_user_ids:
         raise SystemExit("settings.yaml telegram.allowed_user_ids is empty: add your Telegram user id")
     start_heartbeat("state", "telegram")
-    TelegramBot(token, "state", set(settings.telegram.allowed_user_ids)).run()
+    TelegramBot(token, "state", set(settings.telegram.allowed_user_ids), settings=settings.telegram).run()
 
 
 def run_news() -> None:
@@ -421,6 +440,12 @@ if __name__ == "__main__":
         run_news()
     elif cmd == "record-gate":
         sys.exit(record_gate_cli(sys.argv[2:]))
+    elif cmd == "gates":
+        from goldbot.ops.gates_phase import main as gates_main
+        sys.exit(gates_main(sys.argv[2:]))
+    elif cmd == "gate-evidence":
+        from goldbot.ops.gates_phase import evidence_main
+        sys.exit(evidence_main(sys.argv[2:]))
     elif cmd == "publish-costs":
         sys.exit(publish_costs_cli(sys.argv[2:]))
     elif cmd == "health":

@@ -12,6 +12,10 @@ the state directory:
 `control.json` carries the owner's halt: no new entries on any engine until an owner re-arms. Exits are never gated.
 An owner re-arm (dashboard, owner role + TOTP) also writes a fresh `rearm_id`; each engine that sees a new id clears
 its own 12% drawdown halt (RiskGate.rearm). Nothing else writes a rearm id, so no halt clears without that action.
+`control.json` also carries the owner's approval mode (`/mode auto|propose`, design: Operating mode, row A10): None
+until the owner first sets it (the engine then uses its configured mode), and only the Telegram service writes `auto`,
+after the evidence check and a TOTP (goldbot/telegram/automode.py). An engine's 12% kill switch writes it back to
+`propose`. The re-arm lock and the kill switch still force propose-and-approve inside the engine whatever it says.
 Writers here are authenticated before they call the bus (API role check, Telegram allow-list); the files are only
 reachable on the VPS.
 """
@@ -20,6 +24,7 @@ from __future__ import annotations
 import time
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from goldbot.base import Record, create_exclusive, write_atomic
 from goldbot.telegram.approvals import REASON_CODES, Proposal
@@ -41,6 +46,14 @@ class Control(Record):
     rearm_id: str | None = None     # new on every owner re-arm; engines clear a drawdown halt once per id
     rearm_by: str | None = None
     rearm_ts: float = 0.0
+    approval_mode: Literal["propose", "auto"] | None = None    # the owner's /mode; None: never set (engine config)
+    mode_by: str | None = None
+    mode_ts: float = 0.0            # last mode change: the auto-mode evidence counts from here
+    mode_reason: str | None = None
+
+
+ApprovalMode = Literal["propose", "auto"]
+_MODE_FIELDS = ("approval_mode", "mode_by", "mode_ts", "mode_reason")
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -147,12 +160,13 @@ class ApprovalBus:
         try:
             return Control.model_validate_json(self.control_path.read_text()) if self.control_path.exists() else Control()
         except ValueError:
-            return Control(halted=True, reason="unreadable control.json")    # fail closed for entries
+            # fail closed for entries, and back to propose-and-approve for any engine that trades again
+            return Control(halted=True, reason="unreadable control.json", approval_mode="propose")
 
     def set_halt(self, halted: bool, by: str, reason: str | None = None) -> Control:
         prev = self.control()
         c = Control(halted=halted, by=by, ts=time.time(), reason=reason, rearm_id=prev.rearm_id, rearm_by=prev.rearm_by,
-                    rearm_ts=prev.rearm_ts)
+                    rearm_ts=prev.rearm_ts, **{k: getattr(prev, k) for k in _MODE_FIELDS})
         _write_atomic(self.control_path, c.model_dump_json())
         return c
 
@@ -160,6 +174,16 @@ class ApprovalBus:
         """The owner's re-arm, called only after the owner role and a TOTP code were verified: clears the owner halt
         and issues a new rearm id, which the engines answer by clearing their drawdown halt."""
         now = time.time()
-        c = Control(halted=False, by=by, ts=now, rearm_id=uuid.uuid4().hex, rearm_by=by, rearm_ts=now)
+        prev = self.control()
+        c = Control(halted=False, by=by, ts=now, rearm_id=uuid.uuid4().hex, rearm_by=by, rearm_ts=now,
+                    **{k: getattr(prev, k) for k in _MODE_FIELDS})
+        _write_atomic(self.control_path, c.model_dump_json())
+        return c
+
+    def set_mode(self, mode: ApprovalMode, by: str, reason: str | None = None) -> Control:
+        """The owner's approval mode. Callers check authority first: `auto` only after the evidence check and a TOTP
+        (goldbot/telegram/automode.py); `propose` lowers authority and needs neither. The halt and re-arm are kept."""
+        c = self.control().model_copy(update={"approval_mode": mode, "mode_by": by, "mode_ts": time.time(),
+                                              "mode_reason": reason})
         _write_atomic(self.control_path, c.model_dump_json())
         return c

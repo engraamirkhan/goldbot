@@ -2,8 +2,8 @@
 
 Trigger on a 1h close: the close is on the EMA-50 side that matches the 4h EMA-50 slope, ADX(14) > 20, price pulled
 back to within 0.5 ATR of the EMA in the previous `pullback_bars` bars, and this bar closes back in the trend
-direction. Barriers 2.5 / 1.25 x ATR(1h), 48 h. The design's trail (1.5 ATR once 1.25 ATR in profit) is the live
-exit policy; labels use the barriers, which is the conservative bound on what the trail can do.
+direction. Barriers 2.5 / 1.25 x ATR(1h), 48 h, with the design's trail (1.5 ATR once 1.25 ATR in profit) as the exit
+policy, run identically by the labels, the shadow book and the live engine (labels.exit_policy).
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.labels.triple_barrier import BarrierSpec
 from goldbot.specialists.base import Specialist, register
 
@@ -43,8 +44,12 @@ class TrendSpecialist(Specialist):
         c = self.config
         return BarrierSpec(target_atr=c["target_atr"], stop_atr=c["stop_atr"], max_bars=c["max_bars"], name="trend")
 
+    @property
+    def exit_spec(self) -> ExitPolicy:
+        return ExitPolicy(trail_atr=1.5, trail_after_atr=1.25)      # design: trail at 1.5 ATR once 1.25 ATR in profit
+
     def exit_policy(self) -> dict[str, Any]:
-        return {"type": "trail", "trail_atr": 1.5, "activate_after_atr": 1.25}
+        return {"type": "trail", **self.exit_spec.model_dump(exclude_defaults=True)}
 
     def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
         c = self.config

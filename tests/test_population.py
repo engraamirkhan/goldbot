@@ -1,4 +1,5 @@
 """The population tournament's rules (design: A competing population of trading agents)."""
+import inspect
 import random
 
 import numpy as np
@@ -8,7 +9,14 @@ import pytest
 from goldbot.api.schema import AgentRow
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
 from goldbot.research import population as P
-from goldbot.research.population import Member, Population, mutate_config, score_agent
+from goldbot.research.population import (
+    Member,
+    Population,
+    SpawnRefused,
+    founder_base,
+    mutate_config,
+    score_agent,
+)
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import AgentIdentity
 
@@ -193,3 +201,42 @@ def test_mutations_cover_params_feature_subsets_and_timeframes():
         assert "timeframe" not in cfg and (kind == "features" or cfg["feature_seed"] == 7)
     with pytest.raises(ValueError, match="does not run on 4h"):
         SPECIALISTS["trend"](timeframe="4h")
+
+
+# ---------------------------------------------------------------------------------------------- gap founders
+def _founded(tmp_path) -> Population:
+    pop = Population(tmp_path / "p.json")
+    pop.ensure_founders(NOW - pd.Timedelta(days=60))
+    return pop
+
+
+def test_gap_founder_starts_in_shadow_with_zero_capital(tmp_path):
+    pop = _founded(tmp_path)
+    n_before = len(pop.members)
+    m = pop.spawn_founder("breakout", founder_base("breakout", "15m"), NOW, gap_id="uncovered_timeframe:breakout:15m",
+                          origin="breakout default on 15m")
+    assert m.status == "shadow" and m.capital_weight == 0.0 and m.generation == 0 and m.parent_id is None
+    assert m.gap_id == "uncovered_timeframe:breakout:15m" and m.origin == "breakout default on 15m"
+    assert m.notes == ["gap founder: uncovered_timeframe:breakout:15m (breakout default on 15m)"]
+    assert m.specialist().timeframe == "15m"
+    assert len(pop.members) == n_before + 1                            # n_pop, the DSR's trial count, rises
+    assert "status" not in inspect.signature(Population.spawn_founder).parameters
+
+
+def test_gap_founders_respect_the_monthly_and_reserved_slot_caps(tmp_path, monkeypatch):
+    pop = _founded(tmp_path)
+    base = SPECIALISTS["trend"].default_config
+    cfgs = [{**base, "target_atr": base["target_atr"] * f} for f in (0.8, 0.9, 1.1, 1.2)]
+    pop.spawn_founder("trend", cfgs[0], NOW, gap_id="g0", origin="t")
+    pop.spawn_founder("trend", cfgs[1], NOW, gap_id="g1", origin="t")
+    with pytest.raises(SpawnRefused, match="monthly cap"):
+        pop.spawn_founder("trend", cfgs[2], NOW, gap_id="g2", origin="t")
+    nxt = NOW + pd.DateOffset(months=1)
+    pop.spawn_founder("trend", cfgs[2], nxt, gap_id="g2", origin="t")
+    monkeypatch.setattr(P, "GAP_RESERVED_SLOTS", 3)
+    with pytest.raises(SpawnRefused, match="reserved shadow slots"):
+        pop.spawn_founder("trend", cfgs[3], nxt, gap_id="g3", origin="t")
+    monkeypatch.setattr(P, "GAP_RESERVED_SLOTS", 10)
+    monkeypatch.setattr(P, "SHADOW_CAP", len(pop.active("shadow")))
+    with pytest.raises(SpawnRefused, match="shadow cap"):
+        pop.spawn_founder("trend", cfgs[3], nxt, gap_id="g3", origin="t")

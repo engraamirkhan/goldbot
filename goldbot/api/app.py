@@ -14,12 +14,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
-from goldbot.api.auth import AuthStore, User, env_setup_code_hint, has_role, totp_verify
+from goldbot.api import explain
+from goldbot.api.auth import (
+    RESET_TTL_H,
+    SESSION_TTL_H,
+    AuthStore,
+    User,
+    env_setup_code_hint,
+    has_role,
+)
 from goldbot.api.schema import (
     AcceptRequest,
     AcceptResponse,
@@ -30,12 +38,15 @@ from goldbot.api.schema import (
     AuthState,
     CalendarEvent,
     CalendarResponse,
+    ChangePasswordRequest,
     DecidedProposal,
     Decision,
     DecisionResult,
     FeedHealth,
+    ForgotPasswordRequest,
     HaltRequest,
     Headline,
+    HealthView,
     InviteRequest,
     InviteResponse,
     JobRow,
@@ -45,11 +56,19 @@ from goldbot.api.schema import (
     Ok,
     Proposal,
     RearmRequest,
+    RecoveryCodesRequest,
+    RecoveryCodesResponse,
+    RecoveryLoginRequest,
+    RecoveryLoginResponse,
+    ResearchView,
+    ResetLinkResponse,
+    ResetRequest,
+    RevokeResponse,
     Role,
     RoleChange,
     SetupRequest,
+    SetupResponse,
     Status,
-    TotpEnrolment,
     UserRef,
     UserRow,
 )
@@ -59,15 +78,16 @@ from goldbot.telegram.bus import ApprovalBus
 
 if TYPE_CHECKING:
     from goldbot.agents.tools import ReadOnlyTools
+    from goldbot.config import Settings
 
 bearer = HTTPBearer(auto_error=False)
 
 
 class State:
-    def __init__(self, state_dir: str | Path, data_root: str | Path | None = None):
+    def __init__(self, state_dir: str | Path, data_root: str | Path | None = None, owner_email: str | None = None):
         self.dir = Path(state_dir)
         self.bus = ApprovalBus(self.dir)
-        self.auth = AuthStore(self.dir)
+        self.auth = AuthStore(self.dir, owner_email=owner_email)
         self.ws_clients: set[WebSocket] = set()
         self._data_root = data_root
         self._tools: ReadOnlyTools | None = None
@@ -170,9 +190,36 @@ class State:
             self.ws_clients.discard(ws)
 
 
+def _settings_owner_email() -> str | None:
+    """auth.owner_email from settings (settings.local.yaml on the server); unreadable settings mean unset."""
+    try:
+        from goldbot.config import load_settings
+        return load_settings().auth.owner_email
+    except Exception as exc:                    # noqa: BLE001 - the API still serves; bootstrap stays refused
+        print(f"goldbot api: settings unreadable, auth.owner_email unset: {exc}", flush=True)
+        return None
+
+
+LOOPBACK = {"127.0.0.1", "::1"}
+
+
+def client_ip(request: Request) -> str | None:
+    """The caller's address for the per-IP lockout. The API listens on 127.0.0.1 behind the Cloudflare tunnel, so a
+    loopback peer is cloudflared and the visitor's address is its CF-Connecting-IP header; any other peer is used as
+    is (a header from a non-local peer is never trusted)."""
+    host = request.client.host if request.client else None
+    if host in LOOPBACK:
+        fwd = request.headers.get("cf-connecting-ip", "").strip()
+        if fwd:
+            return fwd[:64]
+    return host
+
+
 def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist",
-               data_root: str | Path | None = None) -> FastAPI:
-    st = State(state_dir, data_root)
+               data_root: str | Path | None = None, docs_dir: str | Path | None = None,
+               owner_email: str | None = None) -> FastAPI:
+    """owner_email: the dashboard owner; None reads `auth.owner_email` from settings."""
+    st = State(state_dir, data_root, owner_email if owner_email is not None else _settings_owner_email())
     app = FastAPI(title="goldbot api", version="0.2")
     app.state.st = st
     hint = env_setup_code_hint(st.auth)
@@ -186,32 +233,44 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return u
 
     def need(role: Role) -> Callable[[User], User]:
+        """By rank; "owner" also needs the account to be auth.owner_email (AuthStore.is_owner, fails closed)."""
         def dep(u: User = Depends(auth)) -> User:
-            if not has_role(u, role):
+            if not has_role(u, role) or (role == "owner" and not st.auth.is_owner(u)):
                 raise HTTPException(403, f"{role} role required")
             return u
         return dep
 
+    @app.middleware("http")
+    async def no_referrer(request: Request, call_next: Callable[[Request], Any]) -> Response:
+        # invite and reset links carry their token in the URL fragment; this also keeps any URL out of Referer
+        response: Response = await call_next(request)
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
     # ------------------------------------------------------------- auth endpoints
     @app.get("/api/auth/state")
     def auth_state() -> AuthState:
-        return AuthState(needs_setup=st.auth.setup_code is not None, users=len(st.auth.users))
+        return AuthState(needs_setup=st.auth.setup_code is not None, users=st.auth.user_count())
 
     @app.post("/api/auth/setup")
-    def setup(body: SetupRequest) -> TotpEnrolment:
+    def setup(body: SetupRequest) -> SetupResponse:
         try:
-            uri = st.auth.bootstrap_owner(body.setup_code, body.email, body.password)
+            e = st.auth.bootstrap_owner(body.setup_code, body.email, body.password)
         except PermissionError as exc:
             raise HTTPException(403, str(exc))
-        return TotpEnrolment(totp_uri=uri)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return SetupResponse(totp_uri=e.totp_uri, recovery_codes=e.recovery_codes)
 
     @app.post("/api/auth/login")
-    def login(body: LoginRequest) -> LoginResponse:
+    def login(body: LoginRequest, request: Request) -> LoginResponse:
         try:
-            tok = st.auth.login(body.email, body.password, body.totp)
+            tok = st.auth.login(body.email, body.password, body.totp, ip=client_ip(request))
         except PermissionError as exc:
             raise HTTPException(403, str(exc))
-        u = st.auth.users[body.email.lower()]
+        u = st.auth.session_user(tok)
+        if u is None:                                   # disabled between the check and now
+            raise HTTPException(403, "invalid credentials")
         return LoginResponse(token=tok, expires_in=12 * 3600, role=u.role, email=u.email)
 
     @app.post("/api/auth/logout")
@@ -236,6 +295,63 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             raise HTTPException(400, str(exc))
         return AcceptResponse(email=email, totp_uri=uri)
 
+    @app.post("/api/auth/password/change")
+    def change_password(body: ChangePasswordRequest, creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Ok:
+        if creds is None or st.auth.session_user(creds.credentials) is None:
+            raise HTTPException(401, "login required")
+        try:
+            st.auth.change_password(creds.credentials, body.current_password, body.totp, body.new_password)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return Ok()
+
+    @app.post("/api/auth/password/forgot")
+    def forgot_password(body: ForgotPasswordRequest, request: Request) -> Ok:
+        try:
+            st.auth.forgot_password(body.email, body.totp, body.new_password, recovery_code=body.recovery_code or None,
+                                    ip=client_ip(request))
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return Ok()
+
+    @app.post("/api/auth/reset-link")
+    def reset_link(body: UserRef, u: User = Depends(need("owner"))) -> ResetLinkResponse:
+        try:
+            tok = st.auth.create_reset_link(u.email, body.email)
+        except (KeyError, PermissionError) as exc:
+            raise HTTPException(400, f"no such user: {exc}" if isinstance(exc, KeyError) else str(exc))
+        return ResetLinkResponse(reset_token=tok, expires_h=RESET_TTL_H)
+
+    @app.post("/api/auth/reset")
+    def reset(body: ResetRequest) -> AcceptResponse:
+        try:
+            e = st.auth.use_reset_link(body.token, body.new_password)
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(400, str(exc))
+        return AcceptResponse(email=e.email, totp_uri=e.totp_uri)
+
+    @app.post("/api/auth/recovery/login")
+    def recovery_login(body: RecoveryLoginRequest, request: Request) -> RecoveryLoginResponse:
+        try:
+            r = st.auth.recovery_login(body.email, body.password, body.recovery_code, ip=client_ip(request))
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        return RecoveryLoginResponse(token=r.token, expires_in=SESSION_TTL_H * 3600, role=r.role, email=r.email,
+                                     totp_uri=r.totp_uri, recovery_codes_left=r.recovery_codes_left)
+
+    @app.post("/api/auth/recovery/codes")
+    def recovery_codes(body: RecoveryCodesRequest, u: User = Depends(need("owner")),
+                       creds: HTTPAuthorizationCredentials = Depends(bearer)) -> RecoveryCodesResponse:
+        try:
+            codes = st.auth.regenerate_recovery_codes(creds.credentials, body.password, body.totp)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        return RecoveryCodesResponse(recovery_codes=codes)
+
     @app.get("/api/users")
     def users(u: User = Depends(need("owner"))) -> list[UserRow]:
         return [UserRow.model_validate(r) for r in st.auth.list_users()]
@@ -255,6 +371,22 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         except (ValueError, KeyError) as exc:
             raise HTTPException(400, str(exc))
         return Ok()
+
+    @app.post("/api/users/enable")
+    def enable(body: UserRef, u: User = Depends(need("owner"))) -> Ok:
+        try:
+            st.auth.enable(u.email, body.email)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(400, str(exc))
+        return Ok()
+
+    @app.post("/api/users/revoke-sessions")
+    def revoke_sessions(body: UserRef, u: User = Depends(need("owner"))) -> RevokeResponse:
+        try:
+            n = st.auth.revoke_sessions(u.email, body.email)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(400, str(exc))
+        return RevokeResponse(sessions=n)
 
     @app.get("/api/me")
     def me(u: User = Depends(auth)) -> Me:
@@ -323,7 +455,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
     @app.post("/api/rearm")
     async def rearm(body: RearmRequest, u: User = Depends(need("owner"))) -> Status:
-        if not totp_verify(u.totp_secret, body.totp):
+        if not st.auth.verify_totp(u.email, body.totp):           # each code once (replay refused)
             st.auth.audit("rearm_failed", by=u.email)
             raise HTTPException(403, "authenticator code required to re-arm")
         c = st.bus.owner_rearm(by=f"dashboard:{u.email}")      # also clears the engines' drawdown halts
@@ -378,6 +510,28 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         tags = ("rates", "risk", "dollar", "surprise")      # unscored rows store "" for the direction tags
         return [Headline.model_validate({**r, "link": r.get("link") or None, "shock": bool(r["shock"]),
                                          **{k: r[k] or None for k in tags}}) for r in rows]
+
+    # ============================================================== Health and Research screens (read-only, any role)
+    # Built by goldbot/api/explain.py from drift.json, the shadow book, the health checks, the trial registry, the
+    # research plan and docs/research/hypotheses.md. Nothing here writes.
+    docs = Path(docs_dir) if docs_dir is not None else Path(__file__).resolve().parents[2] / "docs"
+
+    def view_settings() -> Settings | None:
+        from goldbot.config import load_settings
+        try:
+            s = load_settings()
+        except Exception:                     # a bad settings edit: the views fall back to the design defaults
+            return None
+        return s.model_copy(update={"data_root": str(data_root)}) if data_root is not None else s
+
+    @app.get("/api/health", response_model=HealthView)
+    def health_view(_: User = Depends(auth)) -> HealthView:
+        return explain.health_view(st.dir, view_settings())
+
+    @app.get("/api/research", response_model=ResearchView)
+    def research_view(_: User = Depends(auth)) -> ResearchView:
+        return explain.research_view(st.dir, view_settings(), docs)
+    # ============================================================== end Health and Research screens
 
     def current_status() -> Status:
         modes = sorted({str(e.get("approval_mode", "propose")) for e in st.engines()})

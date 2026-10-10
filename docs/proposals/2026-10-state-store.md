@@ -1,6 +1,10 @@
 # Operational state in SQLite (WAL), with off-host backups
 
-Decision document for the owner. Date: 2026-10-10. Status: proposed, nothing implemented.
+Decision document for the owner. Date: 2026-10-10. Status: step 0 (foundation) and step 1 (auth and audit) implemented
+2026-10-10 as package `goldbot/db/` (not `goldbot/state/`); steps 2-8 not started. Step 0 leftovers: `run.py migrate` /
+`import-state` are `python -m goldbot.db migrate|import-state` for now, no `state_db` health check yet, and the API
+migrates aux.db on open until `run.py migrate` exists (concurrent migrators are safe: each step re-reads the version
+under the write lock). Versions are rows of a `schema_version` table, mirrored in `PRAGMA user_version`.
 Owner request: "the trading system uses full stack, and make use of databases as well to get it done robustly, reliably".
 
 **Design basis.** `docs/DESIGN.md` already says "Parquet + DuckDB plus SQLite for live state, no database server"

@@ -2,8 +2,9 @@
 
 Trigger: the previous `range_bars` (>= 8) 1h bars form a range narrower than `max_range_atr` (2.0) x ATR(14) (8 bars
 of a random walk span about 3 ATR, so this is a compressed range), and this bar closes outside it with tick volume above `min_tick_ratio` (1.5) x its 20-bar median. Barriers 2.0 / 1.0 x
-ATR(1h), 24 h. The design's live exit (half at 1.0 ATR, rest trailed at 1.0 ATR; stop inside the range) is the exit
-policy; labels use the barriers.
+ATR(1h), 24 h. The design's exit (half at 1.0 ATR, rest trailed at 1.0 ATR) is the exit policy, run identically by
+the labels, the shadow book and the live engine (labels.exit_policy); the 2.0 ATR target stays as the cap on the rest.
+The design's "stop inside range" is not implemented: the stop is the ATR barrier.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.labels.triple_barrier import BarrierSpec
 from goldbot.specialists.base import Specialist, register
 
@@ -45,9 +47,13 @@ class BreakoutSpecialist(Specialist):
         c = self.config
         return BarrierSpec(target_atr=c["target_atr"], stop_atr=c["stop_atr"], max_bars=c["max_bars"], name="breakout")
 
+    @property
+    def exit_spec(self) -> ExitPolicy:
+        # design: half at 1.0 ATR, rest trailed at 1.0 ATR (the trail arms where the half is taken)
+        return ExitPolicy(scale_atr=1.0, scale_fraction=0.5, trail_atr=1.0, trail_after_atr=1.0)
+
     def exit_policy(self) -> dict[str, Any]:
-        return {"type": "scale_out_trail", "first_target_atr": 1.0, "first_fraction": 0.5, "trail_atr": 1.0,
-                "stop": "inside_range"}
+        return {"type": "scale_out_trail", **self.exit_spec.model_dump(exclude_defaults=True)}
 
     def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
         c = self.config

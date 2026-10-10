@@ -9,7 +9,7 @@ risk_day_anchor:    { tz: UTC,              time: "00:00" }   # loss caps reset
 # `costs` are research priors until the broker's cost table reports its own.
 
 timeframes:
-  decision: [15m, 1h]
+  decision: [15m, 1h, 4h]   # 4h (proposal P4) is also a context timeframe of 15m/1h agents; 1d stays research-only
   context:  [4h, 1d, 1w]
 
 brokers:
@@ -29,12 +29,14 @@ features:
   version: f1
 
 labels:
-  embargo_days: { 15m: 1, 1h: 2 }
-  purge_days:   { 15m: 2, 1h: 5 }
+  embargo_days: { 15m: 1, 1h: 2, 4h: 4 }
+  purge_days:   { 15m: 2, 1h: 5, 4h: 10 }
 
 walkforward:
   15m: { train_months: 24, test_months: 3, step_months: 3 }
   1h:  { train_months: 36, test_months: 6, step_months: 6 }
+  4h:  { train_months: 48, test_months: 6, step_months: 6 }   # proposal P4; research.walkforward.WINDOWS["4h"]
+  # no 1d: daily agents are research-only (the engine holds ~40 trading days of 1m bars, short of 120 daily bars)
 
 risk:
   risk_per_trade: 0.005
@@ -84,6 +86,10 @@ scheduler:
   agents_presession: { kind: daily,  at: "06:30", weekdays: [0, 1, 2, 3, 4], max_late_hours: 1 }   # macro/news briefing before London
   recalibrate:      { kind: weekly,  at: "11:30", weekday: 5, max_late_hours: 30 }   # P9: bounded calibrator refit after the retrain
   drift_watch:      { kind: daily,   at: "23:40", max_late_hours: 20 }                  # PSI, calibration, CUSUM halts (M26/M27)
+  gap_watch:        { kind: daily,   at: "23:55", max_late_hours: 20 }                  # gaps -> shadow founders / on-demand staff runs
+  attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
+
+  feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -107,6 +113,10 @@ research:
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
   holdout_from: 2025-10-01           # held-out year: research never sees it; a passing config is scored on it once
   holdout_to: 2026-09-30             #   (scripts/research_pass.py --score-holdout), inclusive
+  screen_min_events: 1000            # primary-signal screen (P4): events a rule needs; fewer, while positive and
+                                     #   significant, is "inconclusive (event floor)". Changing it is an owner decision
+  screen_min_events_daily: null      # override for rules whose signal is on daily bars (owner ruling A,
+                                     #   docs/research/preregistration-2027Q1.md); null = screen_min_events
   director_floor: 2                  # research director: every unblocked family gets at least this many of the
                                      # month's trials; the rest of (budget x families) follows evidence of signal
   label_grid_step: 0.25              # +-25% on target/stop/max_bars
@@ -134,3 +144,47 @@ drift:                               # design: Drift and health (goldbot/researc
   cusum_h: 4.0
   dd_mult: 1.5                       # an agent's 30-day drawdown above 1.5x backtest halts the system pending review
   dd_window_days: 30
+
+# Dashboard owner (goldbot/api/auth.py). The repo is public: NEVER put a real address here. On the server, put
+#   auth: {owner_email: <your email>}
+# in the git-ignored config/settings.local.yaml before the dashboard's first run. Unset, the owner account cannot be
+# created; the owner role belongs only to this address.
+# auth:
+#   owner_email: owner@example.com
+
+gates:                               # design: Roadmap gates and stop rule (goldbot/ops/gates_phase.py; `run.py gates`)
+  # The design wants these "committed in writing before the first paper trade". Uncommented values are the design's
+  # own numbers; every PROPOSED line needs the owner's sign-off. Evaluating a gate never records it or unlocks live.
+  shuffle_auc_tolerance: 0.02        # PROPOSED: owner sign-off required. Leakage audit "shuffle test at chance": |AUC-0.5| <= this
+  feed_max_mismatch_share: 0.01      # PROPOSED: owner sign-off required. "broker and Dukascopy bars agree": share of bars that differ
+  backtest_min_dsr: 0.95             # PROPOSED: owner sign-off required. Roadmap figure says DSR >= 1.0, Validation says 0.95; DSR is a probability, 1.0 is unreachable
+  backtest_min_trades: 500           # ">= 500 backtest trades" (model-filtered, best evaluated trial)
+  paper_min_trades: 150              # ">= 150 paper trades" (closed demo-account trades since backtest_to_paper)
+  paper_min_days: 182                # PROPOSED: owner sign-off required. Roadmap Phase 2 duration "6 months" as a minimum
+  paper_expectancy_within: 0.5       # "expectancy within 50% of backtest" (no more than 50% below)
+  paper_fills_within: 0.3            # "fills within 30% of target": measured slippage <= 1.3x the modelled slippage
+  live_min_trades: 300               # ">= 300 live trades"
+  live_min_days: 365                 # PROPOSED: owner sign-off required. Roadmap Phase 3 duration "12 months" as a minimum
+  live_expectancy_within: 0.4        # "expectancy within 40% of paper"
+  live_dd_mult: 1.5                  # "drawdown under 1.5x backtest"
+  brokers_within: 0.15               # "brokers within 15%": the two brokers' live expectancy
+  broker_min_trades: 50              # PROPOSED: owner sign-off required. Live trades per broker before they are compared
+  stop_after_months: 18              # stop rule: "after 18 months of paper plus live"
+  stop_min_pooled_trades: 500        #   "the pooled trade count exceeds 500"
+  stop_confidence: 0.90              #   "the lower 90% confidence bound on expectancy is still below zero" (one-sided)
+
+gaps:                                # bounded spawning (goldbot/ops/gap_watch.py, TRADER_LIFECYCLE section 3)
+  founders_per_month: 2              # zero-capital SHADOW founders a month (into 4 reserved slots inside the 24 shadow cap)
+  staff_runs_per_week: 3             # on-demand runs of existing read-only roles, inside agents.monthly_cap_usd
+  hypotheses_per_run: 2              # regime / dead-family gaps filed as hypotheses for the research gates
+  dq_window_days: 7                  # repeated data-quality errors: error events on at least
+  dq_min_error_days: 3               #   this many distinct UTC days within the window
+  regime_window_days: 20             # recent realised volatility = mean of the last 20 daily values
+  regime_history_days: 3650          # volatility terciles cut from up to ten years of 1h bars
+
+attribution:                         # daily deterministic attribution (goldbot/research/attribution.py, BACKLOG 12); reporting only
+  window_days: 180                   # closed shadow trades exited in the last 180 days
+  min_trades: 30                     # cells with fewer trades are marked "noise" and are not evidence
+  calibration_bins: 10               # equal-width bins of p for predicted-vs-realised
+  calibration_min_bin: 10            # bins with fewer candidates are marked noise
+  trade_rows: 300                    # most recent per-trade cost rows kept in state/attribution.json

@@ -68,7 +68,13 @@ from goldbot.research.pipeline import (  # noqa: E402
     run_pool,
 )
 from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry  # noqa: E402
-from goldbot.research.screen import screen, screen_lines  # noqa: E402
+from goldbot.research.screen import (  # noqa: E402
+    is_inconclusive,
+    min_events_for,
+    screen,
+    screen_lines,
+    signal_timeframe,
+)
 from goldbot.specialists import SPECIALISTS, Specialist  # noqa: E402
 
 
@@ -262,15 +268,24 @@ def _rule_only_lines(r: dict[str, Any] | None) -> list[str]:
 
 
 def parse_variants(family: str, raw: str) -> list[dict[str, Any]]:
-    """`--variants` JSON: a list of config overrides, one trial each ([{}] = the family's defaults). Keys must be
-    settings of the family (or timeframe / feature_seed); a typo must not silently run the defaults."""
+    """`--variants` JSON: a list of config overrides, one trial each ([{}] = the family's defaults); a string names one
+    of the family's presets (e.g. '["slow"]' for tsmom, H-01) and stands for its overrides. Keys must be settings of
+    the family (its defaults or optional settings, or timeframe / feature_seed); a typo must not silently run the
+    defaults."""
     from goldbot.specialists.base import FEATURE_SEED_KEY, TIMEFRAME_KEY
+    cls = SPECIALISTS[family]
     variants = json.loads(raw)
-    if isinstance(variants, dict):
+    if isinstance(variants, (dict, str)):
         variants = [variants]
+    if isinstance(variants, list):
+        for i, v in enumerate(variants):
+            if isinstance(v, str):
+                if v not in cls.presets:
+                    raise SystemExit(f"unknown {family} preset {v!r}; presets: {sorted(cls.presets)}")
+                variants[i] = dict(cls.presets[v])
     if not isinstance(variants, list) or not variants or not all(isinstance(v, dict) for v in variants):
-        raise SystemExit("--variants must be a JSON list of objects, e.g. '[{}, {\"band_z\": 1.5}]'")
-    allowed = set(SPECIALISTS[family].default_config) | {TIMEFRAME_KEY, FEATURE_SEED_KEY}
+        raise SystemExit("--variants must be a JSON list of objects or preset names, e.g. '[{}, {\"band_z\": 1.5}]'")
+    allowed = set(cls.default_config) | set(cls.optional_config) | {TIMEFRAME_KEY, FEATURE_SEED_KEY}
     for v in variants:
         bad = sorted(set(v) - allowed)
         if bad:
@@ -288,7 +303,8 @@ def summary_table(rows: list[dict[str, Any]]) -> str:
     for r in rows:
         mf = r["metrics"].get("model_filtered") or {}
         scr = r["metrics"].get("screen")
-        scr_txt = "—" if not scr else ("pass" if scr["passed"] else ("fail (skipped)" if r["metrics"].get("screen_skipped") else "**fail**"))
+        verdict = "inconclusive (event floor)" if is_inconclusive(scr) else "fail"
+        scr_txt = "—" if not scr else ("pass" if scr["passed"] else (f"{verdict} (skipped)" if r["metrics"].get("screen_skipped") else f"**{verdict}**"))
         out.append(f"| {r['trial']} | `{json.dumps(r['overrides']) if r['overrides'] else 'defaults'}` | {r['n']:,} | {scr_txt} | "
                    f"{_fmt(r['metrics'].get('oof_auc'))} | {'pass' if (r['metrics'].get('gates') or {}).get('passed') else 'fail'} | {mf.get('n', 0)} | {_fmt(mf.get('hit_rate', float('nan')))} | "
                    f"{_fmt(mf.get('profit_factor', float('nan')))} | {_fmt(mf.get('dsr'))} |")
@@ -340,6 +356,7 @@ def main() -> int:
                     help="one meta-model over every family deciding on this timeframe (one trial, family pooled_<tf>)")
     ap.add_argument("--macro", default="",
                     help="folder or Parquet of the macro-v1 release: adds the point-in-time macro features")
+    _discovery_args(ap)
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
         raise SystemExit("--pooled runs every member family at its defaults; --variants does not apply")
@@ -360,6 +377,8 @@ def main() -> int:
     print(_macro_line(macro_info)[2:], flush=True)
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
+        if args.discover:
+            return _discover(args, variants, b1, reg, settings, extra_cost, swap, holdout, cost_source, macro)
         return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings, swap=swap,
                     cost_source=cost_source, macro=macro, macro_info=macro_info)
 
@@ -401,10 +420,14 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             print(f"{tf} {len(b_dec):,}  {sizes}; lookahead check: {len(leak['lookahead_columns'])} of "
                   f"{leak['columns_checked']} columns differ [{time.time() - t0:.0f}s]", flush=True)
         b_dec, context, leak, frame = frames[tf]
-        n_trials = reg.n_trials + 1
+        # + every discovery's K_eff (survey 4b), charged to EVERY later trial, survivor or not: the conservative
+        # default, recorded as an owner-acknowledged choice in docs/research/preregistration-2027Q1.md
+        n_trials = reg.n_trials_effective + 1
         preps = [prepare(s, b_dec, context, extra_cost_usd=extra_cost, holdout=holdout, score_holdout=args.score_holdout,
                          frame=frame, swap=swap) for s in job.specs]
-        scr = None if args.score_holdout else screen(preps if job.pooled else preps[0])
+        # event floor: research.screen_min_events, or the daily-signal override (owner ruling A), set before the run
+        floor = min_events_for(tf if job.pooled else signal_timeframe(job.specs[0]), settings.research)
+        scr = None if args.score_holdout else screen(preps if job.pooled else preps[0], floor)
         skipped = bool(scr is not None and not scr["passed"] and args.skip_screen)
         agent_id = pool_identity(tf, preps).agent_id if job.pooled else job.specs[0].agent_id
         version = preps[0].feature_version
@@ -420,7 +443,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                                        "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
             row = reg.record(agent_id=agent_id, family=job.family, config=job.config, feature_version=version,
                              rationale=rationale, results=metrics, status="screened", budget_quarter=quarter)
-            print(f"{json.dumps(job.overrides) or 'defaults'}: screen failed ({n} events) [{time.time() - t0:.0f}s]", flush=True)
+            print(f"{json.dumps(job.overrides) or 'defaults'}: screen {scr['verdict']} ({n} events) [{time.time() - t0:.0f}s]", flush=True)
             text = render_screen_failed(scr, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0, "n": n,
                                                     "swap": swap.model_dump(), "cost_source": cost_source,
                                                     "macro": macro_info})
@@ -456,6 +479,36 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     return 0
 
 
+# ---------------------------------------------------------------------------------------------- feature discovery
+def _discovery_args(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--discover", action="store_true",
+                    help="ONE pre-registered feature-discovery trial (goldbot/research/discovery.py) on --specialist")
+    ap.add_argument("--families", nargs="?", const="family", default="column", choices=["column", "feature", "family"],
+                    help="--discover: group features by registry family (bare flag), by producing feature, or not")
+    ap.add_argument("--discover-config", default="{}", help="--discover: JSON overrides of DiscoveryConfig")
+
+
+def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.DataFrame, reg: TrialRegistry,
+              settings: Any, extra_cost: float, swap: SwapSpec, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
+              cost_source: str, macro: pd.DataFrame | None) -> int:
+    from goldbot.research.discovery import DiscoveryConfig, discovery_pass
+    if args.pooled or args.score_holdout or len(variants) != 1:
+        raise SystemExit("--discover runs one specialist configuration (one --variants entry), no --pooled or --score-holdout")
+    try:
+        cfg = DiscoveryConfig(**json.loads(args.discover_config))
+        row, text = discovery_pass(SPECIALISTS[args.specialist](**variants[0]), b1, reg,
+                                   budget_cap=settings.research.trial_budget_quarter, cfg=cfg, group_mode=args.families,
+                                   extra_cost_usd=extra_cost, swap=swap, holdout=holdout,
+                                   ctx={"macro": macro} if macro is not None else None, rationale=args.rationale,
+                                   cost_source=cost_source)
+    except (TrialBudgetExceeded, ValueError) as exc:
+        raise SystemExit(str(exc)) from None
+    Path(args.report).write_text(text)
+    print(text)
+    print(json.dumps({"trial": row["trial"], "agent_id": row["agent_id"], "status": row["status"]}), flush=True)
+    return 0
+
+
 def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[str, Any]) -> str:
     lines = [f"## {meta['specialist']} primary-signal screen on real bars ({meta['from_year']}-{meta['to_year']})", "",
              f"- bars: {meta['n_1m']:,} 1m -> {meta['n_dec']:,} {meta['tf']} decision bars",
@@ -467,8 +520,13 @@ def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[s
              _macro_line(meta.get("macro")),
              f"- runtime {meta['seconds']:.0f}s", ""]
     lines += screen_lines(scr) + _rule_only_lines(scr["rule_only"])
-    lines += ["Screen failed: no model was fitted. The rule is retired from model research (it may still serve as a "
-              "feature); `--skip-screen` fits a model anyway and is recorded as such."]
+    if is_inconclusive(scr):
+        lines += [f"Screen inconclusive (event floor): positive and significant on {scr['n']:,} events, fewer than the "
+                  f"{scr['min_events']:,} the floor needs. No model was fitted. This recorded, charged trial cannot "
+                  "retire the hypothesis; it is not evidence for promotion either."]
+    else:
+        lines += ["Screen failed: no model was fitted. The rule is retired from model research (it may still serve as a "
+                  "feature); `--skip-screen` fits a model anyway and is recorded as such."]
     return "\n".join(lines)
 
 

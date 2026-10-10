@@ -21,6 +21,7 @@ TABLES = {
     "macro", "calendar_events", "news", "tv_signals", "tv_ideas", "features", "labels",
     "trades", "decisions", "dq_events", "cost_tables", "fills",
     "bars_quarantine",                         # 1m rows with an error-severity dq_flag, kept out of the bar tables
+    "bars_1m_broker",                          # the broker's own M1 as its terminal reports it (D12/D23), never blended
 }
 
 KEY_COLUMNS = {

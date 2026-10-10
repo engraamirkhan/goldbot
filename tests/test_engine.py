@@ -136,6 +136,37 @@ def test_hourly_agent_decides_only_on_hour_closes(tmp_path):
     assert all(t.bars_held <= t.max_bars + 1 for t in trades)
 
 
+def test_4h_agent_decides_only_on_4h_closes_and_its_shadow_trades_count_4h_bars(tmp_path):
+    # no engine change for the 4h decision timeframe: a 4h tsmom agent (the gap_watch founder's config) is scored only
+    # when a 4h bar completes, and its shadow trades age only on 4h bars, so its time barrier is in 4h bars as labelled
+    from goldbot.data.resample import ticks_to_1m
+    from goldbot.research.population import founder_base
+    ticks = synthetic_ticks("2025-02-01", "2025-03-14 12:00", ticks_per_minute=1, seed=8)
+    live_from = pd.Timestamp("2025-03-13", tz="UTC")
+    tsmom = SPECIALISTS["tsmom"](**{**founder_base("tsmom", "4h"), "min_score": 0.0})
+    assert tsmom.timeframe == "4h" and tsmom.label_spec.max_bars == 12
+    Store(tmp_path / "data").append("bars_1m", ticks_to_1m(ticks[ticks["ts_utc"] < live_from]), source="dukascopy")
+    eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", approval_mode="auto", state_dir=str(tmp_path),
+                              shadow_host=True, data_root=str(tmp_path / "data")),
+                 PaperBroker(equity=10_000), [tsmom], {"tsmom": ConstantModel(p=0.65)},
+                 shadow_models={"tsmom-4h-v1": (tsmom.agent_id, ConstantModel(p=0.65))})
+    eng.warm_start(live_from)
+    decisions = []
+    live = ticks[ticks["ts_utc"] >= live_from]
+    for ts, bid, ask in zip(live["ts_utc"], live["bid"].to_numpy(float), live["ask"].to_numpy(float)):
+        decisions += eng.on_tick(Tick(ts_utc=pd.Timestamp(ts), bid=float(bid), ask=float(ask)))
+    mine = [pd.Timestamp(d["ts"]) for d in decisions if d["agent"] == tsmom.agent_id]
+    assert mine and all(t.minute == 0 and t.hour % 4 == 0 for t in mine)
+    assert eng._base_bars(tsmom) == (tsmom.label_spec.max_bars + 1) * 16   # 13 4h bars in 15m base bars
+    assert eng.shadow is not None
+    book = eng.shadow.books["tsmom-4h-v1"]
+    trades = book.open + book.closed
+    assert trades and {t.timeframe for t in trades} == {"4h"}
+    assert all(t.bars_held <= t.max_bars + 1 for t in trades)
+    # 1.5 days of live 15m closes: a trade aged by 15m bars would have held ~16x more bars than 4h bars elapsed
+    assert max(t.bars_held for t in trades) <= (pd.Timestamp("2025-03-14 12:00", tz="UTC") - live_from) / pd.Timedelta(hours=4)
+
+
 def test_cached_context_matches_a_fresh_build(tmp_path):
     # the engine reuses context features until a new context bar completes; across 1h, 4h and the 13:30 NY daily
     # settlement every frame must equal one built from scratch

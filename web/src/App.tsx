@@ -6,10 +6,13 @@ import { Overview } from "./screens/Overview";
 import { Approvals } from "./screens/Approvals";
 import { Agents } from "./screens/Agents";
 import { Feeds } from "./screens/Feeds";
+import { Health } from "./screens/Health";
+import { Research } from "./screens/Research";
 import { News } from "./screens/News";
 import { Users } from "./screens/Users";
+import { Account } from "./screens/Account";
 
-const TABS = ["Overview", "Approvals", "News", "Agents", "Feeds", "Users"] as const;
+const TABS = ["Overview", "Approvals", "News", "Agents", "Health", "Research", "Feeds", "Users", "Account"] as const;
 type Tab = (typeof TABS)[number];
 
 export function App() {
@@ -47,8 +50,11 @@ export function App() {
         {tab === "Approvals" && <Approvals />}
         {tab === "News" && <News />}
         {tab === "Agents" && <Agents />}
+        {tab === "Health" && <Health />}
+        {tab === "Research" && <Research />}
         {tab === "Feeds" && <Feeds />}
         {tab === "Users" && hasRole("owner") && <Users />}
+        {tab === "Account" && <Account />}
       </main>
     </div>
   );

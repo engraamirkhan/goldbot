@@ -125,7 +125,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Rule: a clone (new config hash) needs its OWN passed research trial before shadow -> live; nothing is inherited
   from its parent (the design counts real trials). Held-back agents show as `awaiting_research` in the tournament
   job's output.
-  Deferred (L4): a `preregistered` status written before a trial runs, an `eval_version` field on registry rows,
+  Deferred (L4): ~~a `preregistered` status written before a trial runs~~ (done 2026-10-10, discovery), an `eval_version` field on registry rows,
   bootstrap confidence intervals on expectancy, and a seeded no-signal test (100 seeds, DSR < 0.5 in >= 95).
 - Primary-signal screen and new families (proposal P4, 2026-10-09): `research/screen.py` measures the rule alone
   (every candidate, one position at a time, mid prices) over the research window (holdout excluded) and passes it
@@ -205,6 +205,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   champion version until the owner runs `python -m goldbot.ops.run drift-review --clear "<note>"`. The engine reads
   it (missing = no restriction, unreadable = halt), the gate reason is `drift_system_halt`, health check `drift`.
   Entries only; exits unaffected. Models trained before this have no reference: PSI is skipped for them.
+- Performance attribution (2026-10-10, BACKLOG 12, TRACEABILITY G12): the daily `attribution` job (23:50 UTC,
+  `goldbot/research/attribution.py`) writes `state/attribution.json` and `state/attribution.md` from the shadow book
+  (every candidate, taken or not), engine fills, pending_orders and the canonical cost table: expectancy in R gross
+  and net (count, t, 95% interval, hit rate, profit factor) by timeframe, family, agent, session, side, volatility
+  tercile, decision and exit (stop/target/time/policy); per-trade cost in R (spread, slippage, commission, swap) and
+  the trades costs flipped to losers; calibration of p on taken and untaken candidates; live fill slippage vs the
+  table cell. Cells under `attribution.min_trades` (30) are "noise". Champion-path trades only in the breakdowns
+  (challengers apart). The improvement agent and research analyst read it first via `read_attribution`; hypotheses
+  still go only through `file_hypothesis`; gap_watch caps unchanged. Reporting only: nothing is traded or changed.
+  Open: live realised R per position (needs the engine trade record, item 8), the research director's priority input
+  and a dashboard view (item 12's other criteria).
 - Macro data pipeline (2026-10-10, TRADER_LIFECYCLE gap 2): `.github/workflows/data-macro.yml` (Tuesdays 04:41 UTC
   and by hand) pulls DFII10, T10YIE, DTWEXBGS, GVZCLS and DGS2 from FRED's public fredgraph CSV (no key) via
   `scripts/fred_macro.py` and publishes `macro_fred.parquet` on release `macro-v1`. Rows carry value_date, vintage
@@ -259,8 +270,209 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   bar t uses only bars closed by t (truncated-history test + pipeline lookahead check). They are in
   `DEFAULT_FEATURE_NAMES`, so the default `feature_version` changes (expected: no champions exist, nothing is
   invalidated) and feature-seeded clones now draw from a larger column pool.
+- Survey features (2026-10-10, `goldbot/features/survey.py`, TRACEABILITY F17-F22; indicator survey section 4a, top-15
+  ranks 3, 4, 6 and 10): five registry families for research to screen, no specialist declares them. `vol_estimators`
+  (Garman-Klass, Rogers-Satchell, Yang-Zhang over 20/60 bars, Parkinson 60, YZ20/YZ60 term structure, vol-of-vol =
+  CV of YZ20 over 60); `round_numbers` ((close - nearest $5/$10/$25/$50 level) / ATR14 and how many of the last 50
+  bars traded through it); `regime_stats` (variance ratio q = 2/4/8 over 120 bars, R/S Hurst over 128 returns with
+  chunks 8-64, Kaufman efficiency ratio 10/30); `jumps` (return / bipower sigma of the 60 returns before the bar, flag
+  at |z| > 4, sign, bars since the last jump capped at 500); `expected_move` (close x YZ20 x sqrt(h) for h = 4/16/48
+  bars, and ATR14, over a round-trip cost = 96-bar median spread + 0.37 USD/oz slippage and commission priors; a feature
+  only, the cost-to-move filter is a later trial). Warm-up up to 128 bars (documented per family in the module).
+  Like the trader families they are in `DEFAULT_FEATURE_NAMES`: the default `feature_version` changes f-6932724812 ->
+  f-1b8f723a67 (no champions exist, nothing is invalidated). Equity stress (opt-in, survey rank 6): `macro_drivers`
+  gains `macro_vix`, `macro_vix_chg5`, `macro_spx_dd20` from FRED VIXCLS and SP500 (version 1 -> 2, so the
+  default+macro version changes too; NaN until the release carries them); `scripts/fred_macro.py` now downloads both
+  (`RELEASE_SERIES`, same next-business-day 23:00 UTC availability as GVZCLS; FRED's SP500 covers about ten years).
+  The next data-macro run publishes them to `macro-v1`.
+- Exit policies (2026-10-10, `goldbot/labels/exit_policy.py`, TRACEABILITY M3/M6/M7/R21): trend trails 1.5 ATR once 1.25 ATR in
+  profit; breakout closes half at 1.0 ATR and trails the rest 1.0 ATR (2.0 ATR target kept as the cap); session-open
+  goes flat 1 h before the next session open. One `policy_step` drives the labels (`triple_barrier(policy=)`, used
+  by research `prepare`) and the shadow book; the engine runs the same rules with `modify`/`close` (trail and flat at
+  the agent's bar close, scale-out on the tick), only tightening or reducing, never gated. Parity is tested label vs
+  shadow and label vs the live engine on the paper broker. Families without a policy (tsmom, mean-reversion,
+  intraday momentum) keep byte-identical labels (digest test). R21: in a tier-1 blackout open trades re-scored at
+  p < 0.5 are closed. Consequences: labels of trend/breakout/session-open changed, so their earlier research
+  verdicts were on plain barriers and any model of theirs must be retrained before it trades; the entry threshold
+  and sizing still assume the binary target/stop payoff.
+- Exit-policy safety review fixes (2026-10-10, `engine/runner.py`, TRACEABILITY M3/M6/M7/R21): a raising blackout
+  re-score or scale-out (model error, MT5 `symbol_info` failing) no longer escapes the tick/bar (ops/run.py catches
+  only AssertionError): it is logged (`blackout_rescore_failed`, `scale_out_failed`), the position is kept and the
+  others are still managed; `scaled` is set only after a successful partial close, with `scale_out_retries` (3)
+  attempts in all. New per-tick `_stop_check`: price at or through the engine's stop while the broker's stop is
+  looser (rejected `modify`) closes at market (`engine_stop_close`); reconciliation re-sends a rejected stop with a
+  30 s doubling backoff up to `modify_backoff_max_s` (900 s). The Friday weekend rule keeps the engine's stop when
+  it is tighter than the half-profit stop (never loosens). Fills recovered on restart (`_load_orders`; the ATR is now
+  recorded in the pending_orders row before sending, older rows use the ATR implied by the initial stop) and orphans
+  whose magic maps to exactly one loaded agent get that agent's exit policy back. Gaps: labels and the shadow book
+  fill a stop at the stop even when a bar gaps through it (documented in `labels/exit_policy.py`; unchanged), the
+  broker fills at the market, so a gap costs the live trade the gap; parity tests now cover shorts and a gap.
+  **Known limitation (quant finding 4, not changed):** for policy families (trend, breakout, session-open) the entry
+  threshold (`breakeven_prob`) and Kelly sizing (`size_multiplier`) still assume the binary target_atr/stop_atr
+  payoff, while a policy's exits pay a distribution (trail, flat, scaled). Recommended fix: an EV hurdle from the
+  policy's realised payoff distribution in the walk-forward (mean win and mean loss in R per family), or train on
+  sign(ret) and size from the empirical payoffs; a quant-reviewer decision before any policy model trades.
+- Feature discovery (2026-10-10, survey 4b, TRACEABILITY M37/M38; hypothesis H-02 tooling ready, not run):
+  `research/discovery.py` + `research_pass.py --discover [--families [feature|family]] [--discover-config JSON]`
+  screens every eligible column (may exceed 40) on one specialist's candidates as ONE trial. Inside each purged
+  walk-forward fold, on its training rows only: stability selection (50 weekly-block half-samples, shallow LightGBM
+  gain or L1-logistic, top-k frequency), optional permutation confirmation on an inner purged time split; each fold's
+  model uses its own selection (<= 39 + `side`), then the usual cross-fitted calibration, thresholds and gates
+  (`_walk_forward(fold_cols=...)`). Report: group and feature frequency per fold, stability (share of folds at
+  frequency >= 0.6), survivors (stability >= 0.7, capped at 39), the gates and the pre-registered reading rule
+  (continue: AUC >= 0.53, bootstrap lower bound > 0.50, >= 1,000 scored, net mean R of model-filtered trades > 0;
+  stop: AUC < 0.52). Registry: a `preregistered` row (config, reading rule, plan) is written before the run (closes
+  L4's first item); it is not a trial (`registry.is_trial`: no budget slot, no DSR count; the release merge numbers
+  trials only). The result row has status `discovery`, family `discovery_<specialist>` (never promotable, not director
+  evidence) and `n_groups_screened`. `registry.n_trials_effective` = trials + every discovery's groups screened;
+  research_pass now uses it for every trial's deflated Sharpe (equal to the old count while no discovery exists).
+  Deviations from 4b: the label is the specialist's (no primary-free 4h label yet), groups are registry
+  features/families instead of |Spearman| > 0.7 medoid clusters, and the trade rule is the existing break-even +
+  margin threshold, not the top-tercile cut.
+- SQLite state store, steps 0-1 (2026-10-10, `docs/proposals/2026-10-state-store.md`): package `goldbot/db/`
+  (stdlib `sqlite3`) opens `state/core.db` (synchronous FULL) and `state/aux.db` (NORMAL) with WAL, busy_timeout
+  5000, foreign keys and trusted_schema off; writes take `BEGIN IMMEDIATE`. Forward-only migrations in
+  `db/migrations.py`, one transaction each, recorded in `schema_version` (+ `PRAGMA user_version`); a newer file
+  refuses to open. `RecordRepo` maps a pydantic Record to key/filter columns + a JSON `body`. Import skeleton:
+  `python -m goldbot.db migrate|import-state [--dry-run]` (idempotent by file SHA-256, files left in place).
+  Dashboard auth (`api/auth.py`) now keeps users, invites, sessions (token hashes) and an append-only audit table in
+  aux.db: logins survive API restarts and deploys, and several API processes share sessions. On first start with
+  an empty DB it imports users.json and audit.jsonl once and never writes them again (backup). Failed-login
+  counters stay in memory. Not done: `run.py migrate`/`import-state` wiring, `state_db` health check (step 0
+  leftovers, files owned elsewhere); the API migrates aux.db on open until then. Steps 2-8 not started.
+- Dashboard accounts (2026-10-10, owner request): the owner is the sole admin. `auth.owner_email` (Settings
+  `AuthSettings`, default None; set only in the server's `config/settings.local.yaml`, never in the public repo)
+  is required for bootstrap and is the only address that can hold the owner role. Invites and `set_role` grant
+  only approver/viewer (`GrantableRole` in the contract; "owner" gets 422); the owner cannot be demoted or disabled;
+  an invite never overwrites an existing account; the only user-creating paths are bootstrap and invites. A stored
+  owner that differs from the setting is logged and left alone; `auth.owner_health_note(state_dir, owner_email)`
+  is ready for health.py (not wired: health is owned elsewhere). Password policy: 12+ characters, different from the
+  current one. Endpoints: `POST /api/auth/setup` now returns `SetupResponse` with 10 one-time recovery codes
+  (hashes stored, aux.db migration 3); `/api/auth/password/change` (logged in; password + TOTP; other sessions
+  revoked); `/api/auth/password/forgot` (email + TOTP + new password; same 403 for unknown email or wrong code;
+  shares the 5-in-15-min lockout; all sessions revoked); `/api/auth/reset-link` (owner; 24 h single-use token,
+  hash stored) and `/api/auth/reset` (new password + new TOTP, all sessions revoked); `/api/auth/recovery/login`
+  (owner: password + recovery code, re-enrols TOTP, returns a session) and `/api/auth/recovery/codes` (owner,
+  regenerate); `/api/users/enable` and `/api/users/revoke-sessions` (owner). All audited. Minimal UI: Forgot
+  password / recovery-code / reset-link modes on the login page, recovery codes shown after setup, an Account tab
+  (change password), Enable / Sign out everywhere / Reset link on Users. No button yet for regenerating recovery
+  codes.
+- Account security review (2026-10-10, security-reviewer findings; `api/auth.py`, aux.db migration 4
+  `auth_hardening`; tests/test_auth_security.py): forgot-password for the OWNER now needs a recovery code (spent)
+  as well as the TOTP (`ForgotPasswordRequest.recovery_code`), so the phone or seed alone cannot take over the
+  admin; every successful forgot-password queues a Telegram notice to the owner (a row with role
+  `account_security` in state/agent_runs.jsonl, relayed by the Telegram outbox; email masked). Each TOTP step is
+  accepted once per user (`totp_steps`; login, password change, forgot, /rearm via `AuthStore.verify_totp`, /mode
+  via `verify_owner_totp`, shared counter). Login and recovery-login run scrypt against a dummy hash for unknown
+  emails. Owner-only actions (`_require("owner")`, the API's `need("owner")`, recovery codes, /mode) need
+  `email == auth.owner_email` and fail closed when it is unset; the users.json importer demotes a non-matching owner
+  to viewer (audit `import_owner_demoted`, warning; kept when owner_email is unset, since every owner action is then
+  refused anyway). Password change, forgot and disable delete the account's open reset links. Invite/reset links use
+  the URL fragment (`/#invite=`, `/#reset=`, read once and cleared, `web/src/lib/links.ts`) and every response sends
+  `Referrer-Policy: no-referrer`. Lockout counters live in aux.db (`auth_failures`, pruned to the 15-min window,
+  survive restarts): 5 per email, plus 20 per client IP across emails (CF-Connecting-IP trusted only from the
+  loopback tunnel peer). Known trade-off: anyone who knows an email can keep it locked out. DB files are chmod 0600
+  on every open. e2e codes come from `freshTotp` (waits for an unused step, so the suite takes ~3.5 min).
+- Bounded spawning (2026-10-10, BACKLOG 13, TRADER_LIFECYCLE section 3, TRACEABILITY G11): the daily `gap_watch`
+  job (23:55 UTC, after drift_watch; `goldbot/ops/gap_watch.py`) detects gaps (uncovered family timeframe, all agents
+  of a family retired, drift/system halts, a volatility tercile no champion trained on, error dq events on 3+ days in
+  7, planned family without a founder, a passed trial without an agent) and writes `state/gaps.json` with the actions
+  taken and refused (with reasons). Trading: `Population.spawn_founder` only, zero-capital SHADOW founders of
+  registered families (default on another timeframe, or a passed trial's config), at most `gaps.founders_per_month`
+  (2), only into 4 reserved slots inside the 24 shadow cap (clones now stop at 20), never during a system halt or a
+  drawdown stage, never in a lookahead-blocked family; lineage in `gap_id`/`origin`/`notes`. Live still needs the
+  tournament's DSR and a passed trial of the exact config. Staff: on-demand runs of the existing read-only
+  `data_steward` / `risk_officer` only, 3 per rolling week, once per gap, refused when the month's agent budget is
+  below the role's per-run cap. Regime and dead-family gaps file at most 2 hypotheses per run; a new family, role or
+  untrainable timeframe (4h/1d: no walk-forward window in settings, so the retrain cannot train them) is a BACKLOG
+  suggestion only. Not done: the 4h founder path in `saturday_retrain`.
+
+- Auto-mode offer (2026-10-10, `goldbot/telegram/automode.py`, TRACEABILITY A10, BACKLOG 15): the Telegram service
+  checks every 15 min whether /mode auto may be offered: >= 100 decided proposals since the last mode change, no
+  RiskGate breach (an 8%/12% drawdown stage or a kill switch in `risk_*.json`), no re-arm lock or halt, and no
+  distinguishable veto: approved vs rejected proposals are matched to the shadow book's counterfactual outcomes
+  (same agent, side, signal bar) and compared in R with Welch's t-test (eligible only if p >= 0.10 and the 90% CI
+  spans 0; fewer than 10 outcomes a side fails closed). When it holds, ONE message per mode epoch; it never switches.
+  `/mode auto <code>` checks the dashboard owner's authenticator (`goldbot.api.auth.totp_verify`) and the evidence,
+  then writes `approval_mode` to `state/control.json`; `/mode propose` needs nothing. Both, and refusals, go to
+  `state/audit.jsonl`. Engines read the mode each refresh; the 30-day re-arm lock and the 12% kill switch still force
+  propose, and the kill switch writes propose back to control.json (so the evidence restarts). Known limits: breaches
+  are read from the engines' current risk files (a size-down that recovered before the check is not seen); the
+  dashboard has no /mode control yet (goldbot/api untouched).
+- Cross-feed checks (2026-10-10, `goldbot/data/crossfeed.py`, TRACEABILITY D12/D20/D23/F10, BACKLOG item 14).
+  `feed_reconcile` (scheduler, Mon-Fri 23:20 UTC) rebuilds each account's 1m bars from its stored ticks and compares the
+  last day with the broker's own M1 (`get_bars`; bridge `RemoteBroker`, or on Windows the terminal's saved login via
+  `run._job_broker`): close off by > 2 points, or a minute on one side only, diverges; > 0.5% of broker minutes warns,
+  > 5% (or no engine ticks at all) is an error -> dq_events, state/reconcile_<account>.json, health check
+  `reconcile:<account>` (warn/fail; stale after 96 h). The broker's M1 is kept in the new store table `bars_1m_broker`,
+  so broker history accumulates. Spikes (D20): `quality.confirm_spikes` drops a check_bars spike when the other feed
+  moves the same way by >= half of it within +-1 minute; used by the reconcile run, check_bars alone is unchanged.
+  Survival (D23/F10): `scripts/crossfeed_check.py --specialist X --account A` runs the rule-only screen on Dukascopy and
+  on `bars_1m_broker` over the common period outside the holdout; survives = Dukascopy mean R > 0 with t >= 2.0 AND
+  broker mean R > 0 with t >= 1.0; broker-only significance = feed artefact, dropped; < 90 days or < 100 events per
+  feed = insufficient overlap (not a pass, the current state). Not a trial (it can only discard). Not yet a promotion
+  gate: wire it in once broker history reaches 90 days. Known limit: ticks sharing a millisecond can come back from
+  the store in another order, so a minute's close may differ (absorbed by the 0.5% warning band).
+- Discovery quant-review fixes (2026-10-10): K_eff now follows the pre-registered survivor unit
+  (`DiscoveryConfig.survivor_unit`, default `feature`): feature survivors pay for every feature screened (~300), not
+  the groups (~10); the discovery row records `n_features_screened`, `n_groups_screened`, `survivor_unit` and `k_eff`,
+  and `registry.n_trials_effective` adds `k_eff` (older rows: features screened unless the unit was `group`). Group
+  stability ranks groups by summed member importance in each subsample and counts the top `group_top_k` groups
+  (default: top_k's share of groups), so correlated near-copies no longer deflate their group. `column_groups` maps
+  columns to features on the 2,000 bars before the holdout start (no holdout bar read). `registry_sync.merge_rows`
+  rewrites the result row's `preregistration.trial` when it renumbers. The inner permutation split is `inner_split`,
+  with a test where labels outlive the purge gap. Charging K_eff to every later trial stays the conservative default,
+  recorded as owner-acknowledged in `docs/research/preregistration-2027Q1.md`, with the extra rule that a discovery
+  survivor must also pass the holdout rule before promotion.
+- Slow TSMOM (2026-10-10, H-01, preset `slow`): `--variants '["slow"]'` runs tsmom with the signal on the feature-day
+  bars (`signal_tf: "1d"`, 20/60/120-day vol-scaled returns, 60-day vol) traded on 4h bars, read on the first 4h bar
+  whose close sees the settlement; barriers 3.0 / 1.5 x ATR(1d) frozen at entry (`atr_tf: "1d"`), time barrier 124
+  4h bars (20 trading days), long and short, swap per rollover, one position at a time; walk-forward purge raised to
+  31 days for the 28-day hold (M14; `TimeSeriesMomentumSpecialist.hold_calendar_days`). New hooks
+  `Specialist.candidates_in_context` / `barrier_atr` (used by research `prepare`), `optional_config` and `presets`
+  (accepted by `research_pass.parse_variants`); tsmom's default config, agent ids and labels are byte-identical
+  (digest test). Research-only: without the d1 bars (the engine calls `candidates`) the slow option proposes nothing.
+  Event count on data-v1 (no labels, no outcomes): 2,631 daily signals in the research window; one at a time with
+  every trade held to the time barrier, 165. The true count lies between, so owner ruling A (event floor) is needed
+  before the trial. Note for quant review: feature-day bars include a Friday-evening stub bar (settlement to the
+  Friday close, visible Saturday), so "20 daily bars" is about 3.3 weeks, as for the existing 1d option. Run inputs:
+  `docs/research/preregistration-2027Q1.md` H-01. No research trial was run.
+- GitHub Actions supply chain hardened (2026-10-10, security): every action in `.github/workflows/*.yml` is pinned
+  to a full commit SHA with the version as a comment (checkout v5.1.0, setup-python v6.3.0, setup-node v5.0.0, cache
+  v4.3.0, upload-artifact v4.6.2, download-artifact v4.3.0; resolved via the GitHub API, not guessed). Token scopes:
+  `ci.yml` is `contents: read` with `issues: write` only on `report-failure`; the data and research workflows are
+  `permissions: {}` with `contents: write` + `issues: write` granted only to the job that publishes. Workflow inputs,
+  `github.event_name` and matrix values reach scripts only through `env:` (data-dukascopy, research). Every checkout
+  sets `persist-credentials: false` (no job pushes with git; releases and issues use `GH_TOKEN`). New concurrency
+  groups `data-dukascopy` and `data-macro` (queue, never cancel). `.github/dependabot.yml` opens weekly grouped PRs
+  for actions, pip and npm (`web/`). `actionlint` 1.7.12 (with shellcheck) is clean. Not exercised on GitHub yet:
+  the first CI run on the PR is the check.
+- H-01 review fixes (2026-10-10, before any H-01 outcome was seen): the screen's event floor is configurable,
+  `research.screen_min_events` (1,000) with `research.screen_min_events_daily` (null = the same) for rules whose
+  signal is daily, passed by `research_pass.py`; behaviour unchanged until the owner sets it (ruling A, recommended
+  150). A screen that fails only on the event floor is now `inconclusive (event floor)`: still a recorded, charged
+  `screened` trial with no model, but the report says it cannot retire the hypothesis. The slow preset's daily
+  inputs (signal and ATR) drop the Friday stub bar (daily bars spanning under 12 trading hours), so lookbacks are
+  5-a-week trading days; `schedule_h` is left out of configurations with `signal_tf` (`Specialist.unused_config`),
+  so the slow agent id is now `tsmom-g0-c12c9afb24` (default tsmom ids unchanged, digest test green). Added an
+  unfiltered-context truncation test. Pre-registration H-01 now freezes the stub, Wilder ATR on mids, the score
+  formula, min_score 0.5, the time-barrier wording, costs and swap source, the short-swap bias (report long-only),
+  holdout-crossing labels dropped, 10 trades per positive year, the t-stat and DSR count, and the inconclusive
+  branch; it states H-01 can retire but not promote. Not done: the research report does not yet print the
+  long-only net R split the pre-registration asks for (a follow-up before the run); the 2,631 signal count predates
+  the stub fix (recount at the freeze). No research trial was run.
 
 ## Next steps (no owner input needed unless marked)
+- Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):
+  `python -m goldbot.ops.run gates` prints each roadmap gate as met / not met with its evidence (trial registry DSR,
+  positive years and backtest trades; the nightly cost tables; `state/closed_trades.jsonl` for the paper and live
+  record; `state/gate_evidence.json` for the leakage audit and chaos drill, recorded with `run.py gate-evidence`) and
+  writes `state/gate_report.json`. Health adds `stop_rule` (FAIL on a breach: alerted once, recommends /halt, halts
+  nothing) and `phase_gates` (next gate, informational). Nothing records a gate or unlocks live. OWNER: sign off
+  the `gates:` values marked PROPOSED in `config/settings.yaml` before the first paper trade (DSR bar 0.95 vs the
+  roadmap's 1.0, shuffle AUC tolerance, feed mismatch share, minimum paper/live days, trades per broker). Follow-up
+  for the engine owner: append a `gates_phase.ClosedTrade` per closed position (`append_closed_trade`); until then the
+  paper/live record is empty, so gates 2-3 read "not met" and the stop rule cannot fire on expectancy.
 - Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write
   `state/heartbeat_<service>.json` every minute (`goldbot.ops.health.Heartbeat` / `start_heartbeat`); health fails a
   service silent for 5 min, warns on a tripped daily/weekly loss cap per account and on each order that failed after

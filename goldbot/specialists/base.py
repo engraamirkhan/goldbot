@@ -15,6 +15,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord, Record
+from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.labels.triple_barrier import BarrierSpec
 
 
@@ -61,17 +62,30 @@ class Specialist(ABC):
     # defaults layered over default_config on another decision timeframe (e.g. lookbacks and barriers sized for daily
     # bars); explicit overrides still win, and they become part of the configuration (and its agent id)
     timeframe_defaults: dict[str, dict[str, Any]] = {}
+    # settings a variant may set that are absent from default_config (absent = off), so adding one leaves the default
+    # configuration, its labels and its agent id unchanged
+    optional_config: dict[str, Any] = {}
+    # named variants (`research_pass.py --variants '["<name>"]'`): a pre-registered configuration spelled out once
+    presets: dict[str, dict[str, Any]] = {}
 
     def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
         asked = (identity.config if identity is not None else overrides).get(TIMEFRAME_KEY, type(self).timeframe)
         base = {**self.default_config, **self.timeframe_defaults.get(asked, {})}
-        cfg = {**base, **overrides}
+        unused = self.unused_config({**base, **(identity.config if identity is not None else overrides)})
+        base = {k: v for k, v in base.items() if k not in unused}
+        cfg = {k: v for k, v in {**base, **overrides}.items() if k not in unused}
         self.identity = identity or AgentIdentity(family=self.family, config=cfg)
         self.config = {**base, **self.identity.config}
         tf = self.config.get(TIMEFRAME_KEY, type(self).timeframe)
         if tf != type(self).timeframe and tf not in self.timeframes:
             raise ValueError(f"{self.family} does not run on {tf}; allowed: {(type(self).timeframe, *self.timeframes)}")
         self.timeframe = tf
+
+    @classmethod
+    def unused_config(cls, config: dict[str, Any]) -> set[str]:
+        """Keys `config` makes inert (e.g. a schedule a higher-timeframe signal ignores): left out of the configuration
+        and its agent id, so a parameter that changes nothing cannot make two ids for one rule. None by default."""
+        return set()
 
     @property
     def agent_id(self) -> str:
@@ -81,9 +95,26 @@ class Specialist(ABC):
     def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
         """Return frame with columns idx, side (and optional diagnostics) for signal bars."""
 
+    def candidates_in_context(self, mid_bars: pd.DataFrame, features: pd.DataFrame,
+                              context: dict[str, pd.DataFrame] | None) -> pd.DataFrame:
+        """Candidates when the higher-timeframe bars (`context`, keyed h1/h4/d1, store schema with visible_at) are at
+        hand, as in research (`research.pipeline.prepare`). Default: `candidates`, which sees only the decision frame."""
+        return self.candidates(mid_bars, features)
+
+    def barrier_atr(self, mid_bars: pd.DataFrame, context: dict[str, pd.DataFrame] | None) -> pd.Series | None:
+        """ATR per decision bar that sizes the barriers and the risk (R), read at the signal bar and frozen for the
+        trade's life; None: ATR(14) of the decision bars."""
+        return None
+
     @property
     @abstractmethod
     def label_spec(self) -> BarrierSpec: ...
+
+    @property
+    def exit_spec(self) -> ExitPolicy | None:
+        """The executable exit policy (labels.exit_policy) on top of the barriers, or None for the plain barriers. The
+        labels, the shadow book and the live engine all run it, so research measures the exits live trading takes."""
+        return None
 
     def exit_policy(self) -> dict[str, Any]:
         return {"type": "barrier"}

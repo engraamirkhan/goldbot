@@ -2,7 +2,8 @@
 
 Transport-agnostic core (tested without Telegram), plus a thin python-telegram-bot adapter.
 * Only allow-listed owner user ids may act. `/halt` and `/approve` need no second factor; `/rearm`,
-  `/mode` and parameter changes require a TOTP within 60 s.
+  `/mode` and parameter changes require a TOTP within 60 s, except `/mode propose`, which lowers authority as /halt
+  does. `/mode auto` also needs the auto-mode evidence (goldbot/telegram/automode.py, row A10).
 * Each proposal has a 90 s window; timeouts are logged EXPIRED_UNAPPROVED. Rejections carry a reason code.
 * Exits are never gated here.
 * The bot also acts as the credential prompter for goldbot.ops.accounts (headless secret entry).
@@ -72,7 +73,8 @@ class Proposal(Record):
 
 class ApprovalCenter:
     def __init__(self, allowed_user_ids: set[int], totp_verify: Callable[[str], bool] | None = None,
-                 on_decision: Callable[[Proposal], None] | None = None, bus: ApprovalBus | None = None):
+                 on_decision: Callable[[Proposal], None] | None = None, bus: ApprovalBus | None = None,
+                 auto_eligible: Callable[[], bool] | None = None):
         self.allowed = set(allowed_user_ids)
         self.totp_verify = totp_verify or (lambda code: False)
         self.on_decision = on_decision or (lambda p: None)
@@ -80,6 +82,7 @@ class ApprovalCenter:
         self.log: list[Proposal] = []
         self.mode = "paper"
         self.halted = False
+        self.auto_eligible = auto_eligible or (lambda: False)    # A10 evidence; none given: auto is refused
         self.bus = bus                      # set in production: proposals and decisions cross process boundaries
 
     # ------------------------------------------------------------- proposals
@@ -136,7 +139,8 @@ class ApprovalCenter:
     def command(self, user_id: int, cmd: str, arg: str = "", totp: str | None = None) -> str:
         if user_id not in self.allowed:
             raise PermissionError("user not allowed")
-        if cmd in TOTP_COMMANDS and not (totp and self.totp_verify(totp)):
+        lowers = cmd == "/mode" and arg == "propose"          # less authority: no second factor, like /halt
+        if cmd in TOTP_COMMANDS and not lowers and not (totp and self.totp_verify(totp)):
             return "TOTP required: resend as `<command> <arg> <6-digit code>`"
         if cmd == "/halt":
             self.halted = True
@@ -147,6 +151,8 @@ class ApprovalCenter:
         if cmd == "/mode":
             if arg not in ("paper", "propose", "auto"):
                 return "mode must be paper | propose | auto"
+            if arg == "auto" and not self.auto_eligible():
+                return "auto mode not available: the evidence check (100 proposals, no breach, no veto difference) fails"
             self.mode = arg
             return f"mode set to {arg}"
         if cmd == "/status":

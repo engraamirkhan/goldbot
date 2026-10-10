@@ -131,8 +131,57 @@ def test_without_macro_data_the_feature_is_all_nan_with_a_fixed_column_set():
     bars = pd.DataFrame({"ts_utc": pd.date_range("2025-01-01", periods=10, freq="15min", tz="UTC")})
     X = build_features(bars, ["macro_drivers"], {})
     assert list(X.columns.drop("ts_utc")) == ["macro_real_yield_chg20", "macro_real_yield_z252", "macro_dollar_chg20",
-                                              "macro_gvz", "macro_gvz_chg20"]
+                                              "macro_gvz", "macro_gvz_chg20", "macro_vix", "macro_vix_chg5",
+                                              "macro_spx_dd20"]
     assert X.drop(columns=["ts_utc"]).isna().all().all()
+
+
+def _equity_release(days: pd.DatetimeIndex) -> pd.DataFrame:
+    n = len(days)
+    spx = 4000.0 + 10.0 * np.sin(np.arange(n) / 3.0) + np.arange(n)
+    return pd.concat([
+        fred_frame("VIXCLS", pd.DataFrame({"value_date": days, "value": 15.0 + 0.5 * np.arange(n)}), pd.Timestamp("2025-07-01")),
+        fred_frame("SP500", pd.DataFrame({"value_date": days, "value": spx}), pd.Timestamp("2025-07-01")),
+    ], ignore_index=True)
+
+
+def test_equity_stress_columns_follow_vix_and_the_sp500_drawdown_as_published():
+    """VIXCLS and SP500 use the next-business-day stamp: the value for D reaches the bars only after D+1 23:00 UTC."""
+    days = pd.date_range("2025-01-02", periods=60, freq=US_BDAY)
+    rel = _equity_release(days)
+    assert (rel["available_utc"] == fred_available_utc("VIXCLS", rel["value_date"])).all()
+    bars = pd.DataFrame({"ts_utc": pd.date_range("2025-01-02", "2025-04-15", freq="1h", tz="UTC")})
+    X = build_features(bars, ["macro_drivers"], {"macro": rel})
+    vix = 15.0 + 0.5 * np.arange(60)
+    at = (bars["ts_utc"] == fred_available_utc("VIXCLS", days[[30]])[0]).to_numpy()
+    assert X.loc[at, "macro_vix"].item() == vix[30] and X.loc[at, "macro_vix_chg5"].item() == 2.5
+    assert np.isnan(X["macro_vix"].iloc[0])                       # nothing published yet
+    spx = 4000.0 + 10.0 * np.sin(np.arange(60) / 3.0) + np.arange(60)
+    want = spx[45] / spx[26:46].max() - 1
+    at = (bars["ts_utc"] == fred_available_utc("SP500", days[[45]])[0]).to_numpy()
+    assert np.isclose(X.loc[at, "macro_spx_dd20"].item(), want) and (X["macro_spx_dd20"].dropna() <= 0).all()
+
+
+def test_equity_stress_columns_do_not_change_when_later_observations_are_published():
+    rel = _equity_release(pd.date_range("2025-01-02", periods=80, freq=US_BDAY))
+    bars = pd.DataFrame({"ts_utc": pd.date_range("2025-01-02", "2025-05-01", freq="1h", tz="UTC")})
+    cut = _utc("2025-03-10 12:00")
+    full = build_features(bars, ["macro_drivers"], {"macro": rel})
+    part = build_features(bars, ["macro_drivers"], {"macro": rel[rel["available_utc"] <= cut]})
+    before = (bars["ts_utc"] < cut).to_numpy()
+    for c in ("macro_vix", "macro_vix_chg5", "macro_spx_dd20"):
+        assert full.loc[before, c].notna().any(), c
+        assert np.allclose(full.loc[before, c], part.loc[before, c], equal_nan=True), c
+
+
+def test_fred_script_publishes_the_equity_stress_series():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("fred_macro", Path(__file__).resolve().parents[1] / "scripts" / "fred_macro.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert {"VIXCLS", "SP500", "GVZCLS", "DFII10"} <= set(mod.RELEASE_SERIES)
 
 
 def test_read_macro_files_refuses_rows_without_available_utc(tmp_path):

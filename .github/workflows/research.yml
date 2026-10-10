@@ -14,9 +14,8 @@ on:
       skip_screen: { description: "fit the model even if the rule fails the primary-signal screen (recorded as skipped)", type: boolean, default: false }
       pooled:     { description: "15m or 1h: one pooled meta-model over every family on that timeframe (ignores specialist and variants)", default: "" }
       macro:      { description: "add the point-in-time macro features from release macro-v1 (data-macro workflow); the model's feature version then includes them", type: boolean, default: false }
-permissions:
-  contents: write
-  issues: write
+# Least privilege: no scopes by default; walk-forward grants itself what it needs. Inputs reach the shell only via env:.
+permissions: {}
 concurrency:
   group: research-registry   # one writer at a time for registry.jsonl
   cancel-in-progress: false
@@ -24,14 +23,20 @@ jobs:
   walk-forward:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: write   # registry upload to release research-v1
+      issues: write     # report issue / comment
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with: { python-version: "3.11", cache: pip }
       - run: pip install -e .
       - name: fetch bars and the trial registry
+        env:
+          WANT_MACRO: ${{ inputs.macro }}
         run: |
           gh release download data-v1 -p 'xauusd_1m_dukascopy_*.parquet' -D raw
           ls -la raw
@@ -39,7 +44,7 @@ jobs:
           # the canonical broker's measured costs, published by the VPS after nightly_costs (costs only)
           gh release download costs-v1 -p costs_measured.json -D costs \
             || echo "no measured cost table on release costs-v1; research charges the settings priors (stated in the report)"
-          if [ "${{ inputs.macro }}" = "true" ]; then
+          if [ "$WANT_MACRO" = "true" ]; then
             gh release download macro-v1 -p '*.parquet' -D macro || echo "no macro-v1 release yet; the pass runs without macro features"
           fi
       - name: walk-forward
@@ -58,6 +63,8 @@ jobs:
           if [ -n "$POOLED" ]; then TARGET=(--pooled "$POOLED"); else TARGET=(--specialist "$SPECIALIST" --variants "$VARIANTS"); fi
           # the measured cost table from release costs-v1 (docs/RUNBOOK.md section 4); the settings priors without it
           COSTS=(); if [ -f costs/costs_measured.json ]; then COSTS=(--cost-table costs/costs_measured.json); fi
+          # SCORE_HOLDOUT/SKIP_SCREEN/MACRO are constant flags or empty (set by expressions above), so they stay unquoted
+          # shellcheck disable=SC2086
           python scripts/research_pass.py --bars raw --registry registry.jsonl --report report.md \
             "${TARGET[@]}" --from-year "$FROM_YEAR" --to-year "$TO_YEAR" --rationale "$RATIONALE" \
             "${COSTS[@]}" $SCORE_HOLDOUT $SKIP_SCREEN $MACRO 2>&1 | tee research.log

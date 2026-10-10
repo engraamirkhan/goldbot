@@ -5,7 +5,11 @@ challengers, and the daily model watch runs the CUSUM alarm on a new champion's 
 Trade mechanics mirror the triple-barrier labels the models were trained on, so shadow and backtest are comparable:
 entry at the signal bar's close on the paying side (ask for longs, bid for shorts), target/stop at
 target_atr/stop_atr x ATR, stop assumed first when both are touched in one bar, time exit at the close of the
-(max_bars + 1)-th bar after entry, return = side x (exit - entry) / entry.
+(max_bars + 1)-th bar after entry, return = side x (exit - entry) / entry. A trade opened with its specialist's exit
+policy (trail, scale-out, hard flat) advances through `labels.exit_policy.policy_step`, the step the labels use, so
+the shadow outcome of each policy equals its label; `stop` stays the initial stop (the trade's risk). Like the labels,
+a stop is filled at the stop even when a bar gaps through it (optimistic; the live broker fills a gap at the market:
+see labels.exit_policy), so on a gap the shadow return overstates the live one by the gap.
 
 One engine hosts the book (the account on the canonical-cost broker), so trades are never counted twice.
 
@@ -28,6 +32,8 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import Record, UtcTimestamp
+from goldbot.config import tf_seconds
+from goldbot.labels.exit_policy import ExitPolicy, PolicyState, new_state, policy_return, policy_step
 from goldbot.research.metrics import summarize
 from goldbot.research.promotion import PerfStats
 
@@ -49,8 +55,11 @@ class ShadowTrade(Record):
     bars_held: int = 0
     exit_ts: UtcTimestamp | None = None
     exit: float | None = None
-    barrier: str | None = None        # target | stop | time
+    barrier: str | None = None        # target | stop | time (and trail | flat under an exit policy)
     ret: float | None = None
+    policy: ExitPolicy | None = None  # the specialist's exit policy (None: the plain barriers)
+    atr_usd: float | None = None      # the signal bar's ATR, which the policy's distances are in
+    state: PolicyState | None = None  # trailed stop, best price, scale-out fill, hard-flat deadline
 
 
 class VersionBook(Record):
@@ -76,7 +85,10 @@ class ShadowBook:
 
     def open_trade(self, *, version: str, agent_id: str, side: int, bar_ts: pd.Timestamp, entry: float, atr_usd: float,
                    target_atr: float, stop_atr: float, max_bars: int, p: float, timeframe: str = "15m",
-                   threshold: float | None = None, taken: bool = True, p_raw: float | None = None) -> ShadowTrade | None:
+                   threshold: float | None = None, taken: bool = True, p_raw: float | None = None,
+                   policy: ExitPolicy | None = None, signal_close: pd.Timestamp | None = None) -> ShadowTrade | None:
+        """signal_close: when the signal bar closed (its visible_at; default bar_ts + timeframe), which the hard-flat
+        deadline counts from, as the labels do."""
         if not np.isfinite(atr_usd) or atr_usd <= 0:
             return None
         book = self.books[version]
@@ -84,9 +96,16 @@ class ShadowBook:
             return None   # one shadow entry per version per signal bar, even if the bar is replayed
         if any(t.agent_id == agent_id for t in book.open):
             return None   # one position per agent at a time (taken or not), as the labels it was trained on
+        stop = entry - side * stop_atr * atr_usd
+        state = None
+        if policy is not None and policy.active:
+            close = signal_close if signal_close is not None else bar_ts + pd.Timedelta(seconds=tf_seconds(timeframe))
+            state = new_state(policy, entry=entry, stop=stop, signal_close=close)
         t = ShadowTrade(version=version, agent_id=agent_id, side=side, entry_ts=bar_ts, entry=entry,
-                        stop=entry - side * stop_atr * atr_usd, target=entry + side * target_atr * atr_usd,
-                        max_bars=max_bars, p=p, timeframe=timeframe, threshold=threshold, taken=taken, p_raw=p_raw)
+                        stop=stop, target=entry + side * target_atr * atr_usd,
+                        max_bars=max_bars, p=p, timeframe=timeframe, threshold=threshold, taken=taken, p_raw=p_raw,
+                        policy=policy if state is not None else None, atr_usd=atr_usd if state is not None else None,
+                        state=state)
         book.open.append(t)
         return t
 
@@ -102,16 +121,10 @@ class ShadowBook:
                     still.append(t)            # the entry bar itself never exits the trade
                     continue
                 t.bars_held += 1
-                if t.side > 0:
-                    hit_stop, hit_tgt = bar["bid_low"] <= t.stop, bar["bid_high"] >= t.target
+                if t.state is not None:
+                    self._policy_bar(t, bar, ts, timeframe)
                 else:
-                    hit_stop, hit_tgt = bar["ask_high"] >= t.stop, bar["ask_low"] <= t.target
-                if hit_stop:
-                    self._close(t, ts, t.stop, "stop")
-                elif hit_tgt:
-                    self._close(t, ts, t.target, "target")
-                elif t.bars_held >= t.max_bars + 1:
-                    self._close(t, ts, float(bar["bid_close"] if t.side > 0 else bar["ask_close"]), "time")
+                    self._barrier_bar(t, bar, ts)
                 if t.exit is None:
                     still.append(t)
                 else:
@@ -120,10 +133,42 @@ class ShadowBook:
             book.open = still
         return closed
 
+    def _barrier_bar(self, t: ShadowTrade, bar: pd.Series, ts: pd.Timestamp) -> None:
+        if t.side > 0:
+            hit_stop, hit_tgt = bar["bid_low"] <= t.stop, bar["bid_high"] >= t.target
+        else:
+            hit_stop, hit_tgt = bar["ask_high"] >= t.stop, bar["ask_low"] <= t.target
+        if hit_stop:
+            self._close(t, ts, t.stop, "stop")
+        elif hit_tgt:
+            self._close(t, ts, t.target, "target")
+        elif t.bars_held >= t.max_bars + 1:
+            self._close(t, ts, float(bar["bid_close"] if t.side > 0 else bar["ask_close"]), "time")
+
+    def _policy_bar(self, t: ShadowTrade, bar: pd.Series, ts: pd.Timestamp, timeframe: str) -> None:
+        """One bar under the trade's exit policy (labels.exit_policy.policy_step), then the time barrier."""
+        assert t.state is not None and t.policy is not None and t.atr_usd is not None
+        long = t.side > 0
+        close = float(bar["bid_close"] if long else bar["ask_close"])
+        close_ts = pd.Timestamp(bar["visible_at"]) if "visible_at" in bar.index and pd.notna(bar["visible_at"]) \
+            else ts + pd.Timedelta(seconds=tf_seconds(timeframe))
+        st = t.state.model_copy()
+        out = policy_step(t.policy, st, side=t.side, entry=t.entry, atr=t.atr_usd, initial_stop=t.stop, target=t.target,
+                          fav=float(bar["bid_high"] if long else bar["ask_low"]),
+                          adv=float(bar["bid_low"] if long else bar["ask_high"]), close=close, close_ts=close_ts)
+        t.state = st
+        if out is None and t.bars_held >= t.max_bars + 1:
+            out = ("time", close)
+        if out is not None:
+            self._close(t, ts, out[1], out[0])
+
     @staticmethod
     def _close(t: ShadowTrade, ts: pd.Timestamp, px: float, barrier: str) -> None:
         t.exit_ts, t.exit, t.barrier = ts, float(px), barrier
-        t.ret = t.side * (t.exit - t.entry) / t.entry
+        if t.state is not None and t.policy is not None:
+            t.ret = policy_return(t.side, t.entry, t.exit, t.state.scale_exit, t.policy.scale_fraction)
+        else:
+            t.ret = t.side * (t.exit - t.entry) / t.entry
 
     # ------------------------------------------------------------------ results
     def stats(self, version: str, now: pd.Timestamp) -> PerfStats:

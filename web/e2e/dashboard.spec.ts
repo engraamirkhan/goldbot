@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { totp } from "./totp";
+import { freshTotp } from "./totp";
 
 const info = () => JSON.parse(readFileSync("e2e/.server.json", "utf8")) as { setup_code: string };
 const OWNER = { email: "owner@example.com", password: "owner password 123" };
@@ -16,15 +16,17 @@ async function enrolledSecret(page: Page): Promise<string> {
 async function signIn(page: Page, email: string, password: string, secret: string) {
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
-  await page.getByLabel("Authenticator code").fill(totp(secret));
+  await page.getByLabel("Authenticator code").fill(await freshTotp(secret));
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 }
 
 // One serial story: first run -> owner approves a trade -> halts and re-arms -> invites a viewer -> viewer sees but cannot act.
-test.describe.configure({ mode: "serial" });
+// each authenticator code is accepted once, so a sign-in may wait up to 30 s for a fresh time step (freshTotp)
+test.describe.configure({ mode: "serial", timeout: 90_000 });
 let ownerSecret = "";
 let inviteLink = "";
+let viewerSecret = "";
 
 test("first run creates the owner with an authenticator, then signs in", async ({ page }) => {
   await page.goto("/");
@@ -86,7 +88,7 @@ test("owner halts new entries and re-arms with an authenticator code", async ({ 
   await page.getByLabel("Authenticator code").fill("000000");
   await page.getByRole("button", { name: "Re-arm" }).click();
   await expect(page.locator(".err")).toContainText("authenticator code required");
-  await page.getByLabel("Authenticator code").fill(totp(ownerSecret));
+  await page.getByLabel("Authenticator code").fill(await freshTotp(ownerSecret));
   await page.getByRole("button", { name: "Re-arm" }).click();
   await expect(page.getByRole("button", { name: "Halt new entries" })).toBeVisible();
 });
@@ -109,6 +111,30 @@ test("news tab shows the calendar with blackout windows and the scored headlines
   await expect(page.getByText("Fed's Powell signals a pause in hikes")).toBeVisible();
 });
 
+test("health tab shows agent halts, PSI bands and the charts; research tab the budget, trials and hypotheses", async ({ page }) => {
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await page.getByRole("button", { name: "Health", exact: true }).click();
+  const agents = page.locator("table.agents-health");
+  await expect(agents.locator("tr", { hasText: "tsmom-g0" })).toContainText("50%: sized down");
+  await expect(agents.locator("tr", { hasText: "trend-g1" })).toContainText(/Halted since/);
+  await expect(page.getByTitle(/tsmom-g0 · atr_14: PSI 0.310 \(sized down\)/)).toHaveClass(/bad/);
+  await expect(page.getByRole("img", { name: /Reliability of tsmom-g0/ })).toBeVisible();
+  await expect(page.getByRole("img", { name: /CUSUM of tsmom-g0 over 8 trades/ })).toBeVisible();
+  await expect(page.getByRole("meter", { name: "trend-g1 30-day drawdown" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Health checks" })).toContainText("Deploy");
+  await expect(page.getByRole("alert")).toHaveCount(0);                       // no system halt seeded
+
+  await page.getByRole("button", { name: "Research", exact: true }).click();
+  await expect(page.getByRole("meter", { name: /trials used/ })).toBeVisible();
+  const trials = page.locator("table.trials");
+  await expect(trials.locator("tbody tr")).toHaveCount(2);
+  await expect(trials.locator("tbody tr").first()).toContainText("+0.061 (t 2.63)");
+  await expect(trials.getByText("failed: dsr").first()).toBeVisible();
+  await expect(page.getByText("gross t 2.63 but net negative")).toBeVisible();
+  await expect(page.locator("details.hyp").first()).toContainText("H-01");    // the real docs/research/hypotheses.md
+});
+
 test("owner invites a viewer", async ({ page }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
@@ -116,7 +142,7 @@ test("owner invites a viewer", async ({ page }) => {
   await page.getByPlaceholder("email to invite").fill(VIEWER.email);
   await page.getByRole("button", { name: "Create invite link" }).click();
   inviteLink = (await page.locator("code.mono").textContent()) ?? "";
-  expect(inviteLink).toContain("/?invite=");
+  expect(inviteLink).toContain("/#invite=");
 });
 
 test("viewer accepts the invite and can watch but not approve or manage users", async ({ page }) => {
@@ -128,11 +154,12 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   await page.getByLabel("Password").fill(VIEWER.password);
   await page.getByRole("button", { name: "Accept invite" }).click();
   const secret = await enrolledSecret(page);
+  viewerSecret = secret;
 
   await signIn(page, VIEWER.email, VIEWER.password, secret);
   await expect(page.getByText(`${VIEWER.email} · viewer`)).toBeVisible();
   await expect(page.getByRole("button", { name: "Users" })).toHaveCount(0);
-  for (const tab of ["Overview", "News", "Agents", "Feeds", "Approvals"]) {
+  for (const tab of ["Overview", "News", "Agents", "Health", "Research", "Feeds", "Approvals"]) {
     await page.getByRole("button", { name: tab, exact: true }).click();
   }
   await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
@@ -143,4 +170,39 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
     data: { proposal_id: "e2e-long", action: "approve" }, headers: { authorization: `Bearer ${token}` },
   });
   expect(r.status()).toBe(403);
+});
+
+test("viewer resets a forgotten password with an authenticator code, then changes it while signed in", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Forgot password" }).click();
+  await page.getByLabel("Email").fill(VIEWER.email);
+  await page.getByLabel("New password").fill("forgotten viewer pw 1");
+  await page.getByLabel("Authenticator code").fill("000000");
+  await page.getByRole("button", { name: "Set new password" }).click();
+  await expect(page.locator(".err")).toContainText("invalid credentials");
+  await page.getByLabel("Authenticator code").fill(await freshTotp(viewerSecret));
+  await page.getByRole("button", { name: "Set new password" }).click();
+  await expect(page.getByText("Password changed. Sign in with the new password.")).toBeVisible();
+  await signIn(page, VIEWER.email, "forgotten viewer pw 1", viewerSecret);
+
+  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await page.getByLabel("Current password").fill("forgotten viewer pw 1");
+  await page.getByLabel("Authenticator code").fill(await freshTotp(viewerSecret));
+  await page.getByLabel("New password (12+ characters)").fill(VIEWER.password);
+  await page.getByRole("button", { name: "Change password" }).click();
+  await expect(page.getByText("Password changed. Your other sessions were signed out.")).toBeVisible();
+});
+
+test("owner manages a user's access and never offers the owner role", async ({ page }) => {
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await page.getByRole("button", { name: "Users" }).click();
+  await expect(page.locator("form.inline option[value=owner]")).toHaveCount(0);
+  const row = page.locator("tr", { hasText: VIEWER.email });
+  await row.getByRole("button", { name: "Reset link" }).click();
+  await expect(page.locator("code.mono")).toContainText("/#reset=");
+  await row.getByRole("button", { name: "Disable" }).click();
+  await expect(row.getByRole("button", { name: "Enable" })).toBeVisible();
+  await row.getByRole("button", { name: "Enable" }).click();
+  await expect(row.getByRole("button", { name: "Disable" })).toBeVisible();
 });

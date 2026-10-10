@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -26,7 +26,10 @@ TF_SECONDS: dict[str, int] = {
 
 
 Timeframe = Literal["1m", "5m", "15m", "1h", "4h", "1d", "1w"]
-DecisionTimeframe = Literal["15m", "1h"]
+# Timeframes an agent may decide on live: each needs a walk-forward window (the Saturday retrain) and the engine must
+# hold enough 1m history for 120 of its bars. 1d is research-only: the engine keeps ~40 trading days of 1m bars
+# (EngineConfig.max_bars_in_memory), so a daily agent would never get a frame.
+DecisionTimeframe = Literal["15m", "1h", "4h"]
 
 
 class _Section(BaseModel):
@@ -128,6 +131,30 @@ class SchedulerSettings(_Section):
     agents_presession: ScheduleSettings
     recalibrate: ScheduleSettings
     drift_watch: ScheduleSettings
+    feed_reconcile: ScheduleSettings
+    gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
+    attribution: ScheduleSettings = ScheduleSettings(kind="daily", at="23:50", max_late_hours=20)
+
+
+class GapSettings(_Section):
+    """Bounded spawning (goldbot/ops/gap_watch.py, docs/TRADER_LIFECYCLE.md section 3)."""
+    founders_per_month: int = Field(2, ge=0, le=4)        # zero-capital shadow founders per calendar month
+    staff_runs_per_week: int = Field(3, ge=0, le=7)       # on-demand runs of existing read-only roles, rolling 7 days
+    hypotheses_per_run: int = Field(2, ge=0, le=2)        # hypotheses gap_watch may file per run
+    dq_window_days: int = Field(7, ge=1, le=30)           # data-quality errors counted over this window
+    dq_min_error_days: int = Field(3, ge=1, le=30)        # distinct UTC days with error events that make a gap
+    regime_window_days: int = Field(20, ge=5, le=120)     # recent realised volatility (mean of daily values)
+    regime_history_days: int = Field(3650, ge=365)        # history the volatility terciles are cut from
+
+
+class AttributionSettings(_Section):
+    """Daily performance attribution (goldbot/research/attribution.py, BACKLOG item 12). Reporting only: it changes
+    no trading, setting or model; the staff agents read it and file hypotheses through the bounded path."""
+    window_days: int = Field(180, ge=7, le=3650)          # closed shadow trades exited in this window
+    min_trades: int = Field(30, ge=2)                     # a cell with fewer trades is reported as noise
+    calibration_bins: int = Field(10, ge=2, le=50)        # equal-width bins of p
+    calibration_min_bin: int = Field(10, ge=1)            # a calibration bin with fewer candidates is noise
+    trade_rows: int = Field(300, ge=0, le=5000)           # most recent per-trade cost rows kept in the JSON
 
 
 class ResearchSettings(_Section):
@@ -136,6 +163,9 @@ class ResearchSettings(_Section):
     trial_budget_quarter: int = Field(20, ge=1, le=500)   # pre-registered trials per calendar quarter, all families
     holdout_from: date | None = date(2025, 10, 1)          # research never sees this window unless scoring it
     holdout_to: date | None = date(2026, 9, 30)            # inclusive
+    # primary-signal screen event floor (research.screen, P4); changing it is an owner decision, set before the run
+    screen_min_events: int = Field(1000, ge=1)
+    screen_min_events_daily: int | None = Field(None, ge=1)   # rules whose signal is on daily bars; None: the floor above
     director_floor: int = Field(2, ge=0, le=200)        # research director: exploration trials per family per month
     label_grid_step: float = Field(0.25, gt=0, lt=1)
     cost_window_days: int = Field(30, ge=1)
@@ -173,6 +203,17 @@ class NewsSettings(_Section):
 
 class TelegramSettings(_Section):
     allowed_user_ids: list[int] = Field(default_factory=list)
+    # design (Operating mode, row A10): /mode auto is offered only after this many decided proposals since the last
+    # mode change, no RiskGate breach, and no distinguishable approved-vs-rejected outcome difference (Welch at alpha)
+    auto_min_proposals: int = Field(100, ge=100)
+    auto_alpha: float = Field(0.10, gt=0, le=0.5)
+    auto_min_outcomes_per_side: int = Field(10, ge=2)   # fewer matched outcomes on a side: no evidence (fail closed)
+
+
+class AuthSettings(_Section):
+    """Dashboard owner. The repo is public: set owner_email only in the server's git-ignored
+    config/settings.local.yaml. Unset, the owner account cannot be created (bootstrap refuses)."""
+    owner_email: str | None = None
 
 
 class DriftSettings(_Section):
@@ -190,6 +231,28 @@ class DriftSettings(_Section):
     cusum_h: float = Field(4.0, gt=0)
     dd_mult: float = Field(1.5, gt=1)                # 30-day drawdown above this x backtest halts the system
     dd_window_days: int = Field(30, ge=7)
+
+
+class GateSettings(_Section):
+    """Design: Roadmap gates and the stop rule (goldbot/ops/gates_phase.py). Values without a comment are the design's
+    own numbers; the rest are proposals the owner must sign off before the first paper trade."""
+    shuffle_auc_tolerance: float = Field(0.02, gt=0, lt=0.5)      # PROPOSED: owner sign-off required ("at chance")
+    feed_max_mismatch_share: float = Field(0.01, ge=0, le=1)      # PROPOSED: owner sign-off required ("bars agree")
+    backtest_min_dsr: float = Field(0.95, gt=0, le=1)             # PROPOSED: owner sign-off required (roadmap 1.0 vs 0.95)
+    backtest_min_trades: int = Field(500, ge=1)
+    paper_min_trades: int = Field(150, ge=1)
+    paper_min_days: int = Field(182, ge=0)                        # PROPOSED: owner sign-off required (roadmap "6 months")
+    paper_expectancy_within: float = Field(0.5, gt=0, le=1)
+    paper_fills_within: float = Field(0.3, gt=0)
+    live_min_trades: int = Field(300, ge=1)
+    live_min_days: int = Field(365, ge=0)                         # PROPOSED: owner sign-off required (roadmap "12 months")
+    live_expectancy_within: float = Field(0.4, gt=0, le=1)
+    live_dd_mult: float = Field(1.5, gt=0)
+    brokers_within: float = Field(0.15, gt=0, le=1)
+    broker_min_trades: int = Field(50, ge=1)                      # PROPOSED: owner sign-off required
+    stop_after_months: float = Field(18, gt=0)
+    stop_min_pooled_trades: int = Field(500, ge=1)
+    stop_confidence: float = Field(0.90, gt=0.5, lt=1)
 
 
 class Settings(_Section):
@@ -210,6 +273,20 @@ class Settings(_Section):
     agents: AgentSettings = Field(default_factory=AgentSettings)
     news: NewsSettings = Field(default_factory=NewsSettings)
     drift: DriftSettings = Field(default_factory=DriftSettings)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
+    gates: GateSettings = Field(default_factory=GateSettings)
+    gaps: GapSettings = Field(default_factory=GapSettings)
+    attribution: AttributionSettings = Field(default_factory=AttributionSettings)
+
+    @model_validator(mode="after")
+    def _walkforward_has_purge_and_embargo(self) -> Settings:
+        """Every walk-forward timeframe the retrain trains on has its purge and embargo (design: purged, embargoed
+        walk-forward), so a window added without them fails at load."""
+        for key in ("purge_days", "embargo_days"):
+            missing = sorted(set(self.walkforward) - set(getattr(self.labels, key)))
+            if missing:
+                raise ValueError(f"labels.{key} has no value for walk-forward timeframe(s) {', '.join(missing)}")
+        return self
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
