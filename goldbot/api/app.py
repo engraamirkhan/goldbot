@@ -30,6 +30,7 @@ from goldbot.api.schema import (
     AuthState,
     CalendarEvent,
     CalendarResponse,
+    DecidedProposal,
     Decision,
     DecisionResult,
     FeedHealth,
@@ -52,6 +53,8 @@ from goldbot.api.schema import (
     UserRef,
     UserRow,
 )
+from goldbot.telegram.approvals import Outcome
+from goldbot.telegram.approvals import Proposal as BusProposal
 from goldbot.telegram.bus import ApprovalBus
 
 if TYPE_CHECKING:
@@ -104,6 +107,24 @@ class State:
             except json.JSONDecodeError:
                 pass
         return out
+
+    def drift_halt(self) -> list[str] | None:
+        """Reasons for the drift watch's system halt (state/drift.json), None when there is none. Read the way the
+        engines read it: missing restricts nothing, unreadable or invalid halts entries (fail closed)."""
+        f = self.dir / "drift.json"
+        if not f.exists():
+            return None
+        try:
+            d = json.loads(f.read_text())
+        except (ValueError, OSError):
+            return ["drift.json unreadable"]
+        if not isinstance(d, dict):
+            return ["drift.json invalid"]
+        sh = d.get("system_halt")
+        if not sh:
+            return None
+        reasons = sh.get("reasons") if isinstance(sh, dict) else None
+        return [str(r) for r in reasons] if isinstance(reasons, list) and reasons else ["drift system halt"]
 
     def supervisor(self) -> dict:
         f = self.dir / "supervisor.json"
@@ -250,14 +271,36 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                        account_class=e.get("account_class", "unknown")))
         return rows
 
+    def card(p: BusProposal) -> dict[str, Any]:
+        return dict(proposal_id=p.proposal_id, account_id=p.account_id, agent_id=p.agent_id,
+                    side="long" if p.side > 0 else "short", lots=p.lots, entry=p.entry, stop=p.stop, target=p.target,
+                    p=p.p, ev_r=p.ev_r, spread_points=p.spread_points, top_features=p.top_features, risk_usd=p.risk_usd,
+                    expires_at=datetime.fromtimestamp(p.created + p.window_s, tz=timezone.utc))
+
     @app.get("/api/proposals", response_model=list[Proposal])
     def proposals(_: User = Depends(auth)) -> list[Proposal]:
+        return [Proposal(**card(p)) for p in st.bus.pending()]
+
+    @app.get("/api/proposals/recent", response_model=list[DecidedProposal])
+    def recent_proposals(_: User = Depends(auth)) -> list[DecidedProposal]:
+        """Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it."""
         out = []
-        for p in st.bus.pending():
-            out.append(Proposal(proposal_id=p.proposal_id, account_id=p.account_id, agent_id=p.agent_id,
-                                side="long" if p.side > 0 else "short", lots=p.lots, entry=p.entry, stop=p.stop, target=p.target,
-                                p=p.p, ev_r=p.ev_r, spread_points=p.spread_points, top_features=p.top_features,
-                                expires_at=datetime.fromtimestamp(p.created + p.window_s, tz=timezone.utc)))
+        for p, d in st.bus.recent():
+            if d is not None:                       # decided, the engine has not applied it yet
+                out.append(DecidedProposal.model_validate({**card(p), "status": "submitted" if d.approve else "rejected",
+                                                           "reason_code": None if d.approve else d.reason_code,
+                                                           "decided_by": d.by}))
+                continue
+            if p.outcome == Outcome.APPROVED:
+                status = "refused" if p.gate_refusal else "approved"
+            elif p.outcome == Outcome.REJECTED:
+                status = "rejected"
+            else:
+                status = "expired"
+            by = p.decided_via or (f"telegram:{p.decided_by}" if p.decided_by is not None else None)
+            out.append(DecidedProposal.model_validate({**card(p), "status": status, "decided_by": by,
+                                                       "reason_code": p.reason_code if status == "rejected" else None,
+                                                       "refusal": list(p.gate_refusal or [])}))
         return out
 
     @app.post("/api/decisions")
@@ -339,8 +382,12 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     def current_status() -> Status:
         modes = sorted({str(e.get("approval_mode", "propose")) for e in st.engines()})
         c = st.bus.control()
+        sup = st.supervisor()
+        drift = st.drift_halt()
         return Status(mode=",".join(modes) or "propose", halted=c.halted, halted_by=c.by if c.halted else None,
-                      halt_reason=c.reason if c.halted else None, pending=len(st.bus.pending()), supervisor=st.supervisor())
+                      halt_reason=c.reason if c.halted else None, pending=len(st.bus.pending()), supervisor=sup,
+                      supervisor_halt=bool(sup.get("halt")), supervisor_reasons=[str(r) for r in sup.get("reasons") or []],
+                      drift_halt=drift is not None, drift_reasons=drift or [], blackout=st.active_blackout())
 
     @app.get("/api/status")
     def status(_: User = Depends(auth)) -> Status:

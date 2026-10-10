@@ -7,6 +7,7 @@ type Schemas = components["schemas"];
 export type AccountSummary = Schemas["AccountSummary"];
 export type Stage = AccountSummary["stage"];
 export type Proposal = Schemas["Proposal"];
+export type DecidedProposal = Schemas["DecidedProposal"];
 export type Decision = Schemas["Decision"];
 export type ReasonCode = NonNullable<Decision["reason_code"]>;
 export type AgentRow = Schemas["AgentRow"];
@@ -64,6 +65,7 @@ export const api = {
   status: () => req<Status>("/api/status"),
   accounts: () => req<AccountSummary[]>("/api/accounts"),
   proposals: () => req<Proposal[]>("/api/proposals"),
+  recentProposals: () => req<DecidedProposal[]>("/api/proposals/recent"),
   decide: (proposal_id: string, action: "approve" | "reject", reason_code?: ReasonCode) =>
     req<Schemas["DecisionResult"]>("/api/decisions", { method: "POST", body: JSON.stringify({ proposal_id, action, reason_code }) }),
   halt: (reason?: string) => req<Status>("/api/halt", { method: "POST", body: JSON.stringify({ reason: reason || null }) }),

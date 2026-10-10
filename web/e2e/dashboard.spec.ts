@@ -59,13 +59,21 @@ test("owner approves one proposal and rejects the other with a reason", async ({
   await page.waitForTimeout(500);
   expect(ws.isClosed()).toBe(false);
   await page.getByRole("button", { name: "Approvals" }).click();
-  const cards = page.locator("article.card");
-  await expect(cards).toHaveCount(2);
-  await expect(page.getByText("LONG 0.05 lots")).toBeVisible();
+  await expect(page.getByText("No engines reporting")).toBeVisible();         // safety strip above the cards
+  const waiting = page.getByRole("region", { name: "Waiting for your decision" }).locator("article.card");
+  await expect(waiting).toHaveCount(2);
+  const long = waiting.and(page.locator(".long"));
+  await expect(long.locator(".dir")).toHaveText(/LONG/);
+  await expect(long.getByText("$20")).toBeVisible();                           // $ risk from the engine
 
-  await page.locator("article.card.long").getByRole("button", { name: "Approve" }).click();
-  await expect(cards).toHaveCount(1);
-  await page.locator("article.card.short").getByRole("button", { name: "Reject: cost" }).click();
+  await long.getByRole("button", { name: "Approve" }).click();
+  await expect(waiting).toHaveCount(1);
+  const decided = page.getByRole("region", { name: "Decided in the last 10 minutes" });
+  await expect(decided.getByText("Approval sent.")).toBeVisible();             // the engine applies it on its next tick
+  const short = waiting.and(page.locator(".short"));
+  await short.getByRole("button", { name: "Reject…" }).click();
+  await short.getByRole("group", { name: "Reason for rejecting" }).getByRole("button", { name: "Cost" }).click();
+  await expect(decided.getByText(/Rejected · Cost/)).toBeVisible();
   await expect(page.getByText(/No proposals waiting/)).toBeVisible();
 });
 
