@@ -174,6 +174,12 @@ class TrialRegistry:
         if preregistration is not None:
             row["preregistration"] = {"ts": preregistration["ts"], "trial": preregistration["trial"],
                                       "config_hash": preregistration["config_hash"]}
+            pre_fv = preregistration.get("feature_version")
+            if pre_fv and pre_fv != feature_version:
+                # the run's features are not the pre-registered ones (e.g. a feature-version bump in between): kept
+                # linked, with the deviation on the row for the evaluator to read against the reading rule
+                row["preregistration"]["deviation"] = {"feature_version": {"preregistered": pre_fv,
+                                                                           "run": feature_version}}
         self._append(row)
         return row
 
@@ -317,22 +323,26 @@ class TrialRegistry:
         return q, preregs
 
     def holdout_scored(self, family: str, config: dict) -> bool:
+        """The configuration's one holdout scoring has been spent, on ANY feature version: a re-scoring after a
+        feature-version bump would be a second look at the same held-out window (deliberately version-agnostic)."""
         h = config_hash(config)
         return any(r.get("status") == "holdout" and r.get("family") == family and r.get("config_hash") == h
                    for r in self._rows())
 
-    def passed_gates(self, family: str, config: dict) -> bool:
+    def passed_gates(self, family: str, config: dict, feature_version: str | None = None) -> bool:
         """A walk-forward trial (not a holdout scoring) of exactly this configuration passed the design's gates. A
         configuration chosen from a feature-discovery trial (config key FROM_DISCOVERY_KEY) must ALSO have passed its
         holdout scoring: its features were picked on the same window the walk-forward scored, which the deflated
-        Sharpe corrects only partly (quant review; preregistration-2027Q1.md)."""
+        Sharpe corrects only partly (quant review; preregistration-2027Q1.md). `feature_version`: only rows run on
+        that feature version count, for the gates and the holdout pass alike (None: any version)."""
         h = config_hash(config)
-        rows = self._rows()
-        gates_ok = any(r.get("status") == "evaluated" and r.get("family") == family and r.get("config_hash") == h
+        rows = [r for r in self._rows() if r.get("family") == family and r.get("config_hash") == h
+                and (feature_version is None or r.get("feature_version") == feature_version)]
+        gates_ok = any(r.get("status") == "evaluated"
                        and ((r.get("results") or {}).get("gates") or {}).get("passed") is True for r in rows)
         if not gates_ok or not config.get(FROM_DISCOVERY_KEY):
             return gates_ok
-        return any(r.get("status") == "holdout" and r.get("family") == family and r.get("config_hash") == h
+        return any(r.get("status") == "holdout"
                    and ((r.get("results") or {}).get("holdout_verdict") or {}).get("passed") is True for r in rows)
 
     @contextmanager

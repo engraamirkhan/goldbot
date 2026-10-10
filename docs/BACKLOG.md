@@ -50,6 +50,8 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | ready (after 1) |
 | 30 | Opportunity-day detection: day-type / regime classifier (ADR 0004 north star) | Market preparation, selectivity · FIND | M | proposed (hypothesis via the trial registry; no trials spent) |
 | 31 | Runner exits: let winners run on opportunity days (ADR 0004 north star) | Trade management, exit · FIND | S–M | proposed (after 6; hypothesis via the trial registry) |
+| 32 | Gate EV for exit-policy trades uses the measured mean winner (G-12) | Capital management · RUN | S | proposed (trading-safety review) |
+| 33 | Opportunity-day evaluation for research trials (£/day distribution, days captured) | Performance review · FIND | S–M | proposed (after 20, 26) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -260,7 +262,7 @@ execution items need trading-safety review. Feature items need quant review.
   Deterministic calendars become PIT features: holidays, COMEX option expiry and first notice, Lunar New Year,
   Indian festivals, month and quarter end. Truncation test. Must land before H-04 and H-14 run.
 
-### 25–31. From ADR 0004 (amended 2026-10-10: £1,000 GBP account, £50 daily loss limit, £50+/day north star)
+### 25–33. From ADR 0004 (amended 2026-10-10: £1,000 GBP account, £50 daily loss limit, £50+/day north star) and the opportunity-day research (`docs/research/opportunity-days.md`; 30a/30b, the 29 and 31 additions, 32, 33)
 Source: `docs/decisions/0004-starting-account-and-daily-target.md`. The IC Markets demo is £1,000 GBP, read from
 MT5. At £1,000 only a 15m minimum lot fits (0.82% true risk), and only once 28 and 25 land. The audit found the
 gate treats USD amounts as GBP (HIGH). None of these items uses trial budget or touches the holdout; 30 and 31 are
@@ -301,6 +303,13 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - An allowed exception decision carries reason `min_lot_exception`, realised risk and the phase rate; it reaches
     the decisions log and the approval card's risk line. Exits untouched (test: exit path never calls the gate).
   - Reviews: trading-safety, code; DESIGN Sizing paragraph and TRACEABILITY row updated in the same change.
+  - **Day-factor interplay (safety finding, `docs/research/opportunity-days.md` section 3.2).** Without this
+    exception (setting null), and after 28, the gate's 1.2× tolerance (`gate.py:275-276`) allows the 15m min lot
+    (true 0.82%) at £1,000 only when the multiplier is ≥ 1.37. So a 1.5× opportunity-day factor (item 30) turns
+    trading on and off at this equity, rather than scaling size. Test, GBP account at £1,000, 15m stop $10.90:
+    with the exception null, the decision under multiplier 1.0 is `min_lot_exceeds_risk` and under 1.5 it is
+    allowed (realised 0.82% against a 0.75% target, both recorded on the decision and the approval card); with the
+    exception at 1%, both are allowed and the decision does not depend on the multiplier.
   Depends on: 28 at £1,000 (without it the min lot computes as 1.09% and is refused). 19 (heat cap) must count
   exception trades in full when it lands.
 - **26. Milestone ladder and monthly north-star report.** Value: reports progress the way ADR 0004 decided:
@@ -337,6 +346,17 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - The supervisor applies the same absolute to the combined day loss (one currency, from 28) and writes HALT.
   - Exits, stops and closes never consult it (test). Health and the approval card show the remaining daily
     allowance. DESIGN Hard limits and TRACEABILITY updated. Reviews: trading-safety, code, ui-ux.
+  - **Projected percentage caps too (from `docs/research/opportunity-days.md` section 5).** The 2% account cap
+    (`gate.py:231-234`) and the 1.5% supervisor cap are checked on the loss so far, so at £1,000 a second 0.85% loss
+    ends the day at ~1.69%, past the 1.5% supervisor cap (ADR 0004 section 3). Acceptance:
+    - With `risk.project_pct_caps: true`, the gate refuses `daily_cap_headroom` when day loss + this trade's full
+      stop risk (account currency, from 28) > the effective daily limit, min(2%, supervisor 1.5%, the absolute).
+      The weekly cap is projected the same way (`weekly_cap_headroom`).
+    - Tests on each side of each boundary, including £1,000 with one 0.85% loss and a 0.82% entry (refused: 1.67%
+      > 1.5%).
+    - With the setting false, decisions are identical to today.
+    - Exits untouched.
+    - Owner: adopt or not. At £1,000 it means at most one full loss a day; the alternative is a worst day of ~£17.
   Depends on: 28.
 - **30. Opportunity-day detection (hypothesis; quant review).** Value: the north star depends on trading more on
   days the market offers moves and standing aside otherwise (FIND). Acceptance:
@@ -348,12 +368,88 @@ hypotheses that go through the trial registry in a future quarter's budget.
     by weekday and session, so ADR 0004's "a few such days a month" is measured. Truncation test on every feature.
   - No trial runs until a quarter's budget is available; the Q1 queue (item 5) is not displaced without the
     owner's say. Depends on: 24 (DST-aware sessions), 18 (tier-2 events).
+  - **Registered (2026-10-10):** the hypotheses are H-16 (range forecast), H-17 (trend-day continuation), H-18
+    (post-blackout events), H-19 (stand-aside overlay) and H-20..H-23 (features), in `hypotheses.md` A2. Evidence
+    and design: `docs/research/opportunity-days.md`. Proposed for the Q2 2027 pre-registration: 3–4 trials.
+  - **30a. `day_type` feature family, opt-in (quant + data-engineer review).**
+    - Registered like `positioning`: computed only with an explicit flag (`--day-type`), so the default feature
+      set, the frozen Q1 H-02 universe and its K_eff are unchanged (test: the default column list is identical
+      before and after).
+    - Columns, per feature day (22:00 UTC rollover), joined to decision bars as-of:
+      - `opp_har_range_hat`: HAR on stub-free daily ranges (1/5/22), coefficients fitted only on rows before the
+        fold's end (a fold-fit hook, not a precomputed constant);
+      - `opp_gvz_rv`: `macro_gvz` ÷ annualised YZ20, via `asof_join` on `available_utc`;
+      - `opp_tier1_today`, `opp_min_to_first_tier1`: from the scheduled calendar;
+      - `opp_prev_range_atr`, `opp_nr4`, `opp_nr7`, `opp_inside_day`;
+      - `opp_gap_atr`: weekend/daily reopen gap ÷ ATR(1d);
+      - `opp_noise_ratio`: range since the London/NY local open ÷ its 14-day mean at the same local time, DST-aware
+        (`calendar.LOCAL_SESSIONS`).
+    - A truncation test for every column. The lookahead check reports 0 columns. A test that the GVZ value at a
+      Monday 07:00 UTC bar is the previous Thursday's close. No column uses `side` or a later return.
+  - **30b. Day-score allocator input (trading-safety + quant review).**
+    - `allocator.day_type: {enabled: false, low_cut: 0.33, high_cut: 0.80, factors: [0.0, 1.0, 1.5]}` in settings.
+      With `enabled: false`, decisions are identical to today on a recorded replay (test).
+    - `Regime.day_score` is filled by `runner._regime`. `RuleAllocator.weights` multiplies every family weight by
+      the factor. Validation refuses a factor > `multiplier_bounds[1]` or < 0.
+    - Tests:
+      - factor 0 gives `below_threshold` and no gate call;
+      - factor 1.5 never yields risk above 0.75% at 0.5% risk, and the 1% clamp holds at any risk rate;
+      - `SIZE_DOWN` still caps the multiplier at 0.5;
+      - the exit path never reads `day_score`;
+      - the £1,000 min-lot interplay test in item 25.
+    - `day_score` and the factor are in the decisions log and on the approval card's risk line (ui-ux review).
+    - **Enable only after H-16 passes** its pre-registered reading rule (evaluator verdict on #34).
 - **31. Runner exits (hypothesis; quant and trading-safety review).** Value: a £50 day at £1,000 is a ~6 R winner;
   only trailing or scale-out exits catch those (FIND). Acceptance:
   - A pre-registered variant set (scale-out at 1–1.5 R plus an ATR trail, held only on flagged opportunity days)
     registered through the trial registry, judged on net R and the right tail (share of ≥ 3 R trades), with
-    shadow-book parity to the labels.
+    shadow-book parity to the labels. Registered as H-17's exit pair: V0 fixed target vs V1 scale-and-run
+    (`opportunity-days.md` section 3.3). V2 and V3 are diagnostics.
+  - **Runner mechanics (code).** `ExitPolicy` gains:
+    - `flat_at_local: (zone, "HH:MM") | None`: the rest of the position exits at the first bar close at or after
+      that local time on the entry's trading day;
+    - `trail_ref: "best" | "swing"`: with `swing`, the stop moves behind the last swing low/high *confirmed* since
+      entry (fractal lag as `features.structure` swings, minus `trail_atr` × ATR as a buffer), never loosening.
+  - Both run through `policy_step`, so `triple_barrier`, `ShadowBook` and `runner._manage_policies` agree. A parity
+    test on one fixture bar path gives the same exit bar and price in all three.
+  - DST tests for the clock flat (summer and winter New York).
+  - Existing policies are unchanged (all current exit-policy tests pass).
+  - Live `modify` only tightens. A clock flat is an automatic close that never waits for approval.
   - Exits stay automatic and are never gated. Depends on: 6 (live exit policies), 30.
+- **32. Gate EV for exit-policy trades (G-12; trading-safety review).** Value: the gate's EV
+  `p × target_atr − (1 − p) × stop_atr − cost` (`gate.py:242`) assumes every win reaches the target, but under a
+  policy `p` is P(win) (`exit_policy.policy_label`) (RUN). Acceptance:
+  - `Intent` gains `win_atr`: the agent's measured mean winner in ATR from its labels, capped at `target_atr`.
+    EV uses `min(win_atr, target_atr)`.
+  - Without a policy, `win_atr = target_atr` and decisions are identical (test).
+  - A test where a capped runner with p = 0.45, cap 10 ATR and mean winner 2.0 ATR is refused when the EV is
+    negative.
+  - The change never allows a trade today's gate refuses (property test over a grid).
+  - Depends on: 31.
+- **33. Opportunity-day evaluation for research trials (quant review; read-only).** Value: the north-star KPIs of
+  item 26 applied to research trials and the shadow book, so a hypothesis is judged the way the owner states the
+  goal, without making it a target (FIND). Acceptance:
+  - For any research trial's trade list and the monthly shadow book, every trade is re-sized as a configurable
+    account (default £1,000 GBP: 0.01 lot or refused under the gate's rules, account currency from 28).
+  - The report shows:
+    - the £/day distribution: P(≥ £50), P(≥ £20), median, mean, p5, worst day, days traded;
+    - opportunity days captured, with item 26's definition (range ≥ 1.5 × ATR(1d), ≥ 1 R made) plus the stricter
+      variant from `opportunity-days.md` section 3.4. Misses are split by stand-aside, gate reason and wrong side;
+    - stand-aside accuracy;
+    - drawdown statistics from item 20;
+    - net R by score band.
+  - It reuses item 30's descriptive base-rate report; it does not recompute it.
+  - Golden test on a fixture. Not in the Telegram digest. The header says "diagnostic, not a target".
+  - Depends on: 20, 26.
+- **34. Material feature version (ADR 0006; needs the owner's sign-off).** Value: a feature correction voids research
+  evidence and forces legacy rebuilds only for the models that read the corrected columns. Acceptance:
+  - A material version is hashed over a specialist's selected `model_features` and the versions of the features
+    that produce them. It is recorded on trial rows and model entries, beside today's `feature_version`.
+  - `passed_gates` in the tournament matches on the material version.
+  - Until then, the tournament summary shows any gap between the passing trial's `feature_version` and the live
+    model's.
+  - Tests: a bump of a feature no model reads leaves the material version unchanged; a bump of a read column
+    changes it.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.
@@ -368,6 +464,9 @@ These are never decided by the product owner or by agents.
   toolkit trials that compete with item 5 for Q1's 20.
 - **Going live.** Demo until the paper → tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
   and the typed phrase. Item 8 computes whether the gate is met. It never flips it.
+- **Research evidence across feature versions (ADR 0006, item 34).** For now the tournament accepts a gate pass
+  from another feature version, so the DST correction does not void every trial. Sign off the material feature
+  version as the principled fix, or rule that evidence must be re-run after any feature bump.
 - **Trader-playbook risk policy** (items 17–22; playbook section 7): the weekend rule (recommend flat for intraday
   families), tier-2 and holiday windows, throttle and heat-cap values, edge-linked sizing (G-10). The account size
   and tiny-live risk for H-01 were decided under your delegation in ADR 0004 (minimum-lot exception at ≤ 1%; H-01
@@ -376,6 +475,9 @@ These are never decided by the product owner or by agents.
   limit (item 29); £50+/day is the north star, realistic as a monthly average at ~£21k–£53k. Yours: an optional
   deposit plan (deposits climb the ladder faster than returns: 1h at ~£1,650), and confirm the demo is a Raw Spread
   account (on Standard nothing trades at £1,000).
+- **Opportunity days (`docs/research/opportunity-days.md` section 6).**
+  - An event-count floor for H-18 (~690 events vs 1,000).
+  - Whether to project the percentage daily caps (item 29). At £1,000 that means at most one full loss a day.
 - Also yours: sign off the P7 threshold values (item 8); commit or approve the first measured cost table until
   item 2 lands; VM provisioning and every credential (item 1).
 

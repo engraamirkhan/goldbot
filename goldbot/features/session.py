@@ -10,19 +10,23 @@ from goldbot.data.timeutil import epoch_ns
 from goldbot.features.columns import Columns
 from goldbot.features.registry import FeatureCtx, feature
 
-SESSION_OPENS_UTC = {"asia": 23, "london": 7, "newyork": 12.5}
 
-
-@feature("session", "calendar")
+@feature("session", "calendar", version="2")
 def f_session(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
+    """Session id and minutes since each session's latest open, from `DEFAULT_SESSIONS.sessions_local`: opens on
+    local exchange clocks (Asia 08:00 Tokyo, London 08:00 London, New York 08:30 New York) converted to UTC per date,
+    so they follow London's and New York's own DST switches. Version 2: version 1 used fixed UTC opens (23:00, 07:00,
+    12:30), an hour early on London's or New York's winter time. `min_since_*_open` ranges over [0, 1500) minutes
+    (an open every calendar date; 25 h apart once a year). Known inconsistency, kept on purpose: in the gap between
+    the New York close and the Asia open, `session_id` is asia (as `session_label`, which prices those thin hours with
+    Asia's costs), while `session_zones` treats the gap as no session (its current-session columns are NaN there)."""
     idx = pd.DatetimeIndex(df["ts_utc"]).tz_convert("UTC")
     sess = DEFAULT_SESSIONS.session_label(idx)
     out = Columns(df.index)
     out["session_id"] = pd.Categorical(sess, categories=["asia", "london", "newyork"]).codes
-    hour = idx.hour + idx.minute / 60
-    for name, h in SESSION_OPENS_UTC.items():
-        m = (hour - h) % 24
-        out[f"min_since_{name}_open"] = m * 60
+    ns = epoch_ns(idx)
+    for name in DEFAULT_SESSIONS.sessions_local:
+        out[f"min_since_{name}_open"] = (ns - DEFAULT_SESSIONS.last_open_ns(idx, name)) / 6e10
     out["dow"] = idx.dayofweek
     out["hour_utc"] = idx.hour
     # US and EU DST flags (shifts the NY/London open relative to UTC)

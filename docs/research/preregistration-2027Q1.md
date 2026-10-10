@@ -16,6 +16,10 @@ promotion.
 - Gates (unchanged, `research/gates.py`): >= 1,500 candidates, >= 60 per complete test fold, positive expectancy in
   >= 3 calendar years including one of 2021/2022, DSR >= 0.95 on >= 200 model-filtered trades with the real trial count.
 - Rule-only gates are reported alongside (informational).
+- Features: feature version `f-079deacc61` (sessions v2, DST-aware: `session`, `session_zones`, `market_structure`
+  version 2), `f-f999b359e2` where the macro drivers are added. A result on another feature version is recorded with a
+  `deviation` against its pre-registration (`TrialRegistry.record`), and a holdout scoring needs a gate pass on the same
+  feature version (`passed_gates(feature_version=)`). Any further feature change before a run amends this line first.
 - DSR trial count: 20 (Q4 2026) + Q1 trials run so far + K_eff of H-02. K_eff is the number of units a survivor
   was picked from: the features screened (about 300) when survivors go forward as individual features (the default,
   `survivor_unit=feature`), the groups screened (about 10) only when whole groups go forward (`survivor_unit=group`).

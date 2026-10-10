@@ -9,8 +9,9 @@ talks to the network, a broker or Telegram, so the whole module is unit-tested w
   python -m goldbot.ops.run health --out f.json    # also write the JSON report to a file (UTF-8)
   python -m goldbot.ops.run health --baseline f.json   # exit 1 only for fails that were not failing in f.json
 
-Secrets are checked for PRESENCE only: the report names missing keys and never contains a value. The one network
-probe, the MT5 bridge's /health through the tunnel, is injected (`HealthContext.bridge_probe`); tests leave it unset.
+Secrets are checked for PRESENCE only: the report names missing keys and never contains a value. The network
+probes, the MT5 bridge's /health through the tunnel and the broker's latest tick for the server-clock check
+(`goldbot/ops/server_clock.py`), are injected (`HealthContext.bridge_probe`, `tick_reader`); tests leave them unset.
 
 Operational alerts (design S5, R11, X6) are checks too: a service heartbeat silent for 5 minutes fails, and a tripped
 daily or weekly loss cap and an order that failed after the retries warn with `NOTIFY_ON_WARN`, so the Telegram alert
@@ -39,7 +40,7 @@ from pydantic import Field
 
 from goldbot.base import FrozenRecord, Record, UtcTimestamp, write_atomic
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
-from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
+from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
 from goldbot.data.crossfeed import check_reconciliation
 
 Status = Literal["ok", "warn", "fail"]
@@ -101,6 +102,8 @@ class AccountRef(FrozenRecord):
     """The part of an account the checks need (keeps tests free of accounts.yaml)."""
 
     account_id: str
+    server_tz: str | None = None      # for the server-clock check; None skips it
+    symbol: str = "XAUUSD"
 
 
 class HealthContext(Record):
@@ -114,6 +117,8 @@ class HealthContext(Record):
     disk_usage: Callable[[str], Any] = shutil.disk_usage     # -> (total, used, free) in bytes
     sessions: SessionTable = DEFAULT_SESSIONS
     bridge_probe: Callable[[str], str | None] | None = None   # url -> None when /health answers, else why not
+    tick_reader: Callable[[str, str], Any] | None = None      # (account_id, symbol) -> broker Tick (read-only); None: no bridge
+    clock: Callable[[], pd.Timestamp] | None = None           # host UTC read after a network probe; None: use `now`
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -127,13 +132,26 @@ class HealthContext(Record):
         except Exception as exc:
             s_err = f"{type(exc).__name__}: {exc}"
         try:
-            accs = [AccountRef(account_id=a.account_id) for a in accounts.enabled_accounts()]
+            accs = [AccountRef(account_id=a.account_id, server_tz=a.server_tz, symbol=a.symbol)
+                    for a in accounts.enabled_accounts()]
         except Exception as exc:
             a_err = f"{type(exc).__name__}: {exc}"
         from goldbot.execution.bridge import probe_health
         return cls(state_dir=Path(state_dir), now=now if now is not None else pd.Timestamp.now("UTC"),
                    settings=settings, settings_error=s_err, accounts=accs, accounts_error=a_err,
-                   get_secret=accounts.get_secret, bridge_probe=lambda url: probe_health(url, BRIDGE_TIMEOUT_S))
+                   get_secret=accounts.get_secret, bridge_probe=lambda url: probe_health(url, BRIDGE_TIMEOUT_S),
+                   clock=lambda: pd.Timestamp.now("UTC"),
+                   tick_reader=bridge_tick_reader)
+
+
+def bridge_tick_reader(account_id: str, symbol: str) -> Any:
+    """The account's latest tick through its MT5 bridge (read-only `last_tick` RPC), or None without a bridge."""
+    from goldbot.execution.bridge import RemoteBroker
+    from goldbot.ops import accounts
+    ep = accounts.bridge_endpoint(account_id)
+    if ep is None:
+        return None
+    return RemoteBroker(ep[0], ep[1], name=f"health-clock-{account_id}", timeout_s=BRIDGE_TIMEOUT_S).last_tick(symbol)
 
 
 # --------------------------------------------------------------------------------------------- helpers
@@ -318,6 +336,10 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         statuses.append("warn")
         parts.append(f"broker clock skew {float(skew):+.1f} s vs the wall clock exceeds the {grace:g} s bar-close grace: "
                      f"bars may close before their last ticks ({int(e.get('late_ticks') or 0)} late tick(s) so far)")
+    if e.get("tick_error"):
+        statuses.append("fail")
+        parts.append(f"tick error ({e.get('tick_error_detail') or 'unknown'}): the engine logged it and carries on; "
+                     f"entries blocked until ticks run clean again, exits unaffected (details in the engine log)")
     lost = e.get("closed_records_lost") or []
     if lost:
         statuses.append("fail")
@@ -643,6 +665,40 @@ def check_model_watch(ctx: HealthContext) -> Check:
                      reason=f"champion watch cannot alarm (too few trades) for {', '.join(blind)}: relies on "
                             "drift_watch and the drawdown halt")
     return Check(name="model_watch", status="ok", reason=f"{len(agents)} champion(s) watched")
+
+
+def check_feature_versions(ctx: HealthContext) -> Check:
+    """Active models (champions and challengers in the model registry) per feature version: current, legacy (rebuilt
+    by goldbot/features/legacy.py) or cannot be rebuilt (never scored: warns). goldbot/features/legacy.py can be deleted
+    once no legacy count remains. The registry file is read, never created."""
+    if ctx.settings is None:
+        return _skipped("feature_versions", "settings unreadable")
+    f = Path(ctx.settings.research.models_dir) / "registry.json"
+    if not f.exists():
+        return Check(name="feature_versions", status="ok", reason="no model registry yet")
+    try:
+        rows = [r for r in (_read_json(f) or []) if r.get("status") in ("champion", "challenger")]
+    except (ValueError, OSError, AttributeError) as exc:
+        return Check(name="feature_versions", status="warn", reason=f"model registry unreadable: {exc}"[:300])
+    from goldbot.features.registry import feature_version, versions_for
+    from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
+    current = feature_version(DEFAULT_FEATURE_NAMES)
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[str(r.get("feature_version") or "")] = counts.get(str(r.get("feature_version") or ""), 0) + 1
+    parts, status = [], "ok"
+    for fv, n in sorted(counts.items()):
+        if fv == current:
+            kind = "current"
+        elif fv == "":
+            kind = "unversioned"
+        elif versions_for(DEFAULT_FEATURE_NAMES, fv) is not None:
+            kind = "legacy"
+        else:
+            kind, status = "cannot be rebuilt: not scored", "warn"
+        parts.append(f"{fv or '-'} ({kind}) {n}")
+    return Check(name="feature_versions", status=cast(Status, status),
+                 reason="active models by feature version: " + ("; ".join(parts) or "none"))
 
 
 def check_deploy(ctx: HealthContext) -> Check:
@@ -980,6 +1036,43 @@ def check_bridge(ctx: HealthContext, account_id: str) -> Check | None:
     return Check(name=name, status="ok", reason="bridge answers /health")
 
 
+def _engine_sessions(ctx: HealthContext, account_id: str) -> SessionTable:
+    """The broker session table the engine last wrote to engine_<account>.json (D13), else `ctx.sessions`."""
+    try:
+        cached = _read_json(ctx.state_dir / f"engine_{account_id}.json").get("sessions")
+    except (ValueError, OSError, AttributeError):
+        cached = None
+    table = session_table_from_cache(cached) if cached else None
+    return table if table is not None else ctx.sessions
+
+
+def check_server_clock(ctx: HealthContext, account: AccountRef) -> Check | None:
+    """The broker's real UTC offset against the configured server_tz (goldbot/ops/server_clock.py). Fails on a
+    mismatch over 5 min while the market is open: an entry must not open on a clock that is an hour off (session
+    table, rollover gate, Friday cut, tick and bar stamps); exits are never gated by it. Omitted without a tick reader,
+    a server_tz or a bridge for the account. The engine runs the same assessment on every refresh (entry gate
+    `server_clock_mismatch`); this check measures it independently of the engine. "Now" is read AFTER the tick
+    (`ctx.clock`), and the market-open test uses the engine's cached broker session table when it has one."""
+    if ctx.tick_reader is None or account.server_tz is None:
+        return None
+    from goldbot.ops import server_clock
+    name = f"server_clock:{account.account_id}"
+    try:
+        tick = ctx.tick_reader(account.account_id, account.symbol)
+    except Exception as exc:              # the type only: a bridge error message can name the tunnel endpoint
+        return Check(name=name, status="warn", reason=f"not measured: latest tick unreadable ({type(exc).__name__})")
+    if tick is None:
+        return None
+    now = ctx.clock() if ctx.clock is not None else ctx.now
+    try:
+        p = server_clock.assess(account.account_id, account.server_tz, tick.ts_utc, now,
+                                _engine_sessions(ctx, account.account_id))
+    except Exception as exc:
+        return Check(name=name, status="warn", reason=f"not measured: probe failed ({type(exc).__name__})")
+    status: Status = "fail" if p.status == "mismatch" else "ok"     # market closed: not measurable, no alert noise
+    return Check(name=name, status=status, reason=p.reason)
+
+
 # --------------------------------------------------------------------------------------------- report
 def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport:
     """All checks in a fixed order. `static_only`: settings, accounts, secrets and disk (no service needs to run)."""
@@ -994,13 +1087,15 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
             bridge = check_bridge(ctx, a.account_id)
             checks += [bridge] if bridge is not None else []
+            clock = check_server_clock(ctx, a)
+            checks += [clock] if clock is not None else []
         checks += [check_heartbeat(ctx, s) for s in HEARTBEAT_SERVICES]
         checks += check_scheduler(ctx)
         checks += [check_costs(ctx, a.account_id) for a in ctx.accounts]
         checks += [check_reconciliation(ctx, a.account_id) for a in ctx.accounts]   # D12 (goldbot/data/crossfeed.py)
         if ctx.settings is not None and ctx.settings.costs.publish_release:
             checks.append(check_costs_published(ctx))
-        checks += [check_data_quality(ctx), check_drift(ctx), check_model_watch(ctx), check_deploy(ctx), check_backup_age(ctx), check_backup_prune(ctx), check_restore_drill(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
+        checks += [check_data_quality(ctx), check_drift(ctx), check_model_watch(ctx), check_feature_versions(ctx), check_deploy(ctx), check_backup_age(ctx), check_backup_prune(ctx), check_restore_drill(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
 

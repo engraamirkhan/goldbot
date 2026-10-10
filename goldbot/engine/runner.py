@@ -19,8 +19,7 @@ import time
 import zlib
 from collections import deque
 from pathlib import Path
-from typing import Protocol
-from zoneinfo import ZoneInfo
+from typing import Callable, Protocol
 
 import numpy as np
 import pandas as pd
@@ -29,20 +28,22 @@ from pydantic import Field
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
 from goldbot.base import Record, UtcTimestamp, write_atomic
 from goldbot.config import tf_seconds
-from goldbot.data.calendar import DEFAULT_SESSIONS
+from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_cache
 from goldbot.data.econ_calendar import blackout_window
 from goldbot.data.news import shock_window
 from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
-from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf
+from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.broker import Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
+from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
 from goldbot.labels.exit_policy import ExitPolicy
+from goldbot.ops import server_clock
 from goldbot.ops.account_view import LADDER_TIMEFRAMES
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
@@ -68,6 +69,9 @@ SKEW_WINDOW = 120            # new ticks in the rolling median of broker-vs-wall
 SKEW_BLOCK_S = 10.0
 SKEW_MIN_SAMPLES = 10
 LATE_BARS_BLOCK = 3
+# an exception while processing a tick (the run loop logs it and carries on) blocks entries until this many ticks in a
+# row are processed cleanly; exits never wait for it
+TICK_ERROR_CLEAR_TICKS = 20
 
 
 class Model(Protocol):
@@ -159,6 +163,7 @@ class _Frame(Record):
     m: pd.DataFrame
     X: pd.DataFrame
     atr: pd.Series
+    by_version: dict[str, pd.DataFrame | None] = Field(default_factory=dict)   # X rebuilt for older model versions
 
 
 class OpenTrade(Record):
@@ -284,6 +289,14 @@ class Engine:
         # broker tick time minus the wall clock, seconds, over the last SKEW_WINDOW new ticks (median published)
         self._skew: deque[float] = deque(maxlen=SKEW_WINDOW)
         self._unhealthy_at: pd.Timestamp | None = None    # last time the data was seen stale or in error
+        # host UTC clock for the live clock (tests replace it); ticks are compared with it, never the reverse
+        self.clock: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now("UTC")
+        # D13 session table: the static rule on this account's server clock until run.py sets the broker's (it refreshes
+        # it outside the tick path, so on_tick never calls the broker for sessions); read with no I/O
+        self.sessions: SessionTable = SessionTable(server_tz=cfg.server_tz)
+        self.clock_probe: server_clock.ServerClockProbe | None = None   # latest server-clock measurement
+        self._clean_ticks = 0                          # ticks processed without an exception since the last one
+        self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)
         # risk periods and the owner's re-arm survive a restart (state/risk_<account>.json)
         self._last_reset: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
@@ -342,9 +355,34 @@ class Engine:
 
     # ------------------------------------------------------------------ ticks and bars
     def on_tick(self, t: Tick) -> list[dict]:
-        """Feed a tick; returns any decisions made at a bar close."""
-        self.center.poll_bus()          # approvals from the dashboard / Telegram service, applied within a tick
-        self._poll_rearm(self._now(t))
+        """Feed a tick; returns any decisions made at a bar close. An approval or re-arm that raises is recorded as a
+        tick error (entries blocked) and never stops this tick's exits."""
+        try:
+            self.center.poll_bus()      # approvals from the dashboard / Telegram service, applied within a tick
+            self._poll_rearm(self._now(t))
+        except Exception as exc:
+            self.note_tick_error(exc)
+        out = self._on_tick(t)
+        if self.state.tick_error and self._tick_error_detail is not None:
+            self._clean_ticks += 1      # this tick ran to the end
+            if self._clean_ticks >= TICK_ERROR_CLEAR_TICKS:
+                self.state.tick_error, self._tick_error_detail = False, None
+                self._write_state()
+        return out
+
+    def note_tick_error(self, exc: BaseException) -> None:
+        """A tick raised (the run loop or an approval): log it, block entries (`tick_error`) until
+        TICK_ERROR_CLEAR_TICKS clean ticks, and publish it in the engine state for the health alert."""
+        log.exception("tick processing failed (%s); entries blocked until %d clean ticks", type(exc).__name__,
+                      TICK_ERROR_CLEAR_TICKS, exc_info=exc)
+        self.state.tick_error, self._clean_ticks = True, -1   # the failing tick itself does not count as clean
+        self._tick_error_detail = type(exc).__name__
+        try:
+            self._write_state()
+        except Exception:
+            log.exception("engine state not written after a tick error")
+
+    def _on_tick(self, t: Tick) -> list[dict]:
         if not self._tick_ok(t):
             return []                   # crossed or out-of-order quote: never enters the bars; entries blocked
         prev, self._last_tick = self._last_tick, t
@@ -474,6 +512,26 @@ class Engine:
         X.attrs["feature_version"] = version          # as research stamps it (pipeline.build_decision_frame)
         return _Frame(dec=dec, m=m, X=X, atr=atr(m, 14))
 
+    @staticmethod
+    def _scoring_frame(fr: _Frame, model: Model) -> pd.DataFrame | None:
+        """The frame `model` scores: fr.X when the model is unversioned or of fr.X's feature version; else fr.X with
+        the features the model was trained on rebuilt by their registered older implementations (sessions v1 after
+        the DST fix: features/legacy.py), so a champion or shadow challenger keeps scoring exactly what it was
+        trained on until the normal shadow/promotion flow replaces it. None (not scored, as before) when no
+        registered implementation reproduces the model's version, or when the rebuild itself fails (logged, cached for
+        this frame): the model is not scored, and the bar's other work (policies, blackout closes, shadow) runs on."""
+        mv = getattr(model, "feature_version", "")
+        if not mv or mv == fr.X.attrs.get("feature_version"):
+            return fr.X
+        if mv not in fr.by_version:
+            try:
+                over = versions_for(DEFAULT_FEATURE_NAMES, mv)
+                fr.by_version[mv] = None if over is None else with_versions(fr.X, fr.m, DEFAULT_FEATURE_NAMES, over)
+            except Exception:                         # fail closed: an unscored model, never a crashed bar
+                log.exception("rebuilding the frame at feature version %s failed: models of it are not scored", mv)
+                fr.by_version[mv] = None
+        return fr.by_version[mv]
+
     def _resample(self, complete: pd.DataFrame, tf: str) -> pd.DataFrame:
         """resample_bars(complete, tf), incrementally (identical output; see IncrementalResampler)."""
         rs = self._resamplers.get(tf)
@@ -551,7 +609,7 @@ class Engine:
         hurdle_atr = self._cost_atr(float(a.iloc[last]), close_ts, ex_spread=True)   # p already pays the spread
         cands_by_agent = {agent.agent_id: agent.candidates(m, X) for agent in agents}
         if self.shadow is not None:
-            self._shadow_step(tf, dec, X, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
+            self._shadow_step(tf, fr, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
         for agent in agents:
             cands = cands_by_agent[agent.agent_id]
             if cands.empty or int(cands["idx"].iloc[-1]) != last:
@@ -569,14 +627,16 @@ class Engine:
             if agent.agent_id in (drift.get("halted") or {}):
                 decisions.append(self._record(agent, close_ts, 0.0, 0.0, "drift_halt"))   # CUSUM: entries stop
                 continue
-            mv, fv = getattr(model, "feature_version", ""), X.attrs.get("feature_version")
-            if mv and mv != fv:
+            Xm = self._scoring_frame(fr, model)
+            if Xm is None:
                 # design: a model only ever scores the feature frame it was trained on
                 d = self._record(agent, close_ts, 0.0, 0.0, "feature_version_mismatch")
-                d.update(p=None, model_feature_version=mv, frame_feature_version=fv)     # not scored
+                d.update(p=None, model_feature_version=getattr(model, "feature_version", ""),
+                         frame_feature_version=X.attrs.get("feature_version"))     # not scored
                 decisions.append(d)
                 continue
-            feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
+            sfv = str(Xm.attrs.get("feature_version", ""))
+            feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
             feats["side"] = side          # side-aligned models (features include `side`) align signed inputs themselves
             cols = model.feature_names or [c for c in feats.columns]
             p = float(model.predict(feats[[c for c in cols if c in feats.columns]] if model.feature_names else feats)[0])
@@ -587,11 +647,11 @@ class Engine:
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
                             multiplier=mult if mult > 0 else 0.0, price=price, timeframe=tf, family=agent.family)
             if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, hurdle_atr) + 0.02:
-                decisions.append(self._record(agent, close_ts, p, mult, "below_threshold"))
+                decisions.append(self._record(agent, close_ts, p, mult, "below_threshold", scored_fv=sfv))
                 continue
             gd = self.gate.check(intent, self.state, margin_required=broker_margin(self.broker, self.cfg.symbol))
             if not gd.allowed:
-                decisions.append(self._record(agent, close_ts, p, mult, "gate:" + ",".join(gd.reasons)))
+                decisions.append(self._record(agent, close_ts, p, mult, "gate:" + ",".join(gd.reasons), scored_fv=sfv))
                 continue
             pid = self._proposal_id(agent.agent_id, close_ts)
             if pid in self.sent_ids:
@@ -604,11 +664,11 @@ class Engine:
                             risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2))
             if self.cfg.approval_mode == "auto":
                 self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
-                decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid))
+                decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid, scored_fv=sfv))
             else:
                 self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
                 self.center.propose(prop)
-                decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid))
+                decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid, scored_fv=sfv))
         return decisions
 
     # ------------------------------------------------------------------ approvals -> orders
@@ -967,10 +1027,10 @@ class Engine:
             if fr is None:
                 return
             frames[agent.timeframe] = fr
-        mv = getattr(model, "feature_version", "")
-        if mv and mv != fr.X.attrs.get("feature_version"):
+        Xm = self._scoring_frame(fr, model)
+        if Xm is None:
             return                                        # a model only scores the frame version it was trained on
-        feats = fr.X.drop(columns=["ts_utc"]).iloc[[len(fr.X) - 1]].replace([np.inf, -np.inf], np.nan)
+        feats = Xm.drop(columns=["ts_utc"]).iloc[[len(Xm) - 1]].replace([np.inf, -np.inf], np.nan)
         feats["side"] = tr.side
         cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
         p = float(model.predict(feats[cols])[0])
@@ -1134,8 +1194,19 @@ class Engine:
         st.open_notional = st.open_lots * 100.0 * (tick.bid + tick.ask) / 2
         st.spread_points = (tick.ask - tick.bid) / 0.01
         now = self._now(tick)
-        st.last_tick_age_s = max(0.0, (now - tick.ts_utc).total_seconds())
-        stale = stale_feed(tick.ts_utc, now, limit_seconds=self.cfg.stale_feed_s)
+        # signed: a tick stamped AFTER the host clock (wrong server_tz, broker or host clock) must not look fresh, so
+        # staleness uses the distance either way and the lead itself is an entry block (`tick_from_future`)
+        age = (now - tick.ts_utc).total_seconds()
+        st.last_tick_age_s = abs(age)
+        st.tick_ahead_s = max(0.0, -age)
+        sessions = self.sessions
+        try:
+            stale = stale_feed(now - pd.Timedelta(seconds=abs(age)), now, limit_seconds=self.cfg.stale_feed_s,
+                               sessions=sessions)
+            closed = sessions.entry_block(now) is not None
+        except Exception as exc:        # a broken session table fails closed for entries; exits never read it
+            log.warning("session table unusable (%s): entries blocked as market_closed", type(exc).__name__)
+            stale, closed = False, True
         st.dq_error = stale or bool(self._dq_errors() or self._dq_blocking()) or positions is None \
             or self._book_unreadable() > 0                                    # fail closed: positions_unreadable
         # stale data (design): the last completed bar must be under one decision period old; no bars is stale
@@ -1143,8 +1214,12 @@ class Engine:
             st.stale_bars = True
         else:
             seen = pd.Timestamp(self.bars_1m["visible_at"].iloc[-1])
-            st.stale_bars = (now - seen).total_seconds() > tf_seconds(self.cfg.decision_tf)
-        if st.dq_error or st.stale_bars or st.last_tick_age_s > self.gate.limits.stale_tick_seconds:
+            st.stale_bars = abs((now - seen).total_seconds()) > tf_seconds(self.cfg.decision_tf)
+        self.clock_probe = self._probe_clock(tick, now, sessions)
+        st.clock_mismatch = self.clock_probe.status == "mismatch"
+        st.market_closed = closed
+        if st.dq_error or st.stale_bars or st.last_tick_age_s > self.gate.limits.stale_tick_seconds \
+                or st.tick_ahead_s > self.gate.limits.max_tick_ahead_s or st.clock_mismatch:
             self._unhealthy_at = now
             st.data_recovering = False        # the error itself blocks; recovery starts when it clears
         else:
@@ -1179,6 +1254,23 @@ class Engine:
         if self._propose_only_until is not None and now < self._propose_only_until:
             self.cfg.approval_mode = "propose"  # 30 days propose-and-approve after a re-arm
 
+    def set_sessions(self, table: SessionTable) -> None:
+        """The broker session table (D13), refreshed by the run loop outside the tick path (goldbot/ops/run.py
+        `refresh_sessions`); used for market_closed, feed staleness and the server-clock probe."""
+        self.sessions = table
+
+    def _probe_clock(self, tick: Tick, now: pd.Timestamp, sessions: SessionTable) -> server_clock.ServerClockProbe:
+        """The server-clock probe on the tick this refresh already holds (no broker call): its stamp, converted with
+        server_tz, against the host clock. Any error is "not measured", which never blocks (stale and closed-market
+        rules cover those cases); a measured mismatch blocks entries only."""
+        try:
+            return server_clock.assess(self.cfg.account_id, self.cfg.server_tz, tick.ts_utc, now, sessions)
+        except Exception as exc:
+            log.warning("server clock probe failed (%s); not measured", type(exc).__name__)
+            return server_clock.ServerClockProbe(account_id=self.cfg.account_id, measured_utc=now,
+                                                 server_tz=self.cfg.server_tz, status="not_measured",
+                                                 reason=f"probe failed ({type(exc).__name__})")
+
     def _kill_switch(self, *, everything: bool) -> bool:
         """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
         approve. On the trip every position on the account is closed; while halted, any of this engine's positions
@@ -1210,7 +1302,7 @@ class Engine:
     def _server_clock(self, now: pd.Timestamp, tick: Tick) -> None:
         """Rollover (+-rollover_min of 00:00 server: no entries) and weekend (Friday weekend_cut server until the week
         reopens: no entries; at the cut, once per Friday, this engine's losers are closed and winners' stops tightened)."""
-        srv = now.tz_convert(ZoneInfo(self.cfg.server_tz))
+        srv = server_wall(now, self.cfg.server_tz)[0]        # naive server wall clock; any server_tz incl. NY+7
         mins = srv.hour * 60 + srv.minute + srv.second / 60
         self.state.in_rollover = min(mins, 1440 - mins) <= self.cfg.rollover_min
         h, m = (int(x) for x in self.cfg.weekend_cut.split(":"))
@@ -1260,7 +1352,7 @@ class Engine:
         return done
 
     def _now(self, tick: Tick) -> pd.Timestamp:
-        return pd.Timestamp.now("UTC") if self.cfg.live_clock else tick.ts_utc
+        return self.clock() if self.cfg.live_clock else tick.ts_utc
 
     # ------------------------------------------------------------------ data quality
     def _dq_errors(self) -> list[DQEvent]:
@@ -1698,7 +1790,9 @@ class Engine:
         row = X.iloc[-1]
         adx = float(row.get("h1_adx14", row.get("adx14", 20.0)) or 20.0)
         rv = X["h1_rv_20"] if "h1_rv_20" in X.columns else X.get("rv_20", pd.Series([np.nan]))
-        q = int(pd.qcut(rv.dropna().tail(60 * 24), 4, labels=False, duplicates="drop").iloc[-1]) if rv.notna().sum() > 40 else 1
+        win = rv.dropna().tail(60 * 24)
+        # a constant window has no quartiles (qcut yields NaN): middle bucket, as with too little history
+        q = int(pd.qcut(win, 4, labels=False, duplicates="drop").iloc[-1]) if len(win) > 40 and win.nunique() >= 2 else 1
         to_t1, since_t1 = tier1_minutes(self._calendar[1], close_ts) if self.cfg.news_blackout else (None, None)
         return Regime(adx_1h=adx, atr_1h_quartile=q, vol_tercile=int(row.get("vol_tercile", 1) or 1),
                       minutes_to_tier1=to_t1, minutes_since_tier1=since_t1)
@@ -1749,8 +1843,11 @@ class Engine:
         h = hashlib.sha1(f"{self.cfg.account_id}|{agent_id}|{close_ts.isoformat()}".encode()).hexdigest()[:10]
         return f"{self.cfg.account_id}-{int(close_ts.timestamp())}-{h}"
 
-    def _record(self, agent: Specialist, ts: pd.Timestamp, p: float, mult: float, action: str, pid: str | None = None) -> dict:
+    def _record(self, agent: Specialist, ts: pd.Timestamp, p: float, mult: float, action: str, pid: str | None = None,
+                scored_fv: str | None = None) -> dict:
         d = {"ts": ts.isoformat(), "agent": agent.agent_id, "p": round(p, 4), "mult": round(mult, 3), "action": action, "proposal": pid}
+        if scored_fv is not None:
+            d["scored_feature_version"] = scored_fv      # the frame version the model scored (legacy rebuilds included)
         self.decisions.append(d)
         return d
 
@@ -1764,22 +1861,23 @@ class Engine:
             for version in models:
                 self.shadow.track(version, now)
 
-    def _shadow_step(self, tf: str, dec: pd.DataFrame, X: pd.DataFrame, agents: list[Specialist],
+    def _shadow_step(self, tf: str, fr: _Frame, agents: list[Specialist],
                      cands_by_agent: dict[str, pd.DataFrame], atr_usd: float, cost_atr: float) -> None:
         assert self.shadow is not None
+        dec = fr.dec
         last = len(dec) - 1
         bar = dec.iloc[last]
         self.shadow.on_bar(bar, tf)       # advance open shadow trades of this timeframe; a new entry starts after this bar
-        feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
         for version, (agent_key, model) in self.shadow_models.items():
             for agent in agents:
                 cands = cands_by_agent[agent.agent_id]
                 if agent_key not in (agent.agent_id, agent.family) or cands.empty or int(cands["idx"].iloc[-1]) != last:
                     continue
                 side = int(cands["side"].iloc[-1])
-                mv = getattr(model, "feature_version", "")
-                if mv and mv != X.attrs.get("feature_version"):
+                Xm = self._scoring_frame(fr, model)
+                if Xm is None:
                     continue          # a model only scores the frame version it was trained on, in shadow too
+                feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
                 feats["side"] = side
                 cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
                 p, p_raw = _score(model, feats[cols])
@@ -1791,7 +1889,8 @@ class Engine:
                                        entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
                                        target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p, timeframe=tf,
                                        threshold=threshold, taken=p > threshold, p_raw=p_raw, policy=agent.exit_spec,
-                                       signal_close=pd.Timestamp(bar["visible_at"]))
+                                       signal_close=pd.Timestamp(bar["visible_at"]),
+                                       scored_feature_version=str(Xm.attrs.get("feature_version", "")))
 
     def flush_journal(self) -> None:
         """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the
@@ -1926,6 +2025,10 @@ class Engine:
             # the gate's limits, the price, lot terms and ATR(14) per ladder timeframe; no login or server
             **self._account_view, "price": self._price, "ladder_atr": dict(self._ladder["ladder_atr"]),
             "lot_terms": self._ladder["lot_terms"], "limits": self._published_limits(),
+            "tick_ahead_s": st.tick_ahead_s, "market_closed": st.market_closed, "session_source": self.sessions.source,
+            "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail,
+            "sessions": session_table_cache(self.sessions),
+            "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
         }
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync
         write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps(payload), durable=False)
