@@ -16,8 +16,9 @@ updates:
     schedule: { interval: weekly, day: monday }
     open-pull-requests-limit: 5
     groups:
-      python:
+      python:                          # minor/patch together; a major arrives as its own PR to be hand-tested
         patterns: ["*"]
+        update-types: [minor, patch]
     labels: [dependencies]
 
   - package-ecosystem: npm
@@ -25,6 +26,11 @@ updates:
     schedule: { interval: weekly, day: monday }
     open-pull-requests-limit: 5
     groups:
-      web:
+      web:                             # minor/patch together; a major arrives as its own PR to be hand-tested
         patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      # openapi-typescript (web/src/lib/schema.d.ts generation) needs TypeScript 5; revisit when it supports 7
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     labels: [dependencies]

@@ -509,6 +509,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (recommended floor 150 for daily signals, can retire not promote) must be committed as
   `research.screen_min_events_daily` before the run.
 
+- Dependencies (2026-10-11): Dependabot groups minor/patch updates per ecosystem; majors come as separate PRs to be
+  hand-tested (the 15-package web group #65 was closed: TypeScript 7 broke `npm ci` through openapi-typescript, and
+  React 19 / lightweight-charts 5 / Vite 8 / Vitest 5 need code changes). TypeScript majors are ignored until
+  openapi-typescript supports them. Actions now run on node24 (PR #64): a self-hosted runner (`vars.CI_RUNNER`) must
+  be Actions Runner >= 2.327.1.
+
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
   `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
