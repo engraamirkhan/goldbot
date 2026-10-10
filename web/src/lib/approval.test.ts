@@ -68,6 +68,8 @@ describe("blockers", () => {
     const spent = { limit: 15, used: 15, remaining: 0, binding: "account 2.0% daily cap", binding_label: "this account (2.0% of today's start)", period: "today" as const, notes: [], caps: [] };
     expect(blockers(status(), [account({ loss_budget: spent })], "icm-demo")).toEqual(["daily loss limit reached"]);
     expect(blockers(status(), [account({ loss_budget: { ...spent, used: 5, remaining: 10 } })], "icm-demo")).toEqual([]);
+    const week = { ...spent, binding: "combined 4.0% weekly cap", period: "this week" as const };
+    expect(blockers(status(), [account({ loss_budget: week })], "icm-demo")).toEqual(["weekly loss limit reached"]);
   });
   it("scopes blackouts and account state to the proposal's account; paper ignores the class", () => {
     const s = status({ blackout: { kind: "news_shock", title: "x", ts_utc: null, received_utc: at(0), accounts: ["other"] } });

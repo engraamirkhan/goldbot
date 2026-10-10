@@ -83,5 +83,6 @@ describe("BalanceCard", () => {
                      binding_label: "all accounts together this week (4.0% of the week's start)", caps: [] } })} />);
     expect(screen.getByText("Your balance is not yet big enough for the smallest trade on any timeframe.")).toBeInTheDocument();
     expect(screen.getByText(/stopped while this week's loss is at the limit/)).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "Weekly loss budget used" })).toBeInTheDocument();
   });
 });

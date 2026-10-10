@@ -89,7 +89,7 @@ def test_the_absolute_limit_reserves_the_next_trades_stop_once_the_engine_publis
     assert b is not None
     assert b.binding == "absolute daily limit"
     assert (b.limit, b.used, b.remaining) == pytest.approx((50.0, 40.0, 1.8))   # 50 - 40 - 8.20 for the next stop
-    assert "includes the next trade's stop" in b.binding_label
+    assert "includes the smallest trade's stop" in b.binding_label
     assert not any("BACKLOG 29" in n for n in b.notes)
     spent = _engine(equity=4955.0, balance=5000.0, day_start_equity=5000.0, week_start_equity=5000.0, limits=lim)
     b = _budget(spent, _sup(combined_day_start_equity=5000.0, combined_week_start_equity=5000.0, combined_equity=4955.0))
@@ -101,7 +101,7 @@ def test_the_absolute_limit_without_the_next_trades_risk_counts_the_loss_so_far_
     e = _engine(equity=4960.0, balance=5000.0, day_start_equity=5000.0, week_start_equity=5000.0, limits=lim)
     b = _budget(e, _sup(combined_day_start_equity=5000.0, combined_week_start_equity=5000.0, combined_equity=4960.0))
     assert b is not None and b.binding == "absolute daily limit" and b.remaining == pytest.approx(10.0)
-    assert "next trade" not in b.binding_label
+    assert "smallest trade" not in b.binding_label
 
 
 def test_todays_gains_add_room_before_the_cap_and_an_exhausted_budget_has_none_left():
@@ -194,7 +194,9 @@ def test_the_eight_percent_stage_raises_every_threshold():
     assert normal is not None and down is not None
     for a, b in zip(normal.rungs, down.rungs):
         assert a.equity_needed is not None and b.equity_needed is not None and b.equity_needed > a.equity_needed
-    assert "size-down" in down.rule
+    assert "reduced (8% size-down stage)" in down.rule and "halved" not in down.rule
+    capped = milestones(_engine(currency="USD", stage="size_down", limits={**LIMITS, "min_lot_risk_cap": 0.01}))
+    assert capped is not None and "halved" in capped.rule and "0.50%" in capped.rule
 
 
 def test_a_timeframe_without_enough_bars_for_its_atr_is_pending_and_the_others_still_compute():

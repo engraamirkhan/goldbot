@@ -64,7 +64,7 @@ function LossBudget({ a }: { a: AccountSummary }) {
         <strong>{cash(b.remaining, ccy)} left</strong>{" "}
         <span className="small">limit {cash(b.limit, ccy)} {b.period}</span></p>
       <p className="small">{`Limit set by: ${b.binding_label}`}</p>
-      <div className="bar budget-bar" role="meter" aria-label="Daily loss budget used" aria-valuemin={0}
+      <div className="bar budget-bar" role="meter" aria-label={`${b.period === "this week" ? "Weekly" : "Daily"} loss budget used`} aria-valuemin={0}
            aria-valuemax={round2(b.limit)} aria-valuenow={round2(used)}>
         <span style={{ transform: `scaleX(${b.limit > 0 ? used / b.limit : 1})` }} />
       </div>

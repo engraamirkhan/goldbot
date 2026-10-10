@@ -766,6 +766,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   rule inside "How this is worked out", the day start in local time plus UTC) and a loading placeholder.
   **Owner decision, unchanged behaviour:** viewers see balances and the loss budget, as they already see equity;
   restricting money figures to the owner is the owner's call.
+- Residue (2026-10-10): the monthly report flags R per trade (`monthly_report.r_understated`): a non-USD record
+  without `pnl_currency` keeps "R understated ... BACKLOG 28" after `usd_to_account` appears, with the count when only
+  some are affected. **Contract for the currency lane:** add `ClosedTrade.pnl_currency` to post-fix records. Copy:
+  the blocker, strip status and meter say weekly when a weekly cap binds; the absolute cap reads "(includes the
+  smallest trade's stop)"; the size-down rule says "reduced" (halved only for the min-lot cap); "90% t-interval
+  (approx.)", "Max drawdown on closed trades this month".
 - Owner's manual trading record (2026-10-10, research seeds; security + quant review fixes the same day):
   `python -m goldbot.ops.run owner-history [PATH]` (`goldbot/research/owner_history.py`) reads the owner's MT5 History
   report (HTML, XLSX or a deals CSV; stdlib parsers, no new dependency; inputs and xlsx members over 50 MB refused)

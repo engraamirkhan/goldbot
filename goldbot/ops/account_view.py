@@ -1,7 +1,8 @@
 """The live account view (owner request; ADR 0004 sections 3 and 4): the loss budget and the milestone ladder,
 computed from what the engine publishes in state/engine_<account>.json and the supervisor in state/supervisor.json.
-Nothing here reads config: balances, currency, limits, price, ATR and lot terms are the engine's live values, so the
-view shows what the RiskGate is acting on. Reporting only: nothing here sizes or gates an order.
+Nothing here reads config: balances, currency, limits, price, ATR and lot terms are the engine's live values.
+(The gate still sizes with its default lot terms until ADR 0004 A6 lands, so the ladder's broker lot terms can differ
+from what the gate uses.) Reporting only: nothing here sizes or gates an order.
 
 Loss budget. Every loss cap that stops new entries is listed with its limit, its use and what is left, in account
 currency: the account's daily 2% and weekly 5% (gate.py, on day- and week-start equity), the supervisor's combined
@@ -13,8 +14,8 @@ section 3). The budget shown is the cap with least left (a bad week can bind on 
 * the absolute limit is listed only once the engine publishes `limits.daily_loss_limit_abs` (account currency, per
   account; the currency lane, BACKLOG 28/29): until the RiskGate enforces it, showing it would claim a protection
   that is not there. Its check is projected, so when the engine also publishes `limits.min_lot_risk_account` (the
-  smallest trade's stop risk) that amount is reserved: the limit reads as spent once less than the next trade's
-  stop is left;
+  smallest trade's stop risk) that amount is reserved: the limit reads as spent once less than the smallest
+  trade's stop is left;
 * the caps are checked before an entry against the loss so far, so a day can still end one stop past a cap.
 
 Milestone ladder. A timeframe is tradeable when its minimum lot fits the RiskGate's sizing rule at the current equity
@@ -49,7 +50,7 @@ class LossCap(FrozenRecord):
     period: Period
     limit: float               # account currency
     used: float                # lost since the period started (00:00 UTC / Sunday 00:00 UTC), floating P&L included
-    remaining: float           # max(0, limit - loss since the start [- the next trade's stop]); today's gains add room
+    remaining: float           # max(0, limit - loss since the start [- the smallest trade's stop]); today's gains add room
 
 
 class LossBudget(FrozenRecord):
@@ -146,7 +147,7 @@ def loss_budget(engine: dict[str, Any], supervisor: dict[str, Any], engines: lis
     absolute = _pos(limits.get("daily_loss_limit_abs"))
     if absolute is not None:
         nxt = _pos(limits.get("min_lot_risk_account"))
-        label = "your absolute daily limit" + (" (includes the next trade's stop)" if nxt is not None else "")
+        label = "your absolute daily limit" + (" (includes the smallest trade's stop)" if nxt is not None else "")
         add("absolute daily limit", label, "today", absolute, day0, eq, reserve=nxt or 0.0)
     else:
         notes.append("the absolute daily loss limit (ADR 0004) is not enforced by the risk check yet (BACKLOG 29)")
@@ -204,11 +205,11 @@ def milestones(engine: dict[str, Any]) -> Milestones | None:
     if cap is not None:
         frac = cap / 2 if size_down else cap
         rule = f"the smallest trade (minimum lot) risks at most {100 * frac:.2f}% of equity (minimum-lot rule)"
-    else:
+        rule += " (halved: the account is in the 8% size-down stage)" if size_down else ""
+    else:   # the stage halves the risk per trade and caps the multiplier: a reduction, not a plain halving
         frac = MIN_LOT_TOLERANCE * effective_risk(lim, size_down, 1.0).target
         rule = f"the smallest trade (minimum lot) risks at most {100 * frac:.2f}% of equity at normal conviction"
-    if size_down:
-        rule += " (halved: the account is in the 8% size-down stage)"
+        rule += ", reduced (8% size-down stage)" if size_down else ""
     rule += f"; stop {LADDER_STOP_ATR:g} x ATR(14) of the timeframe"
     lot: dict[str, Any] = engine["lot_terms"] if isinstance(engine.get("lot_terms"), dict) else {}
     fx = usd_to_account(engine)

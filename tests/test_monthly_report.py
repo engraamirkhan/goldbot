@@ -137,16 +137,16 @@ def test_the_daily_digest_carries_the_month_so_far_line_under_its_line_budget(tm
 R_NOTE = "R understated on non-USD accounts until BACKLOG 28"
 
 
-def test_r_on_a_gbp_account_is_flagged_until_the_engine_publishes_its_currency_factor(tmp_path):
+def test_r_on_a_gbp_account_is_flagged_per_trade_and_stays_flagged_after_the_currency_factor_appears(tmp_path):
     _seed(tmp_path)
     [a] = build_monthly_report(tmp_path, month="2026-10", now=NOW).accounts
     assert a.r_note == R_NOTE
     assert R_NOTE in format_report(build_monthly_report(tmp_path, month="2026-10", now=NOW))
     [line] = month_to_date_line(tmp_path, pd.Timestamp("2026-10-10 06:45", tz="UTC"))
     assert f"+3.00R ({R_NOTE})" in line
-    _seed(tmp_path, engine={"usd_to_account": 1 / 1.33})
+    _seed(tmp_path, engine={"usd_to_account": 1 / 1.33})       # BACKLOG 28 landed: these trades were recorded before
     [a] = build_monthly_report(tmp_path, month="2026-10", now=NOW).accounts
-    assert a.r_note is None
+    assert a.r_note == R_NOTE and a.r_flagged == 4
     _seed(tmp_path, currency="USD")
     [a] = build_monthly_report(tmp_path, month="2026-10", now=NOW).accounts
     assert a.r_note is None
@@ -177,3 +177,21 @@ def test_labels_say_what_the_figures_are(tmp_path):
     _seed(tmp_path)
     text = format_report(build_monthly_report(tmp_path, month="2026-10", now=NOW))
     assert "chained closed-trade return" in text and "Max drawdown on closed trades" in text
+
+
+def test_a_trade_recorded_with_its_pnl_currency_is_not_flagged_and_a_mix_is_counted():
+    from types import SimpleNamespace
+
+    from goldbot.ops.monthly_report import r_understated
+    old = SimpleNamespace(r=1.0)                                   # recorded before BACKLOG 28: no pnl_currency
+    new = SimpleNamespace(r=1.0, pnl_currency="GBP")               # recorded with its currency basis
+    assert r_understated(old, "GBP") and not r_understated(new, "GBP")
+    assert not r_understated(old, "USD")                           # a USD account's R was never mis-scaled
+    assert r_understated(old, None)                                # unknown currency: cannot vouch for it
+    assert not r_understated(SimpleNamespace(r=None), "GBP")       # no R, nothing to flag
+
+
+def test_labels_name_the_interval_and_drawdown_honestly(tmp_path):
+    _seed(tmp_path)
+    text = format_report(build_monthly_report(tmp_path, month="2026-10", now=NOW))
+    assert "90% t-interval (approx.)" in text and "Max drawdown on closed trades this month" in text
