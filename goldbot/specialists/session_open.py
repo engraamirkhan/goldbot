@@ -89,7 +89,8 @@ class SessionOpenSpecialist(Specialist):
             same &= sign.shift(i) == sign
             strong &= body_pct.shift(i) >= self.config["min_body_pct"]
         decision = pd.Series(self._open_mask(ts), index=mid_bars.index)
-        # Asian range filter: range of the last 32 bars (8h) before London vs daily ATR (from features if present)
+        # "Asian range" filter: range of the 32 bars (8 h) before the decision's session open (Asia before London; mostly
+        # London before New York) vs daily ATR (from features if present)
         asia_rng = (mid_bars["high"].rolling(32).max() - mid_bars["low"].rolling(32).min()).shift(k)
         atr_d = features["d1_atr14"] if "d1_atr14" in features.columns else features.get("atr14", pd.Series(np.nan, index=mid_bars.index)) * 8
         quiet = asia_rng < self.config["asia_range_max_atr_d"] * atr_d

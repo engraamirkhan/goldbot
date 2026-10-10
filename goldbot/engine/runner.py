@@ -41,6 +41,7 @@ from goldbot.execution.broker import Broker, OrderIntent, OrderResult, Position,
 from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
+from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
 from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
@@ -158,6 +159,7 @@ class _Frame(Record):
     m: pd.DataFrame
     X: pd.DataFrame
     atr: pd.Series
+    by_version: dict[str, pd.DataFrame | None] = Field(default_factory=dict)   # X rebuilt for older model versions
 
 
 class OpenTrade(Record):
@@ -467,6 +469,21 @@ class Engine:
         X.attrs["feature_version"] = version          # as research stamps it (pipeline.build_decision_frame)
         return _Frame(dec=dec, m=m, X=X, atr=atr(m, 14))
 
+    @staticmethod
+    def _scoring_frame(fr: _Frame, model: Model) -> pd.DataFrame | None:
+        """The frame `model` scores: fr.X when the model is unversioned or of fr.X's feature version; else fr.X with
+        the features the model was trained on rebuilt by their registered older implementations (sessions v1 after
+        the DST fix: features/legacy.py), so a champion or shadow challenger keeps scoring exactly what it was
+        trained on until the normal shadow/promotion flow replaces it. None (not scored, as before) when no
+        registered implementation reproduces the model's version."""
+        mv = getattr(model, "feature_version", "")
+        if not mv or mv == fr.X.attrs.get("feature_version"):
+            return fr.X
+        if mv not in fr.by_version:
+            over = versions_for(DEFAULT_FEATURE_NAMES, mv)
+            fr.by_version[mv] = None if over is None else with_versions(fr.X, fr.m, DEFAULT_FEATURE_NAMES, over)
+        return fr.by_version[mv]
+
     def _resample(self, complete: pd.DataFrame, tf: str) -> pd.DataFrame:
         """resample_bars(complete, tf), incrementally (identical output; see IncrementalResampler)."""
         rs = self._resamplers.get(tf)
@@ -540,7 +557,7 @@ class Engine:
         hurdle_atr = self._cost_atr(float(a.iloc[last]), close_ts, ex_spread=True)   # p already pays the spread
         cands_by_agent = {agent.agent_id: agent.candidates(m, X) for agent in agents}
         if self.shadow is not None:
-            self._shadow_step(tf, dec, X, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
+            self._shadow_step(tf, fr, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
         for agent in agents:
             cands = cands_by_agent[agent.agent_id]
             if cands.empty or int(cands["idx"].iloc[-1]) != last:
@@ -558,14 +575,15 @@ class Engine:
             if agent.agent_id in (drift.get("halted") or {}):
                 decisions.append(self._record(agent, close_ts, 0.0, 0.0, "drift_halt"))   # CUSUM: entries stop
                 continue
-            mv, fv = getattr(model, "feature_version", ""), X.attrs.get("feature_version")
-            if mv and mv != fv:
+            Xm = self._scoring_frame(fr, model)
+            if Xm is None:
                 # design: a model only ever scores the feature frame it was trained on
                 d = self._record(agent, close_ts, 0.0, 0.0, "feature_version_mismatch")
-                d.update(p=None, model_feature_version=mv, frame_feature_version=fv)     # not scored
+                d.update(p=None, model_feature_version=getattr(model, "feature_version", ""),
+                         frame_feature_version=X.attrs.get("feature_version"))     # not scored
                 decisions.append(d)
                 continue
-            feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
+            feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
             feats["side"] = side          # side-aligned models (features include `side`) align signed inputs themselves
             cols = model.feature_names or [c for c in feats.columns]
             p = float(model.predict(feats[[c for c in cols if c in feats.columns]] if model.feature_names else feats)[0])
@@ -956,10 +974,10 @@ class Engine:
             if fr is None:
                 return
             frames[agent.timeframe] = fr
-        mv = getattr(model, "feature_version", "")
-        if mv and mv != fr.X.attrs.get("feature_version"):
+        Xm = self._scoring_frame(fr, model)
+        if Xm is None:
             return                                        # a model only scores the frame version it was trained on
-        feats = fr.X.drop(columns=["ts_utc"]).iloc[[len(fr.X) - 1]].replace([np.inf, -np.inf], np.nan)
+        feats = Xm.drop(columns=["ts_utc"]).iloc[[len(Xm) - 1]].replace([np.inf, -np.inf], np.nan)
         feats["side"] = tr.side
         cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
         p = float(model.predict(feats[cols])[0])
@@ -1712,22 +1730,23 @@ class Engine:
             for version in models:
                 self.shadow.track(version, now)
 
-    def _shadow_step(self, tf: str, dec: pd.DataFrame, X: pd.DataFrame, agents: list[Specialist],
+    def _shadow_step(self, tf: str, fr: _Frame, agents: list[Specialist],
                      cands_by_agent: dict[str, pd.DataFrame], atr_usd: float, cost_atr: float) -> None:
         assert self.shadow is not None
+        dec = fr.dec
         last = len(dec) - 1
         bar = dec.iloc[last]
         self.shadow.on_bar(bar, tf)       # advance open shadow trades of this timeframe; a new entry starts after this bar
-        feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
         for version, (agent_key, model) in self.shadow_models.items():
             for agent in agents:
                 cands = cands_by_agent[agent.agent_id]
                 if agent_key not in (agent.agent_id, agent.family) or cands.empty or int(cands["idx"].iloc[-1]) != last:
                     continue
                 side = int(cands["side"].iloc[-1])
-                mv = getattr(model, "feature_version", "")
-                if mv and mv != X.attrs.get("feature_version"):
+                Xm = self._scoring_frame(fr, model)
+                if Xm is None:
                     continue          # a model only scores the frame version it was trained on, in shadow too
+                feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
                 feats["side"] = side
                 cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
                 p, p_raw = _score(model, feats[cols])

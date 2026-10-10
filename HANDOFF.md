@@ -702,16 +702,25 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `SessionTable.sessions_utc` is gone; use `session_windows`, `last_open_ns` or `session_label`. Summer (BST + EDT)
   is unchanged; on London/New York winter time each boundary is an hour later in UTC than before, and the March and
   October gap weeks now split London and New York correctly. **Feature versions bumped: `session` 2, `session_zones`
-  2, `market_structure` 2, all in `DEFAULT_FEATURE_NAMES`, so the default feature version (the one the engine builds)
-  changed: every cached feature frame and every trained model/challenger/champion on the old version is stale; the
-  engine refuses to score them until the Saturday retrain rebuilds them.** Cost tables by session, slippage audit,
-  the account classifier's London/NY ticks and attribution by session all relabel automatically (the next nightly
-  cost table uses the new labels; tables already on disk keep the old ones until then). No hook needed in
-  `engine/runner.py` (`_cost_atr` calls `DEFAULT_SESSIONS.session_label`). For the asia-drift lane (H-04): take the
-  Asia window from `DEFAULT_SESSIONS.session_windows` (code 0 = asia, start = Tokyo 08:00) rather than fixed UTC
-  hours. Open for quant review: `session_open`'s "Asian range" is the 32 bars (8 h) before the decision bar, which is
-  the Asia session only before London; before New York it is mostly the London session (unchanged here, as changing
-  it changes the specialist's candidates).
+  2, `market_structure` 2, all in `DEFAULT_FEATURE_NAMES`: the default feature version is now `f-079deacc61`
+  (was `f-1b8f723a67`; with macro `f-f999b359e2`).** Migration without downtime (quant review HIGH 1): the v1
+  implementations stay registered as legacy versions (`goldbot/features/legacy.py`, `registry.LEGACY_FEATURES`, never in
+  FEATURES), and the engine scores each champion and shadow challenger on the frame of its recorded feature version
+  (`Engine._scoring_frame`: `registry.versions_for` finds the per-feature versions that hash to it, `with_versions`
+  recomputes only those columns; cached per frame). So v1 champions keep trading and v1 challengers keep shadow
+  trading exactly as before (golden test against the pre-fix code), the blackout re-score works for them, retrains
+  and research build v2, and the normal shadow/promotion flow migrates. A version no registered implementation
+  reproduces is still not scored (`feature_version_mismatch`). Delete `features/legacy.py` once no registry holds a
+  model of `f-1b8f723a67`. Research registry: `record` writes a `deviation` on a result whose feature version differs
+  from its pre-registration's; `passed_gates(..., feature_version=)` counts only rows of that version (research_pass's
+  holdout check passes it); `holdout_scored` stays version-agnostic on purpose (a re-score after a bump is a second
+  look). Hook not wired (jobs.py, ops lane): the promotion check (`jobs.py` `research_passed=...passed_gates(...)`)
+  could pass the model's `feature_version`, but no trial has run on v2 yet, so doing so blocks every v2 promotion
+  until a v2 trial passes: a quant/owner call. Cost tables by session, slippage audit, the account classifier's
+  London/NY ticks and attribution by session all relabel automatically (the next nightly cost table uses the new labels; tables already on disk keep the old ones
+  until then). Open for quant review: `session_open`'s "Asian range" is the 32 bars (8 h) before the decision's
+  session open, which is the Asia session only before London; before New York it is mostly the London session
+  (unchanged here, as changing it changes the specialist's candidates).
 - COT positioning and GLD holdings, point in time (2026-10-10, indicator survey #67/#68, hypotheses H-09/H-12, row
   D26): `goldbot/data/positioning.py` + `scripts/positioning_data.py` + `.github/workflows/data-positioning.yml`
   (Saturdays 05:23 UTC) publish `positioning.parquet` on release `positioning-v1`: CFTC disaggregated futures-only

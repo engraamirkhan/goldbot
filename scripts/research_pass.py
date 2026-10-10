@@ -71,6 +71,7 @@ from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
 from goldbot.execution.costs import SwapSpec, load_research_cost_table, research_costs  # noqa: E402
 from goldbot.features import positioning as positioning_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
+from goldbot.features.registry import feature_version  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
     POOLED_FEATURES,
@@ -453,14 +454,16 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     if args.score_holdout:
         if holdout is None:
             raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
+        fv = feature_version(feat_names or research_feature_names(feat_ctx))
         for job in jobs:
             label = json.dumps(job.overrides) if job.overrides else "defaults"
             if reg.holdout_scored(job.family, job.config):
                 raise SystemExit(f"{job.family} {label} was already scored on the holdout; "
                                  "that result is final for this configuration")
-            if not reg.passed_gates(job.family, job.config):
-                raise SystemExit(f"{job.family} {label} has no research trial that passed the design's gates; "
-                                 "only a passing configuration is scored on the holdout")
+            # the gate pass must be on the feature version this run builds (a version bump is a different model)
+            if not reg.passed_gates(job.family, job.config, feature_version=fv):
+                raise SystemExit(f"{job.family} {label} has no research trial on feature version {fv} that passed "
+                                 "the design's gates; only a passing configuration is scored on the holdout")
     # a holdout scoring or a screen is a look at the data too: charged like any trial, and like any trial it spends the
     # pre-registered queue's reservation only when it matches a pending preregistered row (linked to it below)
     try:

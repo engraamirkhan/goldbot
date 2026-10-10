@@ -14,7 +14,8 @@ Definitions:
 - Sessions: the local-clock windows of `DEFAULT_SESSIONS.sessions_local`, converted to UTC per date (asia 08:00
   Tokyo = 23:00 UTC to the London open, london 08:00 London to the New York open, newyork 08:30-17:00 New York; in
   UTC 07:00/12:30/21:00 on summer time, an hour later on each zone's winter time). A bar belongs to the window holding
-  its start; the New York close to 23:00 UTC belongs to none (current-session columns NaN there). One session
+  its start; the New York close to 23:00 UTC belongs to none (current-session columns NaN there; `session_id` and the
+  cost tables call those hours asia, see `features/session.py`). One session
   instance = the bars of one window opening (an Asia session spans midnight).
 - Day: the repo's feature-day (ends 13:30 America/New_York, `timeutil.feature_day`), as the 1d bars. Week: Sunday
   00:00 UTC weeks (`timeutil.floor_tf`, as the 1w bars).
@@ -39,6 +40,8 @@ Definitions:
   the gap or block known.
 """
 from __future__ import annotations
+
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -94,11 +97,15 @@ def _hlo(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarr
             df["close"].to_numpy(dtype=float))
 
 
-def _session_levels(df: pd.DataFrame) -> dict[str, np.ndarray]:
-    """Point-in-time session, day and week levels per bar (prices, not yet scaled)."""
+Instances = Callable[[pd.DatetimeIndex], tuple[np.ndarray, np.ndarray]]
+
+
+def _session_levels(df: pd.DataFrame, instances: Instances = session_instances) -> dict[str, np.ndarray]:
+    """Point-in-time session, day and week levels per bar (prices, not yet scaled). `instances`: the session windows
+    (the DST-aware ones; goldbot/features/legacy.py passes the fixed-UTC v1 windows)."""
     o, h, lo, _ = _hlo(df)
     ts = _utc(df)
-    code, start = session_instances(ts)
+    code, start = instances(ts)
     inside = code >= 0
     rid = _runs(start)
     out: dict[str, np.ndarray] = {}
@@ -123,7 +130,12 @@ def f_session_zones(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Current and previous session high/low/open, each zone's last completed high/low, previous day and week
     high/low, as (close - level) / ATR; `prev_sess_pos` is +1 above the previous session's range, -1 below, 0 inside.
     Warm-up: ATR (13 bars), the first completed session/day/week (NaN until then)."""
-    lv = _session_levels(df)
+    return session_zones_frame(df, session_instances)
+
+
+def session_zones_frame(df: pd.DataFrame, instances: Instances) -> pd.DataFrame:
+    """`session_zones` on the session windows `instances`."""
+    lv = _session_levels(df, instances)
     c = df["close"].to_numpy(dtype=float)
     a = atr(df, 14).to_numpy(dtype=float)
     out = Columns(df.index)
@@ -162,11 +174,16 @@ def f_market_structure(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     `sweep_high` = 1 when the bar swept a reference high and closed back below it, `sweep_low` the mirror,
     `sweep_dir` = sweep_low - sweep_high (+1 bullish sweep). `bos_event` is +1/-1 on the breaking bar, `bos_dir` the
     sign of the latest break (0 before the first), `bars_since_bos` NaN before the first break."""
+    return market_structure_frame(df, ctx, session_instances)
+
+
+def market_structure_frame(df: pd.DataFrame, ctx: FeatureCtx, instances: Instances) -> pd.DataFrame:
+    """`market_structure` with the previous-session reference taken from the session windows `instances`."""
     lag = int(ctx.get("swing_lag", 5))
     _, h, lo, c = _hlo(df)
     n = len(df)
     hf, hp, lf, lp = _confirmed_swing_levels(df, lag)
-    lv = _session_levels(df)
+    lv = _session_levels(df, instances)
     sweep_h = np.zeros(n, dtype=np.int64)
     sweep_l = np.zeros(n, dtype=np.int64)
     prev_sh, prev_sl = _last_known_before(hf, hp), _last_known_before(lf, lp)

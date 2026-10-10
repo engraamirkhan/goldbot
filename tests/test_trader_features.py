@@ -161,7 +161,7 @@ FVG = [
 
 @pytest.mark.parametrize("mirror", [False, True])
 def test_fair_value_gap_forms_on_the_third_bar_shrinks_on_partial_fill_and_is_dropped_when_filled(mirror):
-    m = _frame(FVG, "2024-01-10 08:00")
+    m = _frame(FVG, "2024-01-10 07:00")
     m = _mirror(m) if mirror else m
     X = build_features(m, ["fair_value_gaps"])
     a = atr(m, 14).to_numpy()
@@ -181,7 +181,7 @@ def test_fair_value_gap_forms_on_the_third_bar_shrinks_on_partial_fill_and_is_dr
 
 
 def test_fair_value_gaps_below_the_minimum_size_are_ignored():
-    X = build_features(_frame(FVG, "2024-01-10 08:00"), ["fair_value_gaps"], ctx={"fvg_min_atr": 0.6})
+    X = build_features(_frame(FVG, "2024-01-10 07:00"), ["fair_value_gaps"], ctx={"fvg_min_atr": 0.6})
     assert X["fvg_bull_count"].sum() == 0
 
 
@@ -198,7 +198,7 @@ OB = [                               # lag 2: swing high 101 at B, confirmed at 
 
 @pytest.mark.parametrize("mirror", [False, True])
 def test_order_block_is_the_last_opposite_candle_before_a_structure_breaking_displacement(mirror):
-    m = _frame(OB, "2024-01-10 08:00")
+    m = _frame(OB, "2024-01-10 07:00")
     m = _mirror(m) if mirror else m
     X = build_features(m, ["order_blocks"], ctx={"swing_lag": 2})
     a = atr(m, 14).to_numpy()
@@ -217,7 +217,7 @@ def test_order_block_is_the_last_opposite_candle_before_a_structure_breaking_dis
 
 def test_no_order_block_without_a_break_of_structure():
     rows = [*OB[:3], (100.0, 101.0, 99.95, 100.95)]           # body 0.95 > 0.5 ATR but closes below the swing high
-    X = build_features(_frame(rows, "2024-01-10 08:00"), ["order_blocks"],
+    X = build_features(_frame(rows, "2024-01-10 07:00"), ["order_blocks"],
                        ctx={"swing_lag": 2, "ob_displacement_atr": 0.5})
     assert X["ob_bull_count"].sum() == 0
 

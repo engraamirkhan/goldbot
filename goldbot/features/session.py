@@ -17,7 +17,9 @@ def f_session(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     local exchange clocks (Asia 08:00 Tokyo, London 08:00 London, New York 08:30 New York) converted to UTC per date,
     so they follow London's and New York's own DST switches. Version 2: version 1 used fixed UTC opens (23:00, 07:00,
     12:30), an hour early on London's or New York's winter time. `min_since_*_open` ranges over [0, 1500) minutes
-    (an open every calendar date; 25 h apart once a year)."""
+    (an open every calendar date; 25 h apart once a year). Known inconsistency, kept on purpose: in the gap between
+    the New York close and the Asia open, `session_id` is asia (as `session_label`, which prices those thin hours with
+    Asia's costs), while `session_zones` treats the gap as no session (its current-session columns are NaN there)."""
     idx = pd.DatetimeIndex(df["ts_utc"]).tz_convert("UTC")
     sess = DEFAULT_SESSIONS.session_label(idx)
     out = Columns(df.index)

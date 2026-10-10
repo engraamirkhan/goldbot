@@ -139,3 +139,31 @@ def test_features_whose_values_changed_carry_a_new_version_and_stay_in_the_defau
     for name in ("session", "session_zones", "market_structure"):
         assert FEATURES[name].version == "2", name
         assert name in DEFAULT_FEATURE_NAMES
+
+
+def test_session_features_on_a_prefix_equal_the_full_history_in_october_with_weekend_gaps():
+    m = _bars("2026-10-16", "2026-11-06 23:45")
+    m = m[pd.DatetimeIndex(m["ts_utc"]).dayofweek < 5].reset_index(drop=True)          # no weekend bars
+    names = ["session", "session_zones", "market_structure"]
+    full = build_features(m, names)
+    for cut in (_utc("2026-10-26", "00:00"), _utc("2026-10-26", "08:00"), _utc("2026-11-02", "13:30")):
+        n = int((pd.DatetimeIndex(m["ts_utc"]) <= cut).sum())
+        part = build_features(m.iloc[:n].reset_index(drop=True), names)
+        pd.testing.assert_frame_equal(part.reset_index(drop=True), full.iloc[:n].reset_index(drop=True))
+
+
+def test_in_winter_a_sweep_at_the_0800_utc_london_open_references_the_asia_session_up_to_0800():
+    # 15m bars from 19:00 UTC (one feature-day, so no previous-day level): flat at 100, an Asia high of 105 at 07:30
+    # UTC (still Asia in January), then the 08:00 London-open bar trades to 106 and closes at 103, back below 105
+    ts = pd.date_range("2024-01-09 19:00", "2024-01-10 09:00", freq="15min", tz="UTC")
+    o = np.full(len(ts), 100.0)
+    h, lo, c = o + 0.5, o - 0.5, o.copy()
+    at = {t: k for k, t in enumerate(ts)}
+    k730, k800 = at[_utc("2024-01-10", "07:30")], at[_utc("2024-01-10", "08:00")]
+    h[k730] = 105.0
+    h[k800], c[k800] = 106.0, 103.0
+    m = pd.DataFrame({"ts_utc": ts, "open": o, "high": h, "low": lo, "close": c, "spread": 0.1, "tick_count": 1.0})
+    v2 = build_features(m, ["market_structure"])
+    v1 = build_features(m, ["market_structure"], versions={"market_structure": "1"})
+    assert v2["sweep_high"][k800] == 1                  # previous session = Asia 23:00-08:00, high 105
+    assert v1["sweep_high"][k800] == 0                  # v1: London from 07:00, so 07:30 was in the current session
