@@ -254,4 +254,194 @@ class Headline(BaseModel):
     shock: bool
 
 
+# ============================================================================= Health and Research screens
+# Read-only views for any logged-in role (goldbot/api/explain.py builds them from the state files).
+CheckStatus = Literal["ok", "warn", "fail"]
+
+
+class HealthCheckRow(BaseModel):
+    """One deterministic health check (goldbot/ops/health.py), evaluated when the view is requested."""
+    name: str
+    status: CheckStatus
+    reason: str
+
+
+class AgentHealthRow(BaseModel):
+    """One champion's drift and health (state/drift.json, research/drift.py AgentHealth) with its halt state."""
+    agent_id: str
+    version: str
+    size_factor: float                      # 1.0 full size, 0.5 sized down (PSI or calibration drift)
+    halted: bool                            # CUSUM alarm (sticky until the owner's review or a new champion)
+    halted_since: datetime | None
+    halt_reasons: list[str]
+    notes: list[str]                        # every finding of the last check, in plain words
+    psi_warn: list[str]
+    psi_size_down: list[str]
+    n_live_rows: int
+    ece: float | None
+    brier: float | None
+    n_calib: int
+    cusum: float
+    cusum_alarm: bool
+    dd_30d: float                           # 30-day shadow drawdown, fraction
+    backtest_dd: float | None               # the version's backtest max drawdown, fraction
+    capital_weight: float | None            # allocator share from state/agents.json, when ranked
+
+
+class PsiHeatmap(BaseModel):
+    """PSI of the top features (rows) per agent (columns); null where the agent does not use the feature."""
+    features: list[str]
+    agents: list[str]
+    values: list[list[float | None]]
+    warn: float                             # 0.1: warns
+    size_down: float                        # 0.25: sizes the agent down
+
+
+class ReliabilityBin(BaseModel):
+    lo: float
+    hi: float
+    n: int
+    mean_p: float
+    hit_rate: float
+
+
+class ReliabilityCurve(BaseModel):
+    """Predicted p (10 equal bins) against the realised target-hit rate of closed, taken shadow trades."""
+    agent_id: str                           # "all" for the pooled curve
+    version: str | None
+    n: int
+    ece: float | None
+    brier: float | None
+    bins: list[ReliabilityBin]
+
+
+class CusumPoint(BaseModel):
+    ts: datetime                            # trade exit time
+    z: float                                # standardised residual (realised R minus the R p implied)
+    s: float                                # downward CUSUM statistic after this trade
+
+
+class CusumTrace(BaseModel):
+    agent_id: str
+    version: str
+    k: float
+    h: float                                # alarm threshold: the agent halts when s exceeds it
+    alarm: bool
+    points: list[CusumPoint]
+
+
+class SystemHaltView(BaseModel):
+    since: datetime | None
+    reasons: list[str]
+    review_command: str
+    clear_command: str
+
+
+class HealthView(BaseModel):
+    generated_utc: datetime
+    drift_ts: datetime | None               # when drift_watch last ran; null before its first run
+    drift_error: str | None                 # drift.json unreadable: the engines halt entries (fail closed)
+    system_halt: SystemHaltView | None
+    agents: list[AgentHealthRow]
+    psi: PsiHeatmap
+    reliability: list[ReliabilityCurve]
+    cusum: list[CusumTrace]
+    dd_mult: float                          # system halt when dd_30d > dd_mult x backtest_dd
+    checks: list[HealthCheckRow]            # deploy, data quality, drift
+    errors: dict[str, str]                  # agents whose model could not be checked
+
+
+class TrialBudget(BaseModel):
+    quarter: str
+    budget: int
+    used: int
+    left: int
+
+
+class GateCheck(BaseModel):
+    name: str
+    passed: bool
+    detail: str
+
+
+class TrialRow(BaseModel):
+    """One research-registry trial (state/research_registry.jsonl). R figures are the rule's own expectancy over
+    every candidate: gross on mid prices, net of every cost."""
+    trial: int
+    ts: datetime | None
+    family: str
+    timeframe: str | None
+    status: str
+    agent_id: str
+    gross_r: float | None
+    gross_t: float | None
+    net_r: float | None
+    net_t: float | None
+    n: int | None
+    gates_passed: bool | None               # null when the trial recorded no gate verdict
+    gates: list[GateCheck]
+    rationale: str
+
+
+class PlanFocus(BaseModel):
+    rank: int
+    family: str
+    budget: int
+    evidence: float
+    reasons: list[str]
+
+
+class PlanFamily(BaseModel):
+    family: str
+    trials: int
+    evidence: float
+    blocked: bool
+    flags: list[str]
+    median_auc: float | None
+    best_dsr: float | None
+    shadow_trades: int
+
+
+class ResearchPlanView(BaseModel):
+    """The research director's latest plan (state/research_plan.json)."""
+    created_utc: datetime
+    stale: bool                             # older than 21 days: the monthly loop uses the flat budget instead
+    quarter: str
+    quarter_budget: int
+    quarter_used: int
+    total_budget: int
+    budget: dict[str, int]
+    grid_budget: dict[str, int]
+    unallocated: int
+    holdout_from: str
+    holdout_to: str
+    focus: list[PlanFocus]
+    evidence: list[PlanFamily]
+
+
+class HypothesisTable(BaseModel):
+    title: str
+    columns: list[str]
+    rows: list[list[str]]
+
+
+class HypothesisDoc(BaseModel):
+    """The hypothesis portfolio (docs/research/hypotheses.md), its tables parsed, read-only."""
+    path: str
+    updated_utc: datetime | None
+    tables: list[HypothesisTable]
+    note: str | None
+
+
+class ResearchView(BaseModel):
+    generated_utc: datetime
+    budget: TrialBudget
+    trials: list[TrialRow]                  # newest first, at most 200
+    trials_total: int
+    plan: ResearchPlanView | None
+    plan_error: str | None
+    hypotheses: HypothesisDoc
+# ============================================================================= end Health and Research screens
+
+
 Status.model_rebuild()          # `blackout` refers to ActiveBlackout, defined after Status

@@ -76,6 +76,8 @@ export const api = {
   agentRuns: () => req<AgentRunRow[]>("/api/agent-runs"),
   calendar: (q: CalendarQuery = {}) => req<CalendarResponse>(`/api/calendar${qs(q)}`),
   news: (q: NewsQuery = {}) => req<Headline[]>(`/api/news${qs(q)}`),
+  health: () => req<Schemas["HealthView"]>("/api/health"),
+  research: () => req<Schemas["ResearchView"]>("/api/research"),
 };
 
 export function liveSocket(onEvent: (e: { type: string } & Record<string, unknown>) => void): () => void {

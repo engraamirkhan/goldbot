@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const PORT = 8790;
+const PORT = Number(process.env.E2E_PORT ?? 8790);   // E2E_PORT: run beside another e2e server
 
 // The backend is the real FastAPI app (scripts/e2e_server.py) serving the production build from web/dist,
 // so these tests cover the browser, the API contract, auth/TOTP and the approval centre together.

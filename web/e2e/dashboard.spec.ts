@@ -109,6 +109,30 @@ test("news tab shows the calendar with blackout windows and the scored headlines
   await expect(page.getByText("Fed's Powell signals a pause in hikes")).toBeVisible();
 });
 
+test("health tab shows agent halts, PSI bands and the charts; research tab the budget, trials and hypotheses", async ({ page }) => {
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await page.getByRole("button", { name: "Health", exact: true }).click();
+  const agents = page.locator("table.agents-health");
+  await expect(agents.locator("tr", { hasText: "tsmom-g0" })).toContainText("50%: sized down");
+  await expect(agents.locator("tr", { hasText: "trend-g1" })).toContainText(/Halted since/);
+  await expect(page.getByTitle(/tsmom-g0 · atr_14: PSI 0.310 \(sized down\)/)).toHaveClass(/bad/);
+  await expect(page.getByRole("img", { name: /Reliability of tsmom-g0/ })).toBeVisible();
+  await expect(page.getByRole("img", { name: /CUSUM of tsmom-g0 over 8 trades/ })).toBeVisible();
+  await expect(page.getByRole("meter", { name: "trend-g1 30-day drawdown" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Health checks" })).toContainText("Deploy");
+  await expect(page.getByRole("alert")).toHaveCount(0);                       // no system halt seeded
+
+  await page.getByRole("button", { name: "Research", exact: true }).click();
+  await expect(page.getByRole("meter", { name: /trials used/ })).toBeVisible();
+  const trials = page.locator("table.trials");
+  await expect(trials.locator("tbody tr")).toHaveCount(2);
+  await expect(trials.locator("tbody tr").first()).toContainText("+0.061 (t 2.63)");
+  await expect(trials.getByText("failed: dsr").first()).toBeVisible();
+  await expect(page.getByText("gross t 2.63 but net negative")).toBeVisible();
+  await expect(page.locator("details.hyp").first()).toContainText("H-01");    // the real docs/research/hypotheses.md
+});
+
 test("owner invites a viewer", async ({ page }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
@@ -132,7 +156,7 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   await signIn(page, VIEWER.email, VIEWER.password, secret);
   await expect(page.getByText(`${VIEWER.email} · viewer`)).toBeVisible();
   await expect(page.getByRole("button", { name: "Users" })).toHaveCount(0);
-  for (const tab of ["Overview", "News", "Agents", "Feeds", "Approvals"]) {
+  for (const tab of ["Overview", "News", "Agents", "Health", "Research", "Feeds", "Approvals"]) {
     await page.getByRole("button", { name: tab, exact: true }).click();
   }
   await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);

@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
+from goldbot.api import explain
 from goldbot.api.auth import AuthStore, User, env_setup_code_hint, has_role, totp_verify
 from goldbot.api.schema import (
     AcceptRequest,
@@ -36,6 +37,7 @@ from goldbot.api.schema import (
     FeedHealth,
     HaltRequest,
     Headline,
+    HealthView,
     InviteRequest,
     InviteResponse,
     JobRow,
@@ -45,6 +47,7 @@ from goldbot.api.schema import (
     Ok,
     Proposal,
     RearmRequest,
+    ResearchView,
     Role,
     RoleChange,
     SetupRequest,
@@ -59,6 +62,7 @@ from goldbot.telegram.bus import ApprovalBus
 
 if TYPE_CHECKING:
     from goldbot.agents.tools import ReadOnlyTools
+    from goldbot.config import Settings
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -171,7 +175,7 @@ class State:
 
 
 def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist",
-               data_root: str | Path | None = None) -> FastAPI:
+               data_root: str | Path | None = None, docs_dir: str | Path | None = None) -> FastAPI:
     st = State(state_dir, data_root)
     app = FastAPI(title="goldbot api", version="0.2")
     app.state.st = st
@@ -378,6 +382,28 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         tags = ("rates", "risk", "dollar", "surprise")      # unscored rows store "" for the direction tags
         return [Headline.model_validate({**r, "link": r.get("link") or None, "shock": bool(r["shock"]),
                                          **{k: r[k] or None for k in tags}}) for r in rows]
+
+    # ============================================================== Health and Research screens (read-only, any role)
+    # Built by goldbot/api/explain.py from drift.json, the shadow book, the health checks, the trial registry, the
+    # research plan and docs/research/hypotheses.md. Nothing here writes.
+    docs = Path(docs_dir) if docs_dir is not None else Path(__file__).resolve().parents[2] / "docs"
+
+    def view_settings() -> Settings | None:
+        from goldbot.config import load_settings
+        try:
+            s = load_settings()
+        except Exception:                     # a bad settings edit: the views fall back to the design defaults
+            return None
+        return s.model_copy(update={"data_root": str(data_root)}) if data_root is not None else s
+
+    @app.get("/api/health", response_model=HealthView)
+    def health_view(_: User = Depends(auth)) -> HealthView:
+        return explain.health_view(st.dir, view_settings())
+
+    @app.get("/api/research", response_model=ResearchView)
+    def research_view(_: User = Depends(auth)) -> ResearchView:
+        return explain.research_view(st.dir, view_settings(), docs)
+    # ============================================================== end Health and Research screens
 
     def current_status() -> Status:
         modes = sorted({str(e.get("approval_mode", "propose")) for e in st.engines()})
