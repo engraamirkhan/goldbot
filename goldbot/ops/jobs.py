@@ -21,6 +21,11 @@
                     challenger on its recent counterfactual shadow outcomes (every candidate, taken or not), shrunk
                     toward the current calibration and capped per run; a minor version in the model registry with
                     before/after ECE (also state/recalibration.jsonl). Promotes and retires nothing.
+* drift_watch       daily (design: Drift and health): per champion, PSI of recent candidates' inputs against the
+                    training distribution, ECE/Brier on the trailing taken shadow trades, a residual CUSUM, and the
+                    30-day drawdown against backtest -> state/drift.json (size factors, halted agents, system halt).
+                    Halts are sticky until the owner clears them (`run.py drift-review --clear`) or a new champion
+                    version replaces the halted one. Entries only: exits are never affected.
 * monthly_research  bounded search: label-grid variants (+-step on target, stop and time limit) per specialist, as
                     many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
                     fresh plan), never past the quarter's trial budget and never into the held-out year, each a
@@ -60,9 +65,10 @@ from goldbot.research.director import (
     holdout_window,
     quarter_budget,
 )
+from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
 from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
-from goldbot.research.pipeline import ResearchResult, run_specialist
+from goldbot.research.pipeline import ResearchResult, build_decision_frame, run_specialist
 from goldbot.research.population import Population
 from goldbot.research.promotion import PerfStats, cusum_alarm, evaluate_promotion
 from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry
@@ -348,6 +354,91 @@ def recalibrate(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- drift
+DRIFT_WARMUP_DAYS = 90          # bars before the PSI window so every feature's lookback is filled
+
+
+def _recent_candidates(ctx: JobContext, spec: Any, slot: pd.Timestamp, days: int) -> pd.DataFrame:
+    """Decision-frame features (plus `side`) of the specialist's candidates in the last `days`, built exactly as for
+    training (same context timeframes and feature registry)."""
+    start = slot - pd.Timedelta(days=days + DRIFT_WARMUP_DAYS)
+    dec = _bars(ctx, spec.timeframe, start, slot)
+    if dec.empty:
+        return pd.DataFrame()
+    ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
+    context = {TF_LABEL[tf]: _bars(ctx, tf, ctx_start, slot) for tf in context_tfs(spec.timeframe)}
+    m, X = build_decision_frame(dec.reset_index(drop=True), context)
+    cands = spec.candidates(m, X)
+    if cands.empty:
+        return pd.DataFrame()
+    idx = cands["idx"].to_numpy()
+    feats = X.iloc[idx].reset_index(drop=True)
+    feats["side"] = cands["side"].to_numpy()
+    recent = pd.to_datetime(feats["ts_utc"], utc=True) >= slot - pd.Timedelta(days=days)
+    return feats[recent.to_numpy()].drop(columns=["ts_utc"]).replace([np.inf, -np.inf], np.nan).reset_index(drop=True)
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        return cast(dict[str, Any], json.loads(path.read_text())) if path.exists() else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def drift_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily drift and health check of every champion (design: Drift and health) -> state/drift.json."""
+    d = ctx.settings.drift
+    prev = _read_json(ctx.state_dir / "drift.json")
+    review = _read_json(ctx.state_dir / "drift_review.json")
+    cleared = pd.Timestamp(review["cleared_utc"]) if review.get("cleared_utc") else None
+    book = ShadowBook(ctx.state_dir)
+    health: list[AgentHealth] = []
+    errors: dict[str, str] = {}
+    for e in [x for x in ctx.models.entries if x.status == "champion"]:
+        member = ctx.population.members.get(e.agent_id)
+        try:
+            model = ctx.models.load(e)
+            live = _recent_candidates(ctx, member.specialist(), slot, d.window_days) if member is not None else None
+        except Exception as exc:                       # one broken model must not hide the others' health
+            log.exception("drift_watch: %s", e.version)
+            errors[e.agent_id] = f"{type(exc).__name__}: {exc}"
+            continue
+        vb = book.books.get(e.version)
+        exited = [(pd.Timestamp(t.exit_ts), t) for t in (vb.closed if vb else []) if t.taken and t.exit_ts is not None]
+        exited.sort(key=lambda x: x[0])
+        closed = [t for _, t in exited]
+        recent = [t for ts, t in exited if ts >= slot - pd.Timedelta(days=d.dd_window_days)]
+        bt_dd = (e.backtest or {}).get("max_dd")
+        health.append(assess(e.agent_id, e.version, model=model, live=live, closed_taken=closed, recent_taken=recent,
+                             backtest_dd=float(bt_dd) if bt_dd is not None else None, s=d))
+    # sticky: an agent stays halted while the same version is champion, until the owner clears it
+    prev_halts = prev.get("halted") or {}
+    halted: dict[str, Any] = {}
+    for h in health:
+        old = prev_halts.get(h.agent_id)
+        still = old is not None and old.get("version") == h.version and \
+            (cleared is None or cleared < pd.Timestamp(old["since"]))
+        if h.halted or still:
+            halted[h.agent_id] = old if still else {"version": h.version, "since": slot.isoformat(), "reasons": h.notes}
+            h.halted = True
+    reasons = system_halt_reasons(health, d)
+    old_sys = prev.get("system_halt") or None
+    if old_sys and (cleared is None or cleared < pd.Timestamp(old_sys["since"])):
+        system = old_sys                               # pending the owner's review
+    elif reasons:
+        system = {"since": slot.isoformat(), "reasons": reasons}
+    else:
+        system = None
+    out = {"ts": slot.isoformat(), "agents": {h.agent_id: h.model_dump() for h in health}, "halted": halted,
+           "size_factor": {h.agent_id: h.size_factor for h in health if h.size_factor < 1}, "system_halt": system,
+           "errors": errors}
+    tmp = ctx.state_dir / "drift.json.tmp"
+    tmp.write_text(json.dumps(out, default=str))
+    tmp.replace(ctx.state_dir / "drift.json")
+    return {"agents": len(health), "halted": sorted(halted), "size_down": sorted(out["size_factor"]),
+            "system_halt": bool(system), "errors": errors}
+
+
 # ---------------------------------------------------------------------------------------------- tournament
 def tournament(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Weekly population round (research/population.py): fitness from shadow trades, retirement, shadow -> live
@@ -592,6 +683,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "calendar_archive": calendar_archive,
     "agents_presession": agents_presession,
     "recalibrate": recalibrate,
+    "drift_watch": drift_watch,
 }
 
 

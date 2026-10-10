@@ -200,6 +200,29 @@ def export_costs_cli(argv: list[str], accounts: list[Account] | None = None, sta
     return 0
 
 
+def drift_review_cli(argv: list[str], state_dir: str | Path = "state") -> int:
+    """Show state/drift.json; `--clear "<note>"` records the owner's review, which lifts the current system halt and
+    agent halts (drift_watch re-halts at once if the condition still holds)."""
+    import json
+
+    import pandas as pd
+    path = Path(state_dir) / "drift.json"
+    d = json.loads(path.read_text()) if path.exists() else {}
+    print(json.dumps({k: d.get(k) for k in ("ts", "system_halt", "halted", "size_factor", "errors")}, indent=2))
+    if argv[:1] == ["--clear"]:
+        note = " ".join(argv[1:]).strip()
+        if not note:
+            print("give a note: drift-review --clear \"what was checked\"")
+            return 2
+        (Path(state_dir) / "drift_review.json").write_text(json.dumps({"cleared_utc": pd.Timestamp.now("UTC").isoformat(),
+                                                                         "note": note}))
+        if path.exists():                              # lift now; the next drift_watch re-evaluates from scratch
+            d["system_halt"], d["halted"] = None, {}
+            path.write_text(json.dumps(d))
+        print("review recorded; halts lifted")
+    return 0
+
+
 def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTrader5 package and a terminal
     """Serve the MT5 terminal on this machine to the engine (goldbot/execution/bridge.py). Run under the Wine (or
     Windows) Python next to the terminal. The terminal's saved login is used; the listen address and token come from
@@ -344,6 +367,8 @@ if __name__ == "__main__":
         run_supervisor()
     elif cmd == "engine":
         run_engine(sys.argv[2])
+    elif cmd == "drift-review":
+        sys.exit(drift_review_cli(sys.argv[2:]))
     elif cmd == "bridge":
         run_bridge(sys.argv[2])
     elif cmd == "api":

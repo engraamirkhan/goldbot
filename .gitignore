@@ -27,3 +27,4 @@ web/coverage/
 *.log
 logs/
 .secrets.json
+/config/settings.local.yaml

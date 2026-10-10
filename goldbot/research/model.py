@@ -16,6 +16,7 @@ from sklearn.isotonic import IsotonicRegression
 
 from goldbot.base import Record
 from goldbot.features.registry import side_align
+from goldbot.research.drift import reference_bins
 from goldbot.research.metrics import calibration_ece
 
 try:
@@ -161,6 +162,7 @@ class MetaLabelModel(Record):
     feature_version: str = ""
     model: Any = None   # fitted LGBMClassifier
     calibrator: Any = None           # IsotonicRegression | PlattCalibrator once calibrate() has run
+    feature_ref: dict[str, Any] = Field(default_factory=dict)   # training distribution per input (drift PSI)
 
     @property
     def side_aligned(self) -> bool:
@@ -177,7 +179,9 @@ class MetaLabelModel(Record):
         if lgb is None:
             raise RuntimeError("lightgbm not installed")
         self.model = lgb.LGBMClassifier(**{"n_jobs": FIT_THREADS, **self.params})
-        self.model.fit(self.design(X), y, sample_weight=None if w is None else w.to_numpy())
+        Z = self.design(X)
+        self.model.fit(Z, y, sample_weight=None if w is None else w.to_numpy())
+        self.feature_ref = reference_bins(Z)           # what "normal" looks like for the daily drift check
         return self
 
     def predict_raw(self, X: pd.DataFrame) -> np.ndarray:

@@ -124,6 +124,7 @@ class SchedulerSettings(_Section):
     calendar_archive: ScheduleSettings
     agents_presession: ScheduleSettings
     recalibrate: ScheduleSettings
+    drift_watch: ScheduleSettings
 
 
 class ResearchSettings(_Section):
@@ -171,6 +172,23 @@ class TelegramSettings(_Section):
     allowed_user_ids: list[int] = Field(default_factory=list)
 
 
+class DriftSettings(_Section):
+    """Design: Drift and health (goldbot/research/drift.py)."""
+    psi_warn: float = Field(0.1, gt=0)               # PSI on a top feature that warns
+    psi_size_down: float = Field(0.25, gt=0)         # PSI on a top feature that sizes the agent down
+    top_features: int = Field(10, ge=1, le=40)       # by gain importance (TreeSHAP rank once stored)
+    ece_size_down: float = Field(0.08, gt=0)         # calibration error on the trailing trades that sizes down
+    calib_trades: int = Field(100, ge=10)            # trailing taken trades for ECE / Brier
+    min_calib_trades: int = Field(30, ge=10)         # fewer: calibration not judged
+    size_down_factor: float = Field(0.5, gt=0, le=1)
+    window_days: int = Field(30, ge=7)               # recent candidates for PSI
+    min_rows: int = Field(50, ge=10)                 # fewer recent candidates: PSI not computed
+    cusum_k: float = Field(0.5, ge=0)
+    cusum_h: float = Field(4.0, gt=0)
+    dd_mult: float = Field(1.5, gt=1)                # 30-day drawdown above this x backtest halts the system
+    dd_window_days: int = Field(30, ge=7)
+
+
 class Settings(_Section):
     symbol: str
     data_root: str
@@ -188,6 +206,7 @@ class Settings(_Section):
     research: ResearchSettings = Field(default_factory=ResearchSettings)
     agents: AgentSettings = Field(default_factory=AgentSettings)
     news: NewsSettings = Field(default_factory=NewsSettings)
+    drift: DriftSettings = Field(default_factory=DriftSettings)
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -212,9 +231,25 @@ def load_yaml(path: str | Path) -> dict:
         return yaml.load(fh, Loader=_UniqueKeyLoader)   # a SafeLoader subclass: no arbitrary objects
 
 
+def _deep_merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def settings_dict(path: str | Path = DEFAULT_SETTINGS) -> dict:
+    """settings.yaml with the machine's own overrides merged on top: `settings.local.yaml` next to it (git-ignored),
+    for values that belong to one server and never to the public repo (Telegram user ids), so automatic deploys
+    (`git` fast-forward) never conflict with a local edit."""
+    raw = load_yaml(path)
+    local = Path(path).with_name("settings.local.yaml")
+    return _deep_merge(raw, load_yaml(local) or {}) if local.exists() else raw
+
+
 @lru_cache(maxsize=4)
 def load_settings(path: str | Path = DEFAULT_SETTINGS) -> Settings:
-    return Settings.model_validate(load_yaml(path))
+    return Settings.model_validate(settings_dict(path))
 
 
 def tf_seconds(tf: str) -> int:

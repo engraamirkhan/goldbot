@@ -85,6 +85,7 @@ class AccountState(Record):
     other_equity: float = 0.0
     combined_size_down: bool = False  # the supervisor's 8% combined drawdown stage
     account_class: str = "raw"        # raw | standard | unknown, from the classifier; a paper broker stays "raw"
+    drift_halt: bool = False          # design: Drift and health -- system halt pending the owner's review
 
 
 class Intent(Record):
@@ -157,6 +158,8 @@ class RiskGate:
             reasons.append("rollover")
         if st.weekend:
             reasons.append("weekend")
+        if st.drift_halt:
+            reasons.append("drift_system_halt")
         if st.last_tick_age_s > L.stale_tick_seconds or st.stale_bars:
             reasons.append("stale_data")
         if st.data_recovering:
