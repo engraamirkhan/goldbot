@@ -155,7 +155,8 @@ def test_monthly_research_is_bounded_and_counted(bars_store, tmp_path):
 
 
 def test_monthly_research_stops_at_the_quarterly_budget(bars_store, tmp_path):
-    ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=1, label_grid_paused=False, trial_budget_quarter=2)
+    ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=1, label_grid_paused=False, trial_budget_quarter=2,
+               reserved_trials_quarter=0)
     out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
     assert ctx.trials.n_trials == 2 and "trial budget exceeded" in out["budget"]
 

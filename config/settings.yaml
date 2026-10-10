@@ -115,6 +115,22 @@ research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
   label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
+  reserved_trials_quarter: 13        # held for the pre-registered queue (docs/research/preregistration-2027Q1.md: 13 planned
+                                     #   of 20): the director and the label grid spend only 20 - used - reserved. Each
+                                     #   trial run against a `preregistered` registry row uses one up; revisit each quarter
+  retired_families:                  # mirrors docs/research/hypotheses.md section B (a test checks they agree). A retired
+                                     #   family keeps 1 exploration trial a quarter and is reinstated only by out-of-sample
+                                     #   attribution after its retirement date (research/director.py)
+    - { family: mean_reversion, hypothesis_id: R-01, retired: 2026-10-10, trials: [3],
+        reason: "no gross edge; no cost-surviving evidence for short-horizon reversion in gold" }
+    - { family: session_open, hypothesis_id: R-02, retired: 2026-10-10, trials: [1, 7, 11, 13],
+        reason: "gross +0.042 R, t 1.31 on 1,498 events, fails P4; about 90 events a year" }
+    - { family: trend, hypothesis_id: R-03, retired: 2026-10-10, trials: [2],
+        reason: "no gross edge; small-tick contracts lost short-term trend after 2009" }
+    - { family: breakout, hypothesis_id: R-04, retired: 2026-10-10, trials: [6, 8, 15],
+        reason: "gross +0.015 R, t 0.38; same reason as trend" }
+    - { family: intraday_momentum, hypothesis_id: R-05, retired: 2026-10-10, trials: [18, 19],
+        reason: "NY -0.006 R, London -0.028 R gross; mechanism absent in spot XAUUSD" }
   holdout_from: 2025-10-01           # held-out year: research never sees it; a passing config is scored on it once
   holdout_to: 2026-09-30             #   (scripts/research_pass.py --score-holdout), inclusive
   screen_min_events: 1000            # primary-signal screen (P4): events a rule needs; any screen with fewer events

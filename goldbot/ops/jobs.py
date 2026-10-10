@@ -14,7 +14,8 @@
 * tournament        weekly after the retrain: the population round (fitness, retirement, promotion to live,
                     cloning, capital shares) -> state/agents.json for the dashboard's league table.
 * research_director weekly before the staff agents: scores every family's evidence (trial registry, shadow book,
-                    population) and splits what is left of the quarter's trial budget -> state/research_plan.json
+                    population) and splits what is left of the quarter's trial budget after the pre-registered
+                    queue's reservation (research.reserved_trials_quarter) -> state/research_plan.json
                     (research/director.py). It decides what to research, never what goes live: promotion stays with
                     the gates. Trials scored on the held-out year are never used as evidence.
 * model_watch       daily: a champion promoted in the last CUSUM_WINDOW_DAYS whose shadow returns trip the CUSUM
@@ -34,7 +35,8 @@
                     state/gaps.json (ops/gap_watch.py). Creates no live agent and no new family or role.
 * monthly_research  bounded search: label-grid variants (+-step on target, stop and time limit) per specialist, as
                     many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
-                    fresh plan), never past the quarter's trial budget and never into the held-out year, each a
+                    fresh plan), only while research.label_grid_paused is false, never past the quarter's trial
+                    budget less the pre-registered reservation and never into the held-out year, each a
                     walk-forward recorded in the trial registry whose count feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
 * backup            daily: encrypted restic snapshot of the SQLite files (online backup API), state JSON, trial
                     registry, models and the brain's own Parquet to Oracle Object Storage, append only: retention
@@ -78,13 +80,17 @@ from goldbot.ops import gap_watch as gap_watch_mod
 from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.research.director import (
+    GRID_RATIONALE,
     PLAN_FILE,
     AgentEvidence,
     ResearchPlan,
     ShadowEvidence,
     build_plan,
     holdout_window,
+    load_attribution,
+    load_hypotheses,
     quarter_budget,
+    reserved_trials,
 )
 from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
 from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
@@ -92,7 +98,7 @@ from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import ResearchResult, build_decision_frame, run_specialist
 from goldbot.research.population import Population
 from goldbot.research.promotion import PerfStats, cusum_alarm, evaluate_promotion
-from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry
+from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, quarter_of
 from goldbot.research.registry_sync import read_rows
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import Specialist
@@ -562,11 +568,16 @@ def research_director(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     r = ctx.settings.research
     plan = build_plan(slot, sorted(SPECIALISTS), read_rows(ctx.trials.path), shadow, agents,
                       quarter_budget=quarter_budget(r), monthly_total=budget, trial_budget_per_month=r.trial_budget_per_month,
-                      floor=r.director_floor, cap=cap, holdout=holdout_window(r))
+                      floor=r.director_floor, cap=cap, holdout=holdout_window(r),
+                      attribution=load_attribution(ctx.state_dir), hypotheses=load_hypotheses(),
+                      retired=r.retired_families, promoted={e.version: e.promoted_utc for e in ctx.models.entries},
+                      reserved_setting=r.reserved_trials_quarter, grid_paused=r.label_grid_paused)
     plan.save(ctx.state_dir / PLAN_FILE)
-    return {"quarter": plan.quarter, "quarter_used": plan.quarter_used, "budget": plan.budget,
-            "grid_budget": plan.grid_budget, "unallocated": plan.unallocated, "focus": [f.family for f in plan.focus],
-            "blocked": [s.family for s in plan.evidence if s.blocked], "registry_sync": synced}
+    return {"quarter": plan.quarter, "quarter_used": plan.quarter_used, "quarter_reserved": plan.quarter_reserved,
+            "budget": plan.budget, "grid_budget": plan.grid_budget, "unallocated": plan.unallocated,
+            "focus": [f.family for f in plan.focus], "blocked": [s.family for s in plan.evidence if s.blocked],
+            "retired": [s.family for s in plan.evidence if s.retired], "hypotheses_drift": plan.hypotheses_drift,
+            "registry_sync": synced}
 
 
 def current_plan(ctx: JobContext, slot: pd.Timestamp) -> ResearchPlan | None:
@@ -678,7 +689,9 @@ def _sync_trials(ctx: JobContext) -> int | str | None:
 def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Bounded label-grid search. Paused by default (research.label_grid_paused): barrier perturbations of rules with
     no signal only raise the deflated-Sharpe bar for every later trial. When enabled, each trial is charged to the
-    quarter's pre-registered budget and the loop stops when it is spent; the holdout window is never seen."""
+    quarter's pre-registered budget and the loop stops when what the pre-registered queue leaves is spent
+    (budget - used - research.reserved_trials_quarter's reservation, director.reserved_trials); the holdout window is
+    never seen."""
     r = ctx.settings.research
     synced_before = _sync_trials(ctx)     # count trials run elsewhere (the research workflow) before deflating
     if r.label_grid_paused:
@@ -703,10 +716,11 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         stopped = False
         for overrides in grid[:budget]:
             with ctx.trials.locked():           # check, run and record as one step: two writers cannot both pass
+                reserved = reserved_trials(read_rows(ctx.trials.path), quarter_of(), r.reserved_trials_quarter).reserved
                 try:
-                    quarter = ctx.trials.check_budget(1, q_budget)
+                    quarter = ctx.trials.check_budget(1, max(q_budget - reserved, 0))
                 except TrialBudgetExceeded as exc:
-                    stopped, out["budget"] = True, str(exc)
+                    stopped, out["budget"] = True, f"{exc} ({reserved} of the quarter held for the pre-registered queue)"
                     break
                 res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, history_months,
                                     n_trials=ctx.trials.n_trials + 1, holdout=r.holdout_window())
@@ -714,7 +728,7 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                     break
                 row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
                                         feature_version=res.feature_version, results=res.metrics, status="evaluated",
-                                        rationale=f"monthly bounded label-grid search {slot:%Y-%m} (+-{r.label_grid_step:.0%})",
+                                        rationale=f"{GRID_RATIONALE} {slot:%Y-%m} (+-{r.label_grid_step:.0%})",
                                         budget_quarter=quarter)
             mf = res.metrics.get("model_filtered") or {}
             rows.append({"trial": row["trial"], **overrides, "n": mf.get("n", 0), "sharpe": mf.get("sharpe_ann"), "dsr": mf.get("dsr")})
@@ -722,7 +736,8 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                        "quarter_budget_spent": stopped}
         lines += [f"## {family} ({len(rows)} of {budget} budgeted trials, registry total {ctx.trials.n_trials})", ""]
         if stopped:
-            lines += [f"Stopped: the quarter's trial budget ({q_budget}) is spent.", ""]
+            lines += [f"Stopped: the quarter's trial budget ({q_budget}) is spent, counting the trials held for the "
+                      f"pre-registered queue (research.reserved_trials_quarter).", ""]
         reasons = next((f.reasons for f in plan.focus if f.family == family), []) if plan else []
         lines += [f"- director: {x}" for x in reasons] + ([""] if reasons else [])
         lines += ["| trial | target | stop | max bars | n | Sharpe | DSR |", "|---:|---:|---:|---:|---:|---:|---:|"]
