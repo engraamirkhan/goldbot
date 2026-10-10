@@ -21,6 +21,14 @@ The time barrier (callers) applies after these, at the close of the (max_bars + 
 
 ATR is the signal bar's, as the barriers use. The return of a scaled position is the size-weighted return of its
 two exits.
+
+Known optimistic assumption (gaps): a stop (initial or trailed) is filled AT the stop even when the bar opens
+through it; bars carry no open-vs-level ordering, so a gap is indistinguishable from a touch. The broker fills a gap
+at the market (the paper broker models this: `min(sl, bid)` for longs), so on a gap the live trade exits on the same
+bar as the label but lower by the gap (tests/test_exit_policies.py::test_a_gap_through_the_trail_exits_on_the_label_bar_but_fills_at_the_market).
+Levels on the favourable side (scale-out, target) are likewise filled at the level, which on a gap is pessimistic.
+Labels and the shadow book keep this rule so they agree with each other; the cost model, not the labels, carries
+gap risk.
 """
 from __future__ import annotations
 
