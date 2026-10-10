@@ -11,10 +11,12 @@ from goldbot.data.quality import check_bars
 from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.synthetic import synthetic_ticks
+from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.costs import CostTable
 from goldbot.ops.accounts import Account
 from goldbot.ops.jobs import (
     JobContext,
+    attribution,
     build_scheduler,
     gap_watch,
     label_grid,
@@ -173,7 +175,8 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "agents_daily": "2026-10-02T23:45:00+00:00", "agents_weekly": "2026-10-03T13:00:00+00:00",
                    "monthly_research": "2026-10-04T08:00:00+00:00", "calendar_archive": "2026-10-03T06:10:00+00:00",
                    "agents_presession": "2026-10-05T06:30:00+00:00", "recalibrate": "2026-10-03T11:30:00+00:00", "drift_watch": "2026-10-02T23:40:00+00:00",
-                   "gap_watch": "2026-10-02T23:55:00+00:00", "feed_reconcile": "2026-10-02T23:20:00+00:00"}
+                   "gap_watch": "2026-10-02T23:55:00+00:00", "feed_reconcile": "2026-10-02T23:20:00+00:00",
+                   "attribution": "2026-10-02T23:50:00+00:00"}
 
 
 def test_research_analyst_trial_is_recorded_in_the_registry(bars_store, tmp_path):
@@ -220,3 +223,26 @@ def test_no_spawn_during_system_halt(bars_store, tmp_path):
     assert any(g["kind"] == "system_halt" for g in report["gaps"])
     # no Anthropic key on this host: the on-demand risk officer is refused, never improvised
     assert any(r["action"] == "staff_run" and "anthropic-api-key" in r["reason"] for r in report["refused"])
+
+
+def test_attribution_job_writes_the_report_from_the_shadow_book_and_changes_nothing_else(bars_store, tmp_path):
+    ctx = _ctx(bars_store, tmp_path)
+    slot = pd.Timestamp("2025-09-30 23:50", tz="UTC")
+    book = ShadowBook(tmp_path)
+    book.track("tsmom-g0-0123456789-v1", slot - pd.Timedelta(days=30))
+    for i in range(12):
+        t = book.open_trade(version="tsmom-g0-0123456789-v1", agent_id="tsmom-g0-0123456789", side=1,
+                            bar_ts=slot - pd.Timedelta(days=20 - i, hours=14), entry=2400.0, atr_usd=10.0,
+                            target_atr=2.0, stop_atr=1.0, max_bars=4, p=0.6, timeframe="1h", threshold=0.55)
+        assert t is not None
+        t.exit_ts, t.exit, t.barrier, t.ret = t.entry_ts + pd.Timedelta(hours=2), 2410.0, "time", 10.0 / 2400.0
+        book.books[t.version].open.remove(t)
+        book.books[t.version].closed.append(t)
+    book.save(slot)
+    before = {p.name for p in tmp_path.iterdir()}
+    out = attribution(ctx, slot)
+    assert out["taken"] == 12 and out["verdict"] == "noise" and out["costs"].startswith("settings priors")
+    assert {p.name for p in tmp_path.iterdir()} - before == {"attribution.json", "attribution.md"}
+    report = json.loads((tmp_path / "attribution.json").read_text())
+    assert set(report["breakdowns"]["regime"]) <= {"low", "mid", "high"}       # 1h bars in the store give a regime
+    assert report["live"]["icm-demo"]["fills"] == 0

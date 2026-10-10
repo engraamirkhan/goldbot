@@ -88,18 +88,26 @@ ROLES: dict[str, Role] = {r.name: r for r in [
               "budget, a model or any setting, and nothing is promoted or traded by your opinion: promotion stays "
               "with the gates.",
          max_cost_usd=1.50, max_turns=12, effort="medium"),
-    Role(name="improvement_agent", title="improvement agent", cadence="weekly", tools=tuple(READ_ALL + ["file_hypothesis"]),
-         task="Score the system on three scorecards: expectancy after costs, hit rate against the model's own "
+    Role(name="improvement_agent", title="improvement agent", cadence="weekly",
+         tools=tuple(READ_ALL + ["read_attribution", "file_hypothesis"]),
+         task="Start from the daily attribution report (read_attribution section summary, then the sections you need): "
+              "it is computed by code, so prefer its numbers over your own arithmetic and quote them with their trade "
+              "count and t-stat. Cells marked noise are below the minimum trade count and are not evidence; never file "
+              "a hypothesis on a noise cell or on one 'indistinguishable from zero'. "
+              "Score the system on three scorecards: expectancy after costs, hit rate against the model's own "
               "predicted probability (calibration), and precision of approved versus rejected entries. Find where "
-              "each is weakest by specialist, session and regime using the shadow stats, decisions and fills. File "
+              "each is weakest by specialist, session and regime (and which cost component hurts most) using the "
+              "attribution first, then the shadow stats, decisions and fills. File "
               "at most two hypotheses (read_hypotheses first to avoid duplicates) for the research analyst to test, "
               "each with the evidence that motivated it. You can propose anything; you promote nothing.",
          max_cost_usd=2.00, max_turns=16, effort="high"),
     # runs after the improvement agent in the same weekly job (roles run in this order)
     Role(name="research_analyst", title="research analyst", cadence="weekly",
-         tools=("read_hypotheses", "read_research_registry", "read_shadow_stats", "read_research_plan", "run_trial",
-                "update_hypothesis"),
-         task="Read the research plan (read_research_plan) first. Take the oldest hypotheses whose status is 'proposed', "
+         tools=("read_hypotheses", "read_research_registry", "read_shadow_stats", "read_research_plan", "read_attribution",
+                "run_trial", "update_hypothesis"),
+         task="Read the research plan (read_research_plan) first, then the attribution summary (read_attribution "
+              "section summary) to check each hypothesis's evidence against the code-computed cells (a cell marked "
+              "noise does not justify a trial). Take the oldest hypotheses whose status is 'proposed', "
               "preferring those in the plan's focus families (highest rank first) and never spending a trial on a family "
               "the plan marks blocked (lookahead) unless the hypothesis is the fix, nor more trials on a family than "
               "its budget in the plan (none at all when the plan's quarter budget is used up). For each, decide whether the evidence justifies a "

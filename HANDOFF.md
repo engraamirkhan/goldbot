@@ -205,6 +205,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   champion version until the owner runs `python -m goldbot.ops.run drift-review --clear "<note>"`. The engine reads
   it (missing = no restriction, unreadable = halt), the gate reason is `drift_system_halt`, health check `drift`.
   Entries only; exits unaffected. Models trained before this have no reference: PSI is skipped for them.
+- Performance attribution (2026-10-10, BACKLOG 12, TRACEABILITY G12): the daily `attribution` job (23:50 UTC,
+  `goldbot/research/attribution.py`) writes `state/attribution.json` and `state/attribution.md` from the shadow book
+  (every candidate, taken or not), engine fills, pending_orders and the canonical cost table: expectancy in R gross
+  and net (count, t, 95% interval, hit rate, profit factor) by timeframe, family, agent, session, side, volatility
+  tercile, decision and exit (stop/target/time/policy); per-trade cost in R (spread, slippage, commission, swap) and
+  the trades costs flipped to losers; calibration of p on taken and untaken candidates; live fill slippage vs the
+  table cell. Cells under `attribution.min_trades` (30) are "noise". Champion-path trades only in the breakdowns
+  (challengers apart). The improvement agent and research analyst read it first via `read_attribution`; hypotheses
+  still go only through `file_hypothesis`; gap_watch caps unchanged. Reporting only: nothing is traded or changed.
+  Open: live realised R per position (needs the engine trade record, item 8), the research director's priority input
+  and a dashboard view (item 12's other criteria).
 - Macro data pipeline (2026-10-10, TRADER_LIFECYCLE gap 2): `.github/workflows/data-macro.yml` (Tuesdays 04:41 UTC
   and by hand) pulls DFII10, T10YIE, DTWEXBGS, GVZCLS and DGS2 from FRED's public fredgraph CSV (no key) via
   `scripts/fred_macro.py` and publishes `macro_fred.parquet` on release `macro-v1`. Rows carry value_date, vintage

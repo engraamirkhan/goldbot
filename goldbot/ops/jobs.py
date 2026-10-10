@@ -36,6 +36,9 @@
                     many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
                     fresh plan), never past the quarter's trial budget and never into the held-out year, each a
                     walk-forward recorded in the trial registry whose count feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
+* attribution       daily (BACKLOG 12, G12): deterministic attribution of the shadow book, engine fills and orders
+                    against the canonical cost table -> state/attribution.json + attribution.md, which the improvement
+                    agent and research analyst read (`read_attribution`). Reporting only: changes nothing.
 * feed_reconcile    daily (D12): per account, the engine's tick-built 1m bars against the broker's own M1 for the last
                     day; divergence and unconfirmed spikes -> dq_events, broker M1 -> bars_1m_broker, report ->
                     state/reconcile_<account>.json (health check reconcile:<account>). Skipped without a broker.
@@ -763,6 +766,44 @@ def gap_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
 
 
+# ---------------------------------------------------------------------------------------------- attribution (BACKLOG 12)
+def attribution(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily deterministic attribution (research/attribution.py) -> state/attribution.json and attribution.md.
+    Reads the shadow book, every account's fills and pending_orders table, the cost tables and 1h bars (regime);
+    writes nothing else, so no trade, setting, model or budget changes. A missing input degrades the report (it
+    says so in its notes), never the job."""
+    from goldbot.execution.costs import settings_swap
+    from goldbot.research.attribution import CostModel, VersionRole, build_report, save_report
+    a = ctx.settings.attribution
+    since = slot - pd.Timedelta(days=a.window_days)
+    trades = [t for b in ShadowBook(ctx.state_dir).books.values() for t in b.closed]
+    found = canonical_cost_table(ctx.settings, ctx.accounts, ctx.state_dir)
+    costs = CostModel.from_table(found[0], live_swap(ctx)) if found is not None else CostModel.from_settings(ctx.settings)
+    try:
+        vol = gap_watch_mod.daily_realised_vol(_bars(ctx, "1h", since - pd.Timedelta(days=365), slot))
+    except (ValueError, OSError, KeyError) as exc:
+        log.warning("attribution: 1h bars unreadable, regime unknown: %s", exc)
+        vol = pd.Series(dtype=float)
+    fills, orders, tables = {}, {}, {}
+    for acc in ctx.accounts:
+        try:
+            fills[acc.account_id] = ctx.store.read("fills", source=acc.account_id, start=since, end=slot)
+        except (ValueError, OSError) as exc:
+            log.warning("attribution: fills of %s unreadable: %s", acc.account_id, exc)
+            fills[acc.account_id] = pd.DataFrame()
+        orders[acc.account_id] = _read_json(ctx.state_dir / f"orders_{acc.account_id}.json")
+        try:
+            table = CostTable.load(ctx.state_dir / f"costs_{acc.account_id}.json")
+        except ValueError:
+            table = None
+        tables[acc.account_id] = CostModel.from_table(table, settings_swap(ctx.settings)) if table is not None else None
+    roles = {e.version: VersionRole(status=e.status, promoted_utc=e.promoted_utc) for e in ctx.models.entries}
+    rep = build_report(trades, now=slot, costs=costs, settings=a, daily_vol=vol, roles=roles, fills=fills,
+                       orders=orders, tables=tables)
+    save_report(rep, ctx.state_dir)
+    return {"taken": rep.n_taken, "candidates": rep.n_candidates, "net_r": rep.overall.mean_r_net,
+            "verdict": rep.overall.verdict, "costs": costs.source}
+
 
 # ---------------------------------------------------------------------------------------------- feed reconcile (D12)
 def feed_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
@@ -808,6 +849,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "drift_watch": drift_watch,
     "gap_watch": gap_watch,
     "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
+    "attribution": attribution,                   # BACKLOG 12: daily attribution for the staff agents (reporting only)
 }
 
 
