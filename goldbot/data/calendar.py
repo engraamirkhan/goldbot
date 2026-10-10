@@ -26,7 +26,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
-from goldbot.data.timeutil import epoch_ns, server_to_utc
+from goldbot.data.timeutil import epoch_ns, server_to_utc, server_wall
 
 log = logging.getLogger("goldbot.calendar")
 
@@ -166,7 +166,7 @@ class SessionTable(FrozenRecord):
         return np.where(covered, inside, static)
 
     def _static_open(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
-        local = pd.DatetimeIndex(utc_ts).tz_convert(ZoneInfo(self.server_tz))
+        local = server_wall(pd.DatetimeIndex(utc_ts), self.server_tz)
         dow = local.dayofweek.to_numpy()
         t = local.time
         tsec = np.array([x.hour * 3600 + x.minute * 60 + x.second for x in t])
@@ -226,7 +226,7 @@ class BrokerSessions:
         self._read_at: pd.Timestamp | None = None
 
     def table(self, now: pd.Timestamp) -> SessionTable:
-        day = pd.Timestamp(now).tz_convert(ZoneInfo(self.fallback.server_tz)).date()
+        day = server_wall(pd.Timestamp(now), self.fallback.server_tz)[0].date()
         retry = (self._table is not None and self._table.source != "broker" and self._read_at is not None
                  and now - self._read_at >= self.retry_after)
         if self._table is None or day != self._day or retry:

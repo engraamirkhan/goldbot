@@ -5,18 +5,90 @@
 * swap-day     — each broker's rollover, read from the terminal at runtime (not here).
 
 MT5 returns epoch integers that are *server clock* values labelled as UTC. `server_to_utc`
-undoes that using the broker's IANA zone resolved per timestamp, so EU DST is handled
-and no fixed offset is ever assumed.
+undoes that using the broker's zone resolved per timestamp, so DST is handled and no fixed
+offset is ever assumed. A broker's `server_tz` is an IANA name (`Europe/Athens`: UTC+2/+3 on
+EU dates) or `NY+7` (UTC+2/+3 on US dates: the "5 pm New York = midnight" clock IC Markets
+documents). The two disagree by one hour in the US-EU gap weeks (about three in March, one in
+Oct/Nov); `goldbot.ops.server_clock` measures which one the broker really runs.
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
 UTC = ZoneInfo("UTC")
+NEW_YORK = ZoneInfo("America/New_York")
+NY_PLUS_7 = "NY+7"
+_NY_SHIFT = timedelta(hours=7)
+
+
+class NewYorkPlus7(tzinfo):
+    """Server clock = New York wall clock + 7 h: UTC+2 while New York is on EST, UTC+3 while it is on EDT, switching
+    with the US (second Sunday of March, first Sunday of November, at 02:00 New York = 09:00 server time).
+
+    Brokers whose midnight is "5 pm New York" (IC Markets: MT4/MT5 server time "is based on '5 pm New York'") run
+    this clock. Derived from America/New_York, so a change to US DST law arrives with the tz database.
+
+    For Python datetimes only: pandas treats any non-IANA tzinfo as a fixed offset (`utcoffset(None)`, which is None
+    here so pandas raises instead of silently using one offset all year). Vectorised code uses `server_wall` and
+    `server_to_utc`, which handle `NY+7` through America/New_York."""
+
+    def utcoffset(self, dt: datetime | None) -> timedelta | None:
+        if dt is None:
+            return None
+        ny = (dt.replace(tzinfo=None) - _NY_SHIFT).replace(tzinfo=NEW_YORK, fold=dt.fold)
+        off = ny.utcoffset()
+        return None if off is None else off + _NY_SHIFT
+
+    def dst(self, dt: datetime | None) -> timedelta | None:
+        if dt is None:
+            return None
+        ny = (dt.replace(tzinfo=None) - _NY_SHIFT).replace(tzinfo=NEW_YORK, fold=dt.fold)
+        return ny.dst()
+
+    def tzname(self, dt: datetime | None) -> str:
+        return NY_PLUS_7
+
+    def fromutc(self, dt: datetime) -> datetime:
+        ny = dt.replace(tzinfo=timezone.utc).astimezone(NEW_YORK)
+        return (ny.replace(tzinfo=None) + _NY_SHIFT).replace(tzinfo=self, fold=ny.fold)
+
+    def __repr__(self) -> str:
+        return f"NewYorkPlus7({NY_PLUS_7!r})"
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, NewYorkPlus7)
+
+    def __hash__(self) -> int:
+        return hash(NY_PLUS_7)
+
+
+def server_zone(server_tz: str) -> tzinfo:
+    """The tzinfo for an account's `server_tz`: `NY+7` or any IANA name. Raises (ValueError / ZoneInfoNotFoundError)
+    on anything else, so a typo in accounts.yaml fails at load instead of shifting every timestamp."""
+    if server_tz == NY_PLUS_7:
+        return NewYorkPlus7()
+    return ZoneInfo(server_tz)
+
+
+def server_wall(utc_ts: pd.DatetimeIndex | pd.Timestamp, server_tz: str) -> pd.DatetimeIndex:
+    """Naive server wall-clock values for UTC instants (what the MT5 terminal displays and expects in requests)."""
+    idx = pd.DatetimeIndex([utc_ts] if isinstance(utc_ts, pd.Timestamp) else utc_ts)
+    if idx.tz is None:
+        idx = idx.tz_localize(UTC)
+    if server_tz == NY_PLUS_7:
+        return idx.tz_convert(NEW_YORK).tz_localize(None) + pd.Timedelta(_NY_SHIFT)
+    return idx.tz_convert(ZoneInfo(server_tz)).tz_localize(None)
+
+
+def server_utc_offset(server_tz: str, at_utc: pd.Timestamp) -> timedelta:
+    """The server clock's offset from UTC at instant `at_utc` (e.g. +2 h or +3 h)."""
+    at = pd.Timestamp(at_utc)
+    at = at.tz_localize(UTC) if at.tzinfo is None else at.tz_convert(UTC)
+    return (server_wall(at, server_tz)[0] - at.tz_localize(None)).to_pytimedelta()
 
 
 def epoch_ns(ts: pd.DatetimeIndex | pd.Series | pd.Index) -> np.ndarray:
@@ -41,15 +113,23 @@ def server_to_utc(server_ts: pd.Series | pd.DatetimeIndex, server_tz: str) -> pd
 
     MT5 hands back e.g. 2025-03-10 09:00 meaning 09:00 *Athens* time. Localising to the server
     zone and converting to UTC applies the correct DST offset for each individual timestamp.
+    `NY+7` is localised as New York wall clock + 7 h (pandas cannot localise a custom tzinfo per element).
     """
     idx = pd.DatetimeIndex(server_ts)
     if idx.tz is not None:
         idx = idx.tz_convert(None)
     # ambiguous/nonexistent: brokers freeze the clock across DST; shift_forward is the safe choice
+    if server_tz == NY_PLUS_7:
+        return (idx - pd.Timedelta(_NY_SHIFT)).tz_localize(NEW_YORK, ambiguous="NaT",
+                                                           nonexistent="shift_forward").tz_convert(UTC)
     return idx.tz_localize(ZoneInfo(server_tz), ambiguous="NaT", nonexistent="shift_forward").tz_convert(UTC)
 
 
 def utc_to_server(utc_ts: pd.DatetimeIndex, server_tz: str) -> pd.DatetimeIndex:
+    """Tz-aware server time for an IANA `server_tz`. pandas treats a custom tzinfo as a fixed offset, so `NY+7` is
+    refused here rather than converted wrongly in the gap weeks: use `server_wall` (naive) for any server_tz."""
+    if server_tz == NY_PLUS_7:
+        raise ValueError("utc_to_server cannot represent NY+7 in pandas; use server_wall")
     return pd.DatetimeIndex(utc_ts).tz_convert(ZoneInfo(server_tz))
 
 
@@ -98,6 +178,11 @@ def now_utc() -> datetime:
 
 __all__ = [
     "UTC",
+    "NY_PLUS_7",
+    "NewYorkPlus7",
+    "server_zone",
+    "server_wall",
+    "server_utc_offset",
     "server_to_utc",
     "utc_to_server",
     "feature_day",

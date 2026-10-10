@@ -811,11 +811,45 @@ Saturday run or a manual run of `data-dukascopy` retries it.
 
 `python -m goldbot.ops.run health` lists every check (settings, secrets present, disk, supervisor heartbeat, halt,
 phase gates, each engine's state, stage and data quality, risk state, scheduler jobs, cost tables, news feeds,
-agent spend, stuck approvals, backup age and the restore drill) as ok / warn / fail with a one-line reason, and exits 1 on any fail. `--json`,
+agent spend, stuck approvals, backup age, the restore drill and each account's measured server clock offset) as ok / warn / fail with a one-line reason, and exits 1 on any fail. `--json`,
 `--out FILE`, `--baseline FILE` (fail only on new fails) and `--static` (no running services needed) exist for the
 update script. The Telegram service runs the same checks every 5 minutes and messages you when a check turns fail
 and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service running; the `alerts` check shows
 when that loop has stopped).
+
+### Server clock (US-EU DST gap weeks)
+
+MT5 stamps every tick, bar and deal in the broker's *server time*; `server_tz` in `config/accounts.yaml` converts it
+to UTC. Two clocks are in use: `Europe/Athens` (UTC+2/+3, switching on EU dates) and `NY+7` (UTC+2/+3, switching on
+US dates: "midnight = 5 pm New York"). IC Markets documents the NY+7 clock. They agree except in the gap weeks,
+when a wrong zone shifts the session table, the rollover gate, the Friday 21:30 weekend rule and every timestamp by
+one hour. The `server_clock:<account>` health check measures it: it reads the broker's latest tick, compares it
+with this server's UTC clock and fails (Telegram alert) when they differ by more than 5 minutes while gold trades.
+Over a weekend it says "market closed: not measured", which is fine.
+
+Next gap trading days (check on one of them, during market hours):
+
+| Gap | Trading days | NY+7 | Europe/Athens |
+| --- | --- | --- | --- |
+| Oct/Nov 2026 | Mon 26 Oct - Fri 30 Oct 2026 | UTC+3 | UTC+2 |
+| March 2027 | Mon 15 Mar - Fri 26 Mar 2027 | UTC+3 | UTC+2 |
+| Oct/Nov 2027 | Mon 1 Nov - Fri 5 Nov 2027 | UTC+3 | UTC+2 |
+
+Steps on the brain (or the VPS), on a gap day while the market is open:
+1. `goldbot run health` (or `python -m goldbot.ops.run health`) and read the `server_clock:<account>` line.
+   `ok ... server clock UTC+3 matches NY+7` means the configured zone is right.
+2. A `fail ... server clock reads UTC+3 but Europe/Athens gives UTC+2` means the zone is wrong. Cross-check by eye:
+   the MT5 terminal's Market Watch shows the server time; subtract the real UTC time (`date -u` on the brain).
+3. Fix: set `server_tz` for that account in `config/accounts.yaml` to the zone the broker runs (`NY+7` or
+   `Europe/Athens`) on the brain AND on the MT5 box (the bridge converts with its own copy), commit it, deploy, then
+   restart the bridge and the engine. Run `goldbot run health` again until the line is `ok`.
+4. Until the engine reads this check itself (see HANDOFF), stop new entries with a halt on the dashboard while the
+   line fails; exits are automatic and are not affected.
+
+`NY+7` needs the engine change listed in HANDOFF (`goldbot/engine/runner.py` `_server_clock` must resolve the zone
+with `goldbot.data.timeutil.server_zone`); until it lands, keep `server_tz: Europe/Athens` and use the halt in
+step 4 during the gap days. `goldbot run preflight` runs the same measurement (`server_clock`, blocking on a
+measured mismatch).
 
 ### Updating the VPS to a new version
 

@@ -82,6 +82,11 @@ def _terminal_account(url: str, token: str) -> Any:
     return RemoteBroker(url, token, name="preflight").account()     # read-only RPC; never an order call
 
 
+def _last_tick(url: str, token: str, symbol: str) -> Any:
+    from goldbot.execution.bridge import RemoteBroker
+    return RemoteBroker(url, token, name="preflight").last_tick(symbol)     # read-only RPC; never an order call
+
+
 def _load_accounts() -> dict[str, Any]:
     from goldbot.ops import accounts
     return dict(accounts.load_accounts())
@@ -96,6 +101,7 @@ class PreflightContext(Record):
     run_cmd: Callable[[list[str]], tuple[int, str]] = run_cmd
     bridge_probe: Callable[[str], str | None] | None = None        # url -> None when /health answers
     terminal_account: Callable[[str, str], Any] = _terminal_account
+    tick_reader: Callable[[str, str, str], Any] = _last_tick        # (url, token, symbol) -> latest Tick
     load_accounts: Callable[[], dict[str, Any]] = _load_accounts
     disk_usage: Callable[[str], Any] = shutil.disk_usage
     meminfo: Callable[[], dict[str, int]] = read_meminfo
@@ -197,6 +203,7 @@ def run_preflight(ctx: PreflightContext) -> list[Item]:
                           detail="not checked: the bridge does not answer yet"))
     else:
         items.append(_terminal_item(ctx, url, token, acc_fix))
+        items.append(_server_clock_item(ctx, url, token, hctx))
 
     # 6. dashboard build
     dist = ctx.root / "web" / "dist" / "index.html"
@@ -249,6 +256,25 @@ def _terminal_item(ctx: PreflightContext, url: str, token: str, fix: str) -> Ite
         return Item(name="terminal_account", status="fail", fix=fix, detail=why)
     return Item(name="terminal_account", status="ok", fix=fix,
                 detail=f"terminal logged in to the registered {acc.mode} account on {acc.server}")
+
+
+def _server_clock_item(ctx: PreflightContext, url: str, token: str, hctx: health.HealthContext) -> Item:
+    """The broker's measured UTC offset against server_tz (health.check_server_clock). A mismatch blocks; with the
+    market closed nothing can be measured, which is a non-blocking note."""
+    fix = ("set server_tz for this account in config/accounts.yaml to the zone the broker runs (Europe/Athens or NY+7) "
+           "on the brain AND the MT5 box, restart the bridge and the engine, run preflight again (RUNBOOK: server clock)")
+    try:
+        acc = ctx.load_accounts().get(ctx.account_id)
+    except Exception as exc:
+        return Item(name="server_clock", status="warn", blocking=False, fix=fix,
+                    detail=f"not checked: config/accounts.yaml does not load ({type(exc).__name__})")
+    if acc is None:
+        return Item(name="server_clock", status="warn", blocking=False, fix=fix, detail="not checked: account unknown")
+    ref = health.AccountRef(account_id=ctx.account_id, server_tz=acc.server_tz, symbol=acc.symbol)
+    c = health.check_server_clock(hctx.model_copy(update={"tick_reader": lambda _a, sym: ctx.tick_reader(url, token, sym)}), ref)
+    if c is None:
+        return Item(name="server_clock", status="warn", blocking=False, fix=fix, detail="not checked: no tick reader")
+    return Item(name="server_clock", status=c.status, detail=c.reason, fix=fix, blocking=c.status == "fail")
 
 
 def _private_files(ctx: PreflightContext) -> Item:

@@ -618,6 +618,32 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `why = self._sessions.entry_block(now)` as an entry-blocking reason. Exits are unaffected.
 
 ## Next steps (no owner input needed unless marked)
+- Server clock offset probe and `NY+7` zone (2026-10-10, HIGH from the trading-safety review; answers the D13 open
+  ops check above). Research: IC Markets' own notices say its MT4/MT5 server time "is based on '5 pm New York'" and
+  moves GMT+2 -> GMT+3 on the US DST start (10 Mar 2024, 9 Mar 2025) and back on the US DST end (4 Nov 2018), so
+  ICMarketsSC most likely runs NY+7, not Europe/Athens; not yet measured on our terminal. `goldbot/data/timeutil.py`
+  adds `NY+7` (`NewYorkPlus7` tzinfo, `server_zone`, `server_wall`, `server_utc_offset`; `server_to_utc` handles it
+  via America/New_York + 7 h because pandas treats a custom tzinfo as a fixed offset, so `utc_to_server` refuses
+  NY+7). `Account.server_tz` is validated at load (a typo fails instead of shifting stamps). The session table and
+  the MT5 adapter's server-time requests use `server_wall`. `goldbot/ops/server_clock.py` compares the broker's latest
+  tick (read-only `last_tick` via the bridge) with host UTC, infers the server offset and flags a > 5 min mismatch
+  while trading; `health.check_server_clock` (`server_clock:<account>`, fail = Telegram alert) and preflight
+  (`server_clock`, blocking on a measured mismatch) report it. A wrong Athens on a NY+7 broker makes ticks look an
+  hour in the FUTURE, which the stale-tick rule cannot see (the engine clamps negative ages to 0). accounts.yaml
+  stays on Europe/Athens until both items below land. RUNBOOK "Server clock (US-EU DST gap weeks)": the next gap
+  is Mon 26 - Fri 30 Oct 2026, then 15-26 Mar 2027. **Open, for the engine lane (runner.py was off-limits):**
+  (1) `goldbot/engine/runner.py:1102` `_server_clock` uses `ZoneInfo(self.cfg.server_tz)`: change it to
+  `goldbot.data.timeutil.server_wall(now, self.cfg.server_tz)` (naive server wall clock) before any account is set to
+  `NY+7`, or the engine raises on its first tick; (2) entry hook: probe once per bar while the market is open
+  (`server_clock.measure(broker, account_id, symbol, server_tz, now, sessions)`; the engine already holds the
+  broker), keep the latest `ServerClockProbe`, and add `server_clock.entry_block(probe)` as an entry-only reason
+  (never on the exit path), e.g. a `server_clock_mismatch` RiskGate reason; also write it to engine_<account>.json.
+  (3) `settings.yaml` `brokers.*.server_tz` (research rollover nights, `labels/triple_barrier._server_days`) still
+  takes IANA names only; switch to `server_wall` there with a quant review if research should use NY+7.
+  **Needs the owner:** on Mon 26 Oct 2026 during market hours run `goldbot run health` and read
+  `server_clock:icm-demo`; if it reads UTC+3 vs Athens UTC+2, halt entries for that week (RUNBOOK step 4) until the
+  runner change lands and `server_tz: NY+7` is deployed. Vantage's help centre also puts server midnight at 5 pm New
+  York (likely NY+7) but publishes no switch dates: measure it the same way.
 - XAUUSD trader playbook (2026-10-10, owner request): `docs/research/xauusd-trader-playbook.md` lists ~70 things a
   professional gold trader considers (drivers, CFD microstructure, technicals, risk management, process), each with
   sources, evidence grade and goldbot status, then a ranked gap list (risk gaps G-1..G-10 first: swap in live EV,

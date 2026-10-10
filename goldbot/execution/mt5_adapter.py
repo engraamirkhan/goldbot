@@ -42,7 +42,7 @@ from typing import Any, AsyncIterator
 import pandas as pd
 
 from goldbot.data.calendar import SessionTable, TradingSession, resolve_server_sessions
-from goldbot.data.timeutil import server_to_utc
+from goldbot.data.timeutil import server_to_utc, server_wall
 from goldbot.execution.broker import (
     AccountInfo,
     OrderIntent,
@@ -215,7 +215,7 @@ class MT5Broker:
 
     def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
         # copy_ticks_from takes server time; convert the UTC request into server clock
-        since_server = since_utc.tz_convert(self.server_tz).tz_localize(None)
+        since_server = server_wall(since_utc, self.server_tz)[0]
         ticks = mt5.copy_ticks_from(symbol, since_server.to_pydatetime(), n, mt5.COPY_TICKS_ALL)
         df = pd.DataFrame(ticks)
         if df.empty:
@@ -254,7 +254,7 @@ class MT5Broker:
         if not self._sessions_noted:
             log.info("%s: MetaTrader5 Python exposes no session schedule; using the broker's documented hours", symbol)
             self._sessions_noted = True
-        today = pd.Timestamp.now(tz="UTC").tz_convert(self.server_tz).date()
+        today = server_wall(pd.Timestamp.now(tz="UTC"), self.server_tz)[0].date()
         return resolve_server_sessions(SessionTable(server_tz=self.server_tz).server_sessions(), self.server_tz, today)
 
     # ------------------------------------------------------------------ orders
@@ -328,8 +328,8 @@ class MT5Broker:
         return out
 
     def deals_since(self, since_utc: pd.Timestamp) -> pd.DataFrame:
-        since_server = since_utc.tz_convert(self.server_tz).tz_localize(None).to_pydatetime()
-        until_server = pd.Timestamp.now(self.server_tz).tz_localize(None) + pd.Timedelta(days=1)
+        since_server = server_wall(since_utc, self.server_tz)[0].to_pydatetime()
+        until_server = server_wall(pd.Timestamp.now(tz="UTC"), self.server_tz)[0] + pd.Timedelta(days=1)
         deals = mt5.history_deals_get(since_server, until_server.to_pydatetime())
         if deals is None:             # an error, not an empty history: never read as "no deals" (no fake closes)
             raise RuntimeError(f"history_deals_get failed: {mt5.last_error()}")
