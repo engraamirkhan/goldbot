@@ -17,7 +17,12 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P2):
 * a feature-discovery trial (status "discovery", goldbot/research/discovery.py) is ONE trial, but choosing survivors
   from its selection frequencies looks at many features, so `n_trials_effective` (registry trials plus every
   discovery's K_eff: features screened when survivors go forward as features, groups screened only when whole groups
-  do) is the count the deflated Sharpe of any later trial uses."""
+  do) is the count the deflated Sharpe of any later trial uses;
+* evidence (row M16): a re-evaluation of an already-registered configuration that chooses nothing, such as
+  combinatorial purged CV (research/cpcv.py), is attached to that trial in a sidecar file
+  (`<registry>.evidence.jsonl`, `attach_evidence` / `evidence`), never written as a trial row: it takes no budget
+  slot and does not raise the deflated-Sharpe count. The sidecar is local to the host that wrote it: registry_sync
+  and research.yml do not carry it (evidence is advisory and can only veto; docs/decisions/0002)."""
 from __future__ import annotations
 
 import hashlib
@@ -158,6 +163,38 @@ class TrialRegistry:
         rows = [r for r in self._rows() if r.get("status") == PREREGISTERED and r.get("family") == family
                 and r.get("config_hash") == h]
         return rows[-1] if rows else None
+
+    def row(self, trial: int) -> dict | None:
+        """The trial row (not a pre-registration) numbered `trial`, or None."""
+        return next((r for r in self._rows() if is_trial(r) and int(r.get("trial", -1)) == int(trial)), None)
+
+    # ------------------------------------------------------------------ evidence on existing trials (not trials)
+    @property
+    def evidence_path(self) -> Path:
+        return self.path.with_name(self.path.stem + ".evidence.jsonl")
+
+    def attach_evidence(self, trial: int, kind: str, payload: dict[str, Any],
+                        now: datetime | None = None) -> dict[str, Any]:
+        """Attach a re-evaluation (e.g. kind "cpcv") to an existing trial row; raises KeyError for an unknown trial.
+        Written to the evidence sidecar, so the trial count, the budget and the deflated Sharpe are unchanged.
+        `now`: the time it is stamped with (the scheduler's slot), default the wall clock."""
+        row = self.row(trial)
+        if row is None:
+            raise KeyError(f"no trial #{trial} in {self.path}")
+        ts = now or datetime.now(timezone.utc)
+        ev = {"trial": int(trial), "kind": kind, "ts": ts.isoformat(), "family": row.get("family"),
+              "config_hash": row.get("config_hash"), "quarter": quarter_of(ts), "payload": payload}
+        with open(self.evidence_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(ev, default=str) + "\n")
+        return ev
+
+    def evidence(self, trial: int | None = None, kind: str | None = None) -> list[dict[str, Any]]:
+        """Evidence rows, oldest first, optionally for one trial and/or kind."""
+        if not self.evidence_path.exists():
+            return []
+        rows = [json.loads(line) for line in self.evidence_path.read_text().splitlines() if line.strip()]
+        return [e for e in rows
+                if (trial is None or e.get("trial") == int(trial)) and (kind is None or e.get("kind") == kind)]
 
     def by_family(self, family: str) -> list[dict]:
         return [r for r in self._rows() if r["family"] == family]

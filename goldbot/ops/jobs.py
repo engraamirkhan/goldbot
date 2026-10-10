@@ -14,11 +14,16 @@
 * tournament        weekly after the retrain: the population round (fitness, retirement, promotion to live,
                     cloning, capital shares) -> state/agents.json for the dashboard's league table.
 * research_director weekly before the staff agents: scores every family's evidence (trial registry, shadow book,
-                    population) and splits what is left of the quarter's trial budget -> state/research_plan.json
+                    population) and splits what is left of the quarter's trial budget after the pre-registered
+                    queue's reservation (research.reserved_trials_quarter) -> state/research_plan.json
                     (research/director.py). It decides what to research, never what goes live: promotion stays with
                     the gates. Trials scored on the held-out year are never used as evidence.
-* model_watch       daily: a champion promoted in the last CUSUM_WINDOW_DAYS whose shadow returns trip the CUSUM
-                    alarm against its backtest is replaced by the previous champion (design: Retraining and promotion).
+* model_watch       daily: a new champion whose shadow returns trip the CUSUM alarm against its backtest within its
+                    watch (two weeks or its first cusum.WATCH_MIN_TRADES trades, whichever is later, capped at
+                    cusum.WATCH_MAX_WEEKS) is replaced by the previous champion (design: Retraining and promotion).
+                    A watch whose trade count cannot reach the 5%-rate h reports `cannot_alarm` (job output,
+                    state/model_watch.json, a health warning): such slow agents rely on drift_watch and the drawdown
+                    halt.
 * recalibrate       weekly after the retrain (proposal P9): refits only the probability map of every champion and
                     challenger on its recent counterfactual shadow outcomes (every candidate, taken or not), shrunk
                     toward the current calibration and capped per run; a minor version in the model registry with
@@ -34,7 +39,8 @@
                     state/gaps.json (ops/gap_watch.py). Creates no live agent and no new family or role.
 * monthly_research  bounded search: label-grid variants (+-step on target, stop and time limit) per specialist, as
                     many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
-                    fresh plan), never past the quarter's trial budget and never into the held-out year, each a
+                    fresh plan), only while research.label_grid_paused is false, never past the quarter's trial
+                    budget less the pre-registered reservation and never into the held-out year, each a
                     walk-forward recorded in the trial registry whose count feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
 * backup            daily: encrypted restic snapshot of the SQLite files (online backup API), state JSON, trial
                     registry, models and the brain's own Parquet to Oracle Object Storage, append only: retention
@@ -47,6 +53,9 @@
 * feed_reconcile    daily (D12): per account, the engine's tick-built 1m bars against the broker's own M1 for the last
                     day; divergence and unconfirmed spikes -> dq_events, broker M1 -> bars_1m_broker, report ->
                     state/reconcile_<account>.json (health check reconcile:<account>). Skipped without a broker.
+* cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
+                    of every trial that passed the gates, PBO against its family's other trials, attached to the
+                    trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
 """
 from __future__ import annotations
 
@@ -74,14 +83,27 @@ from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops import gap_watch as gap_watch_mod
 from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Schedule, Scheduler
+from goldbot.research.cusum import (
+    WATCH_MAX_WEEKS,
+    WATCH_MIN_TRADES,
+    WATCH_WEEKS,
+    calibrated_h,
+    can_alarm,
+    watch_trades,
+)
 from goldbot.research.director import (
+    GRID_RATIONALE,
     PLAN_FILE,
     AgentEvidence,
     ResearchPlan,
     ShadowEvidence,
     build_plan,
     holdout_window,
+    load_attribution,
+    load_hypotheses,
+    pending_preregistration,
     quarter_budget,
+    reserved_trials,
 )
 from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
 from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
@@ -89,7 +111,7 @@ from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import ResearchResult, build_decision_frame, run_specialist
 from goldbot.research.population import Population
 from goldbot.research.promotion import PerfStats, cusum_alarm, evaluate_promotion
-from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry
+from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, config_hash, quarter_of
 from goldbot.research.registry_sync import read_rows
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import Specialist
@@ -99,7 +121,10 @@ log = logging.getLogger("goldbot.jobs")
 CHALLENGER_MAX_WEEKS = 8
 CLASSIFIER_WEEKDAY = 4          # Friday's nightly run re-classifies (design: weekly, from the nightly cost job)
 CONTEXT_EXTRA_MONTHS = 2        # daily/4h/1h context needs history before the decision window starts
-CUSUM_WINDOW_DAYS = 14          # a new champion is watched for its first two weeks
+WATCH_GRACE = pd.Timedelta(days=1)   # the daily job evaluates a champion watch once more after it closes
+MODEL_WATCH_FILE = "model_watch.json"   # the last run's per-agent watch status (health: ops/health.check_model_watch)
+CANNOT_ALARM_NOTE = ("too few trades for a CUSUM alarm at the 5% false-alarm rate: this champion relies on drift_watch "
+                     "(quarterly residual CUSUM, calibration, PSI) and the drawdown halt")
 BROKER_TERMS_MAX_AGE_DAYS = 7     # older terminal readings are not trusted (the engine refreshes them every few hours)
 PLAN_MAX_AGE_DAYS = 21          # an older research plan is stale evidence: monthly_research falls back to the flat budget
 
@@ -345,24 +370,58 @@ def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------------------------- model watch
 def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """CUSUM watch of each new champion against its backtest (design: a new champion that trips the alarm early is
+    replaced by the previous one). The watch covers the trades exited in the first two weeks or the first
+    cusum.WATCH_MIN_TRADES, whichever is more, and closes at the later of two weeks and that trade's exit, never past
+    cusum.WATCH_MAX_WEEKS (CUSUM re-verify: two weeks of a 2-2.5 trades/week agent are 4-5 trades, where no 5%-rate
+    alarm can fire). h is calibrated for `cusum.watch_trades` trades. When the statistic cannot exceed h in the
+    watch's trades (`cusum.can_alarm`), the agent is reported `cannot_alarm` instead of a silent "ok"; such agents
+    rely on drift_watch and the drawdown halt. Writes state/model_watch.json for the health check."""
     book = ShadowBook(ctx.state_dir)   # read-only view of the engine's shadow book
+    d = ctx.settings.drift
+    cap_age = pd.Timedelta(weeks=WATCH_MAX_WEEKS)
     out: dict[str, Any] = {}
     for agent_id in ctx.models.agent_ids():
         ch = ctx.models.champion(agent_id)
-        if ch is None or ch.promoted_utc is None or slot - ch.promoted_utc > pd.Timedelta(days=CUSUM_WINDOW_DAYS):
+        if ch is None or ch.promoted_utc is None or slot - ch.promoted_utc > cap_age + WATCH_GRACE:
             continue
         if not ctx.models.by_agent(agent_id, "previous"):
             continue                    # a first model has nothing to fall back to
+        start = ch.promoted_utc
+        closed = book.books[ch.version].closed if ch.version in book.books else []
+        # (exit time, return) of the taken trades exited since promotion, oldest exit first
+        trades = sorted((pd.Timestamp(t.exit_ts), float(t.ret)) for t in closed
+                        if t.taken and t.ret is not None and t.exit_ts is not None
+                        and start <= t.exit_ts <= min(slot, start + cap_age))
+        two_weeks = start + pd.Timedelta(weeks=WATCH_WEEKS)
+        window = trades[:max(sum(1 for ts, _ in trades if ts <= two_weeks), WATCH_MIN_TRADES)]
+        closes = (max(two_weeks, window[WATCH_MIN_TRADES - 1][0]) if len(window) >= WATCH_MIN_TRADES
+                  else start + cap_age)
+        if slot > closes + WATCH_GRACE:
+            continue                    # closed, and evaluated by the run after it closed
+        is_open = slot < closes
         bt = PerfStats.model_validate(ch.backtest) if ch.backtest else None
-        rets = book.returns_since(ch.version, ch.promoted_utc)
         if bt is None or bt.mean_ret is None or bt.std_ret is None:
             out[agent_id] = {"version": ch.version, "watch": "no backtest moments; cannot run CUSUM"}
             continue
-        if cusum_alarm(rets, bt.mean_ret, bt.std_ret):
-            restored = ctx.models.restore_previous(agent_id, f"CUSUM alarm on {len(rets)} shadow trades within {CUSUM_WINDOW_DAYS} days of promotion")
-            out[agent_id] = {"version": ch.version, "action": "restored_previous", "restored": restored.version, "trades": len(rets)}
+        p = bt.hit_rate if 0 < bt.hit_rate < 1 else None
+        n_watch = watch_trades(bt.trades_per_week)
+        # M25: h for a 5% false-alarm rate over the watch's own trade count, on two-point returns that win with the
+        # backtest's hit rate
+        h = calibrated_h(bt.trades_per_week, d.cusum_k, d.cusum_false_alarm, p=p, trades=n_watch)
+        n_reach = (n_watch or WATCH_MIN_TRADES) if is_open else len(window)
+        info = {"version": ch.version, "trades": len(window), "watch_trades": n_watch, "h": round(h, 4),
+                "window": "open" if is_open else "closed", "closes": closes.isoformat()}
+        rets = [r for _, r in window]
+        if not can_alarm(h, n_reach, d.cusum_k, p):
+            out[agent_id] = {**info, "action": "cannot_alarm", "note": CANNOT_ALARM_NOTE}
+        elif cusum_alarm(rets, bt.mean_ret, bt.std_ret, k=d.cusum_k, h=h):
+            restored = ctx.models.restore_previous(
+                agent_id, f"CUSUM alarm on {len(rets)} shadow trades in the new-champion watch (h {h:.3f})")
+            out[agent_id] = {**info, "action": "restored_previous", "restored": restored.version}
         else:
-            out[agent_id] = {"version": ch.version, "action": "ok", "trades": len(rets)}
+            out[agent_id] = {**info, "action": "ok"}
+    write_atomic(ctx.state_dir / MODEL_WATCH_FILE, json.dumps({"ts": slot.isoformat(), "agents": out}, default=str))
     return out
 
 
@@ -468,8 +527,10 @@ def drift_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         closed = [t for _, t in exited]
         recent = [t for ts, t in exited if ts >= slot - pd.Timedelta(days=d.dd_window_days)]
         bt_dd = (e.backtest or {}).get("max_dd")
+        tpw = (e.backtest or {}).get("trades_per_week")      # sets the CUSUM's h (M25: 5% quarterly false alarms)
         health.append(assess(e.agent_id, e.version, model=model, live=live, closed_taken=closed, recent_taken=recent,
-                             backtest_dd=float(bt_dd) if bt_dd is not None else None, s=d))
+                             backtest_dd=float(bt_dd) if bt_dd is not None else None, s=d,
+                             trades_per_week=float(tpw) if tpw else None))
     # sticky: an agent stays halted while the same version is champion, until the owner clears it
     prev_halts = prev.get("halted") or {}
     halted: dict[str, Any] = {}
@@ -552,11 +613,17 @@ def research_director(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     r = ctx.settings.research
     plan = build_plan(slot, sorted(SPECIALISTS), read_rows(ctx.trials.path), shadow, agents,
                       quarter_budget=quarter_budget(r), monthly_total=budget, trial_budget_per_month=r.trial_budget_per_month,
-                      floor=r.director_floor, cap=cap, holdout=holdout_window(r))
+                      floor=r.director_floor, cap=cap, holdout=holdout_window(r),
+                      attribution=load_attribution(ctx.state_dir), hypotheses=load_hypotheses(),
+                      retired=r.retired_families, promoted={e.version: e.promoted_utc for e in ctx.models.entries},
+                      reserved_setting=r.reserved_trials_quarter, grid_paused=r.label_grid_paused)
     plan.save(ctx.state_dir / PLAN_FILE)
-    return {"quarter": plan.quarter, "quarter_used": plan.quarter_used, "budget": plan.budget,
-            "grid_budget": plan.grid_budget, "unallocated": plan.unallocated, "focus": [f.family for f in plan.focus],
-            "blocked": [s.family for s in plan.evidence if s.blocked], "registry_sync": synced}
+    return {"quarter": plan.quarter, "quarter_used": plan.quarter_used, "quarter_reserved": plan.quarter_reserved,
+            "budget": plan.budget, "grid_budget": plan.grid_budget, "unallocated": plan.unallocated,
+            "focus": [f.family for f in plan.focus], "blocked": [s.family for s in plan.evidence if s.blocked],
+            "retired": [s.family for s in plan.evidence if s.retired], "retired_explore": plan.retired_explore,
+            "hypotheses_drift": plan.hypotheses_drift,
+            "registry_sync": synced}
 
 
 def current_plan(ctx: JobContext, slot: pd.Timestamp) -> ResearchPlan | None:
@@ -628,23 +695,33 @@ def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = 
                       ) -> Callable[[str, dict[str, Any], str], dict[str, Any]]:
     """The research analyst's trial: the family's default config with overrides, walk-forward over the whole store,
     recorded in the trial registry (so it counts toward the deflated Sharpe like every monthly-loop trial). It is
-    charged to the quarter's pre-registered trial budget and never sees the holdout window."""
+    charged to the quarter's pre-registered trial budget and never sees the holdout window. Like the director and the
+    label grid it spends only budget - used - reserved (`reserved_trials`, research.reserved_trials_quarter); only a
+    trial of a configuration with a pending `preregistered` row of the quarter may use the reservation, and its row is
+    linked to that pre-registration (so the reservation shrinks by one)."""
     def run(family: str, overrides: dict[str, Any], rationale: str) -> dict[str, Any]:
         end = now() if now is not None else pd.Timestamp.now("UTC")
         r = ctx.settings.research
+        config = {**SPECIALISTS[family].default_config, **overrides}
         _sync_trials(ctx)                 # count the research workflow's trials before charging the budget
         with ctx.trials.locked():
+            rows = read_rows(ctx.trials.path)
+            q_now = quarter_of()          # the quarter the row will be stamped in (check_budget's)
+            prereg = pending_preregistration(rows, q_now, family, config_hash(config))
+            reserved = reserved_trials(rows, q_now, r.reserved_trials_quarter).reserved
+            cap = quarter_budget(r) if prereg is not None else max(quarter_budget(r) - reserved, 0)
             try:
-                quarter = ctx.trials.check_budget(1, quarter_budget(r))
+                quarter = ctx.trials.check_budget(1, cap)
             except TrialBudgetExceeded as exc:
-                return {"error": str(exc)}
+                held = "" if prereg is not None else f" ({reserved} of the quarter held for the pre-registered queue)"
+                return {"error": f"{exc}{held}"}
             res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, 12 * 30, n_trials=ctx.trials.n_trials + 1,
                                 holdout=r.holdout_window())
             if res is None:
                 return {"error": "no bars in the store for this family's timeframe"}
-            row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
+            row = ctx.trials.record(agent_id=res.agent_id, family=family, config=config,
                                     feature_version=res.feature_version, results=res.metrics, status="evaluated",
-                                    rationale=rationale, budget_quarter=quarter)
+                                    rationale=rationale, budget_quarter=quarter, preregistration=prereg)
         keep = ("n_candidates", "n_folds", "threshold", "all_candidates", "model_filtered", "trades_per_year", "rule_only",
                 "gates")
         return {"trial": row["trial"], "registry_total": ctx.trials.n_trials, **{k: res.metrics[k] for k in keep if k in res.metrics}}
@@ -668,7 +745,9 @@ def _sync_trials(ctx: JobContext) -> int | str | None:
 def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Bounded label-grid search. Paused by default (research.label_grid_paused): barrier perturbations of rules with
     no signal only raise the deflated-Sharpe bar for every later trial. When enabled, each trial is charged to the
-    quarter's pre-registered budget and the loop stops when it is spent; the holdout window is never seen."""
+    quarter's pre-registered budget and the loop stops when what the pre-registered queue leaves is spent
+    (budget - used - research.reserved_trials_quarter's reservation, director.reserved_trials); the holdout window is
+    never seen."""
     r = ctx.settings.research
     synced_before = _sync_trials(ctx)     # count trials run elsewhere (the research workflow) before deflating
     if r.label_grid_paused:
@@ -680,6 +759,9 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     lines = [f"# Research loop {slot:%Y-%m}", "", f"Trial budget: {source}.", ""]
     out: dict[str, Any] = {"plan": plan.created_utc.isoformat() if plan else None}
     q_budget = quarter_budget(r)
+    # the reservation of the quarter the slot belongs to (a late run near a quarter boundary still plans the slot's
+    # quarter, as the director does with its slot)
+    slot_quarter = quarter_of(slot.tz_convert("UTC").to_pydatetime())
     h_start, _ = holdout_window(r)
     end = min(slot, h_start)              # the held-out year is never searched
     for family in sorted(SPECIALISTS):
@@ -693,10 +775,11 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         stopped = False
         for overrides in grid[:budget]:
             with ctx.trials.locked():           # check, run and record as one step: two writers cannot both pass
+                reserved = reserved_trials(read_rows(ctx.trials.path), slot_quarter, r.reserved_trials_quarter).reserved
                 try:
-                    quarter = ctx.trials.check_budget(1, q_budget)
+                    quarter = ctx.trials.check_budget(1, max(q_budget - reserved, 0))
                 except TrialBudgetExceeded as exc:
-                    stopped, out["budget"] = True, str(exc)
+                    stopped, out["budget"] = True, f"{exc} ({reserved} of the quarter held for the pre-registered queue)"
                     break
                 res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, history_months,
                                     n_trials=ctx.trials.n_trials + 1, holdout=r.holdout_window())
@@ -704,7 +787,7 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                     break
                 row = ctx.trials.record(agent_id=res.agent_id, family=family, config={**SPECIALISTS[family].default_config, **overrides},
                                         feature_version=res.feature_version, results=res.metrics, status="evaluated",
-                                        rationale=f"monthly bounded label-grid search {slot:%Y-%m} (+-{r.label_grid_step:.0%})",
+                                        rationale=f"{GRID_RATIONALE} {slot:%Y-%m} (+-{r.label_grid_step:.0%})",
                                         budget_quarter=quarter)
             mf = res.metrics.get("model_filtered") or {}
             rows.append({"trial": row["trial"], **overrides, "n": mf.get("n", 0), "sharpe": mf.get("sharpe_ann"), "dsr": mf.get("dsr")})
@@ -712,7 +795,8 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                        "quarter_budget_spent": stopped}
         lines += [f"## {family} ({len(rows)} of {budget} budgeted trials, registry total {ctx.trials.n_trials})", ""]
         if stopped:
-            lines += [f"Stopped: the quarter's trial budget ({q_budget}) is spent.", ""]
+            lines += [f"Stopped: the quarter's trial budget ({q_budget}) is spent, counting the trials held for the "
+                      f"pre-registered queue (research.reserved_trials_quarter).", ""]
         reasons = next((f.reasons for f in plan.focus if f.family == family), []) if plan else []
         lines += [f"- director: {x}" for x in reasons] + ([""] if reasons else [])
         lines += ["| trial | target | stop | max bars | n | Sharpe | DSR |", "|---:|---:|---:|---:|---:|---:|---:|"]
@@ -724,6 +808,82 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     report.write_text("\n".join(lines))
     out["report"] = str(report)
     out["registry_sync"] = {"before": synced_before, "after": _sync_trials(ctx)}
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- CPCV (M16)
+CPCV_MAX_CONFIGS = 8            # PBO compares a passing trial with at most this many of its family's trials (itself in)
+
+
+def cpcv_quarterly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Quarterly (design: "Combinatorial purged CV (6 groups, 2 test, 15 paths) runs quarterly"; research/cpcv.py):
+    for every walk-forward trial that passed the design's gates and has no CPCV evidence this quarter, CPCV on the
+    store's bars up to the holdout (never into it), compared for PBO with its family's other walk-forward trials on
+    the same timeframe (the configurations it was selected among, the most recent CPCV_MAX_CONFIGS). The result is
+    attached to the passing trial as evidence: not a trial, no budget slot, no deflated-Sharpe count. It can only
+    veto (ADR 0002: fragile when PBO > 0.5 or most paths negative), and its PBO is a lower bound (the selection set is
+    every registered trial of the family on that timeframe, screened ones included). A trial whose recorded feature
+    version differs from the one the store's bars build now is skipped, not re-run on different inputs. The evidence
+    sidecar is local to the scheduler host (registry_sync does not carry it; docs/decisions/0002). Report ->
+    state/cpcv_<quarter>.md. One trial's failure does not stop the others; the job fails at the end if any did."""
+    from goldbot.research import cpcv
+    from goldbot.research.registry import quarter_of
+    synced = _sync_trials(ctx)
+    r = ctx.settings.research
+    holdout = r.holdout_window()
+    q = quarter_of(slot.to_pydatetime())
+    rows = read_rows(ctx.trials.path)
+    done = {int(e["trial"]) for e in ctx.trials.evidence(kind=cpcv.EVIDENCE_KIND) if e.get("quarter") == q}
+
+    def timeframe(row: dict[str, Any]) -> str | None:
+        try:
+            return cpcv.trial_timeframe(row) if cpcv.cpcv_eligible(row) is None else None
+        except (KeyError, ValueError, TypeError):
+            return None
+
+    passing = [x for x in rows if timeframe(x) is not None
+               and ((x.get("results") or {}).get("gates") or {}).get("passed") is True]
+    end = min(slot, holdout[0]) if holdout is not None else slot
+    start = end - pd.DateOffset(months=12 * 30)                 # everything the store has
+    out: dict[str, Any] = {"quarter": q, "trials": {}, "errors": {}, "registry_sync": synced}
+    lines = [f"# Combinatorial purged CV {q}", "",
+             f"{len(passing)} trial(s) passed the gates. Evidence on those trials, not new trials.", ""]
+    for row in passing:
+        t = int(row["trial"])
+        if t in done:
+            out["trials"][t] = "already evaluated this quarter"
+            continue
+        try:
+            tf = str(timeframe(row))
+            peers = [x for x in rows if x.get("family") == row["family"] and int(x["trial"]) != t and timeframe(x) == tf]
+            compare = [row, *peers[-(CPCV_MAX_CONFIGS - 1):]]
+            dec = _bars(ctx, tf, start, end)
+            if dec.empty:
+                raise ValueError(f"no {tf} bars in the store before {end:%Y-%m-%d}")
+            ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
+            context = {TF_LABEL[x]: _bars(ctx, x, ctx_start, end) for x in context_tfs(tf)}
+            res = cpcv.cpcv_trials(compare, dec, context, extra_cost_usd=live_extra_cost_usd(ctx), holdout=holdout,
+                                   swap=live_swap(ctx), selection=cpcv.selection_set(rows, {str(row["family"])}, tf),
+                                   skip_stale_features=True)
+            mine = res["per_trial"][t]
+            if "skipped" in mine:                # the trial's features are not what the data builds now
+                out["trials"][t] = f"skipped: {mine['skipped']}"
+                lines += [f"## Trial {t}: {row['family']} ({tf})", "", f"Skipped: {mine['skipped']}.", ""]
+                continue
+            ctx.trials.attach_evidence(t, cpcv.EVIDENCE_KIND, cpcv.evidence_payload(mine, res["pbo"], f"cpcv_quarterly {q}"),
+                                       now=slot.to_pydatetime())
+            out["trials"][t] = {"n_paths": mine.get("n_paths"), "sharpe": mine.get("sharpe"), "mean_r": mine.get("mean_r"),
+                                "pbo": (res["pbo"] or {}).get("pbo"), "compared": [int(x["trial"]) for x in compare],
+                                "fragile": cpcv.verdict(mine, res["pbo"])["fragile"]}
+            lines += [f"## Trial {t}: {row['family']} ({tf})", "", *cpcv.report_lines(res["per_trial"], res["pbo"]), ""]
+        except Exception as exc:                 # one trial's failure must not hide the others' evidence
+            log.exception("cpcv_quarterly: trial %s", t)
+            out["errors"][t] = f"{type(exc).__name__}: {exc}"
+    report = ctx.state_dir / f"cpcv_{q}.md"
+    report.write_text("\n".join(lines))
+    out["report"] = str(report)
+    if out["errors"]:
+        raise RuntimeError(f"cpcv_quarterly failed for trials {sorted(out['errors'])}: {out['errors']} (report {report})")
     return out
 
 
@@ -886,6 +1046,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
     "backup": backup,                             # encrypted off-host backup (ops/backup.py)
     "restore_drill": restore_drill,               # weekly restore + verification of the latest backup
+    "cpcv_quarterly": cpcv_quarterly,             # M16 combinatorial purged CV + PBO of gate-passing trials
     "attribution": attribution,                   # BACKLOG 12: daily attribution for the staff agents (reporting only)
 }
 
@@ -896,5 +1057,5 @@ def build_scheduler(ctx: JobContext, clock: Callable[[], pd.Timestamp] | None = 
     for name, fn in JOBS.items():
         s = getattr(cfg, name)
         sch.add(name, Schedule(kind=s.kind, at=s.at, weekdays=tuple(s.weekdays), weekday=s.weekday, day=s.day,
-                               max_late_hours=s.max_late_hours), functools.partial(fn, ctx))
+                               months=tuple(s.months), max_late_hours=s.max_late_hours), functools.partial(fn, ctx))
     return sch

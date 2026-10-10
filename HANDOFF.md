@@ -66,6 +66,39 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   budget without a plan under 21 days old) and stops when the quarter's budget is spent. The `research_director` staff
   agent explains the plan (`read_research_plan`) and may file two hypotheses; the analyst prefers the plan's focus
   families. Boundary: it decides what to research, never what is promoted or traded; promotion stays with the gates.
+  Two more inputs (2026-10-10, revised after the quant review): (1) the daily attribution report
+  (`state/attribution.json`): the director rebuilds each family's cell from the report's per-trade rows, counting only
+  trades entered on or after their model version's promotion (model registry; an unpromoted version counts nothing),
+  from a report dated at or before the plan and at most 14 days old; under `attribution.min_trades` is noise. The
+  net-R t-stat is shrunk by n/(n+100), clipped to +-1 at t = 3, and tilts the evidence share of the pool by at most
+  +-25%, only for a family with no shadow t-stat (the same shadow trades are never counted twice; the
+  `director_floor` is never tilted). (2) Retired families are governance in settings, `research.retired_families`
+  (family, hypothesis id, retired date, reason, registry trials); `docs/research/hypotheses.md` section B mirrors it,
+  a test checks they agree, and the plan stores the doc's sha256 and any drift (`hypotheses_drift`) but the doc never
+  moves a trial. The retired families SHARE one exploration trial a quarter (none once any of them had a trial this
+  quarter; after the live families' floors), given to the clean retired family with the best positive
+  post-retirement attribution, else by a deterministic rotation over quarters (`retired_explore` in the plan); each
+  is reinstated only by attribution trades after its retirement date with shrunk t >= 2
+  Bonferroni-corrected for retired families x sources (5 families: 2.61). (3) The pre-registered queue is reserved
+  first: `research.reserved_trials_quarter: 13` (docs/research/preregistration-2027Q1.md) minus trials run against a
+  `preregistered` registry row, at least the queued preregistered rows; the director and `monthly_research` spend
+  only budget - used - reserved, and the plan's grid share is 0 while `research.label_grid_paused` (it is). With
+  today's settings in Q1 2027: 20 - 13 = 7 planned trials, tsmom 6 and 1 shared by the five retired families. The
+  plan records `evidence_budget`, `moves`, `quarter_reserved`, `reservation`, `retired_floor`, `retired_explore` and
+  `reinstate_t`.
+- Director re-verify fixes: the research analyst's trial runner (`jobs.make_trial_runner`) now spends only budget -
+  used - reserved like the director and the grid; only a trial of a configuration with a pending `preregistered` row
+  of the quarter may use the reservation, and its registry row is linked to that pre-registration
+  (`director.pending_preregistration`). `monthly_research` reads the reservation of the slot's quarter, not the wall
+  clock's.
+- CUSUM re-verify fixes (M24/M25): h now sits halfway between the chosen reachable value of the statistic and the
+  next higher one (`cusum.decision_interval`: same rate, but unrounded live sums can no longer turn a tie into an
+  alarm); the drift watch calibrates on the agent's actual taken p values resampled per trade (`ps`), not their mean.
+  Live false-alarm rates (production `residual_cusum` arithmetic, 200k paths, p spread per trade): 4.84-4.96% at p
+  0.35-0.55 and 0.30-0.70 (the mean-p h gave 5.7-6.3% at 0.35-0.55; champion watch 2.6-2.9%). The new-champion watch runs two weeks or the
+  first 12 trades, whichever is later, capped at 8 weeks, with h calibrated for that count (`cusum.watch_trades`);
+  when the count cannot reach h it reports `cannot_alarm` (job output, `state/model_watch.json`, health warning
+  `model_watch`) instead of a silent "ok": such slow agents rely on drift_watch and the drawdown halt.
 - Approvals across processes (`telegram/bus.py`): engines, the API and the Telegram service are separate services,
   so engines publish proposals to `state/approvals/pending/`, the dashboard or Telegram writes a decision file
   (created exclusively: first decision wins), and the engine applies it on its next tick, re-running the RiskGate,
@@ -214,8 +247,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   table cell. Cells under `attribution.min_trades` (30) are "noise". Champion-path trades only in the breakdowns
   (challengers apart). The improvement agent and research analyst read it first via `read_attribution`; hypotheses
   still go only through `file_hypothesis`; gap_watch caps unchanged. Reporting only: nothing is traded or changed.
-  Open: live realised R per position (needs the engine trade record, item 8), the research director's priority input
-  and a dashboard view (item 12's other criteria).
+  Open: live realised R per position (needs the engine trade record, item 8) and a dashboard view (item 12's other
+  criteria). The research director now reads it as a capped, noise-aware input (see the director bullet).
 - Macro data pipeline (2026-10-10, TRADER_LIFECYCLE gap 2): `.github/workflows/data-macro.yml` (Tuesdays 04:41 UTC
   and by hand) pulls DFII10, T10YIE, DTWEXBGS, GVZCLS and DGS2 from FRED's public fredgraph CSV (no key) via
   `scripts/fred_macro.py` and publishes `macro_fred.parquet` on release `macro-v1`. Rows carry value_date, vintage
@@ -477,6 +510,34 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   before the trial. Note for quant review: feature-day bars include a Friday-evening stub bar (settlement to the
   Friday close, visible Saturday), so "20 daily bars" is about 3.3 weeks, as for the existing 1d option. Run inputs:
   `docs/research/preregistration-2027Q1.md` H-01. No research trial was run.
+- CPCV and CUSUM calibration (2026-10-10, rows M16/M25): `goldbot/research/cpcv.py` runs combinatorial purged CV
+  (6 equal-duration groups of the research window, holdout excluded; 15 purged/embargoed splits of 2 test groups; 5
+  rebuilt backtest paths) with the walk-forward's own cross-fitted calibration and threshold per path, reports the
+  path Sharpe / mean R distribution and, across several configurations, PBO (CSCV). It is evidence on an existing
+  trial (`<registry>.evidence.jsonl`), not a trial: no budget slot, no deflated-Sharpe count. Run it with
+  `scripts/research_pass.py --cpcv <trial#> [...]`; the scheduler job `cpcv_quarterly` (first Sunday of each quarter,
+  14:00 UTC, new `months` filter on schedules) does every gate-passing trial against its family's other trials ->
+  `state/cpcv_<quarter>.md`. The evidence sidecar is not yet unioned by `registry_sync` with the release copy, and
+  research.yml does not upload it. CUSUM: `goldbot/research/cusum.py` picks h by simulation so in-control residuals
+  alarm within a quarter's expected trades with 5% probability (settings `drift.cusum_k`, `drift.cusum_false_alarm`;
+  `cusum_h` 4.0 only without a backtest trade rate); `drift_watch` and `model_watch` pass the champion's
+  `trades_per_week`. At 1 trade a week h is 3.46 (more sensitive than the old 4.0), at 5 a week 5.21 (fewer false
+  halts). `goldbot/api/explain.py` still draws the CUSUM trace with the fixed `cusum_h` (API lane: should read the
+  `cusum_h` now stored per agent in drift.json).
+- CUSUM/CPCV review fixes (2026-10-10, rows M16/M25, quant review): CUSUM h is now simulated on two-point trade
+  residuals (win +sqrt((1-p)/p), loss -sqrt(p/(1-p))) at the mean taken p in 0.01 buckets, choosing the most
+  sensitive attained h whose false-alarm rate is <= 5% at 95% confidence (outcomes are discrete). Realised quarterly
+  rates at p 0.4/0.5/0.6 and 2/5/15 trades a week: 3.4-4.8% (normal-based h gave 0.3-0.5% at p 0.4); a drop from
+  p 0.4 to 0.3 is caught within a quarter 18-33% of the time against 4-6% before. The drift watch uses the shadow
+  trades' mean p; the new-champion watch (`model_watch`) now calibrates for its own window (trades/week x 2) at the
+  backtest hit rate, so it can actually fire inside two weeks (at ~2 or fewer trades a week it cannot alarm at 5%).
+  ADR docs/decisions/0002: CPCV/PBO can only veto (fragile when PBO > 0.5 or most paths negative, recorded as
+  `verdict` in evidence and report, not yet wired into `passed_gates`: owner decision, recommended after the first
+  quarterly run); `research_pass --cpcv` refuses gate-failed trials unless `--diagnostic` ("diagnostic, not
+  evidence"). PBO drops the never-traded group 0 (5 groups, 2 vs 3 both ways) and is labelled a lower bound of the
+  selection set (every registered family trial on the timeframe, screened included). `cpcv_quarterly` skips trials
+  whose feature version differs from what the bars build now. The evidence sidecar stays local-only (documented, not
+  synced). Not done: `goldbot/api/explain.py` still draws the CUSUM trace with the fixed `cusum_h`.
 - GitHub Actions supply chain hardened (2026-10-10, security): every action in `.github/workflows/*.yml` is pinned
   to a full commit SHA with the version as a comment (checkout v5.1.0, setup-python v6.3.0, setup-node v5.0.0, cache
   v4.3.0, upload-artifact v4.6.2, download-artifact v4.3.0; resolved via the GitHub API, not guessed). Token scopes:
@@ -566,6 +627,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- FYI for the OWNER (no decision needed, 2026-10-10): `research.reserved_trials_quarter: 13` holds the 13 trials
+  of the Q1 2027 pre-registration (`docs/research/preregistration-2027Q1.md`) before the research director and the
+  label grid can spend any; the budget itself (20) is unchanged. Revisit the number with each quarter's
+  pre-registration. Residual: the research analyst's `run_trial` tool still checks the full quarter budget, not the
+  reservation (left out of this change's scope).
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.
 1. Research status (2026-10-09, Q4 2026 trial budget spent: 20/20, research stops until 2027-01-01). Evaluation is
    cross-fitted, spread charged once, design gates and the P4 screen enforced, holdout 2025-10..2026-09 untouched,
