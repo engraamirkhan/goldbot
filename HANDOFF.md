@@ -178,6 +178,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   version/status, `recalibrations` row with before/after ECE; also `state/recalibration.jsonl`). It promotes and
   retires nothing. The ECE after is in-sample. Not done from P9: the monthly refit / drift-triggered refit, recency
   weighting and the replay trial; owner vetoes are not in the shadow book (it is the model's own decision).
+- Free hosting without Windows (2026-10-10, owner: MT5 + $0 hosting, Mac only): two Oracle Cloud Always Free VMs.
+  The MT5 terminal runs under Wine on an x86 E2.1.Micro with the bridge (`goldbot/execution/bridge.py`,
+  `run.py bridge <account>`); everything else runs on an Ampere A1 (4 OCPU / 24 GB) under systemd
+  (`goldbot/ops/linux/`: `brain_bootstrap.sh`, `mt5_bootstrap.sh`, units). The engine uses `RemoteBroker` when the
+  keyring holds `mt5-bridge-url-<account>` + `mt5-bridge-token-<account>`. Bridge safety (from the trading-safety and
+  security review): both ends verify the terminal's login, server and demo/real against the registry
+  (`accounts.verify_terminal_account`; MT5 logins live in the keyring as `mt5-login-<account>`); listens on 127.0.0.1,
+  reached through an SSH tunnel whose key may only forward to that port; constant-time token; allow-listed methods;
+  5 s socket timeout; order calls never retried and refused when older than 10 s at the terminal; `GuardedBroker`
+  refuses orders outside the account's magic range or above 3 lots and stop changes on foreign positions (closes
+  allowed: the kill switch closes everything); a lost reply ends the engine, systemd restarts it
+  (`StartLimitIntervalSec=0`) and restart reconciliation settles the order. Measured: engine ~200 MB, API ~110 MB, a
+  6-month dry run 1.7 GB, so a 1 GB Windows VM (Azure free year) was rejected. Not verified yet: MT5 + the
+  MetaTrader5 package under Wine on the real VM (owner setup: docs/RUNBOOK.md section 0). Wine is for the demo phase;
+  re-decide before real money.
 - Pooled meta-model (P5): `research_pass.py --pooled 15m|1h` fits ONE model over the union of every family whose
   default timeframe it is (15m: intraday_momentum, mean_reversion, session_open; 1h: breakout, trend, tsmom), with
   one indicator column per family, `side` and a declared pooled list (`pipeline.POOLED_FEATURES`, <= 40 inputs in

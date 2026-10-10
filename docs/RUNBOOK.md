@@ -15,6 +15,101 @@ Conventions used below:
 * All times are **UTC**.
 * "State folder" means `C:\goldbot\state`. "Logs folder" means `C:\goldbot\logs`.
 
+## 0. Free hosting on Oracle Cloud, from a Mac (recommended)
+
+goldbot can run with **no Windows machine and no monthly cost** on two Oracle Cloud "Always Free" virtual machines.
+Everything below is done from your Mac: the Oracle website in a browser, and the **Terminal** app for SSH. Sections
+1-2 (a Windows VPS) remain the alternative.
+
+| VM | Oracle shape (Always Free) | What runs there |
+| --- | --- | --- |
+| **brain** | VM.Standard.A1.Flex (ARM), 4 OCPU, 24 GB, Ubuntu 24.04 | engine, supervisor, scheduler (retraining), dashboard API, Telegram, news |
+| **mt5** | VM.Standard.E2.1.Micro (x86), 1 GB, Ubuntu 24.04 | MT5 terminal under Wine + the goldbot bridge |
+
+The engine reaches the terminal through the bridge (`goldbot/execution/bridge.py`) on Oracle's private network.
+MT5 under Wine is less proven than MT5 on Windows: it is used for the demo phase; before real money the demo
+record decides whether it is reliable enough.
+
+### 0.1 Oracle account (browser)
+1. Sign up at oracle.com/cloud/free (a card is needed for verification). Pick a **home region** close to London
+   (IC Markets' MT5 servers are in London/NY4); the region cannot be changed later.
+2. Upgrade the account to **Pay As You Go** (Billing -> Upgrade). Always Free resources stay free; without the
+   upgrade Oracle may reclaim VMs it considers idle. Set a budget alert of $1 (Billing -> Budgets) so any charge
+   would tell you at once.
+3. On your Mac, make an SSH key once: open Terminal and run `ssh-keygen -t ed25519` (press Enter at each question).
+
+### 0.2 Create the two VMs (browser)
+Compute -> Instances -> Create, both in the same VCN (the wizard's default network):
+1. **brain**: image Ubuntu 24.04, shape *Ampere* VM.Standard.A1.Flex with 4 OCPU / 24 GB, paste the contents of
+   `~/.ssh/id_ed25519.pub` (`cat ~/.ssh/id_ed25519.pub` in Terminal). If it says *out of capacity*, try another
+   availability domain or retry later; this is common for free ARM VMs.
+2. **mt5**: image Ubuntu 24.04, shape *AMD* VM.Standard.E2.1.Micro, same SSH key.
+3. Note each VM's **public IP** and the brain's **private IP** (instance page -> Primary VNIC). Do not put these in
+   the repository, an issue or a chat.
+4. No firewall changes: the brain reaches the bridge through an SSH tunnel (port 22, open by default inside the
+   VCN) and the dashboard goes out through Cloudflare Tunnel. The bridge itself listens only on the MT5 box's
+   127.0.0.1.
+
+### 0.3 The MT5 box
+```bash
+ssh ubuntu@<mt5 public ip>
+git clone https://github.com/engraamirkhan/goldbot.git /tmp/goldbot
+sudo bash /tmp/goldbot/goldbot/ops/linux/mt5_bootstrap.sh
+```
+Log in to your IC Markets demo **once** (MT5 keeps the login; goldbot never sees the password):
+1. On the VM: `sudo systemctl start goldbot-vnc`.
+2. On your Mac, a second Terminal window: `ssh -L 5900:localhost:5900 ubuntu@<mt5 public ip>`.
+3. In Finder: Go -> Connect to Server -> `vnc://localhost:5900` (macOS Screen Sharing; leave the password empty).
+4. In that window start the terminal if it is not open (`sudo -u mt5 env DISPLAY=:99 wine 'C:\MT5\ICMarkets\terminal64.exe' &`
+   on the VM), then File -> Login to Trade Account: your login, password, server **ICMarketsSC-Demo**, tick
+   **Save password**. Check `XAUUSD` is in Market Watch, and enable Tools -> Options -> Expert Advisors ->
+   *Allow algorithmic trading*. Close the terminal.
+5. `sudo systemctl stop goldbot-vnc`, close the tunnel window.
+
+Bridge address and token:
+```bash
+goldbot-mt5 accounts bridge-serve icm-demo     # your MT5 login number, then 127.0.0.1:8765; prints a token ONCE
+sudo systemctl start goldbot-bridge@icm-demo
+```
+Copy the token straight into the next step; do not save it anywhere else. The bridge refuses to start unless the
+terminal is logged in to that login on ICMarketsSC-Demo as a **demo** account.
+
+### 0.4 The brain
+```bash
+ssh ubuntu@<brain public ip>
+git clone https://github.com/engraamirkhan/goldbot.git /tmp/goldbot
+sudo bash /tmp/goldbot/goldbot/ops/linux/brain_bootstrap.sh   # ends by printing a "ssh-ed25519 ..." key line
+```
+On the MT5 box: `sudo goldbot-mt5-authorize '<that ssh-ed25519 line>'` (the key may only forward to the bridge).
+Back on the brain:
+```bash
+sudo goldbot-tunnel <mt5 private ip>
+goldbot accounts bridge-use icm-demo           # your MT5 login, http://127.0.0.1:8765, the token from 0.3
+goldbot accounts set telegram-bot-token        # from @BotFather (section 2.8)
+goldbot accounts set anthropic-api-key         # optional: staff agents and headline scoring
+goldbot accounts set github-token              # optional: bar sync and the shared trial registry
+```
+Secrets on these VMs are kept in `/opt/goldbot/state/.secrets.json`, readable only by the `goldbot` service user
+(a server has no desktop keyring); Oracle encrypts the disk at rest. Edit `/opt/goldbot/config/settings.yaml` for
+the Telegram allow-list as in section 2.4 (on the VM only, never committed).
+
+Dashboard: create the Cloudflare tunnel as in section 2.7, then on the brain `sudo cloudflared service install
+<tunnel token>`.
+
+Start everything (supervisor first):
+```bash
+sudo systemctl start goldbot-supervisor goldbot-api goldbot-telegram goldbot-news goldbot-scheduler
+sudo systemctl start goldbot-engine@icm-demo
+goldbot run health
+```
+`systemctl status goldbot-engine@icm-demo` shows a service; `journalctl -u goldbot-engine@icm-demo -f` follows its
+log. If the bridge is unreachable the engine exits and restarts every 10 s; it trades nothing meanwhile, and open
+positions keep their broker-side stop and target.
+
+### 0.5 Daily use
+Only your Mac's browser (the dashboard) and Telegram (the one-click Approve). Updates:
+`cd /opt/goldbot && sudo -u goldbot git pull` on each VM, then `sudo systemctl restart 'goldbot-*'`.
+
 ---
 
 ## 1. What runs where

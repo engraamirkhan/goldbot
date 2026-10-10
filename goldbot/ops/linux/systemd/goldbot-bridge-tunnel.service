@@ -1,0 +1,18 @@
+[Unit]
+Description=SSH tunnel from the brain to the MT5 bridge (token never crosses the network in clear text)
+# never give up restarting (a bridge outage causes fast exits on purpose)
+StartLimitIntervalSec=0
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=goldbot
+# MT5_HOST=<mt5 private ip>, written by `sudo goldbot-tunnel <ip>` on the brain (never in the repository)
+EnvironmentFile=/etc/goldbot/bridge.env
+ExecStart=/usr/bin/ssh -N -i /var/lib/goldbot/.ssh/id_ed25519 -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -L 127.0.0.1:8765:127.0.0.1:8765 mt5@${MT5_HOST}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

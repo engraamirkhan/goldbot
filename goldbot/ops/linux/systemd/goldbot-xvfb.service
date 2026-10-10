@@ -1,0 +1,12 @@
+[Unit]
+# never give up restarting (a bridge outage causes fast exits on purpose)
+StartLimitIntervalSec=0
+Description=virtual display :99 for the MT5 terminal under Wine
+
+[Service]
+User=mt5
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x800x16 -nolisten tcp
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

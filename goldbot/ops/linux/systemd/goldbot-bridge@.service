@@ -1,0 +1,18 @@
+[Unit]
+# never give up restarting (a bridge outage causes fast exits on purpose)
+StartLimitIntervalSec=0
+Description=goldbot MT5 bridge for account %i (terminal under Wine)
+After=network-online.target goldbot-xvfb.service
+Requires=goldbot-xvfb.service
+
+[Service]
+User=mt5
+WorkingDirectory=/opt/goldbot
+Environment=DISPLAY=:99 WINEDEBUG=-all PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring
+# starts the terminal itself (saved login) and serves it to the brain; restarts if the terminal or Wine dies
+ExecStart=/usr/bin/wine python -m goldbot.ops.run bridge %i
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+[Unit]
+# never give up restarting (a bridge outage causes fast exits on purpose)
+StartLimitIntervalSec=0
+Description=goldbot engine for account %i
+After=network-online.target goldbot-supervisor.service
+Wants=network-online.target
+
+[Service]
+User=goldbot
+WorkingDirectory=/opt/goldbot
+Environment=PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring
+ExecStart=/opt/goldbot/.venv/bin/python -m goldbot.ops.run engine %i
+# a lost bridge reply ends the process on purpose: the restart reconciles orders with the broker (row X7)
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/goldbot/state /opt/goldbot/logs /opt/goldbot/data /opt/goldbot/models /var/lib/goldbot
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

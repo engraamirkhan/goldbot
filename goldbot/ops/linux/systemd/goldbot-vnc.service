@@ -1,0 +1,11 @@
+[Unit]
+# never give up restarting (a bridge outage causes fast exits on purpose)
+StartLimitIntervalSec=0
+Description=VNC view of the MT5 display, localhost only (reach it through an SSH tunnel); start only when needed
+After=goldbot-xvfb.service
+Requires=goldbot-xvfb.service
+
+[Service]
+User=mt5
+ExecStart=/usr/bin/x11vnc -display :99 -localhost -rfbport 5900 -forever -nopw -quiet
+Restart=on-failure
