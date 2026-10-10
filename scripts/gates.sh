@@ -8,8 +8,8 @@ cd "$(dirname "$0")/.." || exit 1
 L=${GATES_LOG:-$HOME/tmp/gates}; mkdir -p "$L"; rm -f "$L"/*.log
 run() { local name=$1; shift; ( "$@" > "$L/$name.log" 2>&1; echo "exit $?" >> "$L/$name.log" ) & }
 start=$(date +%s)
-run unit pytest -m "not integration" -q -n auto
-run integration pytest -m integration -q -n auto
+run unit pytest -m "not integration" -q -n "${GATES_WORKERS:-auto}"
+run integration pytest -m integration -q -n "${GATES_WORKERS:-auto}"
 run dry_run python scripts/dry_run.py 1
 run ruff ruff check goldbot tests scripts
 run mypy mypy

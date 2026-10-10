@@ -52,5 +52,7 @@ Each delivered item is scored; it is accepted only with every row "yes".
 - Each agent works in its own git worktree based on the tip of `claude/gifted-goldberg-lcb7pl`, on disjoint files.
 - Python in a worktree: `env PYTHONPATH=$PWD /Users/aamirkhan/myproject/goldbot/.venv/bin/python` (check
   `goldbot.__file__` points at the worktree).
+- CPU is shared: when several agents run at once, run pytest with `-n 4` (or `GATES_WORKERS=4 scripts/gates.sh`), never
+  `-n auto`, so parallel lanes do not starve each other (load hit 106 on 12 cores with every agent on `-n auto`).
 - Agents commit on their branch and never push; the integrator merges, runs the gates, routes reviews, and ships.
 - Free lanes are refilled immediately from the ranked backlog (`docs/BACKLOG.md`).
