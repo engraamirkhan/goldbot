@@ -1,5 +1,7 @@
 # goldbot runbook (owner's guide)
 
+**Start with the one-page [owner guide](OWNER_GUIDE.md) (setup checklist, daily use, decisions); this runbook has the detail.**
+
 This is the step-by-step guide for running goldbot on the Windows VPS. It is written for the owner, not for a
 developer. Every command, service name, file and setting below exists in this repository; where a step depends
 on something outside the repository (Windows, Cloudflare, Telegram, Node.js) the guide says so.
