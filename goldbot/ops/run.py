@@ -288,7 +288,7 @@ def run_scheduler() -> None:
     from pathlib import Path
 
     from goldbot.config import load_settings
-    from goldbot.data.release import sync_release_bars
+    from goldbot.data.release import sync_release
     from goldbot.data.store import Store
     from goldbot.ops import accounts
     from goldbot.ops.jobs import JobContext, build_scheduler, make_trial_runner
@@ -305,7 +305,7 @@ def run_scheduler() -> None:
     ctx = JobContext(settings=settings, store=Store(settings.data_root), state_dir=Path("state"),
                      models=ModelRegistry(settings.research.models_dir), trials=TrialRegistry(settings.research.registry),
                      accounts=accounts.enabled_accounts(),   # live accounts only once the phase gate has passed
-                     sync_bars=lambda store: sync_release_bars(store, token=gh_token),
+                     sync_bars=lambda store: sync_release(store, token=gh_token),   # bars (data-v1) + macro (macro-v1)
                      sync_trials=(lambda path: sync_registry(path, gh_token)) if gh_token else None,
                      population=Population(Path("state") / "population.json"))
     ctx.agent_runner = _agent_runner(settings, ctx.store, trial_runner=make_trial_runner(ctx))

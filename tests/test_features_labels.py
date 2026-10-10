@@ -28,7 +28,8 @@ def test_registry_has_all_families():
 def test_build_features_runs_and_is_versioned(frames):
     b15, _, _ = frames
     m = mid(b15)
-    names = [n for n in FEATURES if n not in ("macro", "calendar_events")]
+    from goldbot.research.pipeline import OPT_IN_FEATURES  # features that need external data in ctx
+    names = [n for n in FEATURES if n not in OPT_IN_FEATURES]
     X = build_features(m, names)
     assert len(X) == len(m)
     assert X.attrs["feature_version"].startswith("f-")

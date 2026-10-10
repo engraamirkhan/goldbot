@@ -22,7 +22,18 @@ from goldbot.research.model import MAX_FEATURES, MetaLabelModel, fit_calibrator
 from goldbot.research.walkforward import Fold, splits_for, window_for
 from goldbot.specialists.base import FEATURE_SEED_KEY, AgentIdentity, Specialist
 
-DEFAULT_FEATURE_NAMES = [n for n in FEATURES if n not in ("macro", "calendar_events")]
+# Features that need an external input in ctx. They are not in the default set, so the default feature version (the
+# one the live engine builds) does not depend on whether that data happens to be loaded.
+OPT_IN_FEATURES = ("macro", "macro_drivers", "calendar_events")
+DEFAULT_FEATURE_NAMES = [n for n in FEATURES if n not in OPT_IN_FEATURES]
+MACRO_FEATURE_NAMES = ["macro_drivers"]      # added when ctx carries the macro table (release macro-v1)
+
+
+def research_feature_names(ctx: dict | None = None) -> list[str]:
+    """The default features, plus the macro drivers when ctx["macro"] holds macro rows. A model trained on this set
+    carries its feature version, so it scores only frames built with macro too."""
+    macro = (ctx or {}).get("macro")
+    return [*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES] if macro is not None and len(macro) else list(DEFAULT_FEATURE_NAMES)
 
 
 class ResearchResult(Record):
@@ -38,8 +49,9 @@ class ResearchResult(Record):
 
 def build_decision_frame(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None = None,
                          feature_names: list[str] | None = None, ctx: dict | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Features on the decision timeframe plus higher-TF context merged without lookahead."""
-    names = feature_names or DEFAULT_FEATURE_NAMES
+    """Features on the decision timeframe plus higher-TF context merged without lookahead. Without `feature_names`:
+    research_feature_names(ctx) (the macro drivers join in when ctx carries macro rows)."""
+    names = feature_names or research_feature_names(ctx)
     m = mid(bars_dec).reset_index(drop=True)
     X = build_features(m, names, ctx)
     version = X.attrs["feature_version"]
@@ -67,16 +79,19 @@ def _auc(y: np.ndarray, p: np.ndarray) -> float | None:
 
 
 def lookahead_check(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None, cut_frac: float = 0.7,
-                    feature_names: list[str] | None = None) -> dict[str, Any]:
+                    feature_names: list[str] | None = None, ctx: dict | None = None) -> dict[str, Any]:
     """Leakage check on the data actually used: build the decision frame on the full history and on the history
-    truncated at `cut_frac` (context bars only those visible by then). A feature whose value on a bar before the cut
-    differs between the two used data from after the cut. Returns the offending columns (empty = clean)."""
+    truncated at `cut_frac` (context bars only those visible by then, ctx tables such as macro only the rows available
+    by then). A feature whose value on a bar before the cut differs between the two used data from after the cut.
+    Returns the offending columns (empty = clean)."""
     bars_dec = bars_dec.reset_index(drop=True)
     cut = int(len(bars_dec) * cut_frac)
     cut_ts = pd.Timestamp(bars_dec["visible_at"].iloc[cut - 1])
-    _, full = build_decision_frame(bars_dec, context, feature_names)
+    _, full = build_decision_frame(bars_dec, context, feature_names, ctx)
     ctx_cut = {k: v[pd.to_datetime(v["visible_at"], utc=True) <= cut_ts] for k, v in (context or {}).items()}
-    _, part = build_decision_frame(bars_dec.iloc[:cut], ctx_cut, feature_names)
+    feat_ctx_cut = {k: v[pd.to_datetime(v["available_utc"], utc=True) <= cut_ts]
+                    if isinstance(v, pd.DataFrame) and "available_utc" in v.columns else v for k, v in (ctx or {}).items()}
+    _, part = build_decision_frame(bars_dec.iloc[:cut], ctx_cut, feature_names or research_feature_names(ctx), feat_ctx_cut)
     a = full.drop(columns=["ts_utc"]).iloc[:cut].reset_index(drop=True)
     b = part.drop(columns=["ts_utc"]).reset_index(drop=True)
     bad = []

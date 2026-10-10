@@ -1,4 +1,5 @@
 from goldbot.features import (  # noqa: F401  (registers features)
+    macro,
     momentum,
     session,
     structure,
