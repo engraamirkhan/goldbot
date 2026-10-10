@@ -880,6 +880,53 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `macro.fetch_cot_gold` / `gld_holdings_from_csv` (no holiday rule, GLD stamped 06:30 ET) are removed. Not yet: the
   workflow has never run (Actions -> data-positioning -> Run workflow); `research.yml` has no positioning input; the
   cleaner opt-in home is `goldbot/research/pipeline.py` OPT_IN_FEATURES (outside this lane).
+- US calendar, tiers 1 and 2, point in time (2026-10-10, BACKLOG 18 data part, playbook G-3, research finding E-1,
+  row D27, ADR 0007):
+  - **Pipeline.** `goldbot/data/us_calendar.py` + `scripts/us_calendar_data.py` +
+    `.github/workflows/data-us-calendar.yml` (Sundays 06:17 UTC) publish `us_calendar.parquet` on release
+    `calendar-v1`, 2010 onwards.
+  - **Tier 1** keeps the labels in code (`econ_calendar.TIER1_PATTERNS`, settings blackout events):
+    - CPI, NFP (Employment Situation) and PCE (Personal Income and Outlays) come from FRED `fred/release/dates`
+      (ids 10/50/54).
+    - The FOMC statement and press conference come from the Fed's `fomccalendars.htm` + `fomchistorical<year>.htm`.
+      Only scheduled meetings count.
+    - A press conference is listed where the page links one, and at every meeting from 2019.
+    - FOMC times by era: statement 14:15 until April 2011, 12:30 on 2011-12 press days, 14:00 from 2013; press
+      conference 14:15 in 2011-12, 14:30 from 2013.
+  - **Tier 2:**
+    - PPI, retail sales, GDP (all estimates; GDP is tier 2 because it is not on the tier-1 list in code), JOLTS and
+      claims come from FRED (ids 46/9/53/192/180).
+    - FOMC minutes use the page's Released date, or the statement + 21 days when there is none yet.
+    - ISM manufacturing and services are rule-derived (1st/3rd US business day, 10:00 ET).
+    - Fed speakers are not covered.
+  - **Checks.** Every FRED id is checked against the release name FRED returns.
+  - **Times.** New York wall times are converted per date, so DST is right.
+  - **Availability.**
+    - `available_utc` is the event minus 7 days.
+    - For agency releases, it is raised to the shutdown floors (2013, 2018-19, 2025; conservative, not checked to
+      the day). The Fed is exempt.
+    - It is never later than the event.
+    - Later runs stamp a late-added event at first sight and add `cancelled` rows for future events that disappear.
+    - Published rows are never rewritten (`check_keeps_history`; exit 2 and nothing is published if a row would be
+      lost).
+  - **No actual/consensus columns**: there is no free, licence-compatible source.
+  - **Opt-in features** in `goldbot/features/us_calendar.py`. `enable()` returns `tier1_events` and `tier2_events`:
+    - tier 1: `min_to_next_tier1_pit`, `min_since_last_tier1_pit`, `tier1_count_today`;
+    - tier 2: `min_to_next_tier2`, `min_since_last_tier2`, `tier2_count_today`;
+    - minutes are capped at 7 days, and counts are per New York day;
+    - they are joined through `known_timeline` + `asof_join` on available_utc;
+    - they are not in DEFAULT_FEATURE_NAMES, so feature_version is unchanged.
+  - **Research** loads it with `research_pass.py --us-calendar DIR` (not with --discover or --cpcv), and
+    `fetch_data_release.py --us-calendar` downloads it to raw-calendar/. There is no store table.
+  - **Verified offline** (Fed pages fetched from the Mac sandbox): the parsers read 2010, 2011, 2015, 2017, 2019,
+    2020 and 2021-2027 correctly. That is 8 scheduled meetings a year, 7 in 2020 (March 17-18 was cancelled), with
+    unscheduled meetings and notation votes skipped.
+  - **Not yet:**
+    - The owner must add the repo secret `FRED_API_KEY` (a free key from fred.stlouisfed.org) and run the workflow.
+    - The FRED ids and the release-date history were not checked live, because there is no key in the sandbox. The
+      name check fails loudly if they are wrong.
+    - PCE's 08:30 ET time for 2010-2012 is not verified.
+    - The RiskGate tier-2 blackout (-5/+15 min) waits for the owner's adopt decision.
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
   `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
   stays partial until the research callers (`pipeline.run_specialist`/`run_pool`, `discovery.discover`) pass it

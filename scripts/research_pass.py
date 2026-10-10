@@ -40,6 +40,11 @@ point-in-time COT and GLD columns (goldbot/features/positioning.py: managed-mone
 4-week change, GLD tonnes 5/20-day % change) to the candidate frame and the leakage check, under the same rules as
 macro (the feature version includes them). Not available with --discover.
 
+US calendar (opt-in): `--us-calendar DIR` (the release calendar-v1, from the data-us-calendar workflow) adds the
+point-in-time tier-1 and tier-2 event columns (goldbot/features/us_calendar.py: minutes to the next and since the last
+event of each tier, capped at 7 days, and the tier's event count on the New York day), under the same rules as
+positioning. Not available with --discover or --cpcv.
+
 Combinatorial purged CV (M16, goldbot/research/cpcv.py): `--cpcv <trial#> [<trial#> ...]` re-evaluates registered
 walk-forward trials on 6 time groups of the research window (15 purged splits, 5 backtest paths) and, for several
 trials, the probability of backtest overfitting across them. It is not a trial: no budget slot, no registry row; the
@@ -50,6 +55,7 @@ passed the gates (docs/decisions/0003-cpcv-and-pbo-can-only-veto.md), so a trial
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
       [--specialist session_open | --pooled 15m] [--from-year 2010] [--to-year 2026] [--rationale "..."] \
       [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table costs_measured.json] [--macro macro/] [--positioning positioning/]
+      [--us-calendar calendar/]
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report cpcv.md --cpcv 12 [13 14] [--diagnostic]
 """
 from __future__ import annotations
@@ -66,10 +72,15 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
-from goldbot.data.release import read_macro_files, read_positioning_files  # noqa: E402
+from goldbot.data.release import (  # noqa: E402
+    read_macro_files,
+    read_positioning_files,
+    read_us_calendar_files,
+)
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
 from goldbot.execution.costs import SwapSpec, load_research_cost_table, research_costs  # noqa: E402
 from goldbot.features import positioning as positioning_features  # noqa: E402
+from goldbot.features import us_calendar as us_calendar_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.features.registry import feature_version  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
@@ -152,13 +163,36 @@ def _positioning_line(info: dict[str, Any] | None) -> str:
     return f"- positioning features: {info['detail']}" if info else "- positioning features: off"
 
 
-def feature_ctx(macro: pd.DataFrame | None, positioning: pd.DataFrame | None) -> tuple[dict | None, list[str] | None]:
+def load_us_calendar(path: str) -> tuple[pd.DataFrame | None, dict[str, Any]]:
+    """The US calendar release for ctx["us_calendar"], or None with the reason (recorded in the trial and reported)."""
+    if not path:
+        return None, {"used": False, "detail": "off (no --us-calendar)"}
+    df = read_us_calendar_files(Path(path))
+    if df.empty:
+        return None, {"used": False, "detail": f"off: no calendar release at {path} (run the data-us-calendar "
+                                                f"workflow; `gh release download calendar-v1 -D {path}`)"}
+    ev = pd.DatetimeIndex(df["event_utc"])
+    return df, {"used": True, "event_types": sorted(df["event_type"].unique()),
+                "detail": f"on: {df['event_type'].nunique()} event types, events {ev.min():%Y-%m-%d} .. "
+                          f"{ev.max():%Y-%m-%d}, joined as of available_utc"}
+
+
+def _us_calendar_line(info: dict[str, Any] | None) -> str:
+    return f"- US calendar features: {info['detail']}" if info else "- US calendar features: off"
+
+
+def feature_ctx(macro: pd.DataFrame | None, positioning: pd.DataFrame | None,
+                us_calendar: pd.DataFrame | None = None) -> tuple[dict | None, list[str] | None]:
     """ctx for the features and the explicit feature list: None (the pipeline's default, with macro when passed)
-    unless positioning is on, which registers and appends the opt-in positioning feature."""
-    ctx = {k: v for k, v in (("macro", macro), ("positioning", positioning)) if v is not None}
-    if positioning is None:
+    unless positioning or the US calendar is on, which registers and appends the opt-in features."""
+    ctx = {k: v for k, v in (("macro", macro), ("positioning", positioning), ("us_calendar", us_calendar))
+           if v is not None}
+    if positioning is None and us_calendar is None:
         return ctx or None, None
-    return ctx, [*research_feature_names(ctx), positioning_features.enable()]
+    extra = [positioning_features.enable()] if positioning is not None else []
+    if us_calendar is not None:
+        extra += us_calendar_features.enable()
+    return ctx, [*research_feature_names(ctx), *extra]
 
 
 def per_year(oof: pd.DataFrame, threshold: float | None) -> pd.DataFrame:
@@ -201,6 +235,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              f"- cost source: {m.get('cost_source', 'settings priors')}",
              _macro_line(m.get("macro")),
              _positioning_line(m.get("positioning")),
+             _us_calendar_line(m.get("us_calendar")),
              _holdout_line(m.get("holdout")),
              f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
@@ -412,6 +447,8 @@ def main() -> int:
                     help="with --cpcv: allow trials that failed the gates; output is diagnostic, not evidence (ADR 0003)")
     ap.add_argument("--positioning", default="",
                     help="folder or Parquet of the positioning-v1 release: adds the opt-in COT/GLD features")
+    ap.add_argument("--us-calendar", default="",
+                    help="folder or Parquet of the calendar-v1 release: adds the opt-in tier-1/tier-2 event features")
     _discovery_args(ap)
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
@@ -435,6 +472,10 @@ def main() -> int:
     print(_positioning_line(positioning_info)[2:], flush=True)
     if args.discover and positioning is not None:
         raise SystemExit("--positioning is not wired into --discover yet; run it without --discover")
+    us_calendar, us_calendar_info = load_us_calendar(args.us_calendar)
+    print(_us_calendar_line(us_calendar_info)[2:], flush=True)
+    if (args.discover or args.cpcv) and us_calendar is not None:
+        raise SystemExit("--us-calendar is not wired into --discover or --cpcv yet; run it without them")
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
         if args.cpcv:
@@ -443,14 +484,15 @@ def main() -> int:
             return _discover(args, variants, b1, reg, settings, extra_cost, swap, holdout, cost_source, macro)
         return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings, swap=swap,
                     cost_source=cost_source, macro=macro, macro_info=macro_info, positioning=positioning,
-                    positioning_info=positioning_info)
+                    positioning_info=positioning_info, us_calendar=us_calendar, us_calendar_info=us_calendar_info)
 
 
 def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
          b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any, *, swap: SwapSpec, cost_source: str,
          macro: pd.DataFrame | None = None, macro_info: dict[str, Any] | None = None,
-         positioning: pd.DataFrame | None = None, positioning_info: dict[str, Any] | None = None) -> int:
-    feat_ctx, feat_names = feature_ctx(macro, positioning)
+         positioning: pd.DataFrame | None = None, positioning_info: dict[str, Any] | None = None,
+         us_calendar: pd.DataFrame | None = None, us_calendar_info: dict[str, Any] | None = None) -> int:
+    feat_ctx, feat_names = feature_ctx(macro, positioning, us_calendar)
     if args.score_holdout:
         if holdout is None:
             raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
@@ -513,7 +555,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         split = None if args.score_holdout else rule_only_split(pd.concat([p.labels for p in preps], ignore_index=True))
         common = {"lookahead": leak, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
                   "screen": scr, "screen_skipped": skipped, "cost_source": cost_source, "macro": macro_info,
-                  "positioning": positioning_info, "rule_only_split": split}
+                  "positioning": positioning_info, "us_calendar": us_calendar_info, "rule_only_split": split}
         rationale = args.rationale + (f" | overrides {json.dumps(job.overrides, sort_keys=True)}" if job.overrides else "")
         if scr is not None and (screen_only or (not scr["passed"] and not args.skip_screen)):
             n = int(sum(len(p.labels) for p in preps))
@@ -541,7 +583,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                              rationale=rationale, results=metrics, status="holdout" if args.score_holdout else "evaluated",
                              budget_quarter=quarter, preregistration=prereg)
             res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped, "cost_source": cost_source,
-                           "macro": macro_info, "positioning": positioning_info, "rule_only_split": split}
+                           "macro": macro_info, "positioning": positioning_info, "us_calendar": us_calendar_info,
+                           "rule_only_split": split}
             years = per_year(res.oof, res.metrics.get("threshold"))
             text = render_report(res, years, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0})
         if job.overrides:
