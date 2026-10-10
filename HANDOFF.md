@@ -284,6 +284,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   p < 0.5 are closed. Consequences: labels of trend/breakout/session-open changed, so their earlier research
   verdicts were on plain barriers and any model of theirs must be retrained before it trades; the entry threshold
   and sizing still assume the binary target/stop payoff.
+- Exit-policy safety review fixes (2026-10-10, `engine/runner.py`, TRACEABILITY M3/M6/M7/R21): a raising blackout
+  re-score or scale-out (model error, MT5 `symbol_info` failing) no longer escapes the tick/bar (ops/run.py catches
+  only AssertionError): it is logged (`blackout_rescore_failed`, `scale_out_failed`), the position is kept and the
+  others are still managed; `scaled` is set only after a successful partial close, with `scale_out_retries` (3)
+  attempts in all. New per-tick `_stop_check`: price at or through the engine's stop while the broker's stop is
+  looser (rejected `modify`) closes at market (`engine_stop_close`); reconciliation re-sends a rejected stop with a
+  30 s doubling backoff up to `modify_backoff_max_s` (900 s). The Friday weekend rule keeps the engine's stop when
+  it is tighter than the half-profit stop (never loosens). Fills recovered on restart (`_load_orders`; the ATR is now
+  recorded in the pending_orders row before sending, older rows use the ATR implied by the initial stop) and orphans
+  whose magic maps to exactly one loaded agent get that agent's exit policy back. Gaps: labels and the shadow book
+  fill a stop at the stop even when a bar gaps through it (documented in `labels/exit_policy.py`; unchanged), the
+  broker fills at the market, so a gap costs the live trade the gap; parity tests now cover shorts and a gap.
+  **Known limitation (quant finding 4, not changed):** for policy families (trend, breakout, session-open) the entry
+  threshold (`breakeven_prob`) and Kelly sizing (`size_multiplier`) still assume the binary target_atr/stop_atr
+  payoff, while a policy's exits pay a distribution (trail, flat, scaled). Recommended fix: an EV hurdle from the
+  policy's realised payoff distribution in the walk-forward (mean win and mean loss in R per family), or train on
+  sign(ret) and size from the empirical payoffs; a quant-reviewer decision before any policy model trades.
 - Feature discovery (2026-10-10, survey 4b, TRACEABILITY M37/M38; hypothesis H-02 tooling ready, not run):
   `research/discovery.py` + `research_pass.py --discover [--families [feature|family]] [--discover-config JSON]`
   screens every eligible column (may exceed 40) on one specialist's candidates as ONE trial. Inside each purged
