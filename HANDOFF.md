@@ -187,8 +187,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `/var/lib/goldbot-deploy/deploys.jsonl` (root only), published read-only to `state/deploys.jsonl` by rename (Telegram
   report, health `deploy`). The MT5 box is updated by hand only. Hardened after the security review: root never writes
   or follows anything in a service-user-writable directory (symlink-to-root attack), approval file opened O_NOFOLLOW
-  and owner-checked, any failure after checkout rolls back, stability = no systemd restart for 90 s plus fresh
-  engine/supervisor heartbeats, CI read from the latest GitHub Actions runs only, no CLI approve.
+  and owner-checked, any failure after checkout rolls back, stability = no systemd restart for 90 s plus a
+  supervisor heartbeat written after the restart (engines write only on ticks), copy in state/ written as the service
+  user, approval opened O_NONBLOCK, CI read from the latest GitHub Actions runs only, no CLI approve.
 - Drift and health (M26/M27, 2026-10-10): every fitted model stores its training distribution per input
   (`feature_ref`); the daily `drift_watch` job (23:40) rebuilds the last 30 days of candidates as in training and
   computes PSI on the top-10 inputs by gain (0.1 warns, 0.25 sizes the agent to 50%), ECE/Brier on the trailing 100
