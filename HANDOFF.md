@@ -515,6 +515,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   openapi-typescript supports them. Actions now run on node24 (PR #64): a self-hosted runner (`vars.CI_RUNNER`) must
   be Actions Runner >= 2.327.1.
 
+- Engine wave 3 (2026-10-11, rows D10, A2, M9): a decision bar is finalised by clock at close + 1.5 s
+  (`runner.BAR_CLOSE_GRACE_S`; the wall clock in production) even when no tick follows it, or at once by a tick at
+  or after the close; each close runs once (`_closed_through`), a tick older than a bar the clock already finalised
+  never revises it, and a repeated poll of the same quote (the run loop's 0.25 s poll) is no longer appended as a new
+  tick (tick counts and the tick log were inflated in quiet markets). Proposals carry
+  `EngineConfig.approval_window_s`, set from `settings.risk.approval_window_seconds` in `ops/run.py` (default 90).
+  The allocator's tier-1 distances come from the calendar the RiskGate's news blackout reads, so its 30-minute
+  zeroing now acts live (weight 0 inside -30/+30 min). Exits are unchanged: they run on every tick before any bar logic.
+
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
   `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15

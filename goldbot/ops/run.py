@@ -117,7 +117,8 @@ def run_engine(account_id: str) -> None:
                               blackout_before_min=settings.risk.blackout.before_min,
                               blackout_after_min=settings.risk.blackout.after_min,
                               shock_blackout_min=settings.news.shock_blackout_min,
-                              shock_min_relevance=settings.news.shock_min_relevance, live_clock=True), broker, agents,
+                              shock_min_relevance=settings.news.shock_min_relevance, live_clock=True,
+                              approval_window_s=settings.risk.approval_window_seconds), broker, agents,
                  champions(), center, limits=limits, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares)
     warm = eng.warm_start(pd.Timestamp.now("UTC"))

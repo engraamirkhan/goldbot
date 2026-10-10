@@ -8,7 +8,21 @@ Also exposes the population view: each agent's weight = allocator family weight 
 """
 from __future__ import annotations
 
+import pandas as pd
+
 from goldbot.base import Record
+
+
+def tier1_minutes(events: pd.DataFrame, now: pd.Timestamp) -> tuple[float | None, float | None]:
+    """(minutes to the next tier-1 event at or after `now`, minutes since the last one before it) from a calendar
+    frame (ts_utc, tier), as the engine's news blackout reads it; None where there is no such event."""
+    if events.empty or "tier" not in events.columns:
+        return None, None
+    ts = pd.DatetimeIndex(pd.to_datetime(events.loc[events["tier"] == 1, "ts_utc"], utc=True))
+    ahead, behind = ts[ts >= now], ts[ts < now]
+    to_next = (ahead.min() - now).total_seconds() / 60 if len(ahead) else None
+    since = (now - behind.max()).total_seconds() / 60 if len(behind) else None
+    return to_next, since
 
 
 class Regime(Record):

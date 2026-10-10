@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 from pydantic import Field
 
-from goldbot.allocator import Regime, RuleAllocator
+from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
 from goldbot.base import Record, UtcTimestamp, write_atomic
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
@@ -56,6 +56,8 @@ log = logging.getLogger("goldbot.engine")
 # close refused with one of these is backed off; any other failure (requote 10004/10021, price changed 10020, a
 # raising call) is retried on the next tick, so an exit is never delayed by a transient refusal
 MARKET_CLOSED_RETCODES = frozenset({10017, 10018})
+# design (D10): a bar close is detected by clock, close time plus this grace, not by the next bar's first tick
+BAR_CLOSE_GRACE_S = 1.5
 
 
 class Model(Protocol):
@@ -96,6 +98,9 @@ class EngineConfig(Record):
     max_bars_in_memory: int = 60000     # 1m bars kept (~40 trading days)
     feature_window: int = 800            # decision bars the features are computed on
     owner_user_id: int = 0
+    # design (Approvals): the owner confirms an entry within this many seconds or it expires unapproved; production
+    # passes settings.risk.approval_window_seconds (goldbot/ops/run.py)
+    approval_window_s: int = Field(90, gt=0)
     data_root: str | None = None         # when set, ticks and fills are logged to the store for the nightly cost job
     shadow_host: bool = False            # this engine runs the shadow book (one per deployment: the canonical-cost broker)
     tick_flush_s: int = 60               # market seconds between tick-log flushes
@@ -222,7 +227,8 @@ class Engine:
         self.pending: dict[str, tuple[Intent, Proposal, Specialist]] = {}
         self.sent_ids: set[str] = set()
         self._orders: dict[str, SentOrder] = {}     # pending_orders: every id ever sent (pruned after a week)
-        self.last_bar_close: pd.Timestamp | None = None
+        self.last_bar_close: pd.Timestamp | None = None   # open of the decision bar the last tick fell in
+        self._closed_through: pd.Timestamp | None = None  # latest bar close processed (tick or clock path): never twice
         self.state = AccountState(equity=0, balance_closed_hwm=0, day_start_equity=0, week_start_equity=0,
                                   open_positions=0, margin_used=0, last_tick_age_s=0, spread_points=0)
         self.decisions: list[dict] = []
@@ -313,9 +319,14 @@ class Engine:
         self._poll_rearm(self._now(t))
         if not self._tick_ok(t):
             return []                   # crossed or out-of-order quote: never enters the bars; entries blocked
-        self._last_tick = t
-        self.ticks.append(t)
-        self._log_tick(t)
+        prev, self._last_tick = self._last_tick, t
+        # the run loop polls the terminal's latest quote several times a second, so a quiet market repeats the same
+        # tick: a repeat only advances the clock (bar close by clock, exits), it is neither a new bar tick nor logged
+        repeat = prev is not None and (prev.ts_utc, prev.bid, prev.ask) == (t.ts_utc, t.bid, t.ask)
+        if not repeat and (self._closed_through is None or t.ts_utc >= self._closed_through):
+            self.ticks.append(t)        # a tick older than a bar the clock already finalised never revises that bar
+        if not repeat:
+            self._log_tick(t)
         self._refresh_broker_terms(t.ts_utc)
         self._roll_risk_period(t.ts_utc)
         if hasattr(self.broker, "on_tick"):
@@ -330,8 +341,11 @@ class Engine:
         sec = tf_seconds(self.cfg.decision_tf)
         bar_close = pd.Timestamp((int(t.ts_utc.timestamp()) // sec) * sec, unit="s", tz="UTC")
         out: list[dict] = []
-        if self.last_bar_close is not None and bar_close > self.last_bar_close:
-            out = self.on_bar_close(self.last_bar_close + pd.Timedelta(seconds=sec), t)
+        due = self._due_close(t, bar_close)
+        if due is not None:
+            self._closed_through = due
+            self._rebuild_bars(until=due)   # every minute before the close is complete; none at or after it joins
+            out = self.on_bar_close(due, t)
             self._last_state_write = t.ts_utc
         elif self._last_state_write is None or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:
             self._rebuild_bars()            # completed minutes join the bars between closes, so their age is current
@@ -341,6 +355,23 @@ class Engine:
         self.last_bar_close = bar_close
         self._flush_closed()               # after every exit of this tick has been sent
         return out
+
+    def _due_close(self, t: Tick, bar_open: pd.Timestamp) -> pd.Timestamp | None:
+        """Design (D10): "Bar close is detected by clock (close time plus 1.5 s grace), not by tick arrival." The bar
+        the last tick fell in (opened at `last_bar_close`) is complete at open + decision_tf; it is finalised once the
+        clock (the tick's time, or the wall clock in production) reaches that close plus BAR_CLOSE_GRACE_S, so a quiet
+        market with no tick after the close still decides. A tick at or after the close finalises it at once: ticks
+        are accepted in time order only (`_tick_ok`), so no later tick can belong to it. Each close is processed once,
+        whichever path sees it first (`_closed_through`); a bar no tick fell in is never closed (as before)."""
+        if self.last_bar_close is None:
+            return None
+        close = self.last_bar_close + pd.Timedelta(seconds=tf_seconds(self.cfg.decision_tf))
+        if self._closed_through is not None and close <= self._closed_through:
+            return None
+        clock = max(t.ts_utc, self._now(t))
+        if bar_open > self.last_bar_close or clock >= close + pd.Timedelta(seconds=BAR_CLOSE_GRACE_S):
+            return close
+        return None
 
     def warm_start(self, now: pd.Timestamp) -> int:
         """Seed the 1m history from the store (release bars synced by the scheduler) so a restarted engine can decide
@@ -357,22 +388,26 @@ class Engine:
         self.bars_1m = b.drop_duplicates("ts_utc", keep="last").tail(self.cfg.max_bars_in_memory).reset_index(drop=True)
         return len(self.bars_1m)
 
-    def _rebuild_bars(self) -> None:
-        """Incremental: only ticks since the last completed minute are aggregated; bars accumulate."""
+    def _rebuild_bars(self, until: pd.Timestamp | None = None) -> None:
+        """Incremental: only ticks since the last completed minute are aggregated; bars accumulate. Without `until`
+        the latest tick's minute may still receive ticks and stays open; with it (a bar close) every minute ending at
+        or before `until` is complete and none starting at or after it is built."""
         if not self.ticks:
             return
-        if self.ticks[0].ts_utc.floor("min") == self.ticks[-1].ts_utc.floor("min"):
+        cutoff = until.floor("min") if until is not None else None
+        if cutoff is None and self.ticks[0].ts_utc.floor("min") == self.ticks[-1].ts_utc.floor("min"):
             return      # every tick is in the current minute (ticks arrive in time order): no minute has completed
         tdf = pd.DataFrame({"ts_utc": [x.ts_utc for x in self.ticks], "bid": [x.bid for x in self.ticks], "ask": [x.ask for x in self.ticks]})
         new = ticks_to_1m(tdf, DEFAULT_SESSIONS)
         if new.empty:
             return
-        last_minute = new["ts_utc"].iloc[-1]
-        done = new[new["ts_utc"] < last_minute]          # the current minute may still receive ticks
+        if cutoff is None:
+            cutoff = new["ts_utc"].iloc[-1]              # the current minute may still receive ticks
+        done = new[new["ts_utc"] < cutoff]
         if not done.empty:
             self._check_new_bars(done)
             self.bars_1m = self._append_bars(done)
-        self.ticks = [x for x in self.ticks if x.ts_utc >= last_minute]
+        self.ticks = [x for x in self.ticks if x.ts_utc >= cutoff]
 
     def _append_bars(self, done: pd.DataFrame) -> pd.DataFrame:
         """bars_1m + newly completed minutes, de-duplicated on ts_utc (last wins) and capped at max_bars_in_memory.
@@ -447,7 +482,7 @@ class Engine:
         self._refresh_account(last_tick)
         self._manage_open(base.dec)
         self.center.sweep_expired()
-        regime = self._regime(base.X)
+        regime = self._regime(base.X, close_ts)
         fam_w = self.allocator.weights(regime)
         decisions: list[dict] = []
         tfs = {a.timeframe for a in self.agents.values()} | {self.cfg.decision_tf}
@@ -530,7 +565,7 @@ class Engine:
             target = price + side * ls.target_atr * float(a.iloc[last])
             prop = Proposal(proposal_id=pid, account_id=self.cfg.account_id, agent_id=agent.agent_id, side=side, lots=gd.lots, entry=price, stop=stop, target=target, p=p,
                             ev_r=p * ls.target_atr - (1 - p) * ls.stop_atr - cost_atr, spread_points=self.state.spread_points,
-                            top_features=self._top_features(model, feats), window_s=90,
+                            top_features=self._top_features(model, feats), window_s=self.cfg.approval_window_s,
                             risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2))
             if self.cfg.approval_mode == "auto":
                 self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
@@ -1533,14 +1568,17 @@ class Engine:
         self._propose_only_until = pd.Timestamp(d["propose_only_until"]) if d.get("propose_only_until") else None
         self._rearm_refused = d.get("rearm_refused")
 
-    def _regime(self, X: pd.DataFrame) -> Regime:
+    def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
+        """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the
+        RiskGate's news blackout already reads (`_blackout`, refreshed by `_refresh_account` just before), so the
+        allocator's own 30-minute zeroing acts live; without `news_blackout` there is no calendar and no zeroing."""
         row = X.iloc[-1]
         adx = float(row.get("h1_adx14", row.get("adx14", 20.0)) or 20.0)
         rv = X["h1_rv_20"] if "h1_rv_20" in X.columns else X.get("rv_20", pd.Series([np.nan]))
         q = int(pd.qcut(rv.dropna().tail(60 * 24), 4, labels=False, duplicates="drop").iloc[-1]) if rv.notna().sum() > 40 else 1
-        tier = int(row.get("in_blackout", 0) or 0)
+        to_t1, since_t1 = tier1_minutes(self._calendar[1], close_ts) if self.cfg.news_blackout else (None, None)
         return Regime(adx_1h=adx, atr_1h_quartile=q, vol_tercile=int(row.get("vol_tercile", 1) or 1),
-                      minutes_to_tier1=0.0 if tier else None, minutes_since_tier1=None)
+                      minutes_to_tier1=to_t1, minutes_since_tier1=since_t1)
 
     def _top_features(self, model: Model, feats: pd.DataFrame) -> list[tuple[str, float]]:
         imp = getattr(model, "importance", None)
