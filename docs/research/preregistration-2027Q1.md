@@ -36,6 +36,17 @@ research director or the monthly label grid can spend any of the quarter's 20 (`
 `reserved_trials`). Each trial run against its `preregistered` registry row uses one up; a queued preregistered row is
 always covered. The director and the grid get at most 20 - used - reserved (7 if nothing else runs first).
 
+**Who may spend the reservation (decided 2026-10-10, quant review).** Every path that records a trial checks the same
+reservation (`TrialRegistry.check_budget_reserved`, `research_pass.py` and `--discover` included): only a run whose
+family and config hash match a pending `preregistered` row of the quarter uses a reserved trial, and its result row is
+linked to that row. Anything else (an ad-hoc variant, a primary-signal screen, a pooled run, a discovery that wrote
+its own pre-registration just before running) must fit in 20 - used - reserved. **Holdout scorings** (`--score-holdout`)
+are trials charged to the budget and follow the same rule: they come out of the unreserved remainder unless a
+`preregistered` row for that exact configuration is pending (the row that pre-registered the walk-forward trial is
+already used by it, so a holdout scoring needs its own row). CPCV re-evaluations are evidence, not trials (ADR 0002):
+no budget slot, no reservation. H-02 uses its reserved slot only when its exact discovery config (including the bars
+range) was pre-registered before the run.
+
 | # | ID | Trial | Depends on | Trials |
 |---|---|---|---|---|
 | 1 | H-13 | Volatility-forecast cost filter, applied as a reporting overlay to every trial below (net R with / without) | none | 0 |

@@ -14,6 +14,11 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P2):
   config and the rule its result will be read by. A preregistered row is a promise, not a look at the data: it is not
   a trial (`is_trial`), takes no budget slot and does not raise the deflated-Sharpe count; the result row that follows
   carries the same trial number and config hash and a `preregistration` reference;
+* the pre-registered queue's reservation (research.reserved_trials_quarter, director.reserved_trials): the manual paths
+  (research_pass.py, discovery) check through `check_budget_reserved`, so only a run matching a pending queued
+  `preregistered` row (family and config hash) may spend the reserved trials, and it is linked to that row; any other
+  run gets budget - used - reserved. A pre-registration a run writes for itself just before it runs
+  (`preregister(queue=False)`, an ad-hoc discovery) is not part of the queue: it neither holds nor uses the reservation;
 * a feature-discovery trial (status "discovery", goldbot/research/discovery.py) is ONE trial, but choosing survivors
   from its selection frequencies looks at many features, so `n_trials_effective` (registry trials plus every
   discovery's K_eff: features screened when survivors go forward as features, groups screened only when whole groups
@@ -32,7 +37,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 LOCK_STALE_S = 4 * 3600          # a lock older than this was left by a crashed writer (a trial runs well under it)
 LOCK_WAIT_S = 6 * 3600
@@ -143,10 +148,12 @@ class TrialRegistry:
             fh.write(json.dumps(row, default=str) + "\n")
 
     def preregister(self, *, agent_id: str, family: str, config: dict, feature_version: str, rationale: str,
-                    reading_rule: str, plan: dict[str, Any] | None = None) -> dict:
+                    reading_rule: str, plan: dict[str, Any] | None = None, queue: bool = True) -> dict:
         """Write the pre-registration of the next trial BEFORE it runs: its config (hashed as the result row will be),
         the rule its result will be read by, and the plan (e.g. the number of features to be screened). Not a trial:
-        it carries the number the result row will take."""
+        it carries the number the result row will take. `queue=False` marks a pre-registration the run writes for
+        itself just before it runs: not part of the pre-registered queue, it neither holds nor uses the quarter's
+        reservation (director.reserved_trials)."""
         row: dict[str, Any] = {
             "trial": self.n_trials + 1,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -154,6 +161,8 @@ class TrialRegistry:
             "feature_version": feature_version, "rationale": rationale, "results": {}, "status": PREREGISTERED,
             "reading_rule": reading_rule, "plan": plan or {},
         }
+        if not queue:
+            row["queue"] = False
         self._append(row)
         return row
 
@@ -218,6 +227,35 @@ class TrialRegistry:
                 f"Every trial raises the deflated-Sharpe bar for all later ones; pre-register fewer variants, wait for "
                 f"next quarter, or raise research.trial_budget_quarter in config/settings.yaml (an owner decision).")
         return q
+
+    def check_budget_reserved(self, jobs: Sequence[tuple[str, dict[str, Any]]], cap: int, reserved_setting: int,
+                              now: datetime | None = None) -> tuple[str, list[dict[str, Any] | None]]:
+        """`check_budget` for `jobs` ((family, config) each) that honours the pre-registered queue's reservation, as
+        the analyst, the director and the label grid do: a job matching a pending queued `preregistered` row of the
+        quarter (`director.pending_preregistration`: same family and config hash) may use the full `cap` and must be
+        recorded linked to that row (so the reservation goes down by one); every other job must fit in
+        cap - used - reserved (`director.reserved_trials`, `reserved_setting` = research.reserved_trials_quarter).
+        Raises TrialBudgetExceeded; returns (the quarter, the matching pre-registration or None, per job)."""
+        # director imports this module, so the import is local
+        from goldbot.research.director import pending_preregistration, reserved_trials
+        q = quarter_of(now)
+        rows = self._rows()
+        preregs: list[dict[str, Any] | None] = []
+        for family, config in jobs:
+            p = pending_preregistration(rows, q, family, config_hash(config))
+            preregs.append(None if p is not None and any(p is c for c in preregs) else p)   # one row covers one run
+        n_open = sum(p is None for p in preregs)
+        reserved = reserved_trials(rows, q, reserved_setting).reserved
+        if n_open:
+            try:
+                self.check_budget(n_open, max(cap - reserved, 0), now)
+            except TrialBudgetExceeded as exc:
+                raise TrialBudgetExceeded(
+                    f"{exc} ({reserved} of the quarter's {cap} are held for the pre-registered queue, "
+                    f"research.reserved_trials_quarter; a run may use them only when it matches a pending "
+                    f"preregistered row, same family and config hash)") from None
+        self.check_budget(len(preregs), cap, now)
+        return q, preregs
 
     def holdout_scored(self, family: str, config: dict) -> bool:
         h = config_hash(config)

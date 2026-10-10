@@ -437,3 +437,50 @@ def test_cpcv_reevaluates_registered_trials_as_evidence_with_pbo_and_takes_no_bu
     monkeypatch.setattr(sys, "argv", base + ["--cpcv", "3"])
     with pytest.raises(SystemExit, match="walk-forward trials only"):
         rp.main()
+
+
+def test_an_ad_hoc_run_cannot_spend_the_reserved_trials_and_a_preregistered_run_uses_them_up(release_dir, tmp_path,
+                                                                                               monkeypatch):
+    from goldbot.research.director import reserved_trials
+    from goldbot.research.registry import TrialRegistry, quarter_of
+    from goldbot.specialists import SPECIALISTS
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    _research_settings(monkeypatch, trial_budget_quarter=2, reserved_trials_quarter=1)
+    reg = TrialRegistry(registry)
+    reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={})
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--skip-screen"])
+    with pytest.raises(SystemExit, match="held for the pre-registered queue"):
+        rp.main()                                        # 2 - 1 used - 1 reserved: nothing left for an ad-hoc run
+    assert reg.n_trials == 1
+    cfg = SPECIALISTS["session_open"]().config
+    pre = reg.preregister(agent_id="x", family="session_open", config=cfg, feature_version="f", rationale="planned",
+                          reading_rule="continue if ...")
+    assert rp.main() == 0                                # the pre-registered configuration uses the reserved trial
+    last = _rows(registry)[-1]
+    assert last["status"] == "evaluated" and last["preregistration"]["ts"] == pre["ts"]
+    assert reserved_trials(_rows(registry), quarter_of(), 1).reserved == 0
+
+
+def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, monkeypatch):
+    from goldbot.research.director import reserved_trials
+    from goldbot.research.registry import TrialRegistry, quarter_of
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    _research_settings(monkeypatch, trial_budget_quarter=2, reserved_trials_quarter=1)
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "session_open", "--discover",
+                                      "--discover-config", '{"n_subsamples": 4, "top_k": 5}'])
+    assert rp.main() == 0                                # ad hoc: 0 used + 1 fits in 2 - 1 reserved
+    pre, res = _rows(registry)
+    assert pre["queue"] is False and res["preregistration"]["ts"] == pre["ts"]
+    assert reserved_trials(_rows(registry), quarter_of(), 1).reserved == 1    # its own row does not use the reservation
+    with pytest.raises(SystemExit, match="held for the pre-registered queue"):
+        rp.main()                                        # a second ad-hoc discovery would spend the reserved trial
+    assert len(_rows(registry)) == 2                     # refused before any row is written
+    queued = TrialRegistry(registry).preregister(agent_id=res["agent_id"], family=res["family"], config=res["config"],
+                                                 feature_version="f", rationale="H-02", reading_rule=pre["reading_rule"])
+    assert rp.main() == 0                                # the queued pre-registration may use it
+    rows = _rows(registry)
+    assert [r["status"] for r in rows[2:]] == ["preregistered", "discovery"]   # no second, self-written row
+    assert rows[-1]["preregistration"]["ts"] == queued["ts"]
+    assert reserved_trials(rows, quarter_of(), 1).reserved == 0

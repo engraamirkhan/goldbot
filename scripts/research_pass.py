@@ -15,8 +15,11 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P1/P2):
 * every report states the design's gates (1,500 candidates, 60 per test fold, three positive years incl. 2021-22)
   and the rule's own gross and net expectancy; the deflated Sharpe is shown only from 200 trades;
 * each run is charged to the quarter's pre-registered trial budget (research.trial_budget_quarter) and refused
-  beyond it; the holdout window (research.holdout_from/to) is excluded unless `--score-holdout`, which scores a
-  configuration on it exactly once.
+  beyond it. The trials held for the pre-registered queue (research.reserved_trials_quarter, director.reserved_trials)
+  are spent only by a run matching a pending `preregistered` row (family and config hash), which it is linked to;
+  any other run (ad-hoc variant, screen, holdout scoring) must fit in budget - used - reserved
+  (TrialRegistry.check_budget_reserved). The holdout window (research.holdout_from/to) is excluded unless
+  `--score-holdout`, which scores a configuration on it exactly once.
 
 Primary-signal screen (P4, goldbot/research/screen.py): before any model, the rule's own gross expectancy over the
 research window must be positive with t >= 2 on >= 1,000 events. A configuration that fails is recorded with status
@@ -415,8 +418,12 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             if not reg.passed_gates(job.family, job.config):
                 raise SystemExit(f"{job.family} {label} has no research trial that passed the design's gates; "
                                  "only a passing configuration is scored on the holdout")
-    try:                                  # a holdout scoring or a screen is a look at the data too: charged like any trial
-        quarter = reg.check_budget(len(jobs), settings.research.trial_budget_quarter)
+    # a holdout scoring or a screen is a look at the data too: charged like any trial, and like any trial it spends the
+    # pre-registered queue's reservation only when it matches a pending preregistered row (linked to it below)
+    try:
+        quarter, preregs = reg.check_budget_reserved([(j.family, j.config) for j in jobs],
+                                                     settings.research.trial_budget_quarter,
+                                                     settings.research.reserved_trials_quarter)
     except TrialBudgetExceeded as exc:
         raise SystemExit(str(exc)) from None
     years_span = (b1["ts_utc"].iloc[-1] - b1["ts_utc"].iloc[0]).days / 365.25
@@ -426,7 +433,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     frames: dict[str, tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, Any], tuple[pd.DataFrame, pd.DataFrame]]] = {}
     sections, rows = [], []
     title = jobs[0].family
-    for job in jobs:
+    for job, prereg in zip(jobs, preregs, strict=True):
         tf = job.timeframe
         if tf not in frames:                       # bars, context, decision frame and lookahead check once per timeframe
             b_dec = resample_bars(b1, tf)
@@ -463,7 +470,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             metrics: dict[str, Any] = {"n_candidates": n, "rule_only": scr["rule_only"], "swap": swap.model_dump(),
                                        "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
             row = reg.record(agent_id=agent_id, family=job.family, config=job.config, feature_version=version,
-                             rationale=rationale, results=metrics, status="screened", budget_quarter=quarter)
+                             rationale=rationale, results=metrics, status="screened", budget_quarter=quarter,
+                             preregistration=prereg)
             print(f"{json.dumps(job.overrides) or 'defaults'}: screen {scr['verdict']} ({n} events) [{time.time() - t0:.0f}s]", flush=True)
             text = render_screen_failed(scr, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0, "n": n,
                                                     "swap": swap.model_dump(), "cost_source": cost_source,
@@ -481,7 +489,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             metrics = {**res.metrics, "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
             row = reg.record(agent_id=res.agent_id, family=job.family, config=job.config, feature_version=res.feature_version,
                              rationale=rationale, results=metrics, status="holdout" if args.score_holdout else "evaluated",
-                             budget_quarter=quarter)
+                             budget_quarter=quarter, preregistration=prereg)
             res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped, "cost_source": cost_source,
                            "macro": macro_info, "rule_only_split": split}
             years = per_year(res.oof, res.metrics.get("threshold"))
@@ -518,7 +526,9 @@ def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.D
     try:
         cfg = DiscoveryConfig(**json.loads(args.discover_config))
         row, text = discovery_pass(SPECIALISTS[args.specialist](**variants[0]), b1, reg,
-                                   budget_cap=settings.research.trial_budget_quarter, cfg=cfg, group_mode=args.families,
+                                   budget_cap=settings.research.trial_budget_quarter,
+                                   reserved_setting=settings.research.reserved_trials_quarter, cfg=cfg,
+                                   group_mode=args.families,
                                    extra_cost_usd=extra_cost, swap=swap, holdout=holdout,
                                    ctx={"macro": macro} if macro is not None else None, rationale=args.rationale,
                                    cost_source=cost_source)

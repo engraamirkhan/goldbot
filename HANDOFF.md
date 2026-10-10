@@ -91,6 +91,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   of the quarter may use the reservation, and its registry row is linked to that pre-registration
   (`director.pending_preregistration`). `monthly_research` reads the reservation of the slot's quarter, not the wall
   clock's.
+- Reservation on the manual paths (quant review MEDIUM, 2026-10-10): `scripts/research_pass.py` (ad-hoc variants,
+  screens, pooled runs, holdout scorings) and `--discover` now check through `TrialRegistry.check_budget_reserved`
+  (same `reserved_trials`/`pending_preregistration` as the director): a run matching a pending queued
+  `preregistered` row (family + config hash) may use the reservation and is linked to that row; anything else must fit
+  in budget - used - reserved. An ad-hoc discovery's own just-in-time pre-registration is written with `queue: false`
+  and no longer counts as a queue trial run. A run's link to its pre-registration now also matches the row's
+  timestamp (two rows can share a trial number). Holdout scorings come out of the unreserved remainder unless
+  pre-registered (preregistration-2027Q1.md). CPCV stays evidence, uncharged (ADR 0002). To spend the reserved H-02
+  slot, pre-register the discovery's exact config (incl. bars range) before running it.
 - CUSUM re-verify fixes (M24/M25): h now sits halfway between the chosen reachable value of the statistic and the
   next higher one (`cusum.decision_interval`: same rate, but unrounded live sums can no longer turn a tie into an
   alarm); the drift watch calibrates on the agent's actual taken p values resampled per trade (`ps`), not their mean.
