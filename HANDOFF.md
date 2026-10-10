@@ -579,6 +579,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   assigned"): the backend and frontend install steps tee into `ci-out/<job>-install.txt` and add `<job>-install` to
   the failed list, so `report-failure` posts the install output. "No runner was assigned" is now said only when no
   artifact exists at all. `actionlint` + shellcheck clean; the first failing run on GitHub is the real check.
+- Daily owner digest (2026-10-10, `goldbot/telegram/digest.py`, TRACEABILITY A12): the Telegram service sends one
+  message a day at `telegram.digest_at` (default 06:45 UTC): health status (failing/warning checks named), yesterday's
+  proposals by outcome, closed trades (net $ and R), open positions, drawdown stage and cap use, halts, the next
+  pre-registered trial or quarter budget, the attribution best/worst non-noise cell, and what waits for the owner
+  (approvals, ROADMAP decision count, deploy on offer). Units and UTC on every number, no identifiers, under 15 lines;
+  each section degrades on its own. Sent once per slot (`state/telegram_digest.json`, recorded after delivery); a
+  slot missed while the service was down goes out on start if under 6 h late. Reporting only.
 
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional

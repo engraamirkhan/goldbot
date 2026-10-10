@@ -206,6 +206,9 @@ gaps:                                # bounded spawning (goldbot/ops/gap_watch.p
   regime_window_days: 20             # recent realised volatility = mean of the last 20 daily values
   regime_history_days: 3650          # volatility terciles cut from up to ten years of 1h bars
 
+telegram:                            # owner user ids go in config/settings.local.yaml (per server), never here
+  digest_at: "06:45"                 # daily owner digest at this UTC time, before London (goldbot/telegram/digest.py)
+
 attribution:                         # daily deterministic attribution (goldbot/research/attribution.py, BACKLOG 12); reporting only
   window_days: 180                   # closed shadow trades exited in the last 180 days
   min_trades: 30                     # cells with fewer trades are marked "noise" and are not evidence
