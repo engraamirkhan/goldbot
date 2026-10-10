@@ -59,7 +59,7 @@ def _records(tmp_path: Path) -> list[ClosedTrade]:
 
 
 def _lines(tmp_path: Path) -> int:
-    f = tmp_path / gates_phase.CLOSED_TRADES_FILE
+    f = gates_phase.closed_trade_file(tmp_path, "icm-demo")
     return len(f.read_text().splitlines()) if f.exists() else 0
 
 
@@ -286,7 +286,7 @@ def test_a_repeated_line_is_counted_once(tmp_path):
     _enter(eng, pb, TREND)
     pb.on_tick(_tick(30, 2002.5))
     _settle(eng)
-    f = tmp_path / gates_phase.CLOSED_TRADES_FILE
+    f = gates_phase.closed_trade_file(tmp_path, "icm-demo")
     f.write_text(f.read_text() * 2)
     assert len(_records(tmp_path)) == 1
 
@@ -296,7 +296,7 @@ def test_the_record_line_is_one_json_object_per_trade(tmp_path):
     _enter(eng, pb, TREND)
     pb.on_tick(_tick(30, 2002.5))
     _settle(eng)
-    row = json.loads((tmp_path / gates_phase.CLOSED_TRADES_FILE).read_text().splitlines()[0])
+    row = json.loads((gates_phase.closed_trade_file(tmp_path, "icm-demo")).read_text().splitlines()[0])
     assert {"account_id", "mode", "agent_id", "side", "lots", "entry_utc", "entry_price", "exit_utc", "exit_price",
             "exit_reason", "pnl", "r", "commission", "swap", "client_order_id", "position_id"} <= set(row)
 
@@ -366,3 +366,19 @@ def test_positions_raising_does_not_crash_on_tick_and_later_ticks_still_manage(t
     assert pid not in eng.open and not pb.positions()
     (t,) = _records(tmp_path)
     assert t.exit_reason == "engine_stop_close"
+
+
+def test_each_account_appends_to_its_own_file_and_the_loader_reads_them_all(tmp_path):
+    """Two engines never share a file (Windows O_APPEND is not atomic); the legacy shared file is still read."""
+    from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, closed_trade_file
+    base = dict(broker="icm", mode="demo", agent_id="a", side=1, lots=0.1, entry_utc=T0, entry_price=2400.0,
+                exit_utc=T0 + pd.Timedelta(hours=1), exit_price=2401.0, exit_reason="target", pnl=10.0, r=1.0,
+                ret=0.0004, equity_before=10_000.0)
+    append_closed_trade(tmp_path, ClosedTrade(account_id="icm-demo", position_id=1, **base))   # type: ignore[arg-type]
+    append_closed_trade(tmp_path, ClosedTrade(account_id="vantage-demo", position_id=1, **base))   # type: ignore[arg-type]
+    assert closed_trade_file(tmp_path, "icm-demo").exists() and closed_trade_file(tmp_path, "vantage-demo").exists()
+    (tmp_path / gates_phase.CLOSED_TRADES_FILE).write_text(
+        ClosedTrade(account_id="icm-demo", position_id=2, **base).model_dump_json() + "\n")   # type: ignore[arg-type]
+    trades, err = load_closed_trades(tmp_path)
+    assert err is None and sorted((t.account_id, t.position_id) for t in trades) == [
+        ("icm-demo", 1), ("icm-demo", 2), ("vantage-demo", 1)]

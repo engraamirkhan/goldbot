@@ -409,7 +409,7 @@ def test_a_torn_line_is_skipped_the_rest_still_count_and_the_engine_records_a_dq
         _enter(eng, pb, TREND, at=T0 + pd.Timedelta(hours=k))
         pb.on_tick(Tick(ts_utc=T0 + pd.Timedelta(hours=k, minutes=30), bid=2002.5, ask=2002.5))
         _settle(eng)
-    f = tmp_path / gates_phase.CLOSED_TRADES_FILE
+    f = gates_phase.closed_trade_file(tmp_path, "icm-demo")
     first, second = f.read_text().splitlines()
     f.write_text(first + "\n" + second[: len(second) // 2] + "\n" + second + "\n")   # a torn line in the middle
     trades, err = load_closed_trades(tmp_path)

@@ -1270,7 +1270,16 @@ class Engine:
         self.open = {int(k): OpenTrade.model_validate(v) for k, v in d.get("open", {}).items()}
         self._closes = [PendingClose.model_validate(v) for v in d.get("closing", [])]
         self._records_lost = [int(x) for x in d.get("records_lost", [])]
-        positions = {p.position_id: p for p in self.broker.positions()}
+        try:
+            positions = {p.position_id: p for p in self.broker.positions()}
+        except Exception as exc:
+            # fail closed (the engine does not start), but say why: the health check then shows an unreadable
+            # terminal instead of a merely stale engine (trading-safety review)
+            write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps({
+                "account": self.cfg.account_id, "ts": time.time(), "dq_error": True,
+                "dq_checks": ["positions_unreadable"], "stage": "unknown",
+                "startup_error": f"{type(exc).__name__}: {exc}"[:300]}), durable=False)
+            raise
         for cid, rec in self._orders.items():
             if rec.status != "sending":
                 continue

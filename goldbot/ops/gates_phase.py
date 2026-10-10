@@ -144,29 +144,42 @@ def load_closed_trades(state_dir: Path) -> tuple[list[ClosedTrade], str | None]:
     error, never silently dropped, and the lines after it still count, so the engine's set of recorded positions is
     never built from a truncated list. A trade is counted once: a later line with the same (account_id, position_id)
     is ignored (the engine writes once per position; this keeps the count right even if a line were ever repeated)."""
-    f = Path(state_dir) / CLOSED_TRADES_FILE
-    if not f.exists():
+    files = closed_trade_files(Path(state_dir))
+    if not files:
         return [], None
     out: list[ClosedTrade] = []
     seen: set[tuple[str, int]] = set()
     bad: list[str] = []
-    for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            t = ClosedTrade.model_validate_json(line)
-        except ValueError as exc:
-            bad.append(f"line {i}: {str(exc).splitlines()[0][:120]}")
-            continue
-        if t.position_id is not None:
-            key = (t.account_id, t.position_id)
-            if key in seen:
+    for f in files:
+        for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if not line.strip():
                 continue
-            seen.add(key)
-        out.append(t)
+            try:
+                t = ClosedTrade.model_validate_json(line)
+            except ValueError as exc:
+                bad.append(f"{f.name} line {i}: {str(exc).splitlines()[0][:120]}")
+                continue
+            if t.position_id is not None:
+                key = (t.account_id, t.position_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+            out.append(t)
     if bad:
-        return out, f"{CLOSED_TRADES_FILE}: {len(bad)} unreadable line(s) skipped ({bad[0]})"
+        return out, f"closed-trade record: {len(bad)} unreadable line(s) skipped ({bad[0]})"
     return out, None
+
+
+def closed_trade_file(state_dir: Path, account_id: str) -> Path:
+    """One record file per account: two engines never append to the same file (on Windows an O_APPEND write is a
+    seek plus a write, not atomic, so concurrent closes could overwrite each other; trading-safety review)."""
+    return Path(state_dir) / f"closed_trades_{account_id}.jsonl"
+
+
+def closed_trade_files(state_dir: Path) -> list[Path]:
+    """The legacy shared file (read only) plus every per-account file."""
+    legacy = Path(state_dir) / CLOSED_TRADES_FILE
+    return ([legacy] if legacy.exists() else []) + sorted(Path(state_dir).glob("closed_trades_*.jsonl"))
 
 
 def append_closed_trade(state_dir: Path, trade: ClosedTrade) -> None:
@@ -175,7 +188,7 @@ def append_closed_trade(state_dir: Path, trade: ClosedTrade) -> None:
     this returns, so a power cut never loses a recorded trade. A short write is completed (os.write may write less
     than asked), and a file whose last line was torn (no trailing newline) gets a newline first, so the new record is
     never glued to the torn one."""
-    f = Path(state_dir) / CLOSED_TRADES_FILE
+    f = closed_trade_file(Path(state_dir), trade.account_id)
     f.parent.mkdir(parents=True, exist_ok=True)
     new = not f.exists()
     data = (trade.model_dump_json() + "\n").encode("utf-8")
@@ -190,7 +203,7 @@ def append_closed_trade(state_dir: Path, trade: ClosedTrade) -> None:
         while view:
             n = os.write(fd, view)
             if n <= 0:
-                raise OSError(f"short write to {CLOSED_TRADES_FILE}: {len(view)} bytes left")
+                raise OSError(f"short write to {f.name}: {len(view)} bytes left")
             view = view[n:]
         os.fsync(fd)
     finally:
@@ -421,7 +434,7 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     items = _previous(2, passed) + [
         GateItem(name="paper_trades", met=len(paper) >= cfg.paper_min_trades,
                  evidence=f"{len(paper)} closed demo trades"
-                 + ("" if (state_dir / CLOSED_TRADES_FILE).exists() else f" (no {CLOSED_TRADES_FILE} yet)"),
+                 + ("" if closed_trade_files(state_dir) else " (no closed-trade record yet)"),
                  need=f">= {cfg.paper_min_trades}"),
         GateItem(name="paper_days", met=p_days >= cfg.paper_min_days, evidence=f"{p_days:.0f} days since backtest_to_paper",
                  need=f">= {cfg.paper_min_days} days"),
