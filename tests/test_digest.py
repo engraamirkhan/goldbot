@@ -228,3 +228,16 @@ def test_digest_counts_a_preregistration_run_without_its_link_by_the_directors_m
     text = build_digest(tmp_path, NOW, settings=load_settings(), roadmap=tmp_path / "nope.md", registry_path=reg)
     assert "Research: no pre-registered trial waiting · budget 2026Q4: 1 of 20 trials used, 12 reserved for " \
            "pre-registered, 7 open" in text
+
+
+def test_digest_shows_next_quarters_queue_in_the_quarter_before(tmp_path: Path) -> None:
+    reg = tmp_path / "trials.jsonl"
+    reg.write_text("\n".join(json.dumps(r) for r in (
+        {"trial": 1, "ts": "2026-10-05T00:00:00+00:00", "status": "preregistered", "family": "tsmom",
+         "config_hash": "h1", "target_quarter": "2027Q1"},
+        {"trial": 1, "ts": "2026-10-06T00:00:00+00:00", "status": "preregistered", "family": "tsmom",
+         "config_hash": "h2", "target_quarter": "2027Q1"},
+    )) + "\n")
+    text = build_digest(tmp_path, NOW, settings=load_settings(), roadmap=tmp_path / "nope.md", registry_path=reg)
+    assert "Research: no pre-registered trial waiting · budget 2026Q4: 0 of 20 trials used, 13 reserved for " \
+           "pre-registered, 7 open · next quarter: 2 queued" in text

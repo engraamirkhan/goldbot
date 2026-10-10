@@ -317,11 +317,8 @@ def grid_allowance(budget: dict[str, int], trial_budget_per_month: int, paused: 
 
 
 def _row_quarter(row: dict[str, Any]) -> str | None:
-    try:
-        ts = datetime.fromisoformat(str(row.get("ts")))
-    except ValueError:
-        return None
-    return quarter_of(ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc))
+    ts = _row_ts(row)
+    return None if ts is None else quarter_of(ts)
 
 
 def prereg_quarter(row: dict[str, Any]) -> str | None:
@@ -368,6 +365,23 @@ def reserved_trials(rows: list[dict[str, Any]], quarter: str, setting: int) -> R
     return Reservation(setting=setting, run=run, pending=pending, reserved=max(setting - run, pending, 0))
 
 
+def later_preregistration(rows: list[dict[str, Any]], quarter: str, family: str,
+                          config_hash: str) -> dict[str, Any] | None:
+    """The oldest queued `preregistered` row for exactly this family and config whose target quarter comes after
+    `quarter` and that no trial has used up, or None. A runner refuses such a config (`later_refusal`): an early run
+    would neither use the row up (`_match_preregistrations`) nor be the pre-registered trial."""
+    queued = [r for r in rows if is_queued(r)]
+    used = _match_preregistrations(rows, queued)
+    return next((p for i, p in enumerate(queued) if i not in used and str(prereg_quarter(p) or "") > quarter
+                 and p.get("family") == family and p.get("config_hash") == config_hash), None)
+
+
+def later_refusal(family: str, row: dict[str, Any]) -> str:
+    """The message every runner gives for a config queued for a later quarter."""
+    return (f"{family} config {row.get('config_hash')} is pre-registered for {prereg_quarter(row)} (queued row "
+            f"#{row.get('trial')}): it may not run before that quarter starts; run it then, or change the config")
+
+
 def pending_preregistration(rows: list[dict[str, Any]], quarter: str, family: str,
                             config_hash: str) -> dict[str, Any] | None:
     """The oldest `preregistered` row of `quarter` for exactly this family and config that no trial has run yet (the
@@ -390,7 +404,12 @@ def _prereg_matches(rows: list[dict[str, Any]], quarter: str) -> tuple[list[dict
 
 
 def _match_preregistrations(rows: list[dict[str, Any]], prereg: list[dict[str, Any]]) -> set[int]:
-    """Indices of `prereg` that a trial row of `rows` was run against (each trial uses at most one, oldest first)."""
+    """Indices of `prereg` that a trial row of `rows` was run against. Each trial uses at most one, and never a row
+    whose quarter (`prereg_quarter`) had not started when the trial was stamped (an early run of a later quarter's
+    config is not that quarter's pre-registered trial). A link names its row; an unlinked trial uses the same family
+    and config hash, preferring a row of its own quarter, then the oldest."""
+    starts = [_quarter_start_or_none(prereg_quarter(p)) for p in prereg]
+    quarters = [prereg_quarter(p) for p in prereg]
     matched: set[int] = set()
     for t in rows:
         if not is_trial(t):
@@ -399,17 +418,38 @@ def _match_preregistrations(rows: list[dict[str, Any]], prereg: list[dict[str, A
         ref: dict[str, Any] = raw if isinstance(raw, dict) else {}
         link = ref.get("trial")
         n = int(_num(t.get("trial")) or 0)
+        t_ts, t_q = _row_ts(t), _row_quarter(t)
+        cands: list[int] = []
         for i, p in enumerate(prereg):
-            if i in matched:
+            start = starts[i]
+            if i in matched or start is None or t_ts is None or t_ts < start:
                 continue
-            same = p.get("family") == t.get("family") and p.get("config_hash") == t.get("config_hash") \
-                and n >= int(_num(p.get("trial")) or 0)
-            # a link names its row by number and, when it recorded one, by timestamp (two rows can share a number)
-            linked = link is not None and p.get("trial") == link and ref.get("ts") in (None, p.get("ts"))
-            if linked or (link is None and same):
-                matched.add(i)
-                break
+            if link is not None:
+                # a link names its row by number and, when it recorded one, by timestamp (two rows can share a number)
+                if p.get("trial") == link and ref.get("ts") in (None, p.get("ts")):
+                    cands = [i]
+                    break
+            elif p.get("family") == t.get("family") and p.get("config_hash") == t.get("config_hash") \
+                    and n >= int(_num(p.get("trial")) or 0):
+                cands.append(i)
+        if cands:
+            matched.add(next((i for i in cands if quarters[i] == t_q), cands[0]))
     return matched
+
+
+def _row_ts(row: dict[str, Any]) -> datetime | None:
+    try:
+        ts = datetime.fromisoformat(str(row.get("ts")))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+
+def _quarter_start_or_none(quarter: str | None) -> datetime | None:
+    try:
+        return quarter_start(quarter) if quarter else None
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------------------------- evidence

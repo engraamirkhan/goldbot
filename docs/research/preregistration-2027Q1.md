@@ -51,7 +51,10 @@ range) was pre-registered before the run.
 `TrialRegistry.preregister(..., queue=True, target_quarter="2027Q1")` before 2027-01-01 (a queued row written once its
 quarter is under way is refused, and a hand-written one is treated as ad hoc). It then holds the 2027Q1 reservation
 and is used up by its trial whenever that runs. Without `target_quarter` the default is the quarter of the writing
-date, or the next quarter within 14 days of its start (from 2026-12-18 for 2027Q1).
+date, or the next quarter within 14 days of its start (from 2026-12-18 for 2027Q1). The row is stamped with the
+registry's clock (it cannot be backdated). **H-01 and H-02 must not run before 2027-01-01:** every runner (research
+analyst, `research_pass.py`, `--discover`, the label grid) refuses a config queued for a later quarter, and a trial
+stamped before its row's quarter would never use the row up.
 
 | # | ID | Trial | Depends on | Trials |
 |---|---|---|---|---|

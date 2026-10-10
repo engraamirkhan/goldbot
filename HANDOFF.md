@@ -111,6 +111,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`director.is_queued`). Rows without `target_quarter` keep the quarter of their timestamp. The digest's
   "next pre-registered trial" and budget line use the director's matching and show reserved/open. Preflight skips a
   `*.db-wal`/`*.db-shm` that vanishes between glob and stat.
+- Reservations cannot move quarters or be backdated (quant re-review, 2026-10-10): a trial stamped before its
+  pre-registration's quarter starts never uses that row up (an early Q4 run of H-01's config left Q1 at 12), and every
+  runner (analyst, `research_pass.py`/`--discover` via `check_budget_reserved` -> `PreregisteredForLaterQuarter`, the
+  label grid, which skips the variant) refuses a config queued for a later quarter (`director.later_preregistration`).
+  An unlinked trial prefers the row of its own quarter. `preregister` has no `now=` (stamped by `registry._utcnow`), and
+  `target_quarter` without `queue=True` is a ValueError. The digest adds "next quarter: N queued".
+  For the owner / backlog (no code change): L2 research.reserved_trials_quarter (13) applies every quarter, so 2026Q4
+  is also held to 7 open trials although its 13 queued trials are planned for 2027Q1 (owner decision: a per-quarter
+  setting or 0 for 2026Q4); L4 the retired-family exploration limit is enforced only on the research-analyst path
+  (research_pass.py, discovery and the label grid do not check research.retired_families).
 - CUSUM re-verify fixes (M24/M25): h now sits halfway between the chosen reachable value of the statistic and the
   next higher one (`cusum.decision_interval`: same rate, but unrounded live sums can no longer turn a tie into an
   alarm); the drift watch calibrates on the agent's actual taken p values resampled per trade (`ps`), not their mean.

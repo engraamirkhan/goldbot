@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -283,7 +284,7 @@ def _trial_line(settings: Settings | None, registry_path: Path | None, now: pd.T
     (director._prereg_matches / reserved_trials): a trial uses up its pre-registration by link or by family and config
     hash, so a run recorded without the link (research_pass) is not shown as still waiting."""
     from goldbot.research.director import _prereg_matches, reserved_trials
-    from goldbot.research.registry import quarter_of, quarter_trials
+    from goldbot.research.registry import quarter_of, quarter_start, quarter_trials
     budget = settings.research.trial_budget_quarter if settings is not None else 20
     setting = settings.research.reserved_trials_quarter if settings is not None else 0
     rows: list[dict[str, Any]] = []
@@ -294,6 +295,9 @@ def _trial_line(settings: Settings | None, registry_path: Path | None, now: pd.T
     reserved = reserved_trials(rows, q, setting).reserved
     budget_txt = (f"budget {q}: {used} of {budget} trials used, {reserved} reserved for pre-registered, "
                   f"{max(budget - used - reserved, 0)} open")
+    nq_rows, nq_matched = _prereg_matches(rows, quarter_of(quarter_start(q) + timedelta(days=100)))
+    if len(nq_rows) > len(nq_matched):    # next quarter's queue, visible in the quarter before (H-01/H-02 in December)
+        budget_txt += f" · next quarter: {len(nq_rows) - len(nq_matched)} queued"
     prereg, matched = _prereg_matches(rows, q)
     waiting = [p for i, p in enumerate(prereg) if i not in matched]
     if waiting:

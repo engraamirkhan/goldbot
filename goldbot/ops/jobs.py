@@ -100,6 +100,8 @@ from goldbot.research.director import (
     ShadowEvidence,
     build_plan,
     holdout_window,
+    later_preregistration,
+    later_refusal,
     load_attribution,
     load_hypotheses,
     pending_preregistration,
@@ -703,7 +705,8 @@ def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = 
     linked to that pre-registration (so the reservation shrinks by one). A retired family (research.retired_families)
     that the director's current plan has not reinstated gets no trial from the open budget beyond the retired
     families' ONE shared exploration trial a quarter (director.RETIRED_EXPLORATION, counted from the registry as the
-    director counts it); only a pending pre-registration of exactly that configuration lifts the refusal."""
+    director counts it); only a pending pre-registration of exactly that configuration lifts the refusal. A
+    configuration queued for a later quarter is refused (`director.later_preregistration`)."""
     def run(family: str, overrides: dict[str, Any], rationale: str) -> dict[str, Any]:
         end = now() if now is not None else pd.Timestamp.now("UTC")
         r = ctx.settings.research
@@ -713,6 +716,9 @@ def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = 
             rows = read_rows(ctx.trials.path)
             q_now = quarter_of()          # the quarter the row will be stamped in (check_budget's)
             prereg = pending_preregistration(rows, q_now, family, config_hash(config))
+            later = None if prereg is not None else later_preregistration(rows, q_now, family, config_hash(config))
+            if later is not None:
+                return {"error": later_refusal(family, later)}
             reserved = reserved_trials(rows, q_now, r.reserved_trials_quarter).reserved
             cap = quarter_budget(r) if prereg is not None else max(quarter_budget(r) - reserved, 0)
             try:
@@ -792,10 +798,17 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         budget = min(plan.grid_budget.get(family, r.trial_budget_per_month), r.trial_budget_per_month) if plan \
             else r.trial_budget_per_month
         rows = []
+        skipped: list[str] = []
         stopped = False
         for overrides in grid[:budget]:
             with ctx.trials.locked():           # check, run and record as one step: two writers cannot both pass
-                reserved = reserved_trials(read_rows(ctx.trials.path), slot_quarter, r.reserved_trials_quarter).reserved
+                reg_rows = read_rows(ctx.trials.path)
+                later = later_preregistration(reg_rows, slot_quarter, family,
+                                              config_hash({**SPECIALISTS[family].default_config, **overrides}))
+                if later is not None:           # queued for a later quarter: not this quarter's grid variant
+                    skipped.append(later_refusal(family, later))
+                    continue
+                reserved = reserved_trials(reg_rows, slot_quarter, r.reserved_trials_quarter).reserved
                 try:
                     quarter = ctx.trials.check_budget(1, max(q_budget - reserved, 0))
                 except TrialBudgetExceeded as exc:
@@ -812,11 +825,12 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             mf = res.metrics.get("model_filtered") or {}
             rows.append({"trial": row["trial"], **overrides, "n": mf.get("n", 0), "sharpe": mf.get("sharpe_ann"), "dsr": mf.get("dsr")})
         out[family] = {"trials": len(rows), "budget": budget, "timeframe": tf, "registry_total": ctx.trials.n_trials,
-                       "quarter_budget_spent": stopped}
+                       "quarter_budget_spent": stopped, "skipped": skipped}
         lines += [f"## {family} ({len(rows)} of {budget} budgeted trials, registry total {ctx.trials.n_trials})", ""]
         if stopped:
             lines += [f"Stopped: the quarter's trial budget ({q_budget}) is spent, counting the trials held for the "
                       f"pre-registered queue (research.reserved_trials_quarter).", ""]
+        lines += [f"Skipped: {x}" for x in skipped] + ([""] if skipped else [])
         reasons = next((f.reasons for f in plan.focus if f.family == family), []) if plan else []
         lines += [f"- director: {x}" for x in reasons] + ([""] if reasons else [])
         lines += ["| trial | target | stop | max bars | n | Sharpe | DSR |", "|---:|---:|---:|---:|---:|---:|---:|"]

@@ -56,6 +56,11 @@ class TrialBudgetExceeded(ValueError):
     """The quarter's pre-registered trial budget would be exceeded."""
 
 
+class PreregisteredForLaterQuarter(TrialBudgetExceeded):
+    """The configuration is pre-registered (queued) for a quarter that has not started: running it now would spend this
+    quarter's budget on a trial the plan put in a later one, and read it by a rule meant for later data."""
+
+
 def config_hash(config: dict) -> str:
     return hashlib.sha1(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()[:12]
 
@@ -76,6 +81,11 @@ def quarter_start(quarter: str) -> datetime:
     if not _QUARTER_RE.match(quarter):
         raise ValueError(f"a quarter looks like 2027Q1, got {quarter!r}")
     return datetime(int(quarter[:4]), 3 * (int(quarter[5]) - 1) + 1, 1, tzinfo=timezone.utc)
+
+
+def _utcnow() -> datetime:
+    """The registry's clock for pre-registrations (a function so tests can set it; callers cannot pass a time)."""
+    return datetime.now(timezone.utc)
 
 
 def planned_quarter(ts: datetime | None = None) -> str:
@@ -173,7 +183,7 @@ class TrialRegistry:
 
     def preregister(self, *, agent_id: str, family: str, config: dict, feature_version: str, rationale: str,
                     reading_rule: str, plan: dict[str, Any] | None = None, queue: bool = False,
-                    target_quarter: str | None = None, now: datetime | None = None) -> dict:
+                    target_quarter: str | None = None) -> dict:
         """Write the pre-registration of the next trial BEFORE it runs: its config (hashed as the result row will be),
         the rule its result will be read by, and the plan (e.g. the number of features to be screened). Not a trial:
         it carries the number the result row will take. By default (`queue=False`) it is the pre-registration a run
@@ -181,10 +191,12 @@ class TrialRegistry:
         quarter's reservation (director.reserved_trials). `queue=True` writes a row of the queue, stamped with the
         `target_quarter` it is planned for (default `planned_quarter(now)`), which must not have started yet (ValueError
         otherwise: a row written once its quarter is under way would only be an ad-hoc run spending the reservation);
-        it holds and is counted in that quarter's reservation whenever its trial runs. `now`: the time it is stamped
-        with, default the wall clock."""
-        ts = now or datetime.now(timezone.utc)
-        ts = ts.astimezone(timezone.utc) if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+        it holds and is counted in that quarter's reservation, and only a trial run in that quarter or later uses it
+        up. The row is stamped with the registry's clock (`_utcnow`), never a time passed in: a queued row cannot be
+        backdated to before its quarter. `target_quarter` without `queue=True` is a ValueError (it would be ignored)."""
+        if target_quarter is not None and not queue:
+            raise ValueError("target_quarter is only for a queued pre-registration: pass queue=True as well")
+        ts = _utcnow()
         row: dict[str, Any] = {
             "trial": self.n_trials + 1,
             "ts": ts.isoformat(),
@@ -269,18 +281,27 @@ class TrialRegistry:
     def check_budget_reserved(self, jobs: Sequence[tuple[str, dict[str, Any]]], cap: int, reserved_setting: int,
                               now: datetime | None = None) -> tuple[str, list[dict[str, Any] | None]]:
         """`check_budget` for `jobs` ((family, config) each) that honours the pre-registered queue's reservation, as
-        the analyst, the director and the label grid do: a job matching a pending queued `preregistered` row of the
+        the analyst, the director and the label grid do (a job whose config is queued for a later quarter is refused,
+        PreregisteredForLaterQuarter): a job matching a pending queued `preregistered` row of the
         quarter (`director.pending_preregistration`: same family and config hash) may use the full `cap` and must be
         recorded linked to that row (so the reservation goes down by one); every other job must fit in
         cap - used - reserved (`director.reserved_trials`, `reserved_setting` = research.reserved_trials_quarter).
         Raises TrialBudgetExceeded; returns (the quarter, the matching pre-registration or None, per job)."""
         # director imports this module, so the import is local
-        from goldbot.research.director import pending_preregistration, reserved_trials
+        from goldbot.research.director import (
+            later_preregistration,
+            later_refusal,
+            pending_preregistration,
+            reserved_trials,
+        )
         q = quarter_of(now)
         rows = self._rows()
         preregs: list[dict[str, Any] | None] = []
         for family, config in jobs:
             p = pending_preregistration(rows, q, family, config_hash(config))
+            later = None if p is not None else later_preregistration(rows, q, family, config_hash(config))
+            if later is not None:
+                raise PreregisteredForLaterQuarter(later_refusal(family, later))
             preregs.append(None if p is not None and any(p is c for c in preregs) else p)   # one row covers one run
         n_open = sum(p is None for p in preregs)
         reserved = reserved_trials(rows, q, reserved_setting).reserved

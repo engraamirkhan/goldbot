@@ -454,8 +454,8 @@ def test_an_ad_hoc_run_cannot_spend_the_reserved_trials_and_a_preregistered_run_
         rp.main()                                        # 2 - 1 used - 1 reserved: nothing left for an ad-hoc run
     assert reg.n_trials == 1
     cfg = SPECIALISTS["session_open"]().config
-    pre = reg.preregister(agent_id="x", family="session_open", config=cfg, feature_version="f", rationale="planned",
-                          reading_rule="continue if ...", **queued_prereg)
+    pre = queued_prereg(reg, agent_id="x", family="session_open", config=cfg, feature_version="f", rationale="planned",
+                          reading_rule="continue if ...")
     assert rp.main() == 0                                # the pre-registered configuration uses the reserved trial
     last = _rows(registry)[-1]
     assert last["status"] == "evaluated" and last["preregistration"]["ts"] == pre["ts"]
@@ -477,9 +477,8 @@ def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, m
     with pytest.raises(SystemExit, match="held for the pre-registered queue"):
         rp.main()                                        # a second ad-hoc discovery would spend the reserved trial
     assert len(_rows(registry)) == 2                     # refused before any row is written
-    queued = TrialRegistry(registry).preregister(agent_id=res["agent_id"], family=res["family"], config=res["config"],
-                                                 feature_version="f", rationale="H-02", reading_rule=pre["reading_rule"],
-                                                 **queued_prereg)
+    queued = queued_prereg(TrialRegistry(registry), agent_id=res["agent_id"], family=res["family"], config=res["config"],
+                                                 feature_version="f", rationale="H-02", reading_rule=pre["reading_rule"])
     assert rp.main() == 0                                # the queued pre-registration may use it
     rows = _rows(registry)
     assert [r["status"] for r in rows[2:]] == ["preregistered", "discovery"]   # no second, self-written row
