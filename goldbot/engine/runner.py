@@ -67,9 +67,12 @@ SKEW_WINDOW = 120            # new ticks in the rolling median of broker-vs-wall
 SKEW_BLOCK_S = 10.0
 SKEW_MIN_SAMPLES = 10
 LATE_BARS_BLOCK = 3
-# an exception while processing a tick (the run loop logs it and carries on) blocks entries until this many ticks in a
-# row are processed cleanly; exits never wait for it
-TICK_ERROR_CLEAR_TICKS = 20
+# an exception while processing a tick (the run loop logs it and carries on) blocks entries until a whole decision bar
+# has closed with no error in it; exits never wait for it. Repeated errors are logged once per type, then at most every
+# TICK_ERROR_LOG_S with a count, and the engine state is rewritten at most every TICK_ERROR_STATE_S while failing.
+TICK_ERROR_LOG_S = 60.0
+TICK_ERROR_STATE_S = 10.0
+TICK_LOG_MAX = 20_000        # ticks kept for the store while writes fail (a full disk): the oldest are dropped
 
 
 class Model(Protocol):
@@ -286,8 +289,13 @@ class Engine:
         # it outside the tick path, so on_tick never calls the broker for sessions); read with no I/O
         self.sessions: SessionTable = SessionTable(server_tz=cfg.server_tz)
         self.clock_probe: server_clock.ServerClockProbe | None = None   # latest server-clock measurement
-        self._clean_ticks = 0                          # ticks processed without an exception since the last one
         self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)
+        self.tick_errors_total = 0                     # since the engine started (engine state, health)
+        self._last_tick_error_at: pd.Timestamp | None = None
+        self._err_log: dict[str, tuple[float, int]] = {}   # exception type -> (last logged, monotonic; suppressed since)
+        self._err_state_written = -1e18                # monotonic time of the last state write caused by an error
+        self._tick_flush_retry: pd.Timestamp | None = None  # after a failed tick-log write, no retry before this
+        self.ticks_dropped = 0                         # tick-log entries dropped while the store could not be written
         # risk periods and the owner's re-arm survive a restart (state/risk_<account>.json)
         self._last_reset: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
@@ -353,25 +361,45 @@ class Engine:
             self._poll_rearm(self._now(t))
         except Exception as exc:
             self.note_tick_error(exc)
-        out = self._on_tick(t)
-        if self.state.tick_error and self._tick_error_detail is not None:
-            self._clean_ticks += 1      # this tick ran to the end
-            if self._clean_ticks >= TICK_ERROR_CLEAR_TICKS:
-                self.state.tick_error, self._tick_error_detail = False, None
-                self._write_state()
-        return out
+        return self._on_tick(t)
+
+    def _error_now(self) -> pd.Timestamp:
+        if self.cfg.live_clock or self._last_tick is None:
+            return self.clock()
+        return self._last_tick.ts_utc
 
     def note_tick_error(self, exc: BaseException) -> None:
-        """A tick raised (the run loop or an approval): log it, block entries (`tick_error`) until
-        TICK_ERROR_CLEAR_TICKS clean ticks, and publish it in the engine state for the health alert."""
-        log.exception("tick processing failed (%s); entries blocked until %d clean ticks", type(exc).__name__,
-                      TICK_ERROR_CLEAR_TICKS, exc_info=exc)
-        self.state.tick_error, self._clean_ticks = True, -1   # the failing tick itself does not count as clean
-        self._tick_error_detail = type(exc).__name__
+        """A tick raised (the run loop, an approval, the tick log, the risk-period read): block entries (`tick_error`)
+        until a whole decision bar closes with no error in it, count it (`tick_errors_total`, `last_tick_error_at` in
+        the engine state, alerted by health) and log it: the first of each type with its traceback, then at most every
+        TICK_ERROR_LOG_S with the number suppressed. The state file is rewritten at most every TICK_ERROR_STATE_S."""
+        kind = type(exc).__name__
+        self.state.tick_error = True
+        self._tick_error_detail = kind
+        self.tick_errors_total += 1
+        self._last_tick_error_at = self._error_now()
+        mono = time.monotonic()
+        last, suppressed = self._err_log.get(kind, (None, 0))
+        if last is None or mono - last >= TICK_ERROR_LOG_S:
+            more = f" ({suppressed} more since the last report)" if suppressed else ""
+            log.error("tick processing failed (%s)%s; entries blocked until a clean decision bar, exits continue",
+                      kind, more, exc_info=exc if last is None else None)
+            self._err_log[kind] = (mono, 0)
+        else:
+            self._err_log[kind] = (last, suppressed + 1)
+        if mono - self._err_state_written >= TICK_ERROR_STATE_S:
+            self._err_state_written = mono
+            try:
+                self._write_state()
+            except Exception:
+                log.warning("engine state not written after a tick error")
+
+    def _guard(self, fn: Callable[[], object]) -> None:
+        """Run one non-exit step of a tick; an exception becomes a tick error instead of aborting the tick."""
         try:
-            self._write_state()
-        except Exception:
-            log.exception("engine state not written after a tick error")
+            fn()
+        except Exception as exc:
+            self.note_tick_error(exc)
 
     def _on_tick(self, t: Tick) -> list[dict]:
         if not self._tick_ok(t):
@@ -386,16 +414,18 @@ class Engine:
                 self.ticks.append(t)
             else:
                 self._late_tick(t)      # never revises a bar the clock already finalised
-            self._log_tick(t)
-        self._refresh_broker_terms(t.ts_utc)
-        self._roll_risk_period(t.ts_utc)
         if hasattr(self.broker, "on_tick"):
-            self.broker.on_tick(t)  # paper broker fills
+            self._guard(lambda: self.broker.on_tick(t))   # type: ignore[attr-defined]  # paper broker fills
+        # exits first: nothing that writes files or reads the account may stand between a quote and the stop check
         self._stop_check(t)
         self._retry_closes(t)              # closes decided earlier that have not succeeded: every tick until done
         if self._kill_pending and self.state.stage == Stage.HALTED:
             self._kill_switch(everything=False)   # until this engine's book is flat
         self._scale_out(t)
+        if not repeat:
+            self._guard(lambda: self._log_tick(t))      # a full disk is a tick error, never a skipped exit
+        self._refresh_broker_terms(t.ts_utc)
+        self._guard(lambda: self._roll_risk_period(t.ts_utc))
         if self._last_reconcile is None or (t.ts_utc - self._last_reconcile).total_seconds() >= self.cfg.reconcile_every_s:
             self._reconcile(t.ts_utc)
         sec = tf_seconds(self.cfg.decision_tf)
@@ -407,6 +437,10 @@ class Engine:
             self._rebuild_bars(until=due)   # every minute before the close is complete; none at or after it joins
             out = self.on_bar_close(due, t)
             self._last_state_write = t.ts_utc
+            bar_open = due - pd.Timedelta(seconds=sec)
+            if self.state.tick_error and (self._last_tick_error_at is None or self._last_tick_error_at < bar_open):
+                self.state.tick_error, self._tick_error_detail = False, None   # a whole clean decision bar closed
+                self._write_state()
         elif self._last_state_write is None or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:
             self._rebuild_bars()            # completed minutes join the bars between closes, so their age is current
             self._refresh_account(t)
@@ -1833,11 +1867,25 @@ class Engine:
         self._journaled = len(self.decisions)
 
     def _log_tick(self, t: Tick) -> None:
+        """Buffer the tick for the store and flush every tick_flush_s. A failed write (a full disk) raises once, then is
+        not retried for tick_flush_s; meanwhile the buffer keeps the newest TICK_LOG_MAX ticks (older ones dropped and
+        counted), so a broken disk can neither grow memory nor fail every tick."""
         if self.store is None:
             return
         self._tick_log.append(t)
+        if len(self._tick_log) > TICK_LOG_MAX:
+            drop = len(self._tick_log) - TICK_LOG_MAX
+            self._tick_log = self._tick_log[drop:]
+            self.ticks_dropped += drop
+        if self._tick_flush_retry is not None and t.ts_utc < self._tick_flush_retry:
+            return
         if (t.ts_utc - self._tick_log[0].ts_utc).total_seconds() >= self.cfg.tick_flush_s:
-            self.flush_ticks()
+            try:
+                self.flush_ticks()
+                self._tick_flush_retry = None
+            except Exception:
+                self._tick_flush_retry = t.ts_utc + pd.Timedelta(seconds=max(self.cfg.tick_flush_s, 1))
+                raise
 
     def flush_ticks(self) -> None:
         """Write buffered ticks as one new part file (append-only; the nightly cost job reads them)."""
@@ -1930,6 +1978,8 @@ class Engine:
             "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
             "tick_ahead_s": st.tick_ahead_s, "market_closed": st.market_closed, "session_source": self.sessions.source,
             "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail,
+            "tick_errors_total": self.tick_errors_total, "ticks_dropped": self.ticks_dropped,
+            "last_tick_error_at": self._last_tick_error_at.isoformat() if self._last_tick_error_at is not None else None,
             "sessions": session_table_cache(self.sessions),
             "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
         }

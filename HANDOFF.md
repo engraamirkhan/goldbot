@@ -753,6 +753,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
+  (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
+  before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each
+  guarded (`_guard` -> `note_tick_error`). A failed tick-log write is retried only after `tick_flush_s` and the buffer
+  keeps the newest `TICK_LOG_MAX` (20,000) ticks (`ticks_dropped` counted), so a full disk neither fails every tick nor
+  grows memory. `tick_error` now clears only when a whole decision bar closes with no error in it (was 20 polls);
+  `note_tick_error` logs the first error of each type with its traceback, then once a minute with a count, and rewrites
+  the engine state at most every 10 s; engine state adds `tick_errors_total`, `last_tick_error_at`, `ticks_dropped`.
+  Health: new `tick_errors:<account>` warns (announced on Telegram) for 15 minutes after an error or when one happened
+  since the previous health run (`health_last.json` ts). `run.py` `engine_pass` routes an AssertionError to
+  `note_tick_error` too (it was swallowed silently).
 - Server clock offset probe and `NY+7` zone (2026-10-10, HIGH from the trading-safety review; answers the D13 open
   ops check above). Research: IC Markets' own notices say its MT4/MT5 server time "is based on '5 pm New York'" and
   moves GMT+2 -> GMT+3 on the US DST start (10 Mar 2024, 9 Mar 2025) and back on the US DST end (4 Nov 2018), so
