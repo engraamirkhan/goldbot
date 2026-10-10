@@ -821,7 +821,7 @@ def cpcv_quarterly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     store's bars up to the holdout (never into it), compared for PBO with its family's other walk-forward trials on
     the same timeframe (the configurations it was selected among, the most recent CPCV_MAX_CONFIGS). The result is
     attached to the passing trial as evidence: not a trial, no budget slot, no deflated-Sharpe count. It can only
-    veto (ADR 0002: fragile when PBO > 0.5 or most paths negative), and its PBO is a lower bound (the selection set is
+    veto (ADR 0003: fragile when PBO > 0.5 or most paths negative), and its PBO is a lower bound (the selection set is
     every registered trial of the family on that timeframe, screened ones included). A trial whose recorded feature
     version differs from the one the store's bars build now is skipped, not re-run on different inputs. The evidence
     sidecar is local to the scheduler host (registry_sync does not carry it; docs/decisions/0002). Report ->

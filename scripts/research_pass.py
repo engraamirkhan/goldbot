@@ -44,7 +44,7 @@ Combinatorial purged CV (M16, goldbot/research/cpcv.py): `--cpcv <trial#> [<tria
 walk-forward trials on 6 time groups of the research window (15 purged splits, 5 backtest paths) and, for several
 trials, the probability of backtest overfitting across them. It is not a trial: no budget slot, no registry row; the
 result is attached to each trial as evidence (`<registry>.evidence.jsonl`). CPCV and PBO can only veto a config that
-passed the gates (docs/decisions/0002-cpcv-and-pbo-can-only-veto.md), so a trial that failed them is refused unless
+passed the gates (docs/decisions/0003-cpcv-and-pbo-can-only-veto.md), so a trial that failed them is refused unless
 `--diagnostic`: the report is then labelled "diagnostic, not evidence" and nothing is attached to the failed trials.
 
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
@@ -408,7 +408,7 @@ def main() -> int:
     ap.add_argument("--cpcv", type=int, nargs="+", default=None, metavar="TRIAL",
                     help="combinatorial purged CV of registered trials (evidence on them, not a trial); PBO across several")
     ap.add_argument("--diagnostic", action="store_true",
-                    help="with --cpcv: allow trials that failed the gates; output is diagnostic, not evidence (ADR 0002)")
+                    help="with --cpcv: allow trials that failed the gates; output is diagnostic, not evidence (ADR 0003)")
     ap.add_argument("--positioning", default="",
                     help="folder or Parquet of the positioning-v1 release: adds the opt-in COT/GLD features")
     _discovery_args(ap)
@@ -589,7 +589,7 @@ def _cpcv(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, extra_
           holdout: tuple[pd.Timestamp, pd.Timestamp] | None, cost_source: str, macro: pd.DataFrame | None) -> int:
     """Combinatorial purged CV of registered trials (goldbot/research/cpcv.py). Not a trial: no budget check, no
     registry row; the result is attached to each gate-passing trial as evidence. Several trials: PBO across them.
-    ADR 0002: CPCV can only veto a passed config, so a trial that failed the gates is refused unless --diagnostic."""
+    ADR 0003: CPCV can only veto a passed config, so a trial that failed the gates is refused unless --diagnostic."""
     from goldbot.research import cpcv
     from goldbot.research.registry_sync import read_rows
     rows = []
@@ -604,7 +604,7 @@ def _cpcv(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, extra_
     failed = [int(r["trial"]) for r in rows if not cpcv.gates_passed(r)]
     if failed and not getattr(args, "diagnostic", False):
         raise SystemExit(f"--cpcv: trial(s) {', '.join(map(str, failed))} failed the gates. CPCV and PBO can only veto a "
-                         "config that passed them, never rescue one (docs/decisions/0002-cpcv-and-pbo-can-only-veto.md); "
+                         "config that passed them, never rescue one (docs/decisions/0003-cpcv-and-pbo-can-only-veto.md); "
                          "add --diagnostic to run anyway (diagnostic, not evidence)")
     tfs = {cpcv.trial_timeframe(r) for r in rows}
     if len(tfs) != 1:

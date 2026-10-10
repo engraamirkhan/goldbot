@@ -26,7 +26,7 @@ is every registered trial of the family on that timeframe, screened ones include
 walk-forward trials compared (at most the job's cap) can be re-run; the report and the evidence say how many of the
 selection set were compared.
 
-Reading rule (docs/decisions/0002-cpcv-and-pbo-can-only-veto.md): CPCV and PBO can only VETO. A config that passed the
+Reading rule (docs/decisions/0003-cpcv-and-pbo-can-only-veto.md): CPCV and PBO can only VETO. A config that passed the
 gates is flagged fragile (`verdict`) when PBO > 0.5 or more than half of its paths have negative mean R; CPCV never
 rescues a config that failed the gates and never picks a winner among configs. `research_pass --cpcv` refuses failed
 trials unless `--diagnostic`, whose output is labelled "diagnostic, not evidence" and attaches nothing to them.
@@ -70,7 +70,7 @@ N_GROUPS = 6
 N_TEST_GROUPS = 2
 MIN_TRAIN = 200                  # as the walk-forward: a split with fewer purged training rows is not fitted
 EVIDENCE_KIND = "cpcv"
-PBO_FRAGILE = 0.5                # ADR 0002: PBO above this flags a passed config fragile
+PBO_FRAGILE = 0.5                # ADR 0003: PBO above this flags a passed config fragile
 NEGATIVE_PATHS_FRAGILE = 0.5     # ... as does more than this share of paths with negative mean R
 NOT_SELECTION = {"preregistered", "holdout"}   # a promise and a re-scoring: not alternatives the config was chosen among
 
@@ -182,7 +182,7 @@ def pbo(perf: np.ndarray) -> dict[str, Any] | None:
 
 
 def verdict(result: dict[str, Any], pbo_info: dict[str, Any] | None) -> dict[str, Any]:
-    """ADR 0002, veto only: fragile when PBO > PBO_FRAGILE or more than NEGATIVE_PATHS_FRAGILE of the paths have
+    """ADR 0003, veto only: fragile when PBO > PBO_FRAGILE or more than NEGATIVE_PATHS_FRAGILE of the paths have
     negative mean R. Never a pass: a config that failed the gates stays failed whatever this says."""
     reasons = []
     p = (pbo_info or {}).get("pbo")
@@ -192,7 +192,7 @@ def verdict(result: dict[str, Any], pbo_info: dict[str, Any] | None) -> dict[str
     neg = float(np.mean([v < 0 for v in paths])) if paths else None
     if neg is not None and neg > NEGATIVE_PATHS_FRAGILE:
         reasons.append(f"{neg:.0%} of paths with negative mean R")
-    return {"fragile": bool(reasons), "reasons": reasons, "rule": "veto only (ADR 0002)"}
+    return {"fragile": bool(reasons), "reasons": reasons, "rule": "veto only (ADR 0003)"}
 
 
 def _dist(x: list[float]) -> dict[str, float]:
@@ -389,13 +389,13 @@ def cpcv_trials(rows: list[dict[str, Any]], b_dec: pd.DataFrame, context: dict[s
 
 def evidence_payload(result: dict[str, Any], pbo_info: dict[str, Any] | None, source: str) -> dict[str, Any]:
     """What is attached to the trial: its CPCV result, the PBO of the comparison it was part of, and the veto-only
-    verdict (ADR 0002)."""
+    verdict (ADR 0003)."""
     return {**result, "pbo": pbo_info, "verdict": verdict(result, pbo_info), "source": source}
 
 
 def report_lines(per_trial: dict[int, dict[str, Any]], pbo_info: dict[str, Any] | None) -> list[str]:
     out = ["| trial | candidates | paths | Sharpe mean (min .. max) | mean R mean (min .. max) | paths with mean R > 0 "
-           "| veto (ADR 0002) |",
+           "| veto (ADR 0003) |",
            "|---:|---:|---:|---|---|---:|---|"]
     for t, r in per_trial.items():
         if "paths" not in r:
@@ -419,7 +419,7 @@ def report_lines(per_trial: dict[int, dict[str, Any]], pbo_info: dict[str, Any] 
                    "of the family on this timeframe, screened ones included) were compared.")
     else:
         out.append("PBO: needs at least two configurations compared on the same groups.")
-    out.append(f"Reading rule (ADR 0002): CPCV and PBO can only veto a config that passed the gates (fragile when PBO > "
+    out.append(f"Reading rule (ADR 0003): CPCV and PBO can only veto a config that passed the gates (fragile when PBO > "
                f"{PBO_FRAGILE:.0%} or more than half the paths are negative); they never rescue a failed config or "
                "pick a winner.")
     out += ["", f"{N_GROUPS} groups, {N_TEST_GROUPS} tested per split: {comb(N_GROUPS, N_TEST_GROUPS)} purged splits rebuild "

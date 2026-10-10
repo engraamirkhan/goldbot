@@ -1,4 +1,4 @@
-# 0002 CPCV and PBO can only veto a config that passed the gates
+# 0003 CPCV and PBO can only veto a config that passed the gates
 
 ## Context
 Combinatorial purged CV (row M16, `goldbot/research/cpcv.py`) re-runs a registered trial's configuration on 6 time

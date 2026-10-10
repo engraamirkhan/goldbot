@@ -173,7 +173,7 @@ def test_cpcv_skips_a_trial_whose_feature_version_is_stale_when_asked(monkeypatc
 
 def test_cpcv_can_only_veto_a_passed_config():
     good = {"paths": [{"mean_r": 0.1}, {"mean_r": 0.05}, {"mean_r": -0.01}, {"mean_r": 0.2}, {"mean_r": 0.02}]}
-    assert cpcv.verdict(good, {"pbo": 0.3}) == {"fragile": False, "reasons": [], "rule": "veto only (ADR 0002)"}
+    assert cpcv.verdict(good, {"pbo": 0.3}) == {"fragile": False, "reasons": [], "rule": "veto only (ADR 0003)"}
     assert cpcv.verdict(good, {"pbo": 0.55})["fragile"]                     # PBO > 0.5
     assert not cpcv.verdict(good, {"pbo": 0.5})["fragile"]
     bad = {"paths": [{"mean_r": -0.1}, {"mean_r": -0.05}, {"mean_r": -0.01}, {"mean_r": 0.2}, {"mean_r": 0.02}]}

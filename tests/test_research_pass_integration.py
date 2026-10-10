@@ -413,7 +413,7 @@ def test_cpcv_reevaluates_registered_trials_as_evidence_with_pbo_and_takes_no_bu
     for _ in range(16):                                                  # the quarter's budget is spent ...
         reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={})
     n = reg.n_trials
-    # ADR 0002: trial 2 failed the gates, so CPCV refuses it (it can only veto a passed config, never rescue one)
+    # ADR 0003: trial 2 failed the gates, so CPCV refuses it (it can only veto a passed config, never rescue one)
     monkeypatch.setattr(sys, "argv", base + ["--cpcv", "1", "2"])
     with pytest.raises(SystemExit, match=r"trial\(s\) 2 failed the gates.*--diagnostic"):
         rp.main()

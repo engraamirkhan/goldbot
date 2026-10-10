@@ -43,7 +43,7 @@ linked to that row. Anything else (an ad-hoc variant, a primary-signal screen, a
 its own pre-registration just before running) must fit in 20 - used - reserved. **Holdout scorings** (`--score-holdout`)
 are trials charged to the budget and follow the same rule: they come out of the unreserved remainder unless a
 `preregistered` row for that exact configuration is pending (the row that pre-registered the walk-forward trial is
-already used by it, so a holdout scoring needs its own row). CPCV re-evaluations are evidence, not trials (ADR 0002):
+already used by it, so a holdout scoring needs its own row). CPCV re-evaluations are evidence, not trials (ADR 0003):
 no budget slot, no reservation. H-02 uses its reserved slot only when its exact discovery config (including the bars
 range) was pre-registered before the run.
 

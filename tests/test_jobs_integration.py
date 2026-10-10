@@ -220,7 +220,7 @@ def test_cpcv_quarterly_attaches_evidence_to_gate_passing_trials_without_new_tri
     # PBO across the comparable peers only (the stale ones are skipped), labelled a lower bound of the selection set
     assert p["pbo"] is not None and p["pbo"]["trials"] == [passed["trial"], passed["trial"] + 1]
     assert p["pbo"]["selection_set"] == 4 and p["pbo"]["lower_bound"] is True
-    assert p["verdict"]["rule"] == "veto only (ADR 0002)" and isinstance(out["trials"][passed["trial"]]["fragile"], bool)
+    assert p["verdict"]["rule"] == "veto only (ADR 0003)" and isinstance(out["trials"][passed["trial"]]["fragile"], bool)
     text = Path(out["report"]).read_text()
     assert "Combinatorial purged CV 2025Q4" in text and "lower bound" in text
     # idempotent within the quarter

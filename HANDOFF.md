@@ -98,7 +98,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   in budget - used - reserved. An ad-hoc discovery's own just-in-time pre-registration is written with `queue: false`
   and no longer counts as a queue trial run. A run's link to its pre-registration now also matches the row's
   timestamp (two rows can share a trial number). Holdout scorings come out of the unreserved remainder unless
-  pre-registered (preregistration-2027Q1.md). CPCV stays evidence, uncharged (ADR 0002). To spend the reserved H-02
+  pre-registered (preregistration-2027Q1.md). CPCV stays evidence, uncharged (ADR 0003). To spend the reserved H-02
   slot, pre-register the discovery's exact config (incl. bars range) before running it.
 - CUSUM re-verify fixes (M24/M25): h now sits halfway between the chosen reachable value of the statistic and the
   next higher one (`cusum.decision_interval`: same rate, but unrounded live sums can no longer turn a tie into an
