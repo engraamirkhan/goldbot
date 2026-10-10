@@ -17,12 +17,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 148 |
+| implemented | 149 |
 | partial | 15 |
 | missing | 4 |
 | deviates | 8 |
 | in review | 6 |
-| **total** | **181** |
+| **total** | **182** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -89,6 +89,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | A9 | "/halt and /approve need no second factor; /rearm, /mode and any parameter change require a 6-digit TOTP within 60 seconds" | implemented | goldbot/telegram/approvals.py:25, 134; goldbot/api/auth.py:53 (+-1 step of 30 s); `/mode propose` is exempt (it lowers authority, as /halt does; A10) | tests/test_cov_telegram.py::test_halt_needs_no_second_factor_but_authority_raising_commands_do |
 | A10 | "/mode auto ... only offered after at least 100 proposals with no RiskGate breach and no distinguishable difference between approved and rejected outcomes" | implemented | goldbot/telegram/automode.py `auto_mode_eligibility` (decided proposals since the last mode change; breaches = a drawdown stage or kill switch in risk_*.json; R of approved vs rejected from the shadow book's counterfactual outcomes, Welch t-test: eligible only if p >= 0.10 AND the 90% CI of the difference spans 0, with >= 10 outcomes a side), `AutoModeOffer` (one message per mode epoch, never switches), `mode_command` (`/mode auto <TOTP>` needs the owner's authenticator via goldbot/api/auth.py and the evidence; `/mode propose` needs nothing; audited); goldbot/telegram/bus.py `Control.approval_mode`, `set_mode`; goldbot/engine/runner.py `_refresh_account` reads it, the re-arm lock and the 12% kill switch force propose and the kill switch writes propose back | tests/test_automode.py::test_not_eligible_below_100_decided_proposals_and_eligible_at_100; ::test_not_eligible_with_a_riskgate_breach; ::test_not_eligible_when_approved_and_rejected_outcomes_differ; ::test_mode_auto_without_a_valid_totp_is_refused_even_when_eligible; ::test_engine_reads_the_owner_mode_and_the_re_arm_lock_wins; ::test_kill_switch_returns_the_owner_mode_to_propose_and_it_stays_there; ::test_downgrade_to_propose_is_always_allowed_without_totp_or_evidence |
 | A11 | Owner halt fails closed on an unreadable control file | implemented | goldbot/telegram/bus.py:129 | tests/test_cov_telegram.py::test_owner_halt_round_trips_and_fails_closed_on_a_corrupt_file |
+| A12 | Daily owner digest on Telegram (owner request 2026-10-10): status, yesterday, risk, research, decisions; once a day, late send under 6 h, no identifiers | implemented | goldbot/telegram/digest.py `build_digest`, `DigestSchedule`; goldbot/telegram/bot.py `_digest_pass`; config/settings.yaml `telegram.digest_at` | tests/test_digest.py::test_digest_renders_every_section_from_fixture_state; ::test_digest_with_no_state_at_all_still_renders; ::test_digest_never_prints_identifiers; ::test_one_broken_input_never_stops_the_digest; ::test_digest_is_sent_once_a_day; ::test_missed_slot_is_sent_on_start_only_under_six_hours_late |
 
 ## Dashboard authentication [Infrastructure: Dashboard]
 

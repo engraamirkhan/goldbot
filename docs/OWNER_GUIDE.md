@@ -28,6 +28,7 @@ For Aamir. Each step links to its [RUNBOOK](RUNBOOK.md) section.
 | [ ] Restic backup keys | later | - | **Not built yet** (lane W1-2); keys will go in through a hidden prompt | [ROADMAP](ROADMAP.md#3-next-two-waves) |
 
 ## 3. Daily use
+- **Morning digest:** at 06:45 UTC Telegram sends one message: all good or what needs attention, yesterday's trades, risk, and decisions waiting for you. [More](RUNBOOK.md#05-daily-use)
 - **Approve:** Telegram shows direction, lots, entry, stop, target, probability, spread. Tap **Approve**, or a **Reject** reason. Or the dashboard **Approvals** tab. After 90 s it expires. [More](RUNBOOK.md#approving-or-rejecting-an-entry)
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)
 - **Deploy:** Telegram *New version ready* -> **[Deploy]**. Never while an entry waits; rolls back by itself if a service fails. [More](RUNBOOK.md#05-daily-use)

@@ -111,6 +111,21 @@ positions keep their broker-side stop and target.
 ### 0.5 Daily use
 Only your Mac's browser (the dashboard) and Telegram (the one-click Approve).
 
+**Morning digest.** Every day at 06:45 UTC (before London; change it with `telegram.digest_at: "HH:MM"` in
+`config/settings.local.yaml`) Telegram sends one short message:
+* **status:** ✅ all good, or ⚠️ attention with the failing and warning health checks named (details: `goldbot run health`);
+* **yesterday** (the previous UTC day): proposals approved / rejected / expired, trades closed with net $ and R, open
+  positions now;
+* **risk:** drawdown stage and % from peak, daily and weekly loss against the caps, and any halt (yours, drift,
+  supervisor, drawdown);
+* **research:** the next pre-registered trial or the quarter's trial budget, and the best and worst attribution cell
+  that is not noise;
+* **for you:** approvals pending, the number of owner decisions open (see OWNER_GUIDE), and a deploy on offer.
+
+It is sent once a day. If the Telegram service was down at 06:45 it sends the digest when it starts, if that is
+within 6 hours; later than that it skips the day. A file it cannot read shows as "could not read" on that line
+and the rest still arrives. It never contains account numbers or emails.
+
 **Updates: one click on Telegram, or by hand.** Nothing is ever deployed without you.
 * When a new version is merged and has passed CI, Telegram shows *New version ready* with the list of changes and
   **[Deploy] [Skip]**. Deploy restarts the services within a minute (never while an entry waits for your click; open
