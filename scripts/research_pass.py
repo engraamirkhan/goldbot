@@ -339,6 +339,7 @@ def main() -> int:
                     help="one meta-model over every family deciding on this timeframe (one trial, family pooled_<tf>)")
     ap.add_argument("--macro", default="",
                     help="folder or Parquet of the macro-v1 release: adds the point-in-time macro features")
+    _discovery_args(ap)
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
         raise SystemExit("--pooled runs every member family at its defaults; --variants does not apply")
@@ -359,6 +360,8 @@ def main() -> int:
     print(_macro_line(macro_info)[2:], flush=True)
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
+        if args.discover:
+            return _discover(args, variants, b1, reg, settings, extra_cost, swap, holdout, cost_source, macro)
         return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings, swap=swap,
                     cost_source=cost_source, macro=macro, macro_info=macro_info)
 
@@ -400,7 +403,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             print(f"{tf} {len(b_dec):,}  {sizes}; lookahead check: {len(leak['lookahead_columns'])} of "
                   f"{leak['columns_checked']} columns differ [{time.time() - t0:.0f}s]", flush=True)
         b_dec, context, leak, frame = frames[tf]
-        n_trials = reg.n_trials + 1
+        n_trials = reg.n_trials_effective + 1        # + groups screened by any discovery (survey 4b)
         preps = [prepare(s, b_dec, context, extra_cost_usd=extra_cost, holdout=holdout, score_holdout=args.score_holdout,
                          frame=frame, swap=swap) for s in job.specs]
         scr = None if args.score_holdout else screen(preps if job.pooled else preps[0])
@@ -452,6 +455,36 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     report = "\n".join(head) + "\n\n".join(sections)
     Path(args.report).write_text(report)
     print(report)
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------- feature discovery
+def _discovery_args(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--discover", action="store_true",
+                    help="ONE pre-registered feature-discovery trial (goldbot/research/discovery.py) on --specialist")
+    ap.add_argument("--families", nargs="?", const="family", default="column", choices=["column", "feature", "family"],
+                    help="--discover: group features by registry family (bare flag), by producing feature, or not")
+    ap.add_argument("--discover-config", default="{}", help="--discover: JSON overrides of DiscoveryConfig")
+
+
+def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.DataFrame, reg: TrialRegistry,
+              settings: Any, extra_cost: float, swap: SwapSpec, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
+              cost_source: str, macro: pd.DataFrame | None) -> int:
+    from goldbot.research.discovery import DiscoveryConfig, discovery_pass
+    if args.pooled or args.score_holdout or len(variants) != 1:
+        raise SystemExit("--discover runs one specialist configuration (one --variants entry), no --pooled or --score-holdout")
+    try:
+        cfg = DiscoveryConfig(**json.loads(args.discover_config))
+        row, text = discovery_pass(SPECIALISTS[args.specialist](**variants[0]), b1, reg,
+                                   budget_cap=settings.research.trial_budget_quarter, cfg=cfg, group_mode=args.families,
+                                   extra_cost_usd=extra_cost, swap=swap, holdout=holdout,
+                                   ctx={"macro": macro} if macro is not None else None, rationale=args.rationale,
+                                   cost_source=cost_source)
+    except (TrialBudgetExceeded, ValueError) as exc:
+        raise SystemExit(str(exc)) from None
+    Path(args.report).write_text(text)
+    print(text)
+    print(json.dumps({"trial": row["trial"], "agent_id": row["agent_id"], "status": row["status"]}), flush=True)
     return 0
 
 

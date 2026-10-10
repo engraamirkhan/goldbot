@@ -9,7 +9,14 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P2):
   Check, run and record happen under `locked()` so two writers cannot both pass the last free slot;
 * a held-out window is scored at most once per configuration (`holdout_scored`, rows with status "holdout");
 * the population's shadow -> live promotion needs a research trial of the configuration that passed the design's
-  gates (`passed_gates`)."""
+  gates (`passed_gates`);
+* pre-registration (deferred item L4): `preregister` writes a row with status "preregistered" BEFORE a run, holding its
+  config and the rule its result will be read by. A preregistered row is a promise, not a look at the data: it is not
+  a trial (`is_trial`), takes no budget slot and does not raise the deflated-Sharpe count; the result row that follows
+  carries the same trial number and config hash and a `preregistration` reference;
+* a feature-discovery trial (status "discovery", goldbot/research/discovery.py) is ONE trial, but choosing survivors
+  from its selection frequencies looks at many feature groups, so `n_trials_effective` (registry trials plus every
+  discovery's `n_groups_screened`) is the count the deflated Sharpe of any later trial uses."""
 from __future__ import annotations
 
 import hashlib
@@ -23,6 +30,10 @@ from typing import Any, Iterator
 
 LOCK_STALE_S = 4 * 3600          # a lock older than this was left by a crashed writer (a trial runs well under it)
 LOCK_WAIT_S = 6 * 3600
+
+
+PREREGISTERED = "preregistered"
+DISCOVERY = "discovery"
 
 
 class TrialBudgetExceeded(ValueError):
@@ -40,10 +51,28 @@ def quarter_of(ts: datetime | None = None) -> str:
     return f"{ts.year}Q{(ts.month - 1) // 3 + 1}"
 
 
+def is_trial(row: dict[str, Any]) -> bool:
+    """Every row is a trial (a look at the data) except a pre-registration, which is written before the look."""
+    return row.get("status") != PREREGISTERED
+
+
+def n_trials_effective(rows: list[dict[str, Any]]) -> int:
+    """The deflated-Sharpe trial count for a later trial: registry trials plus, for every discovery trial, the number of
+    feature groups it screened (indicator survey 4b: N = registry count + K_eff). A survivor of a discovery was chosen
+    by looking at K_eff groups' selection frequencies over the whole research window, so its later trial pays for
+    them."""
+    trials = [r for r in rows if is_trial(r)]
+    k_eff = sum(int(((r.get("results") or {}).get("discovery") or {}).get("n_groups_screened") or 0)
+                for r in trials if r.get("status") == DISCOVERY)
+    return len(trials) + k_eff
+
+
 def quarter_trials(rows: list[dict[str, Any]], quarter: str) -> int:
-    """Registry rows stamped (`ts`, UTC) in `quarter`, whatever their status: the one count the budget uses."""
+    """Trial rows (`is_trial`) stamped (`ts`, UTC) in `quarter`, whatever their status: the one count the budget uses."""
     n = 0
     for r in rows:
+        if not is_trial(r):
+            continue
         try:
             ts = datetime.fromisoformat(str(r.get("ts")))
         except ValueError:
@@ -67,10 +96,15 @@ class TrialRegistry:
 
     @property
     def n_trials(self) -> int:
-        return len(self._rows())
+        return sum(1 for r in self._rows() if is_trial(r))
+
+    @property
+    def n_trials_effective(self) -> int:
+        return n_trials_effective(self._rows())
 
     def record(self, *, agent_id: str, family: str, config: dict, feature_version: str, rationale: str,
-               results: dict, status: str = "evaluated", budget_quarter: str | None = None) -> dict:
+               results: dict, status: str = "evaluated", budget_quarter: str | None = None,
+               preregistration: dict[str, Any] | None = None) -> dict:
         row: dict[str, Any] = {
             "trial": self.n_trials + 1,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -79,9 +113,37 @@ class TrialRegistry:
         }
         if budget_quarter is not None:
             row["budget_quarter"] = budget_quarter
+        if preregistration is not None:
+            row["preregistration"] = {"ts": preregistration["ts"], "trial": preregistration["trial"],
+                                      "config_hash": preregistration["config_hash"]}
+        self._append(row)
+        return row
+
+    def _append(self, row: dict[str, Any]) -> None:
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, default=str) + "\n")
+
+    def preregister(self, *, agent_id: str, family: str, config: dict, feature_version: str, rationale: str,
+                    reading_rule: str, plan: dict[str, Any] | None = None) -> dict:
+        """Write the pre-registration of the next trial BEFORE it runs: its config (hashed as the result row will be),
+        the rule its result will be read by, and the plan (e.g. the number of features to be screened). Not a trial:
+        it carries the number the result row will take."""
+        row: dict[str, Any] = {
+            "trial": self.n_trials + 1,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "agent_id": agent_id, "family": family, "config_hash": config_hash(config), "config": config,
+            "feature_version": feature_version, "rationale": rationale, "results": {}, "status": PREREGISTERED,
+            "reading_rule": reading_rule, "plan": plan or {},
+        }
+        self._append(row)
         return row
+
+    def preregistration(self, family: str, config: dict) -> dict | None:
+        """The latest pre-registration of exactly this configuration, or None."""
+        h = config_hash(config)
+        rows = [r for r in self._rows() if r.get("status") == PREREGISTERED and r.get("family") == family
+                and r.get("config_hash") == h]
+        return rows[-1] if rows else None
 
     def by_family(self, family: str) -> list[dict]:
         return [r for r in self._rows() if r["family"] == family]
