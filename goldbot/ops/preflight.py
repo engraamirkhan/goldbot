@@ -251,11 +251,22 @@ def _terminal_item(ctx: PreflightContext, url: str, token: str, fix: str) -> Ite
                 detail=f"terminal logged in to the registered {acc.mode} account on {acc.server}")
 
 
+def _mode(f: Path) -> int | None:
+    """`f`'s permission bits, or None when it vanished between the glob and the stat (SQLite removes -wal/-shm files
+    when the last connection closes): a file that no longer exists exposes nothing and is skipped."""
+    try:
+        return f.stat().st_mode
+    except OSError:
+        return None
+
+
 def _private_files(ctx: PreflightContext) -> Item:
     fix_dir = ctx.state_dir
     files = sorted([*ctx.state_dir.glob("*.db"), *ctx.state_dir.glob("*.db-wal"), *ctx.state_dir.glob("*.db-shm"),
                     *ctx.state_dir.glob(".secrets.json")]) if ctx.state_dir.is_dir() else []
-    loose = [f.name for f in files if f.stat().st_mode & 0o077]
+    modes = {f: m for f in files if (m := _mode(f)) is not None}
+    files = list(modes)
+    loose = [f.name for f, m in modes.items() if m & 0o077]
     if loose:
         return Item(name="db_files_private", status="fail", detail=f"readable by other users: {', '.join(loose)}",
                     fix=" && ".join(f"sudo chmod 600 {fix_dir / n}" for n in loose))

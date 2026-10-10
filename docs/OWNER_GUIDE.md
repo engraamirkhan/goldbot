@@ -71,6 +71,8 @@ Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decisio
 | First real money, tiny size | earliest 2027-10, realistically **2028**, only if gates pass |
 | Full size | earliest 2028-10 |
 
+**Starting account ([ADR 0004](decisions/0004-starting-account-and-daily-target.md)):** £50 cannot place a trade under the safety rules (the smallest gold trade risks 16%+ of it), so it waits while the demo runs; real trades start only after the paper gate, at about £825 (15m), £1,650 (1h), £3,300 (4h), £7,900 (daily), and £50/day is a realistic average only around £19k–38k. Progress is reported as monthly % and R, not £/day.
+
 ## 6. Never do
 - Paste passwords, tokens, MT5 logins, IPs or recovery codes into chat, GitHub or a repo file. **The repo is public.**
 - Widen risk settings without asking.

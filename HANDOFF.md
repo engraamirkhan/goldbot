@@ -100,6 +100,27 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   timestamp (two rows can share a trial number). Holdout scorings come out of the unreserved remainder unless
   pre-registered (preregistration-2027Q1.md). CPCV stays evidence, uncharged (ADR 0003). To spend the reserved H-02
   slot, pre-register the discovery's exact config (incl. bars range) before running it.
+- Batch review fixes (2026-10-10): the research analyst (`jobs.make_trial_runner`) refuses a retired, non-reinstated
+  family (research.retired_families; reinstatement read from the director's current plan, none without one) once the
+  quarter's ONE shared retired-family exploration trial is used (`director.retired_quarter_trials`), unless a pending
+  pre-registration covers that exact config. Queued pre-registrations now carry `target_quarter` (default
+  `registry.planned_quarter`: the next quarter when written within 14 days of its start) and count in that quarter's
+  reservation; a trial uses one up whichever quarter it runs in (a row written 2026-12-30 and run 2027-01-04 is run in
+  2027Q1). `preregister` defaults to `queue=False`; `queue=True` must be written before its target quarter starts
+  (ValueError otherwise), and a hand-written row claiming a quarter already under way is ad hoc
+  (`director.is_queued`). Rows without `target_quarter` keep the quarter of their timestamp. The digest's
+  "next pre-registered trial" and budget line use the director's matching and show reserved/open. Preflight skips a
+  `*.db-wal`/`*.db-shm` that vanishes between glob and stat.
+- Reservations cannot move quarters or be backdated (quant re-review, 2026-10-10): a trial stamped before its
+  pre-registration's quarter starts never uses that row up (an early Q4 run of H-01's config left Q1 at 12), and every
+  runner (analyst, `research_pass.py`/`--discover` via `check_budget_reserved` -> `PreregisteredForLaterQuarter`, the
+  label grid, which skips the variant) refuses a config queued for a later quarter (`director.later_preregistration`).
+  An unlinked trial prefers the row of its own quarter. `preregister` has no `now=` (stamped by `registry._utcnow`), and
+  `target_quarter` without `queue=True` is a ValueError. The digest adds "next quarter: N queued".
+  For the owner / backlog (no code change): L2 research.reserved_trials_quarter (13) applies every quarter, so 2026Q4
+  is also held to 7 open trials although its 13 queued trials are planned for 2027Q1 (owner decision: a per-quarter
+  setting or 0 for 2026Q4); L4 the retired-family exploration limit is enforced only on the research-analyst path
+  (research_pass.py, discovery and the label grid do not check research.retired_families).
 - CUSUM re-verify fixes (M24/M25): h now sits halfway between the chosen reachable value of the statistic and the
   next higher one (`cusum.decision_interval`: same rate, but unrounded live sums can no longer turn a tie into an
   alarm); the drift watch calibrates on the agent's actual taken p values resampled per trade (`ps`), not their mean.
@@ -578,6 +599,29 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   signals (1,466 long / 688 short), one-at-a-time lower bound 154 events, first signal 2010-06-18. Owner ruling A
   (recommended floor 150 for daily signals, can retire not promote) must be committed as
   `research.screen_min_events_daily` before the run.
+- H-04 Asia-session drift (2026-10-11, specialist `asia_drift`, TRACEABILITY M39): long at 00:00 UTC (decision bar =
+  the 1h bar closing 00:00, entry at its close on the ask), time exit 07:00 UTC as a plain 1h time barrier
+  (`max_bars` 6; labels, shadow book and live count the same bars), stop 1.5 x ATR(1h) frozen at entry, no target, long
+  only, Monday-Friday; no entry when the 23:00 bar is missing, the session calendar is closed or on 25 Dec / 1 Jan; no
+  server rollover is ever held (swap 0, proved in both DST regimes). New `Specialist.screening`: a family under its
+  pre-registered screen is not seeded as a default founder and not pooled (pooled_1h unchanged); a passed trial still
+  becomes a shadow founder through gap_watch. It is active, not retired. Frozen parameters and
+  the exact `research.yml` inputs: `docs/research/preregistration-2027Q1.md` H-04. data-v1 is not on this machine, so
+  only the calendar bound was counted (4,087 entry days 2010-01..2025-09); the data count is due before the freeze.
+  No research trial was run.
+- asia_drift quant-review fixes (2026-10-11): a `screening` family gets no trials from the research director, the
+  label grid, the monthly loop or the research analyst (`jobs.research_families`; tsmom keeps its 6 free trials);
+  `research_pass.py` never fits a model for it (the screen row is recorded, pass or fail); `max_bars` > 6 is refused;
+  research drops entries whose 00:00-07:00 UTC window is not complete in the data (`complete_windows`, timestamps
+  only). **RiskGate guard (fail closed):** any intent whose label spec has no reachable target
+  (`BarrierSpec.has_target` False, `Intent.has_target`, or the family's spec looked up by family / agent id) is refused
+  with `time_exit_ev_unsupported`. **Before a time-exit family can trade live** (owner + trading-safety review):
+  (a) its meta-label is the time-exit outcome (ret > 0 net), not `target_hit`; (b) EV, breakeven and size use
+  EV_R = p x E[R | win] - (1 - p) x E[|R| | loss] - cost_R, with the out-of-fold averages stored in the model
+  artefact, in `goldbot/risk/gate.py` (the EV / standard-edge block of `RiskGate.check`) and
+  `goldbot/engine/runner.py` (size_multiplier / breakeven gate at the entry decision, `ev_r` on the proposal, the
+  shadow threshold); (c) the target-over-cost floor uses E[R | win] instead of `target_atr`. Live 00:00 UTC entries
+  need an owner click at about 01:00 London, so live will be a subset of shadow.
 
 - Dependencies (2026-10-11): Dependabot groups minor/patch updates per ecosystem; majors come as separate PRs to be
   hand-tested (the 15-package web group #65 was closed: TypeScript 7 broke `npm ci` through openapi-typescript, and
@@ -616,8 +660,36 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   holiday hours need an MQL5 `SymbolInfoSessionTrade` helper. Engine hook for the runner lane (not wired):
   `self._sessions = BrokerSessions(broker, symbol, fallback=SessionTable(server_tz=...))` at start, then
   `why = self._sessions.entry_block(now)` as an entry-blocking reason. Exits are unaffected.
+- Engine wave 3 (2026-10-10, rows D10, A2, M9): a decision bar is finalised by clock at close + 1.5 s
+  (`runner.BAR_CLOSE_GRACE_S`; the wall clock in production) even when no tick follows it, or at once by a tick at
+  or after the close; each close runs once (`_closed_through`), a tick older than a bar the clock already finalised
+  never revises it, and a repeated poll of the same quote (the run loop's 0.25 s poll) is no longer appended as a new
+  tick (tick counts and the tick log were inflated in quiet markets). Proposals carry
+  `EngineConfig.approval_window_s`, set from `settings.risk.approval_window_seconds` in `ops/run.py` (default 90).
+  The allocator's tier-1 distances come from the calendar the RiskGate's news blackout reads, so its 30-minute
+  zeroing now acts live (weight 0 inside -30/+30 min). Exits are unchanged: they run on every tick before any bar logic.
+- Wave-3 review fixes (2026-10-10, rows D10, M8, M9): a late tick (stamped before a bar the clock already finalised)
+  is still kept out of the live bars but no longer silently: a `late_tick` data-quality warning (at most one a minute,
+  stored with the bar's dq_events) and the running count `late_ticks` in the engine state; a lone warning never blocks
+  entries (`dq_error` and `dq_checks` count error-severity events only). The engine publishes `clock_skew_s` (broker
+  tick time minus wall clock, median of the last 120 new ticks); health warns above the 1.5 s bar-close grace. It
+  escalates to a blocking data-quality error (entries only; exits never gated) when |skew| > 10 s (`clock_skew`) or
+  when late ticks hit 3 consecutive decision bars (`late_ticks`, cleared by a bar with none), because such bars drift
+  from the training and shadow bars. The allocator keeps its design window, 0 for 30 min either side of tier-1
+  events (`RuleAllocator()` defaults), deliberately stricter than the RiskGate's -15/+30 entry block; the gate window
+  from settings never narrows it (an allocator rule change is the owner's decision).
 
 ## Next steps (no owner input needed unless marked)
+- Starting account and daily target (2026-10-10, owner delegated; `docs/decisions/0004-starting-account-and-daily-target.md`):
+  at £50 (~$66.50 at GBPUSD 1.33) RiskGate refuses every trade on every timeframe (0.01 lot risks 16.4% on 15m up to
+  354% on 1w at gold $4,150 and estimated ATRs; the 1:20 margin floor alone needs ~£470). £50/day is +100%/day;
+  realistic only at ~£19k–38k equity (0.5% risk, 0.1–0.2 R, 15m + 1h). Decided: demo continues at a demo balance
+  equal to the first milestone; minimum-lot exception rule for RiskGate at ≤ 1% realised risk (BACKLOG 25, needs
+  trading-safety review, ships inert with `min_lot_risk_cap: null`); milestones ~£825 (15m), £1,650 (1h), £3,270
+  (4h), £7,900 (1d, also needs 1d as a decision TF); H-01 stays in shadow until the 1d milestone; progress reported
+  as monthly % and R (BACKLOG 26), never £/day; broker terms to be measured (BACKLOG 27). Ruin and feasibility
+  numbers came from the G-5/G-7 tools on unmerged commit 08e654a (run from an extract; re-run from main after merge;
+  its post-8% sizing caveat makes the halt probabilities upper bounds). Owner: deposit plan and demo balance.
 - XAUUSD trader playbook (2026-10-10, owner request): `docs/research/xauusd-trader-playbook.md` lists ~70 things a
   professional gold trader considers (drivers, CFD microstructure, technicals, risk management, process), each with
   sources, evidence grade and goldbot status, then a ranked gap list (risk gaps G-1..G-10 first: swap in live EV,

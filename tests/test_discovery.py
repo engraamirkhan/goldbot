@@ -314,7 +314,7 @@ def test_a_discovery_survivor_needs_a_passed_holdout_before_it_counts_as_passed(
     assert reg.passed_gates("tsmom", plain)                                           # ordinary trials unchanged
 
 
-def test_check_budget_reserved_lets_only_a_pending_queued_preregistration_spend_the_reservation(tmp_path):
+def test_check_budget_reserved_lets_only_a_pending_queued_preregistration_spend_the_reservation(tmp_path, queued_prereg):
     from goldbot.research.director import reserved_trials
     from goldbot.research.registry import TrialBudgetExceeded
     reg = TrialRegistry(tmp_path / "r.jsonl")
@@ -323,7 +323,7 @@ def test_check_budget_reserved_lets_only_a_pending_queued_preregistration_spend_
     # budget 3, 2 held for the queue, 1 used: nothing left for a run that is not pre-registered
     with pytest.raises(TrialBudgetExceeded, match="held for the pre-registered queue"):
         reg.check_budget_reserved([("tsmom", {"x": 1})], 3, 2)
-    pre = reg.preregister(agent_id="b", family="tsmom", config={"x": 1}, feature_version="v", rationale="r",
+    pre = queued_prereg(reg, agent_id="b", family="tsmom", config={"x": 1}, feature_version="v", rationale="r",
                           reading_rule="continue if ...")
     quarter, (match,) = reg.check_budget_reserved([("tsmom", {"x": 1})], 3, 2)
     assert quarter == q and match == pre
@@ -344,11 +344,11 @@ def test_check_budget_reserved_lets_only_a_pending_queued_preregistration_spend_
     assert reg.check_budget_reserved([("discovery_tsmom", {"y": 1})], 5, 2)[1] == [None]   # never matched again
 
 
-def test_a_link_to_a_preregistration_matches_its_timestamp_not_only_its_number(tmp_path):
+def test_a_link_to_a_preregistration_matches_its_timestamp_not_only_its_number(tmp_path, queued_prereg):
     from goldbot.research.director import reserved_trials
     reg = TrialRegistry(tmp_path / "r.jsonl")
     q = quarter_of()
-    queued = reg.preregister(agent_id="a", family="tsmom", config={"x": 1}, feature_version="v", rationale="r",
+    queued = queued_prereg(reg, agent_id="a", family="tsmom", config={"x": 1}, feature_version="v", rationale="r",
                              reading_rule="r")
     jit = reg.preregister(agent_id="b", family="discovery_tsmom", config={"y": 1}, feature_version="v",
                           rationale="r", reading_rule="r", queue=False)

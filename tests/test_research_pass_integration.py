@@ -237,6 +237,32 @@ def test_a_screen_short_only_of_the_daily_signal_floor_is_an_inconclusive_record
     assert "rule_only_split" in row["results"]
 
 
+def test_a_screening_family_that_passes_its_screen_is_recorded_and_never_fits_a_model(release_dir, tmp_path,
+                                                                                    monkeypatch):
+    """asia_drift (H-04) is a rule-only screen: its no-target labels make target_hit 0, so a meta-model would fit
+    y = 0 (quant review M2). A pass records the screen row (status screened, swap charged); evaluate never runs."""
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    _research_settings(monkeypatch, screen_min_events=1)
+    _lenient_screen(monkeypatch, expect_floor=1)
+
+    def no_model(*a, **k):
+        raise AssertionError("a screening family must not reach the model stage")
+    monkeypatch.setattr(rp, "evaluate", no_model)
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "asia_drift"])
+    assert rp.main() == 0
+    row = _rows(registry)[0]
+    assert row["status"] == "screened" and row["family"] == "asia_drift" and row["trial"] == 1 and row["budget_quarter"]
+    assert row["results"]["screen"]["passed"] is True and "gates" not in row["results"]
+    assert row["results"]["swap"]["server_tz"] == "Europe/Athens"           # the run passes a SwapSpec (M3)
+    text = report.read_text()
+    assert "### Primary-signal screen: **PASS**" in text and "rule-only screen: no model was fitted" in text
+    # --skip-screen does not open the model stage for it either
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "asia_drift", "--skip-screen"])
+    assert rp.main() == 0 and _rows(registry)[-1]["status"] == "screened"
+
+
 def test_a_rule_that_passes_the_screen_goes_on_to_the_walk_forward(release_dir, tmp_path, monkeypatch):
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
     _research_settings(monkeypatch, screen_min_events=1)
@@ -440,7 +466,7 @@ def test_cpcv_reevaluates_registered_trials_as_evidence_with_pbo_and_takes_no_bu
 
 
 def test_an_ad_hoc_run_cannot_spend_the_reserved_trials_and_a_preregistered_run_uses_them_up(release_dir, tmp_path,
-                                                                                               monkeypatch):
+                                                                                               monkeypatch, queued_prereg):
     from goldbot.research.director import reserved_trials
     from goldbot.research.registry import TrialRegistry, quarter_of
     from goldbot.specialists import SPECIALISTS
@@ -454,7 +480,7 @@ def test_an_ad_hoc_run_cannot_spend_the_reserved_trials_and_a_preregistered_run_
         rp.main()                                        # 2 - 1 used - 1 reserved: nothing left for an ad-hoc run
     assert reg.n_trials == 1
     cfg = SPECIALISTS["session_open"]().config
-    pre = reg.preregister(agent_id="x", family="session_open", config=cfg, feature_version="f", rationale="planned",
+    pre = queued_prereg(reg, agent_id="x", family="session_open", config=cfg, feature_version="f", rationale="planned",
                           reading_rule="continue if ...")
     assert rp.main() == 0                                # the pre-registered configuration uses the reserved trial
     last = _rows(registry)[-1]
@@ -462,7 +488,7 @@ def test_an_ad_hoc_run_cannot_spend_the_reserved_trials_and_a_preregistered_run_
     assert reserved_trials(_rows(registry), quarter_of(), 1).reserved == 0
 
 
-def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, monkeypatch):
+def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, monkeypatch, queued_prereg):
     from goldbot.research.director import reserved_trials
     from goldbot.research.registry import TrialRegistry, quarter_of
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
@@ -477,7 +503,7 @@ def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, m
     with pytest.raises(SystemExit, match="held for the pre-registered queue"):
         rp.main()                                        # a second ad-hoc discovery would spend the reserved trial
     assert len(_rows(registry)) == 2                     # refused before any row is written
-    queued = TrialRegistry(registry).preregister(agent_id=res["agent_id"], family=res["family"], config=res["config"],
+    queued = queued_prereg(TrialRegistry(registry), agent_id=res["agent_id"], family=res["family"], config=res["config"],
                                                  feature_version="f", rationale="H-02", reading_rule=pre["reading_rule"])
     assert rp.main() == 0                                # the queued pre-registration may use it
     rows = _rows(registry)

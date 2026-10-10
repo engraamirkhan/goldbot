@@ -27,7 +27,7 @@ def _frame(bars_1m: pd.DataFrame, tf: str) -> tuple[pd.DataFrame, pd.DataFrame]:
 def test_every_design_family_is_registered_on_its_timeframe():
     assert {k: v.timeframe for k, v in SPECIALISTS.items()} == {
         "breakout": "1h", "mean_reversion": "15m", "session_open": "15m", "trend": "1h",
-        "tsmom": "1h", "intraday_momentum": "15m"}
+        "tsmom": "1h", "intraday_momentum": "15m", "asia_drift": "1h"}
 
 
 def test_context_is_every_longer_timeframe():
@@ -70,12 +70,12 @@ def test_breakout_needs_a_tight_range_and_volume():
 
 
 @pytest.mark.parametrize("family", ["trend", "mean_reversion", "breakout", "tsmom", "tsmom_4h", "intraday_momentum",
-                                    "intraday_momentum_london"])
+                                    "intraday_momentum_london", "asia_drift"])
 def test_candidates_use_no_future_bars(bars_1m, family):
     configs: dict[str, dict[str, Any]] = {"trend": {"adx_min": 0.0, "pullback_atr": 5.0}, "mean_reversion": {"band_z": 1.0, "rsi_low": 45.0,
              "rsi_high": 55.0, "max_vol_tercile": 2}, "breakout": {"max_range_atr": 5.0, "min_tick_ratio": 0.0},
              "tsmom": {}, "tsmom_4h": {"timeframe": "4h", "max_bars": 12}, "intraday_momentum": {},
-             "intraday_momentum_london": {"session": "london"}}
+             "intraday_momentum_london": {"session": "london"}, "asia_drift": {}}
     loose = configs[family]
     cls = SPECIALISTS[family.removesuffix("_4h").removesuffix("_london")]
     spec = cls(**loose)

@@ -104,7 +104,8 @@ def test_digest_renders_every_section_from_fixture_state(tmp_path: Path) -> None
     assert "Risk: stage size_down · drawdown 3.0% from peak (halt at 12%) · day loss 1.0% of 2.0% cap · week 3.0% of 5.0% cap" in text
     assert "owner halt since Fri 09 Oct 10:00 UTC" in text and "drift system halt" in text
     assert "supervisor combined-cap halt" in text
-    assert "next pre-registered trial #3 (carry) · budget 2026Q4: 2 of 20 trials used" in text
+    assert "next pre-registered trial #3 (carry) · budget 2026Q4: 2 of 20 trials used, 12 reserved for " \
+           "pre-registered, 6 open" in text
     assert "Attribution: best session london +0.21R/trade net (n 64) · worst exit time -0.15R/trade net (n 41)" in text
     assert "👉 For you: 1 approval pending · 3 owner decisions open (see OWNER_GUIDE) · 1 deploy on offer" in text
 
@@ -128,7 +129,8 @@ def test_digest_with_no_state_at_all_still_renders(tmp_path: Path) -> None:
     assert "❔ Health: unknown" in text
     assert "Proposals: none" in text and "Trades closed: none" in text
     assert "Open now: no engine state yet" in text and "Risk: no engine state yet" in text and "Halts: none" in text
-    assert "no pre-registered trial waiting · budget 2026Q4: 0 of 20 trials used" in text
+    assert "no pre-registered trial waiting · budget 2026Q4: 0 of 20 trials used, 0 reserved for " \
+           "pre-registered, 20 open" in text
     assert "Attribution" not in text
     assert "0 approvals pending · owner decisions: see OWNER_GUIDE" in text
     assert len(text.splitlines()) <= 15
@@ -211,3 +213,31 @@ def test_digest_at_setting_defaults_and_validates() -> None:
         TelegramSettings(digest_at="6:45")
     with pytest.raises(ValueError):
         TelegramSettings(digest_at="24:00")
+
+
+def test_digest_counts_a_preregistration_run_without_its_link_by_the_directors_matching(tmp_path: Path) -> None:
+    reg = tmp_path / "trials.jsonl"
+    reg.write_text("\n".join(json.dumps(r) for r in (
+        {"trial": 1, "ts": "2026-10-03T00:00:00+00:00", "status": "preregistered", "family": "tsmom",
+         "config_hash": "abc"},
+        # research_pass recorded the run without a `preregistration` link: same family and config hash
+        {"trial": 1, "ts": "2026-10-04T00:00:00+00:00", "status": "evaluated", "family": "tsmom", "config_hash": "abc"},
+        # a run's own pre-registration is not part of the queue
+        {"trial": 2, "ts": "2026-10-05T00:00:00+00:00", "status": "preregistered", "family": "carry", "queue": False},
+    )) + "\n")
+    text = build_digest(tmp_path, NOW, settings=load_settings(), roadmap=tmp_path / "nope.md", registry_path=reg)
+    assert "Research: no pre-registered trial waiting · budget 2026Q4: 1 of 20 trials used, 12 reserved for " \
+           "pre-registered, 7 open" in text
+
+
+def test_digest_shows_next_quarters_queue_in_the_quarter_before(tmp_path: Path) -> None:
+    reg = tmp_path / "trials.jsonl"
+    reg.write_text("\n".join(json.dumps(r) for r in (
+        {"trial": 1, "ts": "2026-10-05T00:00:00+00:00", "status": "preregistered", "family": "tsmom",
+         "config_hash": "h1", "target_quarter": "2027Q1"},
+        {"trial": 1, "ts": "2026-10-06T00:00:00+00:00", "status": "preregistered", "family": "tsmom",
+         "config_hash": "h2", "target_quarter": "2027Q1"},
+    )) + "\n")
+    text = build_digest(tmp_path, NOW, settings=load_settings(), roadmap=tmp_path / "nope.md", registry_path=reg)
+    assert "Research: no pre-registered trial waiting · budget 2026Q4: 0 of 20 trials used, 13 reserved for " \
+           "pre-registered, 7 open · next quarter: 2 queued" in text
