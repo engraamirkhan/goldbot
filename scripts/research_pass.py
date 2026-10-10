@@ -438,7 +438,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                 "to_year": int(b1["ts_utc"].iloc[-1].year), "n_1m": len(b1), "n_dec": len(b_dec), "tf": tf,
                 "zero_volume": zero_volume}
         # rule-only net R by side and year over every candidate (the pre-registered reading rules read these)
-        split = rule_only_split(pd.concat([p.labels for p in preps], ignore_index=True))
+        # holdout scorings report no split: it would mix research-window and held-out labels (quant review)
+        split = None if args.score_holdout else rule_only_split(pd.concat([p.labels for p in preps], ignore_index=True))
         common = {"lookahead": leak, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
                   "screen": scr, "screen_skipped": skipped, "cost_source": cost_source, "macro": macro_info,
                   "rule_only_split": split}

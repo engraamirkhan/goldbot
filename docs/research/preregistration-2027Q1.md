@@ -152,8 +152,10 @@ promotion.
 - Reading rule (outcomes below written 2026-10-10, before any H-01 outcome was seen; net tests on rule-only net R over
   every candidate, see *Net tests*): **continue** if the P4 screen passes (gross mean R > 0, t >= 2.0, on the event
   floor ruled in A) AND net mean R > 0 with t >= 1.65 AND positive net years >= 3 incl. 2021 or 2022, on both sides
-  together and on long-only (swap bias above). **Stop slow trend in gold** if net mean R <= 0 (the literature's best
-  case then does not survive our costs), or if the screen fails on at least the floor's events. **Inconclusive** if
+  together and on long-only (swap bias above). **Stop slow trend in gold** if net mean R <= 0 on both sides together
+  (the literature's best case then does not survive our costs), or if the screen fails on at least the floor's events.
+  If both sides together pass but long-only net mean R <= 0 or long-only t < 1.65, the result is **inconclusive
+  (short-only edge under a flattering short-swap prior)** (added 2026-10-11, before any outcome was seen). **Inconclusive** if
   the screen has fewer events than the floor (whatever the sign or t), OR if the screen passes but net mean R > 0
   with t < 1.65, or with fewer than 3 positive net years (or none in 2021/2022): recorded and charged, cannot retire
   the hypothesis and does not continue it. A "continue" means only that model research on slow TSMOM may be
