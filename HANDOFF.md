@@ -753,8 +753,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (the stop rule keeps it as recorded: conservative on a GBP deposit). Open notional uses the terminal's contract
   size. symbol_info and the conversion are read once per decision cycle (per side), and the approval re-check reads
   the terms and conversion again (a lost conversion refuses, fail closed). Gate boundary documented: exceeding the
-  daily limit is refused, exactly equal allowed; the supervisor halts on reaching it. BACKLOG 34 (open positions'
-  remaining stop risk) and 35 (costs) added for the daily projection.
+  daily limit is refused, exactly equal allowed; the supervisor halts on reaching it. BACKLOG 35 (open positions'
+  remaining stop risk) and 36 (costs) added for the daily projection.
 - Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
   `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
   minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both
