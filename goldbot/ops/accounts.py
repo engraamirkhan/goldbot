@@ -16,6 +16,8 @@ CLI:
   python -m goldbot.ops.accounts list
   python -m goldbot.ops.accounts add icm-demo          # prompts for login + password, stores in keyring
   python -m goldbot.ops.accounts set tradingview-webhook-secret
+  python -m goldbot.ops.accounts bridge-serve icm-demo # MT5 box: listen address + a new token (printed once)
+  python -m goldbot.ops.accounts bridge-use icm-demo   # engine box: bridge URL + that token
   python -m goldbot.ops.accounts unlock-live icm-live  # refused unless the gate has passed
 """
 from __future__ import annotations
@@ -175,6 +177,18 @@ def save_login(account_id: str, login: int) -> None:
     set_secret(login_key(account_id), str(int(login)))
 
 
+def bridge_token_key(account_id: str) -> str:
+    return f"mt5-bridge-token-{account_id}"
+
+
+def bridge_endpoint(account_id: str) -> tuple[str, str] | None:
+    """(url, token) of the MT5 bridge for this account (goldbot/execution/bridge.py), from the keyring; None when the
+    terminal runs on this machine. Neither value is ever in the repository."""
+    url = get_secret(f"mt5-bridge-url-{account_id}")
+    token = get_secret(bridge_token_key(account_id))
+    return (url, token) if url and token else None
+
+
 def account_password(acc: Account) -> str:
     return get_credential(f"mt5-{acc.account_id}", f"MT5 password for {acc.account_id} (login {acc.login}, {acc.server})")
 
@@ -274,6 +288,20 @@ def main(argv: list[str]) -> int:
         pw = _prompt(f"MT5 password for {acc.account_id} (login {acc.login}, {acc.server})", secret=True)
         set_secret(f"mt5-{acc.account_id}", pw)
         print(f"stored credentials for {acc.account_id} in the OS keyring")
+        return 0
+    if cmd == "bridge-serve":
+        import secrets
+        aid = argv[1]
+        set_secret(f"mt5-bridge-listen-{aid}", _prompt("bridge listen address host:port (the private IP, e.g. 10.0.0.5:8765)", secret=False))
+        token = secrets.token_urlsafe(32)
+        set_secret(bridge_token_key(aid), token)
+        print(f"bridge token for {aid} (enter it on the engine machine with bridge-use; shown only now):\n{token}")
+        return 0
+    if cmd == "bridge-use":
+        aid = argv[1]
+        set_secret(f"mt5-bridge-url-{aid}", _prompt("bridge URL (http://<private-ip>:<port>)", secret=False))
+        set_secret(bridge_token_key(aid), _prompt("bridge token (from bridge-serve)", secret=True))
+        print(f"engine for {aid} will use the bridge")
         return 0
     if cmd == "set":
         set_secret(argv[1], _prompt(f"value for {argv[1]}", secret=True))

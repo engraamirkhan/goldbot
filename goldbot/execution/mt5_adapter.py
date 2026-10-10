@@ -135,14 +135,16 @@ def measure_broker_terms(account_id: str, info: Any, *, account_currency: str, p
 class MT5Broker:
     name = "mt5"
 
-    def __init__(self, *, terminal_path: str, login: int, password: str, server: str, server_tz: str,
+    def __init__(self, *, terminal_path: str, login: int | None, password: str | None, server: str, server_tz: str,
                  symbol: str, account_label: str):
         if mt5 is None:
             raise RuntimeError("MetaTrader5 package is Windows-only; run this adapter on the VPS")
         self.server_tz = server_tz
         self.symbol = symbol
         self.account_label = account_label
-        if not mt5.initialize(path=terminal_path, login=login, password=password, server=server):
+        # without a login the terminal's own saved account is used (bridge on Wine: no password leaves the terminal)
+        creds = {} if login is None else {"login": login, "password": password, "server": server}
+        if not mt5.initialize(path=terminal_path, **creds):
             raise RuntimeError(f"mt5.initialize failed: {mt5.last_error()}")
         if not mt5.symbol_select(symbol, True):
             mt5.shutdown()
