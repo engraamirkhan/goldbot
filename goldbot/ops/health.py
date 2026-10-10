@@ -44,6 +44,7 @@ JOB_OVERDUE_GRACE_S = 15 * 60
 JOB_RUNNING_FAIL_H = 12.0         # a job "running" this long means the scheduler died mid-job
 COSTS_WARN_DAYS = 4.0             # nightly on weekdays: Friday -> Monday is 3 days
 COSTS_FAIL_DAYS = 8.0
+DQ_WINDOW_HOURS = 24              # data-quality error events within this window raise a warning
 NEWS_STALE_POLLS = 3              # feed health older than this many poll intervals: the news service is down
 SPEND_WARN_FRACTION = 0.8
 STUCK_APPROVAL_GRACE_S = 120
@@ -453,6 +454,28 @@ def check_costs(ctx: HealthContext, account_id: str) -> Check:
     return Check(name=name, status="ok", reason=msg)
 
 
+def check_data_quality(ctx: HealthContext) -> Check:
+    """Design (Data quality): errors quarantine the batch and alert. Error-severity events (duplicate stamps, bid >
+    ask, out-of-order bars) recorded by the loaders or the engines in the last DQ_WINDOW_HOURS warn here; their rows
+    are in `bars_quarantine`, not in the bar tables, and an engine blocks entries while its feed is in error."""
+    if ctx.settings is None:
+        return Check(name="data_quality", status="warn", reason="settings unreadable: data root unknown")
+    root = Path(ctx.settings.data_root)
+    if not (root / "dq_events").exists():
+        return Check(name="data_quality", status="ok", reason="no data-quality events recorded")
+    from goldbot.data.store import Store
+    try:
+        ev = Store(root).read("dq_events", start=ctx.now - pd.Timedelta(hours=DQ_WINDOW_HOURS), end=ctx.now)
+    except (ValueError, OSError) as exc:
+        return Check(name="data_quality", status="warn", reason=f"dq_events unreadable: {exc}")
+    errs = ev[ev["severity"] == "error"] if not ev.empty and "severity" in ev.columns else ev.iloc[0:0]
+    if errs.empty:
+        return Check(name="data_quality", status="ok", reason=f"no error events in {DQ_WINDOW_HOURS} h ({len(ev)} warnings)")
+    kinds = ", ".join(f"{k} x{n}" for k, n in errs["check"].value_counts().items())
+    return Check(name="data_quality", status="warn",
+                 reason=f"{len(errs)} error events in {DQ_WINDOW_HOURS} h ({kinds}): rows quarantined, see bars_quarantine")
+
+
 def check_news(ctx: HealthContext) -> Check:
     if ctx.settings is not None and not ctx.settings.news.feeds:
         return Check(name="news", status="ok", reason="no feeds configured")
@@ -549,7 +572,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += [check_engine(ctx, a.account_id), check_risk_state(ctx, a.account_id)]
         checks += check_scheduler(ctx)
         checks += [check_costs(ctx, a.account_id) for a in ctx.accounts]
-        checks += [check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
+        checks += [check_data_quality(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
 

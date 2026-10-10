@@ -17,8 +17,8 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 116 |
-| partial | 18 |
+| implemented | 117 |
+| partial | 17 |
 | missing | 12 |
 | deviates | 9 |
 | in review | 6 |
@@ -127,7 +127,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | D19 | Quality: "Gaps against the calendar" | implemented | goldbot/data/quality.py:52-58 | tests/test_data_layer.py::test_gap_check_fires_whatever_the_timestamp_unit |
 | D20 | Quality: "spikes (>12 sigma of trailing hour with no match on the other feed)" | partial | goldbot/data/quality.py:60-69: 12 sigma of the trailing 60 bars; the other-feed match is not checked | tests/test_data_layer.py::test_quality_checks_flag_spike_and_bid_gt_ask |
 | D21 | Quality: "stale feed (90 s without a tick in session)" | implemented | goldbot/data/quality.py:74 `stale_feed` | tests/test_trace_data_exec.py::test_stale_feed_is_90s_in_session_only |
-| D22 | "Warnings commit with a dq_flag; errors quarantine the batch and alert" | partial | flags set (goldbot/data/quality.py); the release/store writers do not quarantine error batches and nothing alerts | untested |
+| D22 | "Warnings commit with a dq_flag; errors quarantine the batch and alert" | implemented | goldbot/data/quality.py `quarantine` splits error-flagged rows (duplicate stamp, bid > ask; a duplicate keeps its last copy) from the batch; scripts/build_bars.py writes them to the store table `bars_quarantine` and only clean rows to the bar tables; scripts/dukascopy_year.py leaves them out of the published file and writes `*_quarantine.parquet`; the engine already blocks entries on live bar errors and records them in `dq_events`; alert: goldbot/ops/health.py `check_data_quality` warns on error events in the last 24 h. Reading taken: rows, not the whole batch, are held back (a year-long backfill would otherwise be dropped for one bad minute) | tests/test_quarantine.py::test_error_rows_are_quarantined_and_warnings_stay; ::test_a_clean_batch_passes_whole; ::test_the_store_keeps_quarantined_rows_in_their_own_table; ::test_health_alerts_on_error_events_of_the_last_day_only |
 | D23 | "Dukascopy ... kept separate and tagged"; "every signal must survive on both feeds" | partial | `source=` partitions in the store; the two-feed survival check is missing | untested |
 | D24 | "CFD volume is tick count and is never labelled otherwise" | implemented | goldbot/data/resample.py BAR_COLUMNS (`tick_count`) | tests/test_dukascopy_year.py::test_fractional_dukascopy_volumes_are_kept |
 | D25 | Timestamps via `epoch_ns`, never `.asi8` (CLAUDE.md) | implemented | goldbot/data/timeutil.py:22 | tests/test_data_layer.py::test_epoch_ns_is_unit_independent |
@@ -265,7 +265,7 @@ Larger gaps, by priority (effort: S < 1 day, M 1-3 days, L > 3 days):
 8. ~~R25/R26 stale data~~ (done).
 9. ~~R16 re-arm probation~~ (done).
 10. **M3/M6/M7 live exit policies**: trend trail, breakout scale-out and trail, session-open hard flat (M).
-11. **D22 quarantine of error batches** in the store/release writers, with an alert (S).
+11. ~~D22 quarantine of error batches~~ (done).
 12. **M26/M27 drift and health**: PSI per feature, ECE sizing, specialist and system halts (M-L).
 13. **A10 auto-mode offer** after 100 proposals with the veto comparison (S-M).
 14. **R21 blackout early close if p < 0.5**, which needs re-scoring open positions (M).
