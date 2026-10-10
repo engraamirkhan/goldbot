@@ -45,6 +45,9 @@ class RiskLimits(Record):
     # most this fraction of what the combined equity can carry at the leverage cap (30% x 20 = 6x combined equity)
     max_combined_lots: float = 3.0
     max_combined_notional_frac: float = 0.30
+    # account class (design: Account classifier): on Standard the 15m specialists except session-open are disabled
+    # and the rest need an expected edge of at least this many round-trip costs; Unknown trades nothing (paper only)
+    standard_edge_over_cost: float = 1.5
 
     @classmethod
     def from_settings(cls, risk: RiskSettings, *, tiny_live: bool) -> RiskLimits:
@@ -81,6 +84,7 @@ class AccountState(Record):
     other_notional: float = 0.0
     other_equity: float = 0.0
     combined_size_down: bool = False  # the supervisor's 8% combined drawdown stage
+    account_class: str = "raw"        # raw | standard | unknown, from the classifier; a paper broker stays "raw"
 
 
 class Intent(Record):
@@ -98,6 +102,8 @@ class Intent(Record):
     volume_min: float = 0.01
     volume_max: float = 2.0
     stops_level_points: float = 0.0
+    timeframe: str = ""       # the agent's decision timeframe and family, for the account-class rules
+    family: str = ""
 
 
 class GateDecision(Record):
@@ -171,6 +177,14 @@ class RiskGate:
             reasons.append("negative_ev")
         if intent.target_atr < L.min_target_over_cost * intent.cost_atr:
             reasons.append("target_below_cost_floor")
+        if st.account_class == "unknown":
+            reasons.append("account_class_unknown")
+        elif st.account_class == "standard":
+            if intent.timeframe == "15m" and intent.family != "session_open":
+                reasons.append("standard_account_15m")
+            edge = intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr      # gross, before costs
+            if edge <= L.standard_edge_over_cost * intent.cost_atr:            # design: must exceed 1.5x
+                reasons.append("standard_account_edge")
         if reasons:
             return GateDecision(allowed=False, reasons=reasons)
 

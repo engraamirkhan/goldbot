@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.loaders import load_dukascopy_ticks_csv, load_mt5_bars_csv  # noqa: E402
-from goldbot.data.quality import check_bars, events_frame  # noqa: E402
+from goldbot.data.quality import check_bars, events_frame, quarantine  # noqa: E402
 from goldbot.data.resample import resample_bars, ticks_to_1m  # noqa: E402
 from goldbot.data.store import Store  # noqa: E402
 
@@ -41,6 +41,10 @@ def main() -> None:
     print(f"quality: {len(dq)} events; errors: {sum(e.severity == 'error' for e in dq)}")
     if dq:
         store.append("dq_events", events_frame(dq), source=args.source)
+    b1, held = quarantine(b1)                     # error rows never reach the bar tables
+    if not held.empty:
+        store.append("bars_quarantine", held, source=args.source, dedupe=False)
+        print(f"quarantined {len(held):,} bars with an error flag (table bars_quarantine)")
     store.append("bars_1m", b1, source=args.source)
     for tf in ("15m", "1h", "4h", "1d", "1w"):
         b = resample_bars(b1, tf)

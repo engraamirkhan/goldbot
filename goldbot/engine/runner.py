@@ -185,6 +185,7 @@ class Engine:
         self._tick_log: list[Tick] = []
         self._journaled = 0                  # decisions already written to the store's journal
         self._cost_cache: tuple[float, CostTable | None] = (-1.0, None)
+        self._class_cache: tuple[float, str] = (-2.0, "unknown")
         self._ctx_cache: dict[str, tuple[pd.Timestamp, tuple[pd.DataFrame, pd.DataFrame] | None]] = {}
         # per timeframe: completed 1m bars -> bars, re-aggregating only the groups that changed since the last close
         self._resamplers: dict[str, IncrementalResampler] = {}
@@ -427,7 +428,7 @@ class Engine:
             mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, hurdle_atr)[0])
             price = last_tick.ask if side > 0 else last_tick.bid
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
-                            multiplier=mult if mult > 0 else 0.0, price=price)
+                            multiplier=mult if mult > 0 else 0.0, price=price, timeframe=tf, family=agent.family)
             if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, hurdle_atr) + 0.02:
                 decisions.append(self._record(agent, close_ts, p, mult, "below_threshold"))
                 continue
@@ -610,6 +611,9 @@ class Engine:
             st.owner_halt = self.center.bus.control().halted if self.center.bus is not None else False
         if self.cfg.news_blackout:
             st.in_blackout = self._blackout(tick.ts_utc) is not None
+        # design (Account classifier): a broker account trades by its measured class; Unknown (incl. not classified
+        # yet) trades nothing, Standard is restricted in the gate. The paper broker has no account to classify.
+        st.account_class = "raw" if self.cfg.mode == "paper" else self._account_class()
         self._server_clock(now, tick)
         stage = st.stage
         if self.gate.update_stage(st) != stage:
@@ -1018,11 +1022,16 @@ class Engine:
         return c if c is not None else self.cfg.cost_atr
 
     def _account_class(self) -> str:
+        """The classifier's stored class (state/classifier_<account>.json); unknown when missing or unreadable."""
         path = Path(self.cfg.state_dir, f"classifier_{self.cfg.account_id}.json")
-        try:
-            return str(json.loads(path.read_text()).get("class") or "unknown") if path.exists() else "unknown"
-        except (ValueError, OSError):
-            return "unknown"
+        mtime = path.stat().st_mtime if path.exists() else -1.0
+        if mtime != self._class_cache[0]:
+            try:
+                c = str(json.loads(path.read_text()).get("class") or "unknown") if path.exists() else "unknown"
+            except (ValueError, OSError):
+                c = "unknown"
+            self._class_cache = (mtime, c if c in ("raw", "standard", "unknown") else "unknown")
+        return self._class_cache[1]
 
     def _write_state(self) -> None:
         st = self.state

@@ -17,9 +17,9 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 115 |
-| partial | 18 |
-| missing | 13 |
+| implemented | 117 |
+| partial | 17 |
+| missing | 12 |
 | deviates | 9 |
 | in review | 6 |
 | **total** | **161** |
@@ -127,7 +127,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | D19 | Quality: "Gaps against the calendar" | implemented | goldbot/data/quality.py:52-58 | tests/test_data_layer.py::test_gap_check_fires_whatever_the_timestamp_unit |
 | D20 | Quality: "spikes (>12 sigma of trailing hour with no match on the other feed)" | partial | goldbot/data/quality.py:60-69: 12 sigma of the trailing 60 bars; the other-feed match is not checked | tests/test_data_layer.py::test_quality_checks_flag_spike_and_bid_gt_ask |
 | D21 | Quality: "stale feed (90 s without a tick in session)" | implemented | goldbot/data/quality.py:74 `stale_feed` | tests/test_trace_data_exec.py::test_stale_feed_is_90s_in_session_only |
-| D22 | "Warnings commit with a dq_flag; errors quarantine the batch and alert" | partial | flags set (goldbot/data/quality.py); the release/store writers do not quarantine error batches and nothing alerts | untested |
+| D22 | "Warnings commit with a dq_flag; errors quarantine the batch and alert" | implemented | goldbot/data/quality.py `quarantine` splits error-flagged rows (duplicate stamp, bid > ask; a duplicate keeps its last copy) from the batch; scripts/build_bars.py writes them to the store table `bars_quarantine` and only clean rows to the bar tables; scripts/dukascopy_year.py leaves them out of the published file and writes `*_quarantine.parquet`; the engine already blocks entries on live bar errors and records them in `dq_events`; alert: goldbot/ops/health.py `check_data_quality` warns on error events in the last 24 h. Reading taken: rows, not the whole batch, are held back (a year-long backfill would otherwise be dropped for one bad minute) | tests/test_quarantine.py::test_error_rows_are_quarantined_and_warnings_stay; ::test_a_clean_batch_passes_whole; ::test_the_store_keeps_quarantined_rows_in_their_own_table; ::test_health_alerts_on_error_events_of_the_last_day_only |
 | D23 | "Dukascopy ... kept separate and tagged"; "every signal must survive on both feeds" | partial | `source=` partitions in the store; the two-feed survival check is missing | untested |
 | D24 | "CFD volume is tick count and is never labelled otherwise" | implemented | goldbot/data/resample.py BAR_COLUMNS (`tick_count`) | tests/test_dukascopy_year.py::test_fractional_dukascopy_volumes_are_kept |
 | D25 | Timestamps via `epoch_ns`, never `.asi8` (CLAUDE.md) | implemented | goldbot/data/timeutil.py:22 | tests/test_data_layer.py::test_epoch_ns_is_unit_independent |
@@ -207,7 +207,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | X11 | Classifier: commission => Raw; zero commission and median London/NY spread >= $0.30 => Standard | implemented | goldbot/execution/classifier.py:31-48 | tests/test_risk_exec_webhook.py::test_classifier_rules_and_persistence |
 | X12 | "a median under $0.20 with floating spread and no deal history also reads Raw; anything in between is Unknown" | implemented (fixed here) | goldbot/execution/classifier.py:45: Raw now requires no deal history; zero-commission deals with a tight spread are Unknown | tests/test_trace_data_exec.py::test_tight_spread_reads_raw_only_without_deal_history |
 | X13 | "only changes when two consecutive runs disagree"; "re-runs weekly from the nightly cost job" | implemented | goldbot/execution/classifier.py:53; goldbot/ops/jobs.py (Friday) | tests/test_risk_exec_webhook.py::test_classifier_rules_and_persistence; tests/test_jobs_integration.py::test_nightly_costs_from_logged_ticks_and_fills |
-| X14 | "On a Standard account the 15m specialists are disabled and the 1h and session-open specialists run only when expected edge exceeds 1.5x the measured cost; on Unknown the engine stays in paper and alerts" | missing | the engine reports the class (goldbot/engine/runner.py:661) but does not act on it | tests/test_engine_costs.py::test_account_class_is_reported_from_the_classifier_state (report only) |
+| X14 | "On a Standard account the 15m specialists are disabled and the 1h and session-open specialists run only when expected edge exceeds 1.5x the measured cost; on Unknown the engine stays in paper and alerts" | implemented | goldbot/engine/runner.py `_refresh_account` sets `AccountState.account_class` from state/classifier_<account>.json (cached by mtime; missing, unreadable or not yet classified = unknown; a paper broker is never restricted); goldbot/risk/gate.py `check`: unknown -> `account_class_unknown` (no entries; the shadow book keeps learning), standard -> `standard_account_15m` for 15m families except session_open and `standard_account_edge` unless the gross edge p*T-(1-p)*S exceeds `standard_edge_over_cost` (1.5) x the measured round trip; alert: goldbot/ops/health.py `check_engine` warns while a broker account is unknown | tests/test_account_class.py::test_unknown_class_blocks_every_entry; ::test_standard_disables_15m_families_except_session_open; ::test_standard_needs_an_edge_above_one_and_a_half_times_cost; ::test_engine_reads_the_class_for_a_broker_account_and_ignores_it_on_paper; ::test_health_warns_while_a_broker_account_is_unclassified |
 | X15 | Webhook: "accepts POSTs only from TradingView's published IPs" | implemented | goldbot/webhook/app.py:24, 79-83 (peer address) | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar (IP check disabled in test) |
 | X16 | Webhook: "verifies an HMAC over the payload in constant time, rejects replayed nonces" | deviates | constant-time shared secret in the body (goldbot/webhook/app.py:84; TradingView cannot sign) plus content-hash idempotency; no nonce | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar |
 | X17 | "upserts on a content hash so retries are idempotent" | implemented | goldbot/webhook/app.py:40, 87-90 | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar |
@@ -259,14 +259,13 @@ Larger gaps, by priority (effort: S < 1 day, M 1-3 days, L > 3 days):
 2. ~~X8 reconciliation stops~~ (done).
 3. ~~R22/R23 weekend and rollover rules~~ (done).
 4. ~~R7 combined exposure cap~~ (done).
-5. **X14 act on the account class**: Standard disables 15m families and requires 1.5x edge over cost; Unknown
-   forces paper and alerts (S).
+5. ~~X14 act on the account class~~ (done).
 6. ~~R17 combined 8% stage~~ (done).
 7. ~~F2 feature-version check at scoring~~ (done).
 8. ~~R25/R26 stale data~~ (done).
 9. ~~R16 re-arm probation~~ (done).
 10. **M3/M6/M7 live exit policies**: trend trail, breakout scale-out and trail, session-open hard flat (M).
-11. **D22 quarantine of error batches** in the store/release writers, with an alert (S).
+11. ~~D22 quarantine of error batches~~ (done).
 12. **M26/M27 drift and health**: PSI per feature, ECE sizing, specialist and system halts (M-L).
 13. **A10 auto-mode offer** after 100 proposals with the veto comparison (S-M).
 14. **R21 blackout early close if p < 0.5**, which needs re-scoring open positions (M).

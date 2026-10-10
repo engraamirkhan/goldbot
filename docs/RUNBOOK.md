@@ -60,7 +60,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | --- | --- | --- |
 | `calendar_archive` | Daily 06:10 | Stores the Forex Factory week in the `calendar_events` table (feeds the news blackout). |
 | `agents_presession` | Mon-Fri 06:30 | Macro and news analyst writes the pre-session briefing. |
-| `nightly_costs` | Mon-Fri 23:10 | Builds each account's spread/slippage cost table `state\costs_<account>.json`, with the swap and commission the terminal reports (`state\broker_terms_<account>.json`, written by the engine every 6 hours); on Fridays also re-runs the account classifier (`state\classifier_<account>.json`). |
+| `nightly_costs` | Mon-Fri 23:10 | Builds each account's spread/slippage cost table `state\costs_<account>.json`, with the swap and commission the terminal reports (`state\broker_terms_<account>.json`, written by the engine every 6 hours); on Fridays also re-runs the account classifier (`state\classifier_<account>.json`). Until an account has been classified (the first Friday with 1,000+ London/New York ticks logged) its engine opens no positions and the health check warns "account class unknown"; on a Standard account the 15m families except session-open are off. |
 | `model_watch` | Daily 23:30 | CUSUM check on any newly promoted champion; restores the previous champion on an alarm. |
 | `agents_daily` | Mon-Fri 23:45 | Data steward, risk officer, execution auditor. |
 | `saturday_retrain` | Saturday 06:00 | Refreshes bars from `data-v1`, decides waiting challengers (promote/retire), retrains new challengers. |
@@ -104,7 +104,8 @@ goldbot never reads secrets from files in the repository. You type each one once
 goes into Windows Credential Manager under the service name `goldbot`. The engine services cannot ask you for a
 missing secret (they run in the background with no window), so store everything **before** starting services.
 
-MT5 demo accounts (asks for the login number, which it writes into `config/accounts.yaml`, then the password):
+MT5 demo accounts (asks for the login number, then the password; both go into the keyring, never into
+`config/accounts.yaml`, which is in the public repo). The IC Markets demo is on server `ICMarketsSC-Demo`:
 
 ```powershell
 cd C:\goldbot
@@ -113,8 +114,9 @@ cd C:\goldbot
 .\.venv\Scripts\python -m goldbot.ops.accounts list
 ```
 
-`list` should show `password_stored=yes` and a login number for both demo accounts. (The passwords are stored as
-keys `mt5-icm-demo` and `mt5-vantage-demo`.)
+`list` should show `password_stored=yes` and a login number for both demo accounts. (They are stored as keys
+`mt5-login-icm-demo` / `mt5-icm-demo` and `mt5-login-vantage-demo` / `mt5-vantage-demo`.) Never put a login or
+password in a file in `C:\goldbot`; a test fails CI if `config/accounts.yaml` ever carries a login.
 
 Other secrets: each command asks `value for <key>` and hides what you type.
 

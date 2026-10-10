@@ -1,6 +1,8 @@
 """Account registry + credential prompting.
 
-* `config/accounts.yaml` holds everything except secrets.
+* `config/accounts.yaml` holds everything except secrets and MT5 login numbers (the repo is public): a login lives in
+  the keyring under `mt5-login-<account_id>`, next to the password `mt5-<account_id>`; a login left in the yaml is
+  still read, but nothing writes one there.
 * Secrets live in the OS keyring (macOS Keychain / Windows Credential Manager) via `keyring`, falling back
   to state/.secrets.json only when no keyring backend exists (headless Linux CI). That file is plaintext, owner-only
   (created 0600, replaced atomically); it is not encrypted, so a keyring is required on the VPS.
@@ -155,13 +157,22 @@ def load_accounts(path: Path | None = None) -> dict[str, Account]:
     raw = yaml.safe_load(path.read_text())
     out = {}
     for aid, a in raw["accounts"].items():
-        out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=a.get("login"), terminal_path=a["terminal_path"],
+        login = a.get("login")
+        if login is None:
+            stored = get_secret(login_key(aid))
+            login = int(stored) if stored and stored.strip().isdigit() else None
+        out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=login, terminal_path=a["terminal_path"],
                            server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)))
     return out
 
 
-def save_login(account_id: str, login: int, path: Path | None = None) -> None:
-    _edit_yaml_line(_accounts_path(path), account_id, "login", str(int(login)))
+def login_key(account_id: str) -> str:
+    return f"mt5-login-{account_id}"
+
+
+def save_login(account_id: str, login: int) -> None:
+    """The login number goes to the keyring, never to config/accounts.yaml (tracked in a public repo)."""
+    set_secret(login_key(account_id), str(int(login)))
 
 
 def account_password(acc: Account) -> str:

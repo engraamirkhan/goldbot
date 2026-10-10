@@ -33,7 +33,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.data.calendar import DEFAULT_SESSIONS  # noqa: E402
-from goldbot.data.quality import check_bars  # noqa: E402
+from goldbot.data.quality import check_bars, quarantine  # noqa: E402
 from goldbot.data.resample import BAR_COLUMNS  # noqa: E402
 
 MIN_BARS_PER_FULL_MONTH = 15_000   # ~20 trading days x 1,380 minutes = 27,600; accept down to 15,000
@@ -249,6 +249,11 @@ def main() -> int:
     flags = out.pop("dq_flag").fillna("").astype(str)
     out, dq = check_bars(out)
     out["dq_flag"] = [a if a else b for a, b in zip(flags.to_numpy(), out["dq_flag"].to_numpy())]
+    out, held = quarantine(out)                   # error rows (bid > ask) are not published
+    if not held.empty:
+        held_path = (args.out or f"xauusd_1m_dukascopy_{args.year}.parquet").replace(".parquet", "_quarantine.parquet")
+        held.to_parquet(held_path, compression="zstd", index=False)
+        print(f"QUARANTINED {len(held):,} bars with an error flag -> {held_path}")
     out["source"] = "dukascopy"
     path = args.out or f"xauusd_1m_dukascopy_{args.year}.parquet"
     out.to_parquet(path, compression="zstd", index=False)

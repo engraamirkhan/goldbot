@@ -1,7 +1,8 @@
 """Data-quality checks run on every ingest batch.
 
-Warnings commit with a `dq_flag`; errors quarantine the batch. The trading loop never opens a
-position on a bar carrying an error flag.
+Warnings commit with a `dq_flag`; error rows are quarantined (`quarantine`: the store writers put them in the
+`bars_quarantine` table, never in the bar tables, and the health check alerts on error events). The trading loop never
+opens a position on a bar carrying an error flag.
 """
 from __future__ import annotations
 
@@ -69,6 +70,16 @@ def check_bars(bars: pd.DataFrame, *, tf_seconds: int = 60, sessions: SessionTab
             b.at[i, "dq_flag"] = (prev + ";" if prev else "") + "warning:spike"
 
     return b, events
+
+
+def quarantine(bars: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split check_bars output into (clean, quarantined): rows whose dq_flag carries an error (duplicate stamp,
+    bid > ask) are kept out of the bar tables; warnings stay with their flag. A duplicate stamp keeps its last copy
+    clean (check_bars flags the earlier ones), so a re-delivered minute is not lost."""
+    if bars.empty or "dq_flag" not in bars.columns:
+        return bars, bars.iloc[0:0]
+    err = bars["dq_flag"].fillna("").astype(str).str.contains("error:")
+    return bars[~err].reset_index(drop=True), bars[err].reset_index(drop=True)
 
 
 def bar_errors(bars: pd.DataFrame) -> list[DQEvent]:
