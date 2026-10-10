@@ -10,6 +10,21 @@ Owner: Aamir (engraamirkhan on GitHub). Personal project; keep everything inside
 - RiskGate is the only path to an order. Max 40 features per live model. Every join to bars via `asof_join` on `available_utc`.
 - Every change goes through CI (`.github/workflows/ci.yml`); failures are posted as GitHub issues labelled `ci` — read those, the log host is blocked from Claude sandboxes.
 
+- The repo is PUBLIC: never commit or push secrets or account identifiers (passwords, tokens, MT5 login numbers,
+  Telegram ids, hosts) — not in code, config, docs, commits or issue comments. MT5 logins and passwords live only in
+  the VPS keyring (`python -m goldbot.ops.accounts add <account>`); `config/accounts.yaml` keeps `login: null`.
+
+## Lifecycle agents (`.claude/agents/`)
+Every piece of work runs through them: `architect` (plan against DESIGN/TRACEABILITY, read-only) -> `implementer`
+(failing tests first) -> `test-engineer` (all gates below) -> reviews: `code-reviewer` always, `quant-reviewer` for
+research/labels/features/costs/gates, `trading-safety-reviewer` for engine/risk/execution/approvals,
+`security-reviewer` before every push -> `release-manager` (PR, CI, merge when green, progress on issue #34).
+Trading improvement loop: `performance-analyst` (shadow/live trades by timeframe, family, session, costs) ->
+`strategy-researcher` (pre-registered trials across 15m/1h/4h/1d within the quarter's budget) -> `evaluator`
+(verdict against the pre-registered rule and the gates). Reviewers and evaluators are independent and read-only;
+subagents do not spawn subagents. Operating contract: the owner confirms each entry with one click (90 s);
+every exit is automatic.
+
 ## Environment facts
 - Claude cloud sandbox and the Mac's Cowork VM cannot reach market-data hosts (Dukascopy, FRED) or download GitHub Actions logs; GitHub API and git push work from the Mac VM (token via device flow, stored only in the VM).
 - Data pulls run as GitHub Actions (`data-dukascopy.yml`) and publish Parquet to release `data-v1`; `scripts/fetch_data_release.py` loads them.
