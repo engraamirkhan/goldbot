@@ -33,6 +33,8 @@ import hmac
 import json
 import logging
 import time
+from datetime import date
+from datetime import time as dtime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, AsyncIterator, Callable
 
@@ -40,6 +42,7 @@ import pandas as pd
 import requests
 from pydantic import BaseModel
 
+from goldbot.data.calendar import TradingSession
 from goldbot.execution.broker import (
     AccountInfo,
     OrderIntent,
@@ -64,12 +67,13 @@ METHODS: dict[str, tuple[str, bool]] = {
     "deals_since": ("frame", True),
     "broker_terms": ("BrokerTerms", True),
     "margin_required": ("float", True),      # read-only (order_calc_margin): retry-safe, nothing reaches the market
+    "trading_sessions": ("list[TradingSession]", True),   # read-only session hours (D13)
     "place_order": ("OrderResult", False),
     "modify": ("OrderResult", False),
     "close": ("OrderResult", False),
 }
 _RECORDS: dict[str, type[BaseModel]] = {"SymbolInfo": SymbolInfo, "AccountInfo": AccountInfo, "Tick": Tick, "OrderResult": OrderResult,
-            "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent}
+            "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent, "TradingSession": TradingSession}
 MAX_BODY = 1_000_000
 SOCKET_TIMEOUT_S = 5            # a connection that sends nothing for this long is dropped
 ORDER_MAX_AGE_S = 10.0          # an order call older than this when the terminal gets to it is refused
@@ -94,6 +98,8 @@ def _encode(v: Any) -> Any:
         return {"__frame__": json.loads(out.to_json(orient="split", index=False, date_format="iso")), "times": times}
     if isinstance(v, pd.Timestamp):
         return {"__ts__": v.isoformat()}
+    if isinstance(v, (date, dtime)):                # record fields (TradingSession): pydantic parses the ISO text back
+        return v.isoformat()
     if hasattr(v, "model_dump"):                    # python-mode dump: Timestamps stay Timestamps and go as __ts__
         return {"__record__": type(v).__name__, "data": _encode(v.model_dump())}
     if isinstance(v, dict):
@@ -305,6 +311,9 @@ class RemoteBroker:
 
     def margin_required(self, symbol: str, side: int, lots: float, price: float) -> float | None:
         return self._call("margin_required", symbol, side, lots, price)
+
+    def trading_sessions(self, symbol: str) -> list[TradingSession]:
+        return self._call("trading_sessions", symbol)
 
     def place_order(self, intent: OrderIntent) -> OrderResult:
         return self._call("place_order", intent)

@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 import numpy as np
 import pandas as pd
 
+from goldbot.data.calendar import DEFAULT_SESSIONS, TradingSession, resolve_server_sessions
 from goldbot.execution.broker import AccountInfo, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 
 
@@ -54,6 +55,12 @@ class PaperBroker:
     def margin_required(self, symbol: str, side: int, lots: float, price: float) -> float | None:
         """Paper margin at the FCA retail cap for gold, 1:20 (the paper account's leverage)."""
         return lots * self.contract * price / 20.0
+
+    def trading_sessions(self, symbol: str) -> list[TradingSession]:
+        """The static session table's hours for the week from the paper clock's server date (last tick, else now)."""
+        now = self._tick.ts_utc if self._tick is not None else pd.Timestamp.now(tz="UTC")
+        tz = DEFAULT_SESSIONS.server_tz
+        return resolve_server_sessions(DEFAULT_SESSIONS.server_sessions(), tz, now.tz_convert(tz).date())
 
     def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:  # bars come from the store in paper mode
         return pd.DataFrame()
