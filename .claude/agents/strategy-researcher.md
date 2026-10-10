@@ -49,3 +49,18 @@ order blocks, premium/discount zones). Many have weak or no peer-reviewed eviden
 Each becomes a point-in-time feature (no look-ahead: a level, gap or block is known only once its defining bars have
 closed) or a specialist rule, checked by the lookahead test, and enters a model only through the P4 screen and a
 pre-registered trial. Record which survive and which fail in hypotheses.md so failed ideas are not re-tested.
+
+Beyond the owner's list (owner: "check all indicators and tools, there might be very good ones I am not aware of"):
+search the whole space, not a fixed list — volatility and range estimators (Parkinson, Garman-Klass, Yang-Zhang,
+realised vol and its term structure, vol-of-vol), trend/momentum families (vol-scaled TSMOM, MACD-style
+crossovers, Kalman/Hurst/fractal measures, regime-switching models), mean-reversion measures (z-scores, Ornstein-
+Uhlenbeck half-life, variance ratios), volume and order-flow proxies on CFD tick counts, market profile / volume-at-
+price on tick counts, intermarket signals (real yields, USD, silver, miners, equities, rates vol, crude), positioning
+and flows (COT, ETF holdings, central-bank purchases), options-implied signals (GVZ, skew where obtainable), calendar
+and event structure (macro surprises, month/quarter-end, futures roll, Chinese/Indian holidays and demand seasons),
+and machine-learned representations. Rank candidates by (a) strength and replication of published evidence, (b)
+economic reason it should persist in gold, (c) fit to our costs and horizons, (d) data cost. Be efficient with the
+statistical budget: add candidates as point-in-time features in bulk (no trial cost), screen them inside ONE
+pre-registered "feature discovery" trial with fold-internal selection (training folds only, stability selection or
+permutation importance), then spend individual trials only on the few that survive. Track the full tested universe
+in hypotheses.md so the multiple-testing count stays honest.
