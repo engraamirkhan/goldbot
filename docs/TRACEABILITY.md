@@ -19,14 +19,6 @@ Status values:
 | --- | --- |
 | implemented | 144 |
 | partial | 18 |
-| implemented | 144 |
-| partial | 18 |
-| missing | 4 |
-| deviates | 8 |
-| in review | 6 |
-| **total** | **180** |
-| implemented | 144 |
-| partial | 18 |
 | missing | 4 |
 | deviates | 8 |
 | in review | 6 |
