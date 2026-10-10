@@ -25,6 +25,8 @@ from goldbot.research.screen import (
     MIN_EVENTS,
     MIN_T,
     min_events_for,
+    rule_only_split,
+    rule_only_split_lines,
     screen,
     screen_lines,
     screen_verdict,
@@ -46,25 +48,63 @@ def test_screen_passes_only_a_positive_significant_rule_on_enough_events():
     assert screen_verdict({"gross": {"n": 0}, "net": {"n": 0}})["passed"] is False
     v = screen_verdict(_rule(1200, 0.08, 2.4))
     assert v["net_mean_r"] == pytest.approx(-0.12) and v["gross_t"] == 2.4             # net is reported, not decisive
-    text = "\n".join(screen_lines(screen_verdict(_rule(10, -0.1, -1.0))))
-    assert "screen failed, no model fitted" in text and "FAIL events" in text
-    assert "(skipped with --skip-screen)" in "\n".join(screen_lines(screen_verdict(_rule(10, -0.1, -1.0)), skipped=True))
+    text = "\n".join(screen_lines(screen_verdict(_rule(5000, -0.1, -1.0))))
+    assert "screen failed, no model fitted" in text and "FAIL gross_t" in text
+    assert "(skipped with --skip-screen)" in "\n".join(screen_lines(screen_verdict(_rule(5000, -0.1, -1.0)), skipped=True))
 
 
-def test_a_screen_failing_only_on_the_event_floor_is_inconclusive_not_a_plain_fail():
+def test_any_screen_below_the_event_floor_is_inconclusive_whatever_its_sign_or_t():
     v = screen_verdict(_rule(MIN_EVENTS - 1, 0.05, 3.0))
     assert v["passed"] is False and v["verdict"] == INCONCLUSIVE == "inconclusive (event floor)"
     text = "\n".join(screen_lines(v))
     assert "**INCONCLUSIVE (event floor)**" in text and "cannot retire the hypothesis" in text and "FAIL events" in text
-    # any other failing criterion, alone or with the floor, is a plain fail
-    for rule in (_rule(MIN_EVENTS - 1, -0.05, 3.0), _rule(MIN_EVENTS - 1, 0.05, 1.0), _rule(5000, 0.05, 1.0),
+    # below the floor the sign and the t do not matter: too few events to retire the rule
+    for rule in (_rule(MIN_EVENTS - 1, -0.05, 3.0), _rule(MIN_EVENTS - 1, 0.05, 1.0), _rule(10, -0.1, -1.0),
                  {"gross": {"n": 0}, "net": {"n": 0}}):
+        assert screen_verdict(rule)["verdict"] == INCONCLUSIVE
+    # on or above the floor, any failing criterion is a plain fail
+    for rule in (_rule(5000, 0.05, 1.0), _rule(MIN_EVENTS, -0.05, 3.0)):
         assert screen_verdict(rule)["verdict"] == "fail"
     assert screen_verdict(_rule(MIN_EVENTS, 0.05, MIN_T))["verdict"] == "pass"
     # the floor is a parameter: 150 events pass a floor of 150, 149 are inconclusive
     assert screen_verdict(_rule(150, 0.05, 2.0), 150)["passed"] is True
     v149 = screen_verdict(_rule(149, 0.05, 2.0), 150)
     assert v149["verdict"] == INCONCLUSIVE and v149["min_events"] == 150 and ">= 150 events" in v149["rule"]
+
+
+def test_gross_t_of_1_5_on_300_events_with_a_floor_of_1000_is_inconclusive_not_fail():
+    v = screen_verdict(_rule(300, 0.04, 1.5), 1000)
+    assert v["verdict"] == INCONCLUSIVE and v["passed"] is False
+    assert [c["name"] for c in v["checks"] if not c["passed"]] == ["events", "gross_t"]     # both still shown
+
+
+def _net_labels(rows: list[tuple[str, int, float]]) -> pd.DataFrame:
+    """Synthetic net labels: (entry date, side, R) with risk 1%, so ret = R / 100."""
+    return pd.DataFrame({"ts_utc": pd.to_datetime([r[0] for r in rows], utc=True), "side": [r[1] for r in rows],
+                         "ret": [r[2] / 100 for r in rows], "risk": 0.01})
+
+
+def test_rule_only_net_split_reports_long_only_short_only_and_positive_net_years():
+    rows = [(f"{y}-03-{d:02d}", 1, r) for y, r in ((2019, 0.5), (2020, 0.4), (2021, 0.3)) for d in range(1, 11)]
+    rows += [(f"{y}-06-{d:02d}", -1, r) for y, r in ((2021, -0.5), (2022, -0.9)) for d in range(1, 11)]
+    rows += [(f"2023-01-0{d}", 1, 1.0) for d in range(1, 6)]                           # 5 trades: too few for a year
+    rows += [("2019-03-20", -1, 2.0), ("2019-03-21", 1, -0.5)]
+    lab = _net_labels(rows)
+    s = rule_only_split(lab)
+    longs, shorts = lab[lab["side"] == 1], lab[lab["side"] == -1]
+    assert s["long"]["n"] == len(longs) == 36 and s["short"]["n"] == len(shorts) == 21
+    assert s["long"]["mean_r"] == pytest.approx((longs["ret"] / 0.01).mean())
+    assert s["short"]["mean_r"] == pytest.approx((shorts["ret"] / 0.01).mean())
+    assert s["long"]["t_stat"] > 0 > s["short"]["t_stat"]
+    # positive years: every candidate's net R (both sides), >= 10 trades in the entry year, positive mean
+    assert s["positive_years"] == [2019, 2020] and s["n_positive_years"] == 2 and s["chop_year_positive"] is False
+    assert s["years"]["2021"]["n"] == 20 and s["years"]["2021"]["mean_r"] == pytest.approx(-0.1)   # long-only 2021 > 0
+    assert s["years"]["2023"]["n"] == 5 and 2023 not in s["positive_years"]
+    text = "\n".join(rule_only_split_lines(s))
+    assert "long-only (side == 1)" in text and "short-only (side == -1)" in text and "positive net years" in text
+    assert "2019, 2020" in text
+    empty = rule_only_split(pd.DataFrame())
+    assert empty["long"] == {"n": 0} and empty["short"] == {"n": 0} and empty["positive_years"] == []
 
 
 def test_screen_floor_comes_from_settings_with_an_optional_daily_signal_override():

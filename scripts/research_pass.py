@@ -71,6 +71,8 @@ from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry  # noqa
 from goldbot.research.screen import (  # noqa: E402
     is_inconclusive,
     min_events_for,
+    rule_only_split,
+    rule_only_split_lines,
     screen,
     screen_lines,
     signal_timeframe,
@@ -158,6 +160,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              f"- runtime {meta['seconds']:.0f}s", ""]
     lines += screen_lines(m.get("screen"), bool(m.get("screen_skipped")))
     lines += _gates_lines(m.get("gates")) + _rule_gates_lines(m.get("rule_only_gates")) + _holdout_lines(m.get("holdout_verdict")) + _rule_only_lines(m.get("rule_only"))
+    lines += rule_only_split_lines(m.get("rule_only_split"))
     lines += _by_family_lines(m.get("by_family"))
     if "all_candidates" in m:
         lines += ["### Out of fold", "",
@@ -434,8 +437,11 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         meta = {"specialist": job.family, "from_year": int(b1["ts_utc"].iloc[0].year),
                 "to_year": int(b1["ts_utc"].iloc[-1].year), "n_1m": len(b1), "n_dec": len(b_dec), "tf": tf,
                 "zero_volume": zero_volume}
+        # rule-only net R by side and year over every candidate (the pre-registered reading rules read these)
+        split = rule_only_split(pd.concat([p.labels for p in preps], ignore_index=True))
         common = {"lookahead": leak, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
-                  "screen": scr, "screen_skipped": skipped, "cost_source": cost_source, "macro": macro_info}
+                  "screen": scr, "screen_skipped": skipped, "cost_source": cost_source, "macro": macro_info,
+                  "rule_only_split": split}
         rationale = args.rationale + (f" | overrides {json.dumps(job.overrides, sort_keys=True)}" if job.overrides else "")
         if scr is not None and not scr["passed"] and not args.skip_screen:
             n = int(sum(len(p.labels) for p in preps))
@@ -446,7 +452,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             print(f"{json.dumps(job.overrides) or 'defaults'}: screen {scr['verdict']} ({n} events) [{time.time() - t0:.0f}s]", flush=True)
             text = render_screen_failed(scr, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0, "n": n,
                                                     "swap": swap.model_dump(), "cost_source": cost_source,
-                                                    "macro": macro_info})
+                                                    "macro": macro_info, "rule_only_split": split})
         else:
             if job.pooled:
                 res = run_pool(preps, tf, n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
@@ -462,7 +468,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                              rationale=rationale, results=metrics, status="holdout" if args.score_holdout else "evaluated",
                              budget_quarter=quarter)
             res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped, "cost_source": cost_source,
-                           "macro": macro_info}
+                           "macro": macro_info, "rule_only_split": split}
             years = per_year(res.oof, res.metrics.get("threshold"))
             text = render_report(res, years, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0})
         if job.overrides:
@@ -519,9 +525,9 @@ def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[s
              f"- cost source: {meta.get('cost_source', 'settings priors')}",
              _macro_line(meta.get("macro")),
              f"- runtime {meta['seconds']:.0f}s", ""]
-    lines += screen_lines(scr) + _rule_only_lines(scr["rule_only"])
+    lines += screen_lines(scr) + _rule_only_lines(scr["rule_only"]) + rule_only_split_lines(meta.get("rule_only_split"))
     if is_inconclusive(scr):
-        lines += [f"Screen inconclusive (event floor): positive and significant on {scr['n']:,} events, fewer than the "
+        lines += [f"Screen inconclusive (event floor): {scr['n']:,} events, fewer than the "
                   f"{scr['min_events']:,} the floor needs. No model was fitted. This recorded, charged trial cannot "
                   "retire the hypothesis; it is not evidence for promotion either."]
     else:
