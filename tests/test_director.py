@@ -131,8 +131,8 @@ def test_lookahead_dirty_family_gets_nothing_and_its_share_goes_elsewhere():
 
 
 def test_allocation_edge_cases_cap_zero_evidence_and_small_budget():
-    flat, _ = allocate([_score(f, 0.0) for f in FAMILIES], 48, floor=2)
-    assert set(flat.values()) == {48 // len(FAMILIES)}           # an even split when no family has evidence
+    flat, _ = allocate([_score(f, 0.0) for f in FAMILIES], 6 * len(FAMILIES), floor=2)
+    assert set(flat.values()) == {6}                             # an even split when no family has evidence
     capped, left = allocate([_score("trend", 5.0), _score("breakout", 0.1)], 48, floor=2, cap=26)
     assert capped == {"trend": 26, "breakout": 22} and left == 0
     full, left = allocate([_score("trend", 5.0), _score("breakout", 0.1)], 60, floor=2, cap=26)
@@ -210,7 +210,8 @@ def test_monthly_research_honours_the_plan_the_quarter_budget_and_the_holdout(tm
     ctx = _ctx(tmp_path, trial_budget_per_month=6, label_grid_paused=False,   # the grid is paused by default
                reserved_trials_quarter=0)
     slot = pd.Timestamp.now("UTC").floor("min")      # the registry stamps rows with the wall clock: same quarter
-    grid = {"breakout": 0, "intraday_momentum": 0, "mean_reversion": 5, "session_open": 1, "trend": 2, "tsmom": 0}
+    grid = {"asia_drift": 0, "breakout": 0, "intraday_momentum": 0, "mean_reversion": 5, "session_open": 1, "trend": 2,
+            "tsmom": 0}
     _plan(slot - pd.Timedelta(days=1), grid).save(tmp_path / PLAN_FILE)
     out = monthly_research(ctx, slot)
     assert {f: out[f]["trials"] for f in FAMILIES} == grid
@@ -290,8 +291,8 @@ PROMOTED: dict[str, pd.Timestamp | None] = {"v1": NOW - pd.Timedelta(days=300)}
 
 def _rich_trials() -> list[dict[str, Any]]:
     """Registry evidence for every family, unequal, so the evidence split is not flat."""
-    aucs = {"breakout": 0.53, "intraday_momentum": 0.52, "mean_reversion": 0.55, "session_open": 0.54, "trend": 0.56,
-            "tsmom": 0.57}
+    aucs = {"asia_drift": 0.51, "breakout": 0.53, "intraday_momentum": 0.52, "mean_reversion": 0.55,
+            "session_open": 0.54, "trend": 0.56, "tsmom": 0.57}
     return [_trial(i + 1, f, auc=a, n_oof=400) for i, (f, a) in enumerate(sorted(aucs.items()))]
 
 
@@ -397,9 +398,10 @@ def test_retired_families_share_one_exploration_trial_a_quarter():
         assert again.budget["mean_reversion"] == again.budget["breakout"] == 0
         assert set(again.retired_floor.values()) == {0}
     # with only a couple of trials left, live families' floors come first
-    tight = build_plan(NOW, FAMILIES, _rich_trials(), [], [], quarter_budget=100, monthly_total=8,
+    live = len(FAMILIES) - len(RETIRED)
+    tight = build_plan(NOW, FAMILIES, _rich_trials(), [], [], quarter_budget=100, monthly_total=2 * live,
                        trial_budget_per_month=0, floor=2, retired=RETIRED)
-    assert sum(tight.budget.values()) == 8 and tight.budget["mean_reversion"] + tight.budget["breakout"] == 0
+    assert sum(tight.budget.values()) == 2 * live and tight.budget["mean_reversion"] + tight.budget["breakout"] == 0
     # a lookahead-dirty retired family is skipped: the shared trial goes to a clean one
     dirty = _rich_trials() + [_trial(99, "mean_reversion", auc=0.6, lookahead=["x"])]
     d = _plan_with(retired=RETIRED, trials=dirty)
@@ -422,7 +424,9 @@ def test_the_shared_retired_trial_goes_to_the_best_post_retirement_evidence_when
             for i, f in enumerate(["breakout", "intraday_momentum", "mean_reversion", "session_open", "trend"])]
     p7 = build_plan(NOW, FAMILIES, _rich_trials(), [], [], quarter_budget=20, monthly_total=48,
                     trial_budget_per_month=0, floor=2, reserved_setting=13, retired=five)
-    assert p7.total_budget == 7 and sum(p7.budget[r.family] for r in five) == 1 and p7.budget["tsmom"] == 6
+    # the six left go to the active families (tsmom and asia_drift, H-04: active, not retired)
+    assert p7.total_budget == 7 and sum(p7.budget[r.family] for r in five) == 1
+    assert p7.budget["tsmom"] + p7.budget["asia_drift"] == 6 and min(p7.budget["tsmom"], p7.budget["asia_drift"]) >= 2
 
 
 def test_reinstatement_uses_only_trades_after_retirement_and_the_corrected_threshold():
@@ -581,7 +585,7 @@ def test_research_director_job_reads_attribution_settings_and_the_reservation(tm
     assert plan.total_budget == DEFAULT_QUARTER_BUDGET - 13 == sum(plan.budget.values())
     retired = ("breakout", "intraday_momentum", "mean_reversion", "session_open", "trend")
     assert sum(plan.budget[f] for f in retired) == 1       # retired: ONE exploration trial shared by all five
-    assert plan.budget["tsmom"] == 6 and sorted(out["retired"]) == sorted(plan.retired_floor)
+    assert plan.budget["tsmom"] + plan.budget["asia_drift"] == 6 and sorted(out["retired"]) == sorted(plan.retired_floor)
     assert out["retired_explore"] == plan.retired_explore and plan.retired_explore in retired
     # no promoted model version in this registry: the attribution rows are not out-of-sample evidence
     assert all(s.attribution is not None and s.attribution.n == 0 for s in plan.evidence)

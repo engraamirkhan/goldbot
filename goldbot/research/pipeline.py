@@ -405,9 +405,10 @@ def pooled_family(timeframe: str) -> str:
 
 
 def pooled_members(timeframe: str) -> list[str]:
-    """The families a pooled model on `timeframe` unites: every registered family whose default timeframe it is."""
+    """The families a pooled model on `timeframe` unites: every registered family whose default timeframe it is, except
+    a family still under its pre-registered screen (`Specialist.screening`), so adding one leaves the pools unchanged."""
     from goldbot.specialists import SPECIALISTS
-    return sorted(f for f, cls in SPECIALISTS.items() if cls.timeframe == timeframe)
+    return sorted(f for f, cls in SPECIALISTS.items() if cls.timeframe == timeframe and not cls.screening)
 
 
 def pooled_inputs(timeframe: str, families: list[str], eligible: list[str]) -> list[str]:

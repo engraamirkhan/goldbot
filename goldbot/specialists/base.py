@@ -67,6 +67,11 @@ class Specialist(ABC):
     optional_config: dict[str, Any] = {}
     # named variants (`research_pass.py --variants '["<name>"]'`): a pre-registered configuration spelled out once
     presets: dict[str, dict[str, Any]] = {}
+    # True while the family's pre-registered rule-only screen has not passed (e.g. asia_drift, H-04): it is usable by
+    # research (`research_pass.py --specialist`) but is not seeded as a default population founder
+    # (`Population.ensure_founders`) and is not a member of the pooled models (`pipeline.pooled_members`). A passed
+    # walk-forward trial of its exact configuration still becomes a shadow founder (gap_watch `research_ready`)
+    screening: bool = False
 
     def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
         asked = (identity.config if identity is not None else overrides).get(TIMEFRAME_KEY, type(self).timeframe)

@@ -569,6 +569,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   signals (1,466 long / 688 short), one-at-a-time lower bound 154 events, first signal 2010-06-18. Owner ruling A
   (recommended floor 150 for daily signals, can retire not promote) must be committed as
   `research.screen_min_events_daily` before the run.
+- H-04 Asia-session drift (2026-10-11, specialist `asia_drift`, TRACEABILITY M39): long at 00:00 UTC (decision bar =
+  the 1h bar closing 00:00, entry at its close on the ask), time exit 07:00 UTC as a plain 1h time barrier
+  (`max_bars` 6; labels, shadow book and live count the same bars), stop 1.5 x ATR(1h) frozen at entry, no target, long
+  only, Monday-Friday; no entry when the 23:00 bar is missing, the session calendar is closed or on 25 Dec / 1 Jan; no
+  server rollover is ever held (swap 0, proved in both DST regimes). New `Specialist.screening`: a family under its
+  pre-registered screen is not seeded as a default founder and not pooled (pooled_1h unchanged); a passed trial still
+  becomes a shadow founder through gap_watch. It is active, not retired, so the research director now splits the free
+  (non-reserved) trials between tsmom and asia_drift (tsmom 6 -> 3 of 6 with today's settings). Frozen parameters and
+  the exact `research.yml` inputs: `docs/research/preregistration-2027Q1.md` H-04. data-v1 is not on this machine, so
+  only the calendar bound was counted (4,087 entry days 2010-01..2025-09); the data count is due before the freeze.
+  No research trial was run.
 
 - Dependencies (2026-10-11): Dependabot groups minor/patch updates per ecosystem; majors come as separate PRs to be
   hand-tested (the 15-package web group #65 was closed: TypeScript 7 broke `npm ci` through openapi-typescript, and

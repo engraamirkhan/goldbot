@@ -178,6 +178,54 @@ always covered. The director and the grid get at most 20 - used - reserved (7 if
   2025-10 only (press figures for H1 2026 fall in the holdout).
 - Reading rule: **continue** if gross t >= 2.0 on >= 1,000 events AND net mean R > 0. Expected thin: <= 0.03% per
   session against ~0.01% round trip, so a pass needs the measured cost table.
+- Implemented as the specialist `asia_drift` (`goldbot/specialists/asia_drift.py`, `tests/test_asia_drift.py`), agent
+  id `asia_drift-g0-98dc13a518`. Research only: `Specialist.screening` keeps it out of the default population founders
+  and the pooled 1h model until a trial passes; it is active (not in `research.retired_families`).
+- **Frozen parameters (written 2026-10-11, BEFORE any H-04 outcome was seen; no label, return or outcome was
+  computed on real data).** Each is enforced in code or stated as the reading of the run:
+  - *Entry:* long only, at 00:00 UTC: the decision bar is the 1h bar closing at 00:00 UTC (23:00-00:00), entry at its
+    close on the ask (the open of the first 1h bar at or after 00:00 UTC). No entry when that bar is missing, when the
+    session calendar is closed at 00:00 UTC (`DEFAULT_SESSIONS.is_open`: weekend, daily break on the Europe/Athens
+    server clock), or on 25 December / 1 January (UTC dates). So entries are Monday to Friday, at most one a day.
+  - *Exit:* time barrier at the close of the 7th 1h bar after entry (`max_bars` 6), 07:00 UTC, in both DST regimes
+    (London opens 08:00 UTC in winter, 07:00 UTC in summer: flat before or at the open). A plain barrier, no exit
+    policy, so labels, shadow book and live count the same bars (`test_shadow_book_reproduces_the_labels_time_barrier`).
+    A data gap inside the window lengthens the hold in calendar time (bars are counted, as everywhere else).
+  - *Stop:* 1.5 x Wilder ATR(14) of the 1h mid bars, the value at the decision bar's close (completed bars only),
+    frozen for the trade; R = that stop distance. *No target* (`target_atr` 50, out of reach in 7 hourly bars).
+  - *One position at a time* (`labels.one_at_a_time`); a 7-hour hold never overlaps the next day's entry.
+  - *Swap:* none. 00:00-07:00 UTC is 02:00-09:00 (winter) / 03:00-10:00 (summer) server time, so no server midnight
+    is held through (`test_no_trade_is_held_through_the_server_rollover`: `swap_nights` 0 in both regimes).
+  - *Costs:* extra_cost_usd = 0.37 $/oz round trip beyond the spread (as H-01), the spread paid in the labels (ask in,
+    bid out); replaced by the measured `costs-v1` table if it exists at run time (the report states which).
+  - *Event floor:* `research.screen_min_events` (1,000, an intraday rule: the daily override does not apply). Fewer
+    events is `inconclusive (event floor)` whatever the sign or t.
+  - *t-stat, net test, positive years, holdout, DSR count:* as frozen for H-01 (mean R / sd x sqrt(n), gross for the
+    screen, rule-only net R over every candidate for "net mean R > 0"; holdout-crossing labels dropped; DSR count =
+    `n_trials_effective` + 1). Long only, so no long/short split is read.
+  - *Walk-forward (only if the screen passes):* the 1h window (train 36 / test 6 / step 6 months, purge 5 d, embargo
+    2 d), the declared 12-feature list (`AsiaDriftSpecialist.model_features`). The reading rule above is read on the
+    rule-only screen alone; a "continue" means only that model research on H-04 may be pre-registered.
+- Run (Actions -> research -> Run workflow), exactly these inputs:
+
+  | input | value |
+  |---|---|
+  | specialist | `asia_drift` |
+  | from_year | `2010` |
+  | to_year | `2026` |
+  | rationale | `H-04 Asia-session drift (preregistration-2027Q1.md, commit <freeze commit>)` |
+  | variants | `[{}]` |
+  | score_holdout | false |
+  | skip_screen | false |
+  | pooled | (empty) |
+  | macro | false |
+
+  `[{}]` is the default configuration `{"stop_atr": 1.5, "target_atr": 50.0, "max_bars": 6}`. One trial.
+- Event count (2026-10-11, on `00c16d7` plus this change, the commit that adds `asia_drift`; counting only, no prices, labels or outcomes): **data-v1 is not
+  available on this machine, so no data count was made.** Calendar upper bound for the research window
+  2010-01-01 .. 2025-09-30: **4,087** entry days (4,108 weekdays open at 00:00 UTC on the session calendar, less 21
+  weekday 25 Dec / 1 Jan), about 260 a year. The data count (days whose 23:00 UTC bar exists, less the ATR warm-up)
+  can only be lower; to be recorded here before the freeze by a run with data-v1 present.
 
 ### tsmom 4h with swap (continuity)
 - Config: `variants=[{"timeframe": "4h", "max_bars": 12}]`, as refused on 2026-10-09.
