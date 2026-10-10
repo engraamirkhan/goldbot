@@ -760,6 +760,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   plus stale files in the fresh engines' single currency; a stale file in another or no currency keeps only its open
   lots and notional (strict) and is listed in `money_excluded`, which health reports as a warning naming the file.
   The paper exemption of the daily limit goes by type (`ops.run.paper_stand_in`: `isinstance(broker, PaperBroker)`).
+  Integration with the dashboard lane: one `Engine._published_limits` (`limits` in engine_<account>.json: risk per
+  trade, its maximum, multiplier bounds, daily and weekly caps, `daily_loss_limit_abs` per account,
+  `min_lot_risk_cap`, `min_lot_risk_account`); the top-level `currency` is the broker's deposit currency, never
+  blanked by the account view before its first refresh. `ClosedTrade.pnl_currency` is now the account currency
+  whenever the P&L (and R) are in it, "USD" only for the unconverted own-fills fallback, None only on legacy records,
+  so the monthly report's `r_understated` flags only pre-fix trades; the digest sums rows whose `pnl_currency` is
+  None or the account's currency (engine_<account>.json) and names the rest "(n in USD not summed)". Follow-up for
+  the dashboard lane: `monthly_report.account_month` still sums every row's P&L, including a USD fallback row.
 - Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
   `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
   minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both

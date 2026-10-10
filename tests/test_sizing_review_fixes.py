@@ -263,9 +263,37 @@ def test_an_unconverted_own_fill_pnl_is_recorded_in_usd_with_a_flag_and_kept_out
     append_closed_trade(tmp_path, ClosedTrade(account_id="icm-demo", broker="icm", mode="demo",
                                               exit_utc=T0 + pd.Timedelta(minutes=40), ret=0.001, pnl=5.0,
                                               equity_before=1_000.0, position_id=99))
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"account": "icm-demo", "currency": "GBP"}))
     line = trades_line(tmp_path, T0, T0 + pd.Timedelta(days=1))[0]
     assert "net +$5.00" in line                                                 # the formatter's symbol; only the £5
     assert "10.90" not in line and "5.90" not in line and "1 in USD not summed" in line
+
+
+def test_a_converted_gbp_trade_states_its_currency_is_not_flagged_and_is_summed(tmp_path):
+    """Dashboard contract: pnl_currency is the ACCOUNT currency when P&L and R were converted ("USD" only for the
+    unconverted fallback, None only on legacy records), so the monthly report's r_understated never flags it."""
+    from goldbot.ops.monthly_report import r_understated
+    pb = GbpPaper(commission_per_lot_side=0.0, adverse_slip_points=0.0)
+    eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", mode="demo", state_dir=str(tmp_path),
+                              owner_user_id=OWNER), pb, [TrendSpecialist()], {})
+    agent = TrendSpecialist()
+    pb.on_tick(Tick(ts_utc=T0, bid=4_150.0, ask=4_150.0))
+    prop = Proposal(proposal_id="icm-demo-2-x", account_id="icm-demo", agent_id=agent.agent_id, side=1, lots=0.01,
+                    entry=4_150.0, stop=4_139.10, target=4_180.0, p=0.6, ev_r=0.1, spread_points=0.0, top_features=[])
+    eng._execute(prop, agent, 0.01, 4_139.10, 4_180.0, requested=4_150.0, atr_usd=10.90)
+    pb.on_tick(Tick(ts_utc=T0 + pd.Timedelta(minutes=30), bid=4_180.0, ask=4_180.0))       # the target
+    eng._manage_open(pd.DataFrame())
+    eng._save_orders()
+    (t,) = load_closed_trades(tmp_path)[0]
+    assert t.pnl_currency == "GBP" and t.r == pytest.approx(30.0 / 10.90)
+    assert not r_understated(t, "GBP")
+    from goldbot.ops.gates_phase import ClosedTrade
+    legacy = ClosedTrade(account_id="icm-demo", broker="icm", mode="demo", exit_utc=T0, ret=0.0, pnl=1.0,
+                         equity_before=1_000.0, r=0.1)
+    assert r_understated(legacy, "GBP")                                         # a pre-fix record keeps its flag
+    eng._write_state()                                                          # engine file: currency GBP
+    line = trades_line(tmp_path, T0, T0 + pd.Timedelta(days=1))[0]
+    assert f"net +${30.0 / 1.33:,.2f}" in line and "not summed" not in line
 
 
 # ---------------------------------------------------------------------------------------------- LOW-2

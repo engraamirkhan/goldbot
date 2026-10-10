@@ -101,8 +101,9 @@ class ClosedTrade(FrozenRecord):
     commission: float | None = None    # cost in account currency (positive), entry and exit; None when not reported
     swap: float | None = None          # account currency, broker sign; None when not reported
     partial_lots: float = 0.0          # lots closed by a scale-out before the final close
-    # set only when `pnl` is NOT in the account currency: "USD" when the engine recorded its own fills without a
-    # conversion (BACKLOG 28 review LOW-1). Such a P&L is never summed with account-currency money
+    # the currency of `pnl` (BACKLOG 28): the account currency when the broker's P&L was used or the engine's own was
+    # converted; "USD" for the unconverted own-fills fallback on a non-USD account (never summed with account money);
+    # None only on legacy records from before the fix (the monthly report flags their R as understated)
     pnl_currency: str | None = None
 
 

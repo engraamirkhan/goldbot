@@ -1903,7 +1903,10 @@ class Engine:
         dist = abs(entry - tr.initial_sl) if tr.initial_sl is not None else 0.0
         fx = sizing.account_fx(self._account_currency(), self._usd_to_account(tr.side, entry, dist or 1.0))
         risk_usd, notional_usd = dist * lots * contract, entry * lots * contract
-        pnl_currency: str | None = None                # set only when pnl is NOT in the account currency
+        # the P&L's currency on the record (dashboard contract): the account currency when the broker's P&L is used or
+        # the engine's was converted, "USD" for the unconverted own-fills fallback; None is left to legacy records
+        # (the monthly report flags those as R understated), and when the account currency itself is unknown
+        pnl_currency: str | None = self._account_currency() or None
         if info is not None:                           # pnl from the broker's deals, in the account currency
             exit_px, exit_utc, pnl = info["exit_price"], info["exit_utc"], info["pnl"]
             commission, swap = info["commission"], info["swap"]
@@ -1935,7 +1938,8 @@ class Engine:
         equity = tr.equity_before
         if equity is None or equity <= 0:
             # the balance before this trade's P&L was realised (a USD-flagged P&L is not subtracted from a £ balance)
-            equity = self.broker.account().balance - (pnl if pnl_currency is None else 0.0)
+            usd_only = pnl_currency == "USD" and self._account_currency() != "USD"
+            equity = self.broker.account().balance - (0.0 if usd_only else pnl)
             if equity <= 0:
                 equity = self.state.equity
         rec = ClosedTrade(account_id=self.cfg.account_id, broker=self.cfg.broker_name,

@@ -191,11 +191,23 @@ def trades_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp) -> list
     warn = " (⚠️ unreadable record lines skipped)" if err else ""
     if not day:
         return [f"• Trades closed: none{warn}"]
-    # money in the account currency only: a P&L recorded in USD without a conversion (pnl_currency) is not summed
-    pnl = sum(t.pnl for t in day if t.pnl_currency is None)
-    usd = sum(t.pnl_currency is not None for t in day)
-    if usd:
-        warn = f" ({usd} in USD not summed)" + warn
+    # money in the account currency only (BACKLOG 28): a row counts when its pnl_currency is None (legacy) or the
+    # account's currency from engine_<account>.json; others (the unconverted USD fallback) are named, not summed
+    try:
+        ccy = {str(e.get("account")): str(e.get("currency") or "").upper() for e in _engines(state_dir)}
+    except ValueError:
+        ccy = {}
+
+    def counts(t: Any) -> bool:
+        return t.pnl_currency is None or t.pnl_currency.upper() == ccy.get(t.account_id, "")
+
+    pnl = sum(t.pnl for t in day if counts(t))
+    left: dict[str, int] = {}
+    for t in day:
+        if not counts(t):
+            left[str(t.pnl_currency)] = left.get(str(t.pnl_currency), 0) + 1
+    if left:
+        warn = "".join(f" ({n} in {c} not summed)" for c, n in sorted(left.items())) + warn
     rs = [t.r for t in day if t.r is not None]
     r = f" · {sum(rs):+.2f}R" + (f" ({len(rs)} of {len(day)} with R)" if len(rs) < len(day) else "") if rs else " · R n/a"
     wins = sum(t.pnl > 0 for t in day)
