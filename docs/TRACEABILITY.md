@@ -17,12 +17,18 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 138 |
+| implemented | 143 |
 | partial | 18 |
 | missing | 4 |
 | deviates | 9 |
 | in review | 6 |
-| **total** | **175** |
+| **total** | **180** |
+| implemented | 143 |
+| partial | 18 |
+| missing | 4 |
+| deviates | 9 |
+| in review | 6 |
+| **total** | **180** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -97,10 +103,15 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | U1 | "email, password and an authenticator code for every login" | implemented | goldbot/api/auth.py:161-176 | tests/test_api.py::test_bootstrap_invite_roles_and_decisions |
 | U2 | Three roles: owner / approver / viewer with the stated rights | implemented | goldbot/api/auth.py:33-34, `_require`; goldbot/api/app.py role checks | tests/test_api.py::test_bootstrap_invite_roles_and_decisions |
 | U3 | "single-use 72-hour link" | implemented | goldbot/api/auth.py:135-141 | tests/test_api.py::test_bootstrap_invite_roles_and_decisions |
-| U4 | "five failed logins lock an account for 15 minutes" | partial | goldbot/api/auth.py:163-166: five failures in a sliding 15-minute window lock until the oldest ages out, i.e. the lock can be shorter than 15 min after the fifth failure | tests/test_api.py::test_lockout_after_five_failures |
+| U4 | "five failed logins lock an account for 15 minutes" | partial | goldbot/api/auth.py `_check_lockout`/`_fail`: five failures in a sliding 15-minute window, counted in aux.db `auth_failures` (survives a restart), plus 20 per client IP across emails; the lock can be shorter than 15 min after the fifth failure (it lifts when the oldest ages out) | tests/test_api.py::test_lockout_after_five_failures; tests/test_auth_security.py::test_lockout_survives_a_restart; ::test_one_ip_is_limited_across_many_emails |
 | U5 | "sessions are revocable" | implemented | goldbot/api/auth.py:191 `logout` (server-side session table) | tests/test_api.py::test_bootstrap_invite_roles_and_decisions |
 | U6 | "every login, invite, role change and decision is written to an audit log" | implemented | goldbot/api/auth.py:120; goldbot/api/app.py decision endpoint | tests/test_api.py::test_bootstrap_invite_roles_and_decisions |
 | U7 | Re-arm on the dashboard only by the owner with an authenticator code | implemented | goldbot/api/app.py re-arm endpoint; goldbot/engine/runner.py:472 | tests/test_risk_ops.py::test_owner_rearm_on_the_bus_clears_the_drawdown_halt |
+| U8 | Owner account recovery cannot be done with the authenticator alone (security review) | implemented | goldbot/api/auth.py `forgot_password` (owner needs a recovery code, spent) and `_notify_owner` (Telegram notice on every forgot-password) | tests/test_auth_security.py::test_owner_forgot_password_with_only_the_authenticator_is_refused; ::test_owner_forgot_password_needs_a_recovery_code_and_spends_it; ::test_every_successful_forgot_password_queues_a_telegram_notice_for_the_owner |
+| U9 | Each authenticator code is accepted once (RFC 6238 5.2) | implemented | goldbot/api/auth.py `_spend_totp` (aux.db `totp_steps`), used by login, password change, forgot, /rearm and /mode | tests/test_auth_security.py::test_a_totp_code_signs_in_once; ::test_a_code_for_an_earlier_step_than_the_last_spent_is_refused; ::test_replayed_codes_are_refused_for_password_change_and_forgot; ::test_mode_command_shares_the_owner_replay_guard |
+| U10 | Login responses do not reveal whether an account exists (errors and timing) | implemented | goldbot/api/auth.py `_dummy_hash` in `login` and `recovery_login` | tests/test_auth_security.py::test_login_runs_scrypt_whether_or_not_the_account_exists; ::test_recovery_login_runs_scrypt_whether_or_not_the_account_exists |
+| U11 | The owner role is pinned to `auth.owner_email` for every owner-only action | implemented | goldbot/api/auth.py `is_owner`, `_require`, `import_users`; goldbot/api/app.py `need` | tests/test_auth_security.py::test_owner_actions_need_the_owner_email_and_fail_closed_when_it_changes_or_is_unset; ::test_users_json_import_demotes_an_owner_that_is_not_owner_email; ::test_owner_routes_refuse_an_owner_role_whose_email_is_not_owner_email |
+| U12 | Reset and invite links are revoked and kept out of logs and Referer | implemented | goldbot/api/auth.py (`change_password`, `forgot_password`, `disable` delete open reset links); web/src/lib/links.ts (`#invite=`/`#reset=`); goldbot/api/app.py `no_referrer` | tests/test_auth_security.py::test_password_change_forgot_and_disable_delete_open_reset_links; ::test_api_and_static_responses_send_no_referrer; web/src/lib/links.test.ts |
 
 ## Data and time [Data architecture]
 

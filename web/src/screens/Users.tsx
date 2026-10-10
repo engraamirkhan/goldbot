@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, GrantableRole } from "../lib/api";
+import { linkUrl } from "../lib/links";
 
 // Owner only. The owner role is never granted: invites and role changes offer approver or viewer.
 export function Users() {
@@ -13,7 +14,7 @@ export function Users() {
   const refresh = () => qc.invalidateQueries({ queryKey: ["users"] });
   const invite = useMutation({
     mutationFn: () => api.invite(email, role),
-    onSuccess: (r) => { setLink({ kind: "invite", url: `${location.origin}/?invite=${r.invite_token}` }); setEmail(""); refresh(); },
+    onSuccess: (r) => { setLink({ kind: "invite", url: linkUrl("invite", r.invite_token) }); setEmail(""); refresh(); },
   });
   const setRoleM = useMutation({ mutationFn: (v: { email: string; role: GrantableRole }) => api.setRole(v.email, v.role), onSuccess: refresh });
   const disable = useMutation({ mutationFn: (e: string) => api.disable(e), onSuccess: refresh });
@@ -21,7 +22,7 @@ export function Users() {
   const revoke = useMutation({ mutationFn: (e: string) => api.revokeSessions(e), onSuccess: (r, e) => setNote(`${e}: ${r.sessions} session(s) signed out.`) });
   const reset = useMutation({
     mutationFn: (e: string) => api.resetLink(e),
-    onSuccess: (r, e) => setLink({ kind: "reset", url: `${location.origin}/?reset=${r.reset_token}`, who: e }),
+    onSuccess: (r, e) => setLink({ kind: "reset", url: linkUrl("reset", r.reset_token), who: e }),
   });
   const error = [invite, setRoleM, disable, enable, revoke, reset].map((m) => m.error).find(Boolean) as Error | undefined;
 

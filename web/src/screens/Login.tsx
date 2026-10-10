@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api, setToken, setUser } from "../lib/api";
+import { takeLinkTokens } from "../lib/links";
 
 type ModeT = "login" | "setup" | "accept" | "forgot" | "reset" | "recover";
 
@@ -9,14 +10,14 @@ const SUBMIT: Record<ModeT, string> = {
 };
 
 export function Login({ onLogin }: { onLogin: () => void }) {
-  const params = new URLSearchParams(location.search);
   const [mode, setMode] = useState<ModeT>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [setupCode, setSetupCode] = useState("");
-  const [inviteToken, setInviteToken] = useState(params.get("invite") ?? "");
-  const [resetToken, setResetToken] = useState(params.get("reset") ?? "");
+  const [inviteToken, setInviteToken] = useState(() => takeLinkTokens().invite);
+  const [resetToken, setResetToken] = useState(() => takeLinkTokens().reset);
+  const [recoveryCode, setRecoveryCode] = useState("");
   const [totpUri, setTotpUri] = useState<string | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [after, setAfter] = useState<(() => void) | null>(null);
@@ -29,7 +30,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
     }).catch(() => {});
   }, [inviteToken, resetToken]);
 
-  function go(m: ModeT) { setMode(m); setErr(null); setInfo(null); setPassword(""); setCode(""); }
+  function go(m: ModeT) { setMode(m); setErr(null); setInfo(null); setPassword(""); setCode(""); setRecoveryCode(""); }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -48,7 +49,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
         const r = await api.reset(resetToken, password);
         setEmail(r.email); setTotpUri(r.totp_uri);
       } else if (mode === "forgot") {
-        await api.forgotPassword(email, code, password);
+        await api.forgotPassword(email, code, password, recoveryCode);
         go("login"); setInfo("Password changed. Sign in with the new password.");
       } else {
         const r = await api.recoveryLogin(email, password, code);
@@ -88,12 +89,13 @@ export function Login({ onLogin }: { onLogin: () => void }) {
       {mode === "setup" && <p>First run: create the owner account. The setup code is printed in the server log (and sent to Telegram when configured).</p>}
       {mode === "accept" && <p>You have been invited. Choose a password (12+ characters); you will then enrol an authenticator.</p>}
       {mode === "reset" && <p>Choose a new password (12+ characters); you will then enrol a new authenticator.</p>}
-      {mode === "forgot" && <p>Forgot your password? Enter your email, a current authenticator code and a new password (12+ characters). Lost the authenticator too? Ask the owner for a reset link.</p>}
+      {mode === "forgot" && <p>Forgot your password? Enter your email, a current authenticator code and a new password (12+ characters). The owner account also needs one of its recovery codes. Lost the authenticator too? Ask the owner for a reset link.</p>}
       {mode === "recover" && <p>Owner only: sign in with a recovery code instead of the authenticator; you will enrol a new authenticator.</p>}
       {mode === "setup" && <label>Setup code<input value={setupCode} onChange={(e) => setSetupCode(e.target.value)} autoFocus /></label>}
       {mode !== "accept" && mode !== "reset" && <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" /></label>}
       <label>{mode === "forgot" ? "New password" : "Password"}<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={newPassword ? "new-password" : "current-password"} /></label>
       {(mode === "login" || mode === "forgot") && <label>Authenticator code<input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" /></label>}
+      {mode === "forgot" && <label>Recovery code (owner account only)<input value={recoveryCode} onChange={(e) => setRecoveryCode(e.target.value)} autoComplete="off" /></label>}
       {mode === "recover" && <label>Recovery code<input value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" /></label>}
       <button type="submit">{SUBMIT[mode]}</button>
       {info && <p className="muted">{info}</p>}

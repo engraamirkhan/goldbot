@@ -15,6 +15,7 @@ Standard library only (`sqlite3`); no new dependency, process, port or credentia
 """
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import time
@@ -22,6 +23,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
+
+log = logging.getLogger(__name__)
 
 DbKind = Literal["core", "aux"]
 SYNCHRONOUS: dict[DbKind, str] = {"core": "FULL", "aux": "NORMAL"}
@@ -51,11 +54,19 @@ def _check_sqlite_version() -> None:
 
 
 def _create_private(path: Path) -> None:
-    """Create the database file 0600 before SQLite opens it: aux.db holds password hashes and TOTP secrets, and
-    SQLite gives the -wal and -shm files the main file's permissions."""
+    """Create the database file 0600 before SQLite opens it, and put it back to 0600 on every open (a restore, a
+    copy or an older version may have left it group/world readable): aux.db holds password hashes and TOTP
+    secrets, and SQLite gives the -wal and -shm files the main file's permissions. A file this process does not
+    own cannot be chmod-ed; that is logged, not fatal (the owning service tightens it on its next open)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         os.close(os.open(path, os.O_WRONLY | os.O_CREAT, 0o600))
+    for p in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
+        try:
+            if p.exists() and p.stat().st_mode & 0o077:
+                os.chmod(p, 0o600)
+        except OSError as exc:
+            log.warning("could not make %s private (0600): %s", p.name, exc)
 
 
 def connect(path: str | Path, kind: DbKind, *, busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS) -> sqlite3.Connection:
