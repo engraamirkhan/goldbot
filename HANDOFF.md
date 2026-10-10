@@ -274,6 +274,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   default+macro version changes too; NaN until the release carries them); `scripts/fred_macro.py` now downloads both
   (`RELEASE_SERIES`, same next-business-day 23:00 UTC availability as GVZCLS; FRED's SP500 covers about ten years).
   The next data-macro run publishes them to `macro-v1`.
+- Exit policies (2026-10-10, `goldbot/labels/exit_policy.py`, TRACEABILITY M3/M6/M7/R21): trend trails 1.5 ATR once 1.25 ATR in
+  profit; breakout closes half at 1.0 ATR and trails the rest 1.0 ATR (2.0 ATR target kept as the cap); session-open
+  goes flat 1 h before the next session open. One `policy_step` drives the labels (`triple_barrier(policy=)`, used
+  by research `prepare`) and the shadow book; the engine runs the same rules with `modify`/`close` (trail and flat at
+  the agent's bar close, scale-out on the tick), only tightening or reducing, never gated. Parity is tested label vs
+  shadow and label vs the live engine on the paper broker. Families without a policy (tsmom, mean-reversion,
+  intraday momentum) keep byte-identical labels (digest test). R21: in a tier-1 blackout open trades re-scored at
+  p < 0.5 are closed. Consequences: labels of trend/breakout/session-open changed, so their earlier research
+  verdicts were on plain barriers and any model of theirs must be retrained before it trades; the entry threshold
+  and sizing still assume the binary target/stop payoff.
 
 ## Next steps (no owner input needed unless marked)
 - Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write

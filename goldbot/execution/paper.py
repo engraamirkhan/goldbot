@@ -85,6 +85,14 @@ class PaperBroker:
             return OrderResult(ok=False, retcode=10013, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="no such position")
         t = self.last_tick(p.symbol)
         price = t.bid if p.side > 0 else t.ask
+        if lots is not None and lots < p.lots - 1e-9:          # partial close: the rest stays open with its SL/TP
+            pnl = p.side * (price - p.open_price) * lots * self.contract - self.commission * lots
+            self._balance += pnl
+            p.lots = round(p.lots - lots, 8)
+            self._deals.append({"ts_utc": t.ts_utc, "position_id": p.position_id, "type": "partial", "price": price,
+                                "lots": lots, "pnl": pnl, "comment": p.comment})
+            return OrderResult(ok=True, retcode=10009, order_id=None, position_id=p.position_id, filled_lots=lots,
+                               price=price, message="partial")
         return self._close_at(p, price, "close")
 
     def _close_at(self, p: Position, price: float, reason: str) -> OrderResult:

@@ -17,6 +17,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
+from goldbot.labels.exit_policy import ExitPolicy, new_state, policy_label, policy_return, policy_step
 
 
 class BarrierSpec(FrozenRecord):
@@ -72,7 +73,7 @@ def _bar_close_times(bars: pd.DataFrame) -> pd.DatetimeIndex:
 
 
 def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec, atr: pd.Series,
-                   swap: SwapSpec | None = None) -> pd.DataFrame:
+                   swap: SwapSpec | None = None, policy: ExitPolicy | None = None) -> pd.DataFrame:
     """
     bars: ts_utc, bid_high, bid_low, bid_close, ask_high, ask_low, ask_close (store schema), positional index 0..n-1
     signals: frame with columns `idx` (position of signal bar) and `side` (+1 long / -1 short)
@@ -80,12 +81,17 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
     Returns one row per signal: label (+1 target, -1 stop, 0 time-out), ret (signed net return), t_exit (position),
     bars_held, entry, exit, barrier_hit. With `swap`, also swap_nights (nights charged, triple counted three times)
     and swap_ret (their total as a signed return, already included in ret); without it the output is unchanged.
+    With an active `policy` (labels.exit_policy: trail, scale-out, hard flat) each position is advanced through
+    `policy_step`, the mechanics the shadow book and the live engine execute; barrier_hit may then also be "trail" or
+    "flat", and a `scale_exit` column holds the scale-out fill (NaN when none). Without one the output is unchanged.
     """
     n = len(bars)
     bid_h, bid_l, bid_c = bars["bid_high"].to_numpy(), bars["bid_low"].to_numpy(), bars["bid_close"].to_numpy()
     ask_h, ask_l, ask_c = bars["ask_high"].to_numpy(), bars["ask_low"].to_numpy(), bars["ask_close"].to_numpy()
     a = atr.to_numpy()
     rows = []
+    use_policy = policy is not None and policy.active
+    close_ts = _bar_close_times(bars) if use_policy else None
     for idx, side in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int)):
         e = idx + 1
         if e >= n or not np.isfinite(a[idx]) or a[idx] <= 0:
@@ -94,6 +100,11 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
         tgt = entry + side * spec.target_atr * a[idx]
         stp = entry - side * spec.stop_atr * a[idx]
         last = min(e + spec.max_bars, n - 1)
+        if use_policy:
+            assert policy is not None and close_ts is not None
+            rows.append(_policy_row(policy, idx, side, e, last, entry, tgt, stp, float(a[idx]), close_ts,
+                                    (bid_h, bid_l, bid_c) if side > 0 else (ask_l, ask_h, ask_c)))
+            continue
         label, exit_px, t_exit, hit = 0, None, last, "time"
         for j in range(e, last + 1):
             if side > 0:
@@ -133,6 +144,25 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
             out["swap_ret"] = nights * swap.usd_per_oz(out["side"].to_numpy()) / out["entry"].to_numpy(dtype=float)
             out["ret"] = out["ret"] + out["swap_ret"]
     return out
+
+
+def _policy_row(policy: ExitPolicy, idx: int, side: int, e: int, last: int, entry: float, tgt: float, stp: float,
+                atr: float, close_ts: pd.DatetimeIndex, px: tuple[np.ndarray, np.ndarray, np.ndarray]) -> dict:
+    """One label under an exit policy: bars e..last through `policy_step` (fav/adv/close on the exit side), then the
+    time barrier at the close of `last`."""
+    fav, adv, cls = px
+    st = new_state(policy, entry=entry, stop=stp, signal_close=close_ts[idx])
+    hit, exit_px, t_exit = "time", float(cls[last]), last
+    for j in range(e, last + 1):
+        out = policy_step(policy, st, side=side, entry=entry, atr=atr, initial_stop=stp, target=tgt, fav=float(fav[j]),
+                          adv=float(adv[j]), close=float(cls[j]), close_ts=close_ts[j])
+        if out is not None:
+            (hit, exit_px), t_exit = out, j
+            break
+    ret = policy_return(side, entry, exit_px, st.scale_exit, policy.scale_fraction)
+    return {"idx": idx, "side": side, "t_entry": e, "t_exit": t_exit, "bars_held": t_exit - e + 1, "entry": entry,
+            "exit": exit_px, "ret": ret, "label": policy_label(hit, ret), "barrier_hit": hit,
+            "target_hit": int(hit == "target"), "scale_exit": np.nan if st.scale_exit is None else st.scale_exit}
 
 
 def uniqueness_weights(labels: pd.DataFrame, n_bars: int) -> pd.Series:

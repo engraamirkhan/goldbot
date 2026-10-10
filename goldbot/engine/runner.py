@@ -3,7 +3,8 @@
 Per decision-bar close:
   bars (from ticks) -> features (+ higher-TF context, no lookahead) -> candidates from each live agent
   -> model p -> allocator weight -> bet sizing -> RiskGate -> Proposal (propose mode) or direct order (auto)
-  -> broker.place_order with SL/TP attached -> position management (time exit, trailing) -> reconciliation
+  -> broker.place_order with SL/TP attached -> position management (time exit; the specialist's exit policy: trail,
+  scale-out, hard flat; blackout early close) -> reconciliation
   -> engine state file for the supervisor and the API.
 
 Everything below is deterministic and testable with PaperBroker and a replayed tick stream. The MT5
@@ -40,6 +41,7 @@ from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.technical import atr
+from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
@@ -139,6 +141,14 @@ class OpenTrade(Record):
     bars_held: int = 0
     sl: float | None = None           # the protection this engine expects at the broker (reinstated if lost)
     tp: float | None = None
+    # the specialist's exit policy (labels.exit_policy), run on bars of the agent's timeframe as its labels were built
+    policy: ExitPolicy | None = None
+    timeframe: str | None = None
+    entry: float | None = None        # fill price: the policy's distances are measured from it
+    atr_usd: float | None = None      # the signal bar's ATR, which the policy's distances are in
+    opened_utc: UtcTimestamp | None = None   # fill time (tick clock): bars closing after it count for the trail
+    flat_at: UtcTimestamp | None = None      # hard-flat deadline
+    scaled: bool = False              # the scale-out has been taken (or tried)
 
 
 class SentOrder(Record):
@@ -248,6 +258,7 @@ class Engine:
         self._roll_risk_period(t.ts_utc)
         if hasattr(self.broker, "on_tick"):
             self.broker.on_tick(t)  # paper broker fills
+        self._scale_out(t)
         if self._last_reconcile is None or (t.ts_utc - self._last_reconcile).total_seconds() >= self.cfg.reconcile_every_s:
             self._reconcile(t.ts_utc)
         sec = tf_seconds(self.cfg.decision_tf)
@@ -373,6 +384,8 @@ class Engine:
         fam_w = self.allocator.weights(regime)
         decisions: list[dict] = []
         tfs = {a.timeframe for a in self.agents.values()} | {self.cfg.decision_tf}
+        tfs |= {t.timeframe for t in self.open.values() if t.policy is not None and t.timeframe}
+        frames: dict[str, _Frame] = {self.cfg.decision_tf: base}
         if self.shadow is not None:            # open shadow trades keep ageing after their agent leaves the set
             tfs |= {t.timeframe for b in self.shadow.books.values() for t in b.open}
         for tf in sorted(tfs, key=tf_seconds):
@@ -381,8 +394,11 @@ class Engine:
             fr = base if tf == self.cfg.decision_tf else self._frame(complete, tf, close_ts)
             if fr is None or pd.Timestamp(fr.dec["visible_at"].iloc[-1]) != close_ts:
                 continue
+            frames[tf] = fr
+            self._manage_policies(tf, fr.dec, close_ts)
             agents = [a for a in self.agents.values() if a.timeframe == tf]
             decisions += self._decide(tf, fr, agents, fam_w, close_ts, last_tick)
+        self._blackout_close(complete, close_ts, frames)
         if self.shadow is not None:
             self.shadow.save(close_ts)
         self._write_state()
@@ -450,7 +466,7 @@ class Engine:
                             top_features=self._top_features(model, feats), window_s=90,
                             risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2))
             if self.cfg.approval_mode == "auto":
-                self._execute(prop, agent, gd.lots, stop, target, requested=price)
+                self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
                 decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid))
             else:
                 self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
@@ -471,7 +487,8 @@ class Engine:
             if gd.allowed:
                 price = tick.ask if prop.side > 0 else tick.bid
                 self._execute(prop, agent, gd.lots, price - prop.side * gd.stop_distance,
-                              price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price)
+                              price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price,
+                              atr_usd=intent.atr_usd)
             else:
                 self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "gate_at_approval:" + ",".join(gd.reasons)})
                 p.gate_refusal = list(gd.reasons)
@@ -479,7 +496,8 @@ class Engine:
                     self.center.bus.archive(p)          # the dashboard shows "refused at approval", not "approved"
         self._write_state()
 
-    def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float) -> None:
+    def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float,
+                 atr_usd: float | None = None) -> None:
         if prop.proposal_id in self.sent_ids:       # sent before (this process or before a restart): never again
             self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "duplicate_suppressed",
                                    "proposal": prop.proposal_id})
@@ -494,9 +512,15 @@ class Engine:
         rec = self._orders[prop.proposal_id]
         rec.status, rec.position_id = ("filled", res.position_id) if res.ok and res.position_id is not None else ("rejected", None)
         if res.ok and res.position_id is not None:
-            self.open[res.position_id] = OpenTrade(position_id=res.position_id, agent_id=agent.agent_id, side=prop.side, lots=res.filled_lots,
-                                                  entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=self._base_bars(agent),
-                                                  sl=oi.sl, tp=oi.tp)
+            tr = OpenTrade(position_id=res.position_id, agent_id=agent.agent_id, side=prop.side, lots=res.filled_lots,
+                           entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=self._base_bars(agent), sl=oi.sl, tp=oi.tp)
+            policy = agent.exit_spec
+            if policy is not None and policy.active and atr_usd is not None and np.isfinite(atr_usd) and atr_usd > 0:
+                opened = self.broker.last_tick(self.cfg.symbol).ts_utc
+                tr.policy, tr.timeframe, tr.atr_usd = policy, agent.timeframe, float(atr_usd)
+                tr.entry = float(res.price if res.price is not None else requested)
+                tr.opened_utc, tr.flat_at = opened, policy.flat_deadline(opened)
+            self.open[res.position_id] = tr
         self._save_orders()
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order", "ok": res.ok,
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots})
@@ -521,6 +545,122 @@ class Engine:
                 self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "time_exit", "position": pid})
                 del self.open[pid]
         self._reconcile(self.last_bar_close)
+
+    def _manage_policies(self, tf: str, dec: pd.DataFrame, close_ts: pd.Timestamp) -> None:
+        """At the close of a bar of `tf`, run the exit policy of each open trade on that timeframe with the mechanics
+        of its labels (labels.exit_policy): hard flat at the first close at or after the deadline; the trail from the
+        most favourable exit-side price of the bars closed since the fill, armed `trail_after_atr` beyond entry, sent
+        with `modify` and effective from the next bar. A policy only tightens the stop (the server stop stays the
+        floor and reconciliation reinstates the tighter one if it is lost) or closes; if the price is already through
+        the new stop the trade is closed at market. Automatic: never waits for approval."""
+        mine = [(pid, tr) for pid, tr in self.open.items() if tr.policy is not None and tr.timeframe == tf]
+        if not mine:
+            return
+        live = {p.position_id: p for p in self.broker.positions()}
+        for pid, tr in mine:
+            pos = live.get(pid)
+            policy = tr.policy
+            if pos is None or policy is None:
+                continue                                  # closed at the broker: _manage_open forgets it
+            if tr.flat_at is not None and close_ts >= tr.flat_at:
+                self._policy_close(pid, tr, "hard_flat")
+                continue
+            if policy.trail_atr is None or tr.entry is None or tr.atr_usd is None or tr.opened_utc is None:
+                continue
+            after = dec[pd.to_datetime(dec["visible_at"], utc=True) > tr.opened_utc]
+            if after.empty:
+                continue
+            fav = float(after["bid_high"].max()) if tr.side > 0 else float(after["ask_low"].min())
+            best = fav if tr.side * (fav - tr.entry) > 0 else tr.entry
+            trail = policy.trail_stop(tr.side, tr.entry, tr.atr_usd, best)
+            sl = tr.sl
+            if trail is not None and (sl is None or tr.side * (round(trail, 2) - sl) > 1e-9):
+                sl = round(trail, 2)                      # never loosens
+            if sl is None or trail is None:
+                continue
+            tick = self.broker.last_tick(self.cfg.symbol)
+            broker_looser = pos.sl is None or tr.side * (sl - pos.sl) > 1e-9
+            if broker_looser and tr.side * ((tick.bid if tr.side > 0 else tick.ask) - sl) <= 0:
+                # the price is through the stop the policy set but the broker's stop is not there (a new level, or a
+                # modify that did not stick): close at market, as the labels exit at that stop
+                self._policy_close(pid, tr, "trail_close")
+                continue
+            if sl == tr.sl:
+                continue
+            tr.sl = sl                                    # reconciliation re-sends it if the modify did not stick
+            res = self.broker.modify(pid, sl, pos.tp)
+            self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "trail", "position": pid,
+                                   "sl": sl, "ok": res.ok, "retcode": res.retcode})
+        self._save_orders()
+
+    def _policy_close(self, pid: int, tr: OpenTrade, action: str, **extra: object) -> None:
+        res = self.broker.close(pid)
+        self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": action, "position": pid,
+                               "ok": res.ok, "retcode": res.retcode, "price": res.price, **extra})
+        if res.ok:
+            self.open.pop(pid, None)                      # a failed close is retried at the next bar close
+
+    def _scale_out(self, t: Tick) -> None:
+        """Scale-out on the tick that reaches the level (the labels fill it at the level): close `scale_fraction` of
+        the position, rounded down to the volume step; when that would leave less than the minimum volume on either
+        side the scale-out is skipped (size is never increased) and the trail still runs. Taken once; never gated."""
+        due = []
+        for pid, tr in self.open.items():
+            policy = tr.policy
+            if policy is None or tr.scaled or tr.entry is None or tr.atr_usd is None:
+                continue
+            level = policy.scale_level(tr.side, tr.entry, tr.atr_usd)
+            if level is not None and tr.side * ((t.bid if tr.side > 0 else t.ask) - level) >= 0:
+                due.append((pid, tr, policy))
+        if not due:
+            return
+        live = {p.position_id for p in self.broker.positions()}
+        info = self.broker.symbol_info(self.cfg.symbol)
+        for pid, tr, policy in due:
+            if pid not in live:
+                continue
+            tr.scaled = True
+            step = info.volume_step or 0.01
+            lots = round(float(np.floor(tr.lots * policy.scale_fraction / step + 1e-9)) * step, 8)
+            if lots < info.volume_min - 1e-9 or tr.lots - lots < info.volume_min - 1e-9:
+                self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "scale_out_skipped",
+                                       "position": pid, "lots": tr.lots})
+                continue
+            res = self.broker.close(pid, lots)
+            if res.ok:
+                tr.lots = round(tr.lots - (res.filled_lots or lots), 8)
+            self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "scale_out", "position": pid,
+                                   "lots": lots, "ok": res.ok, "retcode": res.retcode, "price": res.price})
+        self._save_orders()
+
+    def _blackout_close(self, complete: pd.DataFrame, close_ts: pd.Timestamp, frames: dict[str, _Frame]) -> None:
+        """Design (News blackout): early close if p < 0.5. In a tier-1 calendar blackout (not an unscheduled news
+        shock) each open trade of a known agent is re-scored by its model on the agent's latest completed bar with the
+        trade's side, at every base bar close; p < 0.5 closes it at market. Never gated by approval."""
+        ev = self._blackout_event
+        if not self.cfg.news_blackout or ev is None or ev.get("kind") == "news_shock" or not self.open:
+            return
+        for pid, tr in list(self.open.items()):
+            agent = self.agents.get(tr.agent_id)
+            model = None if agent is None else (self.models.get(agent.agent_id) or self.models.get(agent.family))
+            if agent is None or model is None:
+                continue
+            fr = frames.get(agent.timeframe)
+            if fr is None:
+                fr = self._frame(complete, agent.timeframe, close_ts)
+                if fr is None:
+                    continue
+                frames[agent.timeframe] = fr
+            mv = getattr(model, "feature_version", "")
+            if mv and mv != fr.X.attrs.get("feature_version"):
+                continue                                  # a model only scores the frame version it was trained on
+            feats = fr.X.drop(columns=["ts_utc"]).iloc[[len(fr.X) - 1]].replace([np.inf, -np.inf], np.nan)
+            feats["side"] = tr.side
+            cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
+            p = float(model.predict(feats[cols])[0])
+            if p < 0.5:
+                self._policy_close(pid, tr, "blackout_close", p=round(p, 4), event=ev.get("title"))
+        self._save_orders()
 
     def _own(self, magic: int) -> bool:
         return self.cfg.magic_base <= magic < self.cfg.magic_base + 100
@@ -951,7 +1091,8 @@ class Engine:
                 self.shadow.open_trade(version=version, agent_id=agent.agent_id, side=side, bar_ts=pd.Timestamp(bar["ts_utc"]),
                                        entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
                                        target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p, timeframe=tf,
-                                       threshold=threshold, taken=p > threshold, p_raw=p_raw)
+                                       threshold=threshold, taken=p > threshold, p_raw=p_raw, policy=agent.exit_spec,
+                                       signal_close=pd.Timestamp(bar["visible_at"]))
 
     def flush_journal(self) -> None:
         """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the
