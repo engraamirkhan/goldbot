@@ -363,7 +363,7 @@ def run_telegram() -> None:
     if not settings.telegram.allowed_user_ids:
         raise SystemExit("settings.yaml telegram.allowed_user_ids is empty: add your Telegram user id")
     start_heartbeat("state", "telegram")
-    TelegramBot(token, "state", set(settings.telegram.allowed_user_ids)).run()
+    TelegramBot(token, "state", set(settings.telegram.allowed_user_ids), settings=settings.telegram).run()
 
 
 def run_news() -> None:
