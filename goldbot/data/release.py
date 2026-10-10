@@ -1,10 +1,13 @@
 """Load the 1m bars the data-dukascopy workflow publishes on release `data-v1` into the store, and derive the
 higher timeframes. Used by scripts/fetch_data_release.py and by the Saturday retrain on the VPS (best effort:
-without network the retrain uses what the store already holds)."""
+without network the retrain uses what the store already holds). The macro series the data-macro workflow publishes
+on release `macro-v1` load the same way into the `macro` table."""
 from __future__ import annotations
 
 import json
+import logging
 import os
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -12,6 +15,8 @@ import pandas as pd
 
 from goldbot.data.resample import resample_bars
 from goldbot.data.store import Store
+
+log = logging.getLogger(__name__)
 
 REPO = "engraamirkhan/goldbot"
 HIGHER_TFS = ("15m", "1h", "4h", "1d", "1w")
@@ -57,3 +62,64 @@ def sync_release_bars(store: Store, *, years: tuple[int, int] | None = None, raw
     files = [download(a, raw_dir, token) for a in list_assets(token)
              if years is None or years[0] <= asset_year(a["name"]) <= years[1]]
     return load_into_store(store, files)
+
+
+# ------------------------------------------------------------------ macro series (data-macro workflow, release macro-v1)
+MACRO_TAG = "macro-v1"
+MACRO_SOURCE = "fred"
+MACRO_COLUMNS = ("series", "value_date", "value", "vintage", "available_utc")
+
+
+def read_macro_files(path: Path) -> pd.DataFrame:
+    """The macro release as one long frame (series, series_id, value_date, value, vintage, available_utc, ts_utc):
+    `path` is a Parquet file or a folder of them. Empty when nothing is there; a file without the point-in-time
+    columns is refused (nothing may join on a nominal date)."""
+    files = [path] if path.is_file() else sorted(path.glob("*.parquet")) if path.is_dir() else []
+    if not files:
+        return pd.DataFrame(columns=list(MACRO_COLUMNS))
+    df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    missing = [c for c in MACRO_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"macro release {path} lacks {missing}")
+    df["available_utc"] = pd.to_datetime(df["available_utc"], utc=True)
+    df["ts_utc"] = df["available_utc"]
+    return df.drop_duplicates(["series", "value_date", "vintage"], keep="last").sort_values("available_utc").reset_index(drop=True)
+
+
+def load_macro_into_store(store: Store, macro: pd.DataFrame) -> int:
+    """Append the macro rows to the store's `macro` table (source fred); de-duplicated on series, value_date, vintage."""
+    return store.append("macro", macro, source=MACRO_SOURCE)
+
+
+def store_macro(store: Store) -> pd.DataFrame:
+    """The macro rows the store holds (what research and the VPS pass as ctx["macro"])."""
+    df = store.read("macro", source=MACRO_SOURCE)
+    if df.empty:
+        return df
+    df["available_utc"] = pd.to_datetime(df["available_utc"], utc=True)
+    return df.drop(columns=[c for c in ("source", "symbol", "year", "month") if c in df.columns])
+
+
+def sync_release_macro(store: Store, *, raw_dir: Path = Path("raw-macro"), token: str | None = None) -> int:
+    """Download the macro release and load it into the store. 0 when the release does not exist yet (the data-macro
+    workflow has not run); other network errors propagate."""
+    token = token or os.environ.get("GH_TOKEN")
+    try:
+        assets = list_assets(token, tag=MACRO_TAG)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return 0
+        raise
+    files = [download(a, raw_dir, token) for a in assets]
+    return sum(load_macro_into_store(store, read_macro_files(f)) for f in files)
+
+
+def sync_release(store: Store, *, token: str | None = None) -> dict[str, int]:
+    """Bars from data-v1 and macro series from macro-v1 (the Saturday retrain's refresh). A macro failure is logged
+    and leaves the bar refresh standing."""
+    counts = sync_release_bars(store, token=token)
+    try:
+        counts["macro"] = sync_release_macro(store, token=token)
+    except Exception as exc:     # macro is optional input; bars are what the retrain needs
+        log.warning("macro release sync failed: %s", exc)
+    return counts

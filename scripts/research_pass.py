@@ -24,9 +24,16 @@ research window must be positive with t >= 2 on >= 1,000 events. A configuration
 Pooled meta-model (P5): `--pooled 15m|1h` fits ONE model over the union of every family deciding on that timeframe
 (family indicators and `side` among its inputs), screened, gated and recorded as family "pooled_<tf>" (one trial).
 
+Macro drivers: `--macro DIR` (the release macro-v1, from the data-macro workflow) adds the point-in-time macro
+features (goldbot/features/macro.py: real-yield change and z-score, dollar change, GVZ level and change) to the
+candidate frame and to the leakage check. A specialist's declared model_features are unchanged; the columns are there
+for a trial that declares them, a seeded clone, or a specialist without a declaration. The feature version then
+includes them, so such a model scores only frames built with macro. A missing or empty release is reported and the
+pass runs without them.
+
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
       [--specialist session_open | --pooled 15m] [--from-year 2010] [--to-year 2026] [--rationale "..."] \
-      [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table config/costs_measured.json]
+      [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table config/costs_measured.json] [--macro macro/]
 """
 from __future__ import annotations
 
@@ -42,6 +49,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
+from goldbot.data.release import read_macro_files  # noqa: E402
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
 from goldbot.execution.costs import CostTable, SwapSpec, research_costs  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
@@ -78,6 +86,24 @@ def load_bars(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
     flags = b["dq_flag"].fillna("").astype(str) if "dq_flag" in b else pd.Series("", index=b.index)
     b = b[~flags.str.startswith("error")]
     return b.drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)[BAR_COLUMNS]
+
+
+def load_macro(path: str) -> tuple[pd.DataFrame | None, dict[str, Any]]:
+    """The macro release for ctx["macro"], or None with the reason (recorded in the trial and shown in the report)."""
+    if not path:
+        return None, {"used": False, "detail": "off (no --macro)"}
+    df = read_macro_files(Path(path))
+    if df.empty:
+        return None, {"used": False, "detail": f"off: no macro release at {path} (run the data-macro workflow; "
+                                                f"`gh release download macro-v1 -D {path}`); ran without macro features"}
+    series = sorted(df["series"].unique())
+    return df, {"used": True, "series": series,
+                "detail": f"on: {', '.join(series)}; value dates {df['value_date'].min():%Y-%m-%d} .. "
+                          f"{df['value_date'].max():%Y-%m-%d}, joined as of available_utc"}
+
+
+def _macro_line(info: dict[str, Any] | None) -> str:
+    return f"- macro features: {info['detail']}" if info else "- macro features: off"
 
 
 def per_year(oof: pd.DataFrame, threshold: float | None) -> pd.DataFrame:
@@ -118,6 +144,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              f"- costs: bar spread in every label plus {m.get('extra_cost_usd', 0.0):.2f} $/oz round trip (slippage and commission)",
              _swap_line(m.get("swap")),
              f"- cost source: {m.get('cost_source', 'settings priors')}",
+             _macro_line(m.get("macro")),
              _holdout_line(m.get("holdout")),
              f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
@@ -310,6 +337,8 @@ def main() -> int:
                     help="fit the model even when the rule fails the primary-signal screen (the screen is still recorded)")
     ap.add_argument("--pooled", default="", choices=["", *sorted(POOLED_FEATURES)],
                     help="one meta-model over every family deciding on this timeframe (one trial, family pooled_<tf>)")
+    ap.add_argument("--macro", default="",
+                    help="folder or Parquet of the macro-v1 release: adds the point-in-time macro features")
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
         raise SystemExit("--pooled runs every member family at its defaults; --variants does not apply")
@@ -326,14 +355,18 @@ def main() -> int:
     holdout = settings.research.holdout_window()
     t0 = time.time()
     b1 = load_bars(Path(args.bars), args.from_year, args.to_year)      # fails fast, before any registry file exists
+    macro, macro_info = load_macro(args.macro)
+    print(_macro_line(macro_info)[2:], flush=True)
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
         return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings, swap=swap,
-                    cost_source=cost_source)
+                    cost_source=cost_source, macro=macro, macro_info=macro_info)
 
 
 def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
-         b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any, *, swap: SwapSpec, cost_source: str) -> int:
+         b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any, *, swap: SwapSpec, cost_source: str,
+         macro: pd.DataFrame | None = None, macro_info: dict[str, Any] | None = None) -> int:
+    feat_ctx = {"macro": macro} if macro is not None else None
     if args.score_holdout:
         if holdout is None:
             raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
@@ -361,8 +394,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         if tf not in frames:                       # bars, context, decision frame and lookahead check once per timeframe
             b_dec = resample_bars(b1, tf)
             context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
-            leak = lookahead_check(b_dec, context)
-            frames[tf] = (b_dec, context, leak, build_decision_frame(b_dec.reset_index(drop=True), context))
+            leak = lookahead_check(b_dec, context, ctx=feat_ctx)
+            frames[tf] = (b_dec, context, leak, build_decision_frame(b_dec.reset_index(drop=True), context, ctx=feat_ctx))
             sizes = "  ".join(f"{k} {len(v):,}" for k, v in context.items())
             print(f"{tf} {len(b_dec):,}  {sizes}; lookahead check: {len(leak['lookahead_columns'])} of "
                   f"{leak['columns_checked']} columns differ [{time.time() - t0:.0f}s]", flush=True)
@@ -378,7 +411,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                 "to_year": int(b1["ts_utc"].iloc[-1].year), "n_1m": len(b1), "n_dec": len(b_dec), "tf": tf,
                 "zero_volume": zero_volume}
         common = {"lookahead": leak, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
-                  "screen": scr, "screen_skipped": skipped, "cost_source": cost_source}
+                  "screen": scr, "screen_skipped": skipped, "cost_source": cost_source, "macro": macro_info}
         rationale = args.rationale + (f" | overrides {json.dumps(job.overrides, sort_keys=True)}" if job.overrides else "")
         if scr is not None and not scr["passed"] and not args.skip_screen:
             n = int(sum(len(p.labels) for p in preps))
@@ -388,7 +421,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                              rationale=rationale, results=metrics, status="screened", budget_quarter=quarter)
             print(f"{json.dumps(job.overrides) or 'defaults'}: screen failed ({n} events) [{time.time() - t0:.0f}s]", flush=True)
             text = render_screen_failed(scr, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0, "n": n,
-                                                    "swap": swap.model_dump(), "cost_source": cost_source})
+                                                    "swap": swap.model_dump(), "cost_source": cost_source,
+                                                    "macro": macro_info})
         else:
             if job.pooled:
                 res = run_pool(preps, tf, n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
@@ -403,7 +437,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             row = reg.record(agent_id=res.agent_id, family=job.family, config=job.config, feature_version=res.feature_version,
                              rationale=rationale, results=metrics, status="holdout" if args.score_holdout else "evaluated",
                              budget_quarter=quarter)
-            res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped, "cost_source": cost_source}
+            res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped, "cost_source": cost_source,
+                           "macro": macro_info}
             years = per_year(res.oof, res.metrics.get("threshold"))
             text = render_report(res, years, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0})
         if job.overrides:
@@ -428,6 +463,7 @@ def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[s
              f"- lookahead check: {'clean' if not leak['lookahead_columns'] else str(len(leak['lookahead_columns'])) + ' columns use future data'}",
              _swap_line(meta.get("swap")),
              f"- cost source: {meta.get('cost_source', 'settings priors')}",
+             _macro_line(meta.get("macro")),
              f"- runtime {meta['seconds']:.0f}s", ""]
     lines += screen_lines(scr) + _rule_only_lines(scr["rule_only"])
     lines += ["Screen failed: no model was fitted. The rule is retired from model research (it may still serve as a "

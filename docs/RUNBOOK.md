@@ -140,7 +140,8 @@ Tailscale is optional.
 | Workflow | When | What it does | Where results appear |
 | --- | --- | --- | --- |
 | `data-dukascopy.yml` | Saturdays 03:17 UTC (current year), or by hand | Downloads Dukascopy ticks, builds 1m bars, publishes Parquet files to the release `data-v1`. | Issues `data coverage <year>` (label `data-coverage`); failures as `data-dukascopy failure for <year>` (labels `ci`, `data`). |
-| `research.yml` | By hand only (Actions -> research -> Run workflow; inputs `specialist`, `from_year`, `to_year`, `rationale`) | Walk-forward research for one specialist family (`session_open`, `mean_reversion`, `trend`, `breakout`) on the `data-v1` bars; keeps the trial registry on release `research-v1`. | Issue `research: <specialist>` (label `research`). |
+| `data-macro.yml` | Tuesdays 04:41 UTC, or by hand | Downloads the FRED macro series (10y real yield, breakeven, broad dollar, gold VIX, 2y yield) and publishes `macro_fred.parquet` to the release `macro-v1`. | Failures as issue `data-macro failure` (labels `ci`, `data`). |
+| `research.yml` | By hand only (Actions -> research -> Run workflow; inputs `specialist`, `from_year`, `to_year`, `rationale`, `macro`) | Walk-forward research for one specialist family (`session_open`, `mean_reversion`, `trend`, `breakout`) on the `data-v1` bars; with `macro` ticked, adds the macro features from `macro-v1`. Keeps the trial registry on release `research-v1`. | Issue `research: <specialist>` (label `research`). |
 | `ci.yml` | Every push, pull request, or by hand | Pre-commit, backend lint/types/unit/integration, frontend lint/types/unit, API contract, browser end-to-end tests. | On a failed push, one issue `CI failure on <commit> (<jobs>)` labelled `ci`, with each failed job's output. |
 
 The VPS does not depend on GitHub to trade. It uses GitHub only to refresh bars (Saturday retrain) and to share
@@ -158,7 +159,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `nightly_costs` | Mon-Fri 23:10 | Builds each account's spread/slippage cost table `state\costs_<account>.json`, with the swap and commission the terminal reports (`state\broker_terms_<account>.json`, written by the engine every 6 hours); on Fridays also re-runs the account classifier (`state\classifier_<account>.json`). Until an account has been classified (the first Friday with 1,000+ London/New York ticks logged) its engine opens no positions and the health check warns "account class unknown"; on a Standard account the 15m families except session-open are off. |
 | `model_watch` | Daily 23:30 | CUSUM check on any newly promoted champion; restores the previous champion on an alarm. |
 | `agents_daily` | Mon-Fri 23:45 | Data steward, risk officer, execution auditor. |
-| `saturday_retrain` | Saturday 06:00 | Refreshes bars from `data-v1`, decides waiting challengers (promote/retire), retrains new challengers. |
+| `saturday_retrain` | Saturday 06:00 | Refreshes bars from `data-v1` and the macro series from `macro-v1` (a macro failure does not stop the retrain), decides waiting challengers (promote/retire), retrains new challengers. |
 | `recalibrate` | Saturday 11:30 | Refits only the probability map of each champion and challenger on its recent shadow outcomes (every candidate, taken or not), bounded to +-0.05 per week; logged in `state\recalibration.jsonl`. Promotes nothing. |
 | `tournament` | Saturday 12:00 | Population round: fitness, retirement, promotion to live, cloning, capital shares -> `state\agents.json`. |
 | `agents_weekly` | Saturday 13:00 | Journal coach, improvement agent, research analyst. |
@@ -262,8 +263,11 @@ The engines warm-start from the 1m bars in `C:\goldbot\data`; without them a 1h 
 before it can decide. The Saturday retrain refreshes them, but load them once now:
 
 ```powershell
-.\.venv\Scripts\python scripts\fetch_data_release.py --years 2024 2026
+.\.venv\Scripts\python scripts\fetch_data_release.py --years 2024 2026 --macro
 ```
+
+`--macro` also loads the macro series (release `macro-v1`) into the store; it prints `macro 0` until the
+`data-macro` workflow has run once. The engines do not use them yet; research does.
 
 If the repository is private this needs a GitHub token. The script has a `--token` option, but do not type a
 token on the command line (it stays in the PowerShell history); skip this step instead and let the first Saturday

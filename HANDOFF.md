@@ -186,6 +186,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   champion version until the owner runs `python -m goldbot.ops.run drift-review --clear "<note>"`. The engine reads
   it (missing = no restriction, unreadable = halt), the gate reason is `drift_system_halt`, health check `drift`.
   Entries only; exits unaffected. Models trained before this have no reference: PSI is skipped for them.
+- Macro data pipeline (2026-10-10, TRADER_LIFECYCLE gap 2): `.github/workflows/data-macro.yml` (Tuesdays 04:41 UTC
+  and by hand) pulls DFII10, T10YIE, DTWEXBGS, GVZCLS and DGS2 from FRED's public fredgraph CSV (no key) via
+  `scripts/fred_macro.py` and publishes `macro_fred.parquet` on release `macro-v1`. Rows carry value_date, vintage
+  (retrieval date) and a conservative available_utc (`data/macro.py: fred_available_utc`): next US business day 23:00
+  UTC for daily H.15/GVZ values, the business day after the following Monday for the weekly H.10 dollar. Published
+  history is never rewritten; a revision is a new row dated from the day it was seen. Feature `macro_drivers`
+  (`features/macro.py`): 20-obs real-yield change, 1-year real-yield z-score, 20-obs dollar change, GVZ level and
+  20-obs change, from first releases only, joined via `asof_join` on available_utc. It is opt-in
+  (`pipeline.OPT_IN_FEATURES`): the default feature version and every declared `model_features` are unchanged.
+  `research_pass.py --macro DIR` (workflow input `macro`) adds it and reports "macro features: on/off (reason)"; a
+  missing release runs without it. The VPS Saturday retrain and `fetch_data_release.py --macro` load the release
+  into the store's `macro` table (`release.sync_release_macro`; 0 rows until the workflow has run). Not done: the
+  live engine does not build `macro_drivers`, so a model trained with `--macro` gets a different feature version
+  and is refused live (`feature_version_mismatch`) until the engine passes the store's macro rows; COT and GLD are
+  not pulled. The workflow has not run yet (first run: Actions -> data-macro -> Run workflow).
 - Free hosting without Windows (2026-10-10, owner: MT5 + $0 hosting, Mac only): two Oracle Cloud Always Free VMs.
   The MT5 terminal runs under Wine on an x86 E2.1.Micro with the bridge (`goldbot/execution/bridge.py`,
   `run.py bridge <account>`); everything else runs on an Ampere A1 (4 OCPU / 24 GB) under systemd
