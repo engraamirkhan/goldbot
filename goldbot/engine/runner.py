@@ -36,12 +36,13 @@ from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resamp
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf
 from goldbot.engine.shadow import ShadowBook
-from goldbot.execution.broker import Broker, OrderIntent, SymbolInfo, Tick
+from goldbot.execution.broker import Broker, OrderIntent, OrderResult, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.technical import atr
 from goldbot.labels.exit_policy import ExitPolicy
+from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
@@ -119,6 +120,9 @@ class EngineConfig(Record):
     # (the per-tick stop check closes the trade at market meanwhile if the price reaches the engine's stop)
     modify_backoff_max_s: int = 900
     scale_out_retries: int = 3               # a failed scale-out is retried on later ticks this many times in all
+    # a trade the broker no longer lists is recorded as closed once its exit deal is seen; a broker whose deal history
+    # shows none is asked again at this many bar closes (a positions() reply that dropped it briefly costs nothing)
+    close_confirm_checks: int = 8
     server_tz: str = "Europe/Athens"         # broker server clock: rollover (00:00 +-5 min) and the Friday 21:30 rule
     rollover_min: int = 5
     weekend_cut: str = "21:30"               # Friday, server time: close losers, tighten winners, no new entries
@@ -154,6 +158,14 @@ class OpenTrade(Record):
     flat_at: UtcTimestamp | None = None      # hard-flat deadline
     scaled: bool = False              # the scale-out is done: taken, skipped (minimum volume) or out of retries
     scale_tries: int = 0              # failed scale-out attempts (bounded by EngineConfig.scale_out_retries)
+    # for the closed-trade record (gates_phase.ClosedTrade): set at the fill, None on trades saved before they existed
+    client_order_id: str | None = None
+    open_price: float | None = None   # fill price (with or without an exit policy)
+    initial_sl: float | None = None   # the stop at entry: R is measured against it
+    initial_lots: float | None = None
+    equity_before: float | None = None
+    scaled_lots: float = 0.0          # taken by the scale-out, at scaled_price: folded into the final record
+    scaled_price: float | None = None
 
 
 class SentOrder(Record):
@@ -228,6 +240,15 @@ class Engine:
         self._propose_only_until: pd.Timestamp | None = None   # after a re-arm: no auto entries before this
         self._rearm_refused: str | None = None       # why the last owner re-arm was refused (engine state, dashboard)
         self._load_risk_state()
+        # closed-trade record (state/closed_trades.jsonl, read by the phase gates and the stop rule): positions already
+        # recorded (key: this account + position id, so a restart never records one twice), closes waiting to be
+        # written, and broker-side closes waiting for their exit deal (position -> bar closes asked)
+        self._recorded: set[int] = {t.position_id for t in load_closed_trades(Path(cfg.state_dir))[0]
+                                    if t.account_id == cfg.account_id and t.position_id is not None}
+        self._closes: list[tuple[int, OpenTrade, str, float | None, pd.Timestamp]] = []
+        self._unconfirmed: dict[int, int] = {}
+        # position -> (consecutive failed engine-stop closes, next attempt): the per-tick stop check backs off (memory)
+        self._close_backoff: dict[int, tuple[int, pd.Timestamp]] = {}
         self._load_orders()
         self._last_state_write: pd.Timestamp | None = None
         self._last_reconcile: pd.Timestamp | None = None
@@ -282,6 +303,7 @@ class Engine:
             self._write_state()
             self._last_state_write = t.ts_utc
         self.last_bar_close = bar_close
+        self._flush_closed()               # after every exit of this tick has been sent
         return out
 
     def warm_start(self, now: pd.Timestamp) -> int:
@@ -522,10 +544,14 @@ class Engine:
         rec = self._orders[prop.proposal_id]
         rec.status, rec.position_id = ("filled", res.position_id) if res.ok and res.position_id is not None else ("rejected", None)
         if res.ok and res.position_id is not None:
+            fill_px = float(res.price if res.price is not None else requested)
+            opened = self.broker.last_tick(self.cfg.symbol).ts_utc
             tr = OpenTrade(position_id=res.position_id, agent_id=agent.agent_id, side=prop.side, lots=res.filled_lots,
-                           entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=self._base_bars(agent), sl=oi.sl, tp=oi.tp)
-            self._attach_policy(tr, agent, entry=float(res.price if res.price is not None else requested),
-                                atr_usd=atr_usd, opened=self.broker.last_tick(self.cfg.symbol).ts_utc)
+                           entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=self._base_bars(agent), sl=oi.sl, tp=oi.tp,
+                           client_order_id=prop.proposal_id, open_price=fill_px, initial_sl=oi.sl,
+                           initial_lots=res.filled_lots, opened_utc=opened,
+                           equity_before=self.state.equity if self.state.equity > 0 else None)
+            self._attach_policy(tr, agent, entry=fill_px, atr_usd=atr_usd, opened=opened)
             self.open[res.position_id] = tr
         self._save_orders()
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order", "ok": res.ok,
@@ -560,17 +586,23 @@ class Engine:
 
     # ------------------------------------------------------------------ position management
     def _manage_open(self, dec: pd.DataFrame) -> None:
-        live = {p.position_id for p in self.broker.positions()}
+        try:
+            live = {p.position_id for p in self.broker.positions()}
+        except Exception:                                 # the terminal failed: manage at the next bar close
+            log.exception("positions() failed; position management skipped this bar")
+            return
+        self._sweep_closed(live)                          # closed by stop/target at the broker
         for pid in list(self.open):
             if pid not in live:
-                del self.open[pid]  # closed by stop/target at the broker
-                continue
+                continue                                  # waiting for its exit deal (_sweep_closed)
             tr = self.open[pid]
             tr.bars_held += 1
             if tr.bars_held >= tr.max_bars:
-                self.broker.close(pid)
+                res = self.broker.close(pid)
                 self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "time_exit", "position": pid})
                 del self.open[pid]
+                if getattr(res, "ok", False):
+                    self._note_closed(pid, tr, "time_exit", res)
         self._reconcile(self.last_bar_close)
 
     def _manage_policies(self, tf: str, dec: pd.DataFrame, close_ts: pd.Timestamp) -> None:
@@ -620,34 +652,52 @@ class Engine:
                                    "sl": sl, "ok": res.ok, "retcode": res.retcode})
         self._save_orders()
 
-    def _policy_close(self, pid: int, tr: OpenTrade, action: str, **extra: object) -> None:
+    def _policy_close(self, pid: int, tr: OpenTrade, action: str, **extra: object) -> OrderResult:
         res = self.broker.close(pid)
         self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": action, "position": pid,
                                "ok": res.ok, "retcode": res.retcode, "price": res.price, **extra})
         if res.ok:
             self.open.pop(pid, None)                      # a failed close is retried at the next bar close
+            self._note_closed(pid, tr, action, res)
+        return res
 
     def _stop_check(self, t: Tick) -> None:
         """Every tick: a trade whose exit-side price is at or through the stop this engine set (`tr.sl`) while the
         broker's stop is looser or missing (a trail or weekend `modify` that was rejected, a stop lost at the broker)
         is closed at market, so the engine's stop and the broker's cannot diverge for the rest of a bar. Where the
-        broker's stop is in place the server executes it. Automatic: never gated; a failing close is retried on the
-        next tick and never stops the loop."""
+        broker's stop is in place the server executes it. Automatic: never gated; a failing close (refused or raising)
+        is retried after reconcile_every_s of tick time, doubling per consecutive failure up to modify_backoff_max_s and
+        reset on success, so a closed market is not flooded with a close per tick (the broker's own stop stays in
+        place meanwhile). A positions() read that raises skips this tick; the next tick retries."""
+        now = t.ts_utc
         through = [(pid, tr) for pid, tr in self.open.items()
-                   if tr.sl is not None and tr.side * ((t.bid if tr.side > 0 else t.ask) - tr.sl) <= 0]
+                   if tr.sl is not None and tr.side * ((t.bid if tr.side > 0 else t.ask) - tr.sl) <= 0
+                   and not (pid in self._close_backoff and now < self._close_backoff[pid][1])]
         if not through:
             return
-        live = {p.position_id: p for p in self.broker.positions()}
+        try:
+            live = {p.position_id: p for p in self.broker.positions()}
+        except Exception:
+            log.exception("positions() failed; the engine stop check is retried next tick")
+            return
         for pid, tr in through:
             pos = live.get(pid)
             if pos is None or (pos.sl is not None and tr.sl is not None and tr.side * (tr.sl - pos.sl) <= 1e-9):
                 continue                                  # gone, or the broker's stop is at least as tight
             try:
-                self._policy_close(pid, tr, "engine_stop_close", sl=tr.sl, broker_sl=pos.sl)
+                ok = self._policy_close(pid, tr, "engine_stop_close", sl=tr.sl, broker_sl=pos.sl).ok
             except Exception as e:                        # one position never stops the loop
-                log.exception("engine stop close failed for position %s; retried next tick", pid)
+                log.exception("engine stop close failed for position %s; retried after a backoff", pid)
                 self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "engine_stop_close_failed",
                                        "position": pid, "error": repr(e)})
+                ok = False
+            if ok:
+                self._close_backoff.pop(pid, None)
+            else:
+                fails = self._close_backoff.get(pid, (0, now))[0]
+                wait = min(self.cfg.reconcile_every_s * 2 ** fails, self.cfg.modify_backoff_max_s)
+                self._close_backoff[pid] = (fails + 1, now + pd.Timedelta(seconds=wait))
+        self._close_backoff = {k: v for k, v in self._close_backoff.items() if k in self.open}
         self._save_orders()
 
     def _scale_out(self, t: Tick) -> None:
@@ -666,7 +716,11 @@ class Engine:
                 due.append((pid, tr, policy))
         if not due:
             return
-        live = {p.position_id for p in self.broker.positions()}
+        try:
+            live = {p.position_id for p in self.broker.positions()}
+        except Exception:
+            log.exception("positions() failed; the scale-out is retried next tick")
+            return
         info: SymbolInfo | None = None
         for pid, tr, policy in due:
             if pid not in live:
@@ -685,7 +739,12 @@ class Engine:
                 res = self.broker.close(pid, lots)
                 if not res.ok:
                     raise RuntimeError(f"partial close refused: retcode {res.retcode} {res.message}")
-                tr.lots, tr.scaled = round(tr.lots - (res.filled_lots or lots), 8), True
+                done = res.filled_lots or lots
+                px = res.price if res.price is not None else (t.bid if tr.side > 0 else t.ask)
+                tr.scaled_price = px if not tr.scaled_lots else \
+                    ((tr.scaled_price or px) * tr.scaled_lots + px * done) / (tr.scaled_lots + done)
+                tr.scaled_lots = round(tr.scaled_lots + done, 8)
+                tr.lots, tr.scaled = round(tr.lots - done, 8), True
                 self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "scale_out", "position": pid,
                                        "lots": lots, "ok": res.ok, "retcode": res.retcode, "price": res.price})
             except Exception as e:                        # one position never stops the loop
@@ -749,7 +808,11 @@ class Engine:
         magic numbers are listed and never touched."""
         if now is not None:
             self._last_reconcile = now
-        positions = self.broker.positions()
+        try:
+            positions = self.broker.positions()
+        except Exception:                                 # the next pass retries; the per-tick stop check still guards
+            log.exception("positions() failed; reconciliation skipped this pass")
+            return
         self._foreign = sorted(p.position_id for p in positions if not self._own(p.magic))
         for p in positions:
             if not self._own(p.magic):
@@ -760,7 +823,8 @@ class Engine:
                 tr = self.open[p.position_id] = OpenTrade(
                     position_id=p.position_id, agent_id="orphan" if agent is None else agent.agent_id, side=p.side,
                     lots=p.lots, entry_bar_ts=p.open_time_utc, max_bars=48 if agent is None else self._base_bars(agent),
-                    sl=p.sl, tp=p.tp)
+                    sl=p.sl, tp=p.tp, client_order_id=p.comment or None, open_price=p.open_price, initial_sl=p.sl,
+                    initial_lots=p.lots, opened_utc=p.open_time_utc)
                 if agent is not None:
                     self._attach_policy(tr, agent, entry=p.open_price, atr_usd=self._implied_atr(agent, p.open_price, p.sl),
                                         opened=p.open_time_utc)
@@ -827,15 +891,20 @@ class Engine:
         if st.week_start_equity == 0:
             st.week_start_equity = acc.balance
         st.balance_closed_hwm = max(st.balance_closed_hwm, acc.balance)
-        positions = self.broker.positions()
-        st.open_positions = len(positions)
-        st.open_lots = round(sum(p.lots for p in positions), 6)       # every position on the account is exposure
+        try:
+            positions = self.broker.positions()
+        except Exception:                 # exposure unknown: the last reading stays and entries are blocked below
+            log.exception("positions() failed; exposure kept from the last reading, entries blocked")
+            positions = None
+        if positions is not None:
+            st.open_positions = len(positions)
+            st.open_lots = round(sum(p.lots for p in positions), 6)   # every position on the account is exposure
         st.open_notional = st.open_lots * 100.0 * (tick.bid + tick.ask) / 2
         st.spread_points = (tick.ask - tick.bid) / 0.01
         now = self._now(tick)
         st.last_tick_age_s = max(0.0, (now - tick.ts_utc).total_seconds())
         stale = stale_feed(tick.ts_utc, now, limit_seconds=self.cfg.stale_feed_s)
-        st.dq_error = stale or bool(self._dq_bar_errors or self._dq_pending)
+        st.dq_error = stale or bool(self._dq_bar_errors or self._dq_pending) or positions is None   # fail closed
         # stale data (design): the last completed bar must be under one decision period old; no bars is stale
         if self.bars_1m.empty:
             st.stale_bars = True
@@ -889,9 +958,11 @@ class Engine:
         for p in self.broker.positions():
             if everything or self.cfg.magic_base <= p.magic < self.cfg.magic_base + 100:
                 res = self.broker.close(p.position_id)
-                self.open.pop(p.position_id, None)
+                tr = self.open.pop(p.position_id, None)
                 self.decisions.append({"ts": time.time(), "action": "kill_switch_close", "position": p.position_id,
                                        "ok": res.ok, "retcode": res.retcode, "price": res.price})
+                if res.ok and tr is not None:                 # only this engine's trades are its record
+                    self._note_closed(p.position_id, tr, "kill_switch_close", res)
         self.state.open_positions = len(self.broker.positions())
 
     def _server_clock(self, now: pd.Timestamp, tick: Tick) -> None:
@@ -917,9 +988,11 @@ class Engine:
             px = tick.bid if p.side > 0 else tick.ask
             if p.side * (px - p.open_price) <= 0:
                 res = self.broker.close(p.position_id)
-                self.open.pop(p.position_id, None)
+                tr = self.open.pop(p.position_id, None)
                 self.decisions.append({"ts": time.time(), "action": "weekend_close_loser", "position": p.position_id,
                                        "ok": res.ok, "retcode": res.retcode, "price": res.price})
+                if res.ok and tr is not None:
+                    self._note_closed(p.position_id, tr, "weekend_close_loser", res)
                 continue
             sl = round(p.open_price + 0.5 * (px - p.open_price), 2)
             tr = self.open.get(p.position_id)
@@ -1031,6 +1104,7 @@ class Engine:
         self._save_orders()
 
     def _save_orders(self) -> None:
+        self._flush_closed()      # a close is on disk before the open-trade table forgets the position
         keep_after = pd.Timestamp.now("UTC") - pd.Timedelta(days=7)
         self._orders = {k: o for k, o in self._orders.items() if o.ts_utc >= keep_after or o.status == "sending"}
         payload = {"sent": {k: o.model_dump(mode="json") for k, o in self._orders.items()},
@@ -1050,7 +1124,6 @@ class Engine:
         self.sent_ids = set(self._orders)
         self.open = {int(k): OpenTrade.model_validate(v) for k, v in d.get("open", {}).items()}
         positions = {p.position_id: p for p in self.broker.positions()}
-        self.open = {k: t for k, t in self.open.items() if k in positions}
         for cid, rec in self._orders.items():
             if rec.status != "sending":
                 continue
@@ -1063,7 +1136,10 @@ class Engine:
                 rec.status, rec.position_id = "filled", pos.position_id
                 tr = self.open[pos.position_id] = OpenTrade(position_id=pos.position_id, agent_id=rec.agent_id,
                                                             side=pos.side, lots=pos.lots, entry_bar_ts=pos.open_time_utc,
-                                                            max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp)
+                                                            max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp,
+                                                            client_order_id=cid, open_price=pos.open_price,
+                                                            initial_sl=rec.sl, initial_lots=rec.lots,
+                                                            opened_utc=pos.open_time_utc)
                 agent = self.agents.get(rec.agent_id)
                 if agent is not None:
                     atr_usd = rec.atr_usd if rec.atr_usd is not None else self._implied_atr(agent, pos.open_price, rec.sl)
@@ -1074,7 +1150,165 @@ class Engine:
                 rec.status = "filled" if dealt else "unfilled"     # filled and already closed, or never filled
                 self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": f"reconcile_sent_{rec.status}",
                                        "proposal": cid})
+                if dealt:
+                    self._record_closed_while_down(cid, rec, deals)
+        # open trades the broker no longer has were closed while the engine was down: recorded once their exit deal
+        # is seen (a trade recorded before the restart is skipped by position id)
+        self._sweep_closed(set(positions))
         self._save_orders()
+
+    # ------------------------------------------------------------------ closed-trade record (phase gates P7, stop rule P6)
+    def _record_closed_while_down(self, cid: str, rec: SentOrder, deals: pd.DataFrame) -> None:
+        """A send confirmed only by its deals on restart (filled and closed while the engine was down): its position
+        is found by client id / comment and recorded like any other close."""
+        if "position_id" not in deals.columns:
+            return
+        if "client_order_id" in deals.columns:
+            mine = deals[deals["client_order_id"] == cid]
+        else:
+            mine = deals[deals["comment"].isin([cid, cid[-31:]])]
+        if mine.empty:
+            return
+        pid = int(mine["position_id"].iloc[0])
+        rec.position_id = pid
+        tr = OpenTrade(position_id=pid, agent_id=rec.agent_id, side=rec.side, lots=rec.lots, entry_bar_ts=rec.ts_utc,
+                       max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp, client_order_id=cid, initial_sl=rec.sl,
+                       initial_lots=rec.lots, opened_utc=rec.ts_utc)
+        self._note_closed(pid, tr, "broker_close")
+
+    def _sweep_closed(self, live: set[int]) -> None:
+        """Open trades the broker no longer lists closed at the broker (stop, target, stop-out, manual): each is
+        recorded once its exit deal is seen and then forgotten. When the broker's deal history carries positions but
+        shows no exit (a positions() reply that dropped the trade, or a deal not synced yet) the trade is kept as it is
+        and asked again at the next bar close, `close_confirm_checks` times, then recorded from what the engine knows.
+        A trade that reappears simply carries on with its stop and policy."""
+        self._unconfirmed = {k: v for k, v in self._unconfirmed.items() if k in self.open and k not in live}
+        for pid in [k for k in self.open if k not in live]:
+            tr = self.open[pid]
+            try:
+                summary, informative = self._exit_deals(pid, tr)
+            except Exception:
+                log.exception("deal history unreadable for position %s", pid)
+                summary, informative = None, False
+            tries = self._unconfirmed.get(pid, 0) + 1
+            if summary is None and informative and tries < self.cfg.close_confirm_checks:
+                if tries == 1:
+                    self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "close_unconfirmed",
+                                           "position": pid})
+                self._unconfirmed[pid] = tries
+                continue
+            self._unconfirmed.pop(pid, None)
+            del self.open[pid]
+            self._note_closed(pid, tr, "broker_close")
+
+    def _note_closed(self, pid: int, tr: OpenTrade, reason: str, res: OrderResult | None = None) -> None:
+        """Queue the record of a fully closed position. Nothing is read or written here, so an exit never waits on the
+        record: the queue is written after the tick's exits (`on_tick`) and before the open-trade table is saved."""
+        if pid in self._recorded:
+            return
+        px = res.price if res is not None and res.ok else None
+        at = self._last_tick.ts_utc if self._last_tick is not None else pd.Timestamp.now("UTC")
+        self._closes.append((pid, tr, reason, px, at))
+
+    def _flush_closed(self) -> None:
+        """Write the queued records. A failure is logged and journalled (`closed_trade_record_failed`) and never
+        raised: the exit has already happened and nothing after it may stop."""
+        if not self._closes:
+            return
+        pending, self._closes = self._closes, []
+        for pid, tr, reason, px, at in pending:
+            try:
+                self._record_closed(pid, tr, reason, px, at)
+            except Exception as e:
+                log.exception("closed trade not recorded for position %s (%s)", pid, reason)
+                self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "closed_trade_record_failed",
+                                       "position": pid, "reason": reason, "error": repr(e)})
+
+    def _exit_deals(self, pid: int, tr: OpenTrade) -> tuple[dict | None, bool]:
+        """(summary of the position's deals, whether the broker's deal history identifies positions at all). Reads the
+        paper broker's deals and MT5's (DEAL_ENTRY 0 in, 1 out, 2 in/out, 3 out by; DEAL_REASON 4 SL, 5 TP, 6 stop-out)
+        alike; the summary is None when no exit deal is there."""
+        starts = [x for x in (tr.opened_utc, tr.entry_bar_ts) if x is not None]
+        d = self.broker.deals_since(min(starts) - pd.Timedelta(days=1))
+        if not isinstance(d, pd.DataFrame) or "position_id" not in d.columns:
+            return None, False
+        d = d[d["position_id"] == pid]
+        mt5 = "entry" in d.columns
+        is_exit = d["entry"].isin([1, 2, 3]) if mt5 else d["type"] != "entry"
+        vol = "volume" if mt5 else "lots"
+        ex, ent = d[is_exit], d[~is_exit]
+        lots = float(ex[vol].sum()) if not ex.empty else 0.0
+        if lots <= 0:
+            return None, True
+
+        def total(col: str, rows: pd.DataFrame) -> float | None:
+            return float(rows[col].fillna(0.0).sum()) if col in rows.columns else None
+        comm = total("commission", d)
+        fee = total("fee", d) or 0.0
+        swap = total("swap", d)
+        gross = total("profit", ex)
+        pnl = gross + (comm or 0.0) + fee + (swap or 0.0) if gross is not None else float(total("pnl", ex) or 0.0)
+        last = ex.sort_values("ts_utc").iloc[-1]
+        if mt5:
+            reason = {4: "stop", 5: "target", 6: "stop_out"}.get(int(last.get("reason", -1)))
+        else:
+            reason = str(last["type"]) if last["type"] in ("stop", "target") else None
+        return {"exit_price": float((ex["price"] * ex[vol]).sum()) / lots, "exit_utc": pd.Timestamp(last["ts_utc"]),
+                "pnl": pnl, "commission": None if comm is None else -(comm + fee), "swap": swap,
+                "entry_price": float(ent["price"].iloc[0]) if not ent.empty else None,
+                "lots": float(ent[vol].sum()) if not ent.empty else None, "reason": reason}, True
+
+    def _record_closed(self, pid: int, tr: OpenTrade, reason: str, px: float | None, at: pd.Timestamp) -> None:
+        """One ClosedTrade for a fully closed position (scale-out folded in: see gates_phase.ClosedTrade), appended
+        durably to state/closed_trades.jsonl. Money from the broker's deals when it reports them (net P&L with
+        commission and swap); otherwise from the engine's own fills at the contract size (commission and swap None)."""
+        if pid in self._recorded:
+            return
+        try:
+            info, _ = self._exit_deals(pid, tr)
+        except Exception:
+            log.exception("deal history unreadable for position %s; recorded from the engine's fills", pid)
+            info = None
+        known = info or {}
+        entry = tr.open_price if tr.open_price is not None else known.get("entry_price") or tr.entry
+        if entry is None:
+            raise ValueError("entry price unknown")
+        lots = float(tr.initial_lots or known.get("lots") or round(tr.lots + tr.scaled_lots, 8))
+        contract = 100.0
+        if info is not None:
+            exit_px, exit_utc, pnl = info["exit_price"], info["exit_utc"], info["pnl"]
+            commission, swap = info["commission"], info["swap"]
+            if reason == "broker_close" and info["reason"]:
+                reason = info["reason"]
+        else:
+            try:
+                contract = float(self.broker.symbol_info(self.cfg.symbol).contract_size) or contract
+            except Exception:
+                log.warning("symbol info unavailable; position %s recorded at contract size %s", pid, contract)
+            if px is None:
+                tick = self.broker.last_tick(self.cfg.symbol)
+                px = tick.bid if tr.side > 0 else tick.ask
+            legs = [(tr.lots, px)] + ([(tr.scaled_lots, tr.scaled_price)] if tr.scaled_price is not None else [])
+            done = sum(n for n, _ in legs)
+            exit_px = sum(n * p for n, p in legs) / done if done > 0 else px
+            pnl = sum(tr.side * (p - entry) * n * contract for n, p in legs)
+            exit_utc, commission, swap = at, None, None
+        risk = abs(entry - tr.initial_sl) * lots * contract if tr.initial_sl is not None else 0.0
+        equity = tr.equity_before
+        if equity is None or equity <= 0:
+            equity = self.broker.account().balance - pnl       # the balance before this trade's P&L was realised
+            if equity <= 0:
+                equity = self.state.equity
+        rec = ClosedTrade(account_id=self.cfg.account_id, broker=self.cfg.broker_name,
+                          mode="live" if self.cfg.mode == "live" else "demo", exit_utc=exit_utc,
+                          ret=pnl / (entry * lots * contract), pnl=pnl, equity_before=equity, position_id=pid,
+                          client_order_id=tr.client_order_id, agent_id=tr.agent_id, side=tr.side, lots=lots,
+                          entry_utc=tr.opened_utc or tr.entry_bar_ts, entry_price=entry, exit_price=exit_px,
+                          exit_reason=reason, r=pnl / risk if risk > 0 else None, commission=commission, swap=swap,
+                          partial_lots=tr.scaled_lots)
+        append_closed_trade(Path(self.cfg.state_dir), rec)
+        self._recorded.add(pid)
+        log.info("closed trade recorded: position %s %s, pnl %.2f", pid, reason, pnl)   # the exit itself is journalled
 
     def _risk_path(self) -> Path:
         return Path(self.cfg.state_dir, f"risk_{self.cfg.account_id}.json")   # not engine_*: the supervisor globs those

@@ -301,6 +301,25 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   payoff, while a policy's exits pay a distribution (trail, flat, scaled). Recommended fix: an EV hurdle from the
   policy's realised payoff distribution in the walk-forward (mean win and mean loss in R per family), or train on
   sign(ret) and size from the empirical payoffs; a quant-reviewer decision before any policy model trades.
+- Closed-trade record (2026-10-10, `engine/runner.py`, `ops/gates_phase.py`, TRACEABILITY P6/P7): the engine now
+  appends one `ClosedTrade` per fully closed position to `state/closed_trades.jsonl` (single O_APPEND write + fsync)
+  for every exit: broker target/stop/stop-out (found at the bar close by `_sweep_closed`), time exit, hard flat,
+  trail close, engine stop close, blackout close, kill switch, weekend loser, and trades that closed while the engine
+  was down (restart). Fields: account, mode (demo for paper/demo engines), agent, side, lots at entry, entry/exit
+  time and price, exit reason, net P&L, R against the initial stop, commission and swap (from the broker's deals;
+  None when only the engine's fills are known), client order id, position id. **Scale-outs are folded into the final
+  record** (`partial_lots`, lots-weighted exit price, summed P&L): one record = one labelled trade, so the gates'
+  trade counts compare with the backtest's; `load_closed_trades` also counts a repeated (account, position) once.
+  Idempotent across restarts (recorded position ids are read back from the file). Records are queued and written
+  after the tick's exits and before the open-trade table is saved; a failure is logged and journalled
+  (`closed_trade_record_failed`) and never blocks or raises from an exit. A trade the broker stops listing without an
+  exit deal (MT5 `positions_get` returning None) is kept and re-checked for `close_confirm_checks` (8) bar closes
+  instead of being forgotten. Same change, safety-review follow-ups: `_stop_check` backs off a refused engine-stop
+  close (30 s doubling to 900 s, reset on success; the broker's stop stays meanwhile) instead of a close per tick, and
+  a raising `positions()` in `_stop_check`, `_scale_out`, `_reconcile`, `_manage_open` or `_refresh_account` is logged
+  and skipped (the account refresh then blocks entries via `dq_error`). Not done: `_kill_switch` and `_weekend_rule`
+  still call `positions()` unguarded; concurrent appends from two engines on Windows are not locked (one line per
+  write, rare); the paper broker's deals now also carry MT5-style `profit`/`commission`/`swap` columns.
 - Feature discovery (2026-10-10, survey 4b, TRACEABILITY M37/M38; hypothesis H-02 tooling ready, not run):
   `research/discovery.py` + `research_pass.py --discover [--families [feature|family]] [--discover-config JSON]`
   screens every eligible column (may exceed 40) on one specialist's candidates as ONE trial. Inside each purged
