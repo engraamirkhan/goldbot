@@ -259,6 +259,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/automode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Automode Get */
+        get: operations["automode_get_api_automode_get"];
+        put?: never;
+        /** Automode Set */
+        post: operations["automode_set_api_automode_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/calendar": {
         parameters: {
             query?: never;
@@ -743,6 +761,44 @@ export interface components {
             /** Users */
             users: number;
         };
+        /** AutoModeView */
+        AutoModeView: {
+            /** Approved */
+            approved: number;
+            /** Breaches */
+            breaches: string[];
+            /** Can Enable */
+            can_enable: boolean;
+            /** Decided */
+            decided: number;
+            /** Eligible */
+            eligible: boolean;
+            /** Engine Modes */
+            engine_modes: {
+                [key: string]: string;
+            };
+            /** Error */
+            error?: string | null;
+            /** Forced Propose */
+            forced_propose: components["schemas"]["ForcedPropose"][];
+            /** Min Outcomes Per Side */
+            min_outcomes_per_side: number;
+            /** Min Proposals */
+            min_proposals: number;
+            /** Mode By */
+            mode_by: string | null;
+            /** Mode Reason */
+            mode_reason: string | null;
+            /** Mode Since */
+            mode_since: string | null;
+            /** Owner Mode */
+            owner_mode: ("propose" | "auto") | null;
+            /** Reasons */
+            reasons: string[];
+            /** Rejected */
+            rejected: number;
+            test: components["schemas"]["VetoTestView"];
+        };
         /**
          * CalendarEvent
          * @description One archived economic-calendar event. Tier 1 (US CPI, NFP, FOMC, PCE) carries its entry-blackout window.
@@ -824,12 +880,29 @@ export interface components {
             agent_id: string;
             /** Alarm */
             alarm: boolean;
+            /** False Alarm */
+            false_alarm?: number | null;
             /** H */
             h: number;
+            /**
+             * H Note
+             * @default
+             */
+            h_note: string;
+            /**
+             * H Source
+             * @default fixed
+             * @enum {string}
+             */
+            h_source: "calibrated" | "fixed";
             /** K */
             k: number;
+            /** P Mean */
+            p_mean?: number | null;
             /** Points */
             points: components["schemas"]["CusumPoint"][];
+            /** Trades Per Week */
+            trades_per_week?: number | null;
             /** Version */
             version: string;
         };
@@ -927,6 +1000,23 @@ export interface components {
             terminal_connected: boolean;
             /** Webhook P99 Latency S */
             webhook_p99_latency_s: number | null;
+        };
+        /**
+         * ForcedPropose
+         * @description An engine override that keeps propose-and-approve whatever the owner's mode says.
+         */
+        ForcedPropose: {
+            /** Account Id */
+            account_id: string;
+            /** Detail */
+            detail: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "rearm_lock" | "kill_switch" | "risk_unreadable";
+            /** Until */
+            until?: string | null;
         };
         /**
          * ForgotPasswordRequest
@@ -1160,6 +1250,25 @@ export interface components {
              */
             role: "owner" | "approver" | "viewer";
         };
+        /** ModeChangeRequest */
+        ModeChangeRequest: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "auto" | "propose";
+            /**
+             * Totp
+             * @default
+             */
+            totp: string;
+        };
+        /** ModeChangeResult */
+        ModeChangeResult: {
+            /** Message */
+            message: string;
+            view: components["schemas"]["AutoModeView"];
+        };
         /** Ok */
         Ok: {
             /**
@@ -1199,6 +1308,39 @@ export interface components {
             rank: number;
             /** Reasons */
             reasons: string[];
+        };
+        /** PlanMove */
+        PlanMove: {
+            /** Budget After */
+            budget_after: number;
+            /** Budget Before */
+            budget_before: number;
+            /** Detail */
+            detail: string;
+            /** Family */
+            family: string;
+            /** Share After */
+            share_after?: number | null;
+            /** Share Before */
+            share_before?: number | null;
+            /** Shift Pct */
+            shift_pct?: number | null;
+            /** Source */
+            source: string;
+        };
+        /**
+         * PlanReservation
+         * @description Trials of the quarter held for the pre-registered queue (research/director.py Reservation).
+         */
+        PlanReservation: {
+            /** Pending */
+            pending: number;
+            /** Reserved */
+            reserved: number;
+            /** Run */
+            run: number;
+            /** Setting */
+            setting: number;
         };
         /** Proposal */
         Proposal: {
@@ -1356,6 +1498,8 @@ export interface components {
          * @description The research director's latest plan (state/research_plan.json).
          */
         ResearchPlanView: {
+            /** Attribution Note */
+            attribution_note?: string | null;
             /** Budget */
             budget: {
                 [key: string]: number;
@@ -1377,12 +1521,46 @@ export interface components {
             holdout_from: string;
             /** Holdout To */
             holdout_to: string;
+            /**
+             * Hypotheses Changed
+             * @default false
+             */
+            hypotheses_changed: boolean;
+            /**
+             * Hypotheses Drift
+             * @default []
+             */
+            hypotheses_drift: string[];
+            /** Hypotheses Note */
+            hypotheses_note?: string | null;
+            /** Hypotheses Sha256 */
+            hypotheses_sha256?: string | null;
+            /** Hypotheses Sha256 Now */
+            hypotheses_sha256_now?: string | null;
+            /**
+             * Moves
+             * @default []
+             */
+            moves: components["schemas"]["PlanMove"][];
             /** Quarter */
             quarter: string;
             /** Quarter Budget */
             quarter_budget: number;
+            /**
+             * Quarter Reserved
+             * @default 0
+             */
+            quarter_reserved: number;
             /** Quarter Used */
             quarter_used: number;
+            /** Reinstate T */
+            reinstate_t?: number | null;
+            reservation?: components["schemas"]["PlanReservation"] | null;
+            /**
+             * Retired
+             * @default []
+             */
+            retired: components["schemas"]["RetiredFamilyView"][];
             /** Stale */
             stale: boolean;
             /** Total Budget */
@@ -1429,6 +1607,23 @@ export interface components {
              * @default
              */
             token: string;
+        };
+        /** RetiredFamilyView */
+        RetiredFamilyView: {
+            /** Family */
+            family: string;
+            /** Floor */
+            floor: number;
+            /** Hypothesis Id */
+            hypothesis_id: string | null;
+            /** New Evidence */
+            new_evidence: string[];
+            /** Reason */
+            reason: string | null;
+            /** Reinstated */
+            reinstated: boolean;
+            /** Since */
+            since: string | null;
         };
         /** RevokeResponse */
         RevokeResponse: {
@@ -1598,6 +1793,32 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /**
+         * VetoTestView
+         * @description Welch's two-sample t-test of mean R, approved minus rejected (telegram/automode.py VetoTest).
+         */
+        VetoTestView: {
+            /** Alpha */
+            alpha: number;
+            /** Ci High */
+            ci_high: number | null;
+            /** Ci Low */
+            ci_low: number | null;
+            /** Diff */
+            diff: number | null;
+            /** Indistinguishable */
+            indistinguishable: boolean;
+            /** Mean R Approved */
+            mean_r_approved: number | null;
+            /** Mean R Rejected */
+            mean_r_rejected: number | null;
+            /** N Approved */
+            n_approved: number;
+            /** N Rejected */
+            n_rejected: number;
+            /** P Value */
+            p_value: number | null;
         };
     };
     responses: never;
@@ -2034,6 +2255,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthState"];
+                };
+            };
+        };
+    };
+    automode_get_api_automode_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoModeView"];
+                };
+            };
+        };
+    };
+    automode_set_api_automode_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModeChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModeChangeResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
