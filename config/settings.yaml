@@ -85,6 +85,7 @@ scheduler:
   recalibrate:      { kind: weekly,  at: "11:30", weekday: 5, max_late_hours: 30 }   # P9: bounded calibrator refit after the retrain
   drift_watch:      { kind: daily,   at: "23:40", max_late_hours: 20 }                  # PSI, calibration, CUSUM halts (M26/M27)
   gap_watch:        { kind: daily,   at: "23:55", max_late_hours: 20 }                  # gaps -> shadow founders / on-demand staff runs
+  attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
 
   feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day
 
@@ -174,3 +175,10 @@ gaps:                                # bounded spawning (goldbot/ops/gap_watch.p
   dq_min_error_days: 3               #   this many distinct UTC days within the window
   regime_window_days: 20             # recent realised volatility = mean of the last 20 daily values
   regime_history_days: 3650          # volatility terciles cut from up to ten years of 1h bars
+
+attribution:                         # daily deterministic attribution (goldbot/research/attribution.py, BACKLOG 12); reporting only
+  window_days: 180                   # closed shadow trades exited in the last 180 days
+  min_trades: 30                     # cells with fewer trades are marked "noise" and are not evidence
+  calibration_bins: 10               # equal-width bins of p for predicted-vs-realised
+  calibration_min_bin: 10            # bins with fewer candidates are marked noise
+  trade_rows: 300                    # most recent per-trade cost rows kept in state/attribution.json

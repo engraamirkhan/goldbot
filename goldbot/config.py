@@ -130,6 +130,7 @@ class SchedulerSettings(_Section):
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
     gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
+    attribution: ScheduleSettings = ScheduleSettings(kind="daily", at="23:50", max_late_hours=20)
 
 
 class GapSettings(_Section):
@@ -141,6 +142,16 @@ class GapSettings(_Section):
     dq_min_error_days: int = Field(3, ge=1, le=30)        # distinct UTC days with error events that make a gap
     regime_window_days: int = Field(20, ge=5, le=120)     # recent realised volatility (mean of daily values)
     regime_history_days: int = Field(3650, ge=365)        # history the volatility terciles are cut from
+
+
+class AttributionSettings(_Section):
+    """Daily performance attribution (goldbot/research/attribution.py, BACKLOG item 12). Reporting only: it changes
+    no trading, setting or model; the staff agents read it and file hypotheses through the bounded path."""
+    window_days: int = Field(180, ge=7, le=3650)          # closed shadow trades exited in this window
+    min_trades: int = Field(30, ge=2)                     # a cell with fewer trades is reported as noise
+    calibration_bins: int = Field(10, ge=2, le=50)        # equal-width bins of p
+    calibration_min_bin: int = Field(10, ge=1)            # a calibration bin with fewer candidates is noise
+    trade_rows: int = Field(300, ge=0, le=5000)           # most recent per-trade cost rows kept in the JSON
 
 
 class ResearchSettings(_Section):
@@ -259,6 +270,7 @@ class Settings(_Section):
     auth: AuthSettings = Field(default_factory=AuthSettings)
     gates: GateSettings = Field(default_factory=GateSettings)
     gaps: GapSettings = Field(default_factory=GapSettings)
+    attribution: AttributionSettings = Field(default_factory=AttributionSettings)
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):

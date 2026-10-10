@@ -18,11 +18,11 @@ Status values:
 | Status | Rows |
 | --- | --- |
 | implemented | 138 |
-| partial | 17 |
+| partial | 18 |
 | missing | 4 |
 | deviates | 9 |
 | in review | 6 |
-| **total** | **174** |
+| **total** | **175** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -251,6 +251,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | G9 | "every run is logged with its inputs, outputs and cost, and their total monthly spend is capped" | implemented | goldbot/agents/runner.py; config/settings.yaml agents.monthly_cap_usd | tests/test_agents.py::test_monthly_cap_blocks_the_run_without_calling_the_api; ::test_per_run_budget_stops_before_spending_more |
 | G10 | Research analyst runs walk-forward trials and records them; promotes nothing | implemented | goldbot/agents/tools.py `run_trial` | tests/test_agents.py::test_research_analyst_tests_a_hypothesis_and_records_the_verdict |
 | G11 | Owner: "spawn more agents as required", bounded (TRADER_LIFECYCLE section 3) | implemented (4h retrain path open) | goldbot/ops/gap_watch.py (daily `gap_watch` -> state/gaps.json, ledger state/gap_ledger.jsonl); goldbot/research/population.py `spawn_founder`, `check_founder_config`, `GAP_RESERVED_SLOTS` (4 of SHADOW_CAP; clones stop 4 short); config `gaps:` (2 founders a month, 3 on-demand staff runs a week, 2 hypotheses a run). Founders are shadow with zero capital, from registered families only (default on another timeframe or a passed trial, numeric settings within +-50%), never during a system halt or a drawdown stage, never in a lookahead-blocked family; on-demand staff runs reuse read-only roles inside agents.monthly_cap_usd. Reading taken: a timeframe without a walk-forward window in settings (4h, 1d) is refused and suggested, since the retrain could never train it | tests/test_population.py::test_gap_founder_starts_in_shadow_with_zero_capital; ::test_gap_founders_respect_the_monthly_and_reserved_slot_caps; tests/test_gap_watch.py (each detector; ::test_staff_runs_respect_the_monthly_agent_budget; ::test_on_demand_staff_run_once_per_gap_within_the_weekly_cap; ::test_a_gap_founder_reaches_live_only_through_the_research_and_dsr_gates; ::test_nothing_in_gap_watch_creates_a_live_agent_or_touches_the_gates); tests/test_jobs_integration.py::test_no_spawn_during_system_halt |
+| G12 | Owner: "analytics, feedback to the system" (BACKLOG item 12): deterministic attribution read by the improvement agent and research analyst | partial | goldbot/research/attribution.py `build_report` (R gross/net, count, t, 95% CI, hit rate, profit factor by timeframe, family, agent, session, side, volatility tercile, decision, exit; per-trade spread/slippage/commission/swap in R; calibration on taken and untaken candidates; live fills vs the cost table; cells under `attribution.min_trades` are noise; champion-path only, challengers apart); goldbot/ops/jobs.py `attribution` (daily 23:50) -> state/attribution.json + .md; goldbot/agents/tools.py `read_attribution`; goldbot/agents/roles.py improvement_agent and research_analyst read it first. Changes nothing; hypotheses only via `file_hypothesis`. Missing: live realised R per position (engine trade record, P6), research director priority input, dashboard view | tests/test_attribution.py (each breakdown, ::test_cells_below_the_minimum_count_are_marked_noise_whatever_their_mean, ::test_cost_attribution_per_trade_in_r_against_the_cost_table, ::test_calibration_compares_p_with_the_realised_outcome_on_taken_and_untaken_candidates, ::test_read_attribution_tool_returns_the_report_and_its_sections, ::test_report_is_deterministic_and_saved_with_a_markdown_summary); tests/test_jobs_integration.py::test_attribution_job_writes_the_report_from_the_shadow_book_and_changes_nothing_else; ::test_build_scheduler_registers_every_job |
 
 ## Gaps
 
