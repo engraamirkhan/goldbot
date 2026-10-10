@@ -343,13 +343,16 @@ def test_an_approval_error_never_skips_the_exits_of_that_tick_and_blocks_entries
     eng._refresh_account(_tick(WED + pd.Timedelta(seconds=1), 2398.0))
     assert eng.state.tick_error and "tick_error" in eng.gate.check(_intent(), eng.state).reasons
     eng.center.poll_bus = lambda: []         # type: ignore[method-assign]
-    from goldbot.engine.runner import TICK_ERROR_CLEAR_TICKS
-    for i in range(TICK_ERROR_CLEAR_TICKS):
+    for i in range(40):                                                # 10 s of clean polls are not enough
         host[0] = WED + pd.Timedelta(seconds=2 + i)
         eng.on_tick(_tick(host[0], 2401.0 + i * 0.01))
+    assert eng.state.tick_error
+    for m in (16, 31):                                                 # a whole clean decision bar (12:15-12:30) closes
+        host[0] = WED + pd.Timedelta(minutes=m)
+        eng.on_tick(_tick(host[0], 2401.5))
     assert not eng.state.tick_error
     state = json.loads((tmp_path / "engine_icm-demo.json").read_text())
-    assert state["tick_error"] is False
+    assert state["tick_error"] is False and state["tick_errors_total"] == 1
 
 
 def test_the_engine_loop_survives_any_exception_and_health_alerts_on_it(tmp_path):
@@ -415,3 +418,89 @@ def test_a_session_table_error_fails_closed_for_entries_only(tmp_path):
     assert pid not in {p.position_id for p in pb.positions()}          # exits unaffected
     eng._refresh_account(_tick(WED, 2398.0))
     assert eng.state.market_closed and "market_closed" in eng.gate.check(_intent(), eng.state).reasons
+
+
+# ---------------------------------------------------------------------------------------------- exits before logging
+def test_a_full_disk_and_a_failing_account_read_on_every_tick_never_stop_the_engine_stop(tmp_path):
+    from goldbot.data.store import Store
+    pb = PaperBroker(equity=10_000)
+    pb.on_tick(_tick(WED))
+    eng, _, host = _engine(tmp_path, pb=pb, data_root=str(tmp_path / "data"), tick_flush_s=0)
+
+    def full(*a: Any, **k: Any) -> Any:
+        raise OSError(28, "No space left on device")
+    assert isinstance(eng.store, Store)
+    eng.store.append = full                                            # type: ignore[method-assign]
+    pid = _open(pb, 1, 2399.0)
+    eng.open[pid] = eng._adopt(next(p for p in pb.positions() if p.position_id == pid))
+    eng._roll_risk_period = lambda now: (_ for _ in ()).throw(OSError("account read failed"))  # type: ignore[method-assign]
+    for i, px in enumerate((2401.0, 2400.5, 2398.0)):                  # the third quote is through the engine stop
+        host[0] = WED + pd.Timedelta(seconds=i + 1)
+        pb.on_tick(_tick(host[0], px))
+        engine_pass(eng, pb, "XAUUSD")                                 # the run loop's pass
+    assert pid not in {p.position_id for p in pb.positions()}
+    assert eng.state.tick_error and eng.tick_errors_total >= 3
+    for i in range(3, 5000):                                           # the tick buffer is capped, not unbounded
+        host[0] = WED + pd.Timedelta(seconds=i)
+        pb.on_tick(_tick(host[0], 2401.0 + (i % 7) * 0.01))
+        engine_pass(eng, pb, "XAUUSD")
+    from goldbot.engine.runner import TICK_LOG_MAX
+    assert len(eng._tick_log) <= TICK_LOG_MAX
+
+
+def test_tick_errors_are_rate_limited_in_the_log_and_the_state_file(tmp_path, caplog):
+    class Dead(PaperBroker):
+        def last_tick(self, symbol: str) -> Tick:
+            raise RuntimeError("terminal gone")
+    pb = Dead(equity=10_000)
+    eng, _, _ = _engine(tmp_path, pb=pb)
+    writes: list[int] = []
+    real = eng._write_state
+
+    def counted() -> None:
+        writes.append(1)
+        real()
+    eng._write_state = counted                                         # type: ignore[method-assign]
+    import logging
+    with caplog.at_level(logging.ERROR, logger="goldbot.engine"):
+        for _ in range(400):                                           # 100 s of 0.25 s passes, all failing
+            engine_pass(eng, pb, "XAUUSD")
+    logged = [r for r in caplog.records if "tick processing failed" in r.getMessage()]
+    assert 1 <= len(logged) <= 3                                       # the first, then at most once a minute
+    assert len(writes) <= 12                                           # not one state write per pass
+    assert eng.tick_errors_total == 400
+    e = json.loads((tmp_path / "engine_icm-demo.json").read_text())
+    assert e["tick_errors_total"] >= 1 and e["last_tick_error_at"]
+
+
+def test_an_assert_in_the_tick_path_is_recorded_not_swallowed(tmp_path):
+    class Asserting(PaperBroker):
+        def last_tick(self, symbol: str) -> Tick:
+            raise AssertionError("invariant broken")
+    pb = Asserting(equity=10_000)
+    eng, _, _ = _engine(tmp_path, pb=pb)
+    assert engine_pass(eng, pb, "XAUUSD") is False
+    assert eng.state.tick_error and eng.tick_errors_total == 1
+
+
+def test_health_warns_on_a_recent_or_new_tick_error_after_it_cleared(tmp_path):
+    import time as _t
+
+    from goldbot.ops import health
+    now = pd.Timestamp.now("UTC")
+    base = {"account": "icm-demo", "ts": _t.time(), "stage": "normal", "tick_error": False, "tick_errors_total": 2}
+    f = tmp_path / "engine_icm-demo.json"
+    ctx = health.HealthContext(state_dir=tmp_path, now=now, get_secret=lambda k: None)
+    f.write_text(json.dumps({**base, "last_tick_error_at": (now - pd.Timedelta(minutes=5)).isoformat()}))
+    c = health.check_tick_errors(ctx, "icm-demo")
+    assert c is not None and c.status == "warn" and "tick error" in c.reason
+    assert health._alerting(c.name, c.status)                          # announced on Telegram
+    f.write_text(json.dumps({**base, "last_tick_error_at": (now - pd.Timedelta(minutes=40)).isoformat()}))
+    old = health.check_tick_errors(ctx, "icm-demo")
+    assert old is not None and old.status == "ok"
+    since = health.HealthContext(state_dir=tmp_path, now=now, get_secret=lambda k: None,
+                                 last_run=now - pd.Timedelta(hours=1))
+    c = health.check_tick_errors(since, "icm-demo")                    # a new error since the last health run
+    assert c is not None and c.status == "warn"
+    f.write_text(json.dumps(base))
+    assert health.check_tick_errors(ctx, "icm-demo") is None
