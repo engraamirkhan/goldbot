@@ -31,7 +31,9 @@
 * Lockout: 5 failures per email or 20 per client IP in 15 minutes, counted in aux.db (survives a restart, pruned to
   the window). Trade-off: anyone who knows an email can keep that account locked out by failing on purpose; the
   per-IP limit slows that down but a distributed attacker can still do it. The owner can always recover from the
-  server (the lockout clears 15 minutes after the last failure).
+  server (the lockout clears 15 minutes after the last failure). The authenticator codes of /rearm and /mode
+  (dashboard and Telegram) count towards the same per-account counter (`verify_code_guarded`), so a stolen session
+  cannot guess codes without limit; reaching the limit sends the owner a notice.
 * Sessions: random bearer tokens with 12 h expiry, stored server-side as SHA-256 hashes, so they can be revoked
   and survive an API restart.
 * Audit: every login, failed login, invite, role change, password or authenticator change and decision is appended
@@ -419,14 +421,44 @@ class AuthStore:
             self.audit(event, email=email, **({"ip": ip} if ip else {}))
             raise PermissionError("too many attempts; wait 15 minutes")
 
-    def _fail(self, email: str, event: str, ip: str | None = None) -> NoReturn:
+    def _record_failure(self, email: str, event: str, ip: str | None = None) -> int:
+        """Count one failure for the account (and the IP); returns the account's failures inside the window."""
         now = time.time_ns()
         with self.db.write() as conn:
             conn.execute("DELETE FROM auth_failures WHERE ts_ns <= ?", (now - LOCKOUT_WINDOW_S * 10**9,))
             conn.executemany("INSERT INTO auth_failures (key, ts_ns) VALUES (?, ?)",
                              [(f"email:{email}", now)] + ([(f"ip:{ip}", now)] if ip else []))
             _audit(conn, event, email=email, **({"ip": ip} if ip else {}))
+            return int(conn.execute("SELECT COUNT(*) FROM auth_failures WHERE key = ?",
+                                    (f"email:{email}",)).fetchone()[0])
+
+    def _fail(self, email: str, event: str, ip: str | None = None) -> NoReturn:
+        self._record_failure(email, event, ip)
         raise PermissionError("invalid credentials")
+
+    def verify_code_guarded(self, code: str, action: str, *, email: str | None = None, ip: str | None = None) -> bool:
+        """An authenticator code for an authority-raising action ("rearm", "mode") inside the login lockout: refused
+        with PermissionError while the account is locked (event `<action>_locked`); a wrong code counts one failure
+        (`<action>_failed`, keyed on the email plus the IP like login); a right one clears the account's counter. The
+        failure that reaches the limit queues one owner notice (no code, no address). email None: the owner pinned to
+        auth.owner_email (unset fails closed, uncounted). Telegram /mode and the dashboard share this counter."""
+        target = email.strip().lower() if email is not None else self.owner_email
+        if target is None:
+            return False
+        self._check_lockout(target, f"{action}_locked", ip)
+        ok = self.verify_totp(target, code) if email is not None else self.verify_owner_totp(code)
+        if ok:
+            with self.db.write() as conn:
+                self._clear_failures(conn, target)
+            return True
+        if self._record_failure(target, f"{action}_failed", ip) == LOCKOUT_FAILURES:
+            what = {"mode": "switching to auto mode", "rearm": "re-arming"}.get(action, action)
+            self._notify_owner(f"{LOCKOUT_FAILURES} wrong authenticator codes for {what} within "
+                               f"{LOCKOUT_WINDOW_S // 60} minutes (at {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}"
+                               f"); code checks for the owner account are locked for {LOCKOUT_WINDOW_S // 60} minutes. "
+                               f"If this was not you, revoke every session on the dashboard (Users), change your "
+                               f"password and check the audit trail.")
+        return False
 
     @staticmethod
     def _clear_failures(conn: sqlite3.Connection, email: str) -> None:

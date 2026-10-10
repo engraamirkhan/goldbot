@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import logging
 import math
 import re
 from datetime import datetime, timezone
@@ -55,6 +56,14 @@ from goldbot.api.schema import (
     VetoTestView,
 )
 from goldbot.config import DriftSettings, Settings, TelegramSettings
+
+log = logging.getLogger(__name__)
+
+
+def _fault(what: str, exc: BaseException) -> str:
+    """Every role reads these views: show the exception type only and log the detail (paths, values) server-side."""
+    log.warning("%s: %s: %s", what, type(exc).__name__, exc)
+    return f"{what} ({type(exc).__name__})"
 
 REVIEW_COMMAND = "python -m goldbot.ops.run drift-review"
 CLEAR_COMMAND = 'python -m goldbot.ops.run drift-review --clear "what you checked"'
@@ -238,7 +247,7 @@ def _checks(state: Path, settings: Settings | None) -> list[HealthCheckRow]:
             out.append(HealthCheckRow(name=c.name, status=c.status, reason=c.reason))
         except Exception as exc:                 # one broken check must not hide the others
             out.append(HealthCheckRow(name=fn.__name__.removeprefix("check_"), status="warn",
-                                      reason=f"check failed: {type(exc).__name__}: {exc}"[:300]))
+                                      reason=_fault("check failed", exc)))
     return out
 
 
@@ -418,7 +427,7 @@ def _plan(state: Path, docs_dir: Path | None = None) -> tuple[ResearchPlanView |
             hypotheses_changed=sha is not None and now_sha is not None and sha != now_sha,
             hypotheses_drift=[str(x) for x in p.get("hypotheses_drift") or []])
     except (ValueError, OSError, KeyError, TypeError) as exc:
-        return None, f"research_plan.json unreadable ({type(exc).__name__}: {exc})"[:300]
+        return None, _fault("research_plan.json unreadable", exc)
     return view, None
 
 
@@ -461,7 +470,7 @@ def _hypotheses(docs_dir: Path) -> HypothesisDoc:
     try:
         text = f.read_text(encoding="utf-8")
     except OSError as exc:
-        return HypothesisDoc(path=rel, updated_utc=None, tables=[], note=f"unreadable: {exc}")
+        return HypothesisDoc(path=rel, updated_utc=None, tables=[], note=_fault("unreadable", exc))
     updated = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
     return HypothesisDoc(path=rel, updated_utc=updated, tables=parse_tables(text), note=None)
 
@@ -528,12 +537,13 @@ def automode_view(state: Path, settings: Settings | None, is_owner: bool) -> Aut
     try:
         e = automode.auto_mode_eligibility_from_state(state, tg)
     except Exception as exc:                   # fail closed: an unreadable evidence base offers nothing
-        err = f"evidence unreadable ({type(exc).__name__}: {exc})"[:300]
+        err = _fault("evidence unreadable", exc)
         e = automode.Eligibility(eligible=False, reasons=[err], since=c.mode_ts, decided=0, approved=0, rejected=0,
                                  breaches=[], test=automode.VetoTest(n_approved=0, n_rejected=0, alpha=tg.auto_alpha))
     t = e.test
     return AutoModeView(
-        owner_mode=c.approval_mode, mode_by=c.mode_by,
+        # who switched ("dashboard:<email>", "telegram:<uid>") is the owner's to see; other roles get the channel
+        owner_mode=c.approval_mode, mode_by=c.mode_by if is_owner or c.mode_by is None else c.mode_by.split(":", 1)[0],
         mode_since=datetime.fromtimestamp(c.mode_ts, tz=timezone.utc) if c.mode_ts else None, mode_reason=c.mode_reason,
         engine_modes=_engine_modes(state), eligible=e.eligible, reasons=list(e.reasons), decided=e.decided,
         approved=e.approved, rejected=e.rejected, min_proposals=tg.auto_min_proposals,

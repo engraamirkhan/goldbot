@@ -607,6 +607,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   was regenerated (npm 10 hit ERESOLVE/an arborist crash moving off the Vite 5 tree); `npm ci` on npm 10 is clean.
   `npm audit` (prod and dev) reports 0 vulnerabilities, down from 7 dev ones. Production JS bundle 245 -> 318 kB
   (75 -> 96 kB gzip), mostly React 19. Deferred: TypeScript 7 and @types/node 26 (Node 22 is the runtime).
+- Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
+  `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded`, inside the login lockout (5 wrong
+  codes per account in 15 minutes, keyed on the owner email plus client IP; events `mode_failed`/`mode_locked`,
+  `rearm_failed`/`rearm_locked`). The counter is the account's login counter, shared by both channels, so a locked
+  owner also cannot sign in for 15 minutes (fail closed; `/mode propose` and `/halt` still work). The failure that
+  reaches the limit queues one Telegram notice (agent_runs.jsonl relay, no code or address). `mode_by` on the
+  auto-mode card is the full `dashboard:<email>`/`telegram:<uid>` only for the verified owner; other roles see the
+  channel. Health, Research and auto-mode error text shows the exception type only (detail logged server-side).
+  Every `/api/` response carries `Cache-Control: no-store`. The unused `lightweight-charts` dependency is removed
+  (new price charts will need it added back).
 
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional

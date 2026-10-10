@@ -248,6 +248,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         # invite and reset links carry their token in the URL fragment; this also keeps any URL out of Referer
         response: Response = await call_next(request)
         response.headers["Referrer-Policy"] = "no-referrer"
+        if request.url.path.startswith("/api/"):
+            # session tokens, recovery codes, TOTP enrolment URIs and invite/reset tokens must never sit in a cache
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     # ------------------------------------------------------------- auth endpoints
@@ -457,9 +460,13 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return current_status()
 
     @app.post("/api/rearm")
-    async def rearm(body: RearmRequest, u: User = Depends(need("owner"))) -> Status:
-        if not st.auth.verify_totp(u.email, body.totp):           # each code once (replay refused)
-            st.auth.audit("rearm_failed", by=u.email)
+    async def rearm(body: RearmRequest, request: Request, u: User = Depends(need("owner"))) -> Status:
+        # each code once (replay refused); wrong codes count towards the login lockout (rearm_failed / rearm_locked)
+        try:
+            ok = st.auth.verify_code_guarded(body.totp, "rearm", email=u.email, ip=client_ip(request))
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        if not ok:
             raise HTTPException(403, "authenticator code required to re-arm")
         c = st.bus.owner_rearm(by=f"dashboard:{u.email}")      # also clears the engines' drawdown halts
         st.auth.audit("rearm", by=u.email, rearm_id=c.rearm_id)
@@ -539,22 +546,29 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     # ============================================================== auto mode (A10): card for any role, switch owner-only
     # The switch runs telegram/automode.py `mode_command`, the code behind Telegram's /mode, with the same checks:
     # the owner pinned to auth.owner_email (need("owner") + verify_owner_totp), each authenticator code spent once
-    # (the replay guard shared with sign-in, re-arm and /mode), then the evidence check. Every outcome is audited by
+    # (the replay guard shared with sign-in, re-arm and /mode) inside the owner's lockout (verify_code_guarded:
+    # mode_failed / mode_locked, shared with Telegram /mode), then the evidence check. Every outcome is audited by
     # mode_command. The engines still force propose under the 30-day re-arm lock and the 12% kill switch.
     @app.get("/api/automode", response_model=AutoModeView)
     def automode_get(u: User = Depends(auth)) -> AutoModeView:
         return explain.automode_view(st.dir, view_settings(), st.auth.is_owner(u))
 
     @app.post("/api/automode", response_model=ModeChangeResult)
-    async def automode_set(body: ModeChangeRequest, u: User = Depends(need("owner"))) -> ModeChangeResult:
+    async def automode_set(body: ModeChangeRequest, request: Request,
+                           u: User = Depends(need("owner"))) -> ModeChangeResult:
         from goldbot.config import TelegramSettings
         from goldbot.telegram import automode
         s = view_settings()
         tg = s.telegram if s is not None else TelegramSettings()
         seen: dict[str, bool] = {}
+        ip = client_ip(request)
 
         def totp_ok(code: str) -> bool:
-            seen["totp"] = st.auth.verify_owner_totp(code)
+            try:        # the owner's lockout counter, shared with sign-in, re-arm and Telegram /mode
+                seen["totp"] = st.auth.verify_code_guarded(code, "mode", ip=ip)
+            except PermissionError:
+                seen["locked"] = True
+                raise
             return seen["totp"]
 
         def eligibility() -> automode.Eligibility:
@@ -566,6 +580,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         arg = "propose" if body.mode == "propose" else ("auto " + code if code.isdigit() else "auto")
         msg = await asyncio.to_thread(automode.mode_command, st.bus, arg, f"dashboard:{u.email}", totp_ok=totp_ok,
                                       eligibility=eligibility, audit=st.auth.audit)
+        if seen.get("locked"):
+            raise HTTPException(403, "too many attempts; wait 15 minutes")
         if body.mode == "auto" and not seen.get("totp"):
             raise HTTPException(403, "authenticator code required to enable auto mode")
         if body.mode == "auto" and not seen.get("eligible"):

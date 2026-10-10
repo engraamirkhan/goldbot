@@ -17,12 +17,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 152 |
+| implemented | 156 |
 | partial | 15 |
 | missing | 3 |
 | deviates | 7 |
 | in review | 6 |
-| **total** | **183** |
+| **total** | **187** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -107,6 +107,10 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | U10 | Login responses do not reveal whether an account exists (errors and timing) | implemented | goldbot/api/auth.py `_dummy_hash` in `login` and `recovery_login` | tests/test_auth_security.py::test_login_runs_scrypt_whether_or_not_the_account_exists; ::test_recovery_login_runs_scrypt_whether_or_not_the_account_exists |
 | U11 | The owner role is pinned to `auth.owner_email` for every owner-only action | implemented | goldbot/api/auth.py `is_owner`, `_require`, `import_users`; goldbot/api/app.py `need` | tests/test_auth_security.py::test_owner_actions_need_the_owner_email_and_fail_closed_when_it_changes_or_is_unset; ::test_users_json_import_demotes_an_owner_that_is_not_owner_email; ::test_owner_routes_refuse_an_owner_role_whose_email_is_not_owner_email |
 | U12 | Reset and invite links are revoked and kept out of logs and Referer | implemented | goldbot/api/auth.py (`change_password`, `forgot_password`, `disable` delete open reset links); web/src/lib/links.ts (`#invite=`/`#reset=`); goldbot/api/app.py `no_referrer` | tests/test_auth_security.py::test_password_change_forgot_and_disable_delete_open_reset_links; ::test_api_and_static_responses_send_no_referrer; web/src/lib/links.test.ts |
+| U13 | Authenticator codes for re-arm and auto mode are inside the lockout, shared by dashboard and Telegram, and the lock alerts the owner (security review) | implemented | goldbot/api/auth.py `verify_code_guarded`; goldbot/api/app.py `rearm`, `automode_set`; goldbot/telegram/automode.py `owner_totp_ok`, `mode_command` (`MODE_LOCKED`) | tests/test_api_code_lockout.py::test_wrong_auto_mode_codes_lock_the_switch_even_for_a_valid_code_and_alert_the_owner; ::test_telegram_mode_and_the_dashboard_share_one_lockout_counter; ::test_wrong_rearm_codes_lock_rearm_even_for_a_valid_code_and_alert_the_owner; ::test_a_right_code_clears_the_owner_counter |
+| U14 | Who switched the entry mode is shown only to the verified owner; other roles see the channel | implemented | goldbot/api/explain.py `automode_view`; web/src/screens/AutoMode.tsx `setBy` | tests/test_api_code_lockout.py::test_mode_by_shows_who_to_the_owner_and_only_the_channel_to_other_roles; web/src/screens/AutoMode.test.tsx "shows who set the mode to the owner and only the channel to a viewer" |
+| U15 | Dashboard views show the exception type only, never its text (paths) | implemented | goldbot/api/explain.py `_fault` (detail logged server-side) | tests/test_api_code_lockout.py::test_automode_and_plan_errors_show_the_exception_type_not_the_detail; ::test_a_failing_health_check_shows_the_type_only |
+| U16 | API responses (sessions, recovery codes, enrolment URIs, invite and reset tokens) are never cached | implemented | goldbot/api/app.py `no_referrer` middleware (`Cache-Control: no-store` on `/api/`) | tests/test_api_code_lockout.py::test_auth_responses_are_never_cached |
 
 ## Data and time [Data architecture]
 
