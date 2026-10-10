@@ -766,7 +766,8 @@ nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what
 | `drawdown_halt` | This account's equity fell 12% below its high-water mark. | Investigate before anything else. The dashboard Re-arm clears only the owner halt; the code has no command that clears this stage (an engine restart resets it, because the stage is kept in memory). |
 | `news_blackout` | Within 15 min before to 30 min after a tier-1 event (CPI, NFP, FOMC, PCE), or 30 min after a high-relevance news shock. The active event is in `state\engine_<account>.json` under `blackout`. | Wait. If it never clears, check `calendar_archive` on the Feeds tab. |
 | `stale_data` | The last tick is older than 20 s (either way: a tick stamped in the future counts too). | Check the MT5 terminal is open, logged in and connected; the Feeds tab shows "Last tick". |
-| `tick_from_future` | The last tick is stamped more than 5 s ahead of this server's clock: wrong `server_tz` in a DST gap week, or a host or broker clock fault. | See "Server clock (US-EU DST gap weeks)" below. |
+| `tick_from_future` | The last tick is stamped more than 10 s ahead of this server's clock: wrong `server_tz` in a DST gap week, or a host or broker clock fault. | See "Server clock (US-EU DST gap weeks)" below. |
+| `tick_error` | Processing a tick raised (a terminal or bridge fault, a bug). The engine logged it and carries on; health fails `engine:<account>` with the error type. Clears after 20 clean ticks. | Read the engine log (`journalctl -u goldbot-engine@<account>` on the brain); if it repeats, restart the engine. Exits keep running. |
 | `server_clock_mismatch` | The broker's measured UTC offset differs from `server_tz` by more than 5 min while gold trades (`server_clock` in `engine_<account>.json`). Clears after 60 s of agreeing ticks. | See "Server clock (US-EU DST gap weeks)" below. |
 | `market_closed` | The broker's session table (read once per server day; static hours if the read fails) says the market is closed, e.g. a holiday early close. | Wait for the reopen; `session_source` in `engine_<account>.json` says whether the broker's own hours are used. |
 | `spread_too_wide` | Spread above 45 points ($0.45). | Usually rollover or news; wait. |
@@ -843,8 +844,16 @@ Next gap trading days (check on one of them, during market hours):
 | Oct/Nov 2027 | Mon 1 Nov - Fri 5 Nov 2027 | UTC+3 | UTC+2 |
 
 The engine runs the same comparison on every account refresh and refuses entries while it fails (gate reason
-`server_clock_mismatch`, plus `tick_from_future` when ticks are stamped more than 5 s ahead of this server's
+`server_clock_mismatch`, plus `tick_from_future` when ticks are stamped more than 10 s ahead of this server's
 clock); exits (stops, time exits, the weekend rule, the kill switch) are never held back by it.
+
+Three rules look at the broker's clock; each owns one case (all block entries only):
+
+| Rule | Measures | Owns |
+| --- | --- | --- |
+| `clock_skew` (data-quality error) | rolling median of broker tick time minus this server's clock over 120 new ticks; blocks beyond 10 s | a broker or host clock drifting by seconds (bars would close before their last ticks) |
+| `tick_from_future` | the latest tick alone, more than 10 s ahead | a sudden jump ahead (wrong zone, clock step) before the median catches up; the same 10 s threshold, so a few seconds fast never trips it |
+| `server_clock_mismatch` | the latest tick against the configured `server_tz`, over 5 minutes while gold trades | a whole-hour zone error (the DST gap weeks) or a host clock far off; names the zone when the other known zone explains it |
 
 Steps on the brain (or the VPS), on a gap day while the market is open:
 1. `goldbot run preflight` first: its `time_sync` line must be ✅ (chrony synchronised); a host clock that is off

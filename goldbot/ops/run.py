@@ -48,32 +48,81 @@ log = logging.getLogger("goldbot.run")
 SESSIONS_TIMEOUT_S = 5.0     # a session read slower than this keeps the last table (the bridge RPC times out at 10 s)
 
 
+class SessionRefresher:
+    """Reads the engine's next session table (D13) on a background thread so the tick loop never waits for the broker:
+    `start(now)` launches a read (never two at once; a hung read blocks only further reads), `collect(now, current)`
+    returns the table to use once the read finished, else None. A read that raised keeps `current`; so does a static
+    fallback while `current` is a broker table still covering `now` (a failed re-read must not throw away a holiday
+    schedule already read)."""
+
+    def __init__(self, source: Any) -> None:
+        self.source = source
+        self._thread: Any = None
+        self._box: dict[str, Any] = {}
+
+    def start(self, now: "pd.Timestamp") -> bool:
+        import threading
+        if self._thread is not None:
+            return False                 # a read is running (or finished and not collected yet)
+        box: dict[str, Any] = {}
+
+        def work() -> None:
+            try:
+                box["table"] = self.source.table(now)
+            except Exception as exc:      # the type only: a bridge error can name the tunnel endpoint
+                box["error"] = type(exc).__name__
+        self._box = box
+        self._thread = threading.Thread(target=work, name="sessions-refresh", daemon=True)
+        self._thread.start()
+        return True
+
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def collect(self, now: "pd.Timestamp", current: "SessionTable | None") -> "SessionTable | None":
+        if self._thread is None or self._thread.is_alive():
+            return None
+        self._thread, box = None, self._box
+        if "table" not in box:
+            log.warning("session table refresh failed (%s); keeping the last table", box.get("error", "no result"))
+            return current
+        new = box["table"]
+        if new.source != "broker" and current is not None and current.source == "broker" \
+                and current.covers_until is not None and now < current.covers_until:
+            log.warning("session table fell back to static (%s); keeping the broker table read earlier", new.note)
+            return current
+        return new
+
+
 def refresh_sessions(source: Any, now: "pd.Timestamp", current: "SessionTable | None",
                      timeout_s: float = SESSIONS_TIMEOUT_S) -> "SessionTable | None":
-    """The engine's next session table (D13) from `source.table(now)` (BrokerSessions), outside the tick path. A read
-    that raises or takes longer than `timeout_s` keeps `current`; so does a static fallback while `current` is a broker
-    table that still covers `now` (a failed re-read must not throw away a holiday schedule already read)."""
-    import threading
-    box: dict[str, Any] = {}
+    """One blocking read through `SessionRefresher`, for the engine's start only (before the tick loop runs): waits at
+    most `timeout_s`, then keeps `current`."""
+    r = SessionRefresher(source)
+    r.start(now)
+    if r._thread is not None:
+        r._thread.join(timeout_s)
+    if r.running():
+        log.warning("session table refresh took over %g s; keeping the last table", timeout_s)
+        return current
+    return r.collect(now, current)
 
-    def work() -> None:
+
+def engine_pass(eng: Any, broker: Any, symbol: str) -> bool:
+    """One pass of the engine loop: read the latest tick and feed it. Any exception is logged and recorded on the
+    engine (`tick_error`: entries blocked until enough clean ticks, alerted by health) and the loop carries on, so a
+    bad tick or a terminal fault never crash-loops the engine (the next pass retries the exits). False on an error."""
+    try:
+        eng.on_tick(broker.last_tick(symbol))
+        return True
+    except AssertionError:
+        return False
+    except Exception as exc:
         try:
-            box["table"] = source.table(now)
-        except Exception as exc:              # the type only: a bridge error can name the tunnel endpoint
-            box["error"] = type(exc).__name__
-    th = threading.Thread(target=work, name="sessions-refresh", daemon=True)
-    th.start()
-    th.join(timeout_s)
-    if th.is_alive() or "table" not in box:
-        log.warning("session table refresh %s; keeping the last table",
-                    f"failed ({box['error']})" if "error" in box else f"took over {timeout_s:g} s")
-        return current
-    new = box["table"]
-    if new.source != "broker" and current is not None and current.source == "broker" \
-            and current.covers_until is not None and now < current.covers_until:
-        log.warning("session table fell back to static (%s); keeping the broker table read earlier", new.note)
-        return current
-    return new
+            eng.note_tick_error(exc)
+        except Exception:
+            log.exception("engine tick failed and the error could not be recorded")
+        return False
 
 
 def run_supervisor() -> None:
@@ -163,10 +212,17 @@ def run_engine(account_id: str) -> None:
                  champions(), center, limits=limits, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares)
     from goldbot.data.calendar import BrokerSessions, SessionTable
-    sessions = BrokerSessions(broker, acc.symbol, fallback=SessionTable(server_tz=acc.server_tz))
-    table = refresh_sessions(sessions, pd.Timestamp.now("UTC"), None)
+    # the session read runs on its own thread: through the bridge it gets its own client (a requests.Session is not
+    # shared across threads); MT5Broker.trading_sessions makes no terminal call (documented hours)
+    session_broker: Any = broker
+    if bridge is not None:
+        from goldbot.execution.bridge import RemoteBroker
+        session_broker = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-sessions")
+    sessions = BrokerSessions(session_broker, acc.symbol, fallback=SessionTable(server_tz=acc.server_tz))
+    table = refresh_sessions(sessions, pd.Timestamp.now("UTC"), None)     # once, before the loop starts
     if table is not None:
         eng.set_sessions(table)
+    refresher = SessionRefresher(sessions)
     warm = eng.warm_start(pd.Timestamp.now("UTC"))
     log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f", account_id,
              type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade)
@@ -176,19 +232,16 @@ def run_engine(account_id: str) -> None:
     seen = mtimes()
     last_check = time.time()
     while True:
-        try:
-            t = broker.last_tick(acc.symbol)
-            eng.on_tick(t)
-        except AssertionError:
-            pass
+        engine_pass(eng, broker, acc.symbol)
+        try:                                       # D13: a finished background read is applied; the loop never waits
+            table = refresher.collect(pd.Timestamp.now("UTC"), eng.sessions)
+            if table is not None:
+                eng.set_sessions(table)
+        except Exception:
+            log.exception("session refresh failed; keeping the last table")
         if time.time() - last_check > 60:          # promotions by the scheduler take effect without a restart
             last_check = time.time()
-            try:                                   # D13: re-read once per server day; never on the tick path
-                table = refresh_sessions(sessions, pd.Timestamp.now("UTC"), eng.sessions)
-                if table is not None:
-                    eng.set_sessions(table)
-            except Exception:
-                log.exception("session refresh failed; keeping the last table")
+            refresher.start(pd.Timestamp.now("UTC"))   # once per server day the read reaches the broker
             now_m = mtimes()
             if now_m != seen:
                 seen = now_m

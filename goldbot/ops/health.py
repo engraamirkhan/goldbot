@@ -336,6 +336,10 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         statuses.append("warn")
         parts.append(f"broker clock skew {float(skew):+.1f} s vs the wall clock exceeds the {grace:g} s bar-close grace: "
                      f"bars may close before their last ticks ({int(e.get('late_ticks') or 0)} late tick(s) so far)")
+    if e.get("tick_error"):
+        statuses.append("fail")
+        parts.append(f"tick error ({e.get('tick_error_detail') or 'unknown'}): the engine logged it and carries on; "
+                     f"entries blocked until ticks run clean again, exits unaffected (details in the engine log)")
     lost = e.get("closed_records_lost") or []
     if lost:
         statuses.append("fail")

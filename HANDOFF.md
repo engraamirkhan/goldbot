@@ -739,7 +739,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   MT5 adapter requests (now tz-aware UTC-labelled datetimes: MT5 reads naive ones in the host zone).
   `goldbot/ops/server_clock.py` compares a tick with host UTC; a mismatch is called a zone error only when the other
   known zone explains it, else "host clock or feed". Engine (`_refresh_account`, no extra RPC): signed tick age,
-  `tick_ahead_s` -> gate `tick_from_future` (> 5 s, `RiskLimits.max_tick_ahead_s`), abs age for stale tick/feed/bars,
+  `tick_ahead_s` -> gate `tick_from_future` (> 10 s = SKEW_BLOCK_S, `RiskLimits.max_tick_ahead_s`), abs age for stale tick/feed/bars,
   probe -> `server_clock_mismatch`, both start `data_recovering` when they clear; D13 `BrokerSessions` built in
   run.py, refreshed beside the 60 s model reload (`refresh_sessions`: a raising, slow (> 5 s) or fallback read keeps
   the last broker table), `eng.set_sessions` -> gate `market_closed`, the same table for stale feed and the probe.
@@ -750,7 +750,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the bridge (`/health` now reports its zone) converts with another zone than the brain. accounts.yaml stays on
   Europe/Athens. RUNBOOK "Server clock (US-EU DST gap weeks)" and new gate-reason rows; ADR 0005. Not done: settings
   `brokers.*.server_tz` is not validated at load (triple_barrier raises on a bad name); a pre-existing `_regime`
-  crash on a perfectly flat price series (`pd.qcut` NaN in runner `_regime`) was seen in a test and left alone.
+  crash on a perfectly flat price series is fixed (`_regime` uses the middle bucket when the volatility window
+  is constant). Review fixes (b55f5d1 review): the run loop (`goldbot/ops/run.py` `engine_pass`) logs any exception
+  instead of crash-looping and sets `tick_error` (gate reason, health fail on `engine:<account>`, cleared after
+  `TICK_ERROR_CLEAR_TICKS` = 20 clean ticks); an approval or re-arm that raises inside `on_tick` is recorded the same
+  way and the tick's exits still run; sessions are read on a background thread (`SessionRefresher`: started every
+  60 s, collected on a later pass, never joined on the tick loop; its own bridge client); a broken session table
+  fails closed for entries (`market_closed`), never for exits. RUNBOOK: which of `clock_skew`, `tick_from_future`
+  and `server_clock_mismatch` owns which case.
   **Needs the owner:** on Mon 26 Oct 2026 during market hours run `goldbot run health` and read
   `server_clock:icm-demo`; if it reads UTC+3 (NY+7) vs Athens UTC+2, the engine is already refusing entries: set
   `server_tz: NY+7` for icm accounts on the brain and the MT5 box (RUNBOOK steps 3-4). Vantage's help centre also puts

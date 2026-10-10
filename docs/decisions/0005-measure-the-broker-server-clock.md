@@ -18,7 +18,7 @@ the session table, the rollover gate, the Friday weekend rule and every timestam
   host UTC while the market is open and reports a > 5 min mismatch in health (fail, alerted) and preflight (blocking).
   A mismatch is an entry-only block; exits are never gated.
 - The engine resolves `NY+7` (`server_wall`), runs the probe on every refresh with no extra broker call, and refuses
-  entries on a mismatch (`server_clock_mismatch`) or a tick stamped > 5 s in the future (`tick_from_future`); exits are
+  entries on a mismatch (`server_clock_mismatch`) or a tick stamped > 10 s in the future (`tick_from_future`, equal to the clock-skew rule); exits are
   never gated. It also reads the broker's session table (D13) outside the tick path (`market_closed`).
 - Keep `Europe/Athens` in accounts.yaml until the probe has measured our terminal in a gap week.
 

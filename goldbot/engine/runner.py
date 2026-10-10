@@ -67,6 +67,9 @@ SKEW_WINDOW = 120            # new ticks in the rolling median of broker-vs-wall
 SKEW_BLOCK_S = 10.0
 SKEW_MIN_SAMPLES = 10
 LATE_BARS_BLOCK = 3
+# an exception while processing a tick (the run loop logs it and carries on) blocks entries until this many ticks in a
+# row are processed cleanly; exits never wait for it
+TICK_ERROR_CLEAR_TICKS = 20
 
 
 class Model(Protocol):
@@ -283,6 +286,8 @@ class Engine:
         # it outside the tick path, so on_tick never calls the broker for sessions); read with no I/O
         self.sessions: SessionTable = SessionTable(server_tz=cfg.server_tz)
         self.clock_probe: server_clock.ServerClockProbe | None = None   # latest server-clock measurement
+        self._clean_ticks = 0                          # ticks processed without an exception since the last one
+        self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)
         # risk periods and the owner's re-arm survive a restart (state/risk_<account>.json)
         self._last_reset: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
@@ -341,9 +346,34 @@ class Engine:
 
     # ------------------------------------------------------------------ ticks and bars
     def on_tick(self, t: Tick) -> list[dict]:
-        """Feed a tick; returns any decisions made at a bar close."""
-        self.center.poll_bus()          # approvals from the dashboard / Telegram service, applied within a tick
-        self._poll_rearm(self._now(t))
+        """Feed a tick; returns any decisions made at a bar close. An approval or re-arm that raises is recorded as a
+        tick error (entries blocked) and never stops this tick's exits."""
+        try:
+            self.center.poll_bus()      # approvals from the dashboard / Telegram service, applied within a tick
+            self._poll_rearm(self._now(t))
+        except Exception as exc:
+            self.note_tick_error(exc)
+        out = self._on_tick(t)
+        if self.state.tick_error and self._tick_error_detail is not None:
+            self._clean_ticks += 1      # this tick ran to the end
+            if self._clean_ticks >= TICK_ERROR_CLEAR_TICKS:
+                self.state.tick_error, self._tick_error_detail = False, None
+                self._write_state()
+        return out
+
+    def note_tick_error(self, exc: BaseException) -> None:
+        """A tick raised (the run loop or an approval): log it, block entries (`tick_error`) until
+        TICK_ERROR_CLEAR_TICKS clean ticks, and publish it in the engine state for the health alert."""
+        log.exception("tick processing failed (%s); entries blocked until %d clean ticks", type(exc).__name__,
+                      TICK_ERROR_CLEAR_TICKS, exc_info=exc)
+        self.state.tick_error, self._clean_ticks = True, -1   # the failing tick itself does not count as clean
+        self._tick_error_detail = type(exc).__name__
+        try:
+            self._write_state()
+        except Exception:
+            log.exception("engine state not written after a tick error")
+
+    def _on_tick(self, t: Tick) -> list[dict]:
         if not self._tick_ok(t):
             return []                   # crossed or out-of-order quote: never enters the bars; entries blocked
         prev, self._last_tick = self._last_tick, t
@@ -1094,8 +1124,13 @@ class Engine:
         st.last_tick_age_s = abs(age)
         st.tick_ahead_s = max(0.0, -age)
         sessions = self.sessions
-        stale = stale_feed(now - pd.Timedelta(seconds=abs(age)), now, limit_seconds=self.cfg.stale_feed_s,
-                           sessions=sessions)
+        try:
+            stale = stale_feed(now - pd.Timedelta(seconds=abs(age)), now, limit_seconds=self.cfg.stale_feed_s,
+                               sessions=sessions)
+            closed = sessions.entry_block(now) is not None
+        except Exception as exc:        # a broken session table fails closed for entries; exits never read it
+            log.warning("session table unusable (%s): entries blocked as market_closed", type(exc).__name__)
+            stale, closed = False, True
         st.dq_error = stale or bool(self._dq_errors() or self._dq_blocking()) or positions is None \
             or self._book_unreadable() > 0                                    # fail closed: positions_unreadable
         # stale data (design): the last completed bar must be under one decision period old; no bars is stale
@@ -1106,7 +1141,7 @@ class Engine:
             st.stale_bars = abs((now - seen).total_seconds()) > tf_seconds(self.cfg.decision_tf)
         self.clock_probe = self._probe_clock(tick, now, sessions)
         st.clock_mismatch = self.clock_probe.status == "mismatch"
-        st.market_closed = sessions.entry_block(now) is not None
+        st.market_closed = closed
         if st.dq_error or st.stale_bars or st.last_tick_age_s > self.gate.limits.stale_tick_seconds \
                 or st.tick_ahead_s > self.gate.limits.max_tick_ahead_s or st.clock_mismatch:
             self._unhealthy_at = now
@@ -1679,7 +1714,9 @@ class Engine:
         row = X.iloc[-1]
         adx = float(row.get("h1_adx14", row.get("adx14", 20.0)) or 20.0)
         rv = X["h1_rv_20"] if "h1_rv_20" in X.columns else X.get("rv_20", pd.Series([np.nan]))
-        q = int(pd.qcut(rv.dropna().tail(60 * 24), 4, labels=False, duplicates="drop").iloc[-1]) if rv.notna().sum() > 40 else 1
+        win = rv.dropna().tail(60 * 24)
+        # a constant window has no quartiles (qcut yields NaN): middle bucket, as with too little history
+        q = int(pd.qcut(win, 4, labels=False, duplicates="drop").iloc[-1]) if len(win) > 40 and win.nunique() >= 2 else 1
         to_t1, since_t1 = tier1_minutes(self._calendar[1], close_ts) if self.cfg.news_blackout else (None, None)
         return Regime(adx_1h=adx, atr_1h_quartile=q, vol_tercile=int(row.get("vol_tercile", 1) or 1),
                       minutes_to_tier1=to_t1, minutes_since_tier1=since_t1)
@@ -1892,6 +1929,7 @@ class Engine:
             "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
             "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
             "tick_ahead_s": st.tick_ahead_s, "market_closed": st.market_closed, "session_source": self.sessions.source,
+            "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail,
             "sessions": session_table_cache(self.sessions),
             "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
         }

@@ -15,7 +15,7 @@ from goldbot.engine import Engine, EngineConfig
 from goldbot.execution.broker import OrderIntent, Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.ops import server_clock
-from goldbot.ops.run import refresh_sessions
+from goldbot.ops.run import SessionRefresher, engine_pass, refresh_sessions
 from goldbot.risk import Intent
 from goldbot.risk.gate import Stage
 from goldbot.specialists import SPECIALISTS
@@ -295,3 +295,123 @@ def test_a_ny7_restart_warm_starts_and_reconciles(tmp_path):
     again.on_tick(_tick(WED + pd.Timedelta(seconds=1)))
     again._refresh_account(_tick(WED + pd.Timedelta(seconds=1)))
     assert again.clock_probe is not None and again.clock_probe.status == "ok"
+
+
+# ---------------------------------------------------------------------------------------------- review fixes (b55f5d1)
+def test_future_tick_threshold_matches_the_clock_skew_rule(tmp_path):
+    from goldbot.engine.runner import SKEW_BLOCK_S
+    from goldbot.risk import RiskLimits
+    assert RiskLimits().max_tick_ahead_s == SKEW_BLOCK_S
+    eng, _, _ = _engine(tmp_path)
+    eng._refresh_account(_tick(WED + pd.Timedelta(seconds=7)))        # a broker clock a few seconds fast still trades
+    assert "tick_from_future" not in eng.gate.check(_intent(), eng.state).reasons
+    eng._refresh_account(_tick(WED + pd.Timedelta(seconds=11)))
+    assert "tick_from_future" in eng.gate.check(_intent(), eng.state).reasons
+
+
+class _ApprovalBoom(PaperBroker):
+    """The broker read at approval time fails (bridge hiccup) while the tick feed is fine."""
+    boom = False
+
+    def last_tick(self, symbol: str) -> Tick:
+        if self.boom:
+            raise ConnectionError("bridge read failed")
+        return super().last_tick(symbol)
+
+
+def test_an_approval_error_never_skips_the_exits_of_that_tick_and_blocks_entries_until_clean(tmp_path):
+    pb = _ApprovalBoom(equity=10_000)
+    pb.on_tick(_tick(WED))
+    eng, _, host = _engine(tmp_path, pb=pb)
+    pid = _open(pb, 1, 2399.0)
+    eng.open[pid] = eng._adopt(next(p for p in pb.positions() if p.position_id == pid))
+    agent = SPECIALISTS["session_open"]()
+    prop = Proposal(proposal_id="icm-demo-e", account_id="icm-demo", agent_id=agent.agent_id, side=1, lots=0.1,
+                    entry=2400.2, stop=2396.2, target=2406.2, p=0.62, ev_r=0.2, spread_points=20, top_features=[])
+    eng.pending[prop.proposal_id] = (_intent(), prop, agent)
+    prop.outcome = Outcome.APPROVED
+
+    def poll() -> list[Proposal]:            # the owner's click arrives on this tick
+        eng.center.on_decision(prop)
+        return []
+    eng.center.poll_bus = poll               # type: ignore[method-assign]
+    pb.on_tick(_tick(WED + pd.Timedelta(seconds=1), 2398.0))
+    pb.boom = True
+    eng.on_tick(_tick(WED + pd.Timedelta(seconds=1), 2398.0))         # _on_decision raises inside poll_bus
+    pb.boom = False
+    assert pid not in {p.position_id for p in pb.positions()}          # the engine stop still closed it
+    eng._refresh_account(_tick(WED + pd.Timedelta(seconds=1), 2398.0))
+    assert eng.state.tick_error and "tick_error" in eng.gate.check(_intent(), eng.state).reasons
+    eng.center.poll_bus = lambda: []         # type: ignore[method-assign]
+    from goldbot.engine.runner import TICK_ERROR_CLEAR_TICKS
+    for i in range(TICK_ERROR_CLEAR_TICKS):
+        host[0] = WED + pd.Timedelta(seconds=2 + i)
+        eng.on_tick(_tick(host[0], 2401.0 + i * 0.01))
+    assert not eng.state.tick_error
+    state = json.loads((tmp_path / "engine_icm-demo.json").read_text())
+    assert state["tick_error"] is False
+
+
+def test_the_engine_loop_survives_any_exception_and_health_alerts_on_it(tmp_path):
+    from goldbot.ops import health
+
+    class Dead(PaperBroker):
+        def last_tick(self, symbol: str) -> Tick:
+            raise RuntimeError("terminal gone")
+    pb = Dead(equity=10_000)
+    eng, _, _ = _engine(tmp_path, pb=pb)
+    assert engine_pass(eng, pb, "XAUUSD") is False                     # logged, not raised
+    assert eng.state.tick_error
+    e = json.loads((tmp_path / "engine_icm-demo.json").read_text())
+    assert e["tick_error"] is True and "RuntimeError" in e["tick_error_detail"]
+    ctx = health.HealthContext(state_dir=tmp_path, now=pd.Timestamp.now("UTC"), get_secret=lambda k: None)
+    c = health.check_engine(ctx, "icm-demo")
+    assert c.status == "fail" and "tick error" in c.reason
+
+
+def test_regime_survives_a_constant_volatility_window(tmp_path):
+    eng, _, _ = _engine(tmp_path)
+    X = pd.DataFrame({"h1_rv_20": [0.001] * 100, "h1_adx14": [25.0] * 100})
+    assert eng._regime(X, WED).atr_1h_quartile == 1
+
+
+def test_the_session_refresh_never_makes_the_loop_wait(tmp_path):
+    release = threading.Event()
+    good = _early_close_table(NY_PLUS_7, WED + pd.Timedelta(hours=10))
+
+    class Slow:
+        def table(self, now: pd.Timestamp) -> SessionTable:
+            release.wait(5.0)
+            return good
+    r = SessionRefresher(Slow())
+    t0 = time.monotonic()
+    assert r.start(WED) is True
+    assert r.collect(WED, None) is None                               # still reading: nothing yet, no wait
+    assert r.start(WED) is False                                       # never two reads at once
+    assert time.monotonic() - t0 < 0.2
+    release.set()
+    deadline = time.monotonic() + 2.0
+    got = None
+    while got is None and time.monotonic() < deadline:
+        got = r.collect(WED, None)
+        time.sleep(0.01)
+    assert got is good
+
+
+def test_a_session_table_error_fails_closed_for_entries_only(tmp_path):
+    eng, pb, _ = _engine(tmp_path)
+
+    class Broken(SessionTable):
+        def entry_block(self, now: pd.Timestamp) -> str | None:
+            raise ValueError("bad window")
+
+        def is_open(self, utc_ts: pd.DatetimeIndex) -> Any:
+            raise ValueError("bad window")
+    eng.set_sessions(Broken(server_tz=NY_PLUS_7))
+    pid = _open(pb, 1, 2399.0)
+    eng.open[pid] = eng._adopt(next(p for p in pb.positions() if p.position_id == pid))
+    pb.on_tick(_tick(WED, 2398.0))
+    eng.on_tick(_tick(WED, 2398.0))
+    assert pid not in {p.position_id for p in pb.positions()}          # exits unaffected
+    eng._refresh_account(_tick(WED, 2398.0))
+    assert eng.state.market_closed and "market_closed" in eng.gate.check(_intent(), eng.state).reasons
