@@ -17,9 +17,9 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 115 |
+| implemented | 116 |
 | partial | 18 |
-| missing | 13 |
+| missing | 12 |
 | deviates | 9 |
 | in review | 6 |
 | **total** | **161** |
@@ -207,7 +207,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | X11 | Classifier: commission => Raw; zero commission and median London/NY spread >= $0.30 => Standard | implemented | goldbot/execution/classifier.py:31-48 | tests/test_risk_exec_webhook.py::test_classifier_rules_and_persistence |
 | X12 | "a median under $0.20 with floating spread and no deal history also reads Raw; anything in between is Unknown" | implemented (fixed here) | goldbot/execution/classifier.py:45: Raw now requires no deal history; zero-commission deals with a tight spread are Unknown | tests/test_trace_data_exec.py::test_tight_spread_reads_raw_only_without_deal_history |
 | X13 | "only changes when two consecutive runs disagree"; "re-runs weekly from the nightly cost job" | implemented | goldbot/execution/classifier.py:53; goldbot/ops/jobs.py (Friday) | tests/test_risk_exec_webhook.py::test_classifier_rules_and_persistence; tests/test_jobs_integration.py::test_nightly_costs_from_logged_ticks_and_fills |
-| X14 | "On a Standard account the 15m specialists are disabled and the 1h and session-open specialists run only when expected edge exceeds 1.5x the measured cost; on Unknown the engine stays in paper and alerts" | missing | the engine reports the class (goldbot/engine/runner.py:661) but does not act on it | tests/test_engine_costs.py::test_account_class_is_reported_from_the_classifier_state (report only) |
+| X14 | "On a Standard account the 15m specialists are disabled and the 1h and session-open specialists run only when expected edge exceeds 1.5x the measured cost; on Unknown the engine stays in paper and alerts" | implemented | goldbot/engine/runner.py `_refresh_account` sets `AccountState.account_class` from state/classifier_<account>.json (cached by mtime; missing, unreadable or not yet classified = unknown; a paper broker is never restricted); goldbot/risk/gate.py `check`: unknown -> `account_class_unknown` (no entries; the shadow book keeps learning), standard -> `standard_account_15m` for 15m families except session_open and `standard_account_edge` unless the gross edge p*T-(1-p)*S exceeds `standard_edge_over_cost` (1.5) x the measured round trip; alert: goldbot/ops/health.py `check_engine` warns while a broker account is unknown | tests/test_account_class.py::test_unknown_class_blocks_every_entry; ::test_standard_disables_15m_families_except_session_open; ::test_standard_needs_an_edge_above_one_and_a_half_times_cost; ::test_engine_reads_the_class_for_a_broker_account_and_ignores_it_on_paper; ::test_health_warns_while_a_broker_account_is_unclassified |
 | X15 | Webhook: "accepts POSTs only from TradingView's published IPs" | implemented | goldbot/webhook/app.py:24, 79-83 (peer address) | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar (IP check disabled in test) |
 | X16 | Webhook: "verifies an HMAC over the payload in constant time, rejects replayed nonces" | deviates | constant-time shared secret in the body (goldbot/webhook/app.py:84; TradingView cannot sign) plus content-hash idempotency; no nonce | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar |
 | X17 | "upserts on a content hash so retries are idempotent" | implemented | goldbot/webhook/app.py:40, 87-90 | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar |
@@ -259,8 +259,7 @@ Larger gaps, by priority (effort: S < 1 day, M 1-3 days, L > 3 days):
 2. ~~X8 reconciliation stops~~ (done).
 3. ~~R22/R23 weekend and rollover rules~~ (done).
 4. ~~R7 combined exposure cap~~ (done).
-5. **X14 act on the account class**: Standard disables 15m families and requires 1.5x edge over cost; Unknown
-   forces paper and alerts (S).
+5. ~~X14 act on the account class~~ (done).
 6. ~~R17 combined 8% stage~~ (done).
 7. ~~F2 feature-version check at scoring~~ (done).
 8. ~~R25/R26 stale data~~ (done).

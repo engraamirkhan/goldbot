@@ -30,7 +30,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`execution/costs.py`, slippage prior until 50 fills) + Friday classifier; Saturday retrain into a challenger
   (`research/model_registry.py`, checksummed artefacts) with automatic promotion through the design's gates
   (`research/promotion.py`) once a shadow record exists; monthly bounded label-grid research loop. The engine logs
-  ticks/fills, prices candidates with the nightly cost table, reports the classifier's account class, and trades
+  ticks/fills, prices candidates with the nightly cost table, acts on the classifier's account class (X14: Unknown or
+  not yet classified = no entries on a broker account, health warns; Standard = 15m families off except session_open
+  and gross edge > 1.5x the measured round trip; the paper broker is never restricted), and trades
   only with registry champions (hot-reloaded on promotion).
 - Shadow book (`engine/shadow.py`): the engine on the canonical-cost broker (IC Markets) paper-trades the champion and
   every challenger on live bars with label-identical mechanics (exact parity with `triple_barrier` is tested) and

@@ -267,6 +267,13 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         statuses.append("fail")
         checks = ", ".join(e.get("dq_checks") or []) or "stale feed"
         parts.append(f"data-quality error ({checks}): entries blocked")
+    cls = str(e.get("account_class") or "unknown")
+    if e.get("mode", "paper") != "paper":
+        if cls == "unknown":
+            statuses.append("warn")
+            parts.append("account class unknown: entries blocked until the Friday classifier reads raw or standard")
+        elif cls == "standard":
+            parts.append("account class standard: 15m families off except session_open, edge must exceed 1.5x cost")
     b = e.get("blackout")
     if isinstance(b, dict) and b:
         parts.append(f"news blackout: {b.get('title', '?')}")
