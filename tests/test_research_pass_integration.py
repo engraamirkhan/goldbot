@@ -84,8 +84,12 @@ def test_reports_carry_gates_rule_only_and_the_cost_line(release_dir, tmp_path, 
     assert "### Design gates: **FAIL**" in text and "FAIL candidates" in text      # 3 synthetic years: far too few
     assert "### The rule alone" in text and "gross (mid prices, no costs)" in text
     assert "0.30 $/oz round trip" in text and "holdout 2025-10-01 .. 2026-10-01 excluded" in text
+    assert "long-only (side == 1)" in text and "short-only (side == -1)" in text and "positive net years" in text
     row = json.loads(registry.read_text().splitlines()[0])
     assert row["results"]["gates"]["passed"] is False and row["results"]["evaluation"] == "cross-fitted"
+    split, net = row["results"]["rule_only_split"], row["results"]["rule_only"]["net"]
+    assert split["long"]["n"] + split["short"]["n"] == net["n"]                    # every candidate, split by side
+    assert sum(e["n"] for e in split["years"].values()) == net["n"]
     assert row["budget_quarter"] and row["status"] == "evaluated"
 
 
@@ -144,7 +148,9 @@ def test_a_rule_that_fails_the_screen_gets_no_model_but_is_a_recorded_trial(rele
     argv = ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry), "--report", str(report),
             "--specialist", "intraday_momentum", "--variants", '[{}, {"session": "london"}]']
     monkeypatch.setattr(sys, "argv", argv)
-    assert rp.main() == 0                    # three synthetic years: far fewer than 1,000 events, so both fail
+    # a floor the synthetic events meet, so the screen is decided on sign and t (below the floor it is inconclusive)
+    _research_settings(monkeypatch, screen_min_events=1)
+    assert rp.main() == 0                    # synthetic random walks: no significant gross edge, so both fail
     rows = _rows(registry)
     assert [r["status"] for r in rows] == ["screened", "screened"] and [r["trial"] for r in rows] == [1, 2]
     scr = rows[0]["results"]["screen"]
@@ -227,6 +233,8 @@ def test_a_screen_short_only_of_the_daily_signal_floor_is_an_inconclusive_record
     text = report.read_text()
     assert "**INCONCLUSIVE (event floor)**" in text and "cannot retire the hypothesis" in text
     assert "The rule is retired" not in text
+    assert "long-only (side == 1)" in text and "positive net years" in text                # screened reports too
+    assert "rule_only_split" in row["results"]
 
 
 def test_a_rule_that_passes_the_screen_goes_on_to_the_walk_forward(release_dir, tmp_path, monkeypatch):

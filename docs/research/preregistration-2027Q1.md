@@ -103,11 +103,21 @@ promotion.
     (`metrics.expectancy`), gross for the screen and net for the reading rule; one-sided thresholds as written below.
   - *DSR trial count:* the registry's `n_trials_effective` + 1 at run time (every recorded Q4 2026 and Q1 2027 trial
     plus H-02's K_eff, per "Fixed for every trial").
-  - *Inconclusive branch:* if the screen fails ONLY on the event floor (gross mean R > 0 and t >= 2.0 on fewer events
-    than the floor), the verdict is `inconclusive (event floor)` (`research.screen`, recorded with status `screened`,
-    charged to the budget): no model, and it neither retires nor continues slow TSMOM. Any other screen failure is a
-    plain fail.
-- **What H-01 can and cannot decide.** At the expected 165-400 events no walk-forward fold reaches the design's model
+  - *Inconclusive branch:* any screen with fewer events than the floor is `inconclusive (event floor)`, whatever the
+    sign or t of its gross mean R (`research.screen`, recorded with status `screened`, charged to the budget;
+    `tests/test_screen_pool.py::test_gross_t_of_1_5_on_300_events_with_a_floor_of_1000_is_inconclusive_not_fail`): no
+    model, and it neither retires nor continues slow TSMOM. A screen on at least the floor's events that misses the
+    sign or the t is a plain fail. (Tightened 2026-10-10, before any outcome was seen: previously only "positive and
+    significant, too few events" was inconclusive.)
+  - *Data warm-up:* the bars start 2010-01-01 (data-v1's first file) and nothing earlier is loaded. The score needs
+    120 + 1 stub-free daily closes, so no signal exists before about mid-June 2010 (the first counted signal is
+    2010-06-18 16:00 UTC); the research window is 2010-01-01 .. 2025-09-30 with that warm-up at its start.
+  - *Net tests:* the reading rule's net t >= 1.65 and positive-year tests use the **rule-only** net R (spread, slippage,
+    commission, swap) over **every candidate** (one position at a time, no model filter), on both sides together and on
+    long-only. Every report prints them (`research.screen.rule_only_split`: net mean R, t and n for long-only
+    (side == 1) and short-only (side == -1), and the positive net years over every candidate;
+    `tests/test_screen_pool.py::test_rule_only_net_split_reports_long_only_short_only_and_positive_net_years`).
+- **What H-01 can and cannot decide.** At the expected 154-400 events no walk-forward fold reaches the design's model
   gates (>= 1,500 candidates, >= 60 per complete test fold, DSR on >= 200 model-filtered trades), so the model gates
   cannot apply: H-01 is evidence about the rule alone. It can **retire** slow TSMOM; it cannot **promote** it.
   Promotion needs separate, pre-registered model research that meets the unchanged gates.
@@ -133,14 +143,21 @@ promotion.
   2,631 daily signals (1,760 long, 871 short); one position at a time, if every trade ran to the 20-day time
   barrier, 165 events. The true count lies between, below the ~450 estimated for the 10-day daily option, and
   probably below the 400 floor first proposed in ruling A: **ruling A must be decided on this count**. The 2,631 was
-  counted before the Friday stub was dropped (about one daily bar in six fewer now); the 165 lower bound is set by
-  the time barrier and does not change. Recount (events only) at the freeze.
-- Reading rule: **continue** if the P4 screen passes (gross mean R > 0, t >= 2.0, on the event floor ruled in A) AND
-  net mean R > 0 with t >= 1.65 AND positive net years >= 3 incl. 2021 or 2022, on both sides together and on
-  long-only (swap bias above). **Stop slow trend in gold** if net mean R <= 0 (the literature's best case then does
-  not survive our costs), or if the screen fails on anything but the event floor. **Inconclusive** if the screen
-  fails only on the event floor: recorded and charged, cannot retire the hypothesis. A "continue" means only that
-  model research on slow TSMOM may be pre-registered; it is not a promotion.
+  counted before the Friday stub was dropped (about one daily bar in six fewer now); superseded by the recount below.
+- **Recount after the Friday-stub fix** (2026-10-10, commit `b17de44`, data-v1 2010-01-01 .. 2026-10-05; events only,
+  no label, no return, no outcome; research window: a signal counts only if its time barrier ends before 2025-10-01):
+  **2,154 daily signals** (1,466 long, 688 short); one position at a time with every trade held to the 124-bar time
+  barrier, **154 events** (the lower bound fell from 165 because the stub-free signals are sparser). The true
+  one-at-a-time count lies between 154 and 2,154, nearer the lower end.
+- Reading rule (outcomes below written 2026-10-10, before any H-01 outcome was seen; net tests on rule-only net R over
+  every candidate, see *Net tests*): **continue** if the P4 screen passes (gross mean R > 0, t >= 2.0, on the event
+  floor ruled in A) AND net mean R > 0 with t >= 1.65 AND positive net years >= 3 incl. 2021 or 2022, on both sides
+  together and on long-only (swap bias above). **Stop slow trend in gold** if net mean R <= 0 (the literature's best
+  case then does not survive our costs), or if the screen fails on at least the floor's events. **Inconclusive** if
+  the screen has fewer events than the floor (whatever the sign or t), OR if the screen passes but net mean R > 0
+  with t < 1.65, or with fewer than 3 positive net years (or none in 2021/2022): recorded and charged, cannot retire
+  the hypothesis and does not continue it. A "continue" means only that model research on slow TSMOM may be
+  pre-registered; it is not a promotion.
 - Expected: gross +0.05..0.10 R; net depends on the short side because longs pay swap.
 
 ### H-06 Macro-conditioned slow TSMOM
@@ -161,11 +178,12 @@ promotion.
 
 ## Needs the owner (before freezing)
 - **A. Event floor for daily-signal families (owner's decision; not yet decided).** The P4 screen needs >= 1,000
-  events; slow TSMOM produces 165-2,631 in 15.75 years (one position at a time; see H-01). **Recommendation (quant
-  review):** floor 150 rule-only events, gross t >= 2.0 unchanged, set in code before the run
-  (`research.screen_min_events_daily: 150`); H-01 can retire, not promote; < 150 = inconclusive. Until you decide,
-  the code keeps 1,000 for every rule (`screen_min_events_daily: null`), under which H-01 can at best be
-  inconclusive.
+  events; slow TSMOM produces 154-2,154 in 15.75 years (one position at a time; recount after the stub fix, see
+  H-01). **Recommendation (quant review):** floor 150 rule-only events, gross t >= 2.0 unchanged, set in code before
+  the run (`research.screen_min_events_daily: 150`); H-01 can retire, not promote; < 150 = inconclusive. Until you
+  decide, the code keeps 1,000 for every rule (`screen_min_events_daily: null`), under which H-01 can only be
+  inconclusive (fewer events than the floor is inconclusive whatever the sign or t).
+  - `research.screen_min_events_daily` must be committed in settings before the run.
 - **B. Trial budget.** 13 planned + 7 reserve fits the default 20; raising it is yours to decide.
 - **C. Paid economic-calendar consensus feed** (H-11 needs surprises); otherwise H-11 stays blocked.
 - **D. Other instruments** (large-tick futures where trend still works) are out of scope unless you decide otherwise.
