@@ -142,7 +142,7 @@ drift:                               # design: Drift and health (goldbot/researc
   window_days: 30                    # recent candidates compared with the training distribution
   min_rows: 50
   cusum_k: 0.5                       # residual CUSUM allowance (sd); h is simulated for this k (research/cusum.py, M25)
-  cusum_false_alarm: 0.05            #   design: 5% chance of a false alarm within a quarter's expected trades
+  cusum_false_alarm: 0.05            #   design: at most 5% chance of a false alarm within a quarter (two-point trade residuals at the mean p)
   cusum_h: 4.0                       #   fallback h only when the backtest has no trade rate
   dd_mult: 1.5                       # an agent's 30-day drawdown above 1.5x backtest halts the system pending review
   dd_window_days: 30

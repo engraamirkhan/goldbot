@@ -21,7 +21,8 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P2):
 * evidence (row M16): a re-evaluation of an already-registered configuration that chooses nothing, such as
   combinatorial purged CV (research/cpcv.py), is attached to that trial in a sidecar file
   (`<registry>.evidence.jsonl`, `attach_evidence` / `evidence`), never written as a trial row: it takes no budget
-  slot and does not raise the deflated-Sharpe count."""
+  slot and does not raise the deflated-Sharpe count. The sidecar is local to the host that wrote it: registry_sync
+  and research.yml do not carry it (evidence is advisory and can only veto; docs/decisions/0002)."""
 from __future__ import annotations
 
 import hashlib

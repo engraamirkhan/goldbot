@@ -35,12 +35,14 @@ pass runs without them.
 Combinatorial purged CV (M16, goldbot/research/cpcv.py): `--cpcv <trial#> [<trial#> ...]` re-evaluates registered
 walk-forward trials on 6 time groups of the research window (15 purged splits, 5 backtest paths) and, for several
 trials, the probability of backtest overfitting across them. It is not a trial: no budget slot, no registry row; the
-result is attached to each trial as evidence (`<registry>.evidence.jsonl`).
+result is attached to each trial as evidence (`<registry>.evidence.jsonl`). CPCV and PBO can only veto a config that
+passed the gates (docs/decisions/0002-cpcv-and-pbo-can-only-veto.md), so a trial that failed them is refused unless
+`--diagnostic`: the report is then labelled "diagnostic, not evidence" and nothing is attached to the failed trials.
 
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
       [--specialist session_open | --pooled 15m] [--from-year 2010] [--to-year 2026] [--rationale "..."] \
       [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table costs_measured.json] [--macro macro/]
-  python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report cpcv.md --cpcv 12 [13 14]
+  python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report cpcv.md --cpcv 12 [13 14] [--diagnostic]
 """
 from __future__ import annotations
 
@@ -364,6 +366,8 @@ def main() -> int:
                     help="folder or Parquet of the macro-v1 release: adds the point-in-time macro features")
     ap.add_argument("--cpcv", type=int, nargs="+", default=None, metavar="TRIAL",
                     help="combinatorial purged CV of registered trials (evidence on them, not a trial); PBO across several")
+    ap.add_argument("--diagnostic", action="store_true",
+                    help="with --cpcv: allow trials that failed the gates; output is diagnostic, not evidence (ADR 0002)")
     _discovery_args(ap)
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
@@ -523,8 +527,10 @@ def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.D
 def _cpcv(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, extra_cost: float, swap: SwapSpec,
           holdout: tuple[pd.Timestamp, pd.Timestamp] | None, cost_source: str, macro: pd.DataFrame | None) -> int:
     """Combinatorial purged CV of registered trials (goldbot/research/cpcv.py). Not a trial: no budget check, no
-    registry row; the result is attached to each trial as evidence. Several trials: PBO across them."""
+    registry row; the result is attached to each gate-passing trial as evidence. Several trials: PBO across them.
+    ADR 0002: CPCV can only veto a passed config, so a trial that failed the gates is refused unless --diagnostic."""
     from goldbot.research import cpcv
+    from goldbot.research.registry_sync import read_rows
     rows = []
     for n in dict.fromkeys(args.cpcv):
         row = reg.row(n)
@@ -534,28 +540,41 @@ def _cpcv(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, extra_
         if why:
             raise SystemExit(f"--cpcv: {why}")
         rows.append(row)
+    failed = [int(r["trial"]) for r in rows if not cpcv.gates_passed(r)]
+    if failed and not getattr(args, "diagnostic", False):
+        raise SystemExit(f"--cpcv: trial(s) {', '.join(map(str, failed))} failed the gates. CPCV and PBO can only veto a "
+                         "config that passed them, never rescue one (docs/decisions/0002-cpcv-and-pbo-can-only-veto.md); "
+                         "add --diagnostic to run anyway (diagnostic, not evidence)")
     tfs = {cpcv.trial_timeframe(r) for r in rows}
     if len(tfs) != 1:
         raise SystemExit(f"--cpcv: trials compared together must share a decision timeframe (got {sorted(tfs)})")
     tf = tfs.pop()
+    selection = cpcv.selection_set(read_rows(reg.path), {str(r["family"]) for r in rows}, tf)
     feat_ctx = {"macro": macro} if macro is not None else None
     b_dec = resample_bars(b1, tf).reset_index(drop=True)
     context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
     frame = build_decision_frame(b_dec, context, ctx=feat_ctx)
     out = cpcv.cpcv_trials(rows, b_dec, context, extra_cost_usd=extra_cost, holdout=holdout, swap=swap, frame=frame,
-                           ctx=feat_ctx)
+                           ctx=feat_ctx, selection=selection)
     version = frame[1].attrs["feature_version"]
-    lines = [f"## Combinatorial purged CV: trials {', '.join(str(r['trial']) for r in rows)} ({tf})", "",
+    label = " (diagnostic, not evidence)" if failed else ""
+    lines = [f"## Combinatorial purged CV: trials {', '.join(str(r['trial']) for r in rows)} ({tf}){label}", "",
              f"- research window {out['edges'][0][:10]} .. {out['edges'][-1][:10]} (holdout excluded), "
              f"{cpcv.N_GROUPS} groups of equal duration",
              f"- costs: bar spread in every label plus {extra_cost:.2f} $/oz round trip; cost source: {cost_source}",
-             "- evidence attached to each trial (not a trial: no budget slot, the deflated-Sharpe count is unchanged)"]
+             "- evidence attached to each gate-passing trial (not a trial: no budget slot, the deflated-Sharpe count is "
+             "unchanged)"]
+    if failed:
+        lines.append(f"- **diagnostic, not evidence**: trial(s) {', '.join(map(str, failed))} failed the gates; CPCV "
+                     "cannot rescue them (ADR 0002) and nothing is attached to them")
     stale = [str(r["trial"]) for r in rows if r.get("feature_version") and r["feature_version"] != version]
     if stale:
         lines.append(f"- **feature version differs from the trial's** for {', '.join(stale)} (data or --macro differ): "
                      "read the paths with care")
     lines += ["", *cpcv.report_lines(out["per_trial"], out["pbo"])]
     for r in rows:
+        if int(r["trial"]) in failed:
+            continue
         res = out["per_trial"][int(r["trial"])]
         reg.attach_evidence(int(r["trial"]), cpcv.EVIDENCE_KIND,
                             cpcv.evidence_payload(res, out["pbo"], f"research_pass --cpcv {' '.join(map(str, args.cpcv))}"))

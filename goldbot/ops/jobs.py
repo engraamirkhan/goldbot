@@ -355,9 +355,12 @@ def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         if bt is None or bt.mean_ret is None or bt.std_ret is None:
             out[agent_id] = {"version": ch.version, "watch": "no backtest moments; cannot run CUSUM"}
             continue
-        d = ctx.settings.drift            # h tuned to a 5% quarterly false-alarm rate at the backtest's trade rate (M25)
+        d = ctx.settings.drift
+        # M25: h for a 5% false-alarm rate over the watch's own window (two weeks of the backtest's trade rate), on
+        # two-point returns that win with the backtest's hit rate
         if cusum_alarm(rets, bt.mean_ret, bt.std_ret, k=d.cusum_k, trades_per_week=bt.trades_per_week,
-                       false_alarm=d.cusum_false_alarm):
+                       false_alarm=d.cusum_false_alarm, p=bt.hit_rate if 0 < bt.hit_rate < 1 else None,
+                       weeks=CUSUM_WINDOW_DAYS / 7.0):
             restored = ctx.models.restore_previous(agent_id, f"CUSUM alarm on {len(rets)} shadow trades within {CUSUM_WINDOW_DAYS} days of promotion")
             out[agent_id] = {"version": ch.version, "action": "restored_previous", "restored": restored.version, "trades": len(rets)}
         else:
@@ -737,7 +740,11 @@ def cpcv_quarterly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     for every walk-forward trial that passed the design's gates and has no CPCV evidence this quarter, CPCV on the
     store's bars up to the holdout (never into it), compared for PBO with its family's other walk-forward trials on
     the same timeframe (the configurations it was selected among, the most recent CPCV_MAX_CONFIGS). The result is
-    attached to the passing trial as evidence: not a trial, no budget slot, no deflated-Sharpe count. Report ->
+    attached to the passing trial as evidence: not a trial, no budget slot, no deflated-Sharpe count. It can only
+    veto (ADR 0002: fragile when PBO > 0.5 or most paths negative), and its PBO is a lower bound (the selection set is
+    every registered trial of the family on that timeframe, screened ones included). A trial whose recorded feature
+    version differs from the one the store's bars build now is skipped, not re-run on different inputs. The evidence
+    sidecar is local to the scheduler host (registry_sync does not carry it; docs/decisions/0002). Report ->
     state/cpcv_<quarter>.md. One trial's failure does not stop the others; the job fails at the end if any did."""
     from goldbot.research import cpcv
     from goldbot.research.registry import quarter_of
@@ -776,12 +783,18 @@ def cpcv_quarterly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
             context = {TF_LABEL[x]: _bars(ctx, x, ctx_start, end) for x in context_tfs(tf)}
             res = cpcv.cpcv_trials(compare, dec, context, extra_cost_usd=live_extra_cost_usd(ctx), holdout=holdout,
-                                   swap=live_swap(ctx))
+                                   swap=live_swap(ctx), selection=cpcv.selection_set(rows, {str(row["family"])}, tf),
+                                   skip_stale_features=True)
             mine = res["per_trial"][t]
+            if "skipped" in mine:                # the trial's features are not what the data builds now
+                out["trials"][t] = f"skipped: {mine['skipped']}"
+                lines += [f"## Trial {t}: {row['family']} ({tf})", "", f"Skipped: {mine['skipped']}.", ""]
+                continue
             ctx.trials.attach_evidence(t, cpcv.EVIDENCE_KIND, cpcv.evidence_payload(mine, res["pbo"], f"cpcv_quarterly {q}"),
                                        now=slot.to_pydatetime())
             out["trials"][t] = {"n_paths": mine.get("n_paths"), "sharpe": mine.get("sharpe"), "mean_r": mine.get("mean_r"),
-                                "pbo": (res["pbo"] or {}).get("pbo"), "compared": [int(x["trial"]) for x in compare]}
+                                "pbo": (res["pbo"] or {}).get("pbo"), "compared": [int(x["trial"]) for x in compare],
+                                "fragile": cpcv.verdict(mine, res["pbo"])["fragile"]}
             lines += [f"## Trial {t}: {row['family']} ({tf})", "", *cpcv.report_lines(res["per_trial"], res["pbo"]), ""]
         except Exception as exc:                 # one trial's failure must not hide the others' evidence
             log.exception("cpcv_quarterly: trial %s", t)

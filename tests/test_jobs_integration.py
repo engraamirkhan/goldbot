@@ -188,24 +188,39 @@ def test_cpcv_quarterly_attaches_evidence_to_gate_passing_trials_without_new_tri
     ctx = _ctx(bars_store, tmp_path)
     cfg = {**SPECIALISTS["session_open"].default_config, "asia_range_max_atr_d": 1.2}
     peer = {**SPECIALISTS["session_open"].default_config, "asia_range_max_atr_d": 1.5}
-    passed = ctx.trials.record(agent_id="a", family="session_open", config=cfg, feature_version="v", rationale="r",
-                               results={"gates": {"passed": True}})
+    stale = ctx.trials.record(agent_id="a", family="session_open", config=cfg, feature_version="v", rationale="r",
+                              results={"gates": {"passed": True}})
     ctx.trials.record(agent_id="b", family="session_open", config=peer, feature_version="v", rationale="r",
                       results={"gates": {"passed": False}})
     ctx.trials.record(agent_id="c", family="session_open", config=cfg, feature_version="v", rationale="r",
                       results={"gates": {"passed": True}}, status="holdout")      # a holdout scoring is never re-run
-    n = ctx.trials.n_trials
     slot = pd.Timestamp("2025-10-05 14:00", tz="UTC")
+    # a trial recorded with other features than the store's bars build now is skipped, not re-run on new inputs
+    first = cpcv_quarterly(ctx, slot)
+    msg = first["trials"][stale["trial"]]
+    assert msg.startswith("skipped: feature version") and msg.endswith("differs from the trial's v")
+    assert not ctx.trials.evidence(kind="cpcv") and not first["errors"]
+    version = msg.split("feature version ")[1].split(" differs")[0]
+    passed = ctx.trials.record(agent_id="a", family="session_open", config=cfg, feature_version=version,
+                               rationale="r", results={"gates": {"passed": True}})
+    ctx.trials.record(agent_id="b", family="session_open", config=peer, feature_version=version, rationale="r",
+                      results={"gates": {"passed": False}})
+    n = ctx.trials.n_trials
     out = cpcv_quarterly(ctx, slot)
     assert ctx.trials.n_trials == n                                       # not a trial: no new row, no budget slot
-    assert list(out["trials"]) == [passed["trial"]] and not out["errors"]
+    assert set(out["trials"]) == {stale["trial"], passed["trial"]} and not out["errors"]
+    assert out["trials"][stale["trial"]].startswith("skipped")
     (ev,) = ctx.trials.evidence(passed["trial"], "cpcv")
     p = ev["payload"]
     assert ev["quarter"] == "2025Q4" and p["n_splits"] == 15 and p["n_paths"] == 5 and len(p["paths"]) == 5
     assert any(s["fitted"] for s in p["splits"])                         # real models, not empty paths
     assert pd.Timestamp(p["edges"][-1]) <= pd.Timestamp("2025-10-01", tz="UTC")   # never into the holdout
+    # PBO across the comparable peers only (the stale ones are skipped), labelled a lower bound of the selection set
     assert p["pbo"] is not None and p["pbo"]["trials"] == [passed["trial"], passed["trial"] + 1]
-    assert "Combinatorial purged CV 2025Q4" in Path(out["report"]).read_text()
+    assert p["pbo"]["selection_set"] == 4 and p["pbo"]["lower_bound"] is True
+    assert p["verdict"]["rule"] == "veto only (ADR 0002)" and isinstance(out["trials"][passed["trial"]]["fragile"], bool)
+    text = Path(out["report"]).read_text()
+    assert "Combinatorial purged CV 2025Q4" in text and "lower bound" in text
     # idempotent within the quarter
     again = cpcv_quarterly(ctx, slot + pd.Timedelta(hours=1))
     assert again["trials"][passed["trial"]] == "already evaluated this quarter"

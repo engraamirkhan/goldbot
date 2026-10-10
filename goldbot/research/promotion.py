@@ -15,7 +15,7 @@ import math
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
-from goldbot.research.cusum import DEFAULT_K, FALSE_ALARM_QUARTER, calibrated_h
+from goldbot.research.cusum import DEFAULT_K, FALSE_ALARM_QUARTER, WATCH_WEEKS, calibrated_h
 
 MIN_SHADOW_WEEKS = 4.0
 MIN_SHADOW_TRADES = 40
@@ -78,15 +78,18 @@ def evaluate_promotion(backtest: PerfStats, shadow: PerfStats, champion: PerfSta
 
 def cusum_alarm(returns: list[float], expected_mean: float, expected_std: float, k: float = DEFAULT_K,
                 h: float | None = None, trades_per_week: float | None = None,
-                false_alarm: float = FALSE_ALARM_QUARTER) -> bool:
+                false_alarm: float = FALSE_ALARM_QUARTER, p: float | None = None,
+                weeks: float = WATCH_WEEKS) -> bool:
     """One-sided CUSUM on standardised trade returns for a downward shift from the backtest's mean (design: a new
     champion that trips the alarm in its first two weeks is replaced by the previous one). k is the allowance and
     h the decision interval, both in standard deviations. Row M25: unless `h` is given, h is tuned so that returns
-    at the backtest's mean alarm within one quarter's expected trades (from the backtest's `trades_per_week`) with
-    probability `false_alarm` (design: 5%; research/cusum.py); without a trade rate the fixed FALLBACK_H applies."""
+    at the backtest's mean alarm within the watch's expected trades (backtest `trades_per_week` x `weeks`, two weeks)
+    with probability at most `false_alarm` (5%; research/cusum.py). In control a trade wins with the backtest's hit
+    rate `p`, so its standardised return is two-point and h is simulated that way (normal when p is None); without a
+    trade rate the fixed FALLBACK_H applies."""
     if expected_std <= 0 or not returns:
         return False
-    h = calibrated_h(trades_per_week, k, false_alarm) if h is None else h
+    h = calibrated_h(trades_per_week, k, false_alarm, p=p, weeks=weeks) if h is None else h
     s = 0.0
     for r in returns:
         s = max(0.0, s + (expected_mean - r) / expected_std - k)

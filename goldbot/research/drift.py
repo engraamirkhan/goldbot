@@ -7,7 +7,8 @@
 * Calibration drift: ECE and Brier score of the agent's own p on its trailing `calib_trades` (100) closed shadow trades
   that were taken; ECE above `ece_size_down` (0.08) sizes down.
 * Specialist halt: a one-sided CUSUM on standardised trade residuals (realised R minus the R the model's p implied),
-  its decision interval tuned to a 5% quarterly false-alarm rate at the backtest's trade rate (row M25, research/cusum.py).
+  its decision interval tuned to a 5% quarterly false-alarm rate at the backtest's trade rate, on two-point trade
+  residuals at the mean p of the trades in the CUSUM (row M25, research/cusum.py).
   An alarm halts that agent's entries until the owner reviews it or a new champion replaces the version.
 * System halt: two agents halted at once, or an agent's 30-day shadow drawdown above 1.5x its backtest drawdown, halts
   every entry pending the owner's review (`python -m goldbot.ops.run drift-review --clear`).
@@ -61,12 +62,13 @@ def psi(ref: dict[str, Any], values: np.ndarray, eps: float = 1e-4) -> float:
 
 
 def residual_cusum(z: list[float], k: float = DEFAULT_K, h: float | None = None, trades_per_week: float | None = None,
-                   false_alarm: float = FALSE_ALARM_QUARTER) -> tuple[bool, float]:
+                   false_alarm: float = FALSE_ALARM_QUARTER, p: float | None = None) -> tuple[bool, float]:
     """One-sided (downward) CUSUM on standardised residuals: (alarm, final statistic). Row M25: unless `h` is given,
     the decision interval is tuned so in-control residuals alarm within one quarter's expected trades (from the
-    backtest's `trades_per_week`) with probability `false_alarm` (design: 5%; research/cusum.py); without a trade rate
-    the fixed FALLBACK_H applies."""
-    h = calibrated_h(trades_per_week, k, false_alarm) if h is None else h
+    backtest's `trades_per_week`) with probability at most `false_alarm` (design: 5%; research/cusum.py), simulated as
+    two-point trade residuals at the mean taken `p` (normal when p is None); without a trade rate the fixed
+    FALLBACK_H applies."""
+    h = calibrated_h(trades_per_week, k, false_alarm, p=p) if h is None else h
     s, alarm = 0.0, False
     for x in z:
         s = max(0.0, s - x - k)
@@ -88,6 +90,14 @@ def trade_residuals(trades: list[Any]) -> list[float]:
         sd = np.sqrt(p * (1 - p)) * (T + 1)
         z.append(float((r - (p * T - (1 - p))) / sd))
     return z
+
+
+def mean_taken_p(trades: list[Any]) -> float | None:
+    """Mean model p of the closed taken trades `trade_residuals` scores (the residuals' in-control win probability,
+    which sets the CUSUM's h; row M25), or None when there are none."""
+    ps = [min(max(float(t.p), 1e-3), 1 - 1e-3) for t in trades
+          if t.exit is not None and abs(t.entry - t.stop) > 0]
+    return float(np.mean(ps)) if ps else None
 
 
 def drawdown(rets: list[float]) -> float:
@@ -125,7 +135,7 @@ def assess(agent_id: str, version: str, *, model: Any, live: pd.DataFrame | None
     """One agent's health from its model (reference bins, importance), recent candidate features (`live`, model
     inputs before side-alignment), its taken shadow trades since the version started (`closed_taken`, oldest first)
     and those of the last 30 days (`recent_taken`). `s`: DriftSettings. `trades_per_week`: the backtest's trade rate,
-    which sets the CUSUM's decision interval (row M25)."""
+    which with the mean p of `closed_taken` sets the CUSUM's decision interval (row M25)."""
     h = AgentHealth(agent_id=agent_id, version=version, backtest_dd=backtest_dd)
     ref = getattr(model, "feature_ref", None) or {}
     if not ref:
@@ -155,7 +165,8 @@ def assess(agent_id: str, version: str, *, model: Any, live: pd.DataFrame | None
         p = np.array([t.p for t in calib], dtype=float)
         y = np.array([t.barrier == "target" for t in calib], dtype=float)
         h.ece, h.brier = round(calibration_ece(p, y), 4), round(float(np.mean((p - y) ** 2)), 4)
-    h_used = calibrated_h(trades_per_week, s.cusum_k, s.cusum_false_alarm) if trades_per_week else s.cusum_h
+    p_bar = mean_taken_p(closed_taken)          # M25: h on two-point residuals at the trades' mean p (0.01 bucket)
+    h_used = calibrated_h(trades_per_week, s.cusum_k, s.cusum_false_alarm, p=p_bar) if trades_per_week else s.cusum_h
     h.cusum_h = round(h_used, 3)
     h.cusum_alarm, cus = residual_cusum(trade_residuals(closed_taken), s.cusum_k, h_used)
     h.cusum = round(cus, 3)

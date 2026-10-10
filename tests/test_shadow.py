@@ -155,6 +155,23 @@ def test_model_watch_restores_the_previous_champion_on_a_cusum_alarm(tmp_path):
     assert ctx.models.champion("agent-x").version == a               # type: ignore[union-attr]
 
 
+def test_model_watch_uses_the_two_week_h_on_two_point_returns_at_the_backtest_hit_rate(tmp_path):
+    from goldbot.research import cusum
+    ctx = _watch_ctx(tmp_path)
+    t = pd.Timestamp("2026-09-01", tz="UTC")
+    a, b = _promote_pair(ctx, t)                                     # backtest: hit 0.45, 4 trades a week
+    promoted = t + pd.Timedelta(days=30)
+    k = ctx.settings.drift.cusum_k
+    h_watch = cusum.calibrated_h(4.0, k, p=0.45, weeks=cusum.WATCH_WEEKS)
+    h_quarter = cusum.calibrated_h(4.0, k, p=0.45)
+    assert h_watch < min(h_quarter, cusum.FALLBACK_H)
+    s = (h_watch + min(h_quarter, cusum.FALLBACK_H)) / 2              # one return that only the watch's h catches
+    _shadow_rets(tmp_path, b, promoted, [0.001 - (s + k) * 0.004])
+    out = model_watch(ctx, promoted + pd.Timedelta(days=3))
+    assert out["agent-x"]["action"] == "restored_previous"
+    assert ctx.models.champion("agent-x").version == a               # type: ignore[union-attr]
+
+
 def test_model_watch_leaves_a_healthy_or_settled_champion_alone(tmp_path):
     ctx = _watch_ctx(tmp_path)
     t = pd.Timestamp("2026-09-01", tz="UTC")

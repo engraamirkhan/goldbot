@@ -19,7 +19,17 @@ fold does not.
 Probability of backtest overfitting (Bailey, Borwein, López de Prado and Zhu 2017, CSCV), when several configurations
 are compared on the same groups: per configuration, the R earned in each group (mean over the 5 paths); for each of the
 C(6, 3) = 20 ways to call 3 groups in-sample, the configuration best in-sample is ranked out of sample; PBO is the share
-of those 20 where it ranks at or below the median (logit of its relative rank <= 0).
+of those 20 where it ranks at or below the median (logit of its relative rank <= 0). Group 0 is left out of PBO: no
+path calibrates or trades it (above), so its column is zero for every configuration and would only add ties; the 5
+scored groups are split 2 against 3 both ways (C(5, 2) + C(5, 3) = 20 splits). PBO is a LOWER BOUND: the selection set
+is every registered trial of the family on that timeframe, screened ones included (`selection_set`), but only the
+walk-forward trials compared (at most the job's cap) can be re-run; the report and the evidence say how many of the
+selection set were compared.
+
+Reading rule (docs/decisions/0002-cpcv-and-pbo-can-only-veto.md): CPCV and PBO can only VETO. A config that passed the
+gates is flagged fragile (`verdict`) when PBO > 0.5 or more than half of its paths have negative mean R; CPCV never
+rescues a config that failed the gates and never picks a winner among configs. `research_pass --cpcv` refuses failed
+trials unless `--diagnostic`, whose output is labelled "diagnostic, not evidence" and attaches nothing to them.
 
 CPCV is NOT a trial. A trial is a look at the data that chooses a configuration; CPCV re-evaluates a configuration that
 is already registered (its trial row holds its config) on the same research window, chooses nothing and changes no
@@ -60,6 +70,9 @@ N_GROUPS = 6
 N_TEST_GROUPS = 2
 MIN_TRAIN = 200                  # as the walk-forward: a split with fewer purged training rows is not fitted
 EVIDENCE_KIND = "cpcv"
+PBO_FRAGILE = 0.5                # ADR 0002: PBO above this flags a passed config fragile
+NEGATIVE_PATHS_FRAGILE = 0.5     # ... as does more than this share of paths with negative mean R
+NOT_SELECTION = {"preregistered", "holdout"}   # a promise and a re-scoring: not alternatives the config was chosen among
 
 
 class CpcvSplit(Record):
@@ -150,20 +163,36 @@ def backtest_paths(n_groups: int = N_GROUPS, n_test: int = N_TEST_GROUPS) -> lis
 
 def pbo(perf: np.ndarray) -> dict[str, Any] | None:
     """Probability of backtest overfitting (CSCV) from a configurations x groups matrix of performance (higher is
-    better); None with fewer than 2 configurations."""
+    better); None with fewer than 2 configurations. With an odd number of groups n, every split of floor(n/2) against
+    ceil(n/2) groups is used in both directions, so in- and out-of-sample stay symmetric."""
     perf = np.asarray(perf, dtype=float)
     m, n = perf.shape
     if m < 2:
         return None
     logits = []
-    for ins in combinations(range(n), n // 2):
-        oos = [g for g in range(n) if g not in ins]
-        best = int(np.argmax(perf[:, list(ins)].sum(axis=1)))
-        omega = rankdata(perf[:, oos].sum(axis=1))[best] / (m + 1)
-        logits.append(float(np.log(omega / (1 - omega))))
+    for size in sorted({n // 2, n - n // 2}):
+        for ins in combinations(range(n), size):
+            oos = [g for g in range(n) if g not in ins]
+            best = int(np.argmax(perf[:, list(ins)].sum(axis=1)))
+            omega = rankdata(perf[:, oos].sum(axis=1))[best] / (m + 1)
+            logits.append(float(np.log(omega / (1 - omega))))
     lam = np.array(logits)
     return {"pbo": float(np.mean(lam <= 0)), "n_configs": int(m), "n_combinations": len(lam),
             "logit_median": float(np.median(lam))}
+
+
+def verdict(result: dict[str, Any], pbo_info: dict[str, Any] | None) -> dict[str, Any]:
+    """ADR 0002, veto only: fragile when PBO > PBO_FRAGILE or more than NEGATIVE_PATHS_FRAGILE of the paths have
+    negative mean R. Never a pass: a config that failed the gates stays failed whatever this says."""
+    reasons = []
+    p = (pbo_info or {}).get("pbo")
+    if p is not None and p > PBO_FRAGILE:
+        reasons.append(f"PBO {p:.0%} > {PBO_FRAGILE:.0%}")
+    paths = [float(x["mean_r"]) for x in result.get("paths") or [] if np.isfinite(x.get("mean_r", float("nan")))]
+    neg = float(np.mean([v < 0 for v in paths])) if paths else None
+    if neg is not None and neg > NEGATIVE_PATHS_FRAGILE:
+        reasons.append(f"{neg:.0%} of paths with negative mean R")
+    return {"fragile": bool(reasons), "reasons": reasons, "rule": "veto only (ADR 0002)"}
 
 
 def _dist(x: list[float]) -> dict[str, float]:
@@ -255,6 +284,27 @@ def cpcv_eligible(row: dict[str, Any]) -> str | None:
     return None
 
 
+def gates_passed(row: dict[str, Any]) -> bool:
+    """The trial passed the design's gates (results.gates.passed is True)."""
+    return ((row.get("results") or {}).get("gates") or {}).get("passed") is True
+
+
+def selection_set(rows: list[dict[str, Any]], families: set[str], timeframe: str) -> list[int]:
+    """Every registered trial of `families` on `timeframe`, screened ones included (all were looks the passing config
+    was chosen among), as trial numbers; pre-registrations and holdout scorings are not alternatives."""
+    out = []
+    for r in rows:
+        if r.get("family") not in families or r.get("status") in NOT_SELECTION:
+            continue
+        try:
+            tf = trial_timeframe(r)
+        except (KeyError, ValueError, TypeError):
+            continue
+        if tf == timeframe:
+            out.append(int(r["trial"]))
+    return sorted(set(out))
+
+
 def trial_inputs(row: dict[str, Any], b_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None, *,
                  extra_cost_usd: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None, swap: Any = None,
                  frame: tuple[pd.DataFrame, pd.DataFrame] | None = None, ctx: dict | None = None
@@ -302,15 +352,23 @@ def research_window(b_dec: pd.DataFrame, holdout: tuple[pd.Timestamp, pd.Timesta
 
 def cpcv_trials(rows: list[dict[str, Any]], b_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None, *,
                 extra_cost_usd: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None, swap: Any = None,
-                frame: tuple[pd.DataFrame, pd.DataFrame] | None = None, ctx: dict | None = None
-                ) -> dict[str, Any]:
+                frame: tuple[pd.DataFrame, pd.DataFrame] | None = None, ctx: dict | None = None,
+                selection: list[int] | None = None, skip_stale_features: bool = False) -> dict[str, Any]:
     """CPCV of each registered trial in `rows` (one decision timeframe) on shared groups, plus PBO across them when
-    there are several. Returns {"per_trial": {trial: result}, "pbo": ... | None, "edges": [...]}."""
+    there are several. `selection`: the trial numbers of the selection set (`selection_set`); PBO is labelled a lower
+    bound when fewer were compared. `skip_stale_features`: a trial whose recorded feature version differs from the
+    one the data builds now is skipped (its config would run on different inputs), not evaluated.
+    Returns {"per_trial": {trial: result}, "pbo": ... | None, "edges": [...]}."""
     edges = group_edges(*research_window(b_dec, holdout))
     per: dict[int, dict[str, Any]] = {}
     for row in rows:
         labels, feats, cols, window, version = trial_inputs(row, b_dec, context, extra_cost_usd=extra_cost_usd,
                                                             holdout=holdout, swap=swap, frame=frame, ctx=ctx)
+        recorded = row.get("feature_version")
+        if skip_stale_features and recorded and recorded != version:
+            per[int(row["trial"])] = {"skipped": f"feature version {version} differs from the trial's {recorded}",
+                                      "feature_version": version}
+            continue
         if labels.empty:
             per[int(row["trial"])] = {"error": "no candidates in the research window"}
             continue
@@ -318,37 +376,52 @@ def cpcv_trials(rows: list[dict[str, Any]], b_dec: pd.DataFrame, context: dict[s
                                           embargo_days=window["embargo_days"], extra_cost_usd=extra_cost_usd,
                                           feature_version=version)
     ok = {t: r for t, r in per.items() if "group_r" in r}
-    perf = np.array([np.mean(np.asarray(r["group_r"]), axis=0) for r in ok.values()]) if ok else np.zeros((0, N_GROUPS))
+    # group 0 is never calibrated or traded on any path (its column is zero for every config): left out of PBO
+    perf = np.array([np.mean(np.asarray(r["group_r"]), axis=0)[1:] for r in ok.values()]) if ok \
+        else np.zeros((0, N_GROUPS - 1))
     p = pbo(perf) if len(ok) >= 2 else None
     if p is not None:
-        p["trials"] = list(ok)
+        sel = sorted(set(selection or []) | set(ok))
+        p.update({"trials": list(ok), "groups": list(range(1, N_GROUPS)), "selection_set": len(sel),
+                  "lower_bound": len(ok) < len(sel)})
     return {"per_trial": per, "pbo": p, "edges": [str(e) for e in edges]}
 
 
 def evidence_payload(result: dict[str, Any], pbo_info: dict[str, Any] | None, source: str) -> dict[str, Any]:
-    """What is attached to the trial: its CPCV result and the PBO of the comparison it was part of."""
-    return {**result, "pbo": pbo_info, "source": source}
+    """What is attached to the trial: its CPCV result, the PBO of the comparison it was part of, and the veto-only
+    verdict (ADR 0002)."""
+    return {**result, "pbo": pbo_info, "verdict": verdict(result, pbo_info), "source": source}
 
 
 def report_lines(per_trial: dict[int, dict[str, Any]], pbo_info: dict[str, Any] | None) -> list[str]:
-    out = ["| trial | candidates | paths | Sharpe mean (min .. max) | mean R mean (min .. max) | paths with mean R > 0 |",
-           "|---:|---:|---:|---|---|---:|"]
+    out = ["| trial | candidates | paths | Sharpe mean (min .. max) | mean R mean (min .. max) | paths with mean R > 0 "
+           "| veto (ADR 0002) |",
+           "|---:|---:|---:|---|---|---:|---|"]
     for t, r in per_trial.items():
         if "paths" not in r:
-            out.append(f"| {t} | | | {r.get('error', '')} | | |")
+            out.append(f"| {t} | | | {r.get('error') or r.get('skipped', '')} | | | |")
             continue
+        v = verdict(r, pbo_info)
         s, m = r["sharpe"], r["mean_r"]
         sh = f"{s['mean']:.2f} ({s['min']:.2f} .. {s['max']:.2f})" if s else "—"
         mr = f"{m['mean']:+.3f} ({m['min']:+.3f} .. {m['max']:+.3f})" if m else "—"
         share = r.get("share_paths_positive")
         out.append(f"| {t} | {r['n_candidates']:,} | {r['n_paths']} | {sh} | {mr} | "
-                   f"{'—' if share is None else f'{share:.0%}'} |")
+                   f"{'—' if share is None else f'{share:.0%}'} | "
+                   f"{'fragile: ' + '; '.join(v['reasons']) if v['fragile'] else 'none'} |")
     out.append("")
     if pbo_info is not None:
+        bound = "a lower bound" if pbo_info.get("lower_bound", True) else "computed on the whole selection set"
         out.append(f"PBO across trials {pbo_info['trials']}: **{pbo_info['pbo']:.0%}** over {pbo_info['n_combinations']} "
-                   f"in/out-of-sample group splits (median logit {pbo_info['logit_median']:+.2f}).")
+                   f"in/out-of-sample splits of groups 1-{N_GROUPS - 1} (group 0 is never traded; median logit "
+                   f"{pbo_info['logit_median']:+.2f}). PBO is {bound}: {len(pbo_info['trials'])} of the "
+                   f"{pbo_info.get('selection_set', '?')} configurations in the selection set (every registered trial "
+                   "of the family on this timeframe, screened ones included) were compared.")
     else:
         out.append("PBO: needs at least two configurations compared on the same groups.")
+    out.append(f"Reading rule (ADR 0002): CPCV and PBO can only veto a config that passed the gates (fragile when PBO > "
+               f"{PBO_FRAGILE:.0%} or more than half the paths are negative); they never rescue a failed config or "
+               "pick a winner.")
     out += ["", f"{N_GROUPS} groups, {N_TEST_GROUPS} tested per split: {comb(N_GROUPS, N_TEST_GROUPS)} purged splits rebuild "
             f"{comb(N_GROUPS - 1, N_TEST_GROUPS - 1)} paths. Holdout excluded. Evidence on existing trials, not a trial."]
     return out

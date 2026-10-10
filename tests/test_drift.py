@@ -107,6 +107,21 @@ def test_assess_sizes_down_on_feature_drift_or_bad_calibration_and_halts_on_cusu
     assert h.halted and h.cusum_alarm
 
 
+def test_assess_halts_with_the_h_calibrated_on_two_point_residuals_at_the_trades_mean_p():
+    from goldbot.research import cusum
+    # 13 straight losses at p 0.4: S = 13 x (sqrt(0.4/0.6) - 0.5) ~ 4.11, above the two-point h at 5 trades a week
+    # (~3.8) and below the normal-based h (~5.2) that the drift watch used before
+    losses = [_trade(i, False, p=0.4) for i in range(13)]
+    h_bern, h_norm = cusum.calibrated_h(5.0, S.cusum_k, p=0.4), cusum.calibrated_h(5.0, S.cusum_k)
+    h = assess("a1", "v1", model=_Model({}), live=None, closed_taken=losses, recent_taken=[], backtest_dd=None, s=S,
+               trades_per_week=5.0)
+    assert h_bern < h.cusum < h_norm
+    assert h.cusum_h == round(h_bern, 3) and h.cusum_alarm and h.halted
+    # without a backtest trade rate the configured fixed h applies
+    h = assess("a1", "v1", model=_Model({}), live=None, closed_taken=losses, recent_taken=[], backtest_dd=None, s=S)
+    assert h.cusum_h == S.cusum_h
+
+
 def test_without_a_reference_or_enough_rows_psi_is_skipped_not_guessed():
     h = assess("a1", "v1", model=_Model({}), live=pd.DataFrame({"x": [1.0]}), closed_taken=[], recent_taken=[],
                backtest_dd=None, s=S)

@@ -127,3 +127,72 @@ def test_cpcv_is_evidence_on_the_trial_not_a_new_trial(tmp_path):
     assert reg.evidence_path.name == "trials.evidence.jsonl" and ev["quarter"] == quarter_of(datetime.now(timezone.utc))
     with pytest.raises(KeyError):
         reg.attach_evidence(99, "cpcv", {})
+
+
+def test_pbo_on_the_five_scored_groups_splits_two_against_three_both_ways():
+    out = _pbo(np.random.default_rng(1).normal(size=(10, 5)))
+    assert out["n_combinations"] == 20                              # C(5, 2) + C(5, 3): symmetric in/out of sample
+    assert _pbo(np.array([[1.0] * 5, [0.0] * 5]))["pbo"] == 0.0
+
+
+def _stub_inputs(monkeypatch, version: str = "fv") -> None:
+    monkeypatch.setattr(cpcv, "trial_inputs", lambda row, *a, **k: (row["labels"], row["feats"], ["side", "x", "z"],
+                                                                  {"purge_days": 2, "embargo_days": 1}, version))
+
+
+B_DEC = pd.DataFrame({"ts_utc": pd.date_range(T0, T1 - pd.Timedelta(days=1), freq="D")})
+
+
+def test_pbo_leaves_out_the_never_traded_group_0_column_and_is_labelled_a_lower_bound(monkeypatch):
+    seen: list[np.ndarray] = []
+    _stub_inputs(monkeypatch)
+    real = cpcv.pbo
+
+    def spy(perf: np.ndarray) -> dict | None:
+        seen.append(np.asarray(perf))
+        return real(perf)
+    monkeypatch.setattr(cpcv, "pbo", spy)
+    rows = []
+    for t, seed in ((1, 0), (2, 1)):
+        labels, feats = _labels(seed=seed)
+        rows.append({"trial": t, "labels": labels, "feats": feats, "feature_version": "fv"})
+    out = cpcv.cpcv_trials(rows, B_DEC, None, extra_cost_usd=0.0, holdout=None, selection=[1, 2, 7])
+    assert seen[0].shape == (2, cpcv.N_GROUPS - 1)                  # groups 1..5 only
+    assert out["pbo"]["groups"] == [1, 2, 3, 4, 5]
+    assert out["pbo"]["selection_set"] == 3 and out["pbo"]["lower_bound"] is True
+    assert "PBO is a lower bound: 2 of the 3 configurations" in "\n".join(cpcv.report_lines(out["per_trial"], out["pbo"]))
+
+
+def test_cpcv_skips_a_trial_whose_feature_version_is_stale_when_asked(monkeypatch):
+    _stub_inputs(monkeypatch, version="now")
+    labels, feats = _labels()
+    row = {"trial": 1, "labels": labels, "feats": feats, "feature_version": "then"}
+    out = cpcv.cpcv_trials([row], B_DEC, None, extra_cost_usd=0.0, holdout=None, skip_stale_features=True)
+    assert out["per_trial"][1]["skipped"] == "feature version now differs from the trial's then"
+
+
+def test_cpcv_can_only_veto_a_passed_config():
+    good = {"paths": [{"mean_r": 0.1}, {"mean_r": 0.05}, {"mean_r": -0.01}, {"mean_r": 0.2}, {"mean_r": 0.02}]}
+    assert cpcv.verdict(good, {"pbo": 0.3}) == {"fragile": False, "reasons": [], "rule": "veto only (ADR 0002)"}
+    assert cpcv.verdict(good, {"pbo": 0.55})["fragile"]                     # PBO > 0.5
+    assert not cpcv.verdict(good, {"pbo": 0.5})["fragile"]
+    bad = {"paths": [{"mean_r": -0.1}, {"mean_r": -0.05}, {"mean_r": -0.01}, {"mean_r": 0.2}, {"mean_r": 0.02}]}
+    v = cpcv.verdict(bad, None)                                              # 3 of 5 paths negative
+    assert v["fragile"] and v["reasons"] == ["60% of paths with negative mean R"]
+    # the verdict has no "pass" value: nothing it says can turn a failed trial into a passed one
+    assert set(cpcv.verdict(good, None)) == {"fragile", "reasons", "rule"}
+    assert cpcv.gates_passed({"results": {"gates": {"passed": True}}})
+    assert not cpcv.gates_passed({"results": {"gates": {"passed": False}}}) and not cpcv.gates_passed({})
+
+
+def test_the_selection_set_is_every_registered_trial_of_the_family_on_the_timeframe_screened_ones_included():
+    from goldbot.specialists import SPECIALISTS
+    d = SPECIALISTS["session_open"].default_config
+    rows = [{"trial": 1, "family": "session_open", "config": d, "status": "evaluated"},
+            {"trial": 2, "family": "session_open", "config": d, "status": "screened"},
+            {"trial": 3, "family": "session_open", "config": d, "status": "holdout"},        # a re-scoring
+            {"trial": 4, "family": "session_open", "config": d, "status": "preregistered"},  # a promise
+            {"trial": 5, "family": "trend", "config": {}, "status": "evaluated"}]
+    tf = cpcv.trial_timeframe(rows[0])
+    assert cpcv.selection_set(rows, {"session_open"}, tf) == [1, 2]
+    assert cpcv.selection_set(rows, {"session_open"}, "nope") == []
