@@ -50,6 +50,9 @@ def _fsync_dir(d: Path) -> None:
         os.close(fd)
 
 
+fsync_dir = _fsync_dir      # public name for appenders (gates_phase.append_closed_trade) that create a file
+
+
 def write_atomic(path: Path, text: str, *, durable: bool = True) -> None:
     """Replace `path` with `text` so a reader never sees a half-written file. durable: the data and the rename reach
     the disk before returning (fsync file and directory), so a power cut leaves the old or the new content, never an

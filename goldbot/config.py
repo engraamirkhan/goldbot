@@ -94,6 +94,9 @@ class RiskSettings(_Section):
     blackout: Blackout
     min_target_over_cost: float = Field(gt=0)
     approval_window_seconds: int = Field(gt=0)
+    # health: an engine whose broker reads (positions(), deal history) failed this many times in a row FAILs and the
+    # owner is alerted on Telegram; fewer is a warning (entries are blocked from the first failure, exits keep trying)
+    positions_unreadable_alert: int = Field(5, ge=1)
 
 
 class CostSettings(_Section):

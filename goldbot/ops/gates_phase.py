@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -56,7 +57,7 @@ import pandas as pd
 from pydantic import Field
 from scipy import stats
 
-from goldbot.base import FrozenRecord, UtcTimestamp, write_atomic
+from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, write_atomic
 from goldbot.config import GateSettings, Settings
 from goldbot.ops.accounts import GATES
 from goldbot.research.metrics import max_drawdown
@@ -72,7 +73,13 @@ NEVER_UNLOCKS = ("This report never records a gate or unlocks live: record with 
 
 
 class ClosedTrade(FrozenRecord):
-    """One closed paper (demo account) or live trade, net of every cost: the record the gates and the stop rule read."""
+    """One closed paper (demo account) or live trade, net of every cost: the record the gates and the stop rule read.
+
+    The engine writes one record per position when it is fully closed (engine/runner.py `_record_closed`). A scale-out
+    is not a trade of its own: its lots, price and P&L are folded into the final record (`lots` is the size at entry,
+    `exit_price` the lots-weighted average of every exit, `partial_lots` what the scale-out took), so one record is one
+    labelled trade, as in the backtest. Fields after `equity_before` are descriptive and optional (older lines, and
+    trades a broker reports without them, leave them empty)."""
 
     account_id: str
     broker: str
@@ -81,6 +88,19 @@ class ClosedTrade(FrozenRecord):
     ret: float                         # net return per trade, side * (exit - entry) / entry less costs (backtest unit)
     pnl: float                         # net P&L in account currency
     equity_before: float = Field(gt=0)
+    position_id: int | None = None     # the broker's position: with account_id, the key a trade is recorded once by
+    client_order_id: str | None = None
+    agent_id: str | None = None
+    side: int | None = None
+    lots: float | None = None          # size at entry (before any scale-out)
+    entry_utc: UtcTimestamp | None = None
+    entry_price: float | None = None
+    exit_price: float | None = None    # lots-weighted average of every exit of the position
+    exit_reason: str | None = None     # stop, target, time_exit, hard_flat, trail_close, engine_stop_close, ...
+    r: float | None = None             # pnl over the initial risk (entry to the initial stop, size at entry)
+    commission: float | None = None    # cost in account currency (positive), entry and exit; None when not reported
+    swap: float | None = None          # account currency, broker sign; None when not reported
+    partial_lots: float = 0.0          # lots closed by a scale-out before the final close
 
 
 class GateItem(FrozenRecord):
@@ -120,27 +140,63 @@ class GateReport(FrozenRecord):
 
 # ---------------------------------------------------------------------------------------------- evidence readers
 def load_closed_trades(state_dir: Path) -> tuple[list[ClosedTrade], str | None]:
-    """The paper and live record; (trades, error). An unreadable line is an error, never silently dropped."""
+    """The paper and live record; (trades, error). An unreadable line (a torn write) is skipped and reported in the
+    error, never silently dropped, and the lines after it still count, so the engine's set of recorded positions is
+    never built from a truncated list. A trade is counted once: a later line with the same (account_id, position_id)
+    is ignored (the engine writes once per position; this keeps the count right even if a line were ever repeated)."""
     f = Path(state_dir) / CLOSED_TRADES_FILE
     if not f.exists():
         return [], None
     out: list[ClosedTrade] = []
-    for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+    seen: set[tuple[str, int]] = set()
+    bad: list[str] = []
+    for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
         if not line.strip():
             continue
         try:
-            out.append(ClosedTrade.model_validate_json(line))
+            t = ClosedTrade.model_validate_json(line)
         except ValueError as exc:
-            return out, f"{CLOSED_TRADES_FILE} line {i} unreadable: {str(exc).splitlines()[0][:120]}"
+            bad.append(f"line {i}: {str(exc).splitlines()[0][:120]}")
+            continue
+        if t.position_id is not None:
+            key = (t.account_id, t.position_id)
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(t)
+    if bad:
+        return out, f"{CLOSED_TRADES_FILE}: {len(bad)} unreadable line(s) skipped ({bad[0]})"
     return out, None
 
 
 def append_closed_trade(state_dir: Path, trade: ClosedTrade) -> None:
-    """Append one closed trade to the record (the writer the engine calls when a position closes)."""
+    """Append one closed trade to the record (the writer the engine calls when a position closes), durably: the line
+    goes out in one write on an O_APPEND descriptor and is fsynced (with the directory when the file is new) before
+    this returns, so a power cut never loses a recorded trade. A short write is completed (os.write may write less
+    than asked), and a file whose last line was torn (no trailing newline) gets a newline first, so the new record is
+    never glued to the torn one."""
     f = Path(state_dir) / CLOSED_TRADES_FILE
     f.parent.mkdir(parents=True, exist_ok=True)
-    with open(f, "a", encoding="utf-8") as fh:
-        fh.write(trade.model_dump_json() + "\n")
+    new = not f.exists()
+    data = (trade.model_dump_json() + "\n").encode("utf-8")
+    if not new and f.stat().st_size > 0:
+        with open(f, "rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            if fh.read(1) != b"\n":
+                data = b"\n" + data
+    fd = os.open(f, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+    try:
+        view = memoryview(data)
+        while view:
+            n = os.write(fd, view)
+            if n <= 0:
+                raise OSError(f"short write to {CLOSED_TRADES_FILE}: {len(view)} bytes left")
+            view = view[n:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    if new:
+        fsync_dir(f.parent)
 
 
 def _read_json(path: Path) -> Any:

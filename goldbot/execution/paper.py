@@ -1,6 +1,7 @@
 """Paper broker: same protocol, live or replayed ticks, fills modelled slightly worse than reality:
 market fills at the touch plus half the last minute's spread standard deviation, stop/target fills with
-20 points adverse slippage, real commission."""
+20 points adverse slippage, real commission. Deals carry MT5's money columns (gross `profit`, `commission` as a negative
+amount on each side, `swap`) next to `pnl` (net of that deal's commission), so the engine reads both brokers alike."""
 from __future__ import annotations
 
 import itertools
@@ -50,6 +51,10 @@ class PaperBroker:
         float_pl = sum(p.profit for p in self._positions.values())
         return AccountInfo(login=0, equity=self._balance + float_pl, balance=self._balance, margin=0.0, margin_free=self._balance + float_pl, leverage=20, currency="USD", server="paper")
 
+    def margin_required(self, symbol: str, side: int, lots: float, price: float) -> float | None:
+        """Paper margin at the FCA retail cap for gold, 1:20 (the paper account's leverage)."""
+        return lots * self.contract * price / 20.0
+
     def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:  # bars come from the store in paper mode
         return pd.DataFrame()
 
@@ -69,7 +74,8 @@ class PaperBroker:
         self._balance -= self.commission * intent.lots
         self._pending_ids.add(intent.client_order_id)
         self._deals.append({"ts_utc": t.ts_utc, "position_id": pid, "type": "entry", "price": price, "lots": intent.lots,
-                            "comment": intent.comment, "client_order_id": intent.client_order_id})
+                            "comment": intent.comment, "client_order_id": intent.client_order_id,
+                            "profit": 0.0, "commission": -self.commission * intent.lots, "swap": 0.0})
         return OrderResult(ok=True, retcode=10009, order_id=pid, position_id=pid, filled_lots=intent.lots, price=price, message="filled")
 
     def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult:
@@ -86,21 +92,25 @@ class PaperBroker:
         t = self.last_tick(p.symbol)
         price = t.bid if p.side > 0 else t.ask
         if lots is not None and lots < p.lots - 1e-9:          # partial close: the rest stays open with its SL/TP
-            pnl = p.side * (price - p.open_price) * lots * self.contract - self.commission * lots
+            gross = p.side * (price - p.open_price) * lots * self.contract
+            pnl = gross - self.commission * lots
             self._balance += pnl
             p.lots = round(p.lots - lots, 8)
             self._deals.append({"ts_utc": t.ts_utc, "position_id": p.position_id, "type": "partial", "price": price,
-                                "lots": lots, "pnl": pnl, "comment": p.comment})
+                                "lots": lots, "pnl": pnl, "comment": p.comment, "profit": gross,
+                                "commission": -self.commission * lots, "swap": 0.0})
             return OrderResult(ok=True, retcode=10009, order_id=None, position_id=p.position_id, filled_lots=lots,
                                price=price, message="partial")
         return self._close_at(p, price, "close")
 
     def _close_at(self, p: Position, price: float, reason: str) -> OrderResult:
-        pnl = p.side * (price - p.open_price) * p.lots * self.contract - self.commission * p.lots
+        gross = p.side * (price - p.open_price) * p.lots * self.contract
+        pnl = gross - self.commission * p.lots
         self._balance += pnl
         del self._positions[p.position_id]
         self._deals.append({"ts_utc": self.last_tick(p.symbol).ts_utc, "position_id": p.position_id, "type": reason, "price": price,
-                            "lots": p.lots, "pnl": pnl, "comment": p.comment})
+                            "lots": p.lots, "pnl": pnl, "comment": p.comment, "profit": gross,
+                            "commission": -self.commission * p.lots, "swap": 0.0})
         return OrderResult(ok=True, retcode=10009, order_id=None, position_id=p.position_id, filled_lots=p.lots, price=price, message=reason)
 
     def _check_exits(self, t: Tick) -> None:

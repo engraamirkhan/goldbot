@@ -288,10 +288,27 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     if market and e.get("stale_bars"):
         statuses.append("warn")
         parts.append("last bar older than one decision period: entries blocked")
-    if e.get("dq_error"):
+    # broker reads failing (MT5 positions_get / history_deals_get returning None): a warning from the first failure,
+    # a FAIL (alerted on Telegram) after risk.positions_unreadable_alert in a row
+    unreadable = int(e.get("positions_unreadable") or 0)
+    alert_after = ctx.settings.risk.positions_unreadable_alert if ctx.settings is not None else 5
+    if unreadable:
+        statuses.append("fail" if unreadable >= alert_after else "warn")
+        parts.append(f"broker positions/deals unreadable {unreadable} time(s) in a row (terminal fault?): entries "
+                     f"blocked, exits retried every tick, closes not confirmed until it reads again")
+    other_dq = [c for c in e.get("dq_checks") or [] if c != "positions_unreadable"]
+    if e.get("dq_error") and (other_dq or not unreadable):
         statuses.append("fail")
-        checks = ", ".join(e.get("dq_checks") or []) or "stale feed"
+        checks = ", ".join(other_dq) or "stale feed"
         parts.append(f"data-quality error ({checks}): entries blocked")
+    for w in e.get("dq_warnings") or []:
+        statuses.append("warn")
+        parts.append(f"data-quality warning: {w}")
+    lost = e.get("closed_records_lost") or []
+    if lost:
+        statuses.append("fail")
+        parts.append(f"closed-trade record LOST for position(s) {', '.join(str(x) for x in lost)} after repeated write "
+                     f"failures: the phase gates and stop rule undercount (details in the engine log)")
     cls = str(e.get("account_class") or "unknown")
     if e.get("mode", "paper") != "paper":
         if cls == "unknown":
