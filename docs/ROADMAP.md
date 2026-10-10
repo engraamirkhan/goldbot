@@ -95,7 +95,7 @@ Wave 3 (shares `runner.py` with W2-1): A2, D10, M9, M3 15m leg. Parked until an 
 
 | # | Decision | Recommendation |
 | --- | --- | --- |
-| D1 | Event floor for daily-signal families | **400**, with t ≥ 2.0 unchanged. With 1,000, H-01 cannot pass by construction |
+| D1 | Event floor for daily-signal families | **150 rule-only events**, gross t ≥ 2.0 unchanged, set in code before the run. Such a trial can retire a hypothesis but not promote it (no walk-forward fold forms at H-01's ~165–400 events); under 150 = inconclusive. Promotion needs separate pre-registered model research meeting the unchanged gates (quant review of H-01) |
 | D2 | Sign-off of the PROPOSED gate thresholds (P7) | Approve the design's values, and rule now whether a low-frequency strategy gets a time-plus-count variant (e.g. 12 months and ≥ 60 trades, same expectancy test); deciding later is rule-fitting |
 | D3 | Owner steps: Oracle account and 2 VMs, MT5 VNC login, keyring secrets, `settings.local.yaml` (owner email, Telegram ids), tunnel, bot | Complete in one sitting, following RUNBOOK; about 2–3 h |
 | D4 | Budget: trial budget and monthly spend | Keep 20 trials a quarter. Cap spend at about $50 a month (Oracle free tier, staff agents within $40) |

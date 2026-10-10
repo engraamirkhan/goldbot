@@ -366,6 +366,22 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   password / recovery-code / reset-link modes on the login page, recovery codes shown after setup, an Account tab
   (change password), Enable / Sign out everywhere / Reset link on Users. No button yet for regenerating recovery
   codes.
+- Account security review (2026-10-10, security-reviewer findings; `api/auth.py`, aux.db migration 4
+  `auth_hardening`; tests/test_auth_security.py): forgot-password for the OWNER now needs a recovery code (spent)
+  as well as the TOTP (`ForgotPasswordRequest.recovery_code`), so the phone or seed alone cannot take over the
+  admin; every successful forgot-password queues a Telegram notice to the owner (a row with role
+  `account_security` in state/agent_runs.jsonl, relayed by the Telegram outbox; email masked). Each TOTP step is
+  accepted once per user (`totp_steps`; login, password change, forgot, /rearm via `AuthStore.verify_totp`, /mode
+  via `verify_owner_totp`, shared counter). Login and recovery-login run scrypt against a dummy hash for unknown
+  emails. Owner-only actions (`_require("owner")`, the API's `need("owner")`, recovery codes, /mode) need
+  `email == auth.owner_email` and fail closed when it is unset; the users.json importer demotes a non-matching owner
+  to viewer (audit `import_owner_demoted`, warning; kept when owner_email is unset, since every owner action is then
+  refused anyway). Password change, forgot and disable delete the account's open reset links. Invite/reset links use
+  the URL fragment (`/#invite=`, `/#reset=`, read once and cleared, `web/src/lib/links.ts`) and every response sends
+  `Referrer-Policy: no-referrer`. Lockout counters live in aux.db (`auth_failures`, pruned to the 15-min window,
+  survive restarts): 5 per email, plus 20 per client IP across emails (CF-Connecting-IP trusted only from the
+  loopback tunnel peer). Known trade-off: anyone who knows an email can keep it locked out. DB files are chmod 0600
+  on every open. e2e codes come from `freshTotp` (waits for an unused step, so the suite takes ~3.5 min).
 - Bounded spawning (2026-10-10, BACKLOG 13, TRADER_LIFECYCLE section 3, TRACEABILITY G11): the daily `gap_watch`
   job (23:55 UTC, after drift_watch; `goldbot/ops/gap_watch.py`) detects gaps (uncovered family timeframe, all agents
   of a family retired, drift/system halts, a volatility tercile no champion trained on, error dq events on 3+ days in
@@ -430,6 +446,30 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   before the trial. Note for quant review: feature-day bars include a Friday-evening stub bar (settlement to the
   Friday close, visible Saturday), so "20 daily bars" is about 3.3 weeks, as for the existing 1d option. Run inputs:
   `docs/research/preregistration-2027Q1.md` H-01. No research trial was run.
+- GitHub Actions supply chain hardened (2026-10-10, security): every action in `.github/workflows/*.yml` is pinned
+  to a full commit SHA with the version as a comment (checkout v5.1.0, setup-python v6.3.0, setup-node v5.0.0, cache
+  v4.3.0, upload-artifact v4.6.2, download-artifact v4.3.0; resolved via the GitHub API, not guessed). Token scopes:
+  `ci.yml` is `contents: read` with `issues: write` only on `report-failure`; the data and research workflows are
+  `permissions: {}` with `contents: write` + `issues: write` granted only to the job that publishes. Workflow inputs,
+  `github.event_name` and matrix values reach scripts only through `env:` (data-dukascopy, research). Every checkout
+  sets `persist-credentials: false` (no job pushes with git; releases and issues use `GH_TOKEN`). New concurrency
+  groups `data-dukascopy` and `data-macro` (queue, never cancel). `.github/dependabot.yml` opens weekly grouped PRs
+  for actions, pip and npm (`web/`). `actionlint` 1.7.12 (with shellcheck) is clean. Not exercised on GitHub yet:
+  the first CI run on the PR is the check.
+- H-01 review fixes (2026-10-10, before any H-01 outcome was seen): the screen's event floor is configurable,
+  `research.screen_min_events` (1,000) with `research.screen_min_events_daily` (null = the same) for rules whose
+  signal is daily, passed by `research_pass.py`; behaviour unchanged until the owner sets it (ruling A, recommended
+  150). A screen that fails only on the event floor is now `inconclusive (event floor)`: still a recorded, charged
+  `screened` trial with no model, but the report says it cannot retire the hypothesis. The slow preset's daily
+  inputs (signal and ATR) drop the Friday stub bar (daily bars spanning under 12 trading hours), so lookbacks are
+  5-a-week trading days; `schedule_h` is left out of configurations with `signal_tf` (`Specialist.unused_config`),
+  so the slow agent id is now `tsmom-g0-c12c9afb24` (default tsmom ids unchanged, digest test green). Added an
+  unfiltered-context truncation test. Pre-registration H-01 now freezes the stub, Wilder ATR on mids, the score
+  formula, min_score 0.5, the time-barrier wording, costs and swap source, the short-swap bias (report long-only),
+  holdout-crossing labels dropped, 10 trades per positive year, the t-stat and DSR count, and the inconclusive
+  branch; it states H-01 can retire but not promote. Not done: the research report does not yet print the
+  long-only net R split the pre-registration asks for (a follow-up before the run); the 2,631 signal count predates
+  the stub fix (recount at the freeze). No research trial was run.
 
 ## Next steps (no owner input needed unless marked)
 - Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):

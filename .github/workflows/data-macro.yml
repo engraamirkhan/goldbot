@@ -9,16 +9,21 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "41 4 * * 2"   # Tuesdays 04:41 UTC: after Monday's weekly H.10 dollar release
-permissions:
-  contents: write   # release asset upload
-  issues: write     # failure report
+permissions: {}   # least privilege: the token has no scopes unless a job grants them
+concurrency:
+  group: data-macro   # one publisher at a time for macro-v1
+  cancel-in-progress: false
 jobs:
   fetch:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: write   # release asset upload
+      issues: write     # failure report
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with: { python-version: "3.11" }
       - run: pip install -e .
       - name: fetch the previously published file (its rows are kept as published)

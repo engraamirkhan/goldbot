@@ -69,8 +69,8 @@ export const api = {
   reset: (token: string, new_password: string) => req<Schemas["AcceptResponse"]>("/api/auth/reset", { method: "POST", body: JSON.stringify({ token, new_password }) }),
   changePassword: (current_password: string, totp: string, new_password: string) =>
     req<Schemas["Ok"]>("/api/auth/password/change", { method: "POST", body: JSON.stringify({ current_password, totp, new_password }) }),
-  forgotPassword: (email: string, totp: string, new_password: string) =>
-    req<Schemas["Ok"]>("/api/auth/password/forgot", { method: "POST", body: JSON.stringify({ email, totp, new_password }) }),
+  forgotPassword: (email: string, totp: string, new_password: string, recovery_code = "") =>
+    req<Schemas["Ok"]>("/api/auth/password/forgot", { method: "POST", body: JSON.stringify({ email, totp, new_password, recovery_code }) }),
   recoveryLogin: (email: string, password: string, recovery_code: string) =>
     req<Schemas["RecoveryLoginResponse"]>("/api/auth/recovery/login", { method: "POST", body: JSON.stringify({ email, password, recovery_code }) }),
   status: () => req<Status>("/api/status"),

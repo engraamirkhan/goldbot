@@ -1,5 +1,7 @@
 # goldbot runbook (owner's guide)
 
+**Start with the one-page [owner guide](OWNER_GUIDE.md) (setup checklist, daily use, decisions); this runbook has the detail.**
+
 This is the step-by-step guide for running goldbot on the Windows VPS. It is written for the owner, not for a
 developer. Every command, service name, file and setting below exists in this repository; where a step depends
 on something outside the repository (Windows, Cloudflare, Telegram, Node.js) the guide says so.
@@ -370,10 +372,12 @@ a service is running; if one keeps restarting, read its `.err` file in the logs 
 | Situation | What to do |
 | --- | --- |
 | Anyone wants a new password | Signed in: **Account** tab -> current password + authenticator code + new password (12+ characters, different from the current one). Their other sessions are signed out. |
-| Someone forgot their password but has the authenticator | Login page -> **Forgot password** -> email, a current code, new password. All their sessions are signed out. Five wrong attempts lock that email for 15 minutes. |
+| An approver or viewer forgot their password but has the authenticator | Login page -> **Forgot password** -> email, a current code, new password. All their sessions are signed out and you get a Telegram notice; if you did not expect it, **Disable** the account. Five wrong attempts lock that email for 15 minutes (20 from one network address lock that address). |
+| You (the owner) forgot your password | Login page -> **Forgot password** -> email, a current authenticator code, new password **and one unused recovery code** (the code is spent). The authenticator alone never resets the owner. You get a Telegram notice either way. |
 | An approver or viewer lost the authenticator | Owner: **Users** -> **Reset link** on their row, and send them the link (24 h, single use). It sets a new password and a new authenticator and signs them out everywhere. |
 | You (the owner) lost the authenticator | Login page -> **Use a recovery code** -> email, password and one unused recovery code. Enrol the new authenticator it shows; the old one stops working. Then get 10 fresh codes (`POST /api/auth/recovery/codes` with password + new code; there is no button yet). The old codes stop working. |
-| You lost the authenticator and every recovery code | On the server: stop `goldbot-api` and ask a Claude session to reset the owner in `state\aux.db`. There is no remote path, by design. |
+| You lost the authenticator and every recovery code, or the password and the authenticator | On the server: stop `goldbot-api` and ask a Claude session to reset the owner in `state\aux.db`. There is no remote path, by design. |
+| A sign-in says "too many attempts" | Wait 15 minutes after the last failure; the counter is kept in `state\aux.db`, so restarting the API does not clear it. Someone who knows your email can keep it locked this way; the audit log shows the failures and their address. |
 | Someone should lose access | Owner: **Users** -> **Disable** (signs them out at once) or **Sign out everywhere**; **Enable** restores the account. The owner cannot be disabled or demoted. |
 
 Every one of these is recorded in the audit log (`state\aux.db`, table `audit`; the state-files table in section 3 shows how to read it).

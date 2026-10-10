@@ -205,7 +205,6 @@ def test_reset_link_sets_password_and_new_authenticator_once(team):
     assert s.session_user(tok) is None
     with pytest.raises(PermissionError):                                       # the old authenticator is gone
         s.login("v@x.io", "a reset viewer password", totp_code(sec["v@x.io"]))
-    s.failed.clear()
     s.login("v@x.io", "a reset viewer password", totp_code(_secret(e.totp_uri)))
     with pytest.raises(PermissionError, match="invalid or expired"):           # single use
         s.use_reset_link(link, "yet another password")
@@ -240,7 +239,6 @@ def test_recovery_code_logs_the_owner_in_once_and_reenrols_the_authenticator(tea
     assert s.session_user(r.token) is not None and s.session_user(old) is None
     with pytest.raises(PermissionError):                                       # each code works once
         s.recovery_login(OWNER, PW, codes[0])
-    s.failed.clear()
     s.login(OWNER, PW, totp_code(_secret(r.totp_uri)))
     assert s.recovery_codes_left(OWNER) == 9 and "recovery_login" in _events(s)
 
@@ -286,7 +284,6 @@ def test_owner_reenables_a_user_and_revokes_sessions(team):
     with pytest.raises(PermissionError):
         s.login("a@x.io", "approver password 123", totp_code(sec["a@x.io"]))
     s.enable(OWNER, "a@x.io")
-    s.failed.clear()
     assert s.session_user(s.login("a@x.io", "approver password 123", totp_code(sec["a@x.io"]))) is not None
     assert {"revoke_sessions", "disable", "enable"} <= set(_events(s))
     with pytest.raises(KeyError):

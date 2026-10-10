@@ -71,13 +71,21 @@ class Specialist(ABC):
     def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
         asked = (identity.config if identity is not None else overrides).get(TIMEFRAME_KEY, type(self).timeframe)
         base = {**self.default_config, **self.timeframe_defaults.get(asked, {})}
-        cfg = {**base, **overrides}
+        unused = self.unused_config({**base, **(identity.config if identity is not None else overrides)})
+        base = {k: v for k, v in base.items() if k not in unused}
+        cfg = {k: v for k, v in {**base, **overrides}.items() if k not in unused}
         self.identity = identity or AgentIdentity(family=self.family, config=cfg)
         self.config = {**base, **self.identity.config}
         tf = self.config.get(TIMEFRAME_KEY, type(self).timeframe)
         if tf != type(self).timeframe and tf not in self.timeframes:
             raise ValueError(f"{self.family} does not run on {tf}; allowed: {(type(self).timeframe, *self.timeframes)}")
         self.timeframe = tf
+
+    @classmethod
+    def unused_config(cls, config: dict[str, Any]) -> set[str]:
+        """Keys `config` makes inert (e.g. a schedule a higher-timeframe signal ignores): left out of the configuration
+        and its agent id, so a parameter that changes nothing cannot make two ids for one rule. None by default."""
+        return set()
 
     @property
     def agent_id(self) -> str:
