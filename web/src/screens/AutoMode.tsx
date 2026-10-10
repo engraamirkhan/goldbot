@@ -8,7 +8,13 @@ import { localTime, num, utcTitle } from "../lib/explain";
 // back to propose needs nothing. The engines still force propose under the 30-day re-arm lock and the 12% kill switch.
 
 const MODE_WORDS = { auto: "Auto", propose: "Propose-and-approve" } as const;
-const r2 = (x: number | null | undefined) => (x == null ? "n/a" : `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(2)}R`);
+// mode_by: the owner sees "dashboard:<email>" / "telegram:<uid>"; other roles get only the channel from the server
+const setBy = (by: string | null) => {
+  if (!by) return "";
+  const i = by.indexOf(":");
+  return i < 0 ? ` on ${by}` : ` by ${by.slice(i + 1)} on ${by.slice(0, i)}`;
+};
+const r2 =(x: number | null | undefined) => (x == null ? "n/a" : `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(2)}R`);
 
 function Evidence({ v }: { v: AutoModeView }) {
   const t = v.test;
@@ -90,7 +96,7 @@ export function AutoModeCard() {
         <span className={`state ${v.eligible ? "ok" : "idle"}`}>{v.eligible ? (v.owner_mode === "auto" ? "evidence holds" : "auto mode offered") : "auto mode not offered"}</span>
       </div>
       <p className="muted small">
-        {v.mode_since ? <>Set <time title={utcTitle(v.mode_since)}>{localTime(v.mode_since)}</time>{v.mode_by ? ` by ${v.mode_by}` : ""}{v.mode_reason ? ` (${v.mode_reason})` : ""}. </> : "The owner has not set a mode yet. "}
+        {v.mode_since ? <>Set <time title={utcTitle(v.mode_since)}>{localTime(v.mode_since)}</time>{setBy(v.mode_by)}{v.mode_reason ? ` (${v.mode_reason})` : ""}. </> : "The owner has not set a mode yet. "}
         {engines.length > 0 ? <>Engines now: {engines.map(([a, m]) => `${a} ${m}`).join(", ")}.</> : "No engines reporting."}
       </p>
       <Forced v={v} />

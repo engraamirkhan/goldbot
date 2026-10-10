@@ -45,6 +45,32 @@ Folded into existing rows by `xauusd-trader-playbook.md` (no new trials):
 - Exit variants: an H-01 survivor only.
 - BTC as a gold signal: not to be added (unstable relation, no mechanism).
 
+## A2. Opportunity-day and runner-exit candidates (Q2 2027)
+
+Added 2026-10-10 from `docs/research/opportunity-days.md` ("OD"), answering the owner's north-star (£50+ on
+opportunity days, less or nothing on poor days; account £1,000). The thesis: **range is predictable, direction is
+not.** A range forecast pays only by (a) skipping quiet days, where fixed USD costs are a larger share of R, and (b)
+letting a correctly-signed trade run on a trend day. It cannot create an entry edge.
+- **Feature-first.** The score's inputs are an opt-in bulk feature family (BACKLOG 30a), kept out of the frozen Q1
+  H-02 universe so its configuration and K_eff are unchanged.
+- **No Q1 2027 trial is used or reserved.**
+- Research window: about 3,940 trading days (2010-01 .. 2025-09). The holdout is untouched.
+
+| Rank | ID | Hypothesis | Status | Rationale | Data | Horizon | Expected gross edge vs cost | Trial cost |
+|---|---|---|---|---|---|---|---|---|
+| 1 | H-16 | **Opportunity score = day-range forecast.** In-fold HAR on stub-free daily ranges, plus GVZ ÷ YZ20, tier-1 count today, prior-day range ÷ ATR20(1d), NR4/NR7/inside-day, weekend gap ÷ ATR(1d). Refreshed at London+60 and NY+60 with the early-session noise ratio. No direction terms | proposed (**Q2 2027**); needs BACKLOG 30a | Volatility persistence (Corsi 2009, R); GVZ adds to HAR (Luo et al. 2016; Wei et al. 2020, FRL, Chinese futures); release days are high-volatility days (Cai et al. 2001; Elder et al. 2012) (OD 1.1, 1.2, 1.8) | D, F (GVZCLS, `asof_join`; D−2 at the London open), calendar | daily, refreshed intraday | Not a return trial. **Reading rule:** continue if out-of-sample Spearman ρ(score, realised range ÷ ATR20) ≥ the HAR-only baseline + 0.05, AND the top-quintile mean range ≥ 1.5× the bottom quintile. Fail: the day factor uses HAR alone, and GVZ, events and compression are retired as range inputs | 1 (counted for honesty, though it tests range, not returns) |
+| 2 | H-19 | **Stand-aside overlay:** every Q2 trial reports net R by score band (low / mid / high) and the effect of skipping the low band | proposed (**Q2 2027**, overlay) | Cost in R falls as ATR rises (SoA A7). Lundström 2013 WP: ORB returns ≈ 150–200 bp/day apart across volatility states (S) | D | all | Not alpha. It raises net R per trade by skipping trades whose range cannot pay costs | 0 (as H-13) |
+| 3 | H-17 | **Trend-day continuation with a runner.** On days with `opp_score` in the top half (H-16's frozen model), at each 15m close between London+60 min and NY+120 min (DST-aware local times): if \|close − day open\| exceeds the noise boundary (14-day mean \|move from the open\| at the same time of day × 1.0), enter that way, at most one trade a day. Stop 1.5 ATR(15m). Exits: **V0** target 3 ATR vs **V1** 50% at 2 ATR, chandelier 2.5 ATR armed at 1.5 ATR, cap 10 ATR, flat 16:30 New York | proposed (**Q2 2027**); needs BACKLOG 30a, 31, 32; **quant review of the retired-family overlap (R-02, R-05) before pre-registration** | Zarattini, Aziz, Barbon 2024: noise-area trend days with trailing and clock exits, SPY net Sharpe 1.33 (S). Kaminski & Lo 2014: trailing exits pay only with serial correlation (S). New vs R-05: ex-ante range conditioning and a runner exit | D | 15m | Unknown. Unconditional NY momentum was −0.006 R gross (R-05). Cost 0.15–0.25 R historically on 15m, lower on high-ATR days. Events ≈ 1,000–1,500 (*estimate*; count from events only before freezing). **Reading rule:** continue only if all hold: gross t ≥ 2 on ≥ 1,000 events; V1 net mean R > 0; ≥ 3 positive net years incl. 2021 or 2022; V1 net ≥ V0 net; the low-score half (shadow) has lower gross R than the high half. If the conditioning makes no difference, the families stay retired. £/day metrics reported, not in the rule | 2 (V0, V1) |
+| 4 | H-18 | **Post-blackout event continuation.** At +30 min after NFP, CPI, FOMC or PCE (the end of the gate's blackout), enter in the direction of the release-to-now move if \|move\| > 1.0 ATR(15m). Runner V1, flat 16:30 New York | proposed (**Q2 2027 only if** an event floor is ruled or tier-2 data exists) | Event days carry the volatility (R). FOMC adjustment lasts beyond 5 min (Awartani et al. 2024, S). Post-announcement effects in gold futures (Sobti, S). Distinct from H-11: needs no consensus surprise | D, calendar | 15m–1h | Unknown. About 44 events/yr, so **~690 events, below the 1,000 floor**: inconclusive by design unless the owner rules a floor or BACKLOG 18/D-4 adds tier-2 events. Reading rule as H-17 (gross t ≥ 2, net > 0, ≥ 3 positive years) | 1 |
+| 5 | H-20 | **Compression → expansion** (NR4/NR7, inside day, ATR percentile) adds range information beyond HAR | proposed (feature inside H-16) | Practitioner only (Crabel 1990); no peer-reviewed test found (P/F) | D | daily | Measured as part of H-16's incremental ρ; no separate rule | 0 |
+| 6 | H-21 | **Early-session noise ratio** (range since the session open ÷ its 14-day average at the same time) predicts the rest-of-day range and flags trend days | proposed (feature in the H-16 refreshes and H-17 entries) | Early-interval RV predicts late RV in gold futures (FRL 2023, S); SPY detector (S) | D | 15m–1h | No separate rule | 0 |
+| 7 | H-22 | **COT extremes predict volatility** | proposed (feature only; lowest) | Vendor claims only (F); weekly | C | daily | — | 0 |
+| 8 | H-23 | **Overnight USD / real-yield shock predicts the day's range** | proposed; blocked on intraday USD (D+, owner) | Contemporaneous relation R; predictive W | D+ | daily | — | 0 until data |
+
+**Q2 2027 pre-registration candidates:** H-16 (1), H-17 (2), H-19 (0), and H-18 (1) only if its floor is ruled. That
+is 3–4 trials. When they run, each adds to the DSR trial count in section C. The ledger below is unchanged today
+(nothing has run).
+
 ## B. Retired: do not re-test without new evidence
 
 The governing list is `research.retired_families` in `config/settings.yaml` (family, row id, retired date, reason,
@@ -82,3 +108,4 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
   - Consensus calendar source.
   - P4 event minimum for daily families.
   - Other instruments if H-01 is net ≤ 0.
+  - Event-family floor for H-18 and projected percentage daily caps (`opportunity-days.md` section 6).

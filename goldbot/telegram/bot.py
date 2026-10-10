@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 
 import pandas as pd
 
@@ -16,7 +17,7 @@ from goldbot.telegram import automode
 from goldbot.telegram.approvals import Proposal
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import DigestSchedule, digest_from_runtime
-from goldbot.telegram.outbox import Outbox
+from goldbot.telegram.outbox import Outbox, ReportRetry, SendGuard
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +60,10 @@ class TelegramBot:  # pragma: no cover - needs network + token
         if Application is None:
             raise RuntimeError("python-telegram-bot not installed; pip install -e '.[live]'")
         self.bus = ApprovalBus(state_dir)
-        self.outbox = Outbox(state_dir, self.bus)
+        # opened lazily inside the pump: a broken aux.db must not stop the service (halt, health alerts, decisions)
+        self.outbox: Outbox | None = None
+        self.send_guard = SendGuard()           # a sent proposal whose mark_sent failed is retried, never re-sent
+        self.report_retry = ReportRetry()       # a report batch failing for one recipient is not resent forever
         self.owner_ids = owner_ids
         self.poll_s = poll_s
         self.state_dir = state_dir
@@ -85,9 +89,16 @@ class TelegramBot:  # pragma: no cover - needs network + token
         n = 0
         while True:
             try:
-                for p in self.outbox.unsent_proposals():
-                    self.outbox.mark_sent(p.proposal_id, await self.send_proposal(p))
-                for pid, outcome, msgs in self.outbox.finished():
+                if self.outbox is None:
+                    self.outbox = Outbox(self.state_dir, self.bus)
+                outbox = self.outbox
+                self.send_guard.retry(outbox, time.monotonic())
+                for p in outbox.unsent_proposals():
+                    if not self.send_guard.should_send(p.proposal_id):
+                        continue                    # went out already; its mark is being retried
+                    msgs = await self.send_proposal(p)
+                    self.send_guard.record(outbox, p.proposal_id, msgs, time.monotonic())
+                for pid, outcome, msgs in outbox.finished():
                     for chat, mid in msgs:
                         try:
                             await self.app.bot.edit_message_reply_markup(chat, mid, reply_markup=None)
@@ -96,9 +107,18 @@ class TelegramBot:  # pragma: no cover - needs network + token
                         except Exception as exc:
                             log.warning("could not update %s: %s", pid, exc)
                 if n % max(int(30 / self.poll_s), 1) == 0:          # reports every ~30 s
-                    for text in self.outbox.new_reports():
+                    texts, ack = outbox.pending_reports()
+                    delivered = True
+                    for text in texts:
                         for uid in self.owner_ids:
-                            await self.app.bot.send_message(uid, text)
+                            try:
+                                await self.app.bot.send_message(uid, text)
+                            except Exception as exc:
+                                delivered = False
+                                log.warning("could not send a report to an owner: %s", exc)
+                    # only after delivery: a failed batch is retried, at most REPORT_ATTEMPTS passes (ReportRetry)
+                    if ack is not None and self.report_retry.should_ack(ack, delivered):
+                        outbox.ack_reports(ack)
             except Exception:
                 log.exception("telegram pump")
             if n % max(int(HEALTH_EVERY_S / self.poll_s), 1) == 0:

@@ -7,12 +7,18 @@ Rules that make it safe to restart at any time:
 * after downtime a missed slot is caught up once if it is no older than `max_late`, otherwise it is skipped and
   the skip is recorded (a Saturday retrain should not start on a Wednesday afternoon);
 * one job failing never stops the others; the error is recorded and the next slot runs normally;
-* state/scheduler.json doubles as the heartbeat the dashboard reads (`/api/jobs`); the supervisor does not read it.
+* job state lives in aux.db (tables scheduler_jobs, scheduler_heartbeat; state store step 3), written under
+  BEGIN IMMEDIATE; the heartbeat row carries the whole status document, which health and the VPS updater read
+  (`python -m goldbot.db scheduler-status`). state/scheduler.json is imported once, then regenerated after every
+  save for the dashboard (`/api/jobs`), the agents' read_state tool and a rolled-back release; a failed export is
+  logged and never stops a job. What a rolled-back release wrote there is merged back on the next start (the newer
+  slot per job wins). The supervisor does not read any of it.
 """
 from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import time
 import traceback
 from pathlib import Path
@@ -22,6 +28,18 @@ import pandas as pd
 from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord, Record, UtcTimestamp
+from goldbot.data.timeutil import epoch_ns
+from goldbot.db import Database
+from goldbot.db.bookkeeping import (
+    SCHEDULER_FILE,
+    dual_read,
+    export_latest,
+    load_jobs,
+    save_jobs,
+    scheduler_document,
+    table_empty,
+)
+from goldbot.db.import_state import ImportSpec
 
 log = logging.getLogger("goldbot.scheduler")
 
@@ -102,14 +120,57 @@ class Job(Record):
     fn: JobFn
 
 
+def _job_state(raw: dict[str, Any]) -> JobState:
+    return JobState.model_validate({f: x for f, x in raw.items() if f != "next_slot"})
+
+
+def _file_jobs(path: Path) -> tuple[dict[str, JobState], str]:
+    text = path.read_text()
+    return {k: _job_state(v) for k, v in json.loads(text).get("jobs", {}).items()}, text
+
+
+def import_scheduler_json(path: Path, conn: sqlite3.Connection) -> int:
+    """state/scheduler.json -> scheduler_jobs (each job validated as a JobState), only into an empty table."""
+    if not table_empty(conn, "scheduler_jobs"):
+        return 0
+    jobs, text = _file_jobs(path)
+    save_jobs(conn, {k: v.model_dump_json() for k, v in jobs.items()}, status=text)
+    return len(jobs)
+
+
+def merge_scheduler_json(path: Path, conn: sqlite3.Connection) -> int:
+    """A file a rolled-back release kept writing: per job, the state with the newer last_slot wins, so a slot that
+    release already ran (or skipped) is not run again."""
+    jobs, _ = _file_jobs(path)
+    have = {k: JobState.model_validate_json(b) for k, b in load_jobs(conn).items()}
+    def is_newer(k: str, v: JobState) -> bool:
+        if k not in have:
+            return True
+        mine = have[k].last_slot
+        return v.last_slot is not None and (mine is None or v.last_slot > mine)
+    newer = {k: v for k, v in jobs.items() if is_newer(k, v)}
+    for k, v in newer.items():
+        conn.execute("INSERT INTO scheduler_jobs (name, body) VALUES (?, ?) "
+                     "ON CONFLICT(name) DO UPDATE SET body = excluded.body", (k, v.model_dump_json()))
+    return len(newer)
+
+
+SCHEDULER_IMPORT = ImportSpec(source="scheduler.json", kind="aux", loader=import_scheduler_json, once=True,
+                              backup=True)
+
+
 class Scheduler:
+    """`state_path` is the heartbeat export (state/scheduler.json); the state itself is in aux.db next to it."""
+
     def __init__(self, state_path: str | Path, clock: Callable[[], pd.Timestamp] | None = None):
         self.path = Path(state_path)
         self.clock = clock or (lambda: pd.Timestamp.now("UTC"))
         self.jobs: dict[str, Job] = {}
-        raw = json.loads(self.path.read_text()) if self.path.exists() else {}
-        self.state: dict[str, JobState] = {k: JobState.model_validate({f: x for f, x in v.items() if f != "next_slot"})
-                                           for k, v in raw.get("jobs", {}).items()}
+        self.db = Database.open(self.path.parent, "aux")
+        if self.path.name == SCHEDULER_IMPORT.source:
+            dual_read(self.db, SCHEDULER_IMPORT, self.path.parent, merge_scheduler_json)
+        with self.db.connection() as conn:
+            self.state: dict[str, JobState] = {k: JobState.model_validate_json(b) for k, b in load_jobs(conn).items()}
 
     def add(self, name: str, schedule: Schedule, fn: JobFn) -> None:
         if name in self.jobs:
@@ -163,14 +224,16 @@ class Scheduler:
             for n in self.jobs}}
 
     def _save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         now = self.clock()
         payload = {"ts": now.isoformat(), "jobs": {
             n: {**s.model_dump(mode="json"), "next_slot": self.jobs[n].schedule.next_slot(now).isoformat() if n in self.jobs else None}
             for n, s in self.state.items()}}
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=1, default=str))
-        tmp.replace(self.path)    # atomic: a crash mid-write never leaves a torn state file
+        doc = json.dumps(payload, indent=1, default=str)
+        with self.db.write() as conn:
+            save_jobs(conn, {n: s.model_dump_json() for n, s in self.state.items()},
+                      int(epoch_ns(pd.DatetimeIndex([now]))[0]), status=doc)
+        # the compatibility export, after the commit (atomic; never raises: a job must run even if the file is locked)
+        export_latest(self.db, SCHEDULER_FILE, self.path, lambda conn: scheduler_document(conn) or doc)
 
     def run_forever(self, poll_s: float = 30.0) -> None:  # pragma: no cover - service loop
         while True:

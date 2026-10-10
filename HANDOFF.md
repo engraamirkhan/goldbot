@@ -443,6 +443,33 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   an empty DB it imports users.json and audit.jsonl once and never writes them again (backup). Failed-login
   counters stay in memory. Not done: `run.py migrate`/`import-state` wiring, `state_db` health check (step 0
   leftovers, files owned elsewhere); the API migrates aux.db on open until then. Steps 2-8 not started.
+- State store step 3 (2026-10-10): staff-agent runs and monthly spend, scheduler job state and the Telegram outbox are
+  in aux.db (`goldbot/db/bookkeeping.py`, migration 5). Each old file is imported once on first open (or by
+  `python -m goldbot.db import-state`) into an empty table. scheduler.json and agent_spend.json stay as exports
+  regenerated after each write (dashboard, health, read_state tool and vps_update.ps1 still read them; originals in
+  `state/pre-db/`); agent_runs.jsonl stays an append-only mirror (dashboard; API owner notices are still relayed from
+  it); telegram_outbox.json is never written again. `SpendLedger.reserve` books the per-run budget under BEGIN
+  IMMEDIATE before the first API call and `settle` books the real cost, so concurrent runs never pass the cap (the
+  old ledger cached the file and the news and agents processes overwrote each other). Not done: news_spend.json
+  (`data/news_collector.py` was out of scope), switching api/app.py to query aux.db.
+  Trading-safety review fixes (same day): exports run after the commit and never raise (a locked file on Windows no
+  longer undoes a spend booking or stops a scheduler job); concurrent exporters converge through `exports.seq`.
+  Rollback safety: telegram_outbox.json is rewritten in its old format for one release; a file another release
+  wrote (hash differs from this code's last export) is merged back once (spend: larger per month; scheduler: newer
+  slot; outbox: its sent list and offset; runs appended only to the file are adopted) and counted in
+  `state_fallback`. Migrations can be `additive`: `schema_version.compat_back_to` lets older code open a newer
+  aux.db; the release before step 3 needs the one-time downgrade in RUNBOOK (updating the VPS). Health and
+  vps_update.ps1 read the scheduler status from aux.db (`python -m goldbot.db scheduler-status`), the file only as
+  fallback. Telegram: aux.db is opened inside the pump (a broken file no longer stops the bot), a proposal whose
+  mark_sent fails is not re-sent (`SendGuard`, retry with backoff), and reports are acknowledged only after delivery
+  (at least once). A run that dies mid-loop keeps its reservation; a failed settle is logged and the run still logged.
+  Re-verification: the heartbeat is read with a plain read-only connection (an `immutable` read tore under a
+  writer); export hashes are recorded before the write and the last 16 kept (`exports.hashes`), so our own file is
+  never taken as foreign; a file missing at the first open is recorded as imported (empty), so a later file is only
+  merged; the outbox merge is a union (DB proposals still pending kept) with the further report cursor; a report
+  batch failing for one recipient is acknowledged after 3 passes (`ReportRetry`); vps_update.ps1 steps aux.db back
+  from schema 5 to 4 by itself when installing a commit without `compat_back_to` (`Sync-AuxSchema`, refuses any
+  other version) and stops the scheduler first, re-checking for a running job before stopping the rest.
 - Dashboard accounts (2026-10-10, owner request): the owner is the sole admin. `auth.owner_email` (Settings
   `AuthSettings`, default None; set only in the server's `config/settings.local.yaml`, never in the public repo)
   is required for bootstrap and is the only address that can hold the owner role. Invites and `set_role` grant
@@ -710,6 +737,52 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`combined_daily_loss_abs`) when the combined day loss reaches 50. Exits never consult it. engine_<account>.json
   carries `daily_loss_limit` and `daily_loss_remaining`; health shows them on the daily cap line and warns when none
   is left. Not done: the approval card's "remaining daily allowance" (ui-ux follow-up).
+- Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
+  `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
+  minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both
+  channels; see the re-review bullet below for the counter key and atomicity). `mode_by` on the
+  auto-mode card is the full `dashboard:<email>`/`telegram:<uid>` only for the verified owner; other roles see the
+  channel. Health, Research and auto-mode error text shows the exception type only (detail logged server-side).
+  Every `/api/` response carries `Cache-Control: no-store`. The unused `lightweight-charts` dependency is removed
+  (new price charts will need it added back).
+- Dashboard security re-review (2026-10-10, TRACEABILITY U13, U15, U17, U18): no reset link can be made or used for
+  the owner account (a stolen owner session could otherwise reset password and authenticator); the owner recovers
+  with a recovery code. Lockout check-and-count is one BEGIN IMMEDIATE transaction (`_reserve`, login and codes),
+  so a 32-thread burst gets at most 5 checks. Code failures count under `code:<email>`: they lock re-arm and auto
+  mode but never sign-in; failed sign-ins lock both (fails safe). The notice fires on crossing the limit, at most once
+  an hour, and names the new server command `python -m goldbot.ops.run revoke-sessions` (signs every account out).
+  The lockout never gates `/api/halt`, Telegram /halt or /mode propose (tested). Health check reasons, drift errors,
+  system-halt reasons and `/api/jobs` errors are whole for the owner and redacted for other roles (type only, paths
+  as `<path>`, in the API layer); `account_security` rows in `/api/agent-runs` are owner-only. RUNBOOK updated.
+  Follow-up: forgot-password, recovery login, password change and recovery-code regeneration also reserve before
+  checking (32-thread bursts get at most 5 checks; a refused new password with the right credentials is not
+  counted). `revoke-sessions` refuses a state directory without aux.db (exit 2, absolute path printed) instead of
+  creating an empty one. Redaction removes quoted paths whole (spaces, Windows) and UNC `\\host\share` paths.
+- Owner's manual trading record (2026-10-10, research seeds; security + quant review fixes the same day):
+  `python -m goldbot.ops.run owner-history [PATH]` (`goldbot/research/owner_history.py`) reads the owner's MT5 History
+  report (HTML, XLSX or a deals CSV; stdlib parsers, no new dependency; inputs and xlsx members over 50 MB refused)
+  from `~/Personal project/trade-history/` (newest file) and writes a Markdown report, a JSON summary (finite numbers
+  only, `allow_nan=False`) and a per-trade CSV (mode 0600) to that same private folder. Writing into ANY git work tree
+  is refused (`git_tree_reason`: a `.git` dir or file in the path, this checkout under any case spelling, or
+  `git rev-parse` succeeding). The header's account number, name, company and server are never kept (only the
+  currency); tickets are used only to match a position to its opening order. A pre-commit hook
+  (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` + digits, also in
+  UTF-16 and inside .xlsx). XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`, default Europe/Athens).
+  1R comes from the opening order's INITIAL stop (Orders section), else the report's S/L, which is the FINAL stop;
+  a stop at or beyond the entry is `sl_moved` and, like the no-stop proxy, kept out of the R statistics. The USD rate
+  is always implied from the trades (a "USD" account implying != 1 is flagged). Reported: R, win rate, expectancy
+  with t, profit factor, return on equity with t, daily P&L by UTC and London day with t and 95% CI and the share of
+  days >= `--targets` (default 30,50), sessions, hour, weekday, side, holding time, tier-1 news (if the store has
+  `calendar_events`), entries near session opens on each date's local clock against a base rate from the owner's
+  active hours, leverage vs equity, losing streak, drawdown from trading only (deposits/withdrawals excluded; % on a
+  flow-adjusted index), and risk of ruin with `goldbot.research.ruin`'s circular block bootstrap for both sizing
+  readings (compounding, fixed stakes) plus a zero-edge (demeaned) stress row; end equity is reported as a capped
+  log10. Ends with hypothesis seeds OH-01..06 in hypotheses.md format, labelled in-sample, not evidence, each phrased
+  as "test whether entries in X differ from the owner's other entries", stating K = slices examined and whether its
+  t clears the Bonferroni bar (slices under 10 trades are never said to clear it). Seeds quote R, % and counts only:
+  do not paste amounts into the repo. The MT5 layout was written from the documented report structure, not checked
+  against a real file (none may enter the repo): if the owner's export parses to 0 trades, look at `_ALIASES` /
+  `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
 - Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;
