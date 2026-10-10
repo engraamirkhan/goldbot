@@ -583,13 +583,14 @@ class AuthStore:
         check_password_policy(new_password)                         # length only: independent of the account
         self._check_lockout(email, "password_forgot_locked", ip)
         u = self.get_user(email)
-        if u is None or not u.enabled:
+        # the same two scrypt calls on every path (unknown, disabled, owner without a recovery code, real account),
+        # so the response time does not reveal which accounts exist (security review of c256c23)
+        refused = u is None or not u.enabled or (u.role == "owner" and not (self.is_owner(u) and recovery_code))
+        same = verify_password(new_password, _dummy_hash() if refused or u is None else u.password_hash)
+        pw_hash = hash_password(new_password)
+        if refused or u is None:
             self._fail(email, "password_forgot_failed", ip)
         owner = u.role == "owner"
-        if owner and not (self.is_owner(u) and recovery_code):
-            self._fail(email, "password_forgot_failed", ip)
-        same = verify_password(new_password, u.password_hash)        # revealed only after the codes pass
-        pw_hash = hash_password(new_password)
         left: int | None = None
         try:
             with self.db.write() as conn:

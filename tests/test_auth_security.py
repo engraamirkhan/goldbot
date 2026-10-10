@@ -181,6 +181,28 @@ def test_recovery_login_runs_scrypt_whether_or_not_the_account_exists(team, monk
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("email", ["a@x.io", "nobody@x.io", OWNER])
+def test_forgot_password_runs_the_same_scrypt_work_on_every_path(team, monkeypatch, email):
+    """Existing account, unknown email and owner without a recovery code all do one verify + one hash before the
+    refusal, so timing does not reveal which accounts exist (security review of c256c23)."""
+    s, _, _ = team
+    calls: list[str] = []
+    real_v, real_h = auth_mod.verify_password, auth_mod.hash_password
+
+    def v(pw: str, h: str) -> bool:
+        calls.append("verify")
+        return real_v(pw, h)
+
+    def hh(pw: str, salt: bytes | None = None) -> str:
+        calls.append("hash")
+        return real_h(pw, salt)
+    monkeypatch.setattr(auth_mod, "verify_password", v)
+    monkeypatch.setattr(auth_mod, "hash_password", hh)
+    with pytest.raises(PermissionError):
+        s.forgot_password(email, "000000", "a brand new password 123")
+    assert calls == ["verify", "hash"]
+
+
 # ----------------------------------------------------------------------------- 4. owner pinned to owner_email
 def _legacy_users(tmp_path, owner: str) -> None:
     u = {"email": owner, "role": "owner", "password_hash": hash_password(PW), "totp_secret": new_totp_secret()}
