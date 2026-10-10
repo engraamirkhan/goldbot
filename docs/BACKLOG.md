@@ -30,7 +30,7 @@ Status: ready / in progress / in review / done / rejected.
 | 11 | Trader-toolkit evaluation as primary signals | Idea generation, confluence · FIND | S–M | ready (after 10) |
 | 12 | Deterministic attribution that feeds back into research | Performance attribution, learning · FIND | M | ready |
 | 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | ready |
-| 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | ready |
+| 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | done (2026-10-10; promotion gate once 90 days of broker M1 exist) |
 | 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | ready |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
@@ -225,7 +225,7 @@ Item 1 needs the owner's VM, so it runs as an owner step alongside the wave.
 ## Later (parked)
 - M28 TreeSHAP per decision, A5 per-trade SHAP, and a post-trade review after each exit.
 - R8 `order_calc_margin` (touches the broker protocol; schedule after item 6).
-- D10 bar close by clock, A2 window from settings, M9 allocator blackout input, D12 daily M1 reconciliation, D11
+- D10 bar close by clock, A2 window from settings, M9 allocator blackout input, D11
   `flags` dedup, D13 session state from `session_deals`, D7 4h bars across the daily break.
 - M25 CUSUM calibrated to 5% quarterly false alarms; M15 walk-forward reads settings; U4 lockout timing.
 - M16 CPCV quarterly; M10 learned allocator (after three months of data); F12 TradingView feature family.

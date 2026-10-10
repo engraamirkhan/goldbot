@@ -32,6 +32,9 @@
                     many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
                     fresh plan), never past the quarter's trial budget and never into the held-out year, each a
                     walk-forward recorded in the trial registry whose count feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
+* feed_reconcile    daily (D12): per account, the engine's tick-built 1m bars against the broker's own M1 for the last
+                    day; divergence and unconfirmed spikes -> dq_events, broker M1 -> bars_1m_broker, report ->
+                    state/reconcile_<account>.json (health check reconcile:<account>). Skipped without a broker.
 """
 from __future__ import annotations
 
@@ -101,6 +104,7 @@ class JobContext(Record):
     agent_runner: AgentRunner | None = None                      # None when no Anthropic API key is in the keyring
     fetch_calendar: Callable[[], str] | None = None              # Forex Factory weekly JSON (network, VPS only)
     upload_costs: Callable[[bytes], str] | None = None           # published cost table -> release costs-v1 (VPS only)
+    broker_for: Callable[[Account], Any] | None = None           # read-only Broker per account (feed_reconcile), or None
 
 
 # ---------------------------------------------------------------------------------------------- nightly costs
@@ -709,6 +713,34 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- feed reconcile (D12)
+def feed_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily (design: Data architecture, D12/D20): per enabled account, the engine's tick-built 1m bars against the
+    broker's own M1 over the last day (goldbot/data/crossfeed.py) -> dq_events, bars_1m_broker, state/reconcile_<acc>.json."""
+    from goldbot.data.crossfeed import reconcile_account
+    if ctx.broker_for is None:
+        return {"skipped": "no broker connection configured for the scheduler"}
+    out: dict[str, Any] = {}
+    failed: list[str] = []
+    for acc in ctx.accounts:
+        broker = None
+        try:                                  # one unreachable terminal does not stop the other account's check
+            broker = ctx.broker_for(acc)
+            if broker is None:
+                out[acc.account_id] = {"skipped": "no read-only broker connection for this account"}
+                continue
+            rep = reconcile_account(ctx.store, broker, acc.account_id, acc.symbol, slot, state_dir=ctx.state_dir)
+            out[acc.account_id] = rep.model_dump(mode="json", exclude={"account_id"})
+        except Exception as exc:
+            failed.append(f"{acc.account_id}: {type(exc).__name__}: {exc}")
+        finally:
+            if broker is not None and hasattr(broker, "shutdown"):
+                broker.shutdown()
+    if failed:                                # the scheduler records the failure (health: scheduler check)
+        raise RuntimeError("feed_reconcile failed for " + "; ".join(failed) + f" (done: {sorted(out)})")
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- wiring
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
@@ -723,6 +755,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "agents_presession": agents_presession,
     "recalibrate": recalibrate,
     "drift_watch": drift_watch,
+    "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
 }
 
 

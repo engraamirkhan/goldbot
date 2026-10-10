@@ -128,6 +128,7 @@ class SchedulerSettings(_Section):
     agents_presession: ScheduleSettings
     recalibrate: ScheduleSettings
     drift_watch: ScheduleSettings
+    feed_reconcile: ScheduleSettings
 
 
 class ResearchSettings(_Section):

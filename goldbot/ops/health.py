@@ -38,6 +38,7 @@ from pydantic import Field
 from goldbot.base import FrozenRecord, Record, UtcTimestamp, write_atomic
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
+from goldbot.data.crossfeed import check_reconciliation
 
 Status = Literal["ok", "warn", "fail"]
 _RANK: dict[str, int] = {"ok": 0, "warn": 1, "fail": 2}
@@ -811,6 +812,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
         checks += [check_heartbeat(ctx, s) for s in HEARTBEAT_SERVICES]
         checks += check_scheduler(ctx)
         checks += [check_costs(ctx, a.account_id) for a in ctx.accounts]
+        checks += [check_reconciliation(ctx, a.account_id) for a in ctx.accounts]   # D12 (goldbot/data/crossfeed.py)
         if ctx.settings is not None and ctx.settings.costs.publish_release:
             checks.append(check_costs_published(ctx))
         checks += [check_data_quality(ctx), check_drift(ctx), check_deploy(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
