@@ -24,7 +24,7 @@ from goldbot.ops.jobs import (
     saturday_retrain,
 )
 from goldbot.research.model_registry import ModelRegistry
-from goldbot.research.population import Population
+from goldbot.research.population import Population, founder_base
 from goldbot.research.promotion import PerfStats
 from goldbot.research.registry import TrialRegistry, quarter_of
 from goldbot.specialists import SPECIALISTS
@@ -101,6 +101,40 @@ def test_retrain_challenger_shadow_promotion_cycle(bars_store, tmp_path):
     assert "challenger" in third["retrain"]                 # a fresh challenger starts its own shadow period
 
 
+@pytest.fixture(scope="module")
+def long_bars_store(tmp_path_factory) -> Path:
+    """Six years of 4h and 1d bars: the 4h window trains on 48 months before its first 6-month test fold."""
+    root = tmp_path_factory.mktemp("data_long")
+    store = Store(root)
+    b1, _ = check_bars(ticks_to_1m(synthetic_ticks("2019-09-01", "2025-10-01", ticks_per_minute=1, seed=11)))
+    for tf in ("4h", "1d"):
+        store.append(f"bars_{tf}", resample_bars(b1, tf), source="synthetic")
+    return root
+
+
+def test_a_4h_agent_retrains_into_a_challenger(long_bars_store, tmp_path):
+    # settings.walkforward["4h"] (48/6/6, proposal P4): the Saturday retrain trains a 4h shadow agent into a challenger
+    # on 4h bars with daily context, instead of skipping it as it did when only 15m and 1h had windows
+    ctx = _ctx(long_bars_store, tmp_path)
+    sat = pd.Timestamp("2025-09-27 06:00", tz="UTC")
+    ctx.population.ensure_founders(sat - pd.Timedelta(days=30))
+    for founder in ctx.population.members.values():
+        founder.status = "retired"                    # this test trains only the 4h agent (15m/1h are covered above)
+    m = ctx.population.spawn_founder("tsmom", founder_base("tsmom", "4h"), sat - pd.Timedelta(days=1),
+                                     gap_id="uncovered_timeframe:tsmom:4h", origin="tsmom default on 4h")
+    out = saturday_retrain(ctx, sat)
+    assert set(out) - {"bars_synced"} == {m.agent_id}
+    rt = out[m.agent_id]["retrain"]
+    assert isinstance(rt, dict), rt
+    entry = ctx.models.get(rt["challenger"])
+    assert entry.status == "challenger" and entry.agent_id == m.agent_id and entry.family == "tsmom"
+    folds = int(entry.notes[0].split()[1])            # "walk-forward N folds, M candidates"
+    assert folds >= 1 and m.specialist().timeframe == "4h"
+    # trained on 4h bars with daily context only (features.mtf.context_tfs("4h") == ["1d"]), as the engine serves it
+    names = ctx.models.load(entry).feature_names
+    assert any(f.startswith("d1_") for f in names) and not any(f.startswith(("h1_", "h4_")) for f in names)
+
+
 def test_monthly_label_grid_is_paused_by_default(tmp_path):
     ctx = _ctx(tmp_path / "data", tmp_path)
     out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
@@ -168,7 +202,8 @@ def test_gap_watch_job_spawns_shadow_founders_and_saves_the_population(bars_stor
     assert all(m.status == "shadow" and m.capital_weight == 0 and m.gap_id for m in new)
     report = json.loads((tmp_path / "gaps.json").read_text())
     assert report["notes"][0].startswith("regime: no champion")
-    assert any("no walk-forward window for 4h" in r["reason"] for r in report["refused"])
+    assert any("no walk-forward window for 1d" in r["reason"] for r in report["refused"])
+    assert not any("no walk-forward window for 4h" in r["reason"] for r in report["refused"])
 
 
 def test_no_spawn_during_system_halt(bars_store, tmp_path):

@@ -313,11 +313,11 @@ def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             out[m.agent_id] = agent
             continue
         spec = m.specialist()
-        if spec.timeframe not in ("15m", "1h"):
+        if spec.timeframe not in ctx.settings.walkforward:   # settings.walkforward: 15m, 1h, 4h (1d research-only)
             agent["retrain"] = f"skipped: no walk-forward window configured for {spec.timeframe}"
             out[m.agent_id] = agent
             continue
-        wf = ctx.settings.walkforward[cast(DecisionTimeframe, spec.timeframe)]
+        wf = ctx.settings.walkforward[spec.timeframe]
         # rolling train window plus enough test history for out-of-fold backtest stats
         res = _walk_forward(ctx, spec, slot, wf.train_months + 4 * wf.test_months)
         if res is None or res.model is None:

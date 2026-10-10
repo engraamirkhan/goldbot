@@ -323,7 +323,7 @@ def run_gap_watch(*, now: pd.Timestamp, settings: GapSettings, population: Popul
         target = AgentIdentity(family=fam, config=cfg).agent_id
         if tf not in walkforward_tfs:
             reason = (f"no walk-forward window for {tf} in settings: the Saturday retrain cannot train it "
-                      "(BACKLOG 13, 4h founder path)")
+                      "(1d is research-only: the engine keeps too little 1m history for daily frames)")
             refused.append(GapRefusal(gap_ids=[g.gap_id], action="spawn_founder", target=target, reason=reason))
             actions.append(GapAction(gap_ids=[g.gap_id], action="suggest", target="BACKLOG",
                                      detail=f"add a {tf} walk-forward window so {fam} can be trained on {tf}"))

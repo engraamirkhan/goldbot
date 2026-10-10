@@ -77,7 +77,8 @@ def test_specialist_barriers_match_the_modelling_table(family, tf, target, stop,
 
 def test_walk_forward_windows_match_design_and_settings():
     s = load_settings()
-    design = {"15m": (24, 3, 3, 2, 1), "1h": (36, 6, 6, 5, 2)}
+    design = {"15m": (24, 3, 3, 2, 1), "1h": (36, 6, 6, 5, 2), "4h": (48, 6, 6, 10, 4)}   # 4h: proposal P4
+    assert set(s.walkforward) == set(design)             # 1d (WINDOWS["1d"], expanding) stays research-only
     for tf, (tr, te, st, purge, emb) in design.items():
         w = WINDOWS[tf]
         assert (w["train_months"], w["test_months"], w["step_months"], w["purge_days"], w["embargo_days"]) == (tr, te, st, purge, emb)

@@ -9,7 +9,7 @@ risk_day_anchor:    { tz: UTC,              time: "00:00" }   # loss caps reset
 # `costs` are research priors until the broker's cost table reports its own.
 
 timeframes:
-  decision: [15m, 1h]
+  decision: [15m, 1h, 4h]   # 4h (proposal P4) is also a context timeframe of 15m/1h agents; 1d stays research-only
   context:  [4h, 1d, 1w]
 
 brokers:
@@ -29,12 +29,14 @@ features:
   version: f1
 
 labels:
-  embargo_days: { 15m: 1, 1h: 2 }
-  purge_days:   { 15m: 2, 1h: 5 }
+  embargo_days: { 15m: 1, 1h: 2, 4h: 4 }
+  purge_days:   { 15m: 2, 1h: 5, 4h: 10 }
 
 walkforward:
   15m: { train_months: 24, test_months: 3, step_months: 3 }
   1h:  { train_months: 36, test_months: 6, step_months: 6 }
+  4h:  { train_months: 48, test_months: 6, step_months: 6 }   # proposal P4; research.walkforward.WINDOWS["4h"]
+  # no 1d: daily agents are research-only (the engine holds ~40 trading days of 1m bars, short of 120 daily bars)
 
 risk:
   risk_per_trade: 0.005
