@@ -123,6 +123,7 @@ class SchedulerSettings(_Section):
     monthly_research: ScheduleSettings
     calendar_archive: ScheduleSettings
     agents_presession: ScheduleSettings
+    recalibrate: ScheduleSettings
 
 
 class ResearchSettings(_Section):
@@ -136,6 +137,11 @@ class ResearchSettings(_Section):
     cost_window_days: int = Field(30, ge=1)
     fills_window_days: int = Field(180, ge=1)
     min_fills_for_slippage: int = Field(50, ge=1)
+    # weekly bounded recalibration (proposal P9): only the probability map, on counterfactual shadow outcomes
+    recal_min_samples: int = Field(50, ge=1)          # fewer recent outcomes: no update
+    recal_prior_trades: float = Field(200.0, ge=0)    # the current calibration counts as this many trades
+    recal_max_shift: float = Field(0.05, gt=0, le=0.2)   # most a probability may move in one run
+    recal_window_days: int = Field(182, ge=7)         # outcomes exited within this many days
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
 

@@ -163,6 +163,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   in retraining. `run.py export-costs --out FILE` writes the canonical broker's table; `research_pass.py --cost-table
   FILE` uses it (research.yml passes `config/costs_measured.json` when committed). Health warns while a table has no
   measured swap. None of this is verified against a real terminal yet (the conversions are tested on a fake mt5).
+- Live data into learning (P9, 2026-10-09): the shadow book records EVERY candidate a champion/challenger scores
+  with its p, raw score, the threshold at the time and `taken` (p > threshold); one position per agent applies over
+  all candidates (as research thins before the model filter), and promotion stats, the CUSUM, re-arm and the
+  population count taken trades only. Books written before this load unchanged (trades taken, no threshold) and are
+  never calibration data. Weekly `recalibrate` job (Saturday 11:30, after the retrain, before the tournament) refits
+  only the probability map of each champion/challenger on `ShadowBook.outcomes` of the last 182 days: a Platt layer
+  on logit(p) with pseudo-outcomes equal to the current p worth 200 trades (`research.recal_prior_trades`), no
+  update below 50 outcomes, p moves at most 0.05 per run; stored as a minor version (new checksummed artefact, same
+  version/status, `recalibrations` row with before/after ECE; also `state/recalibration.jsonl`). It promotes and
+  retires nothing. The ECE after is in-sample. Not done from P9: the monthly refit / drift-triggered refit, recency
+  weighting and the replay trial; owner vetoes are not in the shadow book (it is the model's own decision).
 - Pooled meta-model (P5): `research_pass.py --pooled 15m|1h` fits ONE model over the union of every family whose
   default timeframe it is (15m: intraday_momentum, mean_reversion, session_open; 1h: breakout, trend, tsmom), with
   one indicator column per family, `side` and a declared pooled list (`pipeline.POOLED_FEATURES`, <= 40 inputs in

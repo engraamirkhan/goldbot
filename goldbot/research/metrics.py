@@ -93,3 +93,16 @@ def expectancy(ret: np.ndarray, risk: np.ndarray) -> dict:
     sd = float(np.std(r, ddof=1)) if n > 1 else 0.0
     return {"n": int(n), "mean_ret": float(np.mean(ret)), "mean_r": float(np.mean(r)), "hit_rate": float(np.mean(ret > 0)),
             "t_stat": float(np.mean(r) / sd * np.sqrt(n)) if sd > 0 else 0.0}
+
+def calibration_ece(p: np.ndarray, y: np.ndarray, bins: int = 10) -> float:
+    """Expected calibration error over `bins` equal-width bins of p (1.0 for an empty sample)."""
+    if len(p) == 0:
+        return 1.0
+    edges = np.linspace(0, 1, bins + 1)
+    idx = np.clip(np.digitize(p, edges) - 1, 0, bins - 1)
+    ece = 0.0
+    for b in range(bins):
+        m = idx == b
+        if m.any():
+            ece += m.mean() * abs(p[m].mean() - y[m].mean())
+    return float(ece)

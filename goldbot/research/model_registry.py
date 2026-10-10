@@ -1,5 +1,8 @@
 """Model registry: which trained model each agent (population member) trades with, and its challengers.
 
+A recalibration (weekly job, only the probability map changes) is a minor version: the entry keeps its version and
+status, gets a new checksummed artefact and a row in `recalibrations` (before/after ECE, sample size).
+
 Statuses: `challenger` (shadow only) -> `champion` (traded) -> `previous` (the champion before the current one,
 kept so it can be restored if the new champion trips its alarm in the first two weeks) -> `retired`. Artefacts are
 pickles under models/<family>/<agent_id>-<timestamp>.pkl; the registry stores each file's SHA-256 and refuses to load a file that does not
@@ -36,6 +39,7 @@ class ModelEntry(Record):
     shadow: dict[str, Any] | None = None
     promoted_utc: UtcTimestamp | None = None
     notes: list[str] = Field(default_factory=list)
+    recalibrations: list[dict[str, Any]] = Field(default_factory=list)    # minor versions: only the calibrator changed
 
 
 class ModelRegistry:
@@ -133,6 +137,26 @@ class ModelRegistry:
         prev[-1].notes.append(f"restored: {reason}")
         self._save()
         return prev[-1]
+
+    def recalibrate(self, version: str, model: MetaLabelModel, record: dict[str, Any]) -> ModelEntry:
+        """Store `model` (same trees, new calibrator) as the next minor version of `version`: a new artefact with its
+        checksum, the record appended to `recalibrations`. Status, version and the shadow record are unchanged, so
+        nothing is promoted or retired by a recalibration."""
+        e = self.get(version)
+        if e.status not in ("champion", "challenger"):
+            raise ValueError(f"{version} is {e.status}; only a champion or challenger is recalibrated")
+        if list(model.feature_names) != e.feature_names or model.feature_version != e.feature_version:
+            raise ValueError("a recalibration may change only the calibrator, not the model's inputs")
+        minor = len(e.recalibrations) + 1
+        rel = Path(e.family) / f"{e.version}-r{minor}.pkl"
+        data = pickle.dumps(model)
+        (self.root / rel).write_bytes(data)
+        e.artefact, e.sha256 = str(rel), hashlib.sha256(data).hexdigest()
+        e.recalibrations.append({"minor": minor, **record})
+        e.notes.append(f"recalibration r{minor}: ECE {record.get('ece_before', float('nan')):.4f} -> "
+                       f"{record.get('ece_after', float('nan')):.4f} on {record.get('n', 0)} shadow outcomes")
+        self._save()
+        return e
 
     def retire(self, version: str, reason: str) -> None:
         e = self.get(version)

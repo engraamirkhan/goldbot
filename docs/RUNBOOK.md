@@ -64,6 +64,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `model_watch` | Daily 23:30 | CUSUM check on any newly promoted champion; restores the previous champion on an alarm. |
 | `agents_daily` | Mon-Fri 23:45 | Data steward, risk officer, execution auditor. |
 | `saturday_retrain` | Saturday 06:00 | Refreshes bars from `data-v1`, decides waiting challengers (promote/retire), retrains new challengers. |
+| `recalibrate` | Saturday 11:30 | Refits only the probability map of each champion and challenger on its recent shadow outcomes (every candidate, taken or not), bounded to +-0.05 per week; logged in `state\recalibration.jsonl`. Promotes nothing. |
 | `tournament` | Saturday 12:00 | Population round: fitness, retirement, promotion to live, cloning, capital shares -> `state\agents.json`. |
 | `agents_weekly` | Saturday 13:00 | Journal coach, improvement agent, research analyst. |
 | `monthly_research` | First Sunday of the month 08:00 | Bounded label-grid research; summary in `state\research_<YYYY-MM>.md`. |
@@ -305,7 +306,8 @@ Each report arrives on Telegram, appears on the dashboard **Agents** tab, and is
 | News feed health | `state\news_feeds.json` |
 | Agent spend | `state\agent_spend.json` (monthly), `state\news_spend.json` (headline scoring per day) |
 | Population / league table | `state\population.json`, `state\agents.json` |
-| Shadow records | `state\shadow_<model version>.json` |
+| Shadow records | `state\shadow_<model version>.json`; every candidate with its decision in `state\shadow_book.json` |
+| Weekly recalibrations (before/after ECE) | `state\recalibration.jsonl`; also `recalibrations` in `models\registry.json` |
 | Trained models and champions | `C:\goldbot\models\registry.json` |
 | Trial registry | `state\research_registry.jsonl` |
 | Monthly research summary | `state\research_<YYYY-MM>.md` |

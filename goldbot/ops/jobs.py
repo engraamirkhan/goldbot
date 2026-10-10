@@ -17,6 +17,10 @@
                     the gates. Trials scored on the held-out year are never used as evidence.
 * model_watch       daily: a champion promoted in the last CUSUM_WINDOW_DAYS whose shadow returns trip the CUSUM
                     alarm against its backtest is replaced by the previous champion (design: Retraining and promotion).
+* recalibrate       weekly after the retrain (proposal P9): refits only the probability map of every champion and
+                    challenger on its recent counterfactual shadow outcomes (every candidate, taken or not), shrunk
+                    toward the current calibration and capped per run; a minor version in the model registry with
+                    before/after ECE (also state/recalibration.jsonl). Promotes and retires nothing.
 * monthly_research  bounded search: label-grid variants (+-step on target, stop and time limit) per specialist, as
                     many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
                     fresh plan), never past the quarter's trial budget and never into the held-out year, each a
@@ -32,6 +36,7 @@ import random
 from pathlib import Path
 from typing import Any, Callable, cast
 
+import numpy as np
 import pandas as pd
 
 from goldbot.agents.roles import ROLES
@@ -55,6 +60,7 @@ from goldbot.research.director import (
     holdout_window,
     quarter_budget,
 )
+from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import ResearchResult, run_specialist
 from goldbot.research.population import Population
@@ -292,6 +298,48 @@ def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             out[agent_id] = {"version": ch.version, "action": "restored_previous", "restored": restored.version, "trades": len(rets)}
         else:
             out[agent_id] = {"version": ch.version, "action": "ok", "trades": len(rets)}
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- recalibration
+def recalibrate(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Weekly bounded recalibration (proposal P9). For every champion and challenger: the closed shadow candidates of
+    the last `recal_window_days` that were recorded with their decision (taken or not, so the sample is not selected
+    by the model's own threshold), re-scored through the current calibrator from their raw score; with at least
+    `recal_min_samples` of them a Platt layer shrunk toward the current map (prior worth `recal_prior_trades`) and
+    capped at +-`recal_max_shift` is stacked on the calibrator and stored as a minor version. The trees, features,
+    status and shadow record are untouched; promotion stays with the gates."""
+    r = ctx.settings.research
+    book = ShadowBook(ctx.state_dir)            # read-only view of the engine's shadow book
+    since = slot - pd.Timedelta(days=r.recal_window_days)
+    out: dict[str, Any] = {}
+    for e in [x for x in ctx.models.entries if x.status in ("champion", "challenger")]:
+        sample = book.outcomes(e.version, since)
+        if len(sample) < r.recal_min_samples:
+            out[e.version] = {"action": "skipped", "n": len(sample),
+                              "reason": f"fewer than {r.recal_min_samples} recorded outcomes in {r.recal_window_days} days"}
+            continue
+        model = ctx.models.load(e)
+        raw = np.array([np.nan if t.p_raw is None else t.p_raw for t in sample])
+        p_now = np.array([t.p for t in sample], dtype=float)
+        has_raw = ~np.isnan(raw)
+        if has_raw.any():                       # the probability the current calibrator gives (after earlier layers)
+            p_now[has_raw] = model.calibrated(raw[has_raw])
+        y = np.array([t.barrier == "target" for t in sample], dtype=float)
+        fit = fit_recalibration(p_now, y, prior_weight=r.recal_prior_trades, max_shift=r.recal_max_shift,
+                                min_samples=r.recal_min_samples)
+        if fit is None:
+            continue
+        model.calibrator = RecalibratedCalibrator.on_top(model.calibrator, fit.layer())
+        n_taken = int(sum(t.taken for t in sample))
+        record = {"ts": slot.isoformat(), **fit.model_dump(), "n_taken": n_taken, "n_not_taken": len(sample) - n_taken,
+                  "window_from": since.isoformat()}
+        entry = ctx.models.recalibrate(e.version, model, record)
+        with open(ctx.state_dir / "recalibration.jsonl", "a") as f:
+            f.write(json.dumps({"version": e.version, "agent_id": e.agent_id, "status": entry.status, **record}) + "\n")
+        out[e.version] = {"action": "recalibrated", "minor": len(entry.recalibrations), "n": fit.n, "n_taken": n_taken,
+                          "n_not_taken": len(sample) - n_taken, "ece_before": fit.ece_before,
+                          "ece_after": fit.ece_after, "max_abs_shift": fit.max_abs_shift}
     return out
 
 
@@ -538,6 +586,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "monthly_research": monthly_research,
     "calendar_archive": calendar_archive,
     "agents_presession": agents_presession,
+    "recalibrate": recalibrate,
 }
 
 
