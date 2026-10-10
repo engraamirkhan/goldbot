@@ -29,7 +29,7 @@ Status: ready / in progress / in review / done / rejected.
 | 10 | Trader-toolkit features (sessions, S/R, FVG, order blocks) | Idea generation · FIND | M | done (PR #61) |
 | 11 | Trader-toolkit evaluation as primary signals | Idea generation, confluence · FIND | S–M | ready (via H-02 in Q1) |
 | 12 | Deterministic attribution that feeds back into research | Performance attribution, learning · FIND | M | ready (ROADMAP wave 1, W1-7) |
-| 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | in review (gap_watch done; 4h retrain path open) |
+| 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | in review (gap_watch and the 4h retrain path done; 1d research-only) |
 | 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | done (2026-10-10; promotion gate once 90 days of broker M1 exist) |
 | 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | in review |
 
@@ -188,8 +188,14 @@ Acceptance: as in TRADER_LIFECYCLE section 3, with these tests passing:
 Also: `saturday_retrain` covers 4h, every spawn raises `n_pop`, and every spawn is logged with its gap id.
 
 Status (2026-10-10): `gap_watch` and `Population.spawn_founder` are in review with the three tests above (G11).
-Still open: the 4h (and 1d) founder path in `saturday_retrain`. Until then gap_watch refuses 4h/1d founders and
-records a BACKLOG suggestion.
+4h founder path (2026-10-10): settings carry a 4h walk-forward window (48/6/6, purge 10 d, embargo 4 d), so
+`saturday_retrain` trains 4h agents into challengers and gap_watch spawns 4h founders
+(`tests/test_jobs_integration.py::test_a_4h_agent_retrains_into_a_challenger`,
+`tests/test_gap_watch.py::test_a_4h_founder_is_spawned_for_an_uncovered_4h_timeframe_and_1d_stays_refused`); the
+engine needed no change (`tests/test_engine.py::test_4h_agent_decides_only_on_4h_closes_and_its_shadow_trades_count_4h_bars`).
+Still open: 1d. The engine keeps ~40 trading days of 1m bars (`EngineConfig.max_bars_in_memory`), short of the 120
+daily bars a frame needs, so a daily agent would never decide; gap_watch keeps refusing 1d founders with a BACKLOG
+suggestion until the engine holds daily history (an engine change, trading-safety review).
 
 Rows: G3, G6, G11.
 

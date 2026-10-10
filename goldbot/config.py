@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -26,7 +26,10 @@ TF_SECONDS: dict[str, int] = {
 
 
 Timeframe = Literal["1m", "5m", "15m", "1h", "4h", "1d", "1w"]
-DecisionTimeframe = Literal["15m", "1h"]
+# Timeframes an agent may decide on live: each needs a walk-forward window (the Saturday retrain) and the engine must
+# hold enough 1m history for 120 of its bars. 1d is research-only: the engine keeps ~40 trading days of 1m bars
+# (EngineConfig.max_bars_in_memory), so a daily agent would never get a frame.
+DecisionTimeframe = Literal["15m", "1h", "4h"]
 
 
 class _Section(BaseModel):
@@ -259,6 +262,16 @@ class Settings(_Section):
     auth: AuthSettings = Field(default_factory=AuthSettings)
     gates: GateSettings = Field(default_factory=GateSettings)
     gaps: GapSettings = Field(default_factory=GapSettings)
+
+    @model_validator(mode="after")
+    def _walkforward_has_purge_and_embargo(self) -> Settings:
+        """Every walk-forward timeframe the retrain trains on has its purge and embargo (design: purged, embargoed
+        walk-forward), so a window added without them fails at load."""
+        for key in ("purge_days", "embargo_days"):
+            missing = sorted(set(self.walkforward) - set(getattr(self.labels, key)))
+            if missing:
+                raise ValueError(f"labels.{key} has no value for walk-forward timeframe(s) {', '.join(missing)}")
+        return self
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
