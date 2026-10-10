@@ -422,7 +422,7 @@ Each report arrives on Telegram, appears on the dashboard **Agents** tab, and is
 | Trained models and champions | `C:\goldbot\models\registry.json` |
 | Trial registry | `state\research_registry.jsonl` |
 | Monthly research summary | `state\research_<YYYY-MM>.md` |
-| Dashboard users and audit log | `state\users.json`, `state\audit.jsonl` |
+| Dashboard users, invites, sessions and audit log | `state\aux.db` (SQLite; tables `users`, `invites`, `sessions`, `audit`). Latest audit entries: `python -c "import sqlite3; [print(b) for (b,) in sqlite3.connect('state/aux.db').execute('SELECT body FROM audit ORDER BY id DESC LIMIT 20')]"`. Logins survive an API restart or deploy (12 h sessions). `state\users.json` and `state\audit.jsonl` from before 2026-10-10 were imported once and are kept untouched as a backup; delete them only after a verified backup of aux.db. Copy aux.db (with its `-wal` file) only while `goldbot-api` is stopped: a plain copy of a live WAL database may be inconsistent. |
 | Market data, ticks, fills, decisions journal, news, calendar | `C:\goldbot\data` (Parquet) |
 | Phase gate | `state\phase_state.json` (section 5) |
 | Service logs | `C:\goldbot\logs\<service>.log` / `.err` |

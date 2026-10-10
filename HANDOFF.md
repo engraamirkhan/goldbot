@@ -252,6 +252,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   bar t uses only bars closed by t (truncated-history test + pipeline lookahead check). They are in
   `DEFAULT_FEATURE_NAMES`, so the default `feature_version` changes (expected: no champions exist, nothing is
   invalidated) and feature-seeded clones now draw from a larger column pool.
+- SQLite state store, steps 0-1 (2026-10-10, `docs/proposals/2026-10-state-store.md`): package `goldbot/db/`
+  (stdlib `sqlite3`) opens `state/core.db` (synchronous FULL) and `state/aux.db` (NORMAL) with WAL, busy_timeout
+  5000, foreign keys and trusted_schema off; writes take `BEGIN IMMEDIATE`. Forward-only migrations in
+  `db/migrations.py`, one transaction each, recorded in `schema_version` (+ `PRAGMA user_version`); a newer file
+  refuses to open. `RecordRepo` maps a pydantic Record to key/filter columns + a JSON `body`. Import skeleton:
+  `python -m goldbot.db migrate|import-state [--dry-run]` (idempotent by file SHA-256, files left in place).
+  Dashboard auth (`api/auth.py`) now keeps users, invites, sessions (token hashes) and an append-only audit table in
+  aux.db: logins survive API restarts and deploys, and several API processes share sessions. On first start with
+  an empty DB it imports users.json and audit.jsonl once and never writes them again (backup). Failed-login
+  counters stay in memory. Not done: `run.py migrate`/`import-state` wiring, `state_db` health check (step 0
+  leftovers, files owned elsewhere); the API migrates aux.db on open until then. Steps 2-8 not started.
 
 ## Next steps (no owner input needed unless marked)
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.

@@ -70,7 +70,9 @@ def test_secret_and_user_files_are_never_readable_by_others(isolated, tmp_path, 
         store.bootstrap_owner(store.setup_code or "", "o@x.io", "a long password here")
     finally:
         os.umask(old)
-    for f in (tmp_path / "state" / ".secrets.json", tmp_path / "auth" / "users.json"):
+    db_files = [p for p in (tmp_path / "auth").iterdir() if p.name.startswith("aux.db")]   # aux.db and its -wal/-shm
+    assert tmp_path / "auth" / "aux.db" in db_files
+    for f in (tmp_path / "state" / ".secrets.json", *db_files):
         assert stat.S_IMODE(f.stat().st_mode) & 0o077 == 0, f
     assert json.loads((tmp_path / "state" / ".secrets.json").read_text()) == {"mt5-icm-demo": "pw1", "telegram-bot-token": "tok"}
     assert not [p for p in (tmp_path / "state").iterdir() if p.name != ".secrets.json"]     # no temp files left behind

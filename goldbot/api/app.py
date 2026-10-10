@@ -195,7 +195,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     # ------------------------------------------------------------- auth endpoints
     @app.get("/api/auth/state")
     def auth_state() -> AuthState:
-        return AuthState(needs_setup=st.auth.setup_code is not None, users=len(st.auth.users))
+        return AuthState(needs_setup=st.auth.setup_code is not None, users=st.auth.user_count())
 
     @app.post("/api/auth/setup")
     def setup(body: SetupRequest) -> TotpEnrolment:
@@ -211,7 +211,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             tok = st.auth.login(body.email, body.password, body.totp)
         except PermissionError as exc:
             raise HTTPException(403, str(exc))
-        u = st.auth.users[body.email.lower()]
+        u = st.auth.session_user(tok)
+        if u is None:                                   # disabled between the check and now
+            raise HTTPException(403, "invalid credentials")
         return LoginResponse(token=tok, expires_in=12 * 3600, role=u.role, email=u.email)
 
     @app.post("/api/auth/logout")

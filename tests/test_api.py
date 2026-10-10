@@ -91,7 +91,7 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
     assert c.get("/api/proposals", headers=viewer).status_code == 401  # disabled user's session revoked
     assert c.post("/api/users/role", json={"email": "aamir@x.io", "role": "viewer"}, headers=owner).status_code == 400  # last owner
     # audit trail written
-    events = [json.loads(line)["event"] for line in (tmp_path / "audit.jsonl").read_text().splitlines()]
+    events = [e["event"] for e in st.auth.audit_events()]
     assert {"bootstrap_owner", "login", "login_failed", "invite", "accept_invite", "decision", "disable", "halt", "rearm",
             "rearm_failed"} <= set(events)
     assert c.get("/api/status", headers=owner).json()["pending"] == 0

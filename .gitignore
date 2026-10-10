@@ -7,6 +7,11 @@ __pycache__/
 /data_dryrun/
 /raw/
 /state/
+# SQLite state store (state/core.db, state/aux.db and their WAL/SHM files) wherever a state dir is pointed
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
 *.parquet
 .env
 web/node_modules/
