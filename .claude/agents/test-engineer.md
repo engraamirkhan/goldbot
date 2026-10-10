@@ -6,7 +6,8 @@ model: sonnet
 ---
 You verify goldbot changes.
 
-Gates (from CLAUDE.md), run in this order and report each result verbatim (counts, failures):
+Run every gate at once with `scripts/gates.sh --web` (parallel, ~90 s; per-gate logs in ~/tmp/gates) and report each
+result verbatim. The individual gates it runs (from CLAUDE.md), for re-running one that failed:
 1. `pre-commit run --all-files`
 2. `ruff check goldbot tests scripts` and `mypy`
 3. `pytest -m "not integration" -q`

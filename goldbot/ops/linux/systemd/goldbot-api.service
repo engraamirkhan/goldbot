@@ -1,0 +1,21 @@
+[Unit]
+# never give up restarting (a bridge outage causes fast exits on purpose)
+StartLimitIntervalSec=0
+Description=goldbot api
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=goldbot
+WorkingDirectory=/opt/goldbot
+Environment=PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring
+ExecStart=/opt/goldbot/.venv/bin/python -m goldbot.ops.run api
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/goldbot/state /opt/goldbot/logs /opt/goldbot/data /opt/goldbot/models /var/lib/goldbot
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
