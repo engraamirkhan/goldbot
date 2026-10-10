@@ -462,6 +462,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   long-only net R split the pre-registration asks for (a follow-up before the run); the 2,631 signal count predates
   the stub fix (recount at the freeze). No research trial was run.
 
+- H-01 pre-freeze (2026-10-11): any primary-signal screen below the event floor is "inconclusive (event floor)",
+  whatever its sign; "screen passes but net t < 1.65 or < 3 positive years (incl. 2021/22)" is inconclusive too.
+  Reports carry long-only and short-only net R. Recount after the Friday-stub fix (data-v1, events only): 2,154 daily
+  signals (1,466 long / 688 short), one-at-a-time lower bound 154 events, first signal 2010-06-18. Owner ruling A
+  (recommended floor 150 for daily signals, can retire not promote) must be committed as
+  `research.screen_min_events_daily` before the run.
+
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
   `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
