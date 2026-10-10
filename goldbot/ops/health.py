@@ -198,9 +198,11 @@ def check_secrets(ctx: HealthContext) -> Check:
     missing = [k for k in required if not present(k)]
     for a in ctx.accounts:     # a terminal on this machine needs its password; a bridged one needs the bridge token
         pw, bridge = f"mt5-{a.account_id}", f"mt5-bridge-token-{a.account_id}"
+        url = f"mt5-bridge-url-{a.account_id}"
         required.append(pw)
-        if not (present(pw) or present(bridge)):
-            missing.append(f"{pw} (or {bridge} when the terminal runs behind the bridge)")
+        bridged = present(bridge) and present(url)      # exactly when the engine uses the bridge (bridge_endpoint)
+        if not (present(pw) or bridged):
+            missing.append(f"{pw} (or {url} + {bridge} when the terminal runs behind the bridge)")
     optional = [k for k in OPTIONAL_SECRETS if not present(k)]
     hint = " (python -m goldbot.ops.accounts set <key>)"
     if missing:

@@ -42,6 +42,18 @@ class Item(FrozenRecord):
     blocking: bool = True        # a blocking fail makes the exit code 1
 
 
+def _safe_settings_error(exc: Exception) -> str:
+    """Field locations and error types only: a pydantic error message includes the rejected input value."""
+    errors = getattr(exc, "errors", None)
+    if callable(errors):
+        try:
+            parts = [".".join(str(x) for x in e.get("loc", ())) + f" ({e.get('type', 'error')})" for e in errors()]
+            return f"{type(exc).__name__}: " + "; ".join(parts)
+        except Exception:
+            pass
+    return type(exc).__name__
+
+
 def run_cmd(argv: list[str]) -> tuple[int, str]:
     """(exit code, stdout) of a read-only system command; 127 when it is not installed."""
     try:
@@ -127,7 +139,7 @@ def run_preflight(ctx: PreflightContext) -> list[Item]:
     try:
         settings = Settings.model_validate(settings_dict(ctx.settings_path))
     except Exception as exc:
-        err = f"{type(exc).__name__}: {exc}"
+        err = _safe_settings_error(exc)          # never echo the bad value (it can be the owner's email)
     hctx = _health_ctx(ctx, settings, err)
     local = Path(ctx.settings_path).with_name("settings.local.yaml").name
 

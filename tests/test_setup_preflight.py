@@ -279,3 +279,19 @@ def test_preflight_is_read_only(server, tmp_path):
     after = {p: p.stat().st_mtime_ns for p in Path(tmp_path).rglob("*") if p.is_file()}
     assert before == after
     assert all(c[0] == "timedatectl" or c[1] in ("is-active", "is-enabled") for c in server.calls)
+
+
+def test_preflight_settings_error_never_echoes_the_bad_value():
+    """A pydantic error message contains the rejected input (it can be the owner's email): show location and type only."""
+    from pydantic import BaseModel, ValidationError
+
+    from goldbot.ops.preflight import _safe_settings_error
+
+    class M(BaseModel):
+        owner_email: int
+
+    try:
+        M.model_validate({"owner_email": "someone@private.example"})
+    except ValidationError as exc:
+        msg = _safe_settings_error(exc)
+    assert "someone@private.example" not in msg and "owner_email" in msg
