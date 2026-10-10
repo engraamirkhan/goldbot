@@ -6,10 +6,11 @@ import asyncio
 import logging
 import os
 
-from goldbot.config import ROOT
+from goldbot.config import ROOT, TelegramSettings
 from goldbot.ops import accounts
 from goldbot.ops.deploy import DeployWatch
 from goldbot.ops.health import HealthContext, HealthWatch, run_checks
+from goldbot.telegram import automode
 from goldbot.telegram.approvals import Proposal
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.outbox import Outbox
@@ -31,6 +32,7 @@ except ImportError:  # pragma: no cover
 
 
 DEPLOY_EVERY_S = 600             # new version on main with CI passed -> offered to the owner (one click)
+AUTOMODE_EVERY_S = 900           # auto-mode evidence (A10): offered once per mode epoch when it holds
 HEALTH_EVERY_S = 60               # health checks + alert dedupe: a silent service is reported within ~6 min (S5)
 OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED_UNAPPROVED": "⌛ EXPIRED"}
 
@@ -44,10 +46,12 @@ def outcome_text(outcome: str) -> str:
 class TelegramBot:  # pragma: no cover - needs network + token
     """The Telegram service (`python -m goldbot.ops.run telegram`): sends the engines' proposals from the approval
     bus with Approve/Reject buttons, writes the owner's decisions back to the bus, edits each message with the outcome,
-    delivers the staff agents' reports, and answers /status and /halt. Re-arming needs an authenticator code, so it is
-    done on the dashboard."""
+    delivers the staff agents' reports, and answers /status, /halt and /mode. Re-arming needs an authenticator code, so
+    it is done on the dashboard. `/mode auto <code>` is accepted only on the auto-mode evidence (goldbot/telegram/
+    automode.py), which this service checks and offers once; `/mode propose` needs no code."""
 
-    def __init__(self, token: str, state_dir: str, owner_ids: set[int], poll_s: float = 2.0):
+    def __init__(self, token: str, state_dir: str, owner_ids: set[int], poll_s: float = 2.0,
+                 settings: TelegramSettings | None = None):
         if Application is None:
             raise RuntimeError("python-telegram-bot not installed; pip install -e '.[live]'")
         self.bus = ApprovalBus(state_dir)
@@ -56,11 +60,13 @@ class TelegramBot:  # pragma: no cover - needs network + token
         self.poll_s = poll_s
         self.state_dir = state_dir
         self.health = HealthWatch(state_dir)
+        self.settings = settings or TelegramSettings()
+        self.offer = automode.AutoModeOffer(state_dir)
         # one-click deploys (Linux servers; the systemd unit sets GOLDBOT_DEPLOY=1): goldbot/ops/deploy.py
         self.deploy = DeployWatch(state_dir, ROOT) if os.environ.get("GOLDBOT_DEPLOY") == "1" else None
         self.app = Application.builder().token(token).post_init(self._start_pump).build()
         self.app.add_handler(CallbackQueryHandler(self._on_button))
-        for c in ("status", "halt", "rearm"):
+        for c in ("status", "halt", "rearm", "mode"):
             self.app.add_handler(CommandHandler(c, self._on_command))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_text))
         self._pending_prompt: asyncio.Future | None = None
@@ -92,6 +98,8 @@ class TelegramBot:  # pragma: no cover - needs network + token
                 log.exception("telegram pump")
             if n % max(int(HEALTH_EVERY_S / self.poll_s), 1) == 0:
                 await self._health_pass()
+            if n % max(int(AUTOMODE_EVERY_S / self.poll_s), 1) == 0:
+                await self._automode_pass()
             if self.deploy is not None:
                 await self._deploy_pass(offer=n % max(int(DEPLOY_EVERY_S / self.poll_s), 1) == 0,
                                         report=n % max(int(30 / self.poll_s), 1) == 0)
@@ -110,6 +118,21 @@ class TelegramBot:  # pragma: no cover - needs network + token
             self.health.record(report)          # only after delivery: a failed send is retried next pass
         except Exception:
             log.exception("health pass")
+
+    def _eligibility(self) -> automode.Eligibility:
+        return automode.auto_mode_eligibility_from_state(self.state_dir, self.settings)
+
+    async def _automode_pass(self) -> None:
+        """Offer auto mode once when the evidence holds (A10). Never switches: the owner replies /mode auto <code>."""
+        try:
+            e = await asyncio.to_thread(self._eligibility)
+            text = self.offer.check(e, self.bus.control().approval_mode)
+            if text:
+                for uid in self.owner_ids:
+                    await self.app.bot.send_message(uid, text)
+                self.offer.record(e)            # only after delivery: a failed send is offered again next pass
+        except Exception:
+            log.exception("auto-mode pass")
 
     async def _deploy_pass(self, *, offer: bool, report: bool) -> None:
         """Offer a new version that passed CI ([Deploy] [Skip]); report results of the root deploy script."""
@@ -183,9 +206,20 @@ class TelegramBot:  # pragma: no cover - needs network + token
             text = "HALTED: no new entries on any engine. Open positions keep their stops and exits. Re-arm on the dashboard."
         elif cmd == "/rearm":
             text = "Re-arming needs your authenticator code: use the dashboard (Overview → Re-arm)."
+        elif cmd == "/mode":
+            text = await asyncio.to_thread(
+                automode.mode_command, self.bus, arg, f"telegram:{uid}",
+                totp_ok=lambda code: automode.owner_totp_ok(self.state_dir, code),
+                eligibility=self._eligibility, audit=automode.audit_to(self.state_dir))
+            if arg and len(arg.split()) > 1:
+                try:
+                    await update.message.delete()      # keep the authenticator code out of the chat history
+                except Exception:
+                    pass
         else:
             c = self.bus.control()
             text = (f"halted: {'yes, by ' + str(c.by) + (' (' + c.reason + ')' if c.reason else '') if c.halted else 'no'}\n"
+                    f"approval mode: {c.approval_mode or 'propose (default)'}\n"
                     f"pending proposals: {len(self.bus.pending())}")
         await update.message.reply_text(text)
 

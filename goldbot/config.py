@@ -185,6 +185,11 @@ class NewsSettings(_Section):
 
 class TelegramSettings(_Section):
     allowed_user_ids: list[int] = Field(default_factory=list)
+    # design (Operating mode, row A10): /mode auto is offered only after this many decided proposals since the last
+    # mode change, no RiskGate breach, and no distinguishable approved-vs-rejected outcome difference (Welch at alpha)
+    auto_min_proposals: int = Field(100, ge=100)
+    auto_alpha: float = Field(0.10, gt=0, le=0.5)
+    auto_min_outcomes_per_side: int = Field(10, ge=2)   # fewer matched outcomes on a side: no evidence (fail closed)
 
 
 class AuthSettings(_Section):

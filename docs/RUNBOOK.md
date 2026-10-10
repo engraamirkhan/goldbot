@@ -408,7 +408,22 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   authenticator code -> **Re-arm**. Telegram `/rearm` only tells you to use the dashboard. The same re-arm also
   clears an engine's 12% drawdown halt (the kill switch, which closes every position at market when it trips); each
   engine applies it once, and a restart does not clear the halt.
-* `/status` on Telegram shows whether entries are halted and how many proposals are pending.
+* `/status` on Telegram shows whether entries are halted, the approval mode and how many proposals are pending.
+
+
+### Auto mode (entries without your click)
+
+* By default every entry waits for your click (propose-and-approve). **Auto mode** means an entry that passes the
+  RiskGate is placed without asking you. Every cap, stop and exit works exactly as before; only the click goes.
+* It is never switched on by itself. Telegram sends one message, "Auto mode can be enabled: evidence ...; reply
+  /mode auto <TOTP>", only after at least 100 proposals you approved or rejected since the last mode change, with no
+  RiskGate breach (no 8% size-down, no 12% kill switch) and no measurable difference between the outcomes of the
+  trades you approved and the ones you rejected (your veto is not adding value). The message quotes the numbers.
+* To switch on: `/mode auto 123456` with your current authenticator code (the dashboard one). It is refused if the
+  evidence no longer holds or the code is wrong. Telegram deletes the message with the code.
+* To switch off at any time: `/mode propose` (no code needed), or `/halt` to stop new entries altogether.
+* It switches back to propose-and-approve on its own after a 12% kill switch, and stays propose for the 30 days after
+  any re-arm. `/status` shows the current approval mode; every change is in `state\audit.jsonl`.
 
 ### Staff-agent reports
 

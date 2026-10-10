@@ -47,6 +47,8 @@ def test_commands_totp_rules():
     assert "TOTP required" in c.command(111, "/rearm")
     assert c.command(111, "/rearm", totp="123456").startswith("re-armed") and not c.halted
     assert "TOTP required" in c.command(111, "/mode", "auto")
+    assert c.command(111, "/mode", "auto", "123456").startswith("auto mode not available")   # TOTP alone is not enough (A10)
+    c.auto_eligible = lambda: True
     assert c.command(111, "/mode", "auto", "123456") == "mode set to auto"
     with pytest.raises(PermissionError):
         c.command(222, "/status")

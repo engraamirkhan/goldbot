@@ -343,6 +343,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   untrainable timeframe (4h/1d: no walk-forward window in settings, so the retrain cannot train them) is a BACKLOG
   suggestion only. Not done: the 4h founder path in `saturday_retrain`.
 
+- Auto-mode offer (2026-10-10, `goldbot/telegram/automode.py`, TRACEABILITY A10, BACKLOG 15): the Telegram service
+  checks every 15 min whether /mode auto may be offered: >= 100 decided proposals since the last mode change, no
+  RiskGate breach (an 8%/12% drawdown stage or a kill switch in `risk_*.json`), no re-arm lock or halt, and no
+  distinguishable veto: approved vs rejected proposals are matched to the shadow book's counterfactual outcomes
+  (same agent, side, signal bar) and compared in R with Welch's t-test (eligible only if p >= 0.10 and the 90% CI
+  spans 0; fewer than 10 outcomes a side fails closed). When it holds, ONE message per mode epoch; it never switches.
+  `/mode auto <code>` checks the dashboard owner's authenticator (`goldbot.api.auth.totp_verify`) and the evidence,
+  then writes `approval_mode` to `state/control.json`; `/mode propose` needs nothing. Both, and refusals, go to
+  `state/audit.jsonl`. Engines read the mode each refresh; the 30-day re-arm lock and the 12% kill switch still force
+  propose, and the kill switch writes propose back to control.json (so the evidence restarts). Known limits: breaches
+  are read from the engines' current risk files (a size-down that recovered before the check is not seen); the
+  dashboard has no /mode control yet (goldbot/api untouched).
+
 ## Next steps (no owner input needed unless marked)
 - Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):
   `python -m goldbot.ops.run gates` prints each roadmap gate as met / not met with its evidence (trial registry DSR,

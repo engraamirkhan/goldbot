@@ -31,7 +31,7 @@ Status: ready / in progress / in review / done / rejected.
 | 12 | Deterministic attribution that feeds back into research | Performance attribution, learning · FIND | M | ready (ROADMAP wave 1, W1-7) |
 | 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | in review (gap_watch done; 4h retrain path open) |
 | 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | in progress |
-| 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | in progress |
+| 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | in review |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later

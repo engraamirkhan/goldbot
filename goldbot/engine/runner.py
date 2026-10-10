@@ -764,6 +764,9 @@ class Engine:
         st.account_class = "raw" if self.cfg.mode == "paper" else self._account_class()
         st.drift_halt = bool(self._drift().get("system_halt"))
         self._server_clock(now, tick)
+        owner_mode = self.center.bus.control().approval_mode if self.center.bus is not None else None
+        if owner_mode is not None:
+            self.cfg.approval_mode = owner_mode  # the owner's /mode (A10); the kill switch and re-arm lock win below
         stage = st.stage
         if self.gate.update_stage(st) != stage:
             if st.stage == Stage.HALTED:
@@ -777,8 +780,12 @@ class Engine:
     def _kill_switch(self, *, everything: bool) -> None:
         """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
         approve. On the trip every position on the account is closed; while halted, any of this engine's positions
-        (its magic range) that is still open, e.g. after a failed close, is closed again on each refresh."""
+        (its magic range) that is still open, e.g. after a failed close, is closed again on each refresh. The trip also
+        sets the owner's mode back to propose, so auto mode is offered again only on new evidence (A10)."""
         self.cfg.approval_mode = "propose"
+        if everything and self.center.bus is not None and self.center.bus.control().approval_mode == "auto":
+            self.center.bus.set_mode("propose", by=f"engine:{self.cfg.account_id}", reason="12% kill switch")
+            self.decisions.append({"ts": time.time(), "action": "mode_propose", "reason": "kill_switch"})
         for p in self.broker.positions():
             if everything or self.cfg.magic_base <= p.magic < self.cfg.magic_base + 100:
                 res = self.broker.close(p.position_id)
