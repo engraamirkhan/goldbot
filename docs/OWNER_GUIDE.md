@@ -41,6 +41,7 @@ For Aamir. Each step links to its [RUNBOOK](RUNBOOK.md) section.
 | `order_failed` | Broker refused after retries | Nothing, unless repeated |
 | `drift` | Model drifted; entries halted | After review: `goldbot run drift-review --clear "<note>"` |
 | `stop_rule` | Edge appears gone | Consider `/halt`; ask Claude for options |
+| `model_watch` | A new model's first trades: either a tripwire alarm (badly broken model, the previous one is restored) or `cannot_alarm` (too few trades to judge yet) | Nothing; slow decay is caught by the quarterly `drift` check |
 
 ## 4. Decisions waiting for you
 Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decision-queue), [rulings A-D](research/preregistration-2027Q1.md#needs-the-owner-before-freezing)).
