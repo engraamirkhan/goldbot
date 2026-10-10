@@ -21,6 +21,7 @@
                                                          # drawdown / risk-of-ruin Monte Carlo at the live limits (G-5)
   python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]
                                                          # minimum equity for the minimum lot per family (G-7)
+  python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)
 """
 from __future__ import annotations
 
@@ -467,6 +468,9 @@ if __name__ == "__main__":
     elif cmd == "preflight":
         from goldbot.ops.preflight import main as preflight_main
         sys.exit(preflight_main(sys.argv[2:]))
+    elif cmd == "revoke-sessions":
+        from goldbot.api.auth import revoke_sessions_cli
+        sys.exit(revoke_sessions_cli(sys.argv[2:]))
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))

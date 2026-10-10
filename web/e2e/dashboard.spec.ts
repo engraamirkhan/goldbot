@@ -111,7 +111,7 @@ test("owner enables auto mode with an authenticator code on the evidence, then s
   await expect(card.getByRole("status")).toContainText("Mode: AUTO");
   await card.getByRole("button", { name: "Switch to propose" }).click();
   await expect(card.getByRole("heading", { name: /Entry mode: Propose-and-approve/ })).toBeVisible();
-  await expect(card.getByText(/Set .* by dashboard:owner@example.com \(owner\)/)).toBeVisible();
+  await expect(card.getByText(/Set .* by owner@example.com on dashboard \(owner\)/)).toBeVisible();
 });
 
 test("owner regenerates the recovery codes with password and authenticator code; they are shown once", async ({ page }) => {
