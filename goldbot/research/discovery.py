@@ -485,12 +485,18 @@ def render_discovery(d: DiscoveryResult, meta: dict[str, Any], top: int = 25) ->
 
 
 # ---------------------------------------------------------------------------------------------- the CLI's pass
-def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, cfg: DiscoveryConfig,
-                   group_mode: str = "column", extra_cost_usd: float = 0.0, swap: Any = None,
+def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, reserved_setting: int,
+                   cfg: DiscoveryConfig, group_mode: str = "column", extra_cost_usd: float = 0.0, swap: Any = None,
                    holdout: Window | None = None, ctx: dict | None = None, rationale: str = "",
                    cost_source: str = "settings priors") -> tuple[dict[str, Any], str]:
     """`research_pass.py --discover`: budget check (one trial), the pre-registration row, then the run and its result
-    row (status "discovery"). Call under `reg.locked()`. Returns (result row, report)."""
+    row (status "discovery"). Call under `reg.locked()`. Returns (result row, report).
+
+    Budget (`TrialRegistry.check_budget_reserved`): a discovery whose exact config (family discovery_<specialist>,
+    config hash) has a pending queued `preregistered` row may use the trials reserved for the pre-registered queue
+    (`reserved_setting` = research.reserved_trials_quarter) and is linked to that row; any other discovery must fit in
+    budget - used - reserved and writes its own pre-registration just before it runs (`queue=False`: not part of the
+    queue, so it neither holds nor uses the reservation)."""
     from goldbot.data.resample import resample_bars
     from goldbot.features.mtf import TF_LABEL, context_tfs
     from goldbot.features.registry import feature_version
@@ -502,17 +508,18 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, cf
     )
     from goldbot.research.registry import DISCOVERY
 
-    quarter = reg.check_budget(1, budget_cap)
     names = research_feature_names(ctx)
     family = discovery_family(spec.family)
     config = {"specialist": spec.family, "spec": spec.config, "discovery": cfg.model_dump(), "group_mode": group_mode,
               "features": names, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
               "holdout": None if holdout is None else [str(holdout[0]), str(holdout[1])]}
-    prereg = reg.preregister(agent_id=spec.agent_id, family=family, config=config,
-                             feature_version=feature_version(names), rationale=rationale,
-                             reading_rule=reading_rule(cfg.survivor_unit),
-                             plan={"features": names, "group_mode": group_mode, "trial_status": DISCOVERY,
-                                   "survivor_unit": cfg.survivor_unit})
+    quarter, (prereg,) = reg.check_budget_reserved([(family, config)], budget_cap, reserved_setting)
+    if prereg is None:
+        prereg = reg.preregister(agent_id=spec.agent_id, family=family, config=config,
+                                 feature_version=feature_version(names), rationale=rationale,
+                                 reading_rule=reading_rule(cfg.survivor_unit),
+                                 plan={"features": names, "group_mode": group_mode, "trial_status": DISCOVERY,
+                                       "survivor_unit": cfg.survivor_unit}, queue=False)
     tf = spec.timeframe
     b_dec = resample_bars(b1, tf).reset_index(drop=True)
     context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}

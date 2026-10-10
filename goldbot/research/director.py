@@ -345,20 +345,27 @@ def pending_preregistration(rows: list[dict[str, Any]], quarter: str, family: st
 
 
 def _prereg_matches(rows: list[dict[str, Any]], quarter: str) -> tuple[list[dict[str, Any]], set[int]]:
-    """(the quarter's preregistered rows, indices of those a trial of the quarter was run against)."""
-    prereg = [r for r in rows if r.get("status") == PREREGISTERED and _row_quarter(r) == quarter]
+    """(the quarter's queued preregistered rows, indices of those a trial of the quarter was run against). A
+    pre-registration a run wrote for itself just before running (`queue: false`, `TrialRegistry.preregister`) is not
+    part of the queue: it neither holds nor uses the reservation."""
+    prereg = [r for r in rows if r.get("status") == PREREGISTERED and r.get("queue", True) is not False
+              and _row_quarter(r) == quarter]
     matched: set[int] = set()
     for t in rows:
         if not is_trial(t) or _row_quarter(t) != quarter:
             continue
-        link = (t.get("preregistration") or {}).get("trial") if isinstance(t.get("preregistration"), dict) else None
+        raw = t.get("preregistration")
+        ref: dict[str, Any] = raw if isinstance(raw, dict) else {}
+        link = ref.get("trial")
         n = int(_num(t.get("trial")) or 0)
         for i, p in enumerate(prereg):
             if i in matched:
                 continue
             same = p.get("family") == t.get("family") and p.get("config_hash") == t.get("config_hash") \
                 and n >= int(_num(p.get("trial")) or 0)
-            if (link is not None and p.get("trial") == link) or (link is None and same):
+            # a link names its row by number and, when it recorded one, by timestamp (two rows can share a number)
+            linked = link is not None and p.get("trial") == link and ref.get("ts") in (None, p.get("ts"))
+            if linked or (link is None and same):
                 matched.add(i)
                 break
     return prereg, matched
