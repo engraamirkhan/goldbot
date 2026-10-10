@@ -122,6 +122,100 @@ Only your Mac's browser (the dashboard) and Telegram (the one-click Approve).
 * The health check `deploy` shows the last result. If the deploy script itself changed, review it and run
   `sudo install -m 755 -o root -g root /opt/goldbot/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy`.
 
+### 0.6 Backups and restore (brain)
+The scheduler backs up the brain's state every day at 22:15 UTC with `restic`. The backup is encrypted on the
+brain and sent to **Oracle Object Storage** (free tier, 20 GB). It never goes to GitHub. Each backup holds:
+
+* `core.db` and `aux.db`, copied consistently while the services run;
+* the state JSON files;
+* the trial registry;
+* the models, with their checksums;
+* the brain's own Parquet: ticks, fills, trades and the decisions journal.
+
+Bars from releases and secrets are left out. Every Sunday at 10:00 UTC a restore drill restores the latest backup to
+a temporary folder and checks it. Health shows `backup_age` (warn after 26 h, fail after 72 h; Telegram tells you
+at the first warning), `restore_drill` (fail when the drill fails) and `backup_prune` (warn when the monthly
+retention run from your Mac is older than 45 days).
+
+**Why two keys.** The brain only adds backups; it never deletes old ones (no `restic forget` or `prune` on the
+brain). Old backups are thinned once a month **from your Mac** with a second key. If the brain is ever compromised,
+its key cannot wipe the backup history, and the bucket keeps every overwritten or deleted object for 30 more days
+(versioning), so even a deleting key cannot remove history at once. Decision record:
+`docs/decisions/0002-backup-scope-and-thresholds.md`.
+
+**One-time setup, in the Oracle Cloud console (browser):**
+1. *Storage -> Object Storage -> Buckets -> Create bucket*: name `goldbot-backup`, Standard tier, private (the
+   default). Note the **namespace** (shown on the bucket page) and your **region identifier** (e.g.
+   `eu-frankfurt-1`, top right -> region -> manage regions).
+2. On the bucket page: *Edit* next to **Object Versioning** -> *Enable*. Then *Lifecycle Policy Rules -> Create
+   rule*: name `expire-old-versions`, target **Previous object versions**, action **Delete**, after **30 days**
+   (more is fine; never less), enabled. Deleted or overwritten backup files stay recoverable for those 30 days.
+3. Two users, two groups, two keys (*Identity -> Domains -> Default -> Users / Groups*):
+   * **Brain writer** (user and group `goldbot-backup-writer`): add and read objects, no delete. Policy:
+     `Allow group goldbot-backup-writer to read buckets in tenancy where target.bucket.name='goldbot-backup'` and
+     `Allow group goldbot-backup-writer to manage objects in tenancy where all {target.bucket.name='goldbot-backup', request.permission!='OBJECT_DELETE'}`.
+     restic also removes its own lock files; with no delete right those removals fail, which goldbot logs as a
+     warning only (your Mac's monthly run clears the leftover locks). If the first `goldbot run backup` below fails
+     on a permission error anyway, drop the `request.permission` condition: versioning still keeps 30 days of every
+     deleted file.
+   * **Retention** (user and group `goldbot-backup-retention`): full object rights on the bucket, used only from
+     your Mac: `Allow group goldbot-backup-retention to manage objects in tenancy where target.bucket.name='goldbot-backup'`.
+   On each user: *Customer secret keys -> Generate secret key* (`goldbot-restic-brain`, `goldbot-restic-retention`).
+   Copy each **secret** (shown only once) and **access key**. The brain gets only the writer key.
+4. In your password manager, generate a long random **restic password** and save it there *first*. Without it no
+   backup can ever be restored, and the brain is the only other place that holds it.
+
+**On the brain** (each command asks for its value; nothing is echoed):
+```bash
+goldbot accounts set restic-repository     # s3:https://<namespace>.compat.objectstorage.<region>.oraclecloud.com/goldbot-backup/goldbot
+goldbot accounts set restic-password       # the password from your password manager
+goldbot accounts set restic-s3-access-key  # the BRAIN WRITER key: access key
+goldbot accounts set restic-s3-secret-key  # the BRAIN WRITER key: secret
+goldbot run backup --init                  # creates the encrypted repository (once)
+goldbot run backup                         # first backup now; prints the snapshot id and size
+goldbot run restore-drill                  # restores it to a temp folder and verifies it
+goldbot run health                         # backup_age and restore_drill: OK
+```
+
+**Restore after losing the brain** (target: running again within 1 hour; positions keep their broker-side stops
+meanwhile, and the engines reconcile with the broker on start):
+1. Build a new brain (section 0.4). Store the four `restic-*` keys again, as above (make a new customer secret key
+   if the old one is lost), plus the other secrets from 0.4: secrets are never in the backup.
+2. Restore and verify: `goldbot run restore --latest --to /var/lib/goldbot/restore`. The folder must be empty or
+   missing; a restore never writes over live state. The command ends with `verified` or lists the problems.
+3. Stop everything:
+   `sudo systemctl stop goldbot-engine@icm-demo goldbot-scheduler goldbot-api goldbot-telegram goldbot-news goldbot-supervisor`.
+4. Put the files in place. Delete stale database journals first: an old `-wal` file next to a restored database
+   corrupts it.
+   ```bash
+   sudo -u goldbot rm -f /opt/goldbot/state/*.db-wal /opt/goldbot/state/*.db-shm
+   sudo -u goldbot cp -a /var/lib/goldbot/restore/state/. /opt/goldbot/state/
+   sudo -u goldbot cp -a /var/lib/goldbot/restore/models/. /opt/goldbot/models/
+   sudo -u goldbot cp -a /var/lib/goldbot/restore/data/. /opt/goldbot/data/
+   ```
+   The bar history comes back from the data release at the next Saturday retrain. Use section 2.5 to load it sooner.
+5. Start the supervisor first, then the rest (0.4), then run `goldbot run health`. Anything after the last backup
+   (at most a day) is gone: approvals, orders and engine state are rebuilt from the broker. Trials recorded since
+   then are still on release `research-v1`.
+
+To restore one file only, restore into an empty folder as in step 2 and copy that file. Stop the service that
+writes it first. Restored folders are created owner-only (mode 0700): they hold the databases unencrypted.
+
+**Monthly retention, on your Mac** (health `backup_prune` reminds you after 45 days). Once, install restic
+(`brew install restic`) and store four Keychain items; each `security` command prompts for the value:
+```bash
+security add-generic-password -a goldbot -s restic-repository -w               # same value as on the brain
+security add-generic-password -a goldbot -s restic-password -w                 # from your password manager
+security add-generic-password -a goldbot -s restic-retention-s3-access-key -w  # the RETENTION key: access key
+security add-generic-password -a goldbot -s restic-retention-s3-secret-key -w  # the RETENTION key: secret
+```
+Then, on the first weekend of each month, from the repository folder:
+```bash
+scripts/backup_retention.sh --dry-run   # lists what would be forgotten (14 daily, 8 weekly, 12 monthly kept)
+scripts/backup_retention.sh             # forgets, prunes, and uploads a marker the brain reads at its next backup
+```
+The script refuses to run on a goldbot server. After the brain's next backup, `backup_prune` shows OK.
+
 ---
 
 ## 1. What runs where
@@ -176,6 +270,8 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `tournament` | Saturday 12:00 | Population round: fitness, retirement, promotion to live, cloning, capital shares -> `state\agents.json`. |
 | `agents_weekly` | Saturday 13:00 | Journal coach, improvement agent, research analyst. |
 | `monthly_research` | First Sunday of the month 08:00 | Bounded label-grid research; summary in `state\research_<YYYY-MM>.md`. |
+| `backup` | Daily 22:15 | Brain only: encrypted `restic` backup of the databases, state files, trial registry, models and the brain's own Parquet to Oracle Object Storage, append only (old snapshots are thinned monthly from your Mac to 14 daily, 8 weekly and 12 monthly); result in `state/backup_last.json` (section 0.6). |
+| `restore_drill` | Sunday 10:00 | Restores the latest backup to a temporary folder and verifies checksums, database integrity, row counts and model checksums; result in `state/restore_drill_last.json`. |
 
 The staff-agent jobs and headline scoring only run when the `anthropic-api-key` secret is stored; otherwise the
 job records "skipped" and headlines are collected unscored. Their total spend is capped by
@@ -658,7 +754,7 @@ Saturday run or a manual run of `data-dukascopy` retries it.
 
 `python -m goldbot.ops.run health` lists every check (settings, secrets present, disk, supervisor heartbeat, halt,
 phase gates, each engine's state, stage and data quality, risk state, scheduler jobs, cost tables, news feeds,
-agent spend, stuck approvals) as ok / warn / fail with a one-line reason, and exits 1 on any fail. `--json`,
+agent spend, stuck approvals, backup age and the restore drill) as ok / warn / fail with a one-line reason, and exits 1 on any fail. `--json`,
 `--out FILE`, `--baseline FILE` (fail only on new fails) and `--static` (no running services needed) exist for the
 update script. The Telegram service runs the same checks every 5 minutes and messages you when a check turns fail
 and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service running; the `alerts` check shows

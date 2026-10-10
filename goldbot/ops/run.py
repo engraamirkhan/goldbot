@@ -12,6 +12,9 @@
   python -m goldbot.ops.run gate-evidence <name> (--value X | --passed yes|no) [--detail TEXT]   # leakage audit, chaos drill
   python -m goldbot.ops.run health [--json] [--static] [--out FILE] [--baseline FILE]   (exit 1 on a fail)
   python -m goldbot.ops.run publish-costs [--out FILE]   # canonical broker's measured costs -> release costs-v1
+  python -m goldbot.ops.run backup [--init]              # encrypted restic backup now (--init: create the repository once)
+  python -m goldbot.ops.run restore --latest --to DIR    # restore the latest backup into an empty DIR and verify it
+  python -m goldbot.ops.run restore-drill                # the weekly restore drill, now
 """
 from __future__ import annotations
 
@@ -448,6 +451,9 @@ if __name__ == "__main__":
         sys.exit(evidence_main(sys.argv[2:]))
     elif cmd == "publish-costs":
         sys.exit(publish_costs_cli(sys.argv[2:]))
+    elif cmd in ("backup", "restore", "restore-drill"):
+        from goldbot.ops.backup import main as backup_main
+        sys.exit(backup_main(sys.argv[1:]))
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))

@@ -474,6 +474,24 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
   stays partial until the research callers (`pipeline.run_specialist`/`run_pool`, `discovery.discover`) pass it
   (values equal today, so folds do not change); the tournament promotes shadow -> live at DSR >= 0.95 (row G6).
+- Encrypted off-host backups (2026-10-10, state-store step 2, row P8, `goldbot/ops/backup.py`): scheduler job
+  `backup` (daily 22:15 UTC) snapshots every `state/*.db` with the online backup API (integrity-checked before upload),
+  the state JSON, trial registry, models and the brain's own Parquet (not release sources, not features/labels, not
+  `.secrets.json`) with a SHA-256 manifest, saves them with restic to Oracle Object Storage (secrets only in restic's
+  environment, masked in errors) and writes `state/backup_last.json`. The brain only appends: retention
+  (`forget --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune`) runs monthly from the owner's Mac with a second
+  key (`scripts/backup_retention.sh`, refuses on a server; uploads a marker the brain records, health `backup_prune`
+  warns after 45 days). Staging and restore dirs are 0700 under umask 077; JSONL copies end at the last newline; a
+  month partition caught mid-dedupe is retried, then listed in `skipped_partitions`; `verify_restore` refuses symlinks
+  and paths outside the restore dir. Decision record docs/decisions/0002-backup-scope-and-thresholds.md (renumbered
+  from 0001, which is the auth ADR); `restore_drill` (Sunday 10:00) restores to a temp dir and re-verifies everything
+  (`state/restore_drill_last.json`). Health `backup_age` warns at 26 h (Telegram once), fails at 72 h; `restore_drill`
+  fails on a failed drill. `run.py backup [--init] | restore --latest --to DIR | restore-drill`; brain_bootstrap.sh
+  installs restic. OWNER: create the bucket with Object Versioning and a 30-day previous-version lifecycle rule, a
+  no-delete writer key for the brain and a retention key for the Mac, store the four `restic-*` keys on the brain and
+  the four Keychain items on the Mac, and run the retention script monthly (RUNBOOK 0.6).
+  Not verified against a real restic or Oracle endpoint from here (restic is not installed in the sandbox; the
+  integration test runs where it is).
 - Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):
   `python -m goldbot.ops.run gates` prints each roadmap gate as met / not met with its evidence (trial registry DSR,
   positive years and backtest trades; the nightly cost tables; `state/closed_trades.jsonl` for the paper and live
