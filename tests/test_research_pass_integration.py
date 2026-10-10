@@ -346,3 +346,32 @@ def test_discover_is_one_preregistered_trial_and_later_trials_count_the_features
     assert reg.n_trials == 1 and reg.budget_used(quarter_of()) == 1           # one trial, one budget slot
     assert d["survivor_unit"] == "feature" and d["k_eff"] == d["n_features_screened"]   # feature survivors
     assert reg.n_trials_effective == 1 + d["n_features_screened"]
+
+
+def test_cpcv_reevaluates_registered_trials_as_evidence_with_pbo_and_takes_no_budget(release_dir, tmp_path, monkeypatch):
+    from goldbot.research.registry import TrialRegistry
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "cpcv.md"
+    base = ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry), "--report", str(report)]
+    variants = '[{"asia_range_max_atr_d": 1.2}, {"asia_range_max_atr_d": 1.5}]'
+    monkeypatch.setattr(sys, "argv", base + ["--variants", variants, "--skip-screen"])
+    assert rp.main() == 0
+    reg = TrialRegistry(registry)
+    reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={},
+               status="screened")                                       # trial 3: a screen, no model
+    for _ in range(17):                                                  # the quarter's budget is spent ...
+        reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={})
+    n = reg.n_trials
+    monkeypatch.setattr(sys, "argv", base + ["--cpcv", "1", "2"])
+    assert rp.main() == 0                                                # ... and CPCV still runs: it is not a trial
+    assert reg.n_trials == n
+    ev = {e["trial"]: e["payload"] for e in reg.evidence(kind="cpcv")}
+    assert set(ev) == {1, 2} and all(p["n_splits"] == 15 and p["n_paths"] == 5 for p in ev.values())
+    assert ev[1]["pbo"]["trials"] == [1, 2] and ev[1]["pbo"]["n_combinations"] == 20
+    text = report.read_text()
+    assert "Combinatorial purged CV: trials 1, 2" in text and "PBO across trials [1, 2]" in text and "not a trial" in text
+    monkeypatch.setattr(sys, "argv", base + ["--cpcv", "99"])
+    with pytest.raises(SystemExit, match="no trial #99"):
+        rp.main()
+    monkeypatch.setattr(sys, "argv", base + ["--cpcv", "3"])
+    with pytest.raises(SystemExit, match="walk-forward trials only"):
+        rp.main()

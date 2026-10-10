@@ -112,6 +112,7 @@ class ScheduleSettings(_Section):
     weekdays: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4, 5, 6])
     weekday: int | None = Field(None, ge=0, le=6)
     day: int | None = Field(None, ge=1, le=28)
+    months: list[int] = Field(default_factory=lambda: list(range(1, 13)))   # e.g. [1, 4, 7, 10]: quarterly
     max_late_hours: float = Field(12.0, gt=0)
 
 
@@ -130,6 +131,8 @@ class SchedulerSettings(_Section):
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
     gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
+    cpcv_quarterly: ScheduleSettings = ScheduleSettings(kind="monthly", at="14:00", weekday=6, months=[1, 4, 7, 10],
+                                                        max_late_hours=30)
 
 
 class GapSettings(_Section):
@@ -210,8 +213,9 @@ class DriftSettings(_Section):
     size_down_factor: float = Field(0.5, gt=0, le=1)
     window_days: int = Field(30, ge=7)               # recent candidates for PSI
     min_rows: int = Field(50, ge=10)                 # fewer recent candidates: PSI not computed
-    cusum_k: float = Field(0.5, ge=0)
-    cusum_h: float = Field(4.0, gt=0)
+    cusum_k: float = Field(0.5, ge=0)                # CUSUM allowance in sd (row M25: h is tuned for this k)
+    cusum_false_alarm: float = Field(0.05, gt=0, lt=1)   # design: alarm probability per quarter on in-control trades
+    cusum_h: float = Field(4.0, gt=0)                # fallback h when the backtest has no trade rate
     dd_mult: float = Field(1.5, gt=1)                # 30-day drawdown above this x backtest halts the system
     dd_window_days: int = Field(30, ge=7)
 

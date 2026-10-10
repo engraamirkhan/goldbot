@@ -6,7 +6,8 @@
   is not stored yet (row M28), so gain stands in for SHAP rank.
 * Calibration drift: ECE and Brier score of the agent's own p on its trailing `calib_trades` (100) closed shadow trades
   that were taken; ECE above `ece_size_down` (0.08) sizes down.
-* Specialist halt: a one-sided CUSUM on standardised trade residuals (realised R minus the R the model's p implied).
+* Specialist halt: a one-sided CUSUM on standardised trade residuals (realised R minus the R the model's p implied),
+  its decision interval tuned to a 5% quarterly false-alarm rate at the backtest's trade rate (row M25, research/cusum.py).
   An alarm halts that agent's entries until the owner reviews it or a new champion replaces the version.
 * System halt: two agents halted at once, or an agent's 30-day shadow drawdown above 1.5x its backtest drawdown, halts
   every entry pending the owner's review (`python -m goldbot.ops.run drift-review --clear`).
@@ -22,6 +23,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import Record
+from goldbot.research.cusum import DEFAULT_K, FALSE_ALARM_QUARTER, calibrated_h
 from goldbot.research.metrics import calibration_ece
 
 NAN_BIN = "nan"
@@ -58,9 +60,13 @@ def psi(ref: dict[str, Any], values: np.ndarray, eps: float = 1e-4) -> float:
     return float(np.sum((p_new - p_ref) * np.log(p_new / p_ref)))
 
 
-def residual_cusum(z: list[float], k: float = 0.5, h: float = 4.0) -> tuple[bool, float]:
-    """One-sided (downward) CUSUM on standardised residuals: (alarm, final statistic). M25: k and h are fixed, not yet
-    tuned to the design's 5% quarterly false-alarm rate."""
+def residual_cusum(z: list[float], k: float = DEFAULT_K, h: float | None = None, trades_per_week: float | None = None,
+                   false_alarm: float = FALSE_ALARM_QUARTER) -> tuple[bool, float]:
+    """One-sided (downward) CUSUM on standardised residuals: (alarm, final statistic). Row M25: unless `h` is given,
+    the decision interval is tuned so in-control residuals alarm within one quarter's expected trades (from the
+    backtest's `trades_per_week`) with probability `false_alarm` (design: 5%; research/cusum.py); without a trade rate
+    the fixed FALLBACK_H applies."""
+    h = calibrated_h(trades_per_week, k, false_alarm) if h is None else h
     s, alarm = 0.0, False
     for x in z:
         s = max(0.0, s - x - k)
@@ -104,6 +110,7 @@ class AgentHealth(Record):
     brier: float | None = None
     n_calib: int = 0
     cusum: float = 0.0
+    cusum_h: float | None = None          # the decision interval used (M25: tuned to the trade rate)
     cusum_alarm: bool = False
     dd_30d: float = 0.0
     backtest_dd: float | None = None
@@ -113,10 +120,12 @@ class AgentHealth(Record):
 
 
 def assess(agent_id: str, version: str, *, model: Any, live: pd.DataFrame | None, closed_taken: list[Any],
-           recent_taken: list[Any], backtest_dd: float | None, s: Any) -> AgentHealth:
+           recent_taken: list[Any], backtest_dd: float | None, s: Any,
+           trades_per_week: float | None = None) -> AgentHealth:
     """One agent's health from its model (reference bins, importance), recent candidate features (`live`, model
     inputs before side-alignment), its taken shadow trades since the version started (`closed_taken`, oldest first)
-    and those of the last 30 days (`recent_taken`). `s`: DriftSettings."""
+    and those of the last 30 days (`recent_taken`). `s`: DriftSettings. `trades_per_week`: the backtest's trade rate,
+    which sets the CUSUM's decision interval (row M25)."""
     h = AgentHealth(agent_id=agent_id, version=version, backtest_dd=backtest_dd)
     ref = getattr(model, "feature_ref", None) or {}
     if not ref:
@@ -146,7 +155,9 @@ def assess(agent_id: str, version: str, *, model: Any, live: pd.DataFrame | None
         p = np.array([t.p for t in calib], dtype=float)
         y = np.array([t.barrier == "target" for t in calib], dtype=float)
         h.ece, h.brier = round(calibration_ece(p, y), 4), round(float(np.mean((p - y) ** 2)), 4)
-    h.cusum_alarm, cus = residual_cusum(trade_residuals(closed_taken), s.cusum_k, s.cusum_h)
+    h_used = calibrated_h(trades_per_week, s.cusum_k, s.cusum_false_alarm) if trades_per_week else s.cusum_h
+    h.cusum_h = round(h_used, 3)
+    h.cusum_alarm, cus = residual_cusum(trade_residuals(closed_taken), s.cusum_k, h_used)
     h.cusum = round(cus, 3)
     h.dd_30d = round(drawdown([float(t.ret) for t in recent_taken if t.ret is not None]), 4)
     if h.psi_size_down:

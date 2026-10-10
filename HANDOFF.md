@@ -393,6 +393,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   before the trial. Note for quant review: feature-day bars include a Friday-evening stub bar (settlement to the
   Friday close, visible Saturday), so "20 daily bars" is about 3.3 weeks, as for the existing 1d option. Run inputs:
   `docs/research/preregistration-2027Q1.md` H-01. No research trial was run.
+- CPCV and CUSUM calibration (2026-10-10, rows M16/M25): `goldbot/research/cpcv.py` runs combinatorial purged CV
+  (6 equal-duration groups of the research window, holdout excluded; 15 purged/embargoed splits of 2 test groups; 5
+  rebuilt backtest paths) with the walk-forward's own cross-fitted calibration and threshold per path, reports the
+  path Sharpe / mean R distribution and, across several configurations, PBO (CSCV). It is evidence on an existing
+  trial (`<registry>.evidence.jsonl`), not a trial: no budget slot, no deflated-Sharpe count. Run it with
+  `scripts/research_pass.py --cpcv <trial#> [...]`; the scheduler job `cpcv_quarterly` (first Sunday of each quarter,
+  14:00 UTC, new `months` filter on schedules) does every gate-passing trial against its family's other trials ->
+  `state/cpcv_<quarter>.md`. The evidence sidecar is not yet unioned by `registry_sync` with the release copy, and
+  research.yml does not upload it. CUSUM: `goldbot/research/cusum.py` picks h by simulation so in-control residuals
+  alarm within a quarter's expected trades with 5% probability (settings `drift.cusum_k`, `drift.cusum_false_alarm`;
+  `cusum_h` 4.0 only without a backtest trade rate); `drift_watch` and `model_watch` pass the champion's
+  `trades_per_week`. At 1 trade a week h is 3.46 (more sensitive than the old 4.0), at 5 a week 5.21 (fewer false
+  halts). `goldbot/api/explain.py` still draws the CUSUM trace with the fixed `cusum_h` (API lane: should read the
+  `cusum_h` now stored per agent in drift.json).
 
 ## Next steps (no owner input needed unless marked)
 - Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):

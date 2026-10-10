@@ -39,6 +39,9 @@
 * feed_reconcile    daily (D12): per account, the engine's tick-built 1m bars against the broker's own M1 for the last
                     day; divergence and unconfirmed spikes -> dq_events, broker M1 -> bars_1m_broker, report ->
                     state/reconcile_<account>.json (health check reconcile:<account>). Skipped without a broker.
+* cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
+                    of every trial that passed the gates, PBO against its family's other trials, attached to the
+                    trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
 """
 from __future__ import annotations
 
@@ -349,7 +352,9 @@ def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         if bt is None or bt.mean_ret is None or bt.std_ret is None:
             out[agent_id] = {"version": ch.version, "watch": "no backtest moments; cannot run CUSUM"}
             continue
-        if cusum_alarm(rets, bt.mean_ret, bt.std_ret):
+        d = ctx.settings.drift            # h tuned to a 5% quarterly false-alarm rate at the backtest's trade rate (M25)
+        if cusum_alarm(rets, bt.mean_ret, bt.std_ret, k=d.cusum_k, trades_per_week=bt.trades_per_week,
+                       false_alarm=d.cusum_false_alarm):
             restored = ctx.models.restore_previous(agent_id, f"CUSUM alarm on {len(rets)} shadow trades within {CUSUM_WINDOW_DAYS} days of promotion")
             out[agent_id] = {"version": ch.version, "action": "restored_previous", "restored": restored.version, "trades": len(rets)}
         else:
@@ -459,8 +464,10 @@ def drift_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         closed = [t for _, t in exited]
         recent = [t for ts, t in exited if ts >= slot - pd.Timedelta(days=d.dd_window_days)]
         bt_dd = (e.backtest or {}).get("max_dd")
+        tpw = (e.backtest or {}).get("trades_per_week")      # sets the CUSUM's h (M25: 5% quarterly false alarms)
         health.append(assess(e.agent_id, e.version, model=model, live=live, closed_taken=closed, recent_taken=recent,
-                             backtest_dd=float(bt_dd) if bt_dd is not None else None, s=d))
+                             backtest_dd=float(bt_dd) if bt_dd is not None else None, s=d,
+                             trades_per_week=float(tpw) if tpw else None))
     # sticky: an agent stays halted while the same version is champion, until the owner clears it
     prev_halts = prev.get("halted") or {}
     halted: dict[str, Any] = {}
@@ -718,6 +725,72 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- CPCV (M16)
+CPCV_MAX_CONFIGS = 8            # PBO compares a passing trial with at most this many of its family's trials (itself in)
+
+
+def cpcv_quarterly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Quarterly (design: "Combinatorial purged CV (6 groups, 2 test, 15 paths) runs quarterly"; research/cpcv.py):
+    for every walk-forward trial that passed the design's gates and has no CPCV evidence this quarter, CPCV on the
+    store's bars up to the holdout (never into it), compared for PBO with its family's other walk-forward trials on
+    the same timeframe (the configurations it was selected among, the most recent CPCV_MAX_CONFIGS). The result is
+    attached to the passing trial as evidence: not a trial, no budget slot, no deflated-Sharpe count. Report ->
+    state/cpcv_<quarter>.md. One trial's failure does not stop the others; the job fails at the end if any did."""
+    from goldbot.research import cpcv
+    from goldbot.research.registry import quarter_of
+    synced = _sync_trials(ctx)
+    r = ctx.settings.research
+    holdout = r.holdout_window()
+    q = quarter_of(slot.to_pydatetime())
+    rows = read_rows(ctx.trials.path)
+    done = {int(e["trial"]) for e in ctx.trials.evidence(kind=cpcv.EVIDENCE_KIND) if e.get("quarter") == q}
+
+    def timeframe(row: dict[str, Any]) -> str | None:
+        try:
+            return cpcv.trial_timeframe(row) if cpcv.cpcv_eligible(row) is None else None
+        except (KeyError, ValueError, TypeError):
+            return None
+
+    passing = [x for x in rows if timeframe(x) is not None
+               and ((x.get("results") or {}).get("gates") or {}).get("passed") is True]
+    end = min(slot, holdout[0]) if holdout is not None else slot
+    start = end - pd.DateOffset(months=12 * 30)                 # everything the store has
+    out: dict[str, Any] = {"quarter": q, "trials": {}, "errors": {}, "registry_sync": synced}
+    lines = [f"# Combinatorial purged CV {q}", "",
+             f"{len(passing)} trial(s) passed the gates. Evidence on those trials, not new trials.", ""]
+    for row in passing:
+        t = int(row["trial"])
+        if t in done:
+            out["trials"][t] = "already evaluated this quarter"
+            continue
+        try:
+            tf = str(timeframe(row))
+            peers = [x for x in rows if x.get("family") == row["family"] and int(x["trial"]) != t and timeframe(x) == tf]
+            compare = [row, *peers[-(CPCV_MAX_CONFIGS - 1):]]
+            dec = _bars(ctx, tf, start, end)
+            if dec.empty:
+                raise ValueError(f"no {tf} bars in the store before {end:%Y-%m-%d}")
+            ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
+            context = {TF_LABEL[x]: _bars(ctx, x, ctx_start, end) for x in context_tfs(tf)}
+            res = cpcv.cpcv_trials(compare, dec, context, extra_cost_usd=live_extra_cost_usd(ctx), holdout=holdout,
+                                   swap=live_swap(ctx))
+            mine = res["per_trial"][t]
+            ctx.trials.attach_evidence(t, cpcv.EVIDENCE_KIND, cpcv.evidence_payload(mine, res["pbo"], f"cpcv_quarterly {q}"),
+                                       now=slot.to_pydatetime())
+            out["trials"][t] = {"n_paths": mine.get("n_paths"), "sharpe": mine.get("sharpe"), "mean_r": mine.get("mean_r"),
+                                "pbo": (res["pbo"] or {}).get("pbo"), "compared": [int(x["trial"]) for x in compare]}
+            lines += [f"## Trial {t}: {row['family']} ({tf})", "", *cpcv.report_lines(res["per_trial"], res["pbo"]), ""]
+        except Exception as exc:                 # one trial's failure must not hide the others' evidence
+            log.exception("cpcv_quarterly: trial %s", t)
+            out["errors"][t] = f"{type(exc).__name__}: {exc}"
+    report = ctx.state_dir / f"cpcv_{q}.md"
+    report.write_text("\n".join(lines))
+    out["report"] = str(report)
+    if out["errors"]:
+        raise RuntimeError(f"cpcv_quarterly failed for trials {sorted(out['errors'])}: {out['errors']} (report {report})")
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- gap watch
 def champion_windows(ctx: JobContext) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     """Each champion's training window as the Saturday retrain builds it: train_months + 4 x test_months up to the
@@ -808,6 +881,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "drift_watch": drift_watch,
     "gap_watch": gap_watch,
     "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
+    "cpcv_quarterly": cpcv_quarterly,             # M16 combinatorial purged CV + PBO of gate-passing trials
 }
 
 
@@ -817,5 +891,5 @@ def build_scheduler(ctx: JobContext, clock: Callable[[], pd.Timestamp] | None = 
     for name, fn in JOBS.items():
         s = getattr(cfg, name)
         sch.add(name, Schedule(kind=s.kind, at=s.at, weekdays=tuple(s.weekdays), weekday=s.weekday, day=s.day,
-                               max_late_hours=s.max_late_hours), functools.partial(fn, ctx))
+                               months=tuple(s.months), max_late_hours=s.max_late_hours), functools.partial(fn, ctx))
     return sch

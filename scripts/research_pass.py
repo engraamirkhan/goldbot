@@ -32,9 +32,15 @@ for a trial that declares them, a seeded clone, or a specialist without a declar
 includes them, so such a model scores only frames built with macro. A missing or empty release is reported and the
 pass runs without them.
 
+Combinatorial purged CV (M16, goldbot/research/cpcv.py): `--cpcv <trial#> [<trial#> ...]` re-evaluates registered
+walk-forward trials on 6 time groups of the research window (15 purged splits, 5 backtest paths) and, for several
+trials, the probability of backtest overfitting across them. It is not a trial: no budget slot, no registry row; the
+result is attached to each trial as evidence (`<registry>.evidence.jsonl`).
+
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
       [--specialist session_open | --pooled 15m] [--from-year 2010] [--to-year 2026] [--rationale "..."] \
       [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table costs_measured.json] [--macro macro/]
+  python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report cpcv.md --cpcv 12 [13 14]
 """
 from __future__ import annotations
 
@@ -349,6 +355,8 @@ def main() -> int:
                     help="one meta-model over every family deciding on this timeframe (one trial, family pooled_<tf>)")
     ap.add_argument("--macro", default="",
                     help="folder or Parquet of the macro-v1 release: adds the point-in-time macro features")
+    ap.add_argument("--cpcv", type=int, nargs="+", default=None, metavar="TRIAL",
+                    help="combinatorial purged CV of registered trials (evidence on them, not a trial); PBO across several")
     _discovery_args(ap)
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
@@ -370,6 +378,8 @@ def main() -> int:
     print(_macro_line(macro_info)[2:], flush=True)
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
+        if args.cpcv:
+            return _cpcv(args, b1, reg, extra_cost, swap, holdout, cost_source, macro)
         if args.discover:
             return _discover(args, variants, b1, reg, settings, extra_cost, swap, holdout, cost_source, macro)
         return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings, swap=swap,
@@ -497,6 +507,52 @@ def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.D
     Path(args.report).write_text(text)
     print(text)
     print(json.dumps({"trial": row["trial"], "agent_id": row["agent_id"], "status": row["status"]}), flush=True)
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------- CPCV (M16)
+def _cpcv(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, extra_cost: float, swap: SwapSpec,
+          holdout: tuple[pd.Timestamp, pd.Timestamp] | None, cost_source: str, macro: pd.DataFrame | None) -> int:
+    """Combinatorial purged CV of registered trials (goldbot/research/cpcv.py). Not a trial: no budget check, no
+    registry row; the result is attached to each trial as evidence. Several trials: PBO across them."""
+    from goldbot.research import cpcv
+    rows = []
+    for n in dict.fromkeys(args.cpcv):
+        row = reg.row(n)
+        if row is None:
+            raise SystemExit(f"--cpcv: no trial #{n} in {reg.path}")
+        why = cpcv.cpcv_eligible(row)
+        if why:
+            raise SystemExit(f"--cpcv: {why}")
+        rows.append(row)
+    tfs = {cpcv.trial_timeframe(r) for r in rows}
+    if len(tfs) != 1:
+        raise SystemExit(f"--cpcv: trials compared together must share a decision timeframe (got {sorted(tfs)})")
+    tf = tfs.pop()
+    feat_ctx = {"macro": macro} if macro is not None else None
+    b_dec = resample_bars(b1, tf).reset_index(drop=True)
+    context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
+    frame = build_decision_frame(b_dec, context, ctx=feat_ctx)
+    out = cpcv.cpcv_trials(rows, b_dec, context, extra_cost_usd=extra_cost, holdout=holdout, swap=swap, frame=frame,
+                           ctx=feat_ctx)
+    version = frame[1].attrs["feature_version"]
+    lines = [f"## Combinatorial purged CV: trials {', '.join(str(r['trial']) for r in rows)} ({tf})", "",
+             f"- research window {out['edges'][0][:10]} .. {out['edges'][-1][:10]} (holdout excluded), "
+             f"{cpcv.N_GROUPS} groups of equal duration",
+             f"- costs: bar spread in every label plus {extra_cost:.2f} $/oz round trip; cost source: {cost_source}",
+             "- evidence attached to each trial (not a trial: no budget slot, the deflated-Sharpe count is unchanged)"]
+    stale = [str(r["trial"]) for r in rows if r.get("feature_version") and r["feature_version"] != version]
+    if stale:
+        lines.append(f"- **feature version differs from the trial's** for {', '.join(stale)} (data or --macro differ): "
+                     "read the paths with care")
+    lines += ["", *cpcv.report_lines(out["per_trial"], out["pbo"])]
+    for r in rows:
+        res = out["per_trial"][int(r["trial"])]
+        reg.attach_evidence(int(r["trial"]), cpcv.EVIDENCE_KIND,
+                            cpcv.evidence_payload(res, out["pbo"], f"research_pass --cpcv {' '.join(map(str, args.cpcv))}"))
+    text = "\n".join(lines)
+    Path(args.report).write_text(text)
+    print(text)
     return 0
 
 

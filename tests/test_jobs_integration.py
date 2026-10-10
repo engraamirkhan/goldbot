@@ -16,6 +16,7 @@ from goldbot.ops.accounts import Account
 from goldbot.ops.jobs import (
     JobContext,
     build_scheduler,
+    cpcv_quarterly,
     gap_watch,
     label_grid,
     make_trial_runner,
@@ -139,7 +140,39 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "agents_daily": "2026-10-02T23:45:00+00:00", "agents_weekly": "2026-10-03T13:00:00+00:00",
                    "monthly_research": "2026-10-04T08:00:00+00:00", "calendar_archive": "2026-10-03T06:10:00+00:00",
                    "agents_presession": "2026-10-05T06:30:00+00:00", "recalibrate": "2026-10-03T11:30:00+00:00", "drift_watch": "2026-10-02T23:40:00+00:00",
-                   "gap_watch": "2026-10-02T23:55:00+00:00", "feed_reconcile": "2026-10-02T23:20:00+00:00"}
+                   "gap_watch": "2026-10-02T23:55:00+00:00", "feed_reconcile": "2026-10-02T23:20:00+00:00",
+                   "cpcv_quarterly": "2026-10-04T14:00:00+00:00"}
+    # quarterly: after October's run the next is the first Sunday of January
+    later = build_scheduler(ctx, clock=lambda: pd.Timestamp("2026-10-05 12:00", tz="UTC"))
+    assert later.status()["jobs"]["cpcv_quarterly"]["next_slot"] == "2027-01-03T14:00:00+00:00"
+
+
+def test_cpcv_quarterly_attaches_evidence_to_gate_passing_trials_without_new_trials(bars_store, tmp_path):
+    ctx = _ctx(bars_store, tmp_path)
+    cfg = {**SPECIALISTS["session_open"].default_config, "asia_range_max_atr_d": 1.2}
+    peer = {**SPECIALISTS["session_open"].default_config, "asia_range_max_atr_d": 1.5}
+    passed = ctx.trials.record(agent_id="a", family="session_open", config=cfg, feature_version="v", rationale="r",
+                               results={"gates": {"passed": True}})
+    ctx.trials.record(agent_id="b", family="session_open", config=peer, feature_version="v", rationale="r",
+                      results={"gates": {"passed": False}})
+    ctx.trials.record(agent_id="c", family="session_open", config=cfg, feature_version="v", rationale="r",
+                      results={"gates": {"passed": True}}, status="holdout")      # a holdout scoring is never re-run
+    n = ctx.trials.n_trials
+    slot = pd.Timestamp("2025-10-05 14:00", tz="UTC")
+    out = cpcv_quarterly(ctx, slot)
+    assert ctx.trials.n_trials == n                                       # not a trial: no new row, no budget slot
+    assert list(out["trials"]) == [passed["trial"]] and not out["errors"]
+    (ev,) = ctx.trials.evidence(passed["trial"], "cpcv")
+    p = ev["payload"]
+    assert ev["quarter"] == "2025Q4" and p["n_splits"] == 15 and p["n_paths"] == 5 and len(p["paths"]) == 5
+    assert any(s["fitted"] for s in p["splits"])                         # real models, not empty paths
+    assert pd.Timestamp(p["edges"][-1]) <= pd.Timestamp("2025-10-01", tz="UTC")   # never into the holdout
+    assert p["pbo"] is not None and p["pbo"]["trials"] == [passed["trial"], passed["trial"] + 1]
+    assert "Combinatorial purged CV 2025Q4" in Path(out["report"]).read_text()
+    # idempotent within the quarter
+    again = cpcv_quarterly(ctx, slot + pd.Timedelta(hours=1))
+    assert again["trials"][passed["trial"]] == "already evaluated this quarter"
+    assert len(ctx.trials.evidence(kind="cpcv")) == 1
 
 
 def test_research_analyst_trial_is_recorded_in_the_registry(bars_store, tmp_path):
