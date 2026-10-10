@@ -657,16 +657,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   from settings never narrows it (an allocator rule change is the owner's decision).
 
 ## Next steps (no owner input needed unless marked)
-- Starting account and daily target (2026-10-10, owner delegated; `docs/decisions/0004-starting-account-and-daily-target.md`):
-  at £50 (~$66.50 at GBPUSD 1.33) RiskGate refuses every trade on every timeframe (0.01 lot risks 16.4% on 15m up to
-  354% on 1w at gold $4,150 and estimated ATRs; the 1:20 margin floor alone needs ~£470). £50/day is +100%/day;
-  realistic only at ~£19k–38k equity (0.5% risk, 0.1–0.2 R, 15m + 1h). Decided: demo continues at a demo balance
-  equal to the first milestone; minimum-lot exception rule for RiskGate at ≤ 1% realised risk (BACKLOG 25, needs
-  trading-safety review, ships inert with `min_lot_risk_cap: null`); milestones ~£825 (15m), £1,650 (1h), £3,270
-  (4h), £7,900 (1d, also needs 1d as a decision TF); H-01 stays in shadow until the 1d milestone; progress reported
-  as monthly % and R (BACKLOG 26), never £/day; broker terms to be measured (BACKLOG 27). Ruin and feasibility
-  numbers came from the G-5/G-7 tools on unmerged commit 08e654a (run from an extract; re-run from main after merge;
-  its post-8% sizing caveat makes the halt probabilities upper bounds). Owner: deposit plan and demo balance.
+- Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;
+  `docs/decisions/0004-starting-account-and-daily-target.md`): the IC Markets demo is **£1,000 GBP**, read from MT5
+  `account_info` (never config); **£50 is the owner's absolute daily loss limit**; **£50+/day is the north star**
+  (variable by day, not a quota; realistic as a monthly average at ~£21k–£53k). Read-only audit: equity, caps and
+  stages use broker equity correctly, but **RiskGate treats USD amounts as GBP (HIGH)** (`goldbot/risk/gate.py:249-268`):
+  trades are sized at ~0.75× intended, realised risk reads 1.33× too high (15m min lot 1.09% vs true 0.82%, so it is
+  refused even with the min-lot exception), closed-trade R is understated 1.33× (`goldbot/engine/runner.py:1591-1602`),
+  `Intent` takes no contract terms from `symbol_info` (`runner.py:576-577`), and the supervisor sums mixed-currency
+  equities. Top priority: BACKLOG 28 (currency-correct sizing), then 25 (min-lot exception), then 29
+  (`risk.daily_loss_limit_abs: 50`, projected, entries only); all need trading-safety review. At £1,000 only 15m
+  trades (0.01 lot, 0.82%, Raw account), one position at a time (notional cap), at most two full losses a day
+  (1.5% supervisor cap, worst day ~£17), and the 8% stage is in effect a stop. Ladder: 1h ~£1,650, 4h ~£3,270,
+  1d ~£7,900. North-star KPIs (monthly £/day average, best days, opportunity days captured, max drawdown) are in
+  BACKLOG 26; opportunity-day detection (30) and runner exits (31) are hypotheses for the trial registry (no trials
+  spent). Owner: optional deposit plan; confirm the demo is Raw Spread.
 - XAUUSD trader playbook (2026-10-10, owner request): `docs/research/xauusd-trader-playbook.md` lists ~70 things a
   professional gold trader considers (drivers, CFD microstructure, technicals, risk management, process), each with
   sources, evidence grade and goldbot status, then a ranked gap list (risk gaps G-1..G-10 first: swap in live EV,

@@ -1,94 +1,269 @@
-# 0004 Starting account £50 and the £50-a-day target
+# 0004 Starting account £1,000, a £50 daily loss limit, and the £50-a-day north star
 
 2026-10-10 · program director, with the product-owner and performance-analyst views · decision delegated by the
-owner ("we will start with 50 GBP, the target should be to make 50 GBP per day, using any of the strategies on 15m,
-1h, 4h, daily, weekly").
+owner.
+
+> **Amended 2026-10-10.** The first version of this ADR read the owner's "£50" as the account size. That was
+> wrong. The owner corrected it: *"the broker details I gave you, it should be able to know the balance, which
+> should be 1000 GBP; 50 GBP is the daily loss limit."* The IC Markets demo account is in **GBP** with a **£1,000**
+> balance, and the engine reads it from the broker. **£50 is the owner's absolute daily loss limit.** The owner
+> then confirmed the profit aim: *"that is the ambitious aim and whole purpose of this trading system, to make 50
+> or more a day, but less if the conditions are not suitable; usually there are days in the week where the market
+> can provide opportunities."* So £50+ a day is recorded as the **north-star goal** and varies by day (section 6).
+> It is not a daily quota. Every number below is redone for £1,000. The superseded £50-account analysis is
+> summarised in section 8.
 
 ## Owner summary
-- £50 cannot place a single trade under goldbot's safety rules. The smallest gold trade (0.01 lot) with a normal
-  stop risks 16% of £50 on 15m and 33% on 1h. One losing trade would trip the 12% emergency stop.
-- £50 a day from £50 means doubling the account every day. No strategy, ours or anyone's, does that. Trying would
-  lose the £50 within a few trades (about a 99% chance within five).
-- What we do: stay on demo (as planned) and keep the £50 for later. Real trading starts only once the account
-  reaches about **£850 (15m), £1,650 (1h), £3,300 (4h) and £7,900 (daily)**, and only after the paper gate passes.
-- £50 a day becomes a realistic average at roughly **£20,000–£40,000** of equity at our normal 0.5% risk, if a
-  strategy proves an edge. None has yet.
-- Progress is reported as monthly % return and R (risk units), not £ a day.
-- We will never use martingale, grids or bigger bets to catch up.
+- **North star:** £50 or more on good days, less or nothing on poor ones. We chase it by being selective and
+  letting winners run. Bigger bets are never the route. As a monthly *average* it becomes realistic at about
+  £21k–£53k of equity.
+- **Your account:** £1,000 GBP on the IC Markets demo, read live from the broker (balance and equity, never from
+  config).
+- **Daily loss limit:** never more than £50 lost in a day. The tighter design caps apply first: 2% of the account
+  (£20 at £1,000) and 1.5% across all accounts (£15). In practice, two full losing trades stop new entries for the
+  day; the worst day is about £17. The £50 limit only binds once the account passes £2,500. Exits are never blocked.
+- **We found a sizing bug (HIGH):** the risk check treats US-dollar amounts as pounds. It errs on the safe side
+  (trades are about 25% smaller than intended), but because of it the gate refuses the only trade that fits
+  £1,000. Fixing it comes first.
+- **What can trade at £1,000:** only 15-minute strategies, at the smallest gold size (0.01 lot, about £8 of risk,
+  0.8%). That also needs the small-account rule (BACKLOG 25) and a Raw-spread account. 1h needs about £1,650, 4h
+  about £3,300 and daily about £7,900.
+- **Honest expectation:** no strategy has passed our tests yet. If one does, 1–4% a month (£10–£40 a month at
+  £1,000) is a realistic range. A £50 day (5%, about 6 risk units at the smallest size) is a rare best day from a
+  big trend or news move. It cannot be the average at this size without near-certain ruin.
+- **No martingale, no grids, no catch-up bets.** Progress is reported monthly: average £/day, % return, best days,
+  opportunity days caught, and the largest drawdown.
 
 ## Context
-The owner wants to start with £50 and make £50 a day on any of 15m, 1h, 4h, daily or weekly. The rails this must
-fit, from `docs/DESIGN.md` (Sizing, Hard limits) and `config/settings.yaml` `risk:`:
-
-- Risk per trade 0.5% (`risk_per_trade: 0.005`), 0.1% in tiny-live (`risk_per_trade_tiny_live: 0.001`), multiplier
-  0.25–1.5, hard clamp 1% (`goldbot/risk/gate.py:35`, clamp at `:246-247`).
-- Stop = 1.5 × ATR(14) of the decision timeframe. Lots = equity × risk × m / (stop × 100 oz), rounded down; the
-  trade is skipped with `min_lot_exceeds_risk` when the minimum lot would exceed 1.2× target risk
-  (`gate.py:248-256`).
-- Margin: the larger of the broker's figure and notional / 20 (`gate.py:159-182`, `leverage_cap: 20.0` at `:48`),
-  and margin level after the order ≥ 300% (`:260-264`). Combined notional ≤ 30% × 20 × equity = 6× equity
-  (`:49-52`, `:265-271`).
-- Daily cap 2%, weekly 5%, drawdown 8% (size down) and 12% (close everything, halt) (`settings.yaml` `risk:`).
-- Decision timeframes in the engine are 15m, 1h, 4h. 1d is research-only and 1w is context only
-  (`settings.yaml` `timeframes:`, `walkforward:` comment).
-- No strategy is net positive after costs. The best gross edge measured is tsmom, +0.06 R, negative net
-  (`docs/BACKLOG.md` "Where we stand"). Five families are retired (`settings.yaml` `research.retired_families`).
+Rails from `docs/DESIGN.md` (Sizing, Hard limits) and `config/settings.yaml` `risk:`:
+- Risk per trade 0.5% (`risk_per_trade: 0.005`), 0.1% tiny-live, multiplier 0.25–1.5, hard clamp 1%
+  (`goldbot/risk/gate.py:35`, clamp `:246-247`). Stop = 1.5 × ATR(14) of the decision timeframe.
+- A trade is skipped (`min_lot_exceeds_risk`) when the minimum lot's realised risk exceeds 1.2 × target risk
+  (`gate.py:254-256`).
+- Margin: max(broker `order_calc_margin`, notional / 20); margin level after the order ≥ 300% (`gate.py:158-182`,
+  `:258-263`). Combined notional ≤ 30% × 20 × equity = 6× equity (`:264-270`).
+- Caps: daily 2% and weekly 5% per account (`gate.py:215-220`). The supervisor applies 1.5% / 4% on combined equity
+  (`goldbot/risk/supervisor.py:18-19`, `:54-65`). Drawdown 8% sizes down and 12% halts (`gate.py:139-150`).
+  Values are at `config/settings.yaml:45-48`.
+- Decision timeframes are 15m, 1h and 4h. 1d is research-only and 1w is context only. No strategy is net positive
+  after costs; tsmom has +0.06 R gross and is negative net.
 
 ### Assumptions (stated, not measured)
 | Input | Value | Source |
 | --- | --- | --- |
-| GBPUSD | 1.33, so £50 ≈ **$66.50** | currency-converter.org.uk, 1.32–1.324 on 3–4 Oct 2026; 30rates 1.35 on 10 Sep 2026. Rounded to 1.33 |
-| XAUUSD | **$4,150/oz** | RoboForex analysis, 28 Sep 2026 (range 3,920–4,500). No same-day quote found |
-| Contract | 100 oz per lot, min lot 0.01 (= 1 oz), step 0.01 | design and `gate.py:106-108` defaults; read from the terminal at runtime |
-| IC Markets SC leverage on gold | up to 1:500 headline (FXStreet broker review); comparison sites list 1:200 for gold | **unverified** (the playbook notes the ICM spec page returned 404). Irrelevant to sizing: RiskGate uses the stricter 1:20 |
-| ATR(14), 1d | **~$70** (range $50–110) | **estimate**: ~22% annualised vol at $4,150 gives a daily σ of ~$57, and ATR runs ~1.2× σ. Consistent with the playbook's 1.5 × ATR(1d) = $75–170 (`docs/research/xauusd-trader-playbook.md` 4.4). Not measured from `data-v1` (that is BACKLOG 22, G-7) |
-| ATR, other timeframes | √time scaling of ATR(1d) over a 23-hour trading day: 4h ÷ 2.4, 1h ÷ 4.8, 15m ÷ 9.6, 1w × √5 | **estimate**; intraday ranges in practice run somewhat above √time, which makes the thresholds below slightly optimistic |
+| Account | **£1,000 GBP**, IC Markets SC demo | owner; the engine reads balance and equity from MT5 `account_info` at runtime |
+| GBPUSD | 1.33, so £1,000 ≈ **$1,330** | currency-converter.org.uk 1.32–1.324 (3–4 Oct 2026); 30rates 1.35 (10 Sep 2026) |
+| XAUUSD | **$4,150/oz** | RoboForex, 28 Sep 2026 (range 3,920–4,500) |
+| Contract | 100 oz per lot, min lot 0.01, step 0.01 | design defaults; to be measured (BACKLOG 27) |
+| ATR(14), 1d | **~$70** (range $50–110) | **estimate** from ~22% annualised vol; not measured from `data-v1` (BACKLOG 22) |
+| ATR, other timeframes | √time from 1d over 23 h: 4h ÷ 2.4, 1h ÷ 4.8, 15m ÷ 9.6, 1w × √5 | **estimate**; slightly optimistic |
 
-All dollar thresholds below scale linearly with ATR: if volatility is 50% higher, every equity threshold is 50% higher.
+Every equity threshold scales linearly with ATR and the gold price, and inversely with GBPUSD.
 
-## 1. Feasibility at £50 ($66.50)
+## 1. Code audit: balance, currency and daily caps (read-only)
 
-| Timeframe | ATR(14) | 1.5 × ATR stop | Risk of 0.01 lot | as % of £50 | In the engine today |
-| --- | --- | --- | --- | --- | --- |
-| 15m | ~$7.30 | ~$10.90 | $10.90 | **16.4%** | decision TF (off on a Standard account, `gate.py` `standard_account_15m`) |
-| 1h | ~$14.60 | ~$21.90 | $21.90 | **32.9%** | decision TF |
-| 4h | ~$29 | ~$43.50 | $43.50 | **65.4%** | decision TF |
-| 1d | ~$70 | ~$105 | $105 | **158%** | research-only |
-| 1w | ~$157 | ~$236 | $236 | **354%** | context only |
+| # | Question | Finding | Severity |
+| --- | --- | --- | --- |
+| A1 | Is equity read from the broker? | **Yes.** `MT5Broker.account()` maps `mt5.account_info()` equity, balance, margin and currency (`goldbot/execution/mt5_adapter.py:203-207`). The engine copies equity, margin, balance high-water mark and the day and week start into `AccountState` on every tick (`goldbot/engine/runner.py:1064-1076`, also `:1293`, `:1316`). No balance or equity exists in `config/` (`config/accounts.yaml` holds no balance). Only `PaperBroker` has a configured equity ($10,000 USD, `goldbot/execution/paper.py:21`, `:53`), for paper mode. | OK |
+| A2 | Do sizing, caps and stages use that equity? | **Yes.** Sizing uses `st.equity` (`gate.py:249`, `:254`), the daily and weekly caps use `day_start_equity` and `week_start_equity` (`:215-220`), the stages use `balance_closed_hwm` (`:139-150`), and the margin level uses `st.equity` (`:260`). | OK |
+| A3 | Is account-currency risk converted from the USD stop? | **No.** `risk_usd = st.equity * risk_frac * mult` (`gate.py:249`) is equity in **GBP**, divided by `stop_distance * contract_oz` in **USD** (`:250`). The realised-risk check does the same (`:254-255`). Nothing uses GBPUSD, `trade_tick_value` or `order_calc_profit`: `SymbolInfo` carries no tick value (`mt5_adapter.py:200`) and the gate has no FX input. On the £1,000 GBP account every trade is sized at 1/1.33 ≈ **0.75× intended** (risk is understated by 25%), and the computed realised risk is **1.33× the true figure**. The error is conservative, but it refuses the only trade that fits £1,000: a 15m min lot is computed as 1.09% (true 0.82%), which is over the 1% exception cap of BACKLOG 25. | **HIGH** (wrong on every trade; blocks 15m at £1,000) |
+| A4 | Margin and notional in the same currency? | **No.** The 1:20 figure `notional / 20` is in USD (`gate.py:165`, notional at `:257`). It is compared with the broker margin (GBP, `mt5_adapter.py:242-245`) and with GBP equity (`:260`). The combined-notional cap compares USD notional with 6 × GBP equity (`:268`). Both err strict by 1.33×. | part of A3 |
+| A5 | Closed-trade R and return | `pnl` comes from deal `profit` in the deposit currency (GBP) (`runner.py:1544-1545`). `risk = |entry − sl| × lots × contract` is in USD (`:1591`), so `r = pnl / risk` is **understated by 1.33×** (`:1602`), and so is `ret = pnl / (entry × lots × contract)` (`:1599`). Attribution, drift and the phase gate read R. | part of A3 (MEDIUM on its own) |
+| A6 | Contract terms passed to the gate? | **No.** `Intent(...)` at `runner.py:576-577` passes no `contract_oz`, `volume_min`, `volume_step`, `volume_max` or `stops_level_points`, so the gate uses its defaults: 100 oz, 0.01, 0.01, 2.0, 0 (`gate.py:106-110`). The first version of this ADR said these were "read from the terminal at runtime"; for the gate that was wrong. They match ICM's usual XAUUSD terms but are not verified. | MEDIUM |
+| A7 | Daily loss caps: where, on what? | Account cap 2%: `gate.py:215-218`, `day_loss = 1 − equity / day_start_equity`. Equity includes floating P&L, so the cap is on equity, in the account currency (a ratio, so it is currency-neutral). The day resets at 00:00 UTC (`gate.py:279-288`, via `runner.py:1069`). Supervisor 1.5%: `supervisor.py:54-63` sums each engine's published `equity` and `day_start_equity` (`runner.py:1844`). Both are checked **before** an entry against the loss so far; neither adds the new trade's risk, so a day can end one full loss past the cap. No absolute (£) cap exists. | OK for one GBP account; see A8 |
+| A8 | Supervisor with mixed currencies | The supervisor sums equities across engines without conversion (`supervisor.py:54-57`), as does the gate's `other_equity` (`runner.py:1107`). If `vantage-demo` runs in USD next to `icm-demo` in GBP, the combined ratios mix currencies. | MEDIUM (inert while one account runs) |
 
-Commission ($3.50/lot/side, so $0.07 per 0.01-lot round trip) and spread (~$0.15–0.30/oz) are small next to these.
+**Verdict:** balance and equity come from MT5, and the caps and stages use them correctly. The currency conversion
+is **wrong (HIGH)**: the gate treats USD amounts as GBP. It mis-sizes every trade by about 1.33× on the safe side,
+under-reports R by 1.33×, and blocks the 15m minimum-lot trade at £1,000. The fix is **BACKLOG 28, top priority**,
+and it must land before or with BACKLOG 25.
 
-Checked with the G-7 tool (`goldbot/research/min_lot.py`, branch `worktree-agent-a5e86482ae604f08f` commit
-`08e654a`, not yet merged; run from an extract of that commit, so no code enters this change):
-`python goldbot/research/min_lot.py --price 4150 --stop-distance <10.9|21.9|43.5|105|235.5> --equity 66.5 --risk
-<0.01|0.005|0.001>`. It reports "0.01 lot … refused" at $66.50 for every stop (16.39%, 32.93%, 65.41%, 157.89%,
-354.14%). Its minimum equities agree with the milestone table in 3.3 (for example 15m: $1,090 at ≤ 1%, $1,817 at
-0.5% with the gate's 1.2× tolerance, $9,083 at 0.1%). The tool checks the sizing rule only, not margin or caps.
+## 2. Feasibility at £1,000 ($1,330)
 
-**Margin for 0.01 lot** (notional 1 oz × $4,150 = $4,150):
+| Timeframe | 1.5 × ATR stop | Min-lot (0.01) risk | True % of £1,000 | Gate computes today (A3) | Today at 0.5% (≤ 0.6%) | With BACKLOG 25 (≤ 1%) and 28 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 15m | ~$10.90 | £8.20 | **0.82%** | 1.09% | refused | **allowed** (Raw account; 15m is off on Standard except session-open) |
+| 1h | ~$21.90 | £16.47 | 1.65% | 2.19% | refused | refused |
+| 4h | ~$43.50 | £32.71 | 3.27% | 4.35% | refused | refused |
+| 1d | ~$105 | £78.95 | 7.89% | 10.5% | refused | refused (research-only) |
+| 1w | ~$236 | £177 | 17.7% | 23.6% | refused | refused (context only) |
 
-| Leverage | Margin | Equity for the 300% level floor |
-| --- | --- | --- |
-| 1:500 (ICM SC headline, unverified) | $8.30 | $25 |
-| 1:200 (reported for gold, unverified) | $20.75 | $62 |
-| **1:20 (what RiskGate uses: max(broker, 1:20))** | **$207.50** | **$622 (£468)** |
+Note that BACKLOG 25 **without** 28 still refuses 15m at £1,000 (1.09% > 1%). Both are needed.
 
-The combined-notional cap (6× equity) needs equity ≥ $4,150 / 6 = **$692 (£520)** for one 0.01 lot.
+- **Margin, 0.01 lot** (notional $4,150 = £3,120): 1:20 gives £156, so the margin level is 641% (≥ 300%). Two
+  positions would need £312 (320%).
+- **Combined-notional cap:** 6 × £1,000 = £6,000 ($7,980) holds one 0.01 lot ($4,150) but not two ($8,300). **At
+  £1,000 only one position can be open at a time**, whatever `max_positions` says.
+- **Size-down stage:** in `SIZE_DOWN` the exception cap halves to 0.5%. At £920 (8% down) a 15m min lot is 0.89%,
+  so it is refused. Without trades the drawdown cannot recover to the 5% clear level. **At £1,000 the 8% stage is
+  in effect a stop**, until a deposit or the re-arm path. Shadow trading continues.
 
-**Result at £50:** RiskGate refuses every trade on every timeframe. The order of refusal is `min_lot_exceeds_risk`
-(target risk at 0.5% is $0.33, at 0.1% is $0.07, against $10.90+ for the minimum lot), and the margin floor and the
-notional cap would refuse it too. This is the gate working. Any minimum-lot loss at £50 (16%+) also exceeds the 2%
-daily cap, the 5% weekly cap and the 12% kill switch in one trade.
+## 3. Daily loss limit: £50 absolute, design percentages first
 
-## 2. What £50 a day requires
-£50/day on £50 is **+100% per trading day**. Daily P&L = equity × risk per trade × expectancy (R/trade) × trades
-per day, so equity needed = £50 / (risk × E[R] × trades/day).
+**Decision.** £50 is the owner's outer daily limit in account currency. The design's tighter percentage caps stay.
+The effective daily limit is:
 
-Plausible trade rates for a filtered specialist: 15m 2/day, 1h 0.6/day (~3/week), 4h 0.2/day (~1/week), 1d
-0.05/day (~1/month), 1w 0.01/day (~2–3/year). Plausible net expectancy: 0.1–0.3 R/trade. For scale, nothing
-measured so far is above 0 R net.
+- per account: **min(2% × day-start equity, £50)**. The £50 binds above £2,500.
+- combined (supervisor): **min(1.5% × combined day-start equity, £50)**. The £50 binds above about £3,333.
 
-**Equity needed for an average of £50 per trading day (GBP):**
+New setting **`risk.daily_loss_limit_abs: 50`** (account currency; `null` = off; validated > 0). RiskGate blocks
+**entries only**: exits, stops and closes are never gated. Unlike the percentage caps (checked on the loss so far),
+the absolute check is **projected**: an entry is refused (`daily_loss_limit_abs`) when the day's loss so far plus
+this trade's full stop risk in account currency would exceed £50. One trade cannot carry the day past £50, except
+through gaps or slippage beyond the stop. The supervisor applies the same £50 to the combined loss, which needs
+equities in one currency (BACKLOG 28, A8). This change touches `goldbot/risk`, so it needs trading-safety review;
+it is BACKLOG 29.
+
+| Equity | 2% account cap | 1.5% supervisor cap | Effective daily limit | Weekly 5% | 8% stage | 12% halt |
+| --- | --- | --- | --- | --- | --- | --- |
+| £1,000 | £20 | £15 | **£15** | £50 | £80 | £120 |
+| £2,500 | £50 | £37.50 | £37.50 | £125 | £200 | £300 |
+| £5,000 | £100 | £75 | **£50** (absolute) | £250 | £400 | £600 |
+
+**Interplay at £1,000, 15m min lot.** A full loss is £8.20 plus costs (commission $0.07 and spread ~$0.20–0.30 per
+0.01 lot, about £0.25), so about **£8.45 (0.85%)**.
+- After loss 1: day loss 0.85%, below both caps, so entry 2 is allowed.
+- After loss 2: £16.90 (1.69%), at or above the supervisor's 1.5%, so **entries stop**. The account cap (2%) alone
+  would allow a third entry and a worst day of about £25.
+- **Result: at most two full losses a day, a worst day of about £17**, one position at a time, well inside £50.
+  Gaps through the stop are the exception.
+
+## 4. Milestone ladder (restated for a £1,000 start)
+
+Equity at which the minimum lot fits each timeframe, at $4,150 gold and the ATR estimates (GBP, rounded).
+Recomputed monthly from measured ATR (BACKLOG 22/26).
+
+| Milestone | 1% min-lot cap (BACKLOG 25) | Design 0.5% (within 1.2×) | Trades | Status at £1,000 |
+| --- | --- | --- | --- | --- |
+| floor | £520 | | margin floor and notional cap | passed |
+| **M1** | **£825** | £1,370 | 15m (Raw account) | **reached, once BACKLOG 28 + 25 land** |
+| M2 | £1,650 | £2,745 | + 1h | +65% away |
+| M3 | £3,270 | £5,450 | + 4h | ×3.3 |
+| M4 | £7,900 | £13,160 | + 1d (also needs 1d promoted to a decision timeframe) | ×7.9 |
+
+Each milestone is a **permission, not a promise**: a timeframe trades only when a strategy on it has passed the
+research gates and the paper gate. Above £1,370 the 15m min lot fits the design's 0.5% rule without the exception.
+
+## 5. Realistic expectations at £1,000
+
+Scratch Monte Carlo (not repo code; 20,000 paths, seed 7). 15m only, fixed 0.01 lot (£8.20 per R), 2R target / 1R
+stop, win rate p = (1 + E[R]) / 3, up to 2 entries a day, the 1.5% daily stop, 21 days a month, 12 months, no
+deposits.
+
+| Net E[R] | Mean monthly return | Median equity, 12 months (p10 / p90) | P(12% halt), 3 / 12 months | P(8% stage = de-facto stop), 3 / 12 months |
+| --- | --- | --- | --- | --- |
+| 0.0 (no edge, today) | 0% | £959 (£885 / £1,172) | 57% / 96% | 86% / 99.8% |
+| 0.1 | +1.6% (~£16) | £1,115 (£902 / £1,713) | 31% / 69% | 67% / 95% |
+| 0.2 | +4.1% (~£41) | £1,763 (£959 / £2,156) | 14% / 30% | 46% / 74% |
+
+- The base case today is **E[R] ≤ 0**: no strategy is net positive. So the demo's job is to measure, not to earn.
+- With a real edge of 0.1–0.2 R, **1–4% a month** is the honest range at £1,000. The minimum-lot granularity makes
+  drawdown stops likely within a year; deposits help most, because they lower the min-lot risk %.
+- The 12% column ignores the 8% stage; the last column treats the 8% stage as the stop it effectively is at this
+  size (section 2). Two-outcome model; no gaps or slippage beyond E[R].
+
+## 6. North-star goal: £50 or more a day, on the days the market offers it
+
+The owner's ambition is the purpose of the system: **£50 or more on a good day, less or nothing when conditions
+are poor.** We record it as the north star. It is not a daily quota, and the system never sizes up to reach it.
+
+**What a £50 day is at £1,000.** 5% of equity: about **6.1 R** at the 15m min lot (£8.20 per R), or 5 R at the 1%
+cap. One 0.01 lot makes £50 on a ~$66 move in its favour, which is about one full daily ATR. Such a day comes from a
+**runner**: a trend or news day (volatility expansion, a London–New York overlap breakout, a CPI/NFP/FOMC move)
+where the entry is early and the exit trails. A selective system with an edge might see such days **a few times a
+month at best**. That frequency is unmeasured; BACKLOG 30 measures it from `data-v1`.
+
+**Why it cannot be the average at £1,000.** £50 a day on average is about **+100% a month**. Reaching it means
+risking well beyond 1% per trade, or many trades a day. The £50-account ruin results (section 8) show where that
+goes: even a +0.3 R edge loses half the account within a year in about half the paths. At the rails' 1% cap, a 0.2
+R edge earns about £41 a month, not a day.
+
+**When it becomes a realistic monthly average.** £50 a trading day ≈ **£1,050 a month**:
+
+| Sustained monthly return | Equity for £50/day average |
+| --- | --- |
+| 2% | ~£52,500 |
+| 3% | ~£35,000 |
+| 5% (top-decile, rarely sustained) | ~£21,000 |
+
+At 0.5% risk and 0.1–0.2 R on 15m + 1h (2.6 trades a day), the per-trade arithmetic gives ~£19k–£38k (table A).
+
+**Illustrative compounding from £1,000.** These are **scenarios, not forecasts**. They assume a proven edge
+(none exists yet), no drawdown halts, and deposits at month end.
+
+| Monthly return | Deposit / month | 1 year | 2 years | 3 years | 5 years | Reaches £50/day average |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2% | £0 | £1,268 | £1,608 | £2,040 | £3,281 | ~16.8 years |
+| 2% | £100 | £2,609 | £4,651 | £7,239 | £14,686 | ~9.6 years |
+| 2% | £250 | £4,621 | £9,214 | £15,038 | £31,794 | ~6.7 years |
+| 3% | £0 | £1,426 | £2,033 | £2,898 | £5,892 | ~10.1 years |
+| 3% | £100 | £2,845 | £5,475 | £9,226 | £22,197 | ~6.2 years |
+| 3% | £250 | £4,974 | £10,639 | £18,717 | £46,655 | ~4.3 years |
+| 5% | £0 | £1,796 | £3,225 | £5,792 | £18,679 | ~5.2 years |
+| 5% | £100 | £3,388 | £7,675 | £15,375 | £54,038 | ~3.5 years |
+| 5% | £250 | £5,775 | £14,351 | £29,751 | £107,075 | ~2.6 years |
+
+**How the system pursues it, inside the rails.**
+1. **Be selective:** trade more on opportunity days and stand aside on poor ones. Opportunity-day detection
+   classifies the day by news, volatility expansion and session overlap (BACKLOG 30, a hypothesis through the trial
+   registry).
+2. **Let winners run:** scale-out and trailing exits (BACKLOG 6 is in review; runner-exit variants are BACKLOG 31,
+   through the registry). Exits stay automatic and are never gated.
+3. **Size by conviction, within the cap:** the existing size multiplier (0.25–1.5) scales risk with the model's
+   edge, clamped at 1%. There is no other lever.
+4. **Compound with equity:** risk is a fraction of broker equity, so £ per R grows as the account grows.
+5. **Climb the ladder:** each milestone adds a timeframe (section 4), and so more opportunity days.
+
+**KPIs (monthly report, BACKLOG 26):**
+- monthly average £/day and % return (time-weighted, deposits excluded);
+- distribution of daily P&L: count of days at £50+ and the best-day histogram in R and £;
+- % of opportunity days captured: days the classifier flagged, and days with a daily range ≥ 1.5 × ATR(1d), on
+  which the system made ≥ 1 R;
+- maximum drawdown %, and days lost to the daily cap.
+
+A daily £ figure is never shown as a target to hit, and a missed £50 day never triggers catch-up sizing.
+
+## 7. Decisions
+1. **Currency-correct sizing first (BACKLOG 28, HIGH, top priority).** Risk, margin and notional are converted to
+   the account currency using MT5 `order_calc_profit` (loss at the stop for the lots), falling back to
+   `trade_tick_value / trade_tick_size`. If neither is available on a non-USD account, entries **fail closed**
+   (`fx_conversion_unavailable`). Closed-trade R uses the same currency. Trading-safety review.
+2. **Minimum-lot exception (BACKLOG 25), raised to second.** Unchanged rule: exactly `volume_min` if its realised
+   risk ≤ `risk.min_lot_risk_cap` (1%; half in size-down), every other check after it, `null` = today's behaviour.
+   Nothing trades at £1,000 without it.
+3. **Absolute daily loss limit (BACKLOG 29):** `risk.daily_loss_limit_abs: 50`, projected, entries only.
+4. **Demo runs at the real £1,000 GBP balance.** The demo-balance question is answered.
+5. **North star recorded (section 6),** pursued through selectivity, runners, conviction sizing within the cap,
+   compounding and the ladder. Hypotheses go through the trial registry. **No trials are spent and the budget is
+   untouched** by this ADR.
+6. **Reporting:** monthly £/day average, %, R, best days, opportunity capture, drawdown (BACKLOG 26).
+7. **H-01 (daily-scale stop) stays in shadow until M4 (~£7,900).**
+8. **Deliberately not done:** no martingale, averaging down, grids or adding to losers. No raising risk, the
+   multiplier or the 1% clamp, and no catch-up sizing. No use of 1:500 leverage. No loosening of the caps, stages,
+   trial budget, holdout or gates. Live only after the recorded paper→tiny-live gate, `unlock_live` and the typed
+   phrase. The owner confirms each entry and exits are automatic.
+
+## Consequences
+- Until BACKLOG 28 lands, demo trades on the GBP account are about 25% smaller than designed and their R is
+  understated. Demo results from before the fix are flagged, not mixed with later ones.
+- At £1,000 the system is a one-position, 15m-only, at most two losses a day book. Deposits move it up the ladder
+  faster than returns.
+- The £50 absolute limit is inert below £2,500. It becomes the owner's hard ceiling as the account grows.
+- The numbers depend on estimated ATR, gold price and GBPUSD. Measured values (BACKLOG 22, 27) replace them.
+
+**Needs the owner:** the deposit plan (optional; the table in section 6 shows its effect). Also confirm the demo
+is a **Raw Spread** account: on Standard, 15m is disabled except session-open, and nothing else trades at £1,000.
+The classifier reports the class once the terminal runs (BACKLOG 1).
+
+## 8. Superseded: the £50-account analysis (first version)
+At £50 (~$66.50) RiskGate refused every trade on every timeframe: a 0.01 lot risked 16.4% (15m) to 354% (1w), the
+1:20 margin floor needed ~£470, and the notional cap ~£520. With rules off, a min-lot account at £50 lost half its
+equity within a year in 52–99.9% of paths (E[R] 0.3 down to 0; G-5 tool on unmerged commit `08e654a`). Chasing
+£50/day from £50 (≥ 100% of equity per trade) survived five trades in about 1% of paths. Those results still show
+why the north star cannot be forced through position size.
+
+**Table A. Equity needed for an average of £50 per trading day (GBP),** equity = £50 / (risk × E[R] ×
+trades/day):
 
 | Timeframe | Trades/day | 0.5% risk, 0.1 R | 0.5%, 0.2 R | 0.5%, 0.3 R | 1% risk, 0.1 R | 1%, 0.2 R | 1%, 0.3 R |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -96,170 +271,15 @@ measured so far is above 0 R net.
 | 1h | 0.6 | 166,667 | 83,333 | 55,556 | 83,333 | 41,667 | 27,778 |
 | 4h | 0.2 | 500,000 | 250,000 | 166,667 | 250,000 | 125,000 | 83,333 |
 | 1d | 0.05 | 2,000,000 | 1,000,000 | 666,667 | 1,000,000 | 500,000 | 333,333 |
-| 1w | 0.01 | 10,000,000 | 5,000,000 | 3,333,333 | 5,000,000 | 2,500,000 | 1,666,667 |
 | 15m + 1h | 2.6 | 38,462 | 19,231 | 12,821 | 19,231 | 9,615 | 6,410 |
 
-Slow timeframes cannot carry a daily-income target at any sane account size: their trades are too rare.
-
-**To make £50/day from £50** at 15m (2 trades/day) needs risk per trade of 167% (0.3 R), 250% (0.2 R) or 500%
-(0.1 R) of equity: more than the whole account on every trade. 1:500 leverage allows 8 oz (0.08 lot) on $66.50,
-whose 15m stop is $88, already 132% of equity.
-
-### Risk of ruin from £50
-**With the G-5 tool** (`goldbot/research/ruin.py`, same unmerged commit `08e654a`), parametric 2R win / 1R loss,
-10 trades a week (15m), 52 weeks, 10,000 paths, seed 0. Command:
-`python goldbot/research/ruin.py --win-rate <p> --avg-win 2 --avg-loss 1 --trades-per-week 10 --risk <r>
-[--no-rules]`. The tool sizes as a fixed fraction of current equity, so the 16.4% rows stand for "a 0.01 lot at
-£50".
-
-| Risk per trade | Net E[R] (win rate) | Rules | P(12% halt) within 52 weeks | P(lose half) within 52 weeks | Median end equity × start |
-| --- | --- | --- | --- | --- | --- |
-| 16.4% (0.01 lot at £50) | 0.0 (0.333) | off | 100% | **99.9%** | 0.47 |
-| 16.4% | 0.1 (0.367) | off | 100% | **96.9%** | 0.47 |
-| 16.4% | 0.2 (0.400) | off | 100% | **78.5%** | 0.48 |
-| 16.4% | 0.3 (0.433) | off | 100% | **52.1%** | 0.50 |
-| 16.4% | 0.2 | on | 100% (median 0.1 weeks; 2 of 520 trades taken) | 0% | 0.84 |
-| 1.0% | 0.1 | on | 87.1% | 0% | 1.10 |
-| 1.0% | 0.2 | on | 57.2% | 0% | 1.77 |
-| 0.75% | 0.1 / 0.2 | on | 57.8% / 21.2% | 0% | 1.19 / 1.87 |
-| 0.5% (design) | 0.1 / 0.2 | on | 16.5% / 2.1% | 0% | 1.22 / 1.62 |
-
-Caveat (from the review of `08e654a`; fixes in progress): after the 8% stage the tool sizes at 0.5× risk, while the
-gate does 0.25× (risk halved and the multiplier capped at 0.5). So the "rules on" P(12% halt) figures are
-**upper bounds**: the real gate cuts size harder after 8% and trips 12% less often. The 16.4% rows are unaffected
-(the first loss already passes 12%). The tool's store mode, which understates the H-01 stop and ignores the
-stops-level-plus-spread floor, was not used: every figure here comes from explicit `--stop-distance` values, and at
-these stops ($10.90 and up) the floor (stops level plus a spread of at most 45 points = $0.45) does not bind.
-
-With the rules on, the gate stops the £50 account after its first loss (16.4% drawdown in the median path). With the
-rules off, even a +0.3 R edge loses half the account within a year in about half the paths.
-
-**Fixed-lot cross-check** (scratch script, not repo code): 20,000 paths, seed 7. Each trade: 2R target, 1R stop, win probability p = (1 + E[R]) / 3. Size fixed at
-0.01 lot (it cannot be cut below the minimum). Ruin = equity below one stop (cannot place another trade). RiskGate
-is ignored here; with it, the first loss halts trading (12% kill switch).
-
-| Setup | Net E[R] | P(ruin), 3 months | P(ruin), 12 months | P(≥12% drawdown) | Median end equity, 12 months |
-| --- | --- | --- | --- | --- | --- |
-| 15m, min lot ($10.90 = 16% of £50), 2/day | 0.0 | 71% | 85% | 100% | ~$0 |
-| | 0.1 | 49% | 55% | 100% | ~$0 |
-| | 0.2 | 31% | 31% | 100% | $1,019 |
-| | 0.3 | 18% | 18% | 100% | $1,643 |
-| 1h, min lot ($21.90 = 33%), 0.6/day | 0.0 | 72% | 86% | 100% | ~$0 |
-| | 0.1 | 62% | 71% | 100% | ~$0 |
-| | 0.2 | 50% | 55% | 100% | ~$0 |
-| | 0.3 | 40% | 41% | 100% | $767 |
-
-Even with an edge far above anything we have measured (0.3 R net), a min-lot account at £50 has about a 1-in-5
-(15m) to 2-in-5 (1h) chance of being wiped out. Chasing the target (≥100% of equity per trade, at p = 0.4) survives
-one trade with 40%, five trades with 1.0% and ten trades with 0.01%.
-
-## 3. Decision
-
-### 3.1 Nothing is tradeable at £50; the per-trade risk cap for minimum-lot trades is 1%
-- **Cap: realised risk of a minimum-lot trade ≤ 1% of equity** (0.5% while in the 8% size-down stage). Reasons: 1%
-  is the design's existing hard clamp (`gate.py:35`), so no rail is loosened; it is the top of the playbook's
-  0.25–1% professional range (4.1); two full losses stay within the 2% daily cap; reaching the 12% kill switch
-  takes about 12 straight losses (0.6^12 ≈ 0.2% at p = 0.4), against one loss at £50.
-- **The cost of 1%, stated plainly:** held at 1% for a year at 10 trades a week, even a +0.2 R edge trips the 12%
-  halt in up to 57% of paths (87% at +0.1 R), against up to 2% (17%) at 0.5% (ruin runs in section 2; upper bounds,
-  since the tool under-cuts size after the 8% stage). So 1% is a ceiling for
-  the first trades on a timeframe, not a level to live at. In practice it does not persist: the minimum lot's
-  risk falls as equity grows (at twice the threshold it is 0.5%). The milestone a timeframe is considered
-  comfortably tradeable at is the 0.5% column of 3.3. A halt near M1 costs about 12% (~£100) and needs the
-  existing re-arm path.
-- At £50 every timeframe is 16× to 350× over that cap. **No strategy or timeframe is tradeable at £50**, live or
-  tiny-live. The demo runs at a demo balance (3.4).
-- **What tiny-live means at small equity:** the 0.1% rate cannot be met by any gold trade below about £6,900
-  (15m), £13,700 (1h), £27,300 (4h) or £66,000 (1d). At small equity, tiny-live therefore means **"the smallest
-  tradeable size: one minimum lot, realised risk between 0.1% and 1%"**, which is still tiny in money (about £8 at
-  £850 on 15m) while measuring real fills.
-
-### 3.2 A minimum-lot exception rule for RiskGate (to implement, BACKLOG 25)
-Today a trade is skipped when `lots_raw < volume_min` and the minimum lot's realised risk exceeds 1.2 × `risk_frac`
-× m. At tiny-live (0.1%) that skips every trade below the equities above. The rule:
-
-- New setting `risk.min_lot_risk_cap` (0.01; null = today's behaviour exactly).
-- Applies **only when `lots_raw < volume_min`**. Then the gate places exactly `volume_min`, never more, if and only
-  if `volume_min × stop × contract_oz / equity ≤ min_lot_risk_cap` (halved in `SIZE_DOWN` or combined size-down);
-  otherwise it refuses with `min_lot_exceeds_risk` as now. When `lots_raw ≥ volume_min` nothing changes.
-- Every other check runs unchanged and after it: margin (max(broker, 1:20), 300% floor), combined notional, daily
-  and weekly caps, drawdown stages, positions, blackouts, spread. The exception widens no other limit, and it is not
-  a path around RiskGate: it is a branch inside it.
-- An allowed exception trade is recorded with reason `min_lot_exception`, its realised risk and the phase rate it
-  replaced, so the performance report can separate min-lot trades from rate-sized ones.
-- It counts in full toward the open-risk (heat) cap when G-4 lands (BACKLOG 19): near the threshold only one
-  position can be open.
-- Exits are untouched. Entries still need the owner's confirmation. It applies in demo and tiny-live alike, so
-  paper trades on the demo balance behave as live trades would. Live still needs the recorded paper→tiny-live gate,
-  `unlock_live` and the typed phrase.
-
-This replaces "account size or tiny-live risk for slow horizons" (playbook section 7, item 1): **H-01 (daily-scale
-stop) stays in shadow until equity reaches the 1d milestone.** Decided before H-01's result is known, as the
-playbook asked.
-
-### 3.3 Milestone path
-Equity at which the minimum lot fits each timeframe, at gold $4,150 and the ATR estimates above (GBP, rounded).
-The ladder is recomputed monthly from measured ATR by the sizing-feasibility report (BACKLOG 22).
-
-| Milestone | Equity (1% min-lot cap) | Equity at design 0.5% (min lot within 1.2×, m = 1) | Equity at 0.1% tiny-live rate | Trades |
-| --- | --- | --- | --- | --- |
-| M0 | £50 | n/a | n/a | none; demo only |
-| floor | £520 | | | margin floor (£468) and notional cap (£520): nothing below this, whatever the stop |
-| M1 | **£825** | £1,370 | £6,860 | 15m (Raw account only; 15m is off on Standard) |
-| M2 | **£1,650** | £2,745 | £13,720 | + 1h |
-| M3 | **£3,270** | £5,450 | £27,260 | + 4h |
-| M4 | **£7,900** | £13,160 | £65,790 | + 1d (also needs 1d promoted from research-only to a decision timeframe, separate work) |
-| M5 | £17,700 | £29,500 | £147,560 | 1w: not in the design; listed for completeness only |
-| £50/day | **~£19,000–£38,000** | at 0.5% risk, 0.1–0.2 R net, 15m + 1h (2.6 trades/day) | | ~£12,800 at 0.3 R |
-
-Each milestone is a **permission, not a promise**: a timeframe is traded only if a strategy on it has passed the
-research gates and the paper gate. Growth between milestones comes first from the owner's deposits; at 0.5% risk
-and 0.2 R net, a 15m + 1h book grows about 5.5% a month, and 0.1 R about 2.7%. A deposit never changes the risk
-rate.
-
-### 3.4 Accounts and phases (unchanged rails)
-- **Demo now.** The demo account's balance is set to the planned first live milestone (≥ £850 equivalent, or
-  £1,650 if no 15m strategy passes), not to £50, so paper results measure what live will do. A £50 demo would only
-  log refusals.
-- **The £50 is not deployed** until the account reaches M1 and the paper→tiny-live gate is recorded. Live at £50
-  would place no orders.
-- Paper→tiny-live gate, `unlock_live` plus typed phrase, owner confirmation of each entry and automatic exits are
-  all unchanged.
-
-### 3.5 How progress is reported
-- **Monthly**: % return on start-of-month equity with deposits and withdrawals removed (time-weighted), net R
-  total, R per trade with trade count and 90% interval, maximum drawdown %, and the same by timeframe; plus equity
-  against the next milestone.
-- **Not reported as a target: £ per day.** A daily £ figure on a small account is noise (one 15m trade at M1 is
-  ±£8) and invites chasing.
-- The weekly owner digest shows R and drawdown, not £/day.
-
-### 3.6 Deliberately not done
-- No martingale, no averaging down, no grid, no adding to losers.
-- No raising risk per trade, the multiplier, or the 1% clamp to chase the target; no "catch-up" sizing after losses.
-- No using the broker's 1:500 (or 1:200): the 1:20 margin rule and 300% floor stay.
-- No loosening the daily/weekly caps, the 8%/12% drawdown stages, the trial budget, the holdout or any gate.
-- No trading 1d or 1w through the engine before they are decision timeframes with their own validated models.
-- No live trading at £50.
-
-## Consequences
-- The owner's £50/day goal is recorded as a long-run outcome at roughly £20k–£40k of equity, not an operating
-  target. That is consistent with the design's goal ("a small, durable edge compounded under tight risk").
-- The minimum-lot exception changes RiskGate sizing at small equity: it needs trading-safety review, and `null`
-  keeps today's behaviour, so it ships inert until reviewed.
-- The milestone numbers depend on ATR and the gold price, both estimated here. The first measured sizing-feasibility
-  report replaces them; if volatility rises, the milestones rise with it.
-- A broker with a 0.001-lot minimum (0.1 oz) would cut every threshold tenfold. That is a new broker, an owner
-  decision, and not recommended before a strategy passes the gates.
-- Needs the owner: the deposit plan (spending money) and the demo balance to set.
+At £1,000, 15m at 2 trades a day and 1% risk would need **+2.5 R per trade** for £50 a day. No documented
+systematic gold edge comes close.
 
 ## Not verified / left out
-- IC Markets SC leverage on gold, stop-out level and contract terms: unverified (spec page 404; web sources
-  conflict). They are read from the terminal at runtime; BACKLOG 27 records them.
-- Gold price and GBPUSD are from late-September/early-October 2026 pages, not live quotes. ATR values are estimates,
-  not measured from `data-v1`.
-- Both Monte Carlos are two-outcome models (2R/1R) on assumed expectancies, without gaps or slippage beyond E[R];
-  real outcomes are wider. The G-5/G-7 tools were run from an extract of the unmerged commit `08e654a`
-  (`goldbot/research/ruin.py`, `min_lot.py`), not from this branch, and not reviewed here; the fixed-lot cross-check
-  is a scratch script. Re-run both from `main` once that branch merges.
+- The code audit is by reading only. No test was written to demonstrate A3–A8; BACKLOG 28's tests will.
+- ICM SC leverage, contract terms and stop-out level are unverified (BACKLOG 27). Whether the demo is Raw or
+  Standard is unknown.
+- Gold price, GBPUSD and ATR are estimates. Both Monte Carlos are scratch scripts with two-outcome models.
+- The frequency of £50 days is unmeasured (BACKLOG 30).
 - No code, settings, trials, trial budget or holdout were touched.
