@@ -15,6 +15,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord, Record
+from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.labels.triple_barrier import BarrierSpec
 
 
@@ -84,6 +85,12 @@ class Specialist(ABC):
     @property
     @abstractmethod
     def label_spec(self) -> BarrierSpec: ...
+
+    @property
+    def exit_spec(self) -> ExitPolicy | None:
+        """The executable exit policy (labels.exit_policy) on top of the barriers, or None for the plain barriers. The
+        labels, the shadow book and the live engine all run it, so research measures the exits live trading takes."""
+        return None
 
     def exit_policy(self) -> dict[str, Any]:
         return {"type": "barrier"}

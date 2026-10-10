@@ -92,7 +92,7 @@ Acceptance:
 
 Depends on: 2 (costs), 4 (variant 3). The daily-family event floor is an owner decision (below).
 
-### 6. Live exit policies and blackout early close
+### 6. Live exit policies and blackout early close (in review)
 Value: momentum edges are made in the exits. Labels cannot test exits the engine cannot run, and exits are never
 gated, so they must work unattended (FIND + RUN).
 Acceptance:

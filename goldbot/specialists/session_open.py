@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.labels.triple_barrier import BarrierSpec
 from goldbot.specialists.base import Specialist, register
 
@@ -50,8 +51,16 @@ class SessionOpenSpecialist(Specialist):
         c = self.config
         return BarrierSpec(target_atr=c["target_atr"], stop_atr=c["stop_atr"], max_bars=c["max_bars"], name="session_open")
 
+    @property
+    def exit_spec(self) -> ExitPolicy:
+        """Design: hard flat 1 h before the next session (Asia 08:00 Tokyo = 23:00 UTC, London and New York at this
+        specialist's own opens), run by the labels, the shadow book and the live engine."""
+        c = self.config
+        return ExitPolicy(flat_before_min=60, session_opens=(("Asia/Tokyo", "08:00"), ("Europe/London", c["london_open_local"]),
+                                                             ("America/New_York", c["newyork_open_local"])))
+
     def exit_policy(self) -> dict[str, Any]:
-        return {"type": "barrier", "hard_flat_minutes_before_next_session": 60}
+        return {"type": "barrier", **self.exit_spec.model_dump(exclude_defaults=True)}
 
     def _open_mask(self, ts: pd.DatetimeIndex) -> np.ndarray:
         """True on the bar that is `confirm_bars` bars after a session open (i.e. the decision bar)."""

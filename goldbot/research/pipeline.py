@@ -199,8 +199,8 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
     cands = spec.candidates(m, X)
     a = atr(m, 14)
     ls = spec.label_spec
-    labels = one_at_a_time(triple_barrier(bars_dec, cands, ls, a, swap=swap))
-    gross = one_at_a_time(triple_barrier(_zero_spread(bars_dec), cands, ls, a))
+    labels = one_at_a_time(triple_barrier(bars_dec, cands, ls, a, swap=swap, policy=spec.exit_spec))
+    gross = one_at_a_time(triple_barrier(_zero_spread(bars_dec), cands, ls, a, policy=spec.exit_spec))
     if holdout is not None and not score_holdout:
         if not labels.empty:
             labels = labels[_before(labels, holdout[0])].reset_index(drop=True)
