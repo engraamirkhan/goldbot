@@ -29,7 +29,7 @@ Status: ready / in progress / in review / done / rejected.
 | 10 | Trader-toolkit features (sessions, S/R, FVG, order blocks) | Idea generation · FIND | M | done (PR #61) |
 | 11 | Trader-toolkit evaluation as primary signals | Idea generation, confluence · FIND | S–M | ready (via H-02 in Q1) |
 | 12 | Deterministic attribution that feeds back into research | Performance attribution, learning · FIND | M | ready (ROADMAP wave 1, W1-7) |
-| 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | in progress |
+| 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | in review (gap_watch done; 4h retrain path open) |
 | 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | in progress |
 | 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | in progress |
 
@@ -187,7 +187,11 @@ Acceptance: as in TRADER_LIFECYCLE section 3, with these tests passing:
 
 Also: `saturday_retrain` covers 4h, every spawn raises `n_pop`, and every spawn is logged with its gap id.
 
-Rows: G3, G6; new rows.
+Status (2026-10-10): `gap_watch` and `Population.spawn_founder` are in review with the three tests above (G11).
+Still open: the 4h (and 1d) founder path in `saturday_retrain`. Until then gap_watch refuses 4h/1d founders and
+records a BACKLOG suggestion.
+
+Rows: G3, G6, G11.
 
 ### 14. Cross-feed check
 Value: stops a broker-feed artefact being "found" as an edge once broker data accumulates (FIND, honesty).

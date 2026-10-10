@@ -16,6 +16,7 @@ from goldbot.ops.accounts import Account
 from goldbot.ops.jobs import (
     JobContext,
     build_scheduler,
+    gap_watch,
     label_grid,
     make_trial_runner,
     monthly_research,
@@ -137,7 +138,8 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "model_watch": "2026-10-02T23:30:00+00:00",
                    "agents_daily": "2026-10-02T23:45:00+00:00", "agents_weekly": "2026-10-03T13:00:00+00:00",
                    "monthly_research": "2026-10-04T08:00:00+00:00", "calendar_archive": "2026-10-03T06:10:00+00:00",
-                   "agents_presession": "2026-10-05T06:30:00+00:00", "recalibrate": "2026-10-03T11:30:00+00:00", "drift_watch": "2026-10-02T23:40:00+00:00"}
+                   "agents_presession": "2026-10-05T06:30:00+00:00", "recalibrate": "2026-10-03T11:30:00+00:00", "drift_watch": "2026-10-02T23:40:00+00:00",
+                   "gap_watch": "2026-10-02T23:55:00+00:00"}
 
 
 def test_research_analyst_trial_is_recorded_in_the_registry(bars_store, tmp_path):
@@ -153,3 +155,33 @@ def test_research_analyst_trial_is_recorded_in_the_registry(bars_store, tmp_path
     # the quarter's pre-registered budget is enforced for the analyst too
     capped = make_trial_runner(_ctx(bars_store, tmp_path, trial_budget_quarter=1), now=lambda: pd.Timestamp("2025-09-30", tz="UTC"))
     assert "trial budget exceeded" in capped("session_open", {}, "one too many")["error"]
+
+
+def test_gap_watch_job_spawns_shadow_founders_and_saves_the_population(bars_store, tmp_path):
+    ctx = _ctx(bars_store, tmp_path)
+    slot = pd.Timestamp("2025-10-01 23:55", tz="UTC")
+    ctx.population.ensure_founders(slot - pd.Timedelta(days=30))
+    out = gap_watch(ctx, slot)
+    assert len(out["spawned"]) == ctx.settings.gaps.founders_per_month
+    saved = Population(tmp_path / "population.json")
+    new = [saved.members[a] for a in out["spawned"]]
+    assert all(m.status == "shadow" and m.capital_weight == 0 and m.gap_id for m in new)
+    report = json.loads((tmp_path / "gaps.json").read_text())
+    assert report["notes"][0].startswith("regime: no champion")
+    assert any("no walk-forward window for 4h" in r["reason"] for r in report["refused"])
+
+
+def test_no_spawn_during_system_halt(bars_store, tmp_path):
+    ctx = _ctx(bars_store, tmp_path)
+    slot = pd.Timestamp("2025-10-01 23:55", tz="UTC")
+    ctx.population.ensure_founders(slot - pd.Timedelta(days=30))
+    halt = {"since": slot.isoformat(), "reasons": ["two agents halted"]}
+    (tmp_path / "drift.json").write_text(json.dumps({"halted": {}, "system_halt": halt}))
+    n = len(ctx.population.members)
+    out = gap_watch(ctx, slot)
+    assert out["spawned"] == [] and len(ctx.population.members) == n
+    assert any("system halt" in r for r in out["refused"])
+    report = json.loads((tmp_path / "gaps.json").read_text())
+    assert any(g["kind"] == "system_halt" for g in report["gaps"])
+    # no Anthropic key on this host: the on-demand risk officer is refused, never improvised
+    assert any(r["action"] == "staff_run" and "anthropic-api-key" in r["reason"] for r in report["refused"])

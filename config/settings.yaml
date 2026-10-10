@@ -84,6 +84,7 @@ scheduler:
   agents_presession: { kind: daily,  at: "06:30", weekdays: [0, 1, 2, 3, 4], max_late_hours: 1 }   # macro/news briefing before London
   recalibrate:      { kind: weekly,  at: "11:30", weekday: 5, max_late_hours: 30 }   # P9: bounded calibrator refit after the retrain
   drift_watch:      { kind: daily,   at: "23:40", max_late_hours: 20 }                  # PSI, calibration, CUSUM halts (M26/M27)
+  gap_watch:        { kind: daily,   at: "23:55", max_late_hours: 20 }                  # gaps -> shadow founders / on-demand staff runs
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -162,3 +163,12 @@ gates:                               # design: Roadmap gates and stop rule (gold
   stop_after_months: 18              # stop rule: "after 18 months of paper plus live"
   stop_min_pooled_trades: 500        #   "the pooled trade count exceeds 500"
   stop_confidence: 0.90              #   "the lower 90% confidence bound on expectancy is still below zero" (one-sided)
+
+gaps:                                # bounded spawning (goldbot/ops/gap_watch.py, TRADER_LIFECYCLE section 3)
+  founders_per_month: 2              # zero-capital SHADOW founders a month (into 4 reserved slots inside the 24 shadow cap)
+  staff_runs_per_week: 3             # on-demand runs of existing read-only roles, inside agents.monthly_cap_usd
+  hypotheses_per_run: 2              # regime / dead-family gaps filed as hypotheses for the research gates
+  dq_window_days: 7                  # repeated data-quality errors: error events on at least
+  dq_min_error_days: 3               #   this many distinct UTC days within the window
+  regime_window_days: 20             # recent realised volatility = mean of the last 20 daily values
+  regime_history_days: 3650          # volatility terciles cut from up to ten years of 1h bars

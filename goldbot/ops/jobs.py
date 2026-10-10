@@ -28,6 +28,10 @@
                     30-day drawdown against backtest -> state/drift.json (size factors, halted agents, system halt).
                     Halts are sticky until the owner clears them (`run.py drift-review --clear`) or a new champion
                     version replaces the halted one. Entries only: exits are never affected.
+* gap_watch         daily after drift_watch (TRADER_LIFECYCLE section 3): deterministic gap detectors -> zero-capital
+                    shadow founders (capped a month, reserved slots), on-demand runs of existing read-only staff roles
+                    (capped a week, inside the monthly agent budget), hypotheses, BACKLOG suggestions ->
+                    state/gaps.json (ops/gap_watch.py). Creates no live agent and no new family or role.
 * monthly_research  bounded search: label-grid variants (+-step on target, stop and time limit) per specialist, as
                     many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
                     fresh plan), never past the quarter's trial budget and never into the held-out year, each a
@@ -56,6 +60,7 @@ from goldbot.execution.classifier import PersistentClassifier, classify
 from goldbot.execution.costs import BrokerTerms, CostTable, build_cost_table, publishable
 from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.labels.triple_barrier import SwapSpec
+from goldbot.ops import gap_watch as gap_watch_mod
 from goldbot.ops.accounts import Account
 from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.research.director import (
@@ -709,6 +714,50 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- gap watch
+def champion_windows(ctx: JobContext) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Each champion's training window as the Saturday retrain builds it: train_months + 4 x test_months up to the
+    day its model was fitted (the 1h window for a timeframe without its own)."""
+    out = []
+    for e in ctx.models.entries:
+        if e.status != "champion":
+            continue
+        m = ctx.population.members.get(e.agent_id)
+        tf = gap_watch_mod.member_timeframe(m.family, m.config) if m is not None else "1h"
+        wf = ctx.settings.walkforward.get(cast(DecisionTimeframe, tf)) or ctx.settings.walkforward["1h"]
+        end = e.created_utc
+        out.append((end - pd.DateOffset(months=wf.train_months + 4 * wf.test_months), end))
+    return out
+
+
+def gap_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily after drift_watch (docs/TRADER_LIFECYCLE.md section 3): detects gaps and answers them within the caps
+    (ops/gap_watch.py) -> state/gaps.json. Spawns zero-capital shadow founders only; promotion stays with the gates."""
+    g = ctx.settings.gaps
+    try:
+        dq = ctx.store.read("dq_events", start=slot - pd.Timedelta(days=g.dq_window_days), end=slot)
+    except (ValueError, OSError) as exc:
+        log.warning("gap_watch: dq_events unreadable: %s", exc)
+        dq = pd.DataFrame()
+    try:
+        vol = gap_watch_mod.daily_realised_vol(_bars(ctx, "1h", slot - pd.Timedelta(days=g.regime_history_days), slot))
+    except (ValueError, OSError, KeyError) as exc:
+        log.warning("gap_watch: 1h bars unreadable: %s", exc)
+        vol = pd.Series(dtype=float)
+    stages = {f.stem.removeprefix("engine_"): str(_read_json(f).get("stage", "normal"))
+              for f in sorted(ctx.state_dir.glob("engine_*.json"))}
+    report = gap_watch_mod.run_gap_watch(
+        now=slot, settings=g, population=ctx.population, state_dir=ctx.state_dir,
+        walkforward_tfs=set(ctx.settings.walkforward), drift=_read_json(ctx.state_dir / "drift.json"), dq=dq,
+        daily_vol=vol, champion_windows=champion_windows(ctx), plan=_read_json(ctx.state_dir / PLAN_FILE) or None,
+        trials=read_rows(ctx.trials.path), engine_stages=stages, runner=ctx.agent_runner)
+    if report.spawned:
+        ctx.population.save(ctx.state_dir / "agents.json")
+    return {"gaps": [x.gap_id for x in report.gaps], "spawned": report.spawned,
+            "staff_runs": [a.target for a in report.actions if a.action == "staff_run"],
+            "refused": [f"{r.action} {r.target}: {r.reason}" for r in report.refused]}
+
+
 # ---------------------------------------------------------------------------------------------- wiring
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
@@ -723,6 +772,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "agents_presession": agents_presession,
     "recalibrate": recalibrate,
     "drift_watch": drift_watch,
+    "gap_watch": gap_watch,
 }
 
 

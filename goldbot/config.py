@@ -128,6 +128,18 @@ class SchedulerSettings(_Section):
     agents_presession: ScheduleSettings
     recalibrate: ScheduleSettings
     drift_watch: ScheduleSettings
+    gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
+
+
+class GapSettings(_Section):
+    """Bounded spawning (goldbot/ops/gap_watch.py, docs/TRADER_LIFECYCLE.md section 3)."""
+    founders_per_month: int = Field(2, ge=0, le=4)        # zero-capital shadow founders per calendar month
+    staff_runs_per_week: int = Field(3, ge=0, le=7)       # on-demand runs of existing read-only roles, rolling 7 days
+    hypotheses_per_run: int = Field(2, ge=0, le=2)        # hypotheses gap_watch may file per run
+    dq_window_days: int = Field(7, ge=1, le=30)           # data-quality errors counted over this window
+    dq_min_error_days: int = Field(3, ge=1, le=30)        # distinct UTC days with error events that make a gap
+    regime_window_days: int = Field(20, ge=5, le=120)     # recent realised volatility (mean of daily values)
+    regime_history_days: int = Field(3650, ge=365)        # history the volatility terciles are cut from
 
 
 class ResearchSettings(_Section):
@@ -240,6 +252,7 @@ class Settings(_Section):
     drift: DriftSettings = Field(default_factory=DriftSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     gates: GateSettings = Field(default_factory=GateSettings)
+    gaps: GapSettings = Field(default_factory=GapSettings)
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
