@@ -31,8 +31,11 @@
 * Lockout: 5 failures per email or 20 per client IP in 15 minutes, counted in aux.db (survives a restart, pruned to
   the window). Trade-off: anyone who knows an email can keep that account locked out by failing on purpose; the
   per-IP limit slows that down but a distributed attacker can still do it. The owner can always recover from the
-  server (the lockout clears 15 minutes after the last failure). Login reserves its failure row before checking
-  (`_reserve`, one BEGIN IMMEDIATE transaction), so a concurrent burst gets at most 5 checks, not 5 per thread.
+  server (the lockout clears 15 minutes after the last failure). Every auth flow (login, forgot-password, recovery
+  login, password change, recovery-code regeneration, /rearm and /mode codes) reserves its failure row before
+  checking (`_reserve`, one BEGIN IMMEDIATE transaction), so a concurrent burst gets at most 5 checks, not 5 per
+  thread. Wrong passwords or codes on a signed-in password change or recovery-code regeneration count under
+  `email:<e>`, like sign-in, so they also lock sign-in, re-arm and auto mode for 15 minutes.
 * Authenticator codes for /rearm and /mode (dashboard and Telegram, `verify_code_guarded`) are counted under their
   own key, `code:<email>`: 5 wrong codes lock re-arm and auto mode (both channels) for 15 minutes but never sign-in,
   so a thief guessing codes from a stolen session cannot lock the owner out. Failed sign-ins lock both, so someone
@@ -61,6 +64,7 @@ import os
 import secrets
 import sqlite3
 import struct
+import sys
 import time
 from pathlib import Path
 from typing import Any, NoReturn
@@ -69,7 +73,7 @@ from pydantic import Field
 
 from goldbot.api.schema import Role
 from goldbot.base import FrozenRecord, Record
-from goldbot.db import Database, RecordRepo, db_path
+from goldbot.db import Database, RecordRepo, StateDbError, db_path
 
 log = logging.getLogger(__name__)
 
@@ -429,32 +433,6 @@ class AuthStore:
             return self.is_owner(u) and u is not None and self._spend_totp(conn, u, code)
 
     # ------------------------------------------------------------------ lockout (aux.db, shared by every process)
-    def _check_lockout(self, email: str, event: str, ip: str | None = None) -> None:
-        since = time.time_ns() - LOCKOUT_WINDOW_S * 10**9
-        with self.db.connection() as conn:
-            def n(key: str) -> int:
-                return int(conn.execute("SELECT COUNT(*) FROM auth_failures WHERE key = ? AND ts_ns > ?",
-                                        (key, since)).fetchone()[0])
-            locked = n(f"email:{email}") >= LOCKOUT_FAILURES or (ip is not None and n(f"ip:{ip}") >= IP_LOCKOUT_FAILURES)
-        if locked:
-            self.audit(event, email=email, **({"ip": ip} if ip else {}))
-            raise PermissionError("too many attempts; wait 15 minutes")
-
-    def _record_failure(self, email: str, event: str, ip: str | None = None) -> int:
-        """Count one failure for the account (and the IP); returns the account's failures inside the window."""
-        now = time.time_ns()
-        with self.db.write() as conn:
-            conn.execute("DELETE FROM auth_failures WHERE ts_ns <= ?", (now - LOCKOUT_WINDOW_S * 10**9,))
-            conn.executemany("INSERT INTO auth_failures (key, ts_ns) VALUES (?, ?)",
-                             [(f"email:{email}", now)] + ([(f"ip:{ip}", now)] if ip else []))
-            _audit(conn, event, email=email, **({"ip": ip} if ip else {}))
-            return int(conn.execute("SELECT COUNT(*) FROM auth_failures WHERE key = ?",
-                                    (f"email:{email}",)).fetchone()[0])
-
-    def _fail(self, email: str, event: str, ip: str | None = None) -> NoReturn:
-        self._record_failure(email, event, ip)
-        raise PermissionError("invalid credentials")
-
     def _reserve(self, email: str, locked_event: str, ip: str | None = None, *, code: bool = False) -> _Reservation:
         """Check the lockout and count this attempt as a failure in ONE write transaction (BEGIN IMMEDIATE), before
         the password or code is checked: concurrent attempts serialise here, so a burst gets at most
@@ -487,6 +465,17 @@ class AuthStore:
         """Inside the success's write transaction: the attempt was not a failure; clear its counter (not the IP's)."""
         conn.executemany("DELETE FROM auth_failures WHERE rowid = ?", [(i,) for i in r.rows])
         conn.execute("DELETE FROM auth_failures WHERE key = ?", (r.key,))
+
+    def _unreserve(self, r: _Reservation) -> None:
+        """The credentials were right but the request was refused for another reason (the new password breaks the
+        policy): this attempt is not a failure, so its rows go; earlier failures stay counted."""
+        with self.db.write() as conn:
+            conn.executemany("DELETE FROM auth_failures WHERE rowid = ?", [(i,) for i in r.rows])
+
+    def _fail(self, email: str, event: str, ip: str | None = None) -> NoReturn:
+        """A reserved attempt failed: its rows stay counted; audit it and refuse with one message for every cause."""
+        self.audit(event, email=email, **({"ip": ip} if ip else {}))
+        raise PermissionError("invalid credentials")
 
     def verify_code_guarded(self, code: str, action: str, *, email: str | None = None, ip: str | None = None) -> bool:
         """An authenticator code for an authority-raising action ("rearm", "mode"), counted under `code:<email>`
@@ -621,8 +610,7 @@ class AuthStore:
                     self._release(conn, r)
                     _audit(conn, "login", email=email)
         if tok is None:
-            self.audit("login_failed", email=email, **({"ip": ip} if ip else {}))
-            raise PermissionError("invalid credentials")
+            self._fail(email, "login_failed", ip)
         return tok
 
     def session_user(self, token: str | None) -> User | None:
@@ -652,10 +640,14 @@ class AuthStore:
         u = self.session_user(token)
         if u is None:
             raise PermissionError("login required")
-        self._check_lockout(u.email, "password_change_locked")
+        r = self._reserve(u.email, "password_change_locked")    # counted under email: before the check
         if not verify_password(current_password, u.password_hash):
             self._fail(u.email, "password_change_failed")
-        check_password_policy(new_password, u.password_hash)    # after the password: reveals nothing new
+        try:
+            check_password_policy(new_password, u.password_hash)    # after the password: reveals nothing new
+        except ValueError:
+            self._unreserve(r)
+            raise
         pw_hash = hash_password(new_password)
         with self.db.write() as conn:
             cur = _USERS.get(conn, u.email)
@@ -667,7 +659,7 @@ class AuthStore:
                 _USERS.upsert(conn, cur)
                 conn.execute("DELETE FROM sessions WHERE email = ? AND token_sha256 != ?", (u.email, _token_hash(token)))
                 conn.execute("DELETE FROM password_resets WHERE email = ?", (u.email,))
-                self._clear_failures(conn, u.email)
+                self._release(conn, r)
                 _audit(conn, "password_change", email=u.email)
         if not ok:
             self._fail(u.email, "password_change_failed")
@@ -681,7 +673,7 @@ class AuthStore:
         user is revoked, and the owner gets a Telegram notice (`_notify_owner`)."""
         email = email.strip().lower()
         check_password_policy(new_password)                         # length only: independent of the account
-        self._check_lockout(email, "password_forgot_locked", ip)
+        r = self._reserve(email, "password_forgot_locked", ip)     # counted before any check: a burst gets 5
         u = self.get_user(email)
         # the same two scrypt calls on every path (unknown, disabled, owner without a recovery code, real account),
         # so the response time does not reveal which accounts exist (security review of c256c23)
@@ -711,7 +703,7 @@ class AuthStore:
                 _USERS.upsert(conn, cur)
                 conn.execute("DELETE FROM sessions WHERE email = ?", (email,))
                 conn.execute("DELETE FROM password_resets WHERE email = ?", (email,))
-                self._clear_failures(conn, email)
+                self._release(conn, r)
                 if owner:
                     left = int(conn.execute("SELECT COUNT(*) FROM recovery_codes WHERE email = ? AND used_ns IS NULL",
                                             (email,)).fetchone()[0])
@@ -719,7 +711,10 @@ class AuthStore:
                        **({"recovery_codes_left": left} if owner else {}), **({"ip": ip} if ip else {}))
         except _Refused:
             self._fail(email, "password_forgot_failed", ip)
-        extra = f" One recovery code was spent; {left} left." if owner else ""
+        except ValueError:                              # right credentials, same password: not a failure
+            self._unreserve(r)
+            raise
+        extra =f" One recovery code was spent; {left} left." if owner else ""
         self._notify_owner(f"The password of {u.role} account {_mask(email)} was reset with forgot-password at "
                            f"{time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}; every session was signed out."
                            f"{extra} If this was not expected, disable the account on the dashboard (Users) and "
@@ -802,13 +797,14 @@ class AuthStore:
         u = self.session_user(token)
         if u is None or not self.is_owner(u):
             raise PermissionError("owner role required")
-        self._check_lockout(u.email, "recovery_codes_locked")
+        r = self._reserve(u.email, "recovery_codes_locked")       # counted under email: before the check
         if not verify_password(password, u.password_hash):
             self._fail(u.email, "recovery_codes_failed")
         codes = [_new_recovery_code() for _ in range(RECOVERY_CODES)]
         with self.db.write() as conn:
             ok = self._spend_totp(conn, u, code)
             if ok:
+                self._release(conn, r)
                 self._store_recovery_codes(conn, u.email, codes)
                 _audit(conn, "recovery_codes", email=u.email)
         if not ok:
@@ -819,7 +815,7 @@ class AuthStore:
         """Owner only: password + a one-time recovery code in place of the authenticator. Spends the code, enrols a
         new authenticator, revokes every other session and returns a new one."""
         email = email.strip().lower()
-        self._check_lockout(email, "recovery_login_locked", ip)
+        r = self._reserve(email, "recovery_login_locked", ip)      # counted before any check: a burst gets 5
         u = self.get_user(email)
         pw_ok = verify_password(password, u.password_hash if u is not None else _dummy_hash())   # same cost either way
         if u is None or not self.is_owner(u) or not pw_ok:
@@ -838,7 +834,7 @@ class AuthStore:
                 conn.execute("DELETE FROM sessions WHERE email = ?", (email,))
                 conn.execute("DELETE FROM totp_steps WHERE email = ?", (email,))         # a new authenticator
                 tok = self._new_session(conn, email)
-                self._clear_failures(conn, email)
+                self._release(conn, r)
                 left = int(conn.execute("SELECT COUNT(*) FROM recovery_codes WHERE email = ? AND used_ns IS NULL",
                                         (email,)).fetchone()[0])
                 _audit(conn, "recovery_login", email=email, codes_left=left)
@@ -909,13 +905,6 @@ class AuthStore:
             _audit(conn, "revoke_sessions", by=by_email, email=email, sessions=n)
         return int(n)
 
-    def revoke_all_sessions(self, by: str) -> int:
-        """Sign every account out (the server-side recovery when an owner session may be stolen); audited."""
-        with self.db.write() as conn:
-            n = int(conn.execute("DELETE FROM sessions").rowcount)
-            _audit(conn, "revoke_all_sessions", by=by, sessions=n)
-        return n
-
     def list_users(self) -> list[dict]:
         return [{"email": u.email, "role": u.role, "enabled": u.enabled, "last_login": u.last_login} for u in self.users.values()]
 
@@ -939,8 +928,20 @@ def revoke_sessions_cli(argv: list[str]) -> int:
                                  description="Sign every dashboard account out (all sessions).")
     ap.add_argument("--state", default="state", help="the state directory holding aux.db (default: state)")
     args = ap.parse_args(argv)
-    n = AuthStore(args.state).revoke_all_sessions(by="server:revoke-sessions")
-    print(f"revoked {n} session{'s' if n != 1 else ''}; every account must sign in again")
+    path = db_path(args.state, "aux").resolve()
+    if not path.exists():           # never create an empty aux.db and report a success that signed nobody out
+        print(f"refused: no dashboard database at {path}; pass --state <the server's state directory>",
+              file=sys.stderr)
+        return 2
+    try:
+        db = Database(path, "aux", migrate=False)              # opens the existing file only, no migration
+    except StateDbError as exc:
+        print(f"refused: {path}: {exc}", file=sys.stderr)
+        return 2
+    with db.write() as conn:
+        n = int(conn.execute("DELETE FROM sessions").rowcount)
+        _audit(conn, "revoke_all_sessions", by="server:revoke-sessions", sessions=n)
+    print(f"revoked {n} session{'s' if n != 1 else ''} in {path}; every account must sign in again")
     return 0
 
 

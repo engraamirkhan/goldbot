@@ -60,16 +60,19 @@ from goldbot.config import DriftSettings, Settings, TelegramSettings
 log = logging.getLogger(__name__)
 
 
-# "OSError: [Errno 2] ..." -> "OSError"; then any absolute path (POSIX, ~/ or a Windows drive) -> "<path>"
+# "OSError: [Errno 2] ..." -> "OSError"; then any absolute path (POSIX, ~/, a Windows drive or a UNC \\host\share)
+# -> "<path>": a quoted one whole (spaces included), an unquoted one up to the first space or separator
 _EXC_TEXT = re.compile(r"\b([A-Z][A-Za-z0-9_]*(?:Error|Exception|Exit|Interrupt|Warning))\b: .*", re.S)
-_PATH = re.compile(r"(?<![\w.])(?:[A-Za-z]:\\|~/|/)[^\s'\",;)]+")
+_ROOT = r"(?:[A-Za-z]:\\|\\\\|~/|/)"
+_QUOTED_PATH = re.compile(rf"(['\"]){_ROOT}[^'\"]*\1")
+_PATH = re.compile(rf"(?<![\w.]){_ROOT}[^\s'\",;)]+")
 
 
 def redact(text: str) -> str:
     """Fault text for a non-owner role: the first line, an exception's type without its message, no paths. The
     services write the full text (scheduler job errors, drift errors, health reasons); the owner reads it whole."""
     first = text.splitlines()[0] if text else ""
-    return _PATH.sub("<path>", _EXC_TEXT.sub(r"\1", first))
+    return _PATH.sub("<path>", _QUOTED_PATH.sub(r"\1<path>\1", _EXC_TEXT.sub(r"\1", first)))
 
 
 def _fault(what: str, exc: BaseException) -> str:

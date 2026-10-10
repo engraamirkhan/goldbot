@@ -235,3 +235,121 @@ def test_revoke_sessions_cli_signs_everyone_out(store, capsys):
     assert auth_mod.revoke_sessions_cli(["--state", str(s.dir)]) == 0
     assert s.session_user(tok) is None and "1 session" in capsys.readouterr().out
     assert any(e["event"] == "revoke_all_sessions" for e in s.audit_events())
+
+
+# ------------------------------------------------------------------------------------- every auth flow reserves first
+@pytest.fixture
+def team(store):
+    s, secret = store
+    s.accept_invite(s.create_invite(OWNER, "a@x.io", "approver"), "approver password 123")
+    return s, secret
+
+
+def _count_totp_checks(monkeypatch) -> list[str]:
+    checked: list[str] = []
+    real = AuthStore._spend_totp
+
+    def counting(conn, u, code):
+        checked.append(code)
+        return real(conn, u, code)
+    monkeypatch.setattr(AuthStore, "_spend_totp", staticmethod(counting))
+    return checked
+
+
+def test_a_concurrent_forgot_password_burst_checks_at_most_the_lockout_limit(team, monkeypatch):
+    s, _ = team
+    checked = _count_totp_checks(monkeypatch)
+    _burst(32, lambda: s.forgot_password("a@x.io", "000000", "attacker password 99", ip="203.0.113.9"))
+    assert 1 <= len(checked) <= LOCKOUT_FAILURES
+
+
+def test_a_concurrent_recovery_login_burst_checks_at_most_the_lockout_limit(store, monkeypatch):
+    s, _ = store
+    checked: list[str] = []
+    real = auth_mod.verify_password
+
+    def counting(pw, stored):
+        checked.append(pw)
+        return real(pw, stored)
+    monkeypatch.setattr(auth_mod, "verify_password", counting)
+    _burst(32, lambda: s.recovery_login(OWNER, "wrong password!!", "AAAA-BBBB", ip="203.0.113.9"))
+    assert 1 <= len(checked) <= LOCKOUT_FAILURES
+
+
+def test_concurrent_change_password_and_recovery_code_bursts_check_at_most_the_limit(store, monkeypatch):
+    s, secret = store
+    tok = s.login(OWNER, PW, totp_code(secret))
+    checked: list[str] = []
+    real = auth_mod.verify_password
+
+    def counting(pw, stored):
+        checked.append(pw)
+        return real(pw, stored)
+    monkeypatch.setattr(auth_mod, "verify_password", counting)
+    _burst(32, lambda: s.change_password(tok, "wrong password!!", "000000", "a brand new password"))
+    assert 1 <= len(checked) <= LOCKOUT_FAILURES
+    checked.clear()
+    _window_passes(monkeypatch)
+    _burst(32, lambda: s.regenerate_recovery_codes(tok, "wrong password!!", "000000"))
+    assert 1 <= len(checked) <= LOCKOUT_FAILURES
+
+
+def test_a_rejected_new_password_is_not_counted_as_a_failure(store):
+    s, secret = store
+    tok = s.login(OWNER, PW, totp_code(secret))
+    for _ in range(LOCKOUT_FAILURES + 1):                    # right password, new one too short: never locks
+        with pytest.raises(ValueError):
+            s.change_password(tok, PW, "000000", "short")
+    s.change_password(tok, PW, totp_code(secret), "a brand new password")
+
+
+# ------------------------------------------------------------------------------------- revoke-sessions needs aux.db
+def test_revoke_sessions_cli_refuses_a_state_dir_without_aux_db(tmp_path, capsys):
+    missing = tmp_path / "not-the-state"
+    missing.mkdir()
+    assert auth_mod.revoke_sessions_cli(["--state", str(missing)]) != 0
+    out = capsys.readouterr()
+    assert str((missing / "aux.db").resolve()) in out.out + out.err
+    assert not (missing / "aux.db").exists()
+
+
+def test_revoke_sessions_cli_prints_the_database_it_used(store, capsys):
+    s, _ = store
+    assert auth_mod.revoke_sessions_cli(["--state", str(s.dir)]) == 0
+    assert str((s.dir / "aux.db").resolve()) in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------------------------- Telegram /halt while locked
+def test_telegram_halt_through_the_bot_still_halts_while_codes_are_locked(store):
+    import asyncio
+    import types
+
+    from goldbot.telegram.bot import TelegramBot
+    s, _ = store
+    for _ in range(LOCKOUT_FAILURES):
+        assert not s.verify_code_guarded("000000", "mode")
+    with pytest.raises(PermissionError):
+        s.verify_code_guarded("000000", "mode")
+    bot = TelegramBot.__new__(TelegramBot)                    # no network: only the command handler's state
+    bot.bus, bot.owner_ids, bot.state_dir = ApprovalBus(s.dir), {111}, str(s.dir)
+    replies: list[str] = []
+
+    async def reply_text(text: str) -> None:
+        replies.append(text)
+    msg = types.SimpleNamespace(text="/halt locked out", reply_text=reply_text)
+    update = types.SimpleNamespace(effective_user=types.SimpleNamespace(id=111), message=msg)
+    asyncio.run(bot._on_command(update, None))
+    assert ApprovalBus(s.dir).control().halted and replies[0].startswith("HALTED")
+
+
+# ------------------------------------------------------------------------------------- redaction of quoted and UNC paths
+@pytest.mark.parametrize("text, shown", [
+    ("unreadable: '/srv/gold bot/state/x.json'", "unreadable: '<path>'"),
+    ('unreadable: "C:\\Program Files\\goldbot\\state\\x.json"', 'unreadable: "<path>"'),
+    ("unreadable: 'C:\\Users\\Aamir Khan\\goldbot\\aux.db' (locked)", "unreadable: '<path>' (locked)"),
+    ("unreadable: \\\\vps-host\\share\\goldbot\\x.parquet", "unreadable: <path>"),
+    ("unreadable: '\\\\vps host\\share\\x.parquet'", "unreadable: '<path>'"),
+])
+def test_redaction_removes_quoted_windows_and_unc_paths_whole(text, shown):
+    from goldbot.api.explain import redact
+    assert redact(text) == shown

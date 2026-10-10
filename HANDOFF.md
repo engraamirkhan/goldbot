@@ -624,6 +624,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   The lockout never gates `/api/halt`, Telegram /halt or /mode propose (tested). Health check reasons, drift errors,
   system-halt reasons and `/api/jobs` errors are whole for the owner and redacted for other roles (type only, paths
   as `<path>`, in the API layer); `account_security` rows in `/api/agent-runs` are owner-only. RUNBOOK updated.
+  Follow-up: forgot-password, recovery login, password change and recovery-code regeneration also reserve before
+  checking (32-thread bursts get at most 5 checks; a refused new password with the right credentials is not
+  counted). `revoke-sessions` refuses a state directory without aux.db (exit 2, absolute path printed) instead of
+  creating an empty one. Redaction removes quoted paths whole (spaces, Windows) and UNC `\\host\share` paths.
 
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
