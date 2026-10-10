@@ -618,6 +618,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `why = self._sessions.entry_block(now)` as an entry-blocking reason. Exits are unaffected.
 
 ## Next steps (no owner input needed unless marked)
+- XAUUSD trader playbook (2026-10-10, owner request): `docs/research/xauusd-trader-playbook.md` lists ~70 things a
+  professional gold trader considers (drivers, CFD microstructure, technicals, risk management, process), each with
+  sources, evidence grade and goldbot status, then a ranked gap list (risk gaps G-1..G-10 first: swap in live EV,
+  holiday/reopen rule, tier-2 releases, total open-risk cap, drawdown Monte Carlo, loss-streak throttle, min-lot
+  feasibility, weekend gap risk, MAE/MFE, edge-linked sizing). BACKLOG items 16-24 and H-15 come from it. Open
+  ops check from the D13 review: confirm whether the IC Markets server clock follows Europe/Athens or US DST dates.
 - COT positioning and GLD holdings, point in time (2026-10-10, indicator survey #67/#68, hypotheses H-09/H-12, row
   D26): `goldbot/data/positioning.py` + `scripts/positioning_data.py` + `.github/workflows/data-positioning.yml`
   (Saturdays 05:23 UTC) publish `positioning.parquet` on release `positioning-v1`: CFTC disaggregated futures-only
