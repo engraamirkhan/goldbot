@@ -279,16 +279,23 @@ def research_lines(state_dir: Path, settings: Settings | None, registry_path: Pa
 
 
 def _trial_line(settings: Settings | None, registry_path: Path | None, now: pd.Timestamp) -> str:
-    from goldbot.research.registry import PREREGISTERED, quarter_of, quarter_trials
+    """The quarter's budget and the next pre-registered trial, by the research director's own matching
+    (director._prereg_matches / reserved_trials): a trial uses up its pre-registration by link or by family and config
+    hash, so a run recorded without the link (research_pass) is not shown as still waiting."""
+    from goldbot.research.director import _prereg_matches, reserved_trials
+    from goldbot.research.registry import quarter_of, quarter_trials
     budget = settings.research.trial_budget_quarter if settings is not None else 20
+    setting = settings.research.reserved_trials_quarter if settings is not None else 0
     rows: list[dict[str, Any]] = []
     if registry_path is not None and registry_path.exists():
         rows = [json.loads(x) for x in registry_path.read_text(encoding="utf-8").splitlines() if x.strip()]
     q = quarter_of(_utc(now).to_pydatetime())
     used = quarter_trials(rows, q)
-    budget_txt = f"budget {q}: {used} of {budget} trials used"
-    done = {int((r.get("preregistration") or {}).get("trial", -1)) for r in rows if r.get("status") != PREREGISTERED}
-    waiting = [r for r in rows if r.get("status") == PREREGISTERED and int(r.get("trial", 0)) not in done]
+    reserved = reserved_trials(rows, q, setting).reserved
+    budget_txt = (f"budget {q}: {used} of {budget} trials used, {reserved} reserved for pre-registered, "
+                  f"{max(budget - used - reserved, 0)} open")
+    prereg, matched = _prereg_matches(rows, q)
+    waiting = [p for i, p in enumerate(prereg) if i not in matched]
     if waiting:
         nxt = min(waiting, key=lambda r: int(r.get("trial", 0)))
         return f"Research: next pre-registered trial #{nxt.get('trial')} ({nxt.get('family', '?')}) · {budget_txt}"

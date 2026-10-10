@@ -28,7 +28,7 @@ for any later real discovery, so the director plans only what is left of the qua
 (`research.trial_budget_quarter`, DEFAULT_QUARTER_BUDGET when that setting does not exist), counted from the trial
 registry, AFTER the pre-registered queue's reservation (`reserved_trials`): budget - used - reserved, where reserved =
 max(`research.reserved_trials_quarter` - trials run against one of the quarter's `preregistered` registry rows, the
-quarter's preregistered rows not yet run). The monthly label grid is held to the same remainder. At most GRID_SHARE of
+quarter's preregistered rows not yet run; a queued row belongs to its `target_quarter`, `prereg_quarter`). The monthly label grid is held to the same remainder. At most GRID_SHARE of
 a family's allowance may be spent by the label grid (none while `research.label_grid_paused`). Trials recorded with
 status "holdout" are never read as evidence: the held-out year is scored once per configuration and must not steer
 the search.
@@ -96,7 +96,7 @@ from goldbot.config import RetiredFamily
 from goldbot.research.attribution import T_SIGNIFICANT
 from goldbot.research.population import DSR_PROMOTE, MIN_RANK_TRADES
 from goldbot.research.promotion import MIN_SHADOW_TRADES, PerfStats
-from goldbot.research.registry import PREREGISTERED, is_trial, quarter_of, quarter_trials
+from goldbot.research.registry import PREREGISTERED, is_trial, quarter_of, quarter_start, quarter_trials
 
 Z_FULL = 3.0                     # three standard errors above chance counts as full evidence
 DSR_BAR = DSR_PROMOTE            # 0.95: the deflated-Sharpe bar the gates use
@@ -324,12 +324,45 @@ def _row_quarter(row: dict[str, Any]) -> str | None:
     return quarter_of(ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc))
 
 
+def prereg_quarter(row: dict[str, Any]) -> str | None:
+    """The quarter a queued `preregistered` row belongs to: its `target_quarter` (registry.planned_quarter at writing,
+    or the owner's choice), else, for a row written before that field existed, the quarter of its timestamp."""
+    target = row.get("target_quarter")
+    return str(target) if target else _row_quarter(row)
+
+
+def is_queued(row: dict[str, Any]) -> bool:
+    """A `preregistered` row of the pre-registered queue (the only kind that holds and may use the reservation): not
+    marked `queue: false`, and, when it names a `target_quarter`, written before that quarter started. A row written
+    once its quarter is under way (e.g. just before its own run) is ad hoc: it neither holds nor uses the reservation.
+    A row written before `target_quarter` existed is queued in the quarter of its timestamp, as it always was."""
+    if row.get("status") != PREREGISTERED or row.get("queue", True) is False:
+        return False
+    target = row.get("target_quarter")
+    if not target:
+        return True
+    try:
+        ts = datetime.fromisoformat(str(row.get("ts")))
+        start = quarter_start(str(target))
+    except ValueError:
+        return False                      # an unreadable stamp or target is not a promise the queue can hold
+    return (ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)) < start
+
+
+def retired_quarter_trials(rows: list[dict[str, Any]], quarter: str, retired: set[str]) -> int:
+    """Trial rows of `quarter` (stamped then) on any family in `retired` (research.retired_families): what the retired
+    families' ONE shared exploration trial a quarter (RETIRED_EXPLORATION) has already used."""
+    return sum(1 for r in rows if is_trial(r) and r.get("family") in retired and _row_quarter(r) == quarter)
+
+
 def reserved_trials(rows: list[dict[str, Any]], quarter: str, setting: int) -> Reservation:
     """Trials of `quarter` held for the pre-registered queue, counted BEFORE the director's pool and the label grid:
-    max(setting - run, pending). `run` counts the quarter's trials that were run against one of its `preregistered`
-    rows (linked by `preregistration.trial`, or the same family and config hash with a trial number at or after the
-    pre-registration's); `pending` counts the preregistered rows not yet run. So the reservation shrinks only as the
-    pre-registered plan is executed, a queued pre-registration is always covered, and a row is never counted twice."""
+    max(setting - run, pending). `run` counts the quarter's queued `preregistered` rows (`prereg_quarter`: their
+    target quarter) that a trial was run against, in whatever quarter it ran (linked by `preregistration.trial`, or the
+    same family and config hash with a trial number at or after the pre-registration's); `pending` counts the
+    quarter's preregistered rows not yet run. So the reservation shrinks only as the pre-registered plan is executed,
+    a queued pre-registration is always covered, a Q1 plan written in December counts in Q1, and a row is never
+    counted twice."""
     prereg, matched = _prereg_matches(rows, quarter)
     run, pending = len(matched), len(prereg) - len(matched)
     return Reservation(setting=setting, run=run, pending=pending, reserved=max(setting - run, pending, 0))
@@ -345,14 +378,22 @@ def pending_preregistration(rows: list[dict[str, Any]], quarter: str, family: st
 
 
 def _prereg_matches(rows: list[dict[str, Any]], quarter: str) -> tuple[list[dict[str, Any]], set[int]]:
-    """(the quarter's queued preregistered rows, indices of those a trial of the quarter was run against). A
-    pre-registration a run wrote for itself just before running (`queue: false`, `TrialRegistry.preregister`) is not
-    part of the queue: it neither holds nor uses the reservation."""
-    prereg = [r for r in rows if r.get("status") == PREREGISTERED and r.get("queue", True) is not False
-              and _row_quarter(r) == quarter]
+    """(the quarter's queued preregistered rows, indices of those a trial was run against). The matching runs over
+    the whole registry, oldest first, so a trial uses up exactly one pre-registration whichever quarter either is in
+    (a row targeting 2027Q1 written on 2026-12-30 and run on 2027-01-04 is run), and is then filtered to the rows of
+    `quarter` (`prereg_quarter`). A pre-registration a run wrote for itself just before running (`queue: false`,
+    `TrialRegistry.preregister`) is not part of the queue: it neither holds nor uses the reservation."""
+    queued = [r for r in rows if is_queued(r)]
+    used = _match_preregistrations(rows, queued)
+    keep = [i for i, p in enumerate(queued) if prereg_quarter(p) == quarter]
+    return [queued[i] for i in keep], {j for j, i in enumerate(keep) if i in used}
+
+
+def _match_preregistrations(rows: list[dict[str, Any]], prereg: list[dict[str, Any]]) -> set[int]:
+    """Indices of `prereg` that a trial row of `rows` was run against (each trial uses at most one, oldest first)."""
     matched: set[int] = set()
     for t in rows:
-        if not is_trial(t) or _row_quarter(t) != quarter:
+        if not is_trial(t):
             continue
         raw = t.get("preregistration")
         ref: dict[str, Any] = raw if isinstance(raw, dict) else {}
@@ -368,7 +409,7 @@ def _prereg_matches(rows: list[dict[str, Any]], quarter: str) -> tuple[list[dict
             if linked or (link is None and same):
                 matched.add(i)
                 break
-    return prereg, matched
+    return matched
 
 
 # ---------------------------------------------------------------------------------------------- evidence
@@ -851,7 +892,7 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
     reinstate_t = reinstatement_threshold(len(retired_map) * REINSTATE_SOURCES)
     base_scores = score_families(fams, evidence_rows, shadow, agents)
     scores = [_with_inputs(s, attr[s.family], retired_map.get(s.family), reinstate_t) for s in base_scores]
-    q_retired = sum(1 for r in trials if is_trial(r) and r.get("family") in retired_map and _row_quarter(r) == quarter)
+    q_retired = retired_quarter_trials(trials, quarter, set(retired_map))
     retired_floor, explore, explore_why = retired_exploration(scores, quarter, q_retired)
     explore_note = f"to {explore}: {explore_why}" if explore else explore_why
     evidence_budget, _ = allocate(base_scores, total, floor, cap)

@@ -440,7 +440,7 @@ def test_cpcv_reevaluates_registered_trials_as_evidence_with_pbo_and_takes_no_bu
 
 
 def test_an_ad_hoc_run_cannot_spend_the_reserved_trials_and_a_preregistered_run_uses_them_up(release_dir, tmp_path,
-                                                                                               monkeypatch):
+                                                                                               monkeypatch, queued_prereg):
     from goldbot.research.director import reserved_trials
     from goldbot.research.registry import TrialRegistry, quarter_of
     from goldbot.specialists import SPECIALISTS
@@ -455,14 +455,14 @@ def test_an_ad_hoc_run_cannot_spend_the_reserved_trials_and_a_preregistered_run_
     assert reg.n_trials == 1
     cfg = SPECIALISTS["session_open"]().config
     pre = reg.preregister(agent_id="x", family="session_open", config=cfg, feature_version="f", rationale="planned",
-                          reading_rule="continue if ...")
+                          reading_rule="continue if ...", **queued_prereg)
     assert rp.main() == 0                                # the pre-registered configuration uses the reserved trial
     last = _rows(registry)[-1]
     assert last["status"] == "evaluated" and last["preregistration"]["ts"] == pre["ts"]
     assert reserved_trials(_rows(registry), quarter_of(), 1).reserved == 0
 
 
-def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, monkeypatch):
+def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, monkeypatch, queued_prereg):
     from goldbot.research.director import reserved_trials
     from goldbot.research.registry import TrialRegistry, quarter_of
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
@@ -478,7 +478,8 @@ def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, m
         rp.main()                                        # a second ad-hoc discovery would spend the reserved trial
     assert len(_rows(registry)) == 2                     # refused before any row is written
     queued = TrialRegistry(registry).preregister(agent_id=res["agent_id"], family=res["family"], config=res["config"],
-                                                 feature_version="f", rationale="H-02", reading_rule=pre["reading_rule"])
+                                                 feature_version="f", rationale="H-02", reading_rule=pre["reading_rule"],
+                                                 **queued_prereg)
     assert rp.main() == 0                                # the queued pre-registration may use it
     rows = _rows(registry)
     assert [r["status"] for r in rows[2:]] == ["preregistered", "discovery"]   # no second, self-written row

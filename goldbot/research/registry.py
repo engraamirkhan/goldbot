@@ -17,8 +17,11 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P2):
 * the pre-registered queue's reservation (research.reserved_trials_quarter, director.reserved_trials): the manual paths
   (research_pass.py, discovery) check through `check_budget_reserved`, so only a run matching a pending queued
   `preregistered` row (family and config hash) may spend the reserved trials, and it is linked to that row; any other
-  run gets budget - used - reserved. A pre-registration a run writes for itself just before it runs
-  (`preregister(queue=False)`, an ad-hoc discovery) is not part of the queue: it neither holds nor uses the reservation;
+  run gets budget - used - reserved. A queued row counts in its `target_quarter` (default `planned_quarter`: the
+  next quarter when written within PLAN_AHEAD_DAYS of its start), and a trial uses it up whichever quarter it runs in.
+  A queued row must be written before its target quarter starts (`director.is_queued`);
+  a pre-registration a run writes for itself just before it runs (`preregister`'s default `queue=False`, an ad-hoc
+  discovery) is not part of the queue: it neither holds nor uses the reservation;
 * a feature-discovery trial (status "discovery", goldbot/research/discovery.py) is ONE trial, but choosing survivors
   from its selection frequencies looks at many features, so `n_trials_effective` (registry trials plus every
   discovery's K_eff: features screened when survivors go forward as features, groups screened only when whole groups
@@ -33,9 +36,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
@@ -61,6 +65,26 @@ def quarter_of(ts: datetime | None = None) -> str:
     if ts.tzinfo is not None:
         ts = ts.astimezone(timezone.utc)
     return f"{ts.year}Q{(ts.month - 1) // 3 + 1}"
+
+
+PLAN_AHEAD_DAYS = 14             # a queued pre-registration written this close to a quarter's start targets that quarter
+_QUARTER_RE = re.compile(r"^\d{4}Q[1-4]$")
+
+
+def quarter_start(quarter: str) -> datetime:
+    """00:00 UTC on the first day of `quarter` ("2027Q1" -> 2027-01-01); ValueError for anything else."""
+    if not _QUARTER_RE.match(quarter):
+        raise ValueError(f"a quarter looks like 2027Q1, got {quarter!r}")
+    return datetime(int(quarter[:4]), 3 * (int(quarter[5]) - 1) + 1, 1, tzinfo=timezone.utc)
+
+
+def planned_quarter(ts: datetime | None = None) -> str:
+    """The quarter a queued pre-registration written at `ts` is planned for (its default `target_quarter`): the quarter
+    of `ts`, or the next one when `ts` falls within PLAN_AHEAD_DAYS of the next quarter's start (a Q1 plan written in
+    the last two weeks of December counts in Q1)."""
+    ts = ts or datetime.now(timezone.utc)
+    ts = ts.astimezone(timezone.utc) if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+    return quarter_of(ts + timedelta(days=PLAN_AHEAD_DAYS))
 
 
 def is_trial(row: dict[str, Any]) -> bool:
@@ -148,21 +172,35 @@ class TrialRegistry:
             fh.write(json.dumps(row, default=str) + "\n")
 
     def preregister(self, *, agent_id: str, family: str, config: dict, feature_version: str, rationale: str,
-                    reading_rule: str, plan: dict[str, Any] | None = None, queue: bool = True) -> dict:
+                    reading_rule: str, plan: dict[str, Any] | None = None, queue: bool = False,
+                    target_quarter: str | None = None, now: datetime | None = None) -> dict:
         """Write the pre-registration of the next trial BEFORE it runs: its config (hashed as the result row will be),
         the rule its result will be read by, and the plan (e.g. the number of features to be screened). Not a trial:
-        it carries the number the result row will take. `queue=False` marks a pre-registration the run writes for
-        itself just before it runs: not part of the pre-registered queue, it neither holds nor uses the quarter's
-        reservation (director.reserved_trials)."""
+        it carries the number the result row will take. By default (`queue=False`) it is the pre-registration a run
+        writes for itself just before it runs: not part of the pre-registered queue, it neither holds nor uses the
+        quarter's reservation (director.reserved_trials). `queue=True` writes a row of the queue, stamped with the
+        `target_quarter` it is planned for (default `planned_quarter(now)`), which must not have started yet (ValueError
+        otherwise: a row written once its quarter is under way would only be an ad-hoc run spending the reservation);
+        it holds and is counted in that quarter's reservation whenever its trial runs. `now`: the time it is stamped
+        with, default the wall clock."""
+        ts = now or datetime.now(timezone.utc)
+        ts = ts.astimezone(timezone.utc) if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
         row: dict[str, Any] = {
             "trial": self.n_trials + 1,
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": ts.isoformat(),
             "agent_id": agent_id, "family": family, "config_hash": config_hash(config), "config": config,
             "feature_version": feature_version, "rationale": rationale, "results": {}, "status": PREREGISTERED,
             "reading_rule": reading_rule, "plan": plan or {},
         }
         if not queue:
             row["queue"] = False
+        else:
+            target = target_quarter or planned_quarter(ts)
+            if ts >= quarter_start(target):
+                raise ValueError(
+                    f"a queued pre-registration must be written before its target quarter starts ({target} is under "
+                    f"way): pass target_quarter= a later quarter, or queue=False for an ad-hoc pre-registration")
+            row["target_quarter"] = target
         self._append(row)
         return row
 

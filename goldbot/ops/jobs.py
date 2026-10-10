@@ -94,6 +94,7 @@ from goldbot.research.cusum import (
 from goldbot.research.director import (
     GRID_RATIONALE,
     PLAN_FILE,
+    RETIRED_EXPLORATION,
     AgentEvidence,
     ResearchPlan,
     ShadowEvidence,
@@ -104,6 +105,7 @@ from goldbot.research.director import (
     pending_preregistration,
     quarter_budget,
     reserved_trials,
+    retired_quarter_trials,
 )
 from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
 from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
@@ -698,7 +700,10 @@ def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = 
     charged to the quarter's pre-registered trial budget and never sees the holdout window. Like the director and the
     label grid it spends only budget - used - reserved (`reserved_trials`, research.reserved_trials_quarter); only a
     trial of a configuration with a pending `preregistered` row of the quarter may use the reservation, and its row is
-    linked to that pre-registration (so the reservation shrinks by one)."""
+    linked to that pre-registration (so the reservation shrinks by one). A retired family (research.retired_families)
+    that the director's current plan has not reinstated gets no trial from the open budget beyond the retired
+    families' ONE shared exploration trial a quarter (director.RETIRED_EXPLORATION, counted from the registry as the
+    director counts it); only a pending pre-registration of exactly that configuration lifts the refusal."""
     def run(family: str, overrides: dict[str, Any], rationale: str) -> dict[str, Any]:
         end = now() if now is not None else pd.Timestamp.now("UTC")
         r = ctx.settings.research
@@ -715,6 +720,14 @@ def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = 
             except TrialBudgetExceeded as exc:
                 held = "" if prereg is not None else f" ({reserved} of the quarter held for the pre-registered queue)"
                 return {"error": f"{exc}{held}"}
+            retired = {e.family for e in r.retired_families}
+            if prereg is None and family in retired - _reinstated(ctx, end):
+                used = retired_quarter_trials(rows, quarter, retired)
+                if used >= RETIRED_EXPLORATION:
+                    return {"error": f"{family} is retired (research.retired_families) and not reinstated: the retired "
+                                     f"families share {RETIRED_EXPLORATION} exploration trial a quarter and {quarter} "
+                                     f"has used it ({used} retired-family trial(s)); pre-register the configuration "
+                                     f"to run it from the queue"}
             res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, 12 * 30, n_trials=ctx.trials.n_trials + 1,
                                 holdout=r.holdout_window())
             if res is None:
@@ -726,6 +739,13 @@ def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = 
                 "gates")
         return {"trial": row["trial"], "registry_total": ctx.trials.n_trials, **{k: res.metrics[k] for k in keep if k in res.metrics}}
     return run
+
+
+def _reinstated(ctx: JobContext, slot: pd.Timestamp) -> set[str]:
+    """Retired families the director's current plan reinstated (attribution after the retirement date); none without
+    a fresh plan, so a retired family stays retired when the evidence cannot be read."""
+    plan = current_plan(ctx, slot)
+    return {s.family for s in plan.evidence if s.retired_id is not None and not s.retired} if plan else set()
 
 
 def _num(v: float | None, fmt: str) -> str:

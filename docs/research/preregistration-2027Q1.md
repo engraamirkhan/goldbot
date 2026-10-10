@@ -47,6 +47,12 @@ already used by it, so a holdout scoring needs its own row). CPCV re-evaluations
 no budget slot, no reservation. H-02 uses its reserved slot only when its exact discovery config (including the bars
 range) was pre-registered before the run.
 
+**Writing the queued rows (2026-10-10, batch review).** Each row above is written with
+`TrialRegistry.preregister(..., queue=True, target_quarter="2027Q1")` before 2027-01-01 (a queued row written once its
+quarter is under way is refused, and a hand-written one is treated as ad hoc). It then holds the 2027Q1 reservation
+and is used up by its trial whenever that runs. Without `target_quarter` the default is the quarter of the writing
+date, or the next quarter within 14 days of its start (from 2026-12-18 for 2027Q1).
+
 | # | ID | Trial | Depends on | Trials |
 |---|---|---|---|---|
 | 1 | H-13 | Volatility-forecast cost filter, applied as a reporting overlay to every trial below (net R with / without) | none | 0 |
