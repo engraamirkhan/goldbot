@@ -28,3 +28,4 @@ web/coverage/
 logs/
 .secrets.json
 /config/settings.local.yaml
+/.claude/worktrees/
