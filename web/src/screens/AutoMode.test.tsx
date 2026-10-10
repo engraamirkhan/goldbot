@@ -13,7 +13,10 @@ const view = (over: Partial<apiModule.AutoModeView> = {}): apiModule.AutoModeVie
   forced_propose: [], can_enable: false, error: null, ...over,
 });
 
-const ELIGIBLE = view({ eligible: true, reasons: [], decided: 120, approved: 70, rejected: 50, can_enable: true });
+// the "Set <time> by ... on ..." line is split by the <time> element: match the paragraph's whole text
+const setLine = (re: RegExp) => (_: string, el: Element | null) => el?.tagName === "P" && re.test(el.textContent ?? "");
+
+const ELIGIBLE =view({ eligible: true, reasons: [], decided: 120, approved: 70, rejected: 50, can_enable: true });
 
 function renderCard(role: apiModule.Role) {
   apiModule.setUser({ email: "o@x.io", role });
@@ -35,6 +38,16 @@ describe("Auto-mode card", () => {
     expect(screen.getByText(/\[−0.10R, \+0.70R\]/)).toBeInTheDocument();
     expect(screen.getByText("Only the owner can change the mode.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Enable auto mode" })).toBeNull();
+  });
+
+  it("shows who set the mode to the owner and only the channel to a viewer", async () => {
+    vi.spyOn(apiModule.api, "automode").mockResolvedValue(view({ owner_mode: "propose", mode_by: "telegram", mode_since: "2026-10-01T09:00:00Z" }));
+    const { unmount } = renderCard("viewer");
+    expect(await screen.findByText(setLine(/ on telegram\. /))).toBeInTheDocument();
+    unmount();
+    vi.spyOn(apiModule.api, "automode").mockResolvedValue(view({ owner_mode: "propose", mode_by: "dashboard:o@x.io", mode_since: "2026-10-01T09:00:00Z" }));
+    renderCard("owner");
+    expect(await screen.findByText(setLine(/ by o@x\.io on dashboard\. /))).toBeInTheDocument();
   });
 
   it("shows that the re-arm lock and the kill switch still force propose", async () => {
