@@ -44,6 +44,7 @@ from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
 from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.ops import server_clock
+from goldbot.ops.account_view import LADDER_TIMEFRAMES
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
@@ -54,6 +55,7 @@ from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 
 log = logging.getLogger("goldbot.engine")
+LOT_TERMS_WARN_S = 600.0     # the account view's symbol-info warning, at most this often
 # MT5 trade retcodes that mean the market will not take an order now (10017 TRADE_DISABLED, 10018 MARKET_CLOSED): a
 # close refused with one of these is backed off; any other failure (requote 10004/10021, price changed 10020, a
 # raising call) is retried on the next tick, so an exit is never delayed by a transient refusal
@@ -264,6 +266,13 @@ class Engine:
         self._bars_clean: pd.DataFrame | None = None      # bars_1m as last built by _append_bars (duplicate-free)
         self._calendar: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         self._blackout_event: dict | None = None
+        # the dashboard's account view (goldbot/ops/account_view.py), published in the state file; reporting only.
+        # From the broker: balance, currency and margin (never the login or server), the symbol's lot terms; from the
+        # bars: ATR(14) per ladder timeframe, refreshed at bar closes
+        self._account_view: dict = {"balance": None, "currency": None, "margin": None, "margin_free": None}
+        self._price: float | None = None
+        self._lot_terms_warned = -LOT_TERMS_WARN_S
+        self._ladder: dict = {"ladder_atr": {tf: None for tf in LADDER_TIMEFRAMES}, "lot_terms": None}
         self._news: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         # shadow book: version -> (family, model); champions and challengers paper-trade without orders
         self.shadow = ShadowBook(cfg.state_dir) if cfg.shadow_host else None
@@ -605,6 +614,10 @@ class Engine:
         if base is None:
             return []
         self._last_atr = float(base.atr.iloc[-1]) if np.isfinite(base.atr.iloc[-1]) else self._last_atr
+        try:
+            self._update_ladder(complete)
+        except Exception as exc:                 # noqa: BLE001 - reporting only: a bar close never fails on it
+            log.warning("milestone ATR not updated: %s", type(exc).__name__)
         self._refresh_account(last_tick)
         self._manage_open(base.dec)
         self.center.sweep_expired()
@@ -1164,12 +1177,56 @@ class Engine:
         v = float(a.iloc[-1]) if len(a) else float("nan")
         return v if np.isfinite(v) and v > 0 else None
 
+    # ------------------------------------------------------------------ account view (reporting only)
+    def _lot_terms(self) -> dict | None:
+        """The symbol's lot terms from the broker for the milestone ladder; None (retried on the next refresh) when
+        the broker cannot say. Never the design defaults: the ladder then shows 'pending broker terms'."""
+        try:
+            info = self.broker.symbol_info(self.cfg.symbol)
+        except Exception as exc:                 # noqa: BLE001 - reporting only; trading never depends on it
+            now = time.monotonic()               # retried every refresh (seconds apart): warn at most every 10 min
+            if now - self._lot_terms_warned >= LOT_TERMS_WARN_S:
+                self._lot_terms_warned = now
+                log.warning("symbol info unavailable for the account view: %s", type(exc).__name__)
+            return None
+        return {"contract_oz": info.contract_size, "volume_min": info.volume_min, "volume_step": info.volume_step,
+                "volume_max": info.volume_max, "stops_level_points": info.stops_level_points}
+
+    def _update_ladder(self, complete: pd.DataFrame) -> None:
+        """ATR(14) on the mid of each ladder timeframe's completed bars (None until 15 bars exist), at a bar close.
+        Each timeframe is recomputed only when a new bar of it can have completed (1d: once per feature-day), from the
+        engine's incremental resamplers (the same bars the decision frames use; 1d is the feature-day bar), and is
+        marked done only once its ATR is computed, so a failure is retried at the next close."""
+        if complete.empty:
+            return
+        last = pd.Timestamp(complete["visible_at"].iloc[-1])
+        out = self._ladder["ladder_atr"]
+        seen: dict[str, object] = self._ladder.setdefault("computed_at", {})
+        at = pd.DatetimeIndex([last])
+        for tf in LADDER_TIMEFRAMES:
+            key = feature_day(at)[0] if tf == "1d" else floor_tf(at, tf_seconds(tf))[0]   # as _context keys it
+            if seen.get(tf) == key:
+                continue
+            bars = self._resample(complete, tf)
+            bars = bars[pd.to_datetime(bars["visible_at"], utc=True) <= last].reset_index(drop=True)
+            if len(bars) < 15:
+                out[tf] = None
+            else:
+                v = float(atr(mid(bars.tail(200).reset_index(drop=True)), 14).iloc[-1])
+                out[tf] = v if np.isfinite(v) and v > 0 else None
+            seen[tf] = key
+
     # ------------------------------------------------------------------ helpers
     def _refresh_account(self, tick: Tick) -> None:
         acc = self.broker.account()
         st = self.state
         st.equity = acc.equity
         st.margin_used = acc.margin
+        self._account_view = {"balance": acc.balance, "currency": acc.currency, "margin": acc.margin,
+                              "margin_free": acc.margin_free}
+        self._price = (tick.bid + tick.ask) / 2
+        if self._ladder["lot_terms"] is None:
+            self._ladder["lot_terms"] = self._lot_terms()
         self._roll_risk_period(tick.ts_utc)
         if st.balance_closed_hwm == 0:
             st.balance_closed_hwm = acc.balance
@@ -1994,6 +2051,18 @@ class Engine:
             self._class_cache = (mtime, c if c in ("raw", "standard", "unknown") else "unknown")
         return self._class_cache[1]
 
+    def _published_limits(self) -> dict:
+        """The RiskGate limits the account view reads (loss budget, ladder). Limits added by later work (the absolute
+        daily loss limit, BACKLOG 29; the minimum-lot cap, BACKLOG 25) appear here once RiskLimits has them."""
+        lim = self.gate.limits
+        out = {"risk_per_trade": lim.risk_per_trade, "max_risk_per_trade": lim.max_risk_per_trade,
+               "multiplier_bounds": list(lim.multiplier_bounds), "daily_cap": lim.daily_cap,
+               "weekly_cap": lim.weekly_cap}
+        for extra in ("daily_loss_limit_abs", "min_lot_risk_cap"):
+            if getattr(lim, extra, None) is not None:
+                out[extra] = getattr(lim, extra)
+        return out
+
     def _write_state(self) -> None:
         st = self.state
         payload = {
@@ -2015,6 +2084,10 @@ class Engine:
             "closed_records_lost": self._records_lost, "closes_due": sorted(self._close_due),
             "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
             "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
+            # the dashboard's account view (goldbot/ops/account_view.py): the broker's balance, currency and margin,
+            # the gate's limits, the price, lot terms and ATR(14) per ladder timeframe; no login or server
+            **self._account_view, "price": self._price, "ladder_atr": dict(self._ladder["ladder_atr"]),
+            "lot_terms": self._ladder["lot_terms"], "limits": self._published_limits(),
             "tick_ahead_s": st.tick_ahead_s, "market_closed": st.market_closed, "session_source": self.sessions.source,
             "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail,
             "tick_errors_total": self.tick_errors_total, "ticks_dropped": self.ticks_dropped,

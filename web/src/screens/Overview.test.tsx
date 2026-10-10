@@ -17,6 +17,20 @@ function renderOverview(role: apiModule.Role) {
   return render(<QueryClientProvider client={qc}><Overview /></QueryClientProvider>);
 }
 
+describe("Overview accounts", () => {
+  afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
+
+  it("shows a loading placeholder until the accounts arrive", async () => {
+    apiModule.setUser({ email: "a@x.io", role: "viewer" });
+    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
+    vi.spyOn(apiModule.api, "accounts").mockReturnValue(new Promise(() => {}));
+    vi.spyOn(apiModule.api, "automode").mockRejectedValue(new Error("not under test"));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><Overview /></QueryClientProvider>);
+    expect(await screen.findByLabelText("Loading account")).toHaveAttribute("aria-busy", "true");
+  });
+});
+
 describe("Overview halt control", () => {
   afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
 
