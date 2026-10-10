@@ -58,6 +58,36 @@ promotion.
 - Config: `specialist=tsmom`, signal from 1d bars (20/60/120-day vol-scaled returns, 60-day vol), execution and
   labels on 4h bars, target 3.0 ATR(1d) / stop 1.5 ATR(1d), time barrier 20 trading days, long and short, swap
   charged.
+- Implemented as the tsmom preset `slow` (`goldbot/specialists/time_series_momentum.py`; tsmom's default
+  configuration and labels unchanged, `tests/test_tsmom_slow.py`). Signal on the feature-day bars (d1 context), read on
+  the first 4h bar whose close is at or after the settlement, entry at that bar's close (the open of the first 4h bar
+  after the signal is visible), at most one signal per daily bar; min_score 0.5 (tsmom's daily default, not set by
+  the hypothesis); target/stop from ATR(14) of the daily bars, frozen at entry (R = one 1.5 x ATR(1d) stop); time
+  barrier 124 4h bars (20 trading days: 31 four-hour bars a trading week); one position at a time; swap per rollover
+  in the net labels. Walk-forward: the 4h window (train 48 / test 6 / step 6 months, embargo 4 days) with purge
+  raised from 10 to 31 days, because the label lives up to 28 calendar days plus holidays (M14). Agent id
+  `tsmom-g0-cf39165431`.
+- Run (Actions -> research -> Run workflow), exactly these inputs:
+
+  | input | value |
+  |---|---|
+  | specialist | `tsmom` |
+  | from_year | `2010` |
+  | to_year | `2026` |
+  | rationale | `H-01 slow TSMOM (preregistration-2027Q1.md, commit <freeze commit>)` |
+  | variants | `["slow"]` |
+  | score_holdout | false |
+  | skip_screen | false |
+  | pooled | (empty) |
+  | macro | false |
+
+  `["slow"]` expands to `[{"timeframe": "4h", "signal_tf": "1d", "atr_tf": "1d", "lb_fast_h": 480, "lb_mid_h": 1440,
+  "lb_slow_h": 2880, "vol_window_h": 1440, "min_score": 0.5, "schedule_h": 24, "target_atr": 3.0, "stop_atr": 1.5,
+  "max_bars": 124}]` (either spelling is the same configuration and agent id). One trial.
+- Event count on data-v1 (2026-10-10, counted without labels or any outcome; research window, holdout excluded):
+  2,631 daily signals (1,760 long, 871 short); one position at a time, if every trade ran to the 20-day time
+  barrier, 165 events. The true count lies between, below the ~450 estimated for the 10-day daily option, and
+  probably below the 400 floor proposed in ruling A: **ruling A must be decided on this count**.
 - Reading rule: **continue** if the P4 screen passes (gross mean R > 0, t >= 2.0, on the event floor ruled in A) AND
   net mean R > 0 with t >= 1.65 AND positive net years >= 3 incl. 2021 or 2022. **Stop slow trend in gold** if net
   mean R <= 0 (the literature's best case then does not survive our costs).
