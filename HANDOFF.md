@@ -514,6 +514,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   React 19 / lightweight-charts 5 / Vite 8 / Vitest 5 need code changes). TypeScript majors are ignored until
   openapi-typescript supports them. Actions now run on node24 (PR #64): a self-hosted runner (`vars.CI_RUNNER`) must
   be Actions Runner >= 2.327.1.
+- CI install failures reported (2026-10-10, closes the loop on issue #66, `npm ci` ERESOLVE shown as "no runner was
+  assigned"): the backend and frontend install steps tee into `ci-out/<job>-install.txt` and add `<job>-install` to
+  the failed list, so `report-failure` posts the install output. "No runner was assigned" is now said only when no
+  artifact exists at all. `actionlint` + shellcheck clean; the first failing run on GitHub is the real check.
 
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
