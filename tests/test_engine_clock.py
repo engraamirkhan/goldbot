@@ -504,3 +504,23 @@ def test_health_warns_on_a_recent_or_new_tick_error_after_it_cleared(tmp_path):
     assert c is not None and c.status == "warn"
     f.write_text(json.dumps(base))
     assert health.check_tick_errors(ctx, "icm-demo") is None
+
+
+def test_tick_error_clearing_uses_the_tick_clock_when_ticks_run_ahead_of_the_host(tmp_path):
+    ahead = pd.Timedelta(seconds=30)                                   # broker stamps 30 s ahead of the host clock
+    start = pd.Timestamp("2026-10-28 12:14:00", tz="UTC")
+    eng, pb, host = _engine(tmp_path, start=start)
+
+    def feed(tick_ts: pd.Timestamp) -> None:
+        host[0] = tick_ts - ahead
+        pb.on_tick(_tick(tick_ts, 2401.0))
+        eng.on_tick(_tick(tick_ts, 2401.0))
+    feed(pd.Timestamp("2026-10-28 12:14:30", tz="UTC"))
+    feed(pd.Timestamp("2026-10-28 12:15:20", tz="UTC"))                # bar 12:15-12:30 on the tick clock; host 12:14:50
+    eng.note_tick_error(RuntimeError("bridge hiccup"))                 # happens inside bar 12:15-12:30
+    feed(pd.Timestamp("2026-10-28 12:20:00", tz="UTC"))
+    feed(pd.Timestamp("2026-10-28 12:30:05", tz="UTC"))                # closes 12:15-12:30: that bar had the error
+    assert eng.state.tick_error
+    feed(pd.Timestamp("2026-10-28 12:40:00", tz="UTC"))
+    feed(pd.Timestamp("2026-10-28 12:45:05", tz="UTC"))                # closes 12:30-12:45, clean on the tick clock
+    assert not eng.state.tick_error

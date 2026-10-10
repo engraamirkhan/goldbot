@@ -293,7 +293,11 @@ class Engine:
         self.clock_probe: server_clock.ServerClockProbe | None = None   # latest server-clock measurement
         self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)
         self.tick_errors_total = 0                     # since the engine started (engine state, health)
-        self._last_tick_error_at: pd.Timestamp | None = None
+        self._last_tick_error_at: pd.Timestamp | None = None   # host clock (live) for health and the state file
+        # the same error on the TICK clock, which decision bars are cut on: the latest tick stamp seen when it happened,
+        # moved to the next tick's stamp (`_error_awaits_tick`) so an error between ticks is never dated too early
+        self._error_tick_ts: pd.Timestamp | None = None
+        self._error_awaits_tick = False
         self._err_log: dict[str, tuple[float, int]] = {}   # exception type -> (last logged, monotonic; suppressed since)
         self._err_state_written = -1e18                # monotonic time of the last state write caused by an error
         self._tick_flush_retry: pd.Timestamp | None = None  # after a failed tick-log write, no retry before this
@@ -380,6 +384,8 @@ class Engine:
         self._tick_error_detail = kind
         self.tick_errors_total += 1
         self._last_tick_error_at = self._error_now()
+        self._error_tick_ts = self._last_tick.ts_utc if self._last_tick is not None else None
+        self._error_awaits_tick = True
         mono = time.monotonic()
         last, suppressed = self._err_log.get(kind, (None, 0))
         if last is None or mono - last >= TICK_ERROR_LOG_S:
@@ -407,6 +413,9 @@ class Engine:
         if not self._tick_ok(t):
             return []                   # crossed or out-of-order quote: never enters the bars; entries blocked
         prev, self._last_tick = self._last_tick, t
+        if self._error_awaits_tick:     # date a pending tick error by this tick's stamp (never earlier than it was)
+            self._error_tick_ts = t.ts_utc if self._error_tick_ts is None else max(self._error_tick_ts, t.ts_utc)
+            self._error_awaits_tick = False
         # the run loop polls the terminal's latest quote several times a second, so a quiet market repeats the same
         # tick: a repeat only advances the clock (bar close by clock, exits), it is neither a new bar tick nor logged
         repeat = prev is not None and (prev.ts_utc, prev.bid, prev.ask) == (t.ts_utc, t.bid, t.ask)
@@ -439,8 +448,9 @@ class Engine:
             self._rebuild_bars(until=due)   # every minute before the close is complete; none at or after it joins
             out = self.on_bar_close(due, t)
             self._last_state_write = t.ts_utc
-            bar_open = due - pd.Timedelta(seconds=sec)
-            if self.state.tick_error and (self._last_tick_error_at is None or self._last_tick_error_at < bar_open):
+            bar_open = due - pd.Timedelta(seconds=sec)   # tick clock, as is _error_tick_ts (never the host clock)
+            if self.state.tick_error and not self._error_awaits_tick and self._error_tick_ts is not None \
+                    and self._error_tick_ts < bar_open:
                 self.state.tick_error, self._tick_error_detail = False, None   # a whole clean decision bar closed
                 self._write_state()
         elif self._last_state_write is None or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:
