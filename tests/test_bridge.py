@@ -239,3 +239,14 @@ def test_an_order_is_refused_if_the_terminal_switched_account_after_start():
     with pytest.raises(PermissionError, match="account changed"):
         g.place_order(_intent("icm-demo-2-b"))
     assert len(pb.positions()) == 1
+
+
+def test_the_health_probe_answers_through_the_bridge(bridge):
+    url, _ = bridge
+    assert bridge_mod.probe_health(url) is None                     # no token needed, nothing reaches the terminal
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        dead = f"http://127.0.0.1:{s.getsockname()[1]}"
+    why = bridge_mod.probe_health(dead, timeout_s=1.0)
+    assert why is not None and "unreachable" in why and "127.0.0.1" not in why
+    assert bridge_mod.probe_health(url + "/nope") == "HTTP 404"

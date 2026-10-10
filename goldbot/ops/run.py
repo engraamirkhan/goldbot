@@ -32,10 +32,13 @@ log = logging.getLogger("goldbot.run")
 
 def run_supervisor() -> None:
     from goldbot.config import load_settings
+    from goldbot.ops.health import Heartbeat
     from goldbot.risk.supervisor import Supervisor, SupervisorLimits
     sup = Supervisor("state", SupervisorLimits.from_settings(load_settings().risk))
+    hb = Heartbeat("state", "supervisor")          # S5: every service writes state/heartbeat_<service>.json
     while True:
         st = sup.evaluate()
+        hb.beat()
         if st["halt"]:
             log.warning("HALT %s", st["reasons"])
         time.sleep(5)
@@ -275,6 +278,8 @@ def run_api() -> None:
     import uvicorn
 
     from goldbot.api.app import create_app
+    from goldbot.ops.health import start_heartbeat
+    start_heartbeat("state", "api")
     uvicorn.run(create_app("state"), host="127.0.0.1", port=8787)
 
 
@@ -338,6 +343,8 @@ def run_scheduler() -> None:
     ctx.agent_runner = _agent_runner(settings, ctx.store, trial_runner=make_trial_runner(ctx))
     from goldbot.data.econ_calendar import fetch_ff_week
     ctx.fetch_calendar = fetch_ff_week
+    from goldbot.ops.health import start_heartbeat
+    start_heartbeat("state", "scheduler")         # a thread: a retrain blocks the loop for hours
     sch = build_scheduler(ctx)
     for name, st in sch.status()["jobs"].items():
         log.info("scheduler: %s next at %s", name, st["next_slot"])
@@ -347,6 +354,7 @@ def run_scheduler() -> None:
 def run_telegram() -> None:
     from goldbot.config import load_settings
     from goldbot.ops import accounts
+    from goldbot.ops.health import start_heartbeat
     from goldbot.telegram.bot import TelegramBot
     settings = load_settings()
     token = accounts.get_secret("telegram-bot-token")
@@ -354,6 +362,7 @@ def run_telegram() -> None:
         raise SystemExit("no telegram-bot-token in the keyring: python -m goldbot.ops.accounts set telegram-bot-token")
     if not settings.telegram.allowed_user_ids:
         raise SystemExit("settings.yaml telegram.allowed_user_ids is empty: add your Telegram user id")
+    start_heartbeat("state", "telegram")
     TelegramBot(token, "state", set(settings.telegram.allowed_user_ids)).run()
 
 
@@ -369,7 +378,9 @@ def run_news() -> None:
     from goldbot.data.news_collector import NewsCollector
     from goldbot.data.store import Store
     from goldbot.ops import accounts
+    from goldbot.ops.health import start_heartbeat
     settings = load_settings()
+    start_heartbeat("state", "news")              # a thread: the poll sleeps poll_seconds (300 s) between rounds
     key = accounts.get_secret("anthropic-api-key")
     client = None
     if key:

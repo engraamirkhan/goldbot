@@ -9,7 +9,12 @@ talks to the network, a broker or Telegram, so the whole module is unit-tested w
   python -m goldbot.ops.run health --out f.json    # also write the JSON report to a file (UTF-8)
   python -m goldbot.ops.run health --baseline f.json   # exit 1 only for fails that were not failing in f.json
 
-Secrets are checked for PRESENCE only: the report names missing keys and never contains a value.
+Secrets are checked for PRESENCE only: the report names missing keys and never contains a value. The one network
+probe, the MT5 bridge's /health through the tunnel, is injected (`HealthContext.bridge_probe`); tests leave it unset.
+
+Operational alerts (design S5, R11, X6) are checks too: a service heartbeat silent for 5 minutes fails, and a tripped
+daily or weekly loss cap and an order that failed after the retries warn with `NOTIFY_ON_WARN`, so the Telegram alert
+path tells the owner once per incident. Alerts only add information: nothing here changes orders, sizing or halts.
 
 `HealthWatch` is the alert half: fed a report, it returns the Telegram text for checks that turned fail (and the ones
 that recovered) since the last report, and persists the last statuses in state/health_last.json so a restart of the
@@ -19,15 +24,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import shutil
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Literal, cast
 
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, Record, UtcTimestamp
+from goldbot.base import FrozenRecord, Record, UtcTimestamp, write_atomic
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 
@@ -53,6 +61,11 @@ DISK_FAIL_FREE_GB, DISK_FAIL_FREE_PCT = 2.0, 5.0
 DISK_WARN_FREE_GB, DISK_WARN_FREE_PCT = 5.0, 10.0
 REARM_APPLY_S = 10 * 60           # an engine applies a re-arm on its next tick
 WATCH_STALE_S = 15 * 60           # health_last.json older than this: the Telegram alert loop is not running
+HEARTBEAT_EVERY_S = 60            # services write state/heartbeat_<service>.json at most this often
+HEARTBEAT_SILENT_S = 5 * 60       # design S5: "a heartbeat alert fires if any service has been silent for five minutes"
+HEARTBEAT_SERVICES = ("supervisor", "scheduler", "telegram", "news", "api")   # engines: engine_<account>.json
+FAILED_ORDER_WINDOW_H = 24        # failed sends (X6) in this window are listed, each alerted once
+BRIDGE_TIMEOUT_S = 5.0
 
 REQUIRED_SECRETS = ("telegram-bot-token", "tradingview-webhook-secret")
 OPTIONAL_SECRETS = ("anthropic-api-key", "github-token")    # features switch off without them (logged at start)
@@ -92,6 +105,7 @@ class HealthContext(Record):
     get_secret: Callable[[str], str | None]
     disk_usage: Callable[[str], Any] = shutil.disk_usage     # -> (total, used, free) in bytes
     sessions: SessionTable = DEFAULT_SESSIONS
+    bridge_probe: Callable[[str], str | None] | None = None   # url -> None when /health answers, else why not
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -108,9 +122,10 @@ class HealthContext(Record):
             accs = [AccountRef(account_id=a.account_id) for a in accounts.enabled_accounts()]
         except Exception as exc:
             a_err = f"{type(exc).__name__}: {exc}"
+        from goldbot.execution.bridge import probe_health
         return cls(state_dir=Path(state_dir), now=now if now is not None else pd.Timestamp.now("UTC"),
                    settings=settings, settings_error=s_err, accounts=accs, accounts_error=a_err,
-                   get_secret=accounts.get_secret)
+                   get_secret=accounts.get_secret, bridge_probe=lambda url: probe_health(url, BRIDGE_TIMEOUT_S))
 
 
 # --------------------------------------------------------------------------------------------- helpers
@@ -626,6 +641,160 @@ def check_alert_loop(ctx: HealthContext) -> Check:
     return Check(name="alerts", status="ok", reason=f"last pass {_age(age)} ago")
 
 
+# --------------------------------------------------------------------------------------------- operational alerts
+log = logging.getLogger("goldbot.health")
+
+
+def heartbeat_path(state_dir: str | Path, service: str) -> Path:
+    return Path(state_dir) / f"heartbeat_{service}.json"      # not engine_*: the supervisor globs those
+
+
+class Heartbeat:
+    """state/heartbeat_<service>.json, written at most every `every_s` (call `beat()` from a loop of any period).
+    A write error is logged, never raised: a full disk must not stop the supervisor's loop."""
+
+    def __init__(self, state_dir: str | Path, service: str, every_s: float = HEARTBEAT_EVERY_S,
+                 clock: Callable[[], float] = time.time):
+        self.path = heartbeat_path(state_dir, service)
+        self.service, self.every_s, self.clock = service, every_s, clock
+        self._last: float | None = None
+
+    def beat(self) -> bool:
+        now = self.clock()
+        if self._last is not None and now - self._last < self.every_s:
+            return False
+        try:
+            write_atomic(self.path, json.dumps({"service": self.service, "ts": now}), durable=False)
+        except OSError:
+            log.exception("heartbeat %s", self.service)
+            return False
+        self._last = now
+        return True
+
+
+def start_heartbeat(state_dir: str | Path, service: str, every_s: float = HEARTBEAT_EVERY_S) -> threading.Thread:
+    """A daemon thread beating for a service whose loop lives elsewhere (uvicorn, the Telegram bot, a scheduler
+    blocked in a long job): it proves the process is alive; the service's own checks judge its loop."""
+    hb = Heartbeat(state_dir, service, every_s)
+
+    def loop() -> None:  # pragma: no cover - runs for the life of the process
+        while True:
+            hb.beat()
+            time.sleep(every_s)
+    t = threading.Thread(target=loop, name=f"heartbeat-{service}", daemon=True)
+    t.start()
+    return t
+
+
+def check_heartbeat(ctx: HealthContext, service: str) -> Check:
+    """S5: a service silent for HEARTBEAT_SILENT_S fails (the alert); one that never wrote a heartbeat warns."""
+    name = f"heartbeat:{service}"
+    f = heartbeat_path(ctx.state_dir, service)
+    if not f.exists():
+        return Check(name=name, status="warn", reason=f"no heartbeat_{service}.json: service never started (or predates heartbeats)")
+    try:
+        age = _epoch(ctx.now) - float(_read_json(f)["ts"])
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        return Check(name=name, status="fail", reason=f"heartbeat unreadable: {exc}")
+    if age > HEARTBEAT_SILENT_S:
+        return Check(name=name, status="fail",
+                     reason=f"{service} silent for {_age(age)} (> {HEARTBEAT_SILENT_S // 60} min): service down?")
+    return Check(name=name, status="ok", reason=f"heartbeat {_age(age)}")
+
+
+def check_loss_caps(ctx: HealthContext, account_id: str) -> list[Check]:
+    """R11: the per-account daily and weekly loss caps from the engine's state (equity against the day/week-start
+    equity, the RiskGate's own arithmetic). A tripped cap warns and is announced (NOTIFY_ON_WARN): the gate already
+    blocks entries, this only tells the owner. Weekly stays tripped until the risk week rolls, so it is told once a week."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    if ctx.settings is None or not f.exists():
+        return []
+    try:
+        e = _read_json(f)
+        eq = float(e.get("equity") or 0.0)
+        starts = {"daily": float(e.get("day_start_equity") or 0.0), "weekly": float(e.get("week_start_equity") or 0.0)}
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []                                   # check_engine reports the unreadable file
+    caps = {"daily": ctx.settings.risk.daily_cap, "weekly": ctx.settings.risk.weekly_cap}
+    out = []
+    for period in ("daily", "weekly"):
+        start = starts[period]
+        loss = 1 - eq / start if start > 0 else 0.0
+        msg = f"{account_id}: {period} loss {100 * loss:.2f}% of {'day' if period == 'daily' else 'week'}-start equity {start:,.2f}"
+        if loss >= caps[period]:
+            out.append(Check(name=f"{period}_cap:{account_id}", status="warn",
+                             reason=f"{period.upper()} LOSS CAP hit: {msg} (cap {100 * caps[period]:.1f}%): no new entries until it rolls"))
+        else:
+            out.append(Check(name=f"{period}_cap:{account_id}", status="ok", reason=f"{msg} (cap {100 * caps[period]:.1f}%)"))
+    return out
+
+
+def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timestamp) -> list[tuple[pd.Timestamp, str, Any]]:
+    """(ts, agent, retcode) of failed `order` rows in the engine's decisions journal; [] when it cannot be read."""
+    if ctx.settings is None:
+        return []
+    from goldbot.data.store import Store
+    try:
+        d = Store(ctx.settings.data_root).read("decisions", source=account_id, symbol=ctx.settings.symbol, start=since, end=ctx.now)
+        if d.empty:
+            return []
+        d = d[d["action"] == "order"]
+        out = []
+        for _, row in d.iterrows():
+            detail = json.loads(row["detail"]) if isinstance(row["detail"], str) else {}
+            if detail.get("ok") is False:
+                out.append((pd.Timestamp(row["ts_utc"]), str(row["agent_id"]), detail.get("retcode")))
+        return out
+    except Exception:     # the journal is best effort here: the orders file alone raises the alert
+        log.exception("decisions journal")
+        return []
+
+
+def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
+    """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
+    restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
+    announced once (NOTIFY_ON_WARN), with account, side, lots and the retcode from the decisions journal."""
+    f = ctx.state_dir / f"orders_{account_id}.json"
+    if not f.exists():
+        return []
+    try:
+        sent = _read_json(f).get("sent", {})
+        rows = [(cid, r) for cid, r in sent.items() if r.get("status") in ("rejected", "unfilled")]
+    except (ValueError, OSError, AttributeError) as exc:
+        return [Check(name=f"orders:{account_id}", status="fail", reason=f"orders_{account_id}.json unreadable (the engine refuses to start): {exc}")]
+    since = ctx.now - pd.Timedelta(hours=FAILED_ORDER_WINDOW_H)
+    recent = [(cid, r, pd.Timestamp(r["ts_utc"])) for cid, r in rows if r.get("ts_utc") and pd.Timestamp(r["ts_utc"]) >= since]
+    if not recent:
+        return []
+    journal = _failed_order_retcodes(ctx, account_id, since)
+    out = []
+    for cid, r, ts in sorted(recent, key=lambda x: x[2]):
+        rc = next((code for jts, agent, code in journal
+                   if agent == r.get("agent_id") and abs((jts - ts).total_seconds()) <= 120), None)
+        side = "BUY" if int(r.get("side", 0)) > 0 else "SELL"
+        what = "FAILED_EXEC" if r["status"] == "rejected" else "never filled (found on restart)"
+        out.append(Check(name=f"order_failed:{account_id}:{cid}", status="warn",
+                         reason=f"{what} at {ts:%Y-%m-%d %H:%M} UTC: account {account_id}, {side} {float(r.get('lots', 0)):g} lots, "
+                                f"agent {r.get('agent_id')}, retcode {rc if rc is not None else '?'}"))
+    return out
+
+
+def check_bridge(ctx: HealthContext, account_id: str) -> Check | None:
+    """The MT5 bridge answers GET /health through the SSH tunnel (only when a bridge URL is in the keyring and a probe
+    is configured). A bridge down means no ticks, no orders and no position management for that account."""
+    try:
+        url = ctx.get_secret(f"mt5-bridge-url-{account_id}")
+    except Exception:
+        url = None
+    if not url or ctx.bridge_probe is None:
+        return None
+    name = f"bridge:{account_id}"
+    why = ctx.bridge_probe(url)          # the URL is never quoted in a reason (it names the tunnel endpoint)
+    if why is not None:
+        return Check(name=name, status="fail", reason=f"bridge does not answer /health through the tunnel: {why[:160]}")
+    return Check(name=name, status="ok", reason="bridge answers /health")
+
+
 # --------------------------------------------------------------------------------------------- report
 def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport:
     """All checks in a fixed order. `static_only`: settings, accounts, secrets and disk (no service needs to run)."""
@@ -636,6 +805,10 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
         checks.append(check_phase(ctx))
         for a in ctx.accounts:
             checks += [check_engine(ctx, a.account_id), check_risk_state(ctx, a.account_id)]
+            checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
+            bridge = check_bridge(ctx, a.account_id)
+            checks += [bridge] if bridge is not None else []
+        checks += [check_heartbeat(ctx, s) for s in HEARTBEAT_SERVICES]
         checks += check_scheduler(ctx)
         checks += [check_costs(ctx, a.account_id) for a in ctx.accounts]
         if ctx.settings is not None and ctx.settings.costs.publish_release:
@@ -668,18 +841,32 @@ class WatchState(Record):
     statuses: dict[str, Status] = Field(default_factory=dict)
 
 
+NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:")   # warnings the owner is told about (R11, X6)
+
+
+def _alerting(name: str, status: str) -> bool:
+    return status == "fail" or (status == "warn" and name.startswith(NOTIFY_ON_WARN))
+
+
 def alert_text(prev: dict[str, Status], report: HealthReport) -> str | None:
-    """The message for checks that turned fail since `prev` and for failing checks that recovered; None when nothing
-    changed state. A check that stays failing is not repeated; one that flaps fail -> ok -> fail alerts again."""
-    new = [c for c in report.checks if c.status == "fail" and prev.get(c.name) != "fail"]
+    """The message for checks that turned fail (or a NOTIFY_ON_WARN warning) since `prev` and for alerted checks that
+    recovered; None when nothing changed state. A check that stays failing is not repeated; one that flaps
+    fail -> ok -> fail alerts again. A notice that simply ages out of the report (an old failed order) is not
+    announced as recovered."""
     now = {c.name: c.status for c in report.checks}
-    recovered = sorted(n for n, s in prev.items() if s == "fail" and now.get(n) != "fail")
+    new = [c for c in report.checks if _alerting(c.name, c.status) and prev.get(c.name) != c.status
+           and prev.get(c.name) != "fail"]
+    recovered = sorted(n for n, s in prev.items() if _alerting(n, s) and not _alerting(n, now.get(n, "ok"))
+                       and (s == "fail" or n in now))
     if not new and not recovered:
         return None
     lines = []
     if new:
-        lines.append(f"goldbot health: {len(new)} new failure(s)")
-        lines += [f"FAIL {c.name}: {c.reason}" for c in new]
+        nf = sum(c.status == "fail" for c in new)
+        heads = [f"{nf} new failure(s)"] if nf else []
+        heads += [f"{len(new) - nf} new notice(s)"] if len(new) > nf else []
+        lines.append("goldbot health: " + ", ".join(heads))
+        lines += [f"{c.status.upper()} {c.name}: {c.reason}" for c in new]
     if recovered:
         lines.append("recovered: " + ", ".join(f"{n} ({now.get(n, 'gone')})" for n in recovered))
     still = sorted(report.failing() - {c.name for c in new})
