@@ -38,6 +38,14 @@ open). Long and short, one position at a time, swap charged per rollover in the 
 is raised to cover the hold in calendar days (M14: purge >= the label horizon): 31 days instead of the 4h window's 10.
 Without the context bars (the live engine calls `candidates`) the slow option proposes nothing: it is research-only
 until the engine serves it the daily bars.
+
+Friday stub: the feature-day after Friday's settlement covers only Friday 13:30-17:00 New York (3.5 trading hours)
+before the weekend, a sixth "day" a week. The slow option's daily inputs (signal and ATR) drop every daily bar that
+spans under MIN_DAILY_SPAN_H (12) trading hours, the weekend closure (Friday 17:00 to Sunday 18:00 New York) not
+counted, so a lookback of 20 days is 20 five-a-week trading days and the ATR never averages a 3.5-hour range. The
+stub's move is not lost: Monday's return and true range run from Friday's settlement close. The span is computed from
+the bar's calendar times only (never its data), so a partial bar is treated the same as the finished one. `schedule_h`
+does nothing under `signal_tf` (each daily bar fires once) and is left out of that configuration and its agent id.
 """
 from __future__ import annotations
 
@@ -60,6 +68,26 @@ from goldbot.specialists.base import AgentIdentity, Specialist, register
 # decision bars in one trading week (Sunday open to Friday close; 1d counts settlements only, the conservative end)
 BARS_PER_WEEK = {"1h": 117, "4h": 31, "1d": 5}
 HOLIDAY_SLACK_DAYS = 2        # closed weekdays a hold can span (Christmas and New Year fall in one four-week window)
+MIN_DAILY_SPAN_H = 12.0       # a daily input bar spanning fewer trading hours is a stub (the post-settlement Friday)
+WEEKEND_TZ = "America/New_York"   # gold closes Friday 17:00 and reopens Sunday 18:00 New York time
+
+
+def trading_hours(daily: pd.DataFrame) -> pd.Series:
+    """Hours each daily bar spans from `ts_utc` to `visible_at`, less its overlap with the weekend closure (Friday
+    17:00 to Sunday 18:00 New York). Calendar arithmetic only, so a bar still forming gets the same value."""
+    s = utc_index(daily["ts_utc"]).tz_convert(WEEKEND_TZ).tz_localize(None)
+    e = utc_index(daily["visible_at"]).tz_convert(WEEKEND_TZ).tz_localize(None)
+    friday = s.normalize() - pd.to_timedelta((s.dayofweek - 4) % 7, unit="D")     # the last Friday on or before s
+    shut, reopen = friday + pd.Timedelta(hours=17), friday + pd.Timedelta(days=2, hours=18)
+    span = (e - s).total_seconds().to_numpy()
+    inside = e.where(e < reopen, reopen) - s.where(s > shut, shut)          # time inside the weekend closure
+    overlap = np.clip(inside.total_seconds().to_numpy(), 0, None)
+    return pd.Series((span - overlap) / 3600, index=daily.index)
+
+
+def drop_stub_days(daily: pd.DataFrame) -> pd.DataFrame:
+    """The daily bars spanning at least MIN_DAILY_SPAN_H trading hours (module docstring: Friday stub)."""
+    return daily[trading_hours(daily).to_numpy() >= MIN_DAILY_SPAN_H].reset_index(drop=True)
 
 
 @register
@@ -88,7 +116,7 @@ class TimeSeriesMomentumSpecialist(Specialist):
         # H-01 slow TSMOM, exactly as pre-registered (docs/research/preregistration-2027Q1.md)
         "slow": {"timeframe": "4h", "signal_tf": "1d", "atr_tf": "1d",
                  "lb_fast_h": 20 * 24, "lb_mid_h": 60 * 24, "lb_slow_h": 120 * 24, "vol_window_h": 60 * 24,
-                 "min_score": 0.5, "schedule_h": 24, "target_atr": 3.0, "stop_atr": 1.5,
+                 "min_score": 0.5, "target_atr": 3.0, "stop_atr": 1.5,
                  "max_bars": 20 * BARS_PER_WEEK["4h"] // 5},
     }
     # declared meta-model inputs, chosen by rationale (the momentum signal at each horizon and how much they agree,
@@ -116,6 +144,11 @@ class TimeSeriesMomentumSpecialist(Specialist):
         if purge > WINDOWS[self.timeframe]["purge_days"]:
             self.walkforward = {**type(self).walkforward, "purge_days": purge}
 
+    @classmethod
+    def unused_config(cls, config: dict[str, Any]) -> set[str]:
+        """`schedule_h` under `signal_tf`: each higher bar fires once, the schedule is never read."""
+        return {"schedule_h"} if config.get("signal_tf") is not None else set()
+
     def hold_calendar_days(self) -> float:
         """The longest label life (signal bar to time-out, max_bars + 1 decision bars) in calendar days, weekends and
         HOLIDAY_SLACK_DAYS included."""
@@ -137,7 +170,8 @@ class TimeSeriesMomentumSpecialist(Specialist):
         bars = (context or {}).get(TF_LABEL[tf])
         if bars is None:
             raise ValueError(f"tsmom {key}={tf!r} needs the {TF_LABEL[tf]} context bars")
-        return mid(bars.reset_index(drop=True))
+        bars = bars.reset_index(drop=True)
+        return mid(drop_stub_days(bars) if tf == "1d" else bars)
 
     def _visible_on(self, mid_bars: pd.DataFrame, higher: pd.DataFrame) -> np.ndarray:
         """For each decision bar, the position of the last higher bar visible at its close (visible_at <= close), or

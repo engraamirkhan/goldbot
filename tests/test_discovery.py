@@ -233,9 +233,9 @@ def test_correlated_near_copies_no_longer_deflate_their_group():
     assert sum(sel.group_frequency.values()) == pytest.approx(1.0)  # one group per subsample with group_top_k 1
 
 
-def test_group_top_k_defaults_to_the_top_k_share_of_groups():
+def test_group_top_k_defaults_to_the_top_k_share_of_groups_with_a_floor_of_three():
     from goldbot.research.discovery import group_top_k
-    assert group_top_k(CFG.model_copy(update={"top_k": 10}), n_features=300, n_groups=10) == 1
+    assert group_top_k(CFG.model_copy(update={"top_k": 10}), n_features=300, n_groups=10) == 3        # share 1, floored at 3
     assert group_top_k(CFG.model_copy(update={"top_k": 10}), n_features=40, n_groups=40) == 10   # column mode
     assert group_top_k(CFG.model_copy(update={"top_k": 10}), n_features=120, n_groups=35) == 3
     assert group_top_k(CFG.model_copy(update={"top_k": 10, "group_top_k": 4}), n_features=300, n_groups=10) == 4
@@ -287,3 +287,28 @@ def test_merge_renumbering_rewrites_the_results_preregistration_link():
     assert merged[2]["preregistration"]["trial"] == 2 == merged[1]["trial"]
     assert res["preregistration"]["trial"] == 1                     # the input rows are not mutated
     assert merge_rows(merged, [other]) == merged
+
+
+def test_group_top_k_has_a_floor_so_a_second_family_can_survive():
+    from goldbot.research.discovery import GROUP_TOP_K_FLOOR, DiscoveryConfig, group_top_k
+    cfg = DiscoveryConfig()
+    assert group_top_k(cfg, n_features=300, n_groups=10) >= GROUP_TOP_K_FLOOR       # was 1: frequencies capped at 1 total
+    assert group_top_k(cfg, n_features=300, n_groups=2) == 2                         # never more groups than exist
+    assert group_top_k(cfg.model_copy(update={"group_top_k": 1}), 300, 10) == 1      # explicit setting wins
+
+
+def test_a_discovery_survivor_needs_a_passed_holdout_before_it_counts_as_passed(tmp_path):
+    from goldbot.research.registry import FROM_DISCOVERY_KEY, TrialRegistry, config_hash
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    cfg = {"x": 1, FROM_DISCOVERY_KEY: True}
+    h = config_hash(cfg)
+    rows = [{"status": "evaluated", "family": "tsmom", "config_hash": h, "results": {"gates": {"passed": True}}}]
+    reg._rows = lambda: rows                                                          # type: ignore[method-assign]
+    assert not reg.passed_gates("tsmom", cfg)                                         # gates alone are not enough
+    rows.append({"status": "holdout", "family": "tsmom", "config_hash": h, "results": {"holdout_verdict": {"passed": False}}})
+    assert not reg.passed_gates("tsmom", cfg)
+    rows.append({"status": "holdout", "family": "tsmom", "config_hash": h, "results": {"holdout_verdict": {"passed": True}}})
+    assert reg.passed_gates("tsmom", cfg)
+    plain = {"x": 1}
+    rows.append({"status": "evaluated", "family": "tsmom", "config_hash": config_hash(plain), "results": {"gates": {"passed": True}}})
+    assert reg.passed_gates("tsmom", plain)                                           # ordinary trials unchanged

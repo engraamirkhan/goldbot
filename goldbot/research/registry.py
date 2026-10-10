@@ -39,6 +39,7 @@ LOCK_WAIT_S = 6 * 3600
 
 PREREGISTERED = "preregistered"
 DISCOVERY = "discovery"
+FROM_DISCOVERY_KEY = "from_discovery"   # set on a config whose features came from a discovery trial
 
 
 class TrialBudgetExceeded(ValueError):
@@ -223,10 +224,18 @@ class TrialRegistry:
                    for r in self._rows())
 
     def passed_gates(self, family: str, config: dict) -> bool:
-        """A walk-forward trial (not a holdout scoring) of exactly this configuration passed the design's gates."""
+        """A walk-forward trial (not a holdout scoring) of exactly this configuration passed the design's gates. A
+        configuration chosen from a feature-discovery trial (config key FROM_DISCOVERY_KEY) must ALSO have passed its
+        holdout scoring: its features were picked on the same window the walk-forward scored, which the deflated
+        Sharpe corrects only partly (quant review; preregistration-2027Q1.md)."""
         h = config_hash(config)
-        return any(r.get("status") == "evaluated" and r.get("family") == family and r.get("config_hash") == h
-                   and ((r.get("results") or {}).get("gates") or {}).get("passed") is True for r in self._rows())
+        rows = self._rows()
+        gates_ok = any(r.get("status") == "evaluated" and r.get("family") == family and r.get("config_hash") == h
+                       and ((r.get("results") or {}).get("gates") or {}).get("passed") is True for r in rows)
+        if not gates_ok or not config.get(FROM_DISCOVERY_KEY):
+            return gates_ok
+        return any(r.get("status") == "holdout" and r.get("family") == family and r.get("config_hash") == h
+                   and ((r.get("results") or {}).get("holdout_verdict") or {}).get("passed") is True for r in rows)
 
     @contextmanager
     def locked(self, wait_s: float = LOCK_WAIT_S, stale_s: float = LOCK_STALE_S) -> Iterator[None]:

@@ -9,7 +9,7 @@ risk_day_anchor:    { tz: UTC,              time: "00:00" }   # loss caps reset
 # `costs` are research priors until the broker's cost table reports its own.
 
 timeframes:
-  decision: [15m, 1h]
+  decision: [15m, 1h, 4h]   # 4h (proposal P4) is also a context timeframe of 15m/1h agents; 1d stays research-only
   context:  [4h, 1d, 1w]
 
 brokers:
@@ -29,12 +29,14 @@ features:
   version: f1
 
 labels:
-  embargo_days: { 15m: 1, 1h: 2 }
-  purge_days:   { 15m: 2, 1h: 5 }
+  embargo_days: { 15m: 1, 1h: 2, 4h: 4 }
+  purge_days:   { 15m: 2, 1h: 5, 4h: 10 }
 
 walkforward:
   15m: { train_months: 24, test_months: 3, step_months: 3 }
   1h:  { train_months: 36, test_months: 6, step_months: 6 }
+  4h:  { train_months: 48, test_months: 6, step_months: 6 }   # proposal P4; research.walkforward.WINDOWS["4h"]
+  # no 1d: daily agents are research-only (the engine holds ~40 trading days of 1m bars, short of 120 daily bars)
 
 risk:
   risk_per_trade: 0.005
@@ -86,6 +88,7 @@ scheduler:
   drift_watch:      { kind: daily,   at: "23:40", max_late_hours: 20 }                  # PSI, calibration, CUSUM halts (M26/M27)
   gap_watch:        { kind: daily,   at: "23:55", max_late_hours: 20 }                  # gaps -> shadow founders / on-demand staff runs
   cpcv_quarterly:   { kind: monthly, at: "14:00", weekday: 6, months: [1, 4, 7, 10], max_late_hours: 30 }   # M16: CPCV + PBO of gate-passing trials, first Sunday of each quarter
+  attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
 
   feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day
 
@@ -111,6 +114,10 @@ research:
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
   holdout_from: 2025-10-01           # held-out year: research never sees it; a passing config is scored on it once
   holdout_to: 2026-09-30             #   (scripts/research_pass.py --score-holdout), inclusive
+  screen_min_events: 1000            # primary-signal screen (P4): events a rule needs; fewer, while positive and
+                                     #   significant, is "inconclusive (event floor)". Changing it is an owner decision
+  screen_min_events_daily: null      # override for rules whose signal is on daily bars (owner ruling A,
+                                     #   docs/research/preregistration-2027Q1.md); null = screen_min_events
   director_floor: 2                  # research director: every unblocked family gets at least this many of the
                                      # month's trials; the rest of (budget x families) follows evidence of signal
   label_grid_step: 0.25              # +-25% on target/stop/max_bars
@@ -176,3 +183,10 @@ gaps:                                # bounded spawning (goldbot/ops/gap_watch.p
   dq_min_error_days: 3               #   this many distinct UTC days within the window
   regime_window_days: 20             # recent realised volatility = mean of the last 20 daily values
   regime_history_days: 3650          # volatility terciles cut from up to ten years of 1h bars
+
+attribution:                         # daily deterministic attribution (goldbot/research/attribution.py, BACKLOG 12); reporting only
+  window_days: 180                   # closed shadow trades exited in the last 180 days
+  min_trades: 30                     # cells with fewer trades are marked "noise" and are not evidence
+  calibration_bins: 10               # equal-width bins of p for predicted-vs-realised
+  calibration_min_bin: 10            # bins with fewer candidates are marked noise
+  trade_rows: 300                    # most recent per-trade cost rows kept in state/attribution.json
