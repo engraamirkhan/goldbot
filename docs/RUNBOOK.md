@@ -155,9 +155,10 @@ its key cannot wipe the backup history, and the bucket keeps every overwritten o
      `Allow group goldbot-backup-writer to read buckets in tenancy where target.bucket.name='goldbot-backup'` and
      `Allow group goldbot-backup-writer to manage objects in tenancy where all {target.bucket.name='goldbot-backup', request.permission!='OBJECT_DELETE'}`.
      restic also removes its own lock files; with no delete right those removals fail, which goldbot logs as a
-     warning only (your Mac's monthly run clears the leftover locks). If the first `goldbot run backup` below fails
-     on a permission error anyway, drop the `request.permission` condition: versioning still keeps 30 days of every
-     deleted file.
+     warning only (your Mac's monthly run clears the leftover locks). The no-delete condition is **mandatory**: in
+     Oracle the same delete right also removes old versions, so versioning alone does not protect backups from a
+     compromised server. If the first `goldbot run backup` below fails on a permission error, stop and ask; the
+     fix is an append-only backup target (restic rest-server), never dropping the condition.
    * **Retention** (user and group `goldbot-backup-retention`): full object rights on the bucket, used only from
      your Mac: `Allow group goldbot-backup-retention to manage objects in tenancy where target.bucket.name='goldbot-backup'`.
    On each user: *Customer secret keys -> Generate secret key* (`goldbot-restic-brain`, `goldbot-restic-retention`).

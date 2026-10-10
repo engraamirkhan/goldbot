@@ -26,8 +26,10 @@ and fails at 36 h. The brief for this change gave 72 h as the fail threshold and
   warning). Retention runs monthly from the owner's Mac with a second key (`scripts/backup_retention.sh`, which
   refuses on a server), and uploads a marker snapshot (`goldbot-retention`). The brain records the marker's time, and
   health `backup_prune` warns after 45 days (or 45 days after the first backup when none exists). The bucket has
-  Object Versioning with a lifecycle rule that deletes previous versions only after 30 days or more. If the deny
-  condition breaks restic, versioning is the fallback: a deleting key still cannot remove history for 30 days.
+  Object Versioning with a lifecycle rule that deletes previous versions only after 30 days or more, AND the brain's
+  key has no delete right (mandatory). Versioning alone is not a fallback: in OCI the OBJECT_DELETE right that deletes
+  an object also deletes its previous versions (security review). If the deny condition breaks restic, the fallback
+  is an append-only restic rest-server, not a key with delete rights.
   Rejected: a bucket retention rule, which would also block restic's lock removal and the Mac's prune.
 - **Staging hygiene:** the backup and restore jobs run under umask 077; the work dir, staging dir and restore target
   are 0700, re-applied when they already exist. JSONL copies end at the last newline. A month partition is staged
