@@ -75,8 +75,8 @@ DRILL_WARN_DAYS = 8.0             # weekly restore drill
 PRUNE_WARN_DAYS = 45.0            # monthly retention from the owner's Mac (scripts/backup_retention.sh), two weeks' slack
 BACKUP_REPO_WARN_BYTES = 15e9     # of the 20 GB Oracle Object Storage free tier
 
-REQUIRED_SECRETS = ("telegram-bot-token", "tradingview-webhook-secret")
-OPTIONAL_SECRETS = ("anthropic-api-key", "github-token")    # features switch off without them (logged at start)
+REQUIRED_SECRETS = ("telegram-bot-token",)   # the webhook secret is optional: only the webhook service needs it
+OPTIONAL_SECRETS = ("anthropic-api-key", "github-token", "tradingview-webhook-secret")   # features switch off without them
 
 
 class Check(FrozenRecord):
@@ -194,8 +194,13 @@ def check_secrets(ctx: HealthContext) -> Check:
             return bool(ctx.get_secret(key))
         except Exception:
             return False
-    required = list(REQUIRED_SECRETS) + [f"mt5-{a.account_id}" for a in ctx.accounts]
+    required = list(REQUIRED_SECRETS)
     missing = [k for k in required if not present(k)]
+    for a in ctx.accounts:     # a terminal on this machine needs its password; a bridged one needs the bridge token
+        pw, bridge = f"mt5-{a.account_id}", f"mt5-bridge-token-{a.account_id}"
+        required.append(pw)
+        if not (present(pw) or present(bridge)):
+            missing.append(f"{pw} (or {bridge} when the terminal runs behind the bridge)")
     optional = [k for k in OPTIONAL_SECRETS if not present(k)]
     hint = " (python -m goldbot.ops.accounts set <key>)"
     if missing:
