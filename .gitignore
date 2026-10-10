@@ -19,3 +19,11 @@ web/coverage/
 .ruff_cache/
 .coverage
 *.tsbuildinfo
+
+# never commit models, secrets fallbacks or logs (public repo)
+/models/
+*.pkl
+*.joblib
+*.log
+logs/
+.secrets.json
