@@ -262,15 +262,24 @@ def _rule_only_lines(r: dict[str, Any] | None) -> list[str]:
 
 
 def parse_variants(family: str, raw: str) -> list[dict[str, Any]]:
-    """`--variants` JSON: a list of config overrides, one trial each ([{}] = the family's defaults). Keys must be
-    settings of the family (or timeframe / feature_seed); a typo must not silently run the defaults."""
+    """`--variants` JSON: a list of config overrides, one trial each ([{}] = the family's defaults); a string names one
+    of the family's presets (e.g. '["slow"]' for tsmom, H-01) and stands for its overrides. Keys must be settings of
+    the family (its defaults or optional settings, or timeframe / feature_seed); a typo must not silently run the
+    defaults."""
     from goldbot.specialists.base import FEATURE_SEED_KEY, TIMEFRAME_KEY
+    cls = SPECIALISTS[family]
     variants = json.loads(raw)
-    if isinstance(variants, dict):
+    if isinstance(variants, (dict, str)):
         variants = [variants]
+    if isinstance(variants, list):
+        for i, v in enumerate(variants):
+            if isinstance(v, str):
+                if v not in cls.presets:
+                    raise SystemExit(f"unknown {family} preset {v!r}; presets: {sorted(cls.presets)}")
+                variants[i] = dict(cls.presets[v])
     if not isinstance(variants, list) or not variants or not all(isinstance(v, dict) for v in variants):
-        raise SystemExit("--variants must be a JSON list of objects, e.g. '[{}, {\"band_z\": 1.5}]'")
-    allowed = set(SPECIALISTS[family].default_config) | {TIMEFRAME_KEY, FEATURE_SEED_KEY}
+        raise SystemExit("--variants must be a JSON list of objects or preset names, e.g. '[{}, {\"band_z\": 1.5}]'")
+    allowed = set(cls.default_config) | set(cls.optional_config) | {TIMEFRAME_KEY, FEATURE_SEED_KEY}
     for v in variants:
         bad = sorted(set(v) - allowed)
         if bad:

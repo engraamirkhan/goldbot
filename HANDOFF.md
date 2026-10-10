@@ -284,6 +284,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   p < 0.5 are closed. Consequences: labels of trend/breakout/session-open changed, so their earlier research
   verdicts were on plain barriers and any model of theirs must be retrained before it trades; the entry threshold
   and sizing still assume the binary target/stop payoff.
+- Slow TSMOM (2026-10-10, H-01, preset `slow`): `--variants '["slow"]'` runs tsmom with the signal on the feature-day
+  bars (`signal_tf: "1d"`, 20/60/120-day vol-scaled returns, 60-day vol) traded on 4h bars, read on the first 4h bar
+  whose close sees the settlement; barriers 3.0 / 1.5 x ATR(1d) frozen at entry (`atr_tf: "1d"`), time barrier 124
+  4h bars (20 trading days), long and short, swap per rollover, one position at a time; walk-forward purge raised to
+  31 days for the 28-day hold (M14; `TimeSeriesMomentumSpecialist.hold_calendar_days`). New hooks
+  `Specialist.candidates_in_context` / `barrier_atr` (used by research `prepare`), `optional_config` and `presets`
+  (accepted by `research_pass.parse_variants`); tsmom's default config, agent ids and labels are byte-identical
+  (digest test). Research-only: without the d1 bars (the engine calls `candidates`) the slow option proposes nothing.
+  Event count on data-v1 (no labels, no outcomes): 2,631 daily signals in the research window; one at a time with
+  every trade held to the time barrier, 165. The true count lies between, so owner ruling A (event floor) is needed
+  before the trial. Note for quant review: feature-day bars include a Friday-evening stub bar (settlement to the
+  Friday close, visible Saturday), so "20 daily bars" is about 3.3 weeks, as for the existing 1d option. Run inputs:
+  `docs/research/preregistration-2027Q1.md` H-01. No research trial was run.
 
 ## Next steps (no owner input needed unless marked)
 - Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write

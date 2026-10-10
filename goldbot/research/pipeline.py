@@ -182,7 +182,9 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
             holdout: Window | None = None, score_holdout: bool = False,
             frame: tuple[pd.DataFrame, pd.DataFrame] | None = None, swap: SwapSpec | None = None) -> Prepared:
     """Features, candidates and labels (one position at a time) for one configuration. `frame`: the decision frame
-    (build_decision_frame's output) when several configurations share a timeframe, so it is built once.
+    (build_decision_frame's output) when several configurations share a timeframe, so it is built once. Candidates
+    and the barrier ATR come from `Specialist.candidates_in_context` / `barrier_atr`, which see the context bars (a
+    daily signal executed on 4h bars).
 
     extra_cost_usd: round-trip cost per oz beyond the bar spread (entry and exit slippage plus commission). Labels
     already pay the spread (entry at the ask, exit at the bid), so the spread is not charged again: the extra cost is
@@ -196,8 +198,9 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
     bars_dec = bars_dec.reset_index(drop=True)
     m, X = frame if frame is not None else build_decision_frame(bars_dec, context, feature_names, ctx)
     version = X.attrs["feature_version"]
-    cands = spec.candidates(m, X)
-    a = atr(m, 14)
+    cands = spec.candidates_in_context(m, X, context)
+    own_atr = spec.barrier_atr(m, context)        # e.g. ATR(1d) for a daily signal executed on 4h bars
+    a = atr(m, 14) if own_atr is None else own_atr
     ls = spec.label_spec
     labels = one_at_a_time(triple_barrier(bars_dec, cands, ls, a, swap=swap, policy=spec.exit_spec))
     gross = one_at_a_time(triple_barrier(_zero_spread(bars_dec), cands, ls, a, policy=spec.exit_spec))

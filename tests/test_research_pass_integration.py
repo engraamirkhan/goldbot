@@ -264,6 +264,30 @@ def test_tsmom_daily_variant_is_screened_on_daily_bars(release_dir, tmp_path, mo
     assert "1d decision bars" in text and "- swap: long -60.00" in text
 
 
+def test_slow_tsmom_preset_runs_as_one_h01_trial_on_4h_bars(release_dir, tmp_path, monkeypatch):
+    from goldbot.specialists import SPECIALISTS
+    preset = SPECIALISTS["tsmom"].presets["slow"]
+    assert rp.parse_variants("tsmom", '["slow"]') == [preset]
+    assert rp.parse_variants("tsmom", json.dumps([preset])) == [preset]       # spelled out, the same configuration
+    with pytest.raises(SystemExit, match="unknown tsmom preset"):
+        rp.parse_variants("tsmom", '["fast"]')
+    with pytest.raises(SystemExit, match="context timeframe"):
+        rp.parse_variants("tsmom", '[{"timeframe": "4h", "signal_tf": "1h"}]')
+    with pytest.raises(SystemExit, match="unknown trend settings"):
+        rp.parse_variants("trend", '[{"signal_tf": "1d"}]')                    # optional settings are per family
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "tsmom", "--variants", '["slow"]'])
+    assert rp.main() == 0
+    rows = _rows(registry)
+    assert len(rows) == 1                                                       # one preset, one trial
+    row = rows[0]
+    cfg = row["config"]
+    assert (cfg["timeframe"], cfg["signal_tf"], cfg["atr_tf"], cfg["max_bars"]) == ("4h", "1d", "1d", 124)
+    assert row["results"]["screen"]["n"] > 0 and row["results"]["lookahead"]["lookahead_columns"] == []
+    assert "4h decision bars" in report.read_text()
+
+
 def test_macro_release_adds_point_in_time_features_and_a_missing_one_degrades_clearly(release_dir, tmp_path, monkeypatch,
                                                                                        capsys):
     """--macro with the release: the macro columns are in the frame, the leakage check (macro truncated at the cut
