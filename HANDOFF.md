@@ -211,6 +211,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   do not serve a pooled model yet (needed only if one passes). session_open now trains on an expanding window with
   6-month test folds (`Specialist.walkforward`); at ~95 candidates a year a 6-month fold holds ~47, so its per-fold
   gate still needs denser filters or 9-month folds.
+- Trader-toolkit features (2026-10-10, `goldbot/features/trader.py`, TRACEABILITY F13-F16): four registry families
+  for research to screen; no specialist declares them (its `model_features` are unchanged), so they reach a model only
+  through the P4 screen and a pre-registered trial. `session_zones` (session high/low/open now and for the previous
+  session, each zone's last high/low, previous feature-day and Sunday-week high/low, all (close - level)/ATR14;
+  sessions are the `DEFAULT_SESSIONS.sessions_utc` windows, 21:00-23:00 UTC belongs to none); `market_structure`
+  (liquidity sweep = traded beyond the last confirmed swing, previous session or previous day high/low known at t-1
+  and closed back inside; break of structure = first close beyond the last confirmed unbroken swing); `fair_value_gaps`
+  (bullish if high[i-2] < low[i], known when bar i closes; partial fills shrink it, filled once a bar trades through
+  its far edge; >= 0.1 ATR); `order_blocks` (last opposite-colour candle within 5 bars before a displacement with body
+  > 1.0 ATR closing beyond the last confirmed swing; invalidated by a close through it). Warm-up: ATR 13 bars, the
+  first completed session/day/week; nearest gap/block columns are NaN while none is active (counts 0). Every value at
+  bar t uses only bars closed by t (truncated-history test + pipeline lookahead check). They are in
+  `DEFAULT_FEATURE_NAMES`, so the default `feature_version` changes (expected: no champions exist, nothing is
+  invalidated) and feature-seeded clones now draw from a larger column pool.
 
 ## Next steps (no owner input needed unless marked)
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.

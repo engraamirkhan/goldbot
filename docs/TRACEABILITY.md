@@ -17,12 +17,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 119 |
+| implemented | 123 |
 | partial | 16 |
 | missing | 11 |
 | deviates | 9 |
 | in review | 6 |
-| **total** | **161** |
+| **total** | **165** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -148,6 +148,10 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | F10 | "a Dukascopy cross-check: a signal that only works on broker-fed bars is ... dropped" | missing | | untested |
 | F11 | TradingView alerts "with fired_at - bar_time < tf are flagged intrabar and excluded from training" | partial | flagged (goldbot/webhook/app.py:56); no TV features reach training yet, so exclusion is moot | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar |
 | F12 | "about 1% of alerts randomly blanked" in training; "a missed alert sets the feature to NaN" | missing | no TradingView feature family in the registry | untested |
+| F13 | Trader toolkit, session structure (strategy-researcher; point-in-time, "a level ... is known only once its defining bars have closed"): session zones Tokyo/Asia, London, New York | implemented | goldbot/features/trader.py `session_zones` (family `session`): current session high/low/open, previous session high/low/open, each zone's last completed high/low, previous feature-day and week high/low as (close - level)/ATR14, `prev_sess_pos` (+1 above / -1 below / 0 inside the previous session's range); windows from `DEFAULT_SESSIONS.sessions_utc`, 21:00-23:00 UTC belongs to none | tests/test_trader_features.py::test_session_zones_report_current_and_previous_session_levels_known_at_each_bar; ::test_previous_week_levels_appear_only_once_the_week_is_over |
+| F14 | Trader toolkit, market structure: liquidity sweeps of prior highs/lows, breaks of structure | implemented | goldbot/features/trader.py `market_structure` (family `structure`): `sweep_high/low/dir` against the last confirmed swing, previous session and previous day levels known at t-1; `bos_event/bos_dir/bars_since_bos`, each confirmed swing broken at most once by a close; distances to the last confirmed swings stay in the `swings` family | tests/test_trader_features.py::test_sweep_and_break_of_structure_on_a_known_sequence; ::test_a_swing_is_broken_only_once |
+| F15 | Trader toolkit, fair value gaps (three-bar imbalance) | implemented | goldbot/features/trader.py `fair_value_gaps` (family `smc`): nearest unfilled bullish/bearish gap distance, age, unfilled size (ATR) and count; partial fills shrink the gap, a bar through the far edge fills it; gaps < 0.1 ATR ignored, > 400 bars dropped | tests/test_trader_features.py::test_fair_value_gap_forms_on_the_third_bar_shrinks_on_partial_fill_and_is_dropped_when_filled |
+| F16 | Trader toolkit, order blocks (last opposite candle before a structure-breaking displacement, body > k x ATR) | implemented | goldbot/features/trader.py `order_blocks` (family `smc`): nearest active bullish/bearish block distance (negative inside), age and count; invalidated by a close through the block; k = 1.0, search 5 bars | tests/test_trader_features.py::test_order_block_is_the_last_opposite_candle_before_a_structure_breaking_displacement; ::test_no_order_block_without_a_break_of_structure; no look-ahead for F13-F16: ::test_no_trader_feature_changes_when_future_bars_are_appended; ::test_trader_features_pass_the_pipeline_lookahead_check |
 
 ## Modelling, validation and promotion [Modelling]
 
