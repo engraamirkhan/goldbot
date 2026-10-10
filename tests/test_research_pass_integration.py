@@ -440,7 +440,7 @@ def test_cpcv_reevaluates_registered_trials_as_evidence_with_pbo_and_takes_no_bu
 
 
 def test_an_ad_hoc_run_cannot_spend_the_reserved_trials_and_a_preregistered_run_uses_them_up(release_dir, tmp_path,
-                                                                                               monkeypatch):
+                                                                                               monkeypatch, queued_prereg):
     from goldbot.research.director import reserved_trials
     from goldbot.research.registry import TrialRegistry, quarter_of
     from goldbot.specialists import SPECIALISTS
@@ -454,7 +454,7 @@ def test_an_ad_hoc_run_cannot_spend_the_reserved_trials_and_a_preregistered_run_
         rp.main()                                        # 2 - 1 used - 1 reserved: nothing left for an ad-hoc run
     assert reg.n_trials == 1
     cfg = SPECIALISTS["session_open"]().config
-    pre = reg.preregister(agent_id="x", family="session_open", config=cfg, feature_version="f", rationale="planned",
+    pre = queued_prereg(reg, agent_id="x", family="session_open", config=cfg, feature_version="f", rationale="planned",
                           reading_rule="continue if ...")
     assert rp.main() == 0                                # the pre-registered configuration uses the reserved trial
     last = _rows(registry)[-1]
@@ -462,7 +462,7 @@ def test_an_ad_hoc_run_cannot_spend_the_reserved_trials_and_a_preregistered_run_
     assert reserved_trials(_rows(registry), quarter_of(), 1).reserved == 0
 
 
-def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, monkeypatch):
+def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, monkeypatch, queued_prereg):
     from goldbot.research.director import reserved_trials
     from goldbot.research.registry import TrialRegistry, quarter_of
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
@@ -477,7 +477,7 @@ def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, m
     with pytest.raises(SystemExit, match="held for the pre-registered queue"):
         rp.main()                                        # a second ad-hoc discovery would spend the reserved trial
     assert len(_rows(registry)) == 2                     # refused before any row is written
-    queued = TrialRegistry(registry).preregister(agent_id=res["agent_id"], family=res["family"], config=res["config"],
+    queued = queued_prereg(TrialRegistry(registry), agent_id=res["agent_id"], family=res["family"], config=res["config"],
                                                  feature_version="f", rationale="H-02", reading_rule=pre["reading_rule"])
     assert rp.main() == 0                                # the queued pre-registration may use it
     rows = _rows(registry)

@@ -3,7 +3,7 @@ import hashlib
 import json
 import math
 import random
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ from goldbot.config import RetiredFamily, load_settings
 from goldbot.data.store import Store
 from goldbot.ops import jobs
 from goldbot.ops.jobs import JobContext, monthly_research, research_budget, research_director
+from goldbot.research import registry as registry_mod
 from goldbot.research.attribution import REPORT_FILE
 from goldbot.research.director import (
     ATTRIBUTION_FILE,
@@ -35,8 +36,11 @@ from goldbot.research.director import (
     build_plan,
     holdout_window,
     hypotheses_retired,
+    is_queued,
+    later_preregistration,
     load_attribution,
     load_hypotheses,
+    pending_preregistration,
     quarter_budget,
     quarter_usage,
     reinstatement_threshold,
@@ -49,7 +53,7 @@ from goldbot.research.model_registry import ModelRegistry
 from goldbot.research.pipeline import ResearchResult
 from goldbot.research.population import MIN_RANK_TRADES, Population
 from goldbot.research.promotion import PerfStats
-from goldbot.research.registry import TrialRegistry, quarter_of
+from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, planned_quarter, quarter_of
 from goldbot.specialists import SPECIALISTS
 
 NOW = pd.Timestamp("2026-10-03 12:30", tz="UTC")
@@ -569,6 +573,130 @@ def test_missing_attribution_leaves_the_plan_unchanged(tmp_path):
     assert ResearchPlan.model_validate(old).moves == []
 
 
+def _clock(monkeypatch: pytest.MonkeyPatch, y: int, m: int, d: int) -> None:
+    """Set the registry's clock (what `preregister` stamps; there is no way to pass a time in)."""
+    monkeypatch.setattr(registry_mod, "_utcnow", lambda: datetime(y, m, d, tzinfo=timezone.utc))
+
+
+def test_a_preregistration_written_in_december_for_q1_is_counted_and_run_in_q1(tmp_path, monkeypatch):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    cfg = {"x": 1}
+    _clock(monkeypatch, 2026, 12, 30)
+    pre = reg.preregister(agent_id="a", family="tsmom", config=cfg, feature_version="f", rationale="Q1 plan",
+                          reading_rule="r", queue=True)
+    assert pre["target_quarter"] == "2027Q1"                # written within 14 days of Q1's start
+    assert reserved_trials(reg._rows(), "2027Q1", 13).pending == 1
+    assert pending_preregistration(reg._rows(), "2027Q1", "tsmom", pre["config_hash"]) == pre
+    reg._append({"trial": 1, "ts": "2027-01-04T09:00:00+00:00", "family": "tsmom", "config_hash": pre["config_hash"],
+                 "status": "evaluated", "config": cfg, "results": {}})
+    r = reserved_trials(reg._rows(), "2027Q1", 13)
+    assert (r.run, r.pending, r.reserved) == (1, 0, 12)     # was 13 all quarter before target_quarter
+    assert reserved_trials(reg._rows(), "2026Q4", 13) == Reservation(setting=13, run=0, pending=0, reserved=13)
+    assert pending_preregistration(reg._rows(), "2027Q1", "tsmom", pre["config_hash"]) is None
+
+
+def test_h01_h02_q1_rows_written_in_december_hold_the_q1_reservation(tmp_path, monkeypatch):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    _clock(monkeypatch, 2026, 12, 5)
+    early = reg.preregister(agent_id="a", family="tsmom", config={"h": "H-01"}, feature_version="f", rationale="H-01",
+                            reading_rule="r", queue=True, target_quarter="2027Q1")
+    _clock(monkeypatch, 2026, 12, 20)
+    late = reg.preregister(agent_id="a", family="tsmom", config={"h": "H-02"}, feature_version="f", rationale="H-02",
+                           reading_rule="r", queue=True)
+    assert early["target_quarter"] == late["target_quarter"] == "2027Q1"
+    assert (planned_quarter(datetime(2026, 12, 17, tzinfo=timezone.utc)),
+            planned_quarter(datetime(2026, 12, 18, tzinfo=timezone.utc))) == ("2026Q4", "2027Q1")
+    q1 = reserved_trials(reg._rows(), "2027Q1", 13)
+    assert (q1.run, q1.pending, q1.reserved) == (0, 2, 13)
+    assert reserved_trials(reg._rows(), "2026Q4", 0).pending == 0   # they do not hold December's budget
+    _clock(monkeypatch, 2026, 12, 5)
+    with pytest.raises(ValueError, match="before its target quarter starts"):   # Dec 5 defaults to Q4, under way
+        reg.preregister(agent_id="a", family="tsmom", config={}, feature_version="f", rationale="r",
+                        reading_rule="r", queue=True)
+
+
+def test_a_queued_row_written_mid_quarter_does_not_use_the_reservation(tmp_path, monkeypatch):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    _clock(monkeypatch, 2026, 11, 2)
+    plain = reg.preregister(agent_id="a", family="tsmom", config={"x": 1}, feature_version="f", rationale="r",
+                            reading_rule="r")
+    assert plain["queue"] is False and "target_quarter" not in plain       # the default is ad hoc
+    with pytest.raises(ValueError, match="before its target quarter starts"):
+        reg.preregister(agent_id="a", family="tsmom", config={"x": 2}, feature_version="f", rationale="r",
+                        reading_rule="r", queue=True, target_quarter="2026Q4")
+    # a row claiming the queue for a quarter already under way (e.g. hand-written just before its own run) is ad hoc
+    reg._append({"trial": 1, "ts": "2026-11-02T00:00:00+00:00", "family": "tsmom", "config_hash": "h2",
+                 "status": "preregistered", "target_quarter": "2026Q4", "config": {}, "results": {}})
+    rows = reg._rows()
+    assert not is_queued(rows[-1])
+    assert reserved_trials(rows, "2026Q4", 0).pending == 0
+    assert pending_preregistration(rows, "2026Q4", "tsmom", "h2") is None
+
+
+def test_one_trial_uses_one_preregistration_across_quarters(tmp_path):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    for ts, target in (("2026-10-02T00:00:00+00:00", None), ("2026-12-28T00:00:00+00:00", "2027Q1")):
+        row = {"trial": 1, "ts": ts, "family": "tsmom", "config_hash": "h", "status": "preregistered", "config": {},
+               "results": {}}
+        reg._append({**row, "target_quarter": target} if target else row)
+    reg._append({"trial": 1, "ts": "2027-01-05T00:00:00+00:00", "family": "tsmom", "config_hash": "h",
+                 "status": "evaluated", "config": {}, "results": {}})
+    rows = reg._rows()
+    # the unlinked January trial uses up the row of its own quarter (2027Q1) first; the Q4 row stays pending in Q4
+    q4, q1 = reserved_trials(rows, "2026Q4", 0), reserved_trials(rows, "2027Q1", 0)
+    assert (q4.run, q4.pending, q1.run, q1.pending) == (0, 1, 1, 0)
+
+
+def test_an_early_run_of_a_later_quarters_config_does_not_use_up_its_preregistration(tmp_path, monkeypatch):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    _clock(monkeypatch, 2026, 11, 1)
+    p = reg.preregister(agent_id="a", family="tsmom", config={"h": 1}, feature_version="f", rationale="H-01",
+                        reading_rule="r", queue=True, target_quarter="2027Q1")
+    # an unlinked Q4 trial of H-01's exact config (as an ad-hoc run would record it)
+    reg._append({"trial": 2, "ts": "2026-11-15T00:00:00+00:00", "family": "tsmom", "config_hash": p["config_hash"],
+                 "status": "evaluated", "config": {"h": 1}, "results": {}})
+    rows = reg._rows()
+    assert reserved_trials(rows, "2027Q1", 13) == Reservation(setting=13, run=0, pending=1, reserved=13)
+    assert pending_preregistration(rows, "2027Q1", "tsmom", p["config_hash"]) == p
+    assert later_preregistration(rows, "2026Q4", "tsmom", p["config_hash"]) == p
+    assert later_preregistration(rows, "2027Q1", "tsmom", p["config_hash"]) is None
+
+
+def test_preregister_cannot_be_backdated_and_needs_the_queue_for_a_target_quarter(tmp_path, monkeypatch):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    with pytest.raises(TypeError):
+        reg.preregister(agent_id="a", family="x", config={}, feature_version="f", rationale="r",  # type: ignore[call-arg]
+                        reading_rule="r", queue=True, target_quarter="2026Q4",
+                        now=datetime(2026, 9, 30, tzinfo=timezone.utc))
+    _clock(monkeypatch, 2026, 11, 2)
+    with pytest.raises(ValueError, match="before its target quarter starts"):
+        reg.preregister(agent_id="a", family="x", config={}, feature_version="f", rationale="r", reading_rule="r",
+                        queue=True, target_quarter="2026Q4")
+    with pytest.raises(ValueError, match="queue=True"):
+        reg.preregister(agent_id="a", family="y", config={}, feature_version="f", rationale="r", reading_rule="r",
+                        target_quarter="2027Q1")
+    assert reg._rows() == []
+
+
+def test_runners_refuse_a_config_preregistered_for_a_later_quarter(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
+    ctx = _ctx(tmp_path, trial_budget_quarter=20, reserved_trials_quarter=0, trial_budget_per_month=1,
+               label_grid_paused=False)
+    q = quarter_of()
+    nxt = quarter_of(registry_mod.quarter_start(q) + pd.Timedelta(days=100))
+    cfg = dict(SPECIALISTS["tsmom"].default_config)
+    ctx.trials.preregister(agent_id="a", family="tsmom", config=cfg, feature_version="f", rationale="next quarter",
+                           reading_rule="r", queue=True, target_quarter=nxt)
+    out = jobs.make_trial_runner(ctx)("tsmom", {}, "research analyst: early")
+    assert f"pre-registered for {nxt}" in out["error"] and ctx.trials.n_trials == 0
+    with pytest.raises(TrialBudgetExceeded, match=f"pre-registered for {nxt}"):        # research_pass and discovery
+        ctx.trials.check_budget_reserved([("tsmom", cfg)], 20, 0)
+    monkeypatch.setattr(jobs, "label_grid", lambda default, step: [dict(default)])     # the grid's one variant
+    res = monthly_research(ctx, pd.Timestamp.now("UTC"))
+    assert res["tsmom"]["trials"] == 0 and f"pre-registered for {nxt}" in res["tsmom"]["skipped"][0]
+    assert not any(r.get("family") == "tsmom" and r.get("status") != "preregistered" for r in ctx.trials._rows())
+
+
 def test_research_director_job_reads_attribution_settings_and_the_reservation(tmp_path):
     ctx = _ctx(tmp_path)                                   # the real settings: 13 reserved, five retired families
     now = pd.Timestamp.now("UTC")
@@ -616,10 +744,13 @@ def test_research_analyst_is_refused_once_only_reserved_trials_remain(tmp_path, 
     assert ctx.trials.n_trials == 7
 
 
-def test_research_analyst_runs_a_preregistered_trial_from_the_reservation(tmp_path, monkeypatch):
+def test_research_analyst_runs_a_preregistered_trial_from_the_reservation(tmp_path, monkeypatch, queued_prereg):
     ctx = _analyst_ctx(tmp_path, monkeypatch)
+    # trend is retired and its seven trials this quarter used the retired families' shared exploration trial: only
+    # the pending pre-registration lets the analyst run it
+    assert "trend" in {e.family for e in ctx.settings.research.retired_families}
     cfg = dict(SPECIALISTS["trend"].default_config)
-    pre = ctx.trials.preregister(agent_id="a", family="trend", config=cfg, feature_version="f1", rationale="Q1 plan",
+    pre = queued_prereg(ctx.trials, agent_id="a", family="trend", config=cfg, feature_version="f1", rationale="Q1 plan",
                                  reading_rule="DSR >= 0.95")
     run = jobs.make_trial_runner(ctx)
     out = run("trend", {}, "research analyst: the pre-registered trend trial")
@@ -630,3 +761,19 @@ def test_research_analyst_runs_a_preregistered_trial_from_the_reservation(tmp_pa
     assert (r.run, r.pending, r.reserved) == (1, 0, 12)
     # that pre-registration is used: running the same config again is an ordinary trial, refused
     assert "held for the pre-registered queue" in run("trend", {}, "again")["error"]
+
+
+def test_research_analyst_refuses_a_retired_family_once_the_shared_exploration_trial_is_used(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
+    ctx = _ctx(tmp_path, trial_budget_quarter=20, reserved_trials_quarter=0)    # open budget is not the limit
+    run = jobs.make_trial_runner(ctx)
+    out = run("trend", {}, "research analyst: explore a retired idea")
+    assert out.get("trial") == 1                            # the quarter's ONE shared exploration trial
+    refused = run("breakout", {}, "research analyst: another retired idea")
+    assert "breakout is retired" in refused["error"] and "1 retired-family trial(s)" in refused["error"]
+    assert "trend is retired" in run("trend", {"max_bars": 7}, "again")["error"]
+    assert ctx.trials.n_trials == 1
+    assert run("tsmom", {}, "an active family").get("trial") == 2   # active families are not affected
+    # a family the director's plan reinstated is back on the open budget
+    monkeypatch.setattr(jobs, "_reinstated", lambda ctx, slot: {"breakout"})
+    assert run("breakout", {}, "reinstated by attribution").get("trial") == 3

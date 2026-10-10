@@ -295,3 +295,20 @@ def test_preflight_settings_error_never_echoes_the_bad_value():
     except ValidationError as exc:
         msg = _safe_settings_error(exc)
     assert "someone@private.example" not in msg and "owner_email" in msg
+
+
+def test_a_wal_file_that_vanishes_during_the_permission_check_is_skipped(server, monkeypatch):
+    ctx = server()
+    wal = ctx.state_dir / "core.db-wal"
+    wal.write_text("")
+    wal.chmod(0o644)
+    real_stat = Path.stat
+
+    def stat_gone(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if self.name == "core.db-wal":                  # SQLite removed it between the glob and the stat
+            raise FileNotFoundError(self)
+        return real_stat(self, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", stat_gone)
+    items = {i.name: i for i in pf.run_preflight(ctx)}
+    assert items["db_files_private"].status == "ok" and items["db_files_private"].detail == "1 state file(s) are 0600"
