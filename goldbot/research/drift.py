@@ -62,13 +62,14 @@ def psi(ref: dict[str, Any], values: np.ndarray, eps: float = 1e-4) -> float:
 
 
 def residual_cusum(z: list[float], k: float = DEFAULT_K, h: float | None = None, trades_per_week: float | None = None,
-                   false_alarm: float = FALSE_ALARM_QUARTER, p: float | None = None) -> tuple[bool, float]:
+                   false_alarm: float = FALSE_ALARM_QUARTER, p: float | None = None,
+                   ps: list[float] | None = None) -> tuple[bool, float]:
     """One-sided (downward) CUSUM on standardised residuals: (alarm, final statistic). Row M25: unless `h` is given,
     the decision interval is tuned so in-control residuals alarm within one quarter's expected trades (from the
     backtest's `trades_per_week`) with probability at most `false_alarm` (design: 5%; research/cusum.py), simulated as
-    two-point trade residuals at the mean taken `p` (normal when p is None); without a trade rate the fixed
-    FALLBACK_H applies."""
-    h = calibrated_h(trades_per_week, k, false_alarm, p=p) if h is None else h
+    two-point trade residuals resampling the taken p values `ps` (else at the mean taken `p`; normal when both are
+    None); without a trade rate the fixed FALLBACK_H applies."""
+    h = calibrated_h(trades_per_week, k, false_alarm, p=p, ps=ps) if h is None else h
     s, alarm = 0.0, False
     for x in z:
         s = max(0.0, s - x - k)
@@ -92,11 +93,15 @@ def trade_residuals(trades: list[Any]) -> list[float]:
     return z
 
 
+def taken_ps(trades: list[Any]) -> list[float]:
+    """Model p of each closed taken trade `trade_residuals` scores (clipped as it clips them): the in-control win
+    probabilities the CUSUM's h is calibrated on (row M25, resampled per trade)."""
+    return [min(max(float(t.p), 1e-3), 1 - 1e-3) for t in trades if t.exit is not None and abs(t.entry - t.stop) > 0]
+
+
 def mean_taken_p(trades: list[Any]) -> float | None:
-    """Mean model p of the closed taken trades `trade_residuals` scores (the residuals' in-control win probability,
-    which sets the CUSUM's h; row M25), or None when there are none."""
-    ps = [min(max(float(t.p), 1e-3), 1 - 1e-3) for t in trades
-          if t.exit is not None and abs(t.entry - t.stop) > 0]
+    """Mean model p of the closed taken trades `trade_residuals` scores, or None when there are none."""
+    ps = taken_ps(trades)
     return float(np.mean(ps)) if ps else None
 
 
@@ -135,7 +140,7 @@ def assess(agent_id: str, version: str, *, model: Any, live: pd.DataFrame | None
     """One agent's health from its model (reference bins, importance), recent candidate features (`live`, model
     inputs before side-alignment), its taken shadow trades since the version started (`closed_taken`, oldest first)
     and those of the last 30 days (`recent_taken`). `s`: DriftSettings. `trades_per_week`: the backtest's trade rate,
-    which with the mean p of `closed_taken` sets the CUSUM's decision interval (row M25)."""
+    which with the p values of `closed_taken` sets the CUSUM's decision interval (row M25)."""
     h = AgentHealth(agent_id=agent_id, version=version, backtest_dd=backtest_dd)
     ref = getattr(model, "feature_ref", None) or {}
     if not ref:
@@ -165,8 +170,10 @@ def assess(agent_id: str, version: str, *, model: Any, live: pd.DataFrame | None
         p = np.array([t.p for t in calib], dtype=float)
         y = np.array([t.barrier == "target" for t in calib], dtype=float)
         h.ece, h.brier = round(calibration_ece(p, y), 4), round(float(np.mean((p - y) ** 2)), 4)
-    p_bar = mean_taken_p(closed_taken)          # M25: h on two-point residuals at the trades' mean p (0.01 bucket)
-    h_used = calibrated_h(trades_per_week, s.cusum_k, s.cusum_false_alarm, p=p_bar) if trades_per_week else s.cusum_h
+    # M25: h on two-point residuals resampling the trades' own p values (0.01 buckets), not only their mean
+    ps = taken_ps(closed_taken)
+    h_used = (calibrated_h(trades_per_week, s.cusum_k, s.cusum_false_alarm, p=mean_taken_p(closed_taken), ps=ps)
+              if trades_per_week else s.cusum_h)
     h.cusum_h = round(h_used, 3)
     h.cusum_alarm, cus = residual_cusum(trade_residuals(closed_taken), s.cusum_k, h_used)
     h.cusum = round(cus, 3)

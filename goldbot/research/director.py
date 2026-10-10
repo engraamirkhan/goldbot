@@ -60,9 +60,13 @@ is 0 and the plan is the evidence-only plan, bit for bit.
 
 Retired ideas: the list is governance, so it lives in settings (`research.retired_families`: family, hypothesis id,
 retired date, reason, registry trials). docs/research/hypotheses.md section B mirrors it; the plan stores the doc's
-sha256 and any disagreement (`retired_drift`), but the doc never changes the allocation by itself. A retired family
-keeps an exploration floor of RETIRED_FLOOR trial a quarter (less the trials it already had this quarter) and nothing
-from the evidence pool. It is reinstated (back to the normal floor and pool) by one source only: its attribution
+sha256 and any disagreement (`retired_drift`), but the doc never changes the allocation by itself. The retired
+families SHARE one exploration budget of RETIRED_EXPLORATION trial a quarter (less the trials any of them already had
+this quarter) and get nothing from the evidence pool: five retired families taking one trial each would spend five of
+the seven trials a 20-trial quarter leaves after the 13 reserved (director re-verify). The trial goes to the retired,
+clean family with the best post-retirement evidence (attribution after its retirement date, shrunk t > 0, the highest
+first, ties by name); without any, to the next family of a deterministic rotation by quarter (`retired_exploration`).
+A retired family is reinstated (back to the normal floor and pool) by one source only: its attribution
 trades entered after the retirement date, non-noise, with t_shrunk >= reinstatement_threshold(m), REINSTATE_T's
 one-sided tail divided by m = retired families tested x REINSTATE_SOURCES (Bonferroni; 5 families: 2.61). Shadow
 books are not a reinstatement source: they carry no per-trade dates, so they cannot be cut at the retirement date.
@@ -107,7 +111,7 @@ HOLDOUT_STATUS = "holdout"
 ATTRIBUTION_SHIFT_CAP = 0.25     # attribution may move a family's share of the evidence split by at most +-25%
 ATTRIBUTION_SHRINK_TRADES = 100  # t x n / (n + 100): 30 trades keep 23% of the t-stat, 300 keep 75%
 ATTRIBUTION_MAX_AGE_DAYS = 14    # an older attribution report (the job runs daily) is not used
-RETIRED_FLOOR = 1                # exploration trials a quarter a retired family keeps (never from the evidence pool)
+RETIRED_EXPLORATION = 1          # exploration trials a quarter shared by ALL retired families (never from the pool)
 REINSTATE_T = 2.0                # one-sided bar on the shrunk attribution t before the multiple-testing correction
 REINSTATE_SOURCES = 1            # reinstatement sources tested: attribution trades after the retirement date, only
 GRID_RATIONALE = "monthly bounded label-grid search"   # the rationale prefix jobs.monthly_research records
@@ -120,7 +124,9 @@ IDEA_ALIASES = {"range breakout": "breakout", "trend pullback": "trend", "sessio
 ALLOCATION_RULE = (
     "The budget is what is left of the quarter's trial budget after the trials already run and the pre-registered "
     "queue's reservation. Eligible families (not lookahead-blocked, not retired) each get floor = min(floor, budget // "
-    "eligible, cap); then each retired family gets its exploration floor (1 a quarter, less its trials this quarter). "
+    "eligible, cap); then the retired families share ONE exploration trial a quarter (none once any of them had a "
+    "trial this quarter), given to the clean retired family with the best positive post-retirement attribution, else "
+    "by a rotation over the quarters. "
     "The rest is split among eligible families in proportion to evidence (equal split when every eligible family has "
     "zero evidence) by largest remainders (ties: higher evidence, then family name); a family above its cap is cut to "
     "the cap and the excess is split again among the others. Blocked families get 0. The total equals the budget "
@@ -254,7 +260,8 @@ class ResearchPlan(FrozenRecord):
     hypotheses_note: str | None = None
     quarter_reserved: int = 0                                       # held for the pre-registered queue
     reservation: Reservation | None = None
-    retired_floor: dict[str, int] = Field(default_factory=dict)     # exploration floor per retired family, this quarter
+    retired_floor: dict[str, int] = Field(default_factory=dict)     # the shared exploration trial per retired family
+    retired_explore: str | None = None                              # the retired family it goes to this quarter
     reinstate_t: float | None = None                                # corrected bar on the shrunk attribution t
     hypotheses_sha256: str | None = None                            # the doc as read at plan time
     hypotheses_drift: list[str] = Field(default_factory=list)       # where it disagrees with research.retired_families
@@ -323,6 +330,22 @@ def reserved_trials(rows: list[dict[str, Any]], quarter: str, setting: int) -> R
     rows (linked by `preregistration.trial`, or the same family and config hash with a trial number at or after the
     pre-registration's); `pending` counts the preregistered rows not yet run. So the reservation shrinks only as the
     pre-registered plan is executed, a queued pre-registration is always covered, and a row is never counted twice."""
+    prereg, matched = _prereg_matches(rows, quarter)
+    run, pending = len(matched), len(prereg) - len(matched)
+    return Reservation(setting=setting, run=run, pending=pending, reserved=max(setting - run, pending, 0))
+
+
+def pending_preregistration(rows: list[dict[str, Any]], quarter: str, family: str,
+                            config_hash: str) -> dict[str, Any] | None:
+    """The oldest `preregistered` row of `quarter` for exactly this family and config that no trial has run yet (the
+    `reserved_trials` matching), or None. A trial run against it uses the reservation, not the open budget."""
+    prereg, matched = _prereg_matches(rows, quarter)
+    return next((p for i, p in enumerate(prereg) if i not in matched and p.get("family") == family
+                 and p.get("config_hash") == config_hash), None)
+
+
+def _prereg_matches(rows: list[dict[str, Any]], quarter: str) -> tuple[list[dict[str, Any]], set[int]]:
+    """(the quarter's preregistered rows, indices of those a trial of the quarter was run against)."""
     prereg = [r for r in rows if r.get("status") == PREREGISTERED and _row_quarter(r) == quarter]
     matched: set[int] = set()
     for t in rows:
@@ -338,8 +361,7 @@ def reserved_trials(rows: list[dict[str, Any]], quarter: str, setting: int) -> R
             if (link is not None and p.get("trial") == link) or (link is None and same):
                 matched.add(i)
                 break
-    run, pending = len(matched), len(prereg) - len(matched)
-    return Reservation(setting=setting, run=run, pending=pending, reserved=max(setting - run, pending, 0))
+    return prereg, matched
 
 
 # ---------------------------------------------------------------------------------------------- evidence
@@ -665,8 +687,8 @@ def allocate(scores: list[FamilyScore], monthly_budget: int, floor: int, cap: in
        n_eligible, cap), so no family is starved by a lucky streak elsewhere and a family with no evidence yet still
        gets looked at.
     3. Each retired family (research.retired_families, not reinstated, not blocked) then gets its `retired_floor`
-       (RETIRED_FLOOR a quarter less its trials this quarter), in family order while trials are left, and nothing
-       more: retirement is never permanent, and never more than exploration.
+       (`retired_exploration`: the one shared trial a quarter goes to one of them), while trials are left, and
+       nothing more: retirement is never permanent, and never more than exploration.
     4. The rest is split among eligible families in proportion to `evidence` (equally when every eligible family has
        zero evidence) by largest remainders, ties to higher evidence, then family name.
     5. With a cap (the number of distinct variants a family's search can run), a family above it is cut to the cap
@@ -710,7 +732,33 @@ def allocate(scores: list[FamilyScore], monthly_budget: int, floor: int, cap: in
 
 
 # ---------------------------------------------------------------------------------------------- plan
-def _reasons(s: FamilyScore, retired_floor: int = 0) -> list[str]:
+def retired_exploration(scores: Sequence[FamilyScore], quarter: str, used: int) -> tuple[dict[str, int], str | None, str]:
+    """The retired families' ONE shared exploration trial this quarter: (trials per retired family, the family it goes
+    to or None, why). Nothing when `used` (trials of any retired family this quarter) already covers
+    RETIRED_EXPLORATION. Candidates are retired, not reinstated, not lookahead-blocked. The trial goes to the candidate
+    with the best post-retirement evidence (attribution used, shrunk t > 0; highest first, ties by name), else to
+    candidate (year x 4 + quarter - 1) mod n of the sorted candidates: every retired family is looked at once in n
+    quarters, and the choice is a pure function of the inputs."""
+    retirees = sorted(s.family for s in scores if s.retired)
+    out = dict.fromkeys(retirees, 0)
+    left = max(RETIRED_EXPLORATION - used, 0)
+    cands = [s for s in sorted(scores, key=lambda s: s.family) if s.retired and not s.blocked]
+    if not cands or left == 0:
+        why = (f"the shared exploration trial was used this quarter ({used} retired-family trial(s))" if cands
+               else "no clean retired family")
+        return out, None, why
+    evid = sorted((-s.attribution.t_shrunk, s.family) for s in cands
+                  if s.attribution is not None and s.attribution.used and s.attribution.t_shrunk > 0)
+    if evid:
+        pick, why = evid[0][1], "best post-retirement evidence"
+    else:
+        year, q = int(quarter[:4]), int(quarter[-1])
+        pick, why = cands[(year * 4 + q - 1) % len(cands)].family, f"rotation ({quarter})"
+    out[pick] = left
+    return out, pick, why
+
+
+def _reasons(s: FamilyScore, retired_floor: int = 0, explore_note: str = "") -> list[str]:
     out: list[str] = []
     if s.blocked:
         out.append(f"blocked: trial #{s.lookahead_trial}'s lookahead check found {len(s.lookahead_columns)} columns using "
@@ -728,7 +776,8 @@ def _reasons(s: FamilyScore, retired_floor: int = 0) -> list[str]:
         out.append(f"{s.shadow_trades} shadow trades so far (ranked from {MIN_SHADOW_TRADES}-{MIN_RANK_TRADES})")
     if s.retired:
         out.append(f"retired since {s.retired_since} ({s.retired_id}: {s.retired_status}); not reinstated by "
-                   f"attribution after that date: exploration floor of {retired_floor} trial(s) left this quarter")
+                   f"attribution after that date: {retired_floor} of the retired families' shared exploration trial "
+                   f"this quarter ({explore_note})")
     elif s.retired_id is not None:
         out.append(f"retired since {s.retired_since} ({s.retired_id}) but reinstated: {'; '.join(s.new_evidence)}")
     a = s.attribution
@@ -795,9 +844,9 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
     reinstate_t = reinstatement_threshold(len(retired_map) * REINSTATE_SOURCES)
     base_scores = score_families(fams, evidence_rows, shadow, agents)
     scores = [_with_inputs(s, attr[s.family], retired_map.get(s.family), reinstate_t) for s in base_scores]
-    q_family = {f: sum(1 for r in trials if is_trial(r) and r.get("family") == f and _row_quarter(r) == quarter)
-                for f in retired_map}
-    retired_floor = {f: max(RETIRED_FLOOR - q_family[f], 0) for f in retired_map}
+    q_retired = sum(1 for r in trials if is_trial(r) and r.get("family") in retired_map and _row_quarter(r) == quarter)
+    retired_floor, explore, explore_why = retired_exploration(scores, quarter, q_retired)
+    explore_note = f"to {explore}: {explore_why}" if explore else explore_why
     evidence_budget, _ = allocate(base_scores, total, floor, cap)
     untilted, _ = allocate(scores, total, floor, cap, retired_floor=retired_floor)
     tilt = {s.family: s.attribution.term for s in scores if s.attribution is not None and s.attribution.tilts}
@@ -828,7 +877,8 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
     h0, h1 = holdout or holdout_window(None)
     order = sorted(scores, key=lambda s: (s.blocked or s.retired, -s.evidence, s.family))
     focus = [FocusItem(rank=i + 1, family=s.family, budget=budget[s.family], evidence=round(s.evidence, 4),
-                       reasons=_reasons(s, retired_floor.get(s.family, 0))) for i, s in enumerate(order)]
+                       reasons=_reasons(s, retired_floor.get(s.family, 0), explore_note))
+             for i, s in enumerate(order)]
     drift = retired_drift(list(retired), hypotheses, fams)
     hyp_note = (f"research.retired_families: {sorted(retired_map) or 'none'}; docs/research/hypotheses.md section B "
                 + ("agrees" if not drift else f"disagrees in {len(drift)} place(s) (hypotheses_drift)")
@@ -840,6 +890,7 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
                         holdout_trials_ignored=len(trials) - len(evidence_rows), focus=focus, evidence=scores,
                         evidence_budget=evidence_budget, moves=moves, attribution_as_of=attr_as_of,
                         attribution_note=attr_note, hypotheses_note=hyp_note, quarter_reserved=reservation.reserved,
-                        reservation=reservation, retired_floor=retired_floor, reinstate_t=round(reinstate_t, 6),
+                        reservation=reservation, retired_floor=retired_floor, retired_explore=explore,
+                        reinstate_t=round(reinstate_t, 6),
                         hypotheses_sha256=hashlib.sha256(hypotheses.encode()).hexdigest() if hypotheses else None,
                         hypotheses_drift=drift)

@@ -610,6 +610,24 @@ def check_drift(ctx: HealthContext) -> Check:
     return Check(name="drift", status=cast(Status, status), reason="; ".join(parts) or "no drift")
 
 
+def check_model_watch(ctx: HealthContext) -> Check:
+    """state/model_watch.json (daily model_watch): a new champion whose watch has too few trades for any CUSUM alarm
+    at the 5% rate (`cannot_alarm`) warns, so a silent "no alarm" is never mistaken for a healthy watch."""
+    f = ctx.state_dir / "model_watch.json"          # goldbot.ops.jobs.MODEL_WATCH_FILE
+    if not f.exists():
+        return Check(name="model_watch", status="ok", reason="no champion watch report yet")
+    try:
+        agents = (_read_json(f) or {}).get("agents") or {}
+    except (ValueError, OSError, AttributeError) as exc:
+        return Check(name="model_watch", status="warn", reason=f"model_watch.json unreadable: {exc}"[:300])
+    blind = sorted(a for a, v in agents.items() if isinstance(v, dict) and v.get("action") == "cannot_alarm")
+    if blind:
+        return Check(name="model_watch", status="warn",
+                     reason=f"champion watch cannot alarm (too few trades) for {', '.join(blind)}: relies on "
+                            "drift_watch and the drawdown halt")
+    return Check(name="model_watch", status="ok", reason=f"{len(agents)} champion(s) watched")
+
+
 def check_deploy(ctx: HealthContext) -> Check:
     """The last deploy attempt (state/deploys.jsonl, written by goldbot-deploy): a rollback warns, a failed rollback
     fails; a deploy is only ever started by the owner (Telegram [Deploy] or `sudo goldbot-deploy`)."""
@@ -965,7 +983,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
         checks += [check_reconciliation(ctx, a.account_id) for a in ctx.accounts]   # D12 (goldbot/data/crossfeed.py)
         if ctx.settings is not None and ctx.settings.costs.publish_release:
             checks.append(check_costs_published(ctx))
-        checks += [check_data_quality(ctx), check_drift(ctx), check_deploy(ctx), check_backup_age(ctx), check_backup_prune(ctx), check_restore_drill(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
+        checks += [check_data_quality(ctx), check_drift(ctx), check_model_watch(ctx), check_deploy(ctx), check_backup_age(ctx), check_backup_prune(ctx), check_restore_drill(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
 

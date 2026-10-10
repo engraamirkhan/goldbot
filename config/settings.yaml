@@ -116,11 +116,13 @@ research:
   label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
   reserved_trials_quarter: 13        # held for the pre-registered queue (docs/research/preregistration-2027Q1.md: 13 planned
-                                     #   of 20): the director and the label grid spend only 20 - used - reserved. Each
-                                     #   trial run against a `preregistered` registry row uses one up; revisit each quarter
-  retired_families:                  # mirrors docs/research/hypotheses.md section B (a test checks they agree). A retired
-                                     #   family keeps 1 exploration trial a quarter and is reinstated only by out-of-sample
-                                     #   attribution after its retirement date (research/director.py)
+                                     #   of 20): the director, the label grid and the research analyst spend only 20 - used
+                                     #   - reserved. Each trial run against a `preregistered` registry row uses one up (only
+                                     #   such a trial may draw on the reservation); revisit each quarter
+  retired_families:                  # mirrors docs/research/hypotheses.md section B (a test checks they agree). The retired
+                                     #   families SHARE 1 exploration trial a quarter (best post-retirement evidence, else a
+                                     #   rotation) and each is reinstated only by out-of-sample attribution after its
+                                     #   retirement date (research/director.py)
     - { family: mean_reversion, hypothesis_id: R-01, retired: 2026-10-10, trials: [3],
         reason: "no gross edge; no cost-surviving evidence for short-horizon reversion in gold" }
     - { family: session_open, hypothesis_id: R-02, retired: 2026-10-10, trials: [1, 7, 11, 13],

@@ -79,17 +79,18 @@ def evaluate_promotion(backtest: PerfStats, shadow: PerfStats, champion: PerfSta
 def cusum_alarm(returns: list[float], expected_mean: float, expected_std: float, k: float = DEFAULT_K,
                 h: float | None = None, trades_per_week: float | None = None,
                 false_alarm: float = FALSE_ALARM_QUARTER, p: float | None = None,
-                weeks: float = WATCH_WEEKS) -> bool:
+                weeks: float = WATCH_WEEKS, trades: int | None = None) -> bool:
     """One-sided CUSUM on standardised trade returns for a downward shift from the backtest's mean (design: a new
     champion that trips the alarm in its first two weeks is replaced by the previous one). k is the allowance and
     h the decision interval, both in standard deviations. Row M25: unless `h` is given, h is tuned so that returns
     at the backtest's mean alarm within the watch's expected trades (backtest `trades_per_week` x `weeks`, two weeks)
     with probability at most `false_alarm` (5%; research/cusum.py). In control a trade wins with the backtest's hit
     rate `p`, so its standardised return is two-point and h is simulated that way (normal when p is None); without a
-    trade rate the fixed FALLBACK_H applies."""
+    trade rate the fixed FALLBACK_H applies. `trades`: calibrate for exactly this many trades (the watch's
+    `cusum.watch_trades`) instead of `weeks` of the trade rate."""
     if expected_std <= 0 or not returns:
         return False
-    h = calibrated_h(trades_per_week, k, false_alarm, p=p, weeks=weeks) if h is None else h
+    h = calibrated_h(trades_per_week, k, false_alarm, p=p, weeks=weeks, trades=trades) if h is None else h
     s = 0.0
     for r in returns:
         s = max(0.0, s + (expected_mean - r) / expected_std - k)

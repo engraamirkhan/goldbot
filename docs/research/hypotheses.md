@@ -40,8 +40,8 @@ registry trial #21. Holdout 2025-10-01..2026-09-30 stays untouched.
 
 The governing list is `research.retired_families` in `config/settings.yaml` (family, row id, retired date, reason,
 registry trials); this table mirrors it and `tests/test_director.py` fails when they disagree. Editing this table does
-not change the research director's allocation: change the settings too. A retired family keeps 1 exploration trial a
-quarter and is reinstated only by out-of-sample attribution after its retirement date (`research/director.py`).
+not change the research director's allocation: change the settings too. The retired families share 1 exploration trial
+a quarter (to the one with the best post-retirement evidence, else by rotation) and each is reinstated only by out-of-sample attribution after its retirement date (`research/director.py`).
 
 | ID | Idea | Status | Trials (registry #, report) | Result | Reason retired |
 |---|---|---|---|---|---|

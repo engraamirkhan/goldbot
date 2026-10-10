@@ -49,7 +49,7 @@ from goldbot.research.model_registry import ModelRegistry
 from goldbot.research.pipeline import ResearchResult
 from goldbot.research.population import MIN_RANK_TRADES, Population
 from goldbot.research.promotion import PerfStats
-from goldbot.research.registry import TrialRegistry
+from goldbot.research.registry import TrialRegistry, quarter_of
 from goldbot.specialists import SPECIALISTS
 
 NOW = pd.Timestamp("2026-10-03 12:30", tz="UTC")
@@ -375,25 +375,54 @@ def test_attribution_counts_only_trades_from_each_versions_promotion_on():
     assert all(s.attribution is not None and s.attribution.n == 0 for s in _plan_with(attribution=rep, promoted={}).evidence)
 
 
-def test_retired_family_keeps_a_floor_of_one_trial_a_quarter():
+def test_retired_families_share_one_exploration_trial_a_quarter():
     plan = _plan_with(retired=RETIRED)
-    assert plan.budget["mean_reversion"] == 1 and plan.budget["breakout"] == 1 and sum(plan.budget.values()) == 60
-    assert plan.retired_floor == {"mean_reversion": 1, "breakout": 1}
+    # 2026Q4 rotates to mean_reversion ((2026 x 4 + 3) mod 2 over [breakout, mean_reversion]); one trial for all
+    assert plan.retired_floor == {"breakout": 0, "mean_reversion": 1} and plan.retired_explore == "mean_reversion"
+    assert plan.budget["mean_reversion"] == 1 and plan.budget["breakout"] == 0 and sum(plan.budget.values()) == 60
     assert plan.budget["tsmom"] > 2                          # "failed; superseded" in the doc is not retired
     moves = {m.family: m for m in plan.moves if m.source == "retired_families"}
     assert moves["mean_reversion"].budget_after == 1 and moves["mean_reversion"].budget_before > 1
-    assert any("exploration floor" in r for f in plan.focus if f.family == "breakout" for r in f.reasons)
-    # the floor is per quarter: a mean_reversion trial this quarter uses it up
-    used = _rich_trials() + [{**_trial(7, "mean_reversion"), "ts": (NOW - pd.Timedelta(days=2)).isoformat()}]
-    again = _plan_with(retired=RETIRED, trials=used)
-    assert again.budget["mean_reversion"] == 0 and again.budget["breakout"] == 1
+    assert moves["breakout"].budget_after == 0
+    assert any("shared exploration trial" in r for f in plan.focus if f.family == "mean_reversion" for r in f.reasons)
+    assert any("rotation" in r for f in plan.focus if f.family == "breakout" for r in f.reasons)
+    # next quarter the rotation moves on, deterministically
+    nxt = build_plan(NOW + pd.Timedelta(days=92), FAMILIES, _rich_trials(), [], [], quarter_budget=100,
+                     monthly_total=60, trial_budget_per_month=0, floor=2, retired=RETIRED, promoted=PROMOTED)
+    assert nxt.quarter == "2027Q1" and nxt.retired_floor == {"breakout": 1, "mean_reversion": 0}
+    # the trial is shared: ANY retired family's trial this quarter uses it up for all of them
+    for fam in ("mean_reversion", "breakout"):
+        used = _rich_trials() + [{**_trial(7, fam), "ts": (NOW - pd.Timedelta(days=2)).isoformat()}]
+        again = _plan_with(retired=RETIRED, trials=used)
+        assert again.budget["mean_reversion"] == again.budget["breakout"] == 0
+        assert set(again.retired_floor.values()) == {0}
     # with only a couple of trials left, live families' floors come first
     tight = build_plan(NOW, FAMILIES, _rich_trials(), [], [], quarter_budget=100, monthly_total=8,
                        trial_budget_per_month=0, floor=2, retired=RETIRED)
     assert sum(tight.budget.values()) == 8 and tight.budget["mean_reversion"] + tight.budget["breakout"] == 0
-    # a lookahead-dirty retired family still gets nothing
-    dirty = _rich_trials() + [_trial(99, "breakout", auc=0.6, lookahead=["x"])]
-    assert _plan_with(retired=RETIRED, trials=dirty).budget["breakout"] == 0
+    # a lookahead-dirty retired family is skipped: the shared trial goes to a clean one
+    dirty = _rich_trials() + [_trial(99, "mean_reversion", auc=0.6, lookahead=["x"])]
+    d = _plan_with(retired=RETIRED, trials=dirty)
+    assert d.budget["mean_reversion"] == 0 and d.budget["breakout"] == 1
+
+
+def test_the_shared_retired_trial_goes_to_the_best_post_retirement_evidence_when_there_is_any():
+    after = pd.Timestamp(RETIRED_ON).tz_localize("UTC") + pd.Timedelta(days=5)
+    # breakout: positive out-of-sample attribution after retirement, short of reinstatement (shrunk t 0.8 x 1.5 = 1.2)
+    plan = _plan_with(retired=RETIRED, attribution=_report({"breakout": (400, 1.5)}, start=after))
+    br = next(s for s in plan.evidence if s.family == "breakout")
+    assert br.retired and br.attribution is not None and br.attribution.t_shrunk == pytest.approx(1.2)
+    assert plan.retired_floor == {"breakout": 1, "mean_reversion": 0}      # not the rotation's mean_reversion
+    assert any("best post-retirement evidence" in r for f in plan.focus if f.family == "breakout" for r in f.reasons)
+    # a negative record is not evidence for exploring: the rotation decides
+    neg = _plan_with(retired=RETIRED, attribution=_report({"breakout": (400, -1.5)}, start=after))
+    assert neg.retired_floor == {"breakout": 0, "mean_reversion": 1}
+    # five retired families take one of the director's seven trials, not five
+    five = [RetiredFamily(family=f, hypothesis_id=f"R-0{i}", retired=RETIRED_ON, reason="r")
+            for i, f in enumerate(["breakout", "intraday_momentum", "mean_reversion", "session_open", "trend"])]
+    p7 = build_plan(NOW, FAMILIES, _rich_trials(), [], [], quarter_budget=20, monthly_total=48,
+                    trial_budget_per_month=0, floor=2, reserved_setting=13, retired=five)
+    assert p7.total_budget == 7 and sum(p7.budget[r.family] for r in five) == 1 and p7.budget["tsmom"] == 6
 
 
 def test_reinstatement_uses_only_trades_after_retirement_and_the_corrected_threshold():
@@ -433,7 +462,8 @@ def test_shadow_evidence_is_counted_once_attribution_tilts_only_without_shadow_z
     hot = [AgentEvidence(family="breakout", agent_id="breakout-a", status="shadow", n=400, sharpe_per_trade=0.5)]
     plan = _plan_with(retired=RETIRED, agents=hot)
     br = next(s for s in plan.evidence if s.family == "breakout")
-    assert br.shadow_z is not None and br.shadow_z >= 5 and br.retired and plan.budget["breakout"] == 1
+    assert br.shadow_z is not None and br.shadow_z >= 5 and br.retired and plan.budget["breakout"] == 0
+    assert plan.retired_explore == "mean_reversion"        # nor does it steer the shared exploration trial
 
 
 def test_director_cannot_spend_the_trials_reserved_for_the_preregistered_queue():
@@ -533,7 +563,8 @@ def test_missing_attribution_leaves_the_plan_unchanged(tmp_path):
     # a plan file written before these fields existed still loads
     old = json.loads(base.model_dump_json())
     for k in ("evidence_budget", "moves", "attribution_as_of", "attribution_note", "hypotheses_note", "quarter_reserved",
-              "reservation", "retired_floor", "reinstate_t", "hypotheses_sha256", "hypotheses_drift"):
+              "reservation", "retired_floor", "retired_explore", "reinstate_t", "hypotheses_sha256",
+              "hypotheses_drift"):
         old.pop(k)
     assert ResearchPlan.model_validate(old).moves == []
 
@@ -548,8 +579,54 @@ def test_research_director_job_reads_attribution_settings_and_the_reservation(tm
     assert plan is not None and plan.attribution_as_of is not None and plan.hypotheses_sha256 is not None
     assert plan.quarter_reserved == out["quarter_reserved"] == 13 and plan.hypotheses_drift == []
     assert plan.total_budget == DEFAULT_QUARTER_BUDGET - 13 == sum(plan.budget.values())
-    for f in ("breakout", "intraday_momentum", "mean_reversion", "session_open", "trend"):
-        assert plan.budget[f] == 1                         # retired in research.retired_families: the floor only
-    assert plan.budget["tsmom"] == 2 and sorted(out["retired"]) == sorted(plan.retired_floor)
+    retired = ("breakout", "intraday_momentum", "mean_reversion", "session_open", "trend")
+    assert sum(plan.budget[f] for f in retired) == 1       # retired: ONE exploration trial shared by all five
+    assert plan.budget["tsmom"] == 6 and sorted(out["retired"]) == sorted(plan.retired_floor)
+    assert out["retired_explore"] == plan.retired_explore and plan.retired_explore in retired
     # no promoted model version in this registry: the attribution rows are not out-of-sample evidence
     assert all(s.attribution is not None and s.attribution.n == 0 for s in plan.evidence)
+
+
+def test_monthly_grid_reserves_by_the_slots_quarter_not_the_wall_clock(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
+    ctx = _ctx(tmp_path, trial_budget_per_month=1, label_grid_paused=False, trial_budget_quarter=2,
+               reserved_trials_quarter=0)
+    slot = pd.Timestamp("2025-09-07 08:00", tz="UTC")
+    # two queued pre-registrations of the slot's quarter (2025Q3): the slot's reservation holds both trials
+    for i in (1, 2):
+        ctx.trials._append({"trial": i, "ts": "2025-08-01T00:00:00+00:00", "family": "tsmom", "config_hash": f"h{i}",
+                            "status": "preregistered", "config": {}, "results": {}})
+    out = monthly_research(ctx, slot)
+    assert ctx.trials.n_trials == 0 and "2 of the quarter held" in out["budget"]
+
+
+def _analyst_ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> JobContext:
+    monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
+    ctx = _ctx(tmp_path, trial_budget_quarter=20, reserved_trials_quarter=13)
+    for i in range(7):                                     # 20 - 13 reserved = 7 open trials, all spent
+        ctx.trials.record(agent_id="a", family="trend", config={"i": i}, feature_version="f1", rationale="r", results={})
+    return ctx
+
+
+def test_research_analyst_is_refused_once_only_reserved_trials_remain(tmp_path, monkeypatch):
+    ctx = _analyst_ctx(tmp_path, monkeypatch)
+    out = jobs.make_trial_runner(ctx)("trend", {}, "research analyst: one more idea")
+    assert "trial budget exceeded" in out["error"]
+    assert "13 of the quarter held for the pre-registered queue" in out["error"]
+    assert ctx.trials.n_trials == 7
+
+
+def test_research_analyst_runs_a_preregistered_trial_from_the_reservation(tmp_path, monkeypatch):
+    ctx = _analyst_ctx(tmp_path, monkeypatch)
+    cfg = dict(SPECIALISTS["trend"].default_config)
+    pre = ctx.trials.preregister(agent_id="a", family="trend", config=cfg, feature_version="f1", rationale="Q1 plan",
+                                 reading_rule="DSR >= 0.95")
+    run = jobs.make_trial_runner(ctx)
+    out = run("trend", {}, "research analyst: the pre-registered trend trial")
+    assert out.get("trial") == 8 and "error" not in out
+    row = ctx.trials.row(8)
+    assert row is not None and row["preregistration"]["trial"] == pre["trial"]
+    r = reserved_trials(ctx.trials._rows(), quarter_of(), 13)
+    assert (r.run, r.pending, r.reserved) == (1, 0, 12)
+    # that pre-registration is used: running the same config again is an ordinary trial, refused
+    assert "held for the pre-registered queue" in run("trend", {}, "again")["error"]

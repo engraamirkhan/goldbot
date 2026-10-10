@@ -75,15 +75,30 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `director_floor` is never tilted). (2) Retired families are governance in settings, `research.retired_families`
   (family, hypothesis id, retired date, reason, registry trials); `docs/research/hypotheses.md` section B mirrors it,
   a test checks they agree, and the plan stores the doc's sha256 and any drift (`hypotheses_drift`) but the doc never
-  moves a trial. A retired family keeps 1 exploration trial a quarter (less its trials this quarter, after the live
-  families' floors) and is reinstated only by attribution trades after its retirement date with shrunk t >= 2
+  moves a trial. The retired families SHARE one exploration trial a quarter (none once any of them had a trial this
+  quarter; after the live families' floors), given to the clean retired family with the best positive
+  post-retirement attribution, else by a deterministic rotation over quarters (`retired_explore` in the plan); each
+  is reinstated only by attribution trades after its retirement date with shrunk t >= 2
   Bonferroni-corrected for retired families x sources (5 families: 2.61). (3) The pre-registered queue is reserved
   first: `research.reserved_trials_quarter: 13` (docs/research/preregistration-2027Q1.md) minus trials run against a
   `preregistered` registry row, at least the queued preregistered rows; the director and `monthly_research` spend
   only budget - used - reserved, and the plan's grid share is 0 while `research.label_grid_paused` (it is). With
-  today's settings in Q1 2027: 20 - 13 = 7 planned trials, tsmom 2 (its floor) and 1 each for the five retired
-  families. The plan records `evidence_budget`, `moves`, `quarter_reserved`, `reservation`, `retired_floor` and
+  today's settings in Q1 2027: 20 - 13 = 7 planned trials, tsmom 6 and 1 shared by the five retired families. The
+  plan records `evidence_budget`, `moves`, `quarter_reserved`, `reservation`, `retired_floor`, `retired_explore` and
   `reinstate_t`.
+- Director re-verify fixes: the research analyst's trial runner (`jobs.make_trial_runner`) now spends only budget -
+  used - reserved like the director and the grid; only a trial of a configuration with a pending `preregistered` row
+  of the quarter may use the reservation, and its registry row is linked to that pre-registration
+  (`director.pending_preregistration`). `monthly_research` reads the reservation of the slot's quarter, not the wall
+  clock's.
+- CUSUM re-verify fixes (M24/M25): h now sits halfway between the chosen reachable value of the statistic and the
+  next higher one (`cusum.decision_interval`: same rate, but unrounded live sums can no longer turn a tie into an
+  alarm); the drift watch calibrates on the agent's actual taken p values resampled per trade (`ps`), not their mean.
+  Live false-alarm rates (production `residual_cusum` arithmetic, 200k paths, p spread per trade): 4.84-4.96% at p
+  0.35-0.55 and 0.30-0.70 (the mean-p h gave 5.7-6.3% at 0.35-0.55; champion watch 2.6-2.9%). The new-champion watch runs two weeks or the
+  first 12 trades, whichever is later, capped at 8 weeks, with h calibrated for that count (`cusum.watch_trades`);
+  when the count cannot reach h it reports `cannot_alarm` (job output, `state/model_watch.json`, health warning
+  `model_watch`) instead of a silent "ok": such slow agents rely on drift_watch and the drawdown halt.
 - Approvals across processes (`telegram/bus.py`): engines, the API and the Telegram service are separate services,
   so engines publish proposals to `state/approvals/pending/`, the dashboard or Telegram writes a decision file
   (created exclusively: first decision wins), and the engine applies it on its next tick, re-running the RiskGate,

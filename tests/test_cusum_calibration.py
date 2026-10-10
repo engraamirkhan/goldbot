@@ -122,3 +122,112 @@ def test_residual_cusum_and_cusum_alarm_use_the_calibrated_h():
 def test_settings_carry_k_and_the_design_false_alarm_rate():
     d = load_settings().drift
     assert d.cusum_k == 0.5 and d.cusum_false_alarm == 0.05
+
+
+# ---------------------------------------------------------------------------------------------- re-verify (M25)
+def test_h_sits_halfway_between_the_chosen_reachable_value_and_the_next_higher_one():
+    peaks = np.array([0.0] * 90 + [1.0] * 4 + [2.0] * 3 + [3.0] * 3)      # P(>0)=10%, P(>1)=6%, P(>2)=3%, P(>3)=0
+    assert cusum.decision_interval(peaks, 0.05, z=0.0) == 2.5             # same 3% rate as 2.0, off the lattice
+    assert cusum.decision_interval(np.array([0.0] * 99 + [1.0]), 0.0, z=0.0) == 1.5   # above the top value
+    for p in (0.4, 0.5):
+        h = cusum.calibrated_h(5.0, p=p)
+        win, loss = cusum.residual_values(p)
+        # no reachable value of S within a tiny perturbation of h (S moves in steps of -loss - k and -win - k)
+        steps = {round(a * (-loss - 0.5) - b * (win + 0.5), 6) for a in range(80) for b in range(80)}
+        assert min(abs(h - s) for s in steps if s >= 0) > 1e-3
+
+
+def _agent_ps(lo: float, hi: float) -> list[float]:
+    """An agent's taken p values spread evenly over [lo, hi] in 0.001 steps (off the 0.01 calibration buckets)."""
+    return [float(x) for x in np.linspace(lo, hi, 201)]
+
+
+LIVE_PATHS = 200_000        # rate estimate: standard error ~0.05 pp at 5%
+LIVE_CHECKED = 4_000        # paths also run one by one through the production function, decision for decision
+T_R = 1.5                   # target distance in stop units (R): win +1.5 R, loss -1 R
+
+
+def _live_rate(ps: list[float], n: int, h: float, watch: bool = False, seed: int = 31) -> float:
+    """In-control false-alarm rate of the LIVE code, production float arithmetic (no rounding), each trade's p drawn
+    from the agent's taken p values and its outcome a Bernoulli(p) barrier hit. Drift watch (watch False): residuals
+    standardised exactly as drift.trade_residuals does, through drift.residual_cusum with h. Champion watch (watch
+    True): R returns standardised by the backtest's moments at the marginal hit rate, through
+    promotion.cusum_alarm with h. The first LIVE_CHECKED paths go through the production function itself and must
+    give the same decision as the vectorised replica, which then measures the rate on LIVE_PATHS paths."""
+    rng = np.random.default_rng(seed)
+    arr = np.asarray(ps)
+    hit = float(arr.mean())
+    mean, std = hit * T_R - (1 - hit), float(np.sqrt(hit * (1 - hit)) * (T_R + 1))
+    s = np.zeros(LIVE_PATHS)
+    alarm = np.zeros(LIVE_PATHS, dtype=bool)
+    kept = np.zeros((LIVE_CHECKED, n))
+    for t in range(n):
+        p = arr[rng.integers(0, len(arr), LIVE_PATHS)]
+        r = np.where(rng.random(LIVE_PATHS) < p, T_R, -1.0)
+        if watch:
+            x = r
+            s = np.maximum(0.0, s + (mean - r) / std - 0.5)
+        else:
+            x = (r - (p * T_R - (1 - p))) / (np.sqrt(p * (1 - p)) * (T_R + 1))
+            s = np.maximum(0.0, s - x - 0.5)
+        kept[:, t] = x[:LIVE_CHECKED]
+        alarm |= s > h
+    for i in range(LIVE_CHECKED):
+        row = [float(v) for v in kept[i]]
+        live = cusum_alarm(row, mean, std, h=h) if watch else residual_cusum(row, 0.5, h)[0]
+        assert live == bool(alarm[i])
+    return float(alarm.mean())
+
+
+@pytest.mark.parametrize("spread", [(0.35, 0.55), (0.30, 0.70)])
+@pytest.mark.parametrize("trades_per_week", [2.0, 5.0, 15.0])
+def test_live_residual_cusum_false_alarm_rate_with_per_trade_p_is_at_most_five_percent(spread, trades_per_week):
+    ps = _agent_ps(*spread)
+    h = cusum.calibrated_h(trades_per_week, 0.5, p=float(np.mean(ps)), ps=ps)      # what drift.assess passes
+    rate = _live_rate(ps, _n(trades_per_week), h)
+    assert 0.04 <= rate <= 0.05
+
+
+@pytest.mark.parametrize("spread", [(0.35, 0.55), (0.30, 0.70)])
+@pytest.mark.parametrize("trades_per_week", [2.0, 6.0])
+def test_live_champion_watch_false_alarm_rate_with_per_trade_p_is_at_most_five_percent(spread, trades_per_week):
+    ps = _agent_ps(*spread)
+    n = cusum.watch_trades(trades_per_week)
+    assert n is not None
+    h = cusum.calibrated_h(trades_per_week, 0.5, p=float(np.mean(ps)), trades=n)   # what model_watch passes
+    assert _live_rate(ps, n, h, watch=True, seed=37) <= 0.05
+
+
+def test_calibration_resamples_the_taken_p_values_not_their_mean():
+    ps = _agent_ps(0.35, 0.55)
+    for tpw in (2.0, 5.0, 15.0):
+        n = _n(tpw)
+        h_mean = cusum.calibrated_h(tpw, p=0.45)                          # the re-verify's finding: 5.7-6.3% live
+        h_ps = cusum.calibrated_h(tpw, p=0.45, ps=ps)
+        assert h_ps > h_mean
+        assert _live_rate(ps, n, h_mean) > 0.05 >= _live_rate(ps, n, h_ps)
+    # p values in one 0.01 bucket are the single-p calibration exactly; the histogram is the cache key
+    assert cusum.calibrated_h(5.0, p=0.4, ps=[0.401, 0.399, 0.4]) == cusum.calibrated_h(5.0, p=0.4)
+    assert cusum.p_histogram([0.401, 0.399, 0.452]) == ((0.4, 2), (0.45, 1)) and cusum.p_histogram([]) is None
+    assert cusum.alarm_rate(cusum.calibrated_h(5.0, p=0.5, ps=_agent_ps(0.3, 0.7)), 0.5, 65, ps=_agent_ps(0.3, 0.7)) < 0.052
+
+
+def test_champion_watch_runs_two_weeks_or_twelve_trades_whichever_is_later_capped_at_eight_weeks():
+    assert cusum.watch_trades(10.0) == 20                 # two weeks already hold more than 12 trades
+    assert cusum.watch_trades(2.0) == 12                  # 2 a week: 4 in two weeks, so the first 12 trades
+    assert cusum.watch_trades(2.5) == 12
+    assert cusum.watch_trades(1.0) == 8                   # 8-week cap: 8 trades
+    assert cusum.watch_trades(None) is None and cusum.watch_trades(0.0) is None
+    # at 2-2.5 trades a week a 12-trade watch can alarm; the old two-week window (4-5 trades) could not
+    for tpw, p in ((2.0, 0.45), (2.5, 0.4)):
+        n12, n2 = cusum.watch_trades(tpw), _n(tpw, cusum.WATCH_WEEKS)
+        assert n12 is not None and n2 <= 5
+        h12 = cusum.calibrated_h(tpw, p=p, trades=n12)
+        assert cusum.can_alarm(h12, n12, 0.5, p)
+        assert not cusum.can_alarm(cusum.calibrated_h(tpw, p=p, weeks=cusum.WATCH_WEEKS), n2, 0.5, p)
+        assert cusum.alarm_rate(h12, 0.5, n12, p=p) <= 0.05
+        assert cusum.alarm_rate(h12, 0.5, n12, p=p, p_true=p - 0.2) > 0.2      # a real decay is now catchable
+    # too few trades even at the cap: no alarm is reachable, which the watch must report, not hide
+    n = cusum.watch_trades(0.5)
+    assert n == 4 and not cusum.can_alarm(cusum.calibrated_h(0.5, p=0.4, trades=n), n, 0.5, 0.4)
+    assert cusum.can_alarm(4.0, 4, 0.5, None)             # normal values: always reachable
