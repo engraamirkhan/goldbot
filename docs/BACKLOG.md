@@ -32,6 +32,15 @@ Status: ready / in progress / in review / done / rejected.
 | 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | in review (gap_watch and the 4h retrain path done; 1d research-only) |
 | 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | done (2026-10-10; promotion gate once 90 days of broker M1 exist) |
 | 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | in review |
+| 16 | Swap in the live EV check (playbook G-1) | Capital management, costs · RUN | S | proposed |
+| 17 | Holiday, daily-reopen and Monday-open entry rules (G-2) | Operational risk · RUN | S–M | proposed (owner: windows) |
+| 18 | Tier-2 event blackout and proximity feature (G-3) | Market and macro preparation · RUN | S | proposed (owner: adopt) |
+| 19 | Open-risk (heat) cap and same-direction stacking (G-4) | Capital and drawdown management · RUN | S | proposed (owner: value) |
+| 20 | Drawdown / risk-of-ruin Monte Carlo report (G-5) | Capital and drawdown management · RUN | S | proposed |
+| 21 | Per-agent loss-streak and entry-rate throttle (G-6) | Discipline (system analogue) · RUN | S | proposed (owner: thresholds) |
+| 22 | Min-lot sizing-feasibility report (G-7) | Position sizing · RUN | S | proposed (owner: account size for H-01) |
+| 23 | MAE/MFE in closed-trade and shadow records (G-9) | Post-trade review · FIND | S | proposed |
+| 24 | DST-aware sessions and deterministic calendars (D-1, D-2) | Idea generation (honesty) · FIND | M | proposed |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -218,6 +227,30 @@ Acceptance: `/mode auto` is refused until 100 proposals with no RiskGate breach 
 distinguishable difference between approved and rejected outcomes. The test covers 99 vs 100 and the difference
 test on both sides. The offer is a message. Switching still needs TOTP. Row: A10.
 
+### 16–24. From the XAUUSD trader playbook (strategy researcher, 2026-10-10)
+Source and evidence: `docs/research/xauusd-trader-playbook.md` section 6 (gap ids in brackets). Ranked by the
+researcher. The product owner re-ranks against items 1–15. None of these uses trial budget. Engine, risk and
+execution items need trading-safety review. Feature items need quant review.
+- **16 (G-1).** The gate's EV adds expected swap in ATR (side, nights implied by `max_bars`, triple Wednesday).
+  Test: a 4h long whose EV is positive before swap and negative after is refused; shorts are unchanged.
+- **17 (G-2).** Holiday calendar (US, UK, JP, CN, 24 Dec–2 Jan, early closes): no entries on those days. No
+  entries for 15 min after each daily reopen and 30 min after the weekly open. Fake-clock tests. Exits are untouched.
+- **18 (G-3).** Tier-2 USD events (PPI, retail sales, ISM, GDP, JOLTS, claims, FOMC minutes, Fed chair) get a
+  −5/+15 min entry blackout from config, plus a `min_to_next_tier2` feature. A test per tier.
+- **19 (G-4).** Sum of open risk in R per account and combined ≤ the configured cap. Same-side positions of
+  different agents count as one bet. Gate test on each side of the cap.
+- **20 (G-5).** Monthly bootstrap of shadow or backtest R at live risk settings: P(8%), P(12%), P(weekly cap) in
+  6 and 12 months. Reporting only. Golden test on a fixed seed.
+- **21 (G-6).** After 3 consecutive full stop-outs in a risk day, or more than N entries in a session, an agent
+  makes no entries until the next session. Logged and alerted. Never affects exits.
+- **22 (G-7).** `run.py sizing-feasibility`: per agent, the minimum equity at which the minimum lot stays within
+  1.2× target risk at the current ATR and phase risk rate. Written as phase-gate evidence.
+- **23 (G-9).** Maximum adverse and favourable excursion in R on every shadow and closed trade, shown by exit
+  type in attribution.
+- **24 (D-1, D-2).** Session windows, zones and cost-table sessions follow London and New York local time.
+  Deterministic calendars become PIT features: holidays, COMEX option expiry and first notice, Lunar New Year,
+  Indian festivals, month and quarter end. Truncation test. Must land before H-04 and H-14 run.
+
 ## Needs the owner
 These are never decided by the product owner or by agents.
 - **Automatic deployment to the trading servers (CD).** CI runs on every change. Deploying to the Oracle VMs
@@ -231,6 +264,9 @@ These are never decided by the product owner or by agents.
   toolkit trials that compete with item 5 for Q1's 20.
 - **Going live.** Demo until the paper → tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
   and the typed phrase. Item 8 computes whether the gate is met. It never flips it.
+- **Trader-playbook risk policy** (items 17–22; playbook section 7): the account size or tiny-live risk that
+  lets H-01's minimum lot fit, the weekend rule (recommend flat for intraday families), tier-2 and holiday windows,
+  throttle and heat-cap values, edge-linked sizing (G-10).
 - Also yours: sign off the P7 threshold values (item 8); commit or approve the first measured cost table until
   item 2 lands; VM provisioning and every credential (item 1).
 

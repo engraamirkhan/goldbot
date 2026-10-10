@@ -35,6 +35,15 @@ registry trial #21. Holdout 2025-10-01..2026-09-30 stays untouched.
 | 12 | H-12 | **ETF flow pressure** (GLD Δ1/Δ5): continuation for 1–2 days, reversal at 3–5 days | proposed (feature only) | Price pressure (thesis-level evidence) | E | 1d | Small | 0 (feature) |
 | 13 | H-13 | **Volatility-forecast cost filter**: skip any candidate whose HAR-forecast move is < 3× its round trip | proposed (infrastructure) | Costs decide most outcomes | D | all | Raises net R per trade by removing trades that cannot pay their costs. Not alpha | 0 (applied to every family; report net R with and without) |
 | 14 | H-14 | **15m scalping set** (owner request): liquidity-sweep fades, stop-cluster/round-number reactions, session-open flow and news-jump continuation on 15m, each gated by expected move ≥ 3× round-trip cost | proposed; screen in a 15m discovery trial first | Microstructure mechanisms (Osler 2003/2005); costs dominate at 15m (0.2–0.4 R), so only cost-gated setups | D | 15m | Must show gross edge several times cost; Q4 15m families showed none | 1 (15m discovery) + survivors |
+| 15 | H-15 | **Liquidation rebound** (playbook C-1): after a day when gold falls *with* the S&P 500 and the VIX jumps (dash for cash), long gold 5–15 days. Distinct from H-07, which assumes haven buying | proposed; feature-first (playbook D-8 into H-02) | Forced cross-asset deleveraging sells gold, and it usually recovers (2008, Mar 2020). Mar 2026 is in the holdout and is not usable as evidence | D, F (VIXCLS, SP500) | 1d | Unknown; few events (< 1,000, owner ruling on the daily floor) | 0 until it survives H-02 |
+
+Folded into existing rows by `xauusd-trader-playbook.md` (no new trials):
+- $100 round-number step: H-05.
+- Dovish-FOMC continuation (Awartani et al. 2024): H-11.
+- Seasonal demand windows: H-02 features.
+- LBMA auction and 08:30 ET window scalps: H-14.
+- Exit variants: an H-01 survivor only.
+- BTC as a gold signal: not to be added (unstable relation, no mechanism).
 
 ## B. Retired: do not re-test without new evidence
 
