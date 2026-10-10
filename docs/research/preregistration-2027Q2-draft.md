@@ -1,0 +1,278 @@
+# Pre-registration: Q2 2027 research trials (DRAFT, not frozen: freeze by 2027-03-31)
+
+Written 2026-10-10 by the research director, base `1bcfe1c`, before any of these configurations has been run on data
+and before any Q1 2027 result exists. Agenda and ranking: `research-plan.md`. Hypothesis rows: `hypotheses.md` A
+and A2. Evidence: `opportunity-days.md` ("OD"), `xauusd-trader-playbook.md` ("playbook"), `state-of-the-art.md`.
+
+**This is a draft.** No registry row is written, no trial is reserved in code, no budget is spent, the holdout
+(2025-10-01 .. 2026-09-30) is not read, and the Q1 2027 pre-registration is not changed. Every rule below may still be
+amended before the freeze; once a trial's `preregistered` row is written (with this file's freeze commit), its rule
+is fixed and a change after seeing data makes it exploratory.
+
+## Fixed for every trial (as Q1 unless stated)
+
+- **Data:** Dukascopy 1m XAUUSD 2010-01 .. 2025-09 (release `data-v1`); `macro-v1` (first releases, `asof_join` on
+  `available_utc`) only where stated; the historical tier-1 schedule **E-1** (below) where stated. The holdout is
+  never loaded; every label that has not exited before 2025-10-01 is dropped (`pipeline.prepare`).
+- **Costs:** the measured `costs-v1` table if published at run time, otherwise the settings priors:
+  `extra_cost_usd = 0.37 $/oz` round trip beyond the spread (2 × slippage 0.15 + 2 × commission 3.5 USD per lot side
+  / 100 oz, `execution.costs.settings_extra_cost_usd`), with the spread paid in the labels (ask in, bid out). The
+  report states which. **Swap:** every Q2 trading rule is flat by 16:30 New York, before the 17:00 New York
+  rollover, so `swap_nights` is 0 by construction; each specialist carries a test that no trade is held through the
+  server rollover in either DST regime (as `asia_drift`).
+- **Statistics (as frozen for H-01):** t = mean R / sd(R, ddof 1) × √n; a positive year has ≥ 10 trades and positive
+  mean net R; net tests use rule-only net R over every candidate, one position at a time; any screen below its event
+  floor is `inconclusive (event floor)` whatever its sign or t, charged and recorded, and neither retires nor
+  continues the hypothesis.
+- **Event floor:** `research.screen_min_events` (1,000) for every intraday rule. The daily override does not apply.
+- **DSR trial count:** `registry.n_trials_effective` + 1 at run time = 20 (Q4 2026) + every Q1 and Q2 trial recorded
+  so far + H-02's K_eff (Q1, conservative default: added to every later trial) + H-14's K_eff once it has run.
+- **Feature versions:** `f-079deacc61` (sessions v2, DST-aware) for 15m rules and discovery; `f-f999b359e2` where
+  the macro drivers are used (H-16 only). The opt-in `day_type` family (BACKLOG 30a) is outside the default hash, so it
+  does not move either version; its own family version is recorded on each row that uses it. A run on another
+  version is recorded with a `deviation` (`TrialRegistry.record`), per ADR 0006.
+- **Opportunity-day report (BACKLOG 33)** is printed for every trade-producing trial: £/day distribution re-sized to
+  a £1,000 GBP account (0.01 lot or refused), opportunity days captured (ADR 0004 §6 definition and OD §3.4's stricter
+  one), stand-aside accuracy, drawdown. **Reported, never part of a reading rule.**
+- **£1,000-tradeable share** (diagnostic): the share of entries the £1,000 account could take today: stop ÷ entry
+  price ≤ 0.32% (stop ≤ $13.30 at $4,150, ADR 0004 §2), so historical trades are judged at today's price level.
+- **Overlays (0 trials):** H-13 (net R with and without the volatility-forecast cost filter) and H-19 (net R by
+  HAR-score band low / mid / high, cuts at the 33rd and 80th percentiles of the current fit's in-sample fitted
+  values, and the effect of skipping the low band) on every trade-producing trial.
+
+## Order and budget (20 trials)
+
+| # | ID | Trial | Trials | Depends on | Why it earns the slot |
+|---|---|---|---|---|---|
+| 1 | H-13, H-19 | Overlays on every trial below | 0 | 30a (HAR column) | Costs decide most outcomes at 15m; standing aside on quiet days is the cheapest drawdown control |
+| 2 | H-16 | Opportunity score vs HAR-only range forecast | 1 | 30a, E-1, E-4, `macro-v1` | The one forecastable thing about gold's day (R evidence); decides which range inputs the allocator uses (30b) |
+| 3 | H-17 V0 | Trend-day continuation, fixed target | 1 | **quant ruling Q-1**, 30a, 31, E-1, E-3; event count ≥ 1,000 | Only Q2 idea that can put a 15m trade on the £1,000 demo and aims at the £50-day mechanism; V0 is the control for V1 |
+| 4 | H-17 V1 | Trend-day continuation, scale-and-run | 1 | as #3, plus 32 before any shadow/live use | Tests whether a runner exit pays on range-selected days, which is the best-day KPI's only route at £1,000 |
+| 5 | H-14 | 15m scalping discovery, cost-gated, survivor unit = group | 1 | E-1, E-2, 31; **quant ruling Q-3** | Owner request; screens every 15m mechanism (sweeps, levels, session flow, jumps) for one trial instead of one each |
+| 6–7 | H-14 survivors | One model trial per surviving group | ≤ 2 | H-14 verdict | Only if a group survives; otherwise both slots return to reserve |
+| 8 | H-18 | Post-blackout event continuation | 1 | **owner ruling O-1** (event floor) or tier-2 pooling (BACKLOG 18, D-4), E-1, E-3, 31 | Event days are opportunity days (R); needs no consensus feed, unlike H-11. Withdrawn before freeze if no ruling |
+| — | Q1 follow-ups | Reserved for Q1 survivors (below) | 6 | Q1 verdicts | Survivors seed the next generation before new ideas |
+| — | Free reserve | Not spent unless a rule below calls for it | 7 | — | Holdout scorings of any Q2 passer, confirmations |
+
+Planned 4 (#2–#5) + conditional ≤ 3 (#6–#8) + Q1 follow-ups 6 + free reserve 7 = 20.
+
+**Q1 follow-up reserve (6), in priority order.** Each is pre-registered only after the Q1 evaluator verdict it
+depends on, and before it runs:
+1. H-01 **continue**: pre-registered model research on slow TSMOM that meets the unchanged design gates (1).
+2. H-01 **continue**: exit variant C-5 (breakeven or wider trail) for the slow-TSMOM survivor (1).
+3. H-04 **continue**: model research with a time-exit meta-label (1).
+4. H-02 survivors that Q1's rows 6–9 could not fund (≤ 2).
+5. A holdout scoring (`--score-holdout`) of any Q1 gate passer (1; a holdout scoring is a charged trial).
+If every Q1 hypothesis fails or is inconclusive, the six slots join the free reserve by a written note from the
+research director after the last Q1 verdict.
+
+**Order of runs.** H-16 first (its verdict decides 30b, not H-17). H-17 V0 and V1 together. H-14 at any time; its
+survivor trials after its verdict. H-18 last, only if ruled.
+
+**Reservation in code (design note for the freeze).** `research.reserved_trials_quarter` holds slots only for queued
+`preregistered` rows written before 2027-04-01 (`TrialRegistry.preregister(..., queue=True,
+target_quarter="2027Q2")`). Rows written once Q2 has started (H-14 survivors, most Q1 follow-ups) cannot be queued,
+cannot draw on the reservation, and must fit in 20 − used − reserved (`TrialRegistry.check_budget_reserved`,
+`director.reserved_trials`: reserved = max(setting − queued rows run, pending)). A setting above the number of queued
+rows therefore locks the excess for the whole quarter. **Recommendation:** set the Q2 value to the number of queued
+rows at freeze (4, or 5 with H-18). The in-quarter allocations above are then protected only by discipline; if any
+automated path (the research director's pool, the analyst) can spend the unreserved remainder in Q2, it must be
+paused or capped for the quarter (engineering item E-5). The same arithmetic applies to Q1's setting of 13 against
+its queueable rows; that is flagged to the program director, not changed here.
+
+## Trials and reading rules
+
+### H-16 Opportunity score (range forecast; no trades)
+
+- **Unit:** one row per trading day D with a London session in the data, 2010-01-04 .. 2025-09-30. Out-of-sample
+  rows from the first month with ≥ 500 prior rows (about 2012-01) to 2025-09.
+- **Target:** y_D = ln(W_D ÷ A_D). W_D = high − low of the 15m mid bars from 08:00 London to 16:30 New York on D
+  (DST-aware local clocks, the window the Q2 rules trade). A_D = mean of the last 20 stub-free daily true ranges
+  (mid; Friday stubs dropped as `time_series_momentum.drop_stub_days`), the value visible at 06:30 UTC on D.
+- **Baseline (HAR-only):** OLS of y_D on ln of the mean of w_d = W_d ÷ A_d over the previous 1, 5 and 22 trading
+  days, plus an intercept.
+- **Full score:** the baseline plus, all visible at 06:30 UTC on D:
+  - ln(GVZ ÷ YZ20 annualised), GVZ by `asof_join` on `available_utc` (D−2's close at the London open; OD 1.8); a day
+    with no GVZ observation in the last 5 business days is dropped from **both** models' evaluation (count reported);
+  - number of tier-1 releases scheduled on D (E-1; scheduled times only);
+  - ln(prior stub-free daily range ÷ A_D); NR4, NR7 and inside-day flags on stub-free daily bars (H-20);
+  - |reopen gap| ÷ A_D at the last reopen before 06:30 UTC (the Sunday reopen on Mondays, else the daily reopen).
+  - No direction term, no `side`, nothing after 06:30 UTC on D.
+- **Fitting:** OLS refitted at each calendar month start on every prior row (expanding, ≥ 500 rows, 1-day purge).
+  Predictions for the month use that fit. *Deviation from the default 1d walk-forward (60/12/12 expanding), to be
+  confirmed by the quant reviewer (Q-2):* the models have 4 and 11 coefficients, 500 days is ample, and a monthly
+  refit gives about 3 more out-of-sample years (from 2012 instead of 2015) than the default window; H-17 uses the
+  same scheme.
+- **Reading rule** (from `hypotheses.md` A2, unchanged): **continue** if, pooled out of sample, Spearman
+  ρ(full, y) − ρ(HAR, y) ≥ 0.05, AND the mean W/A of the full score's top quintile is ≥ 1.5 × its bottom quintile's.
+  **Fail:** the day factor (30b) uses HAR alone, and GVZ, events and compression are retired as range inputs.
+  Reported, not in the rule: the 20-day block-bootstrap 95% interval of the ρ difference; each input's drop-one
+  contribution; the London+60 and NY+60 refreshes with the noise ratio (H-21) as diagnostics.
+- **Counting:** one trial (counted for honesty though it tests range, not returns). It produces no trades, so no
+  DSR, no event floor, and no opportunity-day report.
+- **Events owed from data before the freeze:** the number of evaluable days (expected ≈ 3,440 out of sample by the
+  calendar: 13.75 years × ~250; minus missing-GVZ days and data gaps).
+- **Feature version:** `f-f999b359e2` (macro drivers) plus `day_type`'s recorded family version.
+
+### H-17 Trend-day continuation with a runner (V0 and V1: two trials)
+
+- **Specialist:** `trend_day` (E-3), timeframe 15m, rule-only screening family like `asia_drift` (no model stage,
+  never a founder until it passes, refused by the RiskGate until BACKLOG 32 lands).
+- **Day condition (HAR-only, by design):** a day is *high* when H-16's **baseline** forecast for D (fitted exactly as
+  in H-16) is at or above the median of the current fit's in-sample fitted values. The baseline, not the full score,
+  is used so that H-17's configuration does not depend on H-16's verdict (one config hash, written before either
+  runs) and needs no macro data. *This deviates from `hypotheses.md` A2 ("H-16's frozen model"); the full-score
+  version is a Q3 neighbour if H-16 passes.* Median of fitted values, not a trailing-250-day rank, so the condition
+  exists from the first out-of-sample month.
+- **Reference open:** O_D = open of the 15m bar starting 08:00 London.
+- **Noise boundary:** for a bar closing at London local time τ, B = mean over the previous 14 trading days of
+  |close at τ − O| on those days (days without that bar are skipped; fewer than 14 available → no entry).
+- **Entry:** the first 15m bar of D whose close falls in [09:00 London, 10:30 New York] (each in its own DST-aware
+  clock) with |close − O_D| > 1.0 × B; side = sign(close − O_D); entry at that close. At most one trade a day. No
+  entry when the bar is within a tier-1 blackout (−15 / +30 min, E-1), or when the session calendar is closed.
+- **Stop:** 1.5 × Wilder ATR(14) of the 15m mid bars at the entry bar's close, frozen; R = that distance.
+- **V0 (fixed):** target 3.0 ATR; otherwise flat at the first bar close at or after 16:30 New York.
+- **V1 (scale-and-run):** 50% off at 2.0 ATR; chandelier trail 2.5 ATR from the best price, armed at 1.5 ATR (ATR
+  frozen at entry); cap target 10 ATR; flat at 16:30 New York. R per trade is the size-weighted blend of both parts.
+  Both variants run through `policy_step` (BACKLOG 31: `flat_at_local`), so labels, shadow and live agree.
+- **Events:** high days only. The same rule on low days is computed and reported as *low half (shadow)*; it is not
+  part of the trial's event count and is needed by the reading rule.
+- **Reading rule** (A2, unchanged in substance; written before any outcome):
+  - V0 and V1 each **pass** their screen if gross t ≥ 2.0 on ≥ 1,000 events, net mean R > 0, and ≥ 3 positive net
+    years including 2021 or 2022.
+  - **Continue H-17 with the runner** if V1 passes, V1 net mean R ≥ V0 net mean R, AND the low half's gross mean R is
+    below the high half's.
+  - **Continue with fixed exits only** if V0 passes, the low half is below the high half, and V1 fails or is below V0
+    (runner retired for this family).
+  - **Retired as a repeat of R-02 / R-05** if the low half's gross mean R ≥ the high half's, whatever else holds.
+  - Fewer than 1,000 events: inconclusive (event floor). "Continue" permits only pre-registered model research or
+    shadow; it is not a promotion.
+- **Events owed from data before the freeze (events only, no labels or returns):** high days with a qualifying
+  breach, 2012-01 .. 2025-09. Calendar upper bound ≈ 1,720 (half of ≈ 3,440 days); the OD estimate is 1,000–1,500.
+  **If the count is below 1,000, both H-17 rows are withdrawn before the freeze (no trial spent) and their slots go
+  to the free reserve;** the median cut is not moved to raise the count.
+- **Feature version:** `f-079deacc61` plus `day_type`'s recorded family version (HAR column only).
+- **Retired-family overlap (quant ruling Q-1, needed before the freeze).** H-17 re-uses ideas of R-02 (session-open
+  breakout, 15m) and R-05 (intraday momentum). Its claim to be new evidence is the ex-ante range condition and the
+  runner exit (OD §5.1). If the quant reviewer rules it a retired-family re-test, H-17 can run only through the
+  shared retired-family exploration trial, which the director's code allocates (`research/director.py`), and both
+  rows are withdrawn.
+
+### H-14 15m scalping discovery (one trial)
+
+- **Spec (E-2):** a 15m two-sided discovery candidate set, run as `research_pass.py --discover` on that spec.
+  - Candidates: every 15m bar close from 08:00 London to 16:00 New York (DST-aware), outside the tier-1 blackout
+    (−15 / +30 min, E-1) and the first 15 min after the daily reopen, and only where the H-13 cost gate holds: the
+    3.0 ATR target ≥ 3 × the round-trip cost in USD (spread from `costs-v1` for the session, else the prior, plus
+    0.37 $/oz), i.e. ATR(15m) ≥ the round trip.
+  - Both sides are labelled for every candidate (two rows, `side` the 40th input), so the label depends on no primary
+    (survey 4b). Both rows of a bar always fall in the same fold and are purged together.
+  - Label: triple barrier, target 3.0 / stop 1.5 × Wilder ATR(14) of 15m mid bars at the candidate close, time
+    barrier 16 bars, and flat at 16:30 New York (`flat_at_local`, BACKLOG 31).
+- **Features:** every registered default family on `f-079deacc61` (trader toolkit, levels and sweeps, sessions v2,
+  volatility estimators, structure), grouped by family (`--families`). No macro, positioning or `day_type` columns:
+  slow context was screened at 4h by H-02, and keeping them out holds the group count down. If playbook D-5 ($100
+  step, LBMA auction and 08:30 ET windows) lands before the freeze, this line is amended to include it.
+- **Discovery config** (aligned with H-02's frozen row; any other difference is listed at the freeze):
+  `{"n_subsamples": 50, "subsample_frac": 0.5, "survivor_unit": "group", "method": "lgbm", "freq_threshold": 0.6,
+  "stability_threshold": 0.7, "permutation": true, "seed": 0}`. Walk-forward: the 15m window (train 24 / test 3 /
+  step 3 months, purge 2 days, embargo 1 day).
+- **Survivor unit = group (quant ruling Q-3).** At 15m the question is which mechanism (sweep, level, session flow,
+  jump) carries information, not which column, and K_eff = groups screened (about 10–15) instead of features (about
+  300). Under the conservative default every later trial's DSR count carries this K_eff, so the feature unit would
+  add ~300 to every trial for the rest of the program.
+- **Reading rule:**
+  - A group **survives** if it is selected in ≥ 70% of folds (frequency ≥ 0.6) AND the walk-forward on the selected
+    set has out-of-fold AUC ≥ 0.53 with block-bootstrap lower 95% bound > 0.50 AND the pre-set rule (trade when p ≥
+    the training fold's top-tercile cut, one position at a time, both sides) has net mean R > 0 on ≥ 1,000 events.
+  - At most two surviving groups (highest stability first) earn rows 6–7.
+  - **Stop** if AUC < 0.52: the 15m bulk features carry no directional information; they stay as cost and risk
+    filters only, rows 6–7 are cancelled, and the plan records that 15m at £1,000 has no research path besides H-17
+    and H-18. AUC 0.52–0.53: inconclusive, rows 6–7 cancelled.
+- **Survivor trials (rows 6–7), pre-registered after H-14's verdict and before running:** a walk-forward model on
+  H-14's label and candidates with inputs = the surviving group's features + `side` (≤ 40), the unchanged design
+  gates (≥ 1,500 candidates, ≥ 60 per complete test fold, positive in ≥ 3 years incl. 2021 or 2022, DSR ≥ 0.95 on
+  ≥ 200 model-filtered trades with the real count), tagged `from_discovery`, so promotion also needs one holdout
+  scoring (from the free reserve).
+- **Events owed from data before the freeze:** the number of candidate bars after the cost gate and blackouts
+  (calendar upper bound ≈ 4,000 days × ~52 bars over 13 hours; the cost gate is expected to remove a larger share
+  of 2012–2019, when cost in R was 2–3×
+  higher, SoA A7), and the number per year.
+- **Feature version:** `f-079deacc61`.
+
+### H-18 Post-blackout event continuation (one trial, conditional)
+
+- **Specialist:** `event_continuation` (E-3), 15m, rule-only screening family.
+- **Events (E-1):** scheduled US NFP, CPI, PCE and FOMC statement times, 2010-01 .. 2025-09, at whatever scheduled
+  time each had (FOMC was 12:30 / 14:15 ET before 2013, 14:00 ET after). One trade a day at most: the first event of
+  the day; later same-day events are skipped and counted.
+- **Entry:** P0 = open of the 15m bar starting at the scheduled time; the entry bar is the 15m bar closing at release
+  + 30 min (the end of the gate's blackout). M = entry close − P0. Enter if |M| > 1.0 × ATR_pre, where ATR_pre is the
+  Wilder ATR(14) of 15m mid bars at the close of the bar before the release bar; side = sign(M).
+- **Stop:** 1.5 × ATR(14) at the entry bar's close (the system's stop rule; it includes the release bars).
+- **Exit:** V1 as H-17, flat at 16:30 New York.
+- **Event floor:** 1,000 unless the owner rules otherwise (O-1). The calendar count is ≤ 44 a year, ≈ 690 in the
+  window **before** the |M| filter, so under today's floor H-18 can only be inconclusive. **Its row is written only if
+  O-1 is ruled or tier-2 pooling exists; otherwise it is withdrawn before the freeze and the slot goes to reserve.**
+- **Reading rule:** **continue** if gross t ≥ 2.0 on at least the floor's events, net mean R > 0, and ≥ 3 positive
+  net years incl. 2021 or 2022. **Stop** (event continuation retired) if net mean R ≤ 0 or the screen fails on at least
+  the floor's events. Otherwise inconclusive.
+- **Events owed from data before the freeze:** events with the entry bar present, and how many pass |M| > 1.0 ATR
+  (events only: the sign and size of M at +30 min are inputs, not outcomes; nothing after the entry close is read).
+- **Distinct from:** H-11 (needs a consensus surprise), R-08 pre-FOMC drift (before the release).
+- **Feature version:** `f-079deacc61`.
+
+## Dependencies
+
+| Kind | Item | Trials |
+|---|---|---|
+| Owner | **O-1** event floor for scheduled-event families (options in `research-plan.md` §9; recommendation: pool with tier-2 once it exists; until then H-18 waits) | H-18 |
+| Owner | Raw-spread account confirmed (otherwise no 15m result can trade at £1,000) | H-17, H-14, H-18 use, not runs |
+| Quant | **Q-1** H-17's overlap with retired R-02 / R-05 | H-17 |
+| Quant | **Q-2** H-16's expanding monthly refit instead of the default 1d window | H-16, H-17 |
+| Quant | **Q-3** H-14's survivor unit = group (K_eff) | H-14 |
+| Engineering | BACKLOG **30a** `day_type` opt-in features, with a fold-fit hook for the HAR coefficients and the truncation tests | H-16, H-17, overlays |
+| Engineering | BACKLOG **31** `flat_at_local` (and parity across labels, shadow and live) | H-17, H-14, H-18 |
+| Engineering | BACKLOG **32** gate EV from the measured mean winner | H-17 V1, H-18 before any shadow or live use |
+| Engineering | BACKLOG **30b** day-score allocator input | only after H-16 passes; not needed for any run |
+| Engineering | BACKLOG 33 (opportunity-day report), on 20 and 26 | reports only |
+| Data (new) | **E-1** historical tier-1 schedule 2010-01 .. 2025-09 (scheduled times from BLS, BEA and Fed calendars; no outcomes), loadable as research `ctx["events"]`. The live archive is forward-only and research passes no events today | H-16, H-17, H-14, H-18 |
+| Engineering (new) | **E-2** 15m two-sided discovery candidate spec with the cost gate | H-14 |
+| Engineering (new) | **E-3** `trend_day` and `event_continuation` screening specialists | H-17, H-18 |
+| Engineering (new) | **E-4** an evaluation path for H-16 that records one registry trial and prints the reading rule | H-16 |
+| Engineering (new) | **E-5** protect in-quarter allocations (survivors, Q1 follow-ups) from automated spending of the unreserved remainder | budget integrity |
+
+## Not in Q2, and why
+
+| ID | Reason |
+|---|---|
+| H-01, H-06, H-04, H-02 | Q1 (frozen). Follow-ups only, from the Q1 reserve above |
+| H-03, H-05, H-07, H-08, H-10 | Survivor rows of Q1's H-02 at 4h; at 15m, H-05/H-08/H-10 are screened inside H-14 |
+| H-15 | Daily, few events; needs playbook D-8 and ruling A |
+| H-11 | Blocked on a consensus feed (owner decision C) |
+| H-09, H-12, H-22 | Features only (0 trials) |
+| H-20, H-21 | Inside H-16 / H-17 (0 trials) |
+| H-23 | Blocked on intraday USD data (D+, owner) |
+| V2 / V3 runner exits | Diagnostics in H-17's report; using them costs a trial each (Q3 if V1 beats V0) |
+
+## Freeze checklist (by 2027-03-31)
+
+- [ ] Q1 2027 verdicts recorded (or the follow-up reserve kept as written)
+- [ ] Quant rulings Q-1, Q-2, Q-3 recorded here
+- [ ] Owner ruling O-1 recorded, or H-18 withdrawn
+- [ ] BACKLOG 30a, 31, E-1, E-2, E-3, E-4 merged and tested; E-5 decided
+- [ ] Event counts owed above recorded (events only, no labels or outcomes); H-17 withdrawn if < 1,000
+- [ ] `costs-v1` published (or the priors accepted and stated); `macro-v1` present for H-16
+- [ ] `research.reserved_trials_quarter` for Q2 set to the number of queued rows
+- [ ] Each queued row written with `queue=True, target_quarter="2027Q2"` and this file's freeze commit
+
+## Not verified / left out
+
+- No data was read. Every event count is a calendar estimate or quoted from `opportunity-days.md`; the exact counts
+  are owed as listed.
+- The H-14 discovery config is aligned with H-02's description in `preregistration-2027Q1.md`, not with H-02's
+  registry row, which does not exist yet.
+- Whether the research director's automated pool or the analyst would spend Q2's unreserved remainder was read from
+  the code's budget logic (`goldbot/research/registry.py` `check_budget_reserved`, `goldbot/research/director.py`
+  `reserved_trials`), not tested.
+- No code, settings, registry rows, budget, holdout or the Q1 pre-registration were touched.

@@ -363,7 +363,9 @@ def test_the_accounts_absolute_limit_and_the_min_lot_risk_are_published_under_li
                  limits=engine_limits(load_settings(), acc))
     eng._write_state()
     e = json.loads((tmp_path / "engine_icm-demo.json").read_text())
-    assert e["limits"] == {"daily_loss_limit_abs": 50.0, "min_lot_risk_account": None}    # no stop seen yet
+    assert e["limits"]["daily_loss_limit_abs"] == 50.0
+    assert e["limits"]["min_lot_risk_account"] is None                                   # no stop seen yet
+    assert "min_lot_risk_cap" in e["limits"] and e["limits"]["daily_cap"] == 0.02       # the dashboard's keys too
     eng._note_min_lot_risk(eng._sizing_terms(1, 4_150.2, 10.90, cycle=T0), 10.90)
     eng._write_state()
     e = json.loads((tmp_path / "engine_icm-demo.json").read_text())

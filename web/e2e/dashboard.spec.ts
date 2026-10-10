@@ -1,8 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { freshTotp } from "./totp";
 
-const info = () => JSON.parse(readFileSync("e2e/.server.json", "utf8")) as { setup_code: string };
+const info = () => JSON.parse(readFileSync("e2e/.server.json", "utf8")) as { setup_code: string; state_dir: string };
 const OWNER = { email: "owner@example.com", password: "owner password 123" };
 const VIEWER = { email: "viewer@example.com", password: "viewer password 123" };
 
@@ -249,4 +250,35 @@ test("owner manages a user's access and never offers the owner role", async ({ p
   await expect(row.getByRole("button", { name: "Enable" })).toBeVisible();
   await row.getByRole("button", { name: "Enable" }).click();
   await expect(row.getByRole("button", { name: "Disable" })).toBeVisible();
+});
+
+// last in the story: an engine starts reporting (earlier steps rely on "No engines reporting")
+test("once the engine reports, Overview shows the live balance, today's loss budget and the next milestone on a phone", async ({ page }) => {
+  const dir = info().state_dir;
+  writeFileSync(join(dir, "engine_icm-demo.json"), JSON.stringify({
+    account: "icm-demo", broker: "icm", mode: "demo", equity: 1490, balance: 1500, currency: "GBP", margin: 0,
+    day_start_equity: 1500, week_start_equity: 1500, balance_closed_hwm: 1500, stage: "normal", open_positions: 0,
+    account_class: "raw", ts: Date.now() / 1000, price: 4150, spread_points: 20, usd_to_account: 1 / 1.33,
+    limits: { risk_per_trade: 0.005, max_risk_per_trade: 0.01, multiplier_bounds: [0.25, 1.5], daily_cap: 0.02, weekly_cap: 0.05 },
+    ladder_atr: { "15m": 7.27, "1h": 14.6, "4h": 29.0, "1d": 70.0 },
+    lot_terms: { contract_oz: 100, volume_min: 0.01, volume_step: 0.01, volume_max: 50, stops_level_points: 0 },
+  }));
+  writeFileSync(join(dir, "supervisor.json"), JSON.stringify({
+    ts: Date.now() / 1000 + 3600, halt: false, reasons: [], daily_cap: 0.015, combined_day_start_equity: 1500, weekly_cap: 0.04,
+    combined_week_start_equity: 1500, combined_equity: 1490,
+  }));
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  const card = page.getByRole("region", { name: "Account icm-demo" });
+  await expect(card.getByText("£1,500.00")).toBeVisible();                     // balance from the broker, in pounds
+  await expect(card.getByText("£12.50 left")).toBeVisible();                   // 1.5% of £1,500 less £10 lost today
+  await expect(card.getByRole("meter", { name: "Daily loss budget used" })).toBeVisible();
+  await expect(card.getByText(/Next: 1-hour trades at £2,7/)).toBeVisible();
+  await expect(card.getByRole("progressbar", { name: "Progress to 1-hour trades" })).toBeVisible();
+  const box = await card.boundingBox();
+  expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);           // fits the phone
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);   // no sideways scroll
+  await page.getByRole("button", { name: "Approvals" }).click();
+  await expect(page.getByText("Loss budget", { exact: true })).toBeVisible();   // safety strip chip
 });

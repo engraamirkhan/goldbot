@@ -1,4 +1,5 @@
 import type { AccountSummary, Status } from "../lib/api";
+import { budgetTone, cash } from "../lib/account";
 import { blockers, localTime } from "../lib/approval";
 
 type Tone = "ok" | "warn" | "bad" | "idle";
@@ -35,7 +36,7 @@ export function SafetyStrip({ status, accounts, error }: { status?: Status; acco
   );
 }
 
-const LOADING: Chip[] = ["Owner halt", "Supervisor", "Drift halt", "Drawdown", "News", "Account"].map((label) => (
+const LOADING: Chip[] = ["Owner halt", "Supervisor", "Drift halt", "Drawdown", "Loss budget", "News", "Account"].map((label) => (
   { key: label, label, value: "…", tone: "idle" }
 ));
 
@@ -61,6 +62,7 @@ function build(s: Status, accounts: AccountSummary[]): Chip[] {
                  value: one ? STAGE[accounts[0]!.stage] : accounts.map((a) => `${a.account_id} ${STAGE[a.stage]}`).join(" · "),
                  detail: one ? pct(accounts[0]!.drawdown_pct) : undefined });
   }
+  chips.push(budgetChip(accounts));
   const b = s.blackout;
   if (b) {
     const at = b.ts_utc ?? b.received_utc;
@@ -76,4 +78,16 @@ function build(s: Status, accounts: AccountSummary[]): Chip[] {
         tone: accounts.some((a) => a.account_class === "unknown" && a.mode !== "paper") ? "bad" : "ok",
         detail: accounts.length > 1 ? accounts.map((a) => a.account_id).join(" / ") : undefined });
   return chips;
+}
+
+/** The loss budget left (ADR 0004; daily and weekly caps): the account with the least left as a share of its limit. */
+function budgetChip(accounts: AccountSummary[]): Chip {
+  const withBudget = accounts.filter((a) => a.loss_budget);
+  if (withBudget.length === 0) return { key: "budget", label: "Loss budget", value: "not reported", tone: "idle" };
+  const share = (a: AccountSummary) => (a.loss_budget!.limit > 0 ? a.loss_budget!.remaining / a.loss_budget!.limit : 0);
+  const a = withBudget.reduce((w, x) => (share(x) < share(w) ? x : w));
+  const b = a.loss_budget!;
+  const who = accounts.length > 1 ? `${a.account_id}: ` : "";
+  return { key: "budget", label: "Loss budget", value: `${who}${cash(b.remaining, a.currency)} left`,
+           detail: `limit ${cash(b.limit, a.currency)} ${b.period}`, tone: budgetTone(b), title: `Limit set by: ${b.binding_label}` };
 }

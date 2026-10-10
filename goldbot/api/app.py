@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -75,9 +76,12 @@ from goldbot.api.schema import (
     UserRef,
     UserRow,
 )
+from goldbot.ops.account_view import loss_budget, margin_level_pct, milestones
 from goldbot.telegram.approvals import Outcome
 from goldbot.telegram.approvals import Proposal as BusProposal
 from goldbot.telegram.bus import ApprovalBus
+
+log = logging.getLogger("goldbot.api")
 
 if TYPE_CHECKING:
     from goldbot.agents.tools import ReadOnlyTools
@@ -407,12 +411,36 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.get("/api/accounts", response_model=list[AccountSummary])
     def accounts(_: User = Depends(auth)) -> list[AccountSummary]:
         rows = []
-        for e in st.engines():
-            eq, d0, w0, hwm = e.get("equity", 0), e.get("day_start_equity", 0) or 1, e.get("week_start_equity", 0) or 1, e.get("balance_closed_hwm", 0) or 1
+        engines = st.engines()
+        try:                                   # a torn or missing supervisor.json only drops the combined caps
+            sup = st.supervisor()
+        except (OSError, ValueError):
+            sup = {}
+        sup = sup if isinstance(sup, dict) else {}
+
+        def view(fn: Callable[..., Any], *args: Any) -> Any:
+            """The account view is reporting only: a bad state file shows as null, never as a failed request."""
+            try:
+                return fn(*args)
+            except Exception:                  # noqa: BLE001
+                log.exception("account view %s failed", getattr(fn, "__name__", fn))
+                return None
+
+        for e in engines:
+            def num(k: str, e: dict = e) -> float:
+                v = e.get(k)
+                return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+            eq, d0, w0, hwm = num("equity"), num("day_start_equity") or 1, num("week_start_equity") or 1, num("balance_closed_hwm") or 1
+            bal, ccy = e.get("balance"), e.get("currency")
             rows.append(AccountSummary(account_id=e["account"], broker=e.get("broker", ""), mode=e.get("mode", "paper"), equity=eq,
                                        day_pnl_pct=eq / d0 - 1, week_pnl_pct=eq / w0 - 1, drawdown_pct=1 - eq / hwm,
                                        stage=e.get("stage", "normal"), open_positions=e.get("open_positions", 0),
-                                       account_class=e.get("account_class", "unknown")))
+                                       account_class=e.get("account_class", "unknown"),
+                                       balance=bal if isinstance(bal, (int, float)) else None,
+                                       currency=ccy if isinstance(ccy, str) else None,
+                                       margin_level_pct=view(margin_level_pct, e),
+                                       day_pnl=eq - num("day_start_equity") if num("day_start_equity") else None,
+                                       loss_budget=view(loss_budget, e, sup, engines), milestones=view(milestones, e)))
         return rows
 
     def card(p: BusProposal) -> dict[str, Any]:

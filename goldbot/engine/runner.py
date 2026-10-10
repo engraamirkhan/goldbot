@@ -45,6 +45,7 @@ from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
 from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.ops import server_clock
+from goldbot.ops.account_view import LADDER_TIMEFRAMES
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
@@ -55,6 +56,7 @@ from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 
 log = logging.getLogger("goldbot.engine")
+LOT_TERMS_WARN_S = 600.0     # the account view's symbol-info warning, at most this often
 # MT5 trade retcodes that mean the market will not take an order now (10017 TRADE_DISABLED, 10018 MARKET_CLOSED): a
 # close refused with one of these is backed off; any other failure (requote 10004/10021, price changed 10020, a
 # raising call) is retried on the next tick, so an exit is never delayed by a transient refusal
@@ -69,9 +71,12 @@ SKEW_WINDOW = 120            # new ticks in the rolling median of broker-vs-wall
 SKEW_BLOCK_S = 10.0
 SKEW_MIN_SAMPLES = 10
 LATE_BARS_BLOCK = 3
-# an exception while processing a tick (the run loop logs it and carries on) blocks entries until this many ticks in a
-# row are processed cleanly; exits never wait for it
-TICK_ERROR_CLEAR_TICKS = 20
+# an exception while processing a tick (the run loop logs it and carries on) blocks entries until a whole decision bar
+# has closed with no error in it; exits never wait for it. Repeated errors are logged once per type, then at most every
+# TICK_ERROR_LOG_S with a count, and the engine state is rewritten at most every TICK_ERROR_STATE_S while failing.
+TICK_ERROR_LOG_S = 60.0
+TICK_ERROR_STATE_S = 10.0
+TICK_LOG_MAX = 20_000        # ticks kept for the store while writes fail (a full disk): the oldest are dropped
 
 
 class Model(Protocol):
@@ -262,6 +267,13 @@ class Engine:
         self._bars_clean: pd.DataFrame | None = None      # bars_1m as last built by _append_bars (duplicate-free)
         self._calendar: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         self._blackout_event: dict | None = None
+        # the dashboard's account view (goldbot/ops/account_view.py), published in the state file; reporting only.
+        # From the broker: balance, currency and margin (never the login or server), the symbol's lot terms; from the
+        # bars: ATR(14) per ladder timeframe, refreshed at bar closes
+        self._account_view: dict = {"balance": None, "currency": None, "margin": None, "margin_free": None}
+        self._price: float | None = None
+        self._lot_terms_warned = -LOT_TERMS_WARN_S
+        self._ladder: dict = {"ladder_atr": {tf: None for tf in LADDER_TIMEFRAMES}, "lot_terms": None}
         self._news: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         # shadow book: version -> (family, model); champions and challengers paper-trade without orders
         self.shadow = ShadowBook(cfg.state_dir) if cfg.shadow_host else None
@@ -289,8 +301,17 @@ class Engine:
         # it outside the tick path, so on_tick never calls the broker for sessions); read with no I/O
         self.sessions: SessionTable = SessionTable(server_tz=cfg.server_tz)
         self.clock_probe: server_clock.ServerClockProbe | None = None   # latest server-clock measurement
-        self._clean_ticks = 0                          # ticks processed without an exception since the last one
         self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)
+        self.tick_errors_total = 0                     # since the engine started (engine state, health)
+        self._last_tick_error_at: pd.Timestamp | None = None   # host clock (live) for health and the state file
+        # the same error on the TICK clock, which decision bars are cut on: the latest tick stamp seen when it happened,
+        # moved to the next tick's stamp (`_error_awaits_tick`) so an error between ticks is never dated too early
+        self._error_tick_ts: pd.Timestamp | None = None
+        self._error_awaits_tick = False
+        self._err_log: dict[str, tuple[float, int]] = {}   # exception type -> (last logged, monotonic; suppressed since)
+        self._err_state_written = -1e18                # monotonic time of the last state write caused by an error
+        self._tick_flush_retry: pd.Timestamp | None = None  # after a failed tick-log write, no retry before this
+        self.ticks_dropped = 0                         # tick-log entries dropped while the store could not be written
         # risk periods and the owner's re-arm survive a restart (state/risk_<account>.json)
         self._last_reset: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
@@ -363,30 +384,55 @@ class Engine:
             self._poll_rearm(self._now(t))
         except Exception as exc:
             self.note_tick_error(exc)
-        out = self._on_tick(t)
-        if self.state.tick_error and self._tick_error_detail is not None:
-            self._clean_ticks += 1      # this tick ran to the end
-            if self._clean_ticks >= TICK_ERROR_CLEAR_TICKS:
-                self.state.tick_error, self._tick_error_detail = False, None
-                self._write_state()
-        return out
+        return self._on_tick(t)
+
+    def _error_now(self) -> pd.Timestamp:
+        if self.cfg.live_clock or self._last_tick is None:
+            return self.clock()
+        return self._last_tick.ts_utc
 
     def note_tick_error(self, exc: BaseException) -> None:
-        """A tick raised (the run loop or an approval): log it, block entries (`tick_error`) until
-        TICK_ERROR_CLEAR_TICKS clean ticks, and publish it in the engine state for the health alert."""
-        log.exception("tick processing failed (%s); entries blocked until %d clean ticks", type(exc).__name__,
-                      TICK_ERROR_CLEAR_TICKS, exc_info=exc)
-        self.state.tick_error, self._clean_ticks = True, -1   # the failing tick itself does not count as clean
-        self._tick_error_detail = type(exc).__name__
+        """A tick raised (the run loop, an approval, the tick log, the risk-period read): block entries (`tick_error`)
+        until a whole decision bar closes with no error in it, count it (`tick_errors_total`, `last_tick_error_at` in
+        the engine state, alerted by health) and log it: the first of each type with its traceback, then at most every
+        TICK_ERROR_LOG_S with the number suppressed. The state file is rewritten at most every TICK_ERROR_STATE_S."""
+        kind = type(exc).__name__
+        self.state.tick_error = True
+        self._tick_error_detail = kind
+        self.tick_errors_total += 1
+        self._last_tick_error_at = self._error_now()
+        self._error_tick_ts = self._last_tick.ts_utc if self._last_tick is not None else None
+        self._error_awaits_tick = True
+        mono = time.monotonic()
+        last, suppressed = self._err_log.get(kind, (None, 0))
+        if last is None or mono - last >= TICK_ERROR_LOG_S:
+            more = f" ({suppressed} more since the last report)" if suppressed else ""
+            log.error("tick processing failed (%s)%s; entries blocked until a clean decision bar, exits continue",
+                      kind, more, exc_info=exc if last is None else None)
+            self._err_log[kind] = (mono, 0)
+        else:
+            self._err_log[kind] = (last, suppressed + 1)
+        if mono - self._err_state_written >= TICK_ERROR_STATE_S:
+            self._err_state_written = mono
+            try:
+                self._write_state()
+            except Exception:
+                log.warning("engine state not written after a tick error")
+
+    def _guard(self, fn: Callable[[], object]) -> None:
+        """Run one non-exit step of a tick; an exception becomes a tick error instead of aborting the tick."""
         try:
-            self._write_state()
-        except Exception:
-            log.exception("engine state not written after a tick error")
+            fn()
+        except Exception as exc:
+            self.note_tick_error(exc)
 
     def _on_tick(self, t: Tick) -> list[dict]:
         if not self._tick_ok(t):
             return []                   # crossed or out-of-order quote: never enters the bars; entries blocked
         prev, self._last_tick = self._last_tick, t
+        if self._error_awaits_tick:     # date a pending tick error by this tick's stamp (never earlier than it was)
+            self._error_tick_ts = t.ts_utc if self._error_tick_ts is None else max(self._error_tick_ts, t.ts_utc)
+            self._error_awaits_tick = False
         # the run loop polls the terminal's latest quote several times a second, so a quiet market repeats the same
         # tick: a repeat only advances the clock (bar close by clock, exits), it is neither a new bar tick nor logged
         repeat = prev is not None and (prev.ts_utc, prev.bid, prev.ask) == (t.ts_utc, t.bid, t.ask)
@@ -396,16 +442,18 @@ class Engine:
                 self.ticks.append(t)
             else:
                 self._late_tick(t)      # never revises a bar the clock already finalised
-            self._log_tick(t)
-        self._refresh_broker_terms(t.ts_utc)
-        self._roll_risk_period(t.ts_utc)
         if hasattr(self.broker, "on_tick"):
-            self.broker.on_tick(t)  # paper broker fills
+            self._guard(lambda: self.broker.on_tick(t))   # type: ignore[attr-defined]  # paper broker fills
+        # exits first: nothing that writes files or reads the account may stand between a quote and the stop check
         self._stop_check(t)
         self._retry_closes(t)              # closes decided earlier that have not succeeded: every tick until done
         if self._kill_pending and self.state.stage == Stage.HALTED:
             self._kill_switch(everything=False)   # until this engine's book is flat
         self._scale_out(t)
+        if not repeat:
+            self._guard(lambda: self._log_tick(t))      # a full disk is a tick error, never a skipped exit
+        self._refresh_broker_terms(t.ts_utc)
+        self._guard(lambda: self._roll_risk_period(t.ts_utc))
         if self._last_reconcile is None or (t.ts_utc - self._last_reconcile).total_seconds() >= self.cfg.reconcile_every_s:
             self._reconcile(t.ts_utc)
         sec = tf_seconds(self.cfg.decision_tf)
@@ -417,6 +465,11 @@ class Engine:
             self._rebuild_bars(until=due)   # every minute before the close is complete; none at or after it joins
             out = self.on_bar_close(due, t)
             self._last_state_write = t.ts_utc
+            bar_open = due - pd.Timedelta(seconds=sec)   # tick clock, as is _error_tick_ts (never the host clock)
+            if self.state.tick_error and not self._error_awaits_tick and self._error_tick_ts is not None \
+                    and self._error_tick_ts < bar_open:
+                self.state.tick_error, self._tick_error_detail = False, None   # a whole clean decision bar closed
+                self._write_state()
         elif self._last_state_write is None or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:
             self._rebuild_bars()            # completed minutes join the bars between closes, so their age is current
             self._refresh_account(t)
@@ -569,6 +622,10 @@ class Engine:
         if base is None:
             return []
         self._last_atr = float(base.atr.iloc[-1]) if np.isfinite(base.atr.iloc[-1]) else self._last_atr
+        try:
+            self._update_ladder(complete)
+        except Exception as exc:                 # noqa: BLE001 - reporting only: a bar close never fails on it
+            log.warning("milestone ATR not updated: %s", type(exc).__name__)
         self._refresh_account(last_tick)
         self._manage_open(base.dec)
         self.center.sweep_expired()
@@ -694,12 +751,18 @@ class Engine:
             return
         self._min_lot_risk = float(vmin) * stop_distance * float(contract) * fx
 
-    def _published_limits(self) -> dict[str, float | None]:
-        """`limits` in engine_<account>.json (dashboard contract): the account's absolute daily loss limit (from
-        accounts.yaml through engine_limits, account currency) and the minimum lot's stop risk in the account currency
+    def _published_limits(self) -> dict[str, Any]:
+        """`limits` in engine_<account>.json, the RiskGate limits the dashboard's account view reads (loss budget,
+        ladder): risk per trade and its maximum, multiplier bounds, daily and weekly caps; the account's absolute daily
+        loss limit (accounts.yaml through ops.run.engine_limits, account currency; null when off), the minimum-lot
+        exception cap (null when off, always null in tiny-live) and the minimum lot's stop risk in the account currency
         at the latest ATR stop (null when unknown)."""
+        lim = self.gate.limits
         mlr = self._min_lot_risk
-        return {"daily_loss_limit_abs": getattr(self.gate.limits, "daily_loss_limit_abs", None),
+        return {"risk_per_trade": lim.risk_per_trade, "max_risk_per_trade": lim.max_risk_per_trade,
+                "multiplier_bounds": list(lim.multiplier_bounds), "daily_cap": lim.daily_cap,
+                "weekly_cap": lim.weekly_cap, "daily_loss_limit_abs": lim.daily_loss_limit_abs,
+                "min_lot_risk_cap": lim.min_lot_risk_cap,
                 "min_lot_risk_account": round(mlr, 2) if mlr is not None and math.isfinite(mlr) else None}
 
     def _decide(self, tf: str, fr: _Frame, agents: list[Specialist], fam_w: dict[str, float], close_ts: pd.Timestamp,
@@ -1244,12 +1307,56 @@ class Engine:
         v = float(a.iloc[-1]) if len(a) else float("nan")
         return v if np.isfinite(v) and v > 0 else None
 
+    # ------------------------------------------------------------------ account view (reporting only)
+    def _lot_terms(self) -> dict | None:
+        """The symbol's lot terms from the broker for the milestone ladder; None (retried on the next refresh) when
+        the broker cannot say. Never the design defaults: the ladder then shows 'pending broker terms'."""
+        try:
+            info = self.broker.symbol_info(self.cfg.symbol)
+        except Exception as exc:                 # noqa: BLE001 - reporting only; trading never depends on it
+            now = time.monotonic()               # retried every refresh (seconds apart): warn at most every 10 min
+            if now - self._lot_terms_warned >= LOT_TERMS_WARN_S:
+                self._lot_terms_warned = now
+                log.warning("symbol info unavailable for the account view: %s", type(exc).__name__)
+            return None
+        return {"contract_oz": info.contract_size, "volume_min": info.volume_min, "volume_step": info.volume_step,
+                "volume_max": info.volume_max, "stops_level_points": info.stops_level_points}
+
+    def _update_ladder(self, complete: pd.DataFrame) -> None:
+        """ATR(14) on the mid of each ladder timeframe's completed bars (None until 15 bars exist), at a bar close.
+        Each timeframe is recomputed only when a new bar of it can have completed (1d: once per feature-day), from the
+        engine's incremental resamplers (the same bars the decision frames use; 1d is the feature-day bar), and is
+        marked done only once its ATR is computed, so a failure is retried at the next close."""
+        if complete.empty:
+            return
+        last = pd.Timestamp(complete["visible_at"].iloc[-1])
+        out = self._ladder["ladder_atr"]
+        seen: dict[str, object] = self._ladder.setdefault("computed_at", {})
+        at = pd.DatetimeIndex([last])
+        for tf in LADDER_TIMEFRAMES:
+            key = feature_day(at)[0] if tf == "1d" else floor_tf(at, tf_seconds(tf))[0]   # as _context keys it
+            if seen.get(tf) == key:
+                continue
+            bars = self._resample(complete, tf)
+            bars = bars[pd.to_datetime(bars["visible_at"], utc=True) <= last].reset_index(drop=True)
+            if len(bars) < 15:
+                out[tf] = None
+            else:
+                v = float(atr(mid(bars.tail(200).reset_index(drop=True)), 14).iloc[-1])
+                out[tf] = v if np.isfinite(v) and v > 0 else None
+            seen[tf] = key
+
     # ------------------------------------------------------------------ helpers
     def _refresh_account(self, tick: Tick) -> None:
         acc = self.broker.account()
         st = self.state
         st.equity = acc.equity
         st.margin_used = acc.margin
+        self._account_view = {"balance": acc.balance, "currency": acc.currency, "margin": acc.margin,
+                              "margin_free": acc.margin_free}
+        self._price = (tick.bid + tick.ask) / 2
+        if self._ladder["lot_terms"] is None:
+            self._ladder["lot_terms"] = self._lot_terms()
         self._roll_risk_period(tick.ts_utc)
         if st.balance_closed_hwm == 0:
             st.balance_closed_hwm = acc.balance
@@ -2007,11 +2114,25 @@ class Engine:
         self._journaled = len(self.decisions)
 
     def _log_tick(self, t: Tick) -> None:
+        """Buffer the tick for the store and flush every tick_flush_s. A failed write (a full disk) raises once, then is
+        not retried for tick_flush_s; meanwhile the buffer keeps the newest TICK_LOG_MAX ticks (older ones dropped and
+        counted), so a broken disk can neither grow memory nor fail every tick."""
         if self.store is None:
             return
         self._tick_log.append(t)
+        if len(self._tick_log) > TICK_LOG_MAX:
+            drop = len(self._tick_log) - TICK_LOG_MAX
+            self._tick_log = self._tick_log[drop:]
+            self.ticks_dropped += drop
+        if self._tick_flush_retry is not None and t.ts_utc < self._tick_flush_retry:
+            return
         if (t.ts_utc - self._tick_log[0].ts_utc).total_seconds() >= self.cfg.tick_flush_s:
-            self.flush_ticks()
+            try:
+                self.flush_ticks()
+                self._tick_flush_retry = None
+            except Exception:
+                self._tick_flush_retry = t.ts_utc + pd.Timedelta(seconds=max(self.cfg.tick_flush_s, 1))
+                raise
 
     def flush_ticks(self) -> None:
         """Write buffered ticks as one new part file (append-only; the nightly cost job reads them)."""
@@ -2101,7 +2222,6 @@ class Engine:
             **self._daily_allowance(),
             # this account's absolute limit (accounts.yaml): the supervisor applies the smallest published one
             "daily_loss_limit_abs": self.gate.limits.daily_loss_limit_abs,
-            "limits": self._published_limits(),
             "equity": st.equity, "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "open_lots": st.open_lots, "open_notional": st.open_notional,
@@ -2119,11 +2239,20 @@ class Engine:
             "closed_records_lost": self._records_lost, "closes_due": sorted(self._close_due),
             "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
             "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
+            # the dashboard's account view (goldbot/ops/account_view.py): the broker's balance, currency and margin,
+            # the gate's limits, the price, lot terms and ATR(14) per ladder timeframe; no login or server
+            **self._account_view, "price": self._price, "ladder_atr": dict(self._ladder["ladder_atr"]),
+            "lot_terms": self._ladder["lot_terms"], "limits": self._published_limits(),
             "tick_ahead_s": st.tick_ahead_s, "market_closed": st.market_closed, "session_source": self.sessions.source,
             "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail,
+            "tick_errors_total": self.tick_errors_total, "ticks_dropped": self.ticks_dropped,
+            "last_tick_error_at": self._last_tick_error_at.isoformat() if self._last_tick_error_at is not None else None,
             "sessions": session_table_cache(self.sessions),
             "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
         }
+        # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
+        # view's copy (None until the first refresh) must not blank it for the supervisor's currency check
+        payload["currency"] = self._account_currency() or self._account_view.get("currency") or None
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync
         write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps(payload), durable=False)
         self._save_risk_state()
