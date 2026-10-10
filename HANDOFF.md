@@ -259,6 +259,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   bar t uses only bars closed by t (truncated-history test + pipeline lookahead check). They are in
   `DEFAULT_FEATURE_NAMES`, so the default `feature_version` changes (expected: no champions exist, nothing is
   invalidated) and feature-seeded clones now draw from a larger column pool.
+- Survey features (2026-10-10, `goldbot/features/survey.py`, TRACEABILITY F17-F22; indicator survey section 4a, top-15
+  ranks 3, 4, 6 and 10): five registry families for research to screen, no specialist declares them. `vol_estimators`
+  (Garman-Klass, Rogers-Satchell, Yang-Zhang over 20/60 bars, Parkinson 60, YZ20/YZ60 term structure, vol-of-vol =
+  CV of YZ20 over 60); `round_numbers` ((close - nearest $5/$10/$25/$50 level) / ATR14 and how many of the last 50
+  bars traded through it); `regime_stats` (variance ratio q = 2/4/8 over 120 bars, R/S Hurst over 128 returns with
+  chunks 8-64, Kaufman efficiency ratio 10/30); `jumps` (return / bipower sigma of the 60 returns before the bar, flag
+  at |z| > 4, sign, bars since the last jump capped at 500); `expected_move` (close x YZ20 x sqrt(h) for h = 4/16/48
+  bars, and ATR14, over a round-trip cost = 96-bar median spread + 0.37 USD/oz slippage and commission priors; a feature
+  only, the cost-to-move filter is a later trial). Warm-up up to 128 bars (documented per family in the module).
+  Like the trader families they are in `DEFAULT_FEATURE_NAMES`: the default `feature_version` changes f-6932724812 ->
+  f-1b8f723a67 (no champions exist, nothing is invalidated). Equity stress (opt-in, survey rank 6): `macro_drivers`
+  gains `macro_vix`, `macro_vix_chg5`, `macro_spx_dd20` from FRED VIXCLS and SP500 (version 1 -> 2, so the
+  default+macro version changes too; NaN until the release carries them); `scripts/fred_macro.py` now downloads both
+  (`RELEASE_SERIES`, same next-business-day 23:00 UTC availability as GVZCLS; FRED's SP500 covers about ten years).
+  The next data-macro run publishes them to `macro-v1`.
 
 ## Next steps (no owner input needed unless marked)
 - Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write
