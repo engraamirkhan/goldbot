@@ -225,6 +225,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Health View */
+        get: operations["health_view_api_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs": {
         parameters: {
             query?: never;
@@ -324,6 +341,23 @@ export interface paths {
         put?: never;
         /** Rearm */
         post: operations["rearm_api_rearm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Research View */
+        get: operations["research_view_api_research_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -473,6 +507,48 @@ export interface components {
             /** Ts Utc */
             ts_utc: string | null;
         };
+        /**
+         * AgentHealthRow
+         * @description One champion's drift and health (state/drift.json, research/drift.py AgentHealth) with its halt state.
+         */
+        AgentHealthRow: {
+            /** Agent Id */
+            agent_id: string;
+            /** Backtest Dd */
+            backtest_dd: number | null;
+            /** Brier */
+            brier: number | null;
+            /** Capital Weight */
+            capital_weight: number | null;
+            /** Cusum */
+            cusum: number;
+            /** Cusum Alarm */
+            cusum_alarm: boolean;
+            /** Dd 30D */
+            dd_30d: number;
+            /** Ece */
+            ece: number | null;
+            /** Halt Reasons */
+            halt_reasons: string[];
+            /** Halted */
+            halted: boolean;
+            /** Halted Since */
+            halted_since: string | null;
+            /** N Calib */
+            n_calib: number;
+            /** N Live Rows */
+            n_live_rows: number;
+            /** Notes */
+            notes: string[];
+            /** Psi Size Down */
+            psi_size_down: string[];
+            /** Psi Warn */
+            psi_warn: string[];
+            /** Size Factor */
+            size_factor: number;
+            /** Version */
+            version: string;
+        };
         /** AgentRow */
         AgentRow: {
             /** Agent Id */
@@ -573,6 +649,33 @@ export interface components {
              */
             now: string;
         };
+        /** CusumPoint */
+        CusumPoint: {
+            /** S */
+            s: number;
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+            /** Z */
+            z: number;
+        };
+        /** CusumTrace */
+        CusumTrace: {
+            /** Agent Id */
+            agent_id: string;
+            /** Alarm */
+            alarm: boolean;
+            /** H */
+            h: number;
+            /** K */
+            k: number;
+            /** Points */
+            points: components["schemas"]["CusumPoint"][];
+            /** Version */
+            version: string;
+        };
         /**
          * DecidedProposal
          * @description A proposal decided in the last few minutes, so its card can show what happened to it.
@@ -668,6 +771,15 @@ export interface components {
             /** Webhook P99 Latency S */
             webhook_p99_latency_s: number | null;
         };
+        /** GateCheck */
+        GateCheck: {
+            /** Detail */
+            detail: string;
+            /** Name */
+            name: string;
+            /** Passed */
+            passed: boolean;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -713,6 +825,72 @@ export interface components {
              * Format: date-time
              */
             ts_utc: string;
+        };
+        /**
+         * HealthCheckRow
+         * @description One deterministic health check (goldbot/ops/health.py), evaluated when the view is requested.
+         */
+        HealthCheckRow: {
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "warn" | "fail";
+        };
+        /** HealthView */
+        HealthView: {
+            /** Agents */
+            agents: components["schemas"]["AgentHealthRow"][];
+            /** Checks */
+            checks: components["schemas"]["HealthCheckRow"][];
+            /** Cusum */
+            cusum: components["schemas"]["CusumTrace"][];
+            /** Dd Mult */
+            dd_mult: number;
+            /** Drift Error */
+            drift_error: string | null;
+            /** Drift Ts */
+            drift_ts: string | null;
+            /** Errors */
+            errors: {
+                [key: string]: string;
+            };
+            /**
+             * Generated Utc
+             * Format: date-time
+             */
+            generated_utc: string;
+            psi: components["schemas"]["PsiHeatmap"];
+            /** Reliability */
+            reliability: components["schemas"]["ReliabilityCurve"][];
+            system_halt: components["schemas"]["SystemHaltView"] | null;
+        };
+        /**
+         * HypothesisDoc
+         * @description The hypothesis portfolio (docs/research/hypotheses.md), its tables parsed, read-only.
+         */
+        HypothesisDoc: {
+            /** Note */
+            note: string | null;
+            /** Path */
+            path: string;
+            /** Tables */
+            tables: components["schemas"]["HypothesisTable"][];
+            /** Updated Utc */
+            updated_utc: string | null;
+        };
+        /** HypothesisTable */
+        HypothesisTable: {
+            /** Columns */
+            columns: string[];
+            /** Rows */
+            rows: string[][];
+            /** Title */
+            title: string;
         };
         /** InviteRequest */
         InviteRequest: {
@@ -806,6 +984,38 @@ export interface components {
              */
             ok: boolean;
         };
+        /** PlanFamily */
+        PlanFamily: {
+            /** Best Dsr */
+            best_dsr: number | null;
+            /** Blocked */
+            blocked: boolean;
+            /** Evidence */
+            evidence: number;
+            /** Family */
+            family: string;
+            /** Flags */
+            flags: string[];
+            /** Median Auc */
+            median_auc: number | null;
+            /** Shadow Trades */
+            shadow_trades: number;
+            /** Trials */
+            trials: number;
+        };
+        /** PlanFocus */
+        PlanFocus: {
+            /** Budget */
+            budget: number;
+            /** Evidence */
+            evidence: number;
+            /** Family */
+            family: string;
+            /** Rank */
+            rank: number;
+            /** Reasons */
+            reasons: string[];
+        };
         /** Proposal */
         Proposal: {
             /** Account Id */
@@ -848,10 +1058,113 @@ export interface components {
             /** Tradingview Url */
             tradingview_url?: string | null;
         };
+        /**
+         * PsiHeatmap
+         * @description PSI of the top features (rows) per agent (columns); null where the agent does not use the feature.
+         */
+        PsiHeatmap: {
+            /** Agents */
+            agents: string[];
+            /** Features */
+            features: string[];
+            /** Size Down */
+            size_down: number;
+            /** Values */
+            values: (number | null)[][];
+            /** Warn */
+            warn: number;
+        };
         /** RearmRequest */
         RearmRequest: {
             /** Totp */
             totp: string;
+        };
+        /** ReliabilityBin */
+        ReliabilityBin: {
+            /** Hi */
+            hi: number;
+            /** Hit Rate */
+            hit_rate: number;
+            /** Lo */
+            lo: number;
+            /** Mean P */
+            mean_p: number;
+            /** N */
+            n: number;
+        };
+        /**
+         * ReliabilityCurve
+         * @description Predicted p (10 equal bins) against the realised target-hit rate of closed, taken shadow trades.
+         */
+        ReliabilityCurve: {
+            /** Agent Id */
+            agent_id: string;
+            /** Bins */
+            bins: components["schemas"]["ReliabilityBin"][];
+            /** Brier */
+            brier: number | null;
+            /** Ece */
+            ece: number | null;
+            /** N */
+            n: number;
+            /** Version */
+            version: string | null;
+        };
+        /**
+         * ResearchPlanView
+         * @description The research director's latest plan (state/research_plan.json).
+         */
+        ResearchPlanView: {
+            /** Budget */
+            budget: {
+                [key: string]: number;
+            };
+            /**
+             * Created Utc
+             * Format: date-time
+             */
+            created_utc: string;
+            /** Evidence */
+            evidence: components["schemas"]["PlanFamily"][];
+            /** Focus */
+            focus: components["schemas"]["PlanFocus"][];
+            /** Grid Budget */
+            grid_budget: {
+                [key: string]: number;
+            };
+            /** Holdout From */
+            holdout_from: string;
+            /** Holdout To */
+            holdout_to: string;
+            /** Quarter */
+            quarter: string;
+            /** Quarter Budget */
+            quarter_budget: number;
+            /** Quarter Used */
+            quarter_used: number;
+            /** Stale */
+            stale: boolean;
+            /** Total Budget */
+            total_budget: number;
+            /** Unallocated */
+            unallocated: number;
+        };
+        /** ResearchView */
+        ResearchView: {
+            budget: components["schemas"]["TrialBudget"];
+            /**
+             * Generated Utc
+             * Format: date-time
+             */
+            generated_utc: string;
+            hypotheses: components["schemas"]["HypothesisDoc"];
+            plan: components["schemas"]["ResearchPlanView"] | null;
+            /** Plan Error */
+            plan_error: string | null;
+            /** Trials */
+            trials: components["schemas"]["TrialRow"][];
+            /** Trials Total */
+            trials_total: number;
         };
         /** RoleChange */
         RoleChange: {
@@ -913,10 +1226,67 @@ export interface components {
              */
             supervisor_reasons: string[];
         };
+        /** SystemHaltView */
+        SystemHaltView: {
+            /** Clear Command */
+            clear_command: string;
+            /** Reasons */
+            reasons: string[];
+            /** Review Command */
+            review_command: string;
+            /** Since */
+            since: string | null;
+        };
         /** TotpEnrolment */
         TotpEnrolment: {
             /** Totp Uri */
             totp_uri: string;
+        };
+        /** TrialBudget */
+        TrialBudget: {
+            /** Budget */
+            budget: number;
+            /** Left */
+            left: number;
+            /** Quarter */
+            quarter: string;
+            /** Used */
+            used: number;
+        };
+        /**
+         * TrialRow
+         * @description One research-registry trial (state/research_registry.jsonl). R figures are the rule's own expectancy over
+         *     every candidate: gross on mid prices, net of every cost.
+         */
+        TrialRow: {
+            /** Agent Id */
+            agent_id: string;
+            /** Family */
+            family: string;
+            /** Gates */
+            gates: components["schemas"]["GateCheck"][];
+            /** Gates Passed */
+            gates_passed: boolean | null;
+            /** Gross R */
+            gross_r: number | null;
+            /** Gross T */
+            gross_t: number | null;
+            /** N */
+            n: number | null;
+            /** Net R */
+            net_r: number | null;
+            /** Net T */
+            net_t: number | null;
+            /** Rationale */
+            rationale: string;
+            /** Status */
+            status: string;
+            /** Timeframe */
+            timeframe: string | null;
+            /** Trial */
+            trial: number;
+            /** Ts */
+            ts: string | null;
         };
         /** UserRef */
         UserRef: {
@@ -1309,6 +1679,26 @@ export interface operations {
             };
         };
     };
+    health_view_api_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthView"];
+                };
+            };
+        };
+    };
     jobs_api_jobs_get: {
         parameters: {
             query?: never;
@@ -1450,6 +1840,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    research_view_api_research_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchView"];
                 };
             };
         };

@@ -165,6 +165,153 @@
     "title": "ActiveBlackout",
     "type": "object"
    },
+   "AgentHealthRow": {
+    "description": "One champion's drift and health (state/drift.json, research/drift.py AgentHealth) with its halt state.",
+    "properties": {
+     "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+     },
+     "backtest_dd": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Backtest Dd"
+     },
+     "brier": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Brier"
+     },
+     "capital_weight": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Capital Weight"
+     },
+     "cusum": {
+      "title": "Cusum",
+      "type": "number"
+     },
+     "cusum_alarm": {
+      "title": "Cusum Alarm",
+      "type": "boolean"
+     },
+     "dd_30d": {
+      "title": "Dd 30D",
+      "type": "number"
+     },
+     "ece": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ece"
+     },
+     "halt_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Halt Reasons",
+      "type": "array"
+     },
+     "halted": {
+      "title": "Halted",
+      "type": "boolean"
+     },
+     "halted_since": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Halted Since"
+     },
+     "n_calib": {
+      "title": "N Calib",
+      "type": "integer"
+     },
+     "n_live_rows": {
+      "title": "N Live Rows",
+      "type": "integer"
+     },
+     "notes": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+     },
+     "psi_size_down": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Psi Size Down",
+      "type": "array"
+     },
+     "psi_warn": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Psi Warn",
+      "type": "array"
+     },
+     "size_factor": {
+      "title": "Size Factor",
+      "type": "number"
+     },
+     "version": {
+      "title": "Version",
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent_id",
+     "version",
+     "size_factor",
+     "halted",
+     "halted_since",
+     "halt_reasons",
+     "notes",
+     "psi_warn",
+     "psi_size_down",
+     "n_live_rows",
+     "ece",
+     "brier",
+     "n_calib",
+     "cusum",
+     "cusum_alarm",
+     "dd_30d",
+     "backtest_dd",
+     "capital_weight"
+    ],
+    "title": "AgentHealthRow",
+    "type": "object"
+   },
    "AgentRow": {
     "properties": {
      "agent_id": {
@@ -438,6 +585,71 @@
     "title": "CalendarResponse",
     "type": "object"
    },
+   "CusumPoint": {
+    "properties": {
+     "s": {
+      "title": "S",
+      "type": "number"
+     },
+     "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+     },
+     "z": {
+      "title": "Z",
+      "type": "number"
+     }
+    },
+    "required": [
+     "ts",
+     "z",
+     "s"
+    ],
+    "title": "CusumPoint",
+    "type": "object"
+   },
+   "CusumTrace": {
+    "properties": {
+     "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+     },
+     "alarm": {
+      "title": "Alarm",
+      "type": "boolean"
+     },
+     "h": {
+      "title": "H",
+      "type": "number"
+     },
+     "k": {
+      "title": "K",
+      "type": "number"
+     },
+     "points": {
+      "items": {
+       "$ref": "#/components/schemas/CusumPoint"
+      },
+      "title": "Points",
+      "type": "array"
+     },
+     "version": {
+      "title": "Version",
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent_id",
+     "version",
+     "k",
+     "h",
+     "alarm",
+     "points"
+    ],
+    "title": "CusumTrace",
+    "type": "object"
+   },
    "DecidedProposal": {
     "description": "A proposal decided in the last few minutes, so its card can show what happened to it.\n\nsubmitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;\napproved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);\nrejected: with its reason code; expired: nobody decided within the window.",
     "properties": {
@@ -699,6 +911,29 @@
     "title": "FeedHealth",
     "type": "object"
    },
+   "GateCheck": {
+    "properties": {
+     "detail": {
+      "title": "Detail",
+      "type": "string"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "passed": {
+      "title": "Passed",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "name",
+     "passed",
+     "detail"
+    ],
+    "title": "GateCheck",
+    "type": "object"
+   },
    "HTTPValidationError": {
     "properties": {
      "detail": {
@@ -861,6 +1096,213 @@
      "shock"
     ],
     "title": "Headline",
+    "type": "object"
+   },
+   "HealthCheckRow": {
+    "description": "One deterministic health check (goldbot/ops/health.py), evaluated when the view is requested.",
+    "properties": {
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "reason": {
+      "title": "Reason",
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok",
+       "warn",
+       "fail"
+      ],
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "status",
+     "reason"
+    ],
+    "title": "HealthCheckRow",
+    "type": "object"
+   },
+   "HealthView": {
+    "properties": {
+     "agents": {
+      "items": {
+       "$ref": "#/components/schemas/AgentHealthRow"
+      },
+      "title": "Agents",
+      "type": "array"
+     },
+     "checks": {
+      "items": {
+       "$ref": "#/components/schemas/HealthCheckRow"
+      },
+      "title": "Checks",
+      "type": "array"
+     },
+     "cusum": {
+      "items": {
+       "$ref": "#/components/schemas/CusumTrace"
+      },
+      "title": "Cusum",
+      "type": "array"
+     },
+     "dd_mult": {
+      "title": "Dd Mult",
+      "type": "number"
+     },
+     "drift_error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Drift Error"
+     },
+     "drift_ts": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Drift Ts"
+     },
+     "errors": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "title": "Errors",
+      "type": "object"
+     },
+     "generated_utc": {
+      "format": "date-time",
+      "title": "Generated Utc",
+      "type": "string"
+     },
+     "psi": {
+      "$ref": "#/components/schemas/PsiHeatmap"
+     },
+     "reliability": {
+      "items": {
+       "$ref": "#/components/schemas/ReliabilityCurve"
+      },
+      "title": "Reliability",
+      "type": "array"
+     },
+     "system_halt": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SystemHaltView"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "generated_utc",
+     "drift_ts",
+     "drift_error",
+     "system_halt",
+     "agents",
+     "psi",
+     "reliability",
+     "cusum",
+     "dd_mult",
+     "checks",
+     "errors"
+    ],
+    "title": "HealthView",
+    "type": "object"
+   },
+   "HypothesisDoc": {
+    "description": "The hypothesis portfolio (docs/research/hypotheses.md), its tables parsed, read-only.",
+    "properties": {
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     },
+     "tables": {
+      "items": {
+       "$ref": "#/components/schemas/HypothesisTable"
+      },
+      "title": "Tables",
+      "type": "array"
+     },
+     "updated_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Updated Utc"
+     }
+    },
+    "required": [
+     "path",
+     "updated_utc",
+     "tables",
+     "note"
+    ],
+    "title": "HypothesisDoc",
+    "type": "object"
+   },
+   "HypothesisTable": {
+    "properties": {
+     "columns": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Columns",
+      "type": "array"
+     },
+     "rows": {
+      "items": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "title": "Rows",
+      "type": "array"
+     },
+     "title": {
+      "title": "Title",
+      "type": "string"
+     }
+    },
+    "required": [
+     "title",
+     "columns",
+     "rows"
+    ],
+    "title": "HypothesisTable",
     "type": "object"
    },
    "InviteRequest": {
@@ -1084,6 +1526,107 @@
     "title": "Ok",
     "type": "object"
    },
+   "PlanFamily": {
+    "properties": {
+     "best_dsr": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Best Dsr"
+     },
+     "blocked": {
+      "title": "Blocked",
+      "type": "boolean"
+     },
+     "evidence": {
+      "title": "Evidence",
+      "type": "number"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "flags": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Flags",
+      "type": "array"
+     },
+     "median_auc": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Median Auc"
+     },
+     "shadow_trades": {
+      "title": "Shadow Trades",
+      "type": "integer"
+     },
+     "trials": {
+      "title": "Trials",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "family",
+     "trials",
+     "evidence",
+     "blocked",
+     "flags",
+     "median_auc",
+     "best_dsr",
+     "shadow_trades"
+    ],
+    "title": "PlanFamily",
+    "type": "object"
+   },
+   "PlanFocus": {
+    "properties": {
+     "budget": {
+      "title": "Budget",
+      "type": "integer"
+     },
+     "evidence": {
+      "title": "Evidence",
+      "type": "number"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "rank": {
+      "title": "Rank",
+      "type": "integer"
+     },
+     "reasons": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Reasons",
+      "type": "array"
+     }
+    },
+    "required": [
+     "rank",
+     "family",
+     "budget",
+     "evidence",
+     "reasons"
+    ],
+    "title": "PlanFocus",
+    "type": "object"
+   },
    "Proposal": {
     "properties": {
      "account_id": {
@@ -1197,6 +1740,59 @@
     "title": "Proposal",
     "type": "object"
    },
+   "PsiHeatmap": {
+    "description": "PSI of the top features (rows) per agent (columns); null where the agent does not use the feature.",
+    "properties": {
+     "agents": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Agents",
+      "type": "array"
+     },
+     "features": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Features",
+      "type": "array"
+     },
+     "size_down": {
+      "title": "Size Down",
+      "type": "number"
+     },
+     "values": {
+      "items": {
+       "items": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "type": "array"
+      },
+      "title": "Values",
+      "type": "array"
+     },
+     "warn": {
+      "title": "Warn",
+      "type": "number"
+     }
+    },
+    "required": [
+     "features",
+     "agents",
+     "values",
+     "warn",
+     "size_down"
+    ],
+    "title": "PsiHeatmap",
+    "type": "object"
+   },
    "RearmRequest": {
     "properties": {
      "totp": {
@@ -1208,6 +1804,247 @@
      "totp"
     ],
     "title": "RearmRequest",
+    "type": "object"
+   },
+   "ReliabilityBin": {
+    "properties": {
+     "hi": {
+      "title": "Hi",
+      "type": "number"
+     },
+     "hit_rate": {
+      "title": "Hit Rate",
+      "type": "number"
+     },
+     "lo": {
+      "title": "Lo",
+      "type": "number"
+     },
+     "mean_p": {
+      "title": "Mean P",
+      "type": "number"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "lo",
+     "hi",
+     "n",
+     "mean_p",
+     "hit_rate"
+    ],
+    "title": "ReliabilityBin",
+    "type": "object"
+   },
+   "ReliabilityCurve": {
+    "description": "Predicted p (10 equal bins) against the realised target-hit rate of closed, taken shadow trades.",
+    "properties": {
+     "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+     },
+     "bins": {
+      "items": {
+       "$ref": "#/components/schemas/ReliabilityBin"
+      },
+      "title": "Bins",
+      "type": "array"
+     },
+     "brier": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Brier"
+     },
+     "ece": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ece"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Version"
+     }
+    },
+    "required": [
+     "agent_id",
+     "version",
+     "n",
+     "ece",
+     "brier",
+     "bins"
+    ],
+    "title": "ReliabilityCurve",
+    "type": "object"
+   },
+   "ResearchPlanView": {
+    "description": "The research director's latest plan (state/research_plan.json).",
+    "properties": {
+     "budget": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "title": "Budget",
+      "type": "object"
+     },
+     "created_utc": {
+      "format": "date-time",
+      "title": "Created Utc",
+      "type": "string"
+     },
+     "evidence": {
+      "items": {
+       "$ref": "#/components/schemas/PlanFamily"
+      },
+      "title": "Evidence",
+      "type": "array"
+     },
+     "focus": {
+      "items": {
+       "$ref": "#/components/schemas/PlanFocus"
+      },
+      "title": "Focus",
+      "type": "array"
+     },
+     "grid_budget": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "title": "Grid Budget",
+      "type": "object"
+     },
+     "holdout_from": {
+      "title": "Holdout From",
+      "type": "string"
+     },
+     "holdout_to": {
+      "title": "Holdout To",
+      "type": "string"
+     },
+     "quarter": {
+      "title": "Quarter",
+      "type": "string"
+     },
+     "quarter_budget": {
+      "title": "Quarter Budget",
+      "type": "integer"
+     },
+     "quarter_used": {
+      "title": "Quarter Used",
+      "type": "integer"
+     },
+     "stale": {
+      "title": "Stale",
+      "type": "boolean"
+     },
+     "total_budget": {
+      "title": "Total Budget",
+      "type": "integer"
+     },
+     "unallocated": {
+      "title": "Unallocated",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "created_utc",
+     "stale",
+     "quarter",
+     "quarter_budget",
+     "quarter_used",
+     "total_budget",
+     "budget",
+     "grid_budget",
+     "unallocated",
+     "holdout_from",
+     "holdout_to",
+     "focus",
+     "evidence"
+    ],
+    "title": "ResearchPlanView",
+    "type": "object"
+   },
+   "ResearchView": {
+    "properties": {
+     "budget": {
+      "$ref": "#/components/schemas/TrialBudget"
+     },
+     "generated_utc": {
+      "format": "date-time",
+      "title": "Generated Utc",
+      "type": "string"
+     },
+     "hypotheses": {
+      "$ref": "#/components/schemas/HypothesisDoc"
+     },
+     "plan": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ResearchPlanView"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "plan_error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Plan Error"
+     },
+     "trials": {
+      "items": {
+       "$ref": "#/components/schemas/TrialRow"
+      },
+      "title": "Trials",
+      "type": "array"
+     },
+     "trials_total": {
+      "title": "Trials Total",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "generated_utc",
+     "budget",
+     "trials",
+     "trials_total",
+     "plan",
+     "plan_error",
+     "hypotheses"
+    ],
+    "title": "ResearchView",
     "type": "object"
    },
    "RoleChange": {
@@ -1343,6 +2180,45 @@
     "title": "Status",
     "type": "object"
    },
+   "SystemHaltView": {
+    "properties": {
+     "clear_command": {
+      "title": "Clear Command",
+      "type": "string"
+     },
+     "reasons": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Reasons",
+      "type": "array"
+     },
+     "review_command": {
+      "title": "Review Command",
+      "type": "string"
+     },
+     "since": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Since"
+     }
+    },
+    "required": [
+     "since",
+     "reasons",
+     "review_command",
+     "clear_command"
+    ],
+    "title": "SystemHaltView",
+    "type": "object"
+   },
    "TotpEnrolment": {
     "properties": {
      "totp_uri": {
@@ -1354,6 +2230,173 @@
      "totp_uri"
     ],
     "title": "TotpEnrolment",
+    "type": "object"
+   },
+   "TrialBudget": {
+    "properties": {
+     "budget": {
+      "title": "Budget",
+      "type": "integer"
+     },
+     "left": {
+      "title": "Left",
+      "type": "integer"
+     },
+     "quarter": {
+      "title": "Quarter",
+      "type": "string"
+     },
+     "used": {
+      "title": "Used",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "quarter",
+     "budget",
+     "used",
+     "left"
+    ],
+    "title": "TrialBudget",
+    "type": "object"
+   },
+   "TrialRow": {
+    "description": "One research-registry trial (state/research_registry.jsonl). R figures are the rule's own expectancy over\nevery candidate: gross on mid prices, net of every cost.",
+    "properties": {
+     "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "gates": {
+      "items": {
+       "$ref": "#/components/schemas/GateCheck"
+      },
+      "title": "Gates",
+      "type": "array"
+     },
+     "gates_passed": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gates Passed"
+     },
+     "gross_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gross R"
+     },
+     "gross_t": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gross T"
+     },
+     "n": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "N"
+     },
+     "net_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net R"
+     },
+     "net_t": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net T"
+     },
+     "rationale": {
+      "title": "Rationale",
+      "type": "string"
+     },
+     "status": {
+      "title": "Status",
+      "type": "string"
+     },
+     "timeframe": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Timeframe"
+     },
+     "trial": {
+      "title": "Trial",
+      "type": "integer"
+     },
+     "ts": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ts"
+     }
+    },
+    "required": [
+     "trial",
+     "ts",
+     "family",
+     "timeframe",
+     "status",
+     "agent_id",
+     "gross_r",
+     "gross_t",
+     "net_r",
+     "net_t",
+     "n",
+     "gates_passed",
+     "gates",
+     "rationale"
+    ],
+    "title": "TrialRow",
     "type": "object"
    },
    "UserRef": {
@@ -1910,6 +2953,29 @@
     "summary": "Halt"
    }
   },
+  "/api/health": {
+   "get": {
+    "operationId": "health_view_api_health_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HealthView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Health View"
+   }
+  },
   "/api/jobs": {
    "get": {
     "operationId": "jobs_api_jobs_get",
@@ -2115,6 +3181,29 @@
      }
     ],
     "summary": "Rearm"
+   }
+  },
+  "/api/research": {
+   "get": {
+    "operationId": "research_view_api_research_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ResearchView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Research View"
    }
   },
   "/api/status": {

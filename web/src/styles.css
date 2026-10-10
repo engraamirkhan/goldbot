@@ -129,3 +129,76 @@ td a { color: inherit; }
 .card-foot a { color: inherit; min-height: 24px; }
 .section-title { font-size: 14px; color: var(--muted); font-weight: 600; margin: 20px 0 8px; }
 .empty { padding: 16px; border: 1px dashed var(--line); border-radius: 8px; }
+
+/* ------------------------------------------------------------------ health and research (docs/ux/health-research.md) */
+.explain h2 { font-size: 16px; margin: 24px 0 8px; }
+.explain :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.small { font-size: 12px; }
+.state { font-weight: 600; white-space: nowrap; }
+.state.ok { color: var(--ok-fg); } .state.warn { color: var(--warn-fg); } .state.bad { color: var(--bad-fg); }
+.state::before { content: "● "; font-size: 10px; vertical-align: 2px; }
+.halt-banner { background: var(--bad-tint); color: var(--bad-fg); border-color: var(--bad-fg); }
+.halt-banner ul { margin: 6px 0; padding-left: 18px; } .halt-banner p { margin: 6px 0; color: var(--fg); }
+.cmd { display: flex; gap: 8px; align-items: center; margin: 4px 0; min-width: 0; }
+.cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 8px; border-radius: 6px; background: var(--surface); color: var(--fg); border: 1px solid var(--line); font-size: 13px; }
+.cmd button { min-height: 44px; min-width: 64px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; }
+.checks { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 720px) { .checks { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.agents-health td { vertical-align: top; }
+.reasons-list { margin: 0; padding-left: 16px; font-size: 13px; }
+.chart-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 24px; }
+@media (min-width: 960px) { .chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.chart { margin: 0 0 12px; min-width: 0; }
+.chart-title { font-size: 14px; margin-bottom: 4px; }
+.chart-pick { font-size: 13px; color: var(--muted); display: inline-block; margin-bottom: 6px; }
+.chart-pick select { padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--fg); min-height: 32px; }
+.svg-chart { width: 100%; max-width: 420px; height: auto; display: block; overflow: visible; }
+.svg-chart .grid { stroke: var(--line); stroke-width: 1; }
+.svg-chart .tick { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.svg-chart .axis { fill: var(--muted); font-size: 11px; }
+.svg-chart .ideal { stroke: var(--muted); stroke-dasharray: 4 4; stroke-width: 1; }
+.svg-chart .series { fill: none; stroke: var(--info-fg); stroke-width: 2; stroke-linejoin: round; }
+.svg-chart .dot { fill: var(--info-fg); stroke: var(--surface); stroke-width: 2; }
+.svg-chart .count { fill: var(--fg); font-size: 10px; font-variant-numeric: tabular-nums; }
+.svg-chart .hit { fill: transparent; }
+.svg-chart .hit:hover { fill: var(--info-fg); }
+.svg-chart .limit { stroke: var(--bad-fg); stroke-dasharray: 6 3; stroke-width: 1.5; }
+.svg-chart .limit-label { fill: var(--bad-fg); font-size: 10px; }
+.cusum.alarm .series { stroke: var(--bad-fg); }
+.heatmap { width: auto; font-variant-numeric: tabular-nums; }
+.heatmap th, .heatmap td { padding: 6px 8px; font-size: 13px; }
+.heatmap td.psi { text-align: center; min-width: 56px; border: 2px solid var(--bg); border-radius: 4px; }
+.psi.ok { background: var(--ok-tint); } .psi.warn { background: var(--warn-tint); color: var(--warn-fg); font-weight: 600; }
+.psi.bad { background: var(--bad-tint); color: var(--bad-fg); font-weight: 700; } .psi.none { color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; border: 1px solid var(--line); }
+.swatch.ok { background: var(--ok-tint); } .swatch.warn { background: var(--warn-tint); border-color: var(--warn-fg); } .swatch.bad { background: var(--bad-tint); border-color: var(--bad-fg); }
+.as-table summary { cursor: pointer; font-size: 13px; color: var(--muted); min-height: 32px; display: list-item; }
+.ddbars { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.ddhead { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 14px; margin-bottom: 4px; }
+.ddtrack { position: relative; height: 12px; border-radius: 6px; background: var(--line); }
+.ddfill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px; background: var(--info-fg); }
+.ddfill.warn { background: var(--warn-fg); } .ddfill.bad { background: var(--bad-fg); } .ddfill.ok { background: var(--ok-fg); }
+.ddlimit { position: absolute; top: -4px; bottom: -4px; width: 3px; margin-left: -1px; background: var(--fg); border-radius: 1px; }
+.budget { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--surface); }
+.budget p { margin: 8px 0 0; }
+.trials td.num { font-variant-numeric: tabular-nums; white-space: nowrap; } .trials td.neg { color: var(--bad-fg); }
+.trials td.rationale { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.focus { padding-left: 20px; } .focus > li { margin: 6px 0; } .focus ul { margin: 2px 0; padding-left: 16px; font-size: 13px; }
+.hyp { margin-bottom: 8px; } .hyp summary { cursor: pointer; font-weight: 600; min-height: 32px; display: list-item; }
+.hyp-cards { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 960px) { .hyp-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.hyp-card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--surface); font-size: 14px; min-width: 0; }
+.hyp-head { margin: 0 0 6px; font-weight: 700; }
+.hyp-card dl { margin: 0; display: grid; gap: 4px; }
+.hyp-card dt { font-size: 12px; color: var(--muted); } .hyp-card dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 719px) {
+  .shell header { flex-wrap: wrap; gap: 8px 16px; }
+  .shell header nav { order: 3; width: 100%; display: flex; overflow-x: auto; }
+  .shell header nav button { flex: none; min-height: 44px; }
+  .agents-health thead { display: none; }
+  .agents-health tr { display: block; border-bottom: 1px solid var(--line); padding: 6px 0; }
+  .agents-health td { display: grid; grid-template-columns: 9em minmax(0, 1fr); gap: 8px; border: 0; padding: 4px 0; }
+  .agents-health td::before { content: attr(data-label); color: var(--muted); font-size: 12px; }
+  .agents-health td .state { white-space: normal; }
+}
