@@ -41,6 +41,9 @@ Status: ready / in progress / in review / done / rejected.
 | 22 | Min-lot sizing-feasibility report (G-7) | Position sizing · RUN | S | proposed (owner: account size for H-01) |
 | 23 | MAE/MFE in closed-trade and shadow records (G-9) | Post-trade review · FIND | S | proposed |
 | 24 | DST-aware sessions and deterministic calendars (D-1, D-2) | Idea generation (honesty) · FIND | M | proposed |
+| 25 | Minimum-lot exception in RiskGate (ADR 0004) | Position sizing · RUN | S | ready (trading-safety review) |
+| 26 | Milestone ladder and monthly % / R progress report (ADR 0004) | Performance review, capital growth · RUN | S–M | ready |
+| 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | ready (after 1) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -251,6 +254,45 @@ execution items need trading-safety review. Feature items need quant review.
   Deterministic calendars become PIT features: holidays, COMEX option expiry and first notice, Lunar New Year,
   Indian festivals, month and quarter end. Truncation test. Must land before H-04 and H-14 run.
 
+### 25–27. From ADR 0004 (starting account £50 and the daily target, 2026-10-10)
+Source: `docs/decisions/0004-starting-account-and-daily-target.md`. At £50 RiskGate refuses every trade (0.01 lot
+risks 16–354% of equity); these items make the small-account path explicit and measurable. None uses trial budget
+or touches the holdout.
+- **25. Minimum-lot exception (needs trading-safety review).** Value: lets tiny-live trade one minimum lot at small
+  equity without loosening any limit (Position sizing · RUN). Acceptance:
+  - New `risk.min_lot_risk_cap` in settings (validated 0 < x ≤ `max_risk_per_trade`, or null). With null, every
+    existing gate test passes unchanged and a test shows decisions identical to today on a grid of equities and
+    stops.
+  - Applies only when `lots_raw < volume_min`: the gate allows exactly `volume_min` iff its realised risk ≤ the cap
+    (half the cap in `SIZE_DOWN` or combined size-down), else refuses `min_lot_exceeds_risk`. Tests, tiny-live, 15m
+    stop $10.90: equity $1,500 allowed at 0.01 lot (0.73%); $1,000 refused (1.09%); $1,500 in `SIZE_DOWN` refused
+    (cap 0.5%); `lots_raw ≥ volume_min` unchanged; never more than `volume_min` under the exception.
+  - Margin (max(broker, 1:20), 300% floor), combined notional, caps, stages, blackouts and spread checks still run
+    after it: a test at $600 equity with a stop that fits the cap is refused `margin_level_floor`.
+  - An allowed exception decision carries reason `min_lot_exception`, realised risk and the phase rate; it reaches
+    the decisions log and the approval card's risk line. Exits untouched (test: exit path never calls the gate).
+  - Reviews: trading-safety, code; DESIGN Sizing paragraph and TRACEABILITY row updated in the same change.
+  Depends on: nothing; 19 (heat cap) must count exception trades in full when it lands.
+- **26. Milestone ladder and monthly % / R report.** Value: reports progress the way ADR 0004 decided (monthly %
+  and R, equity against the next milestone), never £/day (Performance review · RUN). Acceptance:
+  - A monthly report (job + dashboard card + one Telegram line) with time-weighted % return net of deposits and
+    withdrawals, net R, R/trade with trade count and 90% interval, max drawdown %, all by timeframe; golden test on a
+    fixture with a mid-month deposit (the deposit is not counted as return).
+  - The milestone ladder (equity at which the minimum lot fits 15m/1h/4h/1d at the 1% cap and at 0.5%) is computed
+    from the sizing-feasibility report (item 22) at the current price and measured ATR, not hard-coded; test that a
+    50% higher ATR raises every threshold by 50%.
+  - No £/day figure or target anywhere in the report, card or digest (test on the rendered text).
+  - Reviews: code, ui-ux (screen and Telegram), quant (the R interval). Read-only: no trading-safety review.
+  Depends on: 22.
+- **27. Broker contract terms recorded.** Value: replaces the ADR's unverified leverage, minimum lot, step, contract
+  size and stop-out level with the terminal's own values (Execution · RUN). Acceptance:
+  - On the demo terminal, `state/broker_terms_<account>.json` records `volume_min`, `volume_step`, contract size,
+    account leverage, margin for 0.01 lot at the current price (`order_calc_margin`) and the stop-out level, with a
+    timestamp; no login, balance or account number.
+  - ADR 0004's assumptions table is updated with the measured values (or a note that they matched).
+  - Reviews: code, sre. Read-only on the broker: no trading-safety review.
+  Depends on: 1.
+
 ## Needs the owner
 These are never decided by the product owner or by agents.
 - **Automatic deployment to the trading servers (CD).** CI runs on every change. Deploying to the Oracle VMs
@@ -264,9 +306,13 @@ These are never decided by the product owner or by agents.
   toolkit trials that compete with item 5 for Q1's 20.
 - **Going live.** Demo until the paper → tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
   and the typed phrase. Item 8 computes whether the gate is met. It never flips it.
-- **Trader-playbook risk policy** (items 17–22; playbook section 7): the account size or tiny-live risk that
-  lets H-01's minimum lot fit, the weekend rule (recommend flat for intraday families), tier-2 and holiday windows,
-  throttle and heat-cap values, edge-linked sizing (G-10).
+- **Trader-playbook risk policy** (items 17–22; playbook section 7): the weekend rule (recommend flat for intraday
+  families), tier-2 and holiday windows, throttle and heat-cap values, edge-linked sizing (G-10). The account size
+  and tiny-live risk for H-01 were decided under your delegation in ADR 0004 (minimum-lot exception at ≤ 1%; H-01
+  stays in shadow until equity reaches ~£7,900).
+- **Starting account (ADR 0004).** £50 places no trade under the rails; the £50/day goal is a long-run outcome at
+  roughly £19k–38k equity. Yours: the deposit plan toward the first milestone (~£825 for 15m, ~£1,650 for 1h), and
+  the demo balance (recommend the first milestone you expect to fund, not £50).
 - Also yours: sign off the P7 threshold values (item 8); commit or approve the first measured cost table until
   item 2 lands; VM provisioning and every credential (item 1).
 

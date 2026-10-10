@@ -618,6 +618,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `why = self._sessions.entry_block(now)` as an entry-blocking reason. Exits are unaffected.
 
 ## Next steps (no owner input needed unless marked)
+- Starting account and daily target (2026-10-10, owner delegated; `docs/decisions/0004-starting-account-and-daily-target.md`):
+  at £50 (~$66.50 at GBPUSD 1.33) RiskGate refuses every trade on every timeframe (0.01 lot risks 16.4% on 15m up to
+  354% on 1w at gold $4,150 and estimated ATRs; the 1:20 margin floor alone needs ~£470). £50/day is +100%/day;
+  realistic only at ~£19k–38k equity (0.5% risk, 0.1–0.2 R, 15m + 1h). Decided: demo continues at a demo balance
+  equal to the first milestone; minimum-lot exception rule for RiskGate at ≤ 1% realised risk (BACKLOG 25, needs
+  trading-safety review, ships inert with `min_lot_risk_cap: null`); milestones ~£825 (15m), £1,650 (1h), £3,270
+  (4h), £7,900 (1d, also needs 1d as a decision TF); H-01 stays in shadow until the 1d milestone; progress reported
+  as monthly % and R (BACKLOG 26), never £/day; broker terms to be measured (BACKLOG 27). Ruin and feasibility
+  numbers came from the G-5/G-7 tools on unmerged commit 08e654a (run from an extract; re-run from main after merge;
+  its post-8% sizing caveat makes the halt probabilities upper bounds). Owner: deposit plan and demo balance.
 - XAUUSD trader playbook (2026-10-10, owner request): `docs/research/xauusd-trader-playbook.md` lists ~70 things a
   professional gold trader considers (drivers, CFD microstructure, technicals, risk management, process), each with
   sources, evidence grade and goldbot status, then a ranked gap list (risk gaps G-1..G-10 first: swap in live EV,
