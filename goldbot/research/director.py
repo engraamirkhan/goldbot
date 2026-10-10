@@ -26,33 +26,46 @@ Evidence of signal per family (each component in [0, 1], summed to `evidence` in
 Statistical budget (docs/proposals/2026-10-design-improvements.md, P1/P2): every trial raises the deflated-Sharpe bar
 for any later real discovery, so the director plans only what is left of the quarter's trial budget
 (`research.trial_budget_quarter`, DEFAULT_QUARTER_BUDGET when that setting does not exist), counted from the trial
-registry. Pre-registered trials with a written rationale come first: at most GRID_SHARE of a family's allowance may be
-spent by the monthly label grid (none while `trial_budget_per_month` is 0). Trials recorded with status "holdout"
-are never read as evidence: the held-out year is scored once per configuration and must not steer the search.
+registry, AFTER the pre-registered queue's reservation (`reserved_trials`): budget - used - reserved, where reserved =
+max(`research.reserved_trials_quarter` - trials run against one of the quarter's `preregistered` registry rows, the
+quarter's preregistered rows not yet run). The monthly label grid is held to the same remainder. At most GRID_SHARE of
+a family's allowance may be spent by the label grid (none while `research.label_grid_paused`). Trials recorded with
+status "holdout" are never read as evidence: the held-out year is scored once per configuration and must not steer
+the search.
 
 Flags: `lookahead` (the family's latest trial that ran the lookahead check found columns using future data) blocks the
 family: it gets no budget until a clean check is recorded. `few_candidates_per_fold` (best trial below
 MIN_CANDIDATES_PER_FOLD, the design's per-fold minimum), `no_trials`, `no_oof_auc` and `few_filtered_trades` are
 reported as reasons; they do not change the budget by themselves.
 
-Out-of-sample attribution (state/attribution.json, research/attribution.py) is one more, bounded input. Only the
-family cells of that report are read (champion-path shadow trades, out of sample by construction), only cells not
-marked "noise" (fewer than `attribution.min_trades` trades), and only from a report dated at or before the plan and
-at most ATTRIBUTION_MAX_AGE_DAYS old. Per family:
+Out-of-sample attribution (state/attribution.json, research/attribution.py) is one more, bounded input. The director
+rebuilds each family's cell from the report's per-trade rows (`trades`: taken, champion-path shadow trades), keeping
+only trades entered on or after their model version's promotion (`promoted`, from the model registry; a version with
+no promotion record is not counted), and for a retired family only trades entered on or after its retirement date.
+A cell under the report's `min_trades` is noise; only a report dated at or before the plan and at most
+ATTRIBUTION_MAX_AGE_DAYS old is read. The rows are the report's latest `attribution.trade_rows` taken trades, so a
+truncated report gives a smaller sample, never a selected one. Per family:
 
     t_shrunk = net-R t-stat x n / (n + ATTRIBUTION_SHRINK_TRADES)      (shrunk toward 0 by trade count)
     term     = clip(t_shrunk / Z_FULL, -1, 1)
 
-The term tilts the evidence-based split of the pool (what is left after the floors), never the floors themselves:
+The attribution trades are the same shadow trades shadow_evidence already scores, so the term tilts a family only
+when it has no shadow_z (one source of shadow evidence, never two). The term tilts the evidence-based split of the
+pool (what is left after the floors), never the floors themselves:
 with s_i the evidence-based share and s_bar = sum s_i x term_i, the tilted share is
 s_i x (1 + lam x (term_i - s_bar)), lam = ATTRIBUTION_SHIFT_CAP / max(1, max |term_i - s_bar|). The shares still sum to
 1 and no share moves by more than ATTRIBUTION_SHIFT_CAP (25%) of its evidence-based value; a family with zero
 evidence share stays at zero (attribution cannot create a share, only tilt one). Without a usable report every term
 is 0 and the plan is the evidence-only plan, bit for bit.
 
-Retired ideas: docs/research/hypotheses.md section B is parsed read-only (`retired_families`). A family whose row
-there has status "retired..." gets 0 trials, like a lookahead-blocked family, unless it carries new out-of-sample
-evidence since: a non-noise attribution cell with net-R t-stat >= NEW_EVIDENCE_T or a shadow t-stat >= NEW_EVIDENCE_T.
+Retired ideas: the list is governance, so it lives in settings (`research.retired_families`: family, hypothesis id,
+retired date, reason, registry trials). docs/research/hypotheses.md section B mirrors it; the plan stores the doc's
+sha256 and any disagreement (`retired_drift`), but the doc never changes the allocation by itself. A retired family
+keeps an exploration floor of RETIRED_FLOOR trial a quarter (less the trials it already had this quarter) and nothing
+from the evidence pool. It is reinstated (back to the normal floor and pool) by one source only: its attribution
+trades entered after the retirement date, non-noise, with t_shrunk >= reinstatement_threshold(m), REINSTATE_T's
+one-sided tail divided by m = retired families tested x REINSTATE_SOURCES (Bonferroni; 5 families: 2.61). Shadow
+books are not a reinstatement source: they carry no per-trade dates, so they cannot be cut at the retirement date.
 A lookahead-dirty family gets 0 whatever its evidence.
 
 Allocation (`allocate`) is described in its docstring; every number in a ResearchPlan can be recomputed from the
@@ -61,9 +74,13 @@ family's budget and share, and by how much, against the evidence-only plan.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import re
 import statistics
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -71,9 +88,11 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.config import RetiredFamily
+from goldbot.research.attribution import T_SIGNIFICANT
 from goldbot.research.population import DSR_PROMOTE, MIN_RANK_TRADES
 from goldbot.research.promotion import MIN_SHADOW_TRADES, PerfStats
-from goldbot.research.registry import quarter_of, quarter_trials
+from goldbot.research.registry import PREREGISTERED, is_trial, quarter_of, quarter_trials
 
 Z_FULL = 3.0                     # three standard errors above chance counts as full evidence
 DSR_BAR = DSR_PROMOTE            # 0.95: the deflated-Sharpe bar the gates use
@@ -88,7 +107,10 @@ HOLDOUT_STATUS = "holdout"
 ATTRIBUTION_SHIFT_CAP = 0.25     # attribution may move a family's share of the evidence split by at most +-25%
 ATTRIBUTION_SHRINK_TRADES = 100  # t x n / (n + 100): 30 trades keep 23% of the t-stat, 300 keep 75%
 ATTRIBUTION_MAX_AGE_DAYS = 14    # an older attribution report (the job runs daily) is not used
-NEW_EVIDENCE_T = 2.0             # t-stat that counts as new out-of-sample evidence for a retired idea
+RETIRED_FLOOR = 1                # exploration trials a quarter a retired family keeps (never from the evidence pool)
+REINSTATE_T = 2.0                # one-sided bar on the shrunk attribution t before the multiple-testing correction
+REINSTATE_SOURCES = 1            # reinstatement sources tested: attribution trades after the retirement date, only
+GRID_RATIONALE = "monthly bounded label-grid search"   # the rationale prefix jobs.monthly_research records
 ATTRIBUTION_FILE = "attribution.json"   # research/attribution.py REPORT_FILE, in the state directory
 HYPOTHESES_PATH = Path(__file__).resolve().parents[2] / "docs" / "research" / "hypotheses.md"
 RETIRED_SECTION = "## B."
@@ -96,16 +118,19 @@ RETIRED_SECTION = "## B."
 IDEA_ALIASES = {"range breakout": "breakout", "trend pullback": "trend", "session_open breakout": "session_open"}
 
 ALLOCATION_RULE = (
-    "Eligible families (not lookahead-blocked) each get floor = min(floor, budget // eligible, cap). The rest of the "
-    "budget is split in proportion to evidence (equal split when every eligible family has zero evidence) by largest "
-    "remainders (ties: higher evidence, then family name); a family above its cap is cut to the cap and the excess is "
-    "split again among the others. Blocked families get 0. The total equals the monthly budget unless every eligible "
-    "family is at its cap (then the rest is reported as unallocated). The budget is what is left of the quarter's "
-    "trial budget; the label grid may use at most GRID_SHARE of a family's allowance, the rest is for pre-registered "
-    "trials with a rationale. Families retired in docs/research/hypotheses.md section B get 0 unless they carry new "
-    "out-of-sample evidence (attribution or shadow t-stat >= 2). The attribution term (non-noise family cells of "
-    "state/attribution.json, net-R t-stat shrunk by n/(n+100), clipped to +-1 at t=3) tilts each eligible family's "
-    "evidence share of the pool by at most +-25%; the floor is never tilted.")
+    "The budget is what is left of the quarter's trial budget after the trials already run and the pre-registered "
+    "queue's reservation. Eligible families (not lookahead-blocked, not retired) each get floor = min(floor, budget // "
+    "eligible, cap); then each retired family gets its exploration floor (1 a quarter, less its trials this quarter). "
+    "The rest is split among eligible families in proportion to evidence (equal split when every eligible family has "
+    "zero evidence) by largest remainders (ties: higher evidence, then family name); a family above its cap is cut to "
+    "the cap and the excess is split again among the others. Blocked families get 0. The total equals the budget "
+    "unless every eligible family is at its cap (then the rest is reported as unallocated). The label grid may use at "
+    "most GRID_SHARE of a family's allowance (0 while paused), the rest is for pre-registered trials with a rationale. "
+    "Retired families (settings research.retired_families) are reinstated only by attribution trades after the "
+    "retirement date with shrunk t >= the Bonferroni-corrected bar. The attribution term (per-trade rows of "
+    "state/attribution.json from each version's promotion on, net-R t-stat shrunk by n/(n+100), clipped to +-1 at "
+    "t=3) tilts the evidence share of an eligible family without shadow evidence by at most +-25%; the floor is "
+    "never tilted.")
 
 
 class ShadowEvidence(FrozenRecord):
@@ -127,8 +152,8 @@ class AgentEvidence(FrozenRecord):
 
 
 class AttributionEvidence(FrozenRecord):
-    """One family's cell of the attribution report (state/attribution.json, breakdowns.family) and the bounded term
-    the director derives from it (0 when the cell is noise or the report is not usable)."""
+    """One family's out-of-sample cell, rebuilt from the attribution report's per-trade rows (state/attribution.json
+    `trades`), and the bounded term the director derives from it (0 when the cell is noise or the report unusable)."""
     n: int = 0
     mean_r_net: float | None = None
     t_stat: float | None = None
@@ -136,12 +161,24 @@ class AttributionEvidence(FrozenRecord):
     used: bool = False                # cell not noise, finite t-stat, report usable
     t_shrunk: float = 0.0             # t x n / (n + ATTRIBUTION_SHRINK_TRADES)
     term: float = 0.0                 # clip(t_shrunk / Z_FULL, -1, 1)
+    excluded_pre_promotion: int = 0   # trades entered before their version's promotion (or of an unpromoted version)
+    excluded_pre_retirement: int = 0  # retired family: trades entered before its retirement date
+    since: str | None = None          # retired family: the retirement date the cell starts from
+    tilts: bool = False               # the term is applied (used, no shadow_z: one shadow source, not two)
+
+
+class Reservation(FrozenRecord):
+    """Trials of the quarter held for the pre-registered queue (`reserved_trials`)."""
+    setting: int                      # research.reserved_trials_quarter
+    run: int                          # trials of the quarter run against one of its preregistered rows
+    pending: int                      # preregistered rows of the quarter not yet run
+    reserved: int                     # max(setting - run, pending)
 
 
 class EvidenceMove(FrozenRecord):
     """What one input changed for one family against the plan without it (budget in trials, share of the pool)."""
     family: str
-    source: str                       # "hypotheses_retired" | "attribution"
+    source: str                       # "retired_families" | "attribution"
     detail: str
     budget_before: int
     budget_after: int
@@ -177,10 +214,11 @@ class FamilyScore(FrozenRecord):
     evidence: float
     blocked: bool
     flags: list[str]
-    retired_id: str | None = None     # docs/research/hypotheses.md section B row naming the family
-    retired_status: str | None = None
-    retired: bool = False             # retired there and no new out-of-sample evidence: 0 trials
-    new_evidence: list[str] = Field(default_factory=list)
+    retired_id: str | None = None     # research.retired_families entry's hypothesis id (hypotheses.md section B row)
+    retired_status: str | None = None  # its reason
+    retired_since: str | None = None   # its retirement date
+    retired: bool = False             # retired and not reinstated: the exploration floor only
+    new_evidence: list[str] = Field(default_factory=list)   # what reinstated it
     attribution: AttributionEvidence | None = None
 
 
@@ -214,6 +252,12 @@ class ResearchPlan(FrozenRecord):
     attribution_as_of: str | None = None
     attribution_note: str | None = None
     hypotheses_note: str | None = None
+    quarter_reserved: int = 0                                       # held for the pre-registered queue
+    reservation: Reservation | None = None
+    retired_floor: dict[str, int] = Field(default_factory=dict)     # exploration floor per retired family, this quarter
+    reinstate_t: float | None = None                                # corrected bar on the shrunk attribution t
+    hypotheses_sha256: str | None = None                            # the doc as read at plan time
+    hypotheses_drift: list[str] = Field(default_factory=list)       # where it disagrees with research.retired_families
 
     def save(self, path: str | Path) -> None:
         p = Path(path)
@@ -258,10 +302,44 @@ def quarter_usage(trials: list[dict[str, Any]], now: pd.Timestamp, budget: int) 
     return q, used, max(budget - used, 0)
 
 
-def grid_allowance(budget: dict[str, int], trial_budget_per_month: int) -> dict[str, int]:
+def grid_allowance(budget: dict[str, int], trial_budget_per_month: int, paused: bool = False) -> dict[str, int]:
     """The label grid's share of each family's allowance: floor(GRID_SHARE x budget), at most the monthly grid size,
-    and 0 while the grid is paused (trial_budget_per_month == 0)."""
-    return {f: min(int(b * GRID_SHARE), trial_budget_per_month) for f, b in budget.items()}
+    and 0 while the grid is paused (research.label_grid_paused, or trial_budget_per_month == 0)."""
+    per_month = 0 if paused else trial_budget_per_month
+    return {f: min(int(b * GRID_SHARE), per_month) for f, b in budget.items()}
+
+
+def _row_quarter(row: dict[str, Any]) -> str | None:
+    try:
+        ts = datetime.fromisoformat(str(row.get("ts")))
+    except ValueError:
+        return None
+    return quarter_of(ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc))
+
+
+def reserved_trials(rows: list[dict[str, Any]], quarter: str, setting: int) -> Reservation:
+    """Trials of `quarter` held for the pre-registered queue, counted BEFORE the director's pool and the label grid:
+    max(setting - run, pending). `run` counts the quarter's trials that were run against one of its `preregistered`
+    rows (linked by `preregistration.trial`, or the same family and config hash with a trial number at or after the
+    pre-registration's); `pending` counts the preregistered rows not yet run. So the reservation shrinks only as the
+    pre-registered plan is executed, a queued pre-registration is always covered, and a row is never counted twice."""
+    prereg = [r for r in rows if r.get("status") == PREREGISTERED and _row_quarter(r) == quarter]
+    matched: set[int] = set()
+    for t in rows:
+        if not is_trial(t) or _row_quarter(t) != quarter:
+            continue
+        link = (t.get("preregistration") or {}).get("trial") if isinstance(t.get("preregistration"), dict) else None
+        n = int(_num(t.get("trial")) or 0)
+        for i, p in enumerate(prereg):
+            if i in matched:
+                continue
+            same = p.get("family") == t.get("family") and p.get("config_hash") == t.get("config_hash") \
+                and n >= int(_num(p.get("trial")) or 0)
+            if (link is not None and p.get("trial") == link) or (link is None and same):
+                matched.add(i)
+                break
+    run, pending = len(matched), len(prereg) - len(matched)
+    return Reservation(setting=setting, run=run, pending=pending, reserved=max(setting - run, pending, 0))
 
 
 # ---------------------------------------------------------------------------------------------- evidence
@@ -373,23 +451,38 @@ def score_families(families: list[str], trials: list[dict[str, Any]], shadow: li
 
 
 # ---------------------------------------------------------------------------------------------- attribution, hypotheses
-def attribution_evidence(report: dict[str, Any] | None, families: list[str],
-                         now: pd.Timestamp) -> tuple[dict[str, AttributionEvidence], str | None, str]:
-    """Per family the attribution cell and its bounded term; (evidence, report as_of, note). Only family cells not
-    marked noise, from a report dated at or before `now` (point in time) and at most ATTRIBUTION_MAX_AGE_DAYS old;
-    anything else gives term 0. The report is the champion path's shadow trades: out of sample by construction."""
+def _ts(v: Any) -> pd.Timestamp | None:
+    try:
+        t = pd.Timestamp(v)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(t):
+        return None
+    return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+
+
+def _verdict(n: int, t: float | None, min_trades: int) -> str:
+    if n < min_trades or t is None:
+        return "noise"
+    if abs(t) >= T_SIGNIFICANT:
+        return "positive" if t > 0 else "negative"
+    return "indistinguishable from zero"
+
+
+def attribution_evidence(report: dict[str, Any] | None, families: list[str], now: pd.Timestamp,
+                         promoted: Mapping[str, pd.Timestamp | None] | None = None,
+                         since: Mapping[str, pd.Timestamp] | None = None,
+                         ) -> tuple[dict[str, AttributionEvidence], str | None, str]:
+    """Per family the out-of-sample cell and its bounded term; (evidence, report as_of, note). Cells are rebuilt from
+    the report's per-trade rows: a trade counts only when its version has a promotion date in `promoted` and it was
+    entered on or after it, and, for a family in `since` (retired), entered on or after that date. A cell under the
+    report's `min_trades` is noise. Only a report dated at or before `now` (point in time) and at most
+    ATTRIBUTION_MAX_AGE_DAYS old is read; anything else gives term 0."""
     empty = {f: AttributionEvidence() for f in families}
     if not isinstance(report, dict):
         return empty, None, "no attribution report: no attribution term"
-    try:
-        raw = report.get("as_of")
-        if not isinstance(raw, str):
-            raise ValueError("no as_of")
-        as_of = pd.Timestamp(raw)
-        if pd.isna(as_of):
-            raise ValueError("no as_of")
-        as_of = as_of.tz_localize("UTC") if as_of.tzinfo is None else as_of.tz_convert("UTC")
-    except (TypeError, ValueError):
+    as_of = _ts(report.get("as_of")) if isinstance(report.get("as_of"), str) else None
+    if as_of is None:
         return empty, None, "attribution report without a readable as_of: not used"
     stamp = f"{as_of:%Y-%m-%dT%H:%M:%SZ}"
     if as_of > now:
@@ -397,41 +490,67 @@ def attribution_evidence(report: dict[str, Any] | None, families: list[str],
     if now - as_of > pd.Timedelta(days=ATTRIBUTION_MAX_AGE_DAYS):
         return empty, stamp, f"attribution report older than {ATTRIBUTION_MAX_AGE_DAYS} days: not used"
     min_trades = int(_num(report.get("min_trades")) or 0)
-    cells = (report.get("breakdowns") or {}).get("family") or {}
+    promo = {str(k): _ts(v) for k, v in (promoted or {}).items() if v is not None}
+    cut = dict(since or {})
+    rets: dict[str, list[float]] = {f: [] for f in families}
+    pre_promo = {f: 0 for f in families}
+    pre_ret = {f: 0 for f in families}
+    rows = [r for r in report.get("trades") or [] if isinstance(r, dict)]
+    for r in rows:
+        fam = str(r.get("family"))
+        if fam not in rets or r.get("taken") is False:
+            continue
+        entry, x = _ts(r.get("entry_utc")), _num(r.get("r_net"))
+        if entry is None or x is None or entry > now:
+            continue
+        p = promo.get(str(r.get("version")))
+        if p is None or entry < p:
+            pre_promo[fam] += 1
+            continue
+        if fam in cut and entry < cut[fam]:
+            pre_ret[fam] += 1
+            continue
+        rets[fam].append(x)
     out: dict[str, AttributionEvidence] = {}
     for f in families:
-        c = cells.get(f)
-        if not isinstance(c, dict):
-            out[f] = AttributionEvidence()
-            continue
-        n = int(_num(c.get("n")) or 0)
-        t = _num(c.get("t_stat"))
-        verdict = str(c.get("verdict") or "noise")
-        used = verdict != "noise" and n >= min_trades and t is not None
+        v = rets[f]
+        n = len(v)
+        mean = statistics.fmean(v) if v else None
+        sd = statistics.stdev(v) if n >= 2 else 0.0
+        t = mean / sd * math.sqrt(n) if mean is not None and sd > 0 else None
+        verdict = _verdict(n, t, min_trades)
+        used = verdict != "noise"
         t_shrunk = (t or 0.0) * n / (n + ATTRIBUTION_SHRINK_TRADES) if used else 0.0
-        out[f] = AttributionEvidence(n=n, mean_r_net=_num(c.get("mean_r_net")), t_stat=t, verdict=verdict, used=used,
-                                     t_shrunk=round(t_shrunk, 9),
-                                     term=round(min(max(t_shrunk / Z_FULL, -1.0), 1.0), 9))
+        out[f] = AttributionEvidence(
+            n=n, mean_r_net=None if mean is None else round(mean, 9), t_stat=None if t is None else round(t, 9),
+            verdict=verdict if n else "missing", used=used, t_shrunk=round(t_shrunk, 9),
+            term=round(min(max(t_shrunk / Z_FULL, -1.0), 1.0), 9), excluded_pre_promotion=pre_promo[f],
+            excluded_pre_retirement=pre_ret[f], since=f"{cut[f]:%Y-%m-%d}" if f in cut else None)
     used_n = sum(1 for e in out.values() if e.used)
-    return out, stamp, f"attribution report {stamp}: {used_n} non-noise family cells used (min {min_trades} trades)"
+    n_taken = int(_num(report.get("n_taken")) or 0)
+    trunc = (f"; the report keeps the latest {len(rows)} of {n_taken} taken trades (attribution.trade_rows)"
+             if n_taken > len(rows) else "")
+    return out, stamp, (f"attribution report {stamp}: {used_n} non-noise family cells from its per-trade rows (min "
+                        f"{min_trades} trades; {sum(pre_promo.values())} trades before their version's promotion and "
+                        f"{sum(pre_ret.values())} before a retirement date left out{trunc})")
 
 
 def _cells(line: str) -> list[str]:
     return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
-def retired_families(text: str | None, families: list[str]) -> dict[str, tuple[str, str]]:
-    """family -> (row id, status) for docs/research/hypotheses.md section B rows whose status starts with "retired".
-    A row names a family when the first word of its Idea cell is the family name, or its lead words are an
-    IDEA_ALIASES key. Read-only; a missing file or section means no retired family."""
-    if not text:
-        return {}
+def hypotheses_retired(text: str, families: list[str]) -> tuple[dict[str, tuple[str, list[int]]], list[str]]:
+    """(family -> (row id, registry trials), problems) for docs/research/hypotheses.md section B rows whose status
+    starts with "retired". A row names a family when the first word of its Idea cell is the family name, or its lead
+    words are an IDEA_ALIASES key. Read-only, and only for the consistency check (`retired_drift`): the allocation
+    reads research.retired_families. A missing section or a table without ID / Idea / Status columns is a problem,
+    never "nothing retired"."""
     lines = text.splitlines()
     start = next((i for i, ln in enumerate(lines) if ln.startswith(RETIRED_SECTION)), None)
     if start is None:
-        return {}
+        return {}, [f"hypotheses.md has no '{RETIRED_SECTION}' section"]
     header: list[str] | None = None
-    out: dict[str, tuple[str, str]] = {}
+    out: dict[str, tuple[str, list[int]]] = {}
     for ln in lines[start + 1:]:
         if ln.startswith("## "):
             break
@@ -440,19 +559,54 @@ def retired_families(text: str | None, families: list[str]) -> dict[str, tuple[s
         cells = _cells(ln)
         if header is None:
             header = [c.lower() for c in cells]
+            if not {"id", "idea", "status"} <= set(header):
+                return {}, [f"hypotheses.md section B table header {cells} lacks ID, Idea and Status columns"]
             continue
-        if not {"id", "idea", "status"} <= set(header) or len(cells) != len(header) or set("".join(cells)) <= set("-: "):
+        if len(cells) != len(header) or set("".join(cells)) <= set("-: "):
             continue
         row = dict(zip(header, cells))
-        status = row["status"].strip().lower()
-        if not status.startswith("retired"):
+        if not row["status"].strip().lower().startswith("retired"):
             continue
         lead = row["idea"].split("(")[0].strip().lower()
         words = lead.split()
         fam = IDEA_ALIASES.get(lead) or (words[0] if words else "")
+        col = next((h for h in header if h.startswith("trials")), None)
+        trials = [int(x) for x in re.findall(r"#(\d+)", row[col].split("(")[0])] if col else []
         if fam in families and fam not in out:
-            out[fam] = (row["id"], row["status"])
-    return out
+            out[fam] = (row["id"], trials)
+    if header is None:
+        return {}, ["hypotheses.md section B has no table"]
+    return out, []
+
+
+def retired_drift(retired: Sequence[RetiredFamily], text: str | None, families: list[str]) -> list[str]:
+    """Where research.retired_families (the governance) and hypotheses.md section B (its mirror) disagree: family,
+    row id or registry trials. Empty when they agree. Reported in the plan; never changes the allocation."""
+    if text is None:
+        return ["docs/research/hypotheses.md missing: research.retired_families cannot be checked against it"]
+    doc, problems = hypotheses_retired(text, families)
+    cfg = {e.family: e for e in retired}
+    for fam in sorted(set(doc) | set(cfg)):
+        if fam not in families:
+            problems.append(f"{fam}: in research.retired_families but not a specialist family")
+        elif fam not in cfg:
+            problems.append(f"{fam}: retired in hypotheses.md ({doc[fam][0]}) but not in research.retired_families")
+        elif fam not in doc:
+            problems.append(f"{fam}: in research.retired_families ({cfg[fam].hypothesis_id}) but not retired in "
+                            "hypotheses.md section B")
+        else:
+            if doc[fam][0] != cfg[fam].hypothesis_id:
+                problems.append(f"{fam}: hypotheses.md row {doc[fam][0]} vs settings {cfg[fam].hypothesis_id}")
+            if sorted(doc[fam][1]) != sorted(cfg[fam].trials):
+                problems.append(f"{fam}: hypotheses.md trials {sorted(doc[fam][1])} vs settings {sorted(cfg[fam].trials)}")
+    return problems
+
+
+def reinstatement_threshold(n_tests: int) -> float:
+    """The bar a retired family's shrunk attribution t must reach: REINSTATE_T's one-sided tail probability divided by
+    the number of tests (retired families x REINSTATE_SOURCES; Bonferroni), back to a z. 1 test: 2.0; 5: 2.61."""
+    nd = statistics.NormalDist()
+    return nd.inv_cdf(1.0 - (1.0 - nd.cdf(REINSTATE_T)) / max(n_tests, 1))
 
 
 def load_attribution(state_dir: str | Path) -> dict[str, Any] | None:
@@ -502,34 +656,44 @@ def tilted_shares(evidence: dict[str, float], term: dict[str, float]) -> tuple[d
 
 
 def allocate(scores: list[FamilyScore], monthly_budget: int, floor: int, cap: int | None = None,
-             tilt: dict[str, float] | None = None) -> tuple[dict[str, int], int]:
+             tilt: dict[str, float] | None = None,
+             retired_floor: Mapping[str, int] | None = None) -> tuple[dict[str, int], int]:
     """Trial budget per family (monthly_budget: the trials being planned); returns (budget per family, unallocated).
 
-    1. A family with lookahead-dirty features (FamilyScore.blocked) gets 0 until a clean check is recorded; so does a
-       family retired in docs/research/hypotheses.md section B without new out-of-sample evidence (.retired).
-    2. Every other family gets the exploration floor f = min(floor, monthly_budget // n_eligible, cap), so no family
-       is starved by a lucky streak elsewhere and a family with no evidence yet still gets looked at.
-    3. The remaining R = monthly_budget - f * n_eligible is split in proportion to `evidence` (equally when every
-       eligible family has zero evidence) by largest remainders, ties to higher evidence, then family name.
-    4. With a cap (the number of distinct variants a family's search can run), a family above it is cut to the cap
-       and the excess is split again among the uncapped families by step 3; whatever cannot be placed is unallocated.
-    5. `tilt` (attribution terms in [-1, 1]) replaces the evidence weights of step 3 by `tilted_shares`: each share of
-       the split moves by at most ATTRIBUTION_SHIFT_CAP of itself. All terms 0 (or no tilt) is exactly steps 1-4.
+    1. A family with lookahead-dirty features (FamilyScore.blocked) gets 0 until a clean check is recorded.
+    2. Every eligible family (not blocked, not .retired) gets the exploration floor f = min(floor, monthly_budget //
+       n_eligible, cap), so no family is starved by a lucky streak elsewhere and a family with no evidence yet still
+       gets looked at.
+    3. Each retired family (research.retired_families, not reinstated, not blocked) then gets its `retired_floor`
+       (RETIRED_FLOOR a quarter less its trials this quarter), in family order while trials are left, and nothing
+       more: retirement is never permanent, and never more than exploration.
+    4. The rest is split among eligible families in proportion to `evidence` (equally when every eligible family has
+       zero evidence) by largest remainders, ties to higher evidence, then family name.
+    5. With a cap (the number of distinct variants a family's search can run), a family above it is cut to the cap
+       and the excess is split again among the uncapped families by step 4; whatever cannot be placed is unallocated.
+    6. `tilt` (attribution terms in [-1, 1]) replaces the evidence weights of step 4 by `tilted_shares`: each share of
+       the split moves by at most ATTRIBUTION_SHIFT_CAP of itself. All terms 0 (or no tilt) is exactly steps 1-5.
 
-    Sum of the budget == monthly_budget unless every eligible family is at its cap or every family is blocked.
+    Sum of the budget == monthly_budget unless every eligible family is at its cap or none is eligible.
     """
     if monthly_budget < 0 or floor < 0 or (cap is not None and cap < 0):
         raise ValueError("budget, floor and cap must be non-negative")
     alloc = {s.family: 0 for s in scores}
     eligible = sorted(s.family for s in scores if not s.blocked and not s.retired)
-    if not eligible:
-        return alloc, monthly_budget
-    evidence = {s.family: s.evidence for s in scores}
+    retirees = sorted(s.family for s in scores if s.retired and not s.blocked)
     hi = cap if cap is not None else monthly_budget
-    f = min(floor, monthly_budget // len(eligible), hi)
-    for fam in eligible:
-        alloc[fam] = f
-    pool = monthly_budget - f * len(eligible)
+    left = monthly_budget
+    if eligible:
+        f = min(floor, monthly_budget // len(eligible), hi)
+        for fam in eligible:
+            alloc[fam] = f
+        left -= f * len(eligible)
+    for fam in retirees:
+        give = max(min((retired_floor or {}).get(fam, 0), left, hi), 0)
+        alloc[fam] = give
+        left -= give
+    evidence = {s.family: s.evidence for s in scores}
+    pool = left
     active = [fam for fam in eligible if alloc[fam] < hi]
     while pool > 0 and active:
         weights = {fam: evidence[fam] for fam in active}
@@ -546,7 +710,7 @@ def allocate(scores: list[FamilyScore], monthly_budget: int, floor: int, cap: in
 
 
 # ---------------------------------------------------------------------------------------------- plan
-def _reasons(s: FamilyScore) -> list[str]:
+def _reasons(s: FamilyScore, retired_floor: int = 0) -> list[str]:
     out: list[str] = []
     if s.blocked:
         out.append(f"blocked: trial #{s.lookahead_trial}'s lookahead check found {len(s.lookahead_columns)} columns using "
@@ -563,17 +727,19 @@ def _reasons(s: FamilyScore) -> list[str]:
     elif s.shadow_trades:
         out.append(f"{s.shadow_trades} shadow trades so far (ranked from {MIN_SHADOW_TRADES}-{MIN_RANK_TRADES})")
     if s.retired:
-        out.append(f"retired in docs/research/hypotheses.md ({s.retired_id}: {s.retired_status}) and no new "
-                   f"out-of-sample evidence (attribution or shadow t-stat >= {NEW_EVIDENCE_T:g}): 0 trials")
+        out.append(f"retired since {s.retired_since} ({s.retired_id}: {s.retired_status}); not reinstated by "
+                   f"attribution after that date: exploration floor of {retired_floor} trial(s) left this quarter")
     elif s.retired_id is not None:
-        out.append(f"retired in docs/research/hypotheses.md ({s.retired_id}) but new evidence: {'; '.join(s.new_evidence)}")
+        out.append(f"retired since {s.retired_since} ({s.retired_id}) but reinstated: {'; '.join(s.new_evidence)}")
     a = s.attribution
     if a is not None and a.used and a.t_stat is not None:
         net = f"net R {a.mean_r_net:+.3f}" if a.mean_r_net is not None else "net R n/a"
-        out.append(f"attribution: {net} over {a.n} shadow trades, t {a.t_stat:+.2f} "
-                   f"(shrunk {a.t_shrunk:+.2f}, term {a.term:+.2f}; {a.verdict})")
+        use = "tilts the split" if a.tilts else ("not a tilt: shadow evidence already counts these trades"
+                                                 if s.shadow_z is not None else "not a tilt")
+        out.append(f"attribution: {net} over {a.n} out-of-sample shadow trades, t {a.t_stat:+.2f} "
+                   f"(shrunk {a.t_shrunk:+.2f}, term {a.term:+.2f}; {a.verdict}; {use})")
     elif a is not None and a.n:
-        out.append(f"attribution: {a.n} shadow trades, {a.verdict}: not evidence")
+        out.append(f"attribution: {a.n} out-of-sample shadow trades, {a.verdict}: not evidence")
     if "few_candidates_per_fold" in s.flags and s.best_candidates_per_fold is not None:
         out.append(f"only {s.best_candidates_per_fold:.0f} candidates per fold (need {MIN_CANDIDATES_PER_FOLD}): "
                    "a label grid cannot fix this; a trigger change needs a written rationale")
@@ -584,16 +750,21 @@ def _reasons(s: FamilyScore) -> list[str]:
     return out
 
 
-def _with_inputs(s: FamilyScore, attr: AttributionEvidence, retired: tuple[str, str] | None) -> FamilyScore:
-    new: list[str] = []
-    if attr.used and attr.t_stat is not None and attr.t_stat >= NEW_EVIDENCE_T:
-        new.append(f"attribution net-R t {attr.t_stat:+.2f} on {attr.n} shadow trades")
-    if s.shadow_z is not None and s.shadow_z >= NEW_EVIDENCE_T:
-        new.append(f"shadow t-stat {s.shadow_z:.1f} ({s.shadow_source})")
+def _with_inputs(s: FamilyScore, attr: AttributionEvidence, retired: RetiredFamily | None,
+                 reinstate_t: float) -> FamilyScore:
+    """The score with its attribution cell and retirement. A retired family is reinstated by one source only: its
+    attribution trades after the retirement date (already cut in `attr`), non-noise, shrunk t >= reinstate_t. The
+    attribution term tilts only a family without shadow_z (the same shadow trades are not counted twice)."""
+    reinstated = retired is not None and attr.used and attr.t_shrunk >= reinstate_t
+    new = ([f"attribution after {attr.since}: net-R t {attr.t_stat:+.2f}, shrunk {attr.t_shrunk:+.2f} >= "
+            f"{reinstate_t:.2f} on {attr.n} trades"] if reinstated and attr.t_stat is not None else [])
+    is_retired = retired is not None and not reinstated
+    attr = attr.model_copy(update={"tilts": attr.used and attr.term != 0.0 and s.shadow_z is None and not is_retired})
     return s.model_copy(update={
-        "attribution": attr, "retired_id": retired[0] if retired else None,
-        "retired_status": retired[1] if retired else None, "retired": retired is not None and not new,
-        "new_evidence": new if retired else []})
+        "attribution": attr, "retired_id": retired.hypothesis_id if retired else None,
+        "retired_status": retired.reason if retired else None,
+        "retired_since": f"{retired.retired:%Y-%m-%d}" if retired else None, "retired": is_retired,
+        "new_evidence": new})
 
 
 def _pool_shares(scores: list[FamilyScore], tilt: dict[str, float]) -> tuple[dict[str, float], dict[str, float]]:
@@ -605,29 +776,39 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
                agents: list[AgentEvidence], *, quarter_budget: int, monthly_total: int, trial_budget_per_month: int,
                floor: int, cap: int | None = None,
                holdout: tuple[pd.Timestamp, pd.Timestamp] | None = None,
-               attribution: dict[str, Any] | None = None, hypotheses: str | None = None) -> ResearchPlan:
-    """Plan for the rest of the quarter: total = min(remaining quarter budget, monthly_total); evidence never includes
-    trials recorded with status "holdout". `attribution` is the parsed state/attribution.json (None: no term),
-    `hypotheses` the text of docs/research/hypotheses.md (None: no retired family). A pure function of its inputs."""
-    quarter, used, remaining = quarter_usage(trials, now, quarter_budget)
-    total = min(remaining, monthly_total)
+               attribution: dict[str, Any] | None = None, hypotheses: str | None = None,
+               retired: Sequence[RetiredFamily] = (), promoted: Mapping[str, pd.Timestamp | None] | None = None,
+               reserved_setting: int = 0, grid_paused: bool = False) -> ResearchPlan:
+    """Plan for the rest of the quarter: total = min(quarter budget - used - reserved, monthly_total); evidence never
+    includes trials recorded with status "holdout". `attribution` is the parsed state/attribution.json (None: no
+    term), `promoted` each model version's promotion time (model registry), `retired` research.retired_families,
+    `reserved_setting` research.reserved_trials_quarter. `hypotheses` (the text of docs/research/hypotheses.md) is
+    only hashed and checked against `retired`: it never moves a trial. A pure function of its inputs."""
+    quarter, used, _ = quarter_usage(trials, now, quarter_budget)
+    reservation = reserved_trials(trials, quarter, reserved_setting)
+    total = min(max(quarter_budget - used - reservation.reserved, 0), monthly_total)
     evidence_rows = [r for r in trials if r.get("status") != HOLDOUT_STATUS]
     fams = sorted(families)
-    attr, attr_as_of, attr_note = attribution_evidence(attribution, fams, now)
-    retired = retired_families(hypotheses, fams)
+    retired_map = {e.family: e for e in retired if e.family in fams}
+    since = {f: pd.Timestamp(e.retired).tz_localize("UTC") for f, e in retired_map.items()}
+    attr, attr_as_of, attr_note = attribution_evidence(attribution, fams, now, promoted, since)
+    reinstate_t = reinstatement_threshold(len(retired_map) * REINSTATE_SOURCES)
     base_scores = score_families(fams, evidence_rows, shadow, agents)
-    scores = [_with_inputs(s, attr[s.family], retired.get(s.family)) for s in base_scores]
+    scores = [_with_inputs(s, attr[s.family], retired_map.get(s.family), reinstate_t) for s in base_scores]
+    q_family = {f: sum(1 for r in trials if is_trial(r) and r.get("family") == f and _row_quarter(r) == quarter)
+                for f in retired_map}
+    retired_floor = {f: max(RETIRED_FLOOR - q_family[f], 0) for f in retired_map}
     evidence_budget, _ = allocate(base_scores, total, floor, cap)
-    untilted, _ = allocate(scores, total, floor, cap)
-    tilt = {f: e.term for f, e in attr.items() if e.used and e.term != 0.0}
-    budget, unallocated = allocate(scores, total, floor, cap, tilt=tilt or None)
+    untilted, _ = allocate(scores, total, floor, cap, retired_floor=retired_floor)
+    tilt = {s.family: s.attribution.term for s in scores if s.attribution is not None and s.attribution.tilts}
+    budget, unallocated = allocate(scores, total, floor, cap, tilt=tilt or None, retired_floor=retired_floor)
 
     moves: list[EvidenceMove] = []
     for s in scores:
         if s.retired or untilted[s.family] != evidence_budget[s.family]:
-            detail = (f"retired ({s.retired_id}) without new out-of-sample evidence" if s.retired
-                      else "budget freed by retired families, split by the allocation rule")
-            moves.append(EvidenceMove(family=s.family, source="hypotheses_retired", detail=detail,
+            detail = (f"retired ({s.retired_id}, {s.retired_since}) and not reinstated: exploration floor only"
+                      if s.retired else "budget freed by retired families, split by the allocation rule")
+            moves.append(EvidenceMove(family=s.family, source="retired_families", detail=detail,
                                       budget_before=evidence_budget[s.family], budget_after=untilted[s.family]))
     base_share, tilted = _pool_shares(scores, tilt)
     for s in scores:
@@ -638,7 +819,7 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
         if abs(t - b) <= 1e-12 and budget[s.family] == untilted[s.family]:
             continue
         detail = (f"attribution t {a.t_stat:+.2f} on {a.n} trades -> term {a.term:+.3f}"
-                  if a.used and a.t_stat is not None else "share moved by other families' attribution terms")
+                  if a.tilts and a.t_stat is not None else "share moved by other families' attribution terms")
         moves.append(EvidenceMove(family=s.family, source="attribution", detail=detail,
                                   budget_before=untilted[s.family], budget_after=budget[s.family],
                                   share_before=round(b, 6), share_after=round(t, 6),
@@ -647,13 +828,18 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
     h0, h1 = holdout or holdout_window(None)
     order = sorted(scores, key=lambda s: (s.blocked or s.retired, -s.evidence, s.family))
     focus = [FocusItem(rank=i + 1, family=s.family, budget=budget[s.family], evidence=round(s.evidence, 4),
-                       reasons=_reasons(s)) for i, s in enumerate(order)]
-    hyp_note = (None if hypotheses is None else
-                f"docs/research/hypotheses.md section B: retired families {sorted(retired) or 'none'}")
+                       reasons=_reasons(s, retired_floor.get(s.family, 0))) for i, s in enumerate(order)]
+    drift = retired_drift(list(retired), hypotheses, fams)
+    hyp_note = (f"research.retired_families: {sorted(retired_map) or 'none'}; docs/research/hypotheses.md section B "
+                + ("agrees" if not drift else f"disagrees in {len(drift)} place(s) (hypotheses_drift)")
+                + "; the doc never moves a trial")
     return ResearchPlan(created_utc=now, quarter=quarter, quarter_budget=quarter_budget, quarter_used=used,
                         total_budget=total, floor=floor, cap=cap, budget=budget,
-                        grid_budget=grid_allowance(budget, trial_budget_per_month), unallocated=unallocated,
-                        holdout_from=f"{h0:%Y-%m-%d}", holdout_to=f"{h1:%Y-%m-%d}",
+                        grid_budget=grid_allowance(budget, trial_budget_per_month, grid_paused),
+                        unallocated=unallocated, holdout_from=f"{h0:%Y-%m-%d}", holdout_to=f"{h1:%Y-%m-%d}",
                         holdout_trials_ignored=len(trials) - len(evidence_rows), focus=focus, evidence=scores,
                         evidence_budget=evidence_budget, moves=moves, attribution_as_of=attr_as_of,
-                        attribution_note=attr_note, hypotheses_note=hyp_note)
+                        attribution_note=attr_note, hypotheses_note=hyp_note, quarter_reserved=reservation.reserved,
+                        reservation=reservation, retired_floor=retired_floor, reinstate_t=round(reinstate_t, 6),
+                        hypotheses_sha256=hashlib.sha256(hypotheses.encode()).hexdigest() if hypotheses else None,
+                        hypotheses_drift=drift)

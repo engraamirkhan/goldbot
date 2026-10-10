@@ -31,6 +31,11 @@ promotion.
 
 ## Order and budget (13 planned of 20; 7 reserve)
 
+**Reserved in code:** `research.reserved_trials_quarter: 13` (config/settings.yaml) holds these 13 trials before the
+research director or the monthly label grid can spend any of the quarter's 20 (`research/director.py`
+`reserved_trials`). Each trial run against its `preregistered` registry row uses one up; a queued preregistered row is
+always covered. The director and the grid get at most 20 - used - reserved (7 if nothing else runs first).
+
 | # | ID | Trial | Depends on | Trials |
 |---|---|---|---|---|
 | 1 | H-13 | Volatility-forecast cost filter, applied as a reporting overlay to every trial below (net R with / without) | none | 0 |

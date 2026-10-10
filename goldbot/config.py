@@ -157,10 +157,25 @@ class AttributionSettings(_Section):
     trade_rows: int = Field(300, ge=0, le=5000)           # most recent per-trade cost rows kept in the JSON
 
 
+class RetiredFamily(_Section):
+    """A specialist family the strategy researcher retired (docs/research/hypotheses.md section B mirrors this list;
+    tests/test_director.py checks they agree). Governance lives here, not in the markdown: editing the doc never
+    changes the research director's allocation by itself."""
+    family: str                           # specialist family name (goldbot/specialists)
+    hypothesis_id: str                    # its row in hypotheses.md section B, e.g. "R-01"
+    retired: date                         # reinstatement reads only out-of-sample trades entered on or after this day
+    reason: str
+    trials: list[int] = Field(default_factory=list)       # registry trial numbers that retired it
+
+
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
     trial_budget_quarter: int = Field(20, ge=1, le=500)   # pre-registered trials per calendar quarter, all families
+    # trials of the quarter held for the pre-registered queue (director.reserved_trials): the research director and
+    # the monthly label grid spend only budget - used - reserved
+    reserved_trials_quarter: int = Field(0, ge=0, le=500)
+    retired_families: list[RetiredFamily] = Field(default_factory=list)
     holdout_from: date | None = date(2025, 10, 1)          # research never sees this window unless scoring it
     holdout_to: date | None = date(2026, 9, 30)            # inclusive
     # primary-signal screen event floor (research.screen, P4); changing it is an owner decision, set before the run

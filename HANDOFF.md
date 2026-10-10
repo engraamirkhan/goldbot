@@ -66,15 +66,24 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   budget without a plan under 21 days old) and stops when the quarter's budget is spent. The `research_director` staff
   agent explains the plan (`read_research_plan`) and may file two hypotheses; the analyst prefers the plan's focus
   families. Boundary: it decides what to research, never what is promoted or traded; promotion stays with the gates.
-  Two more inputs (2026-10-10): (1) the daily attribution report (`state/attribution.json`): only family cells not
-  marked noise, from a report dated at or before the plan and at most 14 days old (champion-path shadow trades, out of
-  sample by construction); the net-R t-stat is shrunk by n/(n+100), clipped to +-1 at t = 3, and tilts each family's
-  evidence share of the pool by at most +-25% (the `director_floor` is never tilted; no report = the evidence-only
-  plan, bit for bit). (2) `docs/research/hypotheses.md` section B, parsed read-only: a family whose row is "retired"
-  gets 0 unless it carries new out-of-sample evidence (attribution or shadow t-stat >= 2). With today's file that
-  retires breakout, intraday_momentum, mean_reversion, session_open and trend, so tsmom gets the whole planned budget
-  (owner-visible on the research page). The plan records `evidence_budget` (evidence only) and `moves` (which input
-  moved which family's budget and share, by how much).
+  Two more inputs (2026-10-10, revised after the quant review): (1) the daily attribution report
+  (`state/attribution.json`): the director rebuilds each family's cell from the report's per-trade rows, counting only
+  trades entered on or after their model version's promotion (model registry; an unpromoted version counts nothing),
+  from a report dated at or before the plan and at most 14 days old; under `attribution.min_trades` is noise. The
+  net-R t-stat is shrunk by n/(n+100), clipped to +-1 at t = 3, and tilts the evidence share of the pool by at most
+  +-25%, only for a family with no shadow t-stat (the same shadow trades are never counted twice; the
+  `director_floor` is never tilted). (2) Retired families are governance in settings, `research.retired_families`
+  (family, hypothesis id, retired date, reason, registry trials); `docs/research/hypotheses.md` section B mirrors it,
+  a test checks they agree, and the plan stores the doc's sha256 and any drift (`hypotheses_drift`) but the doc never
+  moves a trial. A retired family keeps 1 exploration trial a quarter (less its trials this quarter, after the live
+  families' floors) and is reinstated only by attribution trades after its retirement date with shrunk t >= 2
+  Bonferroni-corrected for retired families x sources (5 families: 2.61). (3) The pre-registered queue is reserved
+  first: `research.reserved_trials_quarter: 13` (docs/research/preregistration-2027Q1.md) minus trials run against a
+  `preregistered` registry row, at least the queued preregistered rows; the director and `monthly_research` spend
+  only budget - used - reserved, and the plan's grid share is 0 while `research.label_grid_paused` (it is). With
+  today's settings in Q1 2027: 20 - 13 = 7 planned trials, tsmom 2 (its floor) and 1 each for the five retired
+  families. The plan records `evidence_budget`, `moves`, `quarter_reserved`, `reservation`, `retired_floor` and
+  `reinstate_t`.
 - Approvals across processes (`telegram/bus.py`): engines, the API and the Telegram service are separate services,
   so engines publish proposals to `state/approvals/pending/`, the dashboard or Telegram writes a decision file
   (created exclusively: first decision wins), and the engine applies it on its next tick, re-running the RiskGate,
@@ -489,6 +498,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- FYI for the OWNER (no decision needed, 2026-10-10): `research.reserved_trials_quarter: 13` holds the 13 trials
+  of the Q1 2027 pre-registration (`docs/research/preregistration-2027Q1.md`) before the research director and the
+  label grid can spend any; the budget itself (20) is unchanged. Revisit the number with each quarter's
+  pre-registration. Residual: the research analyst's `run_trial` tool still checks the full quarter budget, not the
+  reservation (left out of this change's scope).
 - OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.
 1. Research status (2026-10-09, Q4 2026 trial budget spent: 20/20, research stops until 2027-01-01). Evaluation is
    cross-fitted, spread charged once, design gates and the P4 screen enforced, holdout 2025-10..2026-09 untouched,
