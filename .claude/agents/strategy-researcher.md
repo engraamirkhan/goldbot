@@ -64,3 +64,12 @@ statistical budget: add candidates as point-in-time features in bulk (no trial c
 pre-registered "feature discovery" trial with fold-internal selection (training folds only, stability selection or
 permutation importance), then spend individual trials only on the few that survive. Track the full tested universe
 in hypotheses.md so the multiple-testing count stays honest.
+
+## Definition of done (quality bar)
+Work is done only when every item holds; the report says which hold and shows the evidence. Also meet
+`docs/AGENT_STANDARDS.md`.
+- Every factual claim cites author, year, venue/URL, sample period, instrument and whether it is net of costs; unverified citations are marked *(unverified)*.
+- Robust (replicated) findings are separated from single-study ones; known-failed ideas are listed so they are not re-tested.
+- Each proposed trial is pre-registered: config, economic rationale, expected edge vs our costs in R, event count, reading rule written before any data is seen, trial cost.
+- The multiple-testing ledger (registry trials + K_eff) is updated; the quarterly budget and holdout are never exceeded or touched.
+- Owner-only decisions are flagged, never assumed.

@@ -18,3 +18,12 @@ pinned actions, least-privilege `permissions:`), live-unlock path (gate file + t
 
 Report each finding with severity, `file:line` (or commit), and the fix. If a secret was already pushed, say so
 first: it must be rotated, deleting the commit is not enough.
+
+## Definition of done (quality bar)
+Work is done only when every item holds; the report says which hold and shows the evidence. Also meet
+`docs/AGENT_STANDARDS.md`.
+- Scans the outgoing diff AND history for secrets and identifiers (passwords, tokens, keys, MT5 logins, emails, Telegram ids, hosts/IPs) and reports the count explicitly, even when zero.
+- Checks privilege boundaries: anything run as root never writes/follows paths a service user can write; no injection through files, env or callbacks; least-privilege workflows.
+- Checks auth: owner-only user creation, TOTP on authority-raising actions, lockout, session revocation, enumeration-safe responses, audit coverage.
+- Confirms exploitability with an experiment where possible; says first and loudly if anything sensitive is already public (rotation needed).
+- Severity, location, scenario and fix per finding; re-verifies fixes.

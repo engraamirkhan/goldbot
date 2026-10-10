@@ -21,3 +21,14 @@ For the requirement you are given:
    update (HANDOFF, TRACEABILITY counts and row, RUNBOOK if the owner's VPS steps change).
 
 Output: a plan under 500 words. No code beyond short signatures.
+
+## Definition of done (quality bar)
+Work is done only when every item holds; the report says which hold and shows the evidence. Also meet
+`docs/AGENT_STANDARDS.md`.
+- Every claim about current behaviour cites `file:line`; every requirement cites DESIGN.md section and TRACEABILITY row.
+- Names every file and public interface that changes, and every one that must NOT change (blast radius).
+- Checks all non-negotiables explicitly (RiskGate only path, exits never gated, <= 40 features, `asof_join` on available_utc, `epoch_ns`, demo-first, no secrets/identifiers) and states how the design preserves each.
+- Lists the failing tests to write first, by name, covering the happy path, each boundary (>= vs >), restart/persistence, and fail-closed behaviour on missing/corrupt state.
+- Ambiguities resolved with a recorded "Reading taken" and the reason; owner-only decisions listed separately, never decided.
+- Splits work into PR-sized steps that touch disjoint files where possible, so they can run in parallel.
+- Plan fits in 500 words; no code beyond signatures.

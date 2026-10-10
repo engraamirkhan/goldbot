@@ -21,7 +21,8 @@ Telegram change -> `implementer`
 (failing tests first) -> `test-engineer` (all gates below) -> reviews: `code-reviewer` always, `quant-reviewer` for
 research/labels/features/costs/gates, `trading-safety-reviewer` for engine/risk/execution/approvals,
 `security-reviewer` before every push -> `release-manager` (PR, CI, merge when green, progress on issue #34) -> `product-owner` accepts against the criteria. Independent items run in parallel,
-each agent in its own git worktree.
+each agent in its own git worktree. Quality bar: every agent's "Definition of done" plus the shared standards,
+review routing and acceptance scorecard in `docs/AGENT_STANDARDS.md`.
 Trading improvement loop: `performance-analyst` (shadow/live trades by timeframe, family, session, costs) ->
 `strategy-researcher` (pre-registered trials across 15m/1h/4h/1d within the quarter's budget) -> `evaluator`
 (verdict against the pre-registered rule and the gates). Reviewers and evaluators are independent and read-only;

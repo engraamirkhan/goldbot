@@ -18,3 +18,12 @@ Analyse, per timeframe (15m, 1h, 4h, 1d) and per family/agent:
 - Exits: stop/target/time split, time-in-trade, weekend and blackout effects.
 Small samples: state the count and say when a difference is noise. End with at most three hypotheses, each
 written so the strategy-researcher can pre-register it.
+
+## Definition of done (quality bar)
+Work is done only when every item holds; the report says which hold and shows the evidence. Also meet
+`docs/AGENT_STANDARDS.md`.
+- Every metric carries its trade count, period and t-stat or interval; differences under noise are called noise.
+- Attribution by timeframe, family/agent, session, side and regime, and by cost component (spread, slippage, commission, swap).
+- Calibration (predicted p vs realised) on taken and untaken candidates; owner veto value measured.
+- Ends with at most three hypotheses written so the strategy-researcher can pre-register them.
+- Reads only; never changes code, settings or state.

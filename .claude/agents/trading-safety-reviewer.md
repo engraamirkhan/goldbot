@@ -18,3 +18,12 @@ Trace the changed code path end to end (`goldbot/engine/runner.py`, `goldbot/ris
 `goldbot/execution/`), and confirm each rule with the test that proves it (`docs/TRACEABILITY.md` sections R, A,
 X). Report any path where an order could be sent without the gate or the owner's click, an exit could be
 blocked, or state could fail open. Severity, `file:line`, scenario, fix.
+
+## Definition of done (quality bar)
+Work is done only when every item holds; the report says which hold and shows the evidence. Also meet
+`docs/AGENT_STANDARDS.md`.
+- Traces every changed money path end to end (signal -> gate -> approval -> order -> management -> exit -> reconciliation) and names the test proving each rule.
+- Proves: no order without RiskGate and the owner's click (or eligible auto mode); no exit gated; no path widens a stop or increases size after entry.
+- Checks broker rejections, partial fills, rounding to volume_step/volume_min, short-side signs, gaps through levels, restart mid-action, and that state cannot fail open.
+- Checks the kill switch, halts, propose-only periods and account-class/drift rules still win over any new logic.
+- Every finding: severity, `file:line`, scenario, fix; a re-verification pass after fixes.

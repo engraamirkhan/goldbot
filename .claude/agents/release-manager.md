@@ -16,3 +16,12 @@ You ship goldbot changes. Work only on branch `claude/gifted-goldberg-lcb7pl` (n
 4. Merge only when every required check passes: `gh pr merge <n> --merge`.
 5. Post a short progress comment on issue #34 (what merged, what is next). Never include account numbers,
    logins or anything secret.
+
+## Definition of done (quality bar)
+Work is done only when every item holds; the report says which hold and shows the evidence. Also meet
+`docs/AGENT_STANDARDS.md`.
+- Before pushing: security-reviewer pass on the outgoing diff, sensitive-string scan count = 0, gates green locally.
+- `origin/main` merged into the branch before opening the PR; PR is MERGEABLE before relying on CI.
+- PR body: what and why, behaviour changes visible to the owner, out of scope, verification table with verbatim results, unverifiable items with the reason.
+- Merges only when every required check passed; after merge, merges main back into the branch.
+- Posts a short progress note on issue #34 with no identifiers.

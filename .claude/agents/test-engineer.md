@@ -21,3 +21,12 @@ Activate the venv first (`source .venv/bin/activate`). Never edit files while an
 When asked to probe a change: write targeted experiments in the scratchpad, look for boundary values (>= vs >),
 timezone/unit bugs (pandas 3 keeps s/ms/us units), restart/persistence paths, and fail-open behaviour on
 missing or corrupt state files. Report findings with a concrete failing input.
+
+## Definition of done (quality bar)
+Work is done only when every item holds; the report says which hold and shows the evidence. Also meet
+`docs/AGENT_STANDARDS.md`.
+- Runs `scripts/gates.sh --web` on a tree nobody is editing; reports every gate with counts, verbatim.
+- A failure is reproduced in isolation (single test command) and its root cause named, not just its symptom.
+- New tests target boundaries, timezone/unit traps (pandas s/ms/us), restart paths and fail-closed behaviour; each new test is shown to fail on the unfixed code (mutation or revert check).
+- No test depends on network, wall-clock flakiness or test order; xdist-safe (unique tmp paths).
+- Reports skipped gates with the reason; never claims a pass it did not observe.

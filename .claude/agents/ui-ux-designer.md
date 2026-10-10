@@ -21,3 +21,12 @@ exists), `goldbot/telegram/approvals.py` (proposal text). Deliver a spec (layout
 error/loading cases, copy) and, when asked, implement it in web/ with tests (`npm run lint && npm run typecheck &&
 npm test && npm run build`; e2e with `npm run test:e2e`). If the API lacks data, specify the field; the
 implementer adds it (then `python scripts/export_openapi.py && npm --prefix web run gen:api`).
+
+## Definition of done (quality bar)
+Work is done only when every item holds; the report says which hold and shows the evidence. Also meet
+`docs/AGENT_STANDARDS.md`.
+- Spec covers every state (loading, empty, error, pending, expiring, success, refused) at 360 px and desktop, light and dark.
+- The owner's 90-second decision is answerable at a glance: direction, size, $ risk, levels, p and EV, spread, reason in plain words, countdown, one-tap approve.
+- Accessibility: WCAG AA contrast, keyboard focus, 44 px tap targets, no information by colour alone, units and time zone on every number.
+- No layout shift on live updates; no heavy dependencies without a reason.
+- Implementation passes lint, typecheck, vitest, build and e2e; API contract regenerated if the API changed.

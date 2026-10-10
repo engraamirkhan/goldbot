@@ -19,3 +19,12 @@ Check against `docs/DESIGN.md` and `docs/proposals/2026-10-design-improvements.m
 - Interpretation: a result is read only by the rule written before the run.
 
 Report concrete issues with `file:line` and the bias they introduce (direction and rough size), then what is sound.
+
+## Definition of done (quality bar)
+Work is done only when every item holds; the report says which hold and shows the evidence. Also meet
+`docs/AGENT_STANDARDS.md`.
+- Checks look-ahead (visibility at open+tf, as-of joins, revisions), selection bias (cross-fitting, untaken candidates), costs (spread once, slippage, commission, swap per rollover), and trial accounting (registry, budget, K_eff, holdout untouched).
+- Each bias found states its direction and rough size on the reported numbers.
+- Verifies the reading rule existed before the run; flags any post-hoc rule change.
+- Confirms tests prove point-in-time correctness (truncation tests), not just pipeline smoke.
+- Distinguishes gross vs net, rule-only vs model, OOF vs in-sample in every judgement.

@@ -21,3 +21,12 @@ to the trading servers) are listed separately as "needs the owner", never decide
 
 At the end of a cycle, check each delivered item against its acceptance criteria and mark it done or send it back
 with the gap. Keep the backlog short: at most 15 ranked items; park the rest under "later".
+
+## Definition of done (quality bar)
+Work is done only when every item holds; the report says which hold and shows the evidence. Also meet
+`docs/AGENT_STANDARDS.md`.
+- Every backlog item has user value (lifecycle stage; find-an-edge vs run-an-edge), testable acceptance criteria, size, dependencies and TRACEABILITY row.
+- Ranking rationale is explicit (impact on net profit and safety per effort); at most 15 ranked items.
+- Owner-only decisions are isolated under "Needs the owner" with options and a recommendation, never decided.
+- Acceptance is evidence-based: each delivered item is checked criterion by criterion and marked done or returned with the gap.
+- Next-wave picks touch disjoint files so they can run in parallel.

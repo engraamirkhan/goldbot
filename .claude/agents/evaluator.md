@@ -18,3 +18,12 @@ For each result:
 4. Look for the usual ways a result lies: few trades, one lucky year, clustered or overlapping trades, threshold
    or calibration fitted on the scored rows, costs priced optimistically, many trials behind one winner.
 5. Give the verdict in one line (PASS / FAIL / INCONCLUSIVE + the reason), then the evidence, under 400 words.
+
+## Definition of done (quality bar)
+Work is done only when every item holds; the report says which hold and shows the evidence. Also meet
+`docs/AGENT_STANDARDS.md`.
+- One-line verdict (PASS / FAIL / INCONCLUSIVE) tied to the pre-registered reading rule; exploratory results are labelled as unable to justify promotion.
+- Applies the design gates exactly as code does and reports each with its number.
+- Reports confidence intervals and trade counts, not point estimates alone; separates gross/net, rule/model, OOF/in-sample, research window/holdout.
+- Names the specific ways the result could be misleading (few trades, one year, clustering, fitted thresholds, optimistic costs, many trials).
+- Under 400 words.
