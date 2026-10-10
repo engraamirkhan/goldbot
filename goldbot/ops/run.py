@@ -15,6 +15,8 @@
   python -m goldbot.ops.run backup [--init]              # encrypted restic backup now (--init: create the repository once)
   python -m goldbot.ops.run restore --latest --to DIR    # restore the latest backup into an empty DIR and verify it
   python -m goldbot.ops.run restore-drill                # the weekly restore drill, now
+  python -m goldbot.ops.run setup [--account ID]         # guided setup of secrets and server settings (re-runnable)
+  python -m goldbot.ops.run preflight [--account ID]     # read-only checklist before starting services (exit 1 on a blocker)
 """
 from __future__ import annotations
 
@@ -454,6 +456,12 @@ if __name__ == "__main__":
     elif cmd in ("backup", "restore", "restore-drill"):
         from goldbot.ops.backup import main as backup_main
         sys.exit(backup_main(sys.argv[1:]))
+    elif cmd == "setup":
+        from goldbot.ops.setup_wizard import main as setup_main
+        sys.exit(setup_main(sys.argv[2:]))
+    elif cmd == "preflight":
+        from goldbot.ops.preflight import main as preflight_main
+        sys.exit(preflight_main(sys.argv[2:]))
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))
