@@ -87,8 +87,6 @@ systemctl enable goldbot-bridge@icm-demo
 mkdir -p /etc/goldbot
 echo mt5 > /etc/goldbot/role
 install -m 755 -o root -g root "$ROOT/goldbot/ops/linux/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
-install -m 644 "$ROOT/goldbot/ops/linux/systemd/goldbot-deploy.service" "$ROOT/goldbot/ops/linux/systemd/goldbot-deploy.timer" /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable goldbot-deploy.timer
+# the MT5 box is updated by hand only (sudo goldbot-deploy latest): no deploy timer here
 
 echo "MT5 box installed. Next: log in to MT5 once over VNC, then bridge-serve (docs/RUNBOOK.md)."

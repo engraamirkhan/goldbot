@@ -35,6 +35,12 @@ HEALTH_EVERY_S = 300              # health checks + alert dedupe (the Scheduler'
 OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED_UNAPPROVED": "⌛ EXPIRED"}
 
 
+def outcome_text(outcome: str) -> str:
+    if outcome.startswith("GATE_REFUSED"):
+        return "🛑 NOT PLACED: approved, but the risk check refused it at approval (" + outcome.partition(": ")[2] + ")"
+    return OUTCOME_TEXT.get(outcome, outcome)
+
+
 class TelegramBot:  # pragma: no cover - needs network + token
     """The Telegram service (`python -m goldbot.ops.run telegram`): sends the engines' proposals from the approval
     bus with Approve/Reject buttons, writes the owner's decisions back to the bus, edits each message with the outcome,
@@ -74,7 +80,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
                     for chat, mid in msgs:
                         try:
                             await self.app.bot.edit_message_reply_markup(chat, mid, reply_markup=None)
-                            await self.app.bot.send_message(chat, f"{pid}: {OUTCOME_TEXT.get(outcome, outcome)}",
+                            await self.app.bot.send_message(chat, f"{pid}: {outcome_text(outcome)}",
                                                             reply_parameters=ReplyParameters(message_id=mid))
                         except Exception as exc:
                             log.warning("could not update %s: %s", pid, exc)

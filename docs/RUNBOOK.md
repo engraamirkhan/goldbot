@@ -114,8 +114,8 @@ Only your Mac's browser (the dashboard) and Telegram (the one-click Approve).
   **[Deploy] [Skip]**. Deploy restarts the services within a minute (never while an entry waits for your click; open
   positions keep their broker-side stops and the engine reconciles on start), checks every service is still running
   after 60 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
-* The MT5 box follows only versions you approved (needs `goldbot accounts set github-token` on the brain with
-  *Deployments: write*; without it, update the MT5 box by hand).
+* The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
+  release note mentions the bridge.
 * By hand on either VM: `sudo goldbot-deploy latest` (or a specific commit id). Same checks, same rollback.
 * The health check `deploy` shows the last result. If the deploy script itself changed, review it and run
   `sudo install -m 755 -o root -g root /opt/goldbot/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy`.

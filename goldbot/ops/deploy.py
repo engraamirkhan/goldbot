@@ -9,11 +9,14 @@
   approval, or a commit the owner names on the server (`sudo goldbot-deploy latest`): it re-checks main and CI itself,
   restarts the services, verifies them, rolls back on failure and appends the result to state/deploys.jsonl, which the
   Telegram service reports (`new_results`).
-* After a successful brain deploy, `mark` records a GitHub Deployment (environment `oracle`) when a GitHub token is
-  stored, so the MT5 box follows only versions the owner approved.
+* The MT5 box (terminal + bridge, rarely changed) is updated by hand: `sudo goldbot-deploy latest` there. Following a
+  GitHub Deployment was rejected in review: anyone with Deployments write could create one, which is not the owner's
+  click.
+* An approval file can only be written by the Telegram service after an allow-listed tap; there is deliberately no CLI
+  approve (on the server the owner runs `sudo goldbot-deploy` instead).
 
 CLI (as the service user, `goldbot deploy ...` on the brain):
-  python -m goldbot.ops.deploy status | check | approve <sha> | skip <sha> | mark <sha>
+  python -m goldbot.ops.deploy status | check | skip <sha>
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ import requests
 
 REPO_API = "https://api.github.com/repos/engraamirkhan/goldbot"
 REQUIRED_CHECKS = ("backend", "frontend")       # CI jobs that must conclude "success" on the commit
+ACTIONS_APP_ID = 15368                           # GitHub Actions: check-runs from any other app are ignored
 SHA = re.compile(r"^[0-9a-f]{40}$")
 FetchJson = Callable[[str], Any]
 
@@ -41,7 +45,7 @@ def _get_json(url: str) -> Any:
 
 def ci_status(sha: str, fetch: FetchJson = _get_json) -> str:
     """'yes' when every required check passed on `sha`, 'wait' while one is missing or running, 'no' otherwise."""
-    runs = {r["name"]: r for r in fetch(f"{REPO_API}/commits/{sha}/check-runs?per_page=100").get("check_runs", [])}
+    runs = {r["name"]: r for r in fetch(f"{REPO_API}/commits/{sha}/check-runs?per_page=100&filter=latest&app_id={ACTIONS_APP_ID}").get("check_runs", [])}
     if all(runs.get(n, {}).get("conclusion") == "success" for n in REQUIRED_CHECKS):
         return "yes"
     if any(runs.get(n, {}).get("status") != "completed" for n in REQUIRED_CHECKS):
@@ -128,23 +132,8 @@ class DeployWatch:
         return out
 
 
-def mark_deployed(sha: str, token: str | None, post: Callable[..., Any] = requests.post) -> str:
-    """Record a GitHub Deployment of `sha` to environment `oracle` (the MT5 box follows it). Needs a token with
-    Deployments write; without one the MT5 box is updated by hand."""
-    if not SHA.match(sha):
-        return "invalid sha"
-    if not token:
-        return "no github-token stored: update the MT5 box with `sudo goldbot-deploy latest`"
-    r = post(f"{REPO_API}/deployments", timeout=15,
-             headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
-             json={"ref": sha, "environment": "oracle", "auto_merge": False, "required_contexts": [],
-                   "description": "approved by the owner, deployed on the brain"})
-    return "marked" if r.status_code in (200, 201) else f"GitHub answered {r.status_code}"
-
-
 def main(argv: list[str]) -> int:  # pragma: no cover - thin CLI
     from goldbot.config import ROOT
-    from goldbot.ops import accounts
     w = DeployWatch("state", ROOT)
     cmd = argv[0] if argv else "status"
     if cmd == "status":
@@ -153,13 +142,10 @@ def main(argv: list[str]) -> int:  # pragma: no cover - thin CLI
     if cmd == "check":
         print(json.dumps(w.check()))
         return 0
-    if cmd in ("approve", "skip") and len(argv) > 1:
-        ok = w.approve(argv[1], by=0) if cmd == "approve" else w.skip(argv[1])
+    if cmd == "skip" and len(argv) > 1:
+        ok = w.skip(argv[1])
         print("ok" if ok else "not the commit on offer")
         return 0 if ok else 1
-    if cmd == "mark" and len(argv) > 1:
-        print(mark_deployed(argv[1], accounts.get_secret("github-token")))
-        return 0
     print(__doc__)
     return 2
 

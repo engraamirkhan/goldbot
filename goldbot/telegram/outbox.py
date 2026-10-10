@@ -57,6 +57,10 @@ class Outbox:
                 if p is not None and not p.expired:
                     continue                                 # still open
                 outcome = "EXPIRED_UNAPPROVED"
+            elif outcome == "APPROVED":
+                p = self.bus.get(pid)
+                if p is not None and p.gate_refusal:         # approved, but the RiskGate re-check refused the order
+                    outcome = "GATE_REFUSED: " + ", ".join(p.gate_refusal)
             out.append((pid, outcome, msgs))
             del self.state.sent[pid]
         if out:

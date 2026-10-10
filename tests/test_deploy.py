@@ -4,9 +4,7 @@ import json
 import subprocess
 from typing import Any
 
-import pytest
-
-from goldbot.ops.deploy import DeployWatch, ci_status, mark_deployed
+from goldbot.ops.deploy import ACTIONS_APP_ID, DeployWatch, ci_status
 
 A, B, C = "a" * 40, "b" * 40, "c" * 40
 
@@ -14,6 +12,16 @@ A, B, C = "a" * 40, "b" * 40, "c" * 40
 def _runs(**conclusions: str | None) -> dict[str, Any]:
     return {"check_runs": [{"name": n, "status": "completed" if c else "in_progress", "conclusion": c}
                            for n, c in conclusions.items()]}
+
+
+def test_ci_status_reads_only_the_latest_github_actions_runs():
+    urls: list[str] = []
+
+    def fetch(url: str) -> dict[str, Any]:
+        urls.append(url)
+        return _runs(backend="success", frontend="success")
+    ci_status(B, fetch)
+    assert f"app_id={ACTIONS_APP_ID}" in urls[0] and "filter=latest" in urls[0]
 
 
 def test_ci_status_needs_every_required_job_to_pass():
@@ -78,15 +86,6 @@ def test_results_are_reported_once(tmp_path):
     with log.open("a") as f:
         f.write(json.dumps({"result": "rolled_back", "to": C}) + "\n")
     assert [r["result"] for r in w.new_results()] == ["rolled_back"]
-
-
-@pytest.mark.parametrize("token, status, expected", [(None, 201, "no github-token"), ("t", 201, "marked"),
-                                                     ("t", 403, "GitHub answered 403")])
-def test_marking_a_deployment_for_the_mt5_box(token, status, expected):
-    class R:
-        status_code = status
-    assert expected in mark_deployed(B, token, post=lambda *a, **k: R())
-    assert mark_deployed("main", "t", post=lambda *a, **k: R()) == "invalid sha"
 
 
 def test_health_reports_the_last_deploy(tmp_path):

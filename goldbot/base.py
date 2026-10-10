@@ -8,6 +8,7 @@ by isinstance; `extra="forbid"` turns a misspelt field into an error instead of 
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -55,9 +56,10 @@ def write_atomic(path: Path, text: str, *, durable: bool = True) -> None:
     empty file. Use it for state a restart depends on (orders, risk, approvals, halts); heartbeats rewritten every few
     seconds may pass durable=False."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")   # unique, O_EXCL
+    tmp = Path(name)
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
             if durable:
                 fh.flush()
@@ -74,9 +76,10 @@ def create_exclusive(path: Path, text: str) -> bool:
     fsynced under a temporary name, then hard-linked into place (fails if `path` exists). A crash can no longer leave
     an empty file that blocks the decision forever. False if the file already existed."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")   # unique, O_EXCL
+    tmp = Path(name)
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())

@@ -184,8 +184,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `/usr/local/sbin/goldbot-deploy` (copy of `goldbot/ops/linux/goldbot-deploy.sh`, timer every minute) re-checks main,
   fast-forward and CI, waits while an approval is pending, restarts (supervisor first), verifies every enabled service
   after 60 s and rolls back otherwise; `sudo goldbot-deploy latest|<sha>` does the same by hand. Results in
-  `state/deploys.jsonl` (Telegram report, health `deploy`). After a brain deploy a GitHub Deployment (environment
-  `oracle`, needs github-token) lets the MT5 box follow approved versions only.
+  `/var/lib/goldbot-deploy/deploys.jsonl` (root only), published read-only to `state/deploys.jsonl` by rename (Telegram
+  report, health `deploy`). The MT5 box is updated by hand only. Hardened after the security review: root never writes
+  or follows anything in a service-user-writable directory (symlink-to-root attack), approval file opened O_NOFOLLOW
+  and owner-checked, any failure after checkout rolls back, stability = no systemd restart for 90 s plus fresh
+  engine/supervisor heartbeats, CI read from the latest GitHub Actions runs only, no CLI approve.
 - Drift and health (M26/M27, 2026-10-10): every fitted model stores its training distribution per input
   (`feature_ref`); the daily `drift_watch` job (23:40) rebuilds the last 30 days of candidates as in training and
   computes PSI on the top-10 inputs by gain (0.1 warns, 0.25 sizes the agent to 50%), ECE/Brier on the trailing 100
