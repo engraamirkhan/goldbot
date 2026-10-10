@@ -86,17 +86,53 @@ On the MT5 box: `sudo goldbot-mt5-authorize '<that ssh-ed25519 line>'` (the key 
 Back on the brain:
 ```bash
 sudo goldbot-tunnel <mt5 private ip>
-goldbot accounts bridge-use icm-demo           # your MT5 login, http://127.0.0.1:8765, the token from 0.3
-goldbot accounts set telegram-bot-token        # from @BotFather (section 2.8)
-goldbot accounts set anthropic-api-key         # optional: staff agents and headline scoring
-goldbot accounts set github-token              # optional: bar sync and the shared trial registry
+goldbot run setup                              # guided: every secret and setting, in order (below)
 ```
-Secrets on these VMs are kept in `/opt/goldbot/state/.secrets.json`, readable only by the `goldbot` service user
-(a server has no desktop keyring); Oracle encrypts the disk at rest. Edit `/opt/goldbot/config/settings.yaml` for
-the Telegram allow-list as in section 2.4 (on the VM only, never committed).
+`goldbot run setup` walks through eight steps. Each one says what the value is, where to get it, and what happens
+without it. Secrets are hidden as you type and never shown again. Press Enter to keep a value that is already set, or
+to skip an optional step. You can run it again at any time: it only asks about what you choose to change.
+
+| Step | What | Where to get it |
+| --- | --- | --- |
+| 1 | MT5 demo login number and password (`icm-demo`) | IC Markets welcome email, or MT5 -> File -> Login to Trade Account |
+| 2 | Bridge address (press Enter for `http://127.0.0.1:8765`) and bridge token | the token printed once by `bridge-serve` in 0.3 |
+| 3 | Telegram bot token | @BotFather -> /newbot (section 2.8) |
+| 4 | Your Telegram user id (the only user who may approve) | message @userinfobot |
+| 5 | Dashboard owner email | your own address |
+| 6, 7 | optional: `anthropic-api-key`, `github-token` | console.anthropic.com; GitHub fine-grained token, Contents: read and write |
+| 8 | Backups: namespace, region, bucket, restic password, writer keys | the console steps in 0.6 (skip now, run setup again later) |
+
+Secrets go only into the secret store: on these VMs `/opt/goldbot/state/.secrets.json`, readable only by the
+`goldbot` service user (a server has no desktop keyring); Oracle encrypts the disk at rest. Steps 4 and 5 are
+written to `/opt/goldbot/config/settings.local.yaml` (mode 0600, on the VM only, never committed); the wizard
+keeps every other line already in that file.
 
 Dashboard: create the Cloudflare tunnel as in section 2.7, then on the brain `sudo cloudflared service install
 <tunnel token>`.
+
+Check everything **before** starting the services:
+```bash
+goldbot run preflight
+```
+It changes nothing. Each line is ✅, ⚠️ or ❌; every ❌ prints the exact command that fixes it. It checks: the
+settings load, the owner email, the Telegram token and allow-list, the tunnel service, the bridge address and token,
+the bridge answering through the tunnel, the terminal logged in to the registered demo account (login, server, demo),
+the dashboard build (`web/dist`), the database files being private (0600), backups (a warning only), the clock
+(chrony), disk and memory, and the deploy timer. Fix and repeat until the last line says **READY**; it exits 1
+while anything blocking is left.
+
+By hand (if the wizard cannot be used), the same values:
+```bash
+goldbot accounts add icm-demo                  # MT5 login number, then password
+goldbot accounts bridge-use icm-demo           # http://127.0.0.1:8765, the token from 0.3
+goldbot accounts set telegram-bot-token        # from @BotFather (section 2.8)
+goldbot accounts set anthropic-api-key         # optional: staff agents and headline scoring
+goldbot accounts set github-token              # optional: bar sync and the shared trial registry
+sudo -u goldbot nano /opt/goldbot/config/settings.local.yaml
+#   auth: {owner_email: <you>}
+#   telegram: {allowed_user_ids: [<your id>]}
+```
+then `sudo chmod 600 /opt/goldbot/config/settings.local.yaml`, and the backup keys as in 0.6.
 
 Start everything (supervisor first):
 ```bash
@@ -166,7 +202,9 @@ its key cannot wipe the backup history, and the bucket keeps every overwritten o
 4. In your password manager, generate a long random **restic password** and save it there *first*. Without it no
    backup can ever be restored, and the brain is the only other place that holds it.
 
-**On the brain** (each command asks for its value; nothing is echoed):
+**On the brain**: `goldbot run setup` (step 8) asks for the namespace, region, bucket, password and the writer key,
+and stores the four `restic-*` keys; then run the last four commands below. By hand instead (each command asks for
+its value; nothing is echoed):
 ```bash
 goldbot accounts set restic-repository     # s3:https://<namespace>.compat.objectstorage.<region>.oraclecloud.com/goldbot-backup/goldbot
 goldbot accounts set restic-password       # the password from your password manager
