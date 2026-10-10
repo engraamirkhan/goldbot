@@ -130,6 +130,24 @@ class SchedulerSettings(_Section):
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
     gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
+    # encrypted off-host backup (goldbot/ops/backup.py) next to the daily break, before the nightly jobs start (no CPU
+    # contention with them on the 4-core brain), and its weekly restore drill
+    # on Sunday while the market is closed
+    backup: ScheduleSettings = ScheduleSettings(kind="daily", at="22:15", max_late_hours=20)
+    restore_drill: ScheduleSettings = ScheduleSettings(kind="weekly", at="10:00", weekday=6, max_late_hours=30)
+
+
+class BackupSettings(_Section):
+    """restic to Oracle Object Storage (goldbot/ops/backup.py; credentials only in the secret store)."""
+    host: str = "goldbot-brain"                   # restic --host: stable across a rebuilt VM, so retention keeps working
+    work_dir: str = "~/.cache/goldbot/backup"     # staging and drill scratch, same filesystem as data_root
+    keep_daily: int = Field(14, ge=1)             # proposal section 7: --keep-daily 14 --keep-weekly 8 --keep-monthly 12
+    keep_weekly: int = Field(8, ge=0)
+    keep_monthly: int = Field(12, ge=0)
+    data_exclude_sources: list[str] = Field(default_factory=lambda: ["dukascopy", "fred"])   # on releases
+    data_exclude_tables: list[str] = Field(default_factory=lambda: ["features", "labels"])   # derived
+    check_subset: str = Field("5%", pattern=r"^\d{1,2}(\.\d+)?%$")   # restore drill: restic check --read-data-subset
+    timeout_s: int = Field(3600, ge=60)
 
 
 class GapSettings(_Section):
@@ -259,6 +277,7 @@ class Settings(_Section):
     auth: AuthSettings = Field(default_factory=AuthSettings)
     gates: GateSettings = Field(default_factory=GateSettings)
     gaps: GapSettings = Field(default_factory=GapSettings)
+    backup: BackupSettings = Field(default_factory=BackupSettings)
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):

@@ -382,6 +382,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   survivor must also pass the holdout rule before promotion.
 
 ## Next steps (no owner input needed unless marked)
+- Encrypted off-host backups (2026-10-10, state-store step 2, row P8, `goldbot/ops/backup.py`): scheduler job
+  `backup` (daily 22:15 UTC) snapshots every `state/*.db` with the online backup API (integrity-checked before upload),
+  the state JSON, trial registry, models and the brain's own Parquet (not release sources, not features/labels, not
+  `.secrets.json`) with a SHA-256 manifest, saves them with restic to Oracle Object Storage (secrets only in restic's
+  environment, masked in errors), applies `forget --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune` and
+  writes `state/backup_last.json`; `restore_drill` (Sunday 10:00) restores to a temp dir and re-verifies everything
+  (`state/restore_drill_last.json`). Health `backup_age` warns at 26 h (Telegram once), fails at 72 h; `restore_drill`
+  fails on a failed drill. `run.py backup [--init] | restore --latest --to DIR | restore-drill`; brain_bootstrap.sh
+  installs restic. OWNER: create the bucket and customer secret key and store the four `restic-*` keys (RUNBOOK 0.6).
+  Not verified against a real restic or Oracle endpoint from here (restic is not installed in the sandbox; the
+  integration test runs where it is).
 - Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):
   `python -m goldbot.ops.run gates` prints each roadmap gate as met / not met with its evidence (trial registry DSR,
   positive years and backtest trades; the nightly cost tables; `state/closed_trades.jsonl` for the paper and live

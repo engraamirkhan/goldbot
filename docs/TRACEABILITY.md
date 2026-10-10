@@ -17,12 +17,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 138 |
+| implemented | 139 |
 | partial | 17 |
 | missing | 4 |
 | deviates | 9 |
 | in review | 6 |
-| **total** | **174** |
+| **total** | **175** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -235,6 +235,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | P5 | "Passwords, the webhook secret and the Telegram token live only in the operating-system keyring" | implemented | goldbot/ops/accounts.py (keyring; owner-only fallback file without a backend) | tests/test_accounts.py::test_prompt_stores_and_reuses_credential |
 | P6 | Stop rule: "after 18 months ... pooled trade count exceeds 500 and the lower 90% confidence bound on expectancy is still below zero, or any single incident produces a loss larger than the weekly cap" | partial | goldbot/ops/gates_phase.py `evaluate_stop_rule` (one-sided 90% bound on net per-trade return; incident = one trade losing > `risk.weekly_cap` of equity); goldbot/ops/health.py `check_stop_rule` FAILs and alerts, halts nothing. Missing: the engine does not yet append closed trades to `state/closed_trades.jsonl` | tests/test_phase_gates.py::test_stop_rule_needs_eighteen_months; ::test_stop_rule_needs_more_than_500_pooled_trades; ::test_stop_rule_needs_the_lower_bound_below_zero; ::test_single_loss_larger_than_the_weekly_cap_breaches_at_any_time; ::test_stop_rule_health_check_fails_with_what_it_does |
 | P7 | Roadmap gate thresholds (trade-count and time gates "committed in writing before the first paper trade") | partial | goldbot/ops/gates_phase.py `evaluate_gates`, `run.py gates`; thresholds in config/settings.yaml `gates:` (design numbers, plus PROPOSED values awaiting owner sign-off); never records a gate or unlocks live. Missing: owner sign-off; the closed-trade record (P6) | tests/test_phase_gates.py (a boundary test per threshold); ::test_nothing_here_records_a_gate_unlocks_live_or_touches_risk_state |
+| P8 | "Nightly `restic` snapshots of SQLite, trade log and model artefacts ... with a scripted weekly restore test" [Logging, secrets, backups] | implemented | goldbot/ops/backup.py (online SQLite backup API, manifest, restic via env-only secrets, retention 14/8/12, `restore_drill`); goldbot/ops/jobs.py `backup`, `restore_drill`; goldbot/ops/health.py `check_backup_age` (warn 26 h, fail 72 h), `check_restore_drill`. Target Oracle Object Storage instead of Backblaze B2 (reading taken, docs/proposals/2026-10-state-store.md) | tests/test_backup.py::test_sqlite_snapshot_is_consistent_while_another_process_writes; ::test_backup_runs_restic_with_secrets_in_env_only_and_records_the_result; ::test_restore_drill_detects_a_corrupted_database; ::test_backup_age_thresholds |
 
 ## Population and agents [Evolving the system]
 

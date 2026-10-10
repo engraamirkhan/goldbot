@@ -36,6 +36,10 @@
                     many as the research plan's grid share gives the family (`trial_budget_per_month` each without a
                     fresh plan), never past the quarter's trial budget and never into the held-out year, each a
                     walk-forward recorded in the trial registry whose count feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
+* backup            daily: encrypted restic snapshot of the SQLite files (online backup API), state JSON, trial
+                    registry, models and the brain's own Parquet to Oracle Object Storage, with retention
+                    (ops/backup.py) -> state/backup_last.json (health check backup_age).
+* restore_drill     weekly: restores the latest snapshot to a temp dir and verifies it -> state/restore_drill_last.json.
 * feed_reconcile    daily (D12): per account, the engine's tick-built 1m bars against the broker's own M1 for the last
                     day; divergence and unconfirmed spikes -> dq_events, broker M1 -> bars_1m_broker, report ->
                     state/reconcile_<account>.json (health check reconcile:<account>). Skipped without a broker.
@@ -110,6 +114,7 @@ class JobContext(Record):
     fetch_calendar: Callable[[], str] | None = None              # Forex Factory weekly JSON (network, VPS only)
     upload_costs: Callable[[bytes], str] | None = None           # published cost table -> release costs-v1 (VPS only)
     broker_for: Callable[[Account], Any] | None = None           # read-only Broker per account (feed_reconcile), or None
+    get_secret: Callable[[str], str | None] | None = None        # backup credentials (default: goldbot.ops.accounts)
 
 
 # ---------------------------------------------------------------------------------------------- nightly costs
@@ -792,6 +797,36 @@ def feed_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- backups (state store step 2)
+def _backup_args(ctx: JobContext) -> tuple[Any, Callable[[str], str | None]]:
+    from goldbot.ops import backup as backup_mod
+    if ctx.get_secret is not None:
+        get_secret = ctx.get_secret
+    else:
+        from goldbot.ops.accounts import get_secret
+    return backup_mod.BackupPaths.from_settings(ctx.settings, ctx.state_dir), get_secret
+
+
+def backup(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily: SQLite (online backup API), state JSON, trial registry, models and the brain's own Parquet -> restic,
+    encrypted, to Oracle Object Storage; retention applied; state/backup_last.json (health: backup_age)."""
+    from goldbot.ops import backup as backup_mod
+    paths, get_secret = _backup_args(ctx)
+    b = ctx.settings.backup
+    return backup_mod.backup_job(paths, get_secret, host=b.host, timeout_s=b.timeout_s,
+                                 retention=backup_mod.Retention(keep_daily=b.keep_daily, keep_weekly=b.keep_weekly,
+                                                                keep_monthly=b.keep_monthly))
+
+
+def restore_drill(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Weekly: restore the latest snapshot to a temp dir, verify checksums, integrity_check, schema versions, row
+    counts and model artefacts, `restic check` a data subset; state/restore_drill_last.json (health: restore_drill)."""
+    from goldbot.ops import backup as backup_mod
+    paths, get_secret = _backup_args(ctx)
+    b = ctx.settings.backup
+    return backup_mod.drill_job(paths, get_secret, host=b.host, check_subset=b.check_subset, timeout_s=b.timeout_s)
+
+
 # ---------------------------------------------------------------------------------------------- wiring
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
@@ -808,6 +843,8 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "drift_watch": drift_watch,
     "gap_watch": gap_watch,
     "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
+    "backup": backup,                             # encrypted off-host backup (ops/backup.py)
+    "restore_drill": restore_drill,               # weekly restore + verification of the latest backup
 }
 
 

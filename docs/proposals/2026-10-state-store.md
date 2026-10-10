@@ -1,7 +1,11 @@
 # Operational state in SQLite (WAL), with off-host backups
 
 Decision document for the owner. Date: 2026-10-10. Status: step 0 (foundation) and step 1 (auth and audit) implemented
-2026-10-10 as package `goldbot/db/` (not `goldbot/state/`); steps 2-8 not started. Step 0 leftovers: `run.py migrate` /
+2026-10-10 as package `goldbot/db/` (not `goldbot/state/`); step 2 (backups and restore drill) implemented 2026-10-10 as
+`goldbot/ops/backup.py` (jobs `backup`, `restore_drill`; health `backup_age`, `restore_drill`; `run.py backup|restore|restore-drill`;
+readings in docs/decisions/0001-backup-scope-and-thresholds.md: backup_age fails at 72 h not 36 h, the drill checks
+checksums, integrity, user_version and row counts against a manifest rather than against a `backups` table, no email
+yet, Telegram on the first warning); steps 3-8 not started. Step 0 leftovers: `run.py migrate` /
 `import-state` are `python -m goldbot.db migrate|import-state` for now, no `state_db` health check yet, and the API
 migrates aux.db on open until `run.py migrate` exists (concurrent migrators are safe: each step re-reads the version
 under the write lock). Versions are rows of a `schema_version` table, mirrored in `PRAGMA user_version`.

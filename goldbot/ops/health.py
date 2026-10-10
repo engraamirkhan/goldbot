@@ -69,6 +69,10 @@ HEARTBEAT_SILENT_S = 5 * 60       # design S5: "a heartbeat alert fires if any s
 HEARTBEAT_SERVICES = ("supervisor", "scheduler", "telegram", "news", "api")   # engines: engine_<account>.json
 FAILED_ORDER_WINDOW_H = 24        # failed sends (X6) in this window are listed, each alerted once
 BRIDGE_TIMEOUT_S = 5.0
+BACKUP_WARN_H = 26.0              # daily backup: one missed night warns
+BACKUP_FAIL_H = 72.0              # three missed nights fail
+DRILL_WARN_DAYS = 8.0             # weekly restore drill
+BACKUP_REPO_WARN_BYTES = 15e9     # of the 20 GB Oracle Object Storage free tier
 
 REQUIRED_SECRETS = ("telegram-bot-token", "tradingview-webhook-secret")
 OPTIONAL_SECRETS = ("anthropic-api-key", "github-token")    # features switch off without them (logged at start)
@@ -603,6 +607,61 @@ def check_deploy(ctx: HealthContext) -> Check:
     return Check(name="deploy", status=cast(Status, status), reason=msg)
 
 
+def check_backup_age(ctx: HealthContext) -> Check:
+    """Age of the last successful encrypted off-host backup (state/backup_last.json, goldbot/ops/backup.py). Error
+    texts in the record are masked by the backup module before they are written."""
+    name = "backup_age"
+    f = ctx.state_dir / "backup_last.json"
+    if not f.exists():
+        return Check(name=name, status="warn", reason="no backup recorded yet (RUNBOOK 'Backups': restic keys, "
+                                                      "then `goldbot run backup --init`)")
+    try:
+        rec = _read_json(f)
+        last_ok = pd.Timestamp(rec["last_ok_ts"]) if rec.get("last_ok_ts") else None
+        attempt = pd.Timestamp(rec["ts"])
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        return Check(name=name, status="warn", reason=f"backup_last.json unreadable: {exc}"[:300])
+    failed = "" if rec.get("ok") else f"; last attempt {attempt:%Y-%m-%d %H:%M} failed: {str(rec.get('error'))[:200]}"
+    if last_ok is None:
+        return Check(name=name, status="warn", reason="no successful backup yet" + failed)
+    age_h = (ctx.now - last_ok).total_seconds() / 3600
+    msg = f"last good backup {_age(age_h * 3600)} ago" + failed
+    repo = rec.get("repo_bytes")
+    if age_h > BACKUP_FAIL_H:
+        return Check(name=name, status="fail", reason=msg + f" (> {BACKUP_FAIL_H:.0f} h)")
+    if age_h > BACKUP_WARN_H:
+        return Check(name=name, status="warn", reason=msg + f" (> {BACKUP_WARN_H:.0f} h)")
+    if failed:
+        return Check(name=name, status="warn", reason=msg)
+    if isinstance(repo, (int, float)) and repo > BACKUP_REPO_WARN_BYTES:
+        return Check(name=name, status="warn", reason=msg + f"; repository {repo / 1e9:.1f} GB of the 20 GB free tier")
+    if rec.get("model_problems"):
+        return Check(name=name, status="warn", reason=msg + "; " + "; ".join(rec["model_problems"])[:200])
+    return Check(name=name, status="ok", reason=msg)
+
+
+def check_restore_drill(ctx: HealthContext) -> Check:
+    """The weekly restore drill (state/restore_drill_last.json): a failed drill fails, a stale one warns."""
+    name = "restore_drill"
+    f = ctx.state_dir / "restore_drill_last.json"
+    if not f.exists():
+        return Check(name=name, status="warn", reason="no restore drill yet (weekly, Sunday 10:00 UTC; "
+                                                      "`goldbot run restore-drill` runs one now)")
+    try:
+        rec = _read_json(f)
+        ts = pd.Timestamp(rec["ts"])
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        return Check(name=name, status="warn", reason=f"restore_drill_last.json unreadable: {exc}"[:300])
+    if not rec.get("ok"):
+        why = rec.get("error") or "; ".join(rec.get("problems") or [])
+        return Check(name=name, status="fail", reason=f"drill at {ts:%Y-%m-%d %H:%M} failed: {str(why)[:300]}")
+    age_d = (ctx.now - ts).total_seconds() / 86400
+    msg = f"last drill {_age(age_d * 86400)} ago verified {rec.get('files', 0)} files"
+    if age_d > DRILL_WARN_DAYS:
+        return Check(name=name, status="warn", reason=msg + f" (> {DRILL_WARN_DAYS:.0f} d)")
+    return Check(name=name, status="ok", reason=msg)
+
+
 def check_news(ctx: HealthContext) -> Check:
     if ctx.settings is not None and not ctx.settings.news.feeds:
         return Check(name="news", status="ok", reason="no feeds configured")
@@ -861,7 +920,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
         checks += [check_reconciliation(ctx, a.account_id) for a in ctx.accounts]   # D12 (goldbot/data/crossfeed.py)
         if ctx.settings is not None and ctx.settings.costs.publish_release:
             checks.append(check_costs_published(ctx))
-        checks += [check_data_quality(ctx), check_drift(ctx), check_deploy(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
+        checks += [check_data_quality(ctx), check_drift(ctx), check_deploy(ctx), check_backup_age(ctx), check_restore_drill(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
 
@@ -889,7 +948,8 @@ class WatchState(Record):
     statuses: dict[str, Status] = Field(default_factory=dict)
 
 
-NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:")   # warnings the owner is told about (R11, X6)
+# warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
+NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age")
 
 
 def _alerting(name: str, status: str) -> bool:
