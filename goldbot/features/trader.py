@@ -11,9 +11,11 @@ Conventions (as the other structure features):
   (no previous session, no confirmed swing, no unfilled gap, no active block) is NaN, its count or flag is 0.
 
 Definitions:
-- Sessions: the UTC windows of `DEFAULT_SESSIONS.sessions_utc` (asia 23:00-07:00, london 07:00-12:30, newyork
-  12:30-21:00). A bar belongs to the window holding its start; 21:00-23:00 belongs to none (current-session columns
-  NaN there). One session instance = the bars of one window opening (an Asia session spans midnight).
+- Sessions: the local-clock windows of `DEFAULT_SESSIONS.sessions_local`, converted to UTC per date (asia 08:00
+  Tokyo = 23:00 UTC to the London open, london 08:00 London to the New York open, newyork 08:30-17:00 New York; in
+  UTC 07:00/12:30/21:00 on summer time, an hour later on each zone's winter time). A bar belongs to the window holding
+  its start; the New York close to 23:00 UTC belongs to none (current-session columns NaN there). One session
+  instance = the bars of one window opening (an Asia session spans midnight).
 - Day: the repo's feature-day (ends 13:30 America/New_York, `timeutil.feature_day`), as the 1d bars. Week: Sunday
   00:00 UTC weeks (`timeutil.floor_tf`, as the 1w bars).
 - Swings: `structure.swing_points` with lag `ctx['swing_lag']` (5): a swing at bar j is known from bar j+lag. The
@@ -48,8 +50,7 @@ from goldbot.features.registry import FeatureCtx, feature
 from goldbot.features.structure import swing_points
 from goldbot.features.technical import atr
 
-DAY_NS = 86_400 * 1_000_000_000
-SESSION_NAMES = tuple(DEFAULT_SESSIONS.sessions_utc)          # asia, london, newyork (session_id order)
+SESSION_NAMES = tuple(DEFAULT_SESSIONS.sessions_local)        # asia, london, newyork (session_id order)
 
 
 def _utc(df: pd.DataFrame) -> pd.DatetimeIndex:
@@ -58,19 +59,8 @@ def _utc(df: pd.DataFrame) -> pd.DatetimeIndex:
 
 def session_instances(ts: pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:
     """(session code per bar: index into SESSION_NAMES, -1 outside every window; the UTC start of the bar's session
-    instance in epoch ns, -1 outside). Windows come from DEFAULT_SESSIONS.sessions_utc and may span midnight."""
-    ns = epoch_ns(ts)
-    code = np.full(len(ns), -1, dtype=np.int64)
-    start = np.full(len(ns), -1, dtype=np.int64)
-    tod = ns % DAY_NS
-    for k, (a, b) in enumerate(DEFAULT_SESSIONS.sessions_utc.values()):
-        so = (a.hour * 3600 + a.minute * 60) * 1_000_000_000
-        length = ((b.hour * 3600 + b.minute * 60) * 1_000_000_000 - so) % DAY_NS
-        since = (tod - so) % DAY_NS
-        inside = since < length
-        code[inside] = k
-        start[inside] = ns[inside] - since[inside]
-    return code, start
+    instance in epoch ns, -1 outside). Windows are `DEFAULT_SESSIONS.sessions_local`, resolved per date (DST-aware)."""
+    return DEFAULT_SESSIONS.session_windows(ts)
 
 
 def _runs(key: np.ndarray) -> np.ndarray:
@@ -127,7 +117,8 @@ def _session_levels(df: pd.DataFrame) -> dict[str, np.ndarray]:
 
 
 # --------------------------------------------------------------------------- session zones
-@feature("session_zones", "session", lookback=1000, signed={"prev_sess_pos": 0.0})
+# version 2: DST-aware session windows (version 1 used fixed UTC windows, an hour early on London/New York winter time)
+@feature("session_zones", "session", version="2", lookback=1000, signed={"prev_sess_pos": 0.0})
 def f_session_zones(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Current and previous session high/low/open, each zone's last completed high/low, previous day and week
     high/low, as (close - level) / ATR; `prev_sess_pos` is +1 above the previous session's range, -1 below, 0 inside.
@@ -163,7 +154,8 @@ def _last_known_before(flag: np.ndarray, px: np.ndarray) -> np.ndarray:
     return s.to_numpy(dtype=float)
 
 
-@feature("market_structure", "structure", lookback=1000,
+# version 2: the previous-session sweep reference uses the DST-aware session windows (see session_zones)
+@feature("market_structure", "structure", version="2", lookback=1000,
          signed={"sweep_dir": 0.0, "bos_event": 0.0, "bos_dir": 0.0})
 def f_market_structure(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Liquidity sweeps of prior highs/lows and breaks of structure (definitions in the module docstring).

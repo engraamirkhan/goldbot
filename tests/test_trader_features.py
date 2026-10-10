@@ -83,13 +83,17 @@ def test_session_zones_report_current_and_previous_session_levels_known_at_each_
     assert X["asia_high_dist_atr"][i] == pytest.approx(dist(i, 110.0)) and np.isnan(X["london_high_dist_atr"][i])
     assert X["sess_high_dist_atr"][i] == pytest.approx(dist(i, 100.5)) and X["prev_sess_pos"][i] == 0
     assert X["prev_sess_pos"][at("2024-01-10 12:00")] == 1                     # closed above the Asia range
-    # New York 13:00: previous session London (high 112); Asia's last high still 110
-    i = at("2024-01-10 13:00")
+    # New York opens 08:30 New York = 13:30 UTC in January: at 13:00 London is still the current session
+    assert X["prev_sess_high_dist_atr"][at("2024-01-10 13:00")] == pytest.approx(dist(at("2024-01-10 13:00"), 110.0))
+    # New York 13:30: previous session London (high 112); Asia's last high still 110
+    i = at("2024-01-10 13:30")
     assert X["prev_sess_high_dist_atr"][i] == pytest.approx(dist(i, 112.0))
     assert X["london_high_dist_atr"][i] == pytest.approx(dist(i, 112.0))
     assert X["asia_high_dist_atr"][i] == pytest.approx(dist(i, 110.0))
-    # 21:00-23:00 is outside every window: no current session, the previous one is New York
-    i = at("2024-01-10 21:30")
+    # New York closes 17:00 New York = 22:00 UTC in January; 22:00-23:00 is outside every window: no current
+    # session, the previous one is New York
+    assert not np.isnan(X["sess_high_dist_atr"][at("2024-01-10 21:30")])
+    i = at("2024-01-10 22:30")
     assert np.isnan(X["sess_high_dist_atr"][i]) and X["prev_sess_high_dist_atr"][i] == pytest.approx(dist(i, 100.5))
     # previous feature-day (ends 13:30 New York = 18:30 UTC in January): known only after it closes
     assert np.isnan(X["pdh_dist_atr"][at("2024-01-10 18:15")])
@@ -126,7 +130,7 @@ STRUCTURE = [            # lag 2: swing high 101 at B confirmed at B+2; swept at
 
 @pytest.mark.parametrize("mirror", [False, True])
 def test_sweep_and_break_of_structure_on_a_known_sequence(mirror):
-    m = _frame(STRUCTURE, "2024-01-10 07:00")
+    m = _frame(STRUCTURE, "2024-01-10 08:00")
     m = _mirror(m) if mirror else m
     X = build_features(m, ["market_structure"], ctx={"swing_lag": 2})
     up, dn = ("sweep_low", "sweep_high") if mirror else ("sweep_high", "sweep_low")
@@ -141,7 +145,7 @@ def test_sweep_and_break_of_structure_on_a_known_sequence(mirror):
 
 def test_a_swing_is_broken_only_once():
     rows = [*STRUCTURE[:5], (101.2, 101.25, 100.5, 100.6), (100.6, 101.25, 100.5, 101.1)]   # re-cross 101 at B+6
-    X = build_features(_frame(rows, "2024-01-10 07:00"), ["market_structure"], ctx={"swing_lag": 2})
+    X = build_features(_frame(rows, "2024-01-10 08:00"), ["market_structure"], ctx={"swing_lag": 2})
     assert np.flatnonzero(X["bos_event"].to_numpy()).tolist() == [B + 4]
 
 
@@ -157,7 +161,7 @@ FVG = [
 
 @pytest.mark.parametrize("mirror", [False, True])
 def test_fair_value_gap_forms_on_the_third_bar_shrinks_on_partial_fill_and_is_dropped_when_filled(mirror):
-    m = _frame(FVG, "2024-01-10 07:00")
+    m = _frame(FVG, "2024-01-10 08:00")
     m = _mirror(m) if mirror else m
     X = build_features(m, ["fair_value_gaps"])
     a = atr(m, 14).to_numpy()
@@ -177,7 +181,7 @@ def test_fair_value_gap_forms_on_the_third_bar_shrinks_on_partial_fill_and_is_dr
 
 
 def test_fair_value_gaps_below_the_minimum_size_are_ignored():
-    X = build_features(_frame(FVG, "2024-01-10 07:00"), ["fair_value_gaps"], ctx={"fvg_min_atr": 0.6})
+    X = build_features(_frame(FVG, "2024-01-10 08:00"), ["fair_value_gaps"], ctx={"fvg_min_atr": 0.6})
     assert X["fvg_bull_count"].sum() == 0
 
 
@@ -194,7 +198,7 @@ OB = [                               # lag 2: swing high 101 at B, confirmed at 
 
 @pytest.mark.parametrize("mirror", [False, True])
 def test_order_block_is_the_last_opposite_candle_before_a_structure_breaking_displacement(mirror):
-    m = _frame(OB, "2024-01-10 07:00")
+    m = _frame(OB, "2024-01-10 08:00")
     m = _mirror(m) if mirror else m
     X = build_features(m, ["order_blocks"], ctx={"swing_lag": 2})
     a = atr(m, 14).to_numpy()
@@ -213,7 +217,7 @@ def test_order_block_is_the_last_opposite_candle_before_a_structure_breaking_dis
 
 def test_no_order_block_without_a_break_of_structure():
     rows = [*OB[:3], (100.0, 101.0, 99.95, 100.95)]           # body 0.95 > 0.5 ATR but closes below the swing high
-    X = build_features(_frame(rows, "2024-01-10 07:00"), ["order_blocks"],
+    X = build_features(_frame(rows, "2024-01-10 08:00"), ["order_blocks"],
                        ctx={"swing_lag": 2, "ob_displacement_atr": 0.5})
     assert X["ob_bull_count"].sum() == 0
 
