@@ -293,6 +293,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/proposals/recent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recent Proposals
+         * @description Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it.
+         */
+        get: operations["recent_proposals_api_proposals_recent_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/rearm": {
         parameters: {
             query?: never;
@@ -553,6 +573,69 @@ export interface components {
              */
             now: string;
         };
+        /**
+         * DecidedProposal
+         * @description A proposal decided in the last few minutes, so its card can show what happened to it.
+         *
+         *     submitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;
+         *     approved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);
+         *     rejected: with its reason code; expired: nobody decided within the window.
+         */
+        DecidedProposal: {
+            /** Account Id */
+            account_id: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Decided By */
+            decided_by?: string | null;
+            /** Entry */
+            entry: number;
+            /** Ev R */
+            ev_r: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Lots */
+            lots: number;
+            /** P */
+            p: number;
+            /** Proposal Id */
+            proposal_id: string;
+            /** Reason Code */
+            reason_code?: ("news" | "cost" | "discretion" | "duplicate" | "other") | null;
+            /**
+             * Refusal
+             * @default []
+             */
+            refusal: string[];
+            /** Risk Usd */
+            risk_usd?: number | null;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /** Spread Points */
+            spread_points: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "submitted" | "approved" | "rejected" | "expired" | "refused";
+            /** Stop */
+            stop: number;
+            /** Target */
+            target: number;
+            /** Top Features */
+            top_features: [
+                string,
+                number
+            ][];
+            /** Tradingview Url */
+            tradingview_url?: string | null;
+        };
         /** Decision */
         Decision: {
             /**
@@ -744,6 +827,8 @@ export interface components {
             p: number;
             /** Proposal Id */
             proposal_id: string;
+            /** Risk Usd */
+            risk_usd?: number | null;
             /**
              * Side
              * @enum {string}
@@ -792,6 +877,17 @@ export interface components {
         };
         /** Status */
         Status: {
+            blackout?: components["schemas"]["ActiveBlackout"] | null;
+            /**
+             * Drift Halt
+             * @default false
+             */
+            drift_halt: boolean;
+            /**
+             * Drift Reasons
+             * @default []
+             */
+            drift_reasons: string[];
             /** Halt Reason */
             halt_reason?: string | null;
             /** Halted */
@@ -806,6 +902,16 @@ export interface components {
             supervisor: {
                 [key: string]: unknown;
             };
+            /**
+             * Supervisor Halt
+             * @default false
+             */
+            supervisor_halt: boolean;
+            /**
+             * Supervisor Reasons
+             * @default []
+             */
+            supervisor_reasons: string[];
         };
         /** TotpEnrolment */
         TotpEnrolment: {
@@ -1291,6 +1397,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Proposal"][];
+                };
+            };
+        };
+    };
+    recent_proposals_api_proposals_recent_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecidedProposal"][];
                 };
             };
         };

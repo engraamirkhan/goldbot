@@ -34,10 +34,26 @@ def test_proposal_expires_after_its_window_but_never_once_decided():
 
 
 def test_proposal_text_carries_what_the_owner_needs_to_decide():
-    txt = _prop(side=-1).text()
-    assert "SHORT 0.12 lots" in txt and "stop 2396.20" in txt and "target 2406.20" in txt
-    assert "p=0.62" in txt and "spread 22pt" in txt and "90s" in txt
+    txt = _prop(side=-1, risk_usd=48.0).text()
+    assert txt.splitlines()[0] == "🔵 SHORT 0.12 lots XAUUSD  ·  risk $48"        # direction, size and $ risk first
+    assert "entry 2400.20" in txt and "stop 2396.20" in txt and "target 2406.20" in txt
+    assert "p=0.62" in txt and "EV=+0.31R" in txt and "spread 22pt" in txt and "90s" in txt
     assert "adx14 +31.20" in txt and "extra" not in txt              # top three features only
+    assert "icm-demo · trend-g0-x" in txt
+    assert "risk $" not in _prop().text()                            # proposals without the field still render
+    assert "no feature importances" in _prop(top_features=[]).text()
+
+
+def test_bus_recent_lists_finished_and_submitted_newest_first(tmp_path):
+    bus = ApprovalBus(tmp_path)
+    bus.publish(_prop("open"))
+    bus.publish(_prop("sub"))
+    bus.archive(_prop("old", outcome=Outcome.EXPIRED))
+    bus.submit("sub", False, "cost", by="dashboard:o@x.io")
+    rows = bus.recent()
+    assert [(p.proposal_id, d is not None) for p, d in rows] == [("sub", True), ("old", False)]   # "open" is not decided
+    assert rows[0][1] is not None and rows[0][1].reason_code == "cost"
+    assert bus.recent(max_age_s=-1) == []
 
 
 def test_only_allow_listed_users_decide_and_only_once():

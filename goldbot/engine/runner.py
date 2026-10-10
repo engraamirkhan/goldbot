@@ -448,7 +448,8 @@ class Engine:
             target = price + side * ls.target_atr * float(a.iloc[last])
             prop = Proposal(proposal_id=pid, account_id=self.cfg.account_id, agent_id=agent.agent_id, side=side, lots=gd.lots, entry=price, stop=stop, target=target, p=p,
                             ev_r=p * ls.target_atr - (1 - p) * ls.stop_atr - cost_atr, spread_points=self.state.spread_points,
-                            top_features=self._top_features(model, feats), window_s=90)
+                            top_features=self._top_features(model, feats), window_s=90,
+                            risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2))
             if self.cfg.approval_mode == "auto":
                 self._execute(prop, agent, gd.lots, stop, target, requested=price)
                 decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid))
@@ -474,6 +475,9 @@ class Engine:
                               price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price)
             else:
                 self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "gate_at_approval:" + ",".join(gd.reasons)})
+                p.gate_refusal = list(gd.reasons)
+                if self.center.bus is not None:
+                    self.center.bus.archive(p)          # the dashboard shows "refused at approval", not "approved"
         self._write_state()
 
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float) -> None:

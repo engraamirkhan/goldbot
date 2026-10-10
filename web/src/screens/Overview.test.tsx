@@ -5,7 +5,8 @@ import * as apiModule from "../lib/api";
 import { Overview } from "./Overview";
 
 const status = (over: Partial<apiModule.Status>): apiModule.Status => ({
-  mode: "propose", halted: false, halted_by: null, halt_reason: null, pending: 0, supervisor: {}, ...over,
+  mode: "propose", halted: false, halted_by: null, halt_reason: null, pending: 0, supervisor: {},
+  supervisor_halt: false, supervisor_reasons: [], drift_halt: false, drift_reasons: [], blackout: null, ...over,
 });
 
 function renderOverview(role: apiModule.Role) {
