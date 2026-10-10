@@ -1,5 +1,5 @@
 """Encrypted, off-host backups of the brain's state with a restore drill (docs/proposals/2026-10-state-store.md, step 2
-and section 7; decision record docs/decisions/0001-backup-scope-and-thresholds.md).
+and section 7; decision record docs/decisions/0002-backup-scope-and-thresholds.md).
 
 What a snapshot holds (built in a staging directory, then saved by restic):
 * every SQLite file under the state directory, copied with the online backup API (`sqlite3.Connection.backup`, one
@@ -18,6 +18,17 @@ from the keyring / secret store (`goldbot accounts set restic-repository|restic-
 restic-s3-secret-key`) and reach restic only through its environment: never an argument, never a log line, and any
 value that appears in restic's error output is masked before it is recorded. Never GitHub.
 
+The brain only ever appends: it runs `restic backup`, never `forget` or `prune`, so a compromised brain cannot thin
+out the history through restic. Retention runs monthly from the owner's Mac with a second key
+(scripts/backup_retention.sh), which uploads a small marker snapshot (host and tag `goldbot-retention`) after each
+prune; the brain reads the newest marker's time on each backup and health warns when it is older than 45 days. The
+bucket keeps previous object versions for 30 days (RUNBOOK 0.6), so even a deleting key cannot remove history at once.
+
+Staging and restore directories are created 0700 under umask 077 (re-applied when they already exist): the staged
+copies hold the order and auth databases in clear text. JSONL files are copied up to their last newline, so a line
+being appended is never half in the snapshot. A month partition is staged as a whole: a store rewrite that deletes
+the old parts mid-copy (dedupe) is retried and, if it keeps moving, the month is listed in `skipped_partitions`.
+
 Each run records state/backup_last.json; the weekly drill restores the latest snapshot to a temporary directory,
 re-checks every checksum, `integrity_check`, schema versions and row counts against the manifest, every model
 artefact against models/registry.json, runs `restic check --read-data-subset`, and records
@@ -26,6 +37,7 @@ state/restore_drill_last.json. Health reads both (`backup_age`, `restore_drill`)
   python -m goldbot.ops.run backup [--init]           # one backup now (--init: create the repository once)
   python -m goldbot.ops.run restore --latest --to DIR # restore into an empty DIR (never over live state)
   python -m goldbot.ops.run restore-drill             # the weekly drill, now
+  scripts/backup_retention.sh [--dry-run]             # monthly, on the owner's Mac only: forget + prune, marker
 """
 from __future__ import annotations
 
@@ -60,6 +72,8 @@ LAST_FILE = "backup_last.json"
 DRILL_FILE = "restore_drill_last.json"
 MANIFEST = "MANIFEST.json"
 TAG = "goldbot"
+RETENTION_HOST = RETENTION_TAG = "goldbot-retention"   # marker snapshot the Mac's retention run uploads after a prune
+PRIVATE_UMASK = 0o077
 RELEASE_SOURCES = ("dukascopy", "fred")          # re-downloadable from releases data-v1 / macro-v1
 DERIVED_TABLES = ("features", "labels")          # recomputed from bars
 _STATE_EXCLUDE = (re.compile(r".*\.db(-wal|-shm|-journal)?$"), re.compile(r"^\.secrets\.json$"),
@@ -103,7 +117,9 @@ class BackupPaths(Record):
 
 
 def retention_args(r: Retention, host: str) -> list[str]:
-    """`restic forget` for this host's goldbot snapshots only, pruning unreferenced data in the same run."""
+    """`restic forget` for this host's goldbot snapshots only, pruning unreferenced data in the same run. Run from the
+    owner's Mac by scripts/backup_retention.sh with the retention key, never by the brain (a test keeps the script's
+    flags equal to these)."""
     return ["forget", "--host", host, "--tag", TAG, "--keep-daily", str(r.keep_daily), "--keep-weekly",
             str(r.keep_weekly), "--keep-monthly", str(r.keep_monthly), "--prune"]
 
@@ -224,16 +240,72 @@ def _link_or_copy(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
+def private_dir(p: Path) -> Path:
+    """Create `p` (and parents) for staged or restored state: mode 0700, re-applied when it already exists."""
+    p.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(p, 0o700)
+    return p
+
+
+def _copy_state_file(src: Path, dst: Path) -> None:
+    """A whole copy; for append-only JSONL only up to the last newline, so a line being appended is not cut in half."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.suffix != ".jsonl":
+        shutil.copy2(src, dst)
+        return
+    raw = src.read_bytes()
+    dst.write_bytes(raw[: raw.rfind(b"\n") + 1])
+    shutil.copystat(src, dst)
+
+
+def _stage_partition(pdir: Path, dest: Path, data_root: Path, *, attempts: int = 3, wait_s: float = 0.5,
+                     ) -> tuple[list[str], str | None]:
+    """Stage one month partition as a whole. Returns (incomplete parts skipped, reason the month was skipped or None).
+
+    The store's dedupe rewrite deletes every part of the month, then writes the merged one, so a copy taken in between
+    would silently miss the month (or half of it). A listing is accepted only when every part seen before the copy is
+    still there afterwards and at least one complete part exists; otherwise the staged files are dropped and the copy
+    retried, and after `attempts` the month is reported as skipped. Parts that only appeared later belong to the next
+    snapshot."""
+    reason: str | None = None
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(wait_s)
+        before = sorted(pdir.glob("*.parquet"))
+        complete = [f for f in before if _parquet_complete(f)]
+        incomplete = [(Path("data") / f.relative_to(data_root)).as_posix() for f in before if f not in complete]
+        if not complete:
+            reason = "no complete part (a dedupe rewrite in progress)"
+            continue
+        staged: list[Path] = []
+        try:
+            for f in complete:
+                out = dest / "data" / f.relative_to(data_root)
+                _link_or_copy(f, out)
+                staged.append(out)
+        except FileNotFoundError:
+            reason = "a part was deleted while copying (dedupe rewrite)"
+        else:
+            after = {f.name for f in pdir.glob("*.parquet")}
+            if all(f.name in after for f in before):
+                return incomplete, None
+            reason = "parts were replaced while copying (dedupe rewrite)"
+        for out in staged:
+            out.unlink(missing_ok=True)
+    return [], reason
+
+
 def _excluded_state(rel: Path) -> bool:
     return any(p.match(rel.name) for p in _STATE_EXCLUDE)
 
 
 def build_snapshot(paths: BackupPaths, dest: Path) -> dict[str, Any]:
     """Stage the snapshot set in `dest` (empty) and write MANIFEST.json; returns the manifest."""
-    dest.mkdir(parents=True, exist_ok=True)
+    private_dir(dest)
     state, work = paths.state_dir.resolve(), paths.work_dir.resolve()
     dbs: dict[str, Any] = {}
     skipped: list[str] = []
+    skipped_partitions: list[dict[str, str]] = []
     for db in sorted(state.rglob("*.db")):
         if work in db.resolve().parents or not db.is_file():
             continue
@@ -243,13 +315,10 @@ def build_snapshot(paths: BackupPaths, dest: Path) -> dict[str, Any]:
         rel_state = f.relative_to(state)
         if not f.is_file() or f.is_symlink() or work in f.resolve().parents or _excluded_state(rel_state):
             continue
-        out = dest / "state" / rel_state
-        out.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(f, out)                        # small files written atomically by their owners: a whole copy
+        _copy_state_file(f, dest / "state" / rel_state)   # JSON written atomically; JSONL cut to whole lines
     reg = paths.registry
     if reg.is_file() and state not in reg.resolve().parents:
-        (dest / "registry").mkdir(parents=True, exist_ok=True)
-        shutil.copy2(reg, dest / "registry" / reg.name)
+        _copy_state_file(reg, dest / "registry" / reg.name)
     if paths.models_dir.is_dir():
         for f in sorted(paths.models_dir.rglob("*")):
             if f.is_file() and not f.is_symlink() and not f.name.endswith(".tmp"):
@@ -261,16 +330,18 @@ def build_snapshot(paths: BackupPaths, dest: Path) -> dict[str, Any]:
             table, source = sdir.parent.name, sdir.name.split("=", 1)[1]
             if table in paths.exclude_tables or source in paths.exclude_sources:
                 continue
-            for f in sorted(sdir.rglob("*.parquet")):
-                rel = Path("data") / f.relative_to(paths.data_root)
-                if not _parquet_complete(f):
-                    skipped.append(rel.as_posix())   # a part being written right now: tomorrow's snapshot has it
-                    continue
-                _link_or_copy(f, dest / rel)
+            for pdir in sorted({f.parent for f in sdir.rglob("*.parquet")}):
+                torn, why = _stage_partition(pdir, dest, paths.data_root)
+                skipped += torn                     # parts being written right now: tomorrow's snapshot has them
+                if why:
+                    part_rel = (Path("data") / pdir.relative_to(paths.data_root)).as_posix()
+                    skipped_partitions.append({"partition": part_rel, "reason": why})
+                    log.warning("backup: partition %s skipped: %s", part_rel, why)
     files = {f.relative_to(dest).as_posix(): {"sha256": sha256_file(f), "bytes": f.stat().st_size}
              for f in sorted(dest.rglob("*")) if f.is_file()}
     manifest = {"created_utc": pd.Timestamp.now("UTC").isoformat(), "files": files, "dbs": dbs,
-                "skipped_incomplete": skipped, "model_problems": verify_models(dest / "models")}
+                "skipped_incomplete": skipped,
+                "skipped_partitions": skipped_partitions, "model_problems": verify_models(dest / "models")}
     (dest / MANIFEST).write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     return manifest
 
@@ -306,15 +377,27 @@ def verify_restore(root: Path) -> list[str]:
     except (ValueError, OSError) as exc:
         return [f"{MANIFEST} unreadable: {exc}"]
     problems: list[str] = []
+    base = root.resolve()
+    for link in sorted(p for p in root.rglob("*") if p.is_symlink()):
+        problems.append(f"{link.relative_to(root).as_posix()}: symlink in the restored tree (refused)")
+    unsafe: set[str] = set()
+    for rel in [*manifest.get("files", {}), *manifest.get("dbs", {})]:
+        p = Path(rel)
+        target = root / p
+        if p.is_absolute() or ".." in p.parts or target.is_symlink() or base not in target.resolve().parents:
+            unsafe.add(rel)
+            problems.append(f"{rel}: path escapes the restore directory or is a symlink (refused)")
     for rel, meta in manifest.get("files", {}).items():
         f = root / rel
+        if rel in unsafe:
+            continue
         if not f.is_file():
             problems.append(f"{rel}: missing")
         elif sha256_file(f) != meta.get("sha256"):
             problems.append(f"{rel}: checksum mismatch")
     for rel, want in manifest.get("dbs", {}).items():
         f = root / rel
-        if not f.is_file():
+        if rel in unsafe or not f.is_file():
             continue                                # reported above
         try:
             got = db_facts(f)
@@ -336,14 +419,16 @@ class BackupRecord(Record):
     ts: UtcTimestamp                       # this attempt
     ok: bool
     last_ok_ts: UtcTimestamp | None = None
+    first_ok_ts: UtcTimestamp | None = None        # first successful backup ever (health: prune age grace period)
+    last_prune_ts: UtcTimestamp | None = None      # newest retention marker from the Mac (health: backup_prune)
     snapshot_id: str | None = None
     files: int = 0
     bytes: int = 0
     dbs: dict[str, dict[str, Any]] = Field(default_factory=dict)
     skipped_incomplete: list[str] = Field(default_factory=list)
+    skipped_partitions: list[dict[str, str]] = Field(default_factory=list)
     model_problems: list[str] = Field(default_factory=list)
     repo_bytes: int | None = None
-    retention: Retention | None = None
     duration_s: float = 0.0
     error: str | None = None
 
@@ -359,9 +444,9 @@ class DrillRecord(Record):
     error: str | None = None
 
 
-def _previous_ok(path: Path) -> pd.Timestamp | None:
+def _previous_ok(path: Path, key: str = "last_ok_ts") -> pd.Timestamp | None:
     try:
-        v = json.loads(path.read_text(encoding="utf-8")).get("last_ok_ts")
+        v = json.loads(path.read_text(encoding="utf-8")).get(key)
         return pd.Timestamp(v) if v else None
     except (ValueError, OSError, AttributeError):
         return None
@@ -374,7 +459,17 @@ def _record(path: Path, rec: Record) -> None:
 def _empty_dir(p: Path) -> None:
     if p.exists():
         shutil.rmtree(p)
-    p.mkdir(parents=True)
+    private_dir(p)
+
+
+class _PrivateUmask:
+    """umask 077 for the duration of a backup or restore (staged copies hold the databases in clear text)."""
+
+    def __enter__(self) -> None:
+        self.old = os.umask(PRIVATE_UMASK)
+
+    def __exit__(self, *exc: object) -> None:
+        os.umask(self.old)
 
 
 # ------------------------------------------------------------------------------------------------ backup
@@ -383,14 +478,31 @@ def init_repository(restic: Restic) -> str:
     return restic.run(["init"])
 
 
-def run_backup(paths: BackupPaths, restic: Restic, retention: Retention) -> BackupRecord:
-    """Stage, upload, apply retention, measure. Raises BackupError; `backup_job` records the outcome."""
+def last_prune(restic: Restic) -> pd.Timestamp | None:
+    """Time of the newest retention marker the Mac's run uploaded (None: never pruned, or unreadable)."""
+    try:
+        snaps = json.loads(restic.run(["snapshots", "--json", "--host", RETENTION_HOST, "--tag", RETENTION_TAG])
+                           or "[]")
+        times = [pd.Timestamp(s["time"]) for s in snaps if isinstance(s, dict) and s.get("time")]
+    except (BackupError, ValueError, TypeError, KeyError):
+        log.warning("restic snapshots failed: last prune time unknown")
+        return None
+    return max(times).tz_convert("UTC") if times else None
+
+
+def run_backup(paths: BackupPaths, restic: Restic) -> BackupRecord:
+    """Stage, upload, measure. Append only: never `forget` or `prune` (retention runs from the owner's Mac,
+    scripts/backup_retention.sh). Raises BackupError; `backup_job` records the outcome."""
     t0 = time.monotonic()
+    private_dir(paths.work_dir)
     stage = paths.work_dir / "snapshot"             # a fixed path, so restic finds its parent snapshot
     _empty_dir(stage)
     try:
         manifest = build_snapshot(paths, stage)
-        restic.run(["unlock"])                      # stale locks only (a crashed earlier run); live locks stay
+        try:
+            restic.run(["unlock"])                  # stale locks only (a crashed earlier run); live locks stay
+        except BackupError as exc:                  # a key without delete rights cannot remove locks: not fatal
+            log.warning("restic unlock failed (key without delete rights?): %s", exc)
         out = restic.run(["backup", "--json", "--host", restic.host, "--tag", TAG, str(stage.resolve())])
         snap = None
         for line in out.splitlines()[::-1]:
@@ -401,7 +513,6 @@ def run_backup(paths: BackupPaths, restic: Restic, retention: Retention) -> Back
             if isinstance(msg, dict) and msg.get("message_type") == "summary":
                 snap = msg.get("snapshot_id")
                 break
-        restic.run(retention_args(retention, restic.host))
         repo_bytes = None
         try:
             stats = json.loads(restic.run(["stats", "--json", "--mode", "raw-data"]) or "{}")
@@ -412,28 +523,34 @@ def run_backup(paths: BackupPaths, restic: Restic, retention: Retention) -> Back
         return BackupRecord(ts=pd.Timestamp.now("UTC"), ok=True, snapshot_id=snap, files=len(files),
                             bytes=sum(int(m["bytes"]) for m in files.values()), dbs=manifest["dbs"],
                             skipped_incomplete=manifest["skipped_incomplete"],
-                            model_problems=manifest["model_problems"], repo_bytes=repo_bytes, retention=retention,
+                            skipped_partitions=manifest["skipped_partitions"], last_prune_ts=last_prune(restic),
+                            model_problems=manifest["model_problems"], repo_bytes=repo_bytes,
                             duration_s=round(time.monotonic() - t0, 1))
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 
 
-def backup_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, host: str, retention: Retention,
+def backup_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, host: str,
                runner: Runner = subprocess.run, timeout_s: float = 3600) -> dict[str, Any]:
     """The scheduler job: one backup, recorded in state/backup_last.json whatever happens; raises on failure so the
     scheduler records it too (health: backup_age, scheduler job check)."""
     path = paths.state_dir / LAST_FILE
     prev_ok = _previous_ok(path)
+    first_ok = _previous_ok(path, "first_ok_ts") or prev_ok
+    prev_prune = _previous_ok(path, "last_prune_ts")
     t0 = time.monotonic()
     restic: Restic | None = None
     try:
         restic = Restic.from_secrets(get_secret, host=host, runner=runner, timeout_s=timeout_s)
-        rec = run_backup(paths, restic, retention)
+        with _PrivateUmask():
+            rec = run_backup(paths, restic)
         rec.last_ok_ts = rec.ts
+        rec.first_ok_ts = first_ok or rec.ts
+        rec.last_prune_ts = rec.last_prune_ts or prev_prune
     except Exception as exc:
         msg = f"{type(exc).__name__}: {exc}"
-        rec = BackupRecord(ts=pd.Timestamp.now("UTC"), ok=False, last_ok_ts=prev_ok, retention=retention,
-                           duration_s=round(time.monotonic() - t0, 1),
+        rec = BackupRecord(ts=pd.Timestamp.now("UTC"), ok=False, last_ok_ts=prev_ok, first_ok_ts=first_ok,
+                           last_prune_ts=prev_prune, duration_s=round(time.monotonic() - t0, 1),
                            error=(restic.redact(msg) if restic else msg)[:800])
         _record(path, rec)
         log.error("backup failed: %s", rec.error)
@@ -441,7 +558,8 @@ def backup_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, h
     _record(path, rec)
     log.info("backup ok: snapshot %s, %d files, %d bytes", rec.snapshot_id, rec.files, rec.bytes)
     return {"snapshot": rec.snapshot_id, "files": rec.files, "bytes": rec.bytes, "repo_bytes": rec.repo_bytes,
-            "skipped_incomplete": len(rec.skipped_incomplete), "model_problems": rec.model_problems}
+            "skipped_incomplete": len(rec.skipped_incomplete),
+            "skipped_partitions": rec.skipped_partitions, "model_problems": rec.model_problems}
 
 
 # ------------------------------------------------------------------------------------------------ restore
@@ -452,8 +570,8 @@ def restore(restic: Restic, target: Path, snapshot: str = "latest") -> Path:
     target = target.resolve()
     if target.exists() and any(target.iterdir()):
         raise BackupError(f"{target} is not empty: restore only into an empty directory")
-    scratch = target / ".restic-restore"
-    scratch.mkdir(parents=True)
+    private_dir(target)                             # restored databases in clear text: owner only
+    scratch = private_dir(target / ".restic-restore")
     try:
         args = ["restore", snapshot, "--target", str(scratch)]
         if snapshot == "latest":
@@ -472,7 +590,7 @@ def restore(restic: Restic, target: Path, snapshot: str = "latest") -> Path:
 
 def restore_drill(paths: BackupPaths, restic: Restic, *, check_subset: str = "5%") -> DrillRecord:
     t0 = time.monotonic()
-    paths.work_dir.mkdir(parents=True, exist_ok=True)
+    private_dir(paths.work_dir)
     tmp = Path(tempfile.mkdtemp(prefix="drill-", dir=paths.work_dir))
     try:
         root = restore(restic, tmp / "restored")
@@ -496,7 +614,8 @@ def drill_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, ho
     restic: Restic | None = None
     try:
         restic = Restic.from_secrets(get_secret, host=host, runner=runner, timeout_s=timeout_s)
-        rec = restore_drill(paths, restic, check_subset=check_subset)
+        with _PrivateUmask():
+            rec = restore_drill(paths, restic, check_subset=check_subset)
     except Exception as exc:
         msg = f"{type(exc).__name__}: {exc}"
         rec = DrillRecord(ts=pd.Timestamp.now("UTC"), ok=False, duration_s=round(time.monotonic() - t0, 1),
@@ -524,7 +643,6 @@ def main(argv: list[str], *, get_secret: Callable[[str], str | None] | None = No
     settings = settings or load_settings()
     b = settings.backup
     paths = BackupPaths.from_settings(settings, state_dir)
-    retention = Retention(keep_daily=b.keep_daily, keep_weekly=b.keep_weekly, keep_monthly=b.keep_monthly)
     cmd, rest = (argv[0], argv[1:]) if argv else ("", [])
     try:
         if cmd == "backup":
@@ -532,8 +650,8 @@ def main(argv: list[str], *, get_secret: Callable[[str], str | None] | None = No
                 init_repository(Restic.from_secrets(get_secret, host=b.host, runner=runner, timeout_s=b.timeout_s))
                 print("restic repository created (keep the restic password in your password manager)")
                 return 0
-            print(json.dumps(backup_job(paths, get_secret, host=b.host, retention=retention, runner=runner,
-                                        timeout_s=b.timeout_s), indent=1))
+            print(json.dumps(backup_job(paths, get_secret, host=b.host, runner=runner, timeout_s=b.timeout_s),
+                             indent=1))
             return 0
         if cmd == "restore":
             ap = argparse.ArgumentParser(prog="python -m goldbot.ops.run restore")
@@ -543,7 +661,8 @@ def main(argv: list[str], *, get_secret: Callable[[str], str | None] | None = No
             ap.add_argument("--to", required=True, help="an empty directory")
             a = ap.parse_args(rest)
             restic = Restic.from_secrets(get_secret, host=b.host, runner=runner, timeout_s=b.timeout_s)
-            root = restore(restic, Path(a.to), "latest" if a.latest else a.snapshot)
+            with _PrivateUmask():
+                root = restore(restic, Path(a.to), "latest" if a.latest else a.snapshot)
             problems = verify_restore(root)
             for p in problems:
                 print(f"PROBLEM {p}")
@@ -560,6 +679,6 @@ def main(argv: list[str], *, get_secret: Callable[[str], str | None] | None = No
     return 1
 
 
-__all__ = ["BackupError", "ResticNotConfigured", "Retention", "BackupPaths", "Restic", "retention_args",
+__all__ = ["BackupError", "ResticNotConfigured", "Retention", "BackupPaths", "Restic", "retention_args", "last_prune", "private_dir",
            "snapshot_sqlite", "build_snapshot", "verify_restore", "verify_models", "run_backup", "backup_job",
            "restore", "restore_drill", "drill_job", "BackupRecord", "DrillRecord", "main"]

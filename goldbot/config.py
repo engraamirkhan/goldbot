@@ -145,7 +145,9 @@ class BackupSettings(_Section):
     """restic to Oracle Object Storage (goldbot/ops/backup.py; credentials only in the secret store)."""
     host: str = "goldbot-brain"                   # restic --host: stable across a rebuilt VM, so retention keeps working
     work_dir: str = "~/.cache/goldbot/backup"     # staging and drill scratch, same filesystem as data_root
-    keep_daily: int = Field(14, ge=1)             # proposal section 7: --keep-daily 14 --keep-weekly 8 --keep-monthly 12
+    # proposal section 7: --keep-daily 14 --keep-weekly 8 --keep-monthly 12, applied from the owner's Mac by
+    # scripts/backup_retention.sh (never by the brain; tests keep the script's defaults equal to these)
+    keep_daily: int = Field(14, ge=1)
     keep_weekly: int = Field(8, ge=0)
     keep_monthly: int = Field(12, ge=0)
     data_exclude_sources: list[str] = Field(default_factory=lambda: ["dukascopy", "fred"])   # on releases

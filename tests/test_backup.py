@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -29,7 +30,7 @@ SECRETS = {
     "restic-s3-access-key": "AKSECRET0123",
     "restic-s3-secret-key": "sk/SECRET+abcdef",
 }
-RETENTION = bk.Retention(keep_daily=14, keep_weekly=8, keep_monthly=12)
+RETENTION = bk.Retention(keep_daily=14, keep_weekly=8, keep_monthly=12)   # applied only by the Mac's script
 HOST = "goldbot-brain"
 
 
@@ -41,6 +42,7 @@ class FakeRestic:
         self.calls: list[list[str]] = []
         self.envs: list[dict[str, str]] = []
         self.fail: dict[str, str] = {}
+        self.markers: list[dict[str, str]] = []       # retention marker snapshots (`snapshots --host goldbot-retention`)
 
     @property
     def snap(self) -> Path:
@@ -64,6 +66,8 @@ class FakeRestic:
             shutil.copytree(self.snap, Path(cmd[cmd.index("--target") + 1]), dirs_exist_ok=True)
         elif sub == "stats":
             out = json.dumps({"total_size": 123456})
+        elif sub == "snapshots":
+            out = json.dumps(self.markers)
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
     def subcommands(self) -> list[str]:
@@ -117,7 +121,7 @@ def brain(tmp_path: Path) -> bk.BackupPaths:
 
 def _job(brain: bk.BackupPaths, fake: FakeRestic, secrets: dict[str, str] | None = None) -> dict[str, Any]:
     s = SECRETS if secrets is None else secrets
-    return bk.backup_job(brain, s.get, host=HOST, retention=RETENTION, runner=fake)
+    return bk.backup_job(brain, s.get, host=HOST, runner=fake)
 
 
 def _record(brain: bk.BackupPaths, name: str = bk.LAST_FILE) -> dict[str, Any]:
@@ -214,7 +218,7 @@ def test_backup_runs_restic_with_secrets_in_env_only_and_records_the_result(brai
     fake = FakeRestic(brain.work_dir.parent / "repo")
     with caplog.at_level(logging.DEBUG):
         out = _job(brain, fake)
-    assert fake.subcommands() == ["unlock", "backup", "forget", "stats"]
+    assert fake.subcommands() == ["unlock", "backup", "stats", "snapshots"]
     assert out["snapshot"] == "abc123def" and out["repo_bytes"] == 123456
     for env in fake.envs:
         assert env["RESTIC_PASSWORD"] == SECRETS["restic-password"]
@@ -243,10 +247,93 @@ def test_retention_arguments():
     assert (s.keep_daily, s.keep_weekly, s.keep_monthly) == (14, 8, 12)      # proposal section 7
 
 
-def test_retention_is_applied_after_each_backup(brain):
+def test_the_brain_never_forgets_or_prunes(brain, tmp_path, capsys):
+    """Append only: backup, drill and restore from the brain never thin the history (retention: the owner's Mac)."""
     fake = FakeRestic(brain.work_dir.parent / "repo")
     _job(brain, fake)
-    assert fake.calls[2] == ["restic", *bk.retention_args(RETENTION, HOST)]
+    _job(brain, fake)
+    bk.drill_job(brain, SECRETS.get, host=HOST, runner=fake)
+    bk.restore(bk.Restic.from_secrets(SECRETS.get, host=HOST, runner=fake), tmp_path / "out")
+    base = load_settings()
+    settings = base.model_copy(update={
+        "data_root": str(brain.data_root),
+        "backup": base.backup.model_copy(update={"work_dir": str(brain.work_dir)}),
+        "research": base.research.model_copy(update={"models_dir": str(brain.models_dir),
+                                                     "registry": str(brain.registry)})})
+    for argv in (["backup"], ["restore-drill"]):
+        bk.main(argv, get_secret=SECRETS.get, settings=settings, runner=fake, state_dir=brain.state_dir)
+    assert len(fake.calls) > 10
+    for call in fake.calls:
+        assert "forget" not in call and "--prune" not in call and "prune" not in call, call
+    assert "retention_args" not in (ROOT / "goldbot" / "ops" / "jobs.py").read_text()
+
+
+def test_unlock_without_delete_rights_does_not_fail_the_backup(brain):
+    fake = FakeRestic(brain.work_dir.parent / "repo")
+    fake.fail["unlock"] = "Fatal: unable to remove lock: 403 Forbidden"
+    assert _job(brain, fake)["snapshot"] == "abc123def"
+
+
+def test_the_retention_marker_is_recorded_and_kept_when_unreadable(brain):
+    fake = FakeRestic(brain.work_dir.parent / "repo")
+    _job(brain, fake)
+    rec = _record(brain)
+    assert rec["last_prune_ts"] is None and rec["first_ok_ts"] == rec["ts"]
+    fake.markers = [{"time": "2026-09-01T03:00:00.123+02:00"}, {"time": "2026-10-01T03:00:00Z"}]
+    _job(brain, fake)
+    rec2 = _record(brain)
+    assert pd.Timestamp(rec2["last_prune_ts"]) == pd.Timestamp("2026-10-01T03:00:00Z")
+    assert rec2["first_ok_ts"] == rec["first_ok_ts"]
+    assert fake.calls[-1][1:] == ["snapshots", "--json", "--host", bk.RETENTION_HOST, "--tag", bk.RETENTION_TAG]
+    fake.fail["snapshots"] = "network down"
+    _job(brain, fake)
+    assert pd.Timestamp(_record(brain)["last_prune_ts"]) == pd.Timestamp("2026-10-01T03:00:00Z")
+
+
+_FAKE_RESTIC_SH = """#!/usr/bin/env bash
+echo "$*" >> "$CALLS"
+if [[ "$1" == backup ]]; then cat > "$CALLS.stdin"; fi
+"""
+
+
+def _retention_script(tmp_path: Path, *args: str, role: bool = False) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    fake = tmp_path / "restic"
+    fake.write_text(_FAKE_RESTIC_SH)
+    fake.chmod(0o755)
+    calls = tmp_path / "calls.txt"
+    calls.unlink(missing_ok=True)
+    role_file = tmp_path / "role"
+    role_file.unlink(missing_ok=True)
+    if role:
+        role_file.write_text("brain\n")
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "RESTIC": str(fake), "CALLS": str(calls),
+           "GOLDBOT_ROLE_FILE": str(role_file), "RESTIC_REPOSITORY": SECRETS["restic-repository"],
+           "RESTIC_PASSWORD": "pw", "AWS_ACCESS_KEY_ID": "ak", "AWS_SECRET_ACCESS_KEY": "sk"}
+    p = subprocess.run(["bash", str(ROOT / "scripts" / "backup_retention.sh"), *args], env=env, capture_output=True,
+                       text=True, timeout=30, check=False)
+    return p, (calls.read_text().splitlines() if calls.exists() else [])
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not installed")
+def test_retention_script_prunes_with_the_settings_and_uploads_a_marker(tmp_path):
+    p, calls = _retention_script(tmp_path)
+    assert p.returncode == 0, p.stderr
+    s = load_settings().backup
+    want = " ".join(bk.retention_args(bk.Retention(keep_daily=s.keep_daily, keep_weekly=s.keep_weekly,
+                                                   keep_monthly=s.keep_monthly), s.host))
+    assert calls[0] == "unlock" and calls[1] == want
+    assert calls[2] == f"backup --stdin --stdin-filename retention.json --host {bk.RETENTION_HOST} --tag {bk.RETENTION_TAG}"
+    assert "pruned_utc" in (tmp_path / "calls.txt.stdin").read_text()
+    assert calls[3].startswith(f"forget --host {bk.RETENTION_HOST}")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not installed")
+def test_retention_script_refuses_on_a_goldbot_server_and_dry_run_uploads_no_marker(tmp_path):
+    p, calls = _retention_script(tmp_path, role=True)
+    assert p.returncode == 2 and "refusing" in p.stderr and calls == []
+    p, calls = _retention_script(tmp_path, "--dry-run")
+    assert p.returncode == 0, p.stderr
+    assert calls[1].endswith("--prune --dry-run") and not any(c.startswith("backup") for c in calls)
 
 
 def test_restic_error_output_is_masked_and_the_last_good_backup_is_kept(brain, caplog):
@@ -275,11 +362,116 @@ def test_missing_credentials_name_the_keys_and_record_a_failure(brain):
     assert SECRETS["restic-s3-secret-key"] not in rec["error"]
 
 
+# ------------------------------------------------------------------------------------------------ permissions + guards
+def test_staging_and_restore_directories_are_owner_only(brain, tmp_path, monkeypatch):
+    brain.work_dir.mkdir()
+    brain.work_dir.chmod(0o755)                     # an existing, too-open work dir is tightened
+    seen: dict[str, int] = {}
+    real_build = bk.build_snapshot
+
+    def spy(paths: bk.BackupPaths, dest: Path) -> dict[str, Any]:
+        m = real_build(paths, dest)
+        seen["stage"] = dest.stat().st_mode & 0o777
+        seen["sub"] = (dest / "state").stat().st_mode & 0o777
+        seen["umask"] = os.umask(0o022)
+        os.umask(seen["umask"])
+        return m
+
+    monkeypatch.setattr(bk, "build_snapshot", spy)
+    old = os.umask(0o022)
+    try:
+        fake = FakeRestic(brain.work_dir.parent / "repo")
+        _job(brain, fake)
+        assert os.umask(0o022) == 0o022              # restored after the job
+        assert brain.work_dir.stat().st_mode & 0o777 == 0o700
+        assert seen == {"stage": 0o700, "sub": 0o700, "umask": 0o077}
+        target = tmp_path / "restore-here"
+        target.mkdir()
+        target.chmod(0o755)
+        bk.restore(bk.Restic.from_secrets(SECRETS.get, host=HOST, runner=fake), target)
+        assert target.stat().st_mode & 0o777 == 0o700
+        fresh = bk.restore(bk.Restic.from_secrets(SECRETS.get, host=HOST, runner=fake), tmp_path / "a" / "b")
+        assert fresh.stat().st_mode & 0o777 == 0o700
+    finally:
+        os.umask(old)
+
+
+def test_jsonl_copies_end_at_the_last_newline(brain, tmp_path):
+    (brain.state_dir / "research_registry.jsonl").write_text('{"trial": 1}\n{"trial": 2}\n{"tri')
+    (brain.state_dir / "closed_trades.jsonl").write_text('{"half')
+    m = bk.build_snapshot(brain, tmp_path / "stage")
+    assert (tmp_path / "stage" / "state" / "research_registry.jsonl").read_text() == '{"trial": 1}\n{"trial": 2}\n'
+    assert (tmp_path / "stage" / "state" / "closed_trades.jsonl").read_text() == ""
+    assert (tmp_path / "stage" / "state" / "orders_icm-demo.json").read_text() == '{"orders": []}'
+    assert bk.verify_restore(tmp_path / "stage") == []
+    assert m["files"]["state/research_registry.jsonl"]["bytes"] == 26
+
+
+def _month(brain: bk.BackupPaths) -> Path:
+    return brain.data_root / "ticks" / "source=icm-demo" / "symbol=XAUUSD" / "year=2026" / "month=10"
+
+
+def test_a_dedupe_rewrite_mid_copy_is_retried_and_the_new_part_staged(brain, tmp_path, monkeypatch):
+    monkeypatch.setattr(bk.time, "sleep", lambda s: None)
+    month = _month(brain)
+    (month / "part-e.parquet").unlink()
+    _parquet(month / "part-f.parquet")
+    real = bk._link_or_copy
+    state = {"rewritten": False}
+
+    def rewrite_once(src: Path, dst: Path) -> None:
+        real(src, dst)
+        if not state["rewritten"] and src.parent == month:   # the store deletes every part, then writes the merge
+            state["rewritten"] = True
+            for f in month.glob("*.parquet"):
+                f.unlink()
+            _parquet(month / "part-merged.parquet")
+
+    monkeypatch.setattr(bk, "_link_or_copy", rewrite_once)
+    m = bk.build_snapshot(brain, tmp_path / "stage")
+    ticks = sorted(f for f in m["files"] if f.startswith("data/ticks/"))
+    assert ticks == ["data/ticks/source=icm-demo/symbol=XAUUSD/year=2026/month=10/part-merged.parquet"]
+    assert m["skipped_partitions"] == []
+
+
+def test_a_month_caught_mid_dedupe_is_listed_as_skipped(brain, tmp_path, monkeypatch):
+    monkeypatch.setattr(bk.time, "sleep", lambda s: None)
+    month = _month(brain)
+    for f in month.glob("*.parquet"):
+        f.unlink()
+    (month / "part-merged.parquet").write_bytes(b"PAR1 being written")   # old parts gone, merge not finished
+    fake = FakeRestic(brain.work_dir.parent / "repo")
+    _job(brain, fake)
+    rec = _record(brain)
+    assert rec["skipped_partitions"] == [{"partition": "data/ticks/source=icm-demo/symbol=XAUUSD/year=2026/month=10",
+                                          "reason": "no complete part (a dedupe rewrite in progress)"}]
+
+
+def test_verify_restore_refuses_symlinks_and_paths_outside_the_restore_dir(brain, tmp_path):
+    root = tmp_path / "stage"
+    bk.build_snapshot(brain, root)
+    assert bk.verify_restore(root) == []
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}")
+    mf = json.loads((root / bk.MANIFEST).read_text())
+    mf["files"]["../outside.json"] = {"sha256": bk.sha256_file(outside), "bytes": 2}
+    mf["files"]["/etc/hosts"] = {"sha256": "x", "bytes": 1}
+    (root / bk.MANIFEST).write_text(json.dumps(mf))
+    target = root / "state" / "orders_icm-demo.json"
+    target.unlink()
+    target.symlink_to(outside)                       # checksum would not matter: the link itself is refused
+    problems = bk.verify_restore(root)
+    assert any(p.startswith("../outside.json: path escapes") for p in problems)
+    assert any(p.startswith("/etc/hosts: path escapes") for p in problems)
+    assert "state/orders_icm-demo.json: symlink in the restored tree (refused)" in problems
+    assert any(p.startswith("state/orders_icm-demo.json: path escapes") for p in problems)
+
+
 def test_restic_not_installed_is_a_clear_error(brain):
     def missing(*a: Any, **k: Any) -> Any:
         raise FileNotFoundError("restic")
     with pytest.raises(bk.BackupError, match="not installed"):
-        bk.backup_job(brain, SECRETS.get, host=HOST, retention=RETENTION, runner=missing)
+        bk.backup_job(brain, SECRETS.get, host=HOST, runner=missing)
 
 
 def test_init_creates_the_repository(brain):
@@ -437,9 +629,25 @@ def test_restore_drill_health(tmp_path):
     assert c.status == "fail" and "integrity_check" in c.reason
 
 
+def test_backup_prune_health(tmp_path):
+    assert health.check_backup_prune(_ctx(tmp_path)).status == "ok"                  # no backup yet
+    _write_backup(tmp_path, 1, first_ok_ts=(NOW - pd.Timedelta(days=10)).isoformat())
+    c = health.check_backup_prune(_ctx(tmp_path))
+    assert c.status == "ok" and "no retention run yet" in c.reason
+    _write_backup(tmp_path, 1, first_ok_ts=(NOW - pd.Timedelta(days=46)).isoformat())
+    c = health.check_backup_prune(_ctx(tmp_path))
+    assert c.status == "warn" and "backup_retention.sh" in c.reason
+    _write_backup(tmp_path, 1, last_prune_ts=(NOW - pd.Timedelta(days=44)).isoformat())
+    assert health.check_backup_prune(_ctx(tmp_path)).status == "ok"
+    _write_backup(tmp_path, 1, last_prune_ts=(NOW - pd.Timedelta(days=46)).isoformat())
+    c = health.check_backup_prune(_ctx(tmp_path))
+    assert c.status == "warn" and "> 45 d" in c.reason
+    assert health._alerting("backup_prune", "warn")
+
+
 def test_backup_checks_are_in_the_full_report(tmp_path):
     names = {c.name for c in health.run_checks(_ctx(tmp_path)).checks}
-    assert {"backup_age", "restore_drill"} <= names
+    assert {"backup_age", "backup_prune", "restore_drill"} <= names
 
 
 # ------------------------------------------------------------------------------------------------ real restic
@@ -450,7 +658,7 @@ def test_real_restic_round_trip_and_drill(brain, tmp_path):
     secrets = {"restic-repository": str(repo), "restic-password": "integration-pw",
                "restic-s3-access-key": "unused", "restic-s3-secret-key": "unused"}
     bk.init_repository(bk.Restic.from_secrets(secrets.get, host=HOST))
-    bk.backup_job(brain, secrets.get, host=HOST, retention=RETENTION)
+    bk.backup_job(brain, secrets.get, host=HOST)
     bk.drill_job(brain, secrets.get, host=HOST, check_subset="100%")
     assert _record(brain, bk.DRILL_FILE)["ok"] is True
     root = bk.restore(bk.Restic.from_secrets(secrets.get, host=HOST), tmp_path / "out")

@@ -1,4 +1,4 @@
-# 0001 Backup scope, retention and alert thresholds
+# 0002 Backup scope, retention and alert thresholds
 
 Date: 2026-10-10. Owner of the decision: principal SRE. Implements step 2 of docs/proposals/2026-10-state-store.md.
 
@@ -21,6 +21,18 @@ and fails at 36 h. The brief for this change gave 72 h as the fail threshold and
 - **Retention:** 14 daily, 8 weekly, 12 monthly snapshots, as the proposal says. The design doc is the source of
   truth and the brief said "e.g.". The data is small and deduplicated, and health warns at 15 GB of the 20 GB free
   tier.
+- **Who may delete (security review, 2026-10-10):** the brain only appends. It never runs `forget` or `prune`, and
+  its Oracle key is denied `OBJECT_DELETE` where the policy allows (restic's lock removal then fails, logged as a
+  warning). Retention runs monthly from the owner's Mac with a second key (`scripts/backup_retention.sh`, which
+  refuses on a server), and uploads a marker snapshot (`goldbot-retention`). The brain records the marker's time, and
+  health `backup_prune` warns after 45 days (or 45 days after the first backup when none exists). The bucket has
+  Object Versioning with a lifecycle rule that deletes previous versions only after 30 days or more. If the deny
+  condition breaks restic, versioning is the fallback: a deleting key still cannot remove history for 30 days.
+  Rejected: a bucket retention rule, which would also block restic's lock removal and the Mac's prune.
+- **Staging hygiene:** the backup and restore jobs run under umask 077; the work dir, staging dir and restore target
+  are 0700, re-applied when they already exist. JSONL copies end at the last newline. A month partition is staged
+  whole (a dedupe rewrite seen mid-copy is retried, then listed in `skipped_partitions`). `verify_restore` refuses
+  symlinks and manifest paths that leave the restore directory.
 - **Thresholds:** `backup_age` warns after 26 h and fails after 72 h, as the brief says. The warning is in
   `NOTIFY_ON_WARN`, so the owner hears about the first missed night by Telegram. A failure at 36 h would add a second
   alert for the same incident and would fire on any weekend outage. `restore_drill` fails when the drill fails and

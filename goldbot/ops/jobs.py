@@ -37,8 +37,9 @@
                     fresh plan), never past the quarter's trial budget and never into the held-out year, each a
                     walk-forward recorded in the trial registry whose count feeds the deflated Sharpe; a markdown summary is written to state/research_<YYYY-MM>.md.
 * backup            daily: encrypted restic snapshot of the SQLite files (online backup API), state JSON, trial
-                    registry, models and the brain's own Parquet to Oracle Object Storage, with retention
-                    (ops/backup.py) -> state/backup_last.json (health check backup_age).
+                    registry, models and the brain's own Parquet to Oracle Object Storage, append only: retention
+                    runs from the owner's Mac (scripts/backup_retention.sh) -> state/backup_last.json (health checks
+                    backup_age, backup_prune).
 * restore_drill     weekly: restores the latest snapshot to a temp dir and verifies it -> state/restore_drill_last.json.
 * attribution       daily (BACKLOG 12, G12): deterministic attribution of the shadow book, engine fills and orders
                     against the canonical cost table -> state/attribution.json + attribution.md, which the improvement
@@ -850,13 +851,12 @@ def _backup_args(ctx: JobContext) -> tuple[Any, Callable[[str], str | None]]:
 
 def backup(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Daily: SQLite (online backup API), state JSON, trial registry, models and the brain's own Parquet -> restic,
-    encrypted, to Oracle Object Storage; retention applied; state/backup_last.json (health: backup_age)."""
+    encrypted, to Oracle Object Storage, append only (retention runs from the owner's Mac,
+    scripts/backup_retention.sh); state/backup_last.json (health: backup_age, backup_prune)."""
     from goldbot.ops import backup as backup_mod
     paths, get_secret = _backup_args(ctx)
     b = ctx.settings.backup
-    return backup_mod.backup_job(paths, get_secret, host=b.host, timeout_s=b.timeout_s,
-                                 retention=backup_mod.Retention(keep_daily=b.keep_daily, keep_weekly=b.keep_weekly,
-                                                                keep_monthly=b.keep_monthly))
+    return backup_mod.backup_job(paths, get_secret, host=b.host, timeout_s=b.timeout_s)
 
 
 def restore_drill(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:

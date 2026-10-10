@@ -72,6 +72,7 @@ BRIDGE_TIMEOUT_S = 5.0
 BACKUP_WARN_H = 26.0              # daily backup: one missed night warns
 BACKUP_FAIL_H = 72.0              # three missed nights fail
 DRILL_WARN_DAYS = 8.0             # weekly restore drill
+PRUNE_WARN_DAYS = 45.0            # monthly retention from the owner's Mac (scripts/backup_retention.sh), two weeks' slack
 BACKUP_REPO_WARN_BYTES = 15e9     # of the 20 GB Oracle Object Storage free tier
 
 REQUIRED_SECRETS = ("telegram-bot-token", "tradingview-webhook-secret")
@@ -640,6 +641,33 @@ def check_backup_age(ctx: HealthContext) -> Check:
     return Check(name=name, status="ok", reason=msg)
 
 
+def check_backup_prune(ctx: HealthContext) -> Check:
+    """Retention runs only from the owner's Mac (the brain's key appends): the newest retention marker, as the brain's
+    last backup read it (state/backup_last.json `last_prune_ts`), warns after 45 days. With no marker yet it warns
+    only once the first good backup is 45 days old."""
+    name = "backup_prune"
+    f = ctx.state_dir / "backup_last.json"
+    if not f.exists():
+        return Check(name=name, status="ok", reason="no backup yet")
+    try:
+        rec = _read_json(f)
+        pruned = pd.Timestamp(rec["last_prune_ts"]) if rec.get("last_prune_ts") else None
+        first = pd.Timestamp(rec["first_ok_ts"]) if rec.get("first_ok_ts") else None
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        return Check(name=name, status="warn", reason=f"backup_last.json unreadable: {exc}"[:300])
+    how = "run scripts/backup_retention.sh on your Mac (RUNBOOK 0.6)"
+    if pruned is None:
+        if first is not None and (ctx.now - first).total_seconds() / 86400 > PRUNE_WARN_DAYS:
+            return Check(name=name, status="warn", reason=f"no retention run recorded in {PRUNE_WARN_DAYS:.0f} days of "
+                                                          f"backups: {how}")
+        return Check(name=name, status="ok", reason=f"no retention run yet (monthly; {how})")
+    age_d = (ctx.now - pruned).total_seconds() / 86400
+    msg = f"last retention run {_age(age_d * 86400)} ago"
+    if age_d > PRUNE_WARN_DAYS:
+        return Check(name=name, status="warn", reason=msg + f" (> {PRUNE_WARN_DAYS:.0f} d): {how}")
+    return Check(name=name, status="ok", reason=msg)
+
+
 def check_restore_drill(ctx: HealthContext) -> Check:
     """The weekly restore drill (state/restore_drill_last.json): a failed drill fails, a stale one warns."""
     name = "restore_drill"
@@ -920,7 +948,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
         checks += [check_reconciliation(ctx, a.account_id) for a in ctx.accounts]   # D12 (goldbot/data/crossfeed.py)
         if ctx.settings is not None and ctx.settings.costs.publish_release:
             checks.append(check_costs_published(ctx))
-        checks += [check_data_quality(ctx), check_drift(ctx), check_deploy(ctx), check_backup_age(ctx), check_restore_drill(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
+        checks += [check_data_quality(ctx), check_drift(ctx), check_deploy(ctx), check_backup_age(ctx), check_backup_prune(ctx), check_restore_drill(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
 
@@ -949,7 +977,7 @@ class WatchState(Record):
 
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
-NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age")
+NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune")
 
 
 def _alerting(name: str, status: str) -> bool:
