@@ -1,6 +1,7 @@
 """Wave 3 engine rows: bar close detected by clock with a 1.5 s grace (D10), the approval window from settings (A2) and
 the allocator's tier-1 input fed from the engine's calendar blackout (M9)."""
 import inspect
+import json
 from pathlib import Path
 from typing import Any
 
@@ -128,7 +129,46 @@ def test_a_tick_older_than_a_bar_the_clock_finalised_never_revises_it(tmp_path):
     _feed(eng, clock, CLOSE + pd.Timedelta(seconds=70))
     eng._rebuild_bars()
     pd.testing.assert_frame_equal(eng.bars_1m.iloc[:len(before)].reset_index(drop=True), before.reset_index(drop=True))
-    assert closes == [CLOSE] and not eng._dq_pending
+    assert closes == [CLOSE]
+
+
+def test_a_late_tick_raises_a_rate_limited_late_tick_warning_that_does_not_block_entries(tmp_path):
+    eng, closes, clock = _engine(tmp_path)
+    _fill_first_bar(eng, clock)
+    _feed(eng, clock, CLOSE - pd.Timedelta(seconds=10), wall=CLOSE + pd.Timedelta(seconds=2))   # closes the bar
+    assert closes == [CLOSE] and eng._late_ticks == 0
+    kept = len(eng.ticks)
+    _feed(eng, clock, CLOSE - pd.Timedelta(seconds=5), wall=CLOSE + pd.Timedelta(seconds=3))    # stamped before the close
+    _feed(eng, clock, CLOSE - pd.Timedelta(seconds=4), wall=CLOSE + pd.Timedelta(seconds=4))    # another, same minute
+    assert len(eng.ticks) == kept, "a late tick never enters the live bars"
+    late = [e for e in eng._dq_pending if e.check == "late_tick"]
+    assert len(late) == 1 and late[0].severity == "warning", "warned once per minute, every late tick counted"
+    assert eng._late_ticks == 2
+    eng._refresh_account(_tick(CLOSE - pd.Timedelta(seconds=4)))
+    assert eng.state.dq_error is False, "a warning never blocks entries"
+    eng._write_state()
+    st = json.loads((tmp_path / "engine_x.json").read_text())
+    assert st["late_ticks"] == 2 and "late_tick" not in st["dq_checks"]
+    assert any(w.startswith("late_tick:") for w in st["dq_warnings"])
+    # a minute later the next late tick warns again and says how many were dropped since the last warning
+    _feed(eng, clock, CLOSE - pd.Timedelta(seconds=3), wall=CLOSE + pd.Timedelta(seconds=70))
+    late = [e for e in eng._dq_pending + eng._dq_bar_errors if e.check == "late_tick"]
+    assert len(late) == 2 and "2 late tick(s)" in late[1].detail and eng._late_ticks == 3
+
+
+def test_broker_vs_wall_clock_skew_is_measured_as_a_rolling_median_and_published(tmp_path):
+    eng, _, clock = _engine(tmp_path)
+    for s in range(0, 600, 30):                       # broker timestamps 3 s behind the wall clock, one 60 s outlier
+        lag = 60.0 if s == 300 else 3.0
+        _feed(eng, clock, T0 + pd.Timedelta(seconds=s), wall=T0 + pd.Timedelta(seconds=s + lag))
+    assert eng.clock_skew_s() == pytest.approx(-3.0)
+    eng._refresh_account(_tick(T0 + pd.Timedelta(seconds=570)))
+    eng._write_state()
+    st = json.loads((tmp_path / "engine_x.json").read_text())
+    assert st["clock_skew_s"] == pytest.approx(-3.0) and st["bar_close_grace_s"] == BAR_CLOSE_GRACE_S
+    assert eng.state.dq_error is False, "skew alone never blocks entries (stale-data rules still apply)"
+    fresh, _, _ = _engine(tmp_path / "fresh")
+    assert fresh.clock_skew_s() is None, "no ticks yet: no measurement"
 
 
 def test_replay_tick_clock_never_decides_a_close_twice_with_clock_polls(tmp_path):
@@ -192,9 +232,10 @@ def test_tier1_minutes_counts_only_tier1_events():
     assert tier1_minutes(pd.DataFrame(), EVENT) == (None, None)
 
 
-@pytest.mark.parametrize("offset_min, zero", [(-45, False), (-25, True), (0, True), (25, True), (45, False)])
-def test_allocator_weight_is_zero_within_30_minutes_of_a_tier1_event_from_the_engine_calendar(tmp_path, offset_min,
-                                                                                             zero):
+@pytest.mark.parametrize("offset_min, zero", [(-45, False), (-20, False), (-10, True), (0, True), (25, True),
+                                               (45, False)])
+def test_allocator_weight_is_zero_inside_the_settings_blackout_of_a_tier1_event_from_the_engine_calendar(
+        tmp_path, offset_min, zero):
     _calendar(tmp_path / "data")
     eng = Engine(EngineConfig(account_id="x", broker_name="icm", state_dir=str(tmp_path),
                               data_root=str(tmp_path / "data"), news_blackout=True), PaperBroker(equity=10_000), [], {})
@@ -217,8 +258,8 @@ def test_allocator_has_no_tier1_input_without_the_engine_news_blackout(tmp_path)
 
 @pytest.mark.integration
 def test_engine_bar_closes_inside_the_tier1_window_get_zero_allocator_weight(tmp_path):
-    """End to end: the weights the engine computes at each bar close in a replay are zero within 30 minutes of a
-    tier-1 event in the archived calendar, and not outside it."""
+    """End to end: the weights the engine computes at each bar close in a replay are zero inside the settings blackout
+    (15 min before to 30 min after) of a tier-1 event in the archived calendar, and not outside it."""
     event = pd.Timestamp("2025-03-05 13:30", tz="UTC")
     rows = [("nfp", event, "USD", "Non-Farm Employment Change", "High", 1, "150K", "142K")]
     Store(tmp_path / "data").append("calendar_events", pd.DataFrame(
@@ -239,7 +280,21 @@ def test_engine_bar_closes_inside_the_tier1_window_get_zero_allocator_weight(tmp
     ticks = synthetic_ticks("2025-03-03", "2025-03-06", ticks_per_minute=1, seed=5)
     for ts, bid, ask in zip(ticks["ts_utc"], ticks["bid"].to_numpy(float), ticks["ask"].to_numpy(float)):
         eng.on_tick(Tick(ts_utc=pd.Timestamp(ts), bid=float(bid), ask=float(ask)))
-    inside = [w for c, w in by_close.items() if abs((c - event).total_seconds()) <= 30 * 60]
+    inside = [w for c, w in by_close.items() if -15 * 60 <= (c - event).total_seconds() <= 30 * 60]
     outside = [w for c, w in by_close.items() if abs((c - event).total_seconds()) > 60 * 60]
     assert inside and all(set(w.values()) == {0.0} for w in inside)
     assert outside and all(w["session_open"] == 0.75 for w in outside)
+
+
+def test_engine_allocator_blackout_window_matches_the_risk_gate_window_from_settings(tmp_path):
+    b = load_settings().risk.blackout
+    eng = Engine(EngineConfig(account_id="x", broker_name="icm", state_dir=str(tmp_path),
+                              blackout_before_min=b.before_min, blackout_after_min=b.after_min),
+                 PaperBroker(equity=10_000), [], {})
+    assert (eng.allocator.before, eng.allocator.after) == (b.before_min, b.after_min) == (15, 30)
+    dflt = Engine(EngineConfig(account_id="y", broker_name="icm", state_dir=str(tmp_path / "y")),
+                  PaperBroker(equity=10_000), [], {})
+    assert (dflt.allocator.before, dflt.allocator.after) == (dflt.cfg.blackout_before_min, dflt.cfg.blackout_after_min)
+    custom = Engine(EngineConfig(account_id="z", broker_name="icm", state_dir=str(tmp_path / "z"),
+                                 blackout_before_min=5, blackout_after_min=7), PaperBroker(equity=10_000), [], {})
+    assert (custom.allocator.before, custom.allocator.after) == (5, 7)

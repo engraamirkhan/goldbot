@@ -17,6 +17,7 @@ import json
 import logging
 import time
 import zlib
+from collections import deque
 from pathlib import Path
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -58,6 +59,8 @@ log = logging.getLogger("goldbot.engine")
 MARKET_CLOSED_RETCODES = frozenset({10017, 10018})
 # design (D10): a bar close is detected by clock, close time plus this grace, not by the next bar's first tick
 BAR_CLOSE_GRACE_S = 1.5
+LATE_TICK_WARN_S = 60.0      # at most one late_tick data-quality warning per this many seconds (every one is counted)
+SKEW_WINDOW = 120            # new ticks in the rolling median of broker-vs-wall clock skew
 
 
 class Model(Protocol):
@@ -219,7 +222,8 @@ class Engine:
         # population: agent_id -> share of its family's capital; None = every agent trades at the family weight
         self.live_shares = live_shares
         self.center = center or ApprovalCenter({cfg.owner_user_id})
-        self.allocator = allocator or RuleAllocator()
+        # design (News blackout, row M9): the allocator zeroes weights on the same window the RiskGate blocks entries on
+        self.allocator = allocator or RuleAllocator(cfg.blackout_before_min, cfg.blackout_after_min)
         self.gate = RiskGate(limits)
         self.ticks: list[Tick] = []
         self.bars_1m = pd.DataFrame()
@@ -255,6 +259,13 @@ class Engine:
         self._last_tick: Tick | None = None
         self._dq_pending: list[DQEvent] = []
         self._dq_bar_errors: list[DQEvent] = []
+        # late ticks (stamped before a bar the clock already finalised): dropped from the live bars but still logged,
+        # so the nightly store has them; counted, and warned at most every LATE_TICK_WARN_S (wall clock)
+        self._late_ticks = 0
+        self._late_since_warn = 0
+        self._late_warned_at: pd.Timestamp | None = None
+        # broker tick time minus the wall clock, seconds, over the last SKEW_WINDOW new ticks (median published)
+        self._skew: deque[float] = deque(maxlen=SKEW_WINDOW)
         self._unhealthy_at: pd.Timestamp | None = None    # last time the data was seen stale or in error
         # risk periods and the owner's re-arm survive a restart (state/risk_<account>.json)
         self._last_reset: pd.Timestamp | None = None
@@ -323,9 +334,12 @@ class Engine:
         # the run loop polls the terminal's latest quote several times a second, so a quiet market repeats the same
         # tick: a repeat only advances the clock (bar close by clock, exits), it is neither a new bar tick nor logged
         repeat = prev is not None and (prev.ts_utc, prev.bid, prev.ask) == (t.ts_utc, t.bid, t.ask)
-        if not repeat and (self._closed_through is None or t.ts_utc >= self._closed_through):
-            self.ticks.append(t)        # a tick older than a bar the clock already finalised never revises that bar
         if not repeat:
+            self._skew.append((t.ts_utc - self._now(t)).total_seconds())
+            if self._closed_through is None or t.ts_utc >= self._closed_through:
+                self.ticks.append(t)
+            else:
+                self._late_tick(t)      # never revises a bar the clock already finalised
             self._log_tick(t)
         self._refresh_broker_terms(t.ts_utc)
         self._roll_risk_period(t.ts_utc)
@@ -1060,7 +1074,7 @@ class Engine:
         now = self._now(tick)
         st.last_tick_age_s = max(0.0, (now - tick.ts_utc).total_seconds())
         stale = stale_feed(tick.ts_utc, now, limit_seconds=self.cfg.stale_feed_s)
-        st.dq_error = stale or bool(self._dq_bar_errors or self._dq_pending) or positions is None \
+        st.dq_error = stale or bool(self._dq_errors()) or positions is None \
             or self._book_unreadable() > 0                                    # fail closed: positions_unreadable
         # stale data (design): the last completed bar must be under one decision period old; no bars is stale
         if self.bars_1m.empty:
@@ -1187,6 +1201,33 @@ class Engine:
         return pd.Timestamp.now("UTC") if self.cfg.live_clock else tick.ts_utc
 
     # ------------------------------------------------------------------ data quality
+    def _dq_errors(self) -> list[DQEvent]:
+        """Blocking data-quality events since (and decided at) the last bar close; warnings never block entries."""
+        return [e for e in self._dq_bar_errors + self._dq_pending if e.severity == "error"]
+
+    def _late_tick(self, t: Tick) -> None:
+        """A tick stamped before a bar close the clock already processed (D10: close plus BAR_CLOSE_GRACE_S): it is
+        kept out of the live bars, which is correct, but the tick log (nightly store) still has it, so the two can
+        differ. Recorded as a `late_tick` warning (stored with the bar's dq_events), at most one per LATE_TICK_WARN_S,
+        every one counted in the engine state. Usually the broker clock lags the wall clock by more than the grace
+        (`clock_skew_s`, warned by health)."""
+        self._late_ticks += 1
+        self._late_since_warn += 1
+        now = self._now(t)
+        if self._late_warned_at is not None and (now - self._late_warned_at).total_seconds() < LATE_TICK_WARN_S:
+            return
+        self._dq_pending.append(DQEvent(
+            ts_utc=t.ts_utc, check="late_tick", severity="warning",
+            detail=f"{self._late_since_warn} late tick(s) since the last warning, latest at {t.ts_utc} after the "
+                   f"close through {self._closed_through}: kept out of the live bars, still in the tick log"))
+        self._late_warned_at, self._late_since_warn = now, 0
+
+    def clock_skew_s(self) -> float | None:
+        """Broker tick time minus the wall clock (s), rolling median over the last SKEW_WINDOW new ticks; None before
+        the first. Below -BAR_CLOSE_GRACE_S, bars close by clock before their last ticks arrive (late ticks). Only
+        reported (health warns): entries are not blocked for skew alone; the stale-feed and stale-bar rules apply."""
+        return round(float(np.median(self._skew)), 3) if self._skew else None
+
     def _tick_ok(self, t: Tick) -> bool:
         """Tick-level checks: a crossed or non-positive quote, or a tick older than the previous one, is a
         data-quality error (recorded; the tick is dropped)."""
@@ -1571,7 +1612,8 @@ class Engine:
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the
         RiskGate's news blackout already reads (`_blackout`, refreshed by `_refresh_account` just before), so the
-        allocator's own 30-minute zeroing acts live; without `news_blackout` there is no calendar and no zeroing."""
+        allocator's zeroing (the same blackout_before_min/after_min window) acts live; without `news_blackout` there is
+        no calendar and no zeroing."""
         row = X.iloc[-1]
         adx = float(row.get("h1_adx14", row.get("adx14", 20.0)) or 20.0)
         rv = X["h1_rv_20"] if "h1_rv_20" in X.columns else X.get("rv_20", pd.Series([np.nan]))
@@ -1777,11 +1819,13 @@ class Engine:
             "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
             "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,
             "dq_error": st.dq_error, "stale_bars": st.stale_bars, "data_recovering": st.data_recovering,
-            "dq_checks": sorted({e.check for e in self._dq_bar_errors + self._dq_pending}
+            "dq_checks": sorted({e.check for e in self._dq_errors()}
                                 | ({"positions_unreadable"} if self._book_unreadable() else set())),
             # consecutive failed broker reads (health alerts after broker.positions_unreadable_alert in a row)
             "positions_unreadable": self._book_unreadable(),
-            "dq_warnings": [f"{e.check}: {e.detail}" for e in self._dq_warnings],
+            "dq_warnings": [f"{e.check}: {e.detail}" for e in self._dq_warnings
+                            + [e for e in self._dq_bar_errors + self._dq_pending if e.severity != "error"]],
+            "late_ticks": self._late_ticks, "clock_skew_s": self.clock_skew_s(), "bar_close_grace_s": BAR_CLOSE_GRACE_S,
             "closed_records_lost": self._records_lost, "closes_due": sorted(self._close_due),
             "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
             "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,

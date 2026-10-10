@@ -595,6 +595,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `EngineConfig.approval_window_s`, set from `settings.risk.approval_window_seconds` in `ops/run.py` (default 90).
   The allocator's tier-1 distances come from the calendar the RiskGate's news blackout reads, so its 30-minute
   zeroing now acts live (weight 0 inside -30/+30 min). Exits are unchanged: they run on every tick before any bar logic.
+- Wave-3 review fixes (2026-10-11, rows D10, M9): a late tick (stamped before a bar the clock already finalised) is
+  still kept out of the live bars but no longer silently: a `late_tick` data-quality warning (at most one a minute,
+  stored with the bar's dq_events) and the running count `late_ticks` in the engine state; warnings never block
+  entries (`dq_error` and `dq_checks` now count error-severity events only). The engine publishes `clock_skew_s`
+  (broker tick time minus wall clock, median of the last 120 new ticks); health warns when it exceeds the 1.5 s
+  bar-close grace, without blocking entries (the stale-feed and stale-bar rules still apply). The allocator is built
+  from `EngineConfig.blackout_before_min/after_min` (settings `risk.blackout`, 15/30), so its zeroing window is the
+  RiskGate's: weight 0 inside -15/+30 min instead of -30/+30.
 
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
