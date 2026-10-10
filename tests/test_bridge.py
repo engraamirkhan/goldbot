@@ -250,3 +250,10 @@ def test_the_health_probe_answers_through_the_bridge(bridge):
     why = bridge_mod.probe_health(dead, timeout_s=1.0)
     assert why is not None and "unreachable" in why and "127.0.0.1" not in why
     assert bridge_mod.probe_health(url + "/nope") == "HTTP 404"
+
+
+def test_trading_sessions_cross_the_bridge_read_only(bridge):
+    url, pb = bridge
+    got = RemoteBroker(url, TOKEN).trading_sessions("XAUUSD")
+    assert got == pb.trading_sessions("XAUUSD") and got                  # TRACEABILITY D13
+    assert bridge_mod.METHODS["trading_sessions"][1] is True             # retry-safe: nothing reaches the market

@@ -607,6 +607,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   was regenerated (npm 10 hit ERESOLVE/an arborist crash moving off the Vite 5 tree); `npm ci` on npm 10 is clean.
   `npm audit` (prod and dev) reports 0 vulnerabilities, down from 7 dev ones. Production JS bundle 245 -> 318 kB
   (75 -> 96 kB gzip), mostly React 19. Deferred: TypeScript 7 and @types/node 26 (Node 22 is the runtime).
+- Trading sessions from the broker (2026-10-10, TRACEABILITY D13, still partial): read-only broker method
+  `trading_sessions(symbol)` (paper: static hours; RemoteBroker via the bridge allow-list) returns 7 server days of
+  sessions resolved to UTC per date (Athens DST tested); `SessionTable.from_broker` makes the runtime table (reported
+  days: only reported sessions open, so early closes and holidays block entries; an unreadable list falls back to the
+  static defaults with a logged reason) and `BrokerSessions` refreshes it per server day. Finding: the MetaTrader5
+  Python package has no session schedule (`session_deals` is a deal count), so MT5 reports the documented hours; real
+  holiday hours need an MQL5 `SymbolInfoSessionTrade` helper. Engine hook for the runner lane (not wired):
+  `self._sessions = BrokerSessions(broker, symbol, fallback=SessionTable(server_tz=...))` at start, then
+  `why = self._sessions.entry_block(now)` as an entry-blocking reason. Exits are unaffected.
 
 ## Next steps (no owner input needed unless marked)
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
