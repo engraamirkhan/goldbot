@@ -496,7 +496,10 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         # event floor: research.screen_min_events, or the daily-signal override (owner ruling A), set before the run
         floor = min_events_for(tf if job.pooled else signal_timeframe(job.specs[0]), settings.research)
         scr = None if args.score_holdout else screen(preps if job.pooled else preps[0], floor)
-        skipped = bool(scr is not None and not scr["passed"] and args.skip_screen)
+        # a family under its pre-registered rule-only screen (Specialist.screening, e.g. asia_drift) never reaches the
+        # model stage, pass or fail, with or without --skip-screen: the screen row records the look (quant review M2)
+        screen_only = scr is not None and not job.pooled and job.specs[0].screening
+        skipped = bool(scr is not None and not scr["passed"] and args.skip_screen and not screen_only)
         agent_id = pool_identity(tf, preps).agent_id if job.pooled else job.specs[0].agent_id
         version = preps[0].feature_version
         meta = {"specialist": job.family, "from_year": int(b1["ts_utc"].iloc[0].year),
@@ -509,7 +512,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                   "screen": scr, "screen_skipped": skipped, "cost_source": cost_source, "macro": macro_info,
                   "positioning": positioning_info, "rule_only_split": split}
         rationale = args.rationale + (f" | overrides {json.dumps(job.overrides, sort_keys=True)}" if job.overrides else "")
-        if scr is not None and not scr["passed"] and not args.skip_screen:
+        if scr is not None and (screen_only or (not scr["passed"] and not args.skip_screen)):
             n = int(sum(len(p.labels) for p in preps))
             metrics: dict[str, Any] = {"n_candidates": n, "rule_only": scr["rule_only"], "swap": swap.model_dump(),
                                        "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
@@ -656,7 +659,10 @@ def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[s
              _macro_line(meta.get("macro")),
              f"- runtime {meta['seconds']:.0f}s", ""]
     lines += screen_lines(scr) + _rule_only_lines(scr["rule_only"]) + rule_only_split_lines(meta.get("rule_only_split"))
-    if is_inconclusive(scr):
+    if scr["passed"]:
+        lines += ["Screen passed; rule-only screen: no model was fitted. The family is under its pre-registered screen "
+                  "(`Specialist.screening`); model research on it needs its own pre-registration."]
+    elif is_inconclusive(scr):
         lines += [f"Screen inconclusive (event floor): {scr['n']:,} events, fewer than the "
                   f"{scr['min_events']:,} the floor needs. No model was fitted. This recorded, charged trial cannot "
                   "retire the hypothesis; it is not evidence for promotion either."]

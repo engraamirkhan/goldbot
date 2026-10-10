@@ -259,9 +259,12 @@ class Population:
         self.members: dict[str, Member] = {m["agent_id"]: Member.model_validate(m) for m in raw}
 
     def ensure_founders(self, now: pd.Timestamp) -> list[str]:
-        """Every registered specialist family has a generation-0 agent with its default config."""
+        """Every registered specialist family has a generation-0 agent with its default config, except a family still
+        under its pre-registered screen (`Specialist.screening`): it enters only through a passed trial."""
         added = []
         for fam, cls in sorted(SPECIALISTS.items()):
+            if cls.screening:
+                continue
             ident = AgentIdentity(family=fam, config=dict(cls.default_config))
             if ident.agent_id not in self.members:
                 self.members[ident.agent_id] = Member(agent_id=ident.agent_id, family=fam, config=dict(cls.default_config),

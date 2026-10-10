@@ -110,6 +110,7 @@ class Intent(Record):
     stops_level_points: float = 0.0
     timeframe: str = ""       # the agent's decision timeframe and family, for the account-class rules
     family: str = ""
+    has_target: bool = True   # False: a time-exit label spec (BarrierSpec.has_target); the barrier EV does not apply
 
 
 class GateDecision(Record):
@@ -120,6 +121,21 @@ class GateDecision(Record):
     stop_distance: float = 0.0
     margin_needed: float = 0.0     # the margin the level check used: max(broker figure, 1:20 figure)
     margin_note: str = ""          # which figure won, or why the broker's could not be used (fallback to 1:20)
+
+
+def _family_has_target(intent: Intent) -> bool:
+    """False when the intent's family (its `family`, else the prefix of its agent id `<family>-g<n>-<hash>`) declares a
+    label spec without a reachable target, so a caller that forgot `Intent.has_target` is still refused. Unknown
+    families are not judged here (the other checks apply)."""
+    from goldbot.specialists import SPECIALISTS  # lazy: specialists import labels/features, not the gate
+    family = intent.family or intent.agent_id.rsplit("-", 2)[0]
+    cls = SPECIALISTS.get(family)
+    if cls is None:
+        return True
+    try:
+        return bool(cls().label_spec.has_target)
+    except Exception:                                # a family that cannot build its default spec: fail closed
+        return False
 
 
 def broker_margin(broker: Any, symbol: str) -> MarginFn | None:
@@ -218,6 +234,10 @@ class RiskGate:
             reasons.append("daily_cap")
         if week_loss >= L.weekly_cap:
             reasons.append("weekly_cap")
+        # a time-exit rule has no reachable target: p x target would be fiction (quant review H1). Fail closed until the
+        # EV uses the time-exit outcome (HANDOFF: what must change before live)
+        if not intent.has_target or not _family_has_target(intent):
+            reasons.append("time_exit_ev_unsupported")
         # expected value and minimum target over cost
         ev = intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr - intent.cost_atr
         if ev <= 0:

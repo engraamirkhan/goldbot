@@ -67,6 +67,11 @@ class Specialist(ABC):
     optional_config: dict[str, Any] = {}
     # named variants (`research_pass.py --variants '["<name>"]'`): a pre-registered configuration spelled out once
     presets: dict[str, dict[str, Any]] = {}
+    # True while the family's pre-registered rule-only screen has not passed (e.g. asia_drift, H-04): it is usable by
+    # research (`research_pass.py --specialist`) but is not seeded as a default population founder
+    # (`Population.ensure_founders`) and is not a member of the pooled models (`pipeline.pooled_members`). A passed
+    # walk-forward trial of its exact configuration still becomes a shadow founder (gap_watch `research_ready`)
+    screening: bool = False
 
     def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
         asked = (identity.config if identity is not None else overrides).get(TIMEFRAME_KEY, type(self).timeframe)
@@ -100,6 +105,11 @@ class Specialist(ABC):
         """Candidates when the higher-timeframe bars (`context`, keyed h1/h4/d1, store schema with visible_at) are at
         hand, as in research (`research.pipeline.prepare`). Default: `candidates`, which sees only the decision frame."""
         return self.candidates(mid_bars, features)
+
+    def complete_windows(self, bars_dec: pd.DataFrame, cands: pd.DataFrame) -> pd.DataFrame:
+        """Research sample rule applied before labelling (`research.pipeline.prepare`): the candidates whose holding
+        window the family's pre-registration accepts, judged on bar timestamps only (never prices). Default: all."""
+        return cands
 
     def barrier_atr(self, mid_bars: pd.DataFrame, context: dict[str, pd.DataFrame] | None) -> pd.Series | None:
         """ATR per decision bar that sizes the barriers and the risk (R), read at the signal bar and frozen for the

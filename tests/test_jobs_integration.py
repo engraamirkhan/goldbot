@@ -24,6 +24,7 @@ from goldbot.ops.jobs import (
     make_trial_runner,
     monthly_research,
     nightly_costs,
+    research_families,
     saturday_retrain,
 )
 from goldbot.research.model_registry import ModelRegistry
@@ -147,9 +148,12 @@ def test_monthly_label_grid_is_paused_by_default(tmp_path):
 def test_monthly_research_is_bounded_and_counted(bars_store, tmp_path):
     ctx = _ctx(bars_store, tmp_path, trial_budget_per_month=1, label_grid_paused=False)
     out = monthly_research(ctx, pd.Timestamp("2025-09-07 08:00", tz="UTC"))
-    # the budget is per specialist; every family's trials count towards one registry total
-    assert all(out[f]["trials"] == 1 for f in SPECIALISTS) and ctx.trials.n_trials == len(SPECIALISTS)
-    assert ctx.trials.budget_used(quarter_of()) == len(SPECIALISTS)   # and towards the quarter's trial budget
+    # the budget is per specialist; every family's trials count towards one registry total. A family under its
+    # pre-registered screen (asia_drift) gets no grid trial (quant review M1)
+    fams = research_families()
+    assert "asia_drift" in SPECIALISTS and "asia_drift" not in fams and "asia_drift" not in out
+    assert all(out[f]["trials"] == 1 for f in fams) and ctx.trials.n_trials == len(fams)
+    assert ctx.trials.budget_used(quarter_of()) == len(fams)          # and towards the quarter's trial budget
     report = Path(out["report"]).read_text()
     assert "Research loop 2025-09" in report and report.count("\n| ") >= 3
 

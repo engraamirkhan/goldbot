@@ -57,7 +57,7 @@ from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, planne
 from goldbot.specialists import SPECIALISTS
 
 NOW = pd.Timestamp("2026-10-03 12:30", tz="UTC")
-FAMILIES = sorted(SPECIALISTS)
+FAMILIES = jobs.research_families()      # every registered family except those under their pre-registered screen
 
 
 def _trial(n: int, family: str, auc: float | None = None, n_oof: int = 300, mf_n: int = 0, dsr: float | None = None,
@@ -777,3 +777,13 @@ def test_research_analyst_refuses_a_retired_family_once_the_shared_exploration_t
     # a family the director's plan reinstated is back on the open budget
     monkeypatch.setattr(jobs, "_reinstated", lambda ctx, slot: {"breakout"})
     assert run("breakout", {}, "reinstated by attribution").get("trial") == 3
+
+
+def test_screening_families_get_no_director_grid_or_analyst_trials(tmp_path):
+    """asia_drift (H-04) runs only its pre-registered screen (research.yml): the director, the label grid, the monthly
+    loop and the research analyst never plan or spend a trial on a family under its screen."""
+    assert SPECIALISTS["asia_drift"].screening and "asia_drift" not in jobs.research_families()
+    assert set(jobs.research_families()) == {f for f, c in SPECIALISTS.items() if not c.screening}
+    ctx = _ctx(tmp_path)
+    out = jobs.make_trial_runner(ctx)("asia_drift", {}, "research analyst: try H-04")
+    assert "pre-registered screen" in out["error"] and ctx.trials.n_trials == 0

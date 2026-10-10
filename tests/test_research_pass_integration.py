@@ -237,6 +237,32 @@ def test_a_screen_short_only_of_the_daily_signal_floor_is_an_inconclusive_record
     assert "rule_only_split" in row["results"]
 
 
+def test_a_screening_family_that_passes_its_screen_is_recorded_and_never_fits_a_model(release_dir, tmp_path,
+                                                                                    monkeypatch):
+    """asia_drift (H-04) is a rule-only screen: its no-target labels make target_hit 0, so a meta-model would fit
+    y = 0 (quant review M2). A pass records the screen row (status screened, swap charged); evaluate never runs."""
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    _research_settings(monkeypatch, screen_min_events=1)
+    _lenient_screen(monkeypatch, expect_floor=1)
+
+    def no_model(*a, **k):
+        raise AssertionError("a screening family must not reach the model stage")
+    monkeypatch.setattr(rp, "evaluate", no_model)
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "asia_drift"])
+    assert rp.main() == 0
+    row = _rows(registry)[0]
+    assert row["status"] == "screened" and row["family"] == "asia_drift" and row["trial"] == 1 and row["budget_quarter"]
+    assert row["results"]["screen"]["passed"] is True and "gates" not in row["results"]
+    assert row["results"]["swap"]["server_tz"] == "Europe/Athens"           # the run passes a SwapSpec (M3)
+    text = report.read_text()
+    assert "### Primary-signal screen: **PASS**" in text and "rule-only screen: no model was fitted" in text
+    # --skip-screen does not open the model stage for it either
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "asia_drift", "--skip-screen"])
+    assert rp.main() == 0 and _rows(registry)[-1]["status"] == "screened"
+
+
 def test_a_rule_that_passes_the_screen_goes_on_to_the_walk_forward(release_dir, tmp_path, monkeypatch):
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
     _research_settings(monkeypatch, screen_min_events=1)

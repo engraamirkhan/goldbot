@@ -582,6 +582,14 @@ def tournament(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------------------------- research director
+def research_families() -> list[str]:
+    """The families the research director, the label grid, the monthly loop and the research analyst plan and spend
+    trials on: every registered family except one under its pre-registered rule-only screen (`Specialist.screening`,
+    e.g. asia_drift / H-04), whose only trial is the pre-registered one (research.yml), as it is kept out of the
+    default founders and the pools (quant review M1)."""
+    return sorted(f for f, cls in SPECIALISTS.items() if not cls.screening)
+
+
 def research_budget(ctx: JobContext) -> tuple[int, int]:
     """(most trials the plan may hand out, per-family cap). The plan never exceeds the quarter's remaining budget
     (build_plan); on top of that it is bounded by the flat monthly loop (budget x families) when the grid runs, and
@@ -589,8 +597,9 @@ def research_budget(ctx: JobContext) -> tuple[int, int]:
     budget, whichever is larger (pre-registered trials are not limited to grid variants)."""
     r = ctx.settings.research
     q = quarter_budget(r)
-    grid = max(len(label_grid(cls.default_config, r.label_grid_step)) for cls in SPECIALISTS.values())
-    total = min(q, r.trial_budget_per_month * len(SPECIALISTS)) if r.trial_budget_per_month > 0 else q
+    families = research_families()
+    grid = max(len(label_grid(SPECIALISTS[f].default_config, r.label_grid_step)) for f in families)
+    total = min(q, r.trial_budget_per_month * len(families)) if r.trial_budget_per_month > 0 else q
     return total, max(grid, q)
 
 
@@ -615,7 +624,7 @@ def research_director(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     budget, cap = research_budget(ctx)
     shadow, agents = director_evidence(ctx)
     r = ctx.settings.research
-    plan = build_plan(slot, sorted(SPECIALISTS), read_rows(ctx.trials.path), shadow, agents,
+    plan = build_plan(slot, research_families(), read_rows(ctx.trials.path), shadow, agents,
                       quarter_budget=quarter_budget(r), monthly_total=budget, trial_budget_per_month=r.trial_budget_per_month,
                       floor=r.director_floor, cap=cap, holdout=holdout_window(r),
                       attribution=load_attribution(ctx.state_dir), hypotheses=load_hypotheses(),
@@ -710,6 +719,9 @@ def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = 
     def run(family: str, overrides: dict[str, Any], rationale: str) -> dict[str, Any]:
         end = now() if now is not None else pd.Timestamp.now("UTC")
         r = ctx.settings.research
+        if family in SPECIALISTS and SPECIALISTS[family].screening:
+            return {"error": f"{family} is under its pre-registered screen: its only trial is the pre-registered one "
+                             "(research.yml, docs/research/preregistration-2027Q1.md); the analyst runs none"}
         config = {**SPECIALISTS[family].default_config, **overrides}
         _sync_trials(ctx)                 # count the research workflow's trials before charging the budget
         with ctx.trials.locked():
@@ -790,7 +802,7 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     slot_quarter = quarter_of(slot.tz_convert("UTC").to_pydatetime())
     h_start, _ = holdout_window(r)
     end = min(slot, h_start)              # the held-out year is never searched
-    for family in sorted(SPECIALISTS):
+    for family in research_families():
         grid = label_grid(SPECIALISTS[family].default_config, r.label_grid_step)
         rng.shuffle(grid)
         tf = SPECIALISTS[family].timeframe

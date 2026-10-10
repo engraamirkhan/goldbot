@@ -599,6 +599,29 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   signals (1,466 long / 688 short), one-at-a-time lower bound 154 events, first signal 2010-06-18. Owner ruling A
   (recommended floor 150 for daily signals, can retire not promote) must be committed as
   `research.screen_min_events_daily` before the run.
+- H-04 Asia-session drift (2026-10-11, specialist `asia_drift`, TRACEABILITY M39): long at 00:00 UTC (decision bar =
+  the 1h bar closing 00:00, entry at its close on the ask), time exit 07:00 UTC as a plain 1h time barrier
+  (`max_bars` 6; labels, shadow book and live count the same bars), stop 1.5 x ATR(1h) frozen at entry, no target, long
+  only, Monday-Friday; no entry when the 23:00 bar is missing, the session calendar is closed or on 25 Dec / 1 Jan; no
+  server rollover is ever held (swap 0, proved in both DST regimes). New `Specialist.screening`: a family under its
+  pre-registered screen is not seeded as a default founder and not pooled (pooled_1h unchanged); a passed trial still
+  becomes a shadow founder through gap_watch. It is active, not retired. Frozen parameters and
+  the exact `research.yml` inputs: `docs/research/preregistration-2027Q1.md` H-04. data-v1 is not on this machine, so
+  only the calendar bound was counted (4,087 entry days 2010-01..2025-09); the data count is due before the freeze.
+  No research trial was run.
+- asia_drift quant-review fixes (2026-10-11): a `screening` family gets no trials from the research director, the
+  label grid, the monthly loop or the research analyst (`jobs.research_families`; tsmom keeps its 6 free trials);
+  `research_pass.py` never fits a model for it (the screen row is recorded, pass or fail); `max_bars` > 6 is refused;
+  research drops entries whose 00:00-07:00 UTC window is not complete in the data (`complete_windows`, timestamps
+  only). **RiskGate guard (fail closed):** any intent whose label spec has no reachable target
+  (`BarrierSpec.has_target` False, `Intent.has_target`, or the family's spec looked up by family / agent id) is refused
+  with `time_exit_ev_unsupported`. **Before a time-exit family can trade live** (owner + trading-safety review):
+  (a) its meta-label is the time-exit outcome (ret > 0 net), not `target_hit`; (b) EV, breakeven and size use
+  EV_R = p x E[R | win] - (1 - p) x E[|R| | loss] - cost_R, with the out-of-fold averages stored in the model
+  artefact, in `goldbot/risk/gate.py` (the EV / standard-edge block of `RiskGate.check`) and
+  `goldbot/engine/runner.py` (size_multiplier / breakeven gate at the entry decision, `ev_r` on the proposal, the
+  shadow threshold); (c) the target-over-cost floor uses E[R | win] instead of `target_atr`. Live 00:00 UTC entries
+  need an owner click at about 01:00 London, so live will be a subset of shadow.
 
 - Dependencies (2026-10-11): Dependabot groups minor/patch updates per ecosystem; majors come as separate PRs to be
   hand-tested (the 15-package web group #65 was closed: TypeScript 7 broke `npm ci` through openapi-typescript, and
