@@ -6,6 +6,7 @@ import time
 import pandas as pd
 import pytest
 
+from goldbot.db.bookkeeping import AgentRunLog
 from goldbot.engine import ConstantModel, Engine, EngineConfig
 from goldbot.execution.broker import Tick
 from goldbot.execution.paper import PaperBroker
@@ -125,8 +126,9 @@ def test_outbox_delivers_new_agent_reports_without_replaying_history(tmp_path):
             {"role": "journal_coach", "status": "monthly_cap", "cost_usd": 0.0, "detail": "monthly agent budget 40.00 USD used up"},
             {"role": "improvement_agent", "status": "ok", "cost_usd": 1.2, "report_path": str(tmp_path / "long.md")},
             {"role": "risk_officer", "status": "ok", "cost_usd": 0.2, "report_path": str(outside)}]
-    with log.open("a") as fh:
-        fh.writelines(json.dumps(r) + "\n" for r in rows)
+    runs = AgentRunLog(tmp_path)                                    # runs are recorded in aux.db (state store step 3)
+    for r in rows:
+        runs.append(json.dumps(r))
     msgs = Outbox(tmp_path).new_reports()
     assert msgs[0].startswith("📋 data steward · ok · $0.05") and "all feeds healthy" in msgs[0] and "<!--" not in msgs[0]
     assert "monthly agent budget" in msgs[1]

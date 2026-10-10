@@ -7,13 +7,15 @@
 #   1. records a health baseline and the current commit (the rollback target);
 #   2. fetches and resolves -Ref BEFORE stopping anything (no network wait while the engines are down);
 #   3. refuses to start while a scheduler job is mid-run (a killed job is not re-run for that slot) unless -Force;
-#   4. stops the services in the order below, checks out the new commit, installs, rebuilds the dashboard if web/
+#      then stops the scheduler FIRST and checks again, so no job can start between the check and the stop;
+#   4. stops the other services in the order below, checks out the new commit, installs, steps aux.db back to
+#      schema 4 when the commit predates schema compatibility (Sync-AuxSchema), rebuilds the dashboard if web/
 #      changed, runs the static health checks (settings, accounts, secrets, disk);
 #   5. starts the services, waits, runs the full health checks against the baseline;
 #   6. on any new fail (or a failed step in 4) rolls back to the previous commit the same way and says so.
 #
 # Service order (why):
-#   Stop:  webhook, news, scheduler, api, telegram  -> nothing new can come in and no entry can be approved
+#   Stop:  scheduler (step 3), webhook, news, api, telegram -> nothing new can come in and no entry can be approved
 #          supervisor                               -> engines that are still running now fail closed for entries
 #                                                      (heartbeat > 60 s) but keep managing exits
 #          engines LAST                             -> exits are never gated: an engine closes positions on its time
@@ -67,6 +69,58 @@ function Start-Goldbot {
   }
 }
 
+# A commit from before the state store's step 3 (2026-10-10) knows aux.db only up to schema 4 and refuses the newer
+# file (its dashboard would not start). Schema 5 only added tables, so it is stepped back to 4 with every row kept;
+# the next update re-applies 5 without losing them. Code from step 3 on records compat_back_to and needs nothing.
+$AuxDowngrade = @'
+# BEGIN aux-downgrade
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+have = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
+if have <= 4:
+    sys.exit(0)
+if have != 5:
+    print(f"aux.db schema version {have}: only 5 -> 4 is known, left unchanged")
+    sys.exit(3)
+conn.execute("DELETE FROM schema_version WHERE version = 5")
+conn.execute("PRAGMA user_version = 4")
+conn.commit()
+print("aux.db schema 5 -> 4 for the older release (rows kept; the next update re-applies 5)")
+# END aux-downgrade
+'@
+
+function Sync-AuxSchema {
+  $mig = "$Root\goldbot\db\migrations.py"
+  $aux = "$Root\state\aux.db"
+  if (-not (Test-Path $mig) -or -not (Test-Path $aux)) { return }
+  if (Select-String -Path $mig -Pattern "compat_back_to" -Quiet) { return }    # this commit opens newer files
+  $script = Join-Path $env:TEMP "goldbot_aux_downgrade.py"
+  Set-Content -Path $script -Value $AuxDowngrade -Encoding UTF8
+  & $py $script $aux | Out-Host
+  if ($LASTEXITCODE -ne 0) { Write-Warning "aux.db could not be stepped back for this commit: its dashboard will not open it" }
+}
+
+# Running scheduler jobs (names) from aux.db, else scheduler.json (a release before `goldbot.db scheduler-status`).
+function Get-RunningJobs {
+  $sch = $null
+  $schJson = $null
+  try { $schJson = & $py -m goldbot.db scheduler-status --state-dir "$Root\state" 2>$null } catch { $schJson = $null }
+  if ($LASTEXITCODE -eq 0 -and $schJson) { $sch = ($schJson -join "`n") | ConvertFrom-Json }
+  elseif (Test-Path "$Root\state\scheduler.json") { $sch = Get-Content "$Root\state\scheduler.json" -Raw | ConvertFrom-Json }
+  $running = @()
+  if ($sch) {
+    foreach ($j in $sch.jobs.PSObject.Properties) {
+      $st = $j.Value
+      if ($st.last_started -and (-not $st.last_finished -or ([datetime]$st.last_started -gt [datetime]$st.last_finished))) {
+        $running += "$($j.Name) (started $($st.last_started))"
+      }
+    }
+  }
+  return ,$running
+}
+
 # Check out a commit and install it; returns $true when every step succeeded. Every native command's output goes to
 # Out-Host: in PowerShell anything a function leaves on the pipeline becomes part of its return value.
 function Install-Commit([string]$Sha, [string]$OldSha) {
@@ -74,6 +128,7 @@ function Install-Commit([string]$Sha, [string]$OldSha) {
   if ($LASTEXITCODE -ne 0) { Write-Warning "git checkout $Sha failed"; return $false }
   & $py -m pip install -e ".[live]" | Out-Host   # same extras as vps_bootstrap.ps1
   if ($LASTEXITCODE -ne 0) { Write-Warning "pip install failed"; return $false }
+  Sync-AuxSchema                                  # services are stopped here
   # rebuild the dashboard only when web/ changed (the API serves web\dist)
   git diff --quiet $OldSha $Sha -- web
   if ($LASTEXITCODE -ne 0) {
@@ -106,18 +161,24 @@ if ($NewSha -eq $OldSha) { Write-Host "already at $NewSha; nothing to do"; exit 
 Write-Host "updating $OldSha -> $NewSha"
 
 # ---- 3. do not kill a scheduler job mid-run (its slot is already recorded and would not run again)
-$schFile = "$Root\state\scheduler.json"
-if ((Test-Path $schFile) -and -not $Force) {
-  $sch = Get-Content $schFile -Raw | ConvertFrom-Json
-  foreach ($j in $sch.jobs.PSObject.Properties) {
-    $st = $j.Value
-    if ($st.last_started -and (-not $st.last_finished -or ([datetime]$st.last_started -gt [datetime]$st.last_finished))) {
-      throw "scheduler job $($j.Name) is running (started $($st.last_started)); retry later or pass -Force"
-    }
+#      the status comes from aux.db (state store step 3), which a failed scheduler.json export cannot leave stale.
+#      The scheduler is stopped first and checked again: a job that started in between was interrupted by the stop,
+#      so the scheduler is started again and the update refused (nothing else was stopped).
+if (-not $Force) {
+  $running = Get-RunningJobs
+  if ($running.Count -gt 0) { throw "scheduler job $($running -join ', ') is running; retry later or pass -Force" }
+}
+Write-Host "stopping goldbot-scheduler"
+nssm stop goldbot-scheduler | Out-Null
+if (-not $Force) {
+  $running = Get-RunningJobs
+  if ($running.Count -gt 0) {
+    nssm start goldbot-scheduler | Out-Null
+    throw "scheduler job $($running -join ', ') started while the scheduler was stopping and was interrupted; scheduler restarted, nothing else stopped; retry later"
   }
 }
 
-# ---- 4. stop (order above), check out, install, static checks
+# ---- 4. stop the rest (order above; the scheduler is already down), check out, install, static checks
 Stop-Goldbot
 $installed = Install-Commit $NewSha $OldSha
 
