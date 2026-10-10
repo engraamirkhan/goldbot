@@ -57,6 +57,9 @@ class RiskLimits(Record):
     # BACKLOG 25: below the minimum lot, exactly the minimum lot if its realised risk <= this (halved in size-down;
     # never above max_risk_per_trade); None = off (the 1.2x rule alone)
     min_lot_risk_cap: float | None = None
+    # BACKLOG 29: absolute daily loss limit, account currency; entries refused when loss so far + this trade's stop
+    # risk > min(daily_cap x day-start equity, this). None = off
+    daily_loss_limit_abs: float | None = None
 
     @classmethod
     def from_settings(cls, risk: RiskSettings, *, tiny_live: bool) -> RiskLimits:
@@ -66,7 +69,8 @@ class RiskLimits(Record):
                    dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2,
                    dd_stage1_clear=risk.drawdown_stage1_clear, max_positions=risk.max_positions_per_account,
                    max_spread_points=risk.max_spread_points, stale_tick_seconds=risk.stale_tick_seconds,
-                   min_target_over_cost=risk.min_target_over_cost, min_lot_risk_cap=risk.min_lot_risk_cap)
+                   min_target_over_cost=risk.min_target_over_cost, min_lot_risk_cap=risk.min_lot_risk_cap,
+                   daily_loss_limit_abs=risk.daily_loss_limit_abs)
 
 
 class AccountState(Record):
@@ -183,6 +187,14 @@ class RiskGate:
         return True
 
     # ---------------------------------------------------------------- entry check + sizing
+    def daily_loss_limit(self, st: AccountState) -> float:
+        """The effective daily loss limit in the account currency (ADR 0004 section 3): min(daily_cap x day-start
+        equity, daily_loss_limit_abs); the absolute alone before the day start is known, the percentage alone when the
+        absolute is off. Published in the engine state and health."""
+        pct = self.limits.daily_cap * st.day_start_equity if st.day_start_equity > 0 else math.inf
+        cap = self.limits.daily_loss_limit_abs
+        return min(pct, cap if cap is not None else math.inf)
+
     def min_lot_cap(self, size_down: bool) -> float | None:
         """The minimum-lot exception's cap on realised risk (BACKLOG 25): `min_lot_risk_cap`, clamped to the per-trade
         maximum (design Hard limits: 1%), halved in the 8% size-down stage; None when the exception is off."""
@@ -315,9 +327,16 @@ class RiskGate:
                 comb_notional > L.max_combined_notional_frac * L.leverage_cap * (st.equity + st.other_equity):
             return GateDecision(allowed=False, reasons=["combined_exposure_cap"], stop_distance=stop_distance,
                                 margin_needed=margin_needed, margin_note=margin_note)
+        # absolute daily loss limit (BACKLOG 29, ADR 0004): projected with this trade's full stop risk, entries only
+        risk_amount = lots * sz.risk_per_lot
+        if L.daily_loss_limit_abs is not None:
+            lost = max(0.0, st.day_start_equity - st.equity)
+            if lost + risk_amount > self.daily_loss_limit(st) + 1e-9:
+                return GateDecision(allowed=False, reasons=["daily_loss_limit_abs"], stop_distance=stop_distance,
+                                    margin_needed=margin_needed, margin_note=margin_note)
         return GateDecision(allowed=True, lots=round(lots, 2), reasons=notes, risk_fraction=realised_risk,
                             stop_distance=stop_distance, margin_needed=margin_needed, margin_note=margin_note,
-                            risk_amount=lots * sz.risk_per_lot)
+                            risk_amount=risk_amount)
 
 
 def _risk_week(ts: pd.Timestamp) -> pd.Timestamp:

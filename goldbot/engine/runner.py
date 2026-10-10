@@ -1912,12 +1912,24 @@ class Engine:
             self._class_cache = (mtime, c if c in ("raw", "standard", "unknown") else "unknown")
         return self._class_cache[1]
 
+    def _daily_allowance(self) -> dict[str, float | None]:
+        """min(daily cap x day-start equity, risk.daily_loss_limit_abs) and that limit less today's loss so far, for the
+        engine state and health; None while unknown (no day start yet and no absolute limit)."""
+        st = self.state
+        limit = self.gate.daily_loss_limit(st)
+        if not math.isfinite(limit):
+            return {"daily_loss_limit": None, "daily_loss_remaining": None}
+        lost = max(0.0, st.day_start_equity - st.equity) if st.day_start_equity > 0 else 0.0
+        return {"daily_loss_limit": round(limit, 2), "daily_loss_remaining": round(max(0.0, limit - lost), 2)}
+
     def _write_state(self) -> None:
         st = self.state
         payload = {
             "account": self.cfg.account_id, "broker": self.cfg.broker_name, "mode": self.cfg.mode, "ts": time.time(),
             # the deposit currency: the supervisor refuses to combine engines in different currencies (BACKLOG 28, A8)
             "currency": self._account_currency() or None,
+            # BACKLOG 29: the effective daily loss limit (account currency) and what is left of it today
+            **self._daily_allowance(),
             "equity": st.equity, "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "open_lots": st.open_lots, "open_notional": st.open_notional,

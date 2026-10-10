@@ -26,11 +26,13 @@ class SupervisorLimits(Record):
     dd_stage1: float = 0.08
     dd_stage2: float = 0.12
     heartbeat_max_age_s: int = 60
+    daily_loss_limit_abs: float | None = None   # BACKLOG 29: combined day loss (account currency) that halts; None = off
 
     @classmethod
     def from_settings(cls, risk: RiskSettings) -> SupervisorLimits:
         return cls(daily_cap=risk.supervisor_daily_cap, weekly_cap=risk.supervisor_weekly_cap,
-                   dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2)
+                   dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2,
+                   daily_loss_limit_abs=risk.daily_loss_limit_abs)
 
 
 class Supervisor:
@@ -71,6 +73,10 @@ class Supervisor:
             reasons.append("combined_daily_cap")
         if week_loss >= self.limits.weekly_cap:
             reasons.append("combined_weekly_cap")
+        # the owner's absolute daily limit on the combined loss so far (one currency: mixed currencies halt below)
+        day_loss_amount = day0 - eq
+        if self.limits.daily_loss_limit_abs is not None and day_loss_amount >= self.limits.daily_loss_limit_abs - 1e-9:
+            reasons.append("combined_daily_loss_abs")
         if dd >= self.limits.dd_stage2:
             reasons.append("combined_drawdown_halt")
         if self.unreadable:
@@ -85,7 +91,8 @@ class Supervisor:
                  "combined_open_notional": sum(x["notional"] for x in exposure.values()), "exposure": exposure,
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
-                 "unreadable_engines": self.unreadable, "currencies": currencies}
+                 "unreadable_engines": self.unreadable, "currencies": currencies, "day_loss_amount": day_loss_amount,
+                 "daily_loss_limit_abs": self.limits.daily_loss_limit_abs}
         write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)   # heartbeat: never half-written
         return state
 

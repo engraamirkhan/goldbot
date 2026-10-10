@@ -60,6 +60,10 @@ risk:
   # 0.82%), put `risk: { min_lot_risk_cap: 0.01 }` in that server's config/settings.local.yaml (not in the repo).
   # Maximum 0.01 (the per-trade hard limit); halved in the 8% size-down stage.
   min_lot_risk_cap: null
+  # Absolute daily loss limit in the account currency (ADR 0004: the owner's £50). Entries only, projected: no entry
+  # whose full stop risk would take the day's loss past min(daily_cap x day-start equity, this); the 2% / 1.5% caps
+  # bind first below ~£2,500. The supervisor halts the combined book when its day loss reaches it. Exits never gated.
+  daily_loss_limit_abs: 50
   positions_unreadable_alert: 5      # failed broker reads in a row before health fails and Telegram alerts
 
 costs:

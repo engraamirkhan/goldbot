@@ -703,6 +703,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   is **off in settings.yaml**. Owner: to let the £1,000 demo trade 15m at 0.01 lot (0.82%), add
   `risk: { min_lot_risk_cap: 0.01 }` to the demo server's `config/settings.local.yaml` and restart the engine. The
   approval card does not show the exception yet (ui-ux follow-up).
+- Absolute daily loss limit (2026-10-10, BACKLOG 29, ADR 0004 section 3, row R34; needs trading-safety review):
+  `risk.daily_loss_limit_abs: 50` (account currency; null = off). Entries only, projected: RiskGate refuses
+  `daily_loss_limit_abs` when the day's loss so far plus the new trade's full stop risk would exceed min(daily cap x
+  day-start equity, 50), so the 2% account cap is now also projected while the absolute is set. The supervisor halts
+  (`combined_daily_loss_abs`) when the combined day loss reaches 50. Exits never consult it. engine_<account>.json
+  carries `daily_loss_limit` and `daily_loss_remaining`; health shows them on the daily cap line and warns when none
+  is left. Not done: the approval card's "remaining daily allowance" (ui-ux follow-up).
 
 ## Next steps (no owner input needed unless marked)
 - Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;

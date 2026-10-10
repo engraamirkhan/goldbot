@@ -19,6 +19,10 @@ owner.
 - BACKLOG 25, minimum-lot exception (decision 2): implemented, **off by default** (`risk.min_lot_risk_cap: null`;
   TRACEABILITY R33). Settings have no per-account section, so the owner enables it on the demo server with
   `risk: { min_lot_risk_cap: 0.01 }` in its `config/settings.local.yaml`. Until then nothing trades at £1,000.
+- BACKLOG 29, absolute daily loss limit (decision 3): implemented, `risk.daily_loss_limit_abs: 50` (TRACEABILITY R34).
+  Note: the projection uses min(2% x day-start equity, £50), so the 2% account cap is now also checked with the new
+  trade's risk (stricter than section 3's "loss so far" reading of the percentage cap; at £1,000 a third full loss
+  is refused by the account gate as well as the supervisor).
 
 ## Owner summary
 - **North star:** £50 or more on good days, less or nothing on poor ones. We chase it by being selective and

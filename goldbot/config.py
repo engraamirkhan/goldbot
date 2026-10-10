@@ -98,6 +98,10 @@ class RiskSettings(_Section):
     # its realised risk (account currency, fraction of equity) is within this cap; half of it in the 8% size-down
     # stage. Never above the 1% per-trade maximum. null = off: the minimum lot only within 1.2x the target (design)
     min_lot_risk_cap: float | None = Field(None, gt=0, le=0.01)
+    # BACKLOG 29 (ADR 0004 section 3): the owner's absolute daily loss limit in the account currency. Entries only and
+    # projected: refused when the day's loss so far plus the trade's full stop risk would exceed min(daily_cap x
+    # day-start equity, this); the supervisor halts when the combined day loss reaches it. null = off
+    daily_loss_limit_abs: float | None = Field(None, gt=0)
     # health: an engine whose broker reads (positions(), deal history) failed this many times in a row FAILs and the
     # owner is alerted on Telegram; fewer is a warning (entries are blocked from the first failure, exits keep trying)
     positions_unreadable_alert: int = Field(5, ge=1)

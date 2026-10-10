@@ -21,7 +21,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | --- | --- | --- | --- | --- |
 | 28 | Currency-correct sizing, margin and R on a non-USD account (ADR 0004, audit A3–A8) | Position sizing, safety · RUN | S–M | **in review** (built 2026-10-10; trading-safety review; approval-card currency label open for ui-ux) |
 | 25 | Minimum-lot exception in RiskGate (ADR 0004) | Position sizing · RUN | S | **in review** (built 2026-10-10, off by default; trading-safety review; owner enables on the demo server) |
-| 29 | Absolute daily loss limit `risk.daily_loss_limit_abs` (ADR 0004) | Capital and drawdown management · RUN | S | ready, priority 3 (trading-safety review) |
+| 29 | Absolute daily loss limit `risk.daily_loss_limit_abs` (ADR 0004) | Capital and drawdown management · RUN | S | **in review** (built 2026-10-10, 50 in settings; trading-safety review; approval-card allowance open for ui-ux) |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | ready |
 | 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | done (PR #62) |
 | 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | done (PR #60) |
@@ -343,6 +343,8 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - Exits, stops and closes never consult it (test). Health and the approval card show the remaining daily
     allowance. DESIGN Hard limits and TRACEABILITY updated. Reviews: trading-safety, code, ui-ux.
   Depends on: 28.
+  Status (2026-10-10): built (TRACEABILITY R34; tests/test_daily_loss_abs.py), 50 in settings.yaml; engine state and
+  health show the limit and what is left. Open: the approval card's remaining allowance (ui-ux).
 - **30. Opportunity-day detection (hypothesis; quant review).** Value: the north star depends on trading more on
   days the market offers moves and standing aside otherwise (FIND). Acceptance:
   - The strategy-researcher registers a pre-registered hypothesis in `docs/research/hypotheses.md` and the trial

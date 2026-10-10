@@ -895,6 +895,9 @@ def check_loss_caps(ctx: HealthContext, account_id: str) -> list[Check]:
         e = _read_json(f)
         eq = float(e.get("equity") or 0.0)
         starts = {"daily": float(e.get("day_start_equity") or 0.0), "weekly": float(e.get("week_start_equity") or 0.0)}
+        # BACKLOG 29: the engine's effective daily loss limit (min of the % cap and the absolute) and what is left
+        limit, left = e.get("daily_loss_limit"), e.get("daily_loss_remaining")
+        allowance = (float(limit), float(left)) if limit is not None and left is not None else None
     except (ValueError, OSError, AttributeError, TypeError):
         return []                                   # check_engine reports the unreadable file
     caps = {"daily": ctx.settings.risk.daily_cap, "weekly": ctx.settings.risk.weekly_cap}
@@ -903,6 +906,12 @@ def check_loss_caps(ctx: HealthContext, account_id: str) -> list[Check]:
         start = starts[period]
         loss = 1 - eq / start if start > 0 else 0.0
         msg = f"{account_id}: {period} loss {100 * loss:.2f}% of {'day' if period == 'daily' else 'week'}-start equity {start:,.2f}"
+        if period == "daily" and allowance is not None:
+            msg += f", daily loss limit {allowance[0]:,.2f} ({allowance[1]:,.2f} left)"
+            if allowance[1] <= 0 and loss < caps[period]:
+                out.append(Check(name=f"{period}_cap:{account_id}", status="warn",
+                                 reason=f"DAILY LOSS LIMIT reached: {msg}: no new entries until the day rolls"))
+                continue
         if loss >= caps[period]:
             out.append(Check(name=f"{period}_cap:{account_id}", status="warn",
                              reason=f"{period.upper()} LOSS CAP hit: {msg} (cap {100 * caps[period]:.1f}%): no new entries until it rolls"))
