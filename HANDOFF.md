@@ -412,6 +412,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `docs/research/preregistration-2027Q1.md` H-01. No research trial was run.
 
 ## Next steps (no owner input needed unless marked)
+- Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
+  `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
+  stays partial until the research callers (`pipeline.run_specialist`/`run_pool`, `discovery.discover`) pass it
+  (values equal today, so folds do not change); the tournament promotes shadow -> live at DSR >= 0.95 (row G6).
 - Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):
   `python -m goldbot.ops.run gates` prints each roadmap gate as met / not met with its evidence (trial registry DSR,
   positive years and backtest trades; the nightly cost tables; `state/closed_trades.jsonl` for the paper and live

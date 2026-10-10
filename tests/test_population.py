@@ -77,6 +77,20 @@ def test_strong_shadow_record_is_promoted_and_a_weak_one_is_not(tmp_path):
     assert pop.members["strong"].capital_weight == pytest.approx(1.0)   # only live agent in its family
 
 
+@pytest.mark.parametrize("dsr, promoted", [(0.95, True), (float(np.nextafter(0.95, 0.0)), False)])
+def test_shadow_is_promoted_at_a_deflated_sharpe_of_exactly_0_95_and_not_just_below(tmp_path, monkeypatch, dsr, promoted):
+    # design (G6): promotion passes the deflated-Sharpe gate at "0.95 or better", so the boundary itself promotes
+    assert P.DSR_PROMOTE == 0.95
+    real = P.score_agent
+    monkeypatch.setattr(P, "score_agent", lambda *a, **k: real(*a, **k).model_copy(update={"dsr": dsr}))
+    pop, book = Population(tmp_path / "p.json"), ShadowBook(tmp_path)
+    _member(pop, "edge")
+    _add_trades(book, "edge", _good(150))
+    out = pop.tournament(book, NOW)
+    assert ("edge" in out["promoted"]) is promoted
+    assert pop.members["edge"].status == ("live" if promoted else "shadow")
+
+
 def test_retirement_by_confidence_bound_and_the_six_month_shadow_tail(tmp_path):
     pop, book = Population(tmp_path / "p.json"), ShadowBook(tmp_path)
     _member(pop, "loser", status="live")

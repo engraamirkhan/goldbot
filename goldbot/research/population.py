@@ -373,7 +373,7 @@ class Population:
             s = scores[m.agent_id]
             if len(self.active("live")) >= LIVE_CAP:
                 break
-            if s.dsr > DSR_PROMOTE and s.fitness > 0:
+            if s.dsr >= DSR_PROMOTE and s.fitness > 0:         # design: deflated Sharpe "0.95 or better"
                 if research_passed is not None and not research_passed(m):
                     summary["awaiting_research"].append(m.agent_id)
                     continue
