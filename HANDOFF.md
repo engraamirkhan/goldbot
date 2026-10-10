@@ -301,6 +301,34 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Deviations from 4b: the label is the specialist's (no primary-free 4h label yet), groups are registry
   features/families instead of |Spearman| > 0.7 medoid clusters, and the trade rule is the existing break-even +
   margin threshold, not the top-tercile cut.
+- SQLite state store, steps 0-1 (2026-10-10, `docs/proposals/2026-10-state-store.md`): package `goldbot/db/`
+  (stdlib `sqlite3`) opens `state/core.db` (synchronous FULL) and `state/aux.db` (NORMAL) with WAL, busy_timeout
+  5000, foreign keys and trusted_schema off; writes take `BEGIN IMMEDIATE`. Forward-only migrations in
+  `db/migrations.py`, one transaction each, recorded in `schema_version` (+ `PRAGMA user_version`); a newer file
+  refuses to open. `RecordRepo` maps a pydantic Record to key/filter columns + a JSON `body`. Import skeleton:
+  `python -m goldbot.db migrate|import-state [--dry-run]` (idempotent by file SHA-256, files left in place).
+  Dashboard auth (`api/auth.py`) now keeps users, invites, sessions (token hashes) and an append-only audit table in
+  aux.db: logins survive API restarts and deploys, and several API processes share sessions. On first start with
+  an empty DB it imports users.json and audit.jsonl once and never writes them again (backup). Failed-login
+  counters stay in memory. Not done: `run.py migrate`/`import-state` wiring, `state_db` health check (step 0
+  leftovers, files owned elsewhere); the API migrates aux.db on open until then. Steps 2-8 not started.
+- Dashboard accounts (2026-10-10, owner request): the owner is the sole admin. `auth.owner_email` (Settings
+  `AuthSettings`, default None; set only in the server's `config/settings.local.yaml`, never in the public repo)
+  is required for bootstrap and is the only address that can hold the owner role. Invites and `set_role` grant
+  only approver/viewer (`GrantableRole` in the contract; "owner" gets 422); the owner cannot be demoted or disabled;
+  an invite never overwrites an existing account; the only user-creating paths are bootstrap and invites. A stored
+  owner that differs from the setting is logged and left alone; `auth.owner_health_note(state_dir, owner_email)`
+  is ready for health.py (not wired: health is owned elsewhere). Password policy: 12+ characters, different from the
+  current one. Endpoints: `POST /api/auth/setup` now returns `SetupResponse` with 10 one-time recovery codes
+  (hashes stored, aux.db migration 3); `/api/auth/password/change` (logged in; password + TOTP; other sessions
+  revoked); `/api/auth/password/forgot` (email + TOTP + new password; same 403 for unknown email or wrong code;
+  shares the 5-in-15-min lockout; all sessions revoked); `/api/auth/reset-link` (owner; 24 h single-use token,
+  hash stored) and `/api/auth/reset` (new password + new TOTP, all sessions revoked); `/api/auth/recovery/login`
+  (owner: password + recovery code, re-enrols TOTP, returns a session) and `/api/auth/recovery/codes` (owner,
+  regenerate); `/api/users/enable` and `/api/users/revoke-sessions` (owner). All audited. Minimal UI: Forgot
+  password / recovery-code / reset-link modes on the login page, recovery codes shown after setup, an Account tab
+  (change password), Enable / Sign out everywhere / Reset link on Users. No button yet for regenerating recovery
+  codes.
 
 ## Next steps (no owner input needed unless marked)
 - Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write

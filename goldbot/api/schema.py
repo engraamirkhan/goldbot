@@ -82,6 +82,7 @@ class FeedHealth(BaseModel):
 
 # ----------------------------------------------------------------------------- auth and users
 Role = Literal["owner", "approver", "viewer"]
+GrantableRole = Literal["approver", "viewer"]     # the owner role belongs to auth.owner_email and is never granted
 
 
 class AuthState(BaseModel):
@@ -99,6 +100,11 @@ class TotpEnrolment(BaseModel):
     totp_uri: str
 
 
+class SetupResponse(TotpEnrolment):
+    """The owner's authenticator and 10 one-time recovery codes. Shown once: only their hashes are stored."""
+    recovery_codes: list[str]
+
+
 class LoginRequest(BaseModel):
     email: str = ""
     password: str = ""
@@ -114,7 +120,7 @@ class LoginResponse(BaseModel):
 
 class InviteRequest(BaseModel):
     email: str
-    role: Role = "viewer"
+    role: GrantableRole = "viewer"
 
 
 class InviteResponse(BaseModel):
@@ -146,7 +152,7 @@ class UserRow(BaseModel):
 
 class RoleChange(BaseModel):
     email: str
-    role: Role
+    role: GrantableRole
 
 
 class UserRef(BaseModel):
@@ -155,6 +161,57 @@ class UserRef(BaseModel):
 
 class Ok(BaseModel):
     ok: bool = True
+
+
+class ChangePasswordRequest(BaseModel):
+    """Logged in. Revokes the user's other sessions."""
+    current_password: str = ""
+    totp: str = ""
+    new_password: str = ""
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Self-service reset with a current authenticator code. The same 403 for an unknown email or a wrong code."""
+    email: str = ""
+    totp: str = ""
+    new_password: str = ""
+
+
+class ResetLinkResponse(BaseModel):
+    reset_token: str
+    expires_h: int
+
+
+class ResetRequest(BaseModel):
+    """Owner-issued one-time link: sets a new password and enrols a new authenticator."""
+    token: str = ""
+    new_password: str = ""
+
+
+class RecoveryLoginRequest(BaseModel):
+    """Owner only: a one-time recovery code in place of the authenticator code."""
+    email: str = ""
+    password: str = ""
+    recovery_code: str = ""
+
+
+class RecoveryLoginResponse(LoginResponse):
+    totp_uri: str                 # the new authenticator: enrol it now, the old one no longer works
+    recovery_codes_left: int
+
+
+class RecoveryCodesRequest(BaseModel):
+    password: str = ""
+    totp: str = ""
+
+
+class RecoveryCodesResponse(BaseModel):
+    recovery_codes: list[str]
+
+
+class RevokeResponse(BaseModel):
+    ok: bool = True
+    sessions: int
 
 
 class DecisionResult(BaseModel):

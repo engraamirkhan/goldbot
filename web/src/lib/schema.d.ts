@@ -123,6 +123,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/password/change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change Password */
+        post: operations["change_password_api_auth_password_change_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/password/forgot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Forgot Password */
+        post: operations["forgot_password_api_auth_password_forgot_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/recovery/codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recovery Codes */
+        post: operations["recovery_codes_api_auth_recovery_codes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/recovery/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recovery Login */
+        post: operations["recovery_login_api_auth_recovery_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset */
+        post: operations["reset_api_auth_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/reset-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset Link */
+        post: operations["reset_link_api_auth_reset_link_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/setup": {
         parameters: {
             query?: never;
@@ -415,6 +517,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enable */
+        post: operations["enable_api_users_enable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/revoke-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Sessions */
+        post: operations["revoke_sessions_api_users_revoke_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users/role": {
         parameters: {
             query?: never;
@@ -649,6 +785,27 @@ export interface components {
              */
             now: string;
         };
+        /**
+         * ChangePasswordRequest
+         * @description Logged in. Revokes the user's other sessions.
+         */
+        ChangePasswordRequest: {
+            /**
+             * Current Password
+             * @default
+             */
+            current_password: string;
+            /**
+             * New Password
+             * @default
+             */
+            new_password: string;
+            /**
+             * Totp
+             * @default
+             */
+            totp: string;
+        };
         /** CusumPoint */
         CusumPoint: {
             /** S */
@@ -770,6 +927,27 @@ export interface components {
             terminal_connected: boolean;
             /** Webhook P99 Latency S */
             webhook_p99_latency_s: number | null;
+        };
+        /**
+         * ForgotPasswordRequest
+         * @description Self-service reset with a current authenticator code. The same 403 for an unknown email or a wrong code.
+         */
+        ForgotPasswordRequest: {
+            /**
+             * Email
+             * @default
+             */
+            email: string;
+            /**
+             * New Password
+             * @default
+             */
+            new_password: string;
+            /**
+             * Totp
+             * @default
+             */
+            totp: string;
         };
         /** GateCheck */
         GateCheck: {
@@ -901,7 +1079,7 @@ export interface components {
              * @default viewer
              * @enum {string}
              */
-            role: "owner" | "approver" | "viewer";
+            role: "approver" | "viewer";
         };
         /** InviteResponse */
         InviteResponse: {
@@ -1079,6 +1257,63 @@ export interface components {
             /** Totp */
             totp: string;
         };
+        /** RecoveryCodesRequest */
+        RecoveryCodesRequest: {
+            /**
+             * Password
+             * @default
+             */
+            password: string;
+            /**
+             * Totp
+             * @default
+             */
+            totp: string;
+        };
+        /** RecoveryCodesResponse */
+        RecoveryCodesResponse: {
+            /** Recovery Codes */
+            recovery_codes: string[];
+        };
+        /**
+         * RecoveryLoginRequest
+         * @description Owner only: a one-time recovery code in place of the authenticator code.
+         */
+        RecoveryLoginRequest: {
+            /**
+             * Email
+             * @default
+             */
+            email: string;
+            /**
+             * Password
+             * @default
+             */
+            password: string;
+            /**
+             * Recovery Code
+             * @default
+             */
+            recovery_code: string;
+        };
+        /** RecoveryLoginResponse */
+        RecoveryLoginResponse: {
+            /** Email */
+            email: string;
+            /** Expires In */
+            expires_in: number;
+            /** Recovery Codes Left */
+            recovery_codes_left: number;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "owner" | "approver" | "viewer";
+            /** Token */
+            token: string;
+            /** Totp Uri */
+            totp_uri: string;
+        };
         /** ReliabilityBin */
         ReliabilityBin: {
             /** Hi */
@@ -1166,6 +1401,39 @@ export interface components {
             /** Trials Total */
             trials_total: number;
         };
+        /** ResetLinkResponse */
+        ResetLinkResponse: {
+            /** Expires H */
+            expires_h: number;
+            /** Reset Token */
+            reset_token: string;
+        };
+        /**
+         * ResetRequest
+         * @description Owner-issued one-time link: sets a new password and enrols a new authenticator.
+         */
+        ResetRequest: {
+            /**
+             * New Password
+             * @default
+             */
+            new_password: string;
+            /**
+             * Token
+             * @default
+             */
+            token: string;
+        };
+        /** RevokeResponse */
+        RevokeResponse: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Sessions */
+            sessions: number;
+        };
         /** RoleChange */
         RoleChange: {
             /** Email */
@@ -1174,7 +1442,7 @@ export interface components {
              * Role
              * @enum {string}
              */
-            role: "owner" | "approver" | "viewer";
+            role: "approver" | "viewer";
         };
         /** SetupRequest */
         SetupRequest: {
@@ -1187,6 +1455,16 @@ export interface components {
              * @default
              */
             setup_code: string;
+        };
+        /**
+         * SetupResponse
+         * @description The owner's authenticator and 10 one-time recovery codes. Shown once: only their hashes are stored.
+         */
+        SetupResponse: {
+            /** Recovery Codes */
+            recovery_codes: string[];
+            /** Totp Uri */
+            totp_uri: string;
         };
         /** Status */
         Status: {
@@ -1236,11 +1514,6 @@ export interface components {
             review_command: string;
             /** Since */
             since: string | null;
-        };
-        /** TotpEnrolment */
-        TotpEnrolment: {
-            /** Totp Uri */
-            totp_uri: string;
         };
         /** TrialBudget */
         TrialBudget: {
@@ -1508,6 +1781,204 @@ export interface operations {
             };
         };
     };
+    change_password_api_auth_password_change_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    forgot_password_api_auth_password_forgot_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForgotPasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recovery_codes_api_auth_recovery_codes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryCodesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recovery_login_api_auth_recovery_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryLoginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_api_auth_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_link_api_auth_reset_link_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserRef"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResetLinkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     setup_api_auth_setup_post: {
         parameters: {
             query?: never;
@@ -1527,7 +1998,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TotpEnrolment"];
+                    "application/json": components["schemas"]["SetupResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1924,6 +2395,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Ok"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enable_api_users_enable_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserRef"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_sessions_api_users_revoke_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserRef"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokeResponse"];
                 };
             };
             /** @description Validation Error */

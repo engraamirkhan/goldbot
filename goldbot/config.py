@@ -175,6 +175,12 @@ class TelegramSettings(_Section):
     allowed_user_ids: list[int] = Field(default_factory=list)
 
 
+class AuthSettings(_Section):
+    """Dashboard owner. The repo is public: set owner_email only in the server's git-ignored
+    config/settings.local.yaml. Unset, the owner account cannot be created (bootstrap refuses)."""
+    owner_email: str | None = None
+
+
 class DriftSettings(_Section):
     """Design: Drift and health (goldbot/research/drift.py)."""
     psi_warn: float = Field(0.1, gt=0)               # PSI on a top feature that warns
@@ -210,6 +216,7 @@ class Settings(_Section):
     agents: AgentSettings = Field(default_factory=AgentSettings)
     news: NewsSettings = Field(default_factory=NewsSettings)
     drift: DriftSettings = Field(default_factory=DriftSettings)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):

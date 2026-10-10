@@ -134,3 +134,10 @@ drift:                               # design: Drift and health (goldbot/researc
   cusum_h: 4.0
   dd_mult: 1.5                       # an agent's 30-day drawdown above 1.5x backtest halts the system pending review
   dd_window_days: 30
+
+# Dashboard owner (goldbot/api/auth.py). The repo is public: NEVER put a real address here. On the server, put
+#   auth: {owner_email: <your email>}
+# in the git-ignored config/settings.local.yaml before the dashboard's first run. Unset, the owner account cannot be
+# created; the owner role belongs only to this address.
+# auth:
+#   owner_email: owner@example.com
