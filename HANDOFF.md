@@ -618,6 +618,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `why = self._sessions.entry_block(now)` as an entry-blocking reason. Exits are unaffected.
 
 ## Next steps (no owner input needed unless marked)
+- Risk analytics for playbook G-5 and G-7 (2026-10-10, BACKLOG 20 and 22; tools built, results need data):
+  `python -m goldbot.ops.run ruin --trades-per-week N (--shadow state | --closed-trades state | --r-file trades.csv |
+  --win-rate W --avg-win A --avg-loss L) [--tiny-live] [--out F]` is a seeded circular-block-bootstrap Monte Carlo
+  (`goldbot/research/ruin.py`) at the live limits from settings (0.5%/0.1% risk, 2%/5% caps, 1.5%/4% supervisor caps,
+  8%/12% stages, 5% clear), enforcing them as RiskGate does: P(each limit trips) within 26/52 weeks, median time to
+  the first trip, max drawdown median/95th/99th and risk of ruin. `python -m goldbot.ops.run sizing-feasibility
+  [--equity E] [--tiny-live]` (`goldbot/research/min_lot.py`) gives, per family and decision timeframe from the store's
+  last bars (ATR(14) x the family's default stop multiple), the equity at which 0.01 lot fits the risk (strict and the
+  gate's 1.2x), and the real risk at a given equity; `--price P --stop-distance D` without data. Neither has been run
+  on real bars or trades yet (the Mac VM has no store data); run both on the VPS/brain and attach to phase-gate
+  evidence and the H-01 account-size decision.
 - XAUUSD trader playbook (2026-10-10, owner request): `docs/research/xauusd-trader-playbook.md` lists ~70 things a
   professional gold trader considers (drivers, CFD microstructure, technicals, risk management, process), each with
   sources, evidence grade and goldbot status, then a ranked gap list (risk gaps G-1..G-10 first: swap in live EV,

@@ -66,6 +66,13 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | R30 | Data-quality error blocks entries ("never opens a position on a flagged bar") | implemented | goldbot/risk/gate.py:132-133; goldbot/engine/runner.py:404, 433, 447 | tests/test_risk_ops.py::test_crossed_and_out_of_order_ticks_set_dq_error_until_a_clean_bar; ::test_bar_checks_and_stale_feed_set_dq_error |
 | R31 | Numbers in settings.yaml and code defaults equal the design's | implemented | config/settings.yaml:46-63; goldbot/risk/gate.py:26-42; goldbot/risk/supervisor.py:18-23 | tests/test_trace_risk.py::test_design_numbers_in_settings_and_code_defaults |
 
+Risk analytics (reporting tools, not design rows, so the counts are unchanged): `goldbot/research/ruin.py`
+(`run.py ruin`, playbook G-5) simulates R against the R9/R11/R13/R14 limits read from `config/settings.yaml`, applying
+them as `RiskGate` does (tests/test_ruin.py::test_stage_one_halves_risk_and_stage_two_halts_the_path,
+::test_daily_cap_stops_the_day_and_the_week_carries_on); `goldbot/research/min_lot.py` (`run.py sizing-feasibility`,
+G-7) reports the equity at which R5's minimum-lot rule lets a stop be sized
+(tests/test_min_lot.py::test_agrees_with_the_risk_gate_on_whether_the_minimum_lot_is_allowed).
+
 ## Supervisor [Execution and risk: Supervisor]
 
 | # | Requirement | Status | Code | Test |

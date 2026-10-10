@@ -36,9 +36,9 @@ Status: ready / in progress / in review / done / rejected.
 | 17 | Holiday, daily-reopen and Monday-open entry rules (G-2) | Operational risk · RUN | S–M | proposed (owner: windows) |
 | 18 | Tier-2 event blackout and proximity feature (G-3) | Market and macro preparation · RUN | S | proposed (owner: adopt) |
 | 19 | Open-risk (heat) cap and same-direction stacking (G-4) | Capital and drawdown management · RUN | S | proposed (owner: value) |
-| 20 | Drawdown / risk-of-ruin Monte Carlo report (G-5) | Capital and drawdown management · RUN | S | proposed |
+| 20 | Drawdown / risk-of-ruin Monte Carlo report (G-5) | Capital and drawdown management · RUN | S | tool built (results need data) |
 | 21 | Per-agent loss-streak and entry-rate throttle (G-6) | Discipline (system analogue) · RUN | S | proposed (owner: thresholds) |
-| 22 | Min-lot sizing-feasibility report (G-7) | Position sizing · RUN | S | proposed (owner: account size for H-01) |
+| 22 | Min-lot sizing-feasibility report (G-7) | Position sizing · RUN | S | tool built (results need data; owner: account size for H-01) |
 | 23 | MAE/MFE in closed-trade and shadow records (G-9) | Post-trade review · FIND | S | proposed |
 | 24 | DST-aware sessions and deterministic calendars (D-1, D-2) | Idea generation (honesty) · FIND | M | proposed |
 
