@@ -25,8 +25,11 @@ No swap. The position is open from 00:00 to 07:00 UTC, 02:00-09:00 or 03:00-10:0
 through the server midnight (the rollover): `labels.triple_barrier.rollover_nights` is 0 for every trade
 (tests/test_asia_drift.py).
 
-Research only until it passes: `screening` keeps it out of the default population founders and the pooled models;
-a passed walk-forward trial of its exact configuration still becomes a shadow founder through gap_watch.
+Research only until it passes: `screening` keeps it out of the default population founders, the pooled models, the
+research director / label grid / analyst (`ops.jobs.research_families`) and the model stage of `research_pass.py`
+(rule-only screen). Research keeps an entry only when its whole 00:00-07:00 UTC window is in the data
+(`complete_windows`). The label spec says it has no reachable target (`has_target` False), so the RiskGate refuses its
+intents (`time_exit_ev_unsupported`) until the EV of a time-exit rule is implemented (HANDOFF).
 """
 from __future__ import annotations
 
@@ -71,6 +74,9 @@ class AsiaDriftSpecialist(Specialist):
         super().__init__(*args, **kwargs)
         if not float(self.config["stop_atr"]) > 0 or not float(self.config["target_atr"]) > 0:
             raise ValueError("asia_drift: stop_atr and target_atr must be positive")
+        if not 1 <= int(self.config["max_bars"]) <= self.hold_bars - 1:
+            raise ValueError(f"asia_drift: max_bars must be 1..{self.hold_bars - 1}: the time exit is at "
+                             f"{EXIT_UTC:%H:%M} UTC at the latest")
 
     @property
     def hold_bars(self) -> int:
@@ -81,15 +87,32 @@ class AsiaDriftSpecialist(Specialist):
     @property
     def label_spec(self) -> BarrierSpec:
         # entry at the close of the decision bar (00:00); triple_barrier's time exit is the close of bar
-        # idx + 1 + max_bars, so max_bars = hold_bars - 1 exits at the close of the bar ending 07:00. A configuration
-        # (label grid, clone) may shorten the hold, never carry it past 07:00 UTC
+        # idx + 1 + max_bars, so max_bars = hold_bars - 1 exits at the close of the bar ending 07:00 (a longer hold is
+        # refused by the constructor). No reachable target: has_target False (RiskGate refuses the barrier EV)
         c = self.config
-        hold = min(int(c["max_bars"]), self.hold_bars - 1)
-        return BarrierSpec(target_atr=float(c["target_atr"]), stop_atr=float(c["stop_atr"]), max_bars=max(1, hold),
-                           name="asia_drift")
+        return BarrierSpec(target_atr=float(c["target_atr"]), stop_atr=float(c["stop_atr"]), max_bars=int(c["max_bars"]),
+                           name="asia_drift", has_target=False)
+
+    def complete_windows(self, bars_dec: pd.DataFrame, cands: pd.DataFrame) -> pd.DataFrame:
+        """Pre-registered sample rule (quant review M3): keep an entry only when the bar that closes its time barrier
+        (the 7th after the decision bar for the default) closes exactly 7 hours after the entry, so the 1h bars from
+        00:00 to 07:00 UTC are all there. A data gap or an unlisted closure (e.g. Good Friday) would otherwise carry a
+        bar-counted exit past 07:00 UTC. Bar timestamps only: no price is read."""
+        if cands.empty:
+            return cands
+        step = pd.Timedelta(seconds=tf_seconds(self.timeframe))
+        ts = utc_index(bars_dec["ts_utc"])
+        close = utc_index(bars_dec["visible_at"]) if "visible_at" in bars_dec else ts + step
+        n_hold = int(self.config["max_bars"]) + 1
+        idx = cands["idx"].to_numpy(dtype=int)
+        end = idx + n_hold
+        ok = end < len(close)
+        good = np.zeros(len(idx), dtype=bool)
+        good[ok] = np.asarray(close[end[ok]] - close[idx[ok]] == n_hold * step)
+        return cands[good].reset_index(drop=True)
 
     def exit_policy(self) -> dict[str, Any]:
-        return {"type": "barrier", "time_exit": f"{EXIT_UTC:%H:%M} UTC", "target": "none"}
+        return {"type": "barrier", "time_exit": f"{EXIT_UTC:%H:%M} UTC", "target": "none"}  # label_spec.has_target
 
     def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
         ts = utc_index(mid_bars["ts_utc"])

@@ -3,6 +3,8 @@ stop 1.5 x ATR(1h), every trading day, no entry while the market is closed, no r
 no look-ahead, and labels that the shadow book reproduces."""
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -52,8 +54,11 @@ def test_the_rule_is_the_preregistered_one():
     ls = SPEC.label_spec
     assert SPEC.timeframe == "1h" and SPEC.timeframes == ()
     assert SPEC.config == {"stop_atr": 1.5, "target_atr": NO_TARGET_ATR, "max_bars": 6}
-    assert AsiaDriftSpecialist(max_bars=8).label_spec.max_bars == 6       # never held past 07:00 UTC
+    with pytest.raises(ValueError, match="07:00"):                         # never held past 07:00 UTC
+        AsiaDriftSpecialist(max_bars=7)
+    assert AsiaDriftSpecialist(max_bars=4).label_spec.max_bars == 4       # a shorter hold is a different config
     assert ls.stop_atr == 1.5 and ls.max_bars == 6 and ls.target_atr == NO_TARGET_ATR
+    assert ls.has_target is False                     # explicit: the target is unreachable (RiskGate refuses its EV)
     assert SPEC.exit_spec is None                       # a plain time barrier: no policy, the labels count bars
     assert SPECIALISTS["asia_drift"] is AsiaDriftSpecialist
     assert 0 < len(SPEC.model_features) <= 39
@@ -107,19 +112,30 @@ def test_candidates_and_their_atr_use_no_future_bars(winter):
     dec, m, X, _ = _frame(winter)
     full = SPEC.candidates(m, X)
     a_full = atr(m, 14)
-    for cut_ts in ("2024-01-10 00:00", "2024-01-16 23:00", "2024-01-23 03:00"):
+    # cuts on a bar close and inside the decision bar (23:30: the 23:00 bar is still forming). Compared on the bars
+    # complete at the cut: the engine decides only at a decision-bar close on completed minutes (engine/runner.py
+    # `_frame`), so a forming bar is never a decision bar; research resamples complete history
+    for cut_ts in ("2024-01-10 00:00", "2024-01-16 23:00", "2024-01-16 23:30", "2024-01-23 03:00"):
         cut = pd.Timestamp(cut_ts, tz="UTC")
         dm, mm, Xm, _ = _frame(winter[winter["visible_at"] <= cut])
+        done = int((pd.DatetimeIndex(mm["visible_at"]) <= cut).sum())
         part = SPEC.candidates(mm, Xm)
-        upto = full[full["idx"] < len(mm)].reset_index(drop=True)
-        pd.testing.assert_frame_equal(part.reset_index(drop=True), upto, check_dtype=False)
-        np.testing.assert_allclose(atr(mm, 14).to_numpy(), a_full.to_numpy()[:len(mm)])
-    # rewriting every bar after a decision bar changes neither the signal nor the ATR frozen at it
+        part = part[part["idx"] < done].reset_index(drop=True)
+        upto = full[full["idx"] < done].reset_index(drop=True)
+        pd.testing.assert_frame_equal(part, upto, check_dtype=False)
+        np.testing.assert_allclose(atr(mm, 14).to_numpy()[:done], a_full.to_numpy()[:done])
+    # rewriting every 1m bar after a decision bar's close (features rebuilt from the shocked data) changes neither the
+    # signal nor the ATR frozen at it
     i = int(full["idx"].iloc[5])
-    shocked = m.copy()
-    shocked.loc[i + 1:, ["open", "high", "low", "close"]] *= 1.5
-    assert int(i) in set(SPEC.candidates(shocked, X)["idx"])
-    assert atr(shocked, 14).iloc[i] == pytest.approx(a_full.iloc[i])
+    after = pd.DatetimeIndex(winter["ts_utc"]) >= pd.Timestamp(dec["visible_at"].iloc[i])
+    shocked = winter.copy()
+    px = [c for c in shocked.columns if c.startswith(("bid_", "ask_"))
+          and c.endswith(("open", "high", "low", "close"))]
+    shocked.loc[after, px] = shocked.loc[after, px] * 1.5
+    _, ms, Xs, _ = _frame(shocked)
+    assert i in set(SPEC.candidates(ms, Xs)["idx"])
+    assert atr(ms, 14).iloc[i] == pytest.approx(a_full.iloc[i])
+    assert atr(ms, 14).iloc[i + 3] != pytest.approx(a_full.iloc[i + 3])      # the shock did reach the later bars
 
 
 @pytest.mark.parametrize("regime", ["winter", "summer"])
@@ -191,3 +207,44 @@ def test_registered_for_research_but_not_a_founder_or_pool_member(tmp_path):
     assert added and not any(aid.startswith("asia_drift-") for aid in added)
     retired = {r.family for r in load_settings().research.retired_families}
     assert "asia_drift" not in retired                                       # active, not retired
+
+
+def test_research_drops_entries_whose_window_is_not_exactly_00_to_07_utc(winter):
+    """A data gap or an unlisted closure (e.g. Good Friday) inside 00:00-07:00 would push the bar-counted exit past
+    07:00 UTC: research drops that entry (pre-registered sample rule; bar timestamps only, never prices)."""
+    ts = pd.DatetimeIndex(winter["ts_utc"])
+    hole = (ts >= pd.Timestamp("2024-01-17 03:00", tz="UTC")) & (ts < pd.Timestamp("2024-01-17 04:00", tz="UTC"))
+    dec, m, X, context = _frame(winter[~hole])
+    cands = SPEC.candidates(m, X)
+    kept = SPEC.complete_windows(dec, cands)
+    close = pd.DatetimeIndex(dec["visible_at"])
+    dropped = set(close.take(cands["idx"].to_numpy())) - set(close.take(kept["idx"].to_numpy()))
+    assert dropped == {pd.Timestamp("2024-01-17 00:00", tz="UTC")}
+    lab = prepare(SPEC, dec, context).labels
+    assert len(lab) == len(cands) - 1
+    entry = close.take(lab["idx"].to_numpy())
+    assert pd.Timestamp("2024-01-17 00:00", tz="UTC") not in entry
+    # every kept entry has its 7th bar closing exactly at 07:00 UTC, whatever its barrier
+    assert (close.take(lab["idx"].to_numpy() + 7) - entry == pd.Timedelta(hours=7)).all()
+    # families without a sample rule keep every candidate
+    trend = SPECIALISTS["trend"]()
+    assert trend.complete_windows(dec, cands) is cands
+
+
+def test_risk_gate_refuses_any_intent_without_a_reachable_target():
+    """Quant review H1: the barrier EV formula p x target - (1 - p) x stop is meaningless for a time exit; until the EV
+    uses the time-exit outcome, the gate fails closed for such a label spec (explicit flag or the family's spec)."""
+    from goldbot.risk import AccountState, Intent, RiskGate
+    st = AccountState(equity=10_000, balance_closed_hwm=10_000, day_start_equity=10_000, week_start_equity=10_000,
+                      open_positions=0, margin_used=0.0, last_tick_age_s=1.0, spread_points=25.0)
+    base: dict[str, Any] = dict(agent_id="trend-g0-x", side=1, p=0.62, target_atr=1.5, stop_atr=1.0, atr_usd=4.0, cost_atr=0.1,
+                multiplier=1.0, price=2400.0, timeframe="1h", family="trend")
+    gate = RiskGate()
+    assert gate.check(Intent(**base), st).allowed
+    flagged = gate.check(Intent(**{**base, "has_target": False}), st)
+    assert not flagged.allowed and "time_exit_ev_unsupported" in flagged.reasons
+    # an asia_drift intent is refused even if the caller forgot the flag: by family, or by its agent id alone
+    ad: dict[str, Any] = {**base, "family": "asia_drift", "agent_id": SPEC.agent_id, "target_atr": NO_TARGET_ATR, "stop_atr": 1.5,
+          "p": 0.99}
+    assert "time_exit_ev_unsupported" in gate.check(Intent(**ad), st).reasons
+    assert "time_exit_ev_unsupported" in gate.check(Intent(**{**ad, "family": ""}), st).reasons

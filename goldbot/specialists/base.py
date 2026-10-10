@@ -106,6 +106,11 @@ class Specialist(ABC):
         hand, as in research (`research.pipeline.prepare`). Default: `candidates`, which sees only the decision frame."""
         return self.candidates(mid_bars, features)
 
+    def complete_windows(self, bars_dec: pd.DataFrame, cands: pd.DataFrame) -> pd.DataFrame:
+        """Research sample rule applied before labelling (`research.pipeline.prepare`): the candidates whose holding
+        window the family's pre-registration accepts, judged on bar timestamps only (never prices). Default: all."""
+        return cands
+
     def barrier_atr(self, mid_bars: pd.DataFrame, context: dict[str, pd.DataFrame] | None) -> pd.Series | None:
         """ATR per decision bar that sizes the barriers and the risk (R), read at the signal bar and frozen for the
         trade's life; None: ATR(14) of the decision bars."""

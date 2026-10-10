@@ -207,7 +207,7 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
     bars_dec = bars_dec.reset_index(drop=True)
     m, X = frame if frame is not None else build_decision_frame(bars_dec, context, feature_names, ctx)
     version = X.attrs["feature_version"]
-    cands = spec.candidates_in_context(m, X, context)
+    cands = spec.complete_windows(bars_dec, spec.candidates_in_context(m, X, context))   # sample rule (asia_drift)
     own_atr = spec.barrier_atr(m, context)        # e.g. ATR(1d) for a daily signal executed on 4h bars
     a = atr(m, 14) if own_atr is None else own_atr
     ls = spec.label_spec
