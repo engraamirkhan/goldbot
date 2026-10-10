@@ -36,8 +36,16 @@ def test_prompt_stores_and_reuses_credential(isolated):
     assert pw == "pw-from-owner"
     acc_mod.register_prompter(lambda m, s: (_ for _ in ()).throw(AssertionError("should not prompt twice")))
     assert acc_mod.account_password(acc) == "pw-from-owner"
-    # never written to the yaml
-    assert "pw-from-owner" not in isolated.read_text()
+    # never written to the yaml: neither the password nor the login (the repo is public)
+    assert "pw-from-owner" not in isolated.read_text() and "12345" not in isolated.read_text()
+    assert acc_mod.get_secret("mt5-login-icm-demo") == "12345"
+    assert acc_mod.load_accounts(isolated)["icm-demo"].login == 12345      # read back from the keyring
+
+
+def test_the_committed_registry_holds_no_login_numbers():
+    import yaml
+    raw = yaml.safe_load(acc_mod.ACCOUNTS_FILE.read_text())
+    assert all(a.get("login") is None for a in raw["accounts"].values())
 
 
 def test_live_unlock_requires_gate_and_phrase(isolated, tmp_path):

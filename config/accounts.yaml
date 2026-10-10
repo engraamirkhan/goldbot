@@ -1,7 +1,8 @@
 # Account registry. NO SECRETS HERE. Passwords live in the OS keyring (macOS Keychain on the Mac,
 # Windows Credential Manager on the VPS) under service "goldbot" and key "mt5-<account_id>".
 # Store credentials before starting an engine service (`python -m goldbot.ops.accounts add <account_id>`):
-# a service has no terminal to prompt in. Nothing writes a password to a file or log.
+# a service has no terminal to prompt in. Nothing writes a password to a file or log. MT5 login numbers are
+# kept in the keyring too (`mt5-login-<account_id>`): this file is in a public repo, keep every login null.
 #
 # mode: demo | live.  Phases 0-2 run only on demo accounts; live accounts are enabled by the
 # phase gate plus a typed confirmation, never by editing this file alone.
@@ -10,7 +11,7 @@ accounts:
     broker: icm
     mode: demo
     server: ICMarketsSC-Demo  # confirm in the MT5 terminal: File -> Open an Account
-    login: null  # filled by `python -m goldbot.ops.accounts add icm-demo`
+    login: null  # never here (public repo): `python -m goldbot.ops.accounts add icm-demo` keeps it in the keyring
     terminal_path: C:\MT5\ICMarkets\terminal64.exe
     server_tz: Europe/Athens
     symbol: XAUUSD

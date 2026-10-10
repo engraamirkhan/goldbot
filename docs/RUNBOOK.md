@@ -104,7 +104,8 @@ goldbot never reads secrets from files in the repository. You type each one once
 goes into Windows Credential Manager under the service name `goldbot`. The engine services cannot ask you for a
 missing secret (they run in the background with no window), so store everything **before** starting services.
 
-MT5 demo accounts (asks for the login number, which it writes into `config/accounts.yaml`, then the password):
+MT5 demo accounts (asks for the login number, then the password; both go into the keyring, never into
+`config/accounts.yaml`, which is in the public repo). The IC Markets demo is on server `ICMarketsSC-Demo`:
 
 ```powershell
 cd C:\goldbot
@@ -113,8 +114,9 @@ cd C:\goldbot
 .\.venv\Scripts\python -m goldbot.ops.accounts list
 ```
 
-`list` should show `password_stored=yes` and a login number for both demo accounts. (The passwords are stored as
-keys `mt5-icm-demo` and `mt5-vantage-demo`.)
+`list` should show `password_stored=yes` and a login number for both demo accounts. (They are stored as keys
+`mt5-login-icm-demo` / `mt5-icm-demo` and `mt5-login-vantage-demo` / `mt5-vantage-demo`.) Never put a login or
+password in a file in `C:\goldbot`; a test fails CI if `config/accounts.yaml` ever carries a login.
 
 Other secrets: each command asks `value for <key>` and hides what you type.
 
