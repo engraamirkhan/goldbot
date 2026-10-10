@@ -177,7 +177,7 @@ def run_engine(account_id: str) -> None:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
         log.warning("not on Windows: running %s against the paper broker", account_id)
-    limits = engine_limits(settings, acc, paper=getattr(broker, "name", "") == "paper")
+    limits = engine_limits(settings, acc, paper=paper_stand_in(broker))
     # proposals go to the approval bus in state/; the dashboard and the Telegram service decide through it
     center = ApprovalCenter(set(settings.telegram.allowed_user_ids), bus=ApprovalBus("state"))
     registry_file = Path(settings.research.models_dir) / "registry.json"
@@ -258,6 +258,13 @@ def run_engine(account_id: str) -> None:
                 except (ValueError, TypeError, OSError) as exc:
                     log.error("model reload refused, keeping current models: %s", exc)
         time.sleep(0.25)
+
+
+def paper_stand_in(broker: Any) -> bool:
+    """True when the engine runs against the paper broker standing in for the account (by type, never by its `name`
+    string: re-verification LOW). Only then is the account's absolute daily limit dropped (engine_limits)."""
+    from goldbot.execution.paper import PaperBroker
+    return isinstance(broker, PaperBroker)
 
 
 def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> RiskLimits:

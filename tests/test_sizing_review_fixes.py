@@ -155,6 +155,67 @@ def test_a_stale_engine_file_is_left_out_of_the_currency_check(tmp_path):
     assert s["currency_files"] == {"icm-demo": "engine_icm-demo.json", "vantage-demo": "engine_vantage-demo.json"}
 
 
+def _money_file(d: Path, account: str, currency: str | None, *, equity: float, day0: float, hwm: float,
+                age_s: float = 1.0, lots: float = 0.0) -> None:
+    (d / f"engine_{account}.json").write_text(json.dumps({
+        "account": account, "ts": time.time() - age_s, "equity": equity, "day_start_equity": day0,
+        "week_start_equity": day0, "balance_closed_hwm": hwm, "currency": currency, "open_lots": lots,
+        "open_notional": lots * 100 * 4_150.0}))
+
+
+def test_a_stale_file_in_another_currency_never_dilutes_the_combined_money(tmp_path):
+    """Re-verification MEDIUM: a fresh GBP engine 1.6% down plus a stale USD file must not read as 0.8% down."""
+    _money_file(tmp_path, "icm-demo", "GBP", equity=984.0, day0=1_000.0, hwm=1_000.0)
+    alone = Supervisor(tmp_path).evaluate()
+    _money_file(tmp_path, "vantage-demo", "USD", equity=10_000.0, day0=10_000.0, hwm=10_000.0, age_s=600, lots=0.02)
+    s = Supervisor(tmp_path).evaluate()
+    for k in ("combined_equity", "day_loss", "week_loss", "drawdown"):
+        assert s[k] == pytest.approx(alone[k]), k
+    assert s["halt"] and s["reasons"] == ["combined_daily_cap"]            # 1.6% >= 1.5%: still caught
+    assert s["exposure"]["vantage-demo"]["equity"] == 0.0                  # no money from the other currency ...
+    assert s["exposure"]["vantage-demo"]["lots"] == 0.02                   # ... but its exposure stays (strict)
+    assert s["money_excluded"] == ["engine_vantage-demo.json"]
+    # the engine's view: other_equity unchanged, other lots counted
+    pb = PaperBroker()
+    pb.on_tick(Tick(ts_utc=pd.Timestamp.now("UTC"), bid=4_150.0, ask=4_150.2))
+    eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), halt_checks=True),
+                 pb, [], {})
+    eng._refresh_account(pb.last_tick("XAUUSD"))
+    assert eng.state.other_equity == 0.0 and eng.state.other_lots == 0.02
+
+
+def test_a_stale_file_without_a_currency_stays_out_of_the_money_and_one_in_the_same_currency_counts(tmp_path):
+    _money_file(tmp_path, "icm-demo", "GBP", equity=984.0, day0=1_000.0, hwm=1_000.0)
+    _money_file(tmp_path, "old", None, equity=5_000.0, day0=5_000.0, hwm=5_000.0, age_s=600)
+    s = Supervisor(tmp_path).evaluate()
+    assert s["combined_equity"] == pytest.approx(984.0) and s["money_excluded"] == ["engine_old.json"]
+    (tmp_path / "engine_old.json").unlink()
+    _money_file(tmp_path, "icm-demo-2", "GBP", equity=1_000.0, day0=1_000.0, hwm=1_000.0, age_s=600)
+    s = Supervisor(tmp_path).evaluate()
+    assert s["combined_equity"] == pytest.approx(1_984.0) and s["money_excluded"] == []   # same currency: as before
+
+
+def test_health_warns_naming_a_file_kept_out_of_the_money(tmp_path):
+    _money_file(tmp_path, "icm-demo", "GBP", equity=1_000.0, day0=1_000.0, hwm=1_000.0)
+    _money_file(tmp_path, "vantage-demo", "USD", equity=10_000.0, day0=10_000.0, hwm=10_000.0, age_s=600)
+    Supervisor(tmp_path).evaluate()
+    c = health.check_supervisor(make_ctx(tmp_path, now=pd.Timestamp.now("UTC")))
+    assert c.status == "warn" and "engine_vantage-demo.json" in c.reason and "not summed" in c.reason
+
+
+def test_the_paper_exemption_goes_by_broker_type_not_its_name():
+    from goldbot.ops.run import paper_stand_in
+
+    class Renamed(PaperBroker):
+        name = "mt5"
+
+    class Impostor:
+        name = "paper"
+
+    assert paper_stand_in(PaperBroker()) and paper_stand_in(Renamed())
+    assert not paper_stand_in(Impostor())
+
+
 def test_health_names_mixed_currencies_and_the_offending_files(tmp_path):
     _engine_file(tmp_path, "icm-demo", "GBP")
     _engine_file(tmp_path, "vantage-demo", "USD")

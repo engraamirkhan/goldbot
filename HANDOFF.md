@@ -755,6 +755,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the terms and conversion again (a lost conversion refuses, fail closed). Gate boundary documented: exceeding the
   daily limit is refused, exactly equal allowed; the supervisor halts on reaching it. BACKLOG 35 (open positions'
   remaining stop risk) and 36 (costs) added for the daily projection.
+- Re-verification fix (2026-10-10, row S6): the supervisor never sums money across currencies. Equity, day/week
+  start, HWM, the published daily limit and `exposure[*].equity` (the gate's `other_equity`) come from fresh engines
+  plus stale files in the fresh engines' single currency; a stale file in another or no currency keeps only its open
+  lots and notional (strict) and is listed in `money_excluded`, which health reports as a warning naming the file.
+  The paper exemption of the daily limit goes by type (`ops.run.paper_stand_in`: `isinstance(broker, PaperBroker)`).
 - Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
   `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
   minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both

@@ -835,8 +835,9 @@ Engines now publish their deposit currency and the supervisor halts every accoun
 
 1. Stop all engines (`nssm stop goldbot-engine-icm-demo`, and any other engine service), then the supervisor.
 2. Delete `state\engine_<account>.json` of every account that will not run (with this release `vantage-demo` is
-   `enabled: false` in `config\accounts.yaml`; a file older than 60 s is ignored by the currency check anyway, but
-   an old file without a currency would otherwise be read as "unknown" next to a fresh one).
+   `enabled: false` in `config\accounts.yaml`). A file older than 60 s does not trigger the currency halt, and if
+   its currency differs (or is missing) its money is not summed, but its open lots still count as exposure and the
+   health check warns about it until you delete it.
 3. Deploy (`vps_update.ps1`, below).
 4. Start the supervisor, then all engines together.
 5. Check `state\supervisor.json`: `"halt": false` and `"currencies": {"icm-demo": "GBP"}`. If it shows

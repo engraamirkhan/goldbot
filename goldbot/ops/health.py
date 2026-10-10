@@ -270,9 +270,15 @@ def check_supervisor(ctx: HealthContext) -> Check:
         return Check(name="supervisor", status="fail",
                      reason=f"HALT mixed_account_currencies: {named}. Entries are blocked on every account until only "
                             "one currency runs (stop the other engine or delete its leftover engine_*.json)")
+    # stale engine files in another (or no) currency: their money is not summed, their open exposure is (BACKLOG 28)
+    out = s.get("money_excluded") or []
+    note = (f"; {', '.join(out)}: stale, other or no currency, money not summed (exposure still counted; delete the "
+            "file if that engine no longer runs)") if out else ""
     if s.get("halt"):
         return Check(name="supervisor", status="warn",
-                     reason=f"combined-cap HALT: {', '.join(s.get('reasons') or [])}; heartbeat {_age(age)}")
+                     reason=f"combined-cap HALT: {', '.join(s.get('reasons') or [])}; heartbeat {_age(age)}{note}")
+    if out:
+        return Check(name="supervisor", status="warn", reason=f"heartbeat {_age(age)}{note}")
     if age > SUPERVISOR_WARN_S:
         return Check(name="supervisor", status="warn", reason=f"heartbeat {_age(age)} old")
     note = ", size-down" if s.get("size_down") else ""

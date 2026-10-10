@@ -36,6 +36,11 @@ class SupervisorLimits(Record):
                    dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2)
 
 
+def _currency(e: dict) -> str | None:
+    """An engine file's deposit currency, upper case; None when it does not say."""
+    return str(e.get("currency") or "").strip().upper() or None
+
+
 class Supervisor:
     def __init__(self, state_dir: str | Path, limits: SupervisorLimits | None = None):
         self.dir = Path(state_dir)
@@ -62,16 +67,26 @@ class Supervisor:
     def evaluate(self) -> dict:
         engines = self.read_engines()
         # the currency check counts only engines that are running (heartbeat fresh): a file left by an engine that no
-        # longer runs must not halt the book (review MEDIUM-1); its equity is still summed below, as before
+        # longer runs must not halt the book (review MEDIUM-1)
         now = time.time()
         fresh = [e for e in engines if now - float(e.get("ts", 0) or 0) <= self.limits.heartbeat_max_age_s]
-        currencies = {str(e.get("account")): str(e.get("currency") or "").strip().upper() or None for e in fresh}
+        currencies = {str(e.get("account")): _currency(e) for e in fresh}
         currency_files = {str(e.get("account")): str(e.get("_file", "")) for e in fresh}
         mixed = len(fresh) > 1 and len({c or "?" for c in currencies.values()}) > 1
-        eq = sum(e.get("equity", 0.0) for e in engines)
-        day0 = sum(e.get("day_start_equity", 0.0) for e in engines)
-        wk0 = sum(e.get("week_start_equity", 0.0) for e in engines)
-        hwm = sum(e.get("balance_closed_hwm", 0.0) for e in engines)
+        # money is summed in ONE currency only (re-verification MEDIUM): a stale engine's equity, day/week start, HWM
+        # and published limit count only when its currency equals the fresh engines' single currency. A different or
+        # missing one stays out of every money sum (it would dilute the combined caps, the 12% halt and the notional
+        # cap), while its open lots and notional stay in the exposure (the strict direction). With no fresh engine
+        # (nothing can enter) every file counts, as before
+        kinds = set(currencies.values())
+        single = next(iter(kinds)) if len(kinds) == 1 else None
+        money = engines if not fresh else fresh + [e for e in engines if not any(e is f for f in fresh)
+                                                   and single is not None and _currency(e) == single]
+        excluded = sorted(str(e.get("_file", "")) for e in engines if not any(e is m for m in money))
+        eq = sum(e.get("equity", 0.0) for e in money)
+        day0 = sum(e.get("day_start_equity", 0.0) for e in money)
+        wk0 = sum(e.get("week_start_equity", 0.0) for e in money)
+        hwm = sum(e.get("balance_closed_hwm", 0.0) for e in money)
         day_loss = 1 - eq / day0 if day0 else 0.0
         week_loss = 1 - eq / wk0 if wk0 else 0.0
         dd = 1 - eq / hwm if hwm else 0.0
@@ -82,7 +97,7 @@ class Supervisor:
             reasons.append("combined_weekly_cap")
         # the owner's absolute daily limit on the combined loss so far (one currency: mixed currencies halt below)
         day_loss_amount = day0 - eq
-        published = [float(e["daily_loss_limit_abs"]) for e in engines if e.get("daily_loss_limit_abs") is not None]
+        published = [float(e["daily_loss_limit_abs"]) for e in money if e.get("daily_loss_limit_abs") is not None]
         explicit = [self.limits.daily_loss_limit_abs] if self.limits.daily_loss_limit_abs is not None else []
         abs_limit = min(explicit + published) if explicit or published else None
         # halts when the loss REACHES the limit (>=); the gate's projection refuses only when it would EXCEED it
@@ -97,13 +112,15 @@ class Supervisor:
         stale = [e["account"] for e in engines if time.time() - e.get("ts", 0) > self.limits.heartbeat_max_age_s]
         # combined exposure: engines block entries that would take the sum past the cap (RiskGate)
         exposure = {str(e.get("account")): {"lots": float(e.get("open_lots", 0.0)), "notional": float(e.get("open_notional", 0.0)),
-                                            "equity": float(e.get("equity", 0.0))} for e in engines}
+                                            # a file kept out of the money adds no equity (the gate's other_equity)
+                                            "equity": float(e.get("equity", 0.0)) if any(e is m for m in money) else 0.0}
+                    for e in engines}
         state = {"combined_open_lots": round(sum(x["lots"] for x in exposure.values()), 6),
                  "combined_open_notional": sum(x["notional"] for x in exposure.values()), "exposure": exposure,
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
                  "unreadable_engines": self.unreadable, "currencies": currencies, "currency_files": currency_files,
-                 "day_loss_amount": day_loss_amount, "daily_loss_limit_abs": abs_limit}
+                 "money_excluded": excluded, "day_loss_amount": day_loss_amount, "daily_loss_limit_abs": abs_limit}
         write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)   # heartbeat: never half-written
         return state
 
