@@ -73,7 +73,9 @@ number and name, so it **never goes into the repo or GitHub**: it stays in a pri
    writes `owner_history_*.md`, `.json` and `.trades.csv` next to it; the console prints a short summary.
 
 Only the account currency is read from the report header. The "hypothesis seeds" at the end are patterns in your own
-past trades, not proof of an edge: the research director pre-registers any that are worth a trial.
+past trades, not proof of an edge: the research director pre-registers any that are worth a trial. The tool refuses to
+write into any git folder, and a commit check rejects a report file. **Do not paste amounts into the repo** (or
+GitHub issues): share the seeds, which use R, percentages and counts only.
 
 ## 5. What is honest to expect
 **No strategy is profitable yet.** Dates are earliest-possible.
