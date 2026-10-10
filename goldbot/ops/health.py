@@ -668,31 +668,33 @@ def check_model_watch(ctx: HealthContext) -> Check:
 
 
 def check_feature_versions(ctx: HealthContext) -> Check:
-    """Active models (champions and challengers in the model registry) per feature version: current, legacy (rebuilt
-    by goldbot/features/legacy.py) or cannot be rebuilt (never scored: warns). goldbot/features/legacy.py can be deleted
-    once no legacy count remains. The registry file is read, never created."""
+    """Active models per feature version: champions, challengers and previous champions (the model_watch rollback
+    target, which may become champion again). Each version is current (the default set, or the default set plus the
+    macro drivers), legacy (rebuilt by goldbot/features/legacy.py) or cannot be rebuilt (never scored: warns).
+    goldbot/features/legacy.py can be deleted once no legacy count remains. The registry file is read, never created."""
     if ctx.settings is None:
         return _skipped("feature_versions", "settings unreadable")
     f = Path(ctx.settings.research.models_dir) / "registry.json"
     if not f.exists():
         return Check(name="feature_versions", status="ok", reason="no model registry yet")
     try:
-        rows = [r for r in (_read_json(f) or []) if r.get("status") in ("champion", "challenger")]
+        rows = [r for r in (_read_json(f) or []) if r.get("status") in ("champion", "challenger", "previous")]
     except (ValueError, OSError, AttributeError) as exc:
         return Check(name="feature_versions", status="warn", reason=f"model registry unreadable: {exc}"[:300])
     from goldbot.features.registry import feature_version, versions_for
-    from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
-    current = feature_version(DEFAULT_FEATURE_NAMES)
+    from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES, MACRO_FEATURE_NAMES
+    sets = [list(DEFAULT_FEATURE_NAMES), [*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES]]
+    current = {feature_version(names) for names in sets}
     counts: dict[str, int] = {}
     for r in rows:
         counts[str(r.get("feature_version") or "")] = counts.get(str(r.get("feature_version") or ""), 0) + 1
     parts, status = [], "ok"
     for fv, n in sorted(counts.items()):
-        if fv == current:
+        if fv in current:
             kind = "current"
         elif fv == "":
             kind = "unversioned"
-        elif versions_for(DEFAULT_FEATURE_NAMES, fv) is not None:
+        elif any(versions_for(names, fv) is not None for names in sets):
             kind = "legacy"
         else:
             kind, status = "cannot be rebuilt: not scored", "warn"

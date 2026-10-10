@@ -38,4 +38,7 @@ models never read the corrected columns.
   shift on part of the year) and every promotion still needs its own shadow record.
 - Until the material version exists, any feature bump in the default set changes every model's version. Each one
   needs a legacy implementation (or the affected models stop scoring) and a reviewer's call on evidence.
-- `features/legacy.py` is deleted once the health check `feature_versions` shows no legacy models.
+- `features/legacy.py` is deleted once the health check `feature_versions` shows no legacy models. It counts
+  champions, challengers and previous champions: model_watch can restore a previous champion, so a legacy rollback
+  target still needs its implementation. Macro-trained models are matched against the default set plus the macro
+  drivers, and drift_watch rebuilds their PSI inputs with the store's macro rows (no rows: PSI skipped with a note).

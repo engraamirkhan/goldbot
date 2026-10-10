@@ -9,6 +9,7 @@ trained on"). New research and retrains build v2. A version no registered implem
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -276,3 +277,67 @@ def test_health_counts_models_per_feature_version(tmp_path):
     (models / "registry.json").write_text(json.dumps(rows))
     c = check_feature_versions(make_ctx(tmp_path, settings=settings))
     assert c.status == "warn" and "f-0000000000 (cannot be rebuilt: not scored) 1" in c.reason
+
+
+def _registry(tmp_path: Path, models: list[tuple[str, str]]) -> Any:
+    import json
+
+    from tests.test_health import SETTINGS
+    d = tmp_path / "models"
+    d.mkdir(exist_ok=True)
+    rows = [{"version": f"v{i}", "family": "trend", "agent_id": f"a{i}", "status": st, "feature_version": fv,
+             "created_utc": "2026-10-01T00:00:00+00:00", "feature_names": [], "artefact": "x", "sha256": "0"}
+            for i, (st, fv) in enumerate(models)]
+    (d / "registry.json").write_text(json.dumps(rows))
+    return SETTINGS.model_copy(update={"research": SETTINGS.research.model_copy(update={"models_dir": str(d)})})
+
+
+def test_health_counts_previous_champions_because_a_rollback_restores_them(tmp_path):
+    from goldbot.ops.health import check_feature_versions
+    from tests.test_health import make_ctx
+    cur = feature_version(DEFAULT_FEATURE_NAMES)
+    settings = _registry(tmp_path, [("champion", cur), ("previous", PRE_FIX_DEFAULT_VERSION)])
+    c = check_feature_versions(make_ctx(tmp_path, settings=settings))
+    assert f"{PRE_FIX_DEFAULT_VERSION} (legacy) 1" in c.reason        # legacy.py is still needed for the rollback
+
+
+def test_health_counts_a_macro_trained_model_as_current_not_unbuildable(tmp_path):
+    from goldbot.ops.health import check_feature_versions
+    from goldbot.research.pipeline import MACRO_FEATURE_NAMES
+    from tests.test_health import make_ctx
+    macro_fv = feature_version([*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES])
+    c = check_feature_versions(make_ctx(tmp_path, settings=_registry(tmp_path, [("champion", macro_fv)])))
+    assert c.status == "ok" and f"{macro_fv} (current) 1" in c.reason
+
+
+def _macro_rows() -> pd.DataFrame:
+    from goldbot.data.macro import US_BDAY, fred_frame
+    days = pd.date_range("2024-01-02", "2025-03-07", freq=US_BDAY)
+    n, v = len(days), pd.Timestamp("2025-07-01")
+    return pd.concat([fred_frame(s, pd.DataFrame({"value_date": days, "value": base + 0.01 * np.arange(n)}), v)
+                      for s, base in (("DFII10", 1.0), ("DTWEXBGS", 120.0), ("GVZCLS", 15.0), ("VIXCLS", 15.0),
+                                      ("SP500", 4000.0))], ignore_index=True)
+
+
+def test_a_macro_trained_champion_keeps_its_drift_inputs_with_the_macro_columns(monkeypatch):
+    from goldbot.ops import jobs
+    from goldbot.research.pipeline import MACRO_FEATURE_NAMES
+    slot = _drift_bars(monkeypatch)
+    monkeypatch.setattr(jobs, "store_macro", lambda store: _macro_rows())
+    macro_fv = feature_version([*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES])
+    store_ctx = SimpleNamespace(store=None)
+    live = jobs._recent_candidates(store_ctx, _EveryBar(), slot, 3, feature_version=macro_fv)  # type: ignore[arg-type]
+    assert live is not None and len(live) > 50
+    assert live["macro_dollar_chg20"].notna().all()                       # the macro context was passed
+    old = feature_version([*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES], V1)
+    assert jobs._recent_candidates(store_ctx, _EveryBar(), slot, 3, feature_version=old) is not None  # type: ignore[arg-type]
+
+
+def test_a_macro_champion_without_macro_rows_skips_psi(monkeypatch):
+    from goldbot.ops import jobs
+    from goldbot.research.pipeline import MACRO_FEATURE_NAMES
+    slot = _drift_bars(monkeypatch)
+    monkeypatch.setattr(jobs, "store_macro", lambda store: pd.DataFrame())
+    macro_fv = feature_version([*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES])
+    store_ctx = SimpleNamespace(store=None)
+    assert jobs._recent_candidates(store_ctx, _EveryBar(), slot, 3, feature_version=macro_fv) is None  # type: ignore[arg-type]

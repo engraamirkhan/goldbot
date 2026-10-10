@@ -5,8 +5,9 @@ newyork 12:30-21:00, and fixed UTC opens for `min_since_*_open`. The code below 
 `session_zones`@1 and `market_structure`@1 exactly (tests/test_sessions_v1_migration.py compares them with the output
 of the pre-fix code, tests/data/sessions_v1_golden.parquet). Registered with `legacy=True`: never part of FEATURES,
 so research, retrains and the default feature set build v2; the engine rebuilds v1 columns only for a model whose
-recorded feature version needs them (`registry.versions_for`). Delete a legacy version once no champion, challenger
-or shadow model in any registry carries a feature version that needs it.
+recorded feature version needs them (`registry.versions_for`). Delete a legacy version once no champion, challenger,
+shadow model or previous champion (the model_watch rollback target, which can become champion again) in any registry
+carries a feature version that needs it: the health check `feature_versions` counts all of them.
 """
 from __future__ import annotations
 

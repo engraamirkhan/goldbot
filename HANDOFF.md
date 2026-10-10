@@ -846,8 +846,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   reproduces is still not scored (`feature_version_mismatch`), and neither is one whose rebuild raises (logged, cached
   per frame; the bar's policies, blackout closes and shadow save still run). Decisions and shadow trades record
   `scored_feature_version`. drift_watch builds each champion's PSI inputs at its own feature version
-  (`_recent_candidates(..., feature_version)`; a version that cannot be rebuilt skips PSI with a note). The health
-  check `feature_versions` counts active models per version (current / legacy / cannot be rebuilt = warn): delete
+  (`_recent_candidates(..., feature_version)`; a macro-trained champion is rebuilt over the default set plus the macro
+  drivers with the store's macro rows; a version that cannot be rebuilt, or a macro model without macro rows, skips
+  PSI with a note). The health check `feature_versions` counts champions, challengers and previous champions
+  (rollback targets) per version (current incl. the macro set / legacy / cannot be rebuilt = warn): delete
   `features/legacy.py` once it shows no legacy models. Research registry: `record` writes a `deviation` on a result
   whose feature version differs from its pre-registration's; `passed_gates(..., feature_version=)` counts only rows of
   that version (research_pass's holdout check passes it); `holdout_scored` stays version-agnostic on purpose (a

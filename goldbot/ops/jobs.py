@@ -74,6 +74,7 @@ from goldbot.agents.roles import ROLES
 from goldbot.agents.runner import AgentRunner
 from goldbot.base import Record, write_atomic
 from goldbot.config import DecisionTimeframe, Settings
+from goldbot.data.release import store_macro
 from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.classifier import PersistentClassifier, classify
@@ -115,6 +116,7 @@ from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import (
     DEFAULT_FEATURE_NAMES,
+    MACRO_FEATURE_NAMES,
     ResearchResult,
     build_decision_frame,
     run_specialist,
@@ -490,20 +492,33 @@ def _recent_candidates(ctx: JobContext, spec: Any, slot: pd.Timestamp, days: int
                        feature_version: str = "") -> pd.DataFrame | None:
     """Decision-frame features (plus `side`) of the specialist's candidates in the last `days`, built exactly as for
     training (same context timeframes and feature registry), at the champion's own `feature_version` (legacy
-    implementations where it needs them, `registry.versions_for`). None when no registered implementation reproduces
-    that version: its PSI cannot be computed on the features it was trained on."""
+    implementations where it needs them, `registry.versions_for`), over the default set or, for a model trained with
+    the macro drivers, the default set plus MACRO_FEATURE_NAMES with the store's macro rows as context. None when no
+    registered implementation reproduces that version, or a macro model finds no macro rows: its PSI cannot be
+    computed on the features it was trained on."""
+    names: list[str] | None = None
     versions: dict[str, str] | None = {}
+    feat_ctx: dict[str, Any] | None = None
     if feature_version:
         versions = versions_for(DEFAULT_FEATURE_NAMES, feature_version)
-        if versions is None:
-            return None
+        if versions is not None:
+            names = list(DEFAULT_FEATURE_NAMES)
+        else:
+            versions = versions_for([*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES], feature_version)
+            if versions is None:
+                return None
+            macro = store_macro(ctx.store)
+            if macro.empty:
+                return None
+            names, feat_ctx = [*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES], {"macro": macro}
     start = slot - pd.Timedelta(days=days + DRIFT_WARMUP_DAYS)
     dec = _bars(ctx, spec.timeframe, start, slot)
     if dec.empty:
         return pd.DataFrame()
     ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
     context = {TF_LABEL[tf]: _bars(ctx, tf, ctx_start, slot) for tf in context_tfs(spec.timeframe)}
-    m, X = build_decision_frame(dec.reset_index(drop=True), context, versions=versions)
+    m, X = build_decision_frame(dec.reset_index(drop=True), context, feature_names=names, ctx=feat_ctx,
+                                versions=versions)
     cands = spec.candidates(m, X)
     if cands.empty:
         return pd.DataFrame()
