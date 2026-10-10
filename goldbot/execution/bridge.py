@@ -40,7 +40,15 @@ import pandas as pd
 import requests
 from pydantic import BaseModel
 
-from goldbot.execution.broker import AccountInfo, OrderIntent, OrderResult, Position, SymbolInfo, Tick
+from goldbot.execution.broker import (
+    AccountInfo,
+    OrderIntent,
+    OrderResult,
+    Position,
+    SymbolInfo,
+    Tick,
+    tick_key,
+)
 from goldbot.execution.costs import BrokerTerms
 
 log = logging.getLogger("goldbot.bridge")
@@ -55,6 +63,7 @@ METHODS: dict[str, tuple[str, bool]] = {
     "positions": ("list[Position]", True),
     "deals_since": ("frame", True),
     "broker_terms": ("BrokerTerms", True),
+    "margin_required": ("float", True),      # read-only (order_calc_margin): retry-safe, nothing reaches the market
     "place_order": ("OrderResult", False),
     "modify": ("OrderResult", False),
     "close": ("OrderResult", False),
@@ -289,10 +298,13 @@ class RemoteBroker:
         last = None
         while True:
             t = self.last_tick(symbol)
-            if last is None or (t.ts_utc, t.bid, t.ask) != last:
-                last = (t.ts_utc, t.bid, t.ask)
+            if last is None or tick_key(t) != last:
+                last = tick_key(t)
                 yield t
             await asyncio.sleep(0.25)
+
+    def margin_required(self, symbol: str, side: int, lots: float, price: float) -> float | None:
+        return self._call("margin_required", symbol, side, lots, price)
 
     def place_order(self, intent: OrderIntent) -> OrderResult:
         return self._call("place_order", intent)

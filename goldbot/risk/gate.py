@@ -6,8 +6,10 @@ All state is explicit and serialisable so the engine can reconcile after a resta
 """
 from __future__ import annotations
 
+import logging
 import math
 from enum import Enum
+from typing import Any, Callable
 
 import pandas as pd
 from pydantic import Field
@@ -16,6 +18,9 @@ from goldbot.base import Record
 from goldbot.config import RiskSettings
 from goldbot.data.timeutil import floor_tf, risk_day
 
+log = logging.getLogger("goldbot.risk")
+
+MarginFn = Callable[[int, float, float], "float | None"]   # (side, lots, price) -> broker margin, None if unknown
 REARM_PHRASE = "REARM"   # what rearm() expects; the engine passes it only for an owner re-arm seen on the bus
 
 
@@ -113,6 +118,17 @@ class GateDecision(Record):
     reasons: list[str] = Field(default_factory=list)
     risk_fraction: float = 0.0
     stop_distance: float = 0.0
+    margin_needed: float = 0.0     # the margin the level check used: max(broker figure, 1:20 figure)
+    margin_note: str = ""          # which figure won, or why the broker's could not be used (fallback to 1:20)
+
+
+def broker_margin(broker: Any, symbol: str) -> MarginFn | None:
+    """The gate's margin source for a broker: `broker.margin_required(symbol, side, lots, price)`, or None for a
+    broker without the method (the gate then uses the 1:20 figure and records the fallback)."""
+    fn = getattr(broker, "margin_required", None)
+    if not callable(fn):
+        return None
+    return lambda side, lots, price: fn(symbol, side, lots, price)
 
 
 class RiskGate:
@@ -140,7 +156,35 @@ class RiskGate:
         return True
 
     # ---------------------------------------------------------------- entry check + sizing
-    def check(self, intent: Intent, st: AccountState, now_utc: pd.Timestamp | None = None) -> GateDecision:
+    def margin_for(self, intent: Intent, lots: float, notional: float,
+                   margin_required: MarginFn | None) -> tuple[float, str]:
+        """Design (Hard limits): margin is "checked with order_calc_margin and against the FCA retail cap of 1:20".
+        The larger of the broker's figure and notional / 20 is used; when the broker cannot answer (no source, None,
+        a non-finite or negative figure, or an error) the 1:20 figure is used and the reason recorded. Never smaller
+        than 1:20, so a broker fault can only make the check stricter-or-equal, never fail open."""
+        cap = notional / self.limits.leverage_cap
+        if margin_required is None:
+            return cap, "fallback 1:20: no broker margin source"
+        raw: Any = None
+        try:
+            raw = margin_required(intent.side, lots, intent.price)
+            broker = float(raw) if raw is not None else math.nan
+        except Exception as exc:                      # bridge down, terminal error, junk: fall back, never fail open
+            why = f"fallback 1:20: broker margin failed ({type(exc).__name__}: {exc})"
+            log.warning("%s", why)
+            return cap, why
+        if not math.isfinite(broker) or broker < 0:
+            why = f"fallback 1:20: broker margin unusable ({raw!r})"
+            log.warning("%s", why)
+            return cap, why
+        if broker > cap:
+            return broker, f"broker {broker:.2f} > 1:20 {cap:.2f}"
+        return cap, f"1:20 {cap:.2f} >= broker {broker:.2f}"
+
+    def check(self, intent: Intent, st: AccountState, now_utc: pd.Timestamp | None = None,
+              margin_required: MarginFn | None = None) -> GateDecision:
+        """`margin_required(side, lots, price)` is the broker's margin figure (`broker_margin(broker, symbol)`);
+        without it the margin check uses the 1:20 figure alone and says so in `margin_note`."""
         L = self.limits
         reasons: list[str] = []
         self.update_stage(st)
@@ -211,18 +255,21 @@ class RiskGate:
         if realised_risk > 1.2 * risk_frac * mult and lots_raw < intent.volume_min:
             return GateDecision(allowed=False, reasons=["min_lot_exceeds_risk"], stop_distance=stop_distance)
         notional = lots * intent.contract_oz * intent.price
-        # margin at FCA cap
-        margin_needed = notional / L.leverage_cap
+        # margin: the stricter of the broker's order_calc_margin and the FCA cap (1:20); level must stay >= 300%
+        margin_needed, margin_note = self.margin_for(intent, lots, notional, margin_required)
         level_after = st.equity / max(st.margin_used + margin_needed, 1e-9)
         if level_after < L.margin_level_floor:
-            return GateDecision(allowed=False, reasons=["margin_level_floor"], stop_distance=stop_distance)
+            return GateDecision(allowed=False, reasons=["margin_level_floor"], stop_distance=stop_distance,
+                                margin_needed=margin_needed, margin_note=margin_note)
         # combined exposure cap: both accounts trade one instrument, so their positions are one position
         comb_lots = st.open_lots + st.other_lots + lots
         comb_notional = st.open_notional + st.other_notional + notional
         if comb_lots > L.max_combined_lots + 1e-9 or \
                 comb_notional > L.max_combined_notional_frac * L.leverage_cap * (st.equity + st.other_equity):
-            return GateDecision(allowed=False, reasons=["combined_exposure_cap"], stop_distance=stop_distance)
-        return GateDecision(allowed=True, lots=round(lots, 2), risk_fraction=realised_risk, stop_distance=stop_distance)
+            return GateDecision(allowed=False, reasons=["combined_exposure_cap"], stop_distance=stop_distance,
+                                margin_needed=margin_needed, margin_note=margin_note)
+        return GateDecision(allowed=True, lots=round(lots, 2), risk_fraction=realised_risk, stop_distance=stop_distance,
+                            margin_needed=margin_needed, margin_note=margin_note)
 
 
 def _risk_week(ts: pd.Timestamp) -> pd.Timestamp:

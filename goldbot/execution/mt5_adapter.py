@@ -34,7 +34,15 @@ from typing import Any, AsyncIterator
 import pandas as pd
 
 from goldbot.data.timeutil import server_to_utc
-from goldbot.execution.broker import AccountInfo, OrderIntent, OrderResult, Position, SymbolInfo, Tick
+from goldbot.execution.broker import (
+    AccountInfo,
+    OrderIntent,
+    OrderResult,
+    Position,
+    SymbolInfo,
+    Tick,
+    tick_key,
+)
 from goldbot.execution.costs import BrokerTerms
 
 try:  # pragma: no cover - Windows only
@@ -193,17 +201,27 @@ class MT5Broker:
     def last_tick(self, symbol: str) -> Tick:
         t = mt5.symbol_info_tick(symbol)
         ts = server_to_utc(pd.Series(pd.to_datetime([t.time_msc], unit="ms")), self.server_tz)[0]
-        return Tick(ts_utc=ts, bid=t.bid, ask=t.ask)
+        return Tick(ts_utc=ts, bid=t.bid, ask=t.ask, flags=int(getattr(t, "flags", 0)))
 
     async def stream_ticks(self, symbol: str) -> AsyncIterator[Tick]:  # pragma: no cover
         import asyncio
         last = None
         while True:
             t = self.last_tick(symbol)
-            if last is None or (t.ts_utc, t.bid, t.ask) != last:
-                last = (t.ts_utc, t.bid, t.ask)
+            if last is None or tick_key(t) != last:      # (time_msc, bid, ask, flags), design: Live collector
+                last = tick_key(t)
                 yield t
             await asyncio.sleep(0.25)
+
+    def margin_required(self, symbol: str, side: int, lots: float, price: float) -> float | None:
+        """`order_calc_margin` for a market order of this side and size at this price, in the account currency; None
+        when the terminal cannot answer (the gate then falls back to the 1:20 figure and records why)."""
+        action = mt5.ORDER_TYPE_BUY if side > 0 else mt5.ORDER_TYPE_SELL
+        m = mt5.order_calc_margin(action, symbol, float(lots), float(price))
+        if m is None:
+            log.warning("order_calc_margin(%s, %s lots) returned None: %s", symbol, lots, mt5.last_error())
+            return None
+        return float(m)
 
     # ------------------------------------------------------------------ orders
     def _filling(self) -> int:
