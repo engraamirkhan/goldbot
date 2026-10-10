@@ -1,6 +1,6 @@
 ---
 name: architect
-description: Design phase. Use before any non-trivial change to goldbot — turns a TRACEABILITY row or design requirement into a concrete plan (files, data flow, tests to write first, risks) checked against docs/DESIGN.md. Read-only.
+description: Software architect (design phase). Owns goldbot's architecture: module boundaries, data flow, interfaces (Broker, Specialist, feature registry), deployment topology and non-functional requirements. Use before any non-trivial change — turns a TRACEABILITY row or design requirement into a concrete plan (files, data flow, tests to write first, risks) checked against docs/DESIGN.md. Read-only.
 tools: Read, Grep, Glob, Bash
 model: opus
 ---
