@@ -616,6 +616,24 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   holiday hours need an MQL5 `SymbolInfoSessionTrade` helper. Engine hook for the runner lane (not wired):
   `self._sessions = BrokerSessions(broker, symbol, fallback=SessionTable(server_tz=...))` at start, then
   `why = self._sessions.entry_block(now)` as an entry-blocking reason. Exits are unaffected.
+- Engine wave 3 (2026-10-10, rows D10, A2, M9): a decision bar is finalised by clock at close + 1.5 s
+  (`runner.BAR_CLOSE_GRACE_S`; the wall clock in production) even when no tick follows it, or at once by a tick at
+  or after the close; each close runs once (`_closed_through`), a tick older than a bar the clock already finalised
+  never revises it, and a repeated poll of the same quote (the run loop's 0.25 s poll) is no longer appended as a new
+  tick (tick counts and the tick log were inflated in quiet markets). Proposals carry
+  `EngineConfig.approval_window_s`, set from `settings.risk.approval_window_seconds` in `ops/run.py` (default 90).
+  The allocator's tier-1 distances come from the calendar the RiskGate's news blackout reads, so its 30-minute
+  zeroing now acts live (weight 0 inside -30/+30 min). Exits are unchanged: they run on every tick before any bar logic.
+- Wave-3 review fixes (2026-10-10, rows D10, M8, M9): a late tick (stamped before a bar the clock already finalised)
+  is still kept out of the live bars but no longer silently: a `late_tick` data-quality warning (at most one a minute,
+  stored with the bar's dq_events) and the running count `late_ticks` in the engine state; a lone warning never blocks
+  entries (`dq_error` and `dq_checks` count error-severity events only). The engine publishes `clock_skew_s` (broker
+  tick time minus wall clock, median of the last 120 new ticks); health warns above the 1.5 s bar-close grace. It
+  escalates to a blocking data-quality error (entries only; exits never gated) when |skew| > 10 s (`clock_skew`) or
+  when late ticks hit 3 consecutive decision bars (`late_ticks`, cleared by a bar with none), because such bars drift
+  from the training and shadow bars. The allocator keeps its design window, 0 for 30 min either side of tier-1
+  events (`RuleAllocator()` defaults), deliberately stricter than the RiskGate's -15/+30 entry block; the gate window
+  from settings never narrows it (an allocator rule change is the owner's decision).
 
 ## Next steps (no owner input needed unless marked)
 - XAUUSD trader playbook (2026-10-10, owner request): `docs/research/xauusd-trader-playbook.md` lists ~70 things a

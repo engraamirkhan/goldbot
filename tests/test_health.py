@@ -210,6 +210,20 @@ def test_engine_stage_dq_tick_and_blackout(tmp_path):
     assert health.check_engine(ctx, "icm-demo").status == "fail"
 
 
+def test_engine_clock_skew_beyond_the_bar_close_grace_warns(tmp_path):
+    ctx = make_ctx(tmp_path)
+    engine(tmp_path, 60, clock_skew_s=-0.4, bar_close_grace_s=1.5)
+    c = health.check_engine(ctx, "icm-demo")
+    assert c.status == "ok" and "skew" not in c.reason
+    engine(tmp_path, 60, clock_skew_s=-2.4, bar_close_grace_s=1.5, late_ticks=7)
+    c = health.check_engine(ctx, "icm-demo")
+    assert c.status == "warn" and "-2.4 s" in c.reason and "1.5 s" in c.reason and "7 late" in c.reason
+    engine(tmp_path, 60, clock_skew_s=2.0, bar_close_grace_s=1.5)
+    assert health.check_engine(ctx, "icm-demo").status == "warn"
+    engine(tmp_path, 60, clock_skew_s=-2.4, now=SATURDAY)
+    assert "skew" not in health.check_engine(make_ctx(tmp_path, now=SATURDAY), "icm-demo").reason
+
+
 def test_engine_stale_bars_and_a_refused_rearm_are_reported(tmp_path):
     ctx = make_ctx(tmp_path)
     engine(tmp_path, 60, stale_bars=True)

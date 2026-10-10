@@ -311,6 +311,13 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     for w in e.get("dq_warnings") or []:
         statuses.append("warn")
         parts.append(f"data-quality warning: {w}")
+    # design (D10): bars close by clock at close + grace; a broker clock off the wall clock by more than the grace
+    # closes bars before their last ticks (dropped from the live bars as late ticks). A warning only: no entry block
+    skew, grace = e.get("clock_skew_s"), float(e.get("bar_close_grace_s") or 1.5)
+    if market and skew is not None and abs(float(skew)) > grace:
+        statuses.append("warn")
+        parts.append(f"broker clock skew {float(skew):+.1f} s vs the wall clock exceeds the {grace:g} s bar-close grace: "
+                     f"bars may close before their last ticks ({int(e.get('late_ticks') or 0)} late tick(s) so far)")
     lost = e.get("closed_records_lost") or []
     if lost:
         statuses.append("fail")
