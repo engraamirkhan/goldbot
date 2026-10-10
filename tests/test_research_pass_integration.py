@@ -386,3 +386,54 @@ def test_discover_is_one_preregistered_trial_and_later_trials_count_the_features
     assert reg.n_trials == 1 and reg.budget_used(quarter_of()) == 1           # one trial, one budget slot
     assert d["survivor_unit"] == "feature" and d["k_eff"] == d["n_features_screened"]   # feature survivors
     assert reg.n_trials_effective == 1 + d["n_features_screened"]
+
+
+def _set_gates(registry: Path, passed: dict[int, bool]) -> None:
+    """Stamp the gate verdict of walk-forward trials (synthetic bars rarely pass them on their own)."""
+    rows = [json.loads(x) for x in registry.read_text().splitlines() if x.strip()]
+    for r in rows:
+        if r.get("trial") in passed and r.get("status") == "evaluated":
+            r.setdefault("results", {}).setdefault("gates", {})["passed"] = passed[r["trial"]]
+    registry.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def test_cpcv_reevaluates_registered_trials_as_evidence_with_pbo_and_takes_no_budget(release_dir, tmp_path, monkeypatch):
+    from goldbot.research.registry import TrialRegistry
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "cpcv.md"
+    base = ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry), "--report", str(report)]
+    variants = '[{"asia_range_max_atr_d": 1.2}, {"asia_range_max_atr_d": 1.5}]'
+    monkeypatch.setattr(sys, "argv", base + ["--variants", variants, "--skip-screen"])
+    assert rp.main() == 0
+    _set_gates(registry, {1: True, 2: False})
+    reg = TrialRegistry(registry)
+    reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={},
+               status="screened")                                       # trial 3: a screen, no model
+    reg.record(agent_id="y", family="session_open", config={"asia_range_max_atr_d": 0.9}, feature_version="f",
+               rationale="r", results={}, status="screened")            # trial 4: in the selection set, not re-runnable
+    for _ in range(16):                                                  # the quarter's budget is spent ...
+        reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={})
+    n = reg.n_trials
+    # ADR 0002: trial 2 failed the gates, so CPCV refuses it (it can only veto a passed config, never rescue one)
+    monkeypatch.setattr(sys, "argv", base + ["--cpcv", "1", "2"])
+    with pytest.raises(SystemExit, match=r"trial\(s\) 2 failed the gates.*--diagnostic"):
+        rp.main()
+    assert not reg.evidence(kind="cpcv")
+    monkeypatch.setattr(sys, "argv", base + ["--cpcv", "1", "2", "--diagnostic"])
+    assert rp.main() == 0                                                # ... and CPCV still runs: it is not a trial
+    assert reg.n_trials == n
+    ev = {e["trial"]: e["payload"] for e in reg.evidence(kind="cpcv")}
+    assert set(ev) == {1}                                                # nothing attached to the failed trial
+    assert ev[1]["n_splits"] == 15 and ev[1]["n_paths"] == 5 and "fragile" in ev[1]["verdict"]
+    pbo = ev[1]["pbo"]
+    assert pbo["trials"] == [1, 2] and pbo["n_combinations"] == 20 and pbo["groups"] == [1, 2, 3, 4, 5]
+    assert pbo["selection_set"] == 3 and pbo["lower_bound"] is True      # trials 1, 2 and the screened 4
+    text = report.read_text()
+    assert "Combinatorial purged CV: trials 1, 2" in text and "PBO across trials [1, 2]" in text and "not a trial" in text
+    assert "(diagnostic, not evidence)" in text and "lower bound: 2 of the 3 configurations" in text
+    assert "can only veto" in text
+    monkeypatch.setattr(sys, "argv", base + ["--cpcv", "99"])
+    with pytest.raises(SystemExit, match="no trial #99"):
+        rp.main()
+    monkeypatch.setattr(sys, "argv", base + ["--cpcv", "3"])
+    with pytest.raises(SystemExit, match="walk-forward trials only"):
+        rp.main()

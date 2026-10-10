@@ -101,9 +101,12 @@ def write_private(path: Path, text: str) -> None:
     content is never readable by others even for a moment or when chmod is unsupported, and a crash mid-write
     leaves the previous file intact."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # unique name, created exclusively and never through a planted symlink; mode forced to 0600 (security review)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(name)
     try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
             fh.flush()

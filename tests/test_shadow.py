@@ -120,8 +120,9 @@ def _watch_ctx(tmp_path) -> JobContext:
                       population=Population(tmp_path / "population.json"))
 
 
-def _promote_pair(ctx: JobContext, t: pd.Timestamp) -> tuple[str, str]:
-    bt = PerfStats(n_trades=300, sharpe_ann=1.2, hit_rate=0.45, max_dd=0.1, trades_per_week=4, mean_ret=0.001, std_ret=0.004)
+def _promote_pair(ctx: JobContext, t: pd.Timestamp, trades_per_week: float = 4) -> tuple[str, str]:
+    bt = PerfStats(n_trades=300, sharpe_ann=1.2, hit_rate=0.45, max_dd=0.1, trades_per_week=trades_per_week,
+                   mean_ret=0.001, std_ret=0.004)
     a = ctx.models.add_challenger(MetaLabelModel(feature_names=["x"]), family="session_open", agent_id="agent-x", backtest=bt.model_dump(), now=t)
     ctx.models.promote(a.version, now=t)
     b = ctx.models.add_challenger(MetaLabelModel(feature_names=["x"]), family="session_open", agent_id="agent-x",
@@ -130,11 +131,12 @@ def _promote_pair(ctx: JobContext, t: pd.Timestamp) -> tuple[str, str]:
     return a.version, b.version
 
 
-def _shadow_rets(tmp_path, version: str, start: pd.Timestamp, rets: list[float]) -> None:
+def _shadow_rets(tmp_path, version: str, start: pd.Timestamp, rets: list[float],
+                 every: pd.Timedelta = pd.Timedelta(hours=1)) -> None:
     book = ShadowBook(tmp_path)
     book.track(version, start)
     for i, r in enumerate(rets):
-        ts = start + pd.Timedelta(hours=i + 1)
+        ts = start + every * (i + 1) - pd.Timedelta(minutes=30)
         t = book.open_trade(version=version, agent_id="b", side=1, bar_ts=ts, entry=2400.0, atr_usd=2.0, target_atr=1.5,
                             stop_atr=1.0, max_bars=16, p=0.6)
         assert t is not None
@@ -155,6 +157,24 @@ def test_model_watch_restores_the_previous_champion_on_a_cusum_alarm(tmp_path):
     assert ctx.models.champion("agent-x").version == a               # type: ignore[union-attr]
 
 
+def test_model_watch_uses_the_watch_count_h_on_two_point_returns_at_the_backtest_hit_rate(tmp_path):
+    from goldbot.research import cusum
+    ctx = _watch_ctx(tmp_path)
+    t = pd.Timestamp("2026-09-01", tz="UTC")
+    a, b = _promote_pair(ctx, t)                                     # backtest: hit 0.45, 4 trades a week
+    promoted = t + pd.Timedelta(days=30)
+    k = ctx.settings.drift.cusum_k
+    assert cusum.watch_trades(4.0) == 12                             # 8 in two weeks, so the first 12 trades
+    h_watch = cusum.calibrated_h(4.0, k, p=0.45, trades=12)
+    h_quarter = cusum.calibrated_h(4.0, k, p=0.45)
+    assert h_watch < min(h_quarter, cusum.FALLBACK_H)
+    s = (h_watch + min(h_quarter, cusum.FALLBACK_H)) / 2              # one return that only the watch's h catches
+    _shadow_rets(tmp_path, b, promoted, [0.001 - (s + k) * 0.004])
+    out = model_watch(ctx, promoted + pd.Timedelta(days=3))
+    assert out["agent-x"]["action"] == "restored_previous"
+    assert ctx.models.champion("agent-x").version == a               # type: ignore[union-attr]
+
+
 def test_model_watch_leaves_a_healthy_or_settled_champion_alone(tmp_path):
     ctx = _watch_ctx(tmp_path)
     t = pd.Timestamp("2026-09-01", tz="UTC")
@@ -165,6 +185,63 @@ def test_model_watch_leaves_a_healthy_or_settled_champion_alone(tmp_path):
     _shadow_rets(tmp_path, b, promoted, [-0.006] * 12)
     assert model_watch(ctx, promoted + pd.Timedelta(days=20)) == {}  # past the two-week window: not watched
     assert ctx.models.champion("agent-x").version == b               # type: ignore[union-attr]
+
+
+def test_a_slow_champion_is_watched_past_two_weeks_until_its_first_twelve_trades(tmp_path):
+    ctx = _watch_ctx(tmp_path)
+    t = pd.Timestamp("2026-09-01", tz="UTC")
+    a, b = _promote_pair(ctx, t, trades_per_week=2)                  # 2 a week: two weeks hold only 4 trades
+    promoted = t + pd.Timedelta(days=30)
+    _shadow_rets(tmp_path, b, promoted, [-0.006] * 12, every=pd.Timedelta(days=2))
+    # day 20: the old two-week window had closed (it returned {} here); 10 losing trades are now caught
+    out = model_watch(ctx, promoted + pd.Timedelta(days=20))
+    assert out["agent-x"]["action"] == "restored_previous" and out["agent-x"]["watch_trades"] == 12
+    assert ctx.models.champion("agent-x").version == a               # type: ignore[union-attr]
+
+
+def test_the_watch_closes_at_the_twelfth_trade_and_is_capped_at_eight_weeks(tmp_path):
+    ctx = _watch_ctx(tmp_path)
+    t = pd.Timestamp("2026-09-01", tz="UTC")
+    _, b = _promote_pair(ctx, t, trades_per_week=2)
+    promoted = t + pd.Timedelta(days=30)
+    _shadow_rets(tmp_path, b, promoted, [0.002, -0.001] * 6, every=pd.Timedelta(days=2))   # 12th trade on day 24
+    open_ = model_watch(ctx, promoted + pd.Timedelta(days=20))["agent-x"]
+    assert open_["action"] == "ok" and open_["window"] == "open" and open_["trades"] == 10
+    closing = model_watch(ctx, promoted + pd.Timedelta(days=24, hours=12))["agent-x"]
+    assert closing["window"] == "closed" and closing["trades"] == 12
+    assert closing["closes"] == (promoted + pd.Timedelta(days=24)).isoformat()
+    assert model_watch(ctx, promoted + pd.Timedelta(days=26)) == {}  # closed and evaluated: not watched again
+    # with too few trades the watch runs to the 8-week cap, and no further
+    ctx2 = _watch_ctx(tmp_path / "slow")
+    _, b2 = _promote_pair(ctx2, t, trades_per_week=2)
+    _shadow_rets(tmp_path / "slow", b2, promoted, [0.002] * 3, every=pd.Timedelta(days=10))
+    assert model_watch(ctx2, promoted + pd.Timedelta(days=50))["agent-x"]["window"] == "open"
+    assert model_watch(ctx2, promoted + pd.Timedelta(days=58)) == {}
+
+
+def test_a_watch_too_short_to_alarm_reports_cannot_alarm_and_warns_in_health(tmp_path):
+    import json
+
+    from goldbot.ops.health import check_model_watch
+    from tests.test_health import make_ctx
+    ctx = _watch_ctx(tmp_path)
+    t = pd.Timestamp("2026-09-01", tz="UTC")
+    _, b = _promote_pair(ctx, t, trades_per_week=0.5)                # 4 trades even at the 8-week cap
+    promoted = t + pd.Timedelta(days=30)
+    _shadow_rets(tmp_path, b, promoted, [-0.006] * 3, every=pd.Timedelta(days=1))
+    out = model_watch(ctx, promoted + pd.Timedelta(days=4))["agent-x"]
+    assert out["action"] == "cannot_alarm" and out["watch_trades"] == 4
+    assert "drift_watch" in out["note"] and "drawdown halt" in out["note"]
+    assert ctx.models.champion("agent-x").version == b               # type: ignore[union-attr]
+    saved = json.loads((tmp_path / "model_watch.json").read_text())
+    assert saved["agents"]["agent-x"]["action"] == "cannot_alarm"
+    check = check_model_watch(make_ctx(tmp_path))
+    assert check.status == "warn" and "agent-x" in check.reason and "cannot alarm" in check.reason
+    # a watch that can alarm is not a warning
+    (tmp_path / "model_watch.json").write_text(json.dumps({"ts": "2026-10-07T00:00:00+00:00",
+                                                           "agents": {"agent-x": {"action": "ok"}}}))
+    assert check_model_watch(make_ctx(tmp_path)).status == "ok"
+    assert check_model_watch(make_ctx(tmp_path / "none")).status == "ok"
 
 
 # ---------------------------------------------------------------------------------------------- counterfactual (P9)

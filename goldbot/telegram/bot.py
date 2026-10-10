@@ -6,6 +6,8 @@ import asyncio
 import logging
 import os
 
+import pandas as pd
+
 from goldbot.config import ROOT, TelegramSettings
 from goldbot.ops import accounts
 from goldbot.ops.deploy import DeployWatch
@@ -13,6 +15,7 @@ from goldbot.ops.health import HealthContext, HealthWatch, run_checks
 from goldbot.telegram import automode
 from goldbot.telegram.approvals import Proposal
 from goldbot.telegram.bus import ApprovalBus
+from goldbot.telegram.digest import DigestSchedule, digest_from_runtime
 from goldbot.telegram.outbox import Outbox
 
 log = logging.getLogger(__name__)
@@ -33,6 +36,7 @@ except ImportError:  # pragma: no cover
 
 DEPLOY_EVERY_S = 600             # new version on main with CI passed -> offered to the owner (one click)
 AUTOMODE_EVERY_S = 900           # auto-mode evidence (A10): offered once per mode epoch when it holds
+DIGEST_EVERY_S = 60              # daily owner digest due check (telegram.digest_at; once a day, late <= 6 h)
 HEALTH_EVERY_S = 60               # health checks + alert dedupe: a silent service is reported within ~6 min (S5)
 OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED_UNAPPROVED": "⌛ EXPIRED"}
 
@@ -62,6 +66,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
         self.health = HealthWatch(state_dir)
         self.settings = settings or TelegramSettings()
         self.offer = automode.AutoModeOffer(state_dir)
+        self.digest = DigestSchedule(state_dir, self.settings.digest_at)     # goldbot/telegram/digest.py
         # one-click deploys (Linux servers; the systemd unit sets GOLDBOT_DEPLOY=1): goldbot/ops/deploy.py
         self.deploy = DeployWatch(state_dir, ROOT) if os.environ.get("GOLDBOT_DEPLOY") == "1" else None
         self.app = Application.builder().token(token).post_init(self._start_pump).build()
@@ -100,6 +105,8 @@ class TelegramBot:  # pragma: no cover - needs network + token
                 await self._health_pass()
             if n % max(int(AUTOMODE_EVERY_S / self.poll_s), 1) == 0:
                 await self._automode_pass()
+            if n % max(int(DIGEST_EVERY_S / self.poll_s), 1) == 0:     # n == 0: a missed slot is sent on start
+                await self._digest_pass()
             if self.deploy is not None:
                 await self._deploy_pass(offer=n % max(int(DEPLOY_EVERY_S / self.poll_s), 1) == 0,
                                         report=n % max(int(30 / self.poll_s), 1) == 0)
@@ -118,6 +125,20 @@ class TelegramBot:  # pragma: no cover - needs network + token
             self.health.record(report)          # only after delivery: a failed send is retried next pass
         except Exception:
             log.exception("health pass")
+
+    async def _digest_pass(self) -> None:
+        """The daily owner digest, once per slot (state/telegram_digest.json); a slot missed while this service was
+        down is sent on start when under 6 h late (goldbot/telegram/digest.py)."""
+        try:
+            now = pd.Timestamp.now("UTC")
+            if not self.digest.due(now):
+                return
+            text = await asyncio.to_thread(digest_from_runtime, self.state_dir, now)
+            for uid in self.owner_ids:
+                await self.app.bot.send_message(uid, text)
+            self.digest.record(now)             # only after delivery: a failed send is retried next pass
+        except Exception:
+            log.exception("digest pass")
 
     def _eligibility(self) -> automode.Eligibility:
         return automode.auto_mode_eligibility_from_state(self.state_dir, self.settings)

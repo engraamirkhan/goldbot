@@ -19,15 +19,18 @@ For Aamir. Each step links to its [RUNBOOK](RUNBOOK.md) section.
 | [ ] MT5 box bootstrap | 20 min | Terminal (mt5) | `sudo bash /tmp/goldbot/goldbot/ops/linux/mt5_bootstrap.sh` | [0.3](RUNBOOK.md#03-the-mt5-box) |
 | [ ] One-time MT5 login | 15 min | Terminal, Screen Sharing | `sudo systemctl start goldbot-vnc`; Finder -> Connect to Server -> `vnc://localhost:5900`; tick **Save password** | [0.3](RUNBOOK.md#03-the-mt5-box) |
 | [ ] Bridge token | 5 min | Terminal (mt5) | `goldbot-mt5 accounts bridge-serve icm-demo`; `sudo systemctl start goldbot-bridge@icm-demo`. Shown **once** | [0.3](RUNBOOK.md#03-the-mt5-box) |
-| [ ] Brain bootstrap | 25 min | Terminal (brain, mt5) | `sudo bash /tmp/goldbot/goldbot/ops/linux/brain_bootstrap.sh`; mt5: `sudo goldbot-mt5-authorize '<key line>'`; brain: `sudo goldbot-tunnel <mt5 private ip>`, `goldbot accounts bridge-use icm-demo` | [0.4](RUNBOOK.md#04-the-brain) |
-| [ ] Server settings | 10 min | Terminal (brain) | `sudo -u goldbot nano /opt/goldbot/config/settings.local.yaml`: `auth: {owner_email: <you>}` and `telegram: {allowed_user_ids: [<id>]}`. **Never commit it** | [2.10](RUNBOOK.md#210-dashboard-first-run-create-the-owner-account), [2.8](RUNBOOK.md#28-telegram-bot-with-botfather) |
-| [ ] Secrets | 10 min | Telegram, Terminal (brain) | Bot via @BotFather; `goldbot accounts set telegram-bot-token`; optional `anthropic-api-key`; `github-token` (registry, `costs-v1` release) | [2.3](RUNBOOK.md#23-store-the-secrets-keyring) |
+| [ ] Brain bootstrap | 25 min | Terminal (brain, mt5) | `sudo bash /tmp/goldbot/goldbot/ops/linux/brain_bootstrap.sh`; mt5: `sudo goldbot-mt5-authorize '<key line>'`; brain: `sudo goldbot-tunnel <mt5 private ip>` | [0.4](RUNBOOK.md#04-the-brain) |
+| [ ] Guided setup | 15 min | Telegram, Terminal (brain) | `goldbot run setup`: asks for each value in turn, says where to get it, hides secrets. Have ready: MT5 demo login + password, the bridge token, a bot token from @BotFather, your id from @userinfobot, your email. Safe to run again | [0.4](RUNBOOK.md#04-the-brain) |
 | [ ] Cloudflare tunnel | 15 min | browser, Terminal (brain) | Route to `http://localhost:8787`; `sudo cloudflared service install <tunnel token>` | [2.7](RUNBOOK.md#27-cloudflare-tunnel-dashboard-from-your-phone-no-vpn) |
+| [ ] Preflight | 2 min | Terminal (brain) | `goldbot run preflight`: every ❌ line prints its fix; repeat until it says **READY** | [0.4](RUNBOOK.md#04-the-brain) |
 | [ ] Start, health check | 10 min | Terminal (brain) | `sudo systemctl start goldbot-supervisor goldbot-api goldbot-telegram goldbot-news goldbot-scheduler`; `sudo systemctl start goldbot-engine@icm-demo`; `goldbot run health` | [0.4](RUNBOOK.md#04-the-brain) |
 | [ ] Dashboard first run | 10 min | Terminal, phone | `journalctl -u goldbot-api \| grep "setup code"` (newest line); enter it, add the authenticator, **save the 10 recovery codes** in your password manager | [2.10](RUNBOOK.md#210-dashboard-first-run-create-the-owner-account) |
-| [ ] Restic backup keys | later | - | **Not built yet** (lane W1-2); keys will go in through a hidden prompt | [ROADMAP](ROADMAP.md#3-next-two-waves) |
+| [ ] Backups | 30 min | browser, Terminal (brain) | Oracle console steps in 0.6, then `goldbot run setup` again (step 8) and `goldbot run backup --init` | [0.6](RUNBOOK.md#06-backups-and-restore-brain) |
+
+If the wizard cannot be used, the manual commands are in [RUNBOOK 0.4](RUNBOOK.md#04-the-brain) under "By hand".
 
 ## 3. Daily use
+- **Morning digest:** at 06:45 UTC Telegram sends one message: all good or what needs attention, yesterday's trades, risk, and decisions waiting for you. [More](RUNBOOK.md#05-daily-use)
 - **Approve:** Telegram shows direction, lots, entry, stop, target, probability, spread. Tap **Approve**, or a **Reject** reason. Or the dashboard **Approvals** tab. After 90 s it expires. [More](RUNBOOK.md#approving-or-rejecting-an-entry)
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)
 - **Deploy:** Telegram *New version ready* -> **[Deploy]**. Never while an entry waits; rolls back by itself if a service fails. [More](RUNBOOK.md#05-daily-use)
@@ -41,6 +44,7 @@ For Aamir. Each step links to its [RUNBOOK](RUNBOOK.md) section.
 | `order_failed` | Broker refused after retries | Nothing, unless repeated |
 | `drift` | Model drifted; entries halted | After review: `goldbot run drift-review --clear "<note>"` |
 | `stop_rule` | Edge appears gone | Consider `/halt`; ask Claude for options |
+| `model_watch` | A new model's first trades: either a tripwire alarm (badly broken model, the previous one is restored) or `cannot_alarm` (too few trades to judge yet) | Nothing; slow decay is caught by the quarterly `drift` check |
 
 ## 4. Decisions waiting for you
 Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decision-queue), [rulings A-D](research/preregistration-2027Q1.md#needs-the-owner-before-freezing)).

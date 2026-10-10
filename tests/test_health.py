@@ -700,3 +700,16 @@ def test_alerts_only_add_information(tmp_path):
     assert text is not None and "LOSS CAP" in text and "FAILED_EXEC" in text
     after = {f.relative_to(tmp_path): f.read_bytes() for f in tmp_path.rglob("*") if f.is_file()}
     assert {k for k in after if before.get(k) != after[k]} <= {Path("health_last.json")}
+
+
+def test_a_bridged_terminal_needs_the_bridge_token_not_the_mt5_password(tmp_path):
+    """On the brain the terminal keeps its own login (MT5 box); the brain holds the bridge token instead."""
+    have = {"telegram-bot-token", "mt5-bridge-token-icm-demo", "mt5-bridge-url-icm-demo"}
+    ctx = make_ctx(tmp_path, secrets=have)
+    c = health.check_secrets(ctx)
+    assert c.status != "fail", c.reason
+    token_only = make_ctx(tmp_path, secrets={"telegram-bot-token", "mt5-bridge-token-icm-demo"})
+    assert health.check_secrets(token_only).status == "fail"     # no URL: the engine would use the local terminal
+    ctx = make_ctx(tmp_path, secrets={"telegram-bot-token"})
+    c = health.check_secrets(ctx)
+    assert c.status == "fail" and "mt5-icm-demo" in c.reason and "bridge" in c.reason
