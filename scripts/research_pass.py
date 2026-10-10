@@ -404,7 +404,9 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             print(f"{tf} {len(b_dec):,}  {sizes}; lookahead check: {len(leak['lookahead_columns'])} of "
                   f"{leak['columns_checked']} columns differ [{time.time() - t0:.0f}s]", flush=True)
         b_dec, context, leak, frame = frames[tf]
-        n_trials = reg.n_trials_effective + 1        # + groups screened by any discovery (survey 4b)
+        # + every discovery's K_eff (survey 4b), charged to EVERY later trial, survivor or not: the conservative
+        # default, recorded as an owner-acknowledged choice in docs/research/preregistration-2027Q1.md
+        n_trials = reg.n_trials_effective + 1
         preps = [prepare(s, b_dec, context, extra_cost_usd=extra_cost, holdout=holdout, score_holdout=args.score_holdout,
                          frame=frame, swap=swap) for s in job.specs]
         scr = None if args.score_holdout else screen(preps if job.pooled else preps[0])

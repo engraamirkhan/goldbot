@@ -297,7 +297,7 @@ def test_macro_release_adds_point_in_time_features_and_a_missing_one_degrades_cl
     assert second["feature_version"] != row["feature_version"]          # the macro columns are part of the version
 
 
-def test_discover_is_one_preregistered_trial_and_later_trials_count_the_groups_screened(release_dir, tmp_path, monkeypatch):
+def test_discover_is_one_preregistered_trial_and_later_trials_count_the_features_screened(release_dir, tmp_path, monkeypatch):
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
     monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
                                       "--report", str(report), "--specialist", "session_open", "--discover",
@@ -320,4 +320,5 @@ def test_discover_is_one_preregistered_trial_and_later_trials_count_the_groups_s
     from goldbot.research.registry import TrialRegistry, quarter_of
     reg = TrialRegistry(registry)
     assert reg.n_trials == 1 and reg.budget_used(quarter_of()) == 1           # one trial, one budget slot
-    assert reg.n_trials_effective == 1 + d["n_groups_screened"]
+    assert d["survivor_unit"] == "feature" and d["k_eff"] == d["n_features_screened"]   # feature survivors
+    assert reg.n_trials_effective == 1 + d["n_features_screened"]

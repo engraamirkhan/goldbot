@@ -15,8 +15,9 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P2):
   a trial (`is_trial`), takes no budget slot and does not raise the deflated-Sharpe count; the result row that follows
   carries the same trial number and config hash and a `preregistration` reference;
 * a feature-discovery trial (status "discovery", goldbot/research/discovery.py) is ONE trial, but choosing survivors
-  from its selection frequencies looks at many feature groups, so `n_trials_effective` (registry trials plus every
-  discovery's `n_groups_screened`) is the count the deflated Sharpe of any later trial uses."""
+  from its selection frequencies looks at many features, so `n_trials_effective` (registry trials plus every
+  discovery's K_eff: features screened when survivors go forward as features, groups screened only when whole groups
+  do) is the count the deflated Sharpe of any later trial uses."""
 from __future__ import annotations
 
 import hashlib
@@ -56,13 +57,25 @@ def is_trial(row: dict[str, Any]) -> bool:
     return row.get("status") != PREREGISTERED
 
 
+def discovery_k_eff(disc: dict[str, Any]) -> int:
+    """K_eff of one discovery's results: the recorded `k_eff`, else by its survivor unit: `n_groups_screened` only when
+    whole groups go forward, otherwise `n_features_screened` (a feature-level survivor was picked from every screened
+    column), falling back to the groups when a row recorded no feature count."""
+    if disc.get("k_eff") is not None:
+        return int(disc["k_eff"])
+    groups = int(disc.get("n_groups_screened") or 0)
+    if disc.get("survivor_unit") == "group":
+        return groups
+    return int(disc.get("n_features_screened") or groups)
+
+
 def n_trials_effective(rows: list[dict[str, Any]]) -> int:
-    """The deflated-Sharpe trial count for a later trial: registry trials plus, for every discovery trial, the number of
-    feature groups it screened (indicator survey 4b: N = registry count + K_eff). A survivor of a discovery was chosen
-    by looking at K_eff groups' selection frequencies over the whole research window, so its later trial pays for
-    them."""
+    """The deflated-Sharpe trial count for a later trial: registry trials plus every discovery trial's K_eff (indicator
+    survey 4b: N = registry count + K_eff). A survivor of a discovery was chosen by looking at K_eff units' selection
+    frequencies over the whole research window (features, or groups when only whole groups go forward), so its later
+    trial pays for them."""
     trials = [r for r in rows if is_trial(r)]
-    k_eff = sum(int(((r.get("results") or {}).get("discovery") or {}).get("n_groups_screened") or 0)
+    k_eff = sum(discovery_k_eff((r.get("results") or {}).get("discovery") or {})
                 for r in trials if r.get("status") == DISCOVERY)
     return len(trials) + k_eff
 

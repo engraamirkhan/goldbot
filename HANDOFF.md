@@ -301,6 +301,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Deviations from 4b: the label is the specialist's (no primary-free 4h label yet), groups are registry
   features/families instead of |Spearman| > 0.7 medoid clusters, and the trade rule is the existing break-even +
   margin threshold, not the top-tercile cut.
+- Discovery quant-review fixes (2026-10-10): K_eff now follows the pre-registered survivor unit
+  (`DiscoveryConfig.survivor_unit`, default `feature`): feature survivors pay for every feature screened (~300), not
+  the groups (~10); the discovery row records `n_features_screened`, `n_groups_screened`, `survivor_unit` and `k_eff`,
+  and `registry.n_trials_effective` adds `k_eff` (older rows: features screened unless the unit was `group`). Group
+  stability ranks groups by summed member importance in each subsample and counts the top `group_top_k` groups
+  (default: top_k's share of groups), so correlated near-copies no longer deflate their group. `column_groups` maps
+  columns to features on the 2,000 bars before the holdout start (no holdout bar read). `registry_sync.merge_rows`
+  rewrites the result row's `preregistration.trial` when it renumbers. The inner permutation split is `inner_split`,
+  with a test where labels outlive the purge gap. Charging K_eff to every later trial stays the conservative default,
+  recorded as owner-acknowledged in `docs/research/preregistration-2027Q1.md`, with the extra rule that a discovery
+  survivor must also pass the holdout rule before promotion.
 
 ## Next steps (no owner input needed unless marked)
 - Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write

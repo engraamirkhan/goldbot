@@ -55,7 +55,7 @@ registry trial #21. Holdout 2025-10-01..2026-09-30 stays untouched.
 | Quarter | Registry trials | Screens inside trials (K_eff) | DSR trial count to use for the next trial |
 |---|---|---|---|
 | Q4 2026 | #1–#20 | 0 | 20 |
-| Q1 2027 (planned) | #21–#33 at most (13 planned + 7 reserve) | H-02: number of feature groups screened (≈35; recorded as `n_groups_screened` on the discovery row; `registry.n_trials_effective` adds it) | 20 + trials run so far + K_eff for any survivor of H-02 |
+| Q1 2027 (planned) | #21–#33 at most (13 planned + 7 reserve) | H-02: K_eff = features screened when survivors go forward as features, groups screened only for whole-group survivors (recorded as `k_eff` on the discovery row; `registry.n_trials_effective` adds it) | 20 + trials run so far + K_eff for any survivor of H-02 |
 
 ## Next generation (after Q1 verdicts)
 
