@@ -380,23 +380,27 @@ class MailSettings(_Section):
     @classmethod
     def _origin(cls, v: str | None) -> str | None:
         """An origin only (the link carries a sign-in token): https with a host and no user info, path, query or
-        fragment; http only for exactly localhost, 127.0.0.1 or ::1 (local dev). One trailing slash is dropped."""
+        fragment; http only for exactly localhost, 127.0.0.1 or ::1 (local dev). No whitespace, control character,
+        backslash or semicolon anywhere (urlsplit strips or tolerates some of them, browsers others). One trailing
+        slash is dropped; the result is the normalised lower-case `scheme://netloc`."""
         if v is None:
             return None
-        v = v.strip()
-        v = v[:-1] if v.endswith("/") and not v.endswith("//") else v
         bad = ValueError("auth.mail.dashboard_origin must be an origin like https://dash.example.com (no path, "
-                         "query, fragment or user info; http only for localhost)")
+                         "query, fragment, user info, spaces or control characters; http only for localhost)")
+        if any(c.isspace() or not c.isprintable() or c in "\\;" for c in v):
+            raise bad
+        v = v[:-1] if v.endswith("/") and not v.endswith("//") else v
         try:
             u = urlsplit(v)
             u.port                                          # noqa: B018 - raises on a malformed port
         except ValueError:
             raise bad from None
-        if not u.netloc or u.username is not None or u.password is not None or u.path or u.query or u.fragment \
-                or "#" in v or "?" in v:
+        if not u.netloc or not u.hostname or u.username is not None or u.password is not None or u.path \
+                or u.query or u.fragment or "#" in v or "?" in v:
             raise bad
-        if u.scheme == "https" or (u.scheme == "http" and u.hostname in _LOCAL_HOSTS):
-            return v
+        scheme = u.scheme.lower()
+        if scheme == "https" or (scheme == "http" and u.hostname in _LOCAL_HOSTS):
+            return f"{scheme}://{u.netloc.lower()}"
         raise bad
 
     @model_validator(mode="after")

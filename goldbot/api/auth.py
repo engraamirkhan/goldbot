@@ -360,11 +360,14 @@ class _Reservation(FrozenRecord):
 
 def coarse_ip(ip: str | None) -> str:
     """A network hint for an owner notice, never the full address: IPv4 /16 ('203.0.x.x'), IPv6 /32
-    ('2001:db8::/32'); anything else (no address, a test client) is 'an unknown network'."""
+    ('2001:db8::/32'), and the IPv4 /16 for an IPv4-mapped IPv6 address ('::ffff:203.0.113.45' -> '203.0.x.x', a
+    dual-stack listener's view of an IPv4 client); anything else (no address, a test client) is 'an unknown network'."""
     try:
-        addr = ipaddress.ip_address((ip or "").strip())
+        addr: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address((ip or "").strip())
     except ValueError:
         return "an unknown network"
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
     if addr.version == 4:
         a, b, _, _ = str(addr).split(".")
         return f"{a}.{b}.x.x"
