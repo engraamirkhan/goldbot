@@ -35,7 +35,7 @@ ROADMAP = """# Roadmap
 def _proposal(pid: str, created: pd.Timestamp, outcome: Outcome | None = None, **kw: Any) -> Proposal:
     return Proposal(proposal_id=pid, account_id=ACCOUNT, agent_id="trend-g1-abc", side=1, lots=0.1, entry=2400,
                     stop=2396, target=2406, p=0.6, ev_r=0.3, spread_points=20, top_features=[("a", 0.1)],
-                    created=created.timestamp(), outcome=outcome, decided_via=f"dashboard:{EMAIL}", **kw)
+                    created=created.timestamp(), outcome=outcome, decided_channel="dashboard", **kw)
 
 
 def _trade(exit_utc: pd.Timestamp, pnl: float, r: float | None, pid: int) -> ClosedTrade:

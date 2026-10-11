@@ -79,7 +79,8 @@ follow under "Decided in the last 10 minutes", with no buttons.
 | Older engine | only `risk_usd` | "RISK $20.00 (USD) if the stop is hit, before costs", no share of equity, no budget |
 | Blocked | a halt or blackout is active | Amber note above the buttons: "New entries are blocked (…): the RiskGate will refuse this at approval." Approve stays available; the gate decides |
 
-Every decided note ends with the channel ("via Telegram", "via dashboard (email)") when known.
+Every decided note ends with the channel ("via Telegram", "via the dashboard") when known, never who decided
+(BACKLOG 52: the identity is in the auth audit log only).
 
 Screen states: loading ("Loading proposals…"), error ("Could not load proposals (…). Telegram approvals still
 work."), empty ("No proposals waiting. Entries you approve here or on Telegram are managed automatically

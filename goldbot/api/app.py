@@ -95,7 +95,7 @@ from goldbot.api.schema import (
 )
 from goldbot.config import MailSettings
 from goldbot.ops.account_view import LossBudget, loss_budget, margin_level_pct, milestones, proposal_budget
-from goldbot.telegram.approvals import Outcome
+from goldbot.telegram.approvals import Outcome, decision_channel
 from goldbot.telegram.approvals import Proposal as BusProposal
 from goldbot.telegram.bus import ApprovalBus
 
@@ -570,13 +570,15 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
     @app.get("/api/proposals/recent", response_model=list[DecidedProposal])
     def recent_proposals(_: User = Depends(auth)) -> list[DecidedProposal]:
-        """Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it."""
+        """Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it: by
+        channel and time only, never who (BACKLOG 52)."""
         out = []
         for p, d in st.bus.recent():
             if d is not None:                       # decided, the engine has not applied it yet
                 out.append(DecidedProposal.model_validate({**card(p), "status": "submitted" if d.approve else "rejected",
                                                            "reason_code": None if d.approve else d.reason_code,
-                                                           "decided_by": d.by}))
+                                                           "decided_channel": decision_channel(d.by),
+                                                           "decided_ts": d.ts}))
                 continue
             if p.outcome == Outcome.APPROVED:
                 status = "refused" if p.gate_refusal else "approved"
@@ -584,8 +586,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                 status = "rejected"
             else:
                 status = "expired"
-            by = p.decided_via or (f"telegram:{p.decided_by}" if p.decided_by is not None else None)
-            out.append(DecidedProposal.model_validate({**card(p), "status": status, "decided_by": by,
+            out.append(DecidedProposal.model_validate({**card(p), "status": status,
+                                                       "decided_channel": p.decided_channel, "decided_ts": p.decided_ts,
                                                        "reason_code": p.reason_code if status == "rejected" else None,
                                                        "refusal": list(p.gate_refusal or [])}))
         return out

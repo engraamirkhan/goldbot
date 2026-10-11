@@ -944,7 +944,7 @@
     "type": "object"
    },
    "DecidedProposal": {
-    "description": "A proposal decided in the last few minutes, so its card can show what happened to it.\n\nsubmitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;\napproved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);\nrejected: with its reason code; expired: nobody decided within the window.",
+    "description": "A proposal decided in the last few minutes, so its card can show what happened to it.\n\nsubmitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;\napproved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);\nrejected: with its reason code; expired: nobody decided within the window. `decided_channel` (\"telegram\" |\n\"dashboard\") and `decided_ts` say how and when it was decided, never who (BACKLOG 52: identity is kept in the\nauth audit log only).",
     "properties": {
      "account_id": {
       "title": "Account Id",
@@ -965,7 +965,7 @@
       ],
       "title": "Currency"
      },
-     "decided_by": {
+     "decided_channel": {
       "anyOf": [
        {
         "type": "string"
@@ -974,7 +974,18 @@
         "type": "null"
        }
       ],
-      "title": "Decided By"
+      "title": "Decided Channel"
+     },
+     "decided_ts": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Decided Ts"
      },
      "entry": {
       "title": "Entry",
@@ -5073,7 +5084,7 @@
   },
   "/api/proposals/recent": {
    "get": {
-    "description": "Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it.",
+    "description": "Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it: by\nchannel and time only, never who (BACKLOG 52).",
     "operationId": "recent_proposals_api_proposals_recent_get",
     "responses": {
      "200": {

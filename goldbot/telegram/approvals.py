@@ -14,9 +14,9 @@ import hmac
 import math
 import time
 from enum import Enum
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from goldbot.base import Record
 
@@ -91,14 +91,29 @@ class Proposal(Record):
     window_s: int = 90
     outcome: Outcome | None = None
     reason_code: str | None = None
-    decided_by: int | None = None
-    decided_via: str | None = None       # "telegram:<id>" | "dashboard:<email>" for decisions from the bus
     # finance audit GAP-10: when the owner decided (epoch s, the decision's own clock) and through which channel
     # ("telegram" | "dashboard"), kept on the archived proposal; the channel is the word before ":" and never carries
-    # an id. None for an expired proposal and on proposals archived before these fields existed
+    # an id. None for an expired proposal and on proposals archived before these fields existed. BACKLOG 52: the
+    # channel is the only trace of who decided; identity is in the auth audit log, never in an approval file
     decided_ts: float | None = None
     decided_channel: str | None = None
     gate_refusal: list[str] | None = None    # approved, but the RiskGate re-check at approval time refused the order
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_decider_identity(cls, data: Any) -> Any:
+        """BACKLOG 52: "the done files and the API keep only `decided_channel` (with `decided_ts`)". Files archived
+        before it carry `decided_by` (a Telegram user id) and `decided_via` ("telegram:<id>" | "dashboard:<email>"):
+        they still load (ADR 0010; known history, so not counted as schema skew); the identity is dropped on read and
+        only its channel kept when the file has none, so it is never written again or sent to the API."""
+        if not isinstance(data, dict) or not ({"decided_by", "decided_via"} & data.keys()):
+            return data
+        data = dict(data)
+        by, via = data.pop("decided_by", None), data.pop("decided_via", None)
+        if data.get("decided_channel") is None:
+            data["decided_channel"] = (decision_channel(via) if isinstance(via, str) and ":" in via   # never a bare id
+                                       else "telegram" if by is not None else None)   # decided_by: the in-process bot
+        return data
 
     @property
     def expired(self) -> bool:
@@ -189,8 +204,7 @@ class ApprovalCenter:
             if p.expired:
                 done.append(self._finish(p, Outcome.EXPIRED))
                 continue
-            p.decided_via = d.by
-            p.decided_ts, p.decided_channel = d.ts, decision_channel(d.by)
+            p.decided_ts, p.decided_channel = d.ts, decision_channel(d.by)     # never the id or email (BACKLOG 52)
             p.reason_code = None if d.approve else d.reason_code
             done.append(self._finish(p, Outcome.APPROVED if d.approve else Outcome.REJECTED))
         return done
@@ -205,7 +219,6 @@ class ApprovalCenter:
             return self._finish(p, Outcome.EXPIRED)
         if not approve and reason_code not in REASON_CODES:
             raise ValueError(f"rejection needs a reason code from {REASON_CODES}")
-        p.decided_by = user_id
         p.decided_ts, p.decided_channel = time.time(), "telegram"     # the in-process path is the Telegram bot
         p.reason_code = None if approve else reason_code
         return self._finish(p, Outcome.APPROVED if approve else Outcome.REJECTED)
