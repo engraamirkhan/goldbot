@@ -994,8 +994,34 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     - The gap anchors on the first bar at or after the 18:00 New York reopen.
     - The noise ratio's session starts on the bar containing the open.
     - `daily_bars` refuses bars out of time order.
-  - Still owed: E-4 (H-16's evaluation path, which cuts the bars at holdout_from before features), and the
-    first-out-of-sample month counted from data before the freeze (about 2012-04; the rule is in the Q2 draft).
+  - Still owed: the first out-of-sample month counted from data before the freeze (about 2012-04; the rule is in
+    the Q2 draft). E-4 is built (next bullet).
+- H-16 evaluation path, E-4 (2026-10-11; quant review: merge after fixes, fixes applied). `goldbot/research/h16.py`
+  plus `research_pass.py --h16 --macro DIR --us-calendar DIR` runs H-16's pre-registered test once and records ONE
+  trial (family `h16_opportunity_score`, status `evaluated`, `results.kind` = `range_test`).
+  - It runs only against its pre-registration. Under the registry lock and before anything is read, the run is refused
+    when any H-16 trial exists (whatever its config), when there is not exactly one unused H-16 pre-registration, when
+    that config is not `h16.h16_config(first_oos_month, expected_eval_days)` with 500 rows, when its `code_hash`
+    (h16.py's source, also on the result row) differs, when its feature version differs from
+    `feature_version(["day_type"])` worked out now (`f-52c853166b` for day_type v1), or when the budget is spent.
+  - The frozen month and the frozen evaluable-day count live in the hashed config; the run reads them from it. A
+    different month from the baseline-fit rule, fewer than 90% of the frozen days (checked before any statistic) or a
+    NaN statistic is refused, and nothing is recorded.
+  - `tests/test_day_type_golden.py` (+ `tests/data/day_type_v1_golden.parquet`) ties day_type's outputs to
+    `day_type.VERSION` (so `gvz_series` in the config is informational): changing them without a bump fails CI (`python tests/test_day_type_golden.py` writes the file
+    for a new version).
+  - `h16_feature_version()` restores the feature registry (day_type stays opt-in for every other caller).
+  - The 1m bars, the macro rows and the calendar rows are cut at `research.holdout_from` before anything is resampled.
+    Every full-score input is as known at 06:30 UTC on D.
+  - HAR (4 coefficients) and full (11 coefficients) both go through `fit_har(regressors=...)` on the monthly refits
+    with the 1-day purge. GVZ-stale days are dropped from both models and counted; days without a full forecast are
+    also counted by missing input.
+  - Reading rule as pre-registered: rho gain >= 0.05 AND top/bottom quintile mean W/A >= 1.5, inclusive.
+  - Reported only: the 20-day block-bootstrap interval and the drop-one contributions. Not built: the London+60 /
+    NY+60 refreshes.
+  - Nothing was run on real data and no real registry was written. **Before the freeze:** count the first OOS month
+    and the evaluable days from data (calendar and gaps only), write both into the Q2 draft, and pre-register with
+    `h16_config(month, days)` and `h16_feature_version()`.
 - Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
   (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
   before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each
