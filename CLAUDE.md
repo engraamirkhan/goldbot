@@ -43,7 +43,7 @@ Python records/settings/API contracts are pydantic (`goldbot/base.py` Record/Fro
 `goldbot/api/schema.py`); everything is type-checked with mypy. Timestamps: use `goldbot.data.timeutil.epoch_ns`, never
 `.asi8`/`.view("i8")` (pandas 3 keeps s/ms/us units).
 
-All gates at once, in parallel (~90 s): `scripts/gates.sh --web` (pytest-xdist `-n auto` + every check side by side; logs in ~/tmp/gates).
+All gates at once, in parallel (~90 s): `scripts/gates.sh --web` (pytest-xdist, 4 workers per suite by default via `GATES_WORKERS`, + every check side by side; picks Node 22 for --web; logs in ~/tmp/gates).
 Never run gates one after another, and never edit files while gates run.
 
 Backend: `pip install -e ".[dev]" && pre-commit install`
