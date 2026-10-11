@@ -76,12 +76,7 @@ def bump_export(conn: sqlite3.Connection, source: str) -> None:
                  (source,))
 
 
-def _export_seq(conn: sqlite3.Connection, source: str) -> int:
-    r = conn.execute("SELECT seq FROM exports WHERE source = ?", (source,)).fetchone()
-    return int(r[0]) if r else 0
-
-
-KEEP_HASHES = 16                 # own exports remembered per file: concurrent exporters never look foreign
+KEEP_HASHES = 16                 # own exports remembered per file (any of them on disk is never "foreign")
 
 
 def _sha(text: str) -> str:
@@ -89,8 +84,8 @@ def _sha(text: str) -> str:
 
 
 def remember_hash(conn: sqlite3.Connection, source: str, sha: str) -> None:
-    """Record `sha` as written by this code (before the write, so a crash or a concurrent writer cannot make our own
-    file look foreign); the newest KEEP_HASHES are kept."""
+    """Record `sha` as written by this code; the newest KEEP_HASHES are kept. Called in the write transaction that
+    writes the file, so no reader can pair this file with an older hash list (see `export_latest`)."""
     r = conn.execute("SELECT hashes FROM exports WHERE source = ?", (source,)).fetchone()
     hashes = [h for h in (json.loads(r[0]) if r else []) if h != sha] + [sha]
     conn.execute("INSERT INTO exports (source, seq, hashes) VALUES (?, 0, ?) ON CONFLICT(source) "
@@ -98,21 +93,31 @@ def remember_hash(conn: sqlite3.Connection, source: str, sha: str) -> None:
 
 
 def export_latest(db: Database, source: str, path: Path, render: Callable[[sqlite3.Connection], str]) -> bool:
-    """Write the latest committed state of `source` to `path`, after the commit. Concurrent exporters converge: an
-    exporter whose snapshot was overtaken by another commit (seq moved) renders again, so an older snapshot never
-    stays on disk. The document's hash is recorded before the write so `dual_read` can tell a foreign write. Never
-    raises: the DB already holds the booking; a failed export is logged and the next commit writes the file again."""
+    """Write the latest committed state of `source` to `path`, after the booking's own commit.
+
+    The render, the hash record and the file write happen in ONE write transaction (BEGIN IMMEDIATE), and
+    `foreign_write` checks under the same lock. So exporters and checkers are serialised by aux.db's write lock:
+    the file on disk is always the newest snapshot (no exporter can overwrite a newer file with an older render)
+    and its hash is always the newest one recorded (never evicted by concurrent exporters), and a checker never sees
+    a file whose hash it read before the export. Under load (2026-10-11) the previous lock-free version let a
+    checker read the hash list, then the file an exporter wrote in between, and merge our own export as foreign.
+
+    The lock is held only for a local write and fsync of a small file. Never raises: the booking is already
+    committed; a failed export rolls back only its hash record and the next commit writes the file again. An error
+    after the rename (the file is ours) still commits the hash; a process killed between the rename and the commit
+    leaves the file unrecorded, but it equals what the DB renders, which `dual_read` recognises as ours."""
     try:
-        for _ in range(5):
-            with db.read() as conn:
-                seq, text = _export_seq(conn, source), render(conn)
-            with db.write() as conn:
-                remember_hash(conn, source, _sha(text))
-            export_json(path, text)
-            with db.read() as conn:
-                if _export_seq(conn, source) == seq:
-                    return True
-        return True                                     # still moving: the newest committer exports after us
+        with db.write() as conn:
+            text = render(conn)
+            sha = _sha(text)
+            remember_hash(conn, source, sha)
+            try:
+                export_json(path, text)
+            except Exception:
+                if not _holds(path, sha):
+                    raise                               # nothing written: roll the hash record back
+                log.warning("%s was written but reported an error afterwards; kept as ours", path.name)
+        return True
     except Exception as exc:                            # noqa: BLE001 - an export must never undo or block a booking
         log.warning("could not export %s (the database has the data; retried on the next write): %s", path.name, exc)
         return False
@@ -135,31 +140,59 @@ def ensure_imported(db: Database, spec: ImportSpec, state_dir: Path) -> None:
                      "ON CONFLICT(source) DO NOTHING", (spec.source, now_ns()))
 
 
-def foreign_write(db: Database, source: str, path: Path) -> bool:
-    """True when `path` holds content this code neither imported nor exported recently (an older release wrote it)."""
-    if not path.exists():
-        return False
-    with db.connection() as conn:
-        exp = conn.execute("SELECT hashes FROM exports WHERE source = ?", (source,)).fetchone()
-        imp = conn.execute("SELECT sha256 FROM imports WHERE source = ?", (source,)).fetchone()
-    if imp is None:
-        return False                                    # never imported: ensure_imported handles it
-    known = set(json.loads(exp[0]) if exp else []) | {imp[0]}
+def _holds(path: Path, sha: str) -> bool:
     try:
-        return file_sha256(path) not in known
+        return path.exists() and file_sha256(path) == sha
     except OSError:
         return False
 
 
-def dual_read(db: Database, spec: ImportSpec, state_dir: Path, merge: Loader) -> bool:
+Render = Callable[[sqlite3.Connection], str]
+
+
+def _foreign_in(conn: sqlite3.Connection, source: str, path: Path, render: Render | None = None) -> bool:
+    """Inside a write transaction (exporters hold the same lock): does `path` hold content this code neither imported
+    nor exported recently? A file equal to what the DB renders now is ours (an export killed before its commit)."""
+    if not path.exists():
+        return False
+    exp = conn.execute("SELECT hashes FROM exports WHERE source = ?", (source,)).fetchone()
+    imp = conn.execute("SELECT sha256 FROM imports WHERE source = ?", (source,)).fetchone()
+    if imp is None:
+        return False                                    # never imported: ensure_imported handles it
+    known = set(json.loads(exp[0]) if exp else []) | {imp[0]}
+    try:
+        sha = file_sha256(path)
+    except OSError:
+        return False
+    if sha in known:
+        return False
+    if render is not None and sha == _sha(render(conn)):
+        remember_hash(conn, source, sha)
+        return False
+    return True
+
+
+def foreign_write(db: Database, source: str, path: Path, render: Render | None = None) -> bool:
+    """True when `path` holds content this code neither imported nor exported recently (an older release wrote it).
+    Checked under the write lock, so an export cannot land between reading the hashes and reading the file."""
+    if not path.exists():
+        return False
+    with db.write() as conn:
+        return _foreign_in(conn, source, path, render)
+
+
+def dual_read(db: Database, spec: ImportSpec, state_dir: Path, merge: Loader, render: Render | None = None) -> bool:
     """Import once; afterwards merge a file another writer changed (rollback, then roll forward), count the
-    fallback and adopt its hash so it is merged only once. Returns True when a merge happened (re-export then)."""
+    fallback and adopt its hash so it is merged only once. The check and the merge are one write transaction, so
+    our own concurrent exports are never mistaken for foreign writes. Returns True when a merge happened."""
     ensure_imported(db, spec, state_dir)
     path = state_dir / spec.source
-    if not foreign_write(db, spec.source, path):
+    if not path.exists():
         return False
     try:
         with db.write() as conn:
+            if not _foreign_in(conn, spec.source, path, render):
+                return False
             merge(path, conn)
             count_fallback(conn, spec.source)
             bump_export(conn, spec.source)
@@ -319,7 +352,11 @@ def all_spend(conn: sqlite3.Connection) -> dict[str, float]:
 
 def export_spend(db: Database, state_dir: Path) -> bool:
     """Regenerate agent_spend.json (ops/health.py, an older release) after a commit; never raises."""
-    return export_latest(db, SPEND_FILE, state_dir / SPEND_FILE, lambda conn: json.dumps(all_spend(conn), indent=1))
+    return export_latest(db, SPEND_FILE, state_dir / SPEND_FILE, render_spend)
+
+
+def render_spend(conn: sqlite3.Connection) -> str:
+    return json.dumps(all_spend(conn), indent=1)
 
 
 # ---------------------------------------------------------------------------------------------------- scheduler
@@ -448,6 +485,6 @@ __all__ = ["AGENT_RUNS", "AGENT_SPEND", "AgentRunLog", "OUTBOX_FILE", "RUNS_FILE
            "dual_read", "ensure_imported", "export_json", "export_latest", "export_spend", "fallback_hits",
            "foreign_write", "line_offset_from_cursor", "load_jobs", "max_run_id", "merge_agent_spend_json",
            "month_spent", "outbox_cursor", "outbox_document", "outbox_forget", "outbox_mark_sent", "outbox_sent",
-           "reserve_spend", "runs_after", "remember_hash", "save_jobs", "scheduler_document", "scheduler_heartbeat",
+           "render_spend", "reserve_spend", "runs_after", "remember_hash", "save_jobs", "scheduler_document", "scheduler_heartbeat",
            "scheduler_status", "set_outbox_cursor",
            "table_empty"]

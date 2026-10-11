@@ -105,7 +105,8 @@ class Outbox:
         AgentRunLog(self.dir)                     # imports/adopts agent_runs.jsonl first (the cursor maps onto it)
         self.db = Database.open(self.dir, "aux")
         pending = {p.proposal_id for p in self.bus.pending()}
-        if dual_read(self.db, OUTBOX_IMPORT, self.dir, lambda path, conn: merge_outbox_json(path, conn, pending)):
+        if dual_read(self.db, OUTBOX_IMPORT, self.dir, lambda path, conn: merge_outbox_json(path, conn, pending),
+                     outbox_document):
             self._export()
 
     def _export(self) -> None:

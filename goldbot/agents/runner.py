@@ -32,6 +32,7 @@ from goldbot.db.bookkeeping import (
     export_spend,
     merge_agent_spend_json,
     month_spent,
+    render_spend,
     reserve_spend,
 )
 
@@ -90,7 +91,7 @@ class SpendLedger:
         self.dir = self.path.parent
         self.cap = monthly_cap_usd
         self.db = Database.open(self.dir, "aux")
-        if dual_read(self.db, AGENT_SPEND, self.dir, merge_agent_spend_json):
+        if dual_read(self.db, AGENT_SPEND, self.dir, merge_agent_spend_json, render_spend):
             export_spend(self.db, self.dir)
 
     @property

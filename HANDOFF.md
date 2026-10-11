@@ -458,7 +458,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   old ledger cached the file and the news and agents processes overwrote each other). Not done: news_spend.json
   (`data/news_collector.py` was out of scope), switching api/app.py to query aux.db.
   Trading-safety review fixes (same day): exports run after the commit and never raise (a locked file on Windows no
-  longer undoes a spend booking or stops a scheduler job); concurrent exporters converge through `exports.seq`.
+  longer undoes a spend booking or stops a scheduler job); exporters and the foreign-file check are serialised by aux.db's write lock (render, hash record and file write
+  in one transaction; 2026-10-11: the lock-free version took our own export for a foreign write under load).
   Rollback safety: telegram_outbox.json is rewritten in its old format for one release; a file another release
   wrote (hash differs from this code's last export) is merged back once (spend: larger per month; scheduler: newer
   slot; outbox: its sent list and offset; runs appended only to the file are adopted) and counted in
