@@ -305,7 +305,7 @@ def unknown_status() -> EntryStatus:
     b = block("status_unknown", text="Entry status couldn't be worked out",
               fix="Check the Health tab; the engine still applies every rule itself.")
     b = b.model_copy(update={"kind": "act"})
-    return EntryStatus(state="blocked", headline=f"No new trades known: {b.text}", blocks=[b], exits=EXITS_OK)
+    return EntryStatus(state="blocked", headline=f"No new trades known: {b.text}", blocks=[b], exits=EXITS_SILENT)
 
 
 def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: str | None,
@@ -403,7 +403,8 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
         if n_open is not None and n_open >= limits.max_positions:
             add(block("max_positions", text=f"Already {int(n_open)} trades open (limit {limits.max_positions})"))
         if milestones is not None and not milestones.tradeable and milestones.pending is None:
-            add(block("min_lot_exceeds_risk"))      # until the engine publishes it (BACKLOG 43)
+            # inferred from the ladder, not reported by the engine (BACKLOG 43): worded as likely
+            add(block("min_lot_exceeds_risk", text="Likely: the smallest trade risks too much on every timeframe"))
         published = e.get("entry_blocks")
         if isinstance(published, list):     # the engine's own reasons win; the mapping above is the fallback
             for code in published:

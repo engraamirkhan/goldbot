@@ -35,7 +35,9 @@ export function Approvals() {
 
   return (
     <div className="approvals">
-      <SafetyStrip status={status.data} accounts={accounts.data} error={status.isError || accounts.isError} />
+      <SafetyStrip status={status.data} accounts={accounts.data} error={status.isError || accounts.isError}
+                   updatedAt={status.dataUpdatedAt && accounts.dataUpdatedAt
+                     ? Math.min(status.dataUpdatedAt, accounts.dataUpdatedAt) : undefined} now={now} />
       {pending.isError && <p className="err" role="alert">Could not load proposals ({(pending.error as Error).message}). Telegram approvals still work.</p>}
       {pending.isLoading ? <p className="muted">Loading proposals…</p> : open.length === 0 ? (
         <p className="empty muted">No proposals waiting. Entries you approve here or on Telegram are managed automatically afterwards.</p>

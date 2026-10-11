@@ -201,6 +201,8 @@ def test_a_balance_too_small_for_any_timeframe_says_so():
     ms = Milestones(rule="r", rungs=[], tradeable=[], next_timeframe="15m", next_equity=1500.0)
     s = status(engine(), milestones=ms)
     assert codes(s) == ["min_lot_exceeds_risk"] and s.blocks[0].kind == "wait"
+    # inferred from the ladder, not reported by the engine: worded as likely (re-verification N3)
+    assert s.blocks[0].text == "Likely: the smallest trade risks too much on every timeframe"
     assert codes(status(engine(), milestones=ms.model_copy(update={"pending": "pending broker terms"}))) == []
     assert codes(status(engine(), milestones=ms.model_copy(update={"tradeable": ["4h"]}))) == []
 
@@ -238,6 +240,7 @@ def test_a_failed_build_says_status_unknown_and_points_to_health():
     s = es.unknown_status()
     assert s.state == "blocked" and [b.code for b in s.blocks] == ["status_unknown"]
     assert s.blocks[0].kind == "act" and s.blocks[0].runbook == "Health check"
+    assert s.exits == es.EXITS_SILENT          # nothing is known, so promise only the broker's stops (N2)
 
 
 def test_every_owner_text_is_for_a_real_or_declared_reason():

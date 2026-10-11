@@ -81,6 +81,21 @@ describe("SafetyStrip", () => {
     expect(chip("Loss budget")).toHaveClass("idle");
   });
 
+  it("never says allowed from stale data: a warning with the report's time instead", () => {
+    const t0 = new Date(2026, 9, 14, 14, 2).getTime();      // local 14:02
+    const stale = "Safety state from 14:02, can't reach the server; check before approving";
+    const { rerender } = render(<SafetyStrip status={status()} accounts={[account()]} updatedAt={t0} now={t0 + 20_000} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(stale);
+    expect(screen.getByRole("alert")).toHaveClass("warn");
+    expect(screen.queryByText("New entries allowed")).toBeNull();
+    rerender(<SafetyStrip status={status()} accounts={[account()]} updatedAt={t0} now={t0 + 1_000} error />);
+    expect(screen.getByRole("alert")).toHaveTextContent(stale);
+    expect(screen.queryByText("New entries allowed")).toBeNull();
+    rerender(<SafetyStrip status={status()} accounts={[account()]} updatedAt={t0} now={t0 + 1_000} />);
+    expect(screen.getByRole("status")).toHaveTextContent("New entries allowed");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("shows loading and error states", () => {
     const { rerender } = render(<SafetyStrip />);
     expect(screen.getByRole("status")).toHaveTextContent("Checking safety state");
