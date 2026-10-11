@@ -185,6 +185,7 @@ def test_h16_count_receives_timestamps_only():
 
 # --------------------------------------------------------------------------- guard: nothing after the decision bar
 H17_MONTH = "2023-06"            # the first fit with 30 rows is at May's end
+LONDON_TZ = "Europe/London"
 
 
 def _events(name: str, bars: pd.DataFrame, cal: pd.DataFrame | None) -> pd.DataFrame:
@@ -464,6 +465,44 @@ def test_h17_literal_rule_a_day_whose_first_breach_is_blacked_out_has_no_entry(b
     strict = utc_index(ev.loc[ev["rule"] == "strict", "decision_utc"])
     lo, hi = co.blackout_intervals(cal)
     assert not co.in_intervals(epoch_ns(strict.sort_values()), lo, hi).any()
+
+
+@pytest.mark.parametrize("why", ["closed_session", "no_atr"])
+def test_h17_literal_p2_a_day_whose_first_breach_is_untradeable_has_no_entry(b1: pd.DataFrame,
+                                                                            monkeypatch: pytest.MonkeyPatch, why: str):
+    """Pin P-2 (literal, as the blackout): the day's FIRST breaching bar is the only candidate. If the session is
+    closed at its close or ATR(14) is not defined there, the day is skipped; no later breaching bar is taken."""
+    cal = co.cut_inputs(b1, None, _calendar(), HOLDOUT)[2]
+    base, ev = co.count_h17(b1, cal, H17_MONTH, min_rows=MIN_ROWS)
+    strict = ev[ev["rule"] == "strict"]
+    targets = utc_index(_sample(strict, 8)["decision_utc"])
+    assert len(targets) >= 4
+    if why == "closed_session":
+        real = co.DEFAULT_SESSIONS
+
+        class Closed:
+            def is_open(self, ts: pd.DatetimeIndex) -> np.ndarray:
+                return np.asarray(real.is_open(ts)) & ~np.isin(epoch_ns(pd.DatetimeIndex(ts)), epoch_ns(targets))
+
+        monkeypatch.setattr(co, "DEFAULT_SESSIONS", Closed())
+    else:
+        real_atr = co.atr
+
+        def no_atr(m: pd.DataFrame, n: int) -> pd.Series:
+            a = real_atr(m, n).astype(float).copy()
+            a[np.isin(epoch_ns(utc_index(m["ts_utc"]) + co.M15), epoch_ns(targets))] = np.nan
+            return a
+
+        monkeypatch.setattr(co, "atr", no_atr)
+    out, moved = co.count_h17(b1, cal, H17_MONTH, min_rows=MIN_ROWS)
+    days = set(utc_index(moved.loc[moved["rule"] == "strict", "decision_utc"]).tz_convert(LONDON_TZ).date)
+    assert not days & set(targets.tz_convert(LONDON_TZ).date)       # no entry on any of those days
+    lost = int(utc_index(strict["decision_utc"]).isin(targets).sum())
+    for half in ("high", "low"):
+        assert out[f"{half}_breach_days"] == base[f"{half}_breach_days"]       # the first breach itself is unchanged
+    assert out["high_events_strict"] + out["low_events_strict"] == (
+        base["high_events_strict"] + base["low_events_strict"] - lost)
+    assert out["high_first_breach_untradable"] + out["low_first_breach_untradable"] == lost
 
 
 # --------------------------------------------------------------------------- the whole run

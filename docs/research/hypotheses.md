@@ -186,9 +186,14 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 - Spawn neighbours from passers only: hold length ±50%, a 1d vs 4h execution grid point, short-only, cost-filter
   on/off.
 - Retire failures here with their reason.
-- Owner decisions pending:
+- Owner rulings (owner approved the research director's recommendations, 2026-10-11):
+  - P4 event minimum for daily families: **150, retire-only** (`research.screen_min_events_daily: 150`). It governs
+    H-01 and H-06 now, and H-15, H-07 and H-03 if they reach a daily trial.
+  - Consensus calendar source: **none**. H-11 stays blocked.
+  - Other instruments: **out of scope**, even if H-01 is net ≤ 0.
+  - Trial budget **20** a quarter; the conservative K_eff default is **confirmed**.
+  - `costs-v1` published by 2026-12-11 if the demo terminal runs, otherwise "priors accepted" on 2026-12-14.
+  - Owner's trade history: complete export, analysed locally, only the summary (R, %, counts, K) shared.
+- Owner decisions still pending:
   - D+ data pulls.
-  - Consensus calendar source.
-  - P4 event minimum for daily families.
-  - Other instruments if H-01 is net ≤ 0.
   - Event-family floor for H-18 and projected percentage daily caps (`opportunity-days.md` section 6).

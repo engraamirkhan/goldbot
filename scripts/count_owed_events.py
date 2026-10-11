@@ -309,9 +309,10 @@ def count_h17(b1: pd.DataFrame, cal: pd.DataFrame | None, first_month: str | Non
     """High days (baseline forecast for D >= the fit's median of fitted values, as known at the bar) with a qualifying
     breach: the first 15m bar closing in [09:00 London, 10:30 New York] with |close - O_D| > 1.0 x B, B the mean of
     |close at the same London time - O| over the previous 14 days that had that bar (market open, ATR(14) known), from
-    H-16's first OOS month. Literal rule (program decision): when that first breaching bar's close is inside a tier-1
-    blackout [-15, +30) min the day has no entry (`*_events_strict`, the trial count); the next breaching bar outside
-    the blackout (`*_events_next_bar`) is reported for transparency only. Low days the same (shadow half)."""
+    H-16's first OOS month. Literal rule (program decision; pin P-2 the same): when that first breaching bar's close is
+    inside a tier-1 blackout [-15, +30) min, or the session is closed at it, or ATR(14) is not defined there, the day
+    has no entry (`*_events_strict`, the trial count); the next tradeable breaching bar outside the blackout
+    (`*_events_next_bar`) is reported for transparency only. Low days the same (shadow half)."""
     source = "spec-derived (trend_day, E-3, not merged): preregistration-2027Q2-draft.md H-17"
     if cal is None or len(cal) == 0:
         return _not_counted("calendar-v1 missing (the tier-1 blackout is part of the rule)", source), pd.DataFrame()
@@ -355,18 +356,21 @@ def count_h17(b1: pd.DataFrame, cal: pd.DataFrame | None, first_month: str | Non
     in_oos = lc_date >= start
     out: dict[str, Any] = {"status": "counted", "source": source, "first_oos_month": first_month,
                            "rule": "literal: the day's first breaching bar; no entry that day if its close is in a "
-                                   "tier-1 blackout [-15, +30) min (program decision after the quant review)"}
+                                   "tier-1 blackout [-15, +30) min (program decision after the quant review), the "
+                                   "session is closed at it or ATR(14) is undefined there (pin P-2)"}
     times: list[np.ndarray] = []
     halves: list[str] = []
     rules: list[str] = []
     for half, day_ok in (("high", high), ("low", low)):
-        eligible = breach & day_ok & tradable & in_oos
-        first_breach = first_per_group(lc_date, eligible)
-        strict = first_breach[~blackout[first_breach]]              # literal rule: blacked-out first breach = no entry
-        next_bar = first_per_group(lc_date, eligible & ~blackout)   # old reading, reported for transparency only
+        first_breach = first_per_group(lc_date, breach & day_ok & in_oos)
+        # literal rule (blackout and pin P-2): an untradeable or blacked-out first breach = no entry that day
+        strict = first_breach[tradable[first_breach] & ~blackout[first_breach]]
+        # old reading (the next tradeable breaching bar outside the blackout), reported for transparency only
+        next_bar = first_per_group(lc_date, breach & day_ok & tradable & in_oos & ~blackout)
         out[f"{half}_days"] = int(len(np.unique(lc_date[day_ok & window & in_oos])))
         out[f"{half}_breach_days"] = len(first_breach)
         out[f"{half}_first_breach_in_blackout"] = int(blackout[first_breach].sum())
+        out[f"{half}_first_breach_untradable"] = int((~tradable[first_breach]).sum())
         out[f"{half}_events_strict"] = len(strict)
         out[f"{half}_events_next_bar"] = len(next_bar)
         out[f"{half}_per_year"] = per_year(close_ts[strict])

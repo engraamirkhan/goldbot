@@ -1045,6 +1045,41 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   in-review count script counts H-17's non-literal entries; fix before merge.** Session coverage and the
   conditional H-24 (`hypotheses.md` A4). Owner-method brief: `docs/research/owner-method-study.md`. Scorecard
   updated.
+- H-02 method text made executable (2026-10-11, quant review F1 of the registry writer, before any outcome).
+  `docs/research/preregistration-2027Q1.md` H-02 now says:
+  - the candidates are tsmom's, variant `{"timeframe": "4h", "max_bars": 12}`: |mean of the 1/5/20-day vol-scaled
+    scores| >= 0.5, side = the sign of the score, one at a time;
+  - top_k 39 (= max_selected; `side` is the 40th input);
+  - permutation is a confirmation filter (`permutation: true`), not a tie-break;
+  - freq_threshold and stability_threshold are both 0.6;
+  - the full `DiscoveryConfig.model_dump()` is pinned for the registry writer's spec.
+  Q2 draft: the H-14 run applies the extra cost frozen in its config (a differing settings value is only reported),
+  and H-14's differences from H-02 (stability 0.7, top_k unpinned) are listed for its freeze. Finding for the quant
+  reviewer: the 4h continuity row (C4H) has the same config hash as Q4 trial #17 (`tsmom-g0-76d7b19171`); only
+  the swap charged differs, and the swap is not in the config.
+- **H-17 count follows pin P-2 literally (2026-10-11; quant review follow-up to d2f18c6).** In count-owed-events
+  `count_h17`, the day's first breaching bar is now found before the tradeable check. If the session is closed at its
+  close or ATR(14) is undefined there, the day has no entry, the same treatment as a blacked-out first breach.
+  Previously such a day fell through to the next breaching bar. New field `*_first_breach_untradable`.
+  `*_events_next_bar` is still reported for transparency (the next tradeable breaching bar outside the blackout).
+  Test: `tests/test_count_owed_events.py::test_h17_literal_p2_a_day_whose_first_breach_is_untradeable_has_no_entry`
+  (closed session and missing ATR).
+- Owner research rulings recorded (2026-10-11; the owner approved the research director's recommendations).
+  - `research.screen_min_events_daily: 150` is committed: the daily-signal floor is retire-only.
+  - Code check, code unchanged: a daily screen with >= 150 events can still read `pass` (`research/screen.py`
+    `screen_verdict`). That pass reaches the model stage in `scripts/research_pass.py` and H-01's `continue`, which
+    permits model research only. Promotion still needs `research/gates.py` (>= 1,500 candidates), so the floor can
+    retire but never promote. If the stricter reading (no pass below 1,000) is wanted, that is a quant and
+    implementer change.
+  - Also decided: budget 20 unchanged; no consensus feed; no other instruments; K_eff default confirmed; `costs-v1`
+    published by 2026-12-11 if the demo terminal runs, otherwise "priors accepted" on 2026-12-14; owner history
+    exported in full, analysed locally, summary only.
+  - H-06 reading-rule pins G1-G4 written. The Q1 reservation is planned at 8 unless H-06's count is >= 150 (the
+    quant estimate is about 80-130).
+  - Q2 draft: P-1 resolved; P-2 adopted (a literal first breach: a closed session, no ATR or a blackout means no
+    entry; `trend_day` follows it); P-5 adopted (cost source pinned at the freeze, the same for gates and labels).
+  - Recorded in `docs/research/preregistration-2027Q1.md`, `preregistration-2027Q2-draft.md`, `hypotheses.md`,
+    `research-plan.md` and `scorecard-2026-10.md`.
 - **Owed pre-registration counts (2026-10-11): run count-owed-events and paste the counts before the freeze.**
   `.github/workflows/count-owed-events.yml` (workflow_dispatch only; dispatchable once it is on `main`) downloads
   data-v1, macro-v1 and calendar-v1 (`fetch_data_release.py --download-only`), cuts every input at

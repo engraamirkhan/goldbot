@@ -41,12 +41,14 @@ These are never decided by the product owner or by agents.
 - **Automatic deployment to the trading servers (CD).** CI runs on every change. Deploying to the Oracle VMs
   automatically (on merge or tag, with health check and rollback) waits for your approval. Until then, deploys stay
   manual via `vps_update` / the Linux equivalents.
-- **Event floor for daily-bar families.** P4 requires 1,000 events, and tsmom 1d has 454. Either keep the floor (slow
-  tsmom runs on 4h bars with a 1d condition, item 5), or set a lower floor for daily families.
-- **Large-tick instruments.** Research (Kurth et al.) suggests large-tick contracts keep trend where gold CFDs do
-  not. Adding instruments (silver or others) is your call.
-- **Trial budget.** `trial_budget_quarter` is 20, spent for Q4. Research does not recommend raising it. Item 11 adds
-  toolkit trials that compete with item 5 for Q1's 20.
+- ~~**Event floor for daily-bar families.**~~ **Decided 2026-10-11** (owner approved the research director's
+  recommendations): 150 rule-only events, retire-only (`research.screen_min_events_daily: 150`;
+  `docs/research/preregistration-2027Q1.md` "Owner rulings").
+- ~~**Large-tick instruments.**~~ **Decided 2026-10-11:** out of scope (gold only).
+- ~~**Trial budget.**~~ **Decided 2026-10-11:** 20 a quarter, unchanged. Also decided that day: no consensus feed
+  (H-11 blocked); the conservative K_eff default confirmed; `costs-v1` published by 2026-12-11 if the demo
+  terminal runs, otherwise "priors accepted" on 2026-12-14; the owner's trade history exported in full, analysed
+  locally, summary only.
 - **Going live.** Demo until the paper → tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
   and the typed phrase. Item 8 computes whether the gate is met. It never flips it.
 - **Research evidence across feature versions (ADR 0006, item 34).** For now the tournament accepts a gate pass

@@ -165,6 +165,13 @@ demo this year. Both lanes are kept: Q1 already funds the slow lane; Q2 funds th
 
 ## 9. Needs the owner (options and a recommendation; nothing decided here)
 
+**Decided 2026-10-11 (owner approved the research director's recommendations, 2026-10-11):** item 4 (ruling A) = a daily-signal floor of 150, retire-only, committed in
+settings; item 6 (budget) = 20, unchanged. Also decided: no consensus feed (H-11 stays blocked); no other
+instruments; the conservative K_eff default confirmed; `costs-v1` published by 2026-12-11 if the demo terminal runs,
+otherwise "priors accepted" on 2026-12-14; the owner's trade history exported in full, analysed locally, summary
+only. Items 1-3, 5 and 7 stay open.
+
+
 1. **Event floor for H-18** (~690 scheduled events in 15.75 years before the move filter, below the 1,000 floor).
    Options: (a) a 500-event retire-only floor for scheduled-event families; (b) pool with tier-2 events once BACKLOG
    18 / D-4 and E-1 exist; (c) drop H-18. **Recommendation: (b); until then H-18's Q2 slot stays conditional and

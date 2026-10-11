@@ -190,7 +190,9 @@ research:
   screen_min_events: 1000            # primary-signal screen (P4): events a rule needs; any screen with fewer events
                                      #   (whatever its sign or t) is "inconclusive (event floor)" and cannot retire the
                                      #   hypothesis. Changing it is an owner decision
-  screen_min_events_daily: null      # override for rules whose signal is on daily bars (owner ruling A,
+  screen_min_events_daily: 150       # rules whose signal is on daily bars (owner ruling A, 2026-10-11: 150,
+                                     #   retire-only: below it "inconclusive"; at or above it a screen can fail and
+                                     #   retire, while promotion still needs research/gates.py, >= 1,500 candidates;
                                      #   docs/research/preregistration-2027Q1.md); null = screen_min_events
   director_floor: 2                  # research director: every unblocked family gets at least this many of the
                                      # month's trials; the rest of (budget x families) follows evidence of signal
