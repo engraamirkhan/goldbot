@@ -32,7 +32,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, NoReturn
 
 if TYPE_CHECKING:   # service entry points import lazily; these are for annotations only
     import pandas as pd
@@ -221,6 +221,24 @@ def run_supervisor() -> None:
         time.sleep(5)
 
 
+def refuse_start(account_id: str, why: str, info: Any = None, state_dir: str | Path = "state") -> NoReturn:
+    """End an engine start the terminal-account check refused (review LOW-A): `startup_error` goes into
+    engine_<account>.json first, so health names the cause instead of showing a stale engine, then SystemExit. The
+    deposit currency is kept for the supervisor's currency check; no login, server or balance is written."""
+    import json
+
+    from goldbot.base import write_atomic
+    currency = str(getattr(info, "currency", "") or "").strip().upper() or None
+    try:
+        Path(state_dir).mkdir(parents=True, exist_ok=True)
+        write_atomic(Path(state_dir, f"engine_{account_id}.json"), json.dumps({
+            "account": account_id, "ts": time.time(), "dq_error": True, "dq_checks": ["startup_refused"],
+            "stage": "unknown", "currency": currency, "startup_error": why[:300]}), durable=False)
+    except OSError:
+        log.exception("startup refusal not written to the engine state")
+    raise SystemExit(why)
+
+
 def run_engine(account_id: str) -> None:
     from pathlib import Path
 
@@ -243,17 +261,19 @@ def run_engine(account_id: str) -> None:
         # service manager restarts it, so restart reconciliation settles any order whose result was lost (row X7)
         from goldbot.execution.bridge import RemoteBroker
         broker: Any = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}")
-        why = accounts.verify_terminal_account(acc, broker.account())
+        info = broker.account()
+        why = accounts.verify_terminal_account(acc, info)
         if why:
-            raise SystemExit(f"refusing to trade {account_id} through the bridge: {why}")
+            refuse_start(account_id, f"refusing to trade {account_id} through the bridge: {why}", info)
     elif sys.platform == "win32":
         from goldbot.execution.mt5_adapter import MT5Broker
         acc = accounts.ensure_login(acc)
         broker = MT5Broker(terminal_path=acc.terminal_path, login=acc.login, password=accounts.account_password(acc),
                            server=acc.server, server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id)
-        why = accounts.verify_terminal_account(acc, broker.account())
+        info = broker.account()
+        why = accounts.verify_terminal_account(acc, info)
         if why:
-            raise SystemExit(f"refusing to trade {account_id}: {why}")
+            refuse_start(account_id, f"refusing to trade {account_id}: {why}", info)
     else:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)

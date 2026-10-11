@@ -1045,6 +1045,12 @@ entries refused (`unchecked`) and compares the report with its own at start and 
 | unchecked | the engine is starting, has only ever seen `/health` unreachable, or last confirmed the bridge over 5 min ago (a stuck check) | entries refused (`bridge_incompatible`). When the bridge itself answers, health `bridge_compat:<account>` warns "not confirmed" for the first 2 min, then FAILs (Telegram); an ok over 5 min old FAILs at once. The engine replaces a check thread hung over 15 s on its next 60 s tick and every `/health` read has a hard 5 s deadline, so it heals itself; if the FAIL persists, `sudo systemctl restart goldbot-engine@<account>` |
 | unreachable | `/health` did not answer after the bridge was confirmed ok | no block by itself (no ticks either, so `stale_data` blocks) until the ok is 5 min old; `bridge:<account>` fails; an earlier incompatible is kept |
 
+**Deploy order: the MT5 box first; brain-first only with a flat book.** From protocol v4 (`MIN_COMPATIBLE = 4`) a new
+brain refuses to start against an older bridge: the bridge does not report the account margin mode, which must be
+hedging (`engine:<account>` FAILs with "engine refused to start: ... deploy the MT5 box first"; `bridge_compat`
+names the version). While the engine is down nothing manages open trades beyond their broker stops, so update the
+brain first only when no position is open.
+
 Fix (the MT5 box first, always, when a release adds a bridge method):
 1. On the MT5 box: `sudo goldbot-deploy <sha the brain runs>`, then `sudo systemctl restart goldbot-bridge@<account>`.
 2. On the brain: `curl -fsS http://127.0.0.1:8765/health ; echo` shows `api_version`, `min_compatible`, `methods`,

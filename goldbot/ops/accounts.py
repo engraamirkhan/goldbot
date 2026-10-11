@@ -241,8 +241,11 @@ def verify_terminal_account(acc: Account, info: Any) -> str | None:
     if info.trade_mode != want:
         return f"terminal account is {info.trade_mode or 'unknown'}, {acc.account_id} is {acc.mode}"
     margin = getattr(info, "margin_mode", None)
+    if margin is None:          # a v3 bridge does not report it (review LOW-A: say what to do)
+        return ("terminal margin mode unknown (not reported; the engine needs a hedging account): bridge older than "
+                "protocol v4: deploy the MT5 box first")
     if margin != "hedging":
-        return f"terminal account margin mode is {margin or 'unknown'}; the engine needs a hedging account"
+        return f"terminal account margin mode is {margin}; the engine needs a hedging account"
     return None
 
 

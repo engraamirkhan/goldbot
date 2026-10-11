@@ -341,6 +341,9 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         parts.append(f"state {_age(age)} old")
     else:
         parts.append(f"state {_age(age)} old")
+    if e.get("startup_error"):              # the engine refused to start (review LOW-A): name the cause
+        statuses.append("fail")
+        parts.append(f"engine refused to start: {e['startup_error']}")
     stage = str(e.get("stage", "unknown"))
     if stage == "halted":
         statuses.append("fail")

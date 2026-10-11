@@ -83,11 +83,11 @@ METHODS: dict[str, tuple[str, bool]] = {
 # bridge lacks a method it calls (goldbot/ops/bridge_compat.py). Exits are never gated by it.
 # v3 (ADR 0010): the brain reads responses tolerantly (unknown fields dropped); a v2 brain read them strictly. Same wire
 # bytes, so MIN_COMPATIBLE stays 2; a future bridge that adds a response field sets MIN_COMPATIBLE = 3.
-# v4: AccountInfo.margin_mode (hedging | netting | exchange). A v3 brain drops it and works as before; a v4 brain on a
-# v3 bridge reads None and refuses to start (accounts.verify_terminal_account: a hedging account is required), so the
-# MT5 box is deployed first. MIN_COMPATIBLE = 3 as planned above (a v2 brain reads responses strictly).
+# v4: AccountInfo.margin_mode (hedging | netting | exchange). A v4 brain on a v3 bridge reads None and refuses to start
+# (accounts.verify_terminal_account: a hedging account is required), so the MT5 box is deployed first. MIN_COMPATIBLE
+# = 4 (review LOW-A): bridge-compat and preflight then name a v3 bridge as the cause instead of a generic refusal.
 API_VERSION = 4
-MIN_COMPATIBLE = 3
+MIN_COMPATIBLE = 4
 _RECORDS: dict[str, type[BaseModel]] = {"SymbolInfo": SymbolInfo, "AccountInfo": AccountInfo, "Tick": Tick, "OrderResult": OrderResult,
             "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent, "TradingSession": TradingSession}
 # Any change to these records' fields goes to the trading-safety reviewer (AGENT_STANDARDS S12): responses are read
