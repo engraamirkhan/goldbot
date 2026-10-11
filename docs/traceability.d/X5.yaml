@@ -1,0 +1,5 @@
+id: X5
+requirement: '"Market entries with SL and TP attached in the request"'
+status: implemented
+code: goldbot/engine/runner.py:349-351; goldbot/execution/mt5_adapter.py:107
+test: tests/test_engine.py::test_engine_auto_mode_places_orders_and_writes_state

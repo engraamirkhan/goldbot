@@ -1,0 +1,5 @@
+id: A2
+requirement: Engine window read from `approval_window_seconds`
+status: implemented
+code: goldbot/engine/runner.py:103 `EngineConfig.approval_window_s` (default 90) is the proposal's `window_s` (:568); goldbot/ops/run.py:121 sets it from `settings.risk.approval_window_seconds`
+test: tests/test_bar_close_clock.py::test_proposals_carry_the_configured_approval_window, tests/test_bar_close_clock.py::test_production_engine_reads_the_approval_window_from_settings, tests/test_bar_close_clock.py::test_engine_approval_window_defaults_to_the_settings_value

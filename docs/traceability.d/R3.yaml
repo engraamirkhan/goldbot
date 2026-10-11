@@ -1,0 +1,5 @@
+id: R3
+requirement: '"Stop distance is 1.5 x ATR(14) on the decision timeframe, floored at the broker stop level plus spread"'
+status: deviates
+code: goldbot/risk/gate.py:167 uses the specialist's `stop_atr` x ATR (1.0-1.5 per the Modelling table), so the live stop equals the label's stop; the floor is implemented
+test: 'floor: tests/test_cov_risk.py::test_stop_distance_is_floored_at_broker_stop_level_plus_spread'

@@ -1,0 +1,5 @@
+id: D3
+requirement: Risk-day "ends at 00:00 UTC"
+status: implemented
+code: goldbot/data/timeutil.py:70
+test: tests/test_cov_risk.py::test_new_day_resets_day_start_equity_at_utc_midnight

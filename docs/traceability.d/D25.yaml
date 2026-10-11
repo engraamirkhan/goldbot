@@ -1,0 +1,5 @@
+id: D25
+requirement: Timestamps via `epoch_ns`, never `.asi8` (CLAUDE.md)
+status: implemented
+code: goldbot/data/timeutil.py:22
+test: tests/test_data_layer.py::test_epoch_ns_is_unit_independent

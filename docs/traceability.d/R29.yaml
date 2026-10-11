@@ -1,0 +1,5 @@
+id: R29
+requirement: '"RiskGate is the only path to an order" (CLAUDE.md) and gate re-run at approval'
+status: implemented
+code: goldbot/engine/runner.py:309 (gate before proposal), :331-345 `_on_decision` re-checks
+test: tests/test_cov_engine.py::test_approval_re_runs_the_risk_gate_and_a_halt_meanwhile_blocks_the_entry

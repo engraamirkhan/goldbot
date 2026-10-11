@@ -1,0 +1,5 @@
+id: X17
+requirement: '"upserts on a content hash so retries are idempotent"'
+status: implemented
+code: goldbot/webhook/app.py:40, 87-90
+test: tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar

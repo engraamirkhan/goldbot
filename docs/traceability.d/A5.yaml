@@ -1,0 +1,5 @@
+id: A5
+requirement: Proposal carries "account, direction, lots, stop, target, p, top three SHAP features and current spread"
+status: partial
+code: goldbot/telegram/approvals.py `Proposal.text`; top features are gain importance (`model.importance`), not per-trade TreeSHAP
+test: tests/test_cov_telegram.py::test_proposal_text_carries_what_the_owner_needs_to_decide

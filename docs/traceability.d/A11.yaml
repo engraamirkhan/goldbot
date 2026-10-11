@@ -1,0 +1,5 @@
+id: A11
+requirement: Owner halt fails closed on an unreadable control file
+status: implemented
+code: goldbot/telegram/bus.py:129
+test: tests/test_cov_telegram.py::test_owner_halt_round_trips_and_fails_closed_on_a_corrupt_file

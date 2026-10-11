@@ -1,0 +1,5 @@
+id: P3
+requirement: '"the engine refuses to return a live account unless the gate file agrees with the registry"'
+status: implemented
+code: goldbot/ops/accounts.py:243-250; goldbot/ops/run.py `run_engine`
+test: tests/test_accounts.py::test_registry_demo_first_and_live_locked

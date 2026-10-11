@@ -1,0 +1,5 @@
+id: X2
+requirement: '"engine refuses to start if a symbol is missing from Market Watch"'
+status: implemented
+code: goldbot/execution/mt5_adapter.py:42
+test: untested (Windows only)

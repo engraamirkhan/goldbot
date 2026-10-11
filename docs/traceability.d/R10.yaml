@@ -1,0 +1,5 @@
+id: R10
+requirement: Daily cap resets "00:00 UTC (risk-day)"
+status: implemented
+code: goldbot/risk/gate.py:189 `new_day`; goldbot/engine/runner.py:461 `_roll_risk_period`
+test: tests/test_cov_risk.py::test_new_day_resets_day_start_equity_at_utc_midnight; tests/test_risk_ops.py::test_engine_rolls_caps_across_day_and_week_and_survives_restart

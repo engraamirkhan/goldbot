@@ -1,0 +1,5 @@
+id: A1
+requirement: '"the window is 90 seconds, timeouts are logged EXPIRED_UNAPPROVED"'
+status: implemented
+code: goldbot/telegram/approvals.py:31, 48; goldbot/engine/runner.py:320; config/settings.yaml:63
+test: tests/test_trace_data_exec.py::test_approval_window_and_reason_codes; tests/test_cov_telegram.py::test_a_late_approval_is_logged_as_expired_unapproved

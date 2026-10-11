@@ -1,0 +1,5 @@
+id: D14
+requirement: Macro tables carry `value_date`, `available_utc`, `vintage`; "features join with merge_asof on available_utc only", with a unit test seeding a fake release
+status: implemented
+code: 'goldbot/data/store.py:145 `asof_join` (refuses frames without `available_utc`); goldbot/data/macro.py (`fred_available_utc`, `merge_vintages`, `driver_frames`); .github/workflows/data-macro.yml + scripts/fred_macro.py (FRED DFII10/T10YIE/DTWEXBGS/GVZCLS/DGS2 -> release macro-v1); goldbot/data/release.py `sync_release_macro`; goldbot/features/macro.py `macro_drivers` (opt-in: research_pass `--macro`; not built by the live engine yet). COT and GLD loaders exist but are not pulled'
+test: tests/test_data_layer.py::test_asof_join_never_leaks_future_release; tests/test_data_layer.py::test_a_fake_macro_release_never_reaches_a_bar_before_its_available_utc; tests/test_cov_labels_store.py::test_asof_join_never_uses_a_row_before_it_was_available; tests/test_macro.py

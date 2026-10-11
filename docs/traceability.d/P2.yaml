@@ -1,0 +1,5 @@
+id: P2
+requirement: Live enabled only "after the paper-to-tiny-live gate is recorded as passed and Aamir types the exact confirmation phrase"
+status: implemented
+code: goldbot/ops/accounts.py:230
+test: tests/test_accounts.py::test_live_unlock_requires_gate_and_phrase

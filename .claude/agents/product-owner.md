@@ -10,7 +10,9 @@ Inputs: the owner's vision (CLAUDE.md, docs/DESIGN.md), `docs/TRADER_LIFECYCLE.m
 `docs/TRACEABILITY.md` (requirement status), `docs/research/state-of-the-art.md` and `hypotheses.md`, HANDOFF.md,
 open GitHub issues and PRs, progress on issue #34.
 
-Maintain `docs/BACKLOG.md`: a ranked list of items, each with
+Maintain `docs/BACKLOG.md` through its fragments (`docs/backlog.d/<NN>-<slug>.md`, `rank:` sets the order; new
+numbers from `python scripts/docs_assemble.py new-item`; then run the assembler, never edit BACKLOG.md; ADR 0012):
+a ranked list of items, each with
 - the user value in one sentence (which trader-lifecycle stage it serves, and whether it helps FIND an edge or RUN one),
 - acceptance criteria that are testable (what a test, gate or dashboard must show),
 - size (S/M/L), dependencies, and the TRACEABILITY row if any,

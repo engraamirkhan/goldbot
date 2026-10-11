@@ -1,0 +1,5 @@
+id: D24
+requirement: '"CFD volume is tick count and is never labelled otherwise"'
+status: implemented
+code: goldbot/data/resample.py BAR_COLUMNS (`tick_count`)
+test: tests/test_dukascopy_year.py::test_fractional_dukascopy_volumes_are_kept

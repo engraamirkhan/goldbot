@@ -1,0 +1,5 @@
+id: V3
+requirement: Milestone ladder computed from live equity, price, ATR(14) per timeframe and the min-lot sizing (goldbot/risk/sizing.py), not hard-coded; 50% higher ATR raises every threshold 50%; without the broker's currency factor or lot terms it shows "pending broker terms"
+status: partial
+code: 'goldbot/ops/account_view.py `milestones`; goldbot/engine/runner.py `_update_ladder` (ATR per 15m/1h/4h/1d at bar closes), `_lot_terms`, `_published_limits`. Missing: on the GBP demo the ladder stays pending until BACKLOG 28 publishes `usd_to_account` in the engine state'
+test: tests/test_account_view.py::test_fifty_percent_higher_atr_raises_every_threshold_by_fifty_percent, ::test_a_gbp_account_without_the_engines_currency_factor_shows_pending_broker_terms_and_no_numbers, ::test_the_min_lot_exception_cap_replaces_the_tolerance_rule_once_the_engine_publishes_it; tests/test_engine_account_state.py::test_ladder_atr_is_published_per_timeframe_and_none_where_the_history_is_too_short, ::test_a_ladder_timeframe_that_failed_is_retried_at_the_next_close, ::test_a_failing_ladder_update_or_symbol_info_never_stops_the_bar_close

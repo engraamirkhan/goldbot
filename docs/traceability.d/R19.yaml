@@ -1,0 +1,5 @@
+id: R19
+requirement: Open positions "2 per account", entry skipped
+status: implemented
+code: goldbot/risk/gate.py:140-141
+test: tests/test_cov_risk.py::test_each_account_condition_blocks_entries_on_its_own; ::test_values_just_inside_the_limits_are_allowed

@@ -1,0 +1,5 @@
+id: R27
+requirement: '"Each engine gates entries against its own measured table" and "minimum model-implied target of 2.5x round-trip cost"'
+status: implemented
+code: goldbot/risk/gate.py:152-153; goldbot/engine/runner.py:645 `_cost_atr`
+test: tests/test_cov_risk.py::test_target_must_clear_two_and_a_half_times_round_trip_cost; tests/test_engine_costs.py::test_cost_comes_from_the_table_by_session

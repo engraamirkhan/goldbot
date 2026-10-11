@@ -1,0 +1,5 @@
+id: U14
+requirement: Who switched the entry mode is shown only to the verified owner; other roles see the channel
+status: implemented
+code: goldbot/api/explain.py `automode_view`; web/src/screens/AutoMode.tsx `setBy`
+test: tests/test_api_code_lockout.py::test_mode_by_shows_who_to_the_owner_and_only_the_channel_to_other_roles; web/src/screens/AutoMode.test.tsx "shows who set the mode to the owner and only the channel to a viewer"

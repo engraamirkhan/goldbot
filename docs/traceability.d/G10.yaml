@@ -1,0 +1,5 @@
+id: G10
+requirement: Research analyst runs walk-forward trials and records them; promotes nothing
+status: implemented
+code: goldbot/agents/tools.py `run_trial`
+test: tests/test_agents.py::test_research_analyst_tests_a_hypothesis_and_records_the_verdict

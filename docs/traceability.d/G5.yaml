@@ -1,0 +1,5 @@
+id: G5
+requirement: '"capped (initially 12 live, 24 in shadow)"'
+status: implemented
+code: goldbot/research/population.py:45-46
+test: tests/test_population.py::test_shadow_and_live_caps

@@ -1,0 +1,5 @@
+id: D18
+requirement: 'Quality: "non-monotonic time"'
+status: implemented (fixed here)
+code: 'goldbot/data/quality.py:27-29, 46-50: checked on arrival order; before, the batch was sorted first so the check could never fire (the engine had a workaround in goldbot/engine/runner.py:447)'
+test: tests/test_trace_data_exec.py::test_non_monotonic_batch_is_an_error

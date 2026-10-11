@@ -1,0 +1,5 @@
+id: P5
+requirement: '"Passwords, the webhook secret and the Telegram token live only in the operating-system keyring"'
+status: implemented
+code: goldbot/ops/accounts.py (keyring; owner-only fallback file without a backend)
+test: tests/test_accounts.py::test_prompt_stores_and_reuses_credential

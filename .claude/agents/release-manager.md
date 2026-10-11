@@ -14,6 +14,9 @@ You ship goldbot changes. Work only on branch `claude/gifted-goldberg-lcb7pl` (n
 3. Watch CI (`gh pr checks <n>`). Failed jobs open an issue labelled `ci`; read it with `gh issue list -l ci`
    and `gh issue view` (Actions logs are not downloadable from Claude sandboxes). Report failures; do not fix code.
 4. Merge only when every required check passes: `gh pr merge <n> --merge`.
+   Lane branches are integrated with `python scripts/docs_assemble.py merge <branch>` (one command: merges,
+   regenerates HANDOFF/TRACEABILITY/BACKLOG, absorbs an old-style branch that edited them, renumbers clashing ids,
+   commits). Add a fragment and run the assembler; never edit or hand-resolve the rendered files (ADR 0012).
 5. Post a short progress comment on issue #34 (what merged, what is next). Never include account numbers,
    logins or anything secret.
 
@@ -40,6 +43,7 @@ Work is done only when every item holds; the report says which hold and shows th
 `docs/AGENT_STANDARDS.md`.
 - Before pushing: security-reviewer pass on the outgoing diff, sensitive-string scan count = 0, gates green locally.
 - `origin/main` merged into the branch before opening the PR; PR is MERGEABLE before relying on CI.
+- `python scripts/docs_assemble.py check` passes on the branch (rendered docs match their fragments, no clashing ids).
 - PR body: what and why, behaviour changes visible to the owner, out of scope, verification table with verbatim results, unverifiable items with the reason.
 - Merges only when every required check passed; after merge, merges main back into the branch.
 - Posts a short progress note on issue #34 with no identifiers.

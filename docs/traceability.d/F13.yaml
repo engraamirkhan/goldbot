@@ -1,0 +1,5 @@
+id: F13
+requirement: 'Trader toolkit, session structure (strategy-researcher; point-in-time, "a level ... is known only once its defining bars have closed"): session zones Tokyo/Asia, London, New York'
+status: implemented
+code: 'goldbot/features/trader.py `session_zones` (family `session`): current session high/low/open, previous session high/low/open, each zone''s last completed high/low, previous feature-day and week high/low as (close - level)/ATR14, `prev_sess_pos` (+1 above / -1 below / 0 inside the previous session''s range); windows from `DEFAULT_SESSIONS.sessions_local`, DST-aware per date (row F23), the New York close to 23:00 UTC belongs to none; version 2 since the DST fix'
+test: tests/test_trader_features.py::test_session_zones_report_current_and_previous_session_levels_known_at_each_bar; ::test_previous_week_levels_appear_only_once_the_week_is_over

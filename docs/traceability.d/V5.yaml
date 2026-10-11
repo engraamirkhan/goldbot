@@ -1,0 +1,5 @@
+id: V5
+requirement: The daily digest carries the month so far (time-weighted %, trades, R, average per trading day) once the month has a closed trade, counting trades closed before today only
+status: implemented
+code: goldbot/telegram/digest.py `month_line`; goldbot/ops/monthly_report.py `month_to_date_line`
+test: tests/test_monthly_report.py::test_month_to_date_line_for_the_digest, ::test_the_digest_counts_only_trades_closed_before_today, ::test_the_daily_digest_carries_the_month_so_far_line_under_its_line_budget

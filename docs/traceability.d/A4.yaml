@@ -1,0 +1,5 @@
+id: A4
+requirement: '"Rejections carry a reason code (news, cost, discretion, duplicate, other)"'
+status: implemented
+code: goldbot/telegram/approvals.py:24, 111-112; goldbot/telegram/bus.py:102-104
+test: tests/test_cov_telegram.py::test_rejection_needs_a_listed_reason_code_and_a_bad_one_leaves_it_pending; ::test_every_reason_code_is_accepted_and_recorded

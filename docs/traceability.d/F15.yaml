@@ -1,0 +1,5 @@
+id: F15
+requirement: Trader toolkit, fair value gaps (three-bar imbalance)
+status: implemented
+code: 'goldbot/features/trader.py `fair_value_gaps` (family `smc`): nearest unfilled bullish/bearish gap distance, age, unfilled size (ATR) and count; partial fills shrink the gap, a bar through the far edge fills it; gaps < 0.1 ATR ignored, > 400 bars dropped'
+test: tests/test_trader_features.py::test_fair_value_gap_forms_on_the_third_bar_shrinks_on_partial_fill_and_is_dropped_when_filled

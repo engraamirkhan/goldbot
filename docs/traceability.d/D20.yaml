@@ -1,0 +1,5 @@
+id: D20
+requirement: 'Quality: "spikes (>12 sigma of trailing hour with no match on the other feed)"'
+status: implemented
+code: '12 sigma of the trailing 60 bars: goldbot/data/quality.py `check_bars` (single feed, unchanged); other-feed match: `confirm_spikes` / `spike_matched` keep a spike only when the other feed has no same-direction move of >= half its size within +-1 minute (single minutes or the whole window); applied where both feeds exist (crossfeed `reconcile_account`, engine bars vs broker M1)'
+test: tests/test_data_layer.py::test_quality_checks_flag_spike_and_bid_gt_ask; tests/test_crossfeed.py::test_one_sided_spike_stays_a_warning_and_a_matched_spike_is_dropped; ::test_spike_match_needs_the_same_direction_and_half_the_size; ::test_single_feed_spike_check_is_unchanged_without_another_feed; ::test_reconcile_records_only_unconfirmed_spikes

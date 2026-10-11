@@ -1,0 +1,5 @@
+id: R7
+requirement: '"Combined exposure across both accounts is capped at 3 lots or 30% of combined equity notional, treated as one position"'
+status: implemented
+code: engines publish `open_lots`/`open_notional` (goldbot/engine/runner.py `_write_state`); goldbot/risk/supervisor.py `evaluate` publishes per-account and combined exposure; the engine reads the other accounts' share (`_refresh_account`); goldbot/risk/gate.py `check` blocks `combined_exposure_cap` past 3 lots, or open notional above 30% of what combined equity carries at the 1:20 cap (6x combined equity; the design does not define "equity notional", this is the reading taken)
+test: tests/test_engine_safety.py::test_supervisor_publishes_the_combined_exposure_of_both_accounts; tests/test_engine_safety.py::test_the_gate_blocks_entries_that_would_breach_the_combined_exposure_cap; tests/test_engine_safety.py::test_engine_reads_other_accounts_exposure_and_the_combined_size_down_from_the_supervisor

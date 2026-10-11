@@ -1,0 +1,5 @@
+id: M29
+requirement: '"Retired specialists keep running in shadow"'
+status: implemented
+code: goldbot/research/population.py:47 (182 days)
+test: tests/test_population.py::test_retirement_by_confidence_bound_and_the_six_month_shadow_tail

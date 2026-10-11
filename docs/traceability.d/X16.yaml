@@ -1,0 +1,5 @@
+id: X16
+requirement: 'Webhook: "verifies an HMAC over the payload in constant time, rejects replayed nonces"'
+status: deviates
+code: constant-time shared secret in the body (goldbot/webhook/app.py:84; TradingView cannot sign) plus content-hash idempotency; no nonce
+test: tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar

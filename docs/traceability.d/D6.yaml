@@ -1,0 +1,5 @@
+id: D6
+requirement: Daily bars on the feature-day
+status: implemented
+code: goldbot/data/resample.py:74-79
+test: tests/test_data_layer.py::test_resample_15m_1h_1d

@@ -1,0 +1,5 @@
+id: D11
+requirement: Live collector "polls copy_ticks_from every 250 ms, dedups on (time_msc, bid, ask, flags)"
+status: implemented
+code: goldbot/execution/broker.py `Tick.flags` (default 0, backward compatible) and `tick_key`; goldbot/execution/mt5_adapter.py `copy_ticks` keeps `flags` and dedups on (ts, bid, ask, flags), `last_tick` carries flags, `stream_ticks` (and RemoteBroker's) polls every 0.25 s and dedups on `tick_key`
+test: tests/test_margin_and_tick_dedup.py::test_mt5_ticks_carry_flags_and_the_dedup_keeps_ticks_that_differ_only_by_flags, ::test_the_tick_record_stays_backward_compatible

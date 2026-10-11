@@ -1,0 +1,5 @@
+id: F20
+requirement: 'Survey rank 10, jump flag (#31, Lee-Mykland): raw jump features only (post-jump behaviour needs news timing)'
+status: implemented
+code: 'goldbot/features/survey.py `jumps` (family `volatility`): `jump_z` = r / bipower sigma of the 60 prior returns, `jump_flag` (abs z > 4), `jump_sign`, `bars_since_jump` (cap 500)'
+test: tests/test_survey_features.py::test_a_jump_is_flagged_with_its_sign_and_counted_from

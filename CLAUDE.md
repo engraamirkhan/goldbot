@@ -57,5 +57,9 @@ Frontend (`cd web && npm ci`):
   `PW_CHROMIUM_PATH=/opt/pw-browsers/chromium-*/chrome-linux/chrome`)
 - API contract: after changing goldbot/api, run `python scripts/export_openapi.py && npm --prefix web run gen:api` and commit both files
 
+Docs (ADR 0012): HANDOFF.md, docs/TRACEABILITY.md and docs/BACKLOG.md are generated. Add a fragment and run the assembler: `scripts/docs_assemble.py
+new-handoff <slug>` / `new-row R --slug <s>` / `new-item --slug <s> --title <t>`, edit the new file, then `python scripts/docs_assemble.py`.
+Never edit the rendered files (the `docs-assemble` hook fails). Integrate lanes with `scripts/docs_assemble.py merge <branch>`.
+
 CI (`.github/workflows/ci.yml`) runs pre-commit, backend lint/typecheck/unit/integration, frontend lint/typecheck/unit,
 api-contract and e2e as separate jobs; run the same commands locally before pushing.

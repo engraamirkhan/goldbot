@@ -1,0 +1,5 @@
+id: D21
+requirement: 'Quality: "stale feed (90 s without a tick in session)"'
+status: implemented
+code: goldbot/data/quality.py:74 `stale_feed`
+test: tests/test_trace_data_exec.py::test_stale_feed_is_90s_in_session_only

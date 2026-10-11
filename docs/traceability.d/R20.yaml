@@ -1,0 +1,5 @@
+id: R20
+requirement: 'News blackout "CPI, NFP, FOMC statement and presser, PCE: -15 to +30 min", no entries'
+status: implemented
+code: goldbot/data/econ_calendar.py:24 (tiers), :75 `blackout_window`; goldbot/engine/runner.py:535
+test: tests/test_econ_calendar.py::test_blackout_window_is_15_minutes_before_to_30_after_a_tier1_event; ::test_engine_blocks_entries_inside_the_blackout

@@ -1,0 +1,5 @@
+id: M30
+requirement: 'Bounded research loop: fixed monthly trial budget, +-25% label grid, every trial in the registry feeding DSR'
+status: implemented
+code: goldbot/ops/jobs.py `monthly_research`; config/settings.yaml research; goldbot/research/registry_sync.py
+test: tests/test_jobs_integration.py::test_monthly_research_is_bounded_and_counted; ::test_label_grid_is_the_26_neighbours_of_the_base

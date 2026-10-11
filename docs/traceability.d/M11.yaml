@@ -1,0 +1,5 @@
+id: M11
+requirement: '"Size multiplier m = w * clip((p - p0)/0.20, 0, 1), p0 = (S + c)/(T + S)"'
+status: implemented
+code: goldbot/research/metrics.py:44, 52
+test: untested

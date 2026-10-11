@@ -1,0 +1,5 @@
+id: M20
+requirement: Saturday retrain on "a rolling window matching their walk-forward train length"
+status: implemented
+code: goldbot/ops/jobs.py `saturday_retrain` (train + 4 test windows)
+test: tests/test_jobs_integration.py::test_retrain_challenger_shadow_promotion_cycle

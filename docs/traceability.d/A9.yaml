@@ -1,0 +1,5 @@
+id: A9
+requirement: '"/halt and /approve need no second factor; /rearm, /mode and any parameter change require a 6-digit TOTP within 60 seconds"'
+status: implemented
+code: goldbot/telegram/approvals.py:25, 134; goldbot/api/auth.py:53 (+-1 step of 30 s); `/mode propose` is exempt (it lowers authority, as /halt does; A10)
+test: tests/test_cov_telegram.py::test_halt_needs_no_second_factor_but_authority_raising_commands_do
