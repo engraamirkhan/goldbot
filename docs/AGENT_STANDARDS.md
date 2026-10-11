@@ -20,6 +20,7 @@ file. The product owner accepts work against them; the release manager does not 
 | S9 | **Docs in the same change.** HANDOFF bullet, TRACEABILITY row + counts, RUNBOOK when the owner's steps change, API contract regenerated after `goldbot/api` changes. | Files in the diff |
 | S10 | **Owner decisions isolated.** Anything only the owner may decide (budget, instruments, going live, spending, deployment to servers, gate thresholds) is listed with options and a recommendation, never decided. | "Needs the owner" list |
 | S11 | **Concise.** Reports within the length the brief sets; tables over prose where they help. | Word count |
+| S12 | **Persisted state survives a rollback** (ADR 0010). Every new field on a persisted record has a default that is safe when missing: an older release drops the field on rewrite, and the newer one must then read the default correctly. Persisted state is read with `goldbot.base.load_record` / `load_record_json` (or `RecordRepo(..., tolerant=True)`); only the strict allowlist (credentials, `Control`, `Settings`, bridge order requests) reads with `forbid`. A new persisted model adds a case to `tests/test_persistence_compat.py`. A new restriction is encoded so an older release fails closed: a new value of an existing `Literal` (an older release rejects it), never a new boolean or optional field (an older release drops it and trades without the restriction). A new top-level table in a state file that carries client ids or broker orders (an older release does not read it, only warns) needs a rollback story reviewed by the trading-safety reviewer before it ships. **Bridge responses too** (OrderResult, Position, SymbolInfo, AccountInfo, Tick, BrokerTerms, TradingSession; read tolerantly by the brain): a new field never changes the meaning of an existing one; a non-fill, partial or pending outcome is expressed through `ok=False`, `retcode`, `filled_lots` or `position_id`, never through a new field alone; a new restriction is a new `Literal` value of an existing field or a change to an existing boolean; any change goes to the trading-safety reviewer and bumps `bridge.API_VERSION`. | Default named per new field; compat case or allowlist entry |
 
 ## Workflow security (anyone editing `.github/workflows/`)
 - Pin every action to a full 40-hex commit SHA with the version as a trailing comment
@@ -78,7 +79,7 @@ Each delivered item is scored; it is accepted only with every row "yes".
 | --- | --- |
 | Every acceptance criterion in the backlog item has a passing test or shown evidence | |
 | Agent's own Definition of done fully met (report shows each item) | |
-| Shared standards S1-S11 met | |
+| Shared standards S1-S12 met | |
 | Required reviewers signed off; HIGH/CRITICAL findings closed and re-verified | |
 | CI green on the PR; merged; main merged back into the branch | |
 | Owner-visible behaviour change described in the PR | |
@@ -91,3 +92,8 @@ Each delivered item is scored; it is accepted only with every row "yes".
   `-n auto`, so parallel lanes do not starve each other (load hit 106 on 12 cores with every agent on `-n auto`).
 - Agents commit on their branch and never push; the integrator merges, runs the gates, routes reviews, and ships.
 - Free lanes are refilled immediately from the ranked backlog (`docs/BACKLOG.md`).
+
+## Test rules
+- Stop and exit tests must prove the broker did not do the work: the broker's stop is far away (or its modify is
+  rejected), the engine's is tight, and the test asserts the position is still open after the broker saw the price and
+  before the engine pass (`tests/test_engine_clock.py::_StopStuck`).

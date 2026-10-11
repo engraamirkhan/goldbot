@@ -1,6 +1,7 @@
 import type { AccountSummary, Status } from "../lib/api";
 import { budgetTone, cash } from "../lib/account";
 import { blockers, localTime } from "../lib/approval";
+import { STALE_MS, localHm } from "../lib/entry";
 
 type Tone = "ok" | "warn" | "bad" | "idle";
 type Chip = { key: string; label: string; value: string; detail?: string; tone: Tone; title?: string };
@@ -8,21 +9,36 @@ type Chip = { key: string; label: string; value: string; detail?: string; tone: 
 const STAGE: Record<AccountSummary["stage"], string> = { normal: "normal", size_down: "size down", halted: "halted" };
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 
-/** Everything that can stop a new entry, always visible above the approval cards. Red only for what stops trading. */
-export function SafetyStrip({ status, accounts, error }: { status?: Status; accounts?: AccountSummary[]; error?: boolean }) {
+type Props = {
+  status?: Status; accounts?: AccountSummary[]; error?: boolean;
+  updatedAt?: number;      // the older of the two queries' dataUpdatedAt: a report the server no longer refreshes
+  now?: number;            // the caller's clock (useNow); staleness is judged only with both
+};
+
+/** Everything that can stop a new entry, always visible above the approval cards. Red only for what stops trading.
+ *  Never "allowed" from stale data: an error or a report older than STALE_MS shows its time and a warning instead. */
+export function SafetyStrip({ status, accounts, error, updatedAt, now }: Props) {
   if (error && !status) {
     return <p className="strip-summary warn" role="alert">Safety state unavailable. Check Overview before approving.</p>;
   }
   const loading = !status || !accounts;
+  const stale = !loading && ((error ?? false) || (!!updatedAt && now !== undefined && now - updatedAt > STALE_MS));
   const blocked = loading ? [] : blockers(status, accounts);
   const idle = !loading && accounts.length === 0;
   const chips: Chip[] = loading ? LOADING : build(status, accounts);
   return (
     <section className="safety" aria-label="Safety state">
-      <p className={`strip-summary ${loading ? "idle" : blocked.length ? "bad" : idle ? "warn" : "ok"}`} role="status">
-        {loading ? "Checking safety state…" : blocked.length ? `New entries blocked: ${blocked.join(", ")}`
-          : idle ? "No engines reporting" : "New entries allowed"}
-      </p>
+      {stale ? (
+        <p className="strip-summary warn" role="alert">
+          Safety state from {updatedAt ? localHm(updatedAt) : "earlier"}, can't reach the server; check before approving
+          {blocked.length > 0 && ` (last report: new entries blocked: ${blocked.join(", ")})`}
+        </p>
+      ) : (
+        <p className={`strip-summary ${loading ? "idle" : blocked.length ? "bad" : idle ? "warn" : "ok"}`} role="status">
+          {loading ? "Checking safety state…" : blocked.length ? `New entries blocked: ${blocked.join(", ")}`
+            : idle ? "No engines reporting" : "New entries allowed"}
+        </p>
+      )}
       <ul className="strip">
         {chips.map((c) => (
           <li key={c.key} className={`chip ${c.tone}`} title={c.title}>

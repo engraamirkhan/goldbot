@@ -462,10 +462,19 @@ def test_record_verdict_refuses_a_discovery_row(tmp_path, monkeypatch):
 
 
 def _screened(reg: TrialRegistry, family: str, config: dict[str, Any], screen: dict[str, Any],
-              split: dict[str, Any] | None = None) -> dict[str, Any]:
+              split: dict[str, Any] | None = None, rule_id: str | None = None,
+              reading_rule: str = "rule") -> dict[str, Any]:
+    """A screened trial row, linked to an ad-hoc pre-registration carrying `rule_id` (None: no pre-registration)."""
+    link = None
+    if rule_id is not None or reading_rule != "rule":
+        pre = reg.preregister(agent_id="a", family=family, config=config, feature_version="f", rationale="r",
+                              reading_rule=reading_rule, rule_id=rule_id)
+        link = {"trial": pre["trial"], "ts": pre["ts"], "config_hash": pre["config_hash"]}
     row = {"trial": reg.n_trials + 1, "ts": f"2027-01-{20 + reg.n_trials % 9:02d}T00:00:00+00:00", "agent_id": "a",
            "family": family, "config_hash": config_hash(config), "config": config, "feature_version": "f",
            "status": "screened", "results": {"screen": screen, "rule_only_split": split}}
+    if link:
+        row["preregistration"] = link
     reg._append(row)
     return row
 
@@ -475,34 +484,72 @@ def _scr(verdict: str, n: int, gross_t: float, net_mean_r: float, net_t: float) 
             "net_mean_r": net_mean_r, "net_t": net_t, "min_events": 150}
 
 
-def _split(long_r: float, long_t: float, n_pos: int, chop: bool) -> dict[str, Any]:
+def _split(long_r: float, long_t: float, n_pos: int, chop: bool, n_long_pos: int = 4,
+           long_chop: bool = True) -> dict[str, Any]:
     return {"long": {"n": 120, "mean_r": long_r, "t_stat": long_t}, "short": {"n": 40},
-            "n_positive_years": n_pos, "chop_year_positive": chop}
+            "n_positive_years": n_pos, "chop_year_positive": chop,
+            "n_long_positive_years": n_long_pos, "long_chop_year_positive": long_chop}
 
 
-@pytest.mark.parametrize("family,config,screen,split,decision", [
-    # H-04 (asia_drift): continue iff gross t >= 2.0 on >= the floor's events AND net mean R > 0
-    ("asia_drift", {"stop_atr": 1.5}, _scr("pass", 4000, 2.4, 0.02, 1.0), None, "continue"),
-    ("asia_drift", {"stop_atr": 1.5}, _scr("pass", 4000, 2.4, -0.01, -0.3), None, "stop"),
-    ("asia_drift", {"stop_atr": 1.5}, _scr("fail", 4000, 1.1, 0.02, 0.5), None, "stop"),
-    ("asia_drift", {"stop_atr": 1.5}, _scr("inconclusive (event floor)", 400, 2.5, 0.05, 1.0), None, "inconclusive"),
-    # H-01 (tsmom, signal_tf 1d)
-    ("tsmom", {"signal_tf": "1d"}, _scr("fail", 300, 1.0, 0.05, 1.0), _split(0.1, 2.0, 4, True), "stop"),
-    ("tsmom", {"signal_tf": "1d"}, _scr("inconclusive (event floor)", 120, 2.5, 0.1, 2.0), None, "inconclusive"),
-    ("tsmom", {"signal_tf": "1d"}, _scr("pass", 300, 2.5, -0.02, -0.5), _split(0.1, 2.0, 4, True), "stop"),
-    ("tsmom", {"signal_tf": "1d"}, _scr("pass", 300, 2.5, 0.05, 1.2), _split(0.1, 2.0, 4, True), "inconclusive"),
-    ("tsmom", {"signal_tf": "1d"}, _scr("pass", 300, 2.5, 0.05, 1.9), _split(0.1, 2.0, 2, True), "inconclusive"),
-    ("tsmom", {"signal_tf": "1d"}, _scr("pass", 300, 2.5, 0.05, 1.9), _split(-0.01, 2.0, 4, True), "inconclusive"),
-    ("tsmom", {"signal_tf": "1d"}, _scr("pass", 300, 2.5, 0.05, 1.9), _split(0.1, 1.8, 4, True), "continue"),
-    # tsmom 4h continuity: net mean R <= 0 retires the horizon
-    ("tsmom", {"timeframe": "4h", "max_bars": 12}, _scr("fail", 2000, 0.4, -0.03, -1.0), None, "stop"),
+H01 = {"signal_tf": "1d"}
+C4H = {"timeframe": "4h", "max_bars": 12}
+
+
+@pytest.mark.parametrize("family,config,rule_id,screen,split,decision", [
+    # H-04: continue iff gross t >= 2.0 on >= the floor's events AND net mean R > 0
+    ("asia_drift", {"stop_atr": 1.5}, "H-04", _scr("pass", 4000, 2.4, 0.02, 1.0), None, {"continue"}),
+    ("asia_drift", {"stop_atr": 1.5}, "H-04", _scr("pass", 4000, 2.4, -0.01, -0.3), None, {"stop"}),
+    ("asia_drift", {"stop_atr": 1.5}, "H-04", _scr("fail", 4000, 1.1, 0.02, 0.5), None, {"stop"}),
+    ("asia_drift", {"stop_atr": 1.5}, "H-04", _scr("inconclusive (event floor)", 400, 2.5, 0.05, 1.0), None,
+     {"inconclusive"}),
+    # H-01
+    ("tsmom", H01, "H-01", _scr("fail", 300, 1.0, 0.05, 1.0), _split(0.1, 2.0, 4, True), {"stop"}),
+    ("tsmom", H01, "H-01", _scr("inconclusive (event floor)", 120, 2.5, 0.1, 2.0), None, {"inconclusive"}),
+    ("tsmom", H01, "H-01", _scr("pass", 300, 2.5, -0.02, -0.5), _split(0.1, 2.0, 4, True), {"stop"}),
+    ("tsmom", H01, "H-01", _scr("pass", 300, 2.5, 0.05, 1.2), _split(0.1, 2.0, 4, True), {"inconclusive"}),
+    ("tsmom", H01, "H-01", _scr("pass", 300, 2.5, 0.05, 1.9), _split(0.1, 2.0, 2, True), {"inconclusive"}),
+    ("tsmom", H01, "H-01", _scr("pass", 300, 2.5, 0.05, 1.9), _split(-0.01, 2.0, 4, True), {"inconclusive"}),
+    # quant re-review: >= 3 positive net years incl. 2021/22 on long-only too
+    ("tsmom", H01, "H-01", _scr("pass", 300, 2.5, 0.05, 1.9), _split(0.1, 1.8, 4, True, n_long_pos=2),
+     {"inconclusive"}),
+    ("tsmom", H01, "H-01", _scr("pass", 300, 2.5, 0.05, 1.9), _split(0.1, 1.8, 4, True, long_chop=False),
+     {"inconclusive"}),
+    ("tsmom", H01, "H-01", _scr("pass", 300, 2.5, 0.05, 1.9), _split(0.1, 1.8, 4, True), {"continue"}),
+    # tsmom 4h continuity: net mean R <= 0 retires the horizon; otherwise only "not retired" (never continue)
+    ("tsmom", C4H, "C4H", _scr("fail", 2000, 0.4, -0.03, -1.0), None, {"stop"}),
+    ("tsmom", C4H, "C4H", _scr("fail", 2000, 0.4, 0.01, 0.2), None, {"inconclusive"}),
+    # keyed on the pre-registration's rule id, not the config shape: an unlinked slow-tsmom config is just a screen
+    ("tsmom", H01, None, _scr("pass", 300, 2.5, 0.05, 1.9), _split(0.1, 1.8, 4, True), {"stop", "inconclusive"}),
+    ("tsmom", C4H, None, _scr("fail", 2000, 0.4, 0.01, 0.2), None, {"stop"}),
 ])
-def test_record_verdict_on_a_screened_row_must_be_the_preregistered_decision(tmp_path, family, config, screen,
-                                                                          split, decision):
+def test_record_verdict_on_a_screened_row_must_be_the_preregistered_decision(tmp_path, family, config, rule_id,
+                                                                          screen, split, decision):
     reg = TrialRegistry(tmp_path / "r.jsonl")
-    row = _screened(reg, family, config, screen, split)
-    for other in sorted({"continue", "stop", "inconclusive"} - {decision}):
+    row = _screened(reg, family, config, screen, split, rule_id=rule_id)
+    for other in sorted({"continue", "stop", "inconclusive"} - decision):
         with pytest.raises(ValueError, match="pre-registered decision"):
             reg.record_verdict(row, other, "a reading that does not follow the rule")
-    v = reg.record_verdict(row, decision, "computed from the recorded results")
-    assert v["decision"] == decision and v["rule_checked"] is True
+    pick = sorted(decision)[0]
+    v = reg.record_verdict(row, pick, "computed from the recorded results")
+    assert v["decision"] == pick and v["rule_checked"] is True
+
+
+def test_an_unknown_screened_pass_continues_only_citing_its_preregistrations_reading_rule(tmp_path):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    rule = "continue if gross t >= 2.0 on >= 1,000 events and net mean R > 0"
+    row = _screened(reg, "breakout", {"x": 1}, _scr("pass", 1500, 2.2, 0.02, 1.0), reading_rule=rule)
+    with pytest.raises(ValueError, match="pre-registered decision"):
+        reg.record_verdict(row, "continue", "looks good")                      # cites nothing
+    with pytest.raises(ValueError, match="pre-registered decision"):
+        reg.record_verdict(row, "continue", "looks good", rule="some other rule")
+    assert reg.record_verdict(row, "continue", "the pre-registered rule holds", rule=rule)["decision"] == "continue"
+    bare = _screened(reg, "breakout", {"x": 2}, _scr("pass", 1500, 2.2, 0.02, 1.0))     # no pre-registration
+    with pytest.raises(ValueError, match="pre-registered decision"):
+        reg.record_verdict(bare, "continue", "x", rule=rule)
+
+
+def test_preregister_accepts_only_known_rule_ids(tmp_path):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    with pytest.raises(ValueError, match="rule_id"):
+        reg.preregister(agent_id="a", family="tsmom", config={}, feature_version="f", rationale="r",
+                        reading_rule="r", rule_id="H-99")

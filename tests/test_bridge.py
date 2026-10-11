@@ -1,6 +1,7 @@
 """MT5 broker bridge (goldbot/execution/bridge.py): the engine on one machine, the terminal on another (Oracle free
 tier: MT5 under Wine). A real HTTP bridge on localhost serves the paper broker; RemoteBroker must behave like the
 broker itself, authenticate every call, expose only the Broker methods and never retry an order."""
+import json
 import socket
 import threading
 import time
@@ -10,7 +11,9 @@ from typing import Any, Iterator
 import pandas as pd
 import pytest
 import requests
+from pydantic import ValidationError
 
+from goldbot.base import schema_skew
 from goldbot.engine import Engine, EngineConfig
 from goldbot.execution import bridge as bridge_mod
 from goldbot.execution.bridge import BridgeError, BridgeUnavailable, GuardedBroker, RemoteBroker, make_handler
@@ -69,7 +72,10 @@ def test_every_call_needs_the_token_and_only_broker_methods_are_served(bridge):
     r = requests.post(f"{url}/rpc", json={"method": "__init__", "args": []},
                       headers={"Authorization": f"Bearer {TOKEN}"}, timeout=5)
     assert r.status_code == 403
-    assert requests.get(f"{url}/health", timeout=5).json() == {"ok": True}
+    # no server_tz on the paper broker, no commit given: only the protocol (BACKLOG 42), no account data
+    assert requests.get(f"{url}/health", timeout=5).json() == {"ok": True, "api_version": bridge_mod.API_VERSION,
+                                                               "min_compatible": bridge_mod.MIN_COMPATIBLE,
+                                                               "methods": sorted(bridge_mod.METHODS)}
     with pytest.raises(ValueError):
         make_handler(pb, "short")                                # weak tokens refused
 
@@ -257,3 +263,72 @@ def test_trading_sessions_cross_the_bridge_read_only(bridge):
     got = RemoteBroker(url, TOKEN).trading_sessions("XAUUSD")
     assert got == pb.trading_sessions("XAUUSD") and got                  # TRACEABILITY D13
     assert bridge_mod.METHODS["trading_sessions"][1] is True             # retry-safe: nothing reaches the market
+
+
+# ---------------------------------------------------------------------------------------------- ADR 0010 on the wire
+class _Reply:
+    """A transport that answers every call with `result` (the bridge's wire JSON), as a newer MT5 box would."""
+
+    def __init__(self, result: Any) -> None:
+        self.result = result
+
+    def __call__(self, url: str, data: str, **kw: Any) -> Any:
+        resp = requests.Response()
+        resp.status_code = 200
+        resp._content = json.dumps({"result": self.result}).encode()
+        return resp
+
+
+_TS = {"__ts__": "2025-03-05T10:00:00+00:00"}
+
+
+def _position_wire(**extra: Any) -> dict[str, Any]:
+    data = {"position_id": 7, "symbol": "XAUUSD", "side": 1, "lots": 0.1, "open_price": 2400.2, "sl": 2396.0,
+            "tp": 2406.0, "magic": 260101, "comment": "c", "open_time_utc": _TS, "profit": 1.5}
+    return {"__record__": "Position", "data": {**data, **extra}}
+
+
+def test_a_response_from_a_newer_mt5_box_with_an_unknown_field_decodes_on_the_brain():
+    """ADR 0010: the MT5 box is updated by hand and can run a newer release, so its responses are read tolerantly."""
+    rb = RemoteBroker("http://bridge", TOKEN, post=_Reply([_position_wire(swap_fee=0.3)]))
+    [pos] = rb.positions()
+    assert pos.position_id == 7 and pos.open_time_utc == pd.Timestamp(_TS["__ts__"])
+    assert "swap_fee" not in pos.model_dump()                               # dropped, not kept
+    assert schema_skew()[("bridge-response", "Position", ("swap_fee",))] >= 1
+    tick = {"__record__": "Tick", "data": {"ts_utc": _TS, "bid": 1, "ask": 2, "flags": 6}}
+    assert RemoteBroker("http://bridge", TOKEN, post=_Reply(tick)).last_tick("XAUUSD").bid == 1
+    res = {"__record__": "OrderResult", "data": {"ok": True, "retcode": 10009, "order_id": 9, "position_id": 7,
+                                                 "filled_lots": 0.1, "price": 2400.2, "queue_ms": 3}}
+    assert RemoteBroker("http://bridge", TOKEN, post=_Reply(res)).place_order(_intent()).ok
+
+
+def test_a_wrong_type_or_a_missing_field_in_a_response_still_raises():
+    """Only unknown keys are tolerated (ADR 0010): a response the brain cannot trust is never guessed."""
+    with pytest.raises(ValidationError):
+        RemoteBroker("http://bridge", TOKEN, post=_Reply([_position_wire(lots="a lot")])).positions()
+    broken = _position_wire()
+    del broken["data"]["sl"]
+    with pytest.raises(ValidationError):
+        RemoteBroker("http://bridge", TOKEN, post=_Reply([broken])).positions()
+
+
+def test_an_order_request_record_in_a_response_is_still_decoded_strictly():
+    """An OrderIntent is a request record: it is never read tolerantly, whichever way it crosses the bridge."""
+    wire = bridge_mod._encode(_intent())
+    wire["data"]["max_slippage"] = 5
+    with pytest.raises(ValidationError, match="max_slippage"):
+        RemoteBroker("http://bridge", TOKEN, post=_Reply(wire)).positions()
+
+
+def test_the_bridge_server_refuses_an_order_request_with_an_unknown_field(bridge):
+    """Order requests stay strict on the terminal's side: a field this release does not know is never ignored."""
+    url, pb = bridge
+    hdr = {"Authorization": f"Bearer {TOKEN}"}
+    wire = bridge_mod._encode(_intent())
+    wire["data"]["max_slippage"] = 5
+    r = requests.post(f"{url}/rpc", json={"method": "place_order", "args": [wire], "sent_at": time.time()},
+                      headers=hdr, timeout=5)
+    assert r.status_code == 500 and "max_slippage" in r.json()["error"] and pb.positions() == []
+    plain = {"method": "place_order", "args": [bridge_mod._encode(_intent())], "sent_at": time.time()}
+    r = requests.post(f"{url}/rpc", json=plain, headers=hdr, timeout=5)
+    assert r.status_code == 200 and len(pb.positions()) == 1           # the same request without it is served

@@ -42,7 +42,7 @@ def test_feed_is_parsed_into_utc_events_with_the_design_tiers():
     tiers = df["tier"].to_dict()
     assert {k for k, v in tiers.items() if v == 1} == {"CPI m/m", "Core CPI m/m", "Non-Farm Employment Change",
                                                          "FOMC Statement", "Federal Funds Rate", "Core PCE Price Index m/m"}
-    assert tiers["ISM Manufacturing PMI"] == 2 and tiers["CPI y/y"] == 3 and tiers["Unemployment Claims"] == 3
+    assert tiers["ISM Manufacturing PMI"] == 2 and tiers["CPI y/y"] == 3 and tiers["Unemployment Claims"] == 2   # G-3 list, though Medium
     assert df["event_id"].is_unique
     # the same feed fetched again yields the same ids (the archive replaces, never duplicates)
     assert set(parse_ff_week(FEED, NOW + pd.Timedelta(days=1), TIER1)["event_id"]) == set(df["event_id"])
@@ -79,7 +79,7 @@ def test_archive_job_stores_the_week_and_fails_loudly_on_an_empty_feed(tmp_path)
     assert "skipped" in calendar_archive(_ctx(tmp_path, None), NOW)
     ctx = _ctx(tmp_path, lambda: json.dumps(FEED))
     out = calendar_archive(ctx, NOW)
-    assert out["events"] == 9 and out["by_tier"] == {"1": 6, "2": 1, "3": 2}
+    assert out["events"] == 9 and out["by_tier"] == {"1": 6, "2": 2, "3": 1}
     assert out["next_tier1"][0].startswith("Wed 12:30")
     calendar_archive(ctx, NOW + pd.Timedelta(days=1))          # daily re-fetch: replaced, not duplicated
     assert len(ctx.store.read("calendar_events")) == 9

@@ -180,3 +180,18 @@ def test_existing_behaviour_lockout_roles_and_one_time_invites(tmp_path):
         store.set_role("o@x.io", "nobody@x.io", "viewer")
     assert totp_uri(secret, "o@x.io").startswith("otpauth://")
     assert {"login_locked", "login_failed", "invite", "accept_invite"} <= {e["event"] for e in store.audit_events()}
+
+
+def test_a_user_row_with_an_unknown_field_does_not_authenticate(tmp_path):
+    """ADR 0010 strict allowlist: credentials are never read tolerantly. A user row with a field this release does not
+    know (a newer release's lock or MFA flag) refuses the login and the session instead of ignoring it."""
+    store, secret = _owner(tmp_path)
+    tok = store.login("o@x.io", PW, totp_code(secret))
+    with store.db.write() as conn:
+        body = json.loads(conn.execute("SELECT body FROM users WHERE email = ?", ("o@x.io",)).fetchone()[0])
+        conn.execute("UPDATE users SET body = ? WHERE email = ?",
+                     (json.dumps({**body, "future_lock": True}), "o@x.io"))
+    with pytest.raises(ValueError):
+        store.session_user(tok)
+    with pytest.raises(ValueError):
+        store.login("o@x.io", PW, totp_code(secret))

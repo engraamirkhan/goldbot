@@ -510,6 +510,24 @@ def test_the_outbox_merge_is_a_union_that_keeps_pending_proposals_and_the_furthe
     assert merged.new_reports() == []                                       # the older offset does not replay
 
 
+def test_the_outbox_merge_skips_file_entries_whose_proposal_is_already_archived(tmp_path):
+    """A stale file from a rolled-back release must not bring back a finished proposal: its outcome edit would be
+    sent a second time."""
+    center = ApprovalCenter({1}, bus=ApprovalBus(tmp_path))
+    center.propose(_p("done"))
+    center.propose(_p("open"))
+    box = Outbox(tmp_path)
+    box.mark_sent("done", [(42, 1)])
+    ApprovalBus(tmp_path).submit("done", False, "news", by="dashboard:o@x.io")
+    center.poll_bus()                                                       # archived with its outcome
+    assert box.finished() == [("done", "REJECTED", [(42, 1)])]              # the outcome edit went out once
+    (tmp_path / "telegram_outbox.json").write_text(json.dumps(
+        {"sent": {"done": [[42, 1]], "open": [[42, 2]]}, "reports_offset": None}))   # the older release's stale view
+    merged = Outbox(tmp_path)
+    assert merged.sent == {"open": [(42, 2)]}
+    assert merged.finished() == []
+
+
 def test_a_report_batch_failing_for_one_recipient_is_acknowledged_after_a_few_passes():
     from goldbot.telegram.outbox import ReportRetry, ReportsAck
     retry = ReportRetry(attempts=3)
@@ -548,3 +566,42 @@ def test_the_updater_stops_the_scheduler_and_checks_again_before_stopping_the_re
     stop_sched, recheck, rest = (step3.index("nssm stop goldbot-scheduler"), step3.rindex("Get-RunningJobs"),
                                  step3.index("Stop-Goldbot"))
     assert stop_sched < recheck < rest
+
+
+def test_an_export_landing_during_the_foreign_check_is_not_taken_for_a_foreign_write(tmp_path, monkeypatch):
+    """The race seen under load: a ledger opening (dual_read) while another process exports. The check must never
+    pair the hashes known before an export with the file written by it."""
+    import goldbot.db.bookkeeping as bk
+    SpendLedger(tmp_path / "agent_spend.json", 40.0).add(NOW, 1.0)
+    main = threading.current_thread()
+    go, done = threading.Event(), threading.Event()
+    real = bk.file_sha256
+
+    def exporter():
+        go.wait(10)
+        SpendLedger(tmp_path / "agent_spend.json", 40.0).add(NOW, 0.5)     # records its hash and rewrites the file
+        done.set()
+    t = threading.Thread(target=exporter)
+    t.start()
+
+    def interleave(path):
+        if threading.current_thread() is main and not go.is_set():
+            go.set()
+            done.wait(1.0)                    # lets the export run here, if the check does not hold it off
+        return real(path)
+    monkeypatch.setattr(bk, "file_sha256", interleave)
+    SpendLedger(tmp_path / "agent_spend.json", 40.0)
+    t.join(10)
+    monkeypatch.undo()
+    assert _rows(tmp_path, "SELECT * FROM state_fallback") == []
+    assert SpendLedger(tmp_path / "agent_spend.json", 40.0).month_spent(NOW) == pytest.approx(1.5)
+    assert json.loads((tmp_path / "agent_spend.json").read_text()) == {"2026-10": 1.5}     # not a stale snapshot
+
+
+def test_an_export_killed_before_its_commit_is_still_recognised_as_ours(tmp_path):
+    import sqlite3
+    SpendLedger(tmp_path / "agent_spend.json", 40.0).add(NOW, 1.0)
+    with sqlite3.connect(tmp_path / "aux.db") as c:                         # the hash record never committed
+        c.execute("UPDATE exports SET hashes = '[]' WHERE source = 'agent_spend.json'")
+    assert SpendLedger(tmp_path / "agent_spend.json", 40.0).month_spent(NOW) == 1.0
+    assert _rows(tmp_path, "SELECT * FROM state_fallback") == []           # it equals what the DB renders

@@ -458,7 +458,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   old ledger cached the file and the news and agents processes overwrote each other). Not done: news_spend.json
   (`data/news_collector.py` was out of scope), switching api/app.py to query aux.db.
   Trading-safety review fixes (same day): exports run after the commit and never raise (a locked file on Windows no
-  longer undoes a spend booking or stops a scheduler job); concurrent exporters converge through `exports.seq`.
+  longer undoes a spend booking or stops a scheduler job); exporters and the foreign-file check are serialised by aux.db's write lock (render, hash record and file write
+  in one transaction; 2026-10-11: the lock-free version took our own export for a foreign write under load).
   Rollback safety: telegram_outbox.json is rewritten in its old format for one release; a file another release
   wrote (hash differs from this code's last export) is merged back once (spend: larger per month; scheduler: newer
   slot; outbox: its sent list and offset; runs appended only to the file are adopted) and counted in
@@ -765,6 +766,32 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Not done: the playbook's "until the next session" variant, a cross-account count, a provisional loss for a record
   lost before a restart (only its id persists; health already fails on `closed_records_lost`), and the dashboard /
   approval card (ui-ux follow-up).
+- Entry windows from the calendar (2026-10-11, BACKLOG 17, 18, playbook G-2, G-3, row R36; **off by default**; needs
+  trading-safety review): `risk.blackout.tier2: {enabled: false, before_min: 5, after_min: 15}` refuses entries
+  `tier2_blackout` around tier-2 USD events in the live Forex Factory archive (the G-3 list is now tier 2 whatever the
+  feed's impact, `TIER2_PATTERNS`, so claims moved from tier 3 to 2; nothing in production read tier 2 before);
+  `risk.reopen: {enabled: false, after_daily_reopen_min: 10, after_monday_open_min: 30}` refuses `reopen_window` after
+  each reopen of the broker session table (weekly window after a 12 h+ closure); `risk.holidays: {enabled: false,
+  file: config/holidays_cme_metals.yaml}` refuses `holiday_thin` on listed server dates (version `cme-metals-v1`,
+  valid 2026-2028; a test re-derives it from the rules). An enabled tier-2 or holiday window without its calendar
+  refuses `calendar_unavailable` (no store, unreadable or empty archive window, missing or expired list); a session
+  table that raises counts as inside the reopen window. Edges inclusive. Disabled windows add nothing in the gate
+  (`RiskGate.window_reasons`) and the engine computes nothing for them. Exits never read these flags. New module
+  goldbot/risk/windows.py; the runner's `_entry_windows` sits beside `_blackout` and shares its calendar read
+  (`_calendar_events`). Owner: adopt (OWNER_GUIDE section 4). Not done: UK/JP/CN holidays and early closes, engine
+  state/dashboard display of the window flags (the decisions journal carries the reasons), the 2029 list.
+  Trading-safety review (merge after fixes, no HIGH) fixes in: engine_<account>.json `windows` (flags, holiday version
+  and valid_through, latest calendar event and fetch, `calendar_unavailable_since` and reason); health
+  `check_entry_windows` (`entry_windows:<account>:calendar` FAIL after 30 min unavailable with the market open,
+  `:calendar_age` WARN on a fetch over 36 h old, `:holiday_list` WARN within 90 days of its end; Telegram); one log
+  line per transition; CI fails a year before the holiday list ends. Tier-2 availability now needs the newest fetch
+  under 7 days old and the archive covering through now + 24 h (to the end of its latest event's Forex Factory week),
+  and a Sunday 18:00 UTC fetch (`calendar_archive_sunday`) archives the new week before the open. Holiday list v2:
+  "US federal holidays as a proxy (not measured)", Columbus and Veterans Day out, the day after Thanksgiving and
+  Easter Monday in, tested against a hand-reviewed set. Any error in the window computation sets
+  calendar_unavailable and the reopen flag; a bar close whose account read raises still manages open trades. ADR 0008
+  and econ_calendar.py document the two tier-2 definitions. New BACKLOG 45 (measure the listed days) and 46 (replay
+  the windows and a `research_pass` filter) come before adoption.
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on
@@ -879,25 +906,68 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   is refused (`git_tree_reason`: a `.git` dir or file in the path, this checkout under any case spelling, or
   `git rev-parse` succeeding). The header's account number, name, company and server are never kept (only the
   currency); tickets are used only to match a position to its opening order. A pre-commit hook
-  (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` + digits, also in
-  UTF-16 and inside .xlsx). XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`, default Europe/Athens).
+  (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` / `Счёт:` /
+  `Konto:` / `Cuenta:` + digits, also in UTF-16 and inside .xlsx), and a translated one by shape: an HTML table or
+  xlsx sheet or CSV/TSV with >= 5 rows holding an MT5 stamp `YYYY.MM.DD HH:MM` in one of their first 3 visible cells
+  (hidden HTML cells dropped) under a Positions/Deals-like title (en/ru/de/es) or >= 5 such rows of >= 10 cells (the
+  translated words are unconfirmed against a real export; the shape rule does not need them; every tracked file
+  passes). Linear time (html.parser, no backtracking regex); an xlsx is scanned for at most 200 members and 50 MB.
+  Gaps: a translated export with < 5 trades, or xlsx stamps stored as Excel numbers, pass the shape rule. XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`,
+  default Europe/Athens).
   1R comes from the opening order's INITIAL stop (Orders section), else the report's S/L, which is the FINAL stop;
+  the (symbol, side, open time) fallback pairs a position with an order only when exactly one of each shares the
+  key (an ambiguous key falls back to the final stop);
   a stop at or beyond the entry is `sl_moved` and, like the no-stop proxy, kept out of the R statistics. The USD rate
   is always implied from the trades (a "USD" account implying != 1 is flagged). Reported: R, win rate, expectancy
   with t, profit factor, return on equity with t, daily P&L by UTC and London day with t and 95% CI and the share of
-  days >= `--targets` (default 30,50), sessions, hour, weekday, side, holding time, tier-1 news (if the store has
+  days >= `--targets` (default 30,50), sessions (goldbot's local-clock windows, DST per date), hour, weekday, side,
+  holding time, tier-1 news (if the store has
   `calendar_events`), entries near session opens on each date's local clock against a base rate from the owner's
   active hours, leverage vs equity, losing streak, drawdown from trading only (deposits/withdrawals excluded; % on a
   flow-adjusted index), and risk of ruin with `goldbot.research.ruin`'s circular block bootstrap for both sizing
-  readings (compounding, fixed stakes) plus a zero-edge (demeaned) stress row; end equity is reported as a capped
+  readings (compounding, fixed stakes), each also as a zero-edge (demeaned) stress row; end equity is a capped
   log10. Ends with hypothesis seeds OH-01..06 in hypotheses.md format, labelled in-sample, not evidence, each phrased
   as "test whether entries in X differ from the owner's other entries", stating K = slices examined and whether its
-  t clears the Bonferroni bar (slices under 10 trades are never said to clear it). Seeds quote R, % and counts only:
+  t clears the Bonferroni bar, Student's t at 5%/K on the slice's own n - 1 df (`slice_bar`; slices under 10
+  trades are never said to clear it). Seeds quote R, % and counts only:
   do not paste amounts into the repo. The MT5 layout was written from the documented report structure, not checked
   against a real file (none may enter the repo): if the owner's export parses to 0 trades, look at `_ALIASES` /
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- VRP/purge follow-ups (2026-10-11): `macro_drivers` v5 stub rule from declared bar lengths (macro `f-51ac5ebabb`,
+  macro + day_type `f-48c4c0c57e`); context frames use one `pipeline.CONTEXT_FEATURES` list (engine too, no behaviour
+  change); group-measure rows purged by label exit (`discovery.purged_rest`).
+- Pre-freeze verdict fixes (2026-10-11, third quant re-review): screened-row decisions keyed on the linked
+  pre-registration's `rule_id` (write the Q1 queued rows with `rule_id="H-01"/"H-04"/"C4H"`); H-01 continue needs
+  long-only positive years too; the 4h continuity trial never continues; unknown passes continue only citing their
+  pre-registered reading rule; H-10 jumps-only cannot retire or continue H-10; `macro_drivers` v4 (stub-free HAR-RV),
+  macro version `f-ac2be79efe`, macro + day_type `f-7a3cad1466`; group measure uses `permutation_repeats` and a
+  one-week purge.
+- Persisted state is read tolerantly, built strictly (2026-10-11, ADR 0010): a rollback used to skip closed trades,
+  hide proposals or stop services when a newer release had added a field. `goldbot/base.py` `load_record` /
+  `load_record_json` drop unknown keys at every level (WARNING once per source/model/fields, `schema_skew()`). A wrong
+  type, a missing field or bad JSON still fails, and construction stays `forbid`. Applied to gates_phase, bus proposals
+  (`Control` and `BusDecision` stay strict: an unknown field means halted / the decision is skipped and expires), automode, shadow, ruin, scheduler, model registry, population, director, costs, health, digest, outbox,
+  crossfeed and jobs; `RecordRepo(..., tolerant=False)` is the default (auth stays strict).
+  The pydantic floor is now 2.12. New rule AGENT_STANDARDS S12: every new persisted field has a default that is safe
+  when missing, and a new restriction is encoded so an older release fails closed (a new `Literal` value, never a new
+  boolean). Guard: `tests/test_persistence_compat.py`: a compat case per persisted model; an AST allowlist keyed by
+  file, function and receiver; strict models never read tolerantly (any `*load_record*` call or
+  `RecordRepo(tolerant=...)`); tolerant reads name their class; no left-to-right or discriminated unions in tolerant
+  models.
+  Engine follow-up done (2026-10-11): `runner.py` `_load_orders` (SentOrder/OpenTrade/PendingClose) and
+  `_archive_stale_proposals` read with `load_record*`, so a rollback no longer stops the older engine from starting.
+  `mt5_bootstrap.sh` pins `pydantic>=2.12`; an existing MT5 box is upgraded once by hand (RUNBOOK 0.5).
+  Bridge follow-up done (2026-10-11): `goldbot/execution/bridge.py` `_decode(..., response=True)` reads what the
+  MT5 box sends back (Position, Tick, AccountInfo, SymbolInfo, BrokerTerms, TradingSession, OrderResult) with
+  `load_record` (source `bridge-response`), because the box is updated by hand and can run a newer release. The
+  bridge server's arguments (`response=False`) and `OrderIntent` in either direction stay strict: an order request
+  with an unknown field is refused. Protocol digest unchanged, `API_VERSION` stays 2. The MT5 box needs no pydantic
+  upgrade for this (only the brain calls `load_record`); the RUNBOOK 0.5 upgrade stays recommended for parity.
+  Review LOWs (2026-10-11): a refused decision is logged once per proposal and counted (`base.note_schema_skew`), and
+  an unknown top-level table in `orders_<account>.json` is logged and counted at engine start; S12 now requires a
+  reviewed rollback story for a new table that carries client ids or broker orders.
 - H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
   (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
   version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London
@@ -955,8 +1025,34 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     - The gap anchors on the first bar at or after the 18:00 New York reopen.
     - The noise ratio's session starts on the bar containing the open.
     - `daily_bars` refuses bars out of time order.
-  - Still owed: E-4 (H-16's evaluation path, which cuts the bars at holdout_from before features), and the
-    first-out-of-sample month counted from data before the freeze (about 2012-04; the rule is in the Q2 draft).
+  - Still owed: the first out-of-sample month counted from data before the freeze (about 2012-04; the rule is in
+    the Q2 draft). E-4 is built (next bullet).
+- H-16 evaluation path, E-4 (2026-10-11; quant review: merge after fixes, fixes applied). `goldbot/research/h16.py`
+  plus `research_pass.py --h16 --macro DIR --us-calendar DIR` runs H-16's pre-registered test once and records ONE
+  trial (family `h16_opportunity_score`, status `evaluated`, `results.kind` = `range_test`).
+  - It runs only against its pre-registration. Under the registry lock and before anything is read, the run is refused
+    when any H-16 trial exists (whatever its config), when there is not exactly one unused H-16 pre-registration, when
+    that config is not `h16.h16_config(first_oos_month, expected_eval_days)` with 500 rows, when its `code_hash`
+    (h16.py's source, also on the result row) differs, when its feature version differs from
+    `feature_version(["day_type"])` worked out now (`f-52c853166b` for day_type v1), or when the budget is spent.
+  - The frozen month and the frozen evaluable-day count live in the hashed config; the run reads them from it. A
+    different month from the baseline-fit rule, fewer than 90% of the frozen days (checked before any statistic) or a
+    NaN statistic is refused, and nothing is recorded.
+  - `tests/test_day_type_golden.py` (+ `tests/data/day_type_v1_golden.parquet`) ties day_type's outputs to
+    `day_type.VERSION` (so `gvz_series` in the config is informational): changing them without a bump fails CI (`python tests/test_day_type_golden.py` writes the file
+    for a new version).
+  - `h16_feature_version()` restores the feature registry (day_type stays opt-in for every other caller).
+  - The 1m bars, the macro rows and the calendar rows are cut at `research.holdout_from` before anything is resampled.
+    Every full-score input is as known at 06:30 UTC on D.
+  - HAR (4 coefficients) and full (11 coefficients) both go through `fit_har(regressors=...)` on the monthly refits
+    with the 1-day purge. GVZ-stale days are dropped from both models and counted; days without a full forecast are
+    also counted by missing input.
+  - Reading rule as pre-registered: rho gain >= 0.05 AND top/bottom quintile mean W/A >= 1.5, inclusive.
+  - Reported only: the 20-day block-bootstrap interval and the drop-one contributions. Not built: the London+60 /
+    NY+60 refreshes.
+  - Nothing was run on real data and no real registry was written. **Before the freeze:** count the first OOS month
+    and the evaluable days from data (calendar and gaps only), write both into the Q2 draft, and pre-register with
+    `h16_config(month, days)` and `h16_feature_version()`.
 - Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
   (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
   before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each
@@ -1243,6 +1339,31 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- Non-finite state fails closed (October safety batch, 2026-10-11, TRACEABILITY R37 and S7): `RiskGate.check`
+  refuses first with `invalid_state` plus `invalid:<field>` when any number it reads (equity, HWM, day/week
+  start, margin, spread, tick ages, exposure, stop/target/ATR/cost, multiplier, price, contract terms,
+  `acct_per_usd`) is NaN or infinite; None stays the explicit "unknown" (a USD account with a NaN conversion is
+  now refused, not taken as 1). `_tick_ok` drops a quote with a non-finite bid or ask as `non_finite_quote` (entries
+  blocked; the next valid tick runs the exits). `account_fx("", x)` is None. The supervisor treats a non-finite or
+  wrongly typed engine-file number as `engine_state_unreadable` (halt); `ops.run.supervisor_pass` publishes
+  `supervisor_error` instead of dying when `evaluate` raises. An engine file without `ts` now halts too (engines
+  always write it). Dev extras gain pytest-randomly: every run is in random order (seed in the header; reproduce
+  with `-p randomly --randomly-seed=<n>`, opt out with `-p no:randomly`).
+  Safety review fixes (same day): the gate's guard is `invalid_fields` (reason `invalid_state` / `invalid:<field>`,
+  after the flag reasons) and also requires price, ATR, stop, contract, volumes and equity > 0; an approval on a
+  quote that breaks the tick price rules is refused (`bad_quote:<check>`). A dropped quote or a raising
+  `last_tick` runs `Engine.no_quote_pass`: decided closes retried, a pending kill-switch flatten, host-clock time
+  barriers, and from the Friday cut every own position closed (`weekend_close_no_quote`: no price to tell losers
+  from winners). The state keeps being written with `quote_invalid_since`; health FAILs after 60 s of invalid
+  quotes in market hours, and FAILs (alerted) on `supervisor_error` and `engine_state_unreadable` halts. Repeated
+  bad quotes are one DQ event with a count; every health check is guarded; the seed is printed after each run
+  (tests/conftest.py).
+  Re-verification fixes: the priceless Friday flatten and time barrier never act on a single bad quote. The
+  flatten needs only a dead feed (invalid for `QUOTE_DEAD_S`, 60 s, = health's threshold), whatever happened
+  around the cut; a shorter gap leaves it to `_weekend_rule` on the next valid quote. The time
+  barrier needs a dead feed and counts `bars_held` plus open-market decision bars since `_closed_through`
+  (never wall time over a weekend). A refused close that is not market-closed is re-sent at most once a second
+  (`CLOSE_RETRY_MIN_S`). BACKLOG 44: confirm a zero-equity read before the kill switch (needs an ADR).
 - October batch rollout (SRE, 2026-10-11): `docs/deploy/2026-10-batch.md`.
   - The owner's ordered steps for the two Oracle VMs, to be done by Fri 23 Oct: pre-checks (restic plus a local
     copy, preflight, health baseline); engines stopped; MT5 box first, because the new brain needs the bridge's

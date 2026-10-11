@@ -93,7 +93,7 @@ from typing import Any
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.base import FrozenRecord, UtcTimestamp, load_record
 from goldbot.config import RetiredFamily
 from goldbot.research.attribution import T_SIGNIFICANT
 from goldbot.research.population import DSR_PROMOTE, MIN_RANK_TRADES
@@ -294,7 +294,7 @@ class ResearchPlan(FrozenRecord):
     @classmethod
     def load(cls, path: str | Path) -> ResearchPlan | None:
         p = Path(path)
-        return cls.model_validate(json.loads(p.read_text())) if p.exists() else None
+        return load_record(ResearchPlan, json.loads(p.read_text()), source="research_plan") if p.exists() else None
 
 
 # ---------------------------------------------------------------------------------------------- budget and holdout
@@ -619,29 +619,43 @@ SCREEN_PASS, SCREEN_FAIL = "pass", "fail"
 H01_NET_T, H01_MIN_POSITIVE_YEARS = 1.65, 3
 
 
-def preregistered_decisions(row: dict[str, Any]) -> tuple[set[str], str]:
+def linked_preregistration(rows: list[dict[str, Any]], trial: dict[str, Any]) -> dict[str, Any] | None:
+    """The pre-registration row a trial row is linked to (`preregistration`: timestamp, config hash), or None."""
+    link = trial.get("preregistration")
+    if not isinstance(link, dict) or link.get("ts") is None:
+        return None
+    return next((r for r in rows if r.get("status") == PREREGISTERED and r.get("ts") == link.get("ts")
+                 and link.get("config_hash") in (None, r.get("config_hash"))), None)
+
+
+def preregistered_decisions(row: dict[str, Any], rows: list[dict[str, Any]] | None = None,
+                            cited_rule: str = "") -> tuple[set[str], str]:
     """The decisions the pre-registered reading rule allows for a `screened` row, from its recorded results, and which
-    rule was applied (preregistration-2027Q1.md):
-      * H-04 (`asia_drift`): continue iff the screen passed (gross t >= 2.0 on >= the floor's events) AND net mean R
-        > 0; inconclusive below the event floor; otherwise stop;
-      * H-01 (`tsmom` with signal_tf 1d): inconclusive below the floor; stop if the screen failed or net mean R <= 0;
-        inconclusive if net t < 1.65, fewer than 3 positive net years or none in 2021/2022, or long-only net mean R
-        <= 0 or t < 1.65; otherwise continue;
-      * tsmom 4h continuity (`tsmom`, 4h, max_bars 12, no signal_tf): stop if net mean R <= 0, else continue or
-        inconclusive (the rule only says when the horizon retires);
-      * any other screened row, the screen itself: fail -> stop, inconclusive -> inconclusive, pass -> any."""
+    rule was applied (preregistration-2027Q1.md). The rule is the `rule_id` of the pre-registration the row is
+    linked to (never guessed from the config's shape):
+      * H-04: continue iff the screen passed (gross t >= 2.0 on >= the floor's events) AND net mean R > 0;
+        inconclusive below the event floor; otherwise stop;
+      * H-01: inconclusive below the floor; stop if the screen failed or net mean R <= 0; continue only if net t >=
+        1.65 AND >= 3 positive net years incl. 2021 or 2022 on both sides together AND on long-only AND long-only net
+        mean R > 0 with t >= 1.65; otherwise inconclusive;
+      * C4H (tsmom 4h continuity): stop (retired) if net mean R <= 0, else only "inconclusive" (not retired: the rule
+        never continues the horizon; H-01 supersedes it);
+      * any other screened row, the screen itself: fail -> stop, below the floor -> inconclusive, pass -> stop or
+        inconclusive, and "continue" only when the row is linked to a pre-registration whose reading rule the verdict
+        cites exactly (`cited_rule`)."""
     res = row.get("results") or {}
     scr = res.get("screen") or {}
     verdict = str(scr.get("verdict") or "")
     net = _num(scr.get("net_mean_r"))
     net_t = _num(scr.get("net_t"))
-    cfg, family = _cfg(row), row.get("family")
+    pre = linked_preregistration(rows or [], row)
+    rule_id = (pre or {}).get("rule_id")
     below_floor = verdict not in (SCREEN_PASS, SCREEN_FAIL)
-    if family == "asia_drift":
+    if rule_id == "H-04":
         if below_floor:
             return {"inconclusive"}, "H-04"
         return ({"continue"} if verdict == SCREEN_PASS and net is not None and net > 0 else {"stop"}), "H-04"
-    if family == "tsmom" and cfg.get("signal_tf") == "1d":
+    if rule_id == "H-01":
         if below_floor:
             return {"inconclusive"}, "H-01"
         if verdict == SCREEN_FAIL or net is None or net <= 0:
@@ -651,18 +665,20 @@ def preregistered_decisions(row: dict[str, Any]) -> tuple[set[str], str]:
         long_r, long_t = _num(long.get("mean_r")), _num(long.get("t_stat"))
         years_ok = int(split.get("n_positive_years") or 0) >= H01_MIN_POSITIVE_YEARS and bool(
             split.get("chop_year_positive"))
+        long_years_ok = int(split.get("n_long_positive_years") or 0) >= H01_MIN_POSITIVE_YEARS and bool(
+            split.get("long_chop_year_positive"))
         long_ok = long_r is not None and long_r > 0 and long_t is not None and long_t >= H01_NET_T
-        if net_t is None or net_t < H01_NET_T or not years_ok or not long_ok:
+        if net_t is None or net_t < H01_NET_T or not years_ok or not long_years_ok or not long_ok:
             return {"inconclusive"}, "H-01"
         return {"continue"}, "H-01"
-    if family == "tsmom" and cfg.get("signal_tf") is None and cfg.get("timeframe") == "4h" \
-            and cfg.get("max_bars") == 12:
-        return ({"stop"} if net is None or net <= 0 else {"continue", "inconclusive"}), "tsmom 4h continuity"
+    if rule_id == "C4H":
+        return ({"stop"} if net is None or net <= 0 else {"inconclusive"}), "tsmom 4h continuity"
     if verdict == SCREEN_FAIL:
         return {"stop"}, "screen"
     if below_floor:
         return {"inconclusive"}, "screen"
-    return {"continue", "stop", "inconclusive"}, "screen"
+    cites = pre is not None and bool(cited_rule) and cited_rule == pre.get("reading_rule")
+    return ({"continue", "stop", "inconclusive"} if cites else {"stop", "inconclusive"}), "screen"
 
 
 def slot_refusal(rows: list[dict[str, Any]], quarter: str, prereg: dict[str, Any], family: str,
@@ -675,7 +691,9 @@ def slot_refusal(rows: list[dict[str, Any]], quarter: str, prereg: dict[str, Any
         `config.spec`: its label and candidates), `from_discovery` = the parent's `row_ref`, the claimed `survivor`
         the k-th of `slot_survivors`, and `features` (less `side`) exactly that survivor's recorded members; a holdout
         also exactly survivor trial k's configuration, which passed its gates;
-      * follow-up: the slot's fixed family, and a config whose hash is allowed or that contains every fixed override."""
+      * survivor: only the parent's spec keys plus `from_discovery`, `survivor` and `features` (no other key);
+      * follow-up: the slot's fixed family, and a config whose hash is listed, or that equals the family's default
+        config plus the fixed overrides exactly (no superset)."""
     led = _Ledger(rows)
     slot = led.slot_named(prereg.get("slot_ref"))
     if slot is None:

@@ -26,7 +26,10 @@ from goldbot.specialists.base import FEATURE_SEED_KEY, AgentIdentity, Specialist
 # one the live engine builds) does not depend on whether that data happens to be loaded.
 OPT_IN_FEATURES = ("macro", "macro_drivers", "calendar_events")
 DEFAULT_FEATURE_NAMES = [n for n in FEATURES if n not in OPT_IN_FEATURES]
-MACRO_FEATURE_NAMES = ["macro_drivers"]      # added when ctx carries the macro table (release macro-v1)
+MACRO_FEATURE_NAMES = ["macro_drivers"]
+# the only features computed on higher-timeframe context frames (h1_/h4_/d1_ columns), in research and in the engine;
+# macro features (and so the VRP spread) are computed once, on the decision frame
+CONTEXT_FEATURES: tuple[str, ...] = ("atr", "trend_strength", "moving_averages", "realised_vol")      # added when ctx carries the macro table (release macro-v1)
 
 
 def research_feature_names(ctx: dict | None = None) -> list[str]:
@@ -59,7 +62,7 @@ def build_decision_frame(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame
     version = X.attrs["feature_version"]
     for label, hbars in (context or {}).items():
         hm = mid(hbars).reset_index(drop=True)
-        hf = build_features(hm, [n for n in ("atr", "trend_strength", "moving_averages", "realised_vol") if n in names], ctx)
+        hf = build_features(hm, [n for n in CONTEXT_FEATURES if n in names], ctx)
         X = merge_higher_tf(X, hf, hbars.reset_index(drop=True), label)
     X.attrs["feature_version"] = version
     return m, X

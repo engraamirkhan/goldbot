@@ -11,7 +11,9 @@ talks to the network, a broker or Telegram, so the whole module is unit-tested w
 
 Secrets are checked for PRESENCE only: the report names missing keys and never contains a value. The network
 probes, the MT5 bridge's /health through the tunnel and the broker's latest tick for the server-clock check
-(`goldbot/ops/server_clock.py`), are injected (`HealthContext.bridge_probe`, `tick_reader`); tests leave them unset.
+(`goldbot/ops/server_clock.py`) and the bridge's reported protocol, methods, zone and commit
+(`goldbot/ops/bridge_compat.py`), are injected (`HealthContext.bridge_probe`, `tick_reader`, `bridge_info`); tests
+leave them unset.
 
 Operational alerts (design S5, R11, X6) are checks too: a service heartbeat silent for 5 minutes fails, and a tripped
 daily or weekly loss cap and an order that failed after the retries warn with `NOTIFY_ON_WARN`, so the Telegram alert
@@ -38,10 +40,11 @@ from typing import Any, Callable, Literal, cast
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, Record, UtcTimestamp, write_atomic
+from goldbot.base import FrozenRecord, Record, UtcTimestamp, load_record_json, write_atomic
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
 from goldbot.data.crossfeed import check_reconciliation
+from goldbot.risk.supervisor import engine_fault
 
 Status = Literal["ok", "warn", "fail"]
 _RANK: dict[str, int] = {"ok": 0, "warn": 1, "fail": 2}
@@ -68,6 +71,7 @@ WATCH_STALE_S = 15 * 60           # health_last.json older than this: the Telegr
 HEARTBEAT_EVERY_S = 60            # services write state/heartbeat_<service>.json at most this often
 HEARTBEAT_SILENT_S = 5 * 60       # design S5: "a heartbeat alert fires if any service has been silent for five minutes"
 HEARTBEAT_SERVICES = ("supervisor", "scheduler", "telegram", "news", "api")   # engines: engine_<account>.json
+QUOTE_INVALID_FAIL_S = 60         # an engine whose every quote has been invalid this long in market hours (review MEDIUM-2)
 FAILED_ORDER_WINDOW_H = 24        # failed sends (X6) in this window are listed, each alerted once
 BRIDGE_TIMEOUT_S = 5.0
 BACKUP_WARN_H = 26.0              # daily backup: one missed night warns
@@ -118,6 +122,8 @@ class HealthContext(Record):
     sessions: SessionTable = DEFAULT_SESSIONS
     bridge_probe: Callable[[str], str | None] | None = None   # url -> None when /health answers, else why not
     tick_reader: Callable[[str, str], Any] | None = None      # (account_id, symbol) -> broker Tick (read-only); None: no bridge
+    bridge_info: Callable[[str], Any] | None = None           # url -> bridge_compat.BridgeInfo from /health; None: not probed
+    commit: str | None = None                                 # this checkout's commit, compared with the bridge's
     clock: Callable[[], pd.Timestamp] | None = None           # host UTC read after a network probe; None: use `now`
     last_run: UtcTimestamp | None = None                      # the previous health run (health_last.json), if any
 
@@ -138,11 +144,13 @@ class HealthContext(Record):
         except Exception as exc:
             a_err = f"{type(exc).__name__}: {exc}"
         from goldbot.execution.bridge import probe_health
+        from goldbot.ops.bridge_compat import read_bridge_info, repo_commit
         return cls(state_dir=Path(state_dir), now=now if now is not None else pd.Timestamp.now("UTC"),
                    settings=settings, settings_error=s_err, accounts=accs, accounts_error=a_err,
                    get_secret=accounts.get_secret, bridge_probe=lambda url: probe_health(url, BRIDGE_TIMEOUT_S),
                    clock=lambda: pd.Timestamp.now("UTC"), last_run=_last_run(Path(state_dir)),
-                   tick_reader=bridge_tick_reader)
+                   tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),
+                   commit=repo_commit())
 
 
 def bridge_tick_reader(account_id: str, symbol: str) -> Any:
@@ -275,9 +283,21 @@ def check_supervisor(ctx: HealthContext) -> Check:
     out = s.get("money_excluded") or []
     note = (f"; {', '.join(out)}: stale, other or no currency, money not summed (exposure still counted; delete the "
             "file if that engine no longer runs)") if out else ""
+    reasons = [str(r) for r in s.get("reasons") or []]
+    # a halt that is a fault, not a cap: FAIL, so the Telegram health pass announces it (trading-safety review MEDIUM-1)
+    if "supervisor_error" in reasons:
+        return Check(name="supervisor", status="fail",
+                     reason=f"HALT supervisor_error: the supervisor's evaluation raised {s.get('error') or 'an error'}; "
+                            "entries are blocked on every account until it evaluates cleanly (supervisor log)")
+    if "engine_state_unreadable" in reasons:
+        files = ", ".join(str(f) for f in s.get("unreadable_engines") or []) or "an engine file"
+        return Check(name="supervisor", status="fail",
+                     reason=f"HALT engine_state_unreadable: {files} cannot be read or holds a non-number; entries are "
+                            "blocked on every account until the engine rewrites it (delete it if that engine no longer runs)")
     if s.get("halt"):
+        label = "combined-cap HALT" if any(r.startswith("combined_") for r in reasons) else "HALT"
         return Check(name="supervisor", status="warn",
-                     reason=f"combined-cap HALT: {', '.join(s.get('reasons') or [])}; heartbeat {_age(age)}{note}")
+                     reason=f"{label}: {', '.join(reasons)}; heartbeat {_age(age)}{note}")
     if out:
         return Check(name="supervisor", status="warn", reason=f"heartbeat {_age(age)}{note}")
     if age > SUPERVISOR_WARN_S:
@@ -296,6 +316,9 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         e = _read_json(f)
     except (ValueError, OSError) as exc:
         return Check(name=name, status="fail", reason=f"engine state unreadable: {exc}")
+    bad = engine_fault(e) if isinstance(e, dict) else "the file"
+    if bad is not None:                      # the supervisor's rule: a null, string, bool, NaN or infinite number
+        return Check(name=name, status="fail", reason=f"engine state unreadable: {bad} is not a finite number")
     parts: list[str] = []
     statuses: list[Status] = []
     age = _epoch(ctx.now) - float(e.get("ts", 0))
@@ -351,6 +374,14 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         statuses.append("warn")
         parts.append(f"broker clock skew {float(skew):+.1f} s vs the wall clock exceeds the {grace:g} s bar-close grace: "
                      f"bars may close before their last ticks ({int(e.get('late_ticks') or 0)} late tick(s) so far)")
+    since = e.get("quote_invalid_since")
+    if since and _market_open_throughout(ctx, QUOTE_INVALID_FAIL_S):
+        invalid_s = (ctx.now - pd.Timestamp(since)).total_seconds()
+        if invalid_s >= QUOTE_INVALID_FAIL_S:
+            statuses.append("fail")
+            parts.append(f"quotes invalid for {_age(invalid_s)} (NaN, crossed or unreadable; > {QUOTE_INVALID_FAIL_S} s): "
+                         "entries blocked; decided closes, the kill switch, time exits and the Friday flatten still run "
+                         "on the host clock, stops rest with the broker")
     if e.get("tick_error"):
         statuses.append("fail")
         parts.append(f"tick error ({e.get('tick_error_detail') or 'unknown'}): the engine logged it and carries on; "
@@ -379,7 +410,7 @@ TICK_ERROR_RECENT_S = 15 * 60   # a tick error this recent is reported even afte
 def _last_run(state_dir: Path) -> pd.Timestamp | None:
     """When the previous health report was recorded (state/health_last.json), or None."""
     try:
-        return WatchState.model_validate_json((state_dir / WATCH_FILE).read_text(encoding="utf-8")).ts
+        return load_record_json(WatchState, (state_dir / WATCH_FILE).read_text(encoding="utf-8"), source=WATCH_FILE).ts
     except (ValueError, OSError):
         return None
 
@@ -926,7 +957,7 @@ def check_alert_loop(ctx: HealthContext) -> Check:
     if not f.exists():
         return Check(name="alerts", status="warn", reason="health alerts never ran (Telegram service not started)")
     try:
-        ts = WatchState.model_validate_json(f.read_text(encoding="utf-8")).ts
+        ts = load_record_json(WatchState, f.read_text(encoding="utf-8"), source=WATCH_FILE).ts
     except (ValueError, OSError) as exc:
         return Check(name="alerts", status="warn", reason=f"health_last.json unreadable: {exc}")
     age = (ctx.now - ts).total_seconds() if ts is not None else float("inf")
@@ -1089,6 +1120,64 @@ def check_throttle(ctx: HealthContext, account_id: str) -> list[Check]:
     return out
 
 
+WINDOWS_UNAVAILABLE_FAIL = pd.Timedelta(minutes=30)   # calendar_unavailable this long with the market open: FAIL
+WINDOWS_FETCH_WARN = pd.Timedelta(hours=36)            # newest calendar fetch older than this: WARN
+WINDOWS_HOLIDAY_WARN_DAYS = 90                         # holiday list ending within this many days: WARN
+
+
+def check_entry_windows(ctx: HealthContext, account_id: str) -> list[Check]:
+    """BACKLOG 17/18 entry windows fail closed (`calendar_unavailable` refuses every entry), so the owner must hear
+    when that happens (review M1), from the engine's `windows` block. Checks, only for enabled windows:
+    `entry_windows:<account>:calendar` FAILs once the calendar has been unavailable over 30 min with the market open
+    (ok while the market is closed or for shorter spells, which the Sunday fetch and the 5-minute re-read clear);
+    `entry_windows:<account>:calendar_age` (tier 2) warns when the newest Forex Factory fetch is over 36 h old;
+    `entry_windows:<account>:holiday_list` warns when the holiday list ends within 90 days. Warnings reach Telegram
+    (NOTIFY_ON_WARN). Nothing while every window is off or the engine has not published the block."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    if not f.exists():
+        return []
+    try:
+        w = _read_json(f).get("windows") or {}
+        on = {k: bool(v) for k, v in (w.get("enabled") or {}).items()}
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []                                   # check_engine reports the unreadable file
+    if not any(on.values()):
+        return []
+    out = []
+    pre = f"entry_windows:{account_id}"
+    if on.get("tier2") or on.get("holidays"):
+        since = pd.Timestamp(w["calendar_unavailable_since"]) if w.get("calendar_unavailable_since") else None
+        if not w.get("calendar_unavailable") or since is None:
+            out.append(Check(name=f"{pre}:calendar", status="ok", reason=f"{account_id}: calendar known"))
+        else:
+            lasted = ctx.now - since
+            open_ = _market_open_throughout(ctx, WINDOWS_UNAVAILABLE_FAIL.total_seconds())
+            bad = lasted > WINDOWS_UNAVAILABLE_FAIL and open_
+            why = w.get("calendar_unavailable_reason") or "unknown"
+            out.append(Check(name=f"{pre}:calendar", status="fail" if bad else "ok",
+                             reason=f"{account_id}: calendar_unavailable since {since:%Y-%m-%d %H:%M} UTC ({why}): "
+                                    "entries refused, exits unaffected"
+                                    + ("" if bad else " (market closed or under 30 min)")))
+    if on.get("tier2"):
+        rec = pd.Timestamp(w["calendar_received_utc"]) if w.get("calendar_received_utc") else None
+        if rec is None or ctx.now - rec > WINDOWS_FETCH_WARN:
+            out.append(Check(name=f"{pre}:calendar_age", status="warn",
+                             reason=f"{account_id}: newest calendar fetch {rec or 'never'} is over 36 h old; check the "
+                                    "calendar_archive job"))
+        else:
+            out.append(Check(name=f"{pre}:calendar_age", status="ok",
+                             reason=f"{account_id}: calendar fetched {rec:%Y-%m-%d %H:%M} UTC"))
+    if on.get("holidays") and w.get("holiday_valid_through"):
+        end = pd.Timestamp(w["holiday_valid_through"]).date()
+        left = (end - ctx.now.date()).days
+        near = left <= WINDOWS_HOLIDAY_WARN_DAYS
+        out.append(Check(name=f"{pre}:holiday_list", status="warn" if near else "ok",
+                         reason=f"{account_id}: holiday list {w.get('holiday_version')} valid through {end} ({left} d)"
+                                + ("; extend config/holidays_cme_metals.yaml or every entry is refused after it"
+                                   if near else "")))
+    return out
+
+
 def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
     """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
     restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
@@ -1134,6 +1223,81 @@ def check_bridge(ctx: HealthContext, account_id: str) -> Check | None:
     return Check(name=name, status="ok", reason="bridge answers /health")
 
 
+def check_bridge_compat(ctx: HealthContext, account: AccountRef) -> Check | None:
+    """BACKLOG 42 (gap G6): the bridge's /health against this checkout (goldbot/ops/bridge_compat.py). FAIL when a
+    method this brain calls is missing, the protocol is older, the zone differs or the bridge does not report them: the
+    engine refuses entries (`bridge_incompatible`) until the MT5 box runs a compatible commit; exits are unaffected.
+    A different commit alone is a warning (doc-only commits differ). /health unreachable is a warning here
+    (`bridge:<account>` fails for it) unless the engine's last verdict still blocks. Omitted without a bridge URL or
+    an info reader."""
+    try:
+        url = ctx.get_secret(f"mt5-bridge-url-{account.account_id}")
+    except Exception:
+        url = None
+    if not url or ctx.bridge_info is None or account.server_tz is None:
+        return None
+    from goldbot.ops.bridge_compat import BridgeInfo, assess
+    name = f"bridge_compat:{account.account_id}"
+    try:
+        info = ctx.bridge_info(url)
+    except Exception as exc:              # the type only: a message can name the tunnel endpoint
+        info = BridgeInfo(reachable=False, problem=f"/health unreadable ({type(exc).__name__})")
+    v = assess(info, account.server_tz, ctx.commit)
+    if v.blocks:
+        return Check(name=name, status="fail", reason=f"{v.reason}: the engine refuses entries (bridge_incompatible), "
+                     "exits unaffected; deploy the brain's commit to the MT5 box (RUNBOOK: bridge compatibility)")
+    try:
+        engine = _read_json(ctx.state_dir / f"engine_{account.account_id}.json").get("bridge_compat") or {}
+    except (ValueError, OSError, AttributeError):
+        engine = {}
+    if not isinstance(engine, dict):
+        engine = {}
+    if v.status == "unreachable":
+        if engine.get("status") == "incompatible":
+            return Check(name=name, status="fail", reason=f"{v.reason}; the engine's last verdict still refuses "
+                         f"entries: {str(engine.get('reason', ''))[:200]}")
+        return Check(name=name, status="warn", reason=v.reason)
+    stale = _engine_bridge_unconfirmed(ctx, engine)
+    if stale is not None:                 # the bridge answers, but the engine's own check has not confirmed it
+        why, past_grace = stale
+        return Check(name=name, status="fail" if past_grace else "warn", reason=f"{v.reason}; {why}")
+    return Check(name=name, status="warn" if v.commit_differs else "ok", reason=v.reason)
+
+
+def _age_s(now: pd.Timestamp, raw: Any) -> float:
+    """Seconds since an ISO stamp from a state file; infinity when missing or unreadable (assume the worst)."""
+    try:
+        at = pd.Timestamp(raw) if isinstance(raw, str) else None
+        if at is None or pd.isna(at):
+            return float("inf")
+        return (now - (at if at.tzinfo is not None else at.tz_localize("UTC"))).total_seconds()
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def _engine_bridge_unconfirmed(ctx: HealthContext, engine: dict[str, Any]) -> tuple[str, bool] | None:
+    """Why the engine's published bridge verdict leaves entries refused although this probe passed, and whether it is
+    past the grace period (FAIL, alerted) rather than inside it (warn): `unchecked` for over UNCHECKED_GRACE_S, or an ok
+    whose `checked_at` is over MAX_VERDICT_AGE_S old (its check thread may be stuck). A missing stamp counts as past
+    grace. No verdict published, or an incompatible one (failed above when the probe agrees): None. Not done through
+    NOTIFY_ON_WARN: a commit mismatch on the same check must stay quiet."""
+    from goldbot.ops.bridge_compat import MAX_VERDICT_AGE_S, UNCHECKED_GRACE_S
+    status = engine.get("status")
+    if status is None or status == "incompatible":
+        return None
+    if status == "unchecked":
+        age = _age_s(ctx.now, engine.get("unchecked_since"))
+        span = "since an unknown time" if age == float("inf") else f"for {age / 60:.1f} min"
+        return (f"the engine has not confirmed the bridge {span} ({str(engine.get('reason', ''))[:120]}): entries "
+                "refused (bridge_incompatible); it retries every 60 s and replaces a hung check, restart the engine "
+                "if this persists", age > UNCHECKED_GRACE_S)
+    age = _age_s(ctx.now, engine.get("checked_at"))
+    if age > MAX_VERDICT_AGE_S:
+        return (f"the engine has not confirmed the bridge for over {MAX_VERDICT_AGE_S / 60:g} min (its check may be "
+                "stuck): entries refused as unchecked", True)
+    return None
+
+
 def _engine_sessions(ctx: HealthContext, account_id: str) -> SessionTable:
     """The broker session table the engine last wrote to engine_<account>.json (D13), else `ctx.sessions`."""
     try:
@@ -1172,31 +1336,51 @@ def check_server_clock(ctx: HealthContext, account: AccountRef) -> Check | None:
 
 
 # --------------------------------------------------------------------------------------------- report
+def _guarded(name: str, fn: Callable[[], "Check | list[Check] | None"]) -> list[Check]:
+    """One check; an exception (a type-corrupt state file, a bug) becomes a FAIL named after it instead of aborting the
+    whole report (trading-safety review LOW-3)."""
+    try:
+        out = fn()
+    except Exception as exc:                 # noqa: BLE001 - every check is independent
+        log.exception("health check %s raised", name)
+        return [Check(name=name, status="fail", reason=f"the check raised {type(exc).__name__}: its state file is "
+                                                       "corrupt or the check has a bug (health log)")]
+    return [] if out is None else out if isinstance(out, list) else [out]
+
+
 def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport:
-    """All checks in a fixed order. `static_only`: settings, accounts, secrets and disk (no service needs to run)."""
-    checks = [check_settings(ctx), check_accounts(ctx), check_secrets(ctx), check_disk(ctx)]
+    """All checks in a fixed order. `static_only`: settings, accounts, secrets and disk (no service needs to run).
+    Each check is guarded (`_guarded`): one that raises is a FAIL of its own, never a missing report."""
+    g = _guarded
+    checks = g("settings", lambda: check_settings(ctx)) + g("accounts", lambda: check_accounts(ctx)) + \
+        g("secrets", lambda: check_secrets(ctx)) + g("disk", lambda: check_disk(ctx))
     if not static_only:
-        checks.append(check_supervisor(ctx))
-        checks.append(check_halt(ctx))
-        checks.append(check_phase(ctx))
-        checks += [check_stop_rule(ctx), check_phase_gates(ctx)]
+        checks += g("supervisor", lambda: check_supervisor(ctx)) + g("halt", lambda: check_halt(ctx)) + \
+            g("phase", lambda: check_phase(ctx)) + g("stop_rule", lambda: check_stop_rule(ctx)) + \
+            g("phase_gates", lambda: check_phase_gates(ctx))
         for a in ctx.accounts:
-            checks += [check_engine(ctx, a.account_id), check_risk_state(ctx, a.account_id)]
-            tick_errors = check_tick_errors(ctx, a.account_id)
-            checks += [tick_errors] if tick_errors is not None else []
-            checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
-            checks += check_throttle(ctx, a.account_id)
-            bridge = check_bridge(ctx, a.account_id)
-            checks += [bridge] if bridge is not None else []
-            clock = check_server_clock(ctx, a)
-            checks += [clock] if clock is not None else []
-        checks += [check_heartbeat(ctx, s) for s in HEARTBEAT_SERVICES]
-        checks += check_scheduler(ctx)
-        checks += [check_costs(ctx, a.account_id) for a in ctx.accounts]
-        checks += [check_reconciliation(ctx, a.account_id) for a in ctx.accounts]   # D12 (goldbot/data/crossfeed.py)
+            i = a.account_id
+            checks += g(f"engine:{i}", lambda: check_engine(ctx, i)) + g(f"risk_state:{i}", lambda: check_risk_state(ctx, i))
+            checks += g(f"tick_errors:{i}", lambda: check_tick_errors(ctx, i))
+            checks += g(f"loss_caps:{i}", lambda: check_loss_caps(ctx, i)) + g(f"order_failed:{i}", lambda: check_failed_orders(ctx, i))
+            checks += g(f"throttle:{i}", lambda: check_throttle(ctx, i))
+            checks += g(f"entry_windows:{i}", lambda: check_entry_windows(ctx, i))
+            checks += g(f"bridge:{i}", lambda: check_bridge(ctx, i))
+            checks += g(f"bridge_compat:{i}", lambda: check_bridge_compat(ctx, a))
+            checks += g(f"server_clock:{i}", lambda: check_server_clock(ctx, a))
+        for svc in HEARTBEAT_SERVICES:
+            checks += g(f"heartbeat:{svc}", lambda: check_heartbeat(ctx, svc))
+        checks += g("scheduler", lambda: check_scheduler(ctx))
+        for a in ctx.accounts:
+            checks += g(f"costs:{a.account_id}", lambda: check_costs(ctx, a.account_id))
+        for a in ctx.accounts:
+            checks += g(f"reconciliation:{a.account_id}", lambda: check_reconciliation(ctx, a.account_id))   # D12
         if ctx.settings is not None and ctx.settings.costs.publish_release:
-            checks.append(check_costs_published(ctx))
-        checks += [check_data_quality(ctx), check_drift(ctx), check_model_watch(ctx), check_feature_versions(ctx), check_deploy(ctx), check_backup_age(ctx), check_backup_prune(ctx), check_restore_drill(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
+            checks += g("costs_published", lambda: check_costs_published(ctx))
+        for fn in (check_data_quality, check_drift, check_model_watch, check_feature_versions, check_deploy,
+                   check_backup_age, check_backup_prune, check_restore_drill, check_news, check_agent_spend,
+                   check_approvals, check_alert_loop):
+            checks += g(fn.__name__.removeprefix("check_"), lambda: fn(ctx))
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
 
@@ -1237,7 +1421,7 @@ class WatchState(Record):
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:",
-                  "throttle:")
+                  "throttle:", "entry_windows:")
 
 
 def _alerting(name: str, status: str) -> bool:
@@ -1278,7 +1462,8 @@ class HealthWatch:
     def __init__(self, state_dir: str | Path):
         self.path = Path(state_dir) / WATCH_FILE
         try:
-            self.state = WatchState.model_validate_json(self.path.read_text(encoding="utf-8")) if self.path.exists() else WatchState()
+            self.state = (load_record_json(WatchState, self.path.read_text(encoding="utf-8"), source=WATCH_FILE)
+                          if self.path.exists() else WatchState())
         except (ValueError, OSError):
             self.state = WatchState()       # unreadable: start clean (current fails are announced once more)
 
@@ -1306,7 +1491,7 @@ def _load_report(path: str) -> HealthReport | None:
     if not p.exists():
         return None
     try:
-        return HealthReport.model_validate_json(p.read_text(encoding="utf-8"))
+        return load_record_json(HealthReport, p.read_text(encoding="utf-8"), source="health report")
     except ValueError:
         return None
 

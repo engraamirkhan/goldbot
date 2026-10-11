@@ -71,10 +71,43 @@ class WalkForwardWindow(_Section):
     step_months: int = Field(gt=0)
 
 
+class Tier2Blackout(_Section):
+    """BACKLOG 18 (playbook G-3): "Tier-2 USD events (PPI, retail sales, ISM, GDP, JOLTS, claims, FOMC minutes, Fed
+    chair) get a -5/+15 min entry blackout from config". From the live calendar (store table calendar_events, the
+    archived Forex Factory feed, tiers from goldbot/data/econ_calendar.py). Entries only; with no calendar to judge by,
+    entries are refused (`calendar_unavailable`). Off until the owner adopts it."""
+
+    enabled: bool = False
+    before_min: int = Field(5, ge=0)
+    after_min: int = Field(15, ge=0)
+
+
 class Blackout(_Section):
     before_min: int = Field(ge=0)
     after_min: int = Field(ge=0)
     events: list[str]
+    tier2: Tier2Blackout = Field(default_factory=Tier2Blackout)
+
+
+class ReopenSettings(_Section):
+    """BACKLOG 17 (playbook G-2): "No entries for 15 min after each daily reopen and 30 min after the weekly open"
+    (the minutes are the owner's to set). The reopen is read from the broker session table (D13; the static table
+    otherwise), so it follows the server clock's DST. A reopen after a closure of 12 h or more (the weekend, a holiday
+    closure) takes the weekly window. Entries only; off until the owner adopts it."""
+
+    enabled: bool = False
+    after_daily_reopen_min: int = Field(10, ge=0)
+    after_monday_open_min: int = Field(30, ge=0)
+
+
+class HolidaySettings(_Section):
+    """BACKLOG 17 (playbook G-2): "Holiday calendar ...: no entries on those days". The days come from a versioned
+    list in config (`file`, relative to the repo root), keyed by broker server date (midnight = 17:00 New York, the CME
+    trading-day roll). A missing, unreadable or expired list refuses entries (`calendar_unavailable`). Entries only;
+    off until the owner adopts it."""
+
+    enabled: bool = False
+    file: str = "config/holidays_cme_metals.yaml"
 
 
 class ThrottleSettings(_Section):
@@ -117,6 +150,9 @@ class RiskSettings(_Section):
     positions_unreadable_alert: int = Field(5, ge=1)
     # BACKLOG 21: per-agent loss-streak and entry-rate throttle (goldbot/risk/throttle.py); off by default
     throttle: ThrottleSettings = Field(default_factory=ThrottleSettings)
+    # BACKLOG 17: entry windows after the daily reopen / weekly open and on thin-liquidity days; off by default
+    reopen: ReopenSettings = Field(default_factory=ReopenSettings)
+    holidays: HolidaySettings = Field(default_factory=HolidaySettings)
 
 
 class CostSettings(_Section):
@@ -165,6 +201,9 @@ class SchedulerSettings(_Section):
     cpcv_quarterly: ScheduleSettings = ScheduleSettings(kind="monthly", at="14:00", weekday=6, months=[1, 4, 7, 10],
                                                         max_late_hours=30)
     attribution: ScheduleSettings = ScheduleSettings(kind="daily", at="23:50", max_late_hours=20)
+    # review M2 (BACKLOG 18): a second calendar fetch on Sunday afternoon, so the new Forex Factory week is archived
+    # before the weekly open (an enabled tier-2 window refuses entries until the archive covers the next 24 h)
+    calendar_archive_sunday: ScheduleSettings = ScheduleSettings(kind="weekly", at="18:00", weekday=6, max_late_hours=3)
 
 
 class BackupSettings(_Section):

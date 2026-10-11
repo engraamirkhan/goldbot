@@ -10,10 +10,12 @@ import pytest
 import yaml
 
 from goldbot.config import DEFAULT_SETTINGS
+from goldbot.execution.bridge import API_VERSION, METHODS, MIN_COMPATIBLE
 from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.ops import accounts
 from goldbot.ops import preflight as pf
 from goldbot.ops import setup_wizard as sw
+from goldbot.ops.bridge_compat import BridgeInfo
 
 LOGIN = "51234567"
 MT5_PW = "pw-SECRET-mt5-Zq9"
@@ -191,7 +193,10 @@ def server(tmp_path, cfg):
                   bridge_probe=lambda url: None, terminal_account=lambda url, tok: terminal(),
                   tick_reader=lambda url, tok, sym: Tick(ts_utc=pd.Timestamp.now("UTC"), bid=2000.0, ask=2000.3),
                   bridge_tz=lambda url: "Europe/Athens",
-                  load_accounts=registry, disk_usage=lambda p: (100e9, 50e9, 50e9),
+                  bridge_info=lambda url: BridgeInfo(reachable=True, server_tz="Europe/Athens", api_version=API_VERSION,
+                                                     min_compatible=MIN_COMPATIBLE,
+                                                     methods=sorted(METHODS), commit=COMMIT),
+                  commit=COMMIT, load_accounts=registry, disk_usage=lambda p: (100e9, 50e9, 50e9),
                   meminfo=lambda: {"MemAvailable": 20_000_000, "MemTotal": 24_000_000})
         kw.update(over)
         return pf.PreflightContext(**kw)
@@ -200,8 +205,9 @@ def server(tmp_path, cfg):
     return make
 
 
+COMMIT = "a" * 40
 EXPECTED = ["settings", "owner_email", "telegram_token", "telegram_allowlist", "tunnel_service", "bridge_config",
-            "bridge_health", "terminal_account", "bridge_server_tz", "server_clock", "web_dist", "db_files_private", "backups", "time_sync", "disk",
+            "bridge_health", "terminal_account", "bridge_server_tz", "bridge_compat", "server_clock", "web_dist", "db_files_private", "backups", "time_sync", "disk",
             "memory", "deploy_timer"]
 
 
@@ -263,6 +269,23 @@ def test_bridge_converting_with_another_server_tz_blocks_preflight(server):
     assert item.status == "fail" and item.blocking and "NY+7" in item.detail and "Europe/Athens" in item.detail
     old = {i.name: i for i in pf.run_preflight(server(bridge_tz=lambda url: None))}["bridge_server_tz"]
     assert old.status == "warn" and not old.blocking                  # an older bridge that does not report it
+
+
+def test_an_incompatible_bridge_blocks_preflight_and_a_commit_mismatch_only_warns(server):
+    older = BridgeInfo(reachable=True, server_tz="Europe/Athens", api_version=API_VERSION,
+                       min_compatible=MIN_COMPATIBLE,
+                       methods=sorted(set(METHODS) - {"loss_per_lot"}), commit=COMMIT)
+    ctx = server(bridge_info=lambda url: older)
+    item = {i.name: i for i in pf.run_preflight(ctx)}["bridge_compat"]
+    assert item.status == "fail" and item.blocking and "loss_per_lot" in item.detail and "goldbot-deploy" in item.fix
+    assert pf.main([], ctx) == 1
+    pre42 = {i.name: i for i in pf.run_preflight(server(bridge_info=lambda url: BridgeInfo(
+        reachable=True, server_tz="Europe/Athens")))}["bridge_compat"]
+    assert pre42.status == "fail" and "protocol" in pre42.detail             # today's bridge: update the MT5 box
+    other = server(commit="b" * 40)
+    w = {i.name: i for i in pf.run_preflight(other)}["bridge_compat"]
+    assert w.status == "warn" and not w.blocking and "commits differ" in w.detail
+    assert pf.exit_code(pf.run_preflight(other)) == 0
 
 
 def test_bridge_rpc_error_is_reported_without_the_url(server):

@@ -11,7 +11,7 @@ dependencies = [
     "polars>=1.0",
     "lightgbm>=4.3",
     "scikit-learn>=1.4",
-    "pydantic>=2.6",
+    "pydantic>=2.12",          # per-call extra= for tolerant persisted reads (ADR 0010)
     "pyyaml>=6.0",
     "structlog>=24.1",
     "fastapi>=0.110",
@@ -24,7 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 # Windows VPS only: the official MetaTrader5 package talks to a running terminal.
 live = ["MetaTrader5>=5.0.45; sys_platform == 'win32'", "keyring>=25", "python-telegram-bot>=21"]
-dev = ["pytest>=8", "pytest-xdist>=3.5", "pytest-cov", "ruff", "mypy>=1.10", "pandas-stubs", "types-PyYAML", "types-requests", "pre-commit"]
+dev = ["pytest>=8", "pytest-xdist>=3.5", "pytest-randomly>=3.15", "pytest-cov", "ruff", "mypy>=1.10", "pandas-stubs", "types-PyYAML", "types-requests", "pre-commit"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

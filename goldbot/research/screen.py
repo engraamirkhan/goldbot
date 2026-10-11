@@ -98,17 +98,27 @@ def rule_only_split(net: pd.DataFrame) -> dict[str, Any]:
     (side == -1), and per calendar year of entry over every candidate (both sides). A year is positive with at least
     gates.MIN_TRADES_PER_YEAR trades and positive mean net R (preregistration-2027Q1.md, H-01 "Positive year")."""
     empty: dict[str, Any] = {"long": {"n": 0}, "short": {"n": 0}, "years": {}, "positive_years": [],
-                             "n_positive_years": 0, "chop_year_positive": False}
+                             "n_positive_years": 0, "chop_year_positive": False, "long_years": {},
+                             "long_positive_years": [], "n_long_positive_years": 0, "long_chop_year_positive": False}
     if net.empty or not {"side", "ret", "risk", "ts_utc"} <= set(net.columns):
         return empty
     side = net["side"].to_numpy()
     out = {**empty, **{name: expectancy(net["ret"].to_numpy()[side == s], net["risk"].to_numpy()[side == s])
                        for name, s in (("long", 1), ("short", -1))}}
     year = pd.DatetimeIndex(pd.to_datetime(net["ts_utc"], utc=True)).year
-    years = {str(y): expectancy(g["ret"].to_numpy(), g["risk"].to_numpy()) for y, g in net.groupby(year)}
-    positive = [int(y) for y, e in years.items() if e.get("n", 0) >= MIN_TRADES_PER_YEAR and e["mean_r"] > 0]
+
+    def by_year(frame: pd.DataFrame, yr: Any) -> tuple[dict[str, Any], list[int]]:
+        ys = {str(y): expectancy(g["ret"].to_numpy(), g["risk"].to_numpy()) for y, g in frame.groupby(yr)}
+        return ys, [int(y) for y, e in ys.items() if e.get("n", 0) >= MIN_TRADES_PER_YEAR and e["mean_r"] > 0]
+    years, positive = by_year(net, year)
+    # H-01 reads the positive-year test on both sides together AND on long-only (quant re-review)
+    longs = side == 1
+    long_years, long_positive = by_year(net[longs], year[longs])
     return {**out, "years": years, "positive_years": positive, "n_positive_years": len(positive),
-            "chop_year_positive": any(y in CHOP_YEARS for y in positive)}
+            "chop_year_positive": any(y in CHOP_YEARS for y in positive),
+            "long_years": long_years, "long_positive_years": long_positive,
+            "n_long_positive_years": len(long_positive),
+            "long_chop_year_positive": any(y in CHOP_YEARS for y in long_positive)}
 
 
 def rule_only_split_lines(s: dict[str, Any] | None) -> list[str]:
@@ -123,7 +133,10 @@ def rule_only_split_lines(s: dict[str, Any] | None) -> list[str]:
     pos = s.get("positive_years") or []
     out += ["", f"- positive net years (both sides, >= {MIN_TRADES_PER_YEAR} trades each, by entry year): "
                 f"{s.get('n_positive_years', 0)} ({', '.join(str(y) for y in pos) or 'none'}); one of "
-                f"{', '.join(str(y) for y in CHOP_YEARS)}: {'yes' if s.get('chop_year_positive') else 'no'}", ""]
+                f"{', '.join(str(y) for y in CHOP_YEARS)}: {'yes' if s.get('chop_year_positive') else 'no'}",
+            f"- positive net years (long-only): {s.get('n_long_positive_years', 0)} "
+            f"({', '.join(str(y) for y in s.get('long_positive_years') or []) or 'none'}); one of "
+            f"{', '.join(str(y) for y in CHOP_YEARS)}: {'yes' if s.get('long_chop_year_positive') else 'no'}", ""]
     return out
 
 

@@ -52,7 +52,16 @@ risk:
   max_positions_per_account: 2
   max_spread_points: 45
   stale_tick_seconds: 20
-  blackout: { before_min: 15, after_min: 30, events: [CPI, NFP, FOMC, PCE] }
+  # Tier-1 news blackout (design): entries refused -15/+30 min around CPI, NFP, FOMC, PCE.
+  # Tier 2 (BACKLOG 18, playbook G-3): entries refused `tier2_blackout` from before_min before to after_min after a
+  # tier-2 USD event (PPI, retail sales, ISM, GDP, JOLTS, claims, FOMC minutes, Fed chair; any other high-impact USD
+  # event) in the live calendar (the archived Forex Factory feed). Enabled with no calendar archived around now,
+  # entries are refused `calendar_unavailable` (fail closed). Entries only. OFF until the owner adopts it.
+  blackout:
+    before_min: 15
+    after_min: 30
+    events: [CPI, NFP, FOMC, PCE]
+    tier2: { enabled: false, before_min: 5, after_min: 15 }
   min_target_over_cost: 2.5
   approval_window_seconds: 90
   # Minimum-lot exception (BACKLOG 25, ADR 0004): null = off (the design's 1.2x rule only). Settings are global, not
@@ -71,6 +80,15 @@ risk:
   # day (00:00 UTC) it refuses `throttle_entry_rate`. Entries only: exits are never gated. OFF until the owner sets the
   # thresholds (these are the playbook's proposal, not decisions).
   throttle: { enabled: false, loss_streak: 3, cooldown_bars: 4, max_entries_per_day_per_agent: 3 }
+  # Reopen window (BACKLOG 17, playbook G-2): entries refused `reopen_window` for after_daily_reopen_min minutes after
+  # each daily reopen and after_monday_open_min after the weekly open (or any reopen after a closure of 12 h or more),
+  # read from the broker session table (DST follows the server clock). Entries only. OFF until the owner adopts it.
+  reopen: { enabled: false, after_daily_reopen_min: 10, after_monday_open_min: 30 }
+  # Holiday window (BACKLOG 17): entries refused `holiday_thin` on the thin-liquidity days of the versioned list in
+  # `file` (US federal holidays as a proxy, not measured; Good Friday, Easter Monday, day after Thanksgiving,
+  # 24/26/31 Dec, 1/2 Jan), by broker server date (= the CME trading day). A missing or expired list refuses entries
+  # `calendar_unavailable` (health warns 90 days ahead). Entries only. OFF until the owner adopts it.
+  holidays: { enabled: false, file: config/holidays_cme_metals.yaml }
 
 costs:
   slippage_prior_usd: 0.15           # per oz, used until 50 real fills exist
@@ -99,6 +117,7 @@ scheduler:
   agents_weekly:    { kind: weekly,  at: "13:00", weekday: 5, max_late_hours: 30 }     # journal coach, improvement agent
   monthly_research: { kind: monthly, at: "08:00", weekday: 6, max_late_hours: 30 }   # first Sunday of the month
   calendar_archive: { kind: daily,   at: "06:10", max_late_hours: 20 }                  # Forex Factory week -> calendar_events
+  calendar_archive_sunday: { kind: weekly, at: "18:00", weekday: 6, max_late_hours: 3 }  # the new week before the Sunday open
   agents_presession: { kind: daily,  at: "06:30", weekdays: [0, 1, 2, 3, 4], max_late_hours: 1 }   # macro/news briefing before London
   recalibrate:      { kind: weekly,  at: "11:30", weekday: 5, max_late_hours: 30 }   # P9: bounded calibrator refit after the retrain
   drift_watch:      { kind: daily,   at: "23:40", max_late_hours: 20 }                  # PSI, calibration, CUSUM halts (M26/M27)

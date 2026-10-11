@@ -6,6 +6,8 @@ import type { components, operations } from "./schema";
 type Schemas = components["schemas"];
 export type AccountSummary = Schemas["AccountSummary"];
 export type Stage = AccountSummary["stage"];
+export type EntryStatus = Schemas["EntryStatus"];
+export type EntryBlock = Schemas["EntryBlock"];
 export type Proposal = Schemas["Proposal"];
 export type DecidedProposal = Schemas["DecidedProposal"];
 export type Decision = Schemas["Decision"];

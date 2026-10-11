@@ -42,3 +42,11 @@ def queued_prereg(monkeypatch: pytest.MonkeyPatch) -> Callable[..., dict[str, An
             row: dict[str, Any] = reg.preregister(queue=True, target_quarter=q, **kw)
         return row
     return write
+
+
+def pytest_terminal_summary(terminalreporter: Any, config: Any) -> None:
+    """The test order is random (pytest-randomly, dev extras); `-q` hides its header, so the seed is printed at the end
+    of every run, CI included, to reproduce a failure that depends on the order (trading-safety review LOW-5)."""
+    seed = getattr(config.option, "randomly_seed", None)
+    if isinstance(seed, int) and config.pluginmanager.hasplugin("randomly"):
+        terminalreporter.write_line(f"pytest-randomly seed {seed}: reproduce with -p randomly --randomly-seed={seed}")

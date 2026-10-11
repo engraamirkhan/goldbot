@@ -1,11 +1,13 @@
 """Approvals across processes: engine -> bus -> dashboard/Telegram -> bus -> engine, the owner halt, and what the
 Telegram service sends."""
 import json
+import logging
 import time
 
 import pandas as pd
 import pytest
 
+from goldbot.base import schema_skew
 from goldbot.db.bookkeeping import AgentRunLog
 from goldbot.engine import ConstantModel, Engine, EngineConfig
 from goldbot.execution.broker import Tick
@@ -151,3 +153,56 @@ def test_engine_keeps_one_position_or_proposal_per_agent(tmp_path):
     eng.pending["q1"] = (Intent(agent_id=spec.agent_id, side=1, p=0.6, target_atr=1.5, stop_atr=1.0, atr_usd=4.0,
                                 cost_atr=0.1, multiplier=1.0, price=2400.0), p, spec)
     assert eng._busy(spec.agent_id)
+
+
+def test_pending_lists_a_proposal_written_by_a_newer_release(tmp_path):
+    """ADR 0010: a newer engine's extra field must not hide a live proposal from the owner, or refuse the decision."""
+    bus = ApprovalBus(tmp_path)
+    p = _p("p-new")
+    row = {**json.loads(p.model_dump_json()), "future_field": {"x": 1}}
+    (bus.pending_dir / "p-new.json").write_text(json.dumps(row))
+    assert [q.proposal_id for q in bus.pending()] == ["p-new"]
+    assert bus.get("p-new") == p
+    assert bus.submit("p-new", approve=True, reason_code=None, by="dashboard:o").approve
+
+
+def test_a_control_file_with_an_unknown_field_fails_closed_to_halted(tmp_path):
+    """ADR 0010 strict allowlist: control.json is never read tolerantly. A field this release does not know could be
+    a halt condition it cannot honour, so the file counts as unreadable: halted, propose-and-approve."""
+    bus = ApprovalBus(tmp_path)
+    (tmp_path / "control.json").write_text(json.dumps({"halted": False, "future_halt_reason": "x"}))
+    c = bus.control()
+    assert c.halted is True and c.approval_mode == "propose"
+
+
+def test_a_decision_with_an_unknown_field_is_skipped_and_the_proposal_expires(tmp_path):
+    """ADR 0010 strict allowlist: an owner decision is never applied without a field this release does not know (a
+    newer release's condition or size limit). The decision is skipped and the proposal runs out its window."""
+    engine = ApprovalCenter({1}, bus=ApprovalBus(tmp_path))
+    engine.propose(_p("a"))
+    bus = ApprovalBus(tmp_path)
+    bus.submit("a", True, None, by="dashboard:o")
+    f = bus.decisions_dir / "a.json"
+    f.write_text(json.dumps({**json.loads(f.read_text()), "max_lots": 0.01}))
+    assert bus.decisions_for({"a"}) == [] and bus.recent() == []
+    assert engine.poll_bus() == [] and "a" in engine.pending                 # never applied
+    engine.pending["a"].created = time.time() - 120
+    assert [x.outcome for x in engine.sweep_expired()] == [Outcome.EXPIRED]
+    assert bus.outcome("a") == "EXPIRED_UNAPPROVED"
+
+
+def test_a_refused_decision_is_logged_once_per_proposal_and_counted(tmp_path, caplog):
+    """ADR 0010: a decision skipped for a field this release does not know is not silent. A WARNING is logged once per
+    proposal id, and every read is counted in schema_skew() (the owner's click would otherwise vanish unexplained)."""
+    caplog.set_level(logging.WARNING, logger="goldbot.base")
+    bus = ApprovalBus(tmp_path)
+    for pid in ("skew-a", "skew-b"):
+        bus.publish(_p(pid))
+        bus.submit(pid, True, None, by="dashboard:o")
+        f = bus.decisions_dir / f"{pid}.json"
+        f.write_text(json.dumps({**json.loads(f.read_text()), "max_lots": 0.01}))
+    for _ in range(3):
+        assert bus.decisions_for({"skew-a", "skew-b"}) == []
+    warned = [r.getMessage() for r in caplog.records if "max_lots" in r.getMessage()]
+    assert len(warned) == 2 and any("skew-a" in m for m in warned) and any("skew-b" in m for m in warned)
+    assert schema_skew()[("approvals/decisions:skew-a", "BusDecision", ("max_lots",))] == 3

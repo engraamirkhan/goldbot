@@ -35,7 +35,9 @@ export function Approvals() {
 
   return (
     <div className="approvals">
-      <SafetyStrip status={status.data} accounts={accounts.data} error={status.isError || accounts.isError} />
+      <SafetyStrip status={status.data} accounts={accounts.data} error={status.isError || accounts.isError}
+                   updatedAt={status.dataUpdatedAt && accounts.dataUpdatedAt
+                     ? Math.min(status.dataUpdatedAt, accounts.dataUpdatedAt) : undefined} now={now} />
       {pending.isError && <p className="err" role="alert">Could not load proposals ({(pending.error as Error).message}). Telegram approvals still work.</p>}
       {pending.isLoading ? <p className="muted">Loading proposals…</p> : open.length === 0 ? (
         <p className="empty muted">No proposals waiting. Entries you approve here or on Telegram are managed automatically afterwards.</p>
@@ -43,7 +45,7 @@ export function Approvals() {
         <section className="cards" aria-label="Waiting for your decision">
           {open.map((p) => (
             <ProposalCard key={p.proposal_id} p={p} now={now} canDecide={canDecide}
-                          blockers={blockers(status.data, accounts.data, p.account_id)}
+                          blockers={blockers(status.data, accounts.data, p.account_id, p.agent_id)}
                           busy={busyId === p.proposal_id} error={errors[p.proposal_id]}
                           onApprove={() => m.mutate({ id: p.proposal_id, action: "approve" })}
                           onReject={(reason) => m.mutate({ id: p.proposal_id, action: "reject", reason })} />

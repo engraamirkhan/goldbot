@@ -34,6 +34,17 @@ If the wizard cannot be used, the manual commands are in [RUNBOOK 0.4](RUNBOOK.m
 - **Approve:** Telegram shows direction, lots, entry, stop, target, probability, spread. Tap **Approve**, or a **Reject** reason. Or the dashboard **Approvals** tab. After 90 s it expires. [More](RUNBOOK.md#approving-or-rejecting-an-entry)
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)
 - **Deploy:** Telegram *New version ready* -> **[Deploy]**. Never while an entry waits; rolls back by itself if a service fails. [More](RUNBOOK.md#05-daily-use)
+- **Entry status (top of Overview):** one block per account answers "can it take new trades right now?".
+  **OPEN** (green): yes. **PARTLY OPEN** (amber): yes, except the strategies named (e.g. "trend-g0 paused after 3
+  losses in a row, until 14:30 your time"). **PAUSED** (amber): no, and it clears by itself (market closed, news
+  blackout, today's loss limit reached); it says when. **BLOCKED** (red): no, and something needs you; the reason
+  is tagged **Needs you**, says what to do, and links the Runbook section (e.g. "Broker clock differs from the
+  expected time zone", Runbook: Server clock). Times are in your phone's time zone; hold or hover for UTC. Exits
+  always keep running; if the engine itself has gone silent while the market is open, the block says since when and
+  that your open trades still have their stop and target at the broker (a silent engine while the market is closed is
+  normal and shows as "Market closed"). If the dashboard can't reach the server, a banner says since when and every
+  badge turns grey **UNKNOWN**: what you see is the last report. The Approvals tab's safety strip uses the same reasons.
+  [Spec](ux/entry-status.md)
 - **Health tab:** each check reads ok, warn or fail with a reason, plus drift and drawdown per strategy.
 - **Your account (Overview):** once the engine is connected to the broker, each account card shows the **balance** and
   **equity** in the account's currency (equity includes open trades), today's change since 00:00 UTC, the margin level,
@@ -71,6 +82,19 @@ Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decisio
 | Paid calendar feed (C) | Not for Q1 |
 | Other instruments (D) | Defer until the slow-TSMOM verdict |
 | Per-agent throttle thresholds (BACKLOG 21, built, off) | Turn on at 3 full losses / 4 bars cooldown / 3 entries a day. The caps are **per decision, per account** (each account counts its own; checked at every entry). After the cooldown the count stays: one more full loss blocks again, until a real shadow win (target or >= 0.25R) of the live model |
+| Tier-2 news blackout (BACKLOG 18, built, off) | No new entries from 5 min before to 15 min after a tier-2 US release (PPI, retail sales, ISM, GDP, JOLTS, jobless claims, FOMC minutes, Fed chair, any other high-impact USD item in the Forex Factory calendar). If the calendar is missing, entries stop (`calendar_unavailable`). Recommend: on before tiny-live, after the alert path and the holiday review (BACKLOG 45, 46) |
+| Reopen window (BACKLOG 17, built, off) | No new entries for 10 min after each daily reopen and for 30 min after the Monday open (the playbook proposed 15 min daily). Read from the broker's session hours. Recommend: on before tiny-live, after the alert path and the holiday review (BACKLOG 45, 46) |
+| Holiday days (BACKLOG 17, built, off) | No new entries on the days in `config/holidays_cme_metals.yaml` (US federal holidays as a proxy, not measured: CME metals closed or short days, not Columbus or Veterans Day; Good Friday, Easter Monday, the day after Thanksgiving, 24/26/31 Dec, 1/2 Jan; 2026-2028). If the list runs out, entries stop until it is extended; health warns 90 days ahead. Recommend: on before tiny-live, after the alert path and the holiday review (BACKLOG 45, 46) |
+
+How to turn these on: on the server, add them to `config/settings.local.yaml`, for example
+`risk: { blackout: { tier2: { enabled: true } }, reopen: { enabled: true }, holidays: { enabled: true } }`, then
+restart the engines. They only stop **new entries**; exits and stops always run. Refusals show in the decisions journal
+as `tier2_blackout`, `reopen_window`, `holiday_thin` or `calendar_unavailable`.
+Before adopting any of them, ask for the replay (BACKLOG 46): how many entries each window would have removed from
+the shadow book and the backtest candidates, and whether the removed trades did worse than the kept ones, by family
+and timeframe. A window that removes good trades costs money. Health tells you on Telegram if a window has stopped
+all entries for more than 30 minutes while the market is open (`entry_windows:` checks), if the calendar has not been
+fetched for 36 hours, and 90 days before the holiday list runs out.
 
 ## 4a. Share your own trading record (private)
 The research team turns how you trade by hand into hypotheses it can test. Your MT5 report holds your account
