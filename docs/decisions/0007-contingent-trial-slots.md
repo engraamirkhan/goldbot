@@ -80,3 +80,32 @@ while the survivors compete for the 7 open trials with the director's pool and t
   the research analyst spends the open budget only on an ad-hoc pre-registration naming a pre-registered rule
   (`preregister(rule_ref=)`, linked to the run) or on the retired families' one shared exploration trial; the label
   grid spends none.
+
+## Amendment 2026-10-11 (second quant re-review; before the freeze)
+- **H-02 clusters follow `hypotheses.md` exactly** (`discovery.H02_CLUSTERS`): H-03 = `macro_gvz*` + `macro_vrp`, an
+  explicit VRP spread GVZ^2 - HAR-RV^2 built point-in-time inside the opt-in `macro_drivers` (version 3; the default
+  feature set and `f-079deacc61` are unchanged; the macro version moved from `f-f999b359e2` to `f-e7d2dc11e1` in both
+  pre-registrations); H-05 = `round_numbers`, `support_resistance`, `pdh/pdl/pwh/pwl_dist_atr`; H-07 = VIX and S&P
+  stress; H-08 = `sweep_*` + session/Asia/London extreme distances; H-10 = `jumps` only (no news split before the
+  freeze unless an opt-in `jump_news` feature and the calendar wiring land). `realised_vol`, `vol_estimators`,
+  `swings` and `bos_*` go back to their families. Before any look each cluster must have a non-constant, non-NaN
+  column (`check_cluster_columns`, recorded on the row).
+- **Group measure: joint (grouped) permutation importance**, not summed or mean member importance. Summed gain
+  rewards size: a group of many weak or noise columns accumulates split gain. Mean importance per member is
+  size-neutral but deflates a group whose signal is split across near-copies, and dilutes a strong column with weak
+  siblings, which reintroduces the bias the quant review of dab47c7 removed. Permuting all of a group's columns with
+  one shared row permutation measures what the group as a whole contributes to the fitted model: dead members add
+  nothing (size-neutral) and copies are removed together (redundancy-safe). It is computed per subsample on the
+  training fold's rows outside the subsample (never a test row); `group_top_k` stays 3. Cost: one prediction per
+  group per subsample; with one column per group (column mode) the column's own importance is used, which ranks the
+  same. The rows outside a subsample can share label windows with it at week edges; that is the same for every group,
+  so it inflates no group against another.
+- A follow-up slot is covered only by a config whose hash is listed, or that equals the family's default config plus
+  the fixed overrides exactly (no superset).
+- `record_verdict` refuses a discovery row (its own recorded verdict reads it), and for a `screened` row computes the
+  pre-registered decision from the recorded results (H-01: screen, net t >= 1.65, >= 3 positive net years incl.
+  2021/22, long-only; H-04: screen and net mean R > 0; tsmom 4h: net mean R <= 0 retires; else the screen) and refuses
+  a mismatch (`director.preregistered_decisions`; the row records `rule_checked`).
+- A survivor-slot claim may hold only the parent's spec keys plus `from_discovery`, `survivor` and `features`.
+- In an E-5 quarter a manual `research_pass` / `--discover` row records the rule it cites (`rule_ref`: `--rule-ref`,
+  the pre-registration's own, its slot or the queued row); a capped run citing none is refused (`director.cited_rule`).

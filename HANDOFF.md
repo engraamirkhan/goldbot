@@ -742,6 +742,29 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`combined_daily_loss_abs`) when the combined day loss reaches 50. Exits never consult it. engine_<account>.json
   carries `daily_loss_limit` and `daily_loss_remaining`; health shows them on the daily cap line and warns when none
   is left. Not done: the approval card's "remaining daily allowance" (ui-ux follow-up).
+- Per-agent loss-streak and entry-rate throttle (2026-10-11, BACKLOG 21, playbook G-6, row R35; **off by default**;
+  trading-safety review: merge after fixes, fixes in): `risk.throttle: {enabled: false, loss_streak: 3,
+  cooldown_bars: 4, max_entries_per_day_per_agent: 3}`. The caps are per decision, per account: each account counts
+  its own trades for an agent and RiskGate checks them at every entry decision (proposal and approval re-check), so
+  across two accounts an agent can make up to twice the daily cap. When enabled, RiskGate refuses an agent's entries
+  with `throttle_loss_streak` after `loss_streak` consecutive full losses (R <= -0.9; without R, a `stop`/`stop_out`
+  exit at a loss; any other trade ends the streak) until `cooldown_bars` bars of the agent's timeframe have passed
+  since the last one, or a real shadow win (target hit or >= 0.25R; never a scratch) of the agent's **current live
+  model version**, entered after that loss, closes. The count persists after the cooldown: one more full loss
+  re-blocks at once, until a qualifying win. `throttle_entry_rate` once it has made `max_entries_per_day_per_agent`
+  entries in the risk day (00:00 UTC); `throttle_unknown` (that agent only) if its facts cannot be derived. Exits
+  never consult it. No new state file: facts come from the closed-trade record, the open book, the shadow book (read
+  only while a streak is cooling down, cached by mtime) and, review HIGH-1, closes the engine has seen but not yet
+  recorded (a broker stop found by the bar-close sweep is written after that close's decisions; a write that keeps
+  failing), each counted as a provisional full loss so the loss just taken counts at the very next decision. Engine
+  `live_versions` (agent -> champion version) is set by `ops.run` with the models. engine_<account>.json carries
+  `throttle` (settings; per agent: streak, provisional losses, last loss, cooldown end, entries today, `blocked`; or
+  `error`). Health has one check per agent, `throttle:<account>:<agent>`: warn + Telegram while throttled, FAIL when a
+  streak block has no cooldown end, on `throttle_unknown`, or when the state could not be published. Owner: set the
+  thresholds and turn it on (settings.local.yaml `risk: { throttle: { enabled: true, ... } }`, restart the engine).
+  Not done: the playbook's "until the next session" variant, a cross-account count, a provisional loss for a record
+  lost before a restart (only its id persists; health already fails on `closed_records_lost`), and the dashboard /
+  approval card (ui-ux follow-up).
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on
@@ -875,6 +898,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
+  (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
+  version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London
+  extremes; H-10 jumps only), a before-look check that each cluster has an informative column, and the size-neutral
+  joint permutation group measure (group_top_k 3). Follow-up slots need an exact default+overrides config;
+  `record_verdict` refuses discovery rows and checks screened rows against the pre-registered decision; survivor claims
+  may carry only spec keys + tags; E-5 manual rows record `rule_ref` (`research_pass.py --rule-ref`). Open before the
+  freeze: H-10's news / no-news split (opt-in `jump_news` + calendar into `--discover`) if wanted.
 - Contingent trial slots and withdrawal (2026-10-10, ADR 0007, quant ruling on the Q1 reservation): `reserved_trials_quarter`
   13 -> **9** (5 queued + 4 H-02 survivor slots); 13 would have locked 8 of 20 Q1 trials all quarter. New
   `TrialRegistry.reserve_slot(parent_ref, kind, k, derivation_rule, target_quarter)` (survivor / followup / holdout,
@@ -1002,6 +1033,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   of the store's bars; `--price P --stop-distance D` without data. Neither has been run on real bars or trades yet
   (the Mac VM has no store data); run both on the VPS/brain and attach to phase-gate evidence and the H-01
   account-size decision.
+- MAE/MFE on closed and shadow trades (2026-10-11, BACKLOG 23, playbook G-9, row V6; trading-safety and quant
+  reviewed, fixes in): one definition in `goldbot/labels/excursion.py` (exit-side price: a long's MAE from the bid
+  low, a short's from the ask high; R of the initial risk from price, gross of costs; the time each extreme was first
+  reached; the exit bar under the labels' stop-first convention, whose biases are listed there and beside the
+  attribution table). `ShadowTrade` computes it from the bars between entry and exit (`label_excursions` gives the
+  same for labels; parity tested with and without exit policies). `ClosedTrade` gets it from every tick while the
+  engine holds the position (`Engine._track_excursions`, after the per-tick exits): a price at a broker-held SL/TP
+  freezes the track, a price through an engine-only stop whose close is being retried counts raw, and the record adds
+  the actual exit fill. No extreme is ever after the exit: a track that saw a late-noticed manual or broker close is
+  rebuilt from the stored 1m bars up to the exit, and a close confirmed without deals never folds the quote read at
+  that moment; both, restarts and adopted positions are flagged `excursion_approx`; when nothing of the path was observed (no usable track, no covering bar) the fields stay empty rather than 0R/0R. The 60 s freeze tolerance is tested on both sides. An orphan adopted without an
+  order record keeps prices but no R. Tracking is reporting only: a failure is logged, never a tick error, never
+  blocks an exit or the record. Monthly report: exact and approximate medians apart. Not done: the owner's MT5
+  statement analysis (`research/owner_history.py`) has no price path. **Rollback:** the new keys (`excursion`,
+  `excursion_approx`, `risk_known` in `orders_<account>.json`; `mae_*`/`mfe_*` in `shadow_book.json`) fail to load
+  on an older build (`extra="forbid"`): roll back only when flat (no open trades or shadow trades), or strip those
+  keys first. The cross-cutting fix (load persisted state with `extra="ignore"`, an ADR) is a separate change.
 - **Follow-up once the gate lanes merge:** `goldbot/risk/sizing.py` holds RiskGate's sizing arithmetic and stage
   machine as pure functions (`effective_risk`, `size_lots`, `stop_distance`, `next_stage`, `MIN_LOT_TOLERANCE`), used
   by the two reports above; `goldbot/risk/gate.py` still has its own copy (it was being edited by other lanes) and

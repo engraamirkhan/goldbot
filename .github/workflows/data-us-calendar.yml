@@ -83,13 +83,18 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}   # only to mask it: the posted report must never carry the key
         run: |
           python - <<'EOF'
           import json, os, urllib.request
           repo = os.environ["GITHUB_REPOSITORY"]
           run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-          try: body = open("report.txt").read()[-60000:]
+          try: body = open("report.txt").read()
           except FileNotFoundError: body = "(no report file; failure before the download step)"
+          key = os.environ.get("FRED_API_KEY", "")
+          if key:
+              body = body.replace(key, "***")       # masked before truncating, so no fragment survives a cut
+          body = body[-60000:]
           payload = {"title": "data-us-calendar failure", "body": f"Run: {run_url}\n\n```\n{body}\n```", "labels": ["ci", "data"]}
           req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues", data=json.dumps(payload).encode(),
                                        headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"})

@@ -19,8 +19,8 @@ def _spy(eng: Engine) -> list[Any]:
     seen: list[Any] = []
     real = eng.gate.check
 
-    def spy(intent: Any, st: Any, now_utc: Any = None, margin_required: Any = None) -> Any:
-        gd = real(intent, st, now_utc, margin_required=margin_required)
+    def spy(intent: Any, st: Any, now_utc: Any = None, margin_required: Any = None, throttle: Any = None) -> Any:
+        gd = real(intent, st, now_utc, margin_required=margin_required, throttle=throttle)
         seen.append((margin_required, gd))
         return gd
 

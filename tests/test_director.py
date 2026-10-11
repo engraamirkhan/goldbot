@@ -811,6 +811,22 @@ def test_e5_cap_refuses_open_budget_analyst_trials_unless_a_preregistration_name
     assert jobs.make_trial_runner(other)("tsmom", {"max_bars": 7}, "uncapped").get("trial") == 1
 
 
+def test_manual_runs_in_an_e5_quarter_record_the_rule_they_cite():
+    """research_pass rows in a capped quarter carry `rule_ref`: the --rule-ref given, the matched pre-registration's
+    own rule_ref, or the queued/slot row it ran against; a capped run citing nothing is refused."""
+    from goldbot.research.director import cited_rule
+    queued = {"trial": 21, "ts": "2026-12-20T00:00:00+00:00", "status": "preregistered", "target_quarter": "2027Q1"}
+    named = {"trial": 30, "ts": "2027-02-01T00:00:00+00:00", "queue": False, "rule_ref": "preregistration-2027Q1.md#H-01"}
+    slot_claim = {"trial": 31, "ts": "2027-02-02T00:00:00+00:00", "queue": False, "slot_ref": {"ts": "x", "trial": 25}}
+    assert cited_rule(None, "preregistration-2027Q1.md#reserve", capped=True) == "preregistration-2027Q1.md#reserve"
+    assert cited_rule(named, None, capped=True) == "preregistration-2027Q1.md#H-01"
+    assert cited_rule(queued, None, capped=True) == "preregistered #21 (2026-12-20T00:00:00+00:00)"
+    assert cited_rule(slot_claim, None, capped=True) == "slot #25 (x)"
+    assert cited_rule(None, None, capped=False) is None
+    with pytest.raises(ValueError, match="E-5"):
+        cited_rule(None, None, capped=True)
+
+
 def test_screening_families_get_no_director_grid_or_analyst_trials(tmp_path):
     """asia_drift (H-04) runs only its pre-registered screen (research.yml): the director, the label grid, the monthly
     loop and the research analyst never plan or spend a trial on a family under its screen."""
