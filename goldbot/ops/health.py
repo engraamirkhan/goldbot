@@ -38,7 +38,7 @@ from typing import Any, Callable, Literal, cast
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, Record, UtcTimestamp, write_atomic
+from goldbot.base import FrozenRecord, Record, UtcTimestamp, load_record_json, write_atomic
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
 from goldbot.data.crossfeed import check_reconciliation
@@ -379,7 +379,7 @@ TICK_ERROR_RECENT_S = 15 * 60   # a tick error this recent is reported even afte
 def _last_run(state_dir: Path) -> pd.Timestamp | None:
     """When the previous health report was recorded (state/health_last.json), or None."""
     try:
-        return WatchState.model_validate_json((state_dir / WATCH_FILE).read_text(encoding="utf-8")).ts
+        return load_record_json(WatchState, (state_dir / WATCH_FILE).read_text(encoding="utf-8"), source=WATCH_FILE).ts
     except (ValueError, OSError):
         return None
 
@@ -926,7 +926,7 @@ def check_alert_loop(ctx: HealthContext) -> Check:
     if not f.exists():
         return Check(name="alerts", status="warn", reason="health alerts never ran (Telegram service not started)")
     try:
-        ts = WatchState.model_validate_json(f.read_text(encoding="utf-8")).ts
+        ts = load_record_json(WatchState, f.read_text(encoding="utf-8"), source=WATCH_FILE).ts
     except (ValueError, OSError) as exc:
         return Check(name="alerts", status="warn", reason=f"health_last.json unreadable: {exc}")
     age = (ctx.now - ts).total_seconds() if ts is not None else float("inf")
@@ -1278,7 +1278,8 @@ class HealthWatch:
     def __init__(self, state_dir: str | Path):
         self.path = Path(state_dir) / WATCH_FILE
         try:
-            self.state = WatchState.model_validate_json(self.path.read_text(encoding="utf-8")) if self.path.exists() else WatchState()
+            self.state = (load_record_json(WatchState, self.path.read_text(encoding="utf-8"), source=WATCH_FILE)
+                          if self.path.exists() else WatchState())
         except (ValueError, OSError):
             self.state = WatchState()       # unreadable: start clean (current fails are announced once more)
 
@@ -1306,7 +1307,7 @@ def _load_report(path: str) -> HealthReport | None:
     if not p.exists():
         return None
     try:
-        return HealthReport.model_validate_json(p.read_text(encoding="utf-8"))
+        return load_record_json(HealthReport, p.read_text(encoding="utf-8"), source="health report")
     except ValueError:
         return None
 

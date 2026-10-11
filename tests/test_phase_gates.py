@@ -384,3 +384,12 @@ def test_gate_module_source_has_no_path_to_unlock_or_halt():
     code = src.split('"""', 2)[2]                       # past the module docstring, which names what it never does
     for needle in ("unlock_live(", "record_gate(", "_edit_yaml_line", "control.json", "risk_", "halted", "set_secret"):
         assert needle not in code, needle
+
+
+def test_a_closed_trade_written_by_a_newer_release_still_counts(tmp_path):
+    """ADR 0010: a field a newer release added to the closed-trade record is ignored, never a skipped line."""
+    t = trade(0.001)
+    row = {**json.loads(t.model_dump_json()), "future_field": {"anything": 1}}
+    gates_phase.closed_trade_file(tmp_path, t.account_id).write_text(json.dumps(row) + "\n")
+    trades, err = gates_phase.load_closed_trades(tmp_path)
+    assert err is None and trades == [t]

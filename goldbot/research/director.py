@@ -93,7 +93,7 @@ from typing import Any
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.base import FrozenRecord, UtcTimestamp, load_record
 from goldbot.config import RetiredFamily
 from goldbot.research.attribution import T_SIGNIFICANT
 from goldbot.research.population import DSR_PROMOTE, MIN_RANK_TRADES
@@ -294,7 +294,7 @@ class ResearchPlan(FrozenRecord):
     @classmethod
     def load(cls, path: str | Path) -> ResearchPlan | None:
         p = Path(path)
-        return cls.model_validate(json.loads(p.read_text())) if p.exists() else None
+        return load_record(cls, json.loads(p.read_text()), source="research_plan") if p.exists() else None
 
 
 # ---------------------------------------------------------------------------------------------- budget and holdout

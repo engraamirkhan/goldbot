@@ -4,6 +4,11 @@
 `body TEXT NOT NULL CHECK (json_valid(body))`, written with model_dump_json() and read with model_validate_json(),
 so extra="forbid" still rejects drift."
 
+ADR 0010 ("persisted state is read tolerantly, built strictly"): a repository is strict by default, which is right
+for credentials (users, invites, password resets: a field this release does not know is refused, never ignored).
+Persisted operational state passes `tolerant=True`, so a row a newer release wrote reads with its unknown fields
+dropped (goldbot.base.load_record_json) and a rollback does not take the table down.
+
     users = RecordRepo("users", User, key="email",
                        columns={"email": lambda u: u.email, "role": lambda u: u.role, "enabled": lambda u: int(u.enabled)})
     with db.write() as conn:
@@ -20,6 +25,8 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
+from goldbot.base import load_record_json
+
 R = TypeVar("R", bound=BaseModel)
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -31,13 +38,20 @@ def _ident(name: str) -> str:
 
 
 class RecordRepo(Generic[R]):
-    def __init__(self, table: str, model: type[R], *, key: str, columns: Mapping[str, Callable[[R], Any]]):
+    def __init__(self, table: str, model: type[R], *, key: str, columns: Mapping[str, Callable[[R], Any]],
+                 tolerant: bool = False):
         if key not in columns:
             raise ValueError("the key must be one of the columns")
         self.table = _ident(table)
         self.model = model
         self.key = _ident(key)
         self.columns = {_ident(c): f for c, f in columns.items()}
+        self.tolerant = tolerant
+
+    def _load(self, body: str) -> R:
+        if self.tolerant:
+            return load_record_json(self.model, body, source=f"db:{self.table}")
+        return self.model.model_validate_json(body)
 
     def row(self, rec: R) -> dict[str, Any]:
         return {**{c: f(rec) for c, f in self.columns.items()}, "body": rec.model_dump_json()}
@@ -59,7 +73,7 @@ class RecordRepo(Generic[R]):
 
     def get(self, conn: sqlite3.Connection, key: Any) -> R | None:
         r = conn.execute(f"SELECT body FROM {self.table} WHERE {self.key} = ?", (key,)).fetchone()
-        return self.model.model_validate_json(r[0]) if r else None
+        return self._load(r[0]) if r else None
 
     def select(self, conn: sqlite3.Connection, where: str = "", params: Sequence[Any] | Mapping[str, Any] = (),
                order_by: str | None = None) -> list[R]:
@@ -68,7 +82,7 @@ class RecordRepo(Generic[R]):
         if where:
             sql += f" WHERE {where}"
         sql += f" ORDER BY {_ident(order_by or self.key)}"
-        return [self.model.model_validate_json(b) for (b,) in conn.execute(sql, params)]
+        return [self._load(b) for (b,) in conn.execute(sql, params)]
 
     def delete(self, conn: sqlite3.Connection, key: Any) -> bool:
         return conn.execute(f"DELETE FROM {self.table} WHERE {self.key} = ?", (key,)).rowcount == 1

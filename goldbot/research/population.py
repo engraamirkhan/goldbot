@@ -38,7 +38,7 @@ import pandas as pd
 from pydantic import Field
 from scipy import stats
 
-from goldbot.base import Record, UtcTimestamp
+from goldbot.base import Record, UtcTimestamp, load_record
 from goldbot.config import tf_seconds
 from goldbot.engine.shadow import ShadowBook
 from goldbot.research.metrics import calibration_ece, deflated_sharpe, max_drawdown
@@ -256,7 +256,8 @@ class Population:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         raw = json.loads(self.path.read_text()) if self.path.exists() else []
-        self.members: dict[str, Member] = {m["agent_id"]: Member.model_validate(m) for m in raw}
+        self.members: dict[str, Member] = {m["agent_id"]: load_record(Member, m, source="population.json")
+                                          for m in raw}
 
     def ensure_founders(self, now: pd.Timestamp) -> list[str]:
         """Every registered specialist family has a generation-0 agent with its default config, except a family still

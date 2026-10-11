@@ -1,5 +1,7 @@
 """Shadow book: trades must reproduce the triple-barrier labels the models were trained on, survive a restart, and
 feed the promotion gates and the CUSUM watch."""
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -315,3 +317,19 @@ def test_an_older_book_loads_as_taken_and_only_candidates_with_a_threshold_are_o
     assert [x.threshold for x in again.outcomes("v1")] == [0.55]
     assert again.outcomes("v1", since=t1 + pd.Timedelta(hours=1)) == []
     assert again.stats("v1", t1 + pd.Timedelta(hours=1)).n_trades == 1
+
+
+def test_the_shadow_book_loads_a_file_written_by_a_newer_release(tmp_path):
+    """ADR 0010: fields a newer engine added to a book or a trade are ignored; the trades and the clock survive."""
+    book = ShadowBook(tmp_path)
+    t0 = pd.Timestamp("2026-01-05 08:00", tz="UTC")
+    book.track("v1", t0)
+    book.open_trade(version="v1", agent_id="a", side=1, bar_ts=t0, entry=2400.0, atr_usd=2.0, target_atr=1.5,
+                    stop_atr=1.0, max_bars=4, p=0.6)
+    book.save(t0)
+    raw = json.loads((tmp_path / "shadow_book.json").read_text())
+    raw["v1"]["future_book_field"] = 1
+    raw["v1"]["open"][0]["future_trade_field"] = "x"
+    (tmp_path / "shadow_book.json").write_text(json.dumps(raw))
+    again = ShadowBook(tmp_path)
+    assert again.books["v1"] == book.books["v1"]
