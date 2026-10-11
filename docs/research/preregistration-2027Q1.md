@@ -17,7 +17,7 @@ promotion.
   >= 3 calendar years including one of 2021/2022, DSR >= 0.95 on >= 200 model-filtered trades with the real trial count.
 - Rule-only gates are reported alongside (informational).
 - Features: feature version `f-079deacc61` (sessions v2, DST-aware: `session`, `session_zones`, `market_structure`
-  version 2), `f-f999b359e2` where the macro drivers are added. A result on another feature version is recorded with a
+  version 2), `f-e7d2dc11e1` (was `f-f999b359e2` before `macro_drivers` v3 added the VRP spread `macro_vrp`, amended 2026-10-11) where the macro drivers are added. A result on another feature version is recorded with a
   `deviation` against its pre-registration (`TrialRegistry.record`), and a holdout scoring needs a gate pass on the same
   feature version (`passed_gates(feature_version=)`). Any further feature change before a run amends this line first.
 - DSR trial count: 20 (Q4 2026) + Q1 trials run so far + K_eff of H-02. K_eff is the number of units a survivor
@@ -101,13 +101,27 @@ stamped before its row's quarter would never use the row up.
 - Config: label = 4h triple barrier, target 3.0 ATR / stop 1.5 ATR / 12 bars (tsmom 4h defaults), candidates = every 4h
   bar (no rule), side from the sign of the 20-day vol-scaled return; features = every registered family (incl.
   trader-toolkit, survey and macro), grouped by **hypothesis cluster** (`--families cluster`, `DiscoveryConfig.clusters
-  = discovery.H02_CLUSTERS`: H-03 `macro_gvz*`, `realised_vol`, `vol_estimators`; H-05 `round_numbers`,
-  `support_resistance`, `swings`; H-07 `macro_vix*`, `macro_spx*`; H-08 `session_zones`, `market_structure`; H-10
-  `jumps`, `calendar_events`; first match wins; every other column in its feature family's group; each cluster <= 39
-  columns, checked before any look; amended 2026-10-11 so the "feature cluster" of the reading rule has a recorded
-  stability); survivors go forward as features, so K_eff = features screened (group stability is reported by summed
-  member importance per subsample, top-k over groups, with `group_top_k: 3` set explicitly in the config, per quant
-  ruling Q-3, 2026-10-10).
+  = discovery.H02_CLUSTERS`, amended 2026-10-11 after the quant re-review to follow `hypotheses.md` exactly):
+  - **H-03** gold VRP: `macro_gvz*` and the explicit spread `macro_vrp` = GVZ^2 - HAR-RV^2 (built point-in-time in the
+    opt-in `macro_drivers`, version 3: equal-weight HAR of daily realised variance over completed days before the bar,
+    annualised; feature version `f-e7d2dc11e1`);
+  - **H-05** stop-cluster levels: `round_numbers`, `support_resistance`, and the prior day/week extremes
+    `pdh/pdl/pwh/pwl_dist_atr` (from `session_zones`);
+  - **H-07** equity-stress haven: `macro_vix*`, `macro_spx*`;
+  - **H-08** liquidity-sweep reversal: `sweep_*` and the session / Asia / London extreme distances
+    (`sess_*`, `prev_sess_high/low`, `asia_*`, `london_*` `_dist_atr`);
+  - **H-10** post-jump behaviour: `jumps` only. **H-10 tests jumps only, not the news / no-news split**: the US tier-1
+    calendar is merged, but the split needs an opt-in `jump_news` feature (changing `jumps` would move the pinned
+    default feature version) and the calendar wired into `--discover`; unless both land before the freeze, H-10 reads
+    jumps alone;
+  - first match wins; every other column stays in its feature family's group (`realised_vol` and `vol_estimators` in
+    volatility, `swings` and `bos_*` in structure). Before any look the run checks that every cluster has at least
+    one non-constant, non-NaN column with macro opted in (`discovery.check_cluster_columns`, recorded as
+    `cluster_columns`) and that each cluster has <= 39 columns.
+  Survivors go forward as features, so K_eff = features screened. Group stability uses the size-neutral **joint
+  permutation importance** (all a cluster's columns permuted together on the training fold's rows outside each
+  subsample; ADR 0007 amendment 2026-10-11), top-k over groups with `group_top_k: 3` set explicitly in the config
+  (quant ruling Q-3).
 - Method: stability selection inside each training fold only (50 subsamples x 50%), top-40 by gain; permutation
   importance on an inner split as a tie-break.
 - Reading rule (decided now): a feature cluster **survives** if its selection stability >= 0.6 across folds AND the

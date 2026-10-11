@@ -27,7 +27,7 @@ is fixed and a change after seeing data makes it exploratory.
 - **Event floor:** `research.screen_min_events` (1,000) for every intraday rule. The daily override does not apply.
 - **DSR trial count:** `registry.n_trials_effective` + 1 at run time = 20 (Q4 2026) + every Q1 and Q2 trial recorded
   so far + H-02's K_eff (Q1, conservative default: added to every later trial) + H-14's K_eff once it has run.
-- **Feature versions:** `f-079deacc61` (sessions v2, DST-aware) for 15m rules and discovery; `f-f999b359e2` where
+- **Feature versions:** `f-079deacc61` (sessions v2, DST-aware) for 15m rules and discovery; `f-e7d2dc11e1` (was `f-f999b359e2` before `macro_drivers` v3 added the VRP spread `macro_vrp`, amended 2026-10-11)where
   the macro drivers are used (H-16 only). The opt-in `day_type` family (BACKLOG 30a) is outside the default hash, so it
   does not move either version; its own family version is recorded on each row that uses it. A run on another
   version is recorded with a `deviation` (`TrialRegistry.record`), per ADR 0006.
@@ -125,7 +125,7 @@ way (13 → 9).
   DSR, no event floor, and no opportunity-day report.
 - **Events owed from data before the freeze:** the number of evaluable days (expected ≈ 3,440 out of sample by the
   calendar: 13.75 years × ~250; minus missing-GVZ days and data gaps).
-- **Feature version:** `f-f999b359e2` (macro drivers) plus `day_type`'s recorded family version.
+- **Feature version:** `f-e7d2dc11e1` (macro drivers) plus `day_type`'s recorded family version.
 
 ### H-17 Trend-day continuation with a runner (V0 and V1: two trials)
 
