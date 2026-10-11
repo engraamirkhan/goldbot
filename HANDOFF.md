@@ -879,20 +879,28 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   is refused (`git_tree_reason`: a `.git` dir or file in the path, this checkout under any case spelling, or
   `git rev-parse` succeeding). The header's account number, name, company and server are never kept (only the
   currency); tickets are used only to match a position to its opening order. A pre-commit hook
-  (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` + digits, also in
-  UTF-16 and inside .xlsx). XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`, default Europe/Athens).
+  (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` / `Счёт:` /
+  `Konto:` / `Cuenta:` + digits, also in UTF-16 and inside .xlsx), and a translated one by shape: an HTML table or
+  xlsx sheet with >= 5 rows led by an MT5 stamp `YYYY.MM.DD HH:MM` under a Positions/Deals-like title (en/ru/de/es)
+  or >= 5 such rows of >= 10 cells (the translated words are unconfirmed against a real export; the shape rule does
+  not need them; every tracked file passes). XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`,
+  default Europe/Athens).
   1R comes from the opening order's INITIAL stop (Orders section), else the report's S/L, which is the FINAL stop;
+  the (symbol, side, open time) fallback pairs a position with an order only when exactly one of each shares the
+  key (an ambiguous key falls back to the final stop);
   a stop at or beyond the entry is `sl_moved` and, like the no-stop proxy, kept out of the R statistics. The USD rate
   is always implied from the trades (a "USD" account implying != 1 is flagged). Reported: R, win rate, expectancy
   with t, profit factor, return on equity with t, daily P&L by UTC and London day with t and 95% CI and the share of
-  days >= `--targets` (default 30,50), sessions, hour, weekday, side, holding time, tier-1 news (if the store has
+  days >= `--targets` (default 30,50), sessions (goldbot's local-clock windows, DST per date), hour, weekday, side,
+  holding time, tier-1 news (if the store has
   `calendar_events`), entries near session opens on each date's local clock against a base rate from the owner's
   active hours, leverage vs equity, losing streak, drawdown from trading only (deposits/withdrawals excluded; % on a
   flow-adjusted index), and risk of ruin with `goldbot.research.ruin`'s circular block bootstrap for both sizing
-  readings (compounding, fixed stakes) plus a zero-edge (demeaned) stress row; end equity is reported as a capped
+  readings (compounding, fixed stakes), each also as a zero-edge (demeaned) stress row; end equity is a capped
   log10. Ends with hypothesis seeds OH-01..06 in hypotheses.md format, labelled in-sample, not evidence, each phrased
   as "test whether entries in X differ from the owner's other entries", stating K = slices examined and whether its
-  t clears the Bonferroni bar (slices under 10 trades are never said to clear it). Seeds quote R, % and counts only:
+  t clears the Bonferroni bar, Student's t at 5%/K on the slice's own n - 1 df (`slice_bar`; slices under 10
+  trades are never said to clear it). Seeds quote R, % and counts only:
   do not paste amounts into the repo. The MT5 layout was written from the documented report structure, not checked
   against a real file (none may enter the repo): if the owner's export parses to 0 trades, look at `_ALIASES` /
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
