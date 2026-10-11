@@ -1,0 +1,10 @@
+[Unit]
+Description=goldbot bridge watchdog for account %i, every 2 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=2min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

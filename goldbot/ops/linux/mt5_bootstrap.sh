@@ -37,6 +37,17 @@ if ! swapon --show | grep -q /swapfile; then
   grep -q /swapfile /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
 fi
 
+# A watchdog SIGABRT (goldbot-engine@ WatchdogSec) must not leave process memory, which holds tokens and the
+# file-store secrets, in a core file or a crash report. A pipe core_pattern (apport, systemd-coredump) ignores
+# LimitCORE=0, so apport is turned off and no process dumps core (persisted in sysctl.d; 60- sorts after
+# systemd-coredump's 50-coredump.conf). docs/deploy/first-deploy.md checks /proc/sys/kernel/core_pattern.
+echo "core_pattern was: $(head -c 200 /proc/sys/kernel/core_pattern 2>/dev/null || echo unreadable)"
+systemctl disable --now apport.service 2>/dev/null || true
+if [ -f /etc/default/apport ]; then sed -i 's/^enabled=1/enabled=0/' /etc/default/apport; fi
+printf '%s\n' '# goldbot: no core files or crash reports (they would hold secrets)' 'kernel.core_pattern=|/bin/false' \
+  > /etc/sysctl.d/60-goldbot-no-core.conf
+sysctl -q -p /etc/sysctl.d/60-goldbot-no-core.conf || echo "WARNING: kernel.core_pattern not applied now (applies at boot)"
+
 dpkg --add-architecture i386
 install -d -m 755 /etc/apt/keyrings
 curl -fsSLo /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
@@ -77,7 +88,10 @@ sudo -u mt5 mkdir -p "$ROOT/state" "$ROOT/logs"
 sudo -u mt5 chmod 700 "$ROOT/state"
 
 install -m 644 "$OPS"/systemd/goldbot-xvfb.service "$OPS"/systemd/goldbot-bridge@.service \
-  "$OPS"/systemd/goldbot-vnc.service /etc/systemd/system/
+  "$OPS"/systemd/goldbot-vnc.service "$OPS"/systemd/goldbot-bridge-watchdog@.service \
+  "$OPS"/systemd/goldbot-bridge-watchdog@.timer /etc/systemd/system/
+# root-run, so root's copy from its own clone (never the mt5-writable tree): restarts a bridge stuck in a terminal call
+install -m 755 -o root -g root "$OPS/goldbot-bridge-watchdog.sh" /usr/local/sbin/goldbot-bridge-watchdog
 systemctl daemon-reload
 systemctl enable --now goldbot-xvfb
 
@@ -129,6 +143,7 @@ cd /opt/goldbot && exec sudo -u mt5 -H env DISPLAY=:99 WINEDEBUG=-all PYTHON_KEY
 WRAP
 chmod 755 /usr/local/bin/goldbot-mt5
 systemctl enable goldbot-bridge@icm-demo
+systemctl enable --now goldbot-bridge-watchdog@icm-demo.timer   # idle until the bridge has run 5 min
 
 # Deploys: only versions the owner approves (Telegram [Deploy] or `sudo goldbot-deploy latest`), never by itself.
 # The script runs as root, so a root-owned copy is installed from root's own clone ($OPS); the repo copy (writable by

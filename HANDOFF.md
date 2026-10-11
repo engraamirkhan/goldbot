@@ -105,6 +105,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - UX: a failed redeem goes straight to "Email me a sign-in link" (the old link is spent).
   - RUNBOOK: aux.db schema 6 cannot be stepped back to 4. Releases since state-store step 3 open it; older ones are
     refused by the deploy.
+- Engine loop heartbeat and watchdogs (2026-10-11, SRE first-deploy risk). A hung engine used to show only after 45
+  minutes. Now each loop pass writes `state/heartbeat_engine-<account>.json`, with or without ticks
+  (goldbot/ops/watchdog.py `LoopWatch`). Health check `engine_loop:<account>` FAILs after 150 s.
+  goldbot-engine@.service is `Type=notify` with `WatchdogSec=300`, so systemd restarts a stuck loop, and the
+  restart reconciles with the broker as usual. On the MT5 box, `goldbot-bridge-watchdog@.timer` restarts a bridge
+  that stops answering `GET /health`. Hosts set up earlier need the units reinstalled, then the rollback floor set
+  to this commit: RUNBOOK "Engine loop stuck, and the watchdogs". Tests: tests/test_engine_watchdog.py.
 - The record now carries what the monthly finance audit needs (2026-10-11, docs/finance/audit-framework.md gaps
   GAP-01/02/03/04/05/10/13; TRACEABILITY X18). `ClosedTrade` gains `decision_price`, `decision_spread_points` and
   `decision_utc` (the signal, from the proposal) next to `requested_price` (the quote the order was priced from: in
@@ -207,6 +214,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the guard test that every gate and supervisor reason has owner text read only `throttle_*` from the `out.append`
   helpers and now reads them all, which is how the two open-risk codes were found unworded (`heat_cap` left
   FUTURE). Tests: tests/test_startup_error_exposure.py, tests/test_api_entry_status.py.
+- Engine watchdog review fixes (2026-10-11, recommended for the first demo deploy on Tue 13 Oct).
+  - MEDIUM-1: brain_bootstrap.sh writes the bootstrap commit to `/etc/goldbot/rollback-floor` when no floor exists
+    (root-owned, 0644).
+  - LOW-1: the loop heartbeat now carries `last_pass_s` and `max_pass_s`, and any pass over 30 s is logged.
+  - LOW-2: both bootstraps turn apport off and set `kernel.core_pattern=|/bin/false` in sysctl.d.
+  - LOW-3: the bridge watchdog needs at least 1 probe and a timeout of at least 1 s.
+  - docs/deploy/first-deploy.md: a core_pattern and floor check (1d), watchdog acceptance plus a `kill -STOP` drill
+    (6W), and a `WatchdogSec=0` fallback.
 - GitHub `engraamirkhan/goldbot`. PR 36 (2026-10-01..04 work) is merged into `main`; follow-up work goes on branch
   `claude/gifted-goldberg-lcb7pl` restarted from `main` (Claude sessions do not push to `main` directly). CI (`ci.yml`) runs pre-commit, backend lint/mypy/unit/integration, frontend eslint/tsc/vitest, an API
   contract check and Playwright e2e as separate jobs, and opens one issue labelled `ci` with each failed job's output.

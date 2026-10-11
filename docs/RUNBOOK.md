@@ -984,7 +984,7 @@ is lost: the type's published rows are kept and its `last_ok` does not move.
 phase gates, each engine's state, stage and data quality, risk state, scheduler jobs, cost tables, news feeds,
 agent spend, stuck approvals, backup age, the restore drill and each account's measured server clock offset) as ok / warn / fail with a one-line reason, and exits 1 on any fail. `--json`,
 `--out FILE`, `--baseline FILE` (fail only on new fails) and `--static` (no running services needed) exist for the
-update script. The Telegram service runs the same checks every 5 minutes and messages you when a check turns fail
+update script. The Telegram service runs the same checks every minute and messages you when a check turns fail
 and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service running; the `alerts` check shows
 when that loop has stopped). When the whole brain is down, the outside dead man's switch tells you instead ("Outside
 alert" below; the `deadman` check says whether it is set).
@@ -1031,6 +1031,52 @@ the body says `telegram_alert_undelivered`, Telegram rejected the alert: check t
 
 **Rehearse** (after any change to the brain's alerting, and once a quarter): `sudo systemctl stop goldbot-telegram`;
 expect the DOWN email within about 6 minutes; `sudo systemctl start goldbot-telegram`; expect UP within 2 minutes.
+
+### Engine loop stuck, and the watchdogs (brain and MT5 box)
+
+**What protects you.** Each engine's loop writes `state/heartbeat_engine-<account>.json` on every pass, at most
+every 15 s, with or without ticks. It also pings the systemd watchdog. If the loop stops for 300 s, systemd ends the
+engine with SIGABRT, which writes every thread's Python stack to the journal, and starts it again. The start
+reconciles orders and positions with the broker, as after any restart. Stops stay with the broker the whole time,
+and no exit waits on any of this. The start itself (bridge connect, warm start, model load) may take up to 15
+minutes; a start that hangs longer is ended and started again.
+
+**`engine_loop:<account>` FAIL** ("engine loop silent for ..."; alerted on Telegram after 150 s of silence, market
+open or not):
+1. `sudo journalctl -u goldbot-engine@<account> -n 300`. "Watchdog timeout" followed by a Python stack means systemd
+   killed a stuck loop. Keep that stack: it is the root cause, and it goes into a postmortem in `docs/incidents/`.
+2. Wait 5 minutes. After a watchdog restart the check goes WARN ("engine starting") and then ok. It needs no action.
+3. If it is still failing, `systemctl status goldbot-engine@<account>`:
+   - restarting every few seconds: the start fails. The `engine:<account>` line or `startup_error` in
+     `state/engine_<account>.json` names the cause, which is often the bridge (`bridge:<account>`, see below);
+   - "activating" for many minutes: a slow start. At 15 minutes systemd ends it and the check FAILs "still starting";
+   - active but silent: `sudo systemctl restart goldbot-engine@<account>`. Restarting is safe (reconciliation on start).
+4. **"engine start silent" or "still starting after ..."**: the same steps. A start never blocks exits, because
+   positions it has not yet reconciled keep their stops at the broker.
+
+**Bridge restarted by its watchdog (MT5 box).** The bridge runs under Wine, which cannot ping systemd, so
+`goldbot-bridge-watchdog@<account>.timer` probes `GET /health` on 127.0.0.1:8765 every 2 minutes instead. After 3
+failed probes 20 s apart it restarts `goldbot-bridge@<account>`. It skips the first 5 minutes after a start and any
+unit restarted while it probed. When the brain shows `bridge:<account>` FAIL, or the engine restarts because of a
+lost bridge reply:
+1. On the MT5 box, `sudo journalctl -u goldbot-bridge-watchdog@<account> -n 50` shows whether it restarted the bridge
+   ("did not answer GET /health 3 times; restarting it"), and `sudo journalctl -u goldbot-bridge@<account> -n 200`
+   shows the bridge's own log.
+2. If it keeps restarting, open the terminal over VNC (0.3). Check that it is logged in, that algo trading is
+   enabled, and that no dialog is open.
+3. `systemctl list-timers 'goldbot-bridge-watchdog@*'` shows that the timer is running. To pause it for maintenance,
+   run `sudo systemctl stop goldbot-bridge-watchdog@<account>.timer`, and `start` it again afterwards.
+
+**Installing on a box set up before the watchdogs.** `goldbot-deploy` does not reinstall units:
+- Brain: install `goldbot-engine@.service` from root's own clone at the deployed commit (as in 0.4), then run
+  `sudo systemctl daemon-reload` and restart the engines.
+- MT5 box: install the two `goldbot-bridge-watchdog@` units and the `/usr/local/sbin/goldbot-bridge-watchdog` script
+  the same way, then run `sudo systemctl enable --now goldbot-bridge-watchdog@icm-demo.timer`.
+- Then set the rollback floor (`/etc/goldbot/rollback-floor`, 0.5) to the watchdog commit. A new brain gets it from
+  the bootstrap, which writes the bootstrap commit there when no floor exists. Why it matters: under `Type=notify`,
+  an older release never reports ready. It still starts and trades for up to 15 min, until `TimeoutStartSec`. Then
+  systemd stops it with SIGTERM and starts it again, over and over. Every cycle restarts the engine in the middle of
+  whatever it was doing, and `systemctl restart` (and so a deploy) waits up to 15 min and then fails.
 
 ### Currency rollout (one time: the update that brings currency-correct sizing, BACKLOG 28/25/29)
 

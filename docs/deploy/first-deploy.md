@@ -172,6 +172,12 @@ echo "<HASH-mt5>  mt5_bootstrap.sh" | sha256sum -c - && sudo bash mt5_bootstrap.
 ```
 **Expect** 30-45 min, ending `MT5 box installed`.
 
+**1d. No core files (brain, and the MT5 box for option B).** A watchdog kill must not write the engine's memory,
+which holds tokens, to disk. Run `cat /proc/sys/kernel/core_pattern`. **Expect** `|/bin/false`. The bootstrap log
+shows the earlier value on its `core_pattern was:` line. On the brain, also run `cat /etc/goldbot/rollback-floor`.
+**Expect** `<SHA>`. **Stop if** core_pattern names apport or systemd-coredump. Run
+`sudo sysctl -p /etc/sysctl.d/60-goldbot-no-core.conf` and check again before any secret goes in.
+
 **Stop and roll back:** nothing is running yet. If an install fails, read the end of `/root/goldbot-bootstrap.log`
 (Windows: `C:\ProgramData\goldbot-bootstrap.log`), then delete the VM and recreate it. A fresh VM is faster than
 repairing one.
@@ -303,6 +309,38 @@ print(Store(s.data_root).append('calendar_events', df, source='forexfactory'), '
 * the engine log says `engine icm-demo started (RemoteBroker), models: []`;
 * health shows no FAIL lines, apart from the ones listed below;
 * Telegram sends a message with a dashboard setup code.
+
+**6W. Engine watchdog acceptance (brain, 8 min).** Systemd restarts an engine whose loop sticks. Prove it once, now,
+while the demo account holds no goldbot position:
+```bash
+systemctl show -p ActiveState,WatchdogUSec,StatusText goldbot-engine@icm-demo
+goldbot run health | grep engine_loop
+```
+**Expect:** `ActiveState=active`, `WatchdogUSec=5min` and `StatusText=engine loop running`, then an
+`OK` line for `engine_loop:icm-demo` ("loop turning").
+
+Drill: freeze the loop and watch systemd restart it.
+```bash
+sudo kill -STOP "$(systemctl show -p MainPID --value goldbot-engine@icm-demo)"; date -u
+journalctl -u goldbot-engine@icm-demo -f --no-pager      # Ctrl-C once the engine says "started" again
+```
+**Expect**, within about 6 min of the `date` line:
+* Telegram: `FAIL engine_loop:icm-demo: engine loop silent ...`, may appear after 3-5 min (the health pass runs every 5 min, so it can be missed: the journal lines and `goldbot run health` are the pass criteria);
+* journal: `Watchdog timeout`, a Python stack (`Fatal Python error: Aborted`), then the restart;
+* `engine icm-demo started (RemoteBroker)` (the start reconciled with the broker), and no ERROR line after it;
+* `goldbot run health`: `engine_loop:icm-demo` ok again, and Telegram says `recovered: engine_loop:icm-demo`.
+
+**Stop if** nothing restarts after 8 min. Run `sudo kill -CONT <pid>` and report it.
+
+**Fallback, if there is no time for the drill:** deploy with the watchdog off. The loop heartbeat and the
+`engine_loop` health alert stay on.
+```bash
+sudo mkdir -p /etc/systemd/system/goldbot-engine@.service.d
+printf '[Service]\nWatchdogSec=0\n' | sudo tee /etc/systemd/system/goldbot-engine@.service.d/no-watchdog.conf
+sudo systemctl daemon-reload && sudo systemctl restart goldbot-engine@icm-demo
+```
+A stuck loop is then alerted but not restarted: restart it by hand (RUNBOOK "Engine loop stuck, and the watchdogs").
+Run the drill at the next quiet moment, then delete `no-watchdog.conf`, run `daemon-reload` and restart the engine.
 
 Normal for now (warnings):
 * `backup_age`, `restore_drill`;
