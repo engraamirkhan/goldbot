@@ -385,11 +385,12 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - **Registered (2026-10-10):** the hypotheses are H-16 (range forecast), H-17 (trend-day continuation), H-18
     (post-blackout events), H-19 (stand-aside overlay) and H-20..H-23 (features), in `hypotheses.md` A2. Evidence
     and design: `docs/research/opportunity-days.md`. Proposed for the Q2 2027 pre-registration: 3–4 trials.
-  - **30a. `day_type` feature family, opt-in (quant + data-engineer review).** **Status (2026-10-11): built, in
-    review** (goldbot/features/day_type.py, `research_pass --day-type`, tests/test_day_type_features.py, TRACEABILITY
-    F24). Waiting on the quant-reviewer and data-engineer. `opp_tier1_today` and `opp_min_to_first_tier1` are NaN
-    until the point-in-time US calendar (BACKLOG 18 data branch, `goldbot/data/us_calendar.py`) is merged and passed
-    as ctx["us_calendar"]; the wiring step is in HANDOFF.
+  - **30a. `day_type` feature family, opt-in (quant + data-engineer review).** **Status (2026-10-11): built; the
+    quant and data review said "merge after fixes", and the fixes are applied** (goldbot/features/day_type.py,
+    `research_pass --day-type`, tests/test_day_type_features.py, TRACEABILITY F24).
+    - The HAR column is H-16's session-window model, with the draft's refit, GVZ staleness and tier-1 counting rules.
+    - The tier-1 columns are wired to the merged US calendar (`--us-calendar` fills ctx; `--day-type` requires it).
+    - Pinned versions: `f-1eada57050` (default + day_type) and `f-93fbe9386d` (+ macro).
     - Registered like `positioning`: computed only with an explicit flag (`--day-type`), so the default feature
       set, the frozen Q1 H-02 universe and its K_eff are unchanged (test: the default column list is identical
       before and after).

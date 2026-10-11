@@ -583,6 +583,8 @@ def test_research_pass_adds_the_calendar_features_only_with_the_flag(enabled, tm
     cal, info = mod.load_us_calendar(str(tmp_path))
     assert info["used"] is True and cal is not None and "cpi" in info["event_types"]
     ctx, names = mod.feature_ctx(None, None, cal)
+    assert ctx is not None and ctx["us_calendar"] is cal and names is None      # ctx only, for day_type (review M7)
+    ctx, names = mod.feature_ctx(None, None, cal, calendar_features=True)
     assert ctx is not None and names == [*research_feature_names(ctx), "tier1_events", "tier2_events"]
 
 

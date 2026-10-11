@@ -799,28 +799,41 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
-- Opportunity-day features, BACKLOG 30a (2026-10-11; needs **quant-reviewer and data-engineer review** before any
-  run uses them). `goldbot/features/day_type.py` is the opt-in `day_type` family (version 1). Importing it registers
-  nothing. `enable()` registers it, and `research_pass --day-type` is the only caller, so `DEFAULT_FEATURE_NAMES`,
-  `f-079deacc61` (the Q1 H-02 universe) and `f-f999b359e2` (with macro) are unchanged; a test pins both. Each trial
-  row records `day_type: {family, version}`.
+- Opportunity-day features, BACKLOG 30a (2026-10-11). The quant and data review said "merge after fixes"; the fixes
+  are in the follow-up commit (H1, M1-M9, L1-L5). `goldbot/features/day_type.py` is the opt-in `day_type` family
+  (version 1). Importing it registers nothing. `enable()` registers it, and `research_pass --day-type` is the only
+  caller, so `DEFAULT_FEATURE_NAMES`, `f-079deacc61` (the Q1 H-02 universe) and `f-f999b359e2` (with macro) are
+  unchanged. Sets that include day_type are pinned: `f-1eada57050` (default + day_type) and `f-93fbe9386d` (+ macro).
+  Each trial row records `day_type: {family, version, gvz, us_calendar, refit_schedule, min_fit_rows}`.
+  - research_pass refuses `--day-type` without `--us-calendar`, with `--discover` or `--cpcv`, or with `--from-year`
+    after 2010.
+  - The US calendar branch (7c12fbd) is merged in here. `--us-calendar` now only fills `ctx["us_calendar"]`. The
+    `tier1_events`/`tier2_events` families need `--us-calendar-features`, so H-17 can read only the HAR columns.
   - Day: 22:00 UTC rollover, inside the daily break in both DST regimes. A day spanning under 12 h is a stub and is
     dropped from the daily inputs. A daily value is visible at D 22:00 UTC and is joined with `asof_join`.
-  - Columns: `opp_har_range_hat`, `opp_gvz_rv`, `opp_prev_range_atr`, `opp_nr4`, `opp_nr7`, `opp_inside_day`,
-    `opp_gap_atr`, `opp_noise_ratio`, `opp_tier1_today`, `opp_min_to_first_tier1`. Definitions are in the module
-    docstring.
-  - HAR fitting follows the H-16 ruling (Q-2). OLS is refitted at each month's first rollover on every row whose
-    target closed at least 1 day earlier (expanding, at least 500 rows). A forecast uses the fit in force at its
-    emission close. The fold-fit hook is `har_forecast(refit_at=...)`, or ctx `day_type_refit_at` /
-    `day_type_min_fit_rows` in the feature.
-  - Reading taken for review: a forecast emitted on a Friday whose month ends on the weekend uses the previous month's
-    fit for Monday. H-16's E-4 evaluation path can reuse `fit_har` with its own W_D target.
-  - **Wiring step for the tier-1 columns** (after the BACKLOG 18 data branch, commit 514d338, merges). Merge that
-    branch's `feature_ctx` change with this one so that `--us-calendar` puts the calendar-v1 rows in
-    `ctx["us_calendar"]` whenever `--day-type` is on too. `day_type.tier1_columns` reads that key: columns event_id,
-    tier, event_utc, status, available_utc. It needs no import, but the merge has to keep both parameters. Then add
-    one test that runs `read_us_calendar_files` output through `tier1_columns`. Until that merge the two columns are
-    NaN. The calendar's `known_timeline` could replace the local latest-row-per-event logic; it gives the same states.
+  - Columns: `opp_har_range_hat`, `opp_har_cut33/50/80`, `opp_har_band`, `opp_gvz_rv`, `opp_gvz_stale`,
+    `opp_prev_range_atr`, `opp_nr4`, `opp_nr7`, `opp_inside_day`, `opp_gap_atr`, `opp_noise_ratio`,
+    `opp_tier1_today`, `opp_min_to_first_tier1`. Definitions are in the module docstring.
+  - HAR target is H-16's: y = ln(W / A_{k-1}). W is the 08:00 London to 16:30 New York window range, each on its
+    local clock. A is the mean true range of 20 stub-free opportunity days, which is not the 1d-bar ATR (see DESIGN).
+    W, and with it the forecast and the noise ratio, is NaN on bars longer than 1h.
+  - Refit for month M: at the close of the last weekday opportunity day before M (Friday when M starts at a
+    weekend), on rows closed at least 1 day earlier, with at least 500 rows.
+  - Reading taken: the reviewers asked for "the last stub-free day". That is not known at the previous day's close (a
+    truncation cut inside a month-end stub would see a different fit), so the rule is calendar weekdays. It differs
+    only when the last weekday of a month is a stub.
+  - Each `HarFit` stores its 0.33/0.5/0.8 fitted-value quantiles. `fit_har(regressors=...)` takes any column list,
+    for E-4's full model. The fold-fit hook is `har_forecast(refit_at=...)`, or ctx `day_type_refit_at` /
+    `day_type_min_fit_rows`.
+  - The tier-1 count is of distinct releases: an FOMC statement and its press conference count as one. It reads
+    `ctx["us_calendar"]`, and an integration test goes from `read_us_calendar_files` through `tier1_columns`.
+  - Other rules:
+    - GVZ is stale after 5 US business days counted on value_date (`driver_frames` now carries value_date).
+    - The gap anchors on the first bar at or after the 18:00 New York reopen.
+    - The noise ratio's session starts on the bar containing the open.
+    - `daily_bars` refuses bars out of time order.
+  - Still owed: E-4 (H-16's evaluation path, which cuts the bars at holdout_from before features), and the
+    first-out-of-sample month counted from data before the freeze (about 2012-04; the rule is in the Q2 draft).
 - Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
   (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
   before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each

@@ -1,53 +1,74 @@
-"""Opportunity-day features (opt-in family `day_type`; BACKLOG 30a, docs/research/opportunity-days.md section 3.1).
+"""Opportunity-day features (opt-in family `day_type`; BACKLOG 30a, docs/research/opportunity-days.md section 3.1,
+H-16/H-17/H-19/H-20/H-21 in docs/research/preregistration-2027Q2-draft.md).
 
 Design rule (opportunity-days.md 3.1): "Predicting how much gold will move today is well supported. Predicting which
-way it will move is not." Every column here is a range or event input, never a direction: no column reads `side`, a
-signed return or anything after the bar. They feed H-16 (range forecast), H-20 (compression), H-21 (noise ratio) and,
-once H-16 passes, the day-score allocator input (BACKLOG 30b).
+way it will move is not." Every column is a range or event input, never a direction: no column reads `side`, a signed
+return or anything after the bar.
 
-Opportunity day. Day D runs from D-1 22:00 UTC to D 22:00 UTC (ROLLOVER_UTC_H): the rollover falls inside gold's daily
-break in both US DST regimes (17:00-18:00 New York is 21:00-22:00 UTC in summer, 22:00-23:00 UTC in winter), so the
+Opportunity day. Day D runs from D-1 22:00 UTC to D 22:00 UTC (ROLLOVER_UTC_H). The rollover falls inside gold's daily
+break in both US DST regimes (17:00-18:00 New York is 21:00-22:00 UTC in summer and 22:00-23:00 UTC in winter), so the
 Sunday reopen belongs to Monday and there is no Friday stub. A day whose bars span under MIN_DAY_SPAN_H hours (a
-holiday or a data gap) is a stub and is left out of the daily inputs, as `time_series_momentum.drop_stub_days`; its
-move is not lost (the next day's true range runs from the last stub-free close). A daily value is visible at its
-day's nominal close (D 22:00 UTC) and reaches the bars only through `store.asof_join` on that `available_utc`.
+holiday or a data gap) is a stub. Stubs are left out of the daily inputs, as `time_series_momentum.drop_stub_days`
+does; the next day's true range still runs from the last stub-free close. A daily value is visible at its day's
+nominal close (D 22:00 UTC) and reaches the bars only through `store.asof_join` on that `available_utc`. This ATR(1d)
+is the mean true range of the last ATR_DAYS stub-free opportunity days. It is not the 1d-bar ATR of the decision frame
+(13:30 New York settlement days, Wilder smoothing).
 
 Daily inputs on stub-free days k (all from completed days):
-* `atr`: A_k, the mean of the last ATR_DAYS true ranges through k (H-16's A_D);
-* `w`: range_k / A_{k-1}, the day's range in the ATR(1d) visible at its open; y_k = ln w_k (the HAR target);
-* HAR regressors (Corsi 2009): ln of the mean of w over the last 1, 5 and 22 days.
+* `window_range` W_k: high - low of the bars from 08:00 London to 16:30 New York on day k's date, each on its own
+  local clock (bars starting at or after 08:00 Europe/London and before 16:30 America/New_York). This is H-16's
+  session window, the window the Q2 rules trade. NaN on bars longer than MAX_BAR_MIN (60 minutes);
+* `atr` A_k: the mean of the last ATR_DAYS true ranges through k, i.e. H-16's A_{k+1}, visible at the next day's
+  06:30 UTC;
+* `w` = W_k / A_{k-1} and y_k = ln w_k: H-16's target, the window range in the ATR visible at the day's open;
+* HAR regressors (Corsi 2009): ln of the mean of w over the last 1, 5 and 22 days. EMIT_REGRESSORS run through day k
+  (the forecast for the next day); TARGET_REGRESSORS run through day k-1 (the regressors of y_k).
 
 Columns (per bar, unsigned):
-* `opp_har_range_hat`: the HAR forecast of the next day's range in ATR(1d) units, exp(b0 + b1 ln w1 + b5 ln w5 + b22
-  ln w22). Fitting (H-16, quant ruling Q-2): OLS refitted at each calendar month's first rollover (22:00 UTC on the
-  last day of the previous month) on every earlier row whose target day closed at least FIT_PURGE (1 day) before
-  the refit instant (expanding window, at least MIN_FIT_ROWS rows, else NaN). A forecast emitted at day k's close
-  uses the latest fit whose refit instant is at or before that close. Fold-fit hook: `har_forecast(refit_at=...)`
-  takes any schedule (e.g. walk-forward fold ends), and the feature reads ctx["day_type_refit_at"] (a list of UTC
-  instants) and ctx["day_type_min_fit_rows"] when given. The coefficients are never a precomputed constant;
-* `opp_gvz_rv`: GVZ (macro_gvz, joined on its available_utc: at the London open of D it is D-2's close) / the
-  annualised Yang-Zhang volatility of the last YZ_DAYS stub-free days, in % (x sqrt(252) x 100). NaN when the latest
-  GVZ was published more than GVZ_STALE ago (H-16 drops such days);
-* `opp_prev_range_atr`: the last completed stub-free day's range / its A_k;
+* `opp_har_range_hat`: H-16's baseline forecast of the next day's W / A, exp(b0 + b1 ln w1 + b5 ln w5 + b22 ln w22).
+  Fitting (H-16, quant ruling Q-2, review M1). OLS is refitted once a month, at the close of the last weekday
+  opportunity day before the month's first day (22:00 UTC; a Friday when the month starts at a weekend, so Monday
+  gets the new fit). The fit uses every earlier row whose target day closed at least FIT_PURGE (1 day) before the
+  refit instant (expanding window, at least MIN_FIT_ROWS rows, else NaN).
+  - A forecast emitted at day k's close uses the latest fit whose refit instant is at or before that close.
+  - Why a weekday and not "the last stub-free day": whether that day becomes a stub is known only at its own close,
+    so the previous day's forecast could not know which fit to use (a truncation test sees the difference).
+  - Fold-fit hook: `har_forecast(refit_at=...)` takes any schedule, for example walk-forward fold ends. `fit_har(...,
+    regressors=...)` takes any column list, so H-16's full model (E-4) shares the refit and purge code. The feature
+    reads ctx["day_type_refit_at"] (a list of UTC instants) and ctx["day_type_min_fit_rows"] when given.
+* `opp_har_cut33`, `opp_har_cut50`, `opp_har_cut80`: the 0.33/0.5/0.8 quantiles of the in-sample fitted values of
+  the fit in force (exp units, like the forecast). `opp_har_band` is 0 below cut33, 1 below cut80, else 2. H-17's
+  "high day" is hat >= cut50; H-19's bands are low/mid/high.
+* `opp_gvz_rv`: GVZ (`macro_gvz`, joined on its available_utc; at the London open of D it is D-2's close) divided by
+  the annualised Yang-Zhang volatility of the last YZ_DAYS stub-free days, in % (x sqrt(252) x 100).
+  `opp_gvz_stale` is 1.0 when the latest known GVZ value_date is more than GVZ_STALE_BDAYS US business days before
+  the bar's opportunity day (US_BDAY, federal holidays skipped; H-16: "no GVZ observation in the last 5 business
+  days"). The ratio is then NaN. The flag is NaN when no GVZ is known.
+* `opp_prev_range_atr`: the last completed stub-free day's range / its A_k.
 * `opp_nr4`, `opp_nr7`: 1.0 when that day's range is the narrowest of the last 4 / 7 stub-free days (ties count),
-  else 0.0; `opp_inside_day`: 1.0 when its high <= the previous day's high and its low >= the previous day's low;
-* `opp_gap_atr`: |first open of the day - last close before it| / A (the Sunday reopen on Mondays, else the daily
-  reopen), from the day's first bar onward;
-* `opp_noise_ratio` (H-21): on a bar inside the London (08:00-16:30 Europe/London) or New York (08:30-16:00
-  America/New_York) local session (`calendar.LOCAL_SESSIONS`, so DST follows each zone), the high-low range from the
-  session's first bar of the local date through this bar, divided by the mean of that range at the same session and
-  minutes since the open over the previous NOISE_DAYS days that had that bar (fewer: NaN). The New York session takes
-  over from its open (the London range has run for hours by then); outside both sessions NaN;
-* `opp_tier1_today`, `opp_min_to_first_tier1`: tier-1 releases scheduled on the bar's opportunity day as known at the
-  bar, and minutes from the bar's start to the first of them (negative once it has passed; NO_EVENT_MIN when none).
-  Input: ctx["us_calendar"], the point-in-time US calendar rows (event_id, tier, event_utc, status, available_utc;
-  release calendar-v1, goldbot/data/us_calendar.py on the BACKLOG 18 branch). Each event counts in the state of its
-  latest row with available_utc <= the bar (a late addition is unseen before its stamp; a cancellation from its
-  stamp). Both columns are NaN without the calendar and before its first row.
+  else 0.0. `opp_inside_day`: 1.0 when its high <= the previous day's high and its low >= the previous day's low.
+* `opp_gap_atr`: |open of the day's first bar at or after the 18:00 New York reopen - close of the bar before it| / A
+  (the Sunday reopen on Mondays, else the daily reopen). Set from that bar onward; NaN on the day's earlier bars.
+* `opp_noise_ratio` (H-21): measured on bars inside the London (08:00-16:30 Europe/London) or New York (08:30-16:00
+  America/New_York) local session (`calendar.LOCAL_SESSIONS`, so DST follows each zone).
+  - A session's first bar is the one containing its open (on 1h bars New York starts on the 08:00 bar).
+  - The New York session takes over from its first bar.
+  - The value is the high-low range from the session's first bar of the local date through this bar, divided by the
+    mean of that range at the same session and bar offset over the previous NOISE_DAYS days that had that bar.
+  - NaN with fewer such days, outside both sessions, and on bars longer than 60 minutes.
+* `opp_tier1_today`, `opp_min_to_first_tier1`: the number of distinct tier-1 releases scheduled on the bar's
+  opportunity day as known at the bar, and the minutes from the bar's start to the first of them (negative once it
+  has passed; NO_EVENT_MIN when none). An FOMC statement and its press conference are one release (RELEASE_OF).
+  - Input: ctx["us_calendar"], the rows of release calendar-v1 (goldbot/data/us_calendar.py: event_id, event_type,
+    tier, event_utc, status, available_utc).
+  - Each event counts in the state of its latest row with available_utc <= the bar: a late addition is unseen before
+    its stamp, a cancellation counts from its stamp.
+  - Both columns are NaN without the calendar and before its first row.
 
 Opt-in: this module is NOT imported by goldbot.features and registers nothing on import. `enable()` registers the
-`day_type` feature; scripts/research_pass.py calls it only with `--day-type`. So DEFAULT_FEATURE_NAMES, the frozen
-Q1 H-02 universe and their feature versions do not change. Intended for intraday decision bars (15m, 1h, 4h).
+`day_type` feature, and scripts/research_pass.py calls it only with `--day-type`. So DEFAULT_FEATURE_NAMES and the
+frozen Q1 H-02 universe (f-079deacc61) do not change. A feature set that includes day_type has its own version, pinned
+in the Q2 draft. Intended for 15m and 1h decision bars.
 """
 from __future__ import annotations
 
@@ -55,8 +76,8 @@ import numpy as np
 import pandas as pd
 
 from goldbot.base import FrozenRecord, UtcTimestamp
-from goldbot.data.calendar import LOCAL_SESSIONS
-from goldbot.data.macro import driver_frames
+from goldbot.data.calendar import LOCAL_SESSIONS, LocalSession
+from goldbot.data.macro import US_BDAY, driver_frames
 from goldbot.data.store import asof_join
 from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.features.registry import FEATURES, FeatureCtx, feature
@@ -65,25 +86,35 @@ from goldbot.features.survey import yang_zhang
 NAME = "day_type"
 FAMILY = "day_type"
 VERSION = "1"
-COLUMNS = ("opp_har_range_hat", "opp_gvz_rv", "opp_prev_range_atr", "opp_nr4", "opp_nr7", "opp_inside_day",
-           "opp_gap_atr", "opp_noise_ratio", "opp_tier1_today", "opp_min_to_first_tier1")
+HAR_COLUMNS = ("opp_har_range_hat", "opp_har_cut33", "opp_har_cut50", "opp_har_cut80", "opp_har_band")
 TIER1_COLUMNS = ("opp_tier1_today", "opp_min_to_first_tier1")
+COLUMNS = (*HAR_COLUMNS, "opp_gvz_rv", "opp_gvz_stale", "opp_prev_range_atr", "opp_nr4", "opp_nr7", "opp_inside_day",
+           "opp_gap_atr", "opp_noise_ratio", *TIER1_COLUMNS)
 
 ROLLOVER_UTC_H = 22
 MIN_DAY_SPAN_H = 12.0
+MAX_BAR_MIN = 60
+WINDOW_OPEN = ("Europe/London", 8 * 60)          # H-16 window: 08:00 London ..
+WINDOW_CLOSE = ("America/New_York", 16 * 60 + 30)  # .. 16:30 New York
+REOPEN_NY_MIN = 18 * 60                          # gold reopens 18:00 New York
 ATR_DAYS = 20
 HAR_LAGS = (1, 5, 22)
-EMIT_REGRESSORS = ("x1", "x5", "x22")          # visible at day k's close: forecast for the next day
-TARGET_REGRESSORS = ("x1_t", "x5_t", "x22_t")  # the same, one day earlier: the regressors of target y_k
+EMIT_REGRESSORS = ("x1", "x5", "x22")            # through day k: the forecast for the next day
+TARGET_REGRESSORS = ("x1_t", "x5_t", "x22_t")    # through day k-1: the regressors of target y_k
 MIN_FIT_ROWS = 500
 FIT_PURGE = pd.Timedelta(days=1)
+BAND_QUANTILES = (0.33, 0.5, 0.8)
+REFIT_SCHEDULE = "monthly at the close of the last weekday opportunity day before the month (expanding, 1-day purge)"
 YZ_DAYS = 20
 TRADING_DAYS = 252
-GVZ_STALE = pd.Timedelta(days=7)
+GVZ_STALE_BDAYS = 5
 NOISE_DAYS = 14
 NO_EVENT_MIN = 1440.0
+RELEASE_OF = {"fomc_press_conference": "fomc_statement"}   # one release: statement and press conference
 LONDON, NEWYORK = 1, 2
-_SESSION_CODES = ((NEWYORK, LOCAL_SESSIONS["newyork"]), (LONDON, LOCAL_SESSIONS["london"]))   # NY takes over
+_SESSION_CODES: tuple[tuple[int, LocalSession], ...] = ((LONDON, LOCAL_SESSIONS["london"]),
+                                                       (NEWYORK, LOCAL_SESSIONS["newyork"]))   # NY overrides
+_US_HOLIDAYS = np.array(US_BDAY.holidays, dtype="datetime64[D]")
 
 
 # --------------------------------------------------------------------------- opportunity days
@@ -98,26 +129,50 @@ def day_close_utc(day: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(day).tz_localize("UTC") + pd.Timedelta(hours=ROLLOVER_UTC_H)
 
 
+def bar_minutes(ts: pd.DatetimeIndex) -> int:
+    """The bar length in minutes (the smallest positive step between bar starts; 0 for fewer than two bars)."""
+    steps = np.diff(epoch_ns(ts))
+    return int(steps[steps > 0].min() // 60_000_000_000) if (steps > 0).any() else 0
+
+
+def _local_minutes(ts: pd.DatetimeIndex, tz: str) -> tuple[np.ndarray, pd.DatetimeIndex]:
+    local = ts.tz_convert(tz)
+    return np.asarray(local.hour * 60 + local.minute, dtype=np.int64), local.tz_localize(None).normalize()
+
+
+def window_mask(ts: pd.DatetimeIndex) -> np.ndarray:
+    """Bars inside H-16's window on their opportunity day's date: start >= 08:00 London and < 16:30 New York."""
+    day = opportunity_day(ts)
+    lm, ld = _local_minutes(ts, WINDOW_OPEN[0])
+    nm, nd = _local_minutes(ts, WINDOW_CLOSE[0])
+    return np.asarray((ld == day) & (lm >= WINDOW_OPEN[1]) & (nd == day) & (nm < WINDOW_CLOSE[1]))
+
+
 def daily_bars(df: pd.DataFrame) -> pd.DataFrame:
-    """One row per opportunity day with bars: day, open/high/low/close, first_ts, close_utc, stub (spans under
-    MIN_DAY_SPAN_H hours from the first bar's start to the last bar's end)."""
+    """One row per opportunity day with bars: day, open/high/low/close, window_range (H-16's W), first_ts, close_utc,
+    stub (spans under MIN_DAY_SPAN_H hours from the first bar's start to the last bar's end)."""
+    cols = ["day", "open", "high", "low", "close", "window_range", "first_ts", "ts_utc", "close_utc", "stub"]
     ts = utc_index(df["ts_utc"])
     if len(ts) == 0:
-        return pd.DataFrame(columns=["day", "open", "high", "low", "close", "first_ts", "close_utc", "stub", "ts_utc"])
+        return pd.DataFrame(columns=cols)
     ns = epoch_ns(ts)
-    steps = np.diff(ns)
-    bar_ns = int(steps[steps > 0].min()) if (steps > 0).any() else 0
-    g = pd.DataFrame({"day": opportunity_day(ts), "open": df["open"].to_numpy(dtype=float),
-                      "high": df["high"].to_numpy(dtype=float), "low": df["low"].to_numpy(dtype=float),
-                      "close": df["close"].to_numpy(dtype=float), "ns": ns}).groupby("day", sort=True)
+    if (np.diff(ns) < 0).any():
+        raise ValueError("daily_bars needs bars in time order (ts_utc increasing)")
+    minutes = bar_minutes(ts)
+    h, lo = df["high"].to_numpy(dtype=float), df["low"].to_numpy(dtype=float)
+    inw = window_mask(ts) & (minutes <= MAX_BAR_MIN)
+    g = pd.DataFrame({"day": opportunity_day(ts), "open": df["open"].to_numpy(dtype=float), "high": h, "low": lo,
+                      "close": df["close"].to_numpy(dtype=float), "ns": ns,
+                      "wh": np.where(inw, h, np.nan), "wl": np.where(inw, lo, np.nan)}).groupby("day", sort=True)
     out = g.agg(open=("open", "first"), high=("high", "max"), low=("low", "min"), close=("close", "last"),
-                first_ns=("ns", "min"), last_ns=("ns", "max")).reset_index()
-    span_h = (out["last_ns"] - out["first_ns"] + bar_ns) / 3.6e12
+                first_ns=("ns", "min"), last_ns=("ns", "max"), wh=("wh", "max"), wl=("wl", "min")).reset_index()
+    span_h = (out["last_ns"] - out["first_ns"] + minutes * 60_000_000_000) / 3.6e12
+    out["window_range"] = out["wh"] - out["wl"]
     out["first_ts"] = pd.to_datetime(out["first_ns"].to_numpy(), unit="ns", utc=True)
     out["ts_utc"] = out["first_ts"]
     out["close_utc"] = day_close_utc(pd.DatetimeIndex(out["day"]))
     out["stub"] = span_h.to_numpy() < MIN_DAY_SPAN_H
-    return out.drop(columns=["first_ns", "last_ns"])
+    return out[cols]
 
 
 def _ln(x: pd.Series) -> pd.Series:
@@ -135,7 +190,7 @@ def daily_inputs(daily: pd.DataFrame) -> pd.DataFrame:
     rng = h - lo
     out = s.assign(range=rng, tr=tr)
     out["atr"] = tr.rolling(ATR_DAYS, min_periods=ATR_DAYS).mean()
-    out["w"] = rng / out["atr"].shift(1)
+    out["w"] = s["window_range"].astype(float) / out["atr"].shift(1)
     out["y"] = _ln(out["w"])
     for lag, col in zip(HAR_LAGS, EMIT_REGRESSORS, strict=True):
         out[col] = _ln(out["w"].rolling(lag, min_periods=lag).mean())
@@ -153,45 +208,59 @@ def daily_inputs(daily: pd.DataFrame) -> pd.DataFrame:
 
 # --------------------------------------------------------------------------- HAR fit (fold-fit hook)
 class HarFit(FrozenRecord):
-    """One OLS fit of the HAR range model: coefficients (intercept, b1, b5, b22) or None with too few rows."""
+    """One OLS fit: coefficients (intercept, then one per column of `columns`) and the BAND_QUANTILES of its
+    in-sample fitted values (log units), or None with too few rows."""
     refit_at: UtcTimestamp
+    columns: tuple[str, ...]
     coef: tuple[float, ...] | None
     n_rows: int
     last_target_close: UtcTimestamp | None = None
+    fitted_quantiles: tuple[float, ...] | None = None
 
 
-def fit_har(inputs: pd.DataFrame, refit_at: pd.Timestamp, *, purge: pd.Timedelta = FIT_PURGE,
+def fit_har(inputs: pd.DataFrame, refit_at: pd.Timestamp, *, target: str = "y",
+            regressors: tuple[str, ...] = TARGET_REGRESSORS, purge: pd.Timedelta = FIT_PURGE,
             min_rows: int = MIN_FIT_ROWS) -> HarFit:
-    """OLS of y on the target regressors over the rows whose target day closed at or before `refit_at` - `purge`
+    """OLS of `target` on `regressors` over the rows whose target day closed at or before `refit_at` - `purge`
     (nothing later is read, whatever the frame holds)."""
     at = pd.Timestamp(refit_at)
+    regs = tuple(regressors)
     close = utc_index(inputs["close_utc"]) if len(inputs) else pd.DatetimeIndex([], tz="UTC")
-    cols = ["y", *TARGET_REGRESSORS]
-    rows = inputs.loc[np.asarray(close <= at - purge), cols]
+    rows = inputs.loc[np.asarray(close <= at - purge), [target, *regs]]
     rows = rows[np.isfinite(rows.to_numpy(dtype=float)).all(axis=1)]
-    if len(rows) < max(min_rows, len(cols)):
-        return HarFit(refit_at=at, coef=None, n_rows=len(rows))
-    X = np.column_stack([np.ones(len(rows)), rows[list(TARGET_REGRESSORS)].to_numpy(dtype=float)])
-    coef, *_ = np.linalg.lstsq(X, rows["y"].to_numpy(dtype=float), rcond=None)
-    return HarFit(refit_at=at, coef=tuple(float(b) for b in coef), n_rows=len(rows),
-                  last_target_close=pd.Timestamp(inputs.loc[rows.index[-1], "close_utc"]))
+    if len(rows) < max(min_rows, len(regs) + 1):
+        return HarFit(refit_at=at, columns=regs, coef=None, n_rows=len(rows))
+    X = np.column_stack([np.ones(len(rows)), rows[list(regs)].to_numpy(dtype=float)])
+    coef, *_ = np.linalg.lstsq(X, rows[target].to_numpy(dtype=float), rcond=None)
+    q = np.quantile(X @ coef, BAND_QUANTILES)
+    return HarFit(refit_at=at, columns=regs, coef=tuple(float(b) for b in coef), n_rows=len(rows),
+                  last_target_close=pd.Timestamp(inputs.loc[rows.index[-1], "close_utc"]),
+                  fitted_quantiles=tuple(float(x) for x in q))
 
 
 def monthly_refits(inputs: pd.DataFrame) -> pd.DatetimeIndex:
-    """Each calendar month's first rollover (22:00 UTC on the previous month's last day) up to the last close."""
+    """Each month's refit instant (the close of the last weekday opportunity day before its first day) up to the
+    last close. Calendar arithmetic only, so it is known in advance."""
     if len(inputs) == 0:
         return pd.DatetimeIndex([], tz="UTC")
     close = utc_index(inputs["close_utc"])
-    first = (close.min() + pd.Timedelta(hours=24 - ROLLOVER_UTC_H)).tz_localize(None).to_period("M").to_timestamp()
-    months = pd.date_range(first, close.max().tz_localize(None) + pd.Timedelta(days=1), freq="MS")
-    return pd.DatetimeIndex(months.tz_localize("UTC") - pd.Timedelta(hours=24 - ROLLOVER_UTC_H))
+    first = opportunity_day(close[:1])[0].to_period("M").to_timestamp()
+    out = []
+    for m in pd.date_range(first, opportunity_day(close[-1:])[0] + pd.offsets.MonthBegin(1), freq="MS"):
+        d = m - pd.Timedelta(days=1)
+        while d.dayofweek >= 5:
+            d -= pd.Timedelta(days=1)
+        out.append(d)
+    return day_close_utc(pd.DatetimeIndex(out))
 
 
 def har_forecast(inputs: pd.DataFrame, refit_at: pd.DatetimeIndex | list | None = None, *,
-                 purge: pd.Timedelta = FIT_PURGE, min_rows: int = MIN_FIT_ROWS) -> np.ndarray:
-    """The forecast emitted at each row's close (range of the next day in ATR(1d) units), from the latest fit in
-    `refit_at` (default: monthly_refits) at or before that close; NaN before the first usable fit."""
-    out = np.full(len(inputs), np.nan)
+                 regressors: tuple[str, ...] = TARGET_REGRESSORS, emit: tuple[str, ...] = EMIT_REGRESSORS,
+                 purge: pd.Timedelta = FIT_PURGE, min_rows: int = MIN_FIT_ROWS) -> pd.DataFrame:
+    """Per row: the forecast emitted at its close (`hat`, exp units), the fit's band cuts (`cut33`, `cut50`,
+    `cut80`) and `band` (0/1/2), from the latest fit in `refit_at` (default: monthly_refits) at or before that close.
+    NaN before the first usable fit."""
+    out = pd.DataFrame({c: np.full(len(inputs), np.nan) for c in ("hat", "cut33", "cut50", "cut80", "band")})
     if len(inputs) == 0:
         return out
     refits = monthly_refits(inputs) if refit_at is None else pd.DatetimeIndex(pd.to_datetime(list(refit_at), utc=True))
@@ -199,28 +268,63 @@ def har_forecast(inputs: pd.DataFrame, refit_at: pd.DatetimeIndex | list | None 
     if len(refits) == 0:
         return out
     which = np.searchsorted(epoch_ns(refits), epoch_ns(utc_index(inputs["close_utc"])), side="right") - 1
-    X = np.column_stack([np.ones(len(inputs)), inputs[list(EMIT_REGRESSORS)].to_numpy(dtype=float)])
+    X = np.column_stack([np.ones(len(inputs)), inputs[list(emit)].to_numpy(dtype=float)])
+    vals = {c: np.full(len(inputs), np.nan) for c in out.columns}
     for j in np.unique(which[which >= 0]):
-        fit = fit_har(inputs, refits[j], purge=purge, min_rows=min_rows)
-        if fit.coef is None:
+        fit = fit_har(inputs, refits[j], regressors=regressors, purge=purge, min_rows=min_rows)
+        if fit.coef is None or fit.fitted_quantiles is None:
             continue
         rows = which == j
-        out[rows] = np.exp(X[rows] @ np.asarray(fit.coef))
+        vals["hat"][rows] = np.exp(X[rows] @ np.asarray(fit.coef))
+        for c, q in zip(("cut33", "cut50", "cut80"), fit.fitted_quantiles, strict=True):
+            vals[c][rows] = np.exp(q)
+    h = vals["hat"]
+    vals["band"] = np.where(np.isnan(h), np.nan, np.where(h < vals["cut33"], 0.0, np.where(h < vals["cut80"], 1.0, 2.0)))
+    return pd.DataFrame(vals)
+
+
+# --------------------------------------------------------------------------- reopen gap
+def reopen_gap(df: pd.DataFrame) -> np.ndarray:
+    """Per bar: |open of its day's first bar at or after the 18:00 New York reopen - close of the bar before it|, from
+    that bar onward; NaN on the day's earlier bars."""
+    ts = utc_index(df["ts_utc"])
+    out = np.full(len(ts), np.nan)
+    if len(ts) == 0:
+        return out
+    day = opportunity_day(ts)
+    reopen = (pd.DatetimeIndex(day - pd.Timedelta(days=1)) + pd.Timedelta(minutes=REOPEN_NY_MIN)).tz_localize(
+        "America/New_York", ambiguous="NaT", nonexistent="shift_forward")
+    eligible = epoch_ns(ts) >= epoch_ns(reopen.tz_convert("UTC"))
+    codes = np.asarray(day.factorize()[0])
+    idx = np.flatnonzero(eligible)
+    if len(idx) == 0:
+        return out
+    first = pd.Series(idx).groupby(codes[idx]).min()
+    o, c = df["open"].to_numpy(dtype=float), df["close"].to_numpy(dtype=float)
+    gap = {k: (abs(o[i] - c[i - 1]) if i > 0 else np.nan) for k, i in first.items()}
+    out[idx] = np.array([gap[k] for k in codes[idx]])
     return out
 
 
 # --------------------------------------------------------------------------- noise ratio
 def noise_components(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per bar: (range since the active local session's first bar of the local date, NaN outside the sessions; the
-    session code LONDON/NEWYORK, 0 outside; minutes since the session open, NaN outside)."""
+    session code LONDON/NEWYORK, 0 outside; minutes from the session open to the bar's start, NaN outside). A bar is
+    in a session when it starts before the close and ends after the open; nothing on bars over MAX_BAR_MIN."""
     ts = utc_index(df["ts_utc"])
     n = len(ts)
     session, since, day = np.zeros(n, dtype=np.int64), np.full(n, np.nan), np.zeros(n, dtype=np.int64)
-    for code, sess in reversed(_SESSION_CODES):          # London first, New York overrides where both are open
-        m, d = sess.clock(ts)
-        inside = ~np.isnan(m)
-        session[inside], since[inside], day[inside] = code, m[inside], d[inside]
     rng = np.full(n, np.nan)
+    length = max(bar_minutes(ts), 1)
+    if n == 0 or length > MAX_BAR_MIN:
+        return rng, session, since
+    for code, sess in _SESSION_CODES:                 # London first, New York overrides where both are open
+        local = ts.tz_convert(sess.tz)
+        m = np.asarray(local.hour * 60 + local.minute, dtype=np.int64)
+        o, c = sess.open.hour * 60 + sess.open.minute, sess.close.hour * 60 + sess.close.minute
+        inside = (m < c) & (m + length > o) & np.asarray(local.dayofweek < 5)
+        d = np.asarray(local.year * 10000 + local.month * 100 + local.day, dtype=np.int64)
+        session[inside], since[inside], day[inside] = code, (m - o)[inside], d[inside]
     on = session > 0
     if on.any():
         key = session[on] * 100_000_000 + day[on]          # one run per (session, local date)
@@ -236,7 +340,7 @@ def noise_ratio(df: pd.DataFrame) -> np.ndarray:
     on = session > 0
     if not on.any():
         return out
-    f = pd.DataFrame({"r": rng[on], "k": session[on] * 10_000 + since[on].astype(np.int64)})
+    f = pd.DataFrame({"r": rng[on], "k": session[on] * 10_000 + (since[on] + 1_000).astype(np.int64)})
     base = f.groupby("k", sort=False)["r"].transform(
         lambda x: x.shift(1).rolling(NOISE_DAYS, min_periods=NOISE_DAYS).mean())
     b = base.to_numpy(dtype=float)
@@ -254,15 +358,17 @@ def tier1_columns(df: pd.DataFrame, cal: pd.DataFrame | None) -> pd.DataFrame:
         return out
     ts = utc_index(df["ts_utc"])
     t = epoch_ns(ts)
-    avail_all = pd.DatetimeIndex(pd.to_datetime(cal["available_utc"], utc=True))
-    covered = t >= epoch_ns(avail_all).min()
+    covered = t >= epoch_ns(pd.DatetimeIndex(pd.to_datetime(cal["available_utc"], utc=True))).min()
     count = np.where(covered, 0.0, np.nan)
     minutes = np.where(covered, NO_EVENT_MIN, np.nan)
     c1 = cal[cal["tier"].astype(int) == 1]
     if len(c1):
         ev = pd.DatetimeIndex(pd.to_datetime(c1["event_utc"], utc=True))
+        et_day = ev.tz_convert("America/New_York").strftime("%Y-%m-%d")
+        kind = c1["event_type"].astype(str).map(lambda e: RELEASE_OF.get(e, e))
         c1 = c1.assign(_ev=epoch_ns(ev), _av=epoch_ns(pd.DatetimeIndex(pd.to_datetime(c1["available_utc"], utc=True))),
-                       _day=opportunity_day(ev), _sched=(c1["status"].astype(str) == "scheduled").to_numpy())
+                       _day=opportunity_day(ev), _sched=(c1["status"].astype(str) == "scheduled").to_numpy(),
+                       _release=(kind + ":" + np.asarray(et_day)).to_numpy())
         bar_day = opportunity_day(ts)
         for d, rows in c1.groupby("_day", sort=False):
             idx = np.flatnonzero(np.asarray(bar_day == d) & covered)
@@ -271,7 +377,7 @@ def tier1_columns(df: pd.DataFrame, cal: pd.DataFrame | None) -> pd.DataFrame:
             tb = t[idx]
             lo_ns = epoch_ns(day_close_utc(pd.DatetimeIndex([d])) - pd.Timedelta(days=1))[0]
             first = np.full(len(idx), np.inf)
-            n = np.zeros(len(idx))
+            live_by_release: dict[str, np.ndarray] = {}
             ids = c1[c1["event_id"].isin(rows["event_id"].unique())]
             for _, hist in ids.sort_values("_av", kind="stable").groupby("event_id", sort=False):
                 pos = np.searchsorted(hist["_av"].to_numpy(), tb, side="right") - 1      # latest known row
@@ -279,53 +385,70 @@ def tier1_columns(df: pd.DataFrame, cal: pd.DataFrame | None) -> pd.DataFrame:
                 p = np.where(known, pos, 0)
                 e = hist["_ev"].to_numpy()[p]
                 live = known & hist["_sched"].to_numpy()[p] & (e >= lo_ns) & (e < lo_ns + 86_400 * 10**9)
-                n += live
+                rel = str(hist["_release"].to_numpy()[p][0]) if len(p) else ""
+                live_by_release[rel] = live_by_release.get(rel, np.zeros(len(idx), dtype=bool)) | live
                 first = np.where(live, np.minimum(first, e), first)
-            count[idx] = n
+            count[idx] = np.sum(list(live_by_release.values()), axis=0) if live_by_release else 0.0
             minutes[idx] = np.where(np.isfinite(first), (first - tb) / 6e10, NO_EVENT_MIN)
     out["opp_tier1_today"], out["opp_min_to_first_tier1"] = count, minutes
     return out
 
 
 # --------------------------------------------------------------------------- the feature
-def _join(df: pd.DataFrame, frame: pd.DataFrame, cols: list[str], tolerance: pd.Timedelta | None = None) -> pd.DataFrame:
+def _join(df: pd.DataFrame, frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     bars = pd.DataFrame({"ts_utc": utc_index(df["ts_utc"]).as_unit("ns"), "_row": np.arange(len(df))})
-    j = asof_join(bars, frame[["available_utc", *cols]], tolerance=tolerance).sort_values("_row")
+    j = asof_join(bars, frame[["available_utc", *cols]]).sort_values("_row")
     return j[cols].reset_index(drop=True)
 
 
+def gvz_columns(df: pd.DataFrame, macro: pd.DataFrame | None, yz: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(opp_gvz_rv, opp_gvz_stale) per bar (module docstring)."""
+    nan = np.full(len(df), np.nan)
+    if macro is None or len(macro) == 0:
+        return nan, nan.copy()
+    gvz = driver_frames(macro)["macro_gvz"]
+    if len(gvz) == 0:
+        return nan, nan.copy()
+    j = _join(df, gvz, ["macro_gvz", "value_date"])
+    gv = j["macro_gvz"].to_numpy(dtype=float)
+    vd = pd.to_datetime(j["value_date"])
+    have = np.asarray(vd.notna())
+    stale = np.full(len(df), np.nan)
+    if have.any():
+        bar_day = opportunity_day(utc_index(df["ts_utc"])).to_numpy().astype("datetime64[D]")
+        vdd = vd[have].to_numpy().astype("datetime64[D]")
+        n = np.busday_count(vdd, bar_day[have], holidays=_US_HOLIDAYS)
+        stale[have] = (n > GVZ_STALE_BDAYS).astype(float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where((yz > 0) & (stale == 0.0), gv / np.where(yz > 0, yz, 1.0), np.nan)
+    return ratio, stale
+
+
 def f_day_type(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
-    """The ten day_type columns as known at each bar (module docstring); NaN where an input or history is missing."""
+    """The day_type columns as known at each bar (module docstring); NaN where an input or history is missing."""
     out = pd.DataFrame({c: np.full(len(df), np.nan) for c in COLUMNS}, index=df.index)
     if len(df) == 0:
         return out
     daily = daily_bars(df)
     inp = daily_inputs(daily)
     if len(inp):
-        refit_at = ctx.get("day_type_refit_at")
-        hat = har_forecast(inp, refit_at, min_rows=int(ctx.get("day_type_min_fit_rows", MIN_FIT_ROWS)))
-        emit = pd.DataFrame({"available_utc": utc_index(inp["close_utc"]), "har": hat, "atr": inp["atr"],
-                             "prev": inp["prev_range_atr"], "nr4": inp["nr4"], "nr7": inp["nr7"],
-                             "inside": inp["inside_day"], "yz": inp["yz_ann"]})
-        j = _join(df, emit, ["har", "atr", "prev", "nr4", "nr7", "inside", "yz"])
-        out["opp_har_range_hat"] = j["har"].to_numpy()
+        fc = har_forecast(inp, ctx.get("day_type_refit_at"),
+                          min_rows=int(ctx.get("day_type_min_fit_rows", MIN_FIT_ROWS)))
+        emit = pd.DataFrame({"available_utc": utc_index(inp["close_utc"]), "atr": inp["atr"].to_numpy(),
+                             "prev": inp["prev_range_atr"].to_numpy(), "nr4": inp["nr4"].to_numpy(),
+                             "nr7": inp["nr7"].to_numpy(), "inside": inp["inside_day"].to_numpy(),
+                             "yz": inp["yz_ann"].to_numpy(), **{c: fc[c].to_numpy() for c in fc.columns}})
+        j = _join(df, emit, [c for c in emit.columns if c != "available_utc"])
+        for col, src in zip(HAR_COLUMNS, ("hat", "cut33", "cut50", "cut80", "band"), strict=True):
+            out[col] = j[src].to_numpy()
         out["opp_prev_range_atr"] = j["prev"].to_numpy()
         out["opp_nr4"], out["opp_nr7"] = j["nr4"].to_numpy(), j["nr7"].to_numpy()
         out["opp_inside_day"] = j["inside"].to_numpy()
         atr_now = j["atr"].to_numpy(dtype=float)
-        gap = pd.DataFrame({"available_utc": utc_index(daily["first_ts"]),
-                            "gap": (daily["open"].astype(float) - daily["close"].astype(float).shift(1)).abs()})
-        g = _join(df, gap, ["gap"])["gap"].to_numpy(dtype=float)
+        g = reopen_gap(df)
         with np.errstate(divide="ignore", invalid="ignore"):
             out["opp_gap_atr"] = np.where(atr_now > 0, g / np.where(atr_now > 0, atr_now, 1.0), np.nan)
-        macro = ctx.get("macro")
-        if macro is not None and len(macro):
-            gvz = driver_frames(macro)["macro_gvz"]
-            if len(gvz):
-                gv = _join(df, gvz, ["macro_gvz"], tolerance=GVZ_STALE)["macro_gvz"].to_numpy(dtype=float)
-                yz = j["yz"].to_numpy(dtype=float)
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    out["opp_gvz_rv"] = np.where(yz > 0, gv / np.where(yz > 0, yz, 1.0), np.nan)
+        out["opp_gvz_rv"], out["opp_gvz_stale"] = gvz_columns(df, ctx.get("macro"), j["yz"].to_numpy(dtype=float))
     out["opp_noise_ratio"] = noise_ratio(df)
     tier = tier1_columns(df, ctx.get("us_calendar"))
     for c in TIER1_COLUMNS:
