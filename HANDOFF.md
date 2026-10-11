@@ -975,6 +975,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   in-review count script counts H-17's non-literal entries; fix before merge.** Session coverage and the
   conditional H-24 (`hypotheses.md` A4). Owner-method brief: `docs/research/owner-method-study.md`. Scorecard
   updated.
+- **H-17 count follows pin P-2 literally (2026-10-11; quant review follow-up to d2f18c6).** In count-owed-events
+  `count_h17`, the day's first breaching bar is now found before the tradeable check. If the session is closed at its
+  close or ATR(14) is undefined there, the day has no entry, the same treatment as a blacked-out first breach.
+  Previously such a day fell through to the next breaching bar. New field `*_first_breach_untradable`.
+  `*_events_next_bar` is still reported for transparency (the next tradeable breaching bar outside the blackout).
+  Test: `tests/test_count_owed_events.py::test_h17_literal_p2_a_day_whose_first_breach_is_untradeable_has_no_entry`
+  (closed session and missing ATR).
 - **Owed pre-registration counts (2026-10-11): run count-owed-events and paste the counts before the freeze.**
   `.github/workflows/count-owed-events.yml` (workflow_dispatch only; dispatchable once it is on `main`) downloads
   data-v1, macro-v1 and calendar-v1 (`fetch_data_release.py --download-only`), cuts every input at
