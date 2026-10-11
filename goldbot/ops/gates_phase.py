@@ -164,10 +164,18 @@ def load_closed_trades(state_dir: Path) -> tuple[list[ClosedTrade], str | None]:
     error, never silently dropped, and the lines after it still count, so the engine's set of recorded positions is
     never built from a truncated list. A trade is counted once: a later line with the same (account_id, position_id)
     is ignored (the engine writes once per position; this keeps the count right even if a line were ever repeated)."""
+    rows, err = load_closed_trade_rows(state_dir)
+    return [t for t, _ in rows], err
+
+
+def load_closed_trade_rows(state_dir: Path) -> tuple[list[tuple[ClosedTrade, dict[str, Any]]], str | None]:
+    """`load_closed_trades` with each record's raw JSON object beside it, for a reader that reports fields a newer
+    release added (the performance report, goldbot/ops/perf_report.py) instead of guessing them; the record itself
+    still drops unknown fields (ADR 0010)."""
     files = closed_trade_files(Path(state_dir))
     if not files:
         return [], None
-    out: list[ClosedTrade] = []
+    out: list[tuple[ClosedTrade, dict[str, Any]]] = []
     seen: set[tuple[str, int]] = set()
     bad: list[str] = []
     for f in files:
@@ -184,7 +192,8 @@ def load_closed_trades(state_dir: Path) -> tuple[list[ClosedTrade], str | None]:
                 if key in seen:
                     continue
                 seen.add(key)
-            out.append(t)
+            raw = json.loads(line)
+            out.append((t, raw if isinstance(raw, dict) else {}))
     if bad:
         return out, f"closed-trade record: {len(bad)} unreadable line(s) skipped ({bad[0]})"
     return out, None

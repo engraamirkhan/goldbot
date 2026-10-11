@@ -26,6 +26,8 @@
   python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]
                                                          # time-weighted % return, R, drawdown, avg per day, milestones
   python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds
+  python -m goldbot.ops.run perf-report [--state DIR] [--data-root DIR] [--from D] [--to D] [--out DIR] [--json]
+                                                         # performance report (markdown + JSON) for the analysts; read only
 """
 from __future__ import annotations
 
@@ -718,6 +720,9 @@ if __name__ == "__main__":
     elif cmd == "monthly-report":
         from goldbot.ops.monthly_report import main as monthly_main
         sys.exit(monthly_main(sys.argv[2:]))
+    elif cmd == "perf-report":
+        from goldbot.ops.perf_report import main as perf_main
+        sys.exit(perf_main(sys.argv[2:]))
     elif cmd == "sizing-feasibility":
         from goldbot.research.min_lot import main as feasibility_main
         sys.exit(feasibility_main(sys.argv[2:]))
