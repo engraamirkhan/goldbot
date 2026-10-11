@@ -983,11 +983,27 @@ def heartbeat_path(state_dir: str | Path, service: str) -> Path:
     return Path(state_dir) / f"heartbeat_{service}.json"      # not engine_*: the supervisor globs those
 
 
+_skew_build_failures = 0           # schema_skew summary builds that raised in this process (SRE review)
+
+
+def _note_skew_build_failure(service: str) -> None:
+    """Called inside the except block: the traceback once per process, then only a count at debug level, so a
+    persistent bug does not fill the log every minute (health already WARNs on the error block)."""
+    global _skew_build_failures
+    _skew_build_failures += 1
+    if _skew_build_failures == 1:
+        log.exception("heartbeat %s: schema_skew summary failed (published as an error block; later failures are "
+                      "counted at debug level)", service)
+    else:
+        log.debug("heartbeat %s: schema_skew summary failures %d", service, _skew_build_failures)
+
+
 class Heartbeat:
     """state/heartbeat_<service>.json, written at most every `every_s` (call `beat()` from a loop of any period).
     A write error is logged, never raised: a full disk must not stop the supervisor's loop. It carries this process's
-    bounded `schema_skew` block (ADR 0010), which health checks for the supervisor and the scheduler
-    (`schema_skew:<service>`); building the block never costs the beat: on an error the beat goes out without it."""
+    bounded `schema_skew` block (ADR 0010), which health checks for every service (`schema_skew:svc:<service>`);
+    building the block never costs the beat: on an error the beat carries {"error": <type>} instead, which health
+    WARNs as unreadable."""
 
     def __init__(self, state_dir: str | Path, service: str, every_s: float = HEARTBEAT_EVERY_S,
                  clock: Callable[[], float] = time.time):
@@ -1002,8 +1018,9 @@ class Heartbeat:
         doc: dict[str, Any] = {"service": self.service, "ts": now}
         try:
             doc["schema_skew"] = schema_skew_summary().model_dump(mode="json")
-        except Exception:                    # noqa: BLE001 - liveness first; the skew check then skips this source
-            log.exception("heartbeat %s: schema_skew summary failed", self.service)
+        except Exception as exc:             # noqa: BLE001 - liveness first; health WARNs "block unreadable"
+            doc["schema_skew"] = {"error": type(exc).__name__}          # the type, never the message
+            _note_skew_build_failure(self.service)
         try:
             write_atomic(self.path, json.dumps(doc), durable=False)
         except OSError:
@@ -1194,8 +1211,8 @@ def check_entry_windows(ctx: HealthContext, account_id: str) -> list[Check]:
     return out
 
 
-SKEW_SERVICES = ("supervisor", "scheduler")   # schema_skew:<service> from heartbeat_<service>.json (engines: per account)
-SKEW_CLICK_SOURCE ="approvals/decisions:"   # the approval bus's strict reader (bus.decisions_for)
+SKEW_SERVICES = HEARTBEAT_SERVICES   # schema_skew:svc:<service> from heartbeat_<service>.json (engines: per account)
+SKEW_CLICK_SOURCE = "approvals/decisions:"   # the approval bus's strict reader (bus.decisions_for)
 SKEW_REFUSED_FAIL_S = 3600         # a refused record (a dropped click) FAILs this long after the refusal, then WARNs
 SKEW_REASON_SOURCES = 5            # sources named in the reason (refused first); the rest as "+N more"
 SKEW_REASON_CHARS = 400            # length of the named-sources part of the reason
@@ -1213,15 +1230,17 @@ def _skew_sources(s: SkewSummary) -> str:
     return text + (f" +{left} more (health --json)" if left > 0 else "")
 
 
-def check_schema_skew(ctx: HealthContext, label: str, source: Path | None = None) -> Check | None:
+def check_schema_skew(ctx: HealthContext, label: str, source: Path | None = None, *,
+                      name: str | None = None) -> Check | None:
     """ADR 0010: "persisted state is read tolerantly, built strictly", and state written by a newer release (expected
     only after a rollback) must reach the owner, not only the log. From a process's bounded `schema_skew` block:
-    `schema_skew:<label>` WARNs (NOTIFY_ON_WARN) while that process has read any such state, naming the sources, and
+    `schema_skew:<label>` (or `name`) WARNs (NOTIFY_ON_WARN) while that process has read any such state, naming the sources, and
     FAILs for SKEW_REFUSED_FAIL_S after a strict reader refused a record (for the approval bus: an owner's
     approve/reject click dropped, the proposal expires); after that it WARNs naming the refusal and its time, and a
     new refusal FAILs (and alerts) again. A block without `last_refused_utc` (an older release) reads as a fresh
     refusal. `source`: the file holding the block, by default the engine's engine_<label>.json (label = account);
-    the supervisor and the scheduler publish it in heartbeat_<service>.json (`Heartbeat`). The counts live in the
+    every service publishes it in heartbeat_<service>.json (`Heartbeat`; check_service_schema_skew). A block that
+    the process could not build ({"error": <type>}) WARNs as unreadable. The counts live in the
     process: they clear when it restarts and next writes the file (the engine on a tick or a bar, a heartbeat within
     HEARTBEAT_EVERY_S). None while the block is not published (no file, an older release, an unreadable file: the
     engine and heartbeat checks report those)."""
@@ -1235,7 +1254,10 @@ def check_schema_skew(ctx: HealthContext, label: str, source: Path | None = None
         return None
     if raw is None:
         return None
-    name = f"schema_skew:{label}"
+    name = name or f"schema_skew:{label}"
+    if isinstance(raw, dict) and "error" in raw and "count" not in raw:
+        return Check(name=name, status="warn", reason=f"{label}: schema_skew block unreadable: the process could not "
+                                                      f"build it ({str(raw['error'])[:80]}; see its log)")
     try:
         s = load_record(SkewSummary, raw, source=f"{stable}:schema_skew")
     except ValueError as exc:
@@ -1262,6 +1284,12 @@ def check_schema_skew(ctx: HealthContext, label: str, source: Path | None = None
     return Check(name=name, status="warn",
                  reason=f"{label}: state written by a newer release is read with its new fields ignored "
                         f"({s.count} source(s), {s.reads} read(s)), expected only after a rollback: {srcs}")
+
+
+def check_service_schema_skew(ctx: HealthContext, service: str) -> Check | None:
+    """`schema_skew:svc:<service>` from heartbeat_<service>.json; the `svc:` part keeps it apart from an account of
+    the same name (`schema_skew:<account>`) and still matches NOTIFY_ON_WARN."""
+    return check_schema_skew(ctx, service, heartbeat_path(ctx.state_dir, service), name=f"schema_skew:svc:{service}")
 
 
 def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
@@ -1455,9 +1483,9 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += g(f"bridge:{i}", lambda: check_bridge(ctx, i))
             checks += g(f"bridge_compat:{i}", lambda: check_bridge_compat(ctx, a))
             checks += g(f"server_clock:{i}", lambda: check_server_clock(ctx, a))
-        # the other processes that read state tolerantly (SRE review): supervisor files, aux.db scheduler_jobs
+        # every other process reads state tolerantly too (SRE review): telegram (the decider), supervisor, scheduler...
         for svc in SKEW_SERVICES:
-            checks += g(f"schema_skew:{svc}", lambda: check_schema_skew(ctx, svc, heartbeat_path(ctx.state_dir, svc)))
+            checks += g(f"schema_skew:svc:{svc}", lambda: check_service_schema_skew(ctx, svc))
         for svc in HEARTBEAT_SERVICES:
             checks += g(f"heartbeat:{svc}", lambda: check_heartbeat(ctx, svc))
         checks += g("scheduler", lambda: check_scheduler(ctx))

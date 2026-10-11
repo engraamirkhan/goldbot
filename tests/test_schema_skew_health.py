@@ -243,13 +243,36 @@ def test_the_scheduler_heartbeat_publishes_a_newer_job_state_field_it_ignored(tm
                                 "count": 1, "refused": False}
 
 
-def test_a_heartbeat_is_written_even_if_the_skew_summary_raises(tmp_path, monkeypatch):
+def test_a_failed_summary_build_still_beats_and_publishes_an_error_block(tmp_path, monkeypatch):
     def boom() -> None:
         raise RuntimeError("bug")
     monkeypatch.setattr(health, "schema_skew_summary", boom)
-    assert health.Heartbeat(tmp_path, "supervisor").beat()
-    saved = json.loads(health.heartbeat_path(tmp_path, "supervisor").read_text())
-    assert "ts" in saved and "schema_skew" not in saved                   # liveness first; the check then skips
+    assert health.Heartbeat(tmp_path, "telegram").beat()
+    saved = json.loads(health.heartbeat_path(tmp_path, "telegram").read_text())
+    assert "ts" in saved                                                  # liveness first
+    assert saved["schema_skew"] == {"error": "RuntimeError"}              # the type, never the message
+    c = health.check_service_schema_skew(_ctx(tmp_path), "telegram")
+    assert c is not None and (c.name, c.status) == ("schema_skew:svc:telegram", "warn")
+    assert "unreadable" in c.reason and "RuntimeError" in c.reason
+    assert c.name.startswith(health.NOTIFY_ON_WARN)                       # the owner is told
+
+
+def test_a_failed_summary_build_logs_its_traceback_once_per_process(tmp_path, monkeypatch, caplog):
+    def boom() -> None:
+        raise RuntimeError("bug")
+    monkeypatch.setattr(health, "schema_skew_summary", boom)
+    monkeypatch.setattr(health, "_skew_build_failures", 0)
+    clock = [1_000.0]
+    hb = health.Heartbeat(tmp_path, "news", every_s=1, clock=lambda: clock[0])
+    caplog.set_level("DEBUG", logger=health.log.name)
+    for _ in range(3):
+        assert hb.beat()
+        clock[0] += 2
+    with_tb = [r for r in caplog.records if r.exc_info is not None]
+    assert len(with_tb) == 1 and with_tb[0].levelname == "ERROR"
+    counts = [r.getMessage() for r in caplog.records if r.levelname == "DEBUG" and "schema_skew" in r.getMessage()]
+    assert [m.split()[-1] for m in counts] == ["2", "3"]                  # only a count after the first
+    assert health._skew_build_failures == 3
 
 
 def _publish_hb(tmp_path: Path, service: str, skew: object | None) -> None:
@@ -259,49 +282,67 @@ def _publish_hb(tmp_path: Path, service: str, skew: object | None) -> None:
     health.heartbeat_path(tmp_path, service).write_text(json.dumps(doc))
 
 
-@pytest.mark.parametrize("service", ["supervisor", "scheduler"])
+def test_every_heartbeat_service_is_checked_for_skew():
+    assert health.SKEW_SERVICES == health.HEARTBEAT_SERVICES
+    assert "telegram" in health.SKEW_SERVICES                             # the decider: the blind spot that matters
+
+
+@pytest.mark.parametrize("service", health.HEARTBEAT_SERVICES)
 def test_health_checks_the_skew_block_of_each_service(tmp_path, service):
-    src = health.heartbeat_path(tmp_path, service)
-    name = f"schema_skew:{service}"
+    name = f"schema_skew:svc:{service}"
     _publish_hb(tmp_path, service, _summary())
-    c = health.check_schema_skew(_ctx(tmp_path), service, src)
+    c = health.check_service_schema_skew(_ctx(tmp_path), service)
     assert c is not None and (c.name, c.status) == (name, "ok")
     _publish_hb(tmp_path, service, _summary(("aux.db:scheduler_jobs", "JobState", ["paused_until"], 3, False)))
-    c = health.check_schema_skew(_ctx(tmp_path), service, src)
+    c = health.check_service_schema_skew(_ctx(tmp_path), service)
     assert c is not None and c.status == "warn" and "aux.db:scheduler_jobs" in c.reason and "rollback" in c.reason
     assert c.name == name and c.name.startswith(health.NOTIFY_ON_WARN)
     _publish_hb(tmp_path, service, _summary(("some_strict_file", "Strict", ["x"], 1, True),
                                             refused_at=NOW - pd.Timedelta(minutes=59)))
-    c = health.check_schema_skew(_ctx(tmp_path), service, src)
+    c = health.check_service_schema_skew(_ctx(tmp_path), service)
     assert c is not None and c.status == "fail" and "some_strict_file" in c.reason
     assert "click" not in c.reason                                         # not an approval: no click was dropped
+    _publish_hb(tmp_path, service, _summary(("approvals/decisions:p1", "BusDecision", ["max_lots"], 1, True),
+                                            refused_at=NOW - pd.Timedelta(minutes=59)))
+    c = health.check_service_schema_skew(_ctx(tmp_path), service)
+    assert c is not None and c.status == "fail" and "click" in c.reason    # wherever the bus refused it
     _publish_hb(tmp_path, service, _summary(("some_strict_file", "Strict", ["x"], 1, True),
                                             refused_at=NOW - pd.Timedelta(minutes=61)))
-    c = health.check_schema_skew(_ctx(tmp_path), service, src)
+    c = health.check_service_schema_skew(_ctx(tmp_path), service)
     assert c is not None and c.status == "warn" and "2026-01-15 14:59" in c.reason
     _publish_hb(tmp_path, service, {"count": "lots"})
-    c = health.check_schema_skew(_ctx(tmp_path), service, src)
+    c = health.check_service_schema_skew(_ctx(tmp_path), service)
     assert c is not None and c.status == "warn" and "unreadable" in c.reason
 
 
-def test_an_older_heartbeat_without_the_block_is_skipped(tmp_path):
-    for service in ("supervisor", "scheduler"):
-        src = health.heartbeat_path(tmp_path, service)
-        assert health.check_schema_skew(_ctx(tmp_path), service, src) is None      # no heartbeat yet
-        _publish_hb(tmp_path, service, None)
-        assert health.check_schema_skew(_ctx(tmp_path), service, src) is None      # an older release's heartbeat
+def test_a_service_check_never_clashes_with_an_account_of_the_same_name(tmp_path):
+    ctx = health.HealthContext(state_dir=tmp_path, now=NOW, get_secret=lambda k: None,
+                               accounts=[health.AccountRef(account_id="telegram")])
+    (tmp_path / "engine_telegram.json").write_text(json.dumps({"account": "telegram", "schema_skew": _summary()}))
+    _publish_hb(tmp_path, "telegram", _summary(("x", "M", ["f"], 1, False)))
+    got = {c.name: c.status for c in health.run_checks(ctx).checks}
+    assert (got["schema_skew:telegram"], got["schema_skew:svc:telegram"]) == ("ok", "warn")
+
+
+@pytest.mark.parametrize("service", health.HEARTBEAT_SERVICES)
+def test_an_older_heartbeat_without_the_block_is_skipped(tmp_path, service):
+    assert health.check_service_schema_skew(_ctx(tmp_path), service) is None      # no heartbeat yet
+    _publish_hb(tmp_path, service, None)
+    assert health.check_service_schema_skew(_ctx(tmp_path), service) is None      # an older release's heartbeat
     names = {c.name for c in health.run_checks(_ctx(tmp_path)).checks}
-    assert not names & {"schema_skew:supervisor", "schema_skew:scheduler"}
+    assert f"schema_skew:svc:{service}" not in names
 
 
 def test_run_checks_includes_the_service_skew_checks_and_alerts_on_a_warn(tmp_path):
-    _publish_hb(tmp_path, "supervisor", _summary())
-    _publish_hb(tmp_path, "scheduler", _summary(("aux.db:scheduler_jobs", "JobState", ["paused_until"], 1, False)))
+    for svc in health.HEARTBEAT_SERVICES:
+        _publish_hb(tmp_path, svc, _summary())
+    _publish_hb(tmp_path, "telegram", _summary(("approvals/x", "Proposal", ["new_field"], 1, False)))
     report = health.run_checks(_ctx(tmp_path))
     got = {c.name: c.status for c in report.checks}
-    assert (got["schema_skew:supervisor"], got["schema_skew:scheduler"]) == ("ok", "warn")
+    assert {s: got[f"schema_skew:svc:{s}"] for s in health.HEARTBEAT_SERVICES} == {
+        s: ("warn" if s == "telegram" else "ok") for s in health.HEARTBEAT_SERVICES}
     text = health.HealthWatch(tmp_path).poll(report)
-    assert text is not None and "WARN schema_skew:scheduler" in text
+    assert text is not None and "WARN schema_skew:svc:telegram" in text
 
 
 def test_a_service_skew_check_that_raises_is_a_fail_of_its_own(tmp_path, monkeypatch):
@@ -309,4 +350,4 @@ def test_a_service_skew_check_that_raises_is_a_fail_of_its_own(tmp_path, monkeyp
         raise TypeError("corrupt")
     monkeypatch.setattr(health, "check_schema_skew", boom)
     got = {c.name: c.status for c in health.run_checks(_ctx(tmp_path)).checks}
-    assert got["schema_skew:supervisor"] == "fail" and got["schema_skew:scheduler"] == "fail"
+    assert all(got[f"schema_skew:svc:{s}"] == "fail" for s in health.HEARTBEAT_SERVICES)
