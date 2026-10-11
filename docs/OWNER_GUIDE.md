@@ -71,6 +71,24 @@ Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decisio
 | Paid calendar feed (C) | Not for Q1 |
 | Other instruments (D) | Defer until the slow-TSMOM verdict |
 | Per-agent throttle thresholds (BACKLOG 21, built, off) | Turn on at 3 full losses / 4 bars cooldown / 3 entries a day. The caps are **per decision, per account** (each account counts its own; checked at every entry). After the cooldown the count stays: one more full loss blocks again, until a real shadow win (target or >= 0.25R) of the live model |
+| Open-risk heat cap (BACKLOG 19, built, off) | Turn on at 2% of equity and 2 positions per side. Inert at £1,000 (the combined-notional cap already allows only one 0.01 lot); it matters once two positions fit |
+| Open risk in the daily projection (BACKLOG 35, built, off) | **Yes**, with the £50 limit: two open trades can then never carry the day past it |
+
+**How to turn these on.** On the server, add to `config/settings.local.yaml` (not in the repo) and restart the
+engine:
+
+```yaml
+risk:
+  heat: { enabled: true, max_open_risk: 0.02, max_same_direction: 2 }
+  project_open_risk: true
+```
+
+What changes: a new entry is refused when what your open trades can still lose down to their stops, plus the new
+trade's stop risk, is above 2% of equity (`heat_cap`), or when two trades on the same side are already open
+(`same_direction_cap`). With `project_open_risk`, the £50 daily check also counts what the open trades can still
+lose. A trade without a stop (for example one you opened by hand) blocks new entries while either is on
+(`open_risk_unknown`): put a stop on it. Closing trades is never blocked. `engine_<account>.json` shows `open_risk`
+per position whether or not these are on.
 
 ## 4a. Share your own trading record (private)
 The research team turns how you trade by hand into hypotheses it can test. Your MT5 report holds your account

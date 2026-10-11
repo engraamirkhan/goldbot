@@ -50,7 +50,7 @@ from goldbot.ops.account_view import LADDER_TIMEFRAMES
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
-from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, sizing
+from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, open_risk, sizing
 from goldbot.risk.gate import REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
@@ -366,6 +366,10 @@ class Engine:
         self._contract: float | None = None
         self._contract_tried = False
         self._min_lot_risk: float | None = None      # minimum lot's stop risk, account currency, at the latest stop
+        # BACKLOG 19/35: each open position's remaining stop risk as last computed (published), and the conversion per
+        # side read at most once a minute for it (side -> (minute, account currency per USD or None))
+        self._open_risk_rows: list[dict[str, Any]] = []
+        self._open_fx: dict[int, tuple[pd.Timestamp, float | None]] = {}
         self._unconfirmed: dict[int, int] = {}
         # position -> (consecutive market-closed refusals, next attempt): closes back off only when the market is closed
         self._close_backoff: dict[int, tuple[int, pd.Timestamp]] = {}
@@ -787,6 +791,43 @@ class Engine:
             return
         self._min_lot_risk = float(vmin) * stop_distance * float(contract) * fx
 
+    def _note_open_risk(self, positions: list[Position], tick: Tick) -> None:
+        """BACKLOG 19/35: the account's open positions by side and what each can still lose down to its stop, account
+        currency (`open_risk.remaining_stop_risk`: current close price to the SL x lots x contract x fx). Every position
+        on the account counts, whichever agent or the owner opened it. One without SL, on another symbol, or with no
+        usable conversion is unknown and makes `open_risk` None, which RiskGate refuses while the heat cap or the
+        projection is on (fail closed). Read on every account refresh; exits never read it."""
+        st = self.state
+        st.open_long = sum(1 for p in positions if p.side > 0)
+        st.open_short = sum(1 for p in positions if p.side < 0)
+        rows: list[dict[str, Any]] = []
+        total: float | None = 0.0
+        for p in positions:
+            risk: float | None = None
+            if p.symbol == self.cfg.symbol:
+                px = tick.bid if p.side > 0 else tick.ask
+                fx = None
+                if p.sl is not None and math.isfinite(p.sl) and p.side * (px - p.sl) > 0:
+                    fx = self._open_risk_fx(p.side, px, p.side * (px - p.sl), tick.ts_utc)
+                risk = open_risk.remaining_stop_risk(side=p.side, lots=p.lots, sl=p.sl, bid=tick.bid, ask=tick.ask,
+                                                     contract=self._contract_size(), fx=fx)
+            rows.append({"position_id": p.position_id, "side": p.side, "lots": p.lots, "sl": p.sl,
+                         "risk": round(risk, 2) if risk is not None else None})
+            total = None if total is None or risk is None else total + risk
+        st.open_risk, self._open_risk_rows = total, rows
+
+    def _open_risk_fx(self, side: int, price: float, distance: float, now: pd.Timestamp) -> float | None:
+        """Account currency per USD for open-risk figures: the broker's conversion (`_usd_to_account`, checked by
+        `sizing.account_fx`, so a USD account is 1 and an unknown currency is None), read at most once a minute per side
+        so the per-tick refresh does not call the terminal every tick. A failed read is retried the next minute."""
+        minute = now.floor("min")
+        hit = self._open_fx.get(side)
+        if hit is not None and hit[0] == minute:
+            return hit[1]
+        fx = sizing.account_fx(self._account_currency(), self._usd_to_account(side, price, distance))
+        self._open_fx[side] = (minute, fx)
+        return fx
+
     def _published_limits(self) -> dict[str, Any]:
         """`limits` in engine_<account>.json, the RiskGate limits the dashboard's account view reads (loss budget,
         ladder): risk per trade and its maximum, multiplier bounds, daily and weekly caps; the account's absolute daily
@@ -799,6 +840,8 @@ class Engine:
                 "multiplier_bounds": list(lim.multiplier_bounds), "daily_cap": lim.daily_cap,
                 "weekly_cap": lim.weekly_cap, "daily_loss_limit_abs": lim.daily_loss_limit_abs,
                 "min_lot_risk_cap": lim.min_lot_risk_cap,
+                # BACKLOG 19/35: the open-risk heat cap and whether the daily projection counts open risk (both off by default)
+                "heat": lim.heat.model_dump(), "project_open_risk": lim.project_open_risk,
                 "min_lot_risk_account": round(mlr, 2) if mlr is not None and math.isfinite(mlr) else None}
 
     def _decide(self, tf: str, fr: _Frame, agents: list[Specialist], fam_w: dict[str, float], close_ts: pd.Timestamp,
@@ -1428,6 +1471,9 @@ class Engine:
         if positions is not None:
             st.open_positions = len(positions)
             st.open_lots = round(sum(p.lots for p in positions), 6)   # every position on the account is exposure
+            self._note_open_risk(positions, tick)
+        else:                                   # unknown book: unknown open risk (entries are blocked anyway)
+            st.open_risk, self._open_risk_rows = None, []
         st.open_notional = st.open_lots * self._contract_size() * (tick.bid + tick.ask) / 2   # USD, terminal contract
         st.spread_points = (tick.ask - tick.bid) / 0.01
         now = self._now(tick)
@@ -2464,6 +2510,9 @@ class Engine:
             "equity": st.equity, "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "open_lots": st.open_lots, "open_notional": st.open_notional,
+            # BACKLOG 19/35: remaining stop risk (account currency; null = unknown), per position, and positions by side
+            "open_risk": round(st.open_risk, 2) if st.open_risk is not None else None,
+            "open_risk_positions": self._open_risk_rows, "open_long": st.open_long, "open_short": st.open_short,
             "combined_size_down": st.combined_size_down, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
             "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
             "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,

@@ -765,6 +765,22 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Not done: the playbook's "until the next session" variant, a cross-account count, a provisional loss for a record
   lost before a restart (only its id persists; health already fails on `closed_records_lost`), and the dashboard /
   approval card (ui-ux follow-up).
+- Open-risk heat cap and open-risk daily projection (2026-10-11, BACKLOG 19 playbook G-4 and BACKLOG 35 review
+  MEDIUM-4, row R36; **both off by default**; needs trading-safety review). The engine computes, on every account
+  refresh, each open position's remaining stop risk (max(0, loss from the current close price to its SL) x lots x
+  contract x the broker's conversion, account currency; `goldbot/risk/open_risk.py`) and the positions per side, and
+  publishes `open_risk` (null = unknown), `open_risk_positions`, `open_long`, `open_short`, `limits.heat` and
+  `limits.project_open_risk` in engine_<account>.json. `risk.heat: {enabled: false, max_open_risk: 0.02,
+  max_same_direction: 2}`: RiskGate refuses `heat_cap` when open risk + the new trade's stop risk > 2% of equity and
+  `same_direction_cap` at the third same-side position on the account (any agent, or the owner). `risk.project_open_risk:
+  false`: when true and the account has `daily_loss_limit_abs`, the daily projection adds the open risk. A position
+  without SL, on another symbol, or without a usable conversion makes the open risk unknown: `open_risk_unknown` while
+  either rule is on (fail closed). Exits never consult any of it. Owner: settings.local.yaml `risk: { heat: { enabled:
+  true, ... }, project_open_risk: true }`, restart the engine. Not done: the cross-account sum and count (the
+  supervisor does not publish open risk or side counts yet), health lines and the dashboard budget (ui-ux). Found while
+  building it, pre-existing and unchanged: in auto mode, entries decided at the same bar close are all checked against
+  the account state read before the first one fills, so `max_positions`, the combined cap and these new caps can each
+  be passed once within one bar close (propose mode re-checks at approval with a fresh read).
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on
