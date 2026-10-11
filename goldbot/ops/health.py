@@ -765,7 +765,7 @@ def check_deploy(ctx: HealthContext) -> Check:
         return Check(name="deploy", status="warn", reason=f"deploys.jsonl unreadable: {exc}")
     msg = f"{last.get('result')} {str(last.get('to', ''))[:8]} on {last.get('role')} at {last.get('ts')}: {last.get('detail', '')}"
     status = {"failed": "fail", "rolled_back": "warn", "refused": "warn", "rolled_back_manual": "warn",
-              "rollback_reverted": "warn"}.get(str(last.get("result")), "ok")
+              "rollback_reverted": "warn", "deployed_degraded": "warn"}.get(str(last.get("result")), "ok")
     return Check(name="deploy", status=cast(Status, status), reason=msg)
 
 
@@ -1177,6 +1177,17 @@ def exit_code(report: HealthReport, baseline: HealthReport | None = None) -> int
     return 1 if fails else 0
 
 
+_RANK = {"ok": 0, "warn": 1, "fail": 2}
+
+
+def worsened(report: HealthReport, baseline: HealthReport) -> list[str]:
+    """Checks whose status is worse than in the baseline (ok < warn < fail; a check new since the baseline counts
+    from ok; one that disappeared is not worse), sorted. goldbot-deploy embeds the same rule (WORSE_PY) so it also
+    works against a release that predates this function."""
+    before = {c.name: _RANK[c.status] for c in baseline.checks}
+    return sorted(c.name for c in report.checks if _RANK[c.status] > before.get(c.name, 0))
+
+
 # --------------------------------------------------------------------------------------------- alerts
 WATCH_FILE = "health_last.json"
 MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
@@ -1279,4 +1290,6 @@ def main(argv: list[str], ctx: HealthContext | None = None) -> int:
     baseline = _load_report(args.baseline) if args.baseline else None
     if args.baseline and baseline is not None and baseline.failing():
         print(f"baseline already failing (ignored for the exit code): {', '.join(sorted(baseline.failing()))}", file=sys.stderr)
+    if baseline is not None and (worse := worsened(report, baseline)):
+        print(f"worse than the baseline: {', '.join(worse)}", file=sys.stderr)
     return exit_code(report, baseline)

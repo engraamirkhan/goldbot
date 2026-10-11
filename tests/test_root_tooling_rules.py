@@ -47,19 +47,60 @@ def test_the_patterns_catch_what_they_are_for():
 # as that user. Allowed prefixes: `sudo -u`, `as_owner` (goldbot-deploy's sudo -u wrapper). A line that must run as
 # root carries `# root-ok: <reason>` (for example creating /opt/goldbot before the service user owns anything).
 SERVICE_PATH = r"(?:\$\{?ROOT\}?|/opt/goldbot|/home/mt5|/var/lib/goldbot(?![-\w]))"
-# the command word in command position (line start, after ; & | ( { then do or a plain sudo), or any redirection
-ROOT_FILE_OP = re.compile(r"(?:(?:^|[;&|({]|\bthen\b|\bdo\b|\bsudo\b)\s*(?:chmod|chown|cp|mv|rm|install|tee|cat)\b|>>?)"
-                          r"[^\n|;&]*?" + SERVICE_PATH)
+# the command word in command position (segment start, after ( { then do or a plain sudo), or any redirection
+ROOT_FILE_OP = re.compile(r"(?:(?:^|[({]|\bthen\b|\bdo\b|\bsudo\b)\s*(?:chmod|chown|cp|mv|rm|install|tee|cat)\b|>>?)"
+                          r".*?" + SERVICE_PATH)
 ALLOWED_PREFIX = re.compile(r"^\s*(?:sudo\s+-u\b|as_owner\b)")
-ROOT_OK = re.compile(r"#\s*root-ok:\s*\S")
+ROOT_OK = re.compile(r"^#\s*root-ok:\s*\S")
+
+
+def _split(line: str) -> tuple[list[str], str]:
+    """(command segments split on && || ; | outside quotes, trailing comment outside quotes or "")."""
+    segs, cur, quote, i = [], "", "", 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < len(line):
+                cur += line[i:i + 2]
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            cur += ch
+        elif ch in "'\"":
+            quote = ch
+            cur += ch
+        elif ch == "\\" and i + 1 < len(line):
+            cur += line[i:i + 2]
+            i += 2
+            continue
+        elif ch == "#" and (not cur or cur[-1].isspace()) and not cur.rstrip().endswith("$"):
+            segs.append(cur)
+            return [x for x in segs if x.strip()], line[i:]
+        elif line.startswith(("&&", "||"), i):
+            segs.append(cur)
+            cur = ""
+            i += 2
+            continue
+        elif ch in ";|":
+            segs.append(cur)
+            cur = ""
+        else:
+            cur += ch
+        i += 1
+    segs.append(cur)
+    return [x for x in segs if x.strip()], ""
 
 
 def _shell_hits(text: str, name: str) -> list[str]:
     out = []
     for n, line in enumerate(text.splitlines(), 1):
-        if line.lstrip().startswith("#") or ALLOWED_PREFIX.search(line) or ROOT_OK.search(line):
+        if line.lstrip().startswith("#"):
             continue
-        if ROOT_FILE_OP.search(line):
+        segs, comment = _split(line)
+        if ROOT_OK.search(comment):
+            continue
+        if any(ROOT_FILE_OP.search(seg) and not ALLOWED_PREFIX.search(seg) for seg in segs):
             out.append(f"{name}:{n}: {line.strip()}")
     return out
 
@@ -88,3 +129,20 @@ install -d -m 700 -o root -g root /var/lib/goldbot-deploy
 """
     assert _shell_hits(ok, "ok") == []
     assert _shell_hits("  wine python -m pip install --no-deps -e 'Z:$ROOT'", "pip") == []
+
+
+def test_the_shell_rule_judges_each_command_segment():
+    # an allowed prefix exempts only its own segment, never what follows && || ; or a pipe
+    assert len(_shell_hits("sudo -u goldbot true && chmod 700 $ROOT/state", "x")) == 1
+    assert len(_shell_hits("as_owner test -f x || rm -f /opt/goldbot/state/y", "x")) == 1
+    assert len(_shell_hits("sudo -u goldbot true; cat /var/lib/goldbot/.ssh/id_ed25519.pub", "x")) == 1
+    assert len(_shell_hits("sudo -u goldbot cat x | tee $ROOT/state/y", "x")) == 1
+    # a separator inside quotes belongs to the quoted command (here: run as the service user)
+    assert _shell_hits("sudo -u mt5 sh -c 'umask 077; chmod 700 /home/mt5/.ssh && echo ok >> /home/mt5/x' _", "x") == []
+
+
+def test_root_ok_counts_only_as_a_trailing_comment_outside_quotes():
+    assert _shell_hits('install -d -m 755 -o mt5 -g mt5 "$ROOT"   # root-ok: creates /opt/goldbot', "x") == []
+    assert len(_shell_hits('echo "# root-ok: x"; chmod 700 $ROOT/state', "x")) == 1
+    assert len(_shell_hits("chmod 700 $ROOT/state '# root-ok: inside quotes'", "x")) == 1
+    assert len(_shell_hits("chmod 700 $ROOT/state  # root-ok:", "x")) == 1          # a reason is required

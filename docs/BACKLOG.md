@@ -58,7 +58,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 38 | Owner-run manual rollback in `goldbot-deploy` | Operational resilience · RUN | S–M | done (SRE, 2026-10-11; `goldbot-deploy --rollback <sha>`; security review pending) |
 | 39 | Validate settings (incl. settings.local.yaml) with the target code before any restart | Operational resilience · RUN | S | done (SRE, 2026-10-11; `check_settings`, `--drop-unknown-local-keys`; security review pending) |
 | 40 | `goldbot-deploy`: scheduler-job guard; restart only enabled units | Operational resilience · RUN | S | done (SRE, 2026-10-11; `guard_scheduler`, `--interrupt-jobs`; security review pending) |
-| 41 | `goldbot-deploy`: health checks against a baseline after the restart | Operational resilience · RUN | S | proposed (SRE, G5) |
+| 41 | `goldbot-deploy`: health checks against a baseline after the restart | Operational resilience · RUN | S | done (SRE, 2026-10-11; `health_out`/`health_worse`, result `deployed_degraded`, no automatic rollback) |
 | 42 | Bridge/brain version and server_tz agreement checked at run time | Operational resilience, execution · RUN | S | proposed (SRE, G6; trading-safety review) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
@@ -544,7 +544,10 @@ hypotheses that go through the trial registry in a future quarter's budget.
     - Refuse while a scheduler job runs, using `python -m goldbot.db scheduler-status`, with the fallback to
       `scheduler.json`. Stop the scheduler first and check again, as `vps_update.ps1` steps 3 and 4 do.
     - Restart only units that are `enabled`.
-  - **41.**
+  - **41.** Done 2026-10-11 with one deliberate change, per the program director: a worse check is reported as
+    `deployed_degraded` (names in deploys.jsonl and on Telegram), never rolled back automatically, because exits and
+    the owner's controls decide. "Worse" is ok < warn < fail per check (`goldbot/ops/health.py` `worsened`; the
+    deploy script embeds the same rule for older releases). Original text:
     - Save `goldbot run health --out` before the switch and run `--baseline` after the 90 s wait.
     - Roll back on a new FAIL, except checks that need the market open while it is closed.
     - Log the failing check names.

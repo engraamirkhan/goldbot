@@ -109,6 +109,8 @@ elif cmd in ("stop", "start", "restart"):
                 open(os.path.join(T, "filter_killed"), "w").close()
         os.kill(hp, signal.SIGHUP)
     st["units"].setdefault(norm(args[1]), {"enabled": False})["active"] = cmd != "stop"
+    if cmd != "stop":
+        open(os.path.join(T, "restarted"), "w").close()
     if cmd != "stop" and norm(args[1]) == "goldbot-supervisor.service":
         open(os.path.join(T, "root", "state", "supervisor.json"), "w").write("{}")   # its heartbeat
     if cmd != "stop" and head() == st.get("migrate_at"):
@@ -163,6 +165,18 @@ def settings_dict(path):
 CONFIG_NEW = CONFIG_OLD.replace("    max_risk: float = 0.01\n",
                                 "    max_risk: float = 0.01\n    min_lot_risk_cap: float | None = None\n")
 
+FAKE_HEALTH = """
+import os, shutil, sys
+T = os.environ["T"]
+args = sys.argv[1:]
+assert args[0] == "health", args
+out = args[args.index("--out") + 1]
+src = os.path.join(T, "health_after.json" if os.path.exists(os.path.join(T, "restarted")) else "health_before.json")
+if not os.path.exists(src):
+    sys.exit(2)
+shutil.copy(src, out)
+"""
+
 UNITS = {"goldbot-supervisor.service": True, "goldbot-engine@icm-demo.service": True, "goldbot-api.service": True,
          "goldbot-scheduler.service": True, "goldbot-telegram.service": True,
          "goldbot-engine@vantage-demo.service": False}          # a loaded but disabled stray instance
@@ -213,7 +227,8 @@ class Box:
         origin = tmp / "origin"
         origin.mkdir(parents=True)
         _git(origin, "init", "-q", "-b", "main")
-        base = {"goldbot/__init__.py": "", "config/settings.yaml": "risk:\n  max_risk: 0.01\n",
+        base = {"goldbot/__init__.py": "", "goldbot/ops/__init__.py": "", "goldbot/ops/run.py": FAKE_HEALTH,
+                "config/settings.yaml": "risk:\n  max_risk: 0.01\n",
                 ".gitignore": "config/settings.local.yaml\nstate/\n"}
         self.c1 = _commit(origin, {**base, "goldbot/config.py": CONFIG_OLD,
                                    "goldbot/db/migrations.py": "MIGRATIONS = (1, 2, 3, 4)\n"}, "old")
@@ -455,8 +470,23 @@ def test_the_rollback_floor_blocks_older_targets(tmp_path):
     p = box.run("--rollback", box.c1)
     assert p.returncode == 1 and "rollback floor" in box.records()[-1]["detail"]
     (tmp_path / "floor").write_text(box.c1 + "\n")                     # the floor itself is allowed
+    (tmp_path / "compare.json").write_text(json.dumps({"status": "identical"}))
     p = box.run("--rollback", box.c1)
     assert p.returncode == 0, p.stdout + p.stderr
+
+
+def test_a_floor_github_cannot_confirm_refuses_the_rollback(tmp_path):
+    """Rate limit or offline: with a floor set, the service user's git alone never decides."""
+    box = Box(tmp_path, running="c2", aux=5)
+    (tmp_path / "floor").write_text(box.c1 + "\n")                     # git says: allowed
+    p = box.run("--rollback", box.c1)                                    # no compare.json: curl fails
+    assert p.returncode == 1
+    assert "GitHub can't confirm the floor" in box.records()[-1]["detail"]
+    assert "remove /etc/goldbot/rollback-floor deliberately" in box.records()[-1]["detail"] or \
+        "deliberately to proceed" in box.records()[-1]["detail"]
+    assert box.head() == box.c2 and box.actions() == []
+    (tmp_path / "compare.json").write_text("{not json")                 # an unreadable answer is not a yes
+    assert box.run("--rollback", box.c1).returncode == 1
 
 
 def test_the_heartbeat_is_statted_as_the_service_user(tmp_path):
@@ -493,3 +523,48 @@ def test_github_overrides_the_service_users_git_on_the_floor(tmp_path):
     (tmp_path / "compare.json").write_text(json.dumps({"status": "identical"}))
     p = box.run("--rollback", box.c1)
     assert p.returncode == 0, p.stdout + p.stderr
+
+
+def _health(path: Path, **statuses: str) -> None:
+    path.write_text(json.dumps({"ts": "2026-10-20T09:30:00Z", "status": "ok",
+                                "checks": [{"name": n.replace("__", ":"), "status": st, "reason": "x"}
+                                           for n, st in statuses.items()]}))
+
+
+def test_a_deploy_that_worsens_health_is_reported_degraded_not_rolled_back(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _health(tmp_path / "health_before.json", supervisor="ok", daily_cap__icm="warn", news="fail", tick="ok")
+    _health(tmp_path / "health_after.json", supervisor="warn", daily_cap__icm="warn", news="fail", tick="ok",
+            engine__icm="fail")
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "deployed_degraded" and box.head() == box.c2           # no automatic rollback
+    assert "deployed (degraded: engine:icm,supervisor)" in rec["detail"]
+    log = (tmp_path / "sudo.log").read_text()
+    assert "goldbot bash -c" in log and "health --out" in log                       # run as the service user
+
+
+def test_an_unchanged_or_better_health_is_a_plain_deploy(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _health(tmp_path / "health_before.json", supervisor="warn", news="fail")
+    _health(tmp_path / "health_after.json", supervisor="ok", news="fail")
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert box.records()[-1]["result"] == "deployed"
+
+
+def test_the_embedded_comparison_agrees_with_the_health_module(tmp_path):
+    import re as _re
+
+    from goldbot.ops import health
+    code = _re.search(r"WORSE_PY=\$\(cat <<'PY'\n(.*?)\nPY\n\)", SCRIPT.read_text(), _re.S)
+    assert code, "WORSE_PY not found in goldbot-deploy.sh"
+    before, after = tmp_path / "b.json", tmp_path / "a.json"
+    _health(before, a="ok", b="warn", c="fail", gone="fail")
+    _health(after, a="fail", b="ok", c="fail", new="warn", other="ok")
+    out = subprocess.run([sys.executable, "-I", "-c", code.group(1), str(before), str(after)], capture_output=True,
+                         text=True).stdout.strip()
+    expect = health.worsened(health.HealthReport.model_validate_json(after.read_text()),
+                             health.HealthReport.model_validate_json(before.read_text()))
+    assert out == ",".join(expect) == "a,new"
