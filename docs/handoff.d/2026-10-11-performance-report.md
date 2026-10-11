@@ -9,8 +9,7 @@
     with the shadow outcome of the rejected, expired and approved signals; realised against modelled costs;
     opportunity-day capture against the £50 north star; drawdown against the limits; the journal.
   - Every row carries its count. Below 30 trades a row says "insufficient sample" and gives no interval or reading.
-  - Missing fields show as "not recorded". `RECORD_GAP_FIELDS` (family, timeframe, session, day_type) is read from
-    a newer closed-trade record when present. The record-gap lane should use those names or update that map.
+  - Missing fields show as "not recorded". The record's finance-audit fields are used when present.
   - No identifiers reach the output: no position or order ids, broker or server names, proposal ids, or who
     decided.
   - Tests: `tests/test_perf_report.py` (22). Row V7.

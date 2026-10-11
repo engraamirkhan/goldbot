@@ -145,12 +145,10 @@ def test_missing_fields_are_reported_as_not_recorded_never_guessed(tmp_path):
     assert "gross on 1 of 2" in md and "not recorded" in md
 
 
-def test_record_gap_fields_are_used_when_a_newer_record_carries_them(tmp_path):
+def test_the_records_finance_audit_fields_are_used_when_present(tmp_path):
     _engine(tmp_path)
     t = _ct(1, "2026-10-05 10:00", 16.0, 2.0, agent=None, entry_utc="2026-10-05 09:00")
-    raw = json.loads(t.model_dump_json())
-    raw.update(family="trend", timeframe="4h", model_version="v7", pnl_basis="net", money_source="broker")   # gap lane
-    (tmp_path / f"closed_trades_{ACC}.jsonl").write_text(json.dumps(raw) + "\n")
+    _rec(tmp_path, t, family="trend", timeframe="4h", model_version="v7", pnl_basis="net", money_source="broker")
     [a] = build_performance_report(tmp_path, start=START, end=END, now=NOW).accounts
     assert set(_groups(a, "family")) == {"trend"} and set(_groups(a, "timeframe")) == {"4h"}
     assert set(_groups(a, "session")) == {"london"}                # derived from the entry (09:00 UTC, BST)
@@ -466,21 +464,18 @@ def test_the_default_output_folder_is_kept_out_of_the_public_repo():
 
 
 # ---------------------------------------------------------------------------------------------- quant review (207c9ef)
-def _raw(state: Path, t: ClosedTrade, **extra) -> None:
-    """Append a closed-trade line carrying fields of the record-gap lane (not in ClosedTrade yet)."""
-    raw = json.loads(t.model_dump_json())
-    raw.update(extra)
-    with open(state / f"closed_trades_{t.account_id}.jsonl", "a") as fh:
-        fh.write(json.dumps(raw) + "\n")
+def _rec(state: Path, t: ClosedTrade, **fields) -> None:
+    """Append a closed record carrying the finance-audit fields (decision_price, model_version, pnl_basis, ...)."""
+    append_closed_trade(state, t.model_copy(update=fields))
 
 
 def test_a_gross_row_goes_to_the_gross_column_and_a_net_not_recorded_bucket(tmp_path):
     _engine(tmp_path)
-    _raw(tmp_path, _ct(1, "2026-10-05 10:00", 16.0, 2.0, entry_utc="2026-10-05 09:00"), pnl_basis="net",
+    _rec(tmp_path, _ct(1, "2026-10-05 10:00", 16.0, 2.0, entry_utc="2026-10-05 09:00"), pnl_basis="net",
          money_source="broker")
-    _raw(tmp_path, _ct(2, "2026-10-06 10:00", 9.0, 1.0, entry_utc="2026-10-06 09:00", commission=None, swap=None),
-         pnl_basis="gross", money_source="engine_fills")
-    _raw(tmp_path, _ct(3, "2026-10-07 10:00", 4.0, 0.5, entry_utc="2026-10-07 09:00", commission=None, swap=None))
+    _rec(tmp_path, _ct(2, "2026-10-06 10:00", 9.0, 1.0, entry_utc="2026-10-06 09:00", commission=None, swap=None),
+         pnl_basis="gross", money_source="engine")
+    _rec(tmp_path, _ct(3, "2026-10-07 10:00", 4.0, 0.5, entry_utc="2026-10-07 09:00", commission=None, swap=None))
     rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
     [a] = rep.accounts
     o = a.overall
@@ -491,7 +486,7 @@ def test_a_gross_row_goes_to_the_gross_column_and_a_net_not_recorded_bucket(tmp_
     assert o.gross_r == pytest.approx(2.0 + 0.5 / 8.0 + 1.0) and o.gross_r_trades == 2
     assert o.gross_only == 1 and o.basis_not_recorded == 1
     assert a.not_recorded["pnl_basis"] == 1
-    assert a.money_sources == {"broker": 1, "engine_fills": 1, "not recorded": 1}
+    assert a.money_sources == {"broker": 1, "engine": 1, "not recorded": 1}
     assert a.days.traded_days == 1                                                    # money per day: net rows only
     md = format_markdown(rep)
     assert "net not recorded (gross only, 1)" in md and "basis not recorded (1)" in md
@@ -532,26 +527,43 @@ def test_a_sunday_evening_trade_is_in_the_new_risk_week(tmp_path):
     assert d.worst_week == "2026-10-04" and d.worst_week_loss == pytest.approx(10.0)
 
 
-def test_shadow_matching_ignores_taken_and_reports_it_and_follows_the_model_version(tmp_path):
+def test_approved_trades_match_their_records_model_version_and_the_rest_are_inferred_from_p(tmp_path):
+    """The record lane writes model_version on the closed record (EntryAudit, client order id = proposal id), not on
+    the proposal: approved proposals that traded take it from there; rejected and expired ones fall back to the nearest
+    p and say so. `taken` never decides the match."""
     _engine(tmp_path)
-    p1 = _proposal(tmp_path, "2026-10-06 09:00", Outcome.REJECTED, reason="news")
-    p2 = _proposal(tmp_path, "2026-10-06 10:00", Outcome.REJECTED, reason="news")
-    p3 = _proposal(tmp_path, "2026-10-06 11:00", Outcome.REJECTED, reason="news")
-    for p, v in ((p1, "v2"), (p2, "v1"), (p3, "v9")):                      # the record-gap lane's model_version
-        f = tmp_path / "approvals" / "done" / f"{p.proposal_id}.json"
-        f.write_text(json.dumps({**json.loads(f.read_text()), "model_version": v}))
-    untaken = _shadow("2026-10-06 10:00", exit_price=2010.0)
+    p1 = _proposal(tmp_path, "2026-10-06 09:00", Outcome.APPROVED)
+    p2 = _proposal(tmp_path, "2026-10-06 10:00", Outcome.APPROVED)
+    _proposal(tmp_path, "2026-10-06 11:00", Outcome.REJECTED, reason="news")
+    for i, (p, v) in enumerate(((p1, "v2"), (p2, "v9"))):
+        t = _ct(10 + i, f"2026-10-06 1{3 + i}:00", 8.0, 1.0, entry_utc="2026-10-06 09:00")
+        _rec(tmp_path, t, client_order_id=p.proposal_id, model_version=v)
+    untaken = _shadow("2026-10-06 11:00", exit_price=2010.0, p=0.6)
     untaken.taken = False
     _book(tmp_path, [
-        _shadow("2026-10-06 09:00", exit_price=2030.0, version="v1", p=0.6),    # p nearest, but not the card's model
-        _shadow("2026-10-06 09:00", exit_price=1990.0, version="v2", p=0.3),    # the card's model: -1R
-        untaken,                                                               # v1, below its threshold: still matched
-        _shadow("2026-10-06 11:00", exit_price=2030.0, version="v1"),           # v9 is not in the book
+        _shadow("2026-10-06 09:00", exit_price=2030.0, version="v1", p=0.6),    # p nearest, but not the traded model
+        _shadow("2026-10-06 09:00", exit_price=1990.0, version="v2", p=0.3),    # the record's model: -1R
+        _shadow("2026-10-06 10:00", exit_price=2030.0, version="v1"),           # v9 is not in the book
+        untaken,                                                               # rejected: below its threshold, matched
+        _shadow("2026-10-06 11:00", exit_price=1990.0, version="v2", p=0.1),    # p further from the card's 0.6
     ])
-    [a] = build_performance_report(tmp_path, start=START, end=END, now=NOW).accounts
-    [cf] = a.approvals.counterfactual
-    assert cf.matched == 2 and cf.sum_r == pytest.approx(-1.0 + 1.0) and cf.taken == 1
-    assert cf.unmatched == 1 and cf.unmatched_reasons == {"model version not in the shadow book": 1}
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
+    cf = {c.outcome: c for c in rep.accounts[0].approvals.counterfactual}
+    ap, rj = cf["approved"], cf["rejected"]
+    assert (ap.matched, ap.version_from_record, ap.version_inferred) == (1, 1, 0) and ap.sum_r == pytest.approx(-1.0)
+    assert ap.unmatched_reasons == {"model version not in the shadow book": 1}
+    assert (rj.matched, rj.version_from_record, rj.version_inferred, rj.taken) == (1, 0, 1, 0)
+    assert rj.sum_r == pytest.approx(1.0)
+    assert "version inferred (nearest p) 1" in format_markdown(rep)
+
+
+def test_an_approved_proposal_without_a_closed_record_is_inferred_from_p(tmp_path):
+    _engine(tmp_path)
+    _proposal(tmp_path, "2026-10-06 09:00", Outcome.APPROVED, gate_refusal=["spread"])     # never traded
+    _book(tmp_path, [_shadow("2026-10-06 09:00", exit_price=2030.0, version="v1", p=0.6),
+                     _shadow("2026-10-06 09:00", exit_price=1990.0, version="v2", p=0.2)])
+    [cf] = build_performance_report(tmp_path, start=START, end=END, now=NOW).accounts[0].approvals.counterfactual
+    assert (cf.matched, cf.version_inferred) == (1, 1) and cf.sum_r == pytest.approx(3.0)
 
 
 def test_legacy_proposals_fall_back_to_the_nearest_p_and_unmatched_ones_say_why(tmp_path):
@@ -578,7 +590,7 @@ def test_calibration_compares_approved_signals_shadow_r_with_their_live_net_r(tm
     p = _proposal(tmp_path, "2026-10-05 09:00", Outcome.APPROVED)
     _book(tmp_path, [_shadow("2026-10-05 09:00", exit_price=2020.0)])                   # shadow +2R gross
     t = _ct(1, "2026-10-05 11:00", 12.0, 1.5, entry_utc="2026-10-05 09:00")
-    _raw(tmp_path, t.model_copy(update={"client_order_id": p.proposal_id}), pnl_basis="net")
+    _rec(tmp_path, t.model_copy(update={"client_order_id": p.proposal_id}), pnl_basis="net")
     rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
     c = rep.accounts[0].approvals.calibration
     assert c is not None and c.pairs == 1
@@ -663,10 +675,16 @@ def test_bar_classified_day_types_are_labelled_ex_post(tmp_path):
     assert "By day type (ex post" in format_markdown(rep)
 
 
-def test_decision_price_gives_the_recorded_entry_slippage(tmp_path):
+def test_execution_slippage_and_approval_drift_are_reported_apart(tmp_path):
+    """execution slippage = side x (fill - requested_price); approval drift = side x (requested - decision price)."""
     _engine(tmp_path)
     t = _ct(1, "2026-10-05 10:00", 8.0, 1.0, entry_utc="2026-10-05 09:00")     # long, filled at 2000.0
-    _raw(tmp_path, t, pnl_basis="net", decision_price=1999.8, initial_sl=1990.0)
-    _raw(tmp_path, _ct(2, "2026-10-06 10:00", 8.0, 1.0, side=-1), pnl_basis="net", decision_price=2000.1)
-    c = build_performance_report(tmp_path, start=START, end=END, now=NOW).accounts[0].costs
-    assert c.entry_slippage_trades == 2 and c.entry_slippage_mean_usd == pytest.approx((0.2 + 0.1) / 2)
+    _rec(tmp_path, t, decision_price=1999.5, requested_price=1999.8)
+    _rec(tmp_path, _ct(2, "2026-10-06 10:00", 8.0, 1.0, side=-1), decision_price=2000.4, requested_price=2000.1)
+    _rec(tmp_path, _ct(3, "2026-10-07 10:00", 8.0, 1.0), decision_price=1999.0)   # no requested price: neither
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
+    c = rep.accounts[0].costs
+    assert c.execution_slippage_trades == 2 and c.execution_slippage_mean_usd == pytest.approx((0.2 + 0.1) / 2)
+    assert c.approval_drift_trades == 2 and c.approval_drift_mean_usd == pytest.approx((0.3 + 0.3) / 2)
+    md = format_markdown(rep)
+    assert "execution slippage" in md and "approval drift" in md
