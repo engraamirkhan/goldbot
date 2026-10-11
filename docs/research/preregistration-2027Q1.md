@@ -17,7 +17,7 @@ promotion.
   >= 3 calendar years including one of 2021/2022, DSR >= 0.95 on >= 200 model-filtered trades with the real trial count.
 - Rule-only gates are reported alongside (informational).
 - Features: feature version `f-079deacc61` (sessions v2, DST-aware: `session`, `session_zones`, `market_structure`
-  version 2), `f-ac2be79efe` (was `f-e7d2dc11e1` with `macro_drivers` v3, and `f-f999b359e2` before v3 added the VRP spread `macro_vrp`; v4 drops stub days from its HAR-RV, amended 2026-10-11) where the macro drivers are added. A result on another feature version is recorded with a
+  version 2), `f-51ac5ebabb` (was `f-ac2be79efe` with `macro_drivers` v4, whose stub rule read the data's bar spacing, `f-e7d2dc11e1` with `macro_drivers` v3, and `f-f999b359e2` before v3 added the VRP spread `macro_vrp`; v4 drops stub days from its HAR-RV; v5 reads each bar's declared length, amended 2026-10-11) where the macro drivers are added. A result on another feature version is recorded with a
   `deviation` against its pre-registration (`TrialRegistry.record`), and a holdout scoring needs a gate pass on the same
   feature version (`passed_gates(feature_version=)`). Any further feature change before a run amends this line first.
 - DSR trial count: 20 (Q4 2026) + Q1 trials run so far + K_eff of H-02. K_eff is the number of units a survivor
@@ -112,9 +112,9 @@ stamped before its row's quarter would never use the row up.
   trader-toolkit, survey and macro), grouped by **hypothesis cluster** (`--families cluster`, `DiscoveryConfig.clusters
   = discovery.H02_CLUSTERS`, amended 2026-10-11 after the quant re-review to follow `hypotheses.md` exactly):
   - **H-03** gold VRP: `macro_gvz*` and the explicit spread `macro_vrp` = GVZ^2 - HAR-RV^2 (built point-in-time in the
-    opt-in `macro_drivers`, version 4: equal-weight HAR of daily realised variance over completed, stub-free days
-    before the bar (a day whose bars span < 12 h, e.g. the Sunday reopen, is dropped), annualised; feature version
-    `f-ac2be79efe`);
+    opt-in `macro_drivers`, version 5: equal-weight HAR of daily realised variance over completed, stub-free days
+    before the bar (a day whose bars' declared lengths sum to < 12 h, e.g. the Sunday reopen, is dropped), annualised; feature version
+    `f-51ac5ebabb`);
   - **H-05** stop-cluster levels: `round_numbers` (distance to the nearest $5 / $10 / $25 / $50 level and its
     touches; **no $100 level**, so the $100 round-number step listed under H-05 in `hypotheses.md` is not screened
     here), `support_resistance`, and the prior day/week extremes

@@ -20,9 +20,11 @@ def _bars(start: str = "2025-01-01", end: str = "2025-05-01", seed: int = 0) -> 
     ts = pd.date_range(start, end, freq="1h", tz="UTC")
     dow, hour = ts.dayofweek, ts.hour
     ts = ts[~((dow == 5) | ((dow == 4) & (hour >= 21)) | ((dow == 6) & (hour < 22)))]
+    vis = ts + pd.Timedelta(hours=1)                         # the declared timeframe (resample writes visible_at)
     rng = np.random.default_rng(seed)
     close = 2000.0 * np.exp(np.cumsum(rng.normal(0, 0.002, len(ts))))
-    return pd.DataFrame({"ts_utc": ts, "open": close, "high": close, "low": close, "close": close})
+    return pd.DataFrame({"ts_utc": ts, "visible_at": vis, "open": close, "high": close, "low": close,
+                         "close": close})
 
 
 def _gvz(days: pd.DatetimeIndex) -> pd.DataFrame:
@@ -43,8 +45,8 @@ def _har_var_ann(bars: pd.DataFrame, at: pd.Timestamp) -> float:
     return float((rv.iloc[-1] + rv.iloc[-5:].mean() + rv.iloc[-22:].mean()) / 3 * 252 * 100**2)
 
 
-def test_macro_drivers_version_4_adds_the_stub_free_vrp_spread_and_leaves_the_default_set_alone():
-    assert FEATURES["macro_drivers"].version == "4"
+def test_macro_drivers_version_5_adds_the_stub_free_vrp_spread_and_leaves_the_default_set_alone():
+    assert FEATURES["macro_drivers"].version == "5"
     assert "macro_drivers" not in DEFAULT_FEATURE_NAMES
     assert feature_version(DEFAULT_FEATURE_NAMES) == "f-079deacc61"           # the pinned default version
     days = pd.date_range("2025-01-02", periods=80, freq=US_BDAY)
@@ -75,7 +77,7 @@ def test_both_preregistrations_pin_the_new_macro_feature_version():
         text = (DOCS / doc).read_text()
         assert v in text, doc
         bare = re.sub(r"\(was `f-[0-9a-f]{10}`[^)]*\)", "", text)
-        assert "f-f999b359e2" not in bare and "f-e7d2dc11e1" not in bare, doc
+        assert not {"f-f999b359e2", "f-e7d2dc11e1", "f-ac2be79efe"} & set(re.findall(r"f-[0-9a-f]{10}", bare)), doc
 
 
 def test_the_har_rv_drops_the_sunday_reopen_stub_day():
@@ -89,3 +91,27 @@ def test_the_har_rv_drops_the_sunday_reopen_stub_day():
     tuesday = pd.Timestamp("2025-03-11 12:00", tz="UTC")             # Monday's day is complete, Sunday's is not used
     j = int(np.flatnonzero((bars["ts_utc"] == tuesday).to_numpy())[0])
     assert np.isclose(got[j], _har_var_ann(bars, tuesday))
+
+
+def test_the_stub_rule_reads_the_declared_timeframe_not_the_data():
+    """Quant re-review LOW: a day's span is its bars' declared lengths (visible_at - ts_utc), so a missing bar or an
+    irregular stretch never changes the rule, and a frame that declares no timeframe gets no VRP (fail closed)."""
+    from goldbot.features.macro import har_rv2_annualised
+    bars = _bars()
+    full = har_rv2_annualised(bars)
+    # two-hour bars declared, hourly spacing in the data: every day spans twice its bar count; a median-based rule
+    # would see one hour per bar and call 6-bar days stubs
+    six = bars[bars["ts_utc"].dt.hour.isin([0, 4, 8, 12, 16, 20])].reset_index(drop=True)
+    declared = six.assign(visible_at=six["ts_utc"] + pd.Timedelta(hours=2))
+    assert np.isfinite(har_rv2_annualised(declared)).sum() > np.isfinite(
+        har_rv2_annualised(six.assign(visible_at=six["ts_utc"] + pd.Timedelta(minutes=30)))).sum()
+    assert np.isnan(har_rv2_annualised(bars.drop(columns=["visible_at"]))).all()
+    assert np.isfinite(full).any()
+
+
+def test_vrp_is_computed_once_on_the_decision_frame_and_never_as_context():
+    """d1_/h4_/h1_ macro columns would be a second VRP on other bars: context frames carry only CONTEXT_FEATURES."""
+    from goldbot.research.pipeline import CONTEXT_FEATURES
+    assert "macro_drivers" not in CONTEXT_FEATURES
+    from goldbot.engine import runner
+    assert runner.CONTEXT_FEATURES is CONTEXT_FEATURES          # research and the engine use one list

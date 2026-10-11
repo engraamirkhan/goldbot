@@ -49,7 +49,7 @@ from goldbot.ops import server_clock
 from goldbot.ops.account_view import LADDER_TIMEFRAMES
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
-from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
+from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, sizing
 from goldbot.risk.gate import REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
@@ -626,7 +626,7 @@ class Engine:
             return cached[1]
         hb = self._resample(complete, tf)
         hb = hb[hb["visible_at"] <= close_ts].reset_index(drop=True)
-        out = None if len(hb) < 30 else (hb, build_features(mid(hb), ["atr", "trend_strength", "moving_averages", "realised_vol"]))
+        out = None if len(hb) < 30 else (hb, build_features(mid(hb), list(CONTEXT_FEATURES)))
         self._ctx_cache[tf] = (key, out)
         return out
 
