@@ -1,15 +1,17 @@
 """Write a quarter's pre-registered queued rows and contingent slots into the trial registry (BACKLOG 47).
 
   python scripts/preregister_quarter.py --quarter 2027Q1 --from docs/research/preregistration-2027Q1.yaml \
-      --registry registry.jsonl [--dry-run] [--allow-late REASON]
+      --registry registry.jsonl --bars raw/ [--dry-run] [--allow-late REASON]
 
-`--from` is the reviewed YAML extract of the pre-registration (a `.md` path is read as the `.yaml` beside it). Every row
-is checked against the pre-registration's text, the registry's rules, the quarter's trial budget and the reservation
-in config/settings.yaml before anything is written (goldbot/research/preregistration.py). `--dry-run` prints the rows
-and writes nothing. A write is idempotent, goes through `TrialRegistry.preregister` / `reserve_slot` under the
-registry lock, and is refused on or after the quarter's first day (00:00 UTC) unless `--allow-late` gives a reason, in
-which case rows are written as ad-hoc pre-registrations naming their rule and no slot is written. A pre-registration
-is not a trial: nothing here spends the budget or writes an outcome. The shared copy on release research-v1 is merged
+`--bars` is the folder of the data-v1 yearly 1m files: the sha256 digests of the research window's files (years up to
+research.holdout_from's) are pinned in every row's plan and verified by the runners before any look (BACKLOG 50); a
+write without them is refused. `--from` is the reviewed YAML extract of the pre-registration (a `.md` path is read as
+the `.yaml` beside it). Every row is checked against the pre-registration's text, the registry's rules, the quarter's
+trial budget and the reservation in config/settings.yaml before anything is written
+(goldbot/research/preregistration.py). `--dry-run` prints the rows and writes nothing. A write is idempotent, goes
+through `TrialRegistry.preregister` / `reserve_slot` under the registry lock, and is refused on or after the
+quarter's first day (00:00 UTC) unless `--allow-late` gives a reason, in which case rows are written as ad-hoc
+pre-registrations naming their rule and no slot is written. A pre-registration is not a trial: nothing here spends the budget or writes an outcome. The shared copy on release research-v1 is merged
 before and after by the `preregister-quarter` workflow (goldbot.research.registry_sync), as research.yml does.
 """
 from __future__ import annotations
@@ -26,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from goldbot.config import load_settings  # noqa: E402
+from goldbot.data.release import bar_file_digests  # noqa: E402
 from goldbot.research.director import reserved_trials  # noqa: E402
 from goldbot.research.preregistration import (  # noqa: E402
     QuarterSpec,
@@ -70,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="print the rows and slots; write nothing")
     ap.add_argument("--allow-late", default=None, metavar="REASON",
                     help="write after the quarter started, as ad-hoc rows naming their rule (no slots); states why")
+    ap.add_argument("--bars", default=None, type=Path,
+                    help="folder of the data-v1 yearly 1m files: their research-window sha256 digests are pinned")
     args = ap.parse_args(argv)
     spec_path = args.spec.with_suffix(".yaml") if args.spec.suffix == ".md" else args.spec
     try:
@@ -77,9 +82,16 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, yaml.YAMLError, ValidationError) as exc:
         raise SystemExit(f"{spec_path}: {exc}") from None
     research = load_settings().research
+    digests = None
+    if args.bars is not None:
+        last = research.holdout_from.year if research.holdout_from is not None else None
+        digests = bar_file_digests(args.bars, to_year=last)
+        if not digests:
+            raise SystemExit(f"--bars {args.bars}: no xauusd_1m_dukascopy_<year>.parquet files"
+                             + (f" up to {last}" if last else ""))
     try:
         plan = plan_quarter(qs, research=research, doc_text=doc_text(qs.source, qs.freeze_commit),
-                            quarter=args.quarter)
+                            quarter=args.quarter, data_digests=digests)
     except (OSError, SpecError) as exc:
         raise SystemExit(f"{spec_path}: {exc}") from None
     if args.dry_run:                          # reads only: a missing registry stays missing

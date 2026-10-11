@@ -802,6 +802,44 @@ def pending_preregistration(rows: list[dict[str, Any]], quarter: str, family: st
                  and p.get("config_hash") == config_hash), None)
 
 
+def queued_rows_for(rows: list[dict[str, Any]], quarter: str, family: str,
+                    agent_id: str | None = None) -> list[dict[str, Any]]:
+    """The pending queued rows (no slots) of `quarter` for `family`, and for `agent_id` when given (None: any agent),
+    whatever their config hash: the rows a run of that family and agent could be meant to match. The runners verify
+    the data-v1 digests these rows pin and refuse a config-hash mismatch against them (BACKLOG 50)."""
+    prereg, matched = _prereg_matches(rows, quarter)
+    return [p for i, p in enumerate(prereg) if i not in matched and not p.get("slot") and p.get("family") == family
+            and (agent_id is None or p.get("agent_id") == agent_id)]
+
+
+def config_difference(want: Any, got: Any, prefix: str = "", limit: int = 8) -> list[str]:
+    """Dotted keys at which `got` differs from `want` (nested dicts walked), e.g. ["discovery.top_k", "bars_to"]."""
+    if not isinstance(want, dict) or not isinstance(got, dict):
+        return [] if want == got else [prefix or "(value)"]
+    out: list[str] = []
+    for k in sorted(set(want) | set(got), key=str):
+        out += config_difference(want.get(k), got.get(k), f"{prefix}.{k}" if prefix else str(k), limit)
+    return out[:limit]
+
+
+def queued_mismatch(rows: list[dict[str, Any]], quarter: str, family: str, agent_id: str | None,
+                    config: dict[str, Any], config_hash: str) -> str | None:
+    """Why a run of `config` must not fall back to the open budget, or None: `quarter` holds a pending queued row of
+    the same family and agent (`queued_rows_for`) but none with this config hash, so the run is either the queued row
+    with a deviation (a data-v1 refresh, another discovery setting) or must withdraw it first (quant review F2 of
+    BACKLOG 47: "a hash mismatch with a pending queued row refuses instead of silently falling back")."""
+    cands = queued_rows_for(rows, quarter, family, agent_id)
+    if not cands or any(c.get("config_hash") == config_hash for c in cands):
+        return None
+    c = cands[0]
+    spec_id = (c.get("plan") or {}).get("spec_id")
+    diff = config_difference(c.get("config") or {}, config)
+    return (f"{family} config {config_hash}: {quarter} has a pending queued row #{c.get('trial')}"
+            f"{f' ({spec_id})' if spec_id else ''} of agent {c.get('agent_id')} with config {c.get('config_hash')}; "
+            f"this run differs in {', '.join(diff) or 'its hash'}. Refused instead of falling back to the open budget: "
+            f"run the pre-registered configuration exactly, or withdraw the row (TrialRegistry.withdraw) first")
+
+
 def _prereg_matches(rows: list[dict[str, Any]], quarter: str) -> tuple[list[dict[str, Any]], set[int]]:
     """(the quarter's queued preregistered rows that still count, indices of those a trial ran or used): the queued
     rows not withdrawn, plus the contingent slots neither withdrawn nor expired. The matching runs over the whole

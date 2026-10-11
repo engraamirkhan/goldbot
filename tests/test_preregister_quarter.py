@@ -89,9 +89,12 @@ def _complete_spec(**over: Any) -> dict[str, Any]:
     return spec
 
 
-def _plan(spec: dict[str, Any], reserved: int = 4, budget: int = 20) -> Any:
+DIGESTS = {f"xauusd_1m_dukascopy_{y}.parquet": f"{y:064x}" for y in range(2010, 2026)}   # BACKLOG 50 pins
+
+
+def _plan(spec: dict[str, Any], reserved: int = 4, budget: int = 20, digests: dict[str, str] | None = None) -> Any:
     return plan_quarter(QuarterSpec.model_validate(spec), research=_research(reserved, budget), doc_text=DOC_TEXT,
-                        quarter=Q)
+                        quarter=Q, data_digests=DIGESTS if digests is None else digests)
 
 
 # ---------------------------------------------------------------------------------------------- the doc's spec
@@ -298,9 +301,12 @@ def test_the_script_refuses_a_late_write_and_takes_allow_late_with_a_reason(
     settings = load_settings().model_copy(update={"research": _research(0)})
     monkeypatch.setattr(script, "load_settings", lambda: settings)
     monkeypatch.setattr(script, "doc_text", lambda source, commit: DOC_TEXT)
+    bars = tmp_path / "raw"
+    bars.mkdir()
+    (bars / "xauusd_1m_dukascopy_2010.parquet").write_bytes(b"bars")
     with pytest.raises(SystemExit, match="started"):
-        script.main(["--quarter", Q, "--from", str(spec), "--registry", str(reg_path)])
-    assert script.main(["--quarter", Q, "--from", str(spec), "--registry", str(reg_path),
+        script.main(["--quarter", Q, "--from", str(spec), "--registry", str(reg_path), "--bars", str(bars)])
+    assert script.main(["--quarter", Q, "--from", str(spec), "--registry", str(reg_path), "--bars", str(bars),
                         "--allow-late", "freeze slipped"]) == 0
     assert len(TrialRegistry(reg_path)._rows()) == 2
 
@@ -488,8 +494,13 @@ def test_a_written_discovery_row_is_the_one_research_pass_discover_links(tmp_pat
     from goldbot.research import director
     from goldbot.research.discovery import H02_CLUSTERS
     _clock(monkeypatch, BEFORE)
+    from goldbot.data.release import bar_file_digests
     reg = TrialRegistry(tmp_path / "registry.jsonl")
-    write_quarter(reg, _plan(_complete_spec(reservation=4), reserved=4))
+    bars = tmp_path / "raw"
+    bars.mkdir()
+    for y in range(2010, 2027):
+        (bars / f"xauusd_1m_dukascopy_{y}.parquet").write_bytes(f"bars of {y}".encode())
+    write_quarter(reg, _plan(_complete_spec(reservation=4), reserved=4, digests=bar_file_digests(bars, to_year=2025)))
     written = reg._rows()[0]
     rp = importlib.util.spec_from_file_location("research_pass_m5", ROOT / "scripts/research_pass.py")
     assert rp is not None and rp.loader is not None
@@ -501,6 +512,7 @@ def test_a_written_discovery_row_is_the_one_research_pass_discover_links(tmp_pat
                           json.dumps({"survivor_unit": "feature", "group_top_k": 3, "clusters": H02_CLUSTERS})])
     args.specialist, args.pooled, args.score_holdout = "tsmom", "", False
     args.rationale, args.rule_ref, args.report = "H-02", None, str(tmp_path / "r.md")
+    args.bars, args.from_year, args.to_year = str(bars), 2010, 2100
     variants = research_pass.parse_variants("tsmom", '[{"timeframe": "4h", "max_bars": 12}]')
     b1 = pd.DataFrame({"ts_utc": pd.to_datetime(["2010-01-03 23:00:00", "2017-06-01 00:00:00",
                                                  "2025-09-30 20:59:00"], utc=True)})
