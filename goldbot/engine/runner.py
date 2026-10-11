@@ -310,6 +310,7 @@ class Engine:
         self._calendar_seen: tuple[pd.Timestamp | None, pd.Timestamp | None] = (None, None)
         # when each window the gate refuses on ends (tier2_until, reopen_until, holiday), for the owner's displays
         self._window_ends: dict[str, Any] = {}
+        self._window_end_failing: set[str] = set()     # windows whose end time is failing (logged once per episode)
         # the dashboard's account view (goldbot/ops/account_view.py), published in the state file; reporting only.
         # From the broker: balance, currency and margin (never the login or server), the symbol's lot terms; from the
         # bars: ATR(14) per ladder timeframe, refreshed at bar closes
@@ -2445,11 +2446,19 @@ class Engine:
 
     def _window_end(self, key: str, compute: Callable[[], Any]) -> None:
         """When a window the gate is refusing on ends, for the state file and the owner's displays only: an error here
-        never changes a flag (it only leaves the time unknown)."""
+        never changes a flag (it only leaves the time unknown). Logged once per window when failures start and once
+        when it is computed again (as review M1 for calendar_unavailable), never on every tick."""
         try:
             self._window_ends[key] = compute()
         except Exception as exc:
-            log.warning("entry windows: %s not computed (%s: %s)", key, type(exc).__name__, exc)
+            if key not in self._window_end_failing:
+                self._window_end_failing.add(key)
+                log.warning("entry windows: %s not computed (%s: %s); shown without a time until it is",
+                            key, type(exc).__name__, exc)
+            return
+        if key in self._window_end_failing:
+            self._window_end_failing.discard(key)
+            log.info("entry windows: %s computed again", key)
 
     def _windows_state(self) -> dict:
         """The entry windows for engine_<account>.json and health (`check_entry_windows`, review M1)."""
