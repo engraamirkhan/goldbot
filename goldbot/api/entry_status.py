@@ -13,7 +13,9 @@ them in `entry_blocks`; rollover and the Friday weekend cut are not published ye
 `entry_blocks`, ADR 0011, BACKLOG 43). A reason with no entry in `REASONS` renders generically, never as nothing.
 
 Nothing free-text from the engine reaches the owner (probe reasons name zones and commits, supervisor reasons name
-files): only mapped codes, numbers, agent ids and the news title the dashboard already shows.
+files): only mapped codes, numbers, agent ids and the news title the dashboard already shows. One exception:
+`windows.holiday_name`, which is text from the owner's own file (config/holidays_cme_metals.yaml, reviewed like code)
+and is capped at 60 characters.
 """
 from __future__ import annotations
 

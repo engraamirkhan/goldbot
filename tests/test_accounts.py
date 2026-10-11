@@ -42,16 +42,30 @@ def test_prompt_stores_and_reuses_credential(isolated):
     assert acc_mod.load_accounts(isolated)["icm-demo"].login == 12345      # read back from the keyring
 
 
-def test_an_account_name_that_looks_like_a_login_fails_at_load(isolated):
+def test_an_account_name_that_looks_like_a_login_fails_at_load(isolated, monkeypatch):
     """Account names reach the owner's dashboard, Telegram /status and the digest: a name carrying 5+ digits (an MT5
     login) is refused when config/accounts.yaml is loaded (the displays also cut such runs, as a backstop)."""
     import yaml
     raw = yaml.safe_load(isolated.read_text())
     raw["accounts"]["icm-demo-51234567"] = raw["accounts"].pop("icm-demo")
     isolated.write_text(yaml.safe_dump(raw))
-    with pytest.raises(ValueError, match="5 or more digits"):
+    looked_up: list[str] = []
+    real_get = acc_mod.get_secret
+
+    def spy(key: str) -> str | None:
+        looked_up.append(key)
+        return real_get(key)
+    monkeypatch.setattr(acc_mod, "get_secret", spy)
+    with pytest.raises(ValueError, match="5 or more digits") as excinfo:
         acc_mod.load_accounts(isolated)
-    assert acc_mod.Account.model_fields["account_id"]
+    # security review: the error never echoes the name, and the keyring is not asked for its login
+    assert "51234567" not in str(excinfo.value) and "17 characters" in str(excinfo.value)
+    assert not any("51234567" in k for k in looked_up)
+    # backstop: building the record directly fails without the input in the error either
+    with pytest.raises(ValueError) as direct:
+        acc_mod.Account(account_id="icm-demo-51234567", broker="icm", mode="demo", server="s", login=None,
+                        terminal_path="t", server_tz="Europe/Athens", symbol="XAUUSD", magic_base=1, enabled=True)
+    assert "51234567" not in str(direct.value)
     for ok in ("icm-demo", "icm-live", "ftmo-2026"):
         assert acc_mod.ACCOUNT_ID_LOGIN.search(ok) is None
 
