@@ -22,6 +22,7 @@ on:
 permissions: {}
 jobs:
   walk-forward:
+    if: ${{ github.ref == 'refs/heads/main' }}   # writes the shared registry: only reviewed, merged code
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
@@ -72,13 +73,16 @@ jobs:
         run: |
           set -o pipefail
           if [ -n "$POOLED" ]; then TARGET=(--pooled "$POOLED"); else TARGET=(--specialist "$SPECIALIST" --variants "$VARIANTS"); fi
-          # a pre-registered discovery (e.g. H-02) and the rule a run cites; values reach the CLI as single arguments
+          # a pre-registered discovery (e.g. H-02) and the rule a run cites. Values go in the equals form only: as a
+          # separate argument a value could itself be an option (--families takes an optional value, so
+          # families=--registry=/tmp/x would move where the trial row is written)
+          case "$FAMILIES" in ""|column|feature|family|cluster) ;; *) echo "::error::bad families"; exit 1;; esac
           EXTRA=()
           if [ "$DISCOVER" = "true" ]; then
-            EXTRA+=(--discover --discover-config "$DISCOVER_CONFIG")
-            if [ -n "$FAMILIES" ]; then EXTRA+=(--families "$FAMILIES"); fi
+            EXTRA+=(--discover --discover-config="$DISCOVER_CONFIG")
+            if [ -n "$FAMILIES" ]; then EXTRA+=(--families="$FAMILIES"); fi
           fi
-          if [ -n "$RULE_REF" ]; then EXTRA+=(--rule-ref "$RULE_REF"); fi
+          if [ -n "$RULE_REF" ]; then EXTRA+=(--rule-ref="$RULE_REF"); fi
           TARGET+=("${EXTRA[@]}")
           # the measured cost table from release costs-v1 (docs/RUNBOOK.md section 4); the settings priors without it
           COSTS=(); if [ -f costs/costs_measured.json ]; then COSTS=(--cost-table costs/costs_measured.json); fi

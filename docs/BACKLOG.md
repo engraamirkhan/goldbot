@@ -65,6 +65,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | in review (built 2026-10-11: tsmom preset `slow_macro`, agent `tsmom-g0-fed4baec9f`, and `count_h06` in count-owed-events; quant review of the readings (a)-(e) in `preregistration-2027Q1.md` H-06; count pasted once `macro-v1` exists; by 2026-12-04, else H-06 is withdrawn by its rule) |
 | 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; settings and `hypotheses.md` B together) |
 | 50 | --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners | Idea generation (integrity) · FIND | M | proposed (quant review F2 of BACKLOG 47, 2026-10-11; due before the 2026-12-11 freeze) |
+| 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | proposed (security re-verify of BACKLOG 47, 2026-10-11) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -685,6 +686,16 @@ hypotheses that go through the trial registry in a future quarter's budget.
   Acceptance: tests that a data-v1 refresh after the write is refused with the digest named; that a config-hash
   mismatch against a pending queued row refuses (no fallback); that `--discover`'s `bars_to` is before
   `holdout_from` whatever the data reaches. Quant review. Depends on: BACKLOG 47.
+- **51. VPS monthly loop registry push: re-check the release asset just before upload (security re-verify of
+  BACKLOG 47, 2026-10-11).** Value: research.yml and preregister-quarter.yml serialise their writes to
+  `research-v1/registry.jsonl` through `concurrency: research-registry`, but the VPS monthly loop pushes through
+  `goldbot.research.registry_sync.sync` outside that group. A workflow upload that lands between the loop's pull and
+  its push is overwritten, and the reverse can happen too, so a trial or pre-registration row can be dropped from the
+  shared copy. Do: in `registry_sync.push_release`, and in `scripts/registry_release.sh save`, record the asset's
+  `updated_at` (or id) when pulling, re-read it just before the delete and upload, and when it changed, pull again,
+  merge again and retry a bounded number of times, failing loudly if it keeps changing. Keep the existing refusal of
+  a merge shorter than the published copy. Acceptance: tests with a fake release whose asset changes between the pull
+  and the upload, showing both rows survive, and a bounded-retry failure. Security review. Depends on: BACKLOG 47.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.
