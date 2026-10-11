@@ -937,7 +937,17 @@ class Engine:
                     decisions.append(self._record(agent, close_ts, p, mult, f"auto_paused:{self._auto_paused[1]}",
                                                   scored_fv=sfv))
                     continue
-                res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
+                try:
+                    res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
+                except Exception as exc:
+                    # review LOW-C: the order may or may not be at the broker. Its pending_orders row stays "sending"
+                    # (the restart reconciliation resolves it), entries are blocked (tick_error), no further auto
+                    # entry this bar close; the remaining agents are still journalled and exits carry on
+                    self._auto_paused = (close_ts, "order_raised")
+                    self.note_tick_error(exc)
+                    decisions.append(self._record(agent, close_ts, p, mult, f"auto_unconfirmed:{type(exc).__name__}",
+                                                  pid, scored_fv=sfv))
+                    continue
                 decisions.append(self._record(agent, close_ts, p, mult, self._auto_action(res), pid, scored_fv=sfv))
                 self._after_auto_order(res, gd, side, close_ts)
             else:

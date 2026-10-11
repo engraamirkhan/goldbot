@@ -170,3 +170,23 @@ def test_a_failed_account_reread_after_a_fill_stops_auto_entries_for_the_rest_of
     eng, _, dec = _run(tmp_path, _two(), RiskLimits(**BASE), pb=pb)
     assert _actions(dec) == ["executed:auto", "auto_paused:account_unread"], _actions(dec)
     assert len(pb.positions()) == 1
+
+
+def test_an_order_call_that_raises_pauses_auto_entries_and_leaves_the_row_sending(tmp_path):
+    # LOW-C: a bridge timeout or terminal error inside place_order may or may not have placed the order: the row stays
+    # "sending" for the restart reconciliation, the error blocks entries, and no second order is sent this close
+    class Raising(PaperBroker):
+        calls = 0
+
+        def place_order(self, intent: OrderIntent) -> OrderResult:
+            self.calls += 1
+            raise TimeoutError("bridge timed out")
+
+    pb = Raising(equity=10_000, adverse_slip_points=0.0)
+    eng, _, dec = _run(tmp_path, _two(), RiskLimits(**BASE), pb=pb)
+    first, second = _actions(dec)
+    assert first == "auto_unconfirmed:TimeoutError" and pb.calls == 1
+    assert second.startswith(("gate:", "auto_paused:")) and "executed" not in second, second
+    assert eng._auto_paused is not None and eng._auto_paused[1] == "order_raised"
+    assert [o.status for o in eng._orders.values()] == ["sending"]
+    assert eng.state.tick_error and eng.tick_errors_total == 1

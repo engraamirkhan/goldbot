@@ -789,7 +789,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `auto_paused:unconfirmed_order` / `auto_paused:account_unread`. Two timeframes closing together share it.
   Re-verification LOW-B: an auto entry that did not fill is journalled `auto_rejected:<retcode>` (definite reject,
   nothing placed) or `auto_unconfirmed:<retcode>`, never `executed:auto`; 10032 (only real accounts) and 10046 (hedge
-  prohibited) joined `DEFINITE_REJECT_RETCODES`.
+  prohibited) joined `DEFINITE_REJECT_RETCODES`. LOW-C: a `place_order` that raises (bridge timeout, terminal error)
+  no longer aborts the bar close: auto entries pause for it (`_auto_paused = (close, "order_raised")`), the error is
+  counted through `note_tick_error` (entries blocked until a clean decision bar), the decision is journalled
+  `auto_unconfirmed:<ExceptionType>`, and its pending_orders row stays `sending`, so it is never re-sent and a position
+  that did open is picked up by reconciliation (adopted in this engine's magic range) or by the restart check.
 - Open-risk review LOWs (2026-10-11, row R36): LOW-1 a failure computing the open risk sets it unknown and never
   aborts the account refresh, and a failed account read at the bar close no longer skips `_manage_open` (exits still
   run; that close's entries are refused `data_quality_error`); LOW-2 `AccountState.open_risk` defaults to unknown
