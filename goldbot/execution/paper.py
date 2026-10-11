@@ -56,6 +56,10 @@ class PaperBroker:
         """Paper margin at the FCA retail cap for gold, 1:20 (the paper account's leverage)."""
         return lots * self.contract * price / 20.0
 
+    def loss_per_lot(self, symbol: str, side: int, price: float, distance: float) -> float | None:
+        """The paper account is in USD and XAUUSD P&L is USD: distance x contract (conversion factor 1)."""
+        return abs(distance) * self.contract
+
     def trading_sessions(self, symbol: str) -> list[TradingSession]:
         """The static session table's hours for the week from the paper clock's server date (last tick, else now)."""
         now = self._tick.ts_utc if self._tick is not None else pd.Timestamp.now(tz="UTC")

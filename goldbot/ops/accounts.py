@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 import yaml
-from pydantic import field_validator
+from pydantic import Field, field_validator
 
 from goldbot.base import Record, write_private
 from goldbot.config import ROOT
@@ -62,6 +62,9 @@ class Account(Record):
     symbol: str
     magic_base: int
     enabled: bool
+    # BACKLOG 29 / ADR 0004: the owner's absolute daily loss limit for THIS account, in its own deposit currency
+    # (icm-demo: 50 = £50). None = off. Per account because one number read in different currencies is not one limit
+    daily_loss_limit_abs: float | None = Field(None, gt=0)
 
     @field_validator("server_tz")
     @classmethod
@@ -176,7 +179,8 @@ def load_accounts(path: Path | None = None) -> dict[str, Account]:
             stored = get_secret(login_key(aid))
             login = int(stored) if stored and stored.strip().isdigit() else None
         out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=login, terminal_path=a["terminal_path"],
-                           server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)))
+                           server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)),
+                           daily_loss_limit_abs=a.get("daily_loss_limit_abs"))
     return out
 
 

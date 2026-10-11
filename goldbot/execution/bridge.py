@@ -67,6 +67,7 @@ METHODS: dict[str, tuple[str, bool]] = {
     "deals_since": ("frame", True),
     "broker_terms": ("BrokerTerms", True),
     "margin_required": ("float", True),      # read-only (order_calc_margin): retry-safe, nothing reaches the market
+    "loss_per_lot": ("float", True),         # read-only (order_calc_profit / tick value): the sizing conversion
     "trading_sessions": ("list[TradingSession]", True),   # read-only session hours (D13)
     "place_order": ("OrderResult", False),
     "modify": ("OrderResult", False),
@@ -335,6 +336,9 @@ class RemoteBroker:
 
     def margin_required(self, symbol: str, side: int, lots: float, price: float) -> float | None:
         return self._call("margin_required", symbol, side, lots, price)
+
+    def loss_per_lot(self, symbol: str, side: int, price: float, distance: float) -> float | None:
+        return self._call("loss_per_lot", symbol, side, price, distance)
 
     def trading_sessions(self, symbol: str) -> list[TradingSession]:
         return self._call("trading_sessions", symbol)

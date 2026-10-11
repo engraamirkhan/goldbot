@@ -3,7 +3,9 @@ London) with signal, not noise. Read on a phone, so it stays under about 15 line
 
 * status   all good / attention needed, from the health report, failing and warning checks named;
 * yesterday (the previous UTC day)  proposals made, approved, rejected, expired; trades closed with net P&L ($) and R
-           (state/closed_trades_*.jsonl via goldbot.ops.gates_phase.load_closed_trades); open positions now;
+           (state/closed_trades_*.jsonl via goldbot.ops.gates_phase.load_closed_trades); the month so far (time-weighted
+           %, trades, R, average per trading day; goldbot.ops.monthly_report), once it has a closed trade; open
+           positions now;
 * risk     worst drawdown stage and drawdown from peak, daily and weekly loss-cap use, any halt (owner, drift,
            supervisor, drawdown);
 * research the next pre-registered trial or the quarter's trial budget, and the attribution headline (best and worst
@@ -189,11 +191,33 @@ def trades_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp) -> list
     warn = " (⚠️ unreadable record lines skipped)" if err else ""
     if not day:
         return [f"• Trades closed: none{warn}"]
-    pnl = sum(t.pnl for t in day)
+    # money in the account currency only (BACKLOG 28): a row counts when its pnl_currency is None (legacy) or the
+    # account's currency from engine_<account>.json; others (the unconverted USD fallback) are named, not summed
+    try:
+        ccy = {str(e.get("account")): str(e.get("currency") or "").upper() for e in _engines(state_dir)}
+    except ValueError:
+        ccy = {}
+
+    def counts(t: Any) -> bool:
+        return t.pnl_currency is None or t.pnl_currency.upper() == ccy.get(t.account_id, "")
+
+    pnl = sum(t.pnl for t in day if counts(t))
+    left: dict[str, int] = {}
+    for t in day:
+        if not counts(t):
+            left[str(t.pnl_currency)] = left.get(str(t.pnl_currency), 0) + 1
+    if left:
+        warn = "".join(f" ({n} in {c} not summed)" for c, n in sorted(left.items())) + warn
     rs = [t.r for t in day if t.r is not None]
     r = f" · {sum(rs):+.2f}R" + (f" ({len(rs)} of {len(day)} with R)" if len(rs) < len(day) else "") if rs else " · R n/a"
     wins = sum(t.pnl > 0 for t in day)
     return [f"• Closed {_plural(len(day), 'trade')}: net {_money(pnl)}{r} ({wins} won, {len(day) - wins} lost){warn}"]
+
+
+def month_line(state_dir: Path, yesterday: pd.Timestamp) -> list[str]:
+    """The month so far up to yesterday (goldbot/ops/monthly_report.py): nothing before its first closed trade."""
+    from goldbot.ops.monthly_report import month_to_date_line
+    return month_to_date_line(state_dir, yesterday)
 
 
 def open_line(state_dir: Path) -> list[str]:
@@ -371,6 +395,7 @@ def build_digest(state_dir: str | Path, now: pd.Timestamp, *, report: Any = None
     lines.append(f"Yesterday ({day0:%a %d %b}, 00:00-24:00 UTC)")
     lines += _section(lambda: proposals_line(sd, day0, day1, now), "Proposals")
     lines += _section(lambda: trades_line(sd, day0, day1), "Trades closed")
+    lines += _section(lambda: month_line(sd, now - pd.Timedelta(days=1)), "Month so far")
     lines += _section(lambda: open_line(sd), "Open now")
     lines += _section(lambda: risk_lines(sd, settings), "Risk")
     lines += research_lines(sd, settings, registry_path, now)

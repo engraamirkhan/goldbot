@@ -22,6 +22,8 @@
   python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]
                                                          # minimum equity for the minimum lot per family (G-7)
   python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)
+  python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]
+                                                         # time-weighted % return, R, drawdown, avg per day, milestones
   python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds
 """
 from __future__ import annotations
@@ -155,7 +157,6 @@ def run_engine(account_id: str) -> None:
     settings = load_settings()
     if acc.is_live and acc not in accounts.enabled_accounts("live"):
         raise SystemExit("live account not unlocked by the phase gate")
-    limits = engine_limits(settings, acc)
     bridge = accounts.bridge_endpoint(account_id)
     if bridge is not None:
         # terminal on another machine (Oracle free tier: MT5 under Wine); a bridge failure ends this process and the
@@ -177,6 +178,7 @@ def run_engine(account_id: str) -> None:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
         log.warning("not on Windows: running %s against the paper broker", account_id)
+    limits = engine_limits(settings, acc, paper=paper_stand_in(broker))
     # proposals go to the approval bus in state/; the dashboard and the Telegram service decide through it
     center = ApprovalCenter(set(settings.telegram.allowed_user_ids), bus=ApprovalBus("state"))
     registry_file = Path(settings.research.models_dir) / "registry.json"
@@ -259,12 +261,22 @@ def run_engine(account_id: str) -> None:
         time.sleep(0.25)
 
 
-def engine_limits(settings: Settings, acc: Account) -> RiskLimits:
+def paper_stand_in(broker: Any) -> bool:
+    """True when the engine runs against the paper broker standing in for the account (by type, never by its `name`
+    string: re-verification LOW). Only then is the account's absolute daily limit dropped (engine_limits)."""
+    from goldbot.execution.paper import PaperBroker
+    return isinstance(broker, PaperBroker)
+
+
+def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> RiskLimits:
     """RiskLimits from settings.yaml `risk:`; a live account before the full-size gate (or with an unreadable phase
-    file) gets the tiny-live risk per trade."""
+    file) gets the tiny-live risk per trade (and no minimum-lot exception). The account's own absolute daily loss
+    limit (accounts.yaml, its deposit currency) applies only against its real terminal: `paper=True` (the paper broker
+    standing in for it, a USD book) drops it, so paper and shadow evidence are not changed by a £ figure."""
     from goldbot.ops import accounts
     from goldbot.risk import RiskLimits
-    return RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
+    limits = RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
+    return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs})
 
 
 def record_gate_cli(argv: list[str]) -> int:
@@ -578,6 +590,9 @@ if __name__ == "__main__":
     elif cmd == "ruin":
         from goldbot.research.ruin import main as ruin_main
         sys.exit(ruin_main(sys.argv[2:]))
+    elif cmd == "monthly-report":
+        from goldbot.ops.monthly_report import main as monthly_main
+        sys.exit(monthly_main(sys.argv[2:]))
     elif cmd == "sizing-feasibility":
         from goldbot.research.min_lot import main as feasibility_main
         sys.exit(feasibility_main(sys.argv[2:]))

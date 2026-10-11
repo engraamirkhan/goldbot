@@ -705,6 +705,69 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   from the training and shadow bars. The allocator keeps its design window, 0 for 30 min either side of tier-1
   events (`RuleAllocator()` defaults), deliberately stricter than the RiskGate's -15/+30 entry block; the gate window
   from settings never narrows it (an allocator rule change is the owner's decision).
+- Currency-correct sizing (2026-10-10, BACKLOG 28, ADR 0004 A3-A8, rows R32 and S6; needs trading-safety review):
+  RiskGate now sizes in the account currency. One lot's stop risk is stop x contract x fx, fx being the broker's
+  account currency per USD: `loss_per_lot` on the broker protocol (MT5 `order_calc_profit` for the stop move on one
+  lot, else `trade_tick_value_loss`/`trade_tick_value` per `trade_tick_size`; paper = USD, factor 1; bridge allow-list
+  read-only; RemoteBroker). The 1:20 margin figure, margin level and combined-notional cap compare account currency
+  with account equity. A non-USD account with no usable conversion refuses entries (`fx_conversion_unavailable`); a USD
+  account is 1 by definition and a broker figure more than 1% off is refused. The engine passes the terminal's
+  contract size, minimum lot, lot step, stops level and the conversion into `Intent` (`runner._sizing_terms`; volume
+  max stays capped at the engine's 2.0 per order; an unreadable terminal leaves the currency unknown, so no entry).
+  gate.py calls goldbot/risk/sizing.py for the arithmetic (the parity test now also runs at a GBP factor). Closed-trade
+  R and return use the same conversion; with none, R is left empty and the return comes from prices (the record is
+  never blocked). The supervisor refuses to combine engines in different currencies (`mixed_account_currencies`, a
+  halt): converting would need an FX rate it does not have. Running `vantage-demo` (USD?) next to `icm-demo` (GBP)
+  therefore halts entries on both until a conversion is built. Not changed: the approval card's `risk_usd` stays USD
+  (ui-ux follow-up: show the account-currency risk from `GateDecision.risk_amount`); the approval re-check reuses the
+  conversion read at proposal time (90 s at most).
+- Minimum-lot exception (2026-10-10, BACKLOG 25, ADR 0004 decision 2, row R33; needs trading-safety review):
+  `risk.min_lot_risk_cap` (null = off, the design's 1.2x rule alone; validated 0 < x <= 0.01). When the sized lots
+  fall below the minimum lot, RiskGate places exactly the minimum lot if its realised risk in the account currency is
+  within the cap (clamped to the 1% maximum, halved in the 8% stage or the combined size-down), then runs the margin
+  floor and combined-exposure checks as usual; an allowed exception carries `min_lot_exception` and the engine journals
+  `sizing`, `risk_fraction` and `risk_per_trade` on the decision. Settings are global (no per-account section), so it
+  is **off in settings.yaml**. Owner: to let the £1,000 demo trade 15m at 0.01 lot (0.82%), add
+  `risk: { min_lot_risk_cap: 0.01 }` to the demo server's `config/settings.local.yaml` and restart the engine. The
+  approval card does not show the exception yet (ui-ux follow-up).
+- Absolute daily loss limit (2026-10-10, BACKLOG 29, ADR 0004 section 3, row R34; needs trading-safety review):
+  `risk.daily_loss_limit_abs: 50` (account currency; null = off). Entries only, projected: RiskGate refuses
+  `daily_loss_limit_abs` when the day's loss so far plus the new trade's full stop risk would exceed min(daily cap x
+  day-start equity, 50), so the 2% account cap is now also projected while the absolute is set. The supervisor halts
+  (`combined_daily_loss_abs`) when the combined day loss reaches 50. Exits never consult it. engine_<account>.json
+  carries `daily_loss_limit` and `daily_loss_remaining`; health shows them on the daily cap line and warns when none
+  is left. Not done: the approval card's "remaining daily allowance" (ui-ux follow-up).
+- Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
+  applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
+  tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on
+  icm-demo in config/accounts.yaml, its currency), no longer in settings.yaml; `ops.run.engine_limits(paper=True)`
+  drops it when the paper broker stands in, so the $10k USD paper book and shadow evidence are unchanged. Engines
+  publish it (`daily_loss_limit_abs` and, for the dashboard, `limits.daily_loss_limit_abs` plus
+  `limits.min_lot_risk_account`, the minimum lot's stop risk in account currency at the latest ATR stop or null);
+  the supervisor applies the smallest published limit to the combined loss. Currency rollout: the startup-error file
+  carries `currency`; the supervisor's currency check counts only engines with a fresh heartbeat (equity is still
+  summed as before) and publishes `currency_files`; health fails with "HALT mixed_account_currencies" naming each
+  file and currency; vantage-demo is `enabled: false` until its currency is confirmed; RUNBOOK "Currency rollout"
+  gives the one-time stop-all/delete/deploy/restart/check steps. A P&L the engine records from its own fills
+  without a conversion stays USD with `ClosedTrade.pnl_currency = "USD"` and is left out of the digest's money sum
+  (the stop rule keeps it as recorded: conservative on a GBP deposit). Open notional uses the terminal's contract
+  size. symbol_info and the conversion are read once per decision cycle (per side), and the approval re-check reads
+  the terms and conversion again (a lost conversion refuses, fail closed). Gate boundary documented: exceeding the
+  daily limit is refused, exactly equal allowed; the supervisor halts on reaching it. BACKLOG 35 (open positions'
+  remaining stop risk) and 36 (costs) added for the daily projection.
+- Re-verification fix (2026-10-10, row S6): the supervisor never sums money across currencies. Equity, day/week
+  start, HWM, the published daily limit and `exposure[*].equity` (the gate's `other_equity`) come from fresh engines
+  plus stale files in the fresh engines' single currency; a stale file in another or no currency keeps only its open
+  lots and notional (strict) and is listed in `money_excluded`, which health reports as a warning naming the file.
+  The paper exemption of the daily limit goes by type (`ops.run.paper_stand_in`: `isinstance(broker, PaperBroker)`).
+  Integration with the dashboard lane: one `Engine._published_limits` (`limits` in engine_<account>.json: risk per
+  trade, its maximum, multiplier bounds, daily and weekly caps, `daily_loss_limit_abs` per account,
+  `min_lot_risk_cap`, `min_lot_risk_account`); the top-level `currency` is the broker's deposit currency, never
+  blanked by the account view before its first refresh. `ClosedTrade.pnl_currency` is now the account currency
+  whenever the P&L (and R) are in it, "USD" only for the unconverted own-fills fallback, None only on legacy records,
+  so the monthly report's `r_understated` flags only pre-fix trades; the digest sums rows whose `pnl_currency` is
+  None or the account's currency (engine_<account>.json) and names the rest "(n in USD not summed)". Follow-up for
+  the dashboard lane: `monthly_report.account_month` still sums every row's P&L, including a USD fallback row.
 - Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
   `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
   minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both
@@ -726,6 +789,52 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   checking (32-thread bursts get at most 5 checks; a refused new password with the right credentials is not
   counted). `revoke-sessions` refuses a state directory without aux.db (exit 2, absolute path printed) instead of
   creating an empty one. Redaction removes quoted paths whole (spaces, Windows) and UNC `\\host\share` paths.
+
+- Live account view and monthly report (2026-10-10, TRACEABILITY V1-V5; ADR 0004, BACKLOG 26 backend): the engine
+  publishes in `engine_<account>.json` the broker's `balance`, `currency`, `margin`, `margin_free` (never login or
+  server), `price` (mid), `limits` (the RiskGate's risk per trade, multiplier bounds, daily/weekly caps, plus
+  `daily_loss_limit_abs`/`min_lot_risk_cap` once RiskLimits has them), `lot_terms` from `symbol_info` and
+  `ladder_atr` (ATR(14) of the mid per 15m/1h/4h/1d, refreshed at bar closes, null until 15 bars); the supervisor
+  adds `daily_cap` and `combined_day_start_equity`. `goldbot/ops/account_view.py` turns that into
+  `AccountSummary.balance/currency/margin_level_pct/day_pnl/loss_budget/milestones` (API contract regenerated).
+  Loss budget = min(account cap x day start, combined cap x combined day start, absolute); the binding cap is the one
+  with least left; the combined cap is skipped with a note on mixed currencies; the absolute limit appears only once
+  the engine publishes it (BACKLOG 29). Milestones: minimum lot at a 1.5 x ATR(14) stop within 1.2 x the target risk
+  (or `min_lot_risk_cap` once published), via `goldbot/risk/sizing.py`. **Contract for BACKLOG 28:** publish
+  `usd_to_account` (account currency per 1 USD of gold P&L, from `order_calc_profit`/tick value) in the engine
+  state; until then a non-USD account's ladder reads "pending broker terms" and shows no amounts. Dashboard:
+  Overview account cards (balance vs equity, today, margin level, loss-budget meter, milestone progress bar) and a
+  "Loss budget" chip on the safety strip; a spent budget is listed as "daily loss limit reached" in the blockers.
+  `python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]`: per account, time-weighted %
+  (chained trade returns on the balance before each trade, so deposits are not return), net R, R/trade with a 90%
+  t interval, max drawdown on closed trades, average per weekday elapsed, best 3 days, £50+ days (GBP only),
+  milestones; the digest adds "<Month> so far" once the month has a closed trade. Not done: BACKLOG 26's
+  by-timeframe split, opportunity-day capture, days lost to the cap, the dashboard monthly card and a scheduled job.
+  Engine change is reporting only (state publish and an ATR read at bar closes in a try/except); route it to
+  trading-safety review anyway since it touches goldbot/engine and goldbot/risk/supervisor.py.
+- Account view review fixes (2026-10-10, TRACEABILITY V2-V5): the loss budget now also lists the weekly caps
+  (account 5% on week-start equity, combined 4%; the supervisor publishes `weekly_cap` and
+  `combined_week_start_equity`); left = max(0, limit - loss since the start), so a profitable day adds room; the
+  combined caps are skipped with a note when supervisor.json is over 60 s old, and /api/accounts never fails on a
+  torn supervisor file or junk engine fields. **Contract with the currency lane (BACKLOG 28/29):** read
+  `limits.daily_loss_limit_abs` (account currency, per account) and `limits.min_lot_risk_account` (the smallest
+  trade's stop risk); the absolute cap reserves that amount and is labelled "(includes the next trade's stop)", and
+  the "not enforced yet" note goes once the limit is published. Every cap carries a plain-language `label`
+  (`binding_label`, `period`) for the card ("Limit set by: all accounts together (1.5% of today's start)"). Monthly
+  report: R carries "R understated on non-USD accounts until BACKLOG 28" until the engine publishes
+  `usd_to_account`, the return is labelled a chained closed-trade return with "approximate: positions overlapped"
+  when they did, and the digest's month so far counts trades closed before today only. Engine: ladder ATR from the
+  incremental resamplers, a timeframe marked done only after its ATR is computed (retried otherwise), the
+  symbol-info warning at most every 10 min. Dashboard copy in plain words (timeframes as "15-minute trades", the
+  rule inside "How this is worked out", the day start in local time plus UTC) and a loading placeholder.
+  **Owner decision, unchanged behaviour:** viewers see balances and the loss budget, as they already see equity;
+  restricting money figures to the owner is the owner's call.
+- Residue (2026-10-10): the monthly report flags R per trade (`monthly_report.r_understated`): a non-USD record
+  without `pnl_currency` keeps "R understated ... BACKLOG 28" after `usd_to_account` appears, with the count when only
+  some are affected. **Contract for the currency lane:** add `ClosedTrade.pnl_currency` to post-fix records. Copy:
+  the blocker, strip status and meter say weekly when a weekly cap binds; the absolute cap reads "(includes the
+  smallest trade's stop)"; the size-down rule says "reduced" (halved only for the min-lot cap); "90% t-interval
+  (approx.)", "Max drawdown on closed trades this month".
 - Owner's manual trading record (2026-10-10, research seeds; security + quant review fixes the same day):
   `python -m goldbot.ops.run owner-history [PATH]` (`goldbot/research/owner_history.py`) reads the owner's MT5 History
   report (HTML, XLSX or a deals CSV; stdlib parsers, no new dependency; inputs and xlsx members over 50 MB refused)

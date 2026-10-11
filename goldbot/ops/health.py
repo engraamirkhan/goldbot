@@ -263,9 +263,23 @@ def check_supervisor(ctx: HealthContext) -> Check:
     if age > SUPERVISOR_FAIL_S:
         return Check(name="supervisor", status="fail",
                      reason=f"heartbeat {_age(age)} old (> {SUPERVISOR_FAIL_S} s): engines block entries")
+    if "mixed_account_currencies" in (s.get("reasons") or []):
+        # BACKLOG 28: equities in different currencies are never summed, so every engine's entries are halted; name
+        # the files so the owner can stop the wrong engine or delete a leftover file (RUNBOOK: currency rollout)
+        cur, files = s.get("currencies") or {}, s.get("currency_files") or {}
+        named = ", ".join(f"{files.get(a) or f'engine_{a}.json'} ({c or 'no currency'})" for a, c in sorted(cur.items()))
+        return Check(name="supervisor", status="fail",
+                     reason=f"HALT mixed_account_currencies: {named}. Entries are blocked on every account until only "
+                            "one currency runs (stop the other engine or delete its leftover engine_*.json)")
+    # stale engine files in another (or no) currency: their money is not summed, their open exposure is (BACKLOG 28)
+    out = s.get("money_excluded") or []
+    note = (f"; {', '.join(out)}: stale, other or no currency, money not summed (exposure still counted; delete the "
+            "file if that engine no longer runs)") if out else ""
     if s.get("halt"):
         return Check(name="supervisor", status="warn",
-                     reason=f"combined-cap HALT: {', '.join(s.get('reasons') or [])}; heartbeat {_age(age)}")
+                     reason=f"combined-cap HALT: {', '.join(s.get('reasons') or [])}; heartbeat {_age(age)}{note}")
+    if out:
+        return Check(name="supervisor", status="warn", reason=f"heartbeat {_age(age)}{note}")
     if age > SUPERVISOR_WARN_S:
         return Check(name="supervisor", status="warn", reason=f"heartbeat {_age(age)} old")
     note = ", size-down" if s.get("size_down") else ""
@@ -991,6 +1005,9 @@ def check_loss_caps(ctx: HealthContext, account_id: str) -> list[Check]:
         e = _read_json(f)
         eq = float(e.get("equity") or 0.0)
         starts = {"daily": float(e.get("day_start_equity") or 0.0), "weekly": float(e.get("week_start_equity") or 0.0)}
+        # BACKLOG 29: the engine's effective daily loss limit (min of the % cap and the absolute) and what is left
+        limit, left = e.get("daily_loss_limit"), e.get("daily_loss_remaining")
+        allowance = (float(limit), float(left)) if limit is not None and left is not None else None
     except (ValueError, OSError, AttributeError, TypeError):
         return []                                   # check_engine reports the unreadable file
     caps = {"daily": ctx.settings.risk.daily_cap, "weekly": ctx.settings.risk.weekly_cap}
@@ -999,6 +1016,12 @@ def check_loss_caps(ctx: HealthContext, account_id: str) -> list[Check]:
         start = starts[period]
         loss = 1 - eq / start if start > 0 else 0.0
         msg = f"{account_id}: {period} loss {100 * loss:.2f}% of {'day' if period == 'daily' else 'week'}-start equity {start:,.2f}"
+        if period == "daily" and allowance is not None:
+            msg += f", daily loss limit {allowance[0]:,.2f} ({allowance[1]:,.2f} left)"
+            if allowance[1] <= 0 and loss < caps[period]:
+                out.append(Check(name=f"{period}_cap:{account_id}", status="warn",
+                                 reason=f"DAILY LOSS LIMIT reached: {msg}: no new entries until the day rolls"))
+                continue
         if loss >= caps[period]:
             out.append(Check(name=f"{period}_cap:{account_id}", status="warn",
                              reason=f"{period.upper()} LOSS CAP hit: {msg} (cap {100 * caps[period]:.1f}%): no new entries until it rolls"))
