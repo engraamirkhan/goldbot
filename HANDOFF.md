@@ -122,6 +122,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   failures logged and audited by exception type only. `goldbot run mail-test` checks the setup. Rollback note: aux.db
   schema 6 is additive, so every release since state-store step 3 opens it; a release from before step 3 is refused
   by the deploy (no 6 -> 4 step-back yet). Needs security review.
+- **Owner history: security and quant review fixes to bd5324e (2026-10-11, M43).** The `no-mt5-report` hook now
+  catches the following, whatever the file is called:
+  - a CSV with a UTF-8 BOM (Excel "CSV UTF-8");
+  - the analyser's private markdown, by its title line, and its JSON summary, by both of its source keys;
+  - a gzip, decompressed up to 20 MB;
+  - a zip, by each member's name and by each member's content within the byte budget. Archives are opened one
+    level deep.
+
+  Refusal messages show only `~/Personal project/trade-history`, never a path. `main` turns both refusals into a
+  plain exit. `.share.md` now states how the USD conversion was found ("implied by N trades" / "assumed 1.0"),
+  never the rate. The module docstring records the rule: nothing that multiplies with USD/oz into an amount (lots,
+  ounces, the rate) may enter `.share.md`.
 - **Owner history: shareable summary, in-repo input refused, hook covers every input format (2026-10-11; owner
   approved the owner-method study, M43).** `python -m goldbot.ops.run owner-history` now refuses a report inside any
   git work tree before opening it, and prints only the shareable summary (`render_share`, also written as

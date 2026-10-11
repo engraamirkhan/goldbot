@@ -840,3 +840,66 @@ def test_the_commit_hook_rejects_the_analysers_own_outputs(result, tmp_path):
     renamed = tmp_path / "notes.csv"
     renamed.write_bytes(next(p for p in paths if p.name.endswith(".trades.csv")).read_bytes())
     assert hook.offending([str(renamed)]) == [str(renamed)]               # the per-trade rows, by their header
+
+
+# ---------------------------------------------------------------- security and quant review of bd5324e
+
+def test_the_commit_hook_rejects_a_trades_csv_resaved_with_a_utf8_bom(result, tmp_path):
+    hook = _hook()
+    trades = next(p for p in oh.write_outputs(result, tmp_path / "private") if p.name.endswith(".trades.csv"))
+    bom = tmp_path / "export.csv"                                          # Excel "CSV UTF-8" adds U+FEFF
+    bom.write_bytes(b"\xef\xbb\xbf" + trades.read_bytes())
+    assert hook.offending([str(bom)]) == [str(bom)]
+
+
+def test_the_commit_hook_rejects_the_private_markdown_and_json_outputs_after_a_rename(result, tmp_path):
+    hook = _hook()
+    paths = oh.write_outputs(result, tmp_path / "private")
+    md = tmp_path / "notes.md"
+    md.write_bytes(next(p for p in paths if p.name.endswith(".md") and not p.name.endswith(".share.md"))
+                   .read_bytes())
+    js = tmp_path / "summary.json"
+    js.write_bytes(next(p for p in paths if p.suffix == ".json").read_bytes())
+    assert hook.offending([str(md), str(js)]) == [str(md), str(js)]
+
+
+def test_the_commit_hook_rejects_a_zipped_or_gzipped_report(tmp_path):
+    import gzip
+    hook = _hook()
+    by_name = tmp_path / "archive.zip"
+    with zipfile.ZipFile(by_name, "w") as z:
+        z.writestr("export/ReportHistory-1.html", "<html></html>")      # caught by the member's name
+    by_content = tmp_path / "backup.zip"
+    with zipfile.ZipFile(by_content, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("history.html", report_html(report_rows()))          # caught by the member's content
+    gz = tmp_path / "history.html.gz"
+    gz.write_bytes(gzip.compress(report_html(report_rows())))
+    clean = tmp_path / "clean.zip"
+    with zipfile.ZipFile(clean, "w") as z:
+        z.writestr("readme.txt", "nothing here")
+    files = [str(by_name), str(by_content), str(gz)]
+    assert hook.offending(files + [str(clean)]) == files
+
+
+def test_refusal_messages_never_print_an_absolute_path(result, tmp_path):
+    inside = Path(oh.__file__).resolve().parents[2] / "trade-history" / "r.html"
+    with pytest.raises(ValueError) as e:
+        oh.load_report(inside)
+    clone = tmp_path / "clone"
+    (clone / ".git").mkdir(parents=True)
+    with pytest.raises(ValueError) as w:
+        oh.write_outputs(result, clone / "out")
+    report = tmp_path / "private" / "history.html"
+    report.parent.mkdir()
+    report.write_bytes(report_html(report_rows()))
+    with pytest.raises(SystemExit) as m:
+        oh.main([str(report), "--out", str(clone / "out"), "--no-news"])
+    for msg in (str(e.value), str(w.value), str(m.value)):
+        assert "~/Personal project/trade-history" in msg
+        assert str(Path.home()) not in msg and str(tmp_path) not in msg and "clone" not in msg, msg
+
+
+def test_the_share_summary_states_the_usd_conversion_basis_but_never_the_rate(result):
+    text = oh.render_share(result)
+    assert result.summary.usd_to_ccy_source in text
+    assert "implied by" in text and f"{result.summary.usd_to_ccy:.4f}" not in text and "USD rate" not in text

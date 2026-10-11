@@ -12,7 +12,10 @@ tree is refused before it is opened ("complete export, run locally, share only a
 outputs go to that same private folder with mode 0600, and writing into ANY git work tree is refused (this repo under
 any spelling of its path, a sibling worktree, another clone). The console prints only the shareable summary
 (`render_share`, also written as `owner_history_*.share.md`): aggregates in R, %, counts, USD per ounce and K, never
-an amount in the account's currency, a ticket or a header field. The header's account number, name, company and server are never copied
+an amount in the account's currency, a ticket or a header field. Rule for `render_share`: never add lots, total
+ounces, a trade count per size, the USD rate or any amount to it. USD/oz x ounces is the P&L, and P&L / risk_pct is
+the account size. Errors shown to the owner never print a path (the folder or file name may carry the owner's name or
+account number): only the literal DEFAULT_DIR_SHOWN. The header's account number, name, company and server are never copied
 into a record or an output; only the account currency is kept. Position, order and deal tickets are used only to
 match a position to its opening order and are replaced by a sequence number. Seeds quote R, percentages and counts,
 never money amounts: do not paste amounts into the repo. A pre-commit hook (`scripts/check_no_mt5_report.py`)
@@ -69,7 +72,9 @@ from goldbot.base import FrozenRecord, UtcTimestamp, write_private
 from goldbot.data.calendar import DEFAULT_SESSIONS, LOCAL_SESSIONS, LocalSession
 from goldbot.data.timeutil import epoch_ns, server_to_utc
 
-DEFAULT_DIR = Path("~/Personal project/trade-history").expanduser()
+DEFAULT_DIR_SHOWN = "~/Personal project/trade-history"     # in messages: never the expanded home path
+DEFAULT_DIR = Path(DEFAULT_DIR_SHOWN).expanduser()
+PRIVATE_TITLE = "# Owner trade history" + " (private)"     # split: the commit hook matches the joined title
 CONTRACT_OZ = 100.0                 # XAUUSD: 100 troy ounces per lot (IC Markets / Vantage)
 ROUND_STEP, ROUND_BAND = 10.0, 1.0  # "near a round number": within $1 of a $10 level (uniform base rate 20%)
 OPEN_WINDOW_MIN = 30                # "near a session open": within 30 min after an Asia/London/NY open
@@ -1162,7 +1167,7 @@ def render_markdown(r: Result) -> str:
     def opt(x: float | None, fmt: str = "{:.2f}") -> str:
         return "n/a" if x is None else fmt.format(x)
     lines = [
-        "# Owner trade history (private)", "",
+        PRIVATE_TITLE, "",
         "> Private analysis of the owner's own MT5 history. Keep this file out of the repository. In-sample "
         "description of one discretionary record: nothing here is evidence of an edge.", "",
         f"Period {s.period_start:%Y-%m-%d} .. {s.period_end:%Y-%m-%d} UTC, {s.n_trades} XAUUSD trades, account "
@@ -1281,7 +1286,8 @@ def render_share(r: Result) -> str:
         "amount in the account's currency. In-sample description of one discretionary record, not evidence of an "
         "edge. Share it with the research director; do not commit it.", "",
         f"{n} XAUUSD trades, {s.period_start:%Y-%m} .. {s.period_end:%Y-%m}, {s.daily.n_days} trading days "
-        f"({n / s.daily.n_days:.1f} trades a day). Source: {s.source_format}.", "",
+        f"({n / s.daily.n_days:.1f} trades a day). Source: {s.source_format}. USD conversion: "
+        f"{s.usd_to_ccy_source}.", "",
         _row(["measure", "value"]), _row(["---", "---"]),
         _row(["win rate", f"{s.win_rate:.1%}"]),
         _row(["mean R per trade", "n/a (no trade with a stop on the loss side)" if s.expectancy_r is None
@@ -1371,17 +1377,16 @@ def refuse_in_git_tree(report: Path) -> None:
     may carry the owner's name or account number."""
     if git_tree_reason(report):
         raise ValueError(f"refusing to read a report inside a git work tree (it could be committed to a public repo); "
-                         f"move it to a private folder such as {DEFAULT_DIR}")
+                         f"move it to a private folder such as {DEFAULT_DIR_SHOWN}")
 
 
 def write_outputs(r: Result, out_dir: str | Path) -> list[Path]:
     """Markdown report, JSON summary and per-trade CSV, owner-readable only. Refuses any folder in a git work tree
     (this repo is public; a sibling worktree or another clone can be pushed too): the outputs describe the account."""
     out = Path(out_dir).expanduser().resolve()
-    why = git_tree_reason(out)
-    if why:
-        raise ValueError(f"refusing to write the owner's history into a git work tree ({why}); "
-                         f"use a private folder such as {DEFAULT_DIR}")
+    if git_tree_reason(out):
+        raise ValueError("refusing to write the owner's history into a git work tree; "
+                         f"use a private folder such as {DEFAULT_DIR_SHOWN}")
     stamp = pd.Timestamp.now("UTC").strftime("%Y%m%d-%H%M%S")
     md, js, tr, share = (out / f"{OUTPUT_PREFIX}_{stamp}.{ext}" for ext in ("md", "json", "trades.csv", "share.md"))
     write_private(md, render_markdown(r))
@@ -1437,9 +1442,16 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"report not found (a {src.suffix or 'file without extension'}): export it from MT5 first "
                          "(docs/OWNER_GUIDE.md)")
     targets = tuple(float(x) for x in a.targets.split(",") if x.strip())
-    result = analyse(load_report(src, a.server_tz), contract=a.contract, targets=targets,
+    try:
+        report = load_report(src, a.server_tz)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    result = analyse(report, contract=a.contract, targets=targets,
                      start_balance=a.start_balance, events=_load_events(a.no_news))
-    paths = write_outputs(result, a.out or src.parent)
+    try:
+        paths = write_outputs(result, a.out or src.parent)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
     print(render_share(result))                            # aggregates only: a session transcript may keep stdout
     print(f"wrote {len(paths)} files ({', '.join(p.name.split('.', 1)[1] for p in paths)}) next to the report; "
           "the .md holds the amounts and stays private, the .share.md is the summary to share")
