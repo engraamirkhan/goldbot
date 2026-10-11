@@ -276,6 +276,7 @@ gaps:                                # bounded spawning (goldbot/ops/gap_watch.p
 
 telegram:                            # owner user ids go in config/settings.local.yaml (per server), never here
   digest_at: "06:45"                 # daily owner digest at this UTC time, before London (goldbot/telegram/digest.py)
+  deadman_every_min: 2               # outside dead man's switch: healthy ping period (goldbot/ops/deadman.py); = the check's period
 
 attribution:                         # daily deterministic attribution (goldbot/research/attribution.py, BACKLOG 12); reporting only
   window_days: 180                   # closed shadow trades exited in the last 180 days

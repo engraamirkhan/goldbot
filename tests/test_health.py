@@ -16,13 +16,15 @@ from goldbot.telegram.bus import ApprovalBus
 NOW = pd.Timestamp("2026-10-07 14:00", tz="UTC")        # Wednesday afternoon: gold market open
 SATURDAY = pd.Timestamp("2026-10-10 12:00", tz="UTC")   # weekend: market closed
 SETTINGS = load_settings().model_copy(update={"telegram": TelegramSettings(allowed_user_ids=[42])})
-ALL_SECRETS = {"telegram-bot-token", "tradingview-webhook-secret", "mt5-icm-demo", "anthropic-api-key", "github-token"}
+ALL_SECRETS = {"telegram-bot-token", "tradingview-webhook-secret", "mt5-icm-demo", "anthropic-api-key", "github-token",
+               "deadman-url"}
 
 
 def make_ctx(tmp_path: Path, now: pd.Timestamp = NOW, secrets: set[str] | None = None, **kw) -> HealthContext:
     have = ALL_SECRETS if secrets is None else secrets
     base: dict[str, Any] = dict(state_dir=tmp_path, now=now, settings=SETTINGS, accounts=[AccountRef(account_id="icm-demo")],
-                get_secret=lambda k: "s3cr3t-value" if k in have else None,
+                get_secret=lambda k: (("https://hc-ping.com/s3cr3t" if k == "deadman-url" else "s3cr3t-value")
+                                      if k in have else None),
                 disk_usage=lambda p: (100e9, 50e9, 50e9))
     base.update(kw)
     return HealthContext(**base)

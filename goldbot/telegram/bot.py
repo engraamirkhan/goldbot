@@ -12,6 +12,7 @@ import pandas as pd
 from goldbot.config import ROOT, TelegramSettings
 from goldbot.ops import accounts
 from goldbot.ops.account_view import proposal_budget_from_state
+from goldbot.ops.deadman import DeadMan
 from goldbot.ops.deploy import DeployWatch
 from goldbot.ops.health import HealthContext, HealthWatch, run_checks
 from goldbot.telegram import automode
@@ -70,6 +71,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
         self.state_dir = state_dir
         self.health = HealthWatch(state_dir)
         self.settings = settings or TelegramSettings()
+        self.deadman = DeadMan(accounts.get_secret, self.settings.deadman_every_min)   # outside switch, ADR 0014
         self.offer = automode.AutoModeOffer(state_dir)
         self.digest = DigestSchedule(state_dir, self.settings.digest_at)     # goldbot/telegram/digest.py
         # one-click deploys (Linux servers; the systemd unit sets GOLDBOT_DEPLOY=1): goldbot/ops/deploy.py
@@ -138,16 +140,24 @@ class TelegramBot:  # pragma: no cover - needs network + token
 
     async def _health_pass(self) -> None:
         """Run the health checks and tell the owner about checks that turned fail or recovered (dedupe in
-        state/health_last.json, see goldbot.ops.health.HealthWatch)."""
+        state/health_last.json, see goldbot.ops.health.HealthWatch), then ping the outside dead man's switch: ok
+        while healthy, /fail on a FAIL or an undelivered alert, nothing when the checks themselves did not run."""
+        report, delivered = None, True
         try:
             report = await asyncio.to_thread(lambda: run_checks(HealthContext.from_runtime(self.state_dir)))
             text = self.health.alert(report)
             if text:
-                for uid in self.owner_ids:
-                    await self.app.bot.send_message(uid, text)
+                try:
+                    for uid in self.owner_ids:
+                        await self.app.bot.send_message(uid, text)
+                except Exception:
+                    delivered = False
+                    raise
             self.health.record(report)          # only after delivery: a failed send is retried next pass
         except Exception:
             log.exception("health pass")
+        if report is not None:
+            await asyncio.to_thread(self.deadman.after_health, report, delivered=delivered)   # never raises
 
     async def _digest_pass(self) -> None:
         """The daily owner digest, once per slot (state/telegram_digest.json); a slot missed while this service was
