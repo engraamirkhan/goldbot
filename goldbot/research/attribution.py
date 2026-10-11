@@ -1,6 +1,10 @@
 """Deterministic performance attribution (BACKLOG item 12, TRACEABILITY G12): where R is made or lost and why,
 computed by code every day from the shadow book (every candidate, taken or not), the engines' fills and orders and
-the canonical cost table -> state/attribution.json and the markdown summary state/attribution.md.
+the canonical cost table -> state/attribution.json and the markdown summary state/attribution.md. The exit mix also
+carries each exit type's median MAE / MFE in R (BACKLOG 23, playbook G-9; labels/excursion.py). Known biases of the
+labels' exit-bar convention: a stop exit's MAE is -1 R and a target exit's MFE is target / stop in R by construction
+(marked "fixed": no information); stop-first understates the MFE of a bar that touched both levels; a gapped stop is
+filled at the stop, so shadow MAE on stops is not comparable with live MAE (which includes the gap).
 
 Unit of account: one closed shadow trade, in R (its own initial risk, |entry - stop|). The shadow book trades at the
 paying side of the quote (labels' mechanics), so its R already pays the spread and nothing else. Per trade:
@@ -123,6 +127,9 @@ class Cell(FrozenRecord):
 
 class ExitCell(Cell):
     share: float
+    # BACKLOG 23: median MAE / MFE in R (labels/excursion.py) of the cell's trades that carry one (None: none do)
+    mae_r_median: float | None = None
+    mfe_r_median: float | None = None
 
 
 class TradeRow(FrozenRecord):
@@ -149,6 +156,8 @@ class TradeRow(FrozenRecord):
     swap_r: float
     r_gross: float
     r_net: float
+    mae_r: float | None = None            # BACKLOG 23 (None: a trade opened before excursions were recorded)
+    mfe_r: float | None = None
 
 
 class CostSummary(FrozenRecord):
@@ -335,7 +344,8 @@ def trade_rows(trades: list[ShadowTrade], *, costs: CostModel, daily_vol: pd.Ser
                              risk_usd=round(risk, 6), nights=int(nt), r_shadow=_r(r_shadow) or 0.0,
                              spread_r=_r(spread) or 0.0, slippage_r=_r(slip) or 0.0, commission_r=_r(comm) or 0.0,
                              swap_r=_r(swap) or 0.0, r_gross=_r(gross) or 0.0,
-                             r_net=_r(gross - spread - slip - comm - swap) or 0.0))
+                             r_net=_r(gross - spread - slip - comm - swap) or 0.0, mae_r=_r(t.mae_r),
+                             mfe_r=_r(t.mfe_r)))
     return rows
 
 
@@ -406,7 +416,14 @@ def build_report(trades: list[ShadowTrade], *, now: pd.Timestamp, costs: CostMod
         "side": split(lambda r: r.side, taken), "regime": split(lambda r: r.regime, taken),
         "decision": split(lambda r: "taken" if r.taken else "not_taken", path),
         "exit": split(lambda r: r.exit, taken)}
-    exits = {k: ExitCell(**c.model_dump(), share=round(c.n / len(taken), 9)) for k, c in breakdowns["exit"].items()}
+    def median(xs: list[float | None]) -> float | None:
+        vals = [x for x in xs if x is not None]
+        return _r(float(np.median(vals))) if vals else None
+
+    exits = {k: ExitCell(**c.model_dump(), share=round(c.n / len(taken), 9),
+                         mae_r_median=median([r.mae_r for r in taken if r.exit == k]),
+                         mfe_r_median=median([r.mfe_r for r in taken if r.exit == k]))
+             for k, c in breakdowns["exit"].items()}
 
     comp = {c: np.array([getattr(r, f"{c}_r") for r in taken], dtype=float) for c in COMPONENTS}
     total = sum(comp.values()) if taken else np.zeros(0)
@@ -475,11 +492,18 @@ def render_markdown(rep: AttributionReport) -> str:
               "side": "By side", "regime": "By regime (volatility tercile)", "decision": "By decision (taken vs not)"}
     for key, title in titles.items():
         lines += _rows(title, rep.breakdowns[key])
-    lines += ["## Exit mix (taken)", "", "| exit | n | share | net R | t | verdict |", "|---|---:|---:|---:|---:|---|"]
+    lines += ["## Exit mix (taken)", "", "| exit | n | share | net R | t | verdict | median MAE R | median MFE R |",
+              "|---|---:|---:|---:|---:|---|---:|---:|"]
     for k in EXIT_GROUPS:
         if k in rep.exits:
             e = rep.exits[k]
-            lines.append(f"| {k} | {e.n} | {e.share:.0%} | {_fmt(e.mean_r_net)} | {_fmt(e.t_stat, '+.2f')} | {e.verdict} |")
+            lines.append(f"| {k} | {e.n} | {e.share:.0%} | {_fmt(e.mean_r_net)} | {_fmt(e.t_stat, '+.2f')} | {e.verdict} | "
+                         f"{_fmt(e.mae_r_median, '+.2f')}{' (fixed)' if k == 'stop' else ''} | "
+                         f"{_fmt(e.mfe_r_median, '+.2f')}{' (fixed)' if k == 'target' else ''} |")
+    lines += ["", "MAE / MFE follow the labels' exit-bar convention (stop first): (fixed) = set by construction (a stop "
+              "exit's MAE is -1 R, a target exit's MFE is target / stop); the MFE of a bar that touched both levels is "
+              "understated; a gapped stop fills at the stop, so shadow MAE on stops is not comparable with live. A "
+              "scaled trade's figures cover the whole position until its final exit."]
     c = rep.costs
     lines += ["", "## Costs per taken trade (R)", "", f"Source: {c.source}.", "",
               "| session | " + " | ".join(COMPONENTS) + " |", "|---|" + "---:|" * len(COMPONENTS),

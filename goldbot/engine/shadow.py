@@ -9,7 +9,8 @@ target_atr/stop_atr x ATR, stop assumed first when both are touched in one bar, 
 policy (trail, scale-out, hard flat) advances through `labels.exit_policy.policy_step`, the step the labels use, so
 the shadow outcome of each policy equals its label; `stop` stays the initial stop (the trade's risk). Like the labels,
 a stop is filled at the stop even when a bar gaps through it (optimistic; the live broker fills a gap at the market:
-see labels.exit_policy), so on a gap the shadow return overstates the live one by the gap.
+see labels.exit_policy), so on a gap the shadow return overstates the live one by the gap. Each trade also carries
+its MAE / MFE (BACKLOG 23) from the same bars, with the labels' semantics (labels.excursion.label_excursions).
 
 One engine hosts the book (the account on the canonical-cost broker), so trades are never counted twice.
 
@@ -33,6 +34,7 @@ from pydantic import Field
 
 from goldbot.base import Record, UtcTimestamp
 from goldbot.config import tf_seconds
+from goldbot.labels.excursion import Excursion, bar_prices, exit_bar_extremes
 from goldbot.labels.exit_policy import ExitPolicy, PolicyState, new_state, policy_return, policy_step
 from goldbot.research.metrics import summarize
 from goldbot.research.promotion import PerfStats
@@ -61,6 +63,16 @@ class ShadowTrade(Record):
     atr_usd: float | None = None      # the signal bar's ATR, which the policy's distances are in
     state: PolicyState | None = None  # trailed stop, best price, scale-out fill, hard-flat deadline
     scored_feature_version: str | None = None   # the frame version the model scored (None: older book)
+    # MAE / MFE from the bars, as the labels (labels/excursion.py): price and bar time run while open; R (of the
+    # initial risk |entry - stop|) set at the exit. None on a trade opened before the change (its first bars unseen).
+    # The track starts at `entry` stamped `entry_ts` (the signal bar's open). A scaled trade's figures cover the whole
+    # position until its final exit. A stop exit's MAE is -1 R by construction (gaps filled at the stop)
+    mae_price: float | None = None
+    mae_utc: UtcTimestamp | None = None
+    mfe_price: float | None = None
+    mfe_utc: UtcTimestamp | None = None
+    mae_r: float | None = None
+    mfe_r: float | None = None
 
 
 class VersionBook(Record):
@@ -127,6 +139,7 @@ class ShadowBook:
                     self._policy_bar(t, bar, ts, timeframe)
                 else:
                     self._barrier_bar(t, bar, ts)
+                self._excursion_bar(t, bar, ts)
                 if t.exit is None:
                     still.append(t)
                 else:
@@ -163,6 +176,26 @@ class ShadowBook:
             out = ("time", close)
         if out is not None:
             self._close(t, ts, out[1], out[0])
+
+    @staticmethod
+    def _excursion_bar(t: ShadowTrade, bar: pd.Series, ts: pd.Timestamp) -> None:
+        """Fold this bar into the trade's MAE / MFE after its exit decision (labels/excursion.py: the exit bar under the
+        stop-first convention), and set the R figures at the exit. A trade whose track did not start on its first bar
+        (opened before the change) keeps none: its earlier bars were never seen."""
+        if t.mae_price is None or t.mae_utc is None or t.mfe_price is None or t.mfe_utc is None:
+            if t.bars_held != 1:
+                return
+            ex = Excursion.start(t.entry, t.entry_ts)
+        else:
+            ex = Excursion(mae_price=t.mae_price, mae_utc=t.mae_utc, mfe_price=t.mfe_price, mfe_utc=t.mfe_utc)
+        fav, adv = bar_prices(t.side, bar)
+        if t.exit is not None and t.barrier is not None:
+            fav, adv = exit_bar_extremes(t.side, fav, adv, t.exit, t.barrier)
+        ex.fold(t.side, adv, ts, fav, ts)
+        t.mae_price, t.mae_utc, t.mfe_price, t.mfe_utc = ex.mae_price, ex.mae_utc, ex.mfe_price, ex.mfe_utc
+        if t.exit is not None:
+            s = ex.summary(t.side, t.entry, t.stop)
+            t.mae_r, t.mfe_r = s["mae_r"], s["mfe_r"]
 
     @staticmethod
     def _close(t: ShadowTrade, ts: pd.Timestamp, px: float, barrier: str) -> None:
