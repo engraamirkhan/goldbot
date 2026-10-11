@@ -169,7 +169,8 @@ class Scheduler:
         self.jobs: dict[str, Job] = {}
         self.db = Database.open(self.path.parent, "aux")
         if self.path.name == SCHEDULER_IMPORT.source:
-            dual_read(self.db, SCHEDULER_IMPORT, self.path.parent, merge_scheduler_json)
+            dual_read(self.db, SCHEDULER_IMPORT, self.path.parent, merge_scheduler_json,
+                      lambda conn: scheduler_document(conn) or "")
         with self.db.connection() as conn:
             self.state: dict[str, JobState] = {k: load_record_json(JobState, b, source="aux.db:scheduler_jobs")
                                                for k, b in load_jobs(conn).items()}
