@@ -1,0 +1,5 @@
+id: M17
+requirement: '"at least 1,500 labelled candidates overall and 60 per fold"'
+status: in review
+code: not enforced on `main`; proposal P1 adds the gates
+test: untested

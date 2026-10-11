@@ -1,0 +1,5 @@
+id: S4
+requirement: Unreadable engine state counts as a fault (fail closed)
+status: implemented
+code: goldbot/risk/supervisor.py:69-70
+test: tests/test_risk_ops.py::test_engine_state_is_written_atomically_and_an_unreadable_one_halts

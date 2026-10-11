@@ -203,7 +203,14 @@ and the rest still arrives. It never contains account numbers or emails.
   again on the next card). The failure turns into a warning an hour after the refusal (the warning keeps its time);
   another refused click fails and alerts again. The counts live in the running engine: a restart clears them, but
   the engine rewrites `engine_<account>.json` only on a tick or a bar, so health keeps showing the old block until
-  the first tick after the restart (over a weekend: the Sunday open).
+  the first tick after the restart (over a weekend: the Sunday open). Every other service (supervisor, scheduler,
+  telegram, news, api) reports the same way as `schema_skew:svc:<service>` (from `heartbeat_<service>.json`,
+  refreshed every minute, so a restart clears it within a minute). `schema_skew:svc:telegram` matters most: the
+  Telegram service carries the owner's decisions. A scheduler warning means the older release is ignoring a newer
+  job-control field in `aux.db` (for example a pause): check `job:<name>` and roll forward before the job's next
+  slot if that field matters. A heartbeat from a release before this check carries no block and is skipped. "block unreadable: the
+  process could not build it" means the summary itself failed in that service (a bug, traceback once in its log):
+  the skew of that process is unknown until it is fixed; file an issue and restart the service.
 * Before anything is touched, every deploy and rollback also checks:
   * **aux.db.** A target from before schema compatibility (no `compat_back_to` in its `goldbot/db/migrations.py`)
     cannot open aux.db at schema 5. The script stops every service (inputs, supervisor, engines last), steps aux.db

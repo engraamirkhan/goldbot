@@ -1,0 +1,5 @@
+id: U3
+requirement: '"single-use 72-hour link"'
+status: implemented
+code: goldbot/api/auth.py:135-141
+test: tests/test_api.py::test_bootstrap_invite_roles_and_decisions

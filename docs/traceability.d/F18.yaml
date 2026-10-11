@@ -1,0 +1,5 @@
+id: F18
+requirement: 'Survey rank 4, round numbers (#46): distance to the nearest round level'
+status: implemented
+code: 'goldbot/features/survey.py `round_numbers` (family `structure`): `round_<5/10/25/50>_dist_atr` = (close - level)/ATR14, `round_<s>_touches` over the last 50 bars'
+test: tests/test_survey_features.py::test_round_number_distance_is_in_atr_and_touches_count_bars_trading_through_the_level

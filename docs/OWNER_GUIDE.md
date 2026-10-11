@@ -82,6 +82,9 @@ Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decisio
 | Paid calendar feed (C) | Not for Q1 |
 | Other instruments (D) | Defer until the slow-TSMOM verdict |
 | Per-agent throttle thresholds (BACKLOG 21, built, off) | Turn on at 3 full losses / 4 bars cooldown / 3 entries a day. The caps are **per decision, per account** (each account counts its own; checked at every entry). After the cooldown the count stays: one more full loss blocks again, until a real shadow win (target or >= 0.25R) of the live model |
+| Open-risk heat cap (BACKLOG 19, built, off) | Turn on at 2% of equity and 2 positions per side. Inert at £1,000 (the combined-notional cap already allows only one 0.01 lot); it matters once two positions fit |
+| Open risk in the daily projection (BACKLOG 35, built, off) | **Yes**, with the £50 limit: two open trades can then never carry the day past it |
+| Same-side cap: per account or across accounts (BACKLOG 19) | **Per account for now** (built). The playbook counts same-side positions of different agents as one bet across the whole book; with one account running the two readings are the same. Decide before a second account runs: a combined count needs the supervisor to publish each account's open risk and side counts |
 | Tier-2 news blackout (BACKLOG 18, built, off) | No new entries from 5 min before to 15 min after a tier-2 US release (PPI, retail sales, ISM, GDP, JOLTS, jobless claims, FOMC minutes, Fed chair, any other high-impact USD item in the Forex Factory calendar). If the calendar is missing, entries stop (`calendar_unavailable`). Recommend: on before tiny-live, after the alert path and the holiday review (BACKLOG 45, 46) |
 | Reopen window (BACKLOG 17, built, off) | No new entries for 10 min after each daily reopen and for 30 min after the Monday open (the playbook proposed 15 min daily). Read from the broker's session hours. Recommend: on before tiny-live, after the alert path and the holiday review (BACKLOG 45, 46) |
 | Holiday days (BACKLOG 17, built, off) | No new entries on the days in `config/holidays_cme_metals.yaml` (US federal holidays as a proxy, not measured: CME metals closed or short days, not Columbus or Veterans Day; Good Friday, Easter Monday, the day after Thanksgiving, 24/26/31 Dec, 1/2 Jan; 2026-2028). If the list runs out, entries stop until it is extended; health warns 90 days ahead. Recommend: on before tiny-live, after the alert path and the holiday review (BACKLOG 45, 46) |
@@ -95,6 +98,22 @@ the shadow book and the backtest candidates, and whether the removed trades did 
 and timeframe. A window that removes good trades costs money. Health tells you on Telegram if a window has stopped
 all entries for more than 30 minutes while the market is open (`entry_windows:` checks), if the calendar has not been
 fetched for 36 hours, and 90 days before the holiday list runs out.
+
+**How to turn these on.** On the server, add to `config/settings.local.yaml` (not in the repo) and restart the
+engine:
+
+```yaml
+risk:
+  heat: { enabled: true, max_open_risk: 0.02, max_same_direction: 2 }
+  project_open_risk: true
+```
+
+What changes: a new entry is refused when what your open trades can still lose down to their stops, plus the new
+trade's stop risk, is above 2% of equity (`heat_cap`), or when two trades on the same side are already open
+(`same_direction_cap`). With `project_open_risk`, the £50 daily check also counts what the open trades can still
+lose. A trade without a stop (for example one you opened by hand) blocks new entries while either is on
+(`open_risk_unknown`): put a stop on it. Closing trades is never blocked. `engine_<account>.json` shows `open_risk`
+per position whether or not these are on.
 
 ## 4a. Share your own trading record (private)
 The research team turns how you trade by hand into hypotheses it can test. Your MT5 report holds your account

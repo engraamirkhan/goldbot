@@ -1,0 +1,5 @@
+id: M5
+requirement: 'Breakout: "1h range >= 8 bars and < 1.2 ATR wide ... tick volume > 1.5x 20-bar median"'
+status: deviates
+code: 'goldbot/specialists/breakout.py:26 uses `max_range_atr` 2.0 (docstring: 8 random-walk bars span ~3 ATR, 1.2 never fires); volume rule as designed'
+test: tests/test_specialists.py::test_breakout_needs_a_tight_range_and_volume

@@ -44,6 +44,9 @@ Work is done only when every item holds; the report says which hold and shows th
 - `ruff`, `mypy` clean; unit and integration suites green (`scripts/gates.sh`), results pasted verbatim with counts.
 - No widening of risk: any change on the order/exit path is listed for `trading-safety-reviewer`; any research/label/feature change for `quant-reviewer`.
 - Matches the surrounding idiom (pydantic Records, Settings with yaml entries and comments, docstrings quoting the design rule); no dead code, no TODOs left unexplained.
-- Docs updated in the same commit: HANDOFF bullet, TRACEABILITY row and counts, RUNBOOK when the owner's steps change, API contract regenerated when goldbot/api changes.
+- Docs updated in the same commit: HANDOFF bullet, TRACEABILITY row, RUNBOOK when the owner's steps change, API contract regenerated when goldbot/api changes.
+  HANDOFF, TRACEABILITY and BACKLOG: add a fragment and run the assembler; never edit the rendered files
+  (`python scripts/docs_assemble.py new-handoff <slug>` / `new-row R --slug <s>` / `new-item`, then `python scripts/docs_assemble.py`;
+  a clashing id is fixed with `fix-ids`; ADR 0012).
 - Stayed inside the assigned files; one logical commit with a `<type>: <description>` message and the Co-Authored-By line; nothing pushed.
 - Report states what was NOT done or verified, plainly.

@@ -1,0 +1,5 @@
+id: R6
+requirement: '"Per-trade risk 1% max - Clamped, not rejected"'
+status: implemented (fixed here)
+code: 'goldbot/risk/gate.py:164-166: the cap now applies after the multiplier (before: 0.8% x 1.5 = 1.2%)'
+test: tests/test_trace_risk.py::test_per_trade_risk_is_clamped_at_one_percent_after_the_multiplier; tests/test_cov_risk.py::test_risk_per_trade_is_capped_by_the_hard_maximum

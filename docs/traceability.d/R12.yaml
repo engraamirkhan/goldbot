@@ -1,0 +1,5 @@
+id: R12
+requirement: Weekly cap resets "Sunday 17:00 New York"
+status: deviates (equivalent)
+code: goldbot/risk/gate.py:185 `_risk_week` rolls at Sunday 00:00 UTC on the first day roll; both boundaries fall in the weekend closure (broker opens Sunday 22:02 UTC summer / 23:02 winter), so no trading hour is counted differently
+test: tests/test_risk_ops.py::test_new_day_rolls_the_week_only_at_the_week_boundary

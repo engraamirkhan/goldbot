@@ -1,0 +1,1463 @@
+# goldbot — status and next steps
+
+Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc; edit it here from now on).
+Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
+
+## Where things are (as of 2026-10-05)
+<!-- handoff.d:status -->
+- GitHub `engraamirkhan/goldbot`. PR 36 (2026-10-01..04 work) is merged into `main`; follow-up work goes on branch
+  `claude/gifted-goldberg-lcb7pl` restarted from `main` (Claude sessions do not push to `main` directly). CI (`ci.yml`) runs pre-commit, backend lint/mypy/unit/integration, frontend eslint/tsc/vitest, an API
+  contract check and Playwright e2e as separate jobs, and opens one issue labelled `ci` with each failed job's output.
+- Built and tested: point-in-time store, calendar/UTC, resampler, loaders, quality checks, macro loaders; feature
+  registry (volatility, MA families + ribbon, trend, mean-reversion, MFI, breakout, microstructure, S/R, swings,
+  gaps, candles, session/calendar, macro); triple-barrier labels; specialist interface with agent lineage;
+  four specialist families per the design table: session-open (15m), mean-reversion (15m), trend (1h, 4h EMA-50
+  slope + pullback) and breakout (1h, tight-range break on volume); purged walk-forward + LightGBM meta-labeller + deflated Sharpe + trial registry;
+  RiskGate + supervisor; broker protocol, paper broker, MT5 adapter, account classifier; TradingView webhook;
+  account registry + keyring credential prompts (demo-first, live locked by gate); rule-table allocator;
+  Telegram approval centre + bot adapter; trading engine loop; FastAPI backend with multi-user auth
+  (owner/approver/viewer, password + authenticator, invites, lockout, audit); React+TS dashboard
+  (Overview, Approvals, Agents, Feeds incl. scheduled jobs, Users); VPS bootstrap (NSSM services, Cloudflare Tunnel).
+- Typed stack: records are pydantic (`goldbot/base.py`; persisted timestamps use `UtcTimestamp`), settings are a
+  validated `Settings` model, every API endpoint has request/response models, mypy is clean; web types are generated
+  from the backend OpenAPI schema.
+- Data: every month 2010-01 .. 2026-10 is complete on release `data-v1` (no partial or imputed months after the
+  gap-fill run 37012050707). The weekly scheduled data run refreshes the current year (completed days only).
+- Research pass: `scripts/research_pass.py` + `.github/workflows/research.yml` (walk-forward on the release bars,
+  leakage check, per-year table; registry kept on release `research-v1`; report to issue "research: <specialist>").
+  It is on `main` (PR 36 merged), so it can be dispatched from the Actions tab.
+- Scheduler (VPS service `goldbot-scheduler`, `goldbot/ops/scheduler.py` + `goldbot/ops/jobs.py`, times in
+  `settings.yaml: scheduler`): nightly cost tables per account from the engine's own logged ticks and fills
+  (`execution/costs.py`, slippage prior until 50 fills) + Friday classifier; Saturday retrain into a challenger
+  (`research/model_registry.py`, checksummed artefacts) with automatic promotion through the design's gates
+  (`research/promotion.py`) once a shadow record exists; monthly bounded label-grid research loop. The engine logs
+  ticks/fills, prices candidates with the nightly cost table, acts on the classifier's account class (X14: Unknown or
+  not yet classified = no entries on a broker account, health warns; Standard = 15m families off except session_open
+  and gross edge > 1.5x the measured round trip; the paper broker is never restricted), and trades
+  only with registry champions (hot-reloaded on promotion).
+- Shadow book (`engine/shadow.py`): the engine on the canonical-cost broker (IC Markets) paper-trades the champion and
+  every challenger on live bars with label-identical mechanics (exact parity with `triple_barrier` is tested) and
+  writes `state/shadow_<version>.json`; the Saturday job promotes/retires from it, and the daily `model_watch` job runs
+  a CUSUM on a new champion's first two weeks and restores the previous champion on an alarm.
+- Population tournament (`research/population.py`, weekly `tournament` job): agents = specialist family + config with
+  lineage; founders seeded per family; fitness only from shadow trades (per-trade Sharpe x calibration x drawdown
+  haircut x diversity penalty); ranked after 60 trades; retired on a negative 80% lower bound after 100 trades or two
+  bottom-quartile months (then 6 months more in shadow); shadow -> live via DSR with population size as trials;
+  winners cloned into 2-3 mutated shadow children; caps 12 live / 24 shadow; capital = family weight x fitness share.
+  Models are keyed by agent (`ModelRegistry`); the engine trades only live members and shadow-trades all of them;
+  `state/agents.json` feeds the dashboard's Agents league table.
+- Journal + staff agents: the engine journals every decision to the store's `decisions` table. `goldbot/agents/`:
+  data steward and risk officer (weekday nights), journal coach and improvement agent (Saturdays) run on Claude
+  Opus 5.5 through a budgeted tool-use loop over read-only tools (`agents/tools.py`; the only write is filing a
+  hypothesis to `state/hypotheses.jsonl`), with refusal fallbacks enabled, a per-run cap and a monthly cap
+  (`settings.yaml: agents`), every run logged to `state/agent_runs.jsonl`; reports appear on the Agents screen.
+  The research analyst (Saturdays, after the improvement agent) turns filed hypotheses into at most two bounded
+  walk-forward trials per run (`run_trial`: numeric overrides within +-50% of the defaults, recorded in the trial
+  registry) and records a verdict on each hypothesis; it promotes nothing. The execution auditor (weekday nights)
+  explains `execution/audit.py`'s numbers: slippage per session/order type against the nightly cost table with drift
+  flags, widened spreads, failed orders.
+- Research director (`research/director.py`, scheduler job `research_director` Saturdays 12:30 UTC, before
+  `agents_weekly`): a deterministic score per family from the trial registry (median OOF AUC z-score with
+  se = 1/sqrt(3 n_oof), best DSR on 200+ model-filtered trades, lookahead flags) and the shadow book/population
+  (shadow t-stat), then splits what is left of the quarter's trial budget (`research.trial_budget_quarter`, 20 when
+  unset, counted from the registry): an exploration floor (`research.director_floor`) per family, the rest in
+  proportion to evidence, 0 for a lookahead-dirty family; the label grid may use at most half of a family's share.
+  Trials with status `holdout` are never evidence and `monthly_research` never walks into the held-out year
+  (`research.holdout_from`, default 2025-10-01). Output `state/research_plan.json`; `monthly_research` follows it (flat
+  budget without a plan under 21 days old) and stops when the quarter's budget is spent. The `research_director` staff
+  agent explains the plan (`read_research_plan`) and may file two hypotheses; the analyst prefers the plan's focus
+  families. Boundary: it decides what to research, never what is promoted or traded; promotion stays with the gates.
+  Two more inputs (2026-10-10, revised after the quant review): (1) the daily attribution report
+  (`state/attribution.json`): the director rebuilds each family's cell from the report's per-trade rows, counting only
+  trades entered on or after their model version's promotion (model registry; an unpromoted version counts nothing),
+  from a report dated at or before the plan and at most 14 days old; under `attribution.min_trades` is noise. The
+  net-R t-stat is shrunk by n/(n+100), clipped to +-1 at t = 3, and tilts the evidence share of the pool by at most
+  +-25%, only for a family with no shadow t-stat (the same shadow trades are never counted twice; the
+  `director_floor` is never tilted). (2) Retired families are governance in settings, `research.retired_families`
+  (family, hypothesis id, retired date, reason, registry trials); `docs/research/hypotheses.md` section B mirrors it,
+  a test checks they agree, and the plan stores the doc's sha256 and any drift (`hypotheses_drift`) but the doc never
+  moves a trial. The retired families SHARE one exploration trial a quarter (none once any of them had a trial this
+  quarter; after the live families' floors), given to the clean retired family with the best positive
+  post-retirement attribution, else by a deterministic rotation over quarters (`retired_explore` in the plan); each
+  is reinstated only by attribution trades after its retirement date with shrunk t >= 2
+  Bonferroni-corrected for retired families x sources (5 families: 2.61). (3) The pre-registered queue is reserved
+  first: `research.reserved_trials_quarter: 13` (docs/research/preregistration-2027Q1.md) minus trials run against a
+  `preregistered` registry row, at least the queued preregistered rows; the director and `monthly_research` spend
+  only budget - used - reserved, and the plan's grid share is 0 while `research.label_grid_paused` (it is). With
+  today's settings in Q1 2027: 20 - 13 = 7 planned trials, tsmom 6 and 1 shared by the five retired families. The
+  plan records `evidence_budget`, `moves`, `quarter_reserved`, `reservation`, `retired_floor`, `retired_explore` and
+  `reinstate_t`.
+- Director re-verify fixes: the research analyst's trial runner (`jobs.make_trial_runner`) now spends only budget -
+  used - reserved like the director and the grid; only a trial of a configuration with a pending `preregistered` row
+  of the quarter may use the reservation, and its registry row is linked to that pre-registration
+  (`director.pending_preregistration`). `monthly_research` reads the reservation of the slot's quarter, not the wall
+  clock's.
+- Reservation on the manual paths (quant review MEDIUM, 2026-10-10): `scripts/research_pass.py` (ad-hoc variants,
+  screens, pooled runs, holdout scorings) and `--discover` now check through `TrialRegistry.check_budget_reserved`
+  (same `reserved_trials`/`pending_preregistration` as the director): a run matching a pending queued
+  `preregistered` row (family + config hash) may use the reservation and is linked to that row; anything else must fit
+  in budget - used - reserved. An ad-hoc discovery's own just-in-time pre-registration is written with `queue: false`
+  and no longer counts as a queue trial run. A run's link to its pre-registration now also matches the row's
+  timestamp (two rows can share a trial number). Holdout scorings come out of the unreserved remainder unless
+  pre-registered (preregistration-2027Q1.md). CPCV stays evidence, uncharged (ADR 0003). To spend the reserved H-02
+  slot, pre-register the discovery's exact config (incl. bars range) before running it.
+- Batch review fixes (2026-10-10): the research analyst (`jobs.make_trial_runner`) refuses a retired, non-reinstated
+  family (research.retired_families; reinstatement read from the director's current plan, none without one) once the
+  quarter's ONE shared retired-family exploration trial is used (`director.retired_quarter_trials`), unless a pending
+  pre-registration covers that exact config. Queued pre-registrations now carry `target_quarter` (default
+  `registry.planned_quarter`: the next quarter when written within 14 days of its start) and count in that quarter's
+  reservation; a trial uses one up whichever quarter it runs in (a row written 2026-12-30 and run 2027-01-04 is run in
+  2027Q1). `preregister` defaults to `queue=False`; `queue=True` must be written before its target quarter starts
+  (ValueError otherwise), and a hand-written row claiming a quarter already under way is ad hoc
+  (`director.is_queued`). Rows without `target_quarter` keep the quarter of their timestamp. The digest's
+  "next pre-registered trial" and budget line use the director's matching and show reserved/open. Preflight skips a
+  `*.db-wal`/`*.db-shm` that vanishes between glob and stat.
+- Reservations cannot move quarters or be backdated (quant re-review, 2026-10-10): a trial stamped before its
+  pre-registration's quarter starts never uses that row up (an early Q4 run of H-01's config left Q1 at 12), and every
+  runner (analyst, `research_pass.py`/`--discover` via `check_budget_reserved` -> `PreregisteredForLaterQuarter`, the
+  label grid, which skips the variant) refuses a config queued for a later quarter (`director.later_preregistration`).
+  An unlinked trial prefers the row of its own quarter. `preregister` has no `now=` (stamped by `registry._utcnow`), and
+  `target_quarter` without `queue=True` is a ValueError. The digest adds "next quarter: N queued".
+  For the owner / backlog (no code change): L2 research.reserved_trials_quarter (13) applies every quarter, so 2026Q4
+  is also held to 7 open trials although its 13 queued trials are planned for 2027Q1 (owner decision: a per-quarter
+  setting or 0 for 2026Q4); L4 the retired-family exploration limit is enforced only on the research-analyst path
+  (research_pass.py, discovery and the label grid do not check research.retired_families).
+- CUSUM re-verify fixes (M24/M25): h now sits halfway between the chosen reachable value of the statistic and the
+  next higher one (`cusum.decision_interval`: same rate, but unrounded live sums can no longer turn a tie into an
+  alarm); the drift watch calibrates on the agent's actual taken p values resampled per trade (`ps`), not their mean.
+  Live false-alarm rates (production `residual_cusum` arithmetic, 200k paths, p spread per trade): 4.84-4.96% at p
+  0.35-0.55 and 0.30-0.70 (the mean-p h gave 5.7-6.3% at 0.35-0.55; champion watch 2.6-2.9%). The new-champion watch runs two weeks or the
+  first 12 trades, whichever is later, capped at 8 weeks, with h calibrated for that count (`cusum.watch_trades`);
+  when the count cannot reach h it reports `cannot_alarm` (job output, `state/model_watch.json`, health warning
+  `model_watch`) instead of a silent "ok": such slow agents rely on drift_watch and the drawdown halt.
+- Approvals across processes (`telegram/bus.py`): engines, the API and the Telegram service are separate services,
+  so engines publish proposals to `state/approvals/pending/`, the dashboard or Telegram writes a decision file
+  (created exclusively: first decision wins), and the engine applies it on its next tick, re-running the RiskGate,
+  then archives it in `approvals/done/` with the outcome. Owner halt: `state/control.json`, set by Telegram `/halt`
+  or the dashboard (any approver); re-arm only on the dashboard by the owner with an authenticator code. Engines in
+  production (`halt_checks`) also block entries when the supervisor's heartbeat is missing or stale. Exits are
+  never gated.
+- An approved order never exceeds its card (ADR 0009, 2026-10-11): the approval re-check can only reduce the size
+  (`min(gate lots, card lots)`, journalled `approval_size_capped`), and a risk at the sent lots more than 2% above the
+  card's `risk_amount` (the broker's conversion moved) is refused `risk_above_approved`. Proposals carry the
+  account-currency risk, the minimum-lot note fields and the card's money (docs/ux/approval-card.md); restart
+  engine, Telegram and API together with the engine last when deploying a proposal-format change (RUNBOOK).
+- Clone mutations (`population.mutate_agent`): perturbed barriers/thresholds, a different feature subset
+  (`feature_seed`: seeded 40 of the eligible features) or a different timeframe for breakout and mean_reversion
+  (15m <-> 1h, holding horizon kept).
+- Self-improvement loop (learns from past and present, changes only through gates): Saturday 03:17 UTC the data
+  workflow appends the latest week of Dukascopy bars; 06:00 every population member is retrained on a rolling window
+  ending at the latest bar, charged the canonical broker's measured slippage and commission from the nightly cost
+  table (`jobs.live_extra_cost_usd`), and enters shadow as a challenger; it replaces the champion only when its live
+  shadow record passes the promotion gates, and the daily CUSUM rolls a new champion back if live results drift.
+  The tournament scores agents only on live shadow trades (expectancy, calibration of their own p, drawdown,
+  correlation), clones winners into mutated children and retires losers; the research analyst tests hypotheses the
+  improvement agent files from live scorecards. Every trial counts in the deflated Sharpe.
+- One position per agent at a time (`labels.one_at_a_time`): research keeps a candidate only after the previous one
+  exited, the shadow book refuses entries while the agent's trade is open, the engine skips an agent with an open
+  position or pending proposal. Without it trend's clustered candidates overlapped and inflated every statistic.
+- News blackout: `calendar_archive` (daily 06:10 UTC) stores the Forex Factory week in `calendar_events` with tiers
+  (1 = US CPI/NFP/FOMC/PCE, 2 = other high-impact USD); production engines block entries from 15 min before to 30
+  min after each tier-1 event, and for 30 min after a high-relevance unscheduled news shock. Headlines: service
+  `goldbot-news` (`run.py news`) polls the RSS feeds in `settings.yaml: news` every 5 min, scores gold-relevant items
+  in batches with structured output (budget `news.daily_cap_usd`, counted in the agents' monthly cap; unscored items
+  are kept), stores them in `news`. The macro/news analyst writes the pre-session briefing (weekdays 06:30 UTC) from
+  the calendar and headlines.
+- Telegram service (`python -m goldbot.ops.run telegram`, NSSM `goldbot-telegram`): sends proposals with
+  Approve/Reject buttons, posts each outcome, delivers every staff-agent report, answers /status and /halt
+  (`telegram/outbox.py` keeps progress across restarts).
+- One trial registry (`research/registry_sync.py`): the VPS monthly loop and the research workflow both union their
+  registry with the `research-v1` release copy before and after writing, so the deflated Sharpe counts every trial once.
+- Multi-timeframe: research, retrains, the dry run and the engine all build context with `features.mtf.context_tfs`
+  (every one of 1h/4h/1d longer than the decision bar, prefixed h1_/h4_/d1_), so a model sees the columns it was
+  trained on. The engine runs on its 15m clock and evaluates each agent only when a bar of the agent's own timeframe
+  completes; context features are cached until a new context bar completes; open positions' time barriers and
+  shadow trades count bars of the agent's timeframe.
+- pandas 3 keeps s/ms/us timestamp units: always use `timeutil.epoch_ns`, never `.asi8`.
+- Research discipline (proposal P1-P3, `docs/proposals/2026-10-design-improvements.md`): selection is cross-fitted
+  (fold k calibrated only on earlier folds' OOF predictions; threshold from signal-time information); the cost hurdle
+  is slippage + commission (`live_extra_cost_usd`, the settings prior before a cost table exists), not the spread
+  again; `research/gates.py` checks 1,500 candidates / 60 per test fold / three positive years incl. 2021-22, and
+  live promotion in the tournament needs a passed trial of the exact config; DSR is null below 200 trades; reports
+  carry rule-only gross and net expectancy. Quarterly budget of 20 pre-registered trials
+  (`research.trial_budget_quarter`), holdout 2025-10-01..2026-09-30 (`research_pass.py --score-holdout`, once per
+  config), monthly label grid paused (`research.label_grid_paused`). Meta-models get `side` and side-aligned signed
+  features (`features.registry.side_align`) from each specialist's declared `model_features` (h1_/h4_/d1_ context
+  included). Fold-internal feature selection is deferred.
+  Evaluator fixes (2026-10-08): research stops at the holdout start (no stub folds from later bars; the 60-per-fold
+  gate counts complete folds only); gates include DSR >= 0.95 on 200+ model-filtered trades; `--score-holdout` needs a
+  passed trial, is charged to the budget and is judged by its own rule (mean R > 0, t >= 1.65); one cap and one count
+  for the quarterly budget (`registry.quarter_trials`, every row stamped in the quarter; the director plans from the
+  same number); check-run-record under a portable registry lock; tournament, analyst trials and the paused monthly
+  loop sync the release registry first; engine threshold and size multiplier use cost ex spread (RiskGate keeps the
+  full round trip); signed-feature patterns are part of the feature version.
+  Rule: a clone (new config hash) needs its OWN passed research trial before shadow -> live; nothing is inherited
+  from its parent (the design counts real trials). Held-back agents show as `awaiting_research` in the tournament
+  job's output.
+  Deferred (L4): ~~a `preregistered` status written before a trial runs~~ (done 2026-10-10, discovery), an `eval_version` field on registry rows,
+  bootstrap confidence intervals on expectancy, and a seeded no-signal test (100 seeds, DSR < 0.5 in >= 95).
+- Primary-signal screen and new families (proposal P4, 2026-10-09): `research/screen.py` measures the rule alone
+  (every candidate, one position at a time, mid prices) over the research window (holdout excluded) and passes it
+  only with gross mean R > 0, t >= 2.0 and >= 1,000 events; net R is reported, not a criterion. `research_pass.py`
+  screens every configuration first and fits no model for one that fails (registry status `screened`) unless
+  `--skip-screen` (recorded as `screen_skipped`). **A screen is a trial**: it selects rules on data, so each screened
+  configuration is one registry row, charged to the quarter's budget and counted by the deflated Sharpe whether it
+  passes or not; when it passes, the walk-forward that follows is the same trial (one row). New families, both
+  registered and founders in the population: `tsmom` (1h, 4h option; vol-scaled trailing return over 24/120/480 h,
+  on a fixed 4-hour schedule, barriers 3.0/1.5 ATR, 48 bars) and `intraday_momentum` (15m; at mid-session on the
+  London or New York local clock, DST by zoneinfo, enter in the direction of the move since the session open, exit at
+  the session close, stop 2.0 / target 3.0 ATR). Their features (`tsmom`, `intraday_session`, family `momentum`) are
+  versioned registry features and pass the lookahead check; adding them changes `feature_version` for every family
+  (no champion exists, so nothing live is affected; retrains pick it up). Swap (2026-10-09, horizon study): net research
+  labels pay overnight financing for every broker server-day rollover held through (`triple_barrier(swap=...)`, x3 on
+  `costs.swap_triple_weekday`), from `costs.swap_long/short_usd_per_lot` (prior -60 / 0 USD per lot per night;
+  replace with the broker cost table, `CostTable.swap_*`, which `live_swap` prefers when present); the gross screen
+  carries no cost. tsmom also runs on `timeframe: "1d"` (feature-day bars, no context timeframe; daily defaults in
+  `timeframe_defaults`: 20/60/120-day vol-scaled returns with 60-day vol, every settlement, 3.0/1.5 ATR, 10 bars;
+  walk-forward `WINDOWS["1d"]` train 60 / test 12 / step 12 months expanding). Event count on data-v1 (counted only,
+  outcomes not looked at): 454 events 2010-05..2025-09 (~29 a year, mean hold 6.9 bars, 8 swap nights), so the
+  screen's 1,000-event floor cannot be met: one position at a time caps a 10-day daily rule at roughly
+  trading days / (mean hold + 1), ~500 in 15.75 years. The per-fold gate fails too (12-month folds hold 23-38; the
+  first fold starts 2018-05 because the 200-row training minimum takes ~7 years to fill). The 1d trial's verdict is the
+  event floor; its gross R is still reported. tsmom 4h with swap: 2,289 events, 79% held overnight, 1.78 nights per
+  trade. Every walk-forward report also shows the design's gates applied to the rule alone (`rule_only_gates`: every
+  candidate net of all costs, same folds and trial count), labelled "rule-only (informational; promotion still
+  requires the model path)"; `passed_gates` reads only the model path's `gates`. 4h is
+  research-only: `saturday_retrain` skips timeframes without a settings walk-forward window.
+- Measured broker costs (2026-10-09): the engine reads swap (symbol_info swap_long/short/mode/rollover3days,
+  converted to USD per lot per night: points via tick value, base/margin/deposit money via price when the currency is
+  XAU, interest % of the current price x 100 oz / 360; reopen modes and non-USD deposits are not converted and fall
+  back to the `costs.swap_*` prior with a logged reason) and commission (per lot round trip, commission + fees over
+  the last 90 days' closed positions) from the MT5 terminal every 6 hours (`mt5_adapter.broker_terms` ->
+  `state/broker_terms_<account>.json`); `nightly_costs` puts them into the cost table (`CostTable.swap_*`,
+  `commission_measured`; readings older than 7 days are ignored), so `live_swap` / `live_extra_cost_usd` charge them
+  in retraining. With `costs.publish_release` on and the github-token in the keyring, `nightly_costs` then publishes
+  the canonical broker's table to release `costs-v1` as `costs_measured.json` (`jobs.publish_costs`, via
+  `release.upload_asset`; by hand `run.py publish-costs [--out FILE]`). The published format
+  (`costs.PublishedCostTable`) holds costs only: spread, slippage, commission and swap per lot, `measured_at`, and per
+  field measured/prior with its tick, fill or lot count. No account id, login, balance, equity or free-text notes
+  (tested). Publishing is refused while swap is unmeasured or there are fewer than 50 fills. research.yml downloads
+  the asset when present and passes `--cost-table`; without it the report's cost source says "PRIORS ONLY". Nothing
+  is committed to the repo. Health warns while a table has no measured swap and, with publishing on, when the
+  published copy is missing or older than 8 days (`costs:published`). None of this is verified against a real
+  terminal or a real upload yet (the conversions are tested on a fake mt5, the upload on a fake uploader).
+- Live data into learning (P9, 2026-10-09): the shadow book records EVERY candidate a champion/challenger scores
+  with its p, raw score, the threshold at the time and `taken` (p > threshold); one position per agent applies over
+  all candidates (as research thins before the model filter), and promotion stats, the CUSUM, re-arm and the
+  population count taken trades only. Books written before this load unchanged (trades taken, no threshold) and are
+  never calibration data. Weekly `recalibrate` job (Saturday 11:30, after the retrain, before the tournament) refits
+  only the probability map of each champion/challenger on `ShadowBook.outcomes` of the last 182 days: a Platt layer
+  on logit(p) with pseudo-outcomes equal to the validated p worth 200 trades (`research.recal_prior_trades`), no
+  update below 50 outcomes, p at most 0.05 from the validated calibrator. Each run REPLACES the layer, refitted from
+  the validated map (stacking layers on overlapping 182-day windows compounded: an independent review measured a
+  -0.166 total move against a 0.05 cap after 8 weeks); rows without a raw score are not used; stored as a minor version (new checksummed artefact, same
+  version/status, `recalibrations` row with before/after ECE; also `state/recalibration.jsonl`). It promotes and
+  retires nothing. The ECE after is in-sample. Not done from P9: the monthly refit / drift-triggered refit, recency
+  weighting and the replay trial; owner vetoes are not in the shadow book (it is the model's own decision).
+- Deploys (2026-10-10, owner chose one click + manual): never automatic. The Telegram service (GOLDBOT_DEPLOY=1 on
+  Linux) offers a new main commit that passed CI (backend + frontend check-runs) with [Deploy]/[Skip]
+  (`goldbot/ops/deploy.py`); the tap writes `state/deploy/approved.json` for that exact commit; the root-owned
+  `/usr/local/sbin/goldbot-deploy` (copy of `goldbot/ops/linux/goldbot-deploy.sh`, timer every minute) re-checks main,
+  fast-forward and CI, waits while an approval is pending, restarts (supervisor first), verifies every enabled service
+  after 60 s and rolls back otherwise; `sudo goldbot-deploy latest|<sha>` does the same by hand. Results in
+  `/var/lib/goldbot-deploy/deploys.jsonl` (root only), published read-only to `state/deploys.jsonl` by rename (Telegram
+  report, health `deploy`). The MT5 box is updated by hand only. Hardened after the security review: root never writes
+  or follows anything in a service-user-writable directory (symlink-to-root attack), approval file opened O_NOFOLLOW
+  and owner-checked, any failure after checkout rolls back, stability = no systemd restart for 90 s plus a
+  supervisor heartbeat written after the restart (engines write only on ticks), copy in state/ written as the service
+  user, approval opened O_NONBLOCK, CI read from the latest GitHub Actions runs only, no CLI approve.
+- Drift and health (M26/M27, 2026-10-10): every fitted model stores its training distribution per input
+  (`feature_ref`); the daily `drift_watch` job (23:40) rebuilds the last 30 days of candidates as in training and
+  computes PSI on the top-10 inputs by gain (0.1 warns, 0.25 sizes the agent to 50%), ECE/Brier on the trailing 100
+  taken shadow trades (ECE > 0.08 sizes down), a residual CUSUM (halts the agent) and each agent's 30-day drawdown;
+  two halted agents or a drawdown > 1.5x backtest halt the system. Output `state/drift.json`; halts are sticky per
+  champion version until the owner runs `python -m goldbot.ops.run drift-review --clear "<note>"`. The engine reads
+  it (missing = no restriction, unreadable = halt), the gate reason is `drift_system_halt`, health check `drift`.
+  Entries only; exits unaffected. Models trained before this have no reference: PSI is skipped for them.
+- Performance attribution (2026-10-10, BACKLOG 12, TRACEABILITY G12): the daily `attribution` job (23:50 UTC,
+  `goldbot/research/attribution.py`) writes `state/attribution.json` and `state/attribution.md` from the shadow book
+  (every candidate, taken or not), engine fills, pending_orders and the canonical cost table: expectancy in R gross
+  and net (count, t, 95% interval, hit rate, profit factor) by timeframe, family, agent, session, side, volatility
+  tercile, decision and exit (stop/target/time/policy); per-trade cost in R (spread, slippage, commission, swap) and
+  the trades costs flipped to losers; calibration of p on taken and untaken candidates; live fill slippage vs the
+  table cell. Cells under `attribution.min_trades` (30) are "noise". Champion-path trades only in the breakdowns
+  (challengers apart). The improvement agent and research analyst read it first via `read_attribution`; hypotheses
+  still go only through `file_hypothesis`; gap_watch caps unchanged. Reporting only: nothing is traded or changed.
+  Open: live realised R per position (needs the engine trade record, item 8) and a dashboard view (item 12's other
+  criteria). The research director now reads it as a capped, noise-aware input (see the director bullet).
+- Macro data pipeline (2026-10-10, TRADER_LIFECYCLE gap 2): `.github/workflows/data-macro.yml` (Tuesdays 04:41 UTC
+  and by hand) pulls DFII10, T10YIE, DTWEXBGS, GVZCLS and DGS2 from FRED's public fredgraph CSV (no key) via
+  `scripts/fred_macro.py` and publishes `macro_fred.parquet` on release `macro-v1`. Rows carry value_date, vintage
+  (retrieval date) and a conservative available_utc (`data/macro.py: fred_available_utc`): next US business day 23:00
+  UTC for daily H.15/GVZ values, the business day after the following Monday for the weekly H.10 dollar. Published
+  history is never rewritten; a revision is a new row dated from the day it was seen. Feature `macro_drivers`
+  (`features/macro.py`): 20-obs real-yield change, 1-year real-yield z-score, 20-obs dollar change, GVZ level and
+  20-obs change, from first releases only, joined via `asof_join` on available_utc. It is opt-in
+  (`pipeline.OPT_IN_FEATURES`): the default feature version and every declared `model_features` are unchanged.
+  `research_pass.py --macro DIR` (workflow input `macro`) adds it and reports "macro features: on/off (reason)"; a
+  missing release runs without it. The VPS Saturday retrain and `fetch_data_release.py --macro` load the release
+  into the store's `macro` table (`release.sync_release_macro`; 0 rows until the workflow has run). Not done: the
+  live engine does not build `macro_drivers`, so a model trained with `--macro` gets a different feature version
+  and is refused live (`feature_version_mismatch`) until the engine passes the store's macro rows; COT and GLD are
+  not pulled. The workflow has not run yet (first run: Actions -> data-macro -> Run workflow).
+- Free hosting without Windows (2026-10-10, owner: MT5 + $0 hosting, Mac only): two Oracle Cloud Always Free VMs.
+  The MT5 terminal runs under Wine on an x86 E2.1.Micro with the bridge (`goldbot/execution/bridge.py`,
+  `run.py bridge <account>`); everything else runs on an Ampere A1 (4 OCPU / 24 GB) under systemd
+  (`goldbot/ops/linux/`: `brain_bootstrap.sh`, `mt5_bootstrap.sh`, units). The engine uses `RemoteBroker` when the
+  keyring holds `mt5-bridge-url-<account>` + `mt5-bridge-token-<account>`. Bridge safety (from the trading-safety and
+  security review): both ends verify the terminal's login, server and demo/real against the registry
+  (`accounts.verify_terminal_account`; MT5 logins live in the keyring as `mt5-login-<account>`); listens on 127.0.0.1,
+  reached through an SSH tunnel whose key may only forward to that port; constant-time token; allow-listed methods;
+  5 s socket timeout; order calls never retried and refused when older than 10 s at the terminal; `GuardedBroker`
+  refuses orders outside the account's magic range or above 3 lots and stop changes on foreign positions (closes
+  allowed: the kill switch closes everything); a lost reply ends the engine, systemd restarts it
+  (`StartLimitIntervalSec=0`) and restart reconciliation settles the order. Measured: engine ~200 MB, API ~110 MB, a
+  6-month dry run 1.7 GB, so a 1 GB Windows VM (Azure free year) was rejected. Not verified yet: MT5 + the
+  MetaTrader5 package under Wine on the real VM (owner setup: docs/RUNBOOK.md section 0). Wine is for the demo phase;
+  re-decide before real money.
+- Pooled meta-model (P5): `research_pass.py --pooled 15m|1h` fits ONE model over the union of every family whose
+  default timeframe it is (15m: intraday_momentum, mean_reversion, session_open; 1h: breakout, trend, tsmom), with
+  one indicator column per family, `side` and a declared pooled list (`pipeline.POOLED_FEATURES`, <= 40 inputs in
+  all), the same cross-fitted calibration, per-candidate thresholds (each family's own barriers) and gates, uniqueness
+  weights across the pool; the screen is applied to the union (members shown alone too). Recorded as family
+  `pooled_<tf>` (one trial). The report adds a per-family table with P5's deciding comparison: pooled vs the
+  family's own model, OOF log-loss on the same rows of the same folds. Research only: the engine and model registry
+  do not serve a pooled model yet (needed only if one passes). session_open now trains on an expanding window with
+  6-month test folds (`Specialist.walkforward`); at ~95 candidates a year a 6-month fold holds ~47, so its per-fold
+  gate still needs denser filters or 9-month folds.
+- Trader-toolkit features (2026-10-10, `goldbot/features/trader.py`, TRACEABILITY F13-F16): four registry families
+  for research to screen; no specialist declares them (its `model_features` are unchanged), so they reach a model only
+  through the P4 screen and a pre-registered trial. `session_zones` (session high/low/open now and for the previous
+  session, each zone's last high/low, previous feature-day and Sunday-week high/low, all (close - level)/ATR14;
+  sessions are the DST-aware `DEFAULT_SESSIONS.sessions_local` windows, the New York close to 23:00 UTC belongs to none); `market_structure`
+  (liquidity sweep = traded beyond the last confirmed swing, previous session or previous day high/low known at t-1
+  and closed back inside; break of structure = first close beyond the last confirmed unbroken swing); `fair_value_gaps`
+  (bullish if high[i-2] < low[i], known when bar i closes; partial fills shrink it, filled once a bar trades through
+  its far edge; >= 0.1 ATR); `order_blocks` (last opposite-colour candle within 5 bars before a displacement with body
+  > 1.0 ATR closing beyond the last confirmed swing; invalidated by a close through it). Warm-up: ATR 13 bars, the
+  first completed session/day/week; nearest gap/block columns are NaN while none is active (counts 0). Every value at
+  bar t uses only bars closed by t (truncated-history test + pipeline lookahead check). They are in
+  `DEFAULT_FEATURE_NAMES`, so the default `feature_version` changes (expected: no champions exist, nothing is
+  invalidated) and feature-seeded clones now draw from a larger column pool.
+- Survey features (2026-10-10, `goldbot/features/survey.py`, TRACEABILITY F17-F22; indicator survey section 4a, top-15
+  ranks 3, 4, 6 and 10): five registry families for research to screen, no specialist declares them. `vol_estimators`
+  (Garman-Klass, Rogers-Satchell, Yang-Zhang over 20/60 bars, Parkinson 60, YZ20/YZ60 term structure, vol-of-vol =
+  CV of YZ20 over 60); `round_numbers` ((close - nearest $5/$10/$25/$50 level) / ATR14 and how many of the last 50
+  bars traded through it); `regime_stats` (variance ratio q = 2/4/8 over 120 bars, R/S Hurst over 128 returns with
+  chunks 8-64, Kaufman efficiency ratio 10/30); `jumps` (return / bipower sigma of the 60 returns before the bar, flag
+  at |z| > 4, sign, bars since the last jump capped at 500); `expected_move` (close x YZ20 x sqrt(h) for h = 4/16/48
+  bars, and ATR14, over a round-trip cost = 96-bar median spread + 0.37 USD/oz slippage and commission priors; a feature
+  only, the cost-to-move filter is a later trial). Warm-up up to 128 bars (documented per family in the module).
+  Like the trader families they are in `DEFAULT_FEATURE_NAMES`: the default `feature_version` changes f-6932724812 ->
+  f-1b8f723a67 (no champions exist, nothing is invalidated). Equity stress (opt-in, survey rank 6): `macro_drivers`
+  gains `macro_vix`, `macro_vix_chg5`, `macro_spx_dd20` from FRED VIXCLS and SP500 (version 1 -> 2, so the
+  default+macro version changes too; NaN until the release carries them); `scripts/fred_macro.py` now downloads both
+  (`RELEASE_SERIES`, same next-business-day 23:00 UTC availability as GVZCLS; FRED's SP500 covers about ten years).
+  The next data-macro run publishes them to `macro-v1`.
+- Exit policies (2026-10-10, `goldbot/labels/exit_policy.py`, TRACEABILITY M3/M6/M7/R21): trend trails 1.5 ATR once 1.25 ATR in
+  profit; breakout closes half at 1.0 ATR and trails the rest 1.0 ATR (2.0 ATR target kept as the cap); session-open
+  goes flat 1 h before the next session open. One `policy_step` drives the labels (`triple_barrier(policy=)`, used
+  by research `prepare`) and the shadow book; the engine runs the same rules with `modify`/`close` (trail and flat at
+  the agent's bar close, scale-out on the tick), only tightening or reducing, never gated. Parity is tested label vs
+  shadow and label vs the live engine on the paper broker. Families without a policy (tsmom, mean-reversion,
+  intraday momentum) keep byte-identical labels (digest test). R21: in a tier-1 blackout open trades re-scored at
+  p < 0.5 are closed. Consequences: labels of trend/breakout/session-open changed, so their earlier research
+  verdicts were on plain barriers and any model of theirs must be retrained before it trades; the entry threshold
+  and sizing still assume the binary target/stop payoff.
+- Exit-policy safety review fixes (2026-10-10, `engine/runner.py`, TRACEABILITY M3/M6/M7/R21): a raising blackout
+  re-score or scale-out (model error, MT5 `symbol_info` failing) no longer escapes the tick/bar (ops/run.py catches
+  only AssertionError): it is logged (`blackout_rescore_failed`, `scale_out_failed`), the position is kept and the
+  others are still managed; `scaled` is set only after a successful partial close, with `scale_out_retries` (3)
+  attempts in all. New per-tick `_stop_check`: price at or through the engine's stop while the broker's stop is
+  looser (rejected `modify`) closes at market (`engine_stop_close`); reconciliation re-sends a rejected stop with a
+  30 s doubling backoff up to `modify_backoff_max_s` (900 s). The Friday weekend rule keeps the engine's stop when
+  it is tighter than the half-profit stop (never loosens). Fills recovered on restart (`_load_orders`; the ATR is now
+  recorded in the pending_orders row before sending, older rows use the ATR implied by the initial stop) and orphans
+  whose magic maps to exactly one loaded agent get that agent's exit policy back. Gaps: labels and the shadow book
+  fill a stop at the stop even when a bar gaps through it (documented in `labels/exit_policy.py`; unchanged), the
+  broker fills at the market, so a gap costs the live trade the gap; parity tests now cover shorts and a gap.
+  **Known limitation (quant finding 4, not changed):** for policy families (trend, breakout, session-open) the entry
+  threshold (`breakeven_prob`) and Kelly sizing (`size_multiplier`) still assume the binary target_atr/stop_atr
+  payoff, while a policy's exits pay a distribution (trail, flat, scaled). Recommended fix: an EV hurdle from the
+  policy's realised payoff distribution in the walk-forward (mean win and mean loss in R per family), or train on
+  sign(ret) and size from the empirical payoffs; a quant-reviewer decision before any policy model trades.
+- Closed-trade record (2026-10-10, `engine/runner.py`, `ops/gates_phase.py`, TRACEABILITY P6/P7): the engine now
+  appends one `ClosedTrade` per fully closed position to `state/closed_trades.jsonl` (single O_APPEND write + fsync)
+  for every exit: broker target/stop/stop-out (found at the bar close by `_sweep_closed`), time exit, hard flat,
+  trail close, engine stop close, blackout close, kill switch, weekend loser, and trades that closed while the engine
+  was down (restart). Fields: account, mode (demo for paper/demo engines), agent, side, lots at entry, entry/exit
+  time and price, exit reason, net P&L, R against the initial stop, commission and swap (from the broker's deals;
+  None when only the engine's fills are known), client order id, position id. **Scale-outs are folded into the final
+  record** (`partial_lots`, lots-weighted exit price, summed P&L): one record = one labelled trade, so the gates'
+  trade counts compare with the backtest's; `load_closed_trades` also counts a repeated (account, position) once.
+  Idempotent across restarts (recorded position ids are read back from the file). Records are queued and written
+  after the tick's exits and before the open-trade table is saved; a failure is logged and journalled
+  (`closed_trade_record_failed`) and never blocks or raises from an exit. A trade the broker stops listing without an
+  exit deal (MT5 `positions_get` returning None) is kept and re-checked for `close_confirm_checks` (8) bar closes
+  instead of being forgotten. Same change, safety-review follow-ups: `_stop_check` backs off a refused engine-stop
+  close (30 s doubling to 900 s, reset on success; the broker's stop stays meanwhile) instead of a close per tick, and
+  a raising `positions()` in `_stop_check`, `_scale_out`, `_reconcile`, `_manage_open` or `_refresh_account` is logged
+  and skipped (the account refresh then blocks entries via `dq_error`). Not done: concurrent appends from two engines
+  on Windows are not locked (one line per write, rare); the paper broker's deals now also carry MT5-style
+  `profit`/`commission`/`swap` columns. (The `_kill_switch`/`_weekend_rule` gap is closed by the review fix below.)
+- Closed-trade review fixes (2026-10-10, trading-safety findings, `engine/runner.py`, `execution/mt5_adapter.py`,
+  `ops/gates_phase.py`, `ops/health.py`, tests/test_closed_trade_review.py; TRACEABILITY X6, X8, P6, P7):
+  **no fake closes on a terminal fault**: MT5 `positions_get`/`history_deals_get` returning None now raise with
+  `mt5.last_error()` (and `close`/`modify` raise instead of reporting "no such position"; `order_send` None is a
+  refused result); in the engine an unreadable deal history never confirms a close and an empty one only after
+  `close_confirm_checks`, and nothing is recorded or forgotten from an unreadable book. **Unreadable-book check**:
+  consecutive failed reads (counted once per tick) set `positions_unreadable` in the engine state's `dq_checks`
+  (entries blocked, exits keep trying); health warns from the first failure and FAILs, so Telegram alerts, after
+  `risk.positions_unreadable_alert` (5) in a row. **Guarded kill switch and weekend rule**: each close in its own try;
+  a failed close is re-sent every tick (`_retry_closes`) and the kill switch re-runs every tick until this engine's
+  magic range reads flat; `weekend_done` is set only once every position was handled. **Close-confirmed
+  bookkeeping**: every exit path (kill switch, weekend, time exit, hard flat, trail, blackout, engine stop) drops a
+  trade only on `res.ok`; reconciliation re-adopting a trade this engine sent keeps the pending_orders row's agent,
+  initial stop and lots (R) and signal ATR, never the trailed stop. **Backoff only when the market is closed**:
+  10017/10018 back off (30 s doubling to 900 s); requotes, price changes and raising calls retry every tick on every
+  path. **Record retry**: a failed write stays queued (persisted in `orders_<account>.json` as `closing`), retried
+  every `reconcile_every_s` up to `closed_record_retries` (10), then reported lost (`closed_records_lost` in the
+  engine state, health FAIL, the record logged in full). **Torn writes**: the append completes short writes and starts
+  a new line after a torn tail; the loader skips bad lines, keeps the rest (so `_recorded` is complete) and the
+  engine shows a `closed_trades_unreadable` dq warning. Behaviour change the owner can see: the engine health line
+  now names an unreadable terminal and a lost record. Not verified: the real MT5 terminal (Windows only).
+- Feature discovery (2026-10-10, survey 4b, TRACEABILITY M37/M38; hypothesis H-02 tooling ready, not run):
+  `research/discovery.py` + `research_pass.py --discover [--families [feature|family]] [--discover-config JSON]`
+  screens every eligible column (may exceed 40) on one specialist's candidates as ONE trial. Inside each purged
+  walk-forward fold, on its training rows only: stability selection (50 weekly-block half-samples, shallow LightGBM
+  gain or L1-logistic, top-k frequency), optional permutation confirmation on an inner purged time split; each fold's
+  model uses its own selection (<= 39 + `side`), then the usual cross-fitted calibration, thresholds and gates
+  (`_walk_forward(fold_cols=...)`). Report: group and feature frequency per fold, stability (share of folds at
+  frequency >= 0.6), survivors (stability >= 0.7, capped at 39), the gates and the pre-registered reading rule
+  (continue: AUC >= 0.53, bootstrap lower bound > 0.50, >= 1,000 scored, net mean R of model-filtered trades > 0;
+  stop: AUC < 0.52). Registry: a `preregistered` row (config, reading rule, plan) is written before the run (closes
+  L4's first item); it is not a trial (`registry.is_trial`: no budget slot, no DSR count; the release merge numbers
+  trials only). The result row has status `discovery`, family `discovery_<specialist>` (never promotable, not director
+  evidence) and `n_groups_screened`. `registry.n_trials_effective` = trials + every discovery's groups screened;
+  research_pass now uses it for every trial's deflated Sharpe (equal to the old count while no discovery exists).
+  Deviations from 4b: the label is the specialist's (no primary-free 4h label yet), groups are registry
+  features/families instead of |Spearman| > 0.7 medoid clusters, and the trade rule is the existing break-even +
+  margin threshold, not the top-tercile cut.
+- SQLite state store, steps 0-1 (2026-10-10, `docs/proposals/2026-10-state-store.md`): package `goldbot/db/`
+  (stdlib `sqlite3`) opens `state/core.db` (synchronous FULL) and `state/aux.db` (NORMAL) with WAL, busy_timeout
+  5000, foreign keys and trusted_schema off; writes take `BEGIN IMMEDIATE`. Forward-only migrations in
+  `db/migrations.py`, one transaction each, recorded in `schema_version` (+ `PRAGMA user_version`); a newer file
+  refuses to open. `RecordRepo` maps a pydantic Record to key/filter columns + a JSON `body`. Import skeleton:
+  `python -m goldbot.db migrate|import-state [--dry-run]` (idempotent by file SHA-256, files left in place).
+  Dashboard auth (`api/auth.py`) now keeps users, invites, sessions (token hashes) and an append-only audit table in
+  aux.db: logins survive API restarts and deploys, and several API processes share sessions. On first start with
+  an empty DB it imports users.json and audit.jsonl once and never writes them again (backup). Failed-login
+  counters stay in memory. Not done: `run.py migrate`/`import-state` wiring, `state_db` health check (step 0
+  leftovers, files owned elsewhere); the API migrates aux.db on open until then. Steps 2-8 not started.
+- State store step 3 (2026-10-10): staff-agent runs and monthly spend, scheduler job state and the Telegram outbox are
+  in aux.db (`goldbot/db/bookkeeping.py`, migration 5). Each old file is imported once on first open (or by
+  `python -m goldbot.db import-state`) into an empty table. scheduler.json and agent_spend.json stay as exports
+  regenerated after each write (dashboard, health, read_state tool and vps_update.ps1 still read them; originals in
+  `state/pre-db/`); agent_runs.jsonl stays an append-only mirror (dashboard; API owner notices are still relayed from
+  it); telegram_outbox.json is never written again. `SpendLedger.reserve` books the per-run budget under BEGIN
+  IMMEDIATE before the first API call and `settle` books the real cost, so concurrent runs never pass the cap (the
+  old ledger cached the file and the news and agents processes overwrote each other). Not done: news_spend.json
+  (`data/news_collector.py` was out of scope), switching api/app.py to query aux.db.
+  Trading-safety review fixes (same day): exports run after the commit and never raise (a locked file on Windows no
+  longer undoes a spend booking or stops a scheduler job); exporters and the foreign-file check are serialised by aux.db's write lock (render, hash record and file write
+  in one transaction; 2026-10-11: the lock-free version took our own export for a foreign write under load).
+  Rollback safety: telegram_outbox.json is rewritten in its old format for one release; a file another release
+  wrote (hash differs from this code's last export) is merged back once (spend: larger per month; scheduler: newer
+  slot; outbox: its sent list and offset; runs appended only to the file are adopted) and counted in
+  `state_fallback`. Migrations can be `additive`: `schema_version.compat_back_to` lets older code open a newer
+  aux.db; the release before step 3 needs the one-time downgrade in RUNBOOK (updating the VPS). Health and
+  vps_update.ps1 read the scheduler status from aux.db (`python -m goldbot.db scheduler-status`), the file only as
+  fallback. Telegram: aux.db is opened inside the pump (a broken file no longer stops the bot), a proposal whose
+  mark_sent fails is not re-sent (`SendGuard`, retry with backoff), and reports are acknowledged only after delivery
+  (at least once). A run that dies mid-loop keeps its reservation; a failed settle is logged and the run still logged.
+  Re-verification: the heartbeat is read with a plain read-only connection (an `immutable` read tore under a
+  writer); export hashes are recorded before the write and the last 16 kept (`exports.hashes`), so our own file is
+  never taken as foreign; a file missing at the first open is recorded as imported (empty), so a later file is only
+  merged; the outbox merge is a union (DB proposals still pending kept) with the further report cursor; a report
+  batch failing for one recipient is acknowledged after 3 passes (`ReportRetry`); vps_update.ps1 steps aux.db back
+  from schema 5 to 4 by itself when installing a commit without `compat_back_to` (`Sync-AuxSchema`, refuses any
+  other version) and stops the scheduler first, re-checking for a running job before stopping the rest.
+- Dashboard accounts (2026-10-10, owner request): the owner is the sole admin. `auth.owner_email` (Settings
+  `AuthSettings`, default None; set only in the server's `config/settings.local.yaml`, never in the public repo)
+  is required for bootstrap and is the only address that can hold the owner role. Invites and `set_role` grant
+  only approver/viewer (`GrantableRole` in the contract; "owner" gets 422); the owner cannot be demoted or disabled;
+  an invite never overwrites an existing account; the only user-creating paths are bootstrap and invites. A stored
+  owner that differs from the setting is logged and left alone; `auth.owner_health_note(state_dir, owner_email)`
+  is ready for health.py (not wired: health is owned elsewhere). Password policy: 12+ characters, different from the
+  current one. Endpoints: `POST /api/auth/setup` now returns `SetupResponse` with 10 one-time recovery codes
+  (hashes stored, aux.db migration 3); `/api/auth/password/change` (logged in; password + TOTP; other sessions
+  revoked); `/api/auth/password/forgot` (email + TOTP + new password; same 403 for unknown email or wrong code;
+  shares the 5-in-15-min lockout; all sessions revoked); `/api/auth/reset-link` (owner; 24 h single-use token,
+  hash stored) and `/api/auth/reset` (new password + new TOTP, all sessions revoked); `/api/auth/recovery/login`
+  (owner: password + recovery code, re-enrols TOTP, returns a session) and `/api/auth/recovery/codes` (owner,
+  regenerate); `/api/users/enable` and `/api/users/revoke-sessions` (owner). All audited. Minimal UI: Forgot
+  password / recovery-code / reset-link modes on the login page, recovery codes shown after setup, an Account tab
+  (change password), Enable / Sign out everywhere / Reset link on Users. No button yet for regenerating recovery
+  codes.
+- Account security review (2026-10-10, security-reviewer findings; `api/auth.py`, aux.db migration 4
+  `auth_hardening`; tests/test_auth_security.py): forgot-password for the OWNER now needs a recovery code (spent)
+  as well as the TOTP (`ForgotPasswordRequest.recovery_code`), so the phone or seed alone cannot take over the
+  admin; every successful forgot-password queues a Telegram notice to the owner (a row with role
+  `account_security` in state/agent_runs.jsonl, relayed by the Telegram outbox; email masked). Each TOTP step is
+  accepted once per user (`totp_steps`; login, password change, forgot, /rearm via `AuthStore.verify_totp`, /mode
+  via `verify_owner_totp`, shared counter). Login and recovery-login run scrypt against a dummy hash for unknown
+  emails. Owner-only actions (`_require("owner")`, the API's `need("owner")`, recovery codes, /mode) need
+  `email == auth.owner_email` and fail closed when it is unset; the users.json importer demotes a non-matching owner
+  to viewer (audit `import_owner_demoted`, warning; kept when owner_email is unset, since every owner action is then
+  refused anyway). Password change, forgot and disable delete the account's open reset links. Invite/reset links use
+  the URL fragment (`/#invite=`, `/#reset=`, read once and cleared, `web/src/lib/links.ts`) and every response sends
+  `Referrer-Policy: no-referrer`. Lockout counters live in aux.db (`auth_failures`, pruned to the 15-min window,
+  survive restarts): 5 per email, plus 20 per client IP across emails (CF-Connecting-IP trusted only from the
+  loopback tunnel peer). Known trade-off: anyone who knows an email can keep it locked out. DB files are chmod 0600
+  on every open. e2e codes come from `freshTotp` (waits for an unused step, so the suite takes ~3.5 min).
+- Bounded spawning (2026-10-10, BACKLOG 13, TRADER_LIFECYCLE section 3, TRACEABILITY G11): the daily `gap_watch`
+  job (23:55 UTC, after drift_watch; `goldbot/ops/gap_watch.py`) detects gaps (uncovered family timeframe, all agents
+  of a family retired, drift/system halts, a volatility tercile no champion trained on, error dq events on 3+ days in
+  7, planned family without a founder, a passed trial without an agent) and writes `state/gaps.json` with the actions
+  taken and refused (with reasons). Trading: `Population.spawn_founder` only, zero-capital SHADOW founders of
+  registered families (default on another timeframe, or a passed trial's config), at most `gaps.founders_per_month`
+  (2), only into 4 reserved slots inside the 24 shadow cap (clones now stop at 20), never during a system halt or a
+  drawdown stage, never in a lookahead-blocked family; lineage in `gap_id`/`origin`/`notes`. Live still needs the
+  tournament's DSR and a passed trial of the exact config. Staff: on-demand runs of the existing read-only
+  `data_steward` / `risk_officer` only, 3 per rolling week, once per gap, refused when the month's agent budget is
+  below the role's per-run cap. Regime and dead-family gaps file at most 2 hypotheses per run; a new family, role or
+  untrainable timeframe (4h/1d: no walk-forward window in settings, so the retrain cannot train them) is a BACKLOG
+  suggestion only. Not done: the 4h founder path in `saturday_retrain`.
+
+- Auto-mode offer (2026-10-10, `goldbot/telegram/automode.py`, TRACEABILITY A10, BACKLOG 15): the Telegram service
+  checks every 15 min whether /mode auto may be offered: >= 100 decided proposals since the last mode change, no
+  RiskGate breach (an 8%/12% drawdown stage or a kill switch in `risk_*.json`), no re-arm lock or halt, and no
+  distinguishable veto: approved vs rejected proposals are matched to the shadow book's counterfactual outcomes
+  (same agent, side, signal bar) and compared in R with Welch's t-test (eligible only if p >= 0.10 and the 90% CI
+  spans 0; fewer than 10 outcomes a side fails closed). When it holds, ONE message per mode epoch; it never switches.
+  `/mode auto <code>` checks the dashboard owner's authenticator (`goldbot.api.auth.totp_verify`) and the evidence,
+  then writes `approval_mode` to `state/control.json`; `/mode propose` needs nothing. Both, and refusals, go to
+  `state/audit.jsonl`. Engines read the mode each refresh; the 30-day re-arm lock and the 12% kill switch still force
+  propose, and the kill switch writes propose back to control.json (so the evidence restarts). Known limits: breaches
+  are read from the engines' current risk files (a size-down that recovered before the check is not seen); the
+  dashboard has no /mode control yet (goldbot/api untouched).
+- Cross-feed checks (2026-10-10, `goldbot/data/crossfeed.py`, TRACEABILITY D12/D20/D23/F10, BACKLOG item 14).
+  `feed_reconcile` (scheduler, Mon-Fri 23:20 UTC) rebuilds each account's 1m bars from its stored ticks and compares the
+  last day with the broker's own M1 (`get_bars`; bridge `RemoteBroker`, or on Windows the terminal's saved login via
+  `run._job_broker`): close off by > 2 points, or a minute on one side only, diverges; > 0.5% of broker minutes warns,
+  > 5% (or no engine ticks at all) is an error -> dq_events, state/reconcile_<account>.json, health check
+  `reconcile:<account>` (warn/fail; stale after 96 h). The broker's M1 is kept in the new store table `bars_1m_broker`,
+  so broker history accumulates. Spikes (D20): `quality.confirm_spikes` drops a check_bars spike when the other feed
+  moves the same way by >= half of it within +-1 minute; used by the reconcile run, check_bars alone is unchanged.
+  Survival (D23/F10): `scripts/crossfeed_check.py --specialist X --account A` runs the rule-only screen on Dukascopy and
+  on `bars_1m_broker` over the common period outside the holdout; survives = Dukascopy mean R > 0 with t >= 2.0 AND
+  broker mean R > 0 with t >= 1.0; broker-only significance = feed artefact, dropped; < 90 days or < 100 events per
+  feed = insufficient overlap (not a pass, the current state). Not a trial (it can only discard). Not yet a promotion
+  gate: wire it in once broker history reaches 90 days. Known limit: ticks sharing a millisecond can come back from
+  the store in another order, so a minute's close may differ (absorbed by the 0.5% warning band).
+- Discovery quant-review fixes (2026-10-10): K_eff now follows the pre-registered survivor unit
+  (`DiscoveryConfig.survivor_unit`, default `feature`): feature survivors pay for every feature screened (~300), not
+  the groups (~10); the discovery row records `n_features_screened`, `n_groups_screened`, `survivor_unit` and `k_eff`,
+  and `registry.n_trials_effective` adds `k_eff` (older rows: features screened unless the unit was `group`). Group
+  stability ranks groups by summed member importance in each subsample and counts the top `group_top_k` groups
+  (default: top_k's share of groups), so correlated near-copies no longer deflate their group. `column_groups` maps
+  columns to features on the 2,000 bars before the holdout start (no holdout bar read). `registry_sync.merge_rows`
+  rewrites the result row's `preregistration.trial` when it renumbers. The inner permutation split is `inner_split`,
+  with a test where labels outlive the purge gap. Charging K_eff to every later trial stays the conservative default,
+  recorded as owner-acknowledged in `docs/research/preregistration-2027Q1.md`, with the extra rule that a discovery
+  survivor must also pass the holdout rule before promotion.
+- Slow TSMOM (2026-10-10, H-01, preset `slow`): `--variants '["slow"]'` runs tsmom with the signal on the feature-day
+  bars (`signal_tf: "1d"`, 20/60/120-day vol-scaled returns, 60-day vol) traded on 4h bars, read on the first 4h bar
+  whose close sees the settlement; barriers 3.0 / 1.5 x ATR(1d) frozen at entry (`atr_tf: "1d"`), time barrier 124
+  4h bars (20 trading days), long and short, swap per rollover, one position at a time; walk-forward purge raised to
+  31 days for the 28-day hold (M14; `TimeSeriesMomentumSpecialist.hold_calendar_days`). New hooks
+  `Specialist.candidates_in_context` / `barrier_atr` (used by research `prepare`), `optional_config` and `presets`
+  (accepted by `research_pass.parse_variants`); tsmom's default config, agent ids and labels are byte-identical
+  (digest test). Research-only: without the d1 bars (the engine calls `candidates`) the slow option proposes nothing.
+  Event count on data-v1 (no labels, no outcomes): 2,631 daily signals in the research window; one at a time with
+  every trade held to the time barrier, 165. The true count lies between, so owner ruling A (event floor) is needed
+  before the trial. Note for quant review: feature-day bars include a Friday-evening stub bar (settlement to the
+  Friday close, visible Saturday), so "20 daily bars" is about 3.3 weeks, as for the existing 1d option. Run inputs:
+  `docs/research/preregistration-2027Q1.md` H-01. No research trial was run.
+- CPCV and CUSUM calibration (2026-10-10, rows M16/M25): `goldbot/research/cpcv.py` runs combinatorial purged CV
+  (6 equal-duration groups of the research window, holdout excluded; 15 purged/embargoed splits of 2 test groups; 5
+  rebuilt backtest paths) with the walk-forward's own cross-fitted calibration and threshold per path, reports the
+  path Sharpe / mean R distribution and, across several configurations, PBO (CSCV). It is evidence on an existing
+  trial (`<registry>.evidence.jsonl`), not a trial: no budget slot, no deflated-Sharpe count. Run it with
+  `scripts/research_pass.py --cpcv <trial#> [...]`; the scheduler job `cpcv_quarterly` (first Sunday of each quarter,
+  14:00 UTC, new `months` filter on schedules) does every gate-passing trial against its family's other trials ->
+  `state/cpcv_<quarter>.md`. The evidence sidecar is not yet unioned by `registry_sync` with the release copy, and
+  research.yml does not upload it. CUSUM: `goldbot/research/cusum.py` picks h by simulation so in-control residuals
+  alarm within a quarter's expected trades with 5% probability (settings `drift.cusum_k`, `drift.cusum_false_alarm`;
+  `cusum_h` 4.0 only without a backtest trade rate); `drift_watch` and `model_watch` pass the champion's
+  `trades_per_week`. At 1 trade a week h is 3.46 (more sensitive than the old 4.0), at 5 a week 5.21 (fewer false
+  halts). `goldbot/api/explain.py` still draws the CUSUM trace with the fixed `cusum_h` (API lane: should read the
+  `cusum_h` now stored per agent in drift.json).
+- CUSUM/CPCV review fixes (2026-10-10, rows M16/M25, quant review): CUSUM h is now simulated on two-point trade
+  residuals (win +sqrt((1-p)/p), loss -sqrt(p/(1-p))) at the mean taken p in 0.01 buckets, choosing the most
+  sensitive attained h whose false-alarm rate is <= 5% at 95% confidence (outcomes are discrete). Realised quarterly
+  rates at p 0.4/0.5/0.6 and 2/5/15 trades a week: 3.4-4.8% (normal-based h gave 0.3-0.5% at p 0.4); a drop from
+  p 0.4 to 0.3 is caught within a quarter 18-33% of the time against 4-6% before. The drift watch uses the shadow
+  trades' mean p; the new-champion watch (`model_watch`) now calibrates for its own window (trades/week x 2) at the
+  backtest hit rate, so it can actually fire inside two weeks (at ~2 or fewer trades a week it cannot alarm at 5%).
+  ADR docs/decisions/0002: CPCV/PBO can only veto (fragile when PBO > 0.5 or most paths negative, recorded as
+  `verdict` in evidence and report, not yet wired into `passed_gates`: owner decision, recommended after the first
+  quarterly run); `research_pass --cpcv` refuses gate-failed trials unless `--diagnostic` ("diagnostic, not
+  evidence"). PBO drops the never-traded group 0 (5 groups, 2 vs 3 both ways) and is labelled a lower bound of the
+  selection set (every registered family trial on the timeframe, screened included). `cpcv_quarterly` skips trials
+  whose feature version differs from what the bars build now. The evidence sidecar stays local-only (documented, not
+  synced). Not done: `goldbot/api/explain.py` still draws the CUSUM trace with the fixed `cusum_h`.
+- GitHub Actions supply chain hardened (2026-10-10, security): every action in `.github/workflows/*.yml` is pinned
+  to a full commit SHA with the version as a comment (checkout v5.1.0, setup-python v6.3.0, setup-node v5.0.0, cache
+  v4.3.0, upload-artifact v4.6.2, download-artifact v4.3.0; resolved via the GitHub API, not guessed). Token scopes:
+  `ci.yml` is `contents: read` with `issues: write` only on `report-failure`; the data and research workflows are
+  `permissions: {}` with `contents: write` + `issues: write` granted only to the job that publishes. Workflow inputs,
+  `github.event_name` and matrix values reach scripts only through `env:` (data-dukascopy, research). Every checkout
+  sets `persist-credentials: false` (no job pushes with git; releases and issues use `GH_TOKEN`). New concurrency
+  groups `data-dukascopy` and `data-macro` (queue, never cancel). `.github/dependabot.yml` opens weekly grouped PRs
+  for actions, pip and npm (`web/`). `actionlint` 1.7.12 (with shellcheck) is clean. Not exercised on GitHub yet:
+  the first CI run on the PR is the check.
+- H-01 review fixes (2026-10-10, before any H-01 outcome was seen): the screen's event floor is configurable,
+  `research.screen_min_events` (1,000) with `research.screen_min_events_daily` (null = the same) for rules whose
+  signal is daily, passed by `research_pass.py`; behaviour unchanged until the owner sets it (ruling A, recommended
+  150). A screen that fails only on the event floor is now `inconclusive (event floor)`: still a recorded, charged
+  `screened` trial with no model, but the report says it cannot retire the hypothesis. The slow preset's daily
+  inputs (signal and ATR) drop the Friday stub bar (daily bars spanning under 12 trading hours), so lookbacks are
+  5-a-week trading days; `schedule_h` is left out of configurations with `signal_tf` (`Specialist.unused_config`),
+  so the slow agent id is now `tsmom-g0-c12c9afb24` (default tsmom ids unchanged, digest test green). Added an
+  unfiltered-context truncation test. Pre-registration H-01 now freezes the stub, Wilder ATR on mids, the score
+  formula, min_score 0.5, the time-barrier wording, costs and swap source, the short-swap bias (report long-only),
+  holdout-crossing labels dropped, 10 trades per positive year, the t-stat and DSR count, and the inconclusive
+  branch; it states H-01 can retire but not promote. Not done: the research report does not yet print the
+  long-only net R split the pre-registration asks for (a follow-up before the run); the 2,631 signal count predates
+  the stub fix (recount at the freeze). No research trial was run.
+
+- H-01 pre-freeze (2026-10-11): any primary-signal screen below the event floor is "inconclusive (event floor)",
+  whatever its sign; "screen passes but net t < 1.65 or < 3 positive years (incl. 2021/22)" is inconclusive too.
+  Reports carry long-only and short-only net R. Recount after the Friday-stub fix (data-v1, events only): 2,154 daily
+  signals (1,466 long / 688 short), one-at-a-time lower bound 154 events, first signal 2010-06-18. Owner ruling A
+  (recommended floor 150 for daily signals, can retire not promote) must be committed as
+  `research.screen_min_events_daily` before the run.
+- H-04 Asia-session drift (2026-10-11, specialist `asia_drift`, TRACEABILITY M39): long at 00:00 UTC (decision bar =
+  the 1h bar closing 00:00, entry at its close on the ask), time exit 07:00 UTC as a plain 1h time barrier
+  (`max_bars` 6; labels, shadow book and live count the same bars), stop 1.5 x ATR(1h) frozen at entry, no target, long
+  only, Monday-Friday; no entry when the 23:00 bar is missing, the session calendar is closed or on 25 Dec / 1 Jan; no
+  server rollover is ever held (swap 0, proved in both DST regimes). New `Specialist.screening`: a family under its
+  pre-registered screen is not seeded as a default founder and not pooled (pooled_1h unchanged); a passed trial still
+  becomes a shadow founder through gap_watch. It is active, not retired. Frozen parameters and
+  the exact `research.yml` inputs: `docs/research/preregistration-2027Q1.md` H-04. data-v1 is not on this machine, so
+  only the calendar bound was counted (4,087 entry days 2010-01..2025-09); the data count is due before the freeze.
+  No research trial was run.
+- asia_drift quant-review fixes (2026-10-11): a `screening` family gets no trials from the research director, the
+  label grid, the monthly loop or the research analyst (`jobs.research_families`; tsmom keeps its 6 free trials);
+  `research_pass.py` never fits a model for it (the screen row is recorded, pass or fail); `max_bars` > 6 is refused;
+  research drops entries whose 00:00-07:00 UTC window is not complete in the data (`complete_windows`, timestamps
+  only). **RiskGate guard (fail closed):** any intent whose label spec has no reachable target
+  (`BarrierSpec.has_target` False, `Intent.has_target`, or the family's spec looked up by family / agent id) is refused
+  with `time_exit_ev_unsupported`. **Before a time-exit family can trade live** (owner + trading-safety review):
+  (a) its meta-label is the time-exit outcome (ret > 0 net), not `target_hit`; (b) EV, breakeven and size use
+  EV_R = p x E[R | win] - (1 - p) x E[|R| | loss] - cost_R, with the out-of-fold averages stored in the model
+  artefact, in `goldbot/risk/gate.py` (the EV / standard-edge block of `RiskGate.check`) and
+  `goldbot/engine/runner.py` (size_multiplier / breakeven gate at the entry decision, `ev_r` on the proposal, the
+  shadow threshold); (c) the target-over-cost floor uses E[R | win] instead of `target_atr`. Live 00:00 UTC entries
+  need an owner click at about 01:00 London, so live will be a subset of shadow.
+
+- Dependencies (2026-10-11): Dependabot groups minor/patch updates per ecosystem; majors come as separate PRs to be
+  hand-tested (the 15-package web group #65 was closed: TypeScript 7 broke `npm ci` through openapi-typescript, and
+  React 19 / lightweight-charts 5 / Vite 8 / Vitest 5 need code changes). TypeScript majors are ignored until
+  openapi-typescript supports them. Actions now run on node24 (PR #64): a self-hosted runner (`vars.CI_RUNNER`) must
+  be Actions Runner >= 2.327.1.
+- CI install failures reported (2026-10-10, closes the loop on issue #66, `npm ci` ERESOLVE shown as "no runner was
+  assigned"): the backend and frontend install steps tee into `ci-out/<job>-install.txt` and add `<job>-install` to
+  the failed list, so `report-failure` posts the install output. "No runner was assigned" is now said only when no
+  artifact exists at all. `actionlint` + shellcheck clean; the first failing run on GitHub is the real check.
+- Daily owner digest (2026-10-10, `goldbot/telegram/digest.py`, TRACEABILITY A12): the Telegram service sends one
+  message a day at `telegram.digest_at` (default 06:45 UTC): health status (failing/warning checks named), yesterday's
+  proposals by outcome, closed trades (net $ and R), open positions, drawdown stage and cap use, halts, the next
+  pre-registered trial or quarter budget, the attribution best/worst non-noise cell, and what waits for the owner
+  (approvals, ROADMAP decision count, deploy on offer). Units and UTC on every number, no identifiers, under 15 lines;
+  each section degrades on its own. Sent once per slot (`state/telegram_digest.json`, recorded after delivery); a
+  slot missed while the service was down goes out on start if under 6 h late. Reporting only.
+
+- Web stack upgrade (2026-10-10, four `chore(web)` commits replacing #65): React 19.3.0, react-dom 19.3.0,
+  @types/react(-dom) 19.3.0, lightweight-charts 5.2.1, Vite 8.3.1, @vitejs/plugin-react 6.1.1, Vitest 5.0.2,
+  @vitest/coverage-v8 5.0.2, jsdom 30.1.1, TanStack Query 5.104.1, Playwright 1.64.0, ESLint 10.12.0,
+  typescript-eslint 8.71.1; TypeScript stays 5.9.3 (openapi-typescript 7.13 needs TS 5). Vite/plugin-react/Vitest/
+  jsdom are the newest releases at least two weeks old (8.3.4, 6.1.2, 5.0.3, 30.1.2 were days old; no GitHub
+  advisory affects the chosen versions). Nothing imports lightweight-charts yet (Health charts are inline SVG), so
+  there was no series code to port; new price/equity charts must use the v5 `chart.addSeries(LineSeries, ...)` API.
+  Vitest 5 and jsdom 30 need Node 22 (`engines` already says so; Node 20 fails to start the workers). The lockfile
+  was regenerated (npm 10 hit ERESOLVE/an arborist crash moving off the Vite 5 tree); `npm ci` on npm 10 is clean.
+  `npm audit` (prod and dev) reports 0 vulnerabilities, down from 7 dev ones. Production JS bundle 245 -> 318 kB
+  (75 -> 96 kB gzip), mostly React 19. Deferred: TypeScript 7 and @types/node 26 (Node 22 is the runtime).
+- Trading sessions from the broker (2026-10-10, TRACEABILITY D13, still partial): read-only broker method
+  `trading_sessions(symbol)` (paper: static hours; RemoteBroker via the bridge allow-list) returns 7 server days of
+  sessions resolved to UTC per date (Athens DST tested); `SessionTable.from_broker` makes the runtime table (reported
+  days: only reported sessions open, so early closes and holidays block entries; an unreadable list falls back to the
+  static defaults with a logged reason) and `BrokerSessions` refreshes it per server day. Finding: the MetaTrader5
+  Python package has no session schedule (`session_deals` is a deal count), so MT5 reports the documented hours; real
+  holiday hours need an MQL5 `SymbolInfoSessionTrade` helper. Engine hook for the runner lane (not wired):
+  `self._sessions = BrokerSessions(broker, symbol, fallback=SessionTable(server_tz=...))` at start, then
+  `why = self._sessions.entry_block(now)` as an entry-blocking reason. Exits are unaffected.
+- Engine wave 3 (2026-10-10, rows D10, A2, M9): a decision bar is finalised by clock at close + 1.5 s
+  (`runner.BAR_CLOSE_GRACE_S`; the wall clock in production) even when no tick follows it, or at once by a tick at
+  or after the close; each close runs once (`_closed_through`), a tick older than a bar the clock already finalised
+  never revises it, and a repeated poll of the same quote (the run loop's 0.25 s poll) is no longer appended as a new
+  tick (tick counts and the tick log were inflated in quiet markets). Proposals carry
+  `EngineConfig.approval_window_s`, set from `settings.risk.approval_window_seconds` in `ops/run.py` (default 90).
+  The allocator's tier-1 distances come from the calendar the RiskGate's news blackout reads, so its 30-minute
+  zeroing now acts live (weight 0 inside -30/+30 min). Exits are unchanged: they run on every tick before any bar logic.
+- Wave-3 review fixes (2026-10-10, rows D10, M8, M9): a late tick (stamped before a bar the clock already finalised)
+  is still kept out of the live bars but no longer silently: a `late_tick` data-quality warning (at most one a minute,
+  stored with the bar's dq_events) and the running count `late_ticks` in the engine state; a lone warning never blocks
+  entries (`dq_error` and `dq_checks` count error-severity events only). The engine publishes `clock_skew_s` (broker
+  tick time minus wall clock, median of the last 120 new ticks); health warns above the 1.5 s bar-close grace. It
+  escalates to a blocking data-quality error (entries only; exits never gated) when |skew| > 10 s (`clock_skew`) or
+  when late ticks hit 3 consecutive decision bars (`late_ticks`, cleared by a bar with none), because such bars drift
+  from the training and shadow bars. The allocator keeps its design window, 0 for 30 min either side of tier-1
+  events (`RuleAllocator()` defaults), deliberately stricter than the RiskGate's -15/+30 entry block; the gate window
+  from settings never narrows it (an allocator rule change is the owner's decision).
+- Currency-correct sizing (2026-10-10, BACKLOG 28, ADR 0004 A3-A8, rows R32 and S6; needs trading-safety review):
+  RiskGate now sizes in the account currency. One lot's stop risk is stop x contract x fx, fx being the broker's
+  account currency per USD: `loss_per_lot` on the broker protocol (MT5 `order_calc_profit` for the stop move on one
+  lot, else `trade_tick_value_loss`/`trade_tick_value` per `trade_tick_size`; paper = USD, factor 1; bridge allow-list
+  read-only; RemoteBroker). The 1:20 margin figure, margin level and combined-notional cap compare account currency
+  with account equity. A non-USD account with no usable conversion refuses entries (`fx_conversion_unavailable`); a USD
+  account is 1 by definition and a broker figure more than 1% off is refused. The engine passes the terminal's
+  contract size, minimum lot, lot step, stops level and the conversion into `Intent` (`runner._sizing_terms`; volume
+  max stays capped at the engine's 2.0 per order; an unreadable terminal leaves the currency unknown, so no entry).
+  gate.py calls goldbot/risk/sizing.py for the arithmetic (the parity test now also runs at a GBP factor). Closed-trade
+  R and return use the same conversion; with none, R is left empty and the return comes from prices (the record is
+  never blocked). The supervisor refuses to combine engines in different currencies (`mixed_account_currencies`, a
+  halt): converting would need an FX rate it does not have. Running `vantage-demo` (USD?) next to `icm-demo` (GBP)
+  therefore halts entries on both until a conversion is built. Not changed: the approval card's `risk_usd` stays USD
+  (ui-ux follow-up: show the account-currency risk from `GateDecision.risk_amount`); the approval re-check reuses the
+  conversion read at proposal time (90 s at most).
+- Minimum-lot exception (2026-10-10, BACKLOG 25, ADR 0004 decision 2, row R33; needs trading-safety review):
+  `risk.min_lot_risk_cap` (null = off, the design's 1.2x rule alone; validated 0 < x <= 0.01). When the sized lots
+  fall below the minimum lot, RiskGate places exactly the minimum lot if its realised risk in the account currency is
+  within the cap (clamped to the 1% maximum, halved in the 8% stage or the combined size-down), then runs the margin
+  floor and combined-exposure checks as usual; an allowed exception carries `min_lot_exception` and the engine journals
+  `sizing`, `risk_fraction` and `risk_per_trade` on the decision. Settings are global (no per-account section), so it
+  is **off in settings.yaml**. Owner: to let the £1,000 demo trade 15m at 0.01 lot (0.82%), add
+  `risk: { min_lot_risk_cap: 0.01 }` to the demo server's `config/settings.local.yaml` and restart the engine. The
+  approval card does not show the exception yet (ui-ux follow-up).
+- Absolute daily loss limit (2026-10-10, BACKLOG 29, ADR 0004 section 3, row R34; needs trading-safety review):
+  `risk.daily_loss_limit_abs: 50` (account currency; null = off). Entries only, projected: RiskGate refuses
+  `daily_loss_limit_abs` when the day's loss so far plus the new trade's full stop risk would exceed min(daily cap x
+  day-start equity, 50), so the 2% account cap is now also projected while the absolute is set. The supervisor halts
+  (`combined_daily_loss_abs`) when the combined day loss reaches 50. Exits never consult it. engine_<account>.json
+  carries `daily_loss_limit` and `daily_loss_remaining`; health shows them on the daily cap line and warns when none
+  is left. Not done: the approval card's "remaining daily allowance" (ui-ux follow-up).
+- Per-agent loss-streak and entry-rate throttle (2026-10-11, BACKLOG 21, playbook G-6, row R35; **off by default**;
+  trading-safety review: merge after fixes, fixes in): `risk.throttle: {enabled: false, loss_streak: 3,
+  cooldown_bars: 4, max_entries_per_day_per_agent: 3}`. The caps are per decision, per account: each account counts
+  its own trades for an agent and RiskGate checks them at every entry decision (proposal and approval re-check), so
+  across two accounts an agent can make up to twice the daily cap. When enabled, RiskGate refuses an agent's entries
+  with `throttle_loss_streak` after `loss_streak` consecutive full losses (R <= -0.9; without R, a `stop`/`stop_out`
+  exit at a loss; any other trade ends the streak) until `cooldown_bars` bars of the agent's timeframe have passed
+  since the last one, or a real shadow win (target hit or >= 0.25R; never a scratch) of the agent's **current live
+  model version**, entered after that loss, closes. The count persists after the cooldown: one more full loss
+  re-blocks at once, until a qualifying win. `throttle_entry_rate` once it has made `max_entries_per_day_per_agent`
+  entries in the risk day (00:00 UTC); `throttle_unknown` (that agent only) if its facts cannot be derived. Exits
+  never consult it. No new state file: facts come from the closed-trade record, the open book, the shadow book (read
+  only while a streak is cooling down, cached by mtime) and, review HIGH-1, closes the engine has seen but not yet
+  recorded (a broker stop found by the bar-close sweep is written after that close's decisions; a write that keeps
+  failing), each counted as a provisional full loss so the loss just taken counts at the very next decision. Engine
+  `live_versions` (agent -> champion version) is set by `ops.run` with the models. engine_<account>.json carries
+  `throttle` (settings; per agent: streak, provisional losses, last loss, cooldown end, entries today, `blocked`; or
+  `error`). Health has one check per agent, `throttle:<account>:<agent>`: warn + Telegram while throttled, FAIL when a
+  streak block has no cooldown end, on `throttle_unknown`, or when the state could not be published. Owner: set the
+  thresholds and turn it on (settings.local.yaml `risk: { throttle: { enabled: true, ... } }`, restart the engine).
+  Not done: the playbook's "until the next session" variant, a cross-account count, a provisional loss for a record
+  lost before a restart (only its id persists; health already fails on `closed_records_lost`), and the dashboard /
+  approval card (ui-ux follow-up).
+- Entry windows from the calendar (2026-10-11, BACKLOG 17, 18, playbook G-2, G-3, row R36; **off by default**; needs
+  trading-safety review): `risk.blackout.tier2: {enabled: false, before_min: 5, after_min: 15}` refuses entries
+  `tier2_blackout` around tier-2 USD events in the live Forex Factory archive (the G-3 list is now tier 2 whatever the
+  feed's impact, `TIER2_PATTERNS`, so claims moved from tier 3 to 2; nothing in production read tier 2 before);
+  `risk.reopen: {enabled: false, after_daily_reopen_min: 10, after_monday_open_min: 30}` refuses `reopen_window` after
+  each reopen of the broker session table (weekly window after a 12 h+ closure); `risk.holidays: {enabled: false,
+  file: config/holidays_cme_metals.yaml}` refuses `holiday_thin` on listed server dates (version `cme-metals-v1`,
+  valid 2026-2028; a test re-derives it from the rules). An enabled tier-2 or holiday window without its calendar
+  refuses `calendar_unavailable` (no store, unreadable or empty archive window, missing or expired list); a session
+  table that raises counts as inside the reopen window. Edges inclusive. Disabled windows add nothing in the gate
+  (`RiskGate.window_reasons`) and the engine computes nothing for them. Exits never read these flags. New module
+  goldbot/risk/windows.py; the runner's `_entry_windows` sits beside `_blackout` and shares its calendar read
+  (`_calendar_events`). Owner: adopt (OWNER_GUIDE section 4). Not done: UK/JP/CN holidays and early closes, engine
+  state/dashboard display of the window flags (the decisions journal carries the reasons), the 2029 list.
+  Trading-safety review (merge after fixes, no HIGH) fixes in: engine_<account>.json `windows` (flags, holiday version
+  and valid_through, latest calendar event and fetch, `calendar_unavailable_since` and reason); health
+  `check_entry_windows` (`entry_windows:<account>:calendar` FAIL after 30 min unavailable with the market open,
+  `:calendar_age` WARN on a fetch over 36 h old, `:holiday_list` WARN within 90 days of its end; Telegram); one log
+  line per transition; CI fails a year before the holiday list ends. Tier-2 availability now needs the newest fetch
+  under 7 days old and the archive covering through now + 24 h (to the end of its latest event's Forex Factory week),
+  and a Sunday 18:00 UTC fetch (`calendar_archive_sunday`) archives the new week before the open. Holiday list v2:
+  "US federal holidays as a proxy (not measured)", Columbus and Veterans Day out, the day after Thanksgiving and
+  Easter Monday in, tested against a hand-reviewed set. Any error in the window computation sets
+  calendar_unavailable and the reopen flag; a bar close whose account read raises still manages open trades. ADR 0008
+  and econ_calendar.py document the two tier-2 definitions. New BACKLOG 45 (measure the listed days) and 46 (replay
+  the windows and a `research_pass` filter) come before adoption.
+- Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
+  applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
+  tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on
+  icm-demo in config/accounts.yaml, its currency), no longer in settings.yaml; `ops.run.engine_limits(paper=True)`
+  drops it when the paper broker stands in, so the $10k USD paper book and shadow evidence are unchanged. Engines
+  publish it (`daily_loss_limit_abs` and, for the dashboard, `limits.daily_loss_limit_abs` plus
+  `limits.min_lot_risk_account`, the minimum lot's stop risk in account currency at the latest ATR stop or null);
+  the supervisor applies the smallest published limit to the combined loss. Currency rollout: the startup-error file
+  carries `currency`; the supervisor's currency check counts only engines with a fresh heartbeat (equity is still
+  summed as before) and publishes `currency_files`; health fails with "HALT mixed_account_currencies" naming each
+  file and currency; vantage-demo is `enabled: false` until its currency is confirmed; RUNBOOK "Currency rollout"
+  gives the one-time stop-all/delete/deploy/restart/check steps. A P&L the engine records from its own fills
+  without a conversion stays USD with `ClosedTrade.pnl_currency = "USD"` and is left out of the digest's money sum
+  (the stop rule keeps it as recorded: conservative on a GBP deposit). Open notional uses the terminal's contract
+  size. symbol_info and the conversion are read once per decision cycle (per side), and the approval re-check reads
+  the terms and conversion again (a lost conversion refuses, fail closed). Gate boundary documented: exceeding the
+  daily limit is refused, exactly equal allowed; the supervisor halts on reaching it. BACKLOG 35 (open positions'
+  remaining stop risk) and 36 (costs) added for the daily projection.
+- Re-verification fix (2026-10-10, row S6): the supervisor never sums money across currencies. Equity, day/week
+  start, HWM, the published daily limit and `exposure[*].equity` (the gate's `other_equity`) come from fresh engines
+  plus stale files in the fresh engines' single currency; a stale file in another or no currency keeps only its open
+  lots and notional (strict) and is listed in `money_excluded`, which health reports as a warning naming the file.
+  The paper exemption of the daily limit goes by type (`ops.run.paper_stand_in`: `isinstance(broker, PaperBroker)`).
+  Integration with the dashboard lane: one `Engine._published_limits` (`limits` in engine_<account>.json: risk per
+  trade, its maximum, multiplier bounds, daily and weekly caps, `daily_loss_limit_abs` per account,
+  `min_lot_risk_cap`, `min_lot_risk_account`); the top-level `currency` is the broker's deposit currency, never
+  blanked by the account view before its first refresh. `ClosedTrade.pnl_currency` is now the account currency
+  whenever the P&L (and R) are in it, "USD" only for the unconverted own-fills fallback, None only on legacy records,
+  so the monthly report's `r_understated` flags only pre-fix trades; the digest sums rows whose `pnl_currency` is
+  None or the account's currency (engine_<account>.json) and names the rest "(n in USD not summed)". Follow-up for
+  the dashboard lane: `monthly_report.account_month` still sums every row's P&L, including a USD fallback row
+  (done 2026-10-11, next bullet).
+- No cross-currency money sums anywhere (2026-10-11, final-review follow-ups, row S6): with no fresh engine the
+  supervisor sums stale files' money only when they all report one currency, otherwise none (lots and notional still
+  count) and publishes `no_fresh_engine`. The digest sums P&L per currency and prints each with the account's own
+  symbol from engine_<account>.json ("net +£5.00 · -$10.90"; "(currency not reported)" when unknown; the
+  `monthly_report.money` formatter, as the web's Intl formatting). The monthly report keeps rows in another currency
+  out of the P&L, chained return, days and drawdown (R still counts them) and says "(1 in USD not summed)" in the
+  report and the month-to-date digest line (`AccountMonth.pnl_excluded`, `pnl_note`).
+- Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
+  `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
+  minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both
+  channels; see the re-review bullet below for the counter key and atomicity). `mode_by` on the
+  auto-mode card is the full `dashboard:<email>`/`telegram:<uid>` only for the verified owner; other roles see the
+  channel. Health, Research and auto-mode error text shows the exception type only (detail logged server-side).
+  Every `/api/` response carries `Cache-Control: no-store`. The unused `lightweight-charts` dependency is removed
+  (new price charts will need it added back).
+- Dashboard security re-review (2026-10-10, TRACEABILITY U13, U15, U17, U18): no reset link can be made or used for
+  the owner account (a stolen owner session could otherwise reset password and authenticator); the owner recovers
+  with a recovery code. Lockout check-and-count is one BEGIN IMMEDIATE transaction (`_reserve`, login and codes),
+  so a 32-thread burst gets at most 5 checks. Code failures count under `code:<email>`: they lock re-arm and auto
+  mode but never sign-in; failed sign-ins lock both (fails safe). The notice fires on crossing the limit, at most once
+  an hour, and names the new server command `python -m goldbot.ops.run revoke-sessions` (signs every account out).
+  The lockout never gates `/api/halt`, Telegram /halt or /mode propose (tested). Health check reasons, drift errors,
+  system-halt reasons and `/api/jobs` errors are whole for the owner and redacted for other roles (type only, paths
+  as `<path>`, in the API layer); `account_security` rows in `/api/agent-runs` are owner-only. RUNBOOK updated.
+  Follow-up: forgot-password, recovery login, password change and recovery-code regeneration also reserve before
+  checking (32-thread bursts get at most 5 checks; a refused new password with the right credentials is not
+  counted). `revoke-sessions` refuses a state directory without aux.db (exit 2, absolute path printed) instead of
+  creating an empty one. Redaction removes quoted paths whole (spaces, Windows) and UNC `\\host\share` paths.
+- API request bodies reject unknown fields (2026-10-11, TRACEABILITY U19; security item from the ADR 0010
+  architect): every request body model in `goldbot/api/schema.py` derives from `ApiRequest` (`extra="forbid"`), so
+  a misspelt or attacker-supplied field on an auth, mode, re-arm, halt or approval request is a 422 instead of being
+  dropped. Response models are unchanged. A guard test fails when a new body route uses a model without it. The web
+  client sends exactly the declared keys (web/src/lib/api.ts checked); schema.d.ts is unchanged by the regeneration.
+  The 422 body lists each error as type, loc and msg only (`validation_error` handler in `create_app`): FastAPI's
+  default `input`/`ctx` would echo the rejected value, e.g. a password under a misspelt key (security review LOW).
+
+- Live account view and monthly report (2026-10-10, TRACEABILITY V1-V5; ADR 0004, BACKLOG 26 backend): the engine
+  publishes in `engine_<account>.json` the broker's `balance`, `currency`, `margin`, `margin_free` (never login or
+  server), `price` (mid), `limits` (the RiskGate's risk per trade, multiplier bounds, daily/weekly caps, plus
+  `daily_loss_limit_abs`/`min_lot_risk_cap` once RiskLimits has them), `lot_terms` from `symbol_info` and
+  `ladder_atr` (ATR(14) of the mid per 15m/1h/4h/1d, refreshed at bar closes, null until 15 bars); the supervisor
+  adds `daily_cap` and `combined_day_start_equity`. `goldbot/ops/account_view.py` turns that into
+  `AccountSummary.balance/currency/margin_level_pct/day_pnl/loss_budget/milestones` (API contract regenerated).
+  Loss budget = min(account cap x day start, combined cap x combined day start, absolute); the binding cap is the one
+  with least left; the combined cap is skipped with a note on mixed currencies; the absolute limit appears only once
+  the engine publishes it (BACKLOG 29). Milestones: minimum lot at a 1.5 x ATR(14) stop within 1.2 x the target risk
+  (or `min_lot_risk_cap` once published), via `goldbot/risk/sizing.py`. **Contract for BACKLOG 28:** publish
+  `usd_to_account` (account currency per 1 USD of gold P&L, from `order_calc_profit`/tick value) in the engine
+  state; until then a non-USD account's ladder reads "pending broker terms" and shows no amounts. Dashboard:
+  Overview account cards (balance vs equity, today, margin level, loss-budget meter, milestone progress bar) and a
+  "Loss budget" chip on the safety strip; a spent budget is listed as "daily loss limit reached" in the blockers.
+  `python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]`: per account, time-weighted %
+  (chained trade returns on the balance before each trade, so deposits are not return), net R, R/trade with a 90%
+  t interval, max drawdown on closed trades, average per weekday elapsed, best 3 days, £50+ days (GBP only),
+  milestones; the digest adds "<Month> so far" once the month has a closed trade. Not done: BACKLOG 26's
+  by-timeframe split, opportunity-day capture, days lost to the cap, the dashboard monthly card and a scheduled job.
+  Engine change is reporting only (state publish and an ATR read at bar closes in a try/except); route it to
+  trading-safety review anyway since it touches goldbot/engine and goldbot/risk/supervisor.py.
+- Account view review fixes (2026-10-10, TRACEABILITY V2-V5): the loss budget now also lists the weekly caps
+  (account 5% on week-start equity, combined 4%; the supervisor publishes `weekly_cap` and
+  `combined_week_start_equity`); left = max(0, limit - loss since the start), so a profitable day adds room; the
+  combined caps are skipped with a note when supervisor.json is over 60 s old, and /api/accounts never fails on a
+  torn supervisor file or junk engine fields. **Contract with the currency lane (BACKLOG 28/29):** read
+  `limits.daily_loss_limit_abs` (account currency, per account) and `limits.min_lot_risk_account` (the smallest
+  trade's stop risk); the absolute cap reserves that amount and is labelled "(includes the next trade's stop)", and
+  the "not enforced yet" note goes once the limit is published. Every cap carries a plain-language `label`
+  (`binding_label`, `period`) for the card ("Limit set by: all accounts together (1.5% of today's start)"). Monthly
+  report: R carries "R understated on non-USD accounts until BACKLOG 28" until the engine publishes
+  `usd_to_account`, the return is labelled a chained closed-trade return with "approximate: positions overlapped"
+  when they did, and the digest's month so far counts trades closed before today only. Engine: ladder ATR from the
+  incremental resamplers, a timeframe marked done only after its ATR is computed (retried otherwise), the
+  symbol-info warning at most every 10 min. Dashboard copy in plain words (timeframes as "15-minute trades", the
+  rule inside "How this is worked out", the day start in local time plus UTC) and a loading placeholder.
+  **Owner decision, unchanged behaviour:** viewers see balances and the loss budget, as they already see equity;
+  restricting money figures to the owner is the owner's call.
+- Residue (2026-10-10): the monthly report flags R per trade (`monthly_report.r_understated`): a non-USD record
+  without `pnl_currency` keeps "R understated ... BACKLOG 28" after `usd_to_account` appears, with the count when only
+  some are affected. **Contract for the currency lane:** add `ClosedTrade.pnl_currency` to post-fix records. Copy:
+  the blocker, strip status and meter say weekly when a weekly cap binds; the absolute cap reads "(includes the
+  smallest trade's stop)"; the size-down rule says "reduced" (halved only for the min-lot cap); "90% t-interval
+  (approx.)", "Max drawdown on closed trades this month".
+- Owner's manual trading record (2026-10-10, research seeds; security + quant review fixes the same day):
+  `python -m goldbot.ops.run owner-history [PATH]` (`goldbot/research/owner_history.py`) reads the owner's MT5 History
+  report (HTML, XLSX or a deals CSV; stdlib parsers, no new dependency; inputs and xlsx members over 50 MB refused)
+  from `~/Personal project/trade-history/` (newest file) and writes a Markdown report, a JSON summary (finite numbers
+  only, `allow_nan=False`) and a per-trade CSV (mode 0600) to that same private folder. Writing into ANY git work tree
+  is refused (`git_tree_reason`: a `.git` dir or file in the path, this checkout under any case spelling, or
+  `git rev-parse` succeeding). The header's account number, name, company and server are never kept (only the
+  currency); tickets are used only to match a position to its opening order. A pre-commit hook
+  (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` / `Счёт:` /
+  `Konto:` / `Cuenta:` + digits, also in UTF-16 and inside .xlsx), and a translated one by shape: an HTML table or
+  xlsx sheet or CSV/TSV with >= 5 rows holding an MT5 stamp `YYYY.MM.DD HH:MM` in one of their first 3 visible cells
+  (hidden HTML cells dropped) under a Positions/Deals-like title (en/ru/de/es) or >= 5 such rows of >= 10 cells (the
+  translated words are unconfirmed against a real export; the shape rule does not need them; every tracked file
+  passes). Linear time (html.parser, no backtracking regex); an xlsx is scanned for at most 200 members and 50 MB.
+  Gaps: a translated export with < 5 trades, or xlsx stamps stored as Excel numbers, pass the shape rule. XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`,
+  default Europe/Athens).
+  1R comes from the opening order's INITIAL stop (Orders section), else the report's S/L, which is the FINAL stop;
+  the (symbol, side, open time) fallback pairs a position with an order only when exactly one of each shares the
+  key (an ambiguous key falls back to the final stop);
+  a stop at or beyond the entry is `sl_moved` and, like the no-stop proxy, kept out of the R statistics. The USD rate
+  is always implied from the trades (a "USD" account implying != 1 is flagged). Reported: R, win rate, expectancy
+  with t, profit factor, return on equity with t, daily P&L by UTC and London day with t and 95% CI and the share of
+  days >= `--targets` (default 30,50), sessions (goldbot's local-clock windows, DST per date), hour, weekday, side,
+  holding time, tier-1 news (if the store has
+  `calendar_events`), entries near session opens on each date's local clock against a base rate from the owner's
+  active hours, leverage vs equity, losing streak, drawdown from trading only (deposits/withdrawals excluded; % on a
+  flow-adjusted index), and risk of ruin with `goldbot.research.ruin`'s circular block bootstrap for both sizing
+  readings (compounding, fixed stakes), each also as a zero-edge (demeaned) stress row; end equity is a capped
+  log10. Ends with hypothesis seeds OH-01..06 in hypotheses.md format, labelled in-sample, not evidence, each phrased
+  as "test whether entries in X differ from the owner's other entries", stating K = slices examined and whether its
+  t clears the Bonferroni bar, Student's t at 5%/K on the slice's own n - 1 df (`slice_bar`; slices under 10
+  trades are never said to clear it). Seeds quote R, % and counts only:
+  do not paste amounts into the repo. The MT5 layout was written from the documented report structure, not checked
+  against a real file (none may enter the repo): if the owner's export parses to 0 trades, look at `_ALIASES` /
+  `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
+
+## Next steps (no owner input needed unless marked)
+<!-- handoff.d:next -->
+- **Owed pre-registration counts (2026-10-11): run count-owed-events and paste the counts before the freeze.**
+  `.github/workflows/count-owed-events.yml` (workflow_dispatch only; dispatchable once it is on `main`) downloads
+  data-v1, macro-v1 and calendar-v1 (`fetch_data_release.py --download-only`), cuts every input at
+  `research.holdout_from` and runs `scripts/count_owed_events.py`: Q1 H-04 entries and the 7h-rule drops (asia_drift's
+  own `candidates` + `complete_windows`), an H-01 recount, Q2 H-16 `first_oos_month` + `expected_eval_days` (h16's
+  rule and evaluation-set masks on placebo prices: timestamps, GVZ dates and calendar rows only), H-17, H-18 and H-14.
+  No label, return or price after a decision bar is read (AST and truncation guards in
+  `tests/test_count_owed_events.py`). The table is in the step summary, the JSON in the `owed-counts` artefact; paste
+  them into `docs/research/preregistration-2027Q1.md` (H-04) and `preregistration-2027Q2-draft.md` (H-16/17/18/14).
+  H-17, H-18 and H-14 are counted from the written rule ("spec-derived") until `trend_day`, `event_continuation` and
+  E-2 are merged; recount with their own code before the Q2 freeze. About 10-20 runner-minutes per run.
+- VRP/purge follow-ups (2026-10-11): `macro_drivers` v5 stub rule from declared bar lengths (macro `f-51ac5ebabb`,
+  macro + day_type `f-48c4c0c57e`); context frames use one `pipeline.CONTEXT_FEATURES` list (engine too, no behaviour
+  change); group-measure rows purged by label exit (`discovery.purged_rest`).
+- Pre-freeze verdict fixes (2026-10-11, third quant re-review): screened-row decisions keyed on the linked
+  pre-registration's `rule_id` (write the Q1 queued rows with `rule_id="H-01"/"H-04"/"C4H"`); H-01 continue needs
+  long-only positive years too; the 4h continuity trial never continues; unknown passes continue only citing their
+  pre-registered reading rule; H-10 jumps-only cannot retire or continue H-10; `macro_drivers` v4 (stub-free HAR-RV),
+  macro version `f-ac2be79efe`, macro + day_type `f-7a3cad1466`; group measure uses `permutation_repeats` and a
+  one-week purge.
+- Persisted state is read tolerantly, built strictly (2026-10-11, ADR 0010): a rollback used to skip closed trades,
+  hide proposals or stop services when a newer release had added a field. `goldbot/base.py` `load_record` /
+  `load_record_json` drop unknown keys at every level (WARNING once per source/model/fields, `schema_skew()`). A wrong
+  type, a missing field or bad JSON still fails, and construction stays `forbid`. Applied to gates_phase, bus proposals
+  (`Control` and `BusDecision` stay strict: an unknown field means halted / the decision is skipped and expires), automode, shadow, ruin, scheduler, model registry, population, director, costs, health, digest, outbox,
+  crossfeed and jobs; `RecordRepo(..., tolerant=False)` is the default (auth stays strict).
+  The pydantic floor is now 2.12. New rule AGENT_STANDARDS S12: every new persisted field has a default that is safe
+  when missing, and a new restriction is encoded so an older release fails closed (a new `Literal` value, never a new
+  boolean). Guard: `tests/test_persistence_compat.py`: a compat case per persisted model; an AST allowlist keyed by
+  file, function and receiver; strict models never read tolerantly (any `*load_record*` call or
+  `RecordRepo(tolerant=...)`); tolerant reads name their class; no left-to-right or discriminated unions in tolerant
+  models.
+  Engine follow-up done (2026-10-11): `runner.py` `_load_orders` (SentOrder/OpenTrade/PendingClose) and
+  `_archive_stale_proposals` read with `load_record*`, so a rollback no longer stops the older engine from starting.
+  `mt5_bootstrap.sh` pins `pydantic>=2.12`; an existing MT5 box is upgraded once by hand (RUNBOOK 0.5).
+  Bridge follow-up done (2026-10-11): `goldbot/execution/bridge.py` `_decode(..., response=True)` reads what the
+  MT5 box sends back (Position, Tick, AccountInfo, SymbolInfo, BrokerTerms, TradingSession, OrderResult) with
+  `load_record` (source `bridge-response`), because the box is updated by hand and can run a newer release. The
+  bridge server's arguments (`response=False`) and `OrderIntent` in either direction stay strict: an order request
+  with an unknown field is refused. Protocol digest unchanged, `API_VERSION` stays 2. The MT5 box needs no pydantic
+  upgrade for this (only the brain calls `load_record`); the RUNBOOK 0.5 upgrade stays recommended for parity.
+  Review LOWs (2026-10-11): a refused decision is logged once per proposal and counted (`base.note_schema_skew`), and
+  an unknown top-level table in `orders_<account>.json` is logged and counted at engine start; S12 now requires a
+  reviewed rollback story for a new table that carries client ids or broker orders.
+  Skew reaches the owner (2026-10-11, review follow-up; needs trading-safety and SRE review): the engine publishes a
+  bounded `schema_skew` block in `engine_<account>.json` (`base.schema_skew_summary`: distinct sources, reads, any
+  refused, at most 20 entries with refused ones first, 10 field paths each). Health `schema_skew:<account>` WARNs
+  (Telegram, NOTIFY_ON_WARN) while any is present and names at most 5 sources (~400 characters, then "+N more"), and
+  FAILs for an hour after a strict reader refused a record (an owner's click dropped by the approval bus;
+  `last_refused_utc`, `SKEW_REFUSED_FAIL_S`), then WARNs naming the refusal time; a new refusal FAILs and alerts
+  again (SRE review). Process-lifetime: the counts clear when the engine restarts and next writes its state (on a
+  tick or bar, so a weekend restart keeps the old block until the Sunday open). The check is guarded like the
+  others (a raising check is a FAIL named `schema_skew:<account>`). Only the engine's own reads are counted; skew read by the API, Telegram or
+  supervisor processes is still log-only. Also pinned: a holiday list with a misspelt key (`valid_thru:`, renamed or
+  added beside the real key) fails closed as `calendar_unavailable`, RiskGate refuses entries, exits still run.
+- H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
+  (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
+  version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London
+  extremes; H-10 jumps only), a before-look check that each cluster has an informative column, and the size-neutral
+  joint permutation group measure (group_top_k 3). Follow-up slots need an exact default+overrides config;
+  `record_verdict` refuses discovery rows and checks screened rows against the pre-registered decision; survivor claims
+  may carry only spec keys + tags; E-5 manual rows record `rule_ref` (`research_pass.py --rule-ref`). Open before the
+  freeze: H-10's news / no-news split (opt-in `jump_news` + calendar into `--discover`) if wanted.
+- Contingent trial slots and withdrawal (2026-10-10, ADR 0007, quant ruling on the Q1 reservation): `reserved_trials_quarter`
+  13 -> **9** (5 queued + 4 H-02 survivor slots); 13 would have locked 8 of 20 Q1 trials all quarter. New
+  `TrialRegistry.reserve_slot(parent_ref, kind, k, derivation_rule, target_quarter)` (survivor / followup / holdout,
+  written before the quarter), `preregister(slot_ref=)` to use one in-quarter, `withdraw(ref, reason)` (not a trial).
+  A slot holds only while its condition can still be met and is freed by its rule (`director._Ledger`).
+  reserved = max(setting - run - withdrawn - expired slots, pending, 0). **Re-review fixes (2026-10-11, ADR 0007
+  amendment):** a slot covers only its derived config (parent family + spec, `from_discovery` = parent `row_ref`, the
+  k-th survivor and exactly its recorded members; follow-ups fix family + allowed configs; never a retired family);
+  survivor slots are live only when the parent reads continue under its rule (AUC >= 0.53, LB > 0.50) and >= k
+  pre-registered clusters pass (H-02 now groups by `discovery.H02_CLUSTERS`, `--families cluster`); evaluator
+  verdicts (`record_verdict`) drive rule-only follow-ups; group mode forwards whole groups while they fit and records
+  the rest; `reserved_trials_quarter` is keyed by quarter (`{"2027Q1": 9}`); E-5 cap for 2027Q1
+  (`open_budget_preregistered_only`): the analyst spends the open budget only on a `rule_ref` pre-registration or the
+  shared retired exploration trial, the grid none. **Before 2027-01-01:** write the 4 survivor slots on H-02's queued
+  row (`reserve_slot(h02, "survivor", k, ..., "2027Q1", survivor_pool=["H-03", "H-05", "H-07", "H-08", "H-10"])`,
+  k = 1..4) and H-02's config with `clusters = H02_CLUSTERS`, group mode `cluster`.
+- Opportunity-day features, BACKLOG 30a (2026-10-11). The quant and data review said "merge after fixes"; the fixes
+  are in the follow-up commit (H1, M1-M9, L1-L5). `goldbot/features/day_type.py` is the opt-in `day_type` family
+  (version 1). Importing it registers nothing. `enable()` registers it, and `research_pass --day-type` is the only
+  caller, so `DEFAULT_FEATURE_NAMES`, `f-079deacc61` (the Q1 H-02 universe) and `f-f999b359e2` (with macro) are
+  unchanged. Sets that include day_type are pinned: `f-1eada57050` (default + day_type) and `f-93fbe9386d` (+ macro).
+  Each trial row records `day_type: {family, version, gvz, us_calendar, refit_schedule, min_fit_rows}`.
+  - research_pass refuses `--day-type` without `--us-calendar`, with `--discover` or `--cpcv`, or with `--from-year`
+    after 2010.
+  - The US calendar branch (7c12fbd) is merged in here. `--us-calendar` now only fills `ctx["us_calendar"]`. The
+    `tier1_events`/`tier2_events` families need `--us-calendar-features`, so H-17 can read only the HAR columns.
+  - Day: 22:00 UTC rollover, inside the daily break in both DST regimes. A day spanning under 12 h is a stub and is
+    dropped from the daily inputs. A daily value is visible at D 22:00 UTC and is joined with `asof_join`.
+  - Columns: `opp_har_range_hat`, `opp_har_cut33/50/80`, `opp_har_band`, `opp_gvz_rv`, `opp_gvz_stale`,
+    `opp_prev_range_atr`, `opp_nr4`, `opp_nr7`, `opp_inside_day`, `opp_gap_atr`, `opp_noise_ratio`,
+    `opp_tier1_today`, `opp_min_to_first_tier1`. Definitions are in the module docstring.
+  - HAR target is H-16's: y = ln(W / A_{k-1}). W is the 08:00 London to 16:30 New York window range, each on its
+    local clock. A is the mean true range of 20 stub-free opportunity days, which is not the 1d-bar ATR (see DESIGN).
+    W, and with it the forecast and the noise ratio, is NaN on bars longer than 1h.
+  - Refit for month M: at the close of the last weekday opportunity day before M (Friday when M starts at a
+    weekend), on rows closed at least 1 day earlier, with at least 500 rows.
+  - Reading taken: the reviewers asked for "the last stub-free day". That is not known at the previous day's close (a
+    truncation cut inside a month-end stub would see a different fit), so the rule is calendar weekdays. It differs
+    only when the last weekday of a month is a stub.
+  - Each `HarFit` stores its 0.33/0.5/0.8 fitted-value quantiles. `fit_har(regressors=...)` takes any column list,
+    for E-4's full model. The fold-fit hook is `har_forecast(refit_at=...)`, or ctx `day_type_refit_at` /
+    `day_type_min_fit_rows`.
+  - The tier-1 count is of distinct releases: an FOMC statement and its press conference count as one. It reads
+    `ctx["us_calendar"]`, and an integration test goes from `read_us_calendar_files` through `tier1_columns`.
+  - Other rules:
+    - GVZ is stale after 5 US business days counted on value_date (`driver_frames` now carries value_date).
+    - The gap anchors on the first bar at or after the 18:00 New York reopen.
+    - The noise ratio's session starts on the bar containing the open.
+    - `daily_bars` refuses bars out of time order.
+  - Still owed: the first out-of-sample month counted from data before the freeze (about 2012-04; the rule is in
+    the Q2 draft). E-4 is built (next bullet).
+- H-16 evaluation path, E-4 (2026-10-11; quant review: merge after fixes, fixes applied). `goldbot/research/h16.py`
+  plus `research_pass.py --h16 --macro DIR --us-calendar DIR` runs H-16's pre-registered test once and records ONE
+  trial (family `h16_opportunity_score`, status `evaluated`, `results.kind` = `range_test`).
+  - It runs only against its pre-registration. Under the registry lock and before anything is read, the run is refused
+    when any H-16 trial exists (whatever its config), when there is not exactly one unused H-16 pre-registration, when
+    that config is not `h16.h16_config(first_oos_month, expected_eval_days)` with 500 rows, when its `code_hash`
+    (h16.py's source, also on the result row) differs, when its feature version differs from
+    `feature_version(["day_type"])` worked out now (`f-52c853166b` for day_type v1), or when the budget is spent.
+  - The frozen month and the frozen evaluable-day count live in the hashed config; the run reads them from it. A
+    different month from the baseline-fit rule, fewer than 90% of the frozen days (checked before any statistic) or a
+    NaN statistic is refused, and nothing is recorded.
+  - `tests/test_day_type_golden.py` (+ `tests/data/day_type_v1_golden.parquet`) ties day_type's outputs to
+    `day_type.VERSION` (so `gvz_series` in the config is informational): changing them without a bump fails CI (`python tests/test_day_type_golden.py` writes the file
+    for a new version).
+  - `h16_feature_version()` restores the feature registry (day_type stays opt-in for every other caller).
+  - The 1m bars, the macro rows and the calendar rows are cut at `research.holdout_from` before anything is resampled.
+    Every full-score input is as known at 06:30 UTC on D.
+  - HAR (4 coefficients) and full (11 coefficients) both go through `fit_har(regressors=...)` on the monthly refits
+    with the 1-day purge. GVZ-stale days are dropped from both models and counted; days without a full forecast are
+    also counted by missing input.
+  - Reading rule as pre-registered: rho gain >= 0.05 AND top/bottom quintile mean W/A >= 1.5, inclusive.
+  - Reported only: the 20-day block-bootstrap interval and the drop-one contributions. Not built: the London+60 /
+    NY+60 refreshes.
+  - Nothing was run on real data and no real registry was written. **Before the freeze:** count the first OOS month
+    and the evaluable days from data (calendar and gaps only), write both into the Q2 draft, and pre-register with
+    `h16_config(month, days)` and `h16_feature_version()`.
+- Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
+  (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
+  before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each
+  guarded (`_guard` -> `note_tick_error`). A failed tick-log write is retried only after `tick_flush_s` and the buffer
+  keeps the newest `TICK_LOG_MAX` (20,000) ticks (`ticks_dropped` counted), so a full disk neither fails every tick nor
+  grows memory. `tick_error` now clears only when a whole decision bar closes with no error in it (was 20 polls);
+  `note_tick_error` logs the first error of each type with its traceback, then once a minute with a count, and rewrites
+  the engine state at most every 10 s; engine state adds `tick_errors_total`, `last_tick_error_at`, `ticks_dropped`.
+  Health: new `tick_errors:<account>` warns (announced on Telegram) for 15 minutes after an error or when one happened
+  since the previous health run (`health_last.json` ts). `run.py` `engine_pass` routes an AssertionError to
+  `note_tick_error` too (it was swallowed silently).
+- Server clock offset probe and `NY+7` zone (2026-10-10, HIGH from the trading-safety review; answers the D13 open
+  ops check above). Research: IC Markets' own notices say its MT4/MT5 server time "is based on '5 pm New York'" and
+  moves GMT+2 -> GMT+3 on the US DST start (10 Mar 2024, 9 Mar 2025) and back on the US DST end (4 Nov 2018), so
+  ICMarketsSC most likely runs NY+7, not Europe/Athens; not yet measured on our terminal. `goldbot/data/timeutil.py`
+  adds `NY+7` (`NewYorkPlus7`, `server_zone`, `server_wall` (tz-aware input only), `server_utc_offset`; pandas treats
+  a custom tzinfo as a fixed offset, so `utc_to_server` refuses NY+7). `Account.server_tz` is validated at load.
+  Every server-clock reader uses `server_wall`: session table, engine `_server_clock` (rollover, Friday cut),
+  `labels.triple_barrier._server_days` (rollover nights, also reached from jobs.py SwapSpec and research attribution),
+  MT5 adapter requests (now tz-aware UTC-labelled datetimes: MT5 reads naive ones in the host zone).
+  `goldbot/ops/server_clock.py` compares a tick with host UTC; a mismatch is called a zone error only when the other
+  known zone explains it, else "host clock or feed". Engine (`_refresh_account`, no extra RPC): signed tick age,
+  `tick_ahead_s` -> gate `tick_from_future` (> 10 s = SKEW_BLOCK_S, `RiskLimits.max_tick_ahead_s`), abs age for stale tick/feed/bars,
+  probe -> `server_clock_mismatch`, both start `data_recovering` when they clear; D13 `BrokerSessions` built in
+  run.py, refreshed beside the 60 s model reload (`refresh_sessions`: a raising, slow (> 5 s) or fallback read keeps
+  the last broker table), `eng.set_sessions` -> gate `market_closed`, the same table for stale feed and the probe.
+  Approval-time re-run refreshes the state, so a mismatch or close between proposal and click refuses it. None of
+  these are on the exit path (`_tick_ok` unchanged). engine_<account>.json carries `tick_ahead_s`, `market_closed`,
+  `session_source`, `sessions` (cached table, read by health) and `server_clock`. Health `server_clock:<account>` and
+  preflight `server_clock` (blocking on a mismatch) measure it independently; preflight `bridge_server_tz` blocks when
+  the bridge (`/health` now reports its zone) converts with another zone than the brain. accounts.yaml stays on
+  Europe/Athens. RUNBOOK "Server clock (US-EU DST gap weeks)" and new gate-reason rows; ADR 0005. Not done: settings
+  `brokers.*.server_tz` is not validated at load (triple_barrier raises on a bad name); a pre-existing `_regime`
+  crash on a perfectly flat price series is fixed (`_regime` uses the middle bucket when the volatility window
+  is constant). Review fixes (b55f5d1 review): the run loop (`goldbot/ops/run.py` `engine_pass`) logs any exception
+  instead of crash-looping and sets `tick_error` (gate reason, health fail on `engine:<account>`, cleared after
+  `TICK_ERROR_CLEAR_TICKS` = 20 clean ticks); an approval or re-arm that raises inside `on_tick` is recorded the same
+  way and the tick's exits still run; sessions are read on a background thread (`SessionRefresher`: started every
+  60 s, collected on a later pass, never joined on the tick loop; its own bridge client); a broken session table
+  fails closed for entries (`market_closed`), never for exits. RUNBOOK: which of `clock_skew`, `tick_from_future`
+  and `server_clock_mismatch` owns which case.
+  **Needs the owner:** on Mon 26 Oct 2026 during market hours run `goldbot run health` and read
+  `server_clock:icm-demo`; if it reads UTC+3 (NY+7) vs Athens UTC+2, the engine is already refusing entries: set
+  `server_tz: NY+7` for icm accounts on the brain and the MT5 box (RUNBOOK steps 3-4). Vantage's help centre also puts
+  server midnight at 5 pm New York (likely NY+7) but publishes no switch dates: measure it the same way.
+- Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;
+  `docs/decisions/0004-starting-account-and-daily-target.md`): the IC Markets demo is **£1,000 GBP**, read from MT5
+  `account_info` (never config); **£50 is the owner's absolute daily loss limit**; **£50+/day is the north star**
+  (variable by day, not a quota; realistic as a monthly average at ~£21k–£53k). Read-only audit: equity, caps and
+  stages use broker equity correctly, but **RiskGate treats USD amounts as GBP (HIGH)** (`goldbot/risk/gate.py:249-268`):
+  trades are sized at ~0.75× intended, realised risk reads 1.33× too high (15m min lot 1.09% vs true 0.82%, so it is
+  refused even with the min-lot exception), closed-trade R is understated 1.33× (`goldbot/engine/runner.py:1591-1602`),
+  `Intent` takes no contract terms from `symbol_info` (`runner.py:576-577`), and the supervisor sums mixed-currency
+  equities. Top priority: BACKLOG 28 (currency-correct sizing), then 25 (min-lot exception), then 29
+  (`risk.daily_loss_limit_abs: 50`, projected, entries only); all need trading-safety review. At £1,000 only 15m
+  trades (0.01 lot, 0.82%, Raw account), one position at a time (notional cap), at most two full losses a day
+  (1.5% supervisor cap, worst day ~£17), and the 8% stage is in effect a stop. Ladder: 1h ~£1,650, 4h ~£3,270,
+  1d ~£7,900. North-star KPIs (monthly £/day average, best days, opportunity days captured, max drawdown) are in
+  BACKLOG 26; opportunity-day detection (30) and runner exits (31) are hypotheses for the trial registry (no trials
+  spent). Owner: optional deposit plan; confirm the demo is Raw Spread.
+- Risk analytics for playbook G-5 and G-7 (2026-10-10, BACKLOG 20 and 22; tools built, results need data):
+  `python -m goldbot.ops.run ruin --trades-per-week N (--shadow state [--version V | --agent A | --pool-versions] |
+  --closed-trades state | --r-file trades.csv | --win-rate W --avg-win A --avg-loss L) [--tiny-live] [--multiplier M]
+  [--r-haircut H | --demean] [--out F]` is a seeded circular-block-bootstrap Monte Carlo (`goldbot/research/ruin.py`)
+  at the live limits (built from gate.RiskLimits/SupervisorLimits.from_settings), sized with the gate's arithmetic
+  (8% stage = a quarter of the risk at m = 1) and enforcing the caps and stages as RiskGate does: P(each limit trips)
+  within 26/52 weeks, median time to the first trip, max drawdown median/95th/99th (also at twice the block length)
+  and risk of ruin. The report names the shadow version (one version only, default the agent's champion; pooling
+  only with `--pool-versions`) and the cost basis (shadow = spread only, optimistic; closed trades = net; file =
+  unknown), and warns when `--trades-per-week` is more than 25% off the observed rate.
+  `python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--size-down]` (`goldbot/research/min_lot.py`)
+  gives, per family, decision timeframe and registered preset (tsmom `slow` = H-01: 4h decisions, daily ATR), the
+  equity at which 0.01 lot fits the risk (strict and the gate's 1.2x) and the real risk at a given equity, on the mid
+  of the store's bars; `--price P --stop-distance D` without data. Neither has been run on real bars or trades yet
+  (the Mac VM has no store data); run both on the VPS/brain and attach to phase-gate evidence and the H-01
+  account-size decision.
+- MAE/MFE on closed and shadow trades (2026-10-11, BACKLOG 23, playbook G-9, row V6; trading-safety and quant
+  reviewed, fixes in): one definition in `goldbot/labels/excursion.py` (exit-side price: a long's MAE from the bid
+  low, a short's from the ask high; R of the initial risk from price, gross of costs; the time each extreme was first
+  reached; the exit bar under the labels' stop-first convention, whose biases are listed there and beside the
+  attribution table). `ShadowTrade` computes it from the bars between entry and exit (`label_excursions` gives the
+  same for labels; parity tested with and without exit policies). `ClosedTrade` gets it from every tick while the
+  engine holds the position (`Engine._track_excursions`, after the per-tick exits): a price at a broker-held SL/TP
+  freezes the track, a price through an engine-only stop whose close is being retried counts raw, and the record adds
+  the actual exit fill. No extreme is ever after the exit: a track that saw a late-noticed manual or broker close is
+  rebuilt from the stored 1m bars up to the exit, and a close confirmed without deals never folds the quote read at
+  that moment; both, restarts and adopted positions are flagged `excursion_approx`; when nothing of the path was observed (no usable track, no covering bar) the fields stay empty rather than 0R/0R. The 60 s freeze tolerance is tested on both sides. An orphan adopted without an
+  order record keeps prices but no R. Tracking is reporting only: a failure is logged, never a tick error, never
+  blocks an exit or the record. Monthly report: exact and approximate medians apart. Not done: the owner's MT5
+  statement analysis (`research/owner_history.py`) has no price path. **Rollback:** the new keys (`excursion`,
+  `excursion_approx`, `risk_known` in `orders_<account>.json`; `mae_*`/`mfe_*` in `shadow_book.json`) fail to load
+  on an older build (`extra="forbid"`): roll back only when flat (no open trades or shadow trades), or strip those
+  keys first. The cross-cutting fix (load persisted state with `extra="ignore"`, an ADR) is a separate change.
+- **Follow-up once the gate lanes merge:** `goldbot/risk/sizing.py` holds RiskGate's sizing arithmetic and stage
+  machine as pure functions (`effective_risk`, `size_lots`, `stop_distance`, `next_stage`, `MIN_LOT_TOLERANCE`), used
+  by the two reports above; `goldbot/risk/gate.py` still has its own copy (it was being edited by other lanes) and
+  should call `sizing.py`. Until then `tests/test_sizing_parity.py` runs `RiskGate.check`/`update_stage` against it
+  across stages, multipliers and the min-lot boundary, so the copies cannot drift silently.
+- XAUUSD trader playbook (2026-10-10, owner request): `docs/research/xauusd-trader-playbook.md` lists ~70 things a
+  professional gold trader considers (drivers, CFD microstructure, technicals, risk management, process), each with
+  sources, evidence grade and goldbot status, then a ranked gap list (risk gaps G-1..G-10 first: swap in live EV,
+  holiday/reopen rule, tier-2 releases, total open-risk cap, drawdown Monte Carlo, loss-streak throttle, min-lot
+  feasibility, weekend gap risk, MAE/MFE, edge-linked sizing). BACKLOG items 16-24 and H-15 come from it. Open
+  ops check from the D13 review: confirm whether the IC Markets server clock follows Europe/Athens or US DST dates.
+- DST-aware sessions (2026-10-10, playbook D-1, row F23): session windows are local-clock `SessionWindow`s in
+  `goldbot/data/calendar.py` (`DEFAULT_SESSION_WINDOWS`: Asia 08:00 Tokyo -> London open, London 08:00 London -> New
+  York open, New York 08:30-17:00 New York), converted to UTC per date from the zone rules only (no look-ahead).
+  `SessionTable.sessions_utc` is gone; use `session_windows`, `last_open_ns` or `session_label`. Summer (BST + EDT)
+  is unchanged; on London/New York winter time each boundary is an hour later in UTC than before, and the March and
+  October gap weeks now split London and New York correctly. **Feature versions bumped: `session` 2, `session_zones`
+  2, `market_structure` 2, all in `DEFAULT_FEATURE_NAMES`: the default feature version is now `f-079deacc61`
+  (was `f-1b8f723a67`; with macro `f-f999b359e2`).** Migration without downtime (quant review HIGH 1): the v1
+  implementations stay registered as legacy versions (`goldbot/features/legacy.py`, `registry.LEGACY_FEATURES`, never in
+  FEATURES), and the engine scores each champion and shadow challenger on the frame of its recorded feature version
+  (`Engine._scoring_frame`: `registry.versions_for` finds the per-feature versions that hash to it, `with_versions`
+  recomputes only those columns; cached per frame). So v1 champions keep trading and v1 challengers keep shadow
+  trading exactly as before (golden test against the pre-fix code), the blackout re-score works for them, retrains
+  and research build v2, and the normal shadow/promotion flow migrates. A version no registered implementation
+  reproduces is still not scored (`feature_version_mismatch`), and neither is one whose rebuild raises (logged, cached
+  per frame; the bar's policies, blackout closes and shadow save still run). Decisions and shadow trades record
+  `scored_feature_version`. drift_watch builds each champion's PSI inputs at its own feature version
+  (`_recent_candidates(..., feature_version)`; a macro-trained champion is rebuilt over the default set plus the macro
+  drivers with the store's macro rows; a version that cannot be rebuilt, or a macro model without macro rows, skips
+  PSI with a note). The health check `feature_versions` counts champions, challengers and previous champions
+  (rollback targets) per version (current incl. the macro set / legacy / cannot be rebuilt = warn): delete
+  `features/legacy.py` once it shows no legacy models. Research registry: `record` writes a `deviation` on a result
+  whose feature version differs from its pre-registration's; `passed_gates(..., feature_version=)` counts only rows of
+  that version (research_pass's holdout check passes it); `holdout_scored` stays version-agnostic on purpose (a
+  re-score after a bump is a second look). The tournament's `passed_gates` stays version-agnostic (ADR 0006; the
+  material feature version, BACKLOG 34, needs the owner's sign-off; the tournament summary does not yet show the
+  trial-vs-model version gap). Cost tables by session, slippage audit, the account classifier's London/NY ticks and
+  attribution by session all relabel automatically (the next nightly cost table uses the new labels; tables already
+  on disk keep the old ones until then). Open for quant review: `session_open`'s "Asian range" is the 32 bars (8 h) before the decision's
+  session open, which is the Asia session only before London; before New York it is mostly the London session
+  (unchanged here, as changing it changes the specialist's candidates).
+- COT positioning and GLD holdings, point in time (2026-10-10, indicator survey #67/#68, hypotheses H-09/H-12, row
+  D26): `goldbot/data/positioning.py` + `scripts/positioning_data.py` + `.github/workflows/data-positioning.yml`
+  (Saturdays 05:23 UTC) publish `positioning.parquet` on release `positioning-v1`: CFTC disaggregated futures-only
+  COMEX gold (088691) managed-money long/short/net, open interest, commercials net (producer/merchant + swap dealers),
+  and GLD tonnes from the issuer archive (`GLD_US_archive_EN.csv`). COT is stamped Friday 15:30 ET (zoneinfo: 20:30
+  UTC, 19:30 in US DST), the next business day after the Friday in a federal-holiday week, never before the shutdown
+  catch-up floors (2013, 2018-19 conservative and UNVERIFIED against CFTC notices; 2025 from CFTC 9147-25: reports to
+  23 Dec 2025 not before 3 Jan 2026); unscheduled closures (mourning days 2018-12-05, 2025-01-09) count as holidays;
+  GLD the next US business day 14:00 UTC. Publishing never loses history: only a confirmed-missing release/asset is a
+  first run, and the script refuses (exit 2, nothing published) a frame with fewer rows per source or any published
+  row missing. The 2006+ backfill carries current corrected COT values with first-release stamps (rare, small
+  revisions: accepted look-ahead, documented in `cot_frame`). Revisions add rows (first release kept); a row missing from the previous successful download is
+  stamped at the run that first saw it (catches future delays). GLD blocked/reformatted -> "source unavailable",
+  published rows kept, run still green (reported in the step summary), no scraping. Opt-in features
+  (`goldbot/features/positioning.py`, `research_pass.py --positioning DIR`, not with `--discover`): MM net % OI, its
+  52-report z-score and 4-report change, GLD 5/20-day % change; registered only by `enable()`, so the default feature
+  version is unchanged. `fetch_data_release.py --positioning` loads the store table `positioning`. The old unused
+  `macro.fetch_cot_gold` / `gld_holdings_from_csv` (no holiday rule, GLD stamped 06:30 ET) are removed. Not yet: the
+  workflow has never run (Actions -> data-positioning -> Run workflow); `research.yml` has no positioning input; the
+  cleaner opt-in home is `goldbot/research/pipeline.py` OPT_IN_FEATURES (outside this lane).
+- US calendar, tiers 1 and 2, point in time (2026-10-10, BACKLOG 18 data part, playbook G-3, research finding E-1,
+  row D27, ADR 0008; review fixes 2026-10-11):
+  - **Pipeline.** `goldbot/data/us_calendar.py` + `scripts/us_calendar_data.py` +
+    `.github/workflows/data-us-calendar.yml` (Sundays 06:17 UTC) publish `us_calendar.parquet` on release
+    `calendar-v1`, 2010 onwards.
+  - **Tier 1** keeps the labels in code (`econ_calendar.TIER1_PATTERNS`, settings blackout events):
+    - CPI, NFP (Employment Situation) and PCE (Personal Income and Outlays) come from FRED `fred/release/dates`
+      (ids 10/50/54).
+    - The FOMC statement and press conference come from the Fed's `fomccalendars.htm` + `fomchistorical<year>.htm`.
+      Only scheduled meetings count.
+    - A press conference is listed where the page links one, and at every meeting from 2019.
+    - FOMC times by era: statement 14:15 until April 2011, 12:30 on 2011-12 press days, 14:00 from 2013; press
+      conference 14:15 in 2011-12, 14:30 from 2013.
+  - **Tier 2:**
+    - PPI, retail sales, GDP (all estimates; GDP is tier 2 because it is not on the tier-1 list in code), JOLTS and
+      claims come from FRED (ids 46/9/53/192/180).
+    - FOMC minutes use the page's Released date, or the statement + 21 days when there is none yet.
+    - ISM manufacturing and services are rule-derived (1st/3rd US business day, 10:00 ET).
+    - Fed speakers are not covered.
+  - **Checks.** Every FRED id is checked against the release name FRED returns.
+  - **Times.** New York wall times are converted per date, so DST is right.
+  - **Availability.**
+    - `available_utc` is the event minus 7 days.
+    - For agency releases, it is raised to the shutdown floors (2013, 2018-19, 2025; conservative, not checked to
+      the day). The Fed is exempt.
+    - It is never later than the event.
+    - Later runs stamp a late-added event at first sight and add `cancelled` rows for future events that disappear.
+    - Published rows are never rewritten (`check_keeps_history`; exit 2 and nothing is published if a row would be
+      lost).
+  - **No actual/consensus columns**: there is no free, licence-compatible source.
+  - **Opt-in features** in `goldbot/features/us_calendar.py`. `enable()` returns `tier1_events` and `tier2_events`:
+    - tier 1: `min_to_next_tier1_pit`, `min_since_last_tier1_pit`, `tier1_count_today`;
+    - tier 2: `min_to_next_tier2_pit`, `min_since_last_tier2_pit`, `tier2_count_today`;
+    - minutes are capped at 7 days, and counts are per New York day;
+    - they are joined through `known_timeline` + `asof_join` on available_utc;
+    - they are not in DEFAULT_FEATURE_NAMES, so feature_version is unchanged.
+  - **Research** loads it with `research_pass.py --us-calendar DIR` (not with --discover or --cpcv), and
+    `fetch_data_release.py --us-calendar` downloads it to raw-calendar/. There is no store table.
+  - **Verified offline** (Fed pages fetched from the Mac sandbox): the parsers read 2010, 2011, 2015, 2017, 2019,
+    2020 and 2021-2027 correctly. That is 8 scheduled meetings a year, 7 in 2020 (March 17-18 was cancelled), with
+    unscheduled meetings and notation votes skipped.
+  - **Review fixes (2026-10-11):**
+    - **Backfill.** last_ok is kept per event type. A type that failed on an earlier run is backfilled with rule
+      stamps when it comes back (H1).
+    - **FOMC meeting count.** A Fed year panel or page with fewer than 6 meetings fails the source.
+    - **Mass cancellation.** A run that would cancel more than 2 future events of a type is refused for that type
+      (M1).
+    - **Hand-checked cancellations** (`MANUAL_EVENTS`) (M2):
+      - the March 2020 FOMC;
+      - the BLS dates in the 2013, 2025 and 2026 lapses, verified on the bls.gov lapse tables (2013 via the copy on
+        Calculated Risk);
+      - the 2019 GDP advance;
+      - the 2025 PCE releases.
+      The original 2013 and 2018-19 Census and BEA dates are not in the table because they could not be verified.
+    - **Spacing quarantine.** Monthly releases less than 20 days apart are kept out unless they are in
+      `SPACING_EXEMPT`.
+    - **Count table.** A per-type, per-year count table goes in the step summary (M3).
+    - **Press-conference links.** The check ignores case and the Fed's `fomcpressconf` spelling. Expected press
+      conferences: 3 in 2011, 5 in 2012 and 4 in 2013-18, all counted on the Fed's pages, so the review's
+      "4 a year for 2011-2018" holds only for 2013-18 (M4).
+    - **Per-agency floors.** 2018-19 covers Census and BEA only; a January 2026 lapse floor was added (M5).
+    - **GDP split.** `gdp_advance` is split out and stays tier 2. **Promoting it to tier 1 is an owner /
+      trading-safety decision.**
+    - **Minutes date.** It is tied to the Minutes block, with a 14-28 day gap check (L1).
+    - **ISM.** The research line counts the rule rows; `--us-calendar-exclude-rule` and `RULE_OVERRIDES` are added
+      (L2).
+    - **Column names.** The tier-2 minute columns now carry `_pit` (L4).
+    - **Retail name check.** It is now `Advance Monthly Sales for Retail` (L5).
+  - **Re-verification fixes (2026-10-11):**
+    - **Close pairs.** Both rows of a close monthly pair are quarantined, so a phantom listed first is never kept
+      (M-R1).
+    - **2026 lapse.** The floor is BLS only. Its manual rows are cancelled one minute before each event instead of
+      at the unverified lapse start.
+    - **Recovery path.** `--allow-cancellations TYPE` is a one-shot, audited override, with a RUNBOOK step (L-R1).
+    - **GDP advance.** A late GDP advance is flagged; overrides are 2019-02-28, 2025-12-23 and 2026-02-20, each
+      verified (L-R2).
+    - **Old metadata.** Source-keyed `last_ok` metadata is refused (L-R3).
+  - **GATE: no trial may cite `tier1_events` or `tier2_events` until a quant review of the first live run's count
+    table (step summary) has signed it off.**
+  - **Not yet:**
+    - The owner must add the repo secret `FRED_API_KEY` (a free key from fred.stlouisfed.org) and run the workflow.
+    - The FRED ids and the release-date history were not checked live, because there is no key in the sandbox. The
+      name check fails loudly if they are wrong.
+    - PCE's 08:30 ET time for 2010-2012 is not verified.
+    - The RiskGate tier-2 blackout (-5/+15 min) waits for the owner's adopt decision.
+- Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
+  `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
+  stays partial until the research callers (`pipeline.run_specialist`/`run_pool`, `discovery.discover`) pass it
+  (values equal today, so folds do not change); the tournament promotes shadow -> live at DSR >= 0.95 (row G6).
+- Encrypted off-host backups (2026-10-10, state-store step 2, row P8, `goldbot/ops/backup.py`): scheduler job
+  `backup` (daily 22:15 UTC) snapshots every `state/*.db` with the online backup API (integrity-checked before upload),
+  the state JSON, trial registry, models and the brain's own Parquet (not release sources, not features/labels, not
+  `.secrets.json`) with a SHA-256 manifest, saves them with restic to Oracle Object Storage (secrets only in restic's
+  environment, masked in errors) and writes `state/backup_last.json`. The brain only appends: retention
+  (`forget --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune`) runs monthly from the owner's Mac with a second
+  key (`scripts/backup_retention.sh`, refuses on a server; uploads a marker the brain records, health `backup_prune`
+  warns after 45 days). Staging and restore dirs are 0700 under umask 077; JSONL copies end at the last newline; a
+  month partition caught mid-dedupe is retried, then listed in `skipped_partitions`; `verify_restore` refuses symlinks
+  and paths outside the restore dir. Decision record docs/decisions/0002-backup-scope-and-thresholds.md (renumbered
+  from 0001, which is the auth ADR); `restore_drill` (Sunday 10:00) restores to a temp dir and re-verifies everything
+  (`state/restore_drill_last.json`). Health `backup_age` warns at 26 h (Telegram once), fails at 72 h; `restore_drill`
+  fails on a failed drill. `run.py backup [--init] | restore --latest --to DIR | restore-drill`; brain_bootstrap.sh
+  installs restic. OWNER: create the bucket with Object Versioning and a 30-day previous-version lifecycle rule, a
+  no-delete writer key for the brain and a retention key for the Mac, store the four `restic-*` keys on the brain and
+  the four Keychain items on the Mac, and run the retention script monthly (RUNBOOK 0.6).
+  Not verified against a real restic or Oracle endpoint from here (restic is not installed in the sandbox; the
+  integration test runs where it is).
+- Broker margin in the gate and tick flags (2026-10-10, ROADMAP W2-2, rows R8/D11): brokers gain a read-only
+  `margin_required(symbol, side, lots, price)` (MT5 `order_calc_margin`, paper 1:20, bridge allow-list retry-safe);
+  `RiskGate.check(..., margin_required=...)` uses the larger of the broker figure and notional / 20 and keeps the
+  300% rule; a broker that cannot answer falls back to 1:20 with the reason in `GateDecision.margin_note` (never a
+  smaller margin). `Tick.flags` (default 0) and `tick_key` make the live dedup (time_msc, bid, ask, flags). The engine
+  passes `margin_required=broker_margin(self.broker, self.cfg.symbol)` to both `self.gate.check` calls
+  (proposal and approval re-check; tests/test_engine_margin.py), so R8 is implemented.
+- Roadmap gates and stop rule in code (2026-10-10, BACKLOG item 8, rows P6/P7, `goldbot/ops/gates_phase.py`):
+  `python -m goldbot.ops.run gates` prints each roadmap gate as met / not met with its evidence (trial registry DSR,
+  positive years and backtest trades; the nightly cost tables; `state/closed_trades.jsonl` for the paper and live
+  record; `state/gate_evidence.json` for the leakage audit and chaos drill, recorded with `run.py gate-evidence`) and
+  writes `state/gate_report.json`. Health adds `stop_rule` (FAIL on a breach: alerted once, recommends /halt, halts
+  nothing) and `phase_gates` (next gate, informational). Nothing records a gate or unlocks live. OWNER: sign off
+  the `gates:` values marked PROPOSED in `config/settings.yaml` before the first paper trade (DSR bar 0.95 vs the
+  roadmap's 1.0, shuffle AUC tolerance, feed mismatch share, minimum paper/live days, trades per broker). Follow-up
+  for the engine owner: append a `gates_phase.ClosedTrade` per closed position (`append_closed_trade`); until then the
+  paper/live record is empty, so gates 2-3 read "not met" and the stop rule cannot fire on expectancy.
+- Ops alerts (BACKLOG item 7, rows S5/R11/X6): supervisor, scheduler, telegram, news and api write
+  `state/heartbeat_<service>.json` every minute (`goldbot.ops.health.Heartbeat` / `start_heartbeat`); health fails a
+  service silent for 5 min, warns on a tripped daily/weekly loss cap per account and on each order that failed after
+  the retries (orders_<account>.json `rejected`/`unfilled`, retcode from the decisions journal), and fails a bridge
+  that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
+  health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
+  owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- Non-finite state fails closed (October safety batch, 2026-10-11, TRACEABILITY R37 and S7): `RiskGate.check`
+  refuses first with `invalid_state` plus `invalid:<field>` when any number it reads (equity, HWM, day/week
+  start, margin, spread, tick ages, exposure, stop/target/ATR/cost, multiplier, price, contract terms,
+  `acct_per_usd`) is NaN or infinite; None stays the explicit "unknown" (a USD account with a NaN conversion is
+  now refused, not taken as 1). `_tick_ok` drops a quote with a non-finite bid or ask as `non_finite_quote` (entries
+  blocked; the next valid tick runs the exits). `account_fx("", x)` is None. The supervisor treats a non-finite or
+  wrongly typed engine-file number as `engine_state_unreadable` (halt); `ops.run.supervisor_pass` publishes
+  `supervisor_error` instead of dying when `evaluate` raises. An engine file without `ts` now halts too (engines
+  always write it). Dev extras gain pytest-randomly: every run is in random order (seed in the header; reproduce
+  with `-p randomly --randomly-seed=<n>`, opt out with `-p no:randomly`).
+  Safety review fixes (same day): the gate's guard is `invalid_fields` (reason `invalid_state` / `invalid:<field>`,
+  after the flag reasons) and also requires price, ATR, stop, contract, volumes and equity > 0; an approval on a
+  quote that breaks the tick price rules is refused (`bad_quote:<check>`). A dropped quote or a raising
+  `last_tick` runs `Engine.no_quote_pass`: decided closes retried, a pending kill-switch flatten, host-clock time
+  barriers, and from the Friday cut every own position closed (`weekend_close_no_quote`: no price to tell losers
+  from winners). The state keeps being written with `quote_invalid_since`; health FAILs after 60 s of invalid
+  quotes in market hours, and FAILs (alerted) on `supervisor_error` and `engine_state_unreadable` halts. Repeated
+  bad quotes are one DQ event with a count; every health check is guarded; the seed is printed after each run
+  (tests/conftest.py).
+  Re-verification fixes: the priceless Friday flatten and time barrier never act on a single bad quote. The
+  flatten needs only a dead feed (invalid for `QUOTE_DEAD_S`, 60 s, = health's threshold), whatever happened
+  around the cut; a shorter gap leaves it to `_weekend_rule` on the next valid quote. The time
+  barrier needs a dead feed and counts `bars_held` plus open-market decision bars since `_closed_through`
+  (never wall time over a weekend). A refused close that is not market-closed is re-sent at most once a second
+  (`CLOSE_RETRY_MIN_S`). BACKLOG 44: confirm a zero-equity read before the kill switch (needs an ADR).
+- October batch rollout (SRE, 2026-10-11): `docs/deploy/2026-10-batch.md`.
+  - The owner's ordered steps for the two Oracle VMs, to be done by Fri 23 Oct: pre-checks (restic plus a local
+    copy, preflight, health baseline); engines stopped; MT5 box first, because the new brain needs the bridge's
+    `loss_per_lot`; then the brain; then the checks on `supervisor.json` and `aux.db`; the minimum-lot setting in
+    settings.local.yaml only after the deploy; the first-hour health lines; the 26-30 Oct clock measurement, with
+    the NY+7 switch brain first under `/halt`; the rollback plan.
+  - Found: `goldbot-deploy`'s automatic rollback from this batch ends in `failed`, because aux.db stays at schema 5
+    and the old dashboard refuses it. A rollback with `risk.min_lot_risk_cap` set stops every service, because the
+    old Settings forbid the key. A manual rollback to an older commit is refused.
+  - BACKLOG 37-42 (37-39 HIGH). Use the manual sequence, not Telegram's Deploy button, for this batch.
+- FYI for the OWNER (no decision needed, 2026-10-10): `research.reserved_trials_quarter: 13` holds the 13 trials
+  of the Q1 2027 pre-registration (`docs/research/preregistration-2027Q1.md`) before the research director and the
+- FYI for the OWNER (no decision needed, 2026-10-10; 13 -> 9 by ADR 0007): `research.reserved_trials_quarter: 9` holds the 5 queued
+  trials and 4 contingent H-02 survivor slots of the Q1 2027 pre-registration (`docs/research/preregistration-2027Q1.md`) before the research director and the
+  label grid can spend any; the budget itself (20) is unchanged. Revisit the number with each quarter's
+  pre-registration. Residual: the research analyst's `run_trial` tool still checks the full quarter budget, not the
+  reservation (left out of this change's scope).
+- OWNER decision: design improvements after the first clean research pass, ranked, first batch proposed: `docs/proposals/2026-10-design-improvements.md`.
+1. Research status (2026-10-09, Q4 2026 trial budget spent: 20/20, research stops until 2027-01-01). Evaluation is
+   cross-fitted, spread charged once, design gates and the P4 screen enforced, holdout 2025-10..2026-09 untouched,
+   lookahead check clean on every run (reports: issues #37 #39 #40 #41 #51 #52 #53; summaries on #34).
+   - No gross edge: mean_reversion, session_open, trend, breakout, intraday_momentum (NY, London). Retired from model
+     research.
+   - tsmom (vol-scaled time-series momentum) has a small gross edge: +0.06 R/trade, t 2.6 (1h), 2.4 (4h); net of costs
+     -0.079 R (1h), -0.014 R (4h, before swap). tsmom 1d cannot reach the screen's 1,000 events (454).
+   - Meta-models add no skill: OOF AUC ~0.50 per family and pooled (pooled_1h, #53).
+   Q1 2027 plan (first pre-registered trial): `specialist=tsmom`, `variants=[{"timeframe": "4h", "max_bars": 12}]`,
+   rationale "horizon study: tsmom 4h with swap" (refused on 2026-10-09 by the budget guard). Before it, OWNER on the VPS:
+   once `state\costs_icm-demo.json` carries measured swap (the health check stops warning "no measured swap"), run
+   set `costs.publish_release: true` and restart the scheduler (or run `python -m goldbot.ops.run publish-costs`;
+   docs/RUNBOOK.md section 4); research.yml then charges the measured swap, commission and slippage instead of the priors (swap
+   prior: long -60, short 0 USD/lot/night, x3 Wednesday). If net stays <= 0, the next option (other
+   instruments) is an OWNER decision. Raising `research.trial_budget_quarter` is an OWNER decision.
+   Until an agent passes the gates the engines propose nothing (by design).
+2. On the VPS, check `state/news_feeds.json` after the first hour: the feed URLs in `settings.yaml: news` could not be
+   verified from a Claude sandbox. Fix any that fail; the collector skips broken feeds.
+3. VPS (step by step in `docs/RUNBOOK.md`): provision Windows VPS, run `goldbot/ops/vps_bootstrap.ps1` — OWNER: log in
+   to the two MT5 demo terminals once and store their credentials with `python -m goldbot.ops.accounts add icm-demo`
+   / `add vantage-demo` before starting the services (services cannot prompt); create the Cloudflare tunnel and enter its token on the VPS; store a
+   GitHub token with `python -m goldbot.ops.accounts set github-token` (bar sync + shared trial registry), an
+   Anthropic API key with `python -m goldbot.ops.accounts set anthropic-api-key` (staff agents and headline scoring;
+   off without it) and the Telegram bot token with `python -m goldbot.ops.accounts set telegram-bot-token` (from
+   @BotFather), and put your Telegram user id in `settings.yaml: telegram.allowed_user_ids` (the file has no
+   `telegram:` section yet; add it).
+4. Dashboard first run — OWNER: create the owner account with the setup code the API prints; invite others.
+5. Session-open has about 90 candidates a year, so most 24-month training windows miss the walk-forward's 200-trade
+   training minimum (9 folds in trial #11); it now trains on an expanding window with 6-month test folds (P5), and
+   fails the P4 screen anyway (gross t 1.31), so no model is fitted for it unless a later rule change passes.
+6. Gaps found while writing `docs/RUNBOOK.md` (code changes, through CI): the bootstrap does not build `web/dist`
+   (the API serves nothing without it) and registers services under NSSM's default account, which may not see
+   secrets stored in the owner's Windows Credential Manager; `run_engine` passes no `RiskLimits`, so
+   `settings.yaml: risk` (incl. `risk_per_trade_tiny_live`) is ignored; the engine never calls `risk.gate.new_day`,
+   so daily/weekly caps count from engine start; nothing clears the in-memory `drawdown_halt` except a restart;
+   no live terminals or live engine services are installed. (being fixed)
+
+## Environment facts
+- GitHub free tier: a private repo gets 2,000 Actions minutes a month (reset each billing cycle). CI is two jobs
+  per PR (~15-20 min); research.yml ~30-60 min per run; the weekly data refresh ~5 min. A `full_refresh` of
+  data-dukascopy costs hours per year of data and used up the October quota on 2026-10-06: avoid it on hosted
+  runners. Setting the repository variable `CI_RUNNER` (e.g. `self-hosted`) moves CI to a self-hosted runner, which
+  costs no minutes.
+- Claude sandboxes (cloud container and the Mac's Cowork VM) cannot reach market-data hosts or download Actions
+  logs; GitHub API works. Data runs in GitHub Actions. Reports come back as GitHub issues.
+- MetaTrader5 Python package is Windows-only; execution runs on the VPS.
+- On the personal Claude account, cloud sessions push to GitHub directly (Claude GitHub App is installed on this
+  repo); no device dependency.

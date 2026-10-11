@@ -1,0 +1,5 @@
+id: R1
+requirement: '"Risk per trade defaults to 0.5% of equity (0.1% in the tiny-live phase)"'
+status: implemented
+code: config/settings.yaml:47-48; goldbot/risk/gate.py:46 (`from_settings`); goldbot/ops/run.py `engine_limits`; goldbot/ops/accounts.py:219 `tiny_live_risk`
+test: tests/test_trace_risk.py::test_design_numbers_in_settings_and_code_defaults; tests/test_risk_ops.py::test_settings_reach_the_gate_with_tiny_live_risk

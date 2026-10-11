@@ -30,7 +30,9 @@ Trading improvement loop, led by the `research-director` (north-star: £50+ a da
 when conditions are poor; ADR 0004): `performance-analyst` (shadow/live trades by timeframe, family, session, costs) ->
 `strategy-researcher` (pre-registered trials across 15m/1h/4h/1d within the quarter's budget) -> `evaluator`
 (verdict against the pre-registered rule and the gates). Reviewers and evaluators are independent and read-only;
-subagents do not spawn subagents. Operating contract: the owner confirms each entry with one click (90 s);
+subagents do not spawn subagents. Money and audit: the `finance-auditor` keeps the monthly GBP ledger (all costs,
+reconciled to the broker), budget and break-even, and audits profitability, rule compliance, costs and learning
+monthly and after every deploy (docs/finance/). Operating contract: the owner confirms each entry with one click (90 s);
 every exit is automatic.
 
 ## Environment facts
@@ -54,6 +56,10 @@ Frontend (`cd web && npm ci`):
 - e2e `npm run test:e2e` (real API via scripts/e2e_server.py; in a Claude sandbox set
   `PW_CHROMIUM_PATH=/opt/pw-browsers/chromium-*/chrome-linux/chrome`)
 - API contract: after changing goldbot/api, run `python scripts/export_openapi.py && npm --prefix web run gen:api` and commit both files
+
+Docs (ADR 0012): HANDOFF.md, docs/TRACEABILITY.md and docs/BACKLOG.md are generated. Add a fragment and run the assembler: `scripts/docs_assemble.py
+new-handoff <slug>` / `new-row R --slug <s>` / `new-item --slug <s> --title <t>`, edit the new file, then `python scripts/docs_assemble.py`.
+Never edit the rendered files (the `docs-assemble` hook fails). Integrate lanes with `scripts/docs_assemble.py merge <branch>`.
 
 CI (`.github/workflows/ci.yml`) runs pre-commit, backend lint/typecheck/unit/integration, frontend lint/typecheck/unit,
 api-contract and e2e as separate jobs; run the same commands locally before pushing.

@@ -1,0 +1,5 @@
+id: F7
+requirement: One position per agent (HANDOFF; labels built one at a time)
+status: implemented
+code: goldbot/labels/triple_barrier.py:90; goldbot/engine/runner.py:552
+test: tests/test_features_labels.py::test_one_at_a_time_keeps_a_candidate_only_after_the_previous_exit; tests/test_approval_bus.py::test_engine_keeps_one_position_or_proposal_per_agent

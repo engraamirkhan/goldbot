@@ -1,0 +1,5 @@
+id: U2
+requirement: 'Three roles: owner / approver / viewer with the stated rights'
+status: implemented
+code: goldbot/api/auth.py:33-34, `_require`; goldbot/api/app.py role checks
+test: tests/test_api.py::test_bootstrap_invite_roles_and_decisions

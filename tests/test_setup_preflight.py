@@ -169,7 +169,7 @@ def registry():
 
 def terminal(login=LOGIN, server="ICMarketsSC-Demo", mode="demo"):
     return AccountInfo(login=int(login), equity=1e4, balance=1e4, margin=0, margin_free=1e4, leverage=100,
-                       currency="USD", server=server, trade_mode=mode)
+                       currency="USD", server=server, trade_mode=mode, margin_mode="hedging")
 
 
 @pytest.fixture

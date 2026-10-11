@@ -1,0 +1,5 @@
+id: R21
+requirement: 'Blackout: "early close if p < 0.5"'
+status: implemented
+code: 'goldbot/engine/runner.py `_blackout_close`: in a tier-1 calendar blackout (not a news shock) every open trade of a known agent is re-scored by its model on the agent''s latest completed bar with the trade''s side at each base bar close; p < 0.5 closes it at market, never gated; a re-score that raises is logged (`blackout_rescore_failed`), keeps that trade and does not stop the others or the engine'
+test: tests/test_exit_policies.py::test_blackout_closes_open_trades_whose_rescored_p_is_below_one_half; ::test_a_raising_blackout_rescore_keeps_the_trade_and_still_manages_the_others

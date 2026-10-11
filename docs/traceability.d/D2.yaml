@@ -1,0 +1,5 @@
+id: D2
+requirement: Feature-day "ends at COMEX settlement, 13:30 America/New_York (17:30 or 18:30 UTC)"
+status: implemented
+code: goldbot/data/timeutil.py:47, 63; config/settings.yaml:6
+test: tests/test_data_layer.py::test_feature_day_boundary_at_1330_new_york

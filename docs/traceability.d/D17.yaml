@@ -1,0 +1,5 @@
+id: D17
+requirement: 'Quality on every ingest: duplicate timestamps, bid > ask as errors'
+status: implemented
+code: goldbot/data/quality.py:34-42
+test: tests/test_trace_data_exec.py::test_duplicate_timestamps_are_an_error; tests/test_data_layer.py::test_quality_checks_flag_spike_and_bid_gt_ask

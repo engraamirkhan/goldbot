@@ -1,0 +1,5 @@
+id: F1
+requirement: '"capped at 40 per live model"'
+status: implemented
+code: goldbot/research/model.py:34; goldbot/research/pipeline.py:53; goldbot/config.py:52 (`le=40`)
+test: tests/test_trace_data_exec.py::test_live_models_are_capped_at_40_features; tests/test_specialists.py::test_feature_subset_is_seeded_and_capped

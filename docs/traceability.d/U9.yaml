@@ -1,0 +1,5 @@
+id: U9
+requirement: Each authenticator code is accepted once (RFC 6238 5.2)
+status: implemented
+code: goldbot/api/auth.py `_spend_totp` (aux.db `totp_steps`), used by login, password change, forgot, /rearm and /mode
+test: tests/test_auth_security.py::test_a_totp_code_signs_in_once; ::test_a_code_for_an_earlier_step_than_the_last_spent_is_refused; ::test_replayed_codes_are_refused_for_password_change_and_forgot; ::test_mode_command_shares_the_owner_replay_guard

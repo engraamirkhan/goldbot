@@ -1,0 +1,5 @@
+id: R4
+requirement: '"Lots = (equity x risk x m) / (stop distance in $ x 100 oz), rounded down to volume_step"'
+status: implemented
+code: goldbot/risk/gate.py:168-172
+test: tests/test_cov_risk.py::test_lots_are_rounded_down_to_the_volume_step_and_capped_at_volume_max; ::test_a_raw_size_that_is_an_exact_number_of_steps_is_kept

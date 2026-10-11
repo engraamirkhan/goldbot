@@ -1,0 +1,5 @@
+id: D19
+requirement: 'Quality: "Gaps against the calendar"'
+status: implemented
+code: goldbot/data/quality.py:52-58
+test: tests/test_data_layer.py::test_gap_check_fires_whatever_the_timestamp_unit

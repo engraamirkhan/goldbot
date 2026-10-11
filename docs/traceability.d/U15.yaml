@@ -1,0 +1,5 @@
+id: U15
+requirement: 'Fault text reaches non-owner roles as the exception type only, with paths redacted: view faults (`_fault`, every role), and service text (health check reasons, drift errors and system-halt reasons, scheduler job errors) whole for the owner, redacted for others; account-security notices are owner-only'
+status: implemented
+code: goldbot/api/explain.py `_fault`, `redact`, `_checks(is_owner)`, `health_view(is_owner)`; goldbot/api/app.py `shown` (`/api/jobs`), `/api/agent-runs` filter; goldbot/api/auth.py `owner_health_note` (type only)
+test: tests/test_api_code_lockout.py::test_automode_and_plan_errors_show_the_exception_type_not_the_detail; ::test_a_failing_health_check_shows_the_type_only; tests/test_api_security_followup.py::test_job_errors_show_the_type_only_to_non_owner_roles; ::test_drift_errors_show_the_type_only_to_non_owner_roles; ::test_redaction_keeps_the_type_and_removes_paths; ::test_redaction_removes_quoted_windows_and_unc_paths_whole; ::test_account_security_notices_are_shown_to_the_owner_only

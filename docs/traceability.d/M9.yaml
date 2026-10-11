@@ -1,0 +1,5 @@
+id: M9
+requirement: Allocator's tier-1 input in the engine
+status: implemented
+code: goldbot/engine/runner.py:1571 `_regime` takes the minutes to/since the nearest tier-1 event from the calendar the RiskGate's news blackout reads (`_blackout`), via goldbot/allocator/rules.py:16 `tier1_minutes`; the allocator (goldbot/engine/runner.py `RuleAllocator()`, design 30/30) zeroes every family for 30 min either side, stricter than the RiskGate's -15/+30 entry block (settings `risk.blackout`), which never narrows it
+test: tests/test_bar_close_clock.py::test_allocator_weight_is_zero_within_30_minutes_either_side_of_a_tier1_event_from_the_engine_calendar, tests/test_bar_close_clock.py::test_engine_allocator_window_is_30_30_and_stricter_than_the_risk_gate_window_from_settings, tests/test_bar_close_clock.py::test_engine_bar_closes_inside_the_tier1_window_get_zero_allocator_weight, tests/test_bar_close_clock.py::test_tier1_minutes_counts_only_tier1_events

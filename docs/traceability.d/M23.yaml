@@ -1,0 +1,5 @@
+id: M23
+requirement: '"Specialist promotion is automatic when all gates pass"'
+status: implemented
+code: goldbot/ops/jobs.py `_decide_challengers`
+test: tests/test_jobs_integration.py::test_retrain_challenger_shadow_promotion_cycle

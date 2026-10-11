@@ -1,0 +1,5 @@
+id: P1
+requirement: '"Live accounts exist in the registry from day one but are disabled"'
+status: implemented
+code: config/accounts.yaml; goldbot/ops/accounts.py:243
+test: tests/test_accounts.py::test_registry_demo_first_and_live_locked

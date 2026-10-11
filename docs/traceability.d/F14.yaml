@@ -1,0 +1,5 @@
+id: F14
+requirement: 'Trader toolkit, market structure: liquidity sweeps of prior highs/lows, breaks of structure'
+status: implemented
+code: 'goldbot/features/trader.py `market_structure` (family `structure`): `sweep_high/low/dir` against the last confirmed swing, previous session and previous day levels known at t-1; `bos_event/bos_dir/bars_since_bos`, each confirmed swing broken at most once by a close; distances to the last confirmed swings stay in the `swings` family'
+test: tests/test_trader_features.py::test_sweep_and_break_of_structure_on_a_known_sequence; ::test_a_swing_is_broken_only_once

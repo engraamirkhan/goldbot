@@ -1,0 +1,5 @@
+id: M21
+requirement: Challenger shadow "at least four weeks or 40 trades"
+status: implemented
+code: goldbot/research/promotion.py:19-20, 54 (four weeks and 40 trades, the stricter reading)
+test: tests/test_cov_research.py::test_shadow_needs_four_weeks_and_forty_trades_whichever_is_later

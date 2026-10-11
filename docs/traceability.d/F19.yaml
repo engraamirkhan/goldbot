@@ -1,0 +1,5 @@
+id: F19
+requirement: 'Survey 4a `regime_stats` (#9, #19, #20): variance ratio, rolling Hurst, efficiency ratio'
+status: implemented
+code: 'goldbot/features/survey.py `regime_stats` (family `regime`): `vr_2/4/8` over 120 bars, `hurst_128` (R/S, chunks 8/16/32/64), `er_10/30`'
+test: tests/test_survey_features.py::test_variance_ratio_is_near_one_for_a_random_walk_and_below_one_for_a_reverting_series; ::test_hurst_separates_persistent_from_anti_persistent_returns_and_needs_128_returns; ::test_efficiency_ratio_is_one_on_a_straight_line

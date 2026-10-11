@@ -1,0 +1,5 @@
+id: R17
+requirement: Drawdown stages "per account and on combined equity"
+status: implemented
+code: combined 12% halts (goldbot/risk/supervisor.py `evaluate`); the combined 8% `size_down` flag is read by each engine (`_refresh_account` -> `AccountState.combined_size_down`) and the gate applies the SIZE_DOWN sizing
+test: tests/test_cov_risk.py::test_combined_weekly_cap_and_drawdown_stages; tests/test_engine_safety.py::test_engine_reads_other_accounts_exposure_and_the_combined_size_down_from_the_supervisor

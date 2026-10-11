@@ -1,0 +1,5 @@
+id: D23
+requirement: '"Dukascopy ... kept separate and tagged"; "every signal must survive on both feeds"'
+status: partial
+code: '`source=` partitions in the store, broker M1 in its own table `bars_1m_broker`; survival check goldbot/data/crossfeed.py `survival_check` + scripts/crossfeed_check.py (rule-only screen on each feed over the common period outside the holdout; survives = Dukascopy mean R > 0, t >= 2.0 and broker mean R > 0, t >= 1.0; < 90 days or < 100 events per feed = insufficient overlap, not a pass). Missing: not yet a promotion gate (broker history is accumulating on the VPS)'
+test: tests/test_crossfeed.py::test_survival_verdict_bands; ::test_overlap_cuts_out_the_holdout; ::test_survival_reports_insufficient_overlap_without_broker_history; ::test_crossfeed_script_exits_nonzero_on_insufficient_overlap; ::test_identical_feeds_agree_over_a_long_overlap

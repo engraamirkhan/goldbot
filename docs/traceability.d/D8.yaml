@@ -1,0 +1,5 @@
+id: D8
+requirement: '"Weekly bars run Sunday open to Friday close"'
+status: implemented
+code: goldbot/data/timeutil.py:74 (Sunday-anchored), goldbot/data/resample.py:80
+test: untested

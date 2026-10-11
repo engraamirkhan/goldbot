@@ -1,0 +1,5 @@
+id: R13
+requirement: Drawdown kill switch staged "8% and 12% mark-to-market drawdown from the closed-equity high-water mark"
+status: implemented
+code: goldbot/risk/gate.py:102 `update_stage`; goldbot/engine/runner.py:398 (`balance_closed_hwm` from balance)
+test: tests/test_cov_risk.py::test_drawdown_is_measured_from_closed_balance_high_water_mark

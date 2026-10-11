@@ -1,0 +1,5 @@
+id: M15
+requirement: Walk-forward windows read from settings
+status: partial
+code: 'goldbot/research/walkforward.py `window_for`/`splits_for` take an optional `settings`: its `walkforward` months and `labels` purge/embargo replace the `WINDOWS` default (1d, absent from settings, keeps the constant); the research callers (`pipeline.run_specialist`/`run_pool`, `discovery.discover`) do not pass it yet and use `WINDOWS` (values equal today, 15m/1h/4h). Settings decide which timeframes the Saturday retrain trains (`saturday_retrain`, gap_watch''s founder check) and the length of history it loads; `Settings` rejects a walk-forward timeframe without purge and embargo, and `DecisionTimeframe` (15m, 1h, 4h) rejects a 1d window'
+test: tests/test_trace_data_exec.py::test_walk_forward_windows_match_design_and_settings; ::test_walk_forward_splits_follow_settings_and_the_defaults_equal_the_design; tests/test_config.py::test_4h_walkforward_window_matches_the_research_window; ::test_1d_walkforward_window_is_rejected; ::test_walkforward_timeframe_without_purge_or_embargo_is_rejected; tests/test_jobs_integration.py::test_a_4h_agent_retrains_into_a_challenger

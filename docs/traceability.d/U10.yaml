@@ -1,0 +1,5 @@
+id: U10
+requirement: Login responses do not reveal whether an account exists (errors and timing)
+status: implemented
+code: goldbot/api/auth.py `_dummy_hash` in `login` and `recovery_login`
+test: tests/test_auth_security.py::test_login_runs_scrypt_whether_or_not_the_account_exists; ::test_recovery_login_runs_scrypt_whether_or_not_the_account_exists

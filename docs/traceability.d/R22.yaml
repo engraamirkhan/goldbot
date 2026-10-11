@@ -1,0 +1,5 @@
+id: R22
+requirement: 'Weekend "Friday 21:30 server: close losers; tighten stops on winners"'
+status: implemented
+code: 'goldbot/engine/runner.py `_server_clock`/`_weekend_rule` (server clock from the account''s `server_tz`): once per Friday at 21:30 server this engine''s losers are closed and winners'' stops moved to lock half the open profit (the design gives no amount), or kept at the engine''s stop when that is tighter (never loosens); entries blocked (`weekend`) until the week reopens'
+test: tests/test_engine_safety.py::test_friday_2130_server_closes_losers_tightens_winners_and_blocks_entries; tests/test_exit_policies.py::test_the_weekend_rule_never_loosens_the_engine_stop

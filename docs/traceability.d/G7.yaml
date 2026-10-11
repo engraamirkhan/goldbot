@@ -1,0 +1,5 @@
+id: G7
+requirement: '"Total live risk never exceeds the RiskGate limits however many agents are funded"'
+status: implemented
+code: every order passes RiskGate (R29); `max_positions` per account
+test: tests/test_cov_risk.py::test_each_account_condition_blocks_entries_on_its_own

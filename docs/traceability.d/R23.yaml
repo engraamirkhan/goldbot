@@ -1,0 +1,5 @@
+id: R23
+requirement: 'Rollover "+-5 min of 00:00 server: no entries"'
+status: implemented
+code: goldbot/engine/runner.py `_server_clock` sets `in_rollover`; goldbot/risk/gate.py `check` reason `rollover`
+test: tests/test_engine_safety.py::test_no_entries_within_five_minutes_of_server_midnight

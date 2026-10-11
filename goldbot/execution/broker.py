@@ -95,6 +95,8 @@ class AccountInfo(Record):
     currency: str
     server: str
     trade_mode: str | None = None   # demo | real | contest as the terminal reports it; None = not a broker terminal
+    # hedging | netting | exchange (MT5 ACCOUNT_MARGIN_MODE_*); None = not reported (paper, or an older bridge)
+    margin_mode: str | None = None
 
 
 class Broker(Protocol):

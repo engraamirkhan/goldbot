@@ -1,0 +1,5 @@
+id: R31
+requirement: Numbers in settings.yaml and code defaults equal the design's
+status: implemented
+code: config/settings.yaml:46-63; goldbot/risk/gate.py:26-42; goldbot/risk/supervisor.py:18-23
+test: tests/test_trace_risk.py::test_design_numbers_in_settings_and_code_defaults

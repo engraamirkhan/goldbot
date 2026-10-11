@@ -1,0 +1,5 @@
+id: G1
+requirement: '"an agent needs at least 60 shadow trades before it is ranked"'
+status: implemented
+code: goldbot/research/population.py:41
+test: tests/test_population.py::test_founders_are_seeded_and_unranked_agents_are_not_promoted

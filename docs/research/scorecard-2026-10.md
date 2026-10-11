@@ -71,8 +71,8 @@ label/shadow parity, approval card, alerts, drift and health, backups, SQLite st
 | Quarter | Budget | State |
 |---|---|---|
 | Q4 2026 | 20/20 used | closed: 0 passes |
-| Q1 2027 | 20: 13 reserved for the frozen queue, 7 reserve | draft, freeze by 2027-01-01; nothing may run before then |
-| Q2 2027 | 20: 4 planned, ≤ 3 conditional, 6 for Q1 follow-ups, 7 free reserve | draft written this month; nothing reserved in code |
+| Q1 2027 | 20: 9 reserved (5 queued rows + 4 contingent H-02 survivor slots; 8 if H-06 is withdrawn), 11 open under the E-5 cap | draft, freeze commit 2026-12-14, rows 2026-12-18..23; nothing may run before 2027-01-01 (updated 2026-10-11; was "13 + 7", superseded by ADR 0007) |
+| Q2 2027 | 20: 4 planned, ≤ 3 conditional, 6 for Q1 follow-ups (H-24 added to that list, conditional on H-04), 7 free reserve | draft written this month; nothing reserved in code |
 
 Multiple-testing ledger: unchanged (`hypotheses.md` C). DSR trial count for the next trial: 20, plus Q1 trials and
 H-02's K_eff as they are recorded.
@@ -89,8 +89,8 @@ H-02's K_eff as they are recorded.
 3. **Historical event calendar missing.** The tier-1 archive is forward-only, and research loads no events, so
    event-based inputs (H-16) and H-18 cannot run on 2010–2025 until a historical schedule exists (E-1).
 4. **Reservation arithmetic.** Rows written once a quarter has started cannot draw on the reservation, so a setting
-   above the number of queued rows locks the excess slots for the quarter. This affects Q1's setting of 13 as well as
-   Q2's (flagged to the program director; Q1 not changed).
+   above the number of queued rows locks the excess slots for the quarter. Resolved for Q1 by ADR 0007 (13 → 9 with
+   contingent slots); the same rule sets Q2's value at its freeze.
 
 ## 7. Next month (no trials; the Q4 budget is spent)
 
@@ -108,6 +108,49 @@ Listed with options and recommendations in `research-plan.md` §9: the H-18 even
 events once they exist), ruling A (Q1), the deposit plan (decides when 1h research rises), confirming a Raw-spread
 account (without it nothing can trade at £1,000), the projected percentage caps, and the material feature version.
 The trial budget stays at 20; raising it is not recommended.
+
+## 9. Mid-month update (research director, 2026-10-11)
+
+KPIs unchanged: no trades, no shadow book, no performance-analyst report, so every figure in section 1 is still
+"none". What changed is the readiness picture, checked against the repo, the settings and the shared registry:
+- **Q1 2027 readiness list** written into `preregistration-2027Q1.md`: 5 queued rows (H-02; H-01, H-04 and the 4h
+  continuity trial with `rule_id` H-01 / H-04 / C4H; H-06), 4 survivor slots on H-02's row, no Q1 follow-up or
+  holdout slots, the owed counts, and the freeze checklist, each with an owner and a date.
+- **Found missing:** (1) `research-v1` holds no `preregistered` row or slot yet (20 Q4 rows only); (2) releases
+  `macro-v1`, `calendar-v1` and `costs-v1` do not exist; the macro and calendar workflows have never run; (3) no
+  command writes queued rows or slots (BACKLOG 47); (4) H-06 has no implementation (BACKLOG 48). It now has a written
+  withdrawal rule decided before any outcome: not merged and counted by 2026-12-04, or below the daily floor, means
+  it is withdrawn and the reservation becomes 8; (5) the retired lists for R-01 and R-03 name one trial each, where
+  the registry holds four each (BACKLOG 49; the total of 20 and the DSR count are unaffected).
+- **Q2 draft:** the three quant rulings are written into the rules (H-17 literal blackout; [−15, +30) on the bar
+  close; H-14 cost prior = Dukascopy bar spread + settings extra cost). Ten pins (P-1..P-10) are owed before the
+  first count-owed-events run on `main`. P-1 matters most: the count script in review counts H-17's non-literal
+  entries.
+- **Session coverage** (`hypotheses.md` A4): London and New York are covered at 15m by H-17, H-14 and H-18. Tokyo is
+  covered only by H-04 at 1h and by multi-day holds, none tradeable at £1,000. The Tokyo 15m gap is recorded without
+  a trial (owner's click at UK night, widest spreads, H-04 already holds the one mechanism). The Western leg of the
+  Asia/West mechanism becomes H-24, conditional on H-04 continuing.
+- **Owner's manual method:** a study brief (`owner-method-study.md`) turns the MT5 export into seeds in R and $/oz,
+  never in sizing. Owner-seeded configurations are confirmed by forward shadow, not by the holdout (the owner's
+  trades probably fall inside it). At most two seeds a quarter become trials.
+- **Multiple-testing ledger:** unchanged (20). H-24 adds one trial only if it runs.
+
+## Owner rulings recorded (2026-10-11; source: owner approved the research director's recommendations, 2026-10-11)
+
+- **Ruling A:** daily-signal event floor 150, retire-only (`research.screen_min_events_daily: 150`). H-01 can now
+  retire slow TSMOM at 150+ events; it cannot promote it, because the gates need >= 1,500 candidates. Code check: a
+  daily screen at >= 150 events can still read `pass`, and that permits model research only (Q1 pre-registration,
+  "Owner rulings").
+- **Budget 20** unchanged; **no consensus feed** (H-11 blocked); **no other instruments**; the **conservative K_eff
+  default** confirmed.
+- **costs-v1:** published by 2026-12-11 if the demo terminal runs, otherwise "priors accepted" on 2026-12-14.
+- **Owner's trade history:** complete export, run locally, summary only.
+- **H-06:** reading-rule pins G1-G4 recorded. Withdrawal is likely even at 150 (quant estimate of the lower bound:
+  about 80-130), so the Q1 reservation is planned at 8.
+- **Q2 draft:** P-1 resolved; P-2 (literal first breach) and P-5 (cost source pinned at the freeze, the same for
+  gates and labels) adopted.
+- Open owner items now: the H-18 event floor (O-1), the deposit plan, the Raw-spread account, the projected
+  percentage caps and the material feature version. KPIs, budget and ledger unchanged.
 
 ## Not verified / left out
 

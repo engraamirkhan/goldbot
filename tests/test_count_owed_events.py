@@ -108,9 +108,32 @@ def _macro() -> pd.DataFrame:
     return fred_frame("GVZCLS", pd.DataFrame({"value_date": vd, "value": vals}), pd.Timestamp("2024-01-01"))
 
 
+def _macro_h06(seed: int = 11) -> pd.DataFrame:
+    """GVZ plus H-06's gate series: DFII10 (daily) and DTWEXBGS (weekly H.10 stamp) random walks."""
+    vd = pd.bdate_range("2021-10-01", END)
+    rng = np.random.default_rng(seed)
+    ry = 1.2 + np.cumsum(0.04 * rng.standard_normal(len(vd)))
+    usd = 120 * np.exp(np.cumsum(0.003 * rng.standard_normal(len(vd))))
+    vint = pd.Timestamp("2024-01-01")
+    return pd.concat([_macro(), fred_frame("DFII10", pd.DataFrame({"value_date": vd, "value": ry}), vint),
+                      fred_frame("DTWEXBGS", pd.DataFrame({"value_date": vd, "value": usd}), vint)],
+                     ignore_index=True)
+
+
 @pytest.fixture(scope="module")
 def b1() -> pd.DataFrame:
     return h16.cut_before_holdout(_bars_1m(), HOLDOUT)
+
+
+@pytest.fixture(scope="module")
+def b1_long() -> pd.DataFrame:
+    """A longer history for H-06: slow TSMOM needs 121 daily closes and a 124-bar hold before it signals."""
+    return h16.cut_before_holdout(_bars_1m(start="2022-01-03"), HOLDOUT)
+
+
+@pytest.fixture(scope="module")
+def macro_long() -> pd.DataFrame:
+    return h16.cut_before_holdout(_macro_h06(), HOLDOUT, ("available_utc",))
 
 
 def _before(events: pd.DataFrame, at: pd.Timestamp) -> pd.DataFrame:
@@ -162,6 +185,7 @@ def test_h16_count_receives_timestamps_only():
 
 # --------------------------------------------------------------------------- guard: nothing after the decision bar
 H17_MONTH = "2023-06"            # the first fit with 30 rows is at May's end
+LONDON_TZ = "Europe/London"
 
 
 def _events(name: str, bars: pd.DataFrame, cal: pd.DataFrame | None) -> pd.DataFrame:
@@ -201,9 +225,10 @@ def _emitted(events: pd.DataFrame, row: pd.Series) -> bool:
     return bool(hit.any())
 
 
-# H-04 and H-01 read later bar TIMESTAMPS by design (the 7h sample rule, the barrier end and the one-at-a-time bound),
-# never later prices: their bars after the decision are perturbed, not dropped. H-14, H-17 and H-18 read nothing at all
-# after the decision close: their later bars are both perturbed and dropped.
+# H-04, H-01 and H-06 read later bar TIMESTAMPS by design (the 7h sample rule, the barrier end and the one-at-a-time
+# bound), never later prices: their bars after the decision are perturbed, not dropped (H-06 on its longer history in
+# the test below, which also drops and perturbs its macro rows). H-14, H-17 and H-18 read nothing at all after the
+# decision close: their later bars are both perturbed and dropped.
 @pytest.mark.parametrize("name,drop", [("H-04", False), ("H-01", False), ("H-17", False), ("H-17", True),
                                        ("H-18", False), ("H-18", True), ("H-14", False), ("H-14", True)])
 def test_each_sampled_event_survives_truncation_strictly_after_its_own_decision_close(b1: pd.DataFrame, name: str,
@@ -218,6 +243,23 @@ def test_each_sampled_event_survives_truncation_strictly_after_its_own_decision_
         at = pd.Timestamp(row["decision_utc"])                  # the decision bar's close
         bars = b1[np.asarray(ts < at)].reset_index(drop=True) if drop else _perturbed(b1, at)
         assert _emitted(_events(name, bars, cal), row), f"{name}: event at {at} changed after truncating at its close"
+
+
+def test_each_h06_event_survives_truncation_of_bars_and_macro_strictly_after_its_own_decision_close(
+        b1_long: pd.DataFrame, macro_long: pd.DataFrame):
+    """Per event: every bar price after its decision close perturbed, and every macro row published after it dropped
+    or perturbed; the event (time and side) is still emitted."""
+    _, base = co.count_h06(b1_long, macro_long)
+    assert len(base) >= 6, "H-06: too few events; the test would prove little"
+    avail = utc_index(macro_long["available_utc"])
+    rng = np.random.default_rng(8)
+    for _, row in _sample(base).iterrows():
+        at = pd.Timestamp(row["decision_utc"])
+        after = np.asarray(avail > at)
+        moved = macro_long.copy()
+        moved.loc[after, "value"] = moved.loc[after, "value"].to_numpy() * rng.uniform(0.5, 1.5, int(after.sum()))
+        for bars, macro in ((_perturbed(b1_long, at), macro_long), (b1_long, macro_long[~after]), (b1_long, moved)):
+            assert _emitted(co.count_h06(bars, macro)[1], row), f"H-06: event at {at} moved after its close"
 
 
 def test_h14_cost_gate_binds_on_the_synthetic_spreads(b1: pd.DataFrame):
@@ -294,6 +336,56 @@ def test_h04_sample_rule_drops_an_entry_whose_window_has_a_gap(b1: pd.DataFrame)
     assert base["calendar_upper_bound"] == (base["no_decision_bar"] + base["atr_warmup_or_unusable"]
                                             + base["candidates"])
     assert "asia_drift-g0-98dc13a518" in base["source"]          # the pre-registered agent id
+
+
+def test_h06_count_is_the_slow_macro_presets_own_candidates_against_the_h01_signals(b1_long: pd.DataFrame,
+                                                                                    macro_long: pd.DataFrame):
+    b1, macro = b1_long, macro_long
+    out, ev = co.count_h06(b1, macro, daily_floor=150)
+    h01, h01_ev = co.count_h01(b1)
+    assert out["status"] == "counted" and "tsmom-g0-fed4baec9f" in out["source"]    # the pinned H-06 agent id
+    assert "candidates_in_context" in out["source"] and "slow_macro" in out["source"]
+    assert 0 < out["signals"] < h01["signals"] and out["signals"] == out["long"] + out["short"] == len(ev)
+    assert out["h01_signals"] == h01["signals"]
+    assert out["signals"] + out["dropped_macro_missing"] + out["dropped_disagree"] == h01["signals"]
+    assert 0 < out["one_at_a_time_lower_bound"] <= out["signals"]
+    assert out["daily_floor"] == 150 and out["below_floor"] == (out["one_at_a_time_lower_bound"] < 150)
+    # every H-06 event is an H-01 signal (same time, same side): the gate only removes
+    h01_keys = set(zip(utc_index(h01_ev["decision_utc"]), h01_ev["side"], strict=True))
+    assert set(zip(utc_index(ev["decision_utc"]), ev["side"], strict=True)) <= h01_keys
+    # without DFII10 every candidate lacks a value: reported as not counted, never as zero events
+    no_ry = macro[macro["series_id"] != "DFII10"]
+    assert co.count_h06(b1, no_ry)[0]["status"] == "not counted"
+    assert co.count_h06(b1, None)[0]["status"] == "not counted"
+    assert co.count_h06(b1, _macro())[0]["reason"].startswith("macro-v1 lacks")
+    # DFII10 published only from 2023-03: every earlier H-01 signal has no 20-day change and is dropped as missing
+    since = pd.Timestamp("2023-03-01", tz="UTC")
+    late = macro[np.asarray((macro["series_id"] != "DFII10") | (utc_index(macro["available_utc"]) > since))]
+    part, part_ev = co.count_h06(b1, late)
+    assert part["dropped_macro_missing"] > out["dropped_macro_missing"]
+    assert (utc_index(part_ev["decision_utc"]) > since).all()
+
+
+def test_the_h06_count_path_and_the_gate_it_calls_are_covered_by_the_no_outcome_guard():
+    """count_h06 lives in the script the AST guard scans; the specialist code it calls for the gate is checked here with
+    the same forbidden names and outcome columns."""
+    import inspect
+    import textwrap
+
+    from goldbot.specialists.time_series_momentum import TimeSeriesMomentumSpecialist as TSMOM
+    tree = ast.parse(SCRIPT.read_text())
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    called = {(n.func.id, a.value) for n in ast.walk(fns["count_h06"]) if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Name) for a in n.args if isinstance(a, ast.Constant)}
+    assert ("_tsmom_signals", "slow_macro") in called               # the preset's own candidate code path
+    attrs = {n.attr for n in ast.walk(fns["_tsmom_signals"]) if isinstance(n, ast.Attribute)}
+    assert "candidates_in_context" in attrs
+    for code in (TSMOM.candidates_in_context, TSMOM.macro_agreement, TSMOM._macro_gate):
+        sub = ast.parse(textwrap.dedent(inspect.getsource(code)))
+        used = {n.id for n in ast.walk(sub) if isinstance(n, ast.Name)}
+        used |= {n.attr for n in ast.walk(sub) if isinstance(n, ast.Attribute)}
+        strings = {n.value for n in ast.walk(sub) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+        assert not used & FORBIDDEN_NAMES and not strings & FORBIDDEN_COLUMNS, code.__name__
 
 
 def test_h18_counts_the_first_event_of_a_day_with_its_entry_bar_and_the_move_filter(b1: pd.DataFrame):
@@ -375,17 +467,59 @@ def test_h17_literal_rule_a_day_whose_first_breach_is_blacked_out_has_no_entry(b
     assert not co.in_intervals(epoch_ns(strict.sort_values()), lo, hi).any()
 
 
+@pytest.mark.parametrize("why", ["closed_session", "no_atr"])
+def test_h17_literal_p2_a_day_whose_first_breach_is_untradeable_has_no_entry(b1: pd.DataFrame,
+                                                                            monkeypatch: pytest.MonkeyPatch, why: str):
+    """Pin P-2 (literal, as the blackout): the day's FIRST breaching bar is the only candidate. If the session is
+    closed at its close or ATR(14) is not defined there, the day is skipped; no later breaching bar is taken."""
+    cal = co.cut_inputs(b1, None, _calendar(), HOLDOUT)[2]
+    base, ev = co.count_h17(b1, cal, H17_MONTH, min_rows=MIN_ROWS)
+    strict = ev[ev["rule"] == "strict"]
+    targets = utc_index(_sample(strict, 8)["decision_utc"])
+    assert len(targets) >= 4
+    if why == "closed_session":
+        real = co.DEFAULT_SESSIONS
+
+        class Closed:
+            def is_open(self, ts: pd.DatetimeIndex) -> np.ndarray:
+                return np.asarray(real.is_open(ts)) & ~np.isin(epoch_ns(pd.DatetimeIndex(ts)), epoch_ns(targets))
+
+        monkeypatch.setattr(co, "DEFAULT_SESSIONS", Closed())
+    else:
+        real_atr = co.atr
+
+        def no_atr(m: pd.DataFrame, n: int) -> pd.Series:
+            a = real_atr(m, n).astype(float).copy()
+            a[np.isin(epoch_ns(utc_index(m["ts_utc"]) + co.M15), epoch_ns(targets))] = np.nan
+            return a
+
+        monkeypatch.setattr(co, "atr", no_atr)
+    out, moved = co.count_h17(b1, cal, H17_MONTH, min_rows=MIN_ROWS)
+    days = set(utc_index(moved.loc[moved["rule"] == "strict", "decision_utc"]).tz_convert(LONDON_TZ).date)
+    assert not days & set(targets.tz_convert(LONDON_TZ).date)       # no entry on any of those days
+    lost = int(utc_index(strict["decision_utc"]).isin(targets).sum())
+    for half in ("high", "low"):
+        assert out[f"{half}_breach_days"] == base[f"{half}_breach_days"]       # the first breach itself is unchanged
+    assert out["high_events_strict"] + out["low_events_strict"] == (
+        base["high_events_strict"] + base["low_events_strict"] - lost)
+    assert out["high_first_breach_untradable"] + out["low_first_breach_untradable"] == lost
+
+
 # --------------------------------------------------------------------------- the whole run
 def test_nothing_at_or_after_the_holdout_reaches_any_count():
-    raw = _bars_1m()
-    a = co.run(raw, _macro(), _calendar(), holdout_from=HOLDOUT, extra_cost_usd=EXTRA, min_rows=MIN_ROWS)
-    b = co.run(_perturbed(raw, pd.Timestamp(HOLDOUT, tz="UTC")), _macro(), _calendar(), holdout_from=HOLDOUT,
-               extra_cost_usd=EXTRA, min_rows=MIN_ROWS)
-    assert a["counts"] == b["counts"]
+    raw, macro = _bars_1m(), _macro_h06()
+    late = np.asarray(utc_index(macro["available_utc"]) >= pd.Timestamp(HOLDOUT, tz="UTC"))
+    moved = macro.copy()
+    moved.loc[late, "value"] = moved.loc[late, "value"].to_numpy() * 1.5
+    a = co.run(raw, macro, _calendar(), holdout_from=HOLDOUT, extra_cost_usd=EXTRA, min_rows=MIN_ROWS, daily_floor=150)
+    b = co.run(_perturbed(raw, pd.Timestamp(HOLDOUT, tz="UTC")), moved, _calendar(), holdout_from=HOLDOUT,
+               extra_cost_usd=EXTRA, min_rows=MIN_ROWS, daily_floor=150)
+    assert late.any() and a["counts"] == b["counts"]
+    assert a["counts"]["H-06"]["status"] == "counted"
     assert pd.Timestamp(a["meta"]["bars_to"], tz="UTC") < pd.Timestamp(HOLDOUT, tz="UTC")
     text = co.markdown(a)
     assert "| Q1 H-04 | asia_drift entries" in text and "expected_eval_days" in text
-    assert "| H-04 entries |" in text
+    assert "| H-04 entries |" in text and "| Q1 H-06 |" in text and "| H-06 signals |" in text
 
 
 def test_missing_calendar_is_reported_not_counted():
@@ -394,6 +528,7 @@ def test_missing_calendar_is_reported_not_counted():
     for h in ("H-17", "H-18", "H-14"):
         assert out["counts"][h]["status"] == "not counted" and "calendar" in out["counts"][h]["reason"]
     assert "not counted" not in out["counts"]["H-04"]["status"]
+    assert out["counts"]["H-06"]["status"] == "not counted" and "macro-v1" in out["counts"]["H-06"]["reason"]
     co.markdown(out)                                             # renders without the missing counts
 
 

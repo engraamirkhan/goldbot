@@ -1,0 +1,5 @@
+id: D5
+requirement: '"Resampling is label=''left'', closed=''left'', a bar is complete only at open + tf"'
+status: implemented
+code: goldbot/data/resample.py:68-91 (`visible_at`)
+test: tests/test_data_layer.py::test_resample_15m_1h_1d; ::test_ticks_to_1m_and_visibility

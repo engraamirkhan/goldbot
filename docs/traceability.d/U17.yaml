@@ -1,0 +1,5 @@
+id: U17
+requirement: The owner account cannot be reset with a reset link (a stolen owner session could otherwise set a new password and authenticator); the owner recovers with a recovery code
+status: implemented
+code: goldbot/api/auth.py `create_reset_link`, `use_reset_link` (`OWNER_RESET_REFUSED`)
+test: tests/test_api_security_followup.py::test_no_reset_link_can_be_made_for_the_owner_account; ::test_an_owner_reset_link_already_stored_is_refused

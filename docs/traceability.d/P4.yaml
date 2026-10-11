@@ -1,0 +1,5 @@
+id: P4
+requirement: Gates recorded in order with evidence
+status: implemented
+code: goldbot/ops/accounts.py:188 `record_gate`
+test: tests/test_risk_ops.py::test_record_gate_appends_atomically_and_refuses_bad_names

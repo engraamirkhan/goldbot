@@ -227,8 +227,10 @@ def bridge_endpoint(account_id: str) -> tuple[str, str] | None:
 
 def verify_terminal_account(acc: Account, info: Any) -> str | None:
     """Why the terminal's logged-in account must not be traded as `acc`, or None when it matches: the login (when
-    known), the server, and demo vs real. A terminal on its own saved login (the Wine bridge) could otherwise trade
-    a live account under a demo account's limits, past the phase gate."""
+    known), the server, demo vs real, and a hedging margin mode. A terminal on its own saved login (the Wine bridge)
+    could otherwise trade a live account under a demo account's limits, past the phase gate. The engine keys one
+    position per order ticket (review MEDIUM-1 follow-up): on a netting or exchange account fills join one position per
+    symbol, so anything but hedging is refused, and so is a mode the terminal does not report (an older bridge)."""
     if acc.login is None:
         return f"no login stored for {acc.account_id} (python -m goldbot.ops.accounts add {acc.account_id})"
     if int(info.login) != int(acc.login):
@@ -238,6 +240,9 @@ def verify_terminal_account(acc: Account, info: Any) -> str | None:
     want = "demo" if acc.mode == "demo" else "real"
     if info.trade_mode != want:
         return f"terminal account is {info.trade_mode or 'unknown'}, {acc.account_id} is {acc.mode}"
+    margin = getattr(info, "margin_mode", None)
+    if margin != "hedging":
+        return f"terminal account margin mode is {margin or 'unknown'}; the engine needs a hedging account"
     return None
 
 

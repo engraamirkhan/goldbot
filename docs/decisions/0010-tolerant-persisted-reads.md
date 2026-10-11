@@ -70,7 +70,11 @@ nothing covered the record bodies.
 - A rollback no longer drops closed trades, hides proposals or stops services because of a newer release's fields.
   `schema_skew()` and the log line show that skew is happening (expected only after a rollback). The engine
   publishes a bounded summary (`schema_skew` in engine_<account>.json) and health `schema_skew:<account>` warns the
-  owner, failing when a decision was refused (2026-10-11 follow-up). Skew read by other processes stays log-only.
+  owner, failing when a decision was refused (2026-10-11 follow-up). Every service (supervisor, scheduler with aux.db
+  `scheduler_jobs` -> `JobState`, telegram, news, api) publishes the same block in `heartbeat_<service>.json`
+  (written by `Heartbeat`, so the scheduler's beat thread keeps it fresh during a long job) and health reports
+  `schema_skew:svc:<service>` by the same rules (SRE review follow-ups; `svc:` so a service never clashes with an
+  account of the same name). A block the process could not build is published as `{"error": <type>}` and WARNs.
 - **The refused-click FAIL is bounded in time (SRE review, 2026-10-11).** Options: FAIL until the engine restarts
   (the counts are per process), or FAIL for a window after the latest refusal. Chosen: `SkewSummary.last_refused_utc`
   (wall clock at `note_schema_skew(refused=True)`); health FAILs while now - last_refused_utc <= 1 h

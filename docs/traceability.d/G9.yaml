@@ -1,0 +1,5 @@
+id: G9
+requirement: '"every run is logged with its inputs, outputs and cost, and their total monthly spend is capped"'
+status: implemented
+code: 'goldbot/agents/runner.py (`SpendLedger.reserve`/`settle`: the cap check and booking commit together in aux.db `agent_spend`; runs logged to aux.db `agent_runs`, goldbot/db/bookkeeping.py); config/settings.yaml agents.monthly_cap_usd'
+test: tests/test_agents.py::test_monthly_cap_blocks_the_run_without_calling_the_api; ::test_per_run_budget_stops_before_spending_more; tests/test_state_bookkeeping.py::test_concurrent_processes_never_spend_past_the_cap; ::test_a_run_reserves_its_budget_and_books_only_what_it_spent

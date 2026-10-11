@@ -1,0 +1,5 @@
+id: A8
+requirement: '"accepted by numeric user-id allow-list"'
+status: implemented
+code: goldbot/telegram/approvals.py:104-105, 132-133
+test: tests/test_cov_telegram.py::test_only_allow_listed_users_decide_and_only_once

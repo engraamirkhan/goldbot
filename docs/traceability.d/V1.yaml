@@ -1,0 +1,5 @@
+id: V1
+requirement: Once connected to the broker the dashboard shows the live balance, equity, account currency, margin level and today's P&L in account currency, from the engine's broker reading (never config); no login or server in the state file
+status: implemented
+code: goldbot/engine/runner.py `_refresh_account` (balance, currency, margin from `broker.account()`), `_write_state`; goldbot/api/app.py `/api/accounts`; goldbot/ops/account_view.py `margin_level_pct`; web/src/screens/BalanceCard.tsx
+test: tests/test_engine_account_state.py::test_state_file_carries_balance_currency_margin_level_and_limits_but_never_the_login_or_server; tests/test_api_accounts.py::test_accounts_show_balance_currency_margin_level_and_todays_pnl_in_account_currency, ::test_an_engine_file_from_before_the_account_view_still_renders_with_nulls; web/src/screens/BalanceCard.test.tsx; web/e2e/dashboard.spec.ts "once the engine reports ..." (360 px)

@@ -101,9 +101,12 @@ class Specialist(ABC):
         """Return frame with columns idx, side (and optional diagnostics) for signal bars."""
 
     def candidates_in_context(self, mid_bars: pd.DataFrame, features: pd.DataFrame,
-                              context: dict[str, pd.DataFrame] | None) -> pd.DataFrame:
-        """Candidates when the higher-timeframe bars (`context`, keyed h1/h4/d1, store schema with visible_at) are at
-        hand, as in research (`research.pipeline.prepare`). Default: `candidates`, which sees only the decision frame."""
+                              context: dict[str, pd.DataFrame] | None,
+                              ctx: dict[str, Any] | None = None) -> pd.DataFrame:
+        """Candidates when the higher-timeframe bars (`context`, keyed h1/h4/d1, store schema with visible_at) and the
+        point-in-time tables (`ctx`, as the features get them, e.g. ctx["macro"], joined only via `asof_join` on
+        available_utc) are at hand, as in research (`research.pipeline.prepare`). Default: `candidates`, which sees
+        only the decision frame."""
         return self.candidates(mid_bars, features)
 
     def complete_windows(self, bars_dec: pd.DataFrame, cands: pd.DataFrame) -> pd.DataFrame:

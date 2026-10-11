@@ -1,0 +1,5 @@
+id: F22
+requirement: 'Survey rank 6, equity stress (#63): VIX level and 5-day change, S&P 500 drawdown from its 20-day high, opt-in'
+status: implemented
+code: goldbot/features/macro.py `macro_drivers` v2 (`macro_vix`, `macro_vix_chg5`, `macro_spx_dd20`, first releases joined on available_utc); scripts/fred_macro.py `RELEASE_SERIES` adds VIXCLS and SP500 with the next-business-day stamp
+test: tests/test_macro.py::test_equity_stress_columns_follow_vix_and_the_sp500_drawdown_as_published; ::test_equity_stress_columns_do_not_change_when_later_observations_are_published; ::test_fred_script_publishes_the_equity_stress_series
