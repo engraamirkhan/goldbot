@@ -119,8 +119,16 @@ Write down `<SHA>` and the three `<HASH>` values. They are public.
 
 **Stop if:** any check fails. You are on the wrong commit; ask for the right one.
 
-Have ready: `<mt5-login>` and the MT5 demo password (typed only into the MT5 terminal), the bot token, your Telegram id, your email, an authenticator
-app on your phone.
+**P7. Outside alert (browser, 5 min).** Alerts come from the brain itself, so a dead brain is silent. A free
+check on Healthchecks.io fixes that (it emails you when the brain stops pinging it):
+1. healthchecks.io -> sign up (free plan) -> **Add Check**: name `goldbot brain`, Schedule **Simple**, Period
+   **2 minutes**, Grace **3 minutes**.
+2. Integrations: email is on already. Optional: add **Telegram** there (Healthchecks.io's own bot, not yours).
+3. Copy the check's **ping URL** (`https://hc-ping.com/...`) into your password manager. It is a secret: never paste
+   it into a chat, a command line, an issue or the repository. You store it on the brain in step 8b.
+
+Have ready: `<mt5-login>` and the MT5 demo password (typed only into the MT5 terminal), the bot token, your Telegram id, your email, the
+Healthchecks.io ping URL (password manager), an authenticator app on your phone.
 
 ---
 
@@ -301,6 +309,7 @@ Normal for now (warnings):
 * "no measured swap";
 * `secrets`: optional keys missing (Anthropic key, GitHub token: add later with `goldbot run setup`);
 * `alerts` (in the first minute);
+* `deadman` (until step 8b);
 * no proposals.
 
 **Check both boxes run the same code:**
@@ -364,6 +373,20 @@ brain: `sudo systemctl stop goldbot-news`. Wait.
 **Stop if** no message arrives in 8 minutes. Alerts are not working. Check `journalctl -u goldbot-telegram -n 50`
 and leave goldbot stopped until alerts work.
 
+### 8b. Outside alert (7 min)
+
+brain: `goldbot accounts set deadman-url`, then paste the ping URL from P7 at the hidden prompt.
+
+**Expect within 2 minutes:** the check shows **up** on healthchecks.io, and `goldbot run health | grep deadman` says
+ok.
+
+Rehearse it: `sudo systemctl stop goldbot-telegram`. **Expect within 6 minutes:** an email (and a Telegram message, if
+you added it in P7) from Healthchecks.io saying `goldbot brain` is **down**. Then `sudo systemctl start
+goldbot-telegram`. **Expect** an **up** notice within about 2 minutes.
+
+**Stop if** the check never turns up: `journalctl -u goldbot-telegram | grep "dead man"` says why (RUNBOOK section 6
+"Outside alert"). goldbot may keep running on demo, but fix it before going live.
+
 ### 9. Write down (2 min, in your own notes, not the repository)
 
 * The time each step finished.
@@ -399,6 +422,7 @@ Do not trade this demo account by hand: goldbot's loss limits count every trade 
 | When (UTC) | Look at | Good looks like |
 | --- | --- | --- |
 | through the day | Telegram | no FAIL alert; if one comes, it names the check, and `goldbot run health` says why |
+| through the day | healthchecks.io | `goldbot brain` stays up; a DOWN email: RUNBOOK section 6 "Outside alert" |
 | 06:10 next day | `goldbot run health` -> `scheduler` | `calendar_archive` ran (the news blackout needs it) |
 | 06:45 next day | Telegram digest | arrives, status ✅, or ⚠️ only for backups/swap |
 | +24 h | `systemctl show -p NRestarts goldbot-engine@icm-demo goldbot-bridge-tunnel` | 0, or a few during setup; not growing |
@@ -427,7 +451,5 @@ After both, `goldbot run preflight | grep bridge_compat` must be ✅.
 1. Position ticket fix, open-risk heat cap, API request validation: separate review lanes.
 2. Cloudflare Tunnel plus Access for the dashboard from your phone (needs a domain on Cloudflare).
 3. Tailscale for option B too, replacing the Oracle-private link (one link design for both options).
-4. An outside "dead man's switch". Today alerts come from the brain's own Telegram service, so a dead brain is
-   silent. The 06:45 digest not arriving is your signal until then.
-5. A main-loop heartbeat for the engine. Today a hung engine counts as stale only after 45 min of open market (a
+4. A main-loop heartbeat for the engine. Today a hung engine counts as stale only after 45 min of open market (a
    crashed one restarts within 10 s).

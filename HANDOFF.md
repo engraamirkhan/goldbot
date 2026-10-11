@@ -73,6 +73,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   clash is caught by the `docs-assemble` pre-commit hook (which CI runs) and fixed by `fix-ids`. Lanes are merged
   with `scripts/docs_assemble.py merge <branch>`, which also absorbs branches that still edit the old rendered
   files. Never edit the rendered files.
+- **Outside dead man's switch and a hash-pinned MT5 box (SRE, 2026-10-11; first-deploy risks 1 and 2).**
+  - Alerts no longer depend only on the brain. After each health pass, the Telegram service pings a Healthchecks.io
+    check (free tier; ADR 0014, `goldbot/ops/deadman.py`). It sends an ok ping every `telegram.deadman_every_min`
+    (2) min while health has no FAIL, and `<url>/fail` (body: failing check names only) on a FAIL or an undelivered
+    Telegram alert. The URL is keyring-only (`goldbot accounts set deadman-url`) and never logged. When it is unset,
+    nothing is sent and health `deadman` WARNs. Owner steps: first-deploy.md P7 and 8b, RUNBOOK section 6 "Outside
+    alert". Tests: `tests/test_deadman.py`.
+  - The Wine MT5 box's Windows-Python packages come from `goldbot/ops/linux/mt5-bridge-requirements.txt`. The file
+    is rendered from uv.lock by `scripts/bridge_requirements.py` (CPython 3.11 win_amd64 wheels, sha256) and
+    installed with `pip install --require-hashes --no-deps --only-binary :all:`. pip is no longer upgraded and goldbot
+    is no longer built editable (a `.pth` instead). goldbot-deploy reinstalls the packages when uv.lock changes, with
+    the bridges stopped. CI check: `tests/test_bridge_requirements.py`. An existing MT5 box moves onto the file once,
+    by hand (RUNBOOK 0.5).
 - Email sign-in link, security re-verify nits on 1a8bf43. `auth.mail.dashboard_origin` now refuses any
   whitespace, control character, `\` or `;`, and an empty host. It is stored as the normalised lower-case
   `scheme://netloc`. `coarse_ip` gives the IPv4 /16 for an IPv4-mapped IPv6 address (`::ffff:203.0.113.45` ->
