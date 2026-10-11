@@ -35,6 +35,17 @@ If the wizard cannot be used, the manual commands are in [RUNBOOK 0.4](RUNBOOK.m
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)
 - **Deploy:** Telegram *New version ready* -> **[Deploy]**. Never while an entry waits; rolls back by itself if a service fails. [More](RUNBOOK.md#05-daily-use)
 - **Health tab:** each check reads ok, warn or fail with a reason, plus drift and drawdown per strategy.
+- **Your account (Overview):** once the engine is connected to the broker, each account card shows the **balance** and
+  **equity** in the account's currency (equity includes open trades), today's change since 00:00 UTC, the margin level,
+  the **loss budget** (how much more can be lost before new entries stop, and which limit decides it: today's or
+  this week's, this account's or all accounts together) and the
+  **next milestone** (the timeframes your balance can trade now and the balance the next one needs, with a progress
+  bar). The Approvals tab shows the loss budget too. "Pending broker terms" means the engine has not read the
+  broker's currency conversion yet, so no amount is guessed. A milestone allows a timeframe; a strategy still has to
+  pass its tests before it trades there.
+- **Monthly report:** `goldbot run monthly-report` (or `--month 2026-10`) prints the month's time-weighted return
+  (deposits are not counted as profit), R, largest drawdown, average per trading day, best days and milestone
+  progress. The morning digest carries a one-line month so far. It never sets a daily amount to reach.
 
 | Alert | Means | Do |
 |---|---|---|
@@ -59,6 +70,23 @@ Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decisio
 | Trial budget (B) | Keep 20 a quarter |
 | Paid calendar feed (C) | Not for Q1 |
 | Other instruments (D) | Defer until the slow-TSMOM verdict |
+
+## 4a. Share your own trading record (private)
+The research team turns how you trade by hand into hypotheses it can test. Your MT5 report holds your account
+number and name, so it **never goes into the repo or GitHub**: it stays in a private folder on your Mac.
+
+1. In the MT5 desktop terminal open the **History** tab (Toolbox, `Ctrl+T`), right-click and pick the period
+   (**All History** or the last 3-6 months).
+2. Right-click again -> **Report** -> **HTML** (or **Open XML (MS Office Excel 2007)** for `.xlsx`).
+3. Save it in `~/Personal project/trade-history/` (create the folder; it is outside the repo).
+4. Run `python -m goldbot.ops.run owner-history` from the repo (add `--server-tz <zone>` if your broker is not on
+   Athens time, `--start-balance 50` if the report has no deposit row). It reads the newest report in that folder and
+   writes `owner_history_*.md`, `.json` and `.trades.csv` next to it; the console prints a short summary.
+
+Only the account currency is read from the report header. The "hypothesis seeds" at the end are patterns in your own
+past trades, not proof of an edge: the research director pre-registers any that are worth a trial. The tool refuses to
+write into any git folder, and a commit check rejects a report file. **Do not paste amounts into the repo** (or
+GitHub issues): share the seeds, which use R, percentages and counts only.
 
 ## 5. What is honest to expect
 **No strategy is profitable yet.** Dates are earliest-possible.

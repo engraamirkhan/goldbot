@@ -323,7 +323,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   for research to screen; no specialist declares them (its `model_features` are unchanged), so they reach a model only
   through the P4 screen and a pre-registered trial. `session_zones` (session high/low/open now and for the previous
   session, each zone's last high/low, previous feature-day and Sunday-week high/low, all (close - level)/ATR14;
-  sessions are the `DEFAULT_SESSIONS.sessions_utc` windows, 21:00-23:00 UTC belongs to none); `market_structure`
+  sessions are the DST-aware `DEFAULT_SESSIONS.sessions_local` windows, the New York close to 23:00 UTC belongs to none); `market_structure`
   (liquidity sweep = traded beyond the last confirmed swing, previous session or previous day high/low known at t-1
   and closed back inside; break of structure = first close beyond the last confirmed unbroken swing); `fair_value_gaps`
   (bullish if high[i-2] < low[i], known when bar i closes; partial fills shrink it, filled once a bar trades through
@@ -443,6 +443,33 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   an empty DB it imports users.json and audit.jsonl once and never writes them again (backup). Failed-login
   counters stay in memory. Not done: `run.py migrate`/`import-state` wiring, `state_db` health check (step 0
   leftovers, files owned elsewhere); the API migrates aux.db on open until then. Steps 2-8 not started.
+- State store step 3 (2026-10-10): staff-agent runs and monthly spend, scheduler job state and the Telegram outbox are
+  in aux.db (`goldbot/db/bookkeeping.py`, migration 5). Each old file is imported once on first open (or by
+  `python -m goldbot.db import-state`) into an empty table. scheduler.json and agent_spend.json stay as exports
+  regenerated after each write (dashboard, health, read_state tool and vps_update.ps1 still read them; originals in
+  `state/pre-db/`); agent_runs.jsonl stays an append-only mirror (dashboard; API owner notices are still relayed from
+  it); telegram_outbox.json is never written again. `SpendLedger.reserve` books the per-run budget under BEGIN
+  IMMEDIATE before the first API call and `settle` books the real cost, so concurrent runs never pass the cap (the
+  old ledger cached the file and the news and agents processes overwrote each other). Not done: news_spend.json
+  (`data/news_collector.py` was out of scope), switching api/app.py to query aux.db.
+  Trading-safety review fixes (same day): exports run after the commit and never raise (a locked file on Windows no
+  longer undoes a spend booking or stops a scheduler job); concurrent exporters converge through `exports.seq`.
+  Rollback safety: telegram_outbox.json is rewritten in its old format for one release; a file another release
+  wrote (hash differs from this code's last export) is merged back once (spend: larger per month; scheduler: newer
+  slot; outbox: its sent list and offset; runs appended only to the file are adopted) and counted in
+  `state_fallback`. Migrations can be `additive`: `schema_version.compat_back_to` lets older code open a newer
+  aux.db; the release before step 3 needs the one-time downgrade in RUNBOOK (updating the VPS). Health and
+  vps_update.ps1 read the scheduler status from aux.db (`python -m goldbot.db scheduler-status`), the file only as
+  fallback. Telegram: aux.db is opened inside the pump (a broken file no longer stops the bot), a proposal whose
+  mark_sent fails is not re-sent (`SendGuard`, retry with backoff), and reports are acknowledged only after delivery
+  (at least once). A run that dies mid-loop keeps its reservation; a failed settle is logged and the run still logged.
+  Re-verification: the heartbeat is read with a plain read-only connection (an `immutable` read tore under a
+  writer); export hashes are recorded before the write and the last 16 kept (`exports.hashes`), so our own file is
+  never taken as foreign; a file missing at the first open is recorded as imported (empty), so a later file is only
+  merged; the outbox merge is a union (DB proposals still pending kept) with the further report cursor; a report
+  batch failing for one recipient is acknowledged after 3 passes (`ReportRetry`); vps_update.ps1 steps aux.db back
+  from schema 5 to 4 by itself when installing a commit without `compat_back_to` (`Sync-AuxSchema`, refuses any
+  other version) and stops the scheduler first, re-checking for a running job before stopping the rest.
 - Dashboard accounts (2026-10-10, owner request): the owner is the sole admin. `auth.owner_email` (Settings
   `AuthSettings`, default None; set only in the server's `config/settings.local.yaml`, never in the public repo)
   is required for bootstrap and is the only address that can hold the owner role. Invites and `set_role` grant
@@ -678,8 +705,208 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   from the training and shadow bars. The allocator keeps its design window, 0 for 30 min either side of tier-1
   events (`RuleAllocator()` defaults), deliberately stricter than the RiskGate's -15/+30 entry block; the gate window
   from settings never narrows it (an allocator rule change is the owner's decision).
+- Currency-correct sizing (2026-10-10, BACKLOG 28, ADR 0004 A3-A8, rows R32 and S6; needs trading-safety review):
+  RiskGate now sizes in the account currency. One lot's stop risk is stop x contract x fx, fx being the broker's
+  account currency per USD: `loss_per_lot` on the broker protocol (MT5 `order_calc_profit` for the stop move on one
+  lot, else `trade_tick_value_loss`/`trade_tick_value` per `trade_tick_size`; paper = USD, factor 1; bridge allow-list
+  read-only; RemoteBroker). The 1:20 margin figure, margin level and combined-notional cap compare account currency
+  with account equity. A non-USD account with no usable conversion refuses entries (`fx_conversion_unavailable`); a USD
+  account is 1 by definition and a broker figure more than 1% off is refused. The engine passes the terminal's
+  contract size, minimum lot, lot step, stops level and the conversion into `Intent` (`runner._sizing_terms`; volume
+  max stays capped at the engine's 2.0 per order; an unreadable terminal leaves the currency unknown, so no entry).
+  gate.py calls goldbot/risk/sizing.py for the arithmetic (the parity test now also runs at a GBP factor). Closed-trade
+  R and return use the same conversion; with none, R is left empty and the return comes from prices (the record is
+  never blocked). The supervisor refuses to combine engines in different currencies (`mixed_account_currencies`, a
+  halt): converting would need an FX rate it does not have. Running `vantage-demo` (USD?) next to `icm-demo` (GBP)
+  therefore halts entries on both until a conversion is built. Not changed: the approval card's `risk_usd` stays USD
+  (ui-ux follow-up: show the account-currency risk from `GateDecision.risk_amount`); the approval re-check reuses the
+  conversion read at proposal time (90 s at most).
+- Minimum-lot exception (2026-10-10, BACKLOG 25, ADR 0004 decision 2, row R33; needs trading-safety review):
+  `risk.min_lot_risk_cap` (null = off, the design's 1.2x rule alone; validated 0 < x <= 0.01). When the sized lots
+  fall below the minimum lot, RiskGate places exactly the minimum lot if its realised risk in the account currency is
+  within the cap (clamped to the 1% maximum, halved in the 8% stage or the combined size-down), then runs the margin
+  floor and combined-exposure checks as usual; an allowed exception carries `min_lot_exception` and the engine journals
+  `sizing`, `risk_fraction` and `risk_per_trade` on the decision. Settings are global (no per-account section), so it
+  is **off in settings.yaml**. Owner: to let the £1,000 demo trade 15m at 0.01 lot (0.82%), add
+  `risk: { min_lot_risk_cap: 0.01 }` to the demo server's `config/settings.local.yaml` and restart the engine. The
+  approval card does not show the exception yet (ui-ux follow-up).
+- Absolute daily loss limit (2026-10-10, BACKLOG 29, ADR 0004 section 3, row R34; needs trading-safety review):
+  `risk.daily_loss_limit_abs: 50` (account currency; null = off). Entries only, projected: RiskGate refuses
+  `daily_loss_limit_abs` when the day's loss so far plus the new trade's full stop risk would exceed min(daily cap x
+  day-start equity, 50), so the 2% account cap is now also projected while the absolute is set. The supervisor halts
+  (`combined_daily_loss_abs`) when the combined day loss reaches 50. Exits never consult it. engine_<account>.json
+  carries `daily_loss_limit` and `daily_loss_remaining`; health shows them on the daily cap line and warns when none
+  is left. Not done: the approval card's "remaining daily allowance" (ui-ux follow-up).
+- Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
+  applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
+  tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on
+  icm-demo in config/accounts.yaml, its currency), no longer in settings.yaml; `ops.run.engine_limits(paper=True)`
+  drops it when the paper broker stands in, so the $10k USD paper book and shadow evidence are unchanged. Engines
+  publish it (`daily_loss_limit_abs` and, for the dashboard, `limits.daily_loss_limit_abs` plus
+  `limits.min_lot_risk_account`, the minimum lot's stop risk in account currency at the latest ATR stop or null);
+  the supervisor applies the smallest published limit to the combined loss. Currency rollout: the startup-error file
+  carries `currency`; the supervisor's currency check counts only engines with a fresh heartbeat (equity is still
+  summed as before) and publishes `currency_files`; health fails with "HALT mixed_account_currencies" naming each
+  file and currency; vantage-demo is `enabled: false` until its currency is confirmed; RUNBOOK "Currency rollout"
+  gives the one-time stop-all/delete/deploy/restart/check steps. A P&L the engine records from its own fills
+  without a conversion stays USD with `ClosedTrade.pnl_currency = "USD"` and is left out of the digest's money sum
+  (the stop rule keeps it as recorded: conservative on a GBP deposit). Open notional uses the terminal's contract
+  size. symbol_info and the conversion are read once per decision cycle (per side), and the approval re-check reads
+  the terms and conversion again (a lost conversion refuses, fail closed). Gate boundary documented: exceeding the
+  daily limit is refused, exactly equal allowed; the supervisor halts on reaching it. BACKLOG 35 (open positions'
+  remaining stop risk) and 36 (costs) added for the daily projection.
+- Re-verification fix (2026-10-10, row S6): the supervisor never sums money across currencies. Equity, day/week
+  start, HWM, the published daily limit and `exposure[*].equity` (the gate's `other_equity`) come from fresh engines
+  plus stale files in the fresh engines' single currency; a stale file in another or no currency keeps only its open
+  lots and notional (strict) and is listed in `money_excluded`, which health reports as a warning naming the file.
+  The paper exemption of the daily limit goes by type (`ops.run.paper_stand_in`: `isinstance(broker, PaperBroker)`).
+  Integration with the dashboard lane: one `Engine._published_limits` (`limits` in engine_<account>.json: risk per
+  trade, its maximum, multiplier bounds, daily and weekly caps, `daily_loss_limit_abs` per account,
+  `min_lot_risk_cap`, `min_lot_risk_account`); the top-level `currency` is the broker's deposit currency, never
+  blanked by the account view before its first refresh. `ClosedTrade.pnl_currency` is now the account currency
+  whenever the P&L (and R) are in it, "USD" only for the unconverted own-fills fallback, None only on legacy records,
+  so the monthly report's `r_understated` flags only pre-fix trades; the digest sums rows whose `pnl_currency` is
+  None or the account's currency (engine_<account>.json) and names the rest "(n in USD not summed)". Follow-up for
+  the dashboard lane: `monthly_report.account_month` still sums every row's P&L, including a USD fallback row.
+- Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
+  `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
+  minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both
+  channels; see the re-review bullet below for the counter key and atomicity). `mode_by` on the
+  auto-mode card is the full `dashboard:<email>`/`telegram:<uid>` only for the verified owner; other roles see the
+  channel. Health, Research and auto-mode error text shows the exception type only (detail logged server-side).
+  Every `/api/` response carries `Cache-Control: no-store`. The unused `lightweight-charts` dependency is removed
+  (new price charts will need it added back).
+- Dashboard security re-review (2026-10-10, TRACEABILITY U13, U15, U17, U18): no reset link can be made or used for
+  the owner account (a stolen owner session could otherwise reset password and authenticator); the owner recovers
+  with a recovery code. Lockout check-and-count is one BEGIN IMMEDIATE transaction (`_reserve`, login and codes),
+  so a 32-thread burst gets at most 5 checks. Code failures count under `code:<email>`: they lock re-arm and auto
+  mode but never sign-in; failed sign-ins lock both (fails safe). The notice fires on crossing the limit, at most once
+  an hour, and names the new server command `python -m goldbot.ops.run revoke-sessions` (signs every account out).
+  The lockout never gates `/api/halt`, Telegram /halt or /mode propose (tested). Health check reasons, drift errors,
+  system-halt reasons and `/api/jobs` errors are whole for the owner and redacted for other roles (type only, paths
+  as `<path>`, in the API layer); `account_security` rows in `/api/agent-runs` are owner-only. RUNBOOK updated.
+  Follow-up: forgot-password, recovery login, password change and recovery-code regeneration also reserve before
+  checking (32-thread bursts get at most 5 checks; a refused new password with the right credentials is not
+  counted). `revoke-sessions` refuses a state directory without aux.db (exit 2, absolute path printed) instead of
+  creating an empty one. Redaction removes quoted paths whole (spaces, Windows) and UNC `\\host\share` paths.
+
+- Live account view and monthly report (2026-10-10, TRACEABILITY V1-V5; ADR 0004, BACKLOG 26 backend): the engine
+  publishes in `engine_<account>.json` the broker's `balance`, `currency`, `margin`, `margin_free` (never login or
+  server), `price` (mid), `limits` (the RiskGate's risk per trade, multiplier bounds, daily/weekly caps, plus
+  `daily_loss_limit_abs`/`min_lot_risk_cap` once RiskLimits has them), `lot_terms` from `symbol_info` and
+  `ladder_atr` (ATR(14) of the mid per 15m/1h/4h/1d, refreshed at bar closes, null until 15 bars); the supervisor
+  adds `daily_cap` and `combined_day_start_equity`. `goldbot/ops/account_view.py` turns that into
+  `AccountSummary.balance/currency/margin_level_pct/day_pnl/loss_budget/milestones` (API contract regenerated).
+  Loss budget = min(account cap x day start, combined cap x combined day start, absolute); the binding cap is the one
+  with least left; the combined cap is skipped with a note on mixed currencies; the absolute limit appears only once
+  the engine publishes it (BACKLOG 29). Milestones: minimum lot at a 1.5 x ATR(14) stop within 1.2 x the target risk
+  (or `min_lot_risk_cap` once published), via `goldbot/risk/sizing.py`. **Contract for BACKLOG 28:** publish
+  `usd_to_account` (account currency per 1 USD of gold P&L, from `order_calc_profit`/tick value) in the engine
+  state; until then a non-USD account's ladder reads "pending broker terms" and shows no amounts. Dashboard:
+  Overview account cards (balance vs equity, today, margin level, loss-budget meter, milestone progress bar) and a
+  "Loss budget" chip on the safety strip; a spent budget is listed as "daily loss limit reached" in the blockers.
+  `python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]`: per account, time-weighted %
+  (chained trade returns on the balance before each trade, so deposits are not return), net R, R/trade with a 90%
+  t interval, max drawdown on closed trades, average per weekday elapsed, best 3 days, £50+ days (GBP only),
+  milestones; the digest adds "<Month> so far" once the month has a closed trade. Not done: BACKLOG 26's
+  by-timeframe split, opportunity-day capture, days lost to the cap, the dashboard monthly card and a scheduled job.
+  Engine change is reporting only (state publish and an ATR read at bar closes in a try/except); route it to
+  trading-safety review anyway since it touches goldbot/engine and goldbot/risk/supervisor.py.
+- Account view review fixes (2026-10-10, TRACEABILITY V2-V5): the loss budget now also lists the weekly caps
+  (account 5% on week-start equity, combined 4%; the supervisor publishes `weekly_cap` and
+  `combined_week_start_equity`); left = max(0, limit - loss since the start), so a profitable day adds room; the
+  combined caps are skipped with a note when supervisor.json is over 60 s old, and /api/accounts never fails on a
+  torn supervisor file or junk engine fields. **Contract with the currency lane (BACKLOG 28/29):** read
+  `limits.daily_loss_limit_abs` (account currency, per account) and `limits.min_lot_risk_account` (the smallest
+  trade's stop risk); the absolute cap reserves that amount and is labelled "(includes the next trade's stop)", and
+  the "not enforced yet" note goes once the limit is published. Every cap carries a plain-language `label`
+  (`binding_label`, `period`) for the card ("Limit set by: all accounts together (1.5% of today's start)"). Monthly
+  report: R carries "R understated on non-USD accounts until BACKLOG 28" until the engine publishes
+  `usd_to_account`, the return is labelled a chained closed-trade return with "approximate: positions overlapped"
+  when they did, and the digest's month so far counts trades closed before today only. Engine: ladder ATR from the
+  incremental resamplers, a timeframe marked done only after its ATR is computed (retried otherwise), the
+  symbol-info warning at most every 10 min. Dashboard copy in plain words (timeframes as "15-minute trades", the
+  rule inside "How this is worked out", the day start in local time plus UTC) and a loading placeholder.
+  **Owner decision, unchanged behaviour:** viewers see balances and the loss budget, as they already see equity;
+  restricting money figures to the owner is the owner's call.
+- Residue (2026-10-10): the monthly report flags R per trade (`monthly_report.r_understated`): a non-USD record
+  without `pnl_currency` keeps "R understated ... BACKLOG 28" after `usd_to_account` appears, with the count when only
+  some are affected. **Contract for the currency lane:** add `ClosedTrade.pnl_currency` to post-fix records. Copy:
+  the blocker, strip status and meter say weekly when a weekly cap binds; the absolute cap reads "(includes the
+  smallest trade's stop)"; the size-down rule says "reduced" (halved only for the min-lot cap); "90% t-interval
+  (approx.)", "Max drawdown on closed trades this month".
+- Owner's manual trading record (2026-10-10, research seeds; security + quant review fixes the same day):
+  `python -m goldbot.ops.run owner-history [PATH]` (`goldbot/research/owner_history.py`) reads the owner's MT5 History
+  report (HTML, XLSX or a deals CSV; stdlib parsers, no new dependency; inputs and xlsx members over 50 MB refused)
+  from `~/Personal project/trade-history/` (newest file) and writes a Markdown report, a JSON summary (finite numbers
+  only, `allow_nan=False`) and a per-trade CSV (mode 0600) to that same private folder. Writing into ANY git work tree
+  is refused (`git_tree_reason`: a `.git` dir or file in the path, this checkout under any case spelling, or
+  `git rev-parse` succeeding). The header's account number, name, company and server are never kept (only the
+  currency); tickets are used only to match a position to its opening order. A pre-commit hook
+  (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` + digits, also in
+  UTF-16 and inside .xlsx). XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`, default Europe/Athens).
+  1R comes from the opening order's INITIAL stop (Orders section), else the report's S/L, which is the FINAL stop;
+  a stop at or beyond the entry is `sl_moved` and, like the no-stop proxy, kept out of the R statistics. The USD rate
+  is always implied from the trades (a "USD" account implying != 1 is flagged). Reported: R, win rate, expectancy
+  with t, profit factor, return on equity with t, daily P&L by UTC and London day with t and 95% CI and the share of
+  days >= `--targets` (default 30,50), sessions, hour, weekday, side, holding time, tier-1 news (if the store has
+  `calendar_events`), entries near session opens on each date's local clock against a base rate from the owner's
+  active hours, leverage vs equity, losing streak, drawdown from trading only (deposits/withdrawals excluded; % on a
+  flow-adjusted index), and risk of ruin with `goldbot.research.ruin`'s circular block bootstrap for both sizing
+  readings (compounding, fixed stakes) plus a zero-edge (demeaned) stress row; end equity is reported as a capped
+  log10. Ends with hypothesis seeds OH-01..06 in hypotheses.md format, labelled in-sample, not evidence, each phrased
+  as "test whether entries in X differ from the owner's other entries", stating K = slices examined and whether its
+  t clears the Bonferroni bar (slices under 10 trades are never said to clear it). Seeds quote R, % and counts only:
+  do not paste amounts into the repo. The MT5 layout was written from the documented report structure, not checked
+  against a real file (none may enter the repo): if the owner's export parses to 0 trades, look at `_ALIASES` /
+  `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
+  (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
+  before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each
+  guarded (`_guard` -> `note_tick_error`). A failed tick-log write is retried only after `tick_flush_s` and the buffer
+  keeps the newest `TICK_LOG_MAX` (20,000) ticks (`ticks_dropped` counted), so a full disk neither fails every tick nor
+  grows memory. `tick_error` now clears only when a whole decision bar closes with no error in it (was 20 polls);
+  `note_tick_error` logs the first error of each type with its traceback, then once a minute with a count, and rewrites
+  the engine state at most every 10 s; engine state adds `tick_errors_total`, `last_tick_error_at`, `ticks_dropped`.
+  Health: new `tick_errors:<account>` warns (announced on Telegram) for 15 minutes after an error or when one happened
+  since the previous health run (`health_last.json` ts). `run.py` `engine_pass` routes an AssertionError to
+  `note_tick_error` too (it was swallowed silently).
+- Server clock offset probe and `NY+7` zone (2026-10-10, HIGH from the trading-safety review; answers the D13 open
+  ops check above). Research: IC Markets' own notices say its MT4/MT5 server time "is based on '5 pm New York'" and
+  moves GMT+2 -> GMT+3 on the US DST start (10 Mar 2024, 9 Mar 2025) and back on the US DST end (4 Nov 2018), so
+  ICMarketsSC most likely runs NY+7, not Europe/Athens; not yet measured on our terminal. `goldbot/data/timeutil.py`
+  adds `NY+7` (`NewYorkPlus7`, `server_zone`, `server_wall` (tz-aware input only), `server_utc_offset`; pandas treats
+  a custom tzinfo as a fixed offset, so `utc_to_server` refuses NY+7). `Account.server_tz` is validated at load.
+  Every server-clock reader uses `server_wall`: session table, engine `_server_clock` (rollover, Friday cut),
+  `labels.triple_barrier._server_days` (rollover nights, also reached from jobs.py SwapSpec and research attribution),
+  MT5 adapter requests (now tz-aware UTC-labelled datetimes: MT5 reads naive ones in the host zone).
+  `goldbot/ops/server_clock.py` compares a tick with host UTC; a mismatch is called a zone error only when the other
+  known zone explains it, else "host clock or feed". Engine (`_refresh_account`, no extra RPC): signed tick age,
+  `tick_ahead_s` -> gate `tick_from_future` (> 10 s = SKEW_BLOCK_S, `RiskLimits.max_tick_ahead_s`), abs age for stale tick/feed/bars,
+  probe -> `server_clock_mismatch`, both start `data_recovering` when they clear; D13 `BrokerSessions` built in
+  run.py, refreshed beside the 60 s model reload (`refresh_sessions`: a raising, slow (> 5 s) or fallback read keeps
+  the last broker table), `eng.set_sessions` -> gate `market_closed`, the same table for stale feed and the probe.
+  Approval-time re-run refreshes the state, so a mismatch or close between proposal and click refuses it. None of
+  these are on the exit path (`_tick_ok` unchanged). engine_<account>.json carries `tick_ahead_s`, `market_closed`,
+  `session_source`, `sessions` (cached table, read by health) and `server_clock`. Health `server_clock:<account>` and
+  preflight `server_clock` (blocking on a mismatch) measure it independently; preflight `bridge_server_tz` blocks when
+  the bridge (`/health` now reports its zone) converts with another zone than the brain. accounts.yaml stays on
+  Europe/Athens. RUNBOOK "Server clock (US-EU DST gap weeks)" and new gate-reason rows; ADR 0005. Not done: settings
+  `brokers.*.server_tz` is not validated at load (triple_barrier raises on a bad name); a pre-existing `_regime`
+  crash on a perfectly flat price series is fixed (`_regime` uses the middle bucket when the volatility window
+  is constant). Review fixes (b55f5d1 review): the run loop (`goldbot/ops/run.py` `engine_pass`) logs any exception
+  instead of crash-looping and sets `tick_error` (gate reason, health fail on `engine:<account>`, cleared after
+  `TICK_ERROR_CLEAR_TICKS` = 20 clean ticks); an approval or re-arm that raises inside `on_tick` is recorded the same
+  way and the tick's exits still run; sessions are read on a background thread (`SessionRefresher`: started every
+  60 s, collected on a later pass, never joined on the tick loop; its own bridge client); a broken session table
+  fails closed for entries (`market_closed`), never for exits. RUNBOOK: which of `clock_skew`, `tick_from_future`
+  and `server_clock_mismatch` owns which case.
+  **Needs the owner:** on Mon 26 Oct 2026 during market hours run `goldbot run health` and read
+  `server_clock:icm-demo`; if it reads UTC+3 (NY+7) vs Athens UTC+2, the engine is already refusing entries: set
+  `server_tz: NY+7` for icm accounts on the brain and the MT5 box (RUNBOOK steps 3-4). Vantage's help centre also puts
+  server midnight at 5 pm New York (likely NY+7) but publishes no switch dates: measure it the same way.
 - Starting account, daily loss limit and north star (ADR 0004, amended 2026-10-10 after the owner's correction;
   `docs/decisions/0004-starting-account-and-daily-target.md`): the IC Markets demo is **£1,000 GBP**, read from MT5
   `account_info` (never config); **£50 is the owner's absolute daily loss limit**; **£50+/day is the north star**
@@ -722,6 +949,37 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   holiday/reopen rule, tier-2 releases, total open-risk cap, drawdown Monte Carlo, loss-streak throttle, min-lot
   feasibility, weekend gap risk, MAE/MFE, edge-linked sizing). BACKLOG items 16-24 and H-15 come from it. Open
   ops check from the D13 review: confirm whether the IC Markets server clock follows Europe/Athens or US DST dates.
+- DST-aware sessions (2026-10-10, playbook D-1, row F23): session windows are local-clock `SessionWindow`s in
+  `goldbot/data/calendar.py` (`DEFAULT_SESSION_WINDOWS`: Asia 08:00 Tokyo -> London open, London 08:00 London -> New
+  York open, New York 08:30-17:00 New York), converted to UTC per date from the zone rules only (no look-ahead).
+  `SessionTable.sessions_utc` is gone; use `session_windows`, `last_open_ns` or `session_label`. Summer (BST + EDT)
+  is unchanged; on London/New York winter time each boundary is an hour later in UTC than before, and the March and
+  October gap weeks now split London and New York correctly. **Feature versions bumped: `session` 2, `session_zones`
+  2, `market_structure` 2, all in `DEFAULT_FEATURE_NAMES`: the default feature version is now `f-079deacc61`
+  (was `f-1b8f723a67`; with macro `f-f999b359e2`).** Migration without downtime (quant review HIGH 1): the v1
+  implementations stay registered as legacy versions (`goldbot/features/legacy.py`, `registry.LEGACY_FEATURES`, never in
+  FEATURES), and the engine scores each champion and shadow challenger on the frame of its recorded feature version
+  (`Engine._scoring_frame`: `registry.versions_for` finds the per-feature versions that hash to it, `with_versions`
+  recomputes only those columns; cached per frame). So v1 champions keep trading and v1 challengers keep shadow
+  trading exactly as before (golden test against the pre-fix code), the blackout re-score works for them, retrains
+  and research build v2, and the normal shadow/promotion flow migrates. A version no registered implementation
+  reproduces is still not scored (`feature_version_mismatch`), and neither is one whose rebuild raises (logged, cached
+  per frame; the bar's policies, blackout closes and shadow save still run). Decisions and shadow trades record
+  `scored_feature_version`. drift_watch builds each champion's PSI inputs at its own feature version
+  (`_recent_candidates(..., feature_version)`; a macro-trained champion is rebuilt over the default set plus the macro
+  drivers with the store's macro rows; a version that cannot be rebuilt, or a macro model without macro rows, skips
+  PSI with a note). The health check `feature_versions` counts champions, challengers and previous champions
+  (rollback targets) per version (current incl. the macro set / legacy / cannot be rebuilt = warn): delete
+  `features/legacy.py` once it shows no legacy models. Research registry: `record` writes a `deviation` on a result
+  whose feature version differs from its pre-registration's; `passed_gates(..., feature_version=)` counts only rows of
+  that version (research_pass's holdout check passes it); `holdout_scored` stays version-agnostic on purpose (a
+  re-score after a bump is a second look). The tournament's `passed_gates` stays version-agnostic (ADR 0006; the
+  material feature version, BACKLOG 34, needs the owner's sign-off; the tournament summary does not yet show the
+  trial-vs-model version gap). Cost tables by session, slippage audit, the account classifier's London/NY ticks and
+  attribution by session all relabel automatically (the next nightly cost table uses the new labels; tables already
+  on disk keep the old ones until then). Open for quant review: `session_open`'s "Asian range" is the 32 bars (8 h) before the decision's
+  session open, which is the Asia session only before London; before New York it is mostly the London session
+  (unchanged here, as changing it changes the specialist's candidates).
 - COT positioning and GLD holdings, point in time (2026-10-10, indicator survey #67/#68, hypotheses H-09/H-12, row
   D26): `goldbot/data/positioning.py` + `scripts/positioning_data.py` + `.github/workflows/data-positioning.yml`
   (Saturdays 05:23 UTC) publish `positioning.parquet` on release `positioning-v1`: CFTC disaggregated futures-only

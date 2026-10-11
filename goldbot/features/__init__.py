@@ -1,4 +1,5 @@
-from goldbot.features import (  # noqa: F401  (registers features)
+from goldbot.features import (  # noqa: F401  (registers features; legacy = superseded versions, never in FEATURES)
+    legacy,
     macro,
     momentum,
     session,

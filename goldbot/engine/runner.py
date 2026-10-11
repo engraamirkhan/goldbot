@@ -15,12 +15,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import time
 import zlib
 from collections import deque
 from pathlib import Path
-from typing import Protocol
-from zoneinfo import ZoneInfo
+from typing import Any, Callable, Protocol
 
 import numpy as np
 import pandas as pd
@@ -29,30 +29,34 @@ from pydantic import Field
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
 from goldbot.base import Record, UtcTimestamp, write_atomic
 from goldbot.config import tf_seconds
-from goldbot.data.calendar import DEFAULT_SESSIONS
+from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_cache
 from goldbot.data.econ_calendar import blackout_window
 from goldbot.data.news import shock_window
 from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
-from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf
+from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.broker import Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
+from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
 from goldbot.labels.exit_policy import ExitPolicy
+from goldbot.ops import server_clock
+from goldbot.ops.account_view import LADDER_TIMEFRAMES
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
-from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
+from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, sizing
 from goldbot.risk.gate import REARM_PHRASE, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 
 log = logging.getLogger("goldbot.engine")
+LOT_TERMS_WARN_S = 600.0     # the account view's symbol-info warning, at most this often
 # MT5 trade retcodes that mean the market will not take an order now (10017 TRADE_DISABLED, 10018 MARKET_CLOSED): a
 # close refused with one of these is backed off; any other failure (requote 10004/10021, price changed 10020, a
 # raising call) is retried on the next tick, so an exit is never delayed by a transient refusal
@@ -67,6 +71,12 @@ SKEW_WINDOW = 120            # new ticks in the rolling median of broker-vs-wall
 SKEW_BLOCK_S = 10.0
 SKEW_MIN_SAMPLES = 10
 LATE_BARS_BLOCK = 3
+# an exception while processing a tick (the run loop logs it and carries on) blocks entries until a whole decision bar
+# has closed with no error in it; exits never wait for it. Repeated errors are logged once per type, then at most every
+# TICK_ERROR_LOG_S with a count, and the engine state is rewritten at most every TICK_ERROR_STATE_S while failing.
+TICK_ERROR_LOG_S = 60.0
+TICK_ERROR_STATE_S = 10.0
+TICK_LOG_MAX = 20_000        # ticks kept for the store while writes fail (a full disk): the oldest are dropped
 
 
 class Model(Protocol):
@@ -158,6 +168,7 @@ class _Frame(Record):
     m: pd.DataFrame
     X: pd.DataFrame
     atr: pd.Series
+    by_version: dict[str, pd.DataFrame | None] = Field(default_factory=dict)   # X rebuilt for older model versions
 
 
 class OpenTrade(Record):
@@ -256,6 +267,13 @@ class Engine:
         self._bars_clean: pd.DataFrame | None = None      # bars_1m as last built by _append_bars (duplicate-free)
         self._calendar: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         self._blackout_event: dict | None = None
+        # the dashboard's account view (goldbot/ops/account_view.py), published in the state file; reporting only.
+        # From the broker: balance, currency and margin (never the login or server), the symbol's lot terms; from the
+        # bars: ATR(14) per ladder timeframe, refreshed at bar closes
+        self._account_view: dict = {"balance": None, "currency": None, "margin": None, "margin_free": None}
+        self._price: float | None = None
+        self._lot_terms_warned = -LOT_TERMS_WARN_S
+        self._ladder: dict = {"ladder_atr": {tf: None for tf in LADDER_TIMEFRAMES}, "lot_terms": None}
         self._news: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         # shadow book: version -> (family, model); champions and challengers paper-trade without orders
         self.shadow = ShadowBook(cfg.state_dir) if cfg.shadow_host else None
@@ -277,6 +295,23 @@ class Engine:
         # broker tick time minus the wall clock, seconds, over the last SKEW_WINDOW new ticks (median published)
         self._skew: deque[float] = deque(maxlen=SKEW_WINDOW)
         self._unhealthy_at: pd.Timestamp | None = None    # last time the data was seen stale or in error
+        # host UTC clock for the live clock (tests replace it); ticks are compared with it, never the reverse
+        self.clock: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now("UTC")
+        # D13 session table: the static rule on this account's server clock until run.py sets the broker's (it refreshes
+        # it outside the tick path, so on_tick never calls the broker for sessions); read with no I/O
+        self.sessions: SessionTable = SessionTable(server_tz=cfg.server_tz)
+        self.clock_probe: server_clock.ServerClockProbe | None = None   # latest server-clock measurement
+        self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)
+        self.tick_errors_total = 0                     # since the engine started (engine state, health)
+        self._last_tick_error_at: pd.Timestamp | None = None   # host clock (live) for health and the state file
+        # the same error on the TICK clock, which decision bars are cut on: the latest tick stamp seen when it happened,
+        # moved to the next tick's stamp (`_error_awaits_tick`) so an error between ticks is never dated too early
+        self._error_tick_ts: pd.Timestamp | None = None
+        self._error_awaits_tick = False
+        self._err_log: dict[str, tuple[float, int]] = {}   # exception type -> (last logged, monotonic; suppressed since)
+        self._err_state_written = -1e18                # monotonic time of the last state write caused by an error
+        self._tick_flush_retry: pd.Timestamp | None = None  # after a failed tick-log write, no retry before this
+        self.ticks_dropped = 0                         # tick-log entries dropped while the store could not be written
         # risk periods and the owner's re-arm survive a restart (state/risk_<account>.json)
         self._last_reset: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
@@ -302,6 +337,13 @@ class Engine:
                                     if t.account_id == cfg.account_id and t.position_id is not None}
         self._closes: list[PendingClose] = []
         self._records_lost: list[int] = []           # records given up after closed_record_retries failed writes
+        self._currency = ""                          # the deposit currency, read once from the broker (BACKLOG 28)
+        # symbol_info and the conversion, read once per decision cycle (bar close); the last contract size seen
+        self._sym_cache: tuple[pd.Timestamp | None, SymbolInfo] | None = None
+        self._fx_cache: dict[tuple[pd.Timestamp | None, int], float | None] = {}
+        self._contract: float | None = None
+        self._contract_tried = False
+        self._min_lot_risk: float | None = None      # minimum lot's stop risk, account currency, at the latest stop
         self._unconfirmed: dict[int, int] = {}
         # position -> (consecutive market-closed refusals, next attempt): closes back off only when the market is closed
         self._close_backoff: dict[int, tuple[int, pd.Timestamp]] = {}
@@ -335,12 +377,62 @@ class Engine:
 
     # ------------------------------------------------------------------ ticks and bars
     def on_tick(self, t: Tick) -> list[dict]:
-        """Feed a tick; returns any decisions made at a bar close."""
-        self.center.poll_bus()          # approvals from the dashboard / Telegram service, applied within a tick
-        self._poll_rearm(self._now(t))
+        """Feed a tick; returns any decisions made at a bar close. An approval or re-arm that raises is recorded as a
+        tick error (entries blocked) and never stops this tick's exits."""
+        try:
+            self.center.poll_bus()      # approvals from the dashboard / Telegram service, applied within a tick
+            self._poll_rearm(self._now(t))
+        except Exception as exc:
+            self.note_tick_error(exc)
+        return self._on_tick(t)
+
+    def _error_now(self) -> pd.Timestamp:
+        if self.cfg.live_clock or self._last_tick is None:
+            return self.clock()
+        return self._last_tick.ts_utc
+
+    def note_tick_error(self, exc: BaseException) -> None:
+        """A tick raised (the run loop, an approval, the tick log, the risk-period read): block entries (`tick_error`)
+        until a whole decision bar closes with no error in it, count it (`tick_errors_total`, `last_tick_error_at` in
+        the engine state, alerted by health) and log it: the first of each type with its traceback, then at most every
+        TICK_ERROR_LOG_S with the number suppressed. The state file is rewritten at most every TICK_ERROR_STATE_S."""
+        kind = type(exc).__name__
+        self.state.tick_error = True
+        self._tick_error_detail = kind
+        self.tick_errors_total += 1
+        self._last_tick_error_at = self._error_now()
+        self._error_tick_ts = self._last_tick.ts_utc if self._last_tick is not None else None
+        self._error_awaits_tick = True
+        mono = time.monotonic()
+        last, suppressed = self._err_log.get(kind, (None, 0))
+        if last is None or mono - last >= TICK_ERROR_LOG_S:
+            more = f" ({suppressed} more since the last report)" if suppressed else ""
+            log.error("tick processing failed (%s)%s; entries blocked until a clean decision bar, exits continue",
+                      kind, more, exc_info=exc if last is None else None)
+            self._err_log[kind] = (mono, 0)
+        else:
+            self._err_log[kind] = (last, suppressed + 1)
+        if mono - self._err_state_written >= TICK_ERROR_STATE_S:
+            self._err_state_written = mono
+            try:
+                self._write_state()
+            except Exception:
+                log.warning("engine state not written after a tick error")
+
+    def _guard(self, fn: Callable[[], object]) -> None:
+        """Run one non-exit step of a tick; an exception becomes a tick error instead of aborting the tick."""
+        try:
+            fn()
+        except Exception as exc:
+            self.note_tick_error(exc)
+
+    def _on_tick(self, t: Tick) -> list[dict]:
         if not self._tick_ok(t):
             return []                   # crossed or out-of-order quote: never enters the bars; entries blocked
         prev, self._last_tick = self._last_tick, t
+        if self._error_awaits_tick:     # date a pending tick error by this tick's stamp (never earlier than it was)
+            self._error_tick_ts = t.ts_utc if self._error_tick_ts is None else max(self._error_tick_ts, t.ts_utc)
+            self._error_awaits_tick = False
         # the run loop polls the terminal's latest quote several times a second, so a quiet market repeats the same
         # tick: a repeat only advances the clock (bar close by clock, exits), it is neither a new bar tick nor logged
         repeat = prev is not None and (prev.ts_utc, prev.bid, prev.ask) == (t.ts_utc, t.bid, t.ask)
@@ -350,16 +442,18 @@ class Engine:
                 self.ticks.append(t)
             else:
                 self._late_tick(t)      # never revises a bar the clock already finalised
-            self._log_tick(t)
-        self._refresh_broker_terms(t.ts_utc)
-        self._roll_risk_period(t.ts_utc)
         if hasattr(self.broker, "on_tick"):
-            self.broker.on_tick(t)  # paper broker fills
+            self._guard(lambda: self.broker.on_tick(t))   # type: ignore[attr-defined]  # paper broker fills
+        # exits first: nothing that writes files or reads the account may stand between a quote and the stop check
         self._stop_check(t)
         self._retry_closes(t)              # closes decided earlier that have not succeeded: every tick until done
         if self._kill_pending and self.state.stage == Stage.HALTED:
             self._kill_switch(everything=False)   # until this engine's book is flat
         self._scale_out(t)
+        if not repeat:
+            self._guard(lambda: self._log_tick(t))      # a full disk is a tick error, never a skipped exit
+        self._refresh_broker_terms(t.ts_utc)
+        self._guard(lambda: self._roll_risk_period(t.ts_utc))
         if self._last_reconcile is None or (t.ts_utc - self._last_reconcile).total_seconds() >= self.cfg.reconcile_every_s:
             self._reconcile(t.ts_utc)
         sec = tf_seconds(self.cfg.decision_tf)
@@ -371,6 +465,11 @@ class Engine:
             self._rebuild_bars(until=due)   # every minute before the close is complete; none at or after it joins
             out = self.on_bar_close(due, t)
             self._last_state_write = t.ts_utc
+            bar_open = due - pd.Timedelta(seconds=sec)   # tick clock, as is _error_tick_ts (never the host clock)
+            if self.state.tick_error and not self._error_awaits_tick and self._error_tick_ts is not None \
+                    and self._error_tick_ts < bar_open:
+                self.state.tick_error, self._tick_error_detail = False, None   # a whole clean decision bar closed
+                self._write_state()
         elif self._last_state_write is None or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:
             self._rebuild_bars()            # completed minutes join the bars between closes, so their age is current
             self._refresh_account(t)
@@ -467,6 +566,26 @@ class Engine:
         X.attrs["feature_version"] = version          # as research stamps it (pipeline.build_decision_frame)
         return _Frame(dec=dec, m=m, X=X, atr=atr(m, 14))
 
+    @staticmethod
+    def _scoring_frame(fr: _Frame, model: Model) -> pd.DataFrame | None:
+        """The frame `model` scores: fr.X when the model is unversioned or of fr.X's feature version; else fr.X with
+        the features the model was trained on rebuilt by their registered older implementations (sessions v1 after
+        the DST fix: features/legacy.py), so a champion or shadow challenger keeps scoring exactly what it was
+        trained on until the normal shadow/promotion flow replaces it. None (not scored, as before) when no
+        registered implementation reproduces the model's version, or when the rebuild itself fails (logged, cached for
+        this frame): the model is not scored, and the bar's other work (policies, blackout closes, shadow) runs on."""
+        mv = getattr(model, "feature_version", "")
+        if not mv or mv == fr.X.attrs.get("feature_version"):
+            return fr.X
+        if mv not in fr.by_version:
+            try:
+                over = versions_for(DEFAULT_FEATURE_NAMES, mv)
+                fr.by_version[mv] = None if over is None else with_versions(fr.X, fr.m, DEFAULT_FEATURE_NAMES, over)
+            except Exception:                         # fail closed: an unscored model, never a crashed bar
+                log.exception("rebuilding the frame at feature version %s failed: models of it are not scored", mv)
+                fr.by_version[mv] = None
+        return fr.by_version[mv]
+
     def _resample(self, complete: pd.DataFrame, tf: str) -> pd.DataFrame:
         """resample_bars(complete, tf), incrementally (identical output; see IncrementalResampler)."""
         rs = self._resamplers.get(tf)
@@ -503,6 +622,10 @@ class Engine:
         if base is None:
             return []
         self._last_atr = float(base.atr.iloc[-1]) if np.isfinite(base.atr.iloc[-1]) else self._last_atr
+        try:
+            self._update_ladder(complete)
+        except Exception as exc:                 # noqa: BLE001 - reporting only: a bar close never fails on it
+            log.warning("milestone ATR not updated: %s", type(exc).__name__)
         self._refresh_account(last_tick)
         self._manage_open(base.dec)
         self.center.sweep_expired()
@@ -531,6 +654,117 @@ class Engine:
         self.flush_journal()
         return decisions
 
+    def _account_currency(self) -> str:
+        """The deposit currency as the broker reports it, upper case; "" while unreadable. Read once: the terminal's
+        account is verified at start and on every order (accounts.verify_terminal_account), so it cannot change."""
+        if not self._currency:
+            try:
+                self._currency = str(self.broker.account().currency or "").strip().upper()
+            except Exception as exc:                  # unreadable: "" (entries refused), tried again next time
+                log.warning("account currency unreadable (%s: %s)", type(exc).__name__, exc)
+        return self._currency
+
+    def _symbol_info(self, cycle: pd.Timestamp | None = None) -> SymbolInfo:
+        """The terminal's symbol_info, read once per decision cycle (`cycle` = the bar close; None = read now). Raises
+        when the terminal cannot answer. Remembers the contract size for the exposure figures (`_contract_size`)."""
+        if cycle is not None and self._sym_cache is not None and self._sym_cache[0] == cycle:
+            return self._sym_cache[1]
+        info = self.broker.symbol_info(self.cfg.symbol)
+        self._sym_cache = (cycle, info) if cycle is not None else self._sym_cache
+        size = float(info.contract_size)
+        if math.isfinite(size) and size > 0:
+            self._contract = size
+        return info
+
+    def _contract_size(self) -> float:
+        """Contract size for open notional (review LOW-2): the last one the terminal reported, read once if none yet;
+        100 oz (the design's XAUUSD contract) only while the terminal has never answered."""
+        if self._contract is None and not self._contract_tried:
+            self._contract_tried = True
+            try:
+                self._symbol_info()
+            except Exception as exc:
+                log.warning("symbol_info unavailable for the contract size (%s: %s); 100 oz until it answers",
+                            type(exc).__name__, exc)
+        return self._contract if self._contract is not None else 100.0
+
+    def _usd_to_account(self, side: int, price: float, distance: float, cycle: pd.Timestamp | None = None) -> float | None:
+        """Account currency per USD of XAUUSD P&L from the broker's loss on one lot over `distance` (BACKLOG 28):
+        loss_per_lot / (distance x contract). None when the broker has no answer (or no such method), the answer is not
+        finite and positive, or the contract is unknown; the caller never substitutes a guess. Within one decision
+        cycle the figure is read once per side (it is linear in the distance)."""
+        fn = getattr(self.broker, "loss_per_lot", None)
+        if not callable(fn) or not (math.isfinite(distance) and distance > 0):
+            return None
+        key = (cycle, 1 if side > 0 else -1)
+        if cycle is not None and key in self._fx_cache:
+            return self._fx_cache[key]
+        try:
+            contract = float(self._symbol_info(cycle).contract_size)
+            loss = fn(self.cfg.symbol, side, price, distance)
+            fx = float(loss) / (distance * contract) if loss is not None and contract > 0 else math.nan
+        except Exception as exc:
+            log.warning("broker conversion unavailable (%s: %s)", type(exc).__name__, exc)
+            return None
+        out = fx if math.isfinite(fx) and fx > 0 else None
+        if cycle is not None:
+            self._fx_cache = {k: v for k, v in self._fx_cache.items() if k[0] == cycle}
+            self._fx_cache[key] = out
+        return out
+
+    def _sizing_terms(self, side: int, price: float, stop_distance: float,
+                      cycle: pd.Timestamp | None = None) -> dict[str, Any]:
+        """Intent fields read from the terminal (BACKLOG 28, ADR 0004 A3/A6): contract size, minimum lot, lot step,
+        maximum lot (never above the engine's per-order ceiling, Intent's 2.0 default), stops level, the deposit currency
+        and the broker's conversion of the USD stop into it. When the terminal cannot answer, or answers nonsense, the
+        currency is left unknown and the conversion empty, so the RiskGate refuses the entry (fx_conversion_unavailable)
+        instead of sizing on assumed terms. Exits never come here. `cycle` (the bar close) reads the terminal once per
+        decision cycle; the approval re-check passes None and reads it again."""
+        unknown: dict[str, Any] = {"account_currency": "", "acct_per_usd": None}
+        try:
+            info = self._symbol_info(cycle)
+            terms = {"contract_oz": float(info.contract_size), "volume_min": float(info.volume_min),
+                     "volume_step": float(info.volume_step),
+                     "volume_max": min(float(info.volume_max), float(Intent.model_fields["volume_max"].default)),
+                     "stops_level_points": float(info.stops_level_points)}
+        except Exception as exc:
+            log.warning("symbol_info unavailable (%s: %s): entries refused", type(exc).__name__, exc)
+            return unknown
+        positive = ("contract_oz", "volume_min", "volume_step", "volume_max")
+        if not all(math.isfinite(terms[k]) and terms[k] > 0 for k in positive) or \
+                not (math.isfinite(terms["stops_level_points"]) and terms["stops_level_points"] >= 0):
+            log.warning("symbol_info has unusable contract terms %s: entries refused", terms)
+            return unknown
+        currency = self._account_currency()
+        if not currency:
+            return unknown
+        return {**terms, "account_currency": currency,
+                "acct_per_usd": self._usd_to_account(side, price, stop_distance, cycle)}
+
+    def _note_min_lot_risk(self, terms: dict[str, Any], stop_distance: float) -> None:
+        """The minimum lot's stop risk in the account currency at the latest ATR stop (volume_min x stop x contract x
+        fx), published as `limits.min_lot_risk_account`; None when the terms or the conversion are unknown."""
+        fx = sizing.account_fx(str(terms.get("account_currency", "")), terms.get("acct_per_usd"))
+        vmin, contract = terms.get("volume_min"), terms.get("contract_oz")
+        if fx is None or vmin is None or contract is None or not (math.isfinite(stop_distance) and stop_distance > 0):
+            self._min_lot_risk = None
+            return
+        self._min_lot_risk = float(vmin) * stop_distance * float(contract) * fx
+
+    def _published_limits(self) -> dict[str, Any]:
+        """`limits` in engine_<account>.json, the RiskGate limits the dashboard's account view reads (loss budget,
+        ladder): risk per trade and its maximum, multiplier bounds, daily and weekly caps; the account's absolute daily
+        loss limit (accounts.yaml through ops.run.engine_limits, account currency; null when off), the minimum-lot
+        exception cap (null when off, always null in tiny-live) and the minimum lot's stop risk in the account currency
+        at the latest ATR stop (null when unknown)."""
+        lim = self.gate.limits
+        mlr = self._min_lot_risk
+        return {"risk_per_trade": lim.risk_per_trade, "max_risk_per_trade": lim.max_risk_per_trade,
+                "multiplier_bounds": list(lim.multiplier_bounds), "daily_cap": lim.daily_cap,
+                "weekly_cap": lim.weekly_cap, "daily_loss_limit_abs": lim.daily_loss_limit_abs,
+                "min_lot_risk_cap": lim.min_lot_risk_cap,
+                "min_lot_risk_account": round(mlr, 2) if mlr is not None and math.isfinite(mlr) else None}
+
     def _decide(self, tf: str, fr: _Frame, agents: list[Specialist], fam_w: dict[str, float], close_ts: pd.Timestamp,
                 last_tick: Tick) -> list[dict]:
         dec, m, X, a = fr.dec, fr.m, fr.X, fr.atr
@@ -540,7 +774,7 @@ class Engine:
         hurdle_atr = self._cost_atr(float(a.iloc[last]), close_ts, ex_spread=True)   # p already pays the spread
         cands_by_agent = {agent.agent_id: agent.candidates(m, X) for agent in agents}
         if self.shadow is not None:
-            self._shadow_step(tf, dec, X, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
+            self._shadow_step(tf, fr, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
         for agent in agents:
             cands = cands_by_agent[agent.agent_id]
             if cands.empty or int(cands["idx"].iloc[-1]) != last:
@@ -558,14 +792,16 @@ class Engine:
             if agent.agent_id in (drift.get("halted") or {}):
                 decisions.append(self._record(agent, close_ts, 0.0, 0.0, "drift_halt"))   # CUSUM: entries stop
                 continue
-            mv, fv = getattr(model, "feature_version", ""), X.attrs.get("feature_version")
-            if mv and mv != fv:
+            Xm = self._scoring_frame(fr, model)
+            if Xm is None:
                 # design: a model only ever scores the feature frame it was trained on
                 d = self._record(agent, close_ts, 0.0, 0.0, "feature_version_mismatch")
-                d.update(p=None, model_feature_version=mv, frame_feature_version=fv)     # not scored
+                d.update(p=None, model_feature_version=getattr(model, "feature_version", ""),
+                         frame_feature_version=X.attrs.get("feature_version"))     # not scored
                 decisions.append(d)
                 continue
-            feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
+            sfv = str(Xm.attrs.get("feature_version", ""))
+            feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
             feats["side"] = side          # side-aligned models (features include `side`) align signed inputs themselves
             cols = model.feature_names or [c for c in feats.columns]
             p = float(model.predict(feats[[c for c in cols if c in feats.columns]] if model.feature_names else feats)[0])
@@ -573,14 +809,17 @@ class Engine:
             w = fam_w.get(agent.family, 0.0) * share * float((drift.get("size_factor") or {}).get(agent.agent_id, 1.0))
             mult = float(size_multiplier(np.array([p]), w, ls.target_atr, ls.stop_atr, hurdle_atr)[0])
             price = last_tick.ask if side > 0 else last_tick.bid
-            intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
-                            multiplier=mult if mult > 0 else 0.0, price=price, timeframe=tf, family=agent.family)
             if mult <= 0 or p <= breakeven_prob(ls.target_atr, ls.stop_atr, hurdle_atr) + 0.02:
-                decisions.append(self._record(agent, close_ts, p, mult, "below_threshold"))
+                decisions.append(self._record(agent, close_ts, p, mult, "below_threshold", scored_fv=sfv))
                 continue
+            # the terminal's contract terms and the USD -> account currency conversion (BACKLOG 28)
+            terms = self._sizing_terms(side, price, ls.stop_atr * float(a.iloc[last]), cycle=close_ts)
+            self._note_min_lot_risk(terms, ls.stop_atr * float(a.iloc[last]))
+            intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
+                            multiplier=mult, price=price, timeframe=tf, family=agent.family, **terms)
             gd = self.gate.check(intent, self.state, margin_required=broker_margin(self.broker, self.cfg.symbol))
             if not gd.allowed:
-                decisions.append(self._record(agent, close_ts, p, mult, "gate:" + ",".join(gd.reasons)))
+                decisions.append(self._record(agent, close_ts, p, mult, "gate:" + ",".join(gd.reasons), scored_fv=sfv))
                 continue
             pid = self._proposal_id(agent.agent_id, close_ts)
             if pid in self.sent_ids:
@@ -593,11 +832,14 @@ class Engine:
                             risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2))
             if self.cfg.approval_mode == "auto":
                 self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
-                decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid))
+                decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid, scored_fv=sfv))
             else:
                 self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
                 self.center.propose(prop)
-                decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid))
+                decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid, scored_fv=sfv))
+            if gd.reasons:      # an allowed decision's notes (BACKLOG 25 min_lot_exception): the journal shows the risk
+                decisions[-1].update(sizing=list(gd.reasons), risk_fraction=round(gd.risk_fraction, 5),
+                                     risk_per_trade=self.gate.limits.risk_per_trade)
         return decisions
 
     # ------------------------------------------------------------------ approvals -> orders
@@ -609,6 +851,11 @@ class Engine:
         if p.outcome == Outcome.APPROVED:
             tick = self.broker.last_tick(self.cfg.symbol)
             self._refresh_account(tick)
+            # contract terms and the conversion read again from the terminal (review LOW-5): one it can no longer give
+            # leaves the currency unknown, so the re-check refuses (fail closed); never the proposal-time figure
+            now_px = tick.ask if prop.side > 0 else tick.bid
+            intent = intent.model_copy(update={**self._sizing_terms(intent.side, now_px, intent.stop_atr * intent.atr_usd),
+                                               "price": now_px})
             gd = self.gate.check(intent, self.state,  # re-check at approval time
                                  margin_required=broker_margin(self.broker, self.cfg.symbol))
             if gd.allowed:
@@ -956,10 +1203,10 @@ class Engine:
             if fr is None:
                 return
             frames[agent.timeframe] = fr
-        mv = getattr(model, "feature_version", "")
-        if mv and mv != fr.X.attrs.get("feature_version"):
+        Xm = self._scoring_frame(fr, model)
+        if Xm is None:
             return                                        # a model only scores the frame version it was trained on
-        feats = fr.X.drop(columns=["ts_utc"]).iloc[[len(fr.X) - 1]].replace([np.inf, -np.inf], np.nan)
+        feats = Xm.drop(columns=["ts_utc"]).iloc[[len(Xm) - 1]].replace([np.inf, -np.inf], np.nan)
         feats["side"] = tr.side
         cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
         p = float(model.predict(feats[cols])[0])
@@ -1060,12 +1307,56 @@ class Engine:
         v = float(a.iloc[-1]) if len(a) else float("nan")
         return v if np.isfinite(v) and v > 0 else None
 
+    # ------------------------------------------------------------------ account view (reporting only)
+    def _lot_terms(self) -> dict | None:
+        """The symbol's lot terms from the broker for the milestone ladder; None (retried on the next refresh) when
+        the broker cannot say. Never the design defaults: the ladder then shows 'pending broker terms'."""
+        try:
+            info = self.broker.symbol_info(self.cfg.symbol)
+        except Exception as exc:                 # noqa: BLE001 - reporting only; trading never depends on it
+            now = time.monotonic()               # retried every refresh (seconds apart): warn at most every 10 min
+            if now - self._lot_terms_warned >= LOT_TERMS_WARN_S:
+                self._lot_terms_warned = now
+                log.warning("symbol info unavailable for the account view: %s", type(exc).__name__)
+            return None
+        return {"contract_oz": info.contract_size, "volume_min": info.volume_min, "volume_step": info.volume_step,
+                "volume_max": info.volume_max, "stops_level_points": info.stops_level_points}
+
+    def _update_ladder(self, complete: pd.DataFrame) -> None:
+        """ATR(14) on the mid of each ladder timeframe's completed bars (None until 15 bars exist), at a bar close.
+        Each timeframe is recomputed only when a new bar of it can have completed (1d: once per feature-day), from the
+        engine's incremental resamplers (the same bars the decision frames use; 1d is the feature-day bar), and is
+        marked done only once its ATR is computed, so a failure is retried at the next close."""
+        if complete.empty:
+            return
+        last = pd.Timestamp(complete["visible_at"].iloc[-1])
+        out = self._ladder["ladder_atr"]
+        seen: dict[str, object] = self._ladder.setdefault("computed_at", {})
+        at = pd.DatetimeIndex([last])
+        for tf in LADDER_TIMEFRAMES:
+            key = feature_day(at)[0] if tf == "1d" else floor_tf(at, tf_seconds(tf))[0]   # as _context keys it
+            if seen.get(tf) == key:
+                continue
+            bars = self._resample(complete, tf)
+            bars = bars[pd.to_datetime(bars["visible_at"], utc=True) <= last].reset_index(drop=True)
+            if len(bars) < 15:
+                out[tf] = None
+            else:
+                v = float(atr(mid(bars.tail(200).reset_index(drop=True)), 14).iloc[-1])
+                out[tf] = v if np.isfinite(v) and v > 0 else None
+            seen[tf] = key
+
     # ------------------------------------------------------------------ helpers
     def _refresh_account(self, tick: Tick) -> None:
         acc = self.broker.account()
         st = self.state
         st.equity = acc.equity
         st.margin_used = acc.margin
+        self._account_view = {"balance": acc.balance, "currency": acc.currency, "margin": acc.margin,
+                              "margin_free": acc.margin_free}
+        self._price = (tick.bid + tick.ask) / 2
+        if self._ladder["lot_terms"] is None:
+            self._ladder["lot_terms"] = self._lot_terms()
         self._roll_risk_period(tick.ts_utc)
         if st.balance_closed_hwm == 0:
             st.balance_closed_hwm = acc.balance
@@ -1079,11 +1370,22 @@ class Engine:
         if positions is not None:
             st.open_positions = len(positions)
             st.open_lots = round(sum(p.lots for p in positions), 6)   # every position on the account is exposure
-        st.open_notional = st.open_lots * 100.0 * (tick.bid + tick.ask) / 2
+        st.open_notional = st.open_lots * self._contract_size() * (tick.bid + tick.ask) / 2   # USD, terminal contract
         st.spread_points = (tick.ask - tick.bid) / 0.01
         now = self._now(tick)
-        st.last_tick_age_s = max(0.0, (now - tick.ts_utc).total_seconds())
-        stale = stale_feed(tick.ts_utc, now, limit_seconds=self.cfg.stale_feed_s)
+        # signed: a tick stamped AFTER the host clock (wrong server_tz, broker or host clock) must not look fresh, so
+        # staleness uses the distance either way and the lead itself is an entry block (`tick_from_future`)
+        age = (now - tick.ts_utc).total_seconds()
+        st.last_tick_age_s = abs(age)
+        st.tick_ahead_s = max(0.0, -age)
+        sessions = self.sessions
+        try:
+            stale = stale_feed(now - pd.Timedelta(seconds=abs(age)), now, limit_seconds=self.cfg.stale_feed_s,
+                               sessions=sessions)
+            closed = sessions.entry_block(now) is not None
+        except Exception as exc:        # a broken session table fails closed for entries; exits never read it
+            log.warning("session table unusable (%s): entries blocked as market_closed", type(exc).__name__)
+            stale, closed = False, True
         st.dq_error = stale or bool(self._dq_errors() or self._dq_blocking()) or positions is None \
             or self._book_unreadable() > 0                                    # fail closed: positions_unreadable
         # stale data (design): the last completed bar must be under one decision period old; no bars is stale
@@ -1091,8 +1393,12 @@ class Engine:
             st.stale_bars = True
         else:
             seen = pd.Timestamp(self.bars_1m["visible_at"].iloc[-1])
-            st.stale_bars = (now - seen).total_seconds() > tf_seconds(self.cfg.decision_tf)
-        if st.dq_error or st.stale_bars or st.last_tick_age_s > self.gate.limits.stale_tick_seconds:
+            st.stale_bars = abs((now - seen).total_seconds()) > tf_seconds(self.cfg.decision_tf)
+        self.clock_probe = self._probe_clock(tick, now, sessions)
+        st.clock_mismatch = self.clock_probe.status == "mismatch"
+        st.market_closed = closed
+        if st.dq_error or st.stale_bars or st.last_tick_age_s > self.gate.limits.stale_tick_seconds \
+                or st.tick_ahead_s > self.gate.limits.max_tick_ahead_s or st.clock_mismatch:
             self._unhealthy_at = now
             st.data_recovering = False        # the error itself blocks; recovery starts when it clears
         else:
@@ -1127,6 +1433,23 @@ class Engine:
         if self._propose_only_until is not None and now < self._propose_only_until:
             self.cfg.approval_mode = "propose"  # 30 days propose-and-approve after a re-arm
 
+    def set_sessions(self, table: SessionTable) -> None:
+        """The broker session table (D13), refreshed by the run loop outside the tick path (goldbot/ops/run.py
+        `refresh_sessions`); used for market_closed, feed staleness and the server-clock probe."""
+        self.sessions = table
+
+    def _probe_clock(self, tick: Tick, now: pd.Timestamp, sessions: SessionTable) -> server_clock.ServerClockProbe:
+        """The server-clock probe on the tick this refresh already holds (no broker call): its stamp, converted with
+        server_tz, against the host clock. Any error is "not measured", which never blocks (stale and closed-market
+        rules cover those cases); a measured mismatch blocks entries only."""
+        try:
+            return server_clock.assess(self.cfg.account_id, self.cfg.server_tz, tick.ts_utc, now, sessions)
+        except Exception as exc:
+            log.warning("server clock probe failed (%s); not measured", type(exc).__name__)
+            return server_clock.ServerClockProbe(account_id=self.cfg.account_id, measured_utc=now,
+                                                 server_tz=self.cfg.server_tz, status="not_measured",
+                                                 reason=f"probe failed ({type(exc).__name__})")
+
     def _kill_switch(self, *, everything: bool) -> bool:
         """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
         approve. On the trip every position on the account is closed; while halted, any of this engine's positions
@@ -1158,7 +1481,7 @@ class Engine:
     def _server_clock(self, now: pd.Timestamp, tick: Tick) -> None:
         """Rollover (+-rollover_min of 00:00 server: no entries) and weekend (Friday weekend_cut server until the week
         reopens: no entries; at the cut, once per Friday, this engine's losers are closed and winners' stops tightened)."""
-        srv = now.tz_convert(ZoneInfo(self.cfg.server_tz))
+        srv = server_wall(now, self.cfg.server_tz)[0]        # naive server wall clock; any server_tz incl. NY+7
         mins = srv.hour * 60 + srv.minute + srv.second / 60
         self.state.in_rollover = min(mins, 1440 - mins) <= self.cfg.rollover_min
         h, m = (int(x) for x in self.cfg.weekend_cut.split(":"))
@@ -1208,7 +1531,7 @@ class Engine:
         return done
 
     def _now(self, tick: Tick) -> pd.Timestamp:
-        return pd.Timestamp.now("UTC") if self.cfg.live_clock else tick.ts_utc
+        return self.clock() if self.cfg.live_clock else tick.ts_utc
 
     # ------------------------------------------------------------------ data quality
     def _dq_errors(self) -> list[DQEvent]:
@@ -1382,6 +1705,7 @@ class Engine:
             # terminal instead of a merely stale engine (trading-safety review)
             write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps({
                 "account": self.cfg.account_id, "ts": time.time(), "dq_error": True,
+                "currency": self._account_currency() or None,     # the supervisor's currency check (review MEDIUM-1)
                 "dq_checks": ["positions_unreadable"], "stage": "unknown",
                 "startup_error": f"{type(exc).__name__}: {exc}"[:300]}), durable=False)
             raise
@@ -1570,36 +1894,60 @@ class Engine:
             raise ValueError("entry price unknown")
         lots = float(tr.initial_lots or known.get("lots") or round(tr.lots + tr.scaled_lots, 8))
         contract = 100.0
-        if info is not None:
+        try:
+            contract = float(self.broker.symbol_info(self.cfg.symbol).contract_size) or contract
+        except Exception:
+            log.warning("symbol info unavailable; position %s recorded at contract size %s", pid, contract)
+        # BACKLOG 28 (ADR 0004 A5): risk and notional are USD (price x lots x contract); the broker's P&L is in the
+        # deposit currency. fx converts USD into it (1 on a USD account); None when the broker cannot say
+        dist = abs(entry - tr.initial_sl) if tr.initial_sl is not None else 0.0
+        fx = sizing.account_fx(self._account_currency(), self._usd_to_account(tr.side, entry, dist or 1.0))
+        risk_usd, notional_usd = dist * lots * contract, entry * lots * contract
+        # the P&L's currency on the record (dashboard contract): the account currency when the broker's P&L is used or
+        # the engine's was converted, "USD" for the unconverted own-fills fallback; None is left to legacy records
+        # (the monthly report flags those as R understated), and when the account currency itself is unknown
+        pnl_currency: str | None = self._account_currency() or None
+        if info is not None:                           # pnl from the broker's deals, in the account currency
             exit_px, exit_utc, pnl = info["exit_price"], info["exit_utc"], info["pnl"]
             commission, swap = info["commission"], info["swap"]
             if reason == "broker_close" and info["reason"]:
                 reason = info["reason"]
-        else:
-            try:
-                contract = float(self.broker.symbol_info(self.cfg.symbol).contract_size) or contract
-            except Exception:
-                log.warning("symbol info unavailable; position %s recorded at contract size %s", pid, contract)
+            if fx is not None:
+                r = pnl / (risk_usd * fx) if risk_usd > 0 else None
+                ret = pnl / (notional_usd * fx)
+            else:                                      # no conversion: R unknown (never a wrong R); gross price return
+                log.warning("position %s: no USD -> %s conversion; R left empty, return from prices", pid,
+                            self._account_currency() or "account currency")
+                r, ret = None, tr.side * (exit_px - entry) / entry
+        else:                                          # the engine's own fills: pnl in USD, converted for the record
             if px is None:
                 tick = self.broker.last_tick(self.cfg.symbol)
                 px = tick.bid if tr.side > 0 else tick.ask
             legs = [(tr.lots, px)] + ([(tr.scaled_lots, tr.scaled_price)] if tr.scaled_price is not None else [])
             done = sum(n for n, _ in legs)
             exit_px = sum(n * p for n, p in legs) / done if done > 0 else px
-            pnl = sum(tr.side * (p - entry) * n * contract for n, p in legs)
+            pnl_usd = sum(tr.side * (p - entry) * n * contract for n, p in legs)
+            r = pnl_usd / risk_usd if risk_usd > 0 else None
+            ret = pnl_usd / notional_usd
+            if fx is None:                             # never read as factor 1: recorded in USD and flagged (LOW-1)
+                log.warning("position %s: no USD -> account currency conversion; P&L recorded in USD", pid)
+                pnl, pnl_currency = pnl_usd, "USD"
+            else:
+                pnl = pnl_usd * fx
             exit_utc, commission, swap = at, None, None
-        risk = abs(entry - tr.initial_sl) * lots * contract if tr.initial_sl is not None else 0.0
         equity = tr.equity_before
         if equity is None or equity <= 0:
-            equity = self.broker.account().balance - pnl       # the balance before this trade's P&L was realised
+            # the balance before this trade's P&L was realised (a USD-flagged P&L is not subtracted from a £ balance)
+            usd_only = pnl_currency == "USD" and self._account_currency() != "USD"
+            equity = self.broker.account().balance - (0.0 if usd_only else pnl)
             if equity <= 0:
                 equity = self.state.equity
         rec = ClosedTrade(account_id=self.cfg.account_id, broker=self.cfg.broker_name,
                           mode="live" if self.cfg.mode == "live" else "demo", exit_utc=exit_utc,
-                          ret=pnl / (entry * lots * contract), pnl=pnl, equity_before=equity, position_id=pid,
+                          ret=ret, pnl=pnl, equity_before=equity, position_id=pid,
                           client_order_id=tr.client_order_id, agent_id=tr.agent_id, side=tr.side, lots=lots,
                           entry_utc=tr.opened_utc or tr.entry_bar_ts, entry_price=entry, exit_price=exit_px,
-                          exit_reason=reason, r=pnl / risk if risk > 0 else None, commission=commission, swap=swap,
+                          exit_reason=reason, r=r, commission=commission, swap=swap, pnl_currency=pnl_currency,
                           partial_lots=tr.scaled_lots)
         append_closed_trade(Path(self.cfg.state_dir), rec)
         self._recorded.add(pid)
@@ -1646,7 +1994,9 @@ class Engine:
         row = X.iloc[-1]
         adx = float(row.get("h1_adx14", row.get("adx14", 20.0)) or 20.0)
         rv = X["h1_rv_20"] if "h1_rv_20" in X.columns else X.get("rv_20", pd.Series([np.nan]))
-        q = int(pd.qcut(rv.dropna().tail(60 * 24), 4, labels=False, duplicates="drop").iloc[-1]) if rv.notna().sum() > 40 else 1
+        win = rv.dropna().tail(60 * 24)
+        # a constant window has no quartiles (qcut yields NaN): middle bucket, as with too little history
+        q = int(pd.qcut(win, 4, labels=False, duplicates="drop").iloc[-1]) if len(win) > 40 and win.nunique() >= 2 else 1
         to_t1, since_t1 = tier1_minutes(self._calendar[1], close_ts) if self.cfg.news_blackout else (None, None)
         return Regime(adx_1h=adx, atr_1h_quartile=q, vol_tercile=int(row.get("vol_tercile", 1) or 1),
                       minutes_to_tier1=to_t1, minutes_since_tier1=since_t1)
@@ -1697,8 +2047,11 @@ class Engine:
         h = hashlib.sha1(f"{self.cfg.account_id}|{agent_id}|{close_ts.isoformat()}".encode()).hexdigest()[:10]
         return f"{self.cfg.account_id}-{int(close_ts.timestamp())}-{h}"
 
-    def _record(self, agent: Specialist, ts: pd.Timestamp, p: float, mult: float, action: str, pid: str | None = None) -> dict:
+    def _record(self, agent: Specialist, ts: pd.Timestamp, p: float, mult: float, action: str, pid: str | None = None,
+                scored_fv: str | None = None) -> dict:
         d = {"ts": ts.isoformat(), "agent": agent.agent_id, "p": round(p, 4), "mult": round(mult, 3), "action": action, "proposal": pid}
+        if scored_fv is not None:
+            d["scored_feature_version"] = scored_fv      # the frame version the model scored (legacy rebuilds included)
         self.decisions.append(d)
         return d
 
@@ -1712,22 +2065,23 @@ class Engine:
             for version in models:
                 self.shadow.track(version, now)
 
-    def _shadow_step(self, tf: str, dec: pd.DataFrame, X: pd.DataFrame, agents: list[Specialist],
+    def _shadow_step(self, tf: str, fr: _Frame, agents: list[Specialist],
                      cands_by_agent: dict[str, pd.DataFrame], atr_usd: float, cost_atr: float) -> None:
         assert self.shadow is not None
+        dec = fr.dec
         last = len(dec) - 1
         bar = dec.iloc[last]
         self.shadow.on_bar(bar, tf)       # advance open shadow trades of this timeframe; a new entry starts after this bar
-        feats = X.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
         for version, (agent_key, model) in self.shadow_models.items():
             for agent in agents:
                 cands = cands_by_agent[agent.agent_id]
                 if agent_key not in (agent.agent_id, agent.family) or cands.empty or int(cands["idx"].iloc[-1]) != last:
                     continue
                 side = int(cands["side"].iloc[-1])
-                mv = getattr(model, "feature_version", "")
-                if mv and mv != X.attrs.get("feature_version"):
+                Xm = self._scoring_frame(fr, model)
+                if Xm is None:
                     continue          # a model only scores the frame version it was trained on, in shadow too
+                feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
                 feats["side"] = side
                 cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
                 p, p_raw = _score(model, feats[cols])
@@ -1739,7 +2093,8 @@ class Engine:
                                        entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
                                        target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p, timeframe=tf,
                                        threshold=threshold, taken=p > threshold, p_raw=p_raw, policy=agent.exit_spec,
-                                       signal_close=pd.Timestamp(bar["visible_at"]))
+                                       signal_close=pd.Timestamp(bar["visible_at"]),
+                                       scored_feature_version=str(Xm.attrs.get("feature_version", "")))
 
     def flush_journal(self) -> None:
         """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the
@@ -1763,11 +2118,25 @@ class Engine:
         self._journaled = len(self.decisions)
 
     def _log_tick(self, t: Tick) -> None:
+        """Buffer the tick for the store and flush every tick_flush_s. A failed write (a full disk) raises once, then is
+        not retried for tick_flush_s; meanwhile the buffer keeps the newest TICK_LOG_MAX ticks (older ones dropped and
+        counted), so a broken disk can neither grow memory nor fail every tick."""
         if self.store is None:
             return
         self._tick_log.append(t)
+        if len(self._tick_log) > TICK_LOG_MAX:
+            drop = len(self._tick_log) - TICK_LOG_MAX
+            self._tick_log = self._tick_log[drop:]
+            self.ticks_dropped += drop
+        if self._tick_flush_retry is not None and t.ts_utc < self._tick_flush_retry:
+            return
         if (t.ts_utc - self._tick_log[0].ts_utc).total_seconds() >= self.cfg.tick_flush_s:
-            self.flush_ticks()
+            try:
+                self.flush_ticks()
+                self._tick_flush_retry = None
+            except Exception:
+                self._tick_flush_retry = t.ts_utc + pd.Timedelta(seconds=max(self.cfg.tick_flush_s, 1))
+                raise
 
     def flush_ticks(self) -> None:
         """Write buffered ticks as one new part file (append-only; the nightly cost job reads them)."""
@@ -1837,10 +2206,26 @@ class Engine:
             self._class_cache = (mtime, c if c in ("raw", "standard", "unknown") else "unknown")
         return self._class_cache[1]
 
+    def _daily_allowance(self) -> dict[str, float | None]:
+        """min(daily cap x day-start equity, risk.daily_loss_limit_abs) and that limit less today's loss so far, for the
+        engine state and health; None while unknown (no day start yet and no absolute limit)."""
+        st = self.state
+        limit = self.gate.daily_loss_limit(st)
+        if not math.isfinite(limit):
+            return {"daily_loss_limit": None, "daily_loss_remaining": None}
+        lost = max(0.0, st.day_start_equity - st.equity) if st.day_start_equity > 0 else 0.0
+        return {"daily_loss_limit": round(limit, 2), "daily_loss_remaining": round(max(0.0, limit - lost), 2)}
+
     def _write_state(self) -> None:
         st = self.state
         payload = {
             "account": self.cfg.account_id, "broker": self.cfg.broker_name, "mode": self.cfg.mode, "ts": time.time(),
+            # the deposit currency: the supervisor refuses to combine engines in different currencies (BACKLOG 28, A8)
+            "currency": self._account_currency() or None,
+            # BACKLOG 29: the effective daily loss limit (account currency) and what is left of it today
+            **self._daily_allowance(),
+            # this account's absolute limit (accounts.yaml): the supervisor applies the smallest published one
+            "daily_loss_limit_abs": self.gate.limits.daily_loss_limit_abs,
             "equity": st.equity, "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "open_lots": st.open_lots, "open_notional": st.open_notional,
@@ -1858,7 +2243,20 @@ class Engine:
             "closed_records_lost": self._records_lost, "closes_due": sorted(self._close_due),
             "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
             "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
+            # the dashboard's account view (goldbot/ops/account_view.py): the broker's balance, currency and margin,
+            # the gate's limits, the price, lot terms and ATR(14) per ladder timeframe; no login or server
+            **self._account_view, "price": self._price, "ladder_atr": dict(self._ladder["ladder_atr"]),
+            "lot_terms": self._ladder["lot_terms"], "limits": self._published_limits(),
+            "tick_ahead_s": st.tick_ahead_s, "market_closed": st.market_closed, "session_source": self.sessions.source,
+            "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail,
+            "tick_errors_total": self.tick_errors_total, "ticks_dropped": self.ticks_dropped,
+            "last_tick_error_at": self._last_tick_error_at.isoformat() if self._last_tick_error_at is not None else None,
+            "sessions": session_table_cache(self.sessions),
+            "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
         }
+        # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
+        # view's copy (None until the first refresh) must not blank it for the supervisor's currency check
+        payload["currency"] = self._account_currency() or self._account_view.get("currency") or None
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync
         write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps(payload), durable=False)
         self._save_risk_state()

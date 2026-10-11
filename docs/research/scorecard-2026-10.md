@@ -1,0 +1,117 @@
+# Research scorecard: October 2026
+
+The first monthly scorecard (research director; format in `.claude/agents/research-director.md`). Written
+2026-10-10, base `1bcfe1c`, covering 2026-10-01 .. 2026-10-10. Next issue: early November 2026.
+
+**One line: no strategy has passed, the demo is not trading, and the north-star is not closer in £ terms. This month
+built the tools and the plan to measure it honestly. Nothing here is a profit forecast.**
+
+## 1. North-star KPIs (ADR 0004 §6)
+
+| KPI | This month | Last month | Note |
+|---|---|---|---|
+| Monthly average £/day | **none: no trades** | — | The demo terminal has not run (BACKLOG 1); the engines propose nothing until an agent passes the gates (by design) |
+| Monthly % return (time-weighted, deposits excluded) | none | — | Account £1,000 GBP demo, read from MT5 (ADR 0004) |
+| Days at £50 or more / best-day histogram | 0 / empty | — | — |
+| Opportunity days captured | not measurable | — | The day classifier (H-16) and the base-rate report (BACKLOG 30) do not exist yet |
+| Max drawdown % / days lost to the daily cap | 0% / 0 | — | No trades |
+| Shadow book (net R by timeframe, family, session) | **empty** | — | No champion or challenger is running; the performance analyst has nothing to report. This scorecard is consistent with that: every figure above is "none" |
+
+## 2. Distance to the next milestone and to the north-star
+
+| Target | Where we are | Distance | What closes it |
+|---|---|---|---|
+| **M1: first trade possible (15m, £825 at the 1% min-lot cap)** | Equity £1,000 is above £825 | **Equity: reached. In practice: blocked** by (1) BACKLOG 28 currency fix (the gate computes the 15m min lot at 1.09% instead of 0.82% and refuses it), (2) BACKLOG 25 min-lot exception, (3) a Raw-spread account not yet confirmed, (4) the terminal not yet running (BACKLOG 1), and (5) **no strategy that has passed the research gates** | 1–4 are engineering and owner steps; 5 is research, and the Q1/Q2 plans are the route. The earliest a 15m trial can run is Q2 2027 (`preregistration-2027Q2-draft.md`) |
+| M2: 1h (£1,650) | £1,000 | +65% | Deposits (≈ 3 months at £250/month) or returns (≈ 17 months at a sustained 3%/month, which no strategy has shown) |
+| M3: 4h (£3,270) / M4: 1d (£7,900) | £1,000 | ×3.3 / ×7.9 | As M2 |
+| North-star as a monthly average (£50/day ≈ £1,050/month) | £0/day | Needs ~£21k–£53k of equity at a sustained 2–5%/month (ADR 0004 §6) | Not a near-term research target. £50 *days* at £1,000 need a ~6 R runner on a trend or news day (OD §0) |
+
+## 3. What moved this month
+
+**Research evidence (the Q4 2026 budget, spent 20/20 by 2026-10-09; reports on issues #37–#53, summaries on #34):**
+- No gross edge: mean reversion (15m), session-open breakout (15m), trend pullback (1h), range breakout (1h),
+  intraday momentum (London, NY). All retired (R-01..R-05, `config/settings.yaml` `research.retired_families`).
+- tsmom 1h/4h: gross +0.06 R (t 2.6 / 2.4), net −0.079 R (1h) and −0.014 R (4h, before swap). Failed; only slow TSMOM
+  (H-01) stays alive (R-06).
+- Meta-models: OOF AUC ~0.50 (R-07). Lookahead check clean on every run; holdout untouched.
+- **Verdict count this month: 20 trials, 0 passes.** This is the expected result for these families (SoA C3).
+
+**Research documents (no trials, no budget):** state of the art (SoA), indicator survey, XAUUSD trader playbook with
+a ranked gap list, opportunity days and runner exits, hypotheses H-01..H-23 with the retired list and the
+multiple-testing ledger, the Q1 2027 pre-registration draft (H-01 and H-04 parameters frozen before any outcome,
+event recounts), ADR 0004 (account, daily limit, north-star, milestone ladder; amended to £1,000 / £50), ADR 0006
+(evidence across feature versions), and this month's research plan, Q2 2027 draft and scorecard.
+
+**Research infrastructure (merged; tools, not results):**
+- Trial integrity: reservation of the pre-registered Q1 queue in code (and in every runner), queued rows that cannot
+  be backdated or moved between quarters, screen event floor with an "inconclusive" outcome, CPCV and PBO as
+  veto-only (ADR 0003), CUSUM calibrated to a 5% quarterly false-alarm rate.
+- Discovery: one-trial feature discovery with fold-internal stability selection (`research_pass.py --discover`).
+- Specialists ready for Q1: slow TSMOM preset (H-01), `asia_drift` (H-04).
+- Data and features: FRED macro pipeline (real yields, dollar, GVZ), COT and GLD positioning (opt-in), survey and
+  trader-toolkit features, measured broker costs as a release asset (`costs-v1` once the VPS publishes), DST-aware
+  sessions (feature version `f-079deacc61`), broker clock and sessions.
+- Risk evidence tools (need data): drawdown Monte Carlo (G-5), minimum-lot feasibility (G-7), owner trade-history
+  analyser (private; research seeds only, in-sample).
+
+**Delivery that research depends on (program director's domain, listed for context):** live exit policies with
+label/shadow parity, approval card, alerts, drift and health, backups, SQLite state store, hosting on Oracle VMs.
+
+## 4. What did not move
+
+- No strategy is net positive after costs. The only gross edge (fast tsmom) is smaller than its costs.
+- The demo has not placed a trade or recorded a shadow trade. There is no performance-analyst report.
+- The currency bug that blocks the only trade £1,000 can take (BACKLOG 28, HIGH) is not fixed yet.
+- Owner rulings still open from earlier reviews: ruling A (daily-signal event floor), the H-18 event floor, the
+  Raw-spread account, the deposit plan, the projected percentage caps, the material feature version (ADR 0006).
+- The base rate of £50-sized days (a ~$66 directional move) at today's prices is unmeasured (BACKLOG 30).
+
+## 5. Pipeline and budget
+
+| Quarter | Budget | State |
+|---|---|---|
+| Q4 2026 | 20/20 used | closed: 0 passes |
+| Q1 2027 | 20: 13 reserved for the frozen queue, 7 reserve | draft, freeze by 2027-01-01; nothing may run before then |
+| Q2 2027 | 20: 4 planned, ≤ 3 conditional, 6 for Q1 follow-ups, 7 free reserve | draft written this month; nothing reserved in code |
+
+Multiple-testing ledger: unchanged (`hypotheses.md` C). DSR trial count for the next trial: 20, plus Q1 trials and
+H-02's K_eff as they are recorded.
+
+## 6. Risks raised this month
+
+1. **The tradeable timeframe has the worst evidence.** At £1,000 only 15m can trade, and every 15m family so far had
+   no gross edge. The Q2 draft spends its new trials there anyway (H-17, H-14, H-18), because nothing else can reach
+   the demo this year; if all fail, the plan records that £1,000 has no research-backed trade and puts the options
+   to the owner (`research-plan.md` §7).
+2. **High-opportunity days are the ones £1,000 cannot take.** A higher ATR raises the minimum lot's risk; above
+   ATR(15m) ≈ $8.87 the gate refuses the trade. Every Q2 trial reports the £1,000-tradeable share so this is seen,
+   not discovered later.
+3. **Historical event calendar missing.** The tier-1 archive is forward-only, and research loads no events, so
+   event-based inputs (H-16) and H-18 cannot run on 2010–2025 until a historical schedule exists (E-1).
+4. **Reservation arithmetic.** Rows written once a quarter has started cannot draw on the reservation, so a setting
+   above the number of queued rows locks the excess slots for the quarter. This affects Q1's setting of 13 as well as
+   Q2's (flagged to the program director; Q1 not changed).
+
+## 7. Next month (no trials; the Q4 budget is spent)
+
+- Program director: BACKLOG 28 and 25 (first trade possible at £1,000), BACKLOG 1 (terminal running, so the shadow
+  book and `costs-v1` start).
+- Data engineer: E-1 historical tier-1 schedule; BACKLOG 30 base-rate report (frequency of ≥ 1 and ≥ 1.5 × ATR(1d)
+  days by weekday and session).
+- Quant reviewer: rulings Q-1 (H-17 overlap with R-02/R-05), Q-2 (H-16 evaluation scheme), Q-3 (H-14 survivor unit).
+- Strategy researcher: Q1 freeze checklist (event counts owed from data, `macro-v1` present, rulings recorded).
+- Performance analyst: first report once the demo terminal runs.
+
+## 8. Needs the owner
+
+Listed with options and recommendations in `research-plan.md` §9: the H-18 event floor (recommend: pool with tier-2
+events once they exist), ruling A (Q1), the deposit plan (decides when 1h research rises), confirming a Raw-spread
+account (without it nothing can trade at £1,000), the projected percentage caps, and the material feature version.
+The trial budget stays at 20; raising it is not recommended.
+
+## Not verified / left out
+
+- "What moved" is read from the git history and HANDOFF on base `1bcfe1c`, not from CI or the dashboard.
+- The trial results are quoted from HANDOFF and `hypotheses.md`, not re-run.
+- Distances use ADR 0004's estimated ATR, gold price and GBPUSD; the M2 timings are arithmetic, not forecasts.
+- No code, settings, trials, budget, holdout or the Q1 pre-registration were touched.

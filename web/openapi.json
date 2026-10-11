@@ -50,9 +50,42 @@
       "title": "Account Id",
       "type": "string"
      },
+     "balance": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Balance"
+     },
      "broker": {
       "title": "Broker",
       "type": "string"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "day_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Day Pnl"
      },
      "day_pnl_pct": {
       "title": "Day Pnl Pct",
@@ -65,6 +98,37 @@
      "equity": {
       "title": "Equity",
       "type": "number"
+     },
+     "loss_budget": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/LossBudget"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "margin_level_pct": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Margin Level Pct"
+     },
+     "milestones": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Milestones"
+       },
+       {
+        "type": "null"
+       }
+      ]
      },
      "mode": {
       "enum": [
@@ -1771,6 +1835,108 @@
     "title": "LoginResponse",
     "type": "object"
    },
+   "LossBudget": {
+    "additionalProperties": false,
+    "properties": {
+     "binding": {
+      "title": "Binding",
+      "type": "string"
+     },
+     "binding_label": {
+      "title": "Binding Label",
+      "type": "string"
+     },
+     "caps": {
+      "items": {
+       "$ref": "#/components/schemas/LossCap"
+      },
+      "title": "Caps",
+      "type": "array"
+     },
+     "limit": {
+      "title": "Limit",
+      "type": "number"
+     },
+     "notes": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+     },
+     "period": {
+      "enum": [
+       "today",
+       "this week"
+      ],
+      "title": "Period",
+      "type": "string"
+     },
+     "remaining": {
+      "title": "Remaining",
+      "type": "number"
+     },
+     "used": {
+      "title": "Used",
+      "type": "number"
+     }
+    },
+    "required": [
+     "limit",
+     "used",
+     "remaining",
+     "binding",
+     "binding_label",
+     "period",
+     "caps"
+    ],
+    "title": "LossBudget",
+    "type": "object"
+   },
+   "LossCap": {
+    "additionalProperties": false,
+    "properties": {
+     "label": {
+      "title": "Label",
+      "type": "string"
+     },
+     "limit": {
+      "title": "Limit",
+      "type": "number"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "period": {
+      "enum": [
+       "today",
+       "this week"
+      ],
+      "title": "Period",
+      "type": "string"
+     },
+     "remaining": {
+      "title": "Remaining",
+      "type": "number"
+     },
+     "used": {
+      "title": "Used",
+      "type": "number"
+     }
+    },
+    "required": [
+     "name",
+     "label",
+     "period",
+     "limit",
+     "used",
+     "remaining"
+    ],
+    "title": "LossCap",
+    "type": "object"
+   },
    "Me": {
     "properties": {
      "email": {
@@ -1792,6 +1958,127 @@
      "role"
     ],
     "title": "Me",
+    "type": "object"
+   },
+   "MilestoneRung": {
+    "additionalProperties": false,
+    "properties": {
+     "equity_needed": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Equity Needed"
+     },
+     "pending": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pending"
+     },
+     "reached": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reached"
+     },
+     "timeframe": {
+      "title": "Timeframe",
+      "type": "string"
+     }
+    },
+    "required": [
+     "timeframe"
+    ],
+    "title": "MilestoneRung",
+    "type": "object"
+   },
+   "Milestones": {
+    "additionalProperties": false,
+    "properties": {
+     "next_equity": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Equity"
+     },
+     "next_timeframe": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Timeframe"
+     },
+     "pending": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pending"
+     },
+     "progress": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Progress"
+     },
+     "rule": {
+      "title": "Rule",
+      "type": "string"
+     },
+     "rungs": {
+      "items": {
+       "$ref": "#/components/schemas/MilestoneRung"
+      },
+      "title": "Rungs",
+      "type": "array"
+     },
+     "tradeable": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Tradeable",
+      "type": "array"
+     }
+    },
+    "required": [
+     "rule",
+     "rungs",
+     "tradeable"
+    ],
+    "title": "Milestones",
     "type": "object"
    },
    "ModeChangeRequest": {

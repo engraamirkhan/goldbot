@@ -33,9 +33,11 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 import yaml
+from pydantic import Field, field_validator
 
 from goldbot.base import Record, write_private
 from goldbot.config import ROOT
+from goldbot.data.timeutil import server_zone
 
 ACCOUNTS_FILE = ROOT / "config" / "accounts.yaml"
 PHASE_FILE = ROOT / "state" / "phase_state.json"
@@ -60,6 +62,19 @@ class Account(Record):
     symbol: str
     magic_base: int
     enabled: bool
+    # BACKLOG 29 / ADR 0004: the owner's absolute daily loss limit for THIS account, in its own deposit currency
+    # (icm-demo: 50 = £50). None = off. Per account because one number read in different currencies is not one limit
+    daily_loss_limit_abs: float | None = Field(None, gt=0)
+
+    @field_validator("server_tz")
+    @classmethod
+    def _known_server_tz(cls, v: str) -> str:
+        """`NY+7` (US-switching UTC+2/+3) or an IANA name; a typo fails at load, never shifts timestamps silently."""
+        try:
+            server_zone(v)
+        except Exception as exc:
+            raise ValueError(f"server_tz {v!r} is neither NY+7 nor an IANA zone ({type(exc).__name__})") from exc
+        return v
 
     @property
     def is_live(self) -> bool:
@@ -164,7 +179,8 @@ def load_accounts(path: Path | None = None) -> dict[str, Account]:
             stored = get_secret(login_key(aid))
             login = int(stored) if stored and stored.strip().isdigit() else None
         out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=login, terminal_path=a["terminal_path"],
-                           server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)))
+                           server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)),
+                           daily_loss_limit_abs=a.get("daily_loss_limit_abs"))
     return out
 
 

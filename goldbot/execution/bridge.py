@@ -67,6 +67,7 @@ METHODS: dict[str, tuple[str, bool]] = {
     "deals_since": ("frame", True),
     "broker_terms": ("BrokerTerms", True),
     "margin_required": ("float", True),      # read-only (order_calc_margin): retry-safe, nothing reaches the market
+    "loss_per_lot": ("float", True),         # read-only (order_calc_profit / tick value): the sizing conversion
     "trading_sessions": ("list[TradingSession]", True),   # read-only session hours (D13)
     "place_order": ("OrderResult", False),
     "modify": ("OrderResult", False),
@@ -151,7 +152,14 @@ def make_handler(broker: Any, token: str) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(data)
 
         def do_GET(self) -> None:
-            self._reply(200, {"ok": True}) if self.path == "/health" else self._reply(404, {"error": "not found"})
+            if self.path != "/health":
+                self._reply(404, {"error": "not found"})
+                return
+            body: dict[str, Any] = {"ok": True}
+            tz = getattr(broker, "server_tz", None)      # the zone this box converts MT5 stamps with (not a secret)
+            if isinstance(tz, str):
+                body["server_tz"] = tz
+            self._reply(200, body)
 
         def do_POST(self) -> None:
             auth = self.headers.get("Authorization", "")
@@ -229,6 +237,12 @@ class GuardedBroker:
     def close(self, position_id: int, lots: float | None = None) -> OrderResult:
         return self._b.close(position_id, lots)
 
+    @property
+    def server_tz(self) -> str | None:
+        """The wrapped terminal's server_tz (reported on /health so the brain can compare it with its own)."""
+        tz = getattr(self._b, "server_tz", None)
+        return tz if isinstance(tz, str) else None
+
     def __getattr__(self, name: str) -> Any:          # read-only calls pass through
         if name in METHODS and METHODS[name][1]:
             return getattr(self._b, name)
@@ -250,6 +264,17 @@ def probe_health(url: str, timeout_s: float = 5.0, get: Callable[..., Any] = req
     except (ValueError, AttributeError):
         return "answered, but not with the bridge's JSON"
     return None if ok is True else "answered without ok"
+
+
+def bridge_server_tz(url: str, timeout_s: float = 5.0, get: Callable[..., Any] = requests.get) -> str | None:
+    """The server_tz the bridge converts MT5 stamps with (GET /health), or None when it does not say (an older bridge,
+    unreachable, junk). The brain compares it with its own accounts.yaml in preflight."""
+    try:
+        r = get(f"{url.rstrip('/')}/health", timeout=timeout_s)
+        tz = r.json().get("server_tz") if r.status_code == 200 else None
+    except (requests.RequestException, ValueError, AttributeError):
+        return None
+    return tz if isinstance(tz, str) else None
 
 
 class RemoteBroker:
@@ -311,6 +336,9 @@ class RemoteBroker:
 
     def margin_required(self, symbol: str, side: int, lots: float, price: float) -> float | None:
         return self._call("margin_required", symbol, side, lots, price)
+
+    def loss_per_lot(self, symbol: str, side: int, price: float, distance: float) -> float | None:
+        return self._call("loss_per_lot", symbol, side, price, distance)
 
     def trading_sessions(self, symbol: str) -> list[TradingSession]:
         return self._call("trading_sessions", symbol)

@@ -20,10 +20,12 @@ def _state(equity: float, stage: Stage, combined: bool) -> AccountState:
                         combined_size_down=combined)
 
 
-def _intent(atr: float, mult: float, stops_level: float = 0.0) -> Intent:
-    # price 100 keeps margin and the combined-notional cap out of the way: only the sizing decides
+def _intent(atr: float, mult: float, stops_level: float = 0.0, fx: float = 1.0) -> Intent:
+    # price 100 keeps margin and the combined-notional cap out of the way: only the sizing decides. fx != 1 is a GBP
+    # account at GBPUSD 1.33 (BACKLOG 28: the USD stop converted into the account currency)
     return Intent(agent_id="x", side=1, p=0.7, target_atr=3.0, stop_atr=1.0, atr_usd=atr, cost_atr=0.01,
-                  multiplier=mult, price=100.0, stops_level_points=stops_level)
+                  multiplier=mult, price=100.0, stops_level_points=stops_level,
+                  account_currency="USD" if fx == 1.0 else "GBP", acct_per_usd=None if fx == 1.0 else fx)
 
 
 CASES = list(itertools.product(
@@ -32,21 +34,22 @@ CASES = list(itertools.product(
     [0.001, 0.005, 0.008],
     [5_000.0, 9_166.0, 9_167.0, 20_000.0, 100_000.0],
     [0.5, 5.0, 55.0],
+    [1.0, 1 / 1.33],
 ))
 
 
-@pytest.mark.parametrize("stage_combined,mult,risk,equity,atr", CASES)
+@pytest.mark.parametrize("stage_combined,mult,risk,equity,atr,fx", CASES)
 def test_sizing_module_matches_the_gate(stage_combined: tuple[Stage, bool], mult: float, risk: float, equity: float,
-                                        atr: float):
+                                        atr: float, fx: float):
     stage, combined = stage_combined
     limits = RiskLimits(risk_per_trade=risk)
     st = _state(equity, stage, combined)
-    d = RiskGate(limits).check(_intent(atr, mult), st)
+    d = RiskGate(limits).check(_intent(atr, mult, fx=fx), st)
     assert st.stage == stage                       # the case tests the stage it names
     eff = effective_risk(limits, stage == Stage.SIZE_DOWN or combined, mult)
     stop = stop_distance(1.0, atr, spread_points=25.0, point=limits.point)
     sz = size_lots(equity=equity, risk=eff, stop_distance=stop, contract_oz=100.0, volume_min=0.01, volume_step=0.01,
-                   volume_max=2.0)
+                   volume_max=2.0, acct_per_usd=fx)
     assert d.stop_distance == pytest.approx(stop)
     if sz.refused:
         assert not d.allowed and d.reasons == ["min_lot_exceeds_risk"]

@@ -184,7 +184,8 @@ def _engine_file(tmp_path: Path, account: str, *, lots: float, equity: float = 1
     import time
     (tmp_path / f"engine_{account}.json").write_text(json.dumps({
         "account": account, "ts": time.time(), "equity": equity, "day_start_equity": equity, "week_start_equity": equity,
-        "balance_closed_hwm": equity, "open_lots": lots, "open_notional": lots * 100 * px}))
+        "balance_closed_hwm": equity, "open_lots": lots, "open_notional": lots * 100 * px,
+        "currency": "USD"}))       # the paper engine's currency: mixed currencies halt (BACKLOG 28)
 
 
 def _state(**kw: Any) -> Any:

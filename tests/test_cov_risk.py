@@ -208,10 +208,11 @@ def test_new_day_resets_day_start_equity_at_utc_midnight():
 
 
 # ---------------------------------------------------------------------------------------------- Supervisor
-def _engine_file(d: Path, account: str, *, equity: float, day0: float, wk0: float, hwm: float, age_s: float = 1.0) -> None:
+def _engine_file(d: Path, account: str, *, equity: float, day0: float, wk0: float, hwm: float, age_s: float = 1.0,
+                 currency: str | None = None) -> None:
     (d / f"engine_{account}.json").write_text(json.dumps({
         "account": account, "ts": time.time() - age_s, "equity": equity, "day_start_equity": day0,
-        "week_start_equity": wk0, "balance_closed_hwm": hwm}))
+        "week_start_equity": wk0, "balance_closed_hwm": hwm, "currency": currency}))
 
 
 def test_combined_daily_cap_halts_although_each_account_is_inside_its_own_cap(tmp_path):
@@ -256,12 +257,15 @@ def test_healthy_engines_write_a_fresh_no_halt_heartbeat(tmp_path):
 
 
 def test_silent_engines_are_reported_stale_and_torn_files_are_skipped(tmp_path):
-    _engine_file(tmp_path, "fresh", equity=5_000, day0=5_000, wk0=5_000, hwm=5_000)
-    _engine_file(tmp_path, "silent", equity=5_000, day0=5_000, wk0=5_000, hwm=5_000, age_s=600)
+    _engine_file(tmp_path, "fresh", equity=5_000, day0=5_000, wk0=5_000, hwm=5_000, currency="USD")
+    _engine_file(tmp_path, "silent", equity=5_000, day0=5_000, wk0=5_000, hwm=5_000, age_s=600, currency="USD")
     (tmp_path / "engine_torn.json").write_text('{"account": "torn", "equity": 12')
     s = Supervisor(tmp_path).evaluate()
     assert s["stale_engines"] == ["silent"]
-    assert s["combined_equity"] == pytest.approx(10_000)
+    assert s["combined_equity"] == pytest.approx(10_000)        # a silent engine in the same currency still counts
+    # without a currency the silent file's money stays out (BACKLOG 28 re-verification); a fresh one still counts
+    _engine_file(tmp_path, "silent", equity=5_000, day0=5_000, wk0=5_000, hwm=5_000, age_s=600)
+    assert Supervisor(tmp_path).evaluate()["combined_equity"] == pytest.approx(5_000)
 
 
 def test_no_engines_means_no_losses_and_no_halt(tmp_path):

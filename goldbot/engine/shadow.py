@@ -60,6 +60,7 @@ class ShadowTrade(Record):
     policy: ExitPolicy | None = None  # the specialist's exit policy (None: the plain barriers)
     atr_usd: float | None = None      # the signal bar's ATR, which the policy's distances are in
     state: PolicyState | None = None  # trailed stop, best price, scale-out fill, hard-flat deadline
+    scored_feature_version: str | None = None   # the frame version the model scored (None: older book)
 
 
 class VersionBook(Record):
@@ -86,7 +87,8 @@ class ShadowBook:
     def open_trade(self, *, version: str, agent_id: str, side: int, bar_ts: pd.Timestamp, entry: float, atr_usd: float,
                    target_atr: float, stop_atr: float, max_bars: int, p: float, timeframe: str = "15m",
                    threshold: float | None = None, taken: bool = True, p_raw: float | None = None,
-                   policy: ExitPolicy | None = None, signal_close: pd.Timestamp | None = None) -> ShadowTrade | None:
+                   policy: ExitPolicy | None = None, signal_close: pd.Timestamp | None = None,
+                   scored_feature_version: str | None = None) -> ShadowTrade | None:
         """signal_close: when the signal bar closed (its visible_at; default bar_ts + timeframe), which the hard-flat
         deadline counts from, as the labels do."""
         if not np.isfinite(atr_usd) or atr_usd <= 0:
@@ -105,7 +107,7 @@ class ShadowBook:
                         stop=stop, target=entry + side * target_atr * atr_usd,
                         max_bars=max_bars, p=p, timeframe=timeframe, threshold=threshold, taken=taken, p_raw=p_raw,
                         policy=policy if state is not None else None, atr_usd=atr_usd if state is not None else None,
-                        state=state)
+                        state=state, scored_feature_version=scored_feature_version)
         book.open.append(t)
         return t
 

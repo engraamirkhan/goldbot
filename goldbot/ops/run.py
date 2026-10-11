@@ -21,6 +21,10 @@
                                                          # drawdown / risk-of-ruin Monte Carlo at the live limits (G-5)
   python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]
                                                          # minimum equity for the minimum lot per family (G-7)
+  python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)
+  python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]
+                                                         # time-weighted % return, R, drawdown, avg per day, milestones
+  python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds
 """
 from __future__ import annotations
 
@@ -31,14 +35,96 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:   # service entry points import lazily; these are for annotations only
+    import pandas as pd
+
     from goldbot.agents.runner import AgentRunner
     from goldbot.config import Settings
+    from goldbot.data.calendar import SessionTable
     from goldbot.data.store import Store
     from goldbot.ops.accounts import Account
     from goldbot.risk import RiskLimits
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("goldbot.run")
+
+
+SESSIONS_TIMEOUT_S = 5.0     # a session read slower than this keeps the last table (the bridge RPC times out at 10 s)
+
+
+class SessionRefresher:
+    """Reads the engine's next session table (D13) on a background thread so the tick loop never waits for the broker:
+    `start(now)` launches a read (never two at once; a hung read blocks only further reads), `collect(now, current)`
+    returns the table to use once the read finished, else None. A read that raised keeps `current`; so does a static
+    fallback while `current` is a broker table still covering `now` (a failed re-read must not throw away a holiday
+    schedule already read)."""
+
+    def __init__(self, source: Any) -> None:
+        self.source = source
+        self._thread: Any = None
+        self._box: dict[str, Any] = {}
+
+    def start(self, now: "pd.Timestamp") -> bool:
+        import threading
+        if self._thread is not None:
+            return False                 # a read is running (or finished and not collected yet)
+        box: dict[str, Any] = {}
+
+        def work() -> None:
+            try:
+                box["table"] = self.source.table(now)
+            except Exception as exc:      # the type only: a bridge error can name the tunnel endpoint
+                box["error"] = type(exc).__name__
+        self._box = box
+        self._thread = threading.Thread(target=work, name="sessions-refresh", daemon=True)
+        self._thread.start()
+        return True
+
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def collect(self, now: "pd.Timestamp", current: "SessionTable | None") -> "SessionTable | None":
+        if self._thread is None or self._thread.is_alive():
+            return None
+        self._thread, box = None, self._box
+        if "table" not in box:
+            log.warning("session table refresh failed (%s); keeping the last table", box.get("error", "no result"))
+            return current
+        new = box["table"]
+        if new.source != "broker" and current is not None and current.source == "broker" \
+                and current.covers_until is not None and now < current.covers_until:
+            log.warning("session table fell back to static (%s); keeping the broker table read earlier", new.note)
+            return current
+        return new
+
+
+def refresh_sessions(source: Any, now: "pd.Timestamp", current: "SessionTable | None",
+                     timeout_s: float = SESSIONS_TIMEOUT_S) -> "SessionTable | None":
+    """One blocking read through `SessionRefresher`, for the engine's start only (before the tick loop runs): waits at
+    most `timeout_s`, then keeps `current`."""
+    r = SessionRefresher(source)
+    r.start(now)
+    if r._thread is not None:
+        r._thread.join(timeout_s)
+    if r.running():
+        log.warning("session table refresh took over %g s; keeping the last table", timeout_s)
+        return current
+    return r.collect(now, current)
+
+
+def engine_pass(eng: Any, broker: Any, symbol: str) -> bool:
+    """One pass of the engine loop: read the latest tick and feed it. Any exception (an AssertionError too) is recorded
+    on the engine (`tick_error`: entries blocked until a clean decision bar, rate-limited logging, alerted by health)
+    and the loop carries on, so a bad tick or a terminal fault never crash-loops the engine (the next pass retries the
+    exits). False on an error."""
+    try:
+        eng.on_tick(broker.last_tick(symbol))
+        return True
+    except Exception as exc:
+        try:
+            eng.note_tick_error(exc)
+        except Exception:
+            log.exception("engine tick failed and the error could not be recorded")
+        return False
 
 
 def run_supervisor() -> None:
@@ -71,7 +157,6 @@ def run_engine(account_id: str) -> None:
     settings = load_settings()
     if acc.is_live and acc not in accounts.enabled_accounts("live"):
         raise SystemExit("live account not unlocked by the phase gate")
-    limits = engine_limits(settings, acc)
     bridge = accounts.bridge_endpoint(account_id)
     if bridge is not None:
         # terminal on another machine (Oracle free tier: MT5 under Wine); a bridge failure ends this process and the
@@ -93,6 +178,7 @@ def run_engine(account_id: str) -> None:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
         log.warning("not on Windows: running %s against the paper broker", account_id)
+    limits = engine_limits(settings, acc, paper=paper_stand_in(broker))
     # proposals go to the approval bus in state/; the dashboard and the Telegram service decide through it
     center = ApprovalCenter(set(settings.telegram.allowed_user_ids), bus=ApprovalBus("state"))
     registry_file = Path(settings.research.models_dir) / "registry.json"
@@ -127,6 +213,18 @@ def run_engine(account_id: str) -> None:
                               approval_window_s=settings.risk.approval_window_seconds), broker, agents,
                  champions(), center, limits=limits, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares)
+    from goldbot.data.calendar import BrokerSessions, SessionTable
+    # the session read runs on its own thread: through the bridge it gets its own client (a requests.Session is not
+    # shared across threads); MT5Broker.trading_sessions makes no terminal call (documented hours)
+    session_broker: Any = broker
+    if bridge is not None:
+        from goldbot.execution.bridge import RemoteBroker
+        session_broker = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-sessions")
+    sessions = BrokerSessions(session_broker, acc.symbol, fallback=SessionTable(server_tz=acc.server_tz))
+    table = refresh_sessions(sessions, pd.Timestamp.now("UTC"), None)     # once, before the loop starts
+    if table is not None:
+        eng.set_sessions(table)
+    refresher = SessionRefresher(sessions)
     warm = eng.warm_start(pd.Timestamp.now("UTC"))
     log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f", account_id,
              type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade)
@@ -136,13 +234,16 @@ def run_engine(account_id: str) -> None:
     seen = mtimes()
     last_check = time.time()
     while True:
-        try:
-            t = broker.last_tick(acc.symbol)
-            eng.on_tick(t)
-        except AssertionError:
-            pass
+        engine_pass(eng, broker, acc.symbol)
+        try:                                       # D13: a finished background read is applied; the loop never waits
+            table = refresher.collect(pd.Timestamp.now("UTC"), eng.sessions)
+            if table is not None:
+                eng.set_sessions(table)
+        except Exception:
+            log.exception("session refresh failed; keeping the last table")
         if time.time() - last_check > 60:          # promotions by the scheduler take effect without a restart
             last_check = time.time()
+            refresher.start(pd.Timestamp.now("UTC"))   # once per server day the read reaches the broker
             now_m = mtimes()
             if now_m != seen:
                 seen = now_m
@@ -160,12 +261,22 @@ def run_engine(account_id: str) -> None:
         time.sleep(0.25)
 
 
-def engine_limits(settings: Settings, acc: Account) -> RiskLimits:
+def paper_stand_in(broker: Any) -> bool:
+    """True when the engine runs against the paper broker standing in for the account (by type, never by its `name`
+    string: re-verification LOW). Only then is the account's absolute daily limit dropped (engine_limits)."""
+    from goldbot.execution.paper import PaperBroker
+    return isinstance(broker, PaperBroker)
+
+
+def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> RiskLimits:
     """RiskLimits from settings.yaml `risk:`; a live account before the full-size gate (or with an unreadable phase
-    file) gets the tiny-live risk per trade."""
+    file) gets the tiny-live risk per trade (and no minimum-lot exception). The account's own absolute daily loss
+    limit (accounts.yaml, its deposit currency) applies only against its real terminal: `paper=True` (the paper broker
+    standing in for it, a USD book) drops it, so paper and shadow evidence are not changed by a £ figure."""
     from goldbot.ops import accounts
     from goldbot.risk import RiskLimits
-    return RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
+    limits = RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
+    return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs})
 
 
 def record_gate_cli(argv: list[str]) -> int:
@@ -467,12 +578,21 @@ if __name__ == "__main__":
     elif cmd == "preflight":
         from goldbot.ops.preflight import main as preflight_main
         sys.exit(preflight_main(sys.argv[2:]))
+    elif cmd == "revoke-sessions":
+        from goldbot.api.auth import revoke_sessions_cli
+        sys.exit(revoke_sessions_cli(sys.argv[2:]))
+    elif cmd == "owner-history":
+        from goldbot.research.owner_history import main as owner_history_main
+        sys.exit(owner_history_main(sys.argv[2:]))
     elif cmd == "health":
         from goldbot.ops.health import main as health_main
         sys.exit(health_main(sys.argv[2:]))
     elif cmd == "ruin":
         from goldbot.research.ruin import main as ruin_main
         sys.exit(ruin_main(sys.argv[2:]))
+    elif cmd == "monthly-report":
+        from goldbot.ops.monthly_report import main as monthly_main
+        sys.exit(monthly_main(sys.argv[2:]))
     elif cmd == "sizing-feasibility":
         from goldbot.research.min_lot import main as feasibility_main
         sys.exit(feasibility_main(sys.argv[2:]))

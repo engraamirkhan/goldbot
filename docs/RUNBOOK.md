@@ -528,9 +528,10 @@ a service is running; if one keeps restarting, read its `.err` file in the logs 
 | An approver or viewer forgot their password but has the authenticator | Login page -> **Forgot password** -> email, a current code, new password. All their sessions are signed out and you get a Telegram notice; if you did not expect it, **Disable** the account. Five wrong attempts lock that email for 15 minutes (20 from one network address lock that address). |
 | You (the owner) forgot your password | Login page -> **Forgot password** -> email, a current authenticator code, new password **and one unused recovery code** (the code is spent). The authenticator alone never resets the owner. You get a Telegram notice either way. |
 | An approver or viewer lost the authenticator | Owner: **Users** -> **Reset link** on their row, and send them the link (24 h, single use). It sets a new password and a new authenticator and signs them out everywhere. |
-| You (the owner) lost the authenticator | Login page -> **Use a recovery code** -> email, password and one unused recovery code. Enrol the new authenticator it shows; the old one stops working. Then get 10 fresh codes (`POST /api/auth/recovery/codes` with password + new code; there is no button yet). The old codes stop working. |
+| You (the owner) lost the authenticator | No reset link works for the owner account (a stolen session must not be able to reset it). Login page -> **Use a recovery code** -> email, password and one unused recovery code. Enrol the new authenticator it shows; the old one stops working. Then get 10 fresh codes (`POST /api/auth/recovery/codes` with password + new code; there is no button yet). The old codes stop working. |
 | You lost the authenticator and every recovery code, or the password and the authenticator | On the server: stop `goldbot-api` and ask a Claude session to reset the owner in `state\aux.db`. There is no remote path, by design. |
 | A sign-in says "too many attempts" | Wait 15 minutes after the last failure; the counter is kept in `state\aux.db`, so restarting the API does not clear it. Someone who knows your email can keep it locked this way; the audit log shows the failures and their address. |
+| Re-arm or auto mode says "too many attempts" (Telegram notice: wrong authenticator codes) | Five wrong codes lock re-arm and auto mode (dashboard and Telegram) for 15 minutes; sign-in, **/halt** and **/mode propose** still work. If it was not you, someone holds a signed-in session: on the server, from the goldbot directory, run `python -m goldbot.ops.run revoke-sessions` (signs every account out; add `--state <dir>` if state is elsewhere: it refuses a directory without aux.db), then change your password. Failed sign-ins also lock re-arm and auto mode for the same 15 minutes. |
 | Someone should lose access | Owner: **Users** -> **Disable** (signs them out at once) or **Sign out everywhere**; **Enable** restores the account. The owner cannot be disabled or demoted. |
 
 Every one of these is recorded in the audit log (`state\aux.db`, table `audit`; the state-files table in section 3 shows how to read it).
@@ -598,7 +599,8 @@ place, change or close a trade.
 | research analyst | Saturday 13:00 | runs up to two bounded trials on filed hypotheses and gives a verdict (promotes nothing) |
 
 Each report arrives on Telegram, appears on the dashboard **Agents** tab, and is saved as
-`state\agent_reports\<role>\<UTC time>.md`. Every run (cost, status) is logged in `state\agent_runs.jsonl`.
+`state\agent_reports\<role>\<UTC time>.md`. Every run (cost, status) is logged in `state\aux.db` (table `agent_runs`)
+and copied to `state\agent_runs.jsonl`.
 
 ### Where things live
 
@@ -611,9 +613,11 @@ Each report arrives on Telegram, appears on the dashboard **Agents** tab, and is
 | Cost tables (per account, nightly) | `state\costs_<account>.json` |
 | Swap and commission read from the terminal | `state\broker_terms_<account>.json` (notes say why a value fell back to settings) |
 | Account classifier | `state\classifier_<account>.json` |
-| Scheduler job states | `state\scheduler.json` (also on the **Feeds** tab) |
+| Scheduler job states | `state\aux.db` table `scheduler_jobs`; readable copy `state\scheduler.json` (also on the **Feeds** tab) |
 | News feed health | `state\news_feeds.json` |
-| Agent spend | `state\agent_spend.json` (monthly), `state\news_spend.json` (headline scoring per day) |
+| Agent spend | `state\aux.db` table `agent_spend` (monthly; readable copy `state\agent_spend.json`), `state\news_spend.json` (headline scoring per day) |
+| Telegram outbox (what was sent) | `state\aux.db` tables `outbox_sent`, `outbox_cursor` |
+| Files as they were before the database took over | `state\pre-db\` (kept, never written again) |
 | Population / league table | `state\population.json`, `state\agents.json` |
 | Shadow records | `state\shadow_<model version>.json`; every candidate with its decision in `state\shadow_book.json` |
 | Weekly recalibrations (before/after ECE) | `state\recalibration.jsonl`; also `recalibrations` in `models\registry.json` |
@@ -761,12 +765,19 @@ nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what
 | `supervisor_halt` | The supervisor halted on combined limits (`combined_daily_cap`, `combined_weekly_cap`, `combined_drawdown_halt` in `state\supervisor.json`), **or** its heartbeat is missing/older than 60 s, or `supervisor.json` is unreadable. | Check `nssm status goldbot-supervisor` and the Feeds tab heartbeat; restart it if stopped. For a cap halt see the `daily_cap` row. |
 | `drawdown_halt` | This account's equity fell 12% below its high-water mark. | Investigate before anything else. The dashboard Re-arm clears only the owner halt; the code has no command that clears this stage (an engine restart resets it, because the stage is kept in memory). |
 | `news_blackout` | Within 15 min before to 30 min after a tier-1 event (CPI, NFP, FOMC, PCE), or 30 min after a high-relevance news shock. The active event is in `state\engine_<account>.json` under `blackout`. | Wait. If it never clears, check `calendar_archive` on the Feeds tab. |
-| `stale_data` | The last tick is older than 20 s. | Check the MT5 terminal is open, logged in and connected; the Feeds tab shows "Last tick". |
+| `stale_data` | The last tick is older than 20 s (either way: a tick stamped in the future counts too). | Check the MT5 terminal is open, logged in and connected; the Feeds tab shows "Last tick". |
+| `tick_from_future` | The last tick is stamped more than 10 s ahead of this server's clock: wrong `server_tz` in a DST gap week, or a host or broker clock fault. | See "Server clock (US-EU DST gap weeks)" below. |
+| `tick_error` | Processing a tick raised (a terminal or bridge fault, a full disk, a bug). The engine logs it (first of each type, then once a minute with a count) and carries on; exits run before anything that writes files or reads the account. Health fails `engine:<account>` while it blocks, and warns on Telegram (`tick_errors:<account>`) for 15 minutes after an error or when one happened since the previous health run. Clears when a whole decision bar closes with no error. | Read the engine log (`journalctl -u goldbot-engine@<account>` on the brain); if it repeats, restart the engine. Exits keep running. |
+| `server_clock_mismatch` | The broker's measured UTC offset differs from `server_tz` by more than 5 min while gold trades (`server_clock` in `engine_<account>.json`). Clears after 60 s of agreeing ticks. | See "Server clock (US-EU DST gap weeks)" below. |
+| `market_closed` | The broker's session table (read once per server day; static hours if the read fails) says the market is closed, e.g. a holiday early close. | Wait for the reopen; `session_source` in `engine_<account>.json` says whether the broker's own hours are used. |
 | `spread_too_wide` | Spread above 45 points ($0.45). | Usually rollover or news; wait. |
 | `max_positions` | Two positions already open on this account. | Normal. |
 | `daily_cap` / `weekly_cap` | This account lost 2% / 5% measured from its equity when the engine started. | The engine does not yet reset its day/week starting equity at 00:00 UTC (`new_day` in `goldbot/risk/gate.py` is not called), so these clear only when the engine restarts. Review the losses before restarting. |
 | `negative_ev`, `target_below_cost_floor` | After costs the trade has no edge, or the target is below 2.5x the round-trip cost. | Normal filtering; check the cost table if it happens to every candidate. |
-| `min_lot_exceeds_risk`, `margin_level_floor` | Minimum lot would risk too much, or margin level would fall below 300%. | Account too small for the stop; normal on small demos. |
+| `min_lot_exceeds_risk`, `margin_level_floor` | Minimum lot would risk too much, or margin level would fall below 300%. | Account too small for the stop; normal on small demos. On the £1,000 demo, 15m needs the minimum-lot exception: `risk: { min_lot_risk_cap: 0.01 }` in `config\settings.local.yaml` (never applies in tiny-live). |
+| `fx_conversion_unavailable` | The account is not in USD and the terminal gave no USD -> account-currency conversion (`order_calc_profit` / tick value), or the terminal's symbol info was unreadable. | Check the terminal is logged in and XAUUSD is in Market Watch; entries resume when it answers. Exits are unaffected. |
+| `daily_loss_limit_abs` | Today's loss plus this trade's full stop risk would exceed min(2% of the day-start equity, the account's `daily_loss_limit_abs` in `config\accounts.yaml`, e.g. £50 on icm-demo). Equal is allowed; the supervisor halts once the combined loss reaches the limit. | Normal; clears at 00:00 UTC. `engine_<account>.json` shows `daily_loss_limit` and `daily_loss_remaining`. |
+| `supervisor_halt` with `mixed_account_currencies` | Running engines report different deposit currencies (e.g. GBP and USD); equities are never summed across currencies. Health names the files. | Stop the engine that should not run (or delete its leftover `engine_<account>.json`), see "Currency rollout" below. |
 | `data_quality_error` | Reserved; the engine does not set it today. | - |
 
 ### Telegram is silent
@@ -811,11 +822,74 @@ Saturday run or a manual run of `data-dukascopy` retries it.
 
 `python -m goldbot.ops.run health` lists every check (settings, secrets present, disk, supervisor heartbeat, halt,
 phase gates, each engine's state, stage and data quality, risk state, scheduler jobs, cost tables, news feeds,
-agent spend, stuck approvals, backup age and the restore drill) as ok / warn / fail with a one-line reason, and exits 1 on any fail. `--json`,
+agent spend, stuck approvals, backup age, the restore drill and each account's measured server clock offset) as ok / warn / fail with a one-line reason, and exits 1 on any fail. `--json`,
 `--out FILE`, `--baseline FILE` (fail only on new fails) and `--static` (no running services needed) exist for the
 update script. The Telegram service runs the same checks every 5 minutes and messages you when a check turns fail
 and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service running; the `alerts` check shows
 when that loop has stopped).
+
+### Currency rollout (one time: the update that brings currency-correct sizing, BACKLOG 28/25/29)
+
+Engines now publish their deposit currency and the supervisor halts every account when running engines disagree
+(`mixed_account_currencies`). Do this update with every engine stopped, not engine by engine:
+
+1. Stop all engines (`nssm stop goldbot-engine-icm-demo`, and any other engine service), then the supervisor.
+2. Delete `state\engine_<account>.json` of every account that will not run (with this release `vantage-demo` is
+   `enabled: false` in `config\accounts.yaml`). A file older than 60 s does not trigger the currency halt, and if
+   its currency differs (or is missing) its money is not summed, but its open lots still count as exposure and the
+   health check warns about it until you delete it.
+3. Deploy (`vps_update.ps1`, below).
+4. Start the supervisor, then all engines together.
+5. Check `state\supervisor.json`: `"halt": false` and `"currencies": {"icm-demo": "GBP"}`. If it shows
+   `mixed_account_currencies`, the health check names the offending file.
+
+### Server clock (US-EU DST gap weeks)
+
+MT5 stamps every tick, bar and deal in the broker's *server time*; `server_tz` in `config/accounts.yaml` converts it
+to UTC. Two clocks are in use: `Europe/Athens` (UTC+2/+3, switching on EU dates) and `NY+7` (UTC+2/+3, switching on
+US dates: "midnight = 5 pm New York"). IC Markets documents the NY+7 clock. They agree except in the gap weeks,
+when a wrong zone shifts the session table, the rollover gate, the Friday 21:30 weekend rule and every timestamp by
+one hour. The `server_clock:<account>` health check measures it: it reads the broker's latest tick, compares it
+with this server's UTC clock and fails (Telegram alert) when they differ by more than 5 minutes while gold trades.
+Over a weekend it says "market closed: not measured", which is fine.
+
+Next gap trading days (check on one of them, during market hours):
+
+| Gap | Trading days | NY+7 | Europe/Athens |
+| --- | --- | --- | --- |
+| Oct/Nov 2026 | Mon 26 Oct - Fri 30 Oct 2026 | UTC+3 | UTC+2 |
+| March 2027 | Mon 15 Mar - Fri 26 Mar 2027 | UTC+3 | UTC+2 |
+| Oct/Nov 2027 | Mon 1 Nov - Fri 5 Nov 2027 | UTC+3 | UTC+2 |
+
+The engine runs the same comparison on every account refresh and refuses entries while it fails (gate reason
+`server_clock_mismatch`, plus `tick_from_future` when ticks are stamped more than 10 s ahead of this server's
+clock); exits (stops, time exits, the weekend rule, the kill switch) are never held back by it.
+
+Three rules look at the broker's clock; each owns one case (all block entries only):
+
+| Rule | Measures | Owns |
+| --- | --- | --- |
+| `clock_skew` (data-quality error) | rolling median of broker tick time minus this server's clock over 120 new ticks; blocks beyond 10 s | a broker or host clock drifting by seconds (bars would close before their last ticks) |
+| `tick_from_future` | the latest tick alone, more than 10 s ahead | a sudden jump ahead (wrong zone, clock step) before the median catches up; the same 10 s threshold, so a few seconds fast never trips it |
+| `server_clock_mismatch` | the latest tick against the configured `server_tz`, over 5 minutes while gold trades | a whole-hour zone error (the DST gap weeks) or a host clock far off; names the zone when the other known zone explains it |
+
+Steps on the brain (or the VPS), on a gap day while the market is open:
+1. `goldbot run preflight` first: its `time_sync` line must be ✅ (chrony synchronised); a host clock that is off
+   reads as a mismatch too. Then `goldbot run health` (or `python -m goldbot.ops.run health`) and read the
+   `server_clock:<account>` line. `ok ... server clock UTC+3 matches NY+7` means the configured zone is right.
+2. `fail ... server clock reads UTC+3, which is NY+7 now, but Europe/Athens gives UTC+2 (US-EU DST gap week)`
+   means the zone is wrong. Any other `fail` ("no known server zone explains it: host clock or feed") is NOT a zone
+   problem: check the host clock (`chronyc tracking` on the brain, `w32tm /query /status` on Windows; the offset must
+   be well under a second) and the feed. Cross-check by eye: the MT5 terminal's Market Watch shows the server time;
+   subtract the real UTC time (`date -u` on the brain).
+3. Fix a wrong zone: set `server_tz` for that account in `config/accounts.yaml` to the zone the broker runs (`NY+7`
+   or `Europe/Athens`) on the brain AND on the MT5 box (the bridge converts with its own copy; preflight's
+   `bridge_server_tz` line blocks when the two differ), commit it, deploy, then restart the bridge and the engine.
+   Run `goldbot run health` again until the line is `ok`.
+4. Set `NY+7` only on a gap day when the probe has shown UTC+3 against Athens' UTC+2 (step 2), never on the
+   research alone. Outside the gap weeks the two zones are identical and nothing can be learned.
+
+`goldbot run preflight` runs the same measurement (`server_clock`, blocking on a measured mismatch).
 
 ### Updating the VPS to a new version
 
@@ -833,3 +907,20 @@ fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back,
 * Proposals open during an update expire. Positions keep their broker-side stop and target while engines are down.
 * If the new commit changes `config/accounts.yaml` or `config/settings.yaml` that you edited on the VPS, the
   checkout fails and the script restores the old version untouched: merge those files by hand.
+* Rolling back to a version from before the agent/scheduler/outbox bookkeeping moved into `state\aux.db`
+  (2026-10-10): the new version keeps `scheduler.json`, `agent_spend.json`, `telegram_outbox.json` and
+  `agent_runs.jsonl` up to date, so the old version carries on where it left off, and the new version merges what
+  the old one wrote when you update again. The old version's dashboard would refuse the newer `aux.db`, so the
+  script steps `aux.db` back from schema 5 to 4 by itself when it installs such a version (rows kept; the next
+  update re-applies 5). Only if you check out an old version by hand, stop the services and run the same step:
+
+  ```powershell
+  cd C:\goldbot
+  foreach ($s in "goldbot-scheduler","goldbot-webhook","goldbot-news","goldbot-api","goldbot-telegram","goldbot-supervisor","goldbot-engine-icm","goldbot-engine-vantage") { nssm stop $s }
+  .\.venv\Scripts\python.exe -c "import sqlite3; c = sqlite3.connect(r'state\aux.db'); v = c.execute('SELECT MAX(version) FROM schema_version').fetchone()[0]; assert v == 5, f'schema {v}: do not run this'; c.execute('DELETE FROM schema_version WHERE version = 5'); c.execute('PRAGMA user_version = 4'); c.commit()"
+  ```
+
+  It refuses unless the file is at schema 5. Later versions record which older versions can still open the file,
+  so this step is not needed again for changes that only add tables.
+* The script stops the scheduler first and checks again that no job started in between; if one did, it was
+  interrupted by the stop: the script starts the scheduler again, stops nothing else and refuses the update.

@@ -186,6 +186,7 @@ def test_forgot_password_runs_the_same_scrypt_work_on_every_path(team, monkeypat
     """Existing account, unknown email and owner without a recovery code all do one verify + one hash before the
     refusal, so timing does not reveal which accounts exist (security review of c256c23)."""
     s, _, _ = team
+    auth_mod._dummy_hash()          # built once per process (lru_cache): not part of a request's work
     calls: list[str] = []
     real_v, real_h = auth_mod.verify_password, auth_mod.hash_password
 

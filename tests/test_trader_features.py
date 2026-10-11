@@ -83,13 +83,17 @@ def test_session_zones_report_current_and_previous_session_levels_known_at_each_
     assert X["asia_high_dist_atr"][i] == pytest.approx(dist(i, 110.0)) and np.isnan(X["london_high_dist_atr"][i])
     assert X["sess_high_dist_atr"][i] == pytest.approx(dist(i, 100.5)) and X["prev_sess_pos"][i] == 0
     assert X["prev_sess_pos"][at("2024-01-10 12:00")] == 1                     # closed above the Asia range
-    # New York 13:00: previous session London (high 112); Asia's last high still 110
-    i = at("2024-01-10 13:00")
+    # New York opens 08:30 New York = 13:30 UTC in January: at 13:00 London is still the current session
+    assert X["prev_sess_high_dist_atr"][at("2024-01-10 13:00")] == pytest.approx(dist(at("2024-01-10 13:00"), 110.0))
+    # New York 13:30: previous session London (high 112); Asia's last high still 110
+    i = at("2024-01-10 13:30")
     assert X["prev_sess_high_dist_atr"][i] == pytest.approx(dist(i, 112.0))
     assert X["london_high_dist_atr"][i] == pytest.approx(dist(i, 112.0))
     assert X["asia_high_dist_atr"][i] == pytest.approx(dist(i, 110.0))
-    # 21:00-23:00 is outside every window: no current session, the previous one is New York
-    i = at("2024-01-10 21:30")
+    # New York closes 17:00 New York = 22:00 UTC in January; 22:00-23:00 is outside every window: no current
+    # session, the previous one is New York
+    assert not np.isnan(X["sess_high_dist_atr"][at("2024-01-10 21:30")])
+    i = at("2024-01-10 22:30")
     assert np.isnan(X["sess_high_dist_atr"][i]) and X["prev_sess_high_dist_atr"][i] == pytest.approx(dist(i, 100.5))
     # previous feature-day (ends 13:30 New York = 18:30 UTC in January): known only after it closes
     assert np.isnan(X["pdh_dist_atr"][at("2024-01-10 18:15")])
@@ -126,7 +130,7 @@ STRUCTURE = [            # lag 2: swing high 101 at B confirmed at B+2; swept at
 
 @pytest.mark.parametrize("mirror", [False, True])
 def test_sweep_and_break_of_structure_on_a_known_sequence(mirror):
-    m = _frame(STRUCTURE, "2024-01-10 07:00")
+    m = _frame(STRUCTURE, "2024-01-10 08:00")
     m = _mirror(m) if mirror else m
     X = build_features(m, ["market_structure"], ctx={"swing_lag": 2})
     up, dn = ("sweep_low", "sweep_high") if mirror else ("sweep_high", "sweep_low")
@@ -141,7 +145,7 @@ def test_sweep_and_break_of_structure_on_a_known_sequence(mirror):
 
 def test_a_swing_is_broken_only_once():
     rows = [*STRUCTURE[:5], (101.2, 101.25, 100.5, 100.6), (100.6, 101.25, 100.5, 101.1)]   # re-cross 101 at B+6
-    X = build_features(_frame(rows, "2024-01-10 07:00"), ["market_structure"], ctx={"swing_lag": 2})
+    X = build_features(_frame(rows, "2024-01-10 08:00"), ["market_structure"], ctx={"swing_lag": 2})
     assert np.flatnonzero(X["bos_event"].to_numpy()).tolist() == [B + 4]
 
 

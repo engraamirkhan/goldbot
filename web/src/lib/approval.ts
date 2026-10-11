@@ -70,6 +70,10 @@ export function blockers(status: Status | undefined, accounts: AccountSummary[] 
     if (accountId && a.account_id !== accountId) continue;
     const who = accountId ? "" : ` (${a.account_id})`;
     if (a.stage === "halted") out.push(`drawdown halt${who}`);
+    // the daily caps the risk check enforces (account and combined): spent means no new entry until 00:00 UTC
+    if (a.loss_budget && a.loss_budget.remaining <= 0) {
+      out.push(`${a.loss_budget.period === "this week" ? "weekly" : "daily"} loss limit reached${who}`);
+    }
     // paper engines size as a raw account whatever the classifier says (engine/runner.py), so only demo/live block
     if (a.account_class === "unknown" && a.mode !== "paper") out.push(`account class unknown${who}`);
   }

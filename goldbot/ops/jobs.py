@@ -74,11 +74,13 @@ from goldbot.agents.roles import ROLES
 from goldbot.agents.runner import AgentRunner
 from goldbot.base import Record, write_atomic
 from goldbot.config import DecisionTimeframe, Settings
+from goldbot.data.release import store_macro
 from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.classifier import PersistentClassifier, classify
 from goldbot.execution.costs import BrokerTerms, CostTable, build_cost_table, publishable
 from goldbot.features.mtf import TF_LABEL, context_tfs
+from goldbot.features.registry import versions_for
 from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops import gap_watch as gap_watch_mod
 from goldbot.ops.accounts import Account
@@ -112,7 +114,13 @@ from goldbot.research.director import (
 from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
 from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
-from goldbot.research.pipeline import ResearchResult, build_decision_frame, run_specialist
+from goldbot.research.pipeline import (
+    DEFAULT_FEATURE_NAMES,
+    MACRO_FEATURE_NAMES,
+    ResearchResult,
+    build_decision_frame,
+    run_specialist,
+)
 from goldbot.research.population import Population
 from goldbot.research.promotion import PerfStats, cusum_alarm, evaluate_promotion
 from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, config_hash, quarter_of
@@ -480,16 +488,37 @@ def recalibrate(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 DRIFT_WARMUP_DAYS = 90          # bars before the PSI window so every feature's lookback is filled
 
 
-def _recent_candidates(ctx: JobContext, spec: Any, slot: pd.Timestamp, days: int) -> pd.DataFrame:
+def _recent_candidates(ctx: JobContext, spec: Any, slot: pd.Timestamp, days: int,
+                       feature_version: str = "") -> pd.DataFrame | None:
     """Decision-frame features (plus `side`) of the specialist's candidates in the last `days`, built exactly as for
-    training (same context timeframes and feature registry)."""
+    training (same context timeframes and feature registry), at the champion's own `feature_version` (legacy
+    implementations where it needs them, `registry.versions_for`), over the default set or, for a model trained with
+    the macro drivers, the default set plus MACRO_FEATURE_NAMES with the store's macro rows as context. None when no
+    registered implementation reproduces that version, or a macro model finds no macro rows: its PSI cannot be
+    computed on the features it was trained on."""
+    names: list[str] | None = None
+    versions: dict[str, str] | None = {}
+    feat_ctx: dict[str, Any] | None = None
+    if feature_version:
+        versions = versions_for(DEFAULT_FEATURE_NAMES, feature_version)
+        if versions is not None:
+            names = list(DEFAULT_FEATURE_NAMES)
+        else:
+            versions = versions_for([*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES], feature_version)
+            if versions is None:
+                return None
+            macro = store_macro(ctx.store)
+            if macro.empty:
+                return None
+            names, feat_ctx = [*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES], {"macro": macro}
     start = slot - pd.Timedelta(days=days + DRIFT_WARMUP_DAYS)
     dec = _bars(ctx, spec.timeframe, start, slot)
     if dec.empty:
         return pd.DataFrame()
     ctx_start = start - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
     context = {TF_LABEL[tf]: _bars(ctx, tf, ctx_start, slot) for tf in context_tfs(spec.timeframe)}
-    m, X = build_decision_frame(dec.reset_index(drop=True), context)
+    m, X = build_decision_frame(dec.reset_index(drop=True), context, feature_names=names, ctx=feat_ctx,
+                                versions=versions)
     cands = spec.candidates(m, X)
     if cands.empty:
         return pd.DataFrame()
@@ -518,9 +547,13 @@ def drift_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     errors: dict[str, str] = {}
     for e in [x for x in ctx.models.entries if x.status == "champion"]:
         member = ctx.population.members.get(e.agent_id)
+        unbuildable = False
         try:
             model = ctx.models.load(e)
-            live = _recent_candidates(ctx, member.specialist(), slot, d.window_days) if member is not None else None
+            live = None
+            if member is not None:
+                live = _recent_candidates(ctx, member.specialist(), slot, d.window_days, e.feature_version)
+                unbuildable = live is None
         except Exception as exc:                       # one broken model must not hide the others' health
             log.exception("drift_watch: %s", e.version)
             errors[e.agent_id] = f"{type(exc).__name__}: {exc}"
@@ -535,6 +568,9 @@ def drift_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         health.append(assess(e.agent_id, e.version, model=model, live=live, closed_taken=closed, recent_taken=recent,
                              backtest_dd=float(bt_dd) if bt_dd is not None else None, s=d,
                              trades_per_week=float(tpw) if tpw else None))
+        if unbuildable:
+            health[-1].notes.append(f"feature version {e.feature_version} cannot be rebuilt by any registered "
+                                    "implementation: PSI not computed")
     # sticky: an agent stays halted while the same version is champion, until the owner clears it
     prev_halts = prev.get("halted") or {}
     halted: dict[str, Any] = {}

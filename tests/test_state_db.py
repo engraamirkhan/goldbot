@@ -82,7 +82,7 @@ def test_concurrent_openers_apply_each_migration_once(tmp_path):
 def test_newer_schema_refuses_to_start(tmp_path):
     Database.open(tmp_path, "core")
     with sqlite3.connect(tmp_path / "core.db") as conn:
-        conn.execute("INSERT INTO schema_version VALUES (999, 'from the future', 0)")
+        conn.execute("INSERT INTO schema_version (version, name, applied_ns) VALUES (999, 'from the future', 0)")
     with pytest.raises(SchemaVersionError):
         Database.open(tmp_path, "core")
 

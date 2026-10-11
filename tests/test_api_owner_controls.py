@@ -99,8 +99,10 @@ def test_enable_auto_needs_a_fresh_owner_code_and_the_evidence_and_is_audited(ap
     assert ctl.approval_mode == "auto" and ctl.mode_by == "dashboard:o@x.io"
     assert r.json()["view"]["owner_mode"] == "auto" and r.json()["view"]["can_enable"] is False
     events = [(e["event"], e.get("reason"), e.get("to")) for e in _audit(app)]
-    assert events == [("mode_refused", "evidence", "auto"), ("mode_refused", "totp", "auto"),
-                      ("mode_refused", "totp", "auto"), ("mode_refused", "totp", "auto"), ("mode", None, "auto")]
+    # wrong and replayed codes also count towards the owner's lockout (mode_failed); a non-numeric one is never checked
+    assert events == [("mode_refused", "evidence", "auto"), ("mode_failed", None, None), ("mode_refused", "totp", "auto"),
+                      ("mode_refused", "totp", "auto"), ("mode_failed", None, None), ("mode_refused", "totp", "auto"),
+                      ("mode", None, "auto")]
 
 
 def test_switch_to_propose_needs_no_code_and_is_audited(app_client):

@@ -94,6 +94,11 @@ class RiskSettings(_Section):
     blackout: Blackout
     min_target_over_cost: float = Field(gt=0)
     approval_window_seconds: int = Field(gt=0)
+    # BACKLOG 25 (ADR 0004): when the sized lots fall below the broker's minimum lot, place exactly the minimum lot if
+    # its realised risk (account currency, fraction of equity) is within this cap; half of it in the 8% size-down
+    # stage. Never above the 1% per-trade maximum; never in tiny-live. null = off: the minimum lot only within 1.2x the
+    # target (design). The absolute daily loss limit (BACKLOG 29) is per account: config/accounts.yaml
+    min_lot_risk_cap: float | None = Field(None, gt=0, le=0.01)
     # health: an engine whose broker reads (positions(), deal history) failed this many times in a row FAILs and the
     # owner is alerted on Telegram; fewer is a warning (entries are blocked from the first failure, exits keep trying)
     positions_unreadable_alert: int = Field(5, ge=1)
