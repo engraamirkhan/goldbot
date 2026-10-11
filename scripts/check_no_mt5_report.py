@@ -5,28 +5,39 @@ private folder outside the repo). This hook rejects, whatever the file is called
 * report file names MT5 suggests (`ReportHistory-*`);
 * text containing the report title or an `Account:` label (or its Russian, German or Spanish word) followed by an
   account-like number, also in UTF-16 (the HTML report's usual encoding), with HTML tags allowed in between;
-* a translated report, whose labels the two checks above may not know: an HTML table or .xlsx sheet with at least
-  MIN_STAMPED_ROWS rows that start with an MT5 server stamp `YYYY.MM.DD HH:MM[:SS]` AND either a one-cell section
-  title such as Positions / Deals (English, Russian, German, Spanish) or at least MIN_STAMPED_ROWS of those rows as
-  wide as an MT5 Positions/Orders/Deals row (MIN_REPORT_COLS cells), so an unknown language is caught by shape;
+* a translated report, whose labels the two checks above may not know: an HTML table, an .xlsx sheet or delimited
+  text (CSV, TSV, `;`) with at least MIN_STAMPED_ROWS rows holding an MT5 server stamp `YYYY.MM.DD HH:MM[:SS]` in
+  one of their first STAMP_COLS visible cells AND either a one-cell section title such as Positions / Deals
+  (English, Russian, German, Spanish) or at least MIN_STAMPED_ROWS of those rows as wide as an MT5
+  Positions/Orders/Deals row (MIN_REPORT_COLS cells), so an unknown language is caught by shape. Hidden HTML cells
+  (class "hidden", display:none) are dropped first, as a browser would;
 * .xlsx (zip) files whose worksheet or shared strings contain any of the above.
 
-The translated section and label words are the terminal's usual terms; they were not checked against a real
+Known gaps (stated, not hidden): a translated export with fewer than MIN_STAMPED_ROWS trades, and an .xlsx that
+stores the stamps as Excel date numbers rather than text, pass the shape rule; only the title, account and file-name
+checks see them. The translated section and label words are the terminal's usual terms, not checked against a real
 translated export (none may enter the repo), which is why the shape rule does not depend on them.
+
+Cost is linear in the input: HTML is read with html.parser in one pass (unclosed cells close at the next cell or
+row), no regex backtracks over an unbounded span, and an .xlsx is scanned for at most MAX_ZIP_MEMBERS members and
+MAX_TOTAL_BYTES uncompressed bytes.
 
 Usage: python scripts/check_no_mt5_report.py FILE... (exit 1 and the offending names when any match).
 """
 from __future__ import annotations
 
-import html
+import csv
+import io
 import re
 import sys
 import zipfile
+from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree
 
 TITLE = re.compile(r"Trade\s+History\s+Report", re.IGNORECASE)
-ACCOUNT = re.compile(r"(?:Account|Сч[её]т|Konto|Cuenta):\s*(?:</?\w+[^>]*>\s*)*\d{5,}", re.IGNORECASE)
+# `\w[^>]*` (not `\w+[^>]*`): the two parts cannot share characters, so an unclosed tag costs linear time
+ACCOUNT = re.compile(r"(?:Account|Сч[её]т|Konto|Cuenta):\s*(?:</?\w[^>]*>\s*)*\d{5,}", re.IGNORECASE)
 NAME = re.compile(r"^ReportHistory-", re.IGNORECASE)
 STAMP = re.compile(r"\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}(?::\d{2})?")
 SECTION_TITLES = frozenset({
@@ -35,13 +46,15 @@ SECTION_TITLES = frozenset({
     "positionen", "aufträge", "geschäfte",                           # German
     "posiciones", "órdenes", "ordenes", "transacciones", "operaciones",  # Spanish
 })
-MIN_STAMPED_ROWS = 5           # rows starting with an MT5 stamp before a table counts as a trade list
+MIN_STAMPED_ROWS = 5           # rows holding an MT5 stamp before a table counts as a trade list
+STAMP_COLS = 3                 # the stamp may sit in any of a row's first three visible cells
 MIN_REPORT_COLS = 10           # MT5 Positions rows have 13 cells, Deals 14, Orders 11
 MAX_SCAN = 20 * 2**20          # bytes read per file / zip member
+MAX_ZIP_MEMBERS = 200          # xl/*.xml members scanned per .xlsx
+MAX_TOTAL_BYTES = 50 * 2**20   # uncompressed bytes read per .xlsx, all members together
+DELIMITERS = (",", "\t", ";")
 
-_ROW = re.compile(r"<tr\b", re.IGNORECASE)
-_CELL = re.compile(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", re.IGNORECASE | re.DOTALL)
-_TAG = re.compile(r"<[^>]+>")
+_HTML = re.compile(r"<t[rdh]\b", re.IGNORECASE)
 _NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
 
@@ -58,50 +71,125 @@ def _matches(text: str) -> bool:
     return bool(TITLE.search(text) or ACCOUNT.search(text))
 
 
+class _Rows(HTMLParser):
+    """Visible, non-empty cell texts per table row, in one linear pass. A cell or row start closes any open cell, so
+    unclosed <td>/<tr> (legal HTML) cost nothing extra; hidden cells are dropped, as a browser shows the table."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rows: list[list[str]] = []
+        self._row: list[str] | None = None
+        self._cell: list[str] | None = None
+        self._hidden = False
+
+    def _close_cell(self) -> None:
+        if self._cell is not None and self._row is not None and not self._hidden:
+            text = " ".join("".join(self._cell).split())
+            if text:
+                self._row.append(text)
+        self._cell = None
+
+    def _close_row(self) -> None:
+        self._close_cell()
+        if self._row is not None:
+            self.rows.append(self._row)
+        self._row = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "tr":
+            self._close_row()
+            self._row = []
+        elif tag in ("td", "th"):
+            self._close_cell()
+            if self._row is None:
+                self._row = []
+            a = {k.lower(): (v or "") for k, v in attrs}
+            self._hidden = "hidden" in a.get("class", "").split() or \
+                "display:none" in a.get("style", "").replace(" ", "").lower()
+            self._cell = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("td", "th"):
+            self._close_cell()
+        elif tag in ("tr", "table"):
+            self._close_row()
+
+    def handle_data(self, data: str) -> None:
+        if self._cell is not None:
+            self._cell.append(data)
+
+    def close(self) -> None:
+        super().close()
+        self._close_row()
+
+
 def _html_rows(text: str) -> list[list[str]]:
-    """Non-empty cell texts of every <tr> (tags stripped, entities decoded)."""
-    rows = []
-    for chunk in _ROW.split(text)[1:]:
-        cells = [" ".join(html.unescape(_TAG.sub("", c)).split()) for c in _CELL.findall(chunk)]
-        rows.append([c for c in cells if c])
-    return rows
+    p = _Rows()
+    p.feed(text)
+    p.close()
+    return p.rows
 
 
-def _xlsx_rows(z: zipfile.ZipFile) -> list[list[str]]:
-    """Non-empty cell texts of every row of every worksheet (shared, inline and plain values)."""
-    names = set(z.namelist())
-    shared: list[str] = []
-    if "xl/sharedStrings.xml" in names:
-        with z.open("xl/sharedStrings.xml") as fh:
-            sst = ElementTree.fromstring(fh.read(MAX_SCAN))
-        shared = ["".join(t.text or "" for t in si.iter(f"{_NS}t")) for si in sst.iter(f"{_NS}si")]
+def _delimited_rows(text: str, delim: str) -> list[list[str]]:
+    try:
+        return [[c.strip() for c in r if c.strip()] for r in csv.reader(io.StringIO(text), delimiter=delim)]
+    except csv.Error:                                   # not delimited text after all (NUL bytes, huge fields)
+        return []
+
+
+def _xlsx_rows(members: dict[str, bytes]) -> list[list[str]]:
+    """Non-empty cell texts of every row of every scanned worksheet (shared, inline and plain values). A member cut
+    short by the byte budget does not parse and is skipped."""
+    def parse(raw: bytes) -> ElementTree.Element | None:
+        try:
+            return ElementTree.fromstring(raw)
+        except ElementTree.ParseError:
+            return None
+    sst = parse(members["xl/sharedStrings.xml"]) if "xl/sharedStrings.xml" in members else None
+    shared = [] if sst is None else ["".join(t.text or "" for t in si.iter(f"{_NS}t")) for si in sst.iter(f"{_NS}si")]
     rows: list[list[str]] = []
-    for name in sorted(n for n in names if n.startswith("xl/worksheets/") and n.endswith(".xml")):
-        with z.open(name) as fh:
-            sheet = ElementTree.fromstring(fh.read(MAX_SCAN))
+    for name in sorted(n for n in members if n.startswith("xl/worksheets/")):
+        sheet = parse(members[name])
+        if sheet is None:
+            continue
         for row in sheet.iter(f"{_NS}row"):
             cells = []
             for c in row.iter(f"{_NS}c"):
                 v = c.find(f"{_NS}v")
-                if c.get("t") == "s" and v is not None and (v.text or "").isdigit() and int(v.text or 0) < len(shared):
-                    cells.append(shared[int(v.text or 0)])
+                text = v.text or "" if v is not None else ""
+                if c.get("t") == "s":
+                    cells.append(shared[int(text)] if text.isdigit() and int(text) < len(shared) else "")
                 elif c.get("t") == "inlineStr":
                     cells.append("".join(t.text or "" for t in c.iter(f"{_NS}t")))
-                elif v is not None:
-                    cells.append(v.text or "")
+                else:
+                    cells.append(text)
             rows.append([" ".join(x.split()) for x in cells if x.strip()])
     return rows
 
 
 def _report_shaped(rows: list[list[str]]) -> bool:
-    """A translated trade list: enough rows led by an MT5 server stamp, under a known section title or as wide as
-    an MT5 report row."""
-    stamped = [r for r in rows if r and STAMP.fullmatch(r[0])]
+    """A translated trade list: enough rows with an MT5 server stamp near their start, under a known section title or
+    as wide as an MT5 report row."""
+    stamped = [r for r in rows if any(STAMP.fullmatch(c) for c in r[:STAMP_COLS])]
     if len(stamped) < MIN_STAMPED_ROWS:
         return False
     titled = any(len(r) == 1 and r[0].casefold().rstrip(":") in SECTION_TITLES for r in rows)
     wide = sum(len(r) >= MIN_REPORT_COLS for r in stamped) >= MIN_STAMPED_ROWS
     return titled or wide
+
+
+def _zip_members(z: zipfile.ZipFile) -> dict[str, bytes]:
+    """The first MAX_ZIP_MEMBERS xl/*.xml members, reading at most MAX_SCAN each and MAX_TOTAL_BYTES in all."""
+    out: dict[str, bytes] = {}
+    budget = MAX_TOTAL_BYTES
+    for info in z.infolist():
+        if len(out) >= MAX_ZIP_MEMBERS or budget <= 0:
+            break
+        if info.filename.startswith("xl/") and info.filename.endswith(".xml"):
+            with z.open(info) as member:
+                out[info.filename] = member.read(min(MAX_SCAN, budget))
+            budget -= len(out[info.filename])
+    return out
 
 
 def looks_like_report(path: str) -> bool:
@@ -116,16 +204,18 @@ def looks_like_report(path: str) -> bool:
     if raw[:2] == b"PK":
         try:
             with zipfile.ZipFile(p) as z:
-                for info in z.infolist():
-                    if info.filename.startswith("xl/") and info.filename.endswith(".xml"):
-                        with z.open(info) as member:
-                            if _matches(_text(member.read(MAX_SCAN))):
-                                return True
-                return _report_shaped(_xlsx_rows(z))
-        except (zipfile.BadZipFile, ElementTree.ParseError, KeyError, OSError):
+                members = _zip_members(z)
+        except (zipfile.BadZipFile, KeyError, OSError):
             return False
+        return any(_matches(_text(m)) for m in members.values()) or _report_shaped(_xlsx_rows(members))
     text = _text(raw)
-    return _matches(text) or (bool(_ROW.search(text)) and _report_shaped(_html_rows(text)))
+    if _matches(text):
+        return True
+    if len(STAMP.findall(text)) < MIN_STAMPED_ROWS:      # cheap gate before any table parse
+        return False
+    if _HTML.search(text):
+        return _report_shaped(_html_rows(text))
+    return any(_report_shaped(_delimited_rows(text, d)) for d in DELIMITERS)
 
 
 def offending(paths: list[str]) -> list[str]:

@@ -881,9 +881,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   currency); tickets are used only to match a position to its opening order. A pre-commit hook
   (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` / `Счёт:` /
   `Konto:` / `Cuenta:` + digits, also in UTF-16 and inside .xlsx), and a translated one by shape: an HTML table or
-  xlsx sheet with >= 5 rows led by an MT5 stamp `YYYY.MM.DD HH:MM` under a Positions/Deals-like title (en/ru/de/es)
-  or >= 5 such rows of >= 10 cells (the translated words are unconfirmed against a real export; the shape rule does
-  not need them; every tracked file passes). XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`,
+  xlsx sheet or CSV/TSV with >= 5 rows holding an MT5 stamp `YYYY.MM.DD HH:MM` in one of their first 3 visible cells
+  (hidden HTML cells dropped) under a Positions/Deals-like title (en/ru/de/es) or >= 5 such rows of >= 10 cells (the
+  translated words are unconfirmed against a real export; the shape rule does not need them; every tracked file
+  passes). Linear time (html.parser, no backtracking regex); an xlsx is scanned for at most 200 members and 50 MB.
+  Gaps: a translated export with < 5 trades, or xlsx stamps stored as Excel numbers, pass the shape rule. XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`,
   default Europe/Athens).
   1R comes from the opening order's INITIAL stop (Orders section), else the report's S/L, which is the FINAL stop;
   the (symbol, side, open time) fallback pairs a position with an order only when exactly one of each shares the

@@ -553,6 +553,64 @@ def test_the_commit_hook_rejects_a_translated_account_label_with_a_number(tmp_pa
     assert hook.offending([str(p)]) == [str(p)]
 
 
+def test_the_commit_hook_parses_unclosed_cells_and_tags_in_linear_time(tmp_path):
+    import time as _time
+    hook = _hook()
+    cells = tmp_path / "cells.html"
+    cells.write_text("<table><tr>" + "<td>x" * 50_000, encoding="utf-8")
+    tag = tmp_path / "tag.txt"
+    tag.write_text("Account: <" + "a" * 50_000, encoding="utf-8")
+    t0 = _time.perf_counter()
+    assert hook.offending([str(cells), str(tag)]) == []
+    assert _time.perf_counter() - t0 < 1.0
+
+
+def test_the_commit_hook_drops_hidden_cells_before_the_shape_rule(tmp_path):
+    hook = _hook()
+    rows = _translated_rows("Ιστορικό", ["x"] * 13)
+    body = "".join("<tr>" + ('<td class="hidden">c</td><td style="display: none">d</td>' if i > 1 else "")
+                   + "".join(f"<td>{escape(c)}</td>" for c in r) + "</tr>" for i, r in enumerate(rows))
+    p = tmp_path / "hidden.html"
+    p.write_bytes(f"<table>{body}</table>".encode("utf-16"))
+    assert hook.offending([str(p)]) == [str(p)]
+
+
+@pytest.mark.parametrize("delim,name", [(",", "history.csv"), ("\t", "history.tsv"), (";", "export.txt")])
+def test_the_commit_hook_rejects_a_translated_delimited_export(tmp_path, delim, name):
+    hook = _hook()
+    p = tmp_path / name
+    p.write_text("\n".join(delim.join(r) for r in _translated_rows("Позиции", RU_HEADER)), encoding="utf-8")
+    assert hook.offending([str(p)]) == [str(p)]
+
+
+def test_the_commit_hook_scans_a_bounded_number_of_xlsx_members(tmp_path, monkeypatch):
+    hook = _hook()
+    p = tmp_path / "many.xlsx"
+    with zipfile.ZipFile(p, "w") as z:
+        for i in range(hook.MAX_ZIP_MEMBERS + 50):
+            z.writestr(f"xl/worksheets/sheet{i}.xml", "<worksheet/>")
+    opened: list[str] = []
+    real_open = zipfile.ZipFile.open
+
+    def counting_open(self, name, *a, **kw):
+        opened.append(getattr(name, "filename", name))
+        return real_open(self, name, *a, **kw)
+    monkeypatch.setattr(zipfile.ZipFile, "open", counting_open)
+    assert hook.offending([str(p)]) == []
+    assert len(opened) <= 2 * hook.MAX_ZIP_MEMBERS
+
+
+def test_the_commit_hook_reads_at_most_its_byte_budget_from_an_xlsx(tmp_path, monkeypatch):
+    hook = _hook()
+    p = tmp_path / "big.xlsx"
+    with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("xl/sharedStrings.xml", "<sst>" + " " * 5000 + "</sst>")
+        z.writestr("xl/worksheets/sheet1.xml", "<worksheet>" + " " * 5000 + "Account: " + "1234567</worksheet>")
+    assert hook.offending([str(p)]) == [str(p)]
+    monkeypatch.setattr(hook, "MAX_TOTAL_BYTES", 1000)
+    assert hook.offending([str(p)]) == []          # the account line lies past the budget: never read
+
+
 def test_the_commit_hook_ignores_a_table_with_too_few_stamps_or_no_report_shape(tmp_path):
     hook = _hook()
     few = tmp_path / "few.html"
