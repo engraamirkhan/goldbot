@@ -11,7 +11,8 @@ Choosing which features a model uses is a look at the data, so it happens inside
   LightGBM (or an L1-logistic regression) fitted on each, and a record of which features land in the top `top_k` by
   importance. A feature's frequency in the fold is the share of subsamples that put it in the top k; a group's is the
   share of subsamples in which its JOINT PERMUTATION importance (`group_permutation_importance`: the log-loss increase
-  on the fold's training rows at least a week from the subsample when all its members are permuted together,
+  on the fold's training rows whose labels share no time with the subsample's when all its members are permuted
+  together,
   averaged over `permutation_repeats` shuffles) ranks in the top
   `group_top_k` groups: size-neutral (dead members add nothing, so a large group gains nothing by size) and
   redundancy-safe (near-copies are permuted together, so splitting one signal does not deflate its group); ADR 0007
@@ -249,11 +250,20 @@ def _fit_model(Z: pd.DataFrame, y: np.ndarray, w: np.ndarray, cols: list[str], c
     return coef.reindex(cols).fillna(0.0).to_numpy(dtype=float), predict
 
 
-def purged_rest(week: np.ndarray, picked: np.ndarray, purge_weeks: int = 1) -> np.ndarray:
-    """Row indices whose week is more than `purge_weeks` from every subsample week (`picked`): the rows the group
-    measure is scored on, so no label spanning a week edge links them to the subsample's training rows."""
-    near = np.unique(np.concatenate([picked + d for d in range(-purge_weeks, purge_weeks + 1)]))
-    return np.flatnonzero(~np.isin(week, near))
+def purged_rest(ts: pd.DatetimeIndex, te: pd.DatetimeIndex, subsample: np.ndarray) -> np.ndarray:
+    """Indices of the training fold's rows outside the subsample (`subsample`: boolean mask) whose label interval
+    [ts, te] overlaps no subsample row's: the rows the group measure is scored on (fold-internal; purged by label
+    exit times, so only rows that share label time with the subsample are dropped)."""
+    s, e = epoch_ns(ts), epoch_ns(te)
+    cand = np.flatnonzero(~subsample)
+    if not subsample.any():
+        return cand
+    order = np.argsort(s[subsample], kind="stable")
+    ss, se = s[subsample][order], np.maximum.accumulate(e[subsample][order])
+    # the latest subsample interval starting at or before the row's exit; the running max of exits covers the union
+    k = np.searchsorted(ss, e[cand], side="right") - 1
+    overlap = (k >= 0) & (se[np.clip(k, 0, None)] >= s[cand])
+    return cand[~overlap]
 
 
 def group_permutation_importance(predict: Predict, Z: pd.DataFrame, y: np.ndarray, members: list[list[int]],
@@ -368,7 +378,9 @@ def select_in_fold(feats: pd.DataFrame, labels: pd.DataFrame, fold: Fold, pool: 
         if singletons:          # one column per group: the column's own importance is its group's (size-neutral)
             gimp: np.ndarray = np.bincount(gidx, weights=imp, minlength=len(gkeys)).astype(float)
         else:                   # joint permutation importance on the training fold's rows outside the subsample
-            rest = purged_rest(week, picked, purge_weeks=1)     # a week's purge from every subsample week
+            sub = np.zeros(len(y), dtype=bool)
+            sub[rows] = True
+            rest = purged_rest(ts, te, sub)                  # purged by label exit times, fold-internal
             gimp = (group_permutation_importance(predict, Z_all.iloc[rest], y[rest], members,
                                                  np.random.default_rng([cfg.seed, fold.k, s]),
                                                  repeats=cfg.permutation_repeats)

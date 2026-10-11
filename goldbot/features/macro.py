@@ -17,7 +17,8 @@ VRP spread (H-03, version 3, stub days dropped since version 4; quant re-reviews
 points squared. HAR-RV^2 is the equal-weight HAR of daily realised variance (Corsi 2009 without a fitted regression,
 so nothing is estimated): (RV_d + mean RV over 5 days + mean RV over 22 days) / 3 x 252 x 100^2, where RV of a UTC
 day is the sum of squared log-close returns of the bars in that day, and a bar on day D sees only days before D (its
-own day is not complete). A stub day, whose bars span fewer than MIN_DAY_SPAN_H hours (the Sunday reopen; a short
+own day is not complete). A stub day, whose bars' declared lengths (visible_at - ts_utc; version 5) sum to fewer
+than MIN_DAY_SPAN_H hours (the Sunday reopen; a short
 holiday session), is dropped, as H-01's daily inputs and H-16 drop theirs (stub-free convention, version 4). GVZ is the as-of joined `macro_gvz`. NaN until 22 completed days and a GVZ value exist, or
 when the frame carries no closes.
 """
@@ -38,8 +39,10 @@ MIN_DAY_SPAN_H = 12.0                 # a UTC day whose bars span fewer hours is
 
 
 def har_rv2_annualised(df: pd.DataFrame) -> np.ndarray:
-    """Per bar: the equal-weight HAR of daily realised variance over completed UTC days before the bar's day, in
-    annualised vol points squared (module docstring); NaN before 22 completed days or without closes."""
+    """Per bar: the equal-weight HAR of daily realised variance over completed, stub-free UTC days before the bar's
+    day, in annualised vol points squared (module docstring); NaN before 22 completed days, without closes, or
+    without the declared bar lengths (`visible_at`). Computed on the decision frame only: context frames never carry
+    macro features (`pipeline.CONTEXT_FEATURES`)."""
     n = len(df)
     if n == 0 or "close" not in df.columns:
         return np.full(n, np.nan)
@@ -48,9 +51,13 @@ def har_rv2_annualised(df: pd.DataFrame) -> np.ndarray:
     r = np.log(df["close"].to_numpy(dtype=float))
     r2 = pd.Series(np.diff(r, prepend=np.nan) ** 2)
     rv = r2.groupby(day.to_numpy()).sum(min_count=1)
-    gaps = np.diff(epoch_ns(ts)) if n > 1 else np.array([], dtype=np.int64)
-    bar_s = float(np.median(gaps[gaps > 0])) / 1e9 if (gaps > 0).any() else 0.0
-    span_h = pd.Series(np.ones(n)).groupby(day.to_numpy()).sum() * bar_s / 3600
+    # a day's span is its bars' DECLARED lengths (visible_at - ts_utc, written by the resampler), never inferred from
+    # the data's spacing; a frame that declares no timeframe gets no HAR (fail closed)
+    if "visible_at" not in df.columns:
+        return np.full(n, np.nan)
+    vis = pd.DatetimeIndex(pd.to_datetime(df["visible_at"], utc=True))
+    length_h = (epoch_ns(vis) - epoch_ns(ts)) / 3.6e12
+    span_h = pd.Series(length_h).groupby(day.to_numpy()).sum()
     rv = rv[(span_h >= MIN_DAY_SPAN_H).to_numpy()].dropna()             # stub days dropped (stub-free convention)
     if rv.empty:
         return np.full(n, np.nan)
@@ -77,7 +84,7 @@ def equity_stress_frames(macro: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
 # directional for a meta-label model: rising real yields or a rising dollar mean opposite things for a long and a short;
 # so do equity stress moves (a VIX jump or an S&P drawdown is the haven-bid case)
-@feature("macro_drivers", "macro", version="4",
+@feature("macro_drivers", "macro", version="5",
          signed={"macro_real_yield_chg20": 0.0, "macro_real_yield_z252": 0.0, "macro_dollar_chg20": 0.0,
                  "macro_vix_chg5": 0.0, "macro_spx_dd20": 0.0})
 def f_macro_drivers(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:

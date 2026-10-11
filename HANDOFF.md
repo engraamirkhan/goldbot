@@ -898,6 +898,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- VRP/purge follow-ups (2026-10-11): `macro_drivers` v5 stub rule from declared bar lengths (macro `f-51ac5ebabb`,
+  macro + day_type `f-48c4c0c57e`); context frames use one `pipeline.CONTEXT_FEATURES` list (engine too, no behaviour
+  change); group-measure rows purged by label exit (`discovery.purged_rest`).
 - Pre-freeze verdict fixes (2026-10-11, third quant re-review): screened-row decisions keyed on the linked
   pre-registration's `rule_id` (write the Q1 queued rows with `rule_id="H-01"/"H-04"/"C4H"`); H-01 continue needs
   long-only positive years too; the 4h continuity trial never continues; unknown passes continue only citing their

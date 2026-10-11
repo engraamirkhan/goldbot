@@ -122,3 +122,13 @@ while the survivors compete for the 7 open trials with the director's pool and t
   `f-7a3cad1466`).
 - The joint permutation group measure averages `permutation_repeats` shuffles and scores on rows at least one week
   from every subsample week (`purged_rest`).
+
+## Amendment 2026-10-11 (LOW follow-ups to 25c889d)
+- The VRP stub rule reads each bar's declared length (`visible_at - ts_utc`, written by the resampler), not the
+  data's median spacing; a frame without it gets no HAR (fail closed). `macro_drivers` is version 5: macro feature
+  version `f-51ac5ebabb`, macro + `day_type` `f-48c4c0c57e`.
+- The VRP is computed once, on the decision frame: context frames (h1_/h4_/d1_) carry only
+  `pipeline.CONTEXT_FEATURES` (atr, trend_strength, moving_averages, realised_vol), one list for research and the
+  engine, so no `d1_macro_vrp` exists.
+- The joint permutation measure's rows are purged by label exit times (`purged_rest`: training-fold rows whose
+  [ts_utc, ts_exit] overlaps no subsample label), not by whole weeks; fold-internal as before.
