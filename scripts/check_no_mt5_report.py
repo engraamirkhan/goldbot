@@ -2,7 +2,10 @@
 
 The owner's report holds the account number, name and broker (goldbot/research/owner_history.py reads it from a
 private folder outside the repo). This hook rejects, whatever the file is called:
-* report file names MT5 suggests (`ReportHistory-*`);
+* report file names MT5 suggests (`ReportHistory-*`) and owner_history's own outputs (`owner_history_<stamp>.*`);
+* an HTML table, an .xlsx sheet or delimited text with an English MT5 Positions / Orders / Deals header row (Symbol,
+  Type, Volume, Price and one of Position / Deal / Order / Ticket as whole cells), or the header of owner_history's
+  per-trade CSV: every format the analyser reads is caught whatever its length or stamp format;
 * text containing the report title or an `Account:` label (or its Russian, German or Spanish word) followed by an
   account-like number, also in UTF-16 (the HTML report's usual encoding), with HTML tags allowed in between;
 * a translated report, whose labels the two checks above may not know: an HTML table, an .xlsx sheet or delimited
@@ -13,9 +16,10 @@ private folder outside the repo). This hook rejects, whatever the file is called
   (class "hidden", display:none) are dropped first, as a browser would;
 * .xlsx (zip) files whose worksheet or shared strings contain any of the above.
 
-Known gaps (stated, not hidden): a translated export with fewer than MIN_STAMPED_ROWS trades, and an .xlsx that
-stores the stamps as Excel date numbers rather than text, pass the shape rule; only the title, account and file-name
-checks see them. The translated section and label words are the terminal's usual terms, not checked against a real
+Known gaps (stated, not hidden): a translated export with fewer than MIN_STAMPED_ROWS trades, and a translated
+.xlsx that stores the stamps as Excel date numbers rather than text, pass the shape rule; only the title, account and
+file-name checks see them. A hand-made CSV whose headers use other words (Size, Open Price) is not an MT5 export and
+passes unless it has the report's shape. owner_history's .md and .json outputs are caught by name only. The translated section and label words are the terminal's usual terms, not checked against a real
 translated export (none may enter the repo), which is why the shape rule does not depend on them.
 
 Cost is linear in the input: HTML is read with html.parser in one pass (unclosed cells close at the next cell or
@@ -38,7 +42,14 @@ from xml.etree import ElementTree
 TITLE = re.compile(r"Trade\s+History\s+Report", re.IGNORECASE)
 # `\w[^>]*` (not `\w+[^>]*`): the two parts cannot share characters, so an unclosed tag costs linear time
 ACCOUNT = re.compile(r"(?:Account|Сч[её]т|Konto|Cuenta):\s*(?:</?\w[^>]*>\s*)*\d{5,}", re.IGNORECASE)
-NAME = re.compile(r"^ReportHistory-", re.IGNORECASE)
+# MT5's suggested report name, and owner_history's own outputs (`owner_history_<YYYYmmdd-HHMMSS>.<ext>`)
+NAME = re.compile(r"^(?:ReportHistory-|owner_history_\d{8}-\d{6}\.)", re.IGNORECASE)
+# A trade-list header row, matched cell by cell (whole cell, case-folded), so the analyser's input is caught at any
+# length and with any stamp format: (every one of these cells, plus at least one of these if non-empty)
+TRADE_HEADERS: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
+    (frozenset({"symbol", "type", "volume", "price"}), frozenset({"position", "deal", "order", "ticket"})),  # MT5
+    (frozenset({"seq", "side", "lots", "entry", "exit", "net", "r_multiple"}), frozenset()),  # *.trades.csv
+)
 STAMP = re.compile(r"\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}(?::\d{2})?")
 SECTION_TITLES = frozenset({
     "positions", "orders", "deals",                                  # English
@@ -178,6 +189,16 @@ def _report_shaped(rows: list[list[str]]) -> bool:
     return titled or wide
 
 
+def _trade_header(rows: list[list[str]]) -> bool:
+    """A row naming the columns of an MT5 Positions / Orders / Deals table (English) or of owner_history's per-trade
+    output. Whole cells only: source code quoting the same words ("Symbol", ...) keeps its quotes and does not match."""
+    for r in rows:
+        cells = {c.casefold() for c in r}
+        if any(need <= cells and (not one or cells & one) for need, one in TRADE_HEADERS):
+            return True
+    return False
+
+
 def _zip_members(z: zipfile.ZipFile) -> dict[str, bytes]:
     """The first MAX_ZIP_MEMBERS xl/*.xml members, reading at most MAX_SCAN each and MAX_TOTAL_BYTES in all."""
     out: dict[str, bytes] = {}
@@ -207,10 +228,18 @@ def looks_like_report(path: str) -> bool:
                 members = _zip_members(z)
         except (zipfile.BadZipFile, KeyError, OSError):
             return False
-        return any(_matches(_text(m)) for m in members.values()) or _report_shaped(_xlsx_rows(members))
+        if any(_matches(_text(m)) for m in members.values()):
+            return True
+        rows = _xlsx_rows(members)
+        return _report_shaped(rows) or _trade_header(rows)
     text = _text(raw)
     if _matches(text):
         return True
+    low = text.casefold()
+    if ("symbol" in low and "volume" in low) or "r_multiple" in low:   # cheap gate before the header parse
+        rows = _html_rows(text) if _HTML.search(text) else [r for d in DELIMITERS for r in _delimited_rows(text, d)]
+        if _trade_header(rows):
+            return True
     if len(STAMP.findall(text)) < MIN_STAMPED_ROWS:      # cheap gate before any table parse
         return False
     if _HTML.search(text):

@@ -343,7 +343,7 @@ def test_ruin_rows_cover_both_sizings_with_and_without_the_samples_edge(result):
     assert "compounding" in methods[2] and "zero edge" in methods[2]
     assert "fixed stakes" in methods[3] and "zero edge" in methods[3]
     assert all(0.0 <= r.p_ruin <= r.p_halved <= 1.0 for r in result.summary.ruin)
-    assert "(compounding / fixed / zero edge compounding / zero edge fixed)" in oh.console_summary(result)
+    assert "(compounding / fixed / zero edge compounding / zero edge fixed)" in oh.render_share(result)
 
 
 # ---------------------------------------------------------------- statistics added in review
@@ -710,3 +710,133 @@ def test_an_order_without_a_stop_still_makes_its_open_time_ambiguous():
     _, by_open = oh._initial_stops(cols, [[t, "1", "XAUUSD", "buy", "2640", "filled"],
                                           [t, "2", "XAUUSD", "buy", "", "filled"]])
     assert by_open == {}
+
+
+# ---------------------------------------------------------------- shareable summary, input guard, hook coverage
+# (owner-method study, docs/research/owner-method-study.md: complete export, run locally, share only aggregates)
+
+def _positions_csv(rows: list[list[str]], delim: str = ",") -> str:
+    """The Positions section of the synthetic report as MT5-named delimited text (header + rows)."""
+    start = rows.index(["Positions"]) + 1
+    end = next(i for i in range(start, len(rows)) if not rows[i])
+    return "\n".join(delim.join(r) for r in rows[start:end]) + "\n"
+
+
+def test_a_positions_csv_parses_to_the_same_positions_as_the_html_report(tmp_path, html_file):
+    p = tmp_path / "positions.csv"
+    p.write_text(_positions_csv(report_rows()), encoding="utf-8")
+    a = oh.xauusd_positions(oh.load_report(html_file))
+    b = oh.xauusd_positions(oh.load_report(p))
+    keep = {"side", "lots", "open_utc", "close_utc", "entry", "exit", "sl", "tp", "commission", "swap", "profit"}
+    assert [x.model_dump(include=keep) for x in a] == [x.model_dump(include=keep) for x in b]
+    assert all(x.initial_sl is None for x in b)             # a CSV of positions has no Orders section
+
+
+def test_net_capture_per_ounce_and_the_price_move_are_in_usd_whatever_the_account_currency(result):
+    # T1: +7.80 GBP net at 0.8 GBP per USD on 0.01 lot (1 oz) = 9.75 USD/oz; the price moved +10
+    t1 = result.trades[0]
+    assert t1.usd_per_oz == pytest.approx(9.75) and t1.move_per_oz == pytest.approx(10.0)
+    assert result.trades[1].move_per_oz == pytest.approx(-2.5)               # a sell that went up 2.50
+    s = result.summary
+    assert s.mean_usd_per_oz == pytest.approx((9.75 - 2.75 - 0.75 - 3.25 + 5.75 - 3.875) / 6)
+    assert s.mean_move_per_oz == pytest.approx(7.0 / 6)
+
+
+def test_holding_time_distribution_reports_quantiles_in_minutes(result):
+    # holds 30, 20, 90, 19, 110, 480 min
+    assert result.summary.holding_quantiles == {"p10": pytest.approx(19.5), "p25": pytest.approx(22.5),
+                                                "p50": pytest.approx(60.0), "p75": pytest.approx(105.0),
+                                                "p90": pytest.approx(295.0)}
+
+
+def test_streaks_count_consecutive_wins_and_losses_and_a_flat_trade_breaks_both():
+    assert oh.streaks(np.array([1.0, 2.0, 3.0, -1.0, 0.0, 1.0, -1.0, -2.0])) == (3, 2)
+    assert oh.streaks(np.array([])) == (0, 0)
+
+
+def test_the_summary_carries_both_streaks(result):
+    assert result.summary.longest_winning_streak == 1 and result.summary.longest_losing_streak == 3
+
+
+def test_risk_per_trade_relative_to_equity_uses_real_stops_only(result):
+    # 1R / equity at entry: 4.0/50, 8.0/57.8, (T3 has no stop), 2.4/52.8, 4.8/50.2, 4.0/59.4
+    pct = [t.risk_pct for t in result.trades]
+    assert pct[0] == pytest.approx(0.08) and pct[1] == pytest.approx(8.0 / 57.8) and pct[2] is None
+    assert result.summary.median_risk_pct == pytest.approx(0.08)
+    assert result.summary.max_risk_pct == pytest.approx(8.0 / 57.8)
+
+
+def test_slices_carry_the_mean_capture_per_ounce(result):
+    side = {g.key: g for g in result.summary.by_side}
+    assert side["buy"].mean_usd_per_oz == pytest.approx((9.75 - 0.75 + 5.75 - 3.875) / 4)
+
+
+def test_the_share_summary_holds_every_aggregate_of_the_brief(result):
+    text = oh.render_share(result)
+    for part in ("6 XAUUSD trades", "win rate", "mean R", "USD/oz", "holding time", "p50", "By session",
+                 "By hour", "By weekday", "By side", "winning streak", "losing streak", "max drawdown",
+                 "risk per trade", "leverage", "K = ", "Bonferroni"):
+        assert part in text, part
+    assert f"K = {result.summary.slices_examined}" in text
+
+
+def test_the_share_summary_and_the_console_carry_no_identifiers_and_no_account_money(result, html_file, capsys):
+    secrets = (NAME, ACCOUNT, COMPANY, "Demo-Server", str(TICKET0), str(TICKET0 + 1), str(TICKET0 + 100))
+    oh.main([str(html_file), "--targets", "3,5", "--no-news"])
+    shown = capsys.readouterr().out
+    share = next(p for p in html_file.parent.iterdir() if p.name.endswith(".share.md"))
+    for text in (oh.render_share(result), shown, share.read_text(encoding="utf-8")):
+        for secret in secrets:
+            assert secret not in text, secret
+        assert "£" not in text and "GBP" not in text              # no amount in the account's currency
+    assert share.stat().st_mode & 0o077 == 0                        # owner-only, like the other outputs
+
+
+def test_the_report_is_refused_when_it_sits_inside_the_repository():
+    inside = Path(oh.__file__).resolve().parents[2] / "trade-history" / "ReportHistory-1.html"
+    with pytest.raises(ValueError, match="inside a git work tree") as e:
+        oh.load_report(inside)
+    assert "ReportHistory-1" not in str(e.value)
+    with pytest.raises(SystemExit, match="inside a git work tree"):
+        oh.main([str(inside.parent), "--no-news"])
+
+
+def test_the_report_is_refused_inside_any_other_git_tree(tmp_path):
+    clone = tmp_path / "clone"
+    (clone / ".git").mkdir(parents=True)
+    p = clone / "history.html"
+    p.write_bytes(report_html(report_rows()))
+    with pytest.raises(ValueError, match="inside a git work tree"):
+        oh.load_report(p)
+
+
+def _deals_csv() -> str:
+    return ("Time,Deal,Symbol,Type,Direction,Volume,Price,Order,Commission,Fee,Swap,Profit,Balance,Comment\n"
+            "2026.10.01 10:05:12,2,XAUUSD,buy,in,0.01,2650.00,10,-0.20,0,0,0,50.00,\n"
+            "2026.10.01 10:35:12,3,XAUUSD,sell,out,0.01,2660.00,11,-0.20,0,0,8.00,58.00,\n")
+
+
+def test_the_commit_hook_rejects_every_format_the_analyser_reads(tmp_path, html_file, xlsx_file):
+    """HTML and xlsx reports, and positions or deals CSVs of any length or stamp format: a CSV of two trades has
+    neither a report title nor five stamped rows, so only its MT5 header row gives it away."""
+    hook = _hook()
+    two = tmp_path / "positions.csv"
+    rows = report_rows()
+    two.write_text("\n".join(_positions_csv(rows).splitlines()[:3]) + "\n", encoding="utf-8")
+    iso = tmp_path / "iso.tsv"
+    iso.write_text(_positions_csv(rows, "\t").replace("2026.10.0", "2026-10-0"), encoding="utf-8")
+    deals = tmp_path / "deals.txt"
+    deals.write_text(_deals_csv(), encoding="utf-8")
+    for p in (two, iso, deals):
+        assert len(oh.xauusd_positions(oh.load_report(p))) >= 1, p.name    # the analyser reads it ...
+    files = [str(html_file), str(xlsx_file), str(two), str(iso), str(deals)]
+    assert hook.offending(files) == files                                  # ... and the hook rejects it
+
+
+def test_the_commit_hook_rejects_the_analysers_own_outputs(result, tmp_path):
+    hook = _hook()
+    paths = oh.write_outputs(result, tmp_path / "private")
+    assert hook.offending([str(p) for p in paths]) == [str(p) for p in paths]
+    renamed = tmp_path / "notes.csv"
+    renamed.write_bytes(next(p for p in paths if p.name.endswith(".trades.csv")).read_bytes())
+    assert hook.offending([str(renamed)]) == [str(renamed)]               # the per-trade rows, by their header

@@ -7,9 +7,12 @@ patterns as *hypothesis seeds* in the `docs/research/hypotheses.md` format. Seed
 discretionary record, never evidence: each one still needs a pre-registered trial (strategy-researcher) and the gates.
 
 Privacy (public repo, docs/AGENT_STANDARDS.md S4): the report holds the owner's account number, name and broker.
-The file is read from outside the repo (default `~/Personal project/trade-history/`), the outputs go to that same
-private folder with mode 0600, and writing into ANY git work tree is refused (this repo under any spelling of its
-path, a sibling worktree, another clone). The header's account number, name, company and server are never copied
+The file is read from outside the repo (default `~/Personal project/trade-history/`): a report inside ANY git work
+tree is refused before it is opened ("complete export, run locally, share only a summary", owner-method study). The
+outputs go to that same private folder with mode 0600, and writing into ANY git work tree is refused (this repo under
+any spelling of its path, a sibling worktree, another clone). The console prints only the shareable summary
+(`render_share`, also written as `owner_history_*.share.md`): aggregates in R, %, counts, USD per ounce and K, never
+an amount in the account's currency, a ticket or a header field. The header's account number, name, company and server are never copied
 into a record or an output; only the account currency is kept. Position, order and deal tickets are used only to
 match a position to its opening order and are replaced by a sequence number. Seeds quote R, percentages and counts,
 never money amounts: do not paste amounts into the repo. A pre-commit hook (`scripts/check_no_mt5_report.py`)
@@ -84,6 +87,7 @@ OUTPUT_PREFIX = "owner_history"
 SECTIONS = ("positions", "orders", "deals", "open positions", "working orders", "results", "summary")
 CCY_SIGN = {"GBP": "£", "USD": "$", "EUR": "€"}
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+HOLDING_QUANTILES = (10, 25, 50, 75, 90)
 POSITION_COLS = ("open_time", "position", "symbol", "type", "volume", "open_price", "sl", "tp", "close_time",
                  "close_price", "commission", "swap", "profit")
 DEAL_COLS = ("time", "deal", "symbol", "type", "direction", "volume", "price", "order", "commission", "fee", "swap",
@@ -154,6 +158,9 @@ class Trade(FrozenRecord):
     weekday: str
     equity_at_open: float | None
     leverage: float | None          # notional / equity at entry
+    risk_pct: float | None = None   # 1R / equity at entry, only for a real stop (R_SOURCES)
+    usd_per_oz: float = 0.0         # net result in USD per ounce traded (after costs; the transferable capture)
+    move_per_oz: float = 0.0        # price move in the trade's direction, USD per ounce (before costs)
     near_round: bool
     near_session_open: bool
     near_news: bool | None
@@ -168,6 +175,7 @@ class GroupStat(FrozenRecord):
     t_stat: float | None            # t of the mean net P&L per trade in this slice
     n_r: int = 0                    # trades in the slice with a real 1R (sl_initial / sl_final)
     mean_r: float | None = None
+    mean_usd_per_oz: float | None = None    # mean net capture per ounce, USD (price terms, no account money)
 
 
 class DailyStats(FrozenRecord):
@@ -228,6 +236,11 @@ class Summary(FrozenRecord):
     risk_sources: dict[str, int]
     median_risk: float | None
     median_holding_min: float
+    holding_quantiles: dict[str, float]     # p10 / p25 / p50 / p75 / p90 of the holding time, minutes
+    mean_usd_per_oz: float                  # mean net capture per ounce in USD, after costs (study section 3)
+    mean_move_per_oz: float                 # mean price move in the trade's direction per ounce, before costs
+    median_risk_pct: float | None           # 1R / equity at entry over trades with a real stop
+    max_risk_pct: float | None
     daily: DailyStats
     daily_london: DailyStats
     mean_return_on_equity: float | None   # mean net / equity at entry, per trade
@@ -251,6 +264,7 @@ class Summary(FrozenRecord):
     max_leverage: float | None
     lots_equity_corr: float | None
     longest_losing_streak: int
+    longest_winning_streak: int
     max_drawdown: float
     max_drawdown_pct: float | None
     ruin: list[RuinEstimate]        # [compounding, fixed stakes, zero-edge compounding, zero-edge fixed stakes];
@@ -640,8 +654,10 @@ def _deals(cols: dict[str, int], body: list[list[str]], server_tz: str
 
 def load_report(path: str | Path, server_tz: str = "Europe/Athens") -> Report:
     """Parse an MT5 report (HTML, XLSX or CSV). Only the currency, closed positions, cash flows and the final
-    balance are kept; the header's account number, name, company and server are read past and discarded."""
+    balance are kept; the header's account number, name, company and server are read past and discarded. A report
+    inside a git work tree is refused before it is opened: one `git add` would publish it."""
     p = Path(path)
+    refuse_in_git_tree(p)
     size = p.stat().st_size
     if size > MAX_INPUT_BYTES:
         raise ValueError(f"report too large ({size} bytes > {MAX_INPUT_BYTES}): not an MT5 history export")
@@ -701,9 +717,11 @@ def _t(x: np.ndarray) -> float | None:
 
 
 def _group(keys: Iterable[str], nets: np.ndarray, order: Sequence[str] | None = None,
-           rs: np.ndarray | None = None) -> list[GroupStat]:
-    """Per-slice count, net, mean, win rate and t; with `rs` (NaN where a trade has no real 1R) also mean R."""
-    df = pd.DataFrame({"k": list(keys), "net": nets, "r": rs if rs is not None else np.nan})
+           rs: np.ndarray | None = None, oz: np.ndarray | None = None) -> list[GroupStat]:
+    """Per-slice count, net, mean, win rate and t; with `rs` (NaN where a trade has no real 1R) also mean R, with
+    `oz` the mean net capture per ounce in USD."""
+    df = pd.DataFrame({"k": list(keys), "net": nets, "r": rs if rs is not None else np.nan,
+                       "oz": oz if oz is not None else np.nan})
     out = []
     names = [k for k in (order or sorted(df["k"].unique())) if k in set(df["k"])]
     for k in names:
@@ -712,8 +730,18 @@ def _group(keys: Iterable[str], nets: np.ndarray, order: Sequence[str] | None = 
         r = sub["r"].dropna().to_numpy(dtype=float)
         out.append(GroupStat(key=str(k), n=len(x), net=float(x.sum()), mean=float(x.mean()),
                              win_rate=float((x > 0).mean()), t_stat=_t(x), n_r=len(r),
-                             mean_r=float(r.mean()) if len(r) else None))
+                             mean_r=float(r.mean()) if len(r) else None,
+                             mean_usd_per_oz=float(sub["oz"].mean()) if oz is not None else None))
     return out
+
+
+def streaks(nets: np.ndarray) -> tuple[int, int]:
+    """(longest run of winning trades, longest run of losing trades) in close order; a flat trade breaks both."""
+    win = loss = best_win = best_loss = 0
+    for n in nets:
+        win, loss = (win + 1 if n > 0 else 0), (loss + 1 if n < 0 else 0)
+        best_win, best_loss = max(best_win, win), max(best_loss, loss)
+    return best_win, best_loss
 
 
 def implied_usd_rate(positions: Sequence[Position], currency: str, contract: float = CONTRACT_OZ
@@ -922,6 +950,9 @@ def analyse(report: Report, *, contract: float = CONTRACT_OZ, targets: Sequence[
             r_multiple=net / risk if risk else None, session=str(sessions[i]), hour=int(p.open_utc.hour),
             weekday=WEEKDAYS[p.open_utc.dayofweek], equity_at_open=eq,
             leverage=p.lots * contract * p.entry * rate / eq if eq else None,
+            risk_pct=risk / eq if eq and risk and src in R_SOURCES else None,
+            usd_per_oz=net / rate / (p.lots * contract),
+            move_per_oz=(p.exit - p.entry) * (1 if p.side == "buy" else -1),
             near_round=abs(p.entry - round(p.entry / ROUND_STEP) * ROUND_STEP) <= ROUND_BAND,
             near_session_open=bool(open_flags[i]), near_news=None if news is None else bool(news[i])))
 
@@ -941,10 +972,7 @@ def analyse(report: Report, *, contract: float = CONTRACT_OZ, targets: Sequence[
     daily = _daily(nets, closes, "UTC", targets)
     daily_london = _daily(nets, closes, "Europe/London", targets)
 
-    streak = best_streak = 0
-    for n in nets:
-        streak = streak + 1 if n < 0 else 0
-        best_streak = max(best_streak, streak)
+    win_streak, best_streak = streaks(nets)
     start_eq = None if math.isnan(start) else start + float(flow_amt[flow_ns <= pos[0].open_utc.value].sum())
     # drawdown from trading alone: deposits and withdrawals move the balance but are not losses
     curve = np.cumsum(nets)
@@ -965,17 +993,19 @@ def analyse(report: Report, *, contract: float = CONTRACT_OZ, targets: Sequence[
     if ruin_note:
         notes.append(ruin_note)
     holding = np.array([t.holding_min for t in trades])
+    per_oz = np.array([t.usd_per_oz for t in trades])
+    risk_pct = np.array([t.risk_pct for t in trades if t.risk_pct is not None])
     hold_bucket = pd.cut(holding, [-1, 5, 15, 60, 240, 1440, np.inf],
                          labels=["<5m", "5-15m", "15-60m", "1-4h", "4-24h", ">1d"]).astype(str)
     news_groups = None
     if news is not None:
         news_groups = _group(np.where(news, f"within {NEWS_WINDOW_MIN} min of tier-1", "other"), nets,
-                             [f"within {NEWS_WINDOW_MIN} min of tier-1", "other"], r_all)
-    by_session = _group(sessions, nets, ["asia", "london", "newyork"], r_all)
-    by_hour = _group([f"{t.hour:02d}" for t in trades], nets, None, r_all)
-    by_weekday = _group([t.weekday for t in trades], nets, WEEKDAYS, r_all)
-    by_side = _group([t.side for t in trades], nets, ["buy", "sell"], r_all)
-    by_holding = _group(hold_bucket, nets, ["<5m", "5-15m", "15-60m", "1-4h", "4-24h", ">1d"], r_all)
+                             [f"within {NEWS_WINDOW_MIN} min of tier-1", "other"], r_all, per_oz)
+    by_session = _group(sessions, nets, ["asia", "london", "newyork"], r_all, per_oz)
+    by_hour = _group([f"{t.hour:02d}" for t in trades], nets, None, r_all, per_oz)
+    by_weekday = _group([t.weekday for t in trades], nets, WEEKDAYS, r_all, per_oz)
+    by_side = _group([t.side for t in trades], nets, ["buy", "sell"], r_all, per_oz)
+    by_holding = _group(hold_bucket, nets, ["<5m", "5-15m", "15-60m", "1-4h", "4-24h", ">1d"], r_all, per_oz)
     # K: every slice the report shows (the seeds are picked from among them) plus the two entry-context flags
     k = sum(len(g) for g in (by_session, by_hour, by_weekday, by_side, by_holding, news_groups or [])) + 2
     bonf = statistics.NormalDist().inv_cdf(1 - FAMILY_ALPHA / (2 * k))
@@ -991,7 +1021,12 @@ def analyse(report: Report, *, contract: float = CONTRACT_OZ, targets: Sequence[
         profit_factor=gp / gl if gl > 0 else None,
         risk_sources={k_: sources.count(k_) for k_ in ("sl_initial", "sl_final", "sl_moved", "proxy_avg_loss", "none")},
         median_risk=float(np.median(real_r)) if real_r else None,
-        median_holding_min=float(np.median(holding)), daily=daily, daily_london=daily_london,
+        median_holding_min=float(np.median(holding)),
+        holding_quantiles={f"p{q}": float(np.percentile(holding, q)) for q in HOLDING_QUANTILES},
+        mean_usd_per_oz=float(per_oz.mean()), mean_move_per_oz=float(np.mean([t.move_per_oz for t in trades])),
+        median_risk_pct=float(np.median(risk_pct)) if len(risk_pct) else None,
+        max_risk_pct=float(risk_pct.max()) if len(risk_pct) else None,
+        daily=daily, daily_london=daily_london,
         mean_return_on_equity=float(roe.mean()) if len(roe) else None, return_on_equity_t=_t(roe),
         by_session=by_session, by_hour=by_hour, by_weekday=by_weekday, by_side=by_side, by_holding=by_holding,
         news=news_groups, news_note=news_note,
@@ -1001,7 +1036,7 @@ def analyse(report: Report, *, contract: float = CONTRACT_OZ, targets: Sequence[
         start_equity=start_eq, start_equity_source=start_src,
         median_leverage=float(np.median(levs)) if len(levs) else None,
         max_leverage=float(levs.max()) if len(levs) else None, lots_equity_corr=corr,
-        longest_losing_streak=best_streak, max_drawdown=max_dd, max_drawdown_pct=dd_pct, ruin=ruin, notes=notes)
+        longest_losing_streak=best_streak, longest_winning_streak=win_streak, max_drawdown=max_dd, max_drawdown_pct=dd_pct, ruin=ruin, notes=notes)
     return Result(summary=summary, trades=trades, seeds=hypothesis_seeds(summary, trades))
 
 
@@ -1025,15 +1060,18 @@ def slice_bar(n: int, k: int) -> float:
 def _slice(g: GroupStat, n: int, k: int) -> str:
     """A slice in R, percentages and counts only (never money): the seeds may be quoted in the public repo."""
     r = "no trades with a real 1R" if g.mean_r is None else f"mean {g.mean_r:+.2f} R over {g.n_r}"
+    return f"{g.n}/{n} trades ({g.n / n:.0%}), win {g.win_rate:.0%}, {r}, {_verdict(g, k)}"
+
+
+def _verdict(g: GroupStat, k: int) -> str:
+    """The slice's t against the Bonferroni bar over K slices (`slice_bar`), or why it cannot be judged."""
     if g.t_stat is None:
-        bar = "t n/a"
-    elif g.n < MIN_SLICE_N:
-        bar = f"t {g.t_stat:.2f}, too few trades (< {MIN_SLICE_N}) to judge"
-    else:
-        need = slice_bar(g.n, k)
-        bar = f"t {g.t_stat:.2f}, " + ("clears" if abs(g.t_stat) >= need else "below") + \
-            f" the Bonferroni |t| {need:.2f} (Student's t, {g.n - 1} df)"
-    return f"{g.n}/{n} trades ({g.n / n:.0%}), win {g.win_rate:.0%}, {r}, {bar}"
+        return "t n/a"
+    if g.n < MIN_SLICE_N:
+        return f"t {g.t_stat:.2f}, too few trades (< {MIN_SLICE_N}) to judge"
+    need = slice_bar(g.n, k)
+    return f"t {g.t_stat:.2f}, " + ("clears" if abs(g.t_stat) >= need else "below") + \
+        f" the Bonferroni |t| {need:.2f} (Student's t, {g.n - 1} df)"
 
 
 def _flag_slice(trades: list[Trade], flag: Sequence[bool], name: str, k: int) -> str:
@@ -1215,19 +1253,73 @@ def render_markdown(r: Result) -> str:
     return "\n".join(lines) + "\n"
 
 
-def console_summary(r: Result) -> str:
+def _share_groups(title: str, groups: list[GroupStat], n: int, k: int) -> list[str]:
+    lines = [f"### {title}", "", _row(["", "trades", "share", "win", "mean R (n)", "mean USD/oz", "t vs bar"]),
+             _row(["---"] * 7)]
+    for g in groups:
+        lines.append(_row([g.key, g.n, f"{g.n / n:.0%}", f"{g.win_rate:.0%}",
+                           "n/a" if g.mean_r is None else f"{g.mean_r:+.2f} ({g.n_r})",
+                           "n/a" if g.mean_usd_per_oz is None else f"{g.mean_usd_per_oz:+.2f}", _verdict(g, k)]))
+    return lines + [""]
+
+
+def render_share(r: Result) -> str:
+    """The summary the owner may share (owner-method study: "share only a summary"): aggregates in R, %, counts,
+    USD per ounce (price terms, the same on any account size) and K. No amount in the account's currency, no trade
+    row, no ticket and nothing from the report header, so it names neither the account nor its size. Still keep it
+    out of the repo; the research director quotes from it."""
     s = r.summary
-    sign = CCY_SIGN.get(s.currency, s.currency + " ")
-    shares = ", ".join(f">= {sign}{k}: {v:.0%}" for k, v in s.daily.share_at_least.items())
-    ruin = "n/a" if not s.ruin else " / ".join(f"{ru.p_ruin:.1%}" for ru in s.ruin) + \
-        " (compounding / fixed / zero edge compounding / zero edge fixed)"
-    return (f"{s.n_trades} XAUUSD trades {s.period_start:%Y-%m-%d}..{s.period_end:%Y-%m-%d}: net {_money(s.total_net, sign)}, "
-            f"win {s.win_rate:.0%}, PF {'n/a' if s.profit_factor is None else f'{s.profit_factor:.2f}'}, "
-            f"expectancy {_money(s.expectancy, sign)}/trade\n"
-            f"days {s.daily.n_days}: mean {_money(s.daily.mean, sign)}, worst {_money(s.daily.worst, sign)} "
-            f"({s.daily.worst_day}); {shares}\n"
-            f"max drawdown {_money(s.max_drawdown, sign)}, losing streak {s.longest_losing_streak}, ruin {ruin}\n"
-            f"{len(r.seeds)} hypothesis seeds (in-sample, not evidence)")
+    n, k = s.n_trades, s.slices_examined
+
+    def pct(x: float | None, fmt: str = "{:.1%}") -> str:
+        return "n/a (equity unknown)" if x is None else fmt.format(x)
+    payoff = abs(s.avg_win / s.avg_loss) if s.avg_loss else None
+    q = s.holding_quantiles
+    lines = [
+        "# Owner trade history: shareable summary", "",
+        "Aggregates only: R, percentages, counts, USD per ounce and K. No account number, name, broker, ticket or "
+        "amount in the account's currency. In-sample description of one discretionary record, not evidence of an "
+        "edge. Share it with the research director; do not commit it.", "",
+        f"{n} XAUUSD trades, {s.period_start:%Y-%m} .. {s.period_end:%Y-%m}, {s.daily.n_days} trading days "
+        f"({n / s.daily.n_days:.1f} trades a day). Source: {s.source_format}.", "",
+        _row(["measure", "value"]), _row(["---", "---"]),
+        _row(["win rate", f"{s.win_rate:.1%}"]),
+        _row(["mean R per trade", "n/a (no trade with a stop on the loss side)" if s.expectancy_r is None
+              else f"{s.expectancy_r:+.2f} R over {s.n_r} trades with a real stop ({s.n_r / n:.0%} of trades)"]),
+        _row(["mean net capture (after costs)", f"{s.mean_usd_per_oz:+.2f} USD/oz"]),
+        _row(["mean price move in the trade's direction", f"{s.mean_move_per_oz:+.2f} USD/oz"]),
+        _row(["payoff ratio (average win / average loss)", "n/a" if payoff is None else f"{payoff:.2f}"]),
+        _row(["profit factor", "n/a" if s.profit_factor is None else f"{s.profit_factor:.2f}"]),
+        _row(["holding time p10 / p25 / p50 / p75 / p90",
+              " / ".join(f"{q[f'p{x}']:.0f}" for x in HOLDING_QUANTILES) + " min"]),
+        _row(["longest winning streak", f"{s.longest_winning_streak} trades"]),
+        _row(["longest losing streak", f"{s.longest_losing_streak} trades"]),
+        _row(["max drawdown (flow-adjusted, % of peak)", pct(s.max_drawdown_pct)]),
+        _row(["risk per trade (1R / equity at entry) median / max",
+              f"{pct(s.median_risk_pct)} / {pct(s.max_risk_pct)}"]),
+        _row(["leverage (notional / equity) median / max",
+              f"{pct(s.median_leverage, '{:.1f}x')} / {pct(s.max_leverage, '{:.1f}x')}"]),
+        _row(["return on equity per trade (mean)", pct(s.mean_return_on_equity, "{:+.2%}")]),
+        _row(["P(ruin) in a year at the owner's sizing (compounding / fixed / zero edge compounding / zero edge "
+              "fixed)", "n/a" if not s.ruin else " / ".join(f"{ru.p_ruin:.1%}" for ru in s.ruin)]), "",
+        "## Histograms (entry time, UTC; sessions on local exchange clocks)", ""]
+    lines += _share_groups("By session (asia = Tokyo, plus the thin hours after the New York close)", s.by_session,
+                           n, k)
+    lines += _share_groups("By hour (UTC)", s.by_hour, n, k)
+    lines += _share_groups("By weekday", s.by_weekday, n, k)
+    lines += _share_groups("By side (long = buy, short = sell)", s.by_side, n, k)
+    lines += _share_groups("By holding time", s.by_holding, n, k)
+    if s.news:
+        lines += _share_groups("Around tier-1 news", s.news, n, k)
+    lines += [f"Entries in the first {OPEN_WINDOW_MIN} min after a session open: {s.share_near_session_open:.0%} "
+              f"(expected {s.session_open_base_rate:.0%}); within ${ROUND_BAND:g} of a ${ROUND_STEP:g} level: "
+              f"{s.share_near_round_number:.0%}.", "",
+              "## Overfitting control", "",
+              f"K = {k} slices examined (every row of the histograms above plus the session-open and round-number "
+              f"flags). A slice clears only at Bonferroni 5%/K on Student's t with its own n - 1 degrees of freedom "
+              f"and n >= {MIN_SLICE_N} (|t| >= {s.bonferroni_t:.2f} for a very large slice, "
+              f"{slice_bar(30, k):.2f} for 30 trades). Quote K with every pattern taken from this summary.", ""]
+    return "\n".join(lines) + "\n"
 
 
 def _rounded(x: object) -> object:
@@ -1274,6 +1366,14 @@ def git_tree_reason(out: Path) -> str | None:
     return None
 
 
+def refuse_in_git_tree(report: Path) -> None:
+    """Raise when the export sits in a git work tree. The message names neither the file nor the folder: the path
+    may carry the owner's name or account number."""
+    if git_tree_reason(report):
+        raise ValueError(f"refusing to read a report inside a git work tree (it could be committed to a public repo); "
+                         f"move it to a private folder such as {DEFAULT_DIR}")
+
+
 def write_outputs(r: Result, out_dir: str | Path) -> list[Path]:
     """Markdown report, JSON summary and per-trade CSV, owner-readable only. Refuses any folder in a git work tree
     (this repo is public; a sibling worktree or another clone can be pushed too): the outputs describe the account."""
@@ -1283,13 +1383,14 @@ def write_outputs(r: Result, out_dir: str | Path) -> list[Path]:
         raise ValueError(f"refusing to write the owner's history into a git work tree ({why}); "
                          f"use a private folder such as {DEFAULT_DIR}")
     stamp = pd.Timestamp.now("UTC").strftime("%Y%m%d-%H%M%S")
-    md, js, tr = (out / f"{OUTPUT_PREFIX}_{stamp}.{ext}" for ext in ("md", "json", "trades.csv"))
+    md, js, tr, share = (out / f"{OUTPUT_PREFIX}_{stamp}.{ext}" for ext in ("md", "json", "trades.csv", "share.md"))
     write_private(md, render_markdown(r))
+    write_private(share, render_share(r))
     write_private(js, json.dumps(_rounded(r.model_dump(mode="json", exclude={"trades"})), indent=2,
                                  allow_nan=False))
     write_private(tr, pd.DataFrame([t.model_dump(mode="json") for t in r.trades]).to_csv(index=False,
                                                                                         float_format="%.6g"))
-    return [md, js, tr]
+    return [md, js, tr, share]
 
 
 def _newest_report(folder: Path) -> Path:
@@ -1325,6 +1426,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-news", action="store_true", help="skip the economic-calendar lookup")
     a = ap.parse_args(argv)
     src = Path(a.path).expanduser()
+    try:
+        refuse_in_git_tree(src)                            # before a folder in the repo is even listed
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
     if src.is_dir():
         src = _newest_report(src)
     if not src.exists():
@@ -1335,12 +1440,13 @@ def main(argv: list[str] | None = None) -> int:
     result = analyse(load_report(src, a.server_tz), contract=a.contract, targets=targets,
                      start_balance=a.start_balance, events=_load_events(a.no_news))
     paths = write_outputs(result, a.out or src.parent)
-    print(console_summary(result))
-    for p in paths:
-        print(f"wrote {p}")
+    print(render_share(result))                            # aggregates only: a session transcript may keep stdout
+    print(f"wrote {len(paths)} files ({', '.join(p.name.split('.', 1)[1] for p in paths)}) next to the report; "
+          "the .md holds the amounts and stays private, the .share.md is the summary to share")
     return 0
 
 
 __all__ = ["Report", "Position", "Trade", "Summary", "Result", "HypothesisSeed", "load_report", "xauusd_positions",
-           "analyse", "bootstrap_ruin", "render_markdown", "write_outputs", "git_tree_reason", "parse_number",
-           "parse_time", "session_open_flags", "session_open_base_rate", "main"]
+           "analyse", "bootstrap_ruin", "render_markdown", "render_share", "streaks", "write_outputs",
+           "git_tree_reason", "refuse_in_git_tree", "parse_number", "parse_time", "session_open_flags",
+           "session_open_base_rate", "main"]
