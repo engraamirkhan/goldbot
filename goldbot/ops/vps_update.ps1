@@ -61,13 +61,16 @@ function Test-Bridge([string]$Sha) {
 
 function Install-Bridge([string]$Sha) {
   nssm stop "goldbot-bridge-$Account" | Out-Host
+  $ok = $true
   git checkout --detach $Sha | Out-Host
-  if ($LASTEXITCODE -ne 0) { Write-Warning "git checkout $Sha failed"; return $false }
-  & $py -m pip install -e ".[live]" | Out-Host      # same extras as the bootstrap (pydantic>=2.12, ADR 0010)
-  if ($LASTEXITCODE -ne 0) { Write-Warning "pip install failed"; return $false }
-  nssm start "goldbot-bridge-$Account" | Out-Host
+  if ($LASTEXITCODE -ne 0) { Write-Warning "git checkout $Sha failed"; $ok = $false }
+  if ($ok) {
+    python -m uv sync --frozen --extra live --python 3.11 | Out-Host     # exact versions from uv.lock (ADR 0010 pin)
+    if ($LASTEXITCODE -ne 0) { Write-Warning "uv sync failed"; $ok = $false }
+  }
+  nssm start "goldbot-bridge-$Account" | Out-Host    # always: a stopped bridge cuts the engine off from the terminal
   Start-Sleep -Seconds 5
-  return $true
+  return $ok
 }
 
 if ($BridgeOnly) {
@@ -173,8 +176,8 @@ function Get-RunningJobs {
 function Install-Commit([string]$Sha, [string]$OldSha) {
   git checkout --detach $Sha | Out-Host
   if ($LASTEXITCODE -ne 0) { Write-Warning "git checkout $Sha failed"; return $false }
-  & $py -m pip install -e ".[live]" | Out-Host   # same extras as vps_bootstrap.ps1
-  if ($LASTEXITCODE -ne 0) { Write-Warning "pip install failed"; return $false }
+  python -m uv sync --frozen --extra live --python 3.11 | Out-Host   # same as vps_bootstrap.ps1 (uv.lock)
+  if ($LASTEXITCODE -ne 0) { Write-Warning "uv sync failed"; return $false }
   Sync-AuxSchema                                  # services are stopped here
   # rebuild the dashboard only when web/ changed (the API serves web\dist)
   git diff --quiet $OldSha $Sha -- web

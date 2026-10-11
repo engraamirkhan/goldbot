@@ -7,17 +7,18 @@
 #
 #   .\vps_bootstrap.ps1                       # services run as LocalSystem
 #   .\vps_bootstrap.ps1 -RunAs ".\aamir"      # services run as the owner's Windows user (recommended)
-#   .\vps_bootstrap.ps1 -BridgeOnly -RunAs ".\<user>" -Ref <40-hex sha>
+#   .\vps_bootstrap.ps1 -BridgeOnly -Ref <40-hex sha>
 #       MT5 BRIDGE box next to a Linux brain (e.g. a 1 GiB Azure free VM): only Python, Git, NSSM, Tailscale, one MT5
 #       terminal, goldbot + MetaTrader5, a 4-6 GB pagefile, the OpenSSH server for the brain's tunnel (Tailscale
-#       addresses only, user `mt5` may only forward to 127.0.0.1:8765) and ONE service, goldbot-bridge-<account>. No
+#       interface only, user `mt5` may only forward to 127.0.0.1:8765) and ONE service, goldbot-bridge-<account>, run
+#       as the non-admin local user goldbot-bridge (created here; you choose its password). No
 #       Node, no dashboard, no engine (an engine here would be a second engine on the account), no cloudflared.
 #       Afterwards: vps_bridge_authorize.ps1 for the brain's key; updates with vps_update.ps1 -BridgeOnly.
 # Credential Manager is per user: the account that stored the secrets (accounts set/add) must be the account the
 # services run as. With -RunAs the password is asked once via Get-Credential and handed to NSSM (which stores it
 # with the service in the Windows service manager); it is never written to a file or echoed.
 param(
-  [string]$RunAs = "",         # optional NSSM ObjectName, e.g. ".\aamir" or "VPS01\aamir" (required with -BridgeOnly)
+  [string]$RunAs = "",         # optional NSSM ObjectName, e.g. ".\aamir" or "VPS01\aamir" (all-in-one only)
   [switch]$BridgeOnly,         # the MT5 bridge box of a Linux brain (see above)
   [string]$Ref = "",           # -BridgeOnly: the 40-hex commit id on main the owner checked (empty: main now)
   [string]$Account = "icm-demo"
@@ -27,11 +28,41 @@ $NodeMajor = "22"              # match CI (.github/workflows/ci.yml NODE_VERSION
 $Repo = "https://github.com/engraamirkhan/goldbot.git"
 $Root = "C:\goldbot"
 
+# Windows ACLs (security review H1b): the tree and the terminals are written by Administrators only; the service user
+# reads them and writes only its own folders (and its terminal's folder, which MT5's live update writes). Without
+# this, C:\goldbot inherits C:\'s "Authenticated Users: create/append", so any local user could plant code the
+# services run. $User may be empty (services as LocalSystem): then only SYSTEM and Administrators keep access.
+function Set-GoldbotAcl([string]$User, [string[]]$Terminals, [string[]]$Writable = @("state", "logs")) {
+  icacls $Root /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "icacls $Root failed" }
+  icacls C:\MT5 /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "icacls C:\MT5 failed" }
+  if (-not $User) { return }
+  icacls $Root /grant "${User}:(OI)(CI)RX" | Out-Null
+  icacls C:\MT5 /grant "${User}:(OI)(CI)RX" | Out-Null
+  foreach ($d in $Writable) {
+    if ($d -eq "state") { icacls "$Root\state" /grant "${User}:(OI)(CI)M" | Out-Null }
+    if ($d -eq "logs") { icacls "$Root\logs" /grant "${User}:(OI)(CI)M" | Out-Null }
+    if ($d -eq "data") { icacls "$Root\data" /grant "${User}:(OI)(CI)M" | Out-Null }
+    if ($d -eq "models") { icacls "$Root\models" /grant "${User}:(OI)(CI)M" | Out-Null }
+  }
+  foreach ($t in $Terminals) { icacls "C:\MT5\$t" /grant "${User}:(OI)(CI)M" | Out-Null }
+}
+
+# The MT5 installer runs as Administrator, so it must carry a valid Authenticode signature from MetaQuotes
+# (security review M2); a tampered or unsigned download is refused before it runs.
+function Assert-MetaQuotesSigned([string]$Path) {
+  $sig = Get-AuthenticodeSignature $Path
+  if ((Get-AuthenticodeSignature $Path).Status -ne 'Valid') { throw "mt5setup.exe signature is $($sig.Status): not run" }
+  if ($sig.SignerCertificate.Subject -notmatch 'MetaQuotes') { throw "mt5setup.exe is not signed by MetaQuotes: not run" }
+}
+
 function Install-BridgeOnly {
-  if (-not $RunAs) { throw "-BridgeOnly needs -RunAs: Credential Manager is per user, the bridge service runs as you" }
   if ($Ref -and ($Ref -notmatch '^[0-9a-f]{40}$')) { throw "-Ref must be a 40-hex commit id on main" }
   if ($Account -notmatch '^[a-z0-9-]{1,40}$') { throw "-Account must be an account id from config/accounts.yaml" }
   $svc = "goldbot-bridge-$Account"
+  # the bridge runs as its own NON-admin local user (security review H1c), never as the RDP administrator
+  $BridgeUser = "goldbot-bridge"
   Start-Transcript -Path "$env:ProgramData\goldbot-bootstrap.log" -Append | Out-Null
 
   # 1 GiB of RAM: a fixed 4-6 GB pagefile on C: (B2ats v2 has no temporary disk); takes effect after a restart
@@ -40,6 +71,15 @@ function Install-BridgeOnly {
   $pf = Get-CimInstance Win32_PageFileSetting | Where-Object { $_.Name -ieq "C:\pagefile.sys" }
   if (-not $pf) { $pf = New-CimInstance -ClassName Win32_PageFileSetting -Property @{ Name = "C:\pagefile.sys" } }
   Set-CimInstance -InputObject $pf -Property @{ InitialSize = [uint32]4096; MaximumSize = [uint32]6144 }
+
+  # the bridge user's password is chosen by the owner (password manager): it is needed again for `runas` (MT5 login
+  # and bridge-serve as this user); it goes to New-LocalUser and NSSM only, never to a file or the screen
+  $cred = Get-Credential -UserName $BridgeUser -Message "Choose a password for the local user $BridgeUser (save it in your password manager first)"
+  if (-not (Get-LocalUser -Name $BridgeUser -ErrorAction SilentlyContinue)) {
+    New-LocalUser -Name $BridgeUser -Password $cred.Password -PasswordNeverExpires `
+      -Description "goldbot MT5 bridge service (not an administrator)" | Out-Null
+  }
+  try { Add-LocalGroupMember -Group Users -Member $BridgeUser -ErrorAction Stop } catch { Write-Host "$BridgeUser already in Users" }
 
   foreach ($id in "Python.Python.3.11", "Git.Git", "NSSM.NSSM", "Tailscale.Tailscale") {
     winget install -e --id $id --silent --accept-package-agreements --accept-source-agreements
@@ -52,18 +92,23 @@ function Install-BridgeOnly {
       git -C $Root checkout --detach $Ref
       if ($LASTEXITCODE -ne 0) { throw "commit $Ref not found" }
     }
+  } elseif ($Ref) {           # a re-run never moves an installed tree; say so when it is on another commit
+    $head = "$(git -C $Root rev-parse HEAD)".Trim()
+    if ($head -ne $Ref) { Write-Warning "WARNING: $Root is at $head, not $Ref: left as it is (update with vps_update.ps1 -BridgeOnly -Ref $Ref)" }
   }
   Set-Location $Root
   New-Item -ItemType Directory -Force -Path "$Root\state", "$Root\logs", "C:\MT5\ICMarkets" | Out-Null
-  python -m pip install --upgrade pip uv
-  python -m uv venv .venv
-  .\.venv\Scripts\python -m pip install -e ".[live]"     # goldbot + MetaTrader5 (win32 only) + pydantic>=2.12 (ADR 0010)
-  if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+  # exact versions from uv.lock (security review L1). Run as Administrator: the bridge user may only read the tree.
+  python -m pip install --upgrade uv
+  python -m uv sync --frozen --extra live --python 3.11     # goldbot + MetaTrader5 (win32) + pydantic>=2.12 (ADR 0010)
+  if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
   if (-not (Test-Path "C:\MT5\ICMarkets\terminal64.exe")) {       # one terminal: the path config/accounts.yaml expects
     $mt5 = "$env:TEMP\mt5setup.exe"
-    Invoke-WebRequest -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -OutFile $mt5
+    Invoke-WebRequest -UseBasicParsing -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -OutFile $mt5
+    Assert-MetaQuotesSigned $mt5
     Start-Process $mt5 -ArgumentList "/auto /path:C:\MT5\ICMarkets" -Wait
   }
+  Set-GoldbotAcl -User $BridgeUser -Terminals @("ICMarkets")
   w32tm /config /manualpeerlist:"time.cloudflare.com,0x8" /syncfromflags:manual /update
   w32tm /resync
 
@@ -71,7 +116,13 @@ function Install-BridgeOnly {
   Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
   Set-Service sshd -StartupType Automatic
   Start-Service sshd
-  Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue | Set-NetFirewallRule -RemoteAddress "100.64.0.0/10"
+  # SSH only on the Tailscale interface and from Tailscale addresses (security review L4)
+  $rule = Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue
+  if ($rule) { $rule | Set-NetFirewallRule -InterfaceAlias "Tailscale" -RemoteAddress "100.64.0.0/10" }
+  else {                       # some images install sshd without its firewall rule
+    New-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -DisplayName "OpenSSH Server (sshd)" -Direction Inbound -Protocol TCP `
+      -LocalPort 22 -Action Allow -InterfaceAlias "Tailscale" -RemoteAddress "100.64.0.0/10" | Out-Null
+  }
   if (-not (Get-LocalUser -Name "mt5" -ErrorAction SilentlyContinue)) {
     $bytes = New-Object byte[] 32                                   # a password nobody ever sees: key logins only
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
@@ -93,6 +144,8 @@ Match User mt5
     PasswordAuthentication no
     AllowTcpForwarding local
     PermitOpen 127.0.0.1:8765
+    AllowStreamLocalForwarding no
+    ForceCommand cmd.exe /c exit 1
     PermitTTY no
     X11Forwarding no
     AllowAgentForwarding no
@@ -100,11 +153,8 @@ Match User mt5
   }
   Restart-Service sshd
 
-  # ONE service: the bridge, as the owner's user (its Credential Manager holds the listen address, token and login)
+  # ONE service: the bridge, as the bridge user (its Credential Manager holds the listen address, token and login)
   $py = "$Root\.venv\Scripts\python.exe"
-  $cred = Get-Credential -UserName $RunAs -Message "Windows password for $RunAs (the bridge service runs as this user)"
-  icacls "$Root\state" /grant "$($RunAs):(OI)(CI)M" | Out-Null
-  icacls "$Root\logs" /grant "$($RunAs):(OI)(CI)M" | Out-Null
   nssm install $svc $py "-m goldbot.ops.run bridge $Account"
   nssm set $svc AppDirectory $Root
   nssm set $svc AppStdout "$Root\logs\$svc.log"
@@ -114,12 +164,14 @@ Match User mt5
   nssm set $svc AppExit Default Restart
   nssm set $svc AppRestartDelay 10000
   nssm set $svc Start SERVICE_AUTO_START
-  nssm set $svc ObjectName $cred.UserName $cred.GetNetworkCredential().Password | Out-Null
+  nssm set $svc ObjectName ".\$BridgeUser" $cred.GetNetworkCredential().Password | Out-Null
   $cred = $null
   Stop-Transcript | Out-Null
-  Write-Host "Bridge box installed, nothing started. Restart Windows once (pagefile), then as ${RunAs}: tailscale up;"
-  Write-Host "  log in to MT5 once (Save password); .\.venv\Scripts\python -m goldbot.ops.accounts bridge-serve $Account"
-  Write-Host "  .\goldbot\ops\vps_bridge_authorize.ps1 '<the brain key line>'; nssm start $svc"
+  Write-Host "Bridge box installed. The bridge service is NOT started (the SSH server is). Restart Windows once (pagefile)."
+  Write-Host "Then (docs/deploy/first-deploy.md):"
+  Write-Host "  tailscale up --unattended;  runas /user:$BridgeUser C:\MT5\ICMarkets\terminal64.exe   (log in once, Save password, exit)"
+  Write-Host "  runas /user:$BridgeUser `"cmd /k cd /d C:\goldbot && .venv\Scripts\python -m goldbot.ops.accounts bridge-serve $Account`""
+  Write-Host "  .\goldbot\ops\vps_bridge_authorize.ps1 '<the brain key line>'; nssm restart $svc"
 }
 
 if ($BridgeOnly) { Install-BridgeOnly; exit 0 }
@@ -136,7 +188,7 @@ if (-not $haveNode) {
   $rel = (Invoke-RestMethod "https://nodejs.org/dist/index.json") | Where-Object { $_.version -like "v$NodeMajor.*" } | Select-Object -First 1
   $msiName = "node-$($rel.version)-x64.msi"
   $msi = "$env:TEMP\$msiName"
-  Invoke-WebRequest -Uri "https://nodejs.org/dist/$($rel.version)/$msiName" -OutFile $msi
+  Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/$($rel.version)/$msiName" -OutFile $msi
   $sums = (Invoke-WebRequest -Uri "https://nodejs.org/dist/$($rel.version)/SHASUMS256.txt" -UseBasicParsing).Content
   $expected = (($sums -split "`n") | Where-Object { $_ -match "\s$([regex]::Escape($msiName))$" }) -split "\s+" | Select-Object -First 1
   if ((Get-FileHash $msi -Algorithm SHA256).Hash -ne $expected.ToUpper()) { throw "Node MSI checksum mismatch" }
@@ -147,8 +199,8 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
 if (-not (Test-Path $Root)) { git clone $Repo $Root }
 Set-Location $Root
 python -m pip install --upgrade pip uv
-python -m uv venv .venv
-.\.venv\Scripts\python -m pip install -e ".[live]"
+python -m uv sync --frozen --extra live --python 3.11      # exact versions from uv.lock; `uv venv` alone has no pip
+if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
 
 # Dashboard: the API serves web/dist (re-run these two lines after every git pull that touches web/)
 Push-Location "$Root\web"
@@ -162,7 +214,8 @@ Pop-Location
 New-Item -ItemType Directory -Force -Path C:\MT5\ICMarkets, C:\MT5\Vantage, $Root\state, $Root\logs | Out-Null
 $mt5 = "$env:TEMP\mt5setup.exe"
 if (-not (Test-Path "C:\MT5\ICMarkets\terminal64.exe")) {
-  Invoke-WebRequest -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -OutFile $mt5
+  Invoke-WebRequest -UseBasicParsing -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -OutFile $mt5
+  Assert-MetaQuotesSigned $mt5
   Start-Process $mt5 -ArgumentList "/auto /path:C:\MT5\ICMarkets" -Wait
   Start-Process $mt5 -ArgumentList "/auto /path:C:\MT5\Vantage" -Wait
 }
@@ -177,10 +230,11 @@ $svcCred = $null
 if ($RunAs) {
   # asked interactively, kept only in memory; the account needs "Log on as a service" (NSSM grants it)
   $svcCred = Get-Credential -UserName $RunAs -Message "Windows password for $RunAs (services run as this user)"
-  # the service user needs write access to state\ and logs\
-  icacls "$Root\state" /grant "$($RunAs):(OI)(CI)M" | Out-Null
-  icacls "$Root\logs" /grant "$($RunAs):(OI)(CI)M" | Out-Null
 }
+# Administrators own the tree and the terminals; the service user reads them and writes state, logs, data (the bar
+# store) and models (the scheduler's retrain) only (security review H1b)
+New-Item -ItemType Directory -Force -Path "$Root\data", "$Root\models" | Out-Null
+Set-GoldbotAcl -User $RunAs -Terminals @("ICMarkets", "Vantage") -Writable @("state", "logs", "data", "models")
 $svcs = @(
   @{ name="goldbot-supervisor"; args="-m goldbot.ops.run supervisor" },
   @{ name="goldbot-engine-icm"; args="-m goldbot.ops.run engine icm-demo" },
