@@ -439,6 +439,11 @@ def test_the_coarse_network_hint_never_carries_a_full_address():
     assert coarse_ip(None) == coarse_ip("testclient") == "an unknown network"
 
 
+def test_an_ipv4_mapped_ipv6_address_gets_the_ipv4_hint():
+    from goldbot.api.auth import coarse_ip
+    assert coarse_ip("::ffff:203.0.113.45") == "203.0.x.x"
+
+
 def test_a_link_sign_in_also_emails_the_owner_without_the_token(api):
     c, _, fake, secret = api
     _ask(c, OWNER)
@@ -469,10 +474,20 @@ def test_a_bad_dashboard_origin_is_refused(origin):
 @pytest.mark.parametrize("origin, kept", [
     ("https://dash.test", "https://dash.test"), ("https://dash.test/", "https://dash.test"),
     ("https://dash.test:8443", "https://dash.test:8443"), ("http://localhost:5173", "http://localhost:5173"),
-    ("http://127.0.0.1:8787", "http://127.0.0.1:8787"), ("http://[::1]:8787", "http://[::1]:8787")])
-def test_a_good_dashboard_origin_is_kept(origin, kept):
+    ("http://127.0.0.1:8787", "http://127.0.0.1:8787"), ("http://[::1]:8787", "http://[::1]:8787"),
+    ("HTTPS://Dash.Test:8443", "https://dash.test:8443"), ("HTTP://LocalHost:5173/", "http://localhost:5173")])
+def test_a_good_dashboard_origin_is_kept_lower_case_as_scheme_and_host_only(origin, kept):
     m = MailSettings(enabled=True, host="smtp.test", from_address="bot@x.io", dashboard_origin=origin)
     assert m.dashboard_origin == kept
+
+
+@pytest.mark.parametrize("origin", [
+    " https://dash.test", "https://dash.test ", "https://dash .test", "https://dash.test\t", "https://dash.test\n",
+    "https://dash\x00.test", "https://dash.test\x7f", "https://dash.test\\evil.test", "https://dash.test;x",
+    "https://:443", "https://[]", "https://@dash.test", "https:// dash.test"])
+def test_a_dashboard_origin_with_whitespace_control_characters_or_no_host_is_refused(origin):
+    with pytest.raises(ValidationError):
+        MailSettings(enabled=True, host="smtp.test", from_address="bot@x.io", dashboard_origin=origin)
 
 
 def test_signing_a_user_out_everywhere_also_deletes_their_email_links(tmp_path):

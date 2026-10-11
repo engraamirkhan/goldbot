@@ -73,6 +73,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   clash is caught by the `docs-assemble` pre-commit hook (which CI runs) and fixed by `fix-ids`. Lanes are merged
   with `scripts/docs_assemble.py merge <branch>`, which also absorbs branches that still edit the old rendered
   files. Never edit the rendered files.
+- Email sign-in link, security re-verify nits on 1a8bf43. `auth.mail.dashboard_origin` now refuses any
+  whitespace, control character, `\` or `;`, and an empty host. It is stored as the normalised lower-case
+  `scheme://netloc`. `coarse_ip` gives the IPv4 /16 for an IPv4-mapped IPv6 address (`::ffff:203.0.113.45` ->
+  `203.0.x.x`).
 - Email sign-in link: follow-ups to the security review of fe58fae (approved; no timing oracle found).
   - M1: ADR 0013 records the accepted risk (with mail on, mailbox plus authenticator signs the owner in) and its
     limits. Every `email_link_login` sends the owner a Telegram notice (`_notify_owner`) and an email
