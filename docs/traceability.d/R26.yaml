@@ -1,0 +1,5 @@
+id: R26
+requirement: Stale data reset "60 s of healthy data"
+status: implemented
+code: 'goldbot/engine/runner.py `_refresh_account`: after stale ticks, stale bars or a data-quality error, `data_recovering` blocks entries until `healthy_resume_s` (60) of healthy data'
+test: tests/test_engine_safety.py::test_entries_resume_only_after_sixty_seconds_of_healthy_data

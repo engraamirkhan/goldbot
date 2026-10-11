@@ -1,0 +1,5 @@
+id: F9
+requirement: '"an as-of audit on every join"'
+status: implemented
+code: goldbot/data/store.py:145 (refuses non-`available_utc` joins), goldbot/features/mtf.py:12
+test: tests/test_data_layer.py::test_asof_join_never_leaks_future_release

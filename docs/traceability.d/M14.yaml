@@ -1,0 +1,6 @@
+id: M14
+requirement: '"Purge is always at least the specialist''s label horizon"'
+status: implemented
+code: goldbot/research/walkforward.py:47; a tsmom hold longer than its window's purge (the H-01 `slow` preset, 124 4h bars) raises the purge to the hold in calendar days (goldbot/specialists/time_series_momentum.py `hold_calendar_days`, 31 days)
+test: tests/test_trace_data_exec.py::test_purge_is_at_least_every_label_horizon; tests/test_tsmom_slow.py::test_purge_covers_every_label_life
+order: 12.5

@@ -1,0 +1,5 @@
+id: U1
+requirement: '"email, password and an authenticator code for every login"'
+status: implemented
+code: goldbot/api/auth.py:161-176
+test: tests/test_api.py::test_bootstrap_invite_roles_and_decisions

@@ -1,0 +1,5 @@
+id: X11
+requirement: 'Classifier: commission => Raw; zero commission and median London/NY spread >= $0.30 => Standard'
+status: implemented
+code: goldbot/execution/classifier.py:31-48
+test: tests/test_risk_exec_webhook.py::test_classifier_rules_and_persistence

@@ -1,0 +1,5 @@
+id: U18
+requirement: 'The code lockout never gates halt or propose: after five wrong codes the dashboard halt, Telegram /halt (bus.set_halt) and /mode propose still work and sign-in stays open'
+status: implemented
+code: goldbot/api/app.py `halt` (no code); goldbot/telegram/automode.py `mode_command` (propose needs no code); goldbot/telegram/bot.py `_on_command` (/halt); goldbot/api/auth.py `_reserve` (code key separate from sign-in)
+test: tests/test_api_security_followup.py::test_the_code_lockout_never_gates_halt_or_propose; ::test_telegram_halt_through_the_bot_still_halts_while_codes_are_locked

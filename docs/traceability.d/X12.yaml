@@ -1,0 +1,5 @@
+id: X12
+requirement: '"a median under $0.20 with floating spread and no deal history also reads Raw; anything in between is Unknown"'
+status: implemented (fixed here)
+code: 'goldbot/execution/classifier.py:45: Raw now requires no deal history; zero-commission deals with a tight spread are Unknown'
+test: tests/test_trace_data_exec.py::test_tight_spread_reads_raw_only_without_deal_history

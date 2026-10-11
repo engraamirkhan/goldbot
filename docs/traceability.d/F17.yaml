@@ -1,0 +1,5 @@
+id: F17
+requirement: 'Survey 4a `vol_estimators` (#26, #27, #33, #34): GK, RS, YZ, vol-of-vol, term structure'
+status: implemented
+code: 'goldbot/features/survey.py `vol_estimators` (family `volatility`): `vol_gk/rs/yz_20/60`, `vol_pk_60`, `vol_ts_yz_20_60`, `vol_of_vol_60`; per-bar log-return volatilities, trailing windows'
+test: tests/test_survey_features.py::test_volatility_estimators_match_their_formulas_on_the_last_window; ::test_volatility_estimators_warm_up_as_documented

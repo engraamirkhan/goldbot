@@ -1,0 +1,5 @@
+id: A6
+requirement: '"every exit is automatic and never gated by approval"'
+status: implemented
+code: goldbot/engine/runner.py:367 `_manage_open` (no approval path)
+test: tests/test_cov_engine.py::test_time_exit_and_broker_side_closes_are_tracked

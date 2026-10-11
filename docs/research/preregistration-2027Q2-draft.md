@@ -208,16 +208,16 @@ way (13 → 9).
   |close at τ − O| on those days (days without that bar are skipped; fewer than 14 available → no entry).
 - **Entry:** the first 15m bar of D whose close falls in [09:00 London, 10:30 New York] (each in its own DST-aware
   clock) with |close − O_D| > 1.0 × B; side = sign(close − O_D); entry at that close. At most one trade a day. No
-  entry when the session calendar is closed. **Blackout, literal rule (program decision and quant review, settled
-  2026-10-11, before any count or outcome):** only the day's *first* breaching bar is a candidate. If its close falls
-  in a tier-1 blackout, the day has **no entry**: no later breaching bar of D is taken. The blackout is the half-open
-  interval **[release − 15 min, release + 30 min) applied to the bar's close time**, built from the tier-1 rows of
-  E-1 as known at that bar (status `scheduled`, `available_utc` before the bar). (The allocator zeroes every weight
-  over [−30, +30] min around a tier-1 event, `allocator/rules.py`; that is a live sizing rule, not part of this
-  trial's event definition.) Whether the same literal reading applies when the session calendar is closed at that
-  close, or ATR(14) is not yet defined, is pin P-2 below (recommended: yes). The low half (shadow) uses the identical
-  rule. count-owed-events reports the literal count (`high_events_strict`, the trial count) and, for transparency
-  only, the count that would take the next breaching bar outside the blackout (`high_events_next_bar`).
+  entry when the session calendar is closed. **Blackout, literal rule (program decision 2026-10-11 after the quant
+  review, before any count or outcome):** the candidate is the day's *first* breaching bar only; if that bar's close
+  lies inside a tier-1 blackout, **[−15, +30) min around the scheduled release, on the bar close** (E-1), the day has
+  **no entry**: no later breaching bar of that day is taken. (The allocator zeroes every weight over [−30, +30] min
+  around a tier-1 event, `allocator/rules.py`; that is a live sizing rule, not part of this trial's event definition.)
+  count-owed-events reports the literal count (`high_events_strict`, the trial count) and, for transparency only, the
+  count that would take the next breaching bar outside the blackout (`high_events_next_bar`). The blackout is built
+  from the tier-1 rows of E-1 as known at that bar (status `scheduled`, `available_utc` before the bar). Whether the
+  same literal reading applies when the session calendar is closed at that close, or ATR(14) is not yet defined, is
+  pin P-2 below (recommended: yes). The low half (shadow) uses the identical rule.
 - **Stop:** 1.5 × Wilder ATR(14) of the 15m mid bars at the entry bar's close, frozen; R = that distance.
 - **V0 (fixed):** target 3.0 ATR; otherwise flat at the first bar close at or after 16:30 New York.
 - **V1 (scale-and-run):** 50% off at 2.0 ATR; chandelier trail 2.5 ATR from the best price, armed at 1.5 ATR (ATR
@@ -266,17 +266,17 @@ way (13 → 9).
 ### H-14 15m scalping discovery (one trial)
 
 - **Spec (E-2):** a 15m two-sided discovery candidate set, run as `research_pass.py --discover` on that spec.
-  - Candidates: every 15m bar close from 08:00 London to 16:00 New York (DST-aware, both ends inclusive), outside
-    the tier-1 blackout (**[release − 15 min, release + 30 min) on the bar close**, as H-17, E-1; the allocator's
-    live [−30, +30] min zero-weight window is a sizing rule, not part of the candidate set) and the first 15 min
-    after the daily reopen (outside this window in practice; kept for clarity), and only where the H-13 cost gate
-    holds: the 3.0 ATR target ≥ 3 × the round-trip cost in USD, i.e. ATR(15m) ≥ the round trip.
+  - Candidates: every 15m bar close from 08:00 London to 16:00 New York (DST-aware, both ends included), outside the
+    tier-1 blackout (**[−15, +30) min around the scheduled release, on the bar close**, E-1; the allocator's live
+    [−30, +30] min zero-weight window is a sizing rule, not part of the candidate set) and the first 15 min after the
+    daily reopen, and only where the H-13 cost gate holds: the 3.0 ATR target ≥ 3 × the round-trip cost in USD, i.e.
+    ATR(15m) ≥ the round trip (the daily-reopen exclusion lies outside this window in practice; kept for clarity).
   - **Cost prior for the gate (quant review, settled 2026-10-11):** round trip = the candidate 15m bar's own
-    Dukascopy mean spread (`spread_mean`, USD/oz, data-v1) + the settings extra cost
-    (`execution.costs.settings_extra_cost_usd`, 0.37 $/oz today; the value at the freeze is written into the config
-    and so into its hash; count-owed-events records the check, and a different value at the run is a deviation stated
-    in the report). `costs-v1` is **not** read by the gate, even if published before the run, so the candidate set
-    and its owed count cannot move between the count and the run.
+    Dukascopy mean spread (`spread_mean`, USD/oz) + the settings extra cost (`execution.costs.settings_extra_cost_usd`,
+    0.37 $/oz today; the value at the freeze is written into the config and so into its hash). `costs-v1` is **not**
+    read by the gate, even if published before the run, so the candidate set and its owed count cannot move between
+    the count and the run. The extra cost is checked to be 0.37 $/oz at the run (count-owed-events records the
+    check; a different value is a deviation stated in the report).
   - Both sides are labelled for every candidate (two rows, `side` the 40th input), so the label depends on no primary
     (survey 4b). Both rows of a bar always fall in the same fold and are purged together.
   - Label: triple barrier, target 3.0 / stop 1.5 × Wilder ATR(14) of 15m mid bars at the candidate close, time

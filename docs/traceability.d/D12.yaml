@@ -1,0 +1,5 @@
+id: D12
+requirement: '"daily reconciliation against the broker''s own M1 logs any divergence"'
+status: implemented
+code: 'goldbot/data/crossfeed.py `reconcile_account` (engine 1m bars rebuilt from the account''s stored ticks vs `Broker.get_bars(symbol, "1m", 1500)` over the last day: close diff > 2 points, minutes missing on either side; > 0.5% of broker minutes warning, > 5% error) -> dq_events (source = account), state/reconcile_<account>.json, broker M1 kept in `bars_1m_broker`; scheduler job `feed_reconcile` (goldbot/ops/jobs.py, Mon-Fri 23:20 UTC; broker from `run._job_broker`: bridge or the Windows terminal); health check `check_reconciliation` (warning warn, error fail, stale > 96 h warn) in `health.run_checks`'
+test: tests/test_crossfeed.py::test_agreeing_feeds_reconcile_with_no_divergence; ::test_diverging_closes_beyond_two_points_are_counted_and_graded; ::test_missing_minutes_on_either_side_are_counted; ::test_reconcile_account_writes_events_broker_history_and_report; ::test_reconcile_health_check_follows_the_report_severity; ::test_feed_reconcile_job_runs_per_account_and_skips_without_a_broker

@@ -1,0 +1,5 @@
+id: D16
+requirement: News features "join as-of on received_utc"; "a high-relevance unscheduled shock triggers a 30-minute entry blackout"
+status: implemented
+code: goldbot/data/news.py:167 `shock_window`; goldbot/engine/runner.py:535
+test: tests/test_news.py::test_shock_blocks_entries_for_30_minutes

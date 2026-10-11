@@ -1,0 +1,5 @@
+id: G6
+requirement: '"promotion from shadow to live still passes the deflated-Sharpe gate with the population size as the trial count"'
+status: implemented
+code: goldbot/research/population.py `tournament` promotes on DSR >= 0.95 (`DSR_PROMOTE`), the design's "0.95 or better"
+test: tests/test_population.py::test_strong_shadow_record_is_promoted_and_a_weak_one_is_not; ::test_shadow_is_promoted_at_a_deflated_sharpe_of_exactly_0_95_and_not_just_below

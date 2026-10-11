@@ -668,8 +668,9 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         # + every discovery's K_eff (survey 4b), charged to EVERY later trial, survivor or not: the conservative
         # default, recorded as an owner-acknowledged choice in docs/research/preregistration-2027Q1.md
         n_trials = reg.n_trials_effective + 1
-        preps = [prepare(s, b_dec, context, extra_cost_usd=extra_cost, holdout=holdout, score_holdout=args.score_holdout,
-                         frame=frame, swap=swap) for s in job.specs]
+        # ctx: the point-in-time tables a candidate rule reads (H-06's macro gate); the frame is already built
+        preps = [prepare(s, b_dec, context, ctx=feat_ctx, extra_cost_usd=extra_cost, holdout=holdout,
+                         score_holdout=args.score_holdout, frame=frame, swap=swap) for s in job.specs]
         # event floor: research.screen_min_events, or the daily-signal override (owner ruling A), set before the run
         floor = min_events_for(tf if job.pooled else signal_timeframe(job.specs[0]), settings.research)
         scr = None if args.score_holdout else screen(preps if job.pooled else preps[0], floor)

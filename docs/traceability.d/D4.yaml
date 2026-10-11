@@ -1,0 +1,5 @@
+id: D4
+requirement: Swap-day "read from the terminal, used only for cost attribution"
+status: implemented
+code: 'rollover = midnight on the canonical broker''s server clock (`labels.triple_barrier.rollover_nights`); rates and triple day read from the terminal (goldbot/execution/mt5_adapter.py `swap_usd_per_lot`, `triple_weekday`: swap_mode points/money/interest -> USD per lot per night, unsupported modes fall back to the `costs.swap_*` prior with a logged reason) by the engine (`Engine._refresh_broker_terms` -> state/broker_terms_<account>.json) into the nightly cost table (`jobs.nightly_costs`, `CostTable.swap_*`), which `live_swap` and `research_pass.py --cost-table` charge'
+test: tests/test_swap.py; tests/test_measured_costs.py::test_swap_modes_convert_to_usd_per_lot_per_night; ::test_unsupported_swap_modes_give_no_rate_and_say_why; ::test_nightly_costs_fill_swap_and_commission_from_the_terminal

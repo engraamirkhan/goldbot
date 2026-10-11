@@ -1,0 +1,5 @@
+id: F3
+requirement: 'Labels: "Triple-barrier on mid price with spread charged at entry and exit (buy at ask, sell at bid)"'
+status: implemented
+code: goldbot/labels/triple_barrier.py:39-60
+test: tests/test_cov_labels_store.py::test_long_enters_at_the_ask_and_only_bars_after_the_signal_count; ::test_short_enters_at_the_bid_and_is_stopped_by_the_ask

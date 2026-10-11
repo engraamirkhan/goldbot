@@ -1,0 +1,5 @@
+id: S1
+requirement: Combined caps "1.5% daily, 4% weekly" of combined equity, tighter than per account
+status: implemented
+code: goldbot/risk/supervisor.py:53-66; goldbot/ops/run.py `run_supervisor` (from settings)
+test: tests/test_cov_risk.py::test_combined_daily_cap_halts_although_each_account_is_inside_its_own_cap; ::test_combined_weekly_cap_and_drawdown_stages

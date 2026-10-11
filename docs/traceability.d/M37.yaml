@@ -1,0 +1,5 @@
+id: M37
+requirement: 'Pre-registration (deferred L4): a `preregistered` registry row with config and reading rule written BEFORE the run; not a trial (no budget slot, no DSR count); the result row carries the same trial number, config hash and a `preregistration` reference'
+status: implemented
+code: goldbot/research/registry.py `preregister`, `preregistration`, `is_trial`, `quarter_trials`, `n_trials`; goldbot/research/registry_sync.py `merge_rows` numbers trials only; used by `research_pass.py --discover`; the merge rewrites the result row's `preregistration.trial` on renumbering
+test: tests/test_discovery.py::test_a_preregistration_precedes_its_result_and_is_neither_a_trial_nor_a_budget_slot; ::test_merge_renumbering_rewrites_the_results_preregistration_link; tests/test_research_pass_integration.py::test_discover_is_one_preregistered_trial_and_later_trials_count_the_features_screened

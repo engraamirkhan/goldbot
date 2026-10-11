@@ -1,0 +1,5 @@
+id: G3
+requirement: Cloning "two or three mutated children ... a parent is never duplicated unchanged"
+status: implemented
+code: goldbot/research/population.py:48, 180
+test: tests/test_population.py::test_winners_are_cloned_into_mutated_shadow_children; tests/test_features_labels.py::test_agent_identity_clone_must_differ

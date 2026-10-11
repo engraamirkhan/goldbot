@@ -1,0 +1,5 @@
+id: X9
+requirement: 'Cost model: spread by session from own ticks, slippage from own fills by session and order type, "$0.15 prior until 50 fills"; swap'
+status: implemented
+code: goldbot/execution/costs.py; config/settings.yaml `costs`; commission per lot round trip from the terminal's recent closed positions (`mt5_adapter.commission_round_trip_per_lot`, `CostTable.commission_measured`) and swap from symbol_info (row D4), settings values while not measured; swap in the net research labels per rollover held through (goldbot/labels/triple_barrier.py); health warns while a table has no measured swap (goldbot/ops/health.py `check_costs`)
+test: tests/test_costs_promotion_registry.py::test_slippage_keeps_the_prior_until_enough_fills_and_signs_by_side; tests/test_cov_execution.py::test_slippage_cells_need_their_own_min_fills_and_ignore_unpriced_rows; tests/test_measured_costs.py::test_commission_is_per_lot_round_trip_over_complete_positions; ::test_adapter_reads_swap_and_commission_from_the_terminal; ::test_stale_or_missing_terms_keep_the_settings_values; ::test_health_warns_until_the_cost_table_has_measured_swap

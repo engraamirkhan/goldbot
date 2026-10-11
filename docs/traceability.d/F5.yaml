@@ -1,0 +1,5 @@
+id: F5
+requirement: '"Meta-labelling: the rule sets the side, the model learns P(rule is right)"'
+status: implemented
+code: goldbot/research/pipeline.py:96 `run_specialist` (y = target_hit)
+test: tests/test_research_pass_integration.py::test_research_pass_reports_and_records_trials

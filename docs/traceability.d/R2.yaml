@@ -1,0 +1,5 @@
+id: R2
+requirement: '"scaled by the model multiplier bounded 0.25-1.5"'
+status: implemented
+code: goldbot/risk/gate.py:158-159
+test: tests/test_cov_risk.py::test_model_multiplier_is_bounded_to_quarter_and_one_and_a_half

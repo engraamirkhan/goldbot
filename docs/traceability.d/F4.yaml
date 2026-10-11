@@ -1,0 +1,5 @@
+id: F4
+requirement: '"The label is the sign of the first barrier touched, with the time barrier yielding the sign of the realised return"'
+status: implemented
+code: goldbot/labels/triple_barrier.py:44-63
+test: tests/test_cov_labels_store.py::test_time_exit_label_is_the_sign_of_the_realised_return; ::test_stop_is_assumed_first_when_both_barriers_are_inside_one_bar

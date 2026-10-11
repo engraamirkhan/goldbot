@@ -1,0 +1,5 @@
+id: M12
+requirement: '"Probabilities are isotonic-calibrated on out-of-fold predictions; thresholds maximise out-of-sample profit factor net of costs, shaded up by 0.02"'
+status: in review
+code: goldbot/research/model.py:46; threshold is breakeven + 0.02 (goldbot/research/pipeline.py, goldbot/engine/runner.py:306), not PF-optimised; cross-fitted calibration is proposal P1
+test: tests/test_research_pass_integration.py::test_research_pass_reports_and_records_trials

@@ -1,0 +1,5 @@
+id: X1
+requirement: '"The engine never imports MetaTrader5 directly"; Broker protocol'
+status: implemented
+code: goldbot/execution/broker.py; MetaTrader5 only in goldbot/execution/mt5_adapter.py
+test: untested (structural)

@@ -1,0 +1,5 @@
+id: M2
+requirement: 'Trend trigger: EMA-50 side matching the 4h slope, ADX(14) > 20, pullback within 0.5 ATR'
+status: implemented
+code: goldbot/specialists/trend.py
+test: tests/test_specialists.py::test_trend_takes_a_pullback_in_the_4h_direction

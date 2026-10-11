@@ -1,0 +1,5 @@
+id: R11
+requirement: Weekly loss cap "5% per account", "No new entries; owner told"
+status: implemented
+code: 'goldbot/risk/gate.py:143, 146-147 (no entries); owner told: goldbot/ops/health.py:681 `check_loss_caps` (daily and weekly cap per account from engine_<account>.json) warns with NOTIFY_ON_WARN (:818), so the Telegram health pass sends it once per incident (the weekly one stays tripped until the risk week rolls: once a week per account)'
+test: tests/test_cov_risk.py::test_each_account_condition_blocks_entries_on_its_own, tests/test_health.py::test_loss_caps_warn_and_are_announced_once

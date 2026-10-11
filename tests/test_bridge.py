@@ -152,7 +152,7 @@ def _acc(**kw: Any) -> acc_mod.Account:
 
 def _info(**kw: Any) -> AccountInfo:
     base: dict[str, Any] = dict(login=1234567, equity=1e4, balance=1e4, margin=0, margin_free=1e4, leverage=20,
-                                currency="USD", server="ICMarketsSC-Demo", trade_mode="demo")
+                                currency="USD", server="ICMarketsSC-Demo", trade_mode="demo", margin_mode="hedging")
     base.update(kw)
     return AccountInfo(**base)
 
@@ -171,6 +171,16 @@ def test_the_terminal_must_be_logged_in_to_the_registry_account():
     assert "no login" in _why(_acc(login=None), _info())
     assert acc_mod.verify_terminal_account(_acc(mode="live", server="ICMarketsSC-Live"),
                                            _info(server="ICMarketsSC-Live", trade_mode="real")) is None
+
+
+def test_the_terminal_account_must_be_hedging():
+    # review LOW (MEDIUM-1 follow-up): the engine keys one position per order ticket; on a netting or exchange account
+    # fills join one position per symbol, so the engine refuses to start (and to send orders) unless it is hedging.
+    # Unknown (an older bridge that does not report it) refuses too: update the bridge first
+    assert acc_mod.verify_terminal_account(_acc(), _info()) is None
+    for mode in ("netting", "exchange", None):
+        why = _why(_acc(), _info(margin_mode=mode))
+        assert "hedging" in why and str(mode or "unknown") in why, why
 
 
 @pytest.fixture

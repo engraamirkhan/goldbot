@@ -1,0 +1,5 @@
+id: A3
+requirement: '"approval re-runs the RiskGate and spread check at approval time"'
+status: implemented
+code: goldbot/engine/runner.py:331-345
+test: tests/test_cov_engine.py::test_approval_re_runs_the_risk_gate_and_a_halt_meanwhile_blocks_the_entry

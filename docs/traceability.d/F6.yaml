@@ -1,0 +1,5 @@
+id: F6
+requirement: '"weighted by uniqueness (average inverse concurrency over the label''s life) times absolute return"'
+status: implemented
+code: goldbot/labels/triple_barrier.py:77
+test: tests/test_cov_labels_store.py::test_uniqueness_weights_discount_overlapping_labels

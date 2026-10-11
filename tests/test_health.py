@@ -570,7 +570,8 @@ def test_heartbeat_writes_at_most_once_a_minute(tmp_path):
     clock.t += 61
     assert hb.beat()
     saved = json.loads(health.heartbeat_path(tmp_path, "supervisor").read_text())
-    assert saved == {"service": "supervisor", "ts": clock.t}
+    assert {k: saved[k] for k in ("service", "ts")} == {"service": "supervisor", "ts": clock.t}
+    assert set(saved) == {"service", "ts", "schema_skew"}           # ADR 0010: the process's bounded skew block
 
 
 def test_a_heartbeat_write_error_never_stops_the_service(tmp_path):

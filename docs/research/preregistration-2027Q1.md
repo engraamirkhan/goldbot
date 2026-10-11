@@ -268,6 +268,20 @@ stamped before its row's quarter would never use the row up.
   the H-06 row is not written, `research.reserved_trials_quarter` for 2027Q1 is set to 8, and no trial is spent.**
   Under any floor H-06 can only be inconclusive on fewer events, so a run would buy no information. If the preset is
   not merged by 2026-12-04, the same withdrawal applies.
+- **Implemented (BACKLOG 48, 2026-10-11; no outcome read, nothing tuned; quant review pending).** The tsmom preset
+  `slow_macro` = `slow` + `"macro_gate": true`, agent id `tsmom-g0-fed4baec9f` (`slow` stays `tsmom-g0-c12c9afb24`;
+  `goldbot/specialists/time_series_momentum.py`, `tests/test_tsmom_macro_gate.py`). The gate keeps an H-01 candidate
+  only when `macro_drivers`' `macro_real_yield_chg20` (DFII10) and `macro_dollar_chg20` (DTWEXBGS), joined by
+  `asof_join` on `available_utc` at the close of the 4h bar the candidate fires on, are both < 0 for a long or both
+  > 0 for a short; a NaN or zero change drops it. The run needs the macro release (`--macro`, which also gives the
+  pre-registered feature version `f-51ac5ebabb`): without `ctx["macro"]` the preset refuses to run rather than spend
+  a trial on no candidates. Readings taken where the text above allows more than one, each the most literal, for the
+  quant reviewer to confirm or amend before the freeze: (a) "20-day change" = 20 observations of each series' first
+  releases (about 20 US business days; the `f-51ac5ebabb` columns); (b) "the signal bar" = the 4h decision bar the
+  trade enters on, as H-01's ATR (not the daily bar's settlement, nor the 4h bar's open; with the 23:00 UTC stamps the
+  three differ only on data-gap days); (c) "agree" is strict, so a zero change keeps neither side; (d) the dollar
+  change is a ratio and DFII10's a difference (the sign, which is all the gate reads, is the same); (e) the model's
+  declared inputs are H-01's (no macro column), and the macro columns in the frame are not read by the rule.
 
 ### H-04 Asia-session drift
 - Config: long at 00:00 UTC, exit 07:00 UTC (flat before London), stop 1.5 ATR(1h), every trading day, Data before
@@ -401,7 +415,7 @@ and run there, and its table is pasted here with the run's commit:
 |---|---|---|---|
 | H-04 entries, entries dropped by the 7-hour sample rule (with dates), days without a decision bar, ATR warm-up, holdout-crossing entry; calendar upper bound 4,087 | `data-v1` | release manager merges; strategy researcher dispatches and pastes | merge 2026-10-25, paste 2026-11-01 |
 | H-01 recount (signals by side, one-at-a-time lower bound) against 2,154 / 154; any difference explained here | `data-v1` | as above | 2026-11-01 |
-| H-06 signals and one-at-a-time lower bound (**not in the script yet**: add with the preset) | `macro-v1`, H-06 preset | implementer adds; strategy researcher pastes | 2026-12-04 |
+| H-06 signals by side and one-at-a-time lower bound, produced by count-owed-events (`count_h06`: the `slow_macro` preset's own `candidates_in_context` on data-v1 + `macro-v1`, with the H-01 signals the gate removes and the lower bound against the daily floor in force, `below_floor`); "not counted" until `macro-v1` exists | `macro-v1`, H-06 preset (merged with the count, BACKLOG 48) | strategy researcher dispatches and pastes | 2026-12-04 |
 | Q2 counts from the same run (H-16, H-17, H-18, H-14) | `calendar-v1`, `macro-v1`; Q2 pins P-1 .. P-10 first | as above | not needed for Q1 |
 
 **4. Freeze checklist, with an owner and a date for each item** (the boxes below are ticked only when done)
@@ -413,7 +427,7 @@ and run there, and its table is pasted here with the run's commit:
 | `calendar-v1` published (`data-us-calendar` on `main`; needed by Q2, not by Q1) | data engineer | 2026-10-18 |
 | `costs-v1` published from the VPS, or "priors accepted" written here by the research director | owner and SRE (VPS step, BACKLOG 1); research director records the fallback | 2026-12-11 / fallback 2026-12-14 |
 | A pre-registration writer: a command plus a `workflow_dispatch` job that writes queued rows and slots into the shared registry under its lock and syncs `research-v1` (BACKLOG 47; built 2026-10-11 as `scripts/preregister_quarter.py` + the `preregister-quarter` workflow, from `preregistration-2027Q1.yaml`, which must be updated with this file: H-02's config, H-06 or its withdrawal, the freeze commit) | implementer; quant and security reviewers | 2026-12-04 |
-| H-06 preset merged and counted, or withdrawn by its rule (BACKLOG 48) | strategy researcher, implementer | 2026-12-04 |
+| H-06 preset merged and counted, or withdrawn by its rule (BACKLOG 48; preset and count built 2026-10-11, in review; the count waits for `macro-v1`) | strategy researcher, implementer | 2026-12-04 |
 | H-10: no `jump_news` for Q1 (decided here). H-10 reads jumps only, which is inconclusive for H-10 by its rule, so the feature version stays put | research director | done 2026-10-11 |
 | Feature-version line final (`f-079deacc61`; macro `f-51ac5ebabb`); any later bump amends it first | quant reviewer | 2026-12-11 |
 | Freeze commit of this file; `<freeze commit>` filled in every run-input table | research director | 2026-12-14 |
@@ -426,7 +440,8 @@ and run there, and its table is pasted here with the run's commit:
 - [ ] `costs-v1` measured table published from the VPS (or the priors accepted and stated)
 - [ ] `macro-v1` release present
 - [x] `research_pass.py --discover` merged and tested (`scripts/research_pass.py --discover`, `tests/test_discovery.py`; checked 2026-10-11)
-- [ ] count-owed-events merged and run on `main` (data-v1); its counts pasted here (H-04 entries and the 7h-rule drops; the H-01 recount)
+- [ ] count-owed-events merged and run on `main` (data-v1); its counts pasted here (H-04 entries and the 7h-rule drops;
+  H-01 recount)
 - [ ] H-06 preset merged and counted, or H-06 withdrawn and the reservation set to 8
 - [ ] pre-registration writer merged (BACKLOG 47); the 4 survivor slots written on H-02's row
 - [ ] each trial's `preregistered` registry row written with this file's commit id

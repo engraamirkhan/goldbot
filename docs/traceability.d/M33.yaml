@@ -1,0 +1,5 @@
+id: M33
+requirement: 'Primary-signal screen before any model: rule-only gross mean R > 0, t >= 2, >= 1,000 events (proposal P4); each screened configuration is a trial. Floor from settings (`research.screen_min_events`, daily-signal override `screen_min_events_daily`, null = unchanged; owner ruling A); failing only on the floor is `inconclusive (event floor)`: recorded and charged, cannot retire the hypothesis'
+status: implemented
+code: goldbot/research/screen.py; scripts/research_pass.py (`--skip-screen`, status `screened`); goldbot/config.py
+test: tests/test_screen_pool.py::test_screen_passes_only_a_positive_significant_rule_on_enough_events; tests/test_screen_pool.py::test_a_screen_failing_only_on_the_event_floor_is_inconclusive_not_a_plain_fail; tests/test_screen_pool.py::test_screen_floor_comes_from_settings_with_an_optional_daily_signal_override; tests/test_research_pass_integration.py::test_a_rule_that_fails_the_screen_gets_no_model_but_is_a_recorded_trial; tests/test_research_pass_integration.py::test_a_screen_short_only_of_the_daily_signal_floor_is_an_inconclusive_recorded_trial

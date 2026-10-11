@@ -1,0 +1,5 @@
+id: M19
+requirement: '"deflated Sharpe ratio of 0.95 or better using the real trial count from the research registry"'
+status: in review
+code: goldbot/research/metrics.py:31 computed and reported; not a gate on challengers; P1/P2
+test: untested

@@ -1,0 +1,5 @@
+id: M4
+requirement: 'Mean-reversion: 2 sigma of 20-bar band, RSI(14) beyond 25/75, 1h vol in bottom two terciles'
+status: implemented
+code: goldbot/specialists/mean_reversion.py
+test: tests/test_specialists.py::test_mean_reversion_fades_band_extremes_in_calm_markets

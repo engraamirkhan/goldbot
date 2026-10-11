@@ -1,0 +1,5 @@
+id: X15
+requirement: 'Webhook: "accepts POSTs only from TradingView''s published IPs"'
+status: implemented
+code: goldbot/webhook/app.py:24, 79-83 (peer address)
+test: tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar (IP check disabled in test)

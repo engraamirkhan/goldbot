@@ -1,0 +1,5 @@
+id: G8
+requirement: 'Staff agents: "none can place, modify or close a trade"; read-only tools; the only write is a hypothesis'
+status: implemented
+code: goldbot/agents/tools.py; goldbot/agents/roles.py
+test: tests/test_agents.py::test_tools_outside_the_role_are_refused_and_not_run; ::test_improvement_agent_files_a_hypothesis
