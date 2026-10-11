@@ -35,7 +35,7 @@ from goldbot.data.news import shock_window
 from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
-from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_to_utc, server_wall
+from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
 from goldbot.execution.broker import Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
@@ -384,7 +384,6 @@ class Engine:
         # an invalid feed (a dropped quote or a last_tick read that raised): since when on the host clock (engine state,
         # health FAILs after QUOTE_INVALID_FAIL_S), and when the state file was last written meanwhile
         self._quote_invalid_since: pd.Timestamp | None = None
-        self._last_valid_quote: pd.Timestamp | None = None   # host clock of the last valid quote (the Friday flatten)
         self._invalid_state_written: pd.Timestamp | None = None
         self._dq_repeats: dict[str, int] = {}        # ticks folded into the pending event of each check (LOW-1)
         self._load_orders()
@@ -468,7 +467,6 @@ class Engine:
             return []
         self._quote_invalid_since = self._invalid_state_written = None
         prev, self._last_tick = self._last_tick, t
-        self._last_valid_quote = self._host_now()
         if self._error_awaits_tick:     # date a pending tick error by this tick's stamp (never earlier than it was)
             self._error_tick_ts = t.ts_utc if self._error_tick_ts is None else max(self._error_tick_ts, t.ts_utc)
             self._error_awaits_tick = False
@@ -555,9 +553,11 @@ class Engine:
 
         Friday flatten: past the weekend cut (server time) and before the weekend rule completed, every position of
         this engine is closed (`weekend_close_no_quote`: no valid quote tells losers from winners, and a flat book
-        cannot gap through a stop) only when the feed has been invalid since before the cut, or for QUOTE_DEAD_S with no
-        valid quote since the cut. Otherwise `_weekend_rule` runs on the next valid quote. Once per Friday; a refused
-        close is retried every pass (`_retry_closes`)."""
+        cannot gap through a stop) only when the feed is dead (invalid for QUOTE_DEAD_S), whatever happened around the
+        cut (re-verification R1: a burst of bad quotes across the cut never flattens winners within seconds, and a
+        feed that dies just after a valid post-cut quote never lets losers ride the weekend). A shorter gap leaves it to
+        `_weekend_rule` on the next valid quote. Once per Friday; a refused close is retried every pass
+        (`_retry_closes`)."""
         since = self._quote_invalid_since
         dead = since is not None and (now - since).total_seconds() >= QUOTE_DEAD_S
         if dead:
@@ -576,10 +576,8 @@ class Engine:
                 or self._weekend_done == srv.date().isoformat():
             return
         self.state.weekend = True
-        cut = server_to_utc(pd.DatetimeIndex([srv.normalize() + pd.Timedelta(hours=h, minutes=m)]), self.cfg.server_tz)[0]
-        last_valid = self._last_valid_quote
-        if since is None or not (since <= cut or (dead and (last_valid is None or last_valid < cut))):
-            return                                        # a valid quote since the cut: `_weekend_rule` decides
+        if not dead:
+            return                                        # a short gap: `_weekend_rule` decides on the next valid quote
         positions = self._read_positions("the no-quote weekend flatten is retried next pass")
         if positions is None:
             return

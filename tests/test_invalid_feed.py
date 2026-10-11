@@ -327,3 +327,26 @@ def test_a_refused_close_that_is_not_market_closed_is_resent_at_most_once_a_seco
     host[0] = WED + pd.Timedelta(seconds=1.0)
     eng.on_tick(_tick(host[0], 2401.5))
     assert pb.calls == 2
+
+
+# ---------------------------------------------------------------------------------------------- re-verification R1
+def test_a_winner_survives_a_four_second_crossed_burst_spanning_the_cut(tmp_path):
+    eng, pb, host, pid = _winner_before_the_cut(tmp_path)
+    for s in (-1, 0, 1, 2):                                             # cut-1 s .. cut+2 s, all crossed
+        host[0] = CUT + pd.Timedelta(seconds=s, milliseconds=500)
+        eng.on_tick(Tick(ts_utc=host[0], bid=2410.5, ask=2410.0))
+    assert pid in _open_ids(pb)
+    assert not any(d.get("action") == "weekend_close_no_quote" for d in eng.decisions)
+
+
+def test_a_loser_is_closed_once_the_feed_dies_after_a_valid_quote_just_past_the_cut(tmp_path):
+    eng, pb, host, pid = _winner_before_the_cut(tmp_path)               # the account refreshed at cut-1 s
+    host[0] = CUT + pd.Timedelta(seconds=1)
+    pb.on_tick(_tick(host[0], 2390.0))
+    eng.on_tick(_tick(host[0], 2390.0))                                 # valid, a loser; the rule has not run yet
+    assert pid in _open_ids(pb) and eng._weekend_done is None
+    _nan_feed(eng, host, 30)
+    assert pid in _open_ids(pb)                                         # not on a short gap
+    _nan_feed(eng, host, 32)
+    assert pid not in _open_ids(pb)                                     # dead for 60 s: never rides the weekend
+    assert any(d.get("action") == "weekend_close_no_quote" for d in eng.decisions)

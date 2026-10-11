@@ -1328,8 +1328,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   bad quotes are one DQ event with a count; every health check is guarded; the seed is printed after each run
   (tests/conftest.py).
   Re-verification fixes: the priceless Friday flatten and time barrier never act on a single bad quote. The
-  flatten needs the feed invalid since before the cut, or dead for `QUOTE_DEAD_S` (60 s, = health's threshold)
-  with no valid quote since the cut; otherwise `_weekend_rule` decides on the next valid quote. The time
+  flatten needs only a dead feed (invalid for `QUOTE_DEAD_S`, 60 s, = health's threshold), whatever happened
+  around the cut; a shorter gap leaves it to `_weekend_rule` on the next valid quote. The time
   barrier needs a dead feed and counts `bars_held` plus open-market decision bars since `_closed_through`
   (never wall time over a weekend). A refused close that is not market-closed is re-sent at most once a second
   (`CLOSE_RETRY_MIN_S`). BACKLOG 44: confirm a zero-equity read before the kill switch (needs an ADR).
