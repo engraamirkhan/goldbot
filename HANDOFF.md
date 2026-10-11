@@ -767,7 +767,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   whenever the P&L (and R) are in it, "USD" only for the unconverted own-fills fallback, None only on legacy records,
   so the monthly report's `r_understated` flags only pre-fix trades; the digest sums rows whose `pnl_currency` is
   None or the account's currency (engine_<account>.json) and names the rest "(n in USD not summed)". Follow-up for
-  the dashboard lane: `monthly_report.account_month` still sums every row's P&L, including a USD fallback row.
+  the dashboard lane: `monthly_report.account_month` still sums every row's P&L, including a USD fallback row
+  (done 2026-10-11, next bullet).
+- No cross-currency money sums anywhere (2026-10-11, final-review follow-ups, row S6): with no fresh engine the
+  supervisor sums stale files' money only when they all report one currency, otherwise none (lots and notional still
+  count) and publishes `no_fresh_engine`. The digest sums P&L per currency and prints each with the account's own
+  symbol from engine_<account>.json ("net +£5.00 · -$10.90"; "(currency not reported)" when unknown; the
+  `monthly_report.money` formatter, as the web's Intl formatting). The monthly report keeps rows in another currency
+  out of the P&L, chained return, days and drawdown (R still counts them) and says "(1 in USD not summed)" in the
+  report and the month-to-date digest line (`AccountMonth.pnl_excluded`, `pnl_note`).
 - Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
   `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
   minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both
@@ -1011,6 +1019,91 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `macro.fetch_cot_gold` / `gld_holdings_from_csv` (no holiday rule, GLD stamped 06:30 ET) are removed. Not yet: the
   workflow has never run (Actions -> data-positioning -> Run workflow); `research.yml` has no positioning input; the
   cleaner opt-in home is `goldbot/research/pipeline.py` OPT_IN_FEATURES (outside this lane).
+- US calendar, tiers 1 and 2, point in time (2026-10-10, BACKLOG 18 data part, playbook G-3, research finding E-1,
+  row D27, ADR 0008; review fixes 2026-10-11):
+  - **Pipeline.** `goldbot/data/us_calendar.py` + `scripts/us_calendar_data.py` +
+    `.github/workflows/data-us-calendar.yml` (Sundays 06:17 UTC) publish `us_calendar.parquet` on release
+    `calendar-v1`, 2010 onwards.
+  - **Tier 1** keeps the labels in code (`econ_calendar.TIER1_PATTERNS`, settings blackout events):
+    - CPI, NFP (Employment Situation) and PCE (Personal Income and Outlays) come from FRED `fred/release/dates`
+      (ids 10/50/54).
+    - The FOMC statement and press conference come from the Fed's `fomccalendars.htm` + `fomchistorical<year>.htm`.
+      Only scheduled meetings count.
+    - A press conference is listed where the page links one, and at every meeting from 2019.
+    - FOMC times by era: statement 14:15 until April 2011, 12:30 on 2011-12 press days, 14:00 from 2013; press
+      conference 14:15 in 2011-12, 14:30 from 2013.
+  - **Tier 2:**
+    - PPI, retail sales, GDP (all estimates; GDP is tier 2 because it is not on the tier-1 list in code), JOLTS and
+      claims come from FRED (ids 46/9/53/192/180).
+    - FOMC minutes use the page's Released date, or the statement + 21 days when there is none yet.
+    - ISM manufacturing and services are rule-derived (1st/3rd US business day, 10:00 ET).
+    - Fed speakers are not covered.
+  - **Checks.** Every FRED id is checked against the release name FRED returns.
+  - **Times.** New York wall times are converted per date, so DST is right.
+  - **Availability.**
+    - `available_utc` is the event minus 7 days.
+    - For agency releases, it is raised to the shutdown floors (2013, 2018-19, 2025; conservative, not checked to
+      the day). The Fed is exempt.
+    - It is never later than the event.
+    - Later runs stamp a late-added event at first sight and add `cancelled` rows for future events that disappear.
+    - Published rows are never rewritten (`check_keeps_history`; exit 2 and nothing is published if a row would be
+      lost).
+  - **No actual/consensus columns**: there is no free, licence-compatible source.
+  - **Opt-in features** in `goldbot/features/us_calendar.py`. `enable()` returns `tier1_events` and `tier2_events`:
+    - tier 1: `min_to_next_tier1_pit`, `min_since_last_tier1_pit`, `tier1_count_today`;
+    - tier 2: `min_to_next_tier2_pit`, `min_since_last_tier2_pit`, `tier2_count_today`;
+    - minutes are capped at 7 days, and counts are per New York day;
+    - they are joined through `known_timeline` + `asof_join` on available_utc;
+    - they are not in DEFAULT_FEATURE_NAMES, so feature_version is unchanged.
+  - **Research** loads it with `research_pass.py --us-calendar DIR` (not with --discover or --cpcv), and
+    `fetch_data_release.py --us-calendar` downloads it to raw-calendar/. There is no store table.
+  - **Verified offline** (Fed pages fetched from the Mac sandbox): the parsers read 2010, 2011, 2015, 2017, 2019,
+    2020 and 2021-2027 correctly. That is 8 scheduled meetings a year, 7 in 2020 (March 17-18 was cancelled), with
+    unscheduled meetings and notation votes skipped.
+  - **Review fixes (2026-10-11):**
+    - **Backfill.** last_ok is kept per event type. A type that failed on an earlier run is backfilled with rule
+      stamps when it comes back (H1).
+    - **FOMC meeting count.** A Fed year panel or page with fewer than 6 meetings fails the source.
+    - **Mass cancellation.** A run that would cancel more than 2 future events of a type is refused for that type
+      (M1).
+    - **Hand-checked cancellations** (`MANUAL_EVENTS`) (M2):
+      - the March 2020 FOMC;
+      - the BLS dates in the 2013, 2025 and 2026 lapses, verified on the bls.gov lapse tables (2013 via the copy on
+        Calculated Risk);
+      - the 2019 GDP advance;
+      - the 2025 PCE releases.
+      The original 2013 and 2018-19 Census and BEA dates are not in the table because they could not be verified.
+    - **Spacing quarantine.** Monthly releases less than 20 days apart are kept out unless they are in
+      `SPACING_EXEMPT`.
+    - **Count table.** A per-type, per-year count table goes in the step summary (M3).
+    - **Press-conference links.** The check ignores case and the Fed's `fomcpressconf` spelling. Expected press
+      conferences: 3 in 2011, 5 in 2012 and 4 in 2013-18, all counted on the Fed's pages, so the review's
+      "4 a year for 2011-2018" holds only for 2013-18 (M4).
+    - **Per-agency floors.** 2018-19 covers Census and BEA only; a January 2026 lapse floor was added (M5).
+    - **GDP split.** `gdp_advance` is split out and stays tier 2. **Promoting it to tier 1 is an owner /
+      trading-safety decision.**
+    - **Minutes date.** It is tied to the Minutes block, with a 14-28 day gap check (L1).
+    - **ISM.** The research line counts the rule rows; `--us-calendar-exclude-rule` and `RULE_OVERRIDES` are added
+      (L2).
+    - **Column names.** The tier-2 minute columns now carry `_pit` (L4).
+    - **Retail name check.** It is now `Advance Monthly Sales for Retail` (L5).
+  - **Re-verification fixes (2026-10-11):**
+    - **Close pairs.** Both rows of a close monthly pair are quarantined, so a phantom listed first is never kept
+      (M-R1).
+    - **2026 lapse.** The floor is BLS only. Its manual rows are cancelled one minute before each event instead of
+      at the unverified lapse start.
+    - **Recovery path.** `--allow-cancellations TYPE` is a one-shot, audited override, with a RUNBOOK step (L-R1).
+    - **GDP advance.** A late GDP advance is flagged; overrides are 2019-02-28, 2025-12-23 and 2026-02-20, each
+      verified (L-R2).
+    - **Old metadata.** Source-keyed `last_ok` metadata is refused (L-R3).
+  - **GATE: no trial may cite `tier1_events` or `tier2_events` until a quant review of the first live run's count
+    table (step summary) has signed it off.**
+  - **Not yet:**
+    - The owner must add the repo secret `FRED_API_KEY` (a free key from fred.stlouisfed.org) and run the workflow.
+    - The FRED ids and the release-date history were not checked live, because there is no key in the sandbox. The
+      name check fails loudly if they are wrong.
+    - PCE's 08:30 ET time for 2010-2012 is not verified.
+    - The RiskGate tier-2 blackout (-5/+15 min) waits for the owner's adopt decision.
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
   `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
   stays partial until the research callers (`pipeline.run_specialist`/`run_pool`, `discovery.discover`) pass it
@@ -1057,6 +1150,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- October batch rollout (SRE, 2026-10-11): `docs/deploy/2026-10-batch.md`.
+  - The owner's ordered steps for the two Oracle VMs, to be done by Fri 23 Oct: pre-checks (restic plus a local
+    copy, preflight, health baseline); engines stopped; MT5 box first, because the new brain needs the bridge's
+    `loss_per_lot`; then the brain; then the checks on `supervisor.json` and `aux.db`; the minimum-lot setting in
+    settings.local.yaml only after the deploy; the first-hour health lines; the 26-30 Oct clock measurement, with
+    the NY+7 switch brain first under `/halt`; the rollback plan.
+  - Found: `goldbot-deploy`'s automatic rollback from this batch ends in `failed`, because aux.db stays at schema 5
+    and the old dashboard refuses it. A rollback with `risk.min_lot_risk_cap` set stops every service, because the
+    old Settings forbid the key. A manual rollback to an older commit is refused.
+  - BACKLOG 37-42 (37-39 HIGH). Use the manual sequence, not Telegram's Deploy button, for this batch.
 - FYI for the OWNER (no decision needed, 2026-10-10): `research.reserved_trials_quarter: 13` holds the 13 trials
   of the Q1 2027 pre-registration (`docs/research/preregistration-2027Q1.md`) before the research director and the
   label grid can spend any; the budget itself (20) is unchanged. Revisit the number with each quarter's

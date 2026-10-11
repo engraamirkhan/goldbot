@@ -39,7 +39,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | in review |
 | 16 | Swap in the live EV check (playbook G-1) | Capital management, costs · RUN | S | proposed |
 | 17 | Holiday, daily-reopen and Monday-open entry rules (G-2) | Operational risk · RUN | S–M | proposed (owner: windows) |
-| 18 | Tier-2 event blackout and proximity feature (G-3) | Market and macro preparation · RUN | S | proposed (owner: adopt) |
+| 18 | Tier-2 event blackout and proximity feature (G-3) | Market and macro preparation · RUN | S | data part in review (2026-10-10: calendar-v1 tiers 1+2, opt-in features); blackout proposed (owner: adopt) |
 | 19 | Open-risk (heat) cap and same-direction stacking (G-4) | Capital and drawdown management · RUN | S | proposed (owner: value) |
 | 20 | Drawdown / risk-of-ruin Monte Carlo report (G-5) | Capital and drawdown management · RUN | S | tool built (results need data) |
 | 21 | Per-agent loss-streak and entry-rate throttle (G-6) | Discipline (system analogue) · RUN | S | proposed (owner: thresholds) |
@@ -54,6 +54,12 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 33 | Opportunity-day evaluation for research trials (£/day distribution, days captured) | Performance review · FIND | S–M | proposed (after 20, 26) |
 | 35 | Open positions' remaining stop risk in the daily £ projection (review MEDIUM-4) | Capital and drawdown management · RUN | S | proposed (after 29; trading-safety review) |
 | 36 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | proposed (after 29; trading-safety review) |
+| 37 | `goldbot-deploy` steps aux.db back on rollback (Linux `Sync-AuxSchema`) | Operational resilience · RUN | S | proposed (SRE, from docs/deploy/2026-10-batch.md G1; HIGH) |
+| 38 | Owner-run manual rollback in `goldbot-deploy` | Operational resilience · RUN | S–M | proposed (SRE, G2; HIGH) |
+| 39 | Validate settings (incl. settings.local.yaml) with the target code before any restart | Operational resilience · RUN | S | proposed (SRE, G3; HIGH) |
+| 40 | `goldbot-deploy`: scheduler-job guard; restart only enabled units | Operational resilience · RUN | S | proposed (SRE, G4) |
+| 41 | `goldbot-deploy`: health checks against a baseline after the restart | Operational resilience · RUN | S | proposed (SRE, G5) |
+| 42 | Bridge/brain version and server_tz agreement checked at run time | Operational resilience, execution · RUN | S | proposed (SRE, G6; trading-safety review) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -250,6 +256,20 @@ execution items need trading-safety review. Feature items need quant review.
   entries for 15 min after each daily reopen and 30 min after the weekly open. Fake-clock tests. Exits are untouched.
 - **18 (G-3).** Tier-2 USD events (PPI, retail sales, ISM, GDP, JOLTS, claims, FOMC minutes, Fed chair) get a
   −5/+15 min entry blackout from config, plus a `min_to_next_tier2` feature. A test per tier.
+  *Data part done (2026-10-10; review fixes 2026-10-11; row D27, ADR 0008):* the point-in-time US calendar on
+  release `calendar-v1`, 2010 onwards, tiers 1 and 2 (finding E-1, for H-16/H-17/H-18).
+  - Tier 1: CPI, NFP and PCE from FRED; FOMC statement and press conference from the Fed's calendars.
+  - Tier 2: PPI, retail sales, `gdp_advance` and the later `gdp` estimates, JOLTS and claims from FRED; FOMC minutes;
+    ISM by rule.
+  - Hand-checked cancellations; per-agency shutdown floors; per-type backfill; mass-cancellation, spacing and count
+    guards.
+  - Opt-in features `tier1_events` and `tier2_events` (`min_to_next_tier2_pit`, `min_since_last_tier2_pit`,
+    `tier2_count_today`, and the tier-1 equivalents), loaded with `research_pass.py --us-calendar`.
+  - Open:
+    - the owner adds the `FRED_API_KEY` secret and runs the workflow;
+    - a quant review of the first run's count table, before any trial cites the features;
+    - promoting `gdp_advance` to tier 1 is an owner / trading-safety decision;
+    - the RiskGate blackout waits for the owner's adopt decision.
 - **19 (G-4).** Sum of open risk in R per account and combined ≤ the configured cap. Same-side positions of
   different agents count as one bet. Gate test on each side of the cap.
 - **20 (G-5).** Monthly bootstrap of shadow or backtest R at live risk settings: P(8%), P(12%), P(weekly cap) in
@@ -474,6 +494,50 @@ hypotheses that go through the trial registry in a future quarter's budget.
   spread, commission and (overnight) swap, about £0.25 on a 0.01 lot, so the projection understates a full loss by
   ~3% at £1,000 (RUN). Acceptance: the projected risk adds the round-trip cost in account currency from the cost
   table (`_cost_atr` x ATR x lots x contract x fx); boundary test. Trading-safety review.
+
+- **37–42. Deploy path gaps found while planning the October batch rollout (SRE, 2026-10-11;
+  `docs/deploy/2026-10-batch.md` section "Gaps").** Each item is owner-approved, CI-gated and reversible. A
+  root-run step never writes or follows a path the service user can write: state is touched only through
+  `sudo -u <service user>`. Every item needs a security review. Tests: shellcheck at warning level in CI (a
+  pre-commit hook for `goldbot/ops/linux/*.sh`; there is none today), plus a pytest that runs the script against a
+  temporary repository and state directory with `systemctl` stubbed.
+  - **37 (HIGH).** In `switch_to`, after the checkout and before any restart:
+    - when the target's `goldbot/db/migrations.py` lacks `compat_back_to` and `state/aux.db` is at schema 5, stop
+      every `goldbot-*` service, run the step-back as the service user, then restart (same logic as
+      `goldbot/ops/vps_update.ps1` `Sync-AuxSchema`);
+    - refuse any other version and say why.
+
+    Acceptance:
+    - a deploy from a schema-5 commit back to a schema-4 commit ends `rolled_back`, not `failed`;
+    - the dashboard opens after it;
+    - test with a fixture DB at 4 and 5.
+  - **38 (HIGH).** `sudo goldbot-deploy rollback <sha>`:
+    - accepts only an ancestor of the running commit that is on `main` and passed CI;
+    - takes the lock;
+    - waits for any pending approval;
+    - runs the same restart order, stability check and aux.db step-back;
+    - logs `rolled_back_manual` to deploys.jsonl, which Telegram reports.
+
+    A Telegram **[Roll back]** button stays out of scope until the owner asks for it.
+  - **39 (HIGH).** After the checkout, validate settings (`Settings` over `settings.yaml` plus
+    `settings.local.yaml`) and `accounts.yaml` with the target's own interpreter, as the service user.
+    Acceptance:
+    - on a validation error, refuse before any restart and name the key, never the value;
+    - test: a local `risk.min_lot_risk_cap` with a pre-batch target is refused and nothing restarts.
+  - **40.**
+    - Refuse while a scheduler job runs, using `python -m goldbot.db scheduler-status`, with the fallback to
+      `scheduler.json`. Stop the scheduler first and check again, as `vps_update.ps1` steps 3 and 4 do.
+    - Restart only units that are `enabled`.
+  - **41.**
+    - Save `goldbot run health --out` before the switch and run `--baseline` after the 90 s wait.
+    - Roll back on a new FAIL, except checks that need the market open while it is closed.
+    - Log the failing check names.
+  - **42.**
+    - The bridge reports its commit on `/health`.
+    - The engine refuses entries (fail closed, exits never gated) and health fails `bridge_server_tz:<account>`
+      when the bridge's `server_tz` differs from its own.
+    - The Telegram deploy offer says when the MT5 box runs an older commit than the one offered.
+    - Trading-safety review.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.

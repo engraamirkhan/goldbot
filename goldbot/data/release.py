@@ -196,6 +196,44 @@ def sync_release_positioning(store: Store, *, raw_dir: Path = Path("raw-position
     return sum(load_positioning_into_store(store, read_positioning_files(f)) for f in files)
 
 
+# ------------------------------------------------------------------ US calendar, tiers 1 and 2 (data-us-calendar workflow, release calendar-v1)
+CALENDAR_TAG = "calendar-v1"
+US_CALENDAR_COLUMNS = ("event_id", "event_type", "tier", "event_utc", "status", "available_utc", "source")
+
+
+def read_us_calendar_files(path: Path) -> pd.DataFrame:
+    """The US calendar release, tiers 1 and 2 (goldbot/data/us_calendar.py COLUMNS) as one frame, for ctx["us_calendar"]:
+    `path` is a Parquet file or a folder of them. Empty when nothing is there; a file without the point-in-time
+    columns is refused. Every row is kept (cancellations and late stamps are history, not duplicates)."""
+    files = [path] if path.is_file() else sorted(path.glob("*.parquet")) if path.is_dir() else []
+    if not files:
+        return pd.DataFrame(columns=list(US_CALENDAR_COLUMNS))
+    df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    missing = [c for c in US_CALENDAR_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"us calendar release {path} lacks {missing}")
+    df["available_utc"] = pd.to_datetime(df["available_utc"], utc=True)
+    df["event_utc"] = pd.to_datetime(df["event_utc"], utc=True)
+    df["ts_utc"] = df["available_utc"]
+    return (df.drop_duplicates(["event_id", "status", "available_utc"], keep="last")
+            .sort_values(["available_utc", "event_id"], kind="stable").reset_index(drop=True))
+
+
+def sync_release_us_calendar(*, raw_dir: Path = Path("raw-calendar"), token: str | None = None) -> pd.DataFrame:
+    """Download release calendar-v1 into `raw_dir` and return its rows (read_us_calendar_files). Empty when the release
+    does not exist yet (the data-us-calendar workflow has not run); other network errors propagate."""
+    token = token or os.environ.get("GH_TOKEN")
+    try:
+        assets = list_assets(token, tag=CALENDAR_TAG)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return read_us_calendar_files(raw_dir / "__none__")
+        raise
+    for a in assets:
+        download(a, raw_dir, token)
+    return read_us_calendar_files(raw_dir)
+
+
 def sync_release(store: Store, *, token: str | None = None) -> dict[str, int]:
     """Bars from data-v1 and macro series from macro-v1 (the Saturday retrain's refresh). A macro failure is logged
     and leaves the bar refresh standing."""
