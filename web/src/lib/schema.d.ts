@@ -631,6 +631,7 @@ export interface components {
             day_pnl_pct: number;
             /** Drawdown Pct */
             drawdown_pct: number;
+            entry_status?: components["schemas"]["EntryStatus"] | null;
             /** Equity */
             equity: number;
             loss_budget?: components["schemas"]["LossBudget"] | null;
@@ -1016,6 +1017,64 @@ export interface components {
         DecisionResult: {
             /** Outcome */
             outcome: string;
+        };
+        /**
+         * EntryBlock
+         * @description One reason this account cannot open a new trade now, in the owner's words (goldbot/api/entry_status.py).
+         */
+        EntryBlock: {
+            /** Agent Id */
+            agent_id?: string | null;
+            /** At */
+            at?: string | null;
+            /** At Label */
+            at_label?: ("opens" | "until" | "resets" | "since") | null;
+            /** Code */
+            code: string;
+            /** Fix */
+            fix: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "act" | "wait";
+            /** Runbook */
+            runbook?: string | null;
+            /** Runbook Url */
+            runbook_url?: string | null;
+            /**
+             * Scope
+             * @default account
+             * @enum {string}
+             */
+            scope: "account" | "agent";
+            /** Text */
+            text: string;
+        };
+        /**
+         * EntryStatus
+         * @description Can this account take a new trade right now? open: yes; partial: yes, except the strategies named; waiting:
+         *     no, and every reason clears by itself; blocked: no, and something needs the owner. Exits never depend on it.
+         */
+        EntryStatus: {
+            /** As Of */
+            as_of?: string | null;
+            /** Blocks */
+            blocks: components["schemas"]["EntryBlock"][];
+            /** Exits */
+            exits: string;
+            /** Headline */
+            headline: string;
+            /**
+             * Notes
+             * @default []
+             */
+            notes: string[];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "open" | "partial" | "waiting" | "blocked";
         };
         /** FeedHealth */
         FeedHealth: {

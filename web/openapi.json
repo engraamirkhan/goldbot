@@ -95,6 +95,16 @@
       "title": "Drawdown Pct",
       "type": "number"
      },
+     "entry_status": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/EntryStatus"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
      "equity": {
       "title": "Equity",
       "type": "number"
@@ -1237,6 +1247,168 @@
      "outcome"
     ],
     "title": "DecisionResult",
+    "type": "object"
+   },
+   "EntryBlock": {
+    "description": "One reason this account cannot open a new trade now, in the owner's words (goldbot/api/entry_status.py).",
+    "properties": {
+     "agent_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Agent Id"
+     },
+     "at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "At"
+     },
+     "at_label": {
+      "anyOf": [
+       {
+        "enum": [
+         "opens",
+         "until",
+         "resets",
+         "since"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "At Label"
+     },
+     "code": {
+      "title": "Code",
+      "type": "string"
+     },
+     "fix": {
+      "title": "Fix",
+      "type": "string"
+     },
+     "kind": {
+      "enum": [
+       "act",
+       "wait"
+      ],
+      "title": "Kind",
+      "type": "string"
+     },
+     "runbook": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Runbook"
+     },
+     "runbook_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Runbook Url"
+     },
+     "scope": {
+      "default": "account",
+      "enum": [
+       "account",
+       "agent"
+      ],
+      "title": "Scope",
+      "type": "string"
+     },
+     "text": {
+      "title": "Text",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "text",
+     "fix",
+     "kind"
+    ],
+    "title": "EntryBlock",
+    "type": "object"
+   },
+   "EntryStatus": {
+    "description": "Can this account take a new trade right now? open: yes; partial: yes, except the strategies named; waiting:\nno, and every reason clears by itself; blocked: no, and something needs the owner. Exits never depend on it.",
+    "properties": {
+     "as_of": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "As Of"
+     },
+     "blocks": {
+      "items": {
+       "$ref": "#/components/schemas/EntryBlock"
+      },
+      "title": "Blocks",
+      "type": "array"
+     },
+     "exits": {
+      "title": "Exits",
+      "type": "string"
+     },
+     "headline": {
+      "title": "Headline",
+      "type": "string"
+     },
+     "notes": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+     },
+     "state": {
+      "enum": [
+       "open",
+       "partial",
+       "waiting",
+       "blocked"
+      ],
+      "title": "State",
+      "type": "string"
+     }
+    },
+    "required": [
+     "state",
+     "headline",
+     "blocks",
+     "exits"
+    ],
+    "title": "EntryStatus",
     "type": "object"
    },
    "FeedHealth": {

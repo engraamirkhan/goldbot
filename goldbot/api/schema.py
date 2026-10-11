@@ -10,6 +10,31 @@ from pydantic import BaseModel, Field
 from goldbot.ops.account_view import LossBudget, Milestones
 
 
+class EntryBlock(BaseModel):
+    """One reason this account cannot open a new trade now, in the owner's words (goldbot/api/entry_status.py)."""
+    code: str                               # the RiskGate / supervisor reason (goldbot/risk/gate.py), or a newer one
+    scope: Literal["account", "agent"] = "account"   # agent: only that strategy is held back (the throttle)
+    agent_id: str | None = None
+    text: str                               # what is happening, plain words, no times: "Market closed"
+    fix: str                                # the next step: "Nothing to do: it reopens by itself."
+    kind: Literal["act", "wait"]            # act: needs the owner or an operator; wait: clears by itself
+    at: datetime | None = None              # the time that goes with `at_label`, UTC (shown in the owner's zone)
+    at_label: Literal["opens", "until", "resets", "since"] | None = None
+    runbook: str | None = None              # the RUNBOOK section that explains it
+    runbook_url: str | None = None
+
+
+class EntryStatus(BaseModel):
+    """Can this account take a new trade right now? open: yes; partial: yes, except the strategies named; waiting:
+    no, and every reason clears by itself; blocked: no, and something needs the owner. Exits never depend on it."""
+    state: Literal["open", "partial", "waiting", "blocked"]
+    headline: str                           # one line: "No new trades for now: Market closed"
+    blocks: list[EntryBlock]                # what needs the owner first
+    notes: list[str] = []                   # worth knowing, never blocking ("price error 4 min ago, carried on")
+    exits: str                              # what still protects open trades
+    as_of: datetime | None = None           # the engine's last report
+
+
 class AccountSummary(BaseModel):
     account_id: str
     broker: str
@@ -29,6 +54,7 @@ class AccountSummary(BaseModel):
     day_pnl: float | None = None            # equity - day-start equity (00:00 UTC), floating P&L included
     loss_budget: LossBudget | None = None   # today's effective daily loss limit and what is used of it
     milestones: Milestones | None = None    # timeframes the minimum lot fits now, and the equity the next one needs
+    entry_status: EntryStatus | None = None  # can it take a new trade now, why not and what fixes it (null: not built)
 
 
 class Proposal(BaseModel):

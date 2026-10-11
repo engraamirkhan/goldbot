@@ -31,6 +31,32 @@ describe("Overview accounts", () => {
   });
 });
 
+describe("Overview entry status", () => {
+  afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
+
+  it("puts the entry status first, one line per account from the API", async () => {
+    apiModule.setUser({ email: "a@x.io", role: "viewer" });
+    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
+    vi.spyOn(apiModule.api, "automode").mockRejectedValue(new Error("not under test"));
+    vi.spyOn(apiModule.api, "accounts").mockResolvedValue([{
+      account_id: "icm-demo", broker: "icm", mode: "demo", equity: 1000, day_pnl_pct: 0, week_pnl_pct: 0, drawdown_pct: 0,
+      stage: "normal", open_positions: 0, account_class: "raw",
+      entry_status: { state: "open", headline: "Can take new trades", blocks: [], notes: [], as_of: null,
+                      exits: "Exits keep running: open trades keep their stop, target and automatic exits." } }]);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = render(<QueryClientProvider client={qc}><Overview /></QueryClientProvider>);
+    const row = await screen.findByRole("article", { name: "Entry status icm-demo" });
+    expect(row).toHaveTextContent("Can take new trades");
+    expect(container.querySelector("section > *")).toHaveClass("entry");
+  });
+
+  it("shows the empty state when no engine reports", async () => {
+    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
+    renderOverview("viewer");
+    expect(await screen.findByText(/No engine is reporting, so no new trades can open/)).toBeInTheDocument();
+  });
+});
+
 describe("Overview halt control", () => {
   afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
 

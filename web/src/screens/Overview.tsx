@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api, hasRole, type Status } from "../lib/api";
 import { AutoModeCard } from "./AutoMode";
 import { BalanceCard, BalanceCardSkeleton } from "./BalanceCard";
+import { EntryStatusPanel } from "./EntryStatus";
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
 
@@ -11,6 +12,7 @@ export function Overview() {
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
   return (
     <section>
+      <EntryStatusPanel loading={accounts.isLoading} error={accounts.isError} accounts={accounts.data} />
       <div className="tiles">
         <div className="tile"><span>Mode</span><strong>{status.data?.mode ?? "…"}</strong></div>
         <div className={`tile ${status.data?.halted ? "bad" : ""}`}><span>Halted</span><strong>{status.data ? (status.data.halted ? "yes" : "no") : "…"}</strong></div>

@@ -43,7 +43,7 @@ export function Approvals() {
         <section className="cards" aria-label="Waiting for your decision">
           {open.map((p) => (
             <ProposalCard key={p.proposal_id} p={p} now={now} canDecide={canDecide}
-                          blockers={blockers(status.data, accounts.data, p.account_id)}
+                          blockers={blockers(status.data, accounts.data, p.account_id, p.agent_id)}
                           busy={busyId === p.proposal_id} error={errors[p.proposal_id]}
                           onApprove={() => m.mutate({ id: p.proposal_id, action: "approve" })}
                           onReject={(reason) => m.mutate({ id: p.proposal_id, action: "reject", reason })} />

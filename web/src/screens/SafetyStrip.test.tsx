@@ -44,6 +44,14 @@ describe("SafetyStrip", () => {
     expect(screen.getByRole("status")).toHaveTextContent("New entries allowed");
   });
 
+  it("words the summary with the API's entry status, so it agrees with the Overview panel", () => {
+    const entry_status = { state: "waiting" as const, headline: "No new trades for now: Market closed", notes: [], exits: "x", as_of: null,
+      blocks: [{ code: "market_closed", text: "Market closed", fix: "Nothing to do.", kind: "wait" as const, scope: "account" as const,
+                 agent_id: null, at: null, at_label: null, runbook: null, runbook_url: null }] };
+    render(<SafetyStrip status={status()} accounts={[account({ entry_status })]} />);
+    expect(screen.getByRole("status")).toHaveTextContent("New entries blocked: Market closed");
+  });
+
   it("says when no engine is reporting", () => {
     render(<SafetyStrip status={status()} accounts={[]} />);
     expect(screen.getByRole("status")).toHaveTextContent("No engines reporting");
