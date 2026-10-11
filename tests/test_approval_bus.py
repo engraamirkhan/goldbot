@@ -171,3 +171,19 @@ def test_a_control_file_with_an_unknown_field_fails_closed_to_halted(tmp_path):
     (tmp_path / "control.json").write_text(json.dumps({"halted": False, "future_halt_reason": "x"}))
     c = bus.control()
     assert c.halted is True and c.approval_mode == "propose"
+
+
+def test_a_decision_with_an_unknown_field_is_skipped_and_the_proposal_expires(tmp_path):
+    """ADR 0010 strict allowlist: an owner decision is never applied without a field this release does not know (a
+    newer release's condition or size limit). The decision is skipped and the proposal runs out its window."""
+    engine = ApprovalCenter({1}, bus=ApprovalBus(tmp_path))
+    engine.propose(_p("a"))
+    bus = ApprovalBus(tmp_path)
+    bus.submit("a", True, None, by="dashboard:o")
+    f = bus.decisions_dir / "a.json"
+    f.write_text(json.dumps({**json.loads(f.read_text()), "max_lots": 0.01}))
+    assert bus.decisions_for({"a"}) == [] and bus.recent() == []
+    assert engine.poll_bus() == [] and "a" in engine.pending                 # never applied
+    engine.pending["a"].created = time.time() - 120
+    assert [x.outcome for x in engine.sweep_expired()] == [Outcome.EXPIRED]
+    assert bus.outcome("a") == "EXPIRED_UNAPPROVED"

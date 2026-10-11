@@ -27,7 +27,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
-from goldbot.base import Record, UtcTimestamp, write_atomic
+from goldbot.base import Record, UtcTimestamp, load_record, load_record_json, write_atomic
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_cache
 from goldbot.data.econ_calendar import blackout_window
@@ -393,7 +393,7 @@ class Engine:
             return
         for f in bus.pending_dir.glob(f"{self.cfg.account_id}-*.json"):
             try:
-                p = Proposal.model_validate_json(f.read_text())
+                p = load_record_json(Proposal, f.read_text(), source="approvals/pending")
             except (ValueError, OSError):
                 continue
             if p.expired and p.proposal_id not in self.pending:
@@ -1759,12 +1759,14 @@ class Engine:
         if not path.exists():
             return
         d = json.loads(path.read_text())          # unreadable -> fail loudly rather than forget what was sent
-        self._orders = {k: SentOrder.model_validate(v) for k, v in d.get("sent", {}).items()}
+        # ADR 0010 (rollback = restart): fields a newer release added are dropped, a wrong type still fails loudly
+        src = "orders_<account>.json"
+        self._orders = {k: load_record(SentOrder, v, source=src) for k, v in d.get("sent", {}).items()}
         self.sent_ids = set(self._orders)
-        self.open = {int(k): OpenTrade.model_validate(v) for k, v in d.get("open", {}).items()}
+        self.open = {int(k): load_record(OpenTrade, v, source=src) for k, v in d.get("open", {}).items()}
         for tr in self.open.values():
             tr.excursion_approx = True            # ticks while the engine was down were not seen (BACKLOG 23)
-        self._closes = [PendingClose.model_validate(v) for v in d.get("closing", [])]
+        self._closes = [load_record(PendingClose, v, source=src) for v in d.get("closing", [])]
         self._records_lost = [int(x) for x in d.get("records_lost", [])]
         try:
             positions = {p.position_id: p for p in self.broker.positions()}

@@ -169,6 +169,11 @@ and the rest still arrives. It never contains account numbers or emails.
   after 90 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
 * The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
   release note mentions the bridge.
+  Deploys there never upgrade Python packages (`--no-deps`). An MT5 box set up before ADR 0010 needs pydantic 2.12 or
+  newer, which you install once by hand:
+  `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install 'pydantic>=2.12'`, then
+  `sudo systemctl restart 'goldbot-bridge@*'`. Today the bridge does not need it to run; the bridge follow-up in HANDOFF
+  will.
 * By hand on either VM: `sudo goldbot-deploy latest` (or a specific commit id). Same checks, same rollback.
   Run it inside `tmux` (`tmux new -s deploy`; after a dropped connection, `tmux attach -t deploy`), or as
   `sudo systemd-run --wait --pty --unit goldbot-deploy-manual /usr/local/sbin/goldbot-deploy <args>`. The script

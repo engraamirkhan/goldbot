@@ -78,9 +78,11 @@ class ApprovalBus:
             f = self.decisions_dir / f"{pid}.json"
             if f.exists():
                 try:
-                    out.append(load_record_json(BusDecision, f.read_text(), source="approvals/decisions"))
+                    # strict on purpose (ADR 0010 allowlist): a decision is never applied without a field this release
+                    # does not know (a newer condition or size limit); it is skipped and the proposal expires
+                    out.append(BusDecision.model_validate_json(f.read_text()))
                 except ValueError:
-                    continue          # half-written by a crashed writer; the window will expire it
+                    continue          # half-written by a crashed writer, or from a newer release; the window expires it
         return out
 
     def archive(self, p: Proposal) -> None:
@@ -140,7 +142,7 @@ class ApprovalBus:
         for f in self.decisions_dir.glob("*.json"):
             pf = self.pending_dir / f.name
             try:
-                d = load_record_json(BusDecision, f.read_text(), source="approvals/decisions")
+                d = BusDecision.model_validate_json(f.read_text())          # strict, as decisions_for
                 if d.ts >= cutoff and pf.exists():
                     rows.append((d.ts, load_record_json(Proposal, pf.read_text(), source="approvals/pending"), d))
             except (ValueError, OSError):
