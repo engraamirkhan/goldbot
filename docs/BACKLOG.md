@@ -259,7 +259,9 @@ execution items need trading-safety review. Feature items need quant review.
 - **22 (G-7).** `run.py sizing-feasibility`: per agent, the minimum equity at which the minimum lot stays within
   1.2× target risk at the current ATR and phase risk rate. Written as phase-gate evidence.
 - **23 (G-9).** Maximum adverse and favourable excursion in R on every shadow and closed trade, shown by exit
-  type in attribution.
+  type in attribution. **In review (2026-10-11, TRACEABILITY V6):** price, R and time of each on `ShadowTrade`
+  (bars, label semantics) and `ClosedTrade` (ticks; approximate from stored bars across a restart); median MAE/MFE
+  in R in the monthly report and per exit type in attribution. Needs trading-safety and quant review.
 - **24 (D-1, D-2).** Session windows, zones and cost-table sessions follow London and New York local time.
   Deterministic calendars become PIT features: holidays, COMEX option expiry and first notice, Lunar New Year,
   Indian festivals, month and quarter end. Truncation test. Must land before H-04 and H-14 run.

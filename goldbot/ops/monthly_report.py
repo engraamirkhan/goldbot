@@ -18,7 +18,10 @@ Per account, for one calendar month (UTC; default the current one):
 * net P&L and the average per trading day (Monday-Friday days of the month elapsed so far, traded or not; trades
   closed after the report's day are left out, so the digest's "so far" is up to yesterday);
 * the three best days by net P&L (with their R), and the number of days at £50 or more on a GBP account;
-* the milestone ladder at the engine's live equity (goldbot/ops/account_view.py).
+* the milestone ladder at the engine's live equity (goldbot/ops/account_view.py);
+* median MAE and MFE in R (BACKLOG 23: how far trades went against and for the position before the exit, in R of
+  the initial risk from price), over the trades that carry them, with the number filled from stored bars across a
+  restart (approximate).
 
 The report describes; it never sets a day's amount to reach (ADR 0004: a missed £50 day never prompts more risk), so
 the wording has no per-day aim, countdown or shortfall. Reporting only: nothing here changes an order, halt or setting.
@@ -73,6 +76,10 @@ class AccountMonth(FrozenRecord):
     r_note: str | None = None          # why the R figures are not to be trusted yet (non-USD account, BACKLOG 28)
     r_flagged: int = 0                 # trades whose R is understated (recorded before the currency fix)
     overlapped: bool = False           # positions overlapped: the chained return is approximate
+    mae_r_median: float | None = None  # median MAE in R (<= 0) over the trades recording one (BACKLOG 23)
+    mfe_r_median: float | None = None
+    excursion_trades: int = 0          # trades with an MAE / MFE in R
+    excursion_approx: int = 0          # of those, partly filled from stored bars (a restart): approximate
 
 
 class MonthlyReport(FrozenRecord):
@@ -143,6 +150,7 @@ def account_month(account: str, trades: list[ClosedTrade], start: pd.Timestamp, 
     eq = engine.get("equity")
     flagged = sum(r_understated(t, ccy) for t in trades)
     overlapped = any(b.entry_utc is not None and b.entry_utc < a.exit_utc for a, b in zip(trades, trades[1:]))
+    exc = [t for t in trades if t.mae_r is not None and t.mfe_r is not None]
     return AccountMonth(
         account_id=account, currency=ccy, trades=len(trades), twr_pct=100 * (idx - 1), pnl=pnl,
         net_r=sum(rs) if rs else None, r_per_trade=float(np.mean(rs)) if rs else None, r_trades=len(rs),
@@ -151,7 +159,10 @@ def account_month(account: str, trades: list[ClosedTrade], start: pd.Timestamp, 
         days_50_plus=sum(d.pnl >= NORTH_STAR_DAY_GBP for d in per_day) if ccy == "GBP" else None,
         equity_now=float(eq) if isinstance(eq, (int, float)) else None, milestones=milestones(engine),
         r_note=(R_NOTE if flagged == len(rs) else f"{R_NOTE} ({flagged} of {len(rs)} trades)") if flagged else None,
-        r_flagged=flagged, overlapped=overlapped)
+        r_flagged=flagged, overlapped=overlapped,
+        mae_r_median=float(np.median([t.mae_r for t in exc])) if exc else None,
+        mfe_r_median=float(np.median([t.mfe_r for t in exc])) if exc else None,
+        excursion_trades=len(exc), excursion_approx=sum(bool(t.excursion_approx) for t in exc))
 
 
 def build_monthly_report(state_dir: str | Path, *, month: str | None = None,
@@ -208,6 +219,11 @@ def format_report(rep: MonthlyReport) -> str:
             lines.append(f"  R {a.net_r:+.2f} net · {a.r_per_trade:+.2f} R/trade over {a.r_trades} with R{ci}{note}")
         else:
             lines.append("  R: not recorded")
+        if a.mae_r_median is not None and a.mfe_r_median is not None:
+            approx_note = (f" ({a.excursion_approx} approximate: filled from stored bars across a restart)"
+                           if a.excursion_approx else "")
+            lines.append(f"  Excursion: median MAE {a.mae_r_median:+.2f}R · median MFE {a.mfe_r_median:+.2f}R over "
+                         f"{a.excursion_trades} trades{approx_note}")
         lines.append(f"  Max drawdown on closed trades this month {a.max_drawdown_pct:.2f}% · average {money(a.avg_per_day, c)} "
                      f"per trading day over {a.trading_days} weekdays")
         best = " · ".join(f"{pd.Timestamp(d.day):%a %d %b} {money(d.pnl, c)}"

@@ -938,6 +938,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   of the store's bars; `--price P --stop-distance D` without data. Neither has been run on real bars or trades yet
   (the Mac VM has no store data); run both on the VPS/brain and attach to phase-gate evidence and the H-01
   account-size decision.
+- MAE/MFE on closed and shadow trades (2026-10-11, BACKLOG 23, playbook G-9, row V6; needs trading-safety and quant
+  review): one definition in `goldbot/labels/excursion.py` (exit-side price: a long's MAE from the bid low, a short's
+  from the ask high; R of the initial risk from price, gross of costs; the time each extreme was first reached; the
+  exit bar under the labels' stop-first convention). `ShadowTrade` computes it from the bars between entry and exit
+  (`label_excursions` gives the same for labels; parity tested). `ClosedTrade` gets it from every tick while the
+  engine holds the position (`Engine._track_excursions`, after the tick's exits, clamped at the expected SL/TP so
+  ticks after a server-side exit never count, plus the actual exit fill); the track is saved with the open trade, and
+  a trade carried across a restart or adopted is filled from the stored 1m bars wholly inside it and flagged
+  `excursion_approx`. Tracking is reporting only: a failure is logged, never a tick error, never blocks an exit or the
+  record. Shown as median MAE/MFE in R in the monthly report and per exit type in attribution. Not done: the owner's
+  MT5 statement analysis (`research/owner_history.py`) has no price path, so no MAE/MFE there without joining bars.
 - **Follow-up once the gate lanes merge:** `goldbot/risk/sizing.py` holds RiskGate's sizing arithmetic and stage
   machine as pure functions (`effective_risk`, `size_lots`, `stop_distance`, `next_stage`, `MIN_LOT_TOLERANCE`), used
   by the two reports above; `goldbot/risk/gate.py` still has its own copy (it was being edited by other lanes) and

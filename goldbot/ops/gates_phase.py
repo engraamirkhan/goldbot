@@ -105,6 +105,18 @@ class ClosedTrade(FrozenRecord):
     # converted; "USD" for the unconverted own-fills fallback on a non-USD account (never summed with account money);
     # None only on legacy records from before the fix (the monthly report flags their R as understated)
     pnl_currency: str | None = None
+    # MAE / MFE (BACKLOG 23, labels/excursion.py): the worst and best exit-side price while the engine held the
+    # position (bid for a long, ask for a short; the exit fill included), in R of the initial risk from price (gross
+    # of costs; MAE <= 0) and when each was first reached. None on older records and when tracking failed.
+    mae_price: float | None = None
+    mae_r: float | None = None
+    mae_utc: UtcTimestamp | None = None
+    mfe_price: float | None = None
+    mfe_r: float | None = None
+    mfe_utc: UtcTimestamp | None = None
+    # True when part of the path was not seen by ticks (a restart, an adopted or never-tracked position): that part is
+    # filled from the stored 1m bars wholly inside the trade, so an extreme in a gap the bars do not cover is missed
+    excursion_approx: bool | None = None
 
 
 class GateItem(FrozenRecord):

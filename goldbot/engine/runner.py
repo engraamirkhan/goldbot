@@ -43,6 +43,7 @@ from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
+from goldbot.labels.excursion import Excursion
 from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.ops import server_clock
 from goldbot.ops.account_view import LADDER_TIMEFRAMES
@@ -198,6 +199,11 @@ class OpenTrade(Record):
     equity_before: float | None = None
     scaled_lots: float = 0.0          # taken by the scale-out, at scaled_price: folded into the final record
     scaled_price: float | None = None
+    # MAE / MFE so far (BACKLOG 23), from every tick while this engine holds the position (`_track_excursions`);
+    # approx: part of the path was not seen by ticks (carried across a restart, adopted), so the record fills it from
+    # the stored 1m bars and flags it
+    excursion: Excursion | None = None
+    excursion_approx: bool = False
 
 
 class PendingClose(Record):
@@ -309,6 +315,7 @@ class Engine:
         self._error_tick_ts: pd.Timestamp | None = None
         self._error_awaits_tick = False
         self._err_log: dict[str, tuple[float, int]] = {}   # exception type -> (last logged, monotonic; suppressed since)
+        self._excursion_errors: dict[str, int] = {}        # MAE/MFE tracking failures by type (reporting only)
         self._err_state_written = -1e18                # monotonic time of the last state write caused by an error
         self._tick_flush_retry: pd.Timestamp | None = None  # after a failed tick-log write, no retry before this
         self.ticks_dropped = 0                         # tick-log entries dropped while the store could not be written
@@ -450,6 +457,7 @@ class Engine:
         if self._kill_pending and self.state.stage == Stage.HALTED:
             self._kill_switch(everything=False)   # until this engine's book is flat
         self._scale_out(t)
+        self._track_excursions(t)          # reporting only, after every exit; never raises
         if not repeat:
             self._guard(lambda: self._log_tick(t))      # a full disk is a tick error, never a skipped exit
         self._refresh_broker_terms(t.ts_utc)
@@ -1284,7 +1292,8 @@ class Engine:
                        entry_bar_ts=p.open_time_utc, max_bars=max_bars, sl=p.sl, tp=p.tp,
                        client_order_id=rec.client_order_id if rec is not None else p.comment or None,
                        open_price=p.open_price, initial_sl=rec.sl if rec is not None else p.sl,
-                       initial_lots=rec.lots if rec is not None else p.lots, opened_utc=p.open_time_utc)
+                       initial_lots=rec.lots if rec is not None else p.lots, opened_utc=p.open_time_utc,
+                       excursion_approx=True)
         if agent is not None:
             atr_usd = rec.atr_usd if rec is not None and rec.atr_usd is not None else \
                 self._implied_atr(agent, p.open_price, tr.initial_sl)
@@ -1696,6 +1705,8 @@ class Engine:
         self._orders = {k: SentOrder.model_validate(v) for k, v in d.get("sent", {}).items()}
         self.sent_ids = set(self._orders)
         self.open = {int(k): OpenTrade.model_validate(v) for k, v in d.get("open", {}).items()}
+        for tr in self.open.values():
+            tr.excursion_approx = True            # ticks while the engine was down were not seen (BACKLOG 23)
         self._closes = [PendingClose.model_validate(v) for v in d.get("closing", [])]
         self._records_lost = [int(x) for x in d.get("records_lost", [])]
         try:
@@ -1729,7 +1740,7 @@ class Engine:
                                                             max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp,
                                                             client_order_id=cid, open_price=pos.open_price,
                                                             initial_sl=rec.sl, initial_lots=rec.lots,
-                                                            opened_utc=pos.open_time_utc)
+                                                            opened_utc=pos.open_time_utc, excursion_approx=True)
                 agent = self.agents.get(rec.agent_id)
                 if agent is not None:
                     atr_usd = rec.atr_usd if rec.atr_usd is not None else self._implied_atr(agent, pos.open_price, rec.sl)
@@ -1948,10 +1959,63 @@ class Engine:
                           client_order_id=tr.client_order_id, agent_id=tr.agent_id, side=tr.side, lots=lots,
                           entry_utc=tr.opened_utc or tr.entry_bar_ts, entry_price=entry, exit_price=exit_px,
                           exit_reason=reason, r=r, commission=commission, swap=swap, pnl_currency=pnl_currency,
-                          partial_lots=tr.scaled_lots)
+                          partial_lots=tr.scaled_lots,
+                          **self._closed_excursion(pid, tr, entry, tr.opened_utc or tr.entry_bar_ts, exit_utc,
+                                                   px if px is not None else exit_px))
         append_closed_trade(Path(self.cfg.state_dir), rec)
         self._recorded.add(pid)
         log.info("closed trade recorded: position %s %s, pnl %.2f", pid, reason, pnl)   # the exit itself is journalled
+
+    # ------------------------------------------------------------------ MAE / MFE (BACKLOG 23, reporting only)
+    def _track_excursions(self, t: Tick) -> None:
+        """Fold this tick into each open position's MAE / MFE (labels/excursion.py): the exit-side price (bid for a long,
+        ask for a short), clamped at the stop and target this engine expects at the broker, so the ticks between a
+        server-side exit and the engine noticing it never count (the record adds the actual exit fill). Runs after
+        every exit of the tick. Reporting only: a failure is logged (once per kind, then counted) and never raised or
+        made a tick error, so it can neither block an exit nor an entry; the position's record is then approximate."""
+        for tr in self.open.values():
+            try:
+                entry = tr.open_price if tr.open_price is not None else tr.entry
+                if entry is None or (tr.opened_utc is not None and t.ts_utc < tr.opened_utc):
+                    continue
+                px = t.bid if tr.side > 0 else t.ask
+                if tr.sl is not None and tr.side * (px - tr.sl) < 0:
+                    px = tr.sl
+                if tr.tp is not None and tr.side * (px - tr.tp) > 0:
+                    px = tr.tp
+                if tr.excursion is None:
+                    tr.excursion = Excursion.start(entry, tr.opened_utc or t.ts_utc)
+                tr.excursion.fold(tr.side, px, t.ts_utc)
+            except Exception as exc:
+                tr.excursion_approx = True
+                kind = type(exc).__name__
+                n = self._excursion_errors.get(kind, 0)
+                self._excursion_errors[kind] = n + 1
+                if n == 0:
+                    log.warning("MAE/MFE tracking failed (%s); reporting only, trading continues", kind, exc_info=exc)
+
+    def _closed_excursion(self, pid: int, tr: OpenTrade, entry: float, entry_utc: pd.Timestamp,
+                          exit_utc: pd.Timestamp, exit_fill: float | None) -> dict[str, Any]:
+        """The ClosedTrade MAE / MFE fields: the tick track plus the exit fill. When ticks did not see the whole path
+        (`excursion_approx`, or no track at all) the stored 1m bars wholly inside [entry, exit] on the exit side are
+        folded in and the record says approximate. Never raises: a failure leaves the fields empty (the trade is
+        still recorded)."""
+        try:
+            ex = tr.excursion.model_copy() if tr.excursion is not None else Excursion.start(entry, entry_utc)
+            approx = tr.excursion_approx or tr.excursion is None
+            fav_col, adv_col = ("bid_high", "bid_low") if tr.side > 0 else ("ask_low", "ask_high")
+            b = self.bars_1m
+            if approx and not b.empty and {"ts_utc", fav_col, adv_col} <= set(b.columns):
+                ts = pd.to_datetime(b["ts_utc"], utc=True)
+                inside = b[(ts >= entry_utc) & (ts + pd.Timedelta(minutes=1) <= exit_utc)]
+                for at, fav, adv in zip(pd.to_datetime(inside["ts_utc"], utc=True), inside[fav_col], inside[adv_col]):
+                    ex.fold(tr.side, float(adv), at, float(fav), at)
+            if exit_fill is not None:
+                ex.fold(tr.side, float(exit_fill), exit_utc)
+            return {**ex.summary(tr.side, entry, tr.initial_sl), "excursion_approx": approx}
+        except Exception:
+            log.warning("MAE/MFE not recorded for position %s; the trade is recorded without it", pid, exc_info=True)
+            return {}
 
     def _risk_path(self) -> Path:
         return Path(self.cfg.state_dir, f"risk_{self.cfg.account_id}.json")   # not engine_*: the supervisor globs those
