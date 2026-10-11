@@ -172,7 +172,9 @@ repairing one.
 
 **A (Windows, in Remote Desktop).** Start the terminal **as the bridge user**, so the saved login belongs to the
 account the service runs as. In PowerShell:
-`runas /user:goldbot-bridge C:\MT5\ICMarkets\terminal64.exe`. It asks for the `goldbot-bridge` password. Then:
+`runas /user:goldbot-bridge C:\MT5\ICMarkets\terminal64.exe`. It asks for the `goldbot-bridge` password.
+**Never start `terminal64.exe` as the administrator** (no double-click, no "Run as administrator"): the bridge
+user can write that folder (MT5 updates itself), so only ever start it with `runas` as above. Then:
 1. File -> Login to Trade Account: `<mt5-login>`, password, server **ICMarketsSC-Demo**, tick **Save password**.
 2. Check that `XAUUSD` is in Market Watch.
 3. Tools -> Options -> Expert Advisors -> tick **Allow algorithmic trading**.
