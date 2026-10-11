@@ -52,6 +52,7 @@ from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, sizing
 from goldbot.risk.gate import REARM_PHRASE, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
+from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 
@@ -335,6 +336,8 @@ class Engine:
                                              severity="warning", detail=rec_err))
         self._recorded: set[int] = {t.position_id for t in trades
                                     if t.account_id == cfg.account_id and t.position_id is not None}
+        # this account's closed trades, kept in step with the record (_record_closed): the throttle's losses and entries
+        self._throttle_closed: list[ClosedTrade] = [t for t in trades if t.account_id == cfg.account_id]
         self._closes: list[PendingClose] = []
         self._records_lost: list[int] = []           # records given up after closed_record_retries failed writes
         self._currency = ""                          # the deposit currency, read once from the broker (BACKLOG 28)
@@ -817,7 +820,8 @@ class Engine:
             self._note_min_lot_risk(terms, ls.stop_atr * float(a.iloc[last]))
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
                             multiplier=mult, price=price, timeframe=tf, family=agent.family, **terms)
-            gd = self.gate.check(intent, self.state, margin_required=broker_margin(self.broker, self.cfg.symbol))
+            gd = self.gate.check(intent, self.state, close_ts, margin_required=broker_margin(self.broker, self.cfg.symbol),
+                                 throttle=self._agent_throttle(agent.agent_id, tf, close_ts))
             if not gd.allowed:
                 decisions.append(self._record(agent, close_ts, p, mult, "gate:" + ",".join(gd.reasons), scored_fv=sfv))
                 continue
@@ -856,8 +860,10 @@ class Engine:
             now_px = tick.ask if prop.side > 0 else tick.bid
             intent = intent.model_copy(update={**self._sizing_terms(intent.side, now_px, intent.stop_atr * intent.atr_usd),
                                                "price": now_px})
-            gd = self.gate.check(intent, self.state,  # re-check at approval time
-                                 margin_required=broker_margin(self.broker, self.cfg.symbol))
+            gd = self.gate.check(intent, self.state, tick.ts_utc,  # re-check at approval time
+                                 margin_required=broker_margin(self.broker, self.cfg.symbol),
+                                 throttle=self._agent_throttle(agent.agent_id, intent.timeframe or agent.timeframe,
+                                                               tick.ts_utc))
             if gd.allowed:
                 price = tick.ask if prop.side > 0 else tick.bid
                 self._execute(prop, agent, gd.lots, price - prop.side * gd.stop_distance,
@@ -1951,6 +1957,7 @@ class Engine:
                           partial_lots=tr.scaled_lots)
         append_closed_trade(Path(self.cfg.state_dir), rec)
         self._recorded.add(pid)
+        self._throttle_closed.append(rec)
         log.info("closed trade recorded: position %s %s, pnl %.2f", pid, reason, pnl)   # the exit itself is journalled
 
     def _risk_path(self) -> Path:
@@ -2216,6 +2223,52 @@ class Engine:
         lost = max(0.0, st.day_start_equity - st.equity) if st.day_start_equity > 0 else 0.0
         return {"daily_loss_limit": round(limit, 2), "daily_loss_remaining": round(max(0.0, limit - lost), 2)}
 
+    def _agent_throttle(self, agent_id: str, timeframe: str, now: pd.Timestamp) -> AgentThrottle | None:
+        """The agent's throttle facts at `now` (BACKLOG 21), derived from durable records only (goldbot/risk/throttle.py):
+        this account's closed-trade record, the open book and the queued closes (one entry per position), and the shadow
+        book when a streak reaches the threshold. None while the throttle is off, so a disabled throttle reads nothing."""
+        cfg = self.gate.limits.throttle
+        if not cfg.enabled:
+            return None
+        entries: dict[object, pd.Timestamp] = {}
+        for t in self._throttle_closed:
+            if t.agent_id == agent_id and t.entry_utc is not None:
+                entries[t.position_id if t.position_id is not None else id(t)] = pd.Timestamp(t.entry_utc)
+        for tr in [*self.open.values(), *(c.trade for c in self._closes)]:
+            if tr.agent_id == agent_id:
+                entries[tr.position_id] = pd.Timestamp(tr.opened_utc if tr.opened_utc is not None else tr.entry_bar_ts)
+        return agent_throttle(agent_id, timeframe, closed=self._throttle_closed, entry_times=entries.values(), now=now,
+                              shadow_win=lambda: self._shadow_win(agent_id), consult_shadow_at=cfg.loss_streak)
+
+    def _shadow_win(self, agent_id: str) -> pd.Timestamp | None:
+        """The agent's latest winning shadow trade: this engine's book when it hosts it, else the host's saved file. An
+        unreadable book clears nothing (fail closed: the streak keeps refusing until its cooldown passes)."""
+        try:
+            book = self.shadow if self.shadow is not None else ShadowBook(self.cfg.state_dir)
+            return latest_shadow_win(book, agent_id)
+        except Exception as exc:
+            log.warning("throttle: shadow book unreadable (%s); no shadow win counted", type(exc).__name__)
+            return None
+
+    def _throttle_state(self, now: pd.Timestamp) -> dict[str, Any]:
+        """`throttle` in engine_<account>.json and health: the settings, and when on, each agent's facts, when its
+        cooldown ends and the reasons RiskGate would refuse its entry with now (`blocked`)."""
+        cfg = self.gate.limits.throttle
+        out: dict[str, Any] = cfg.model_dump()
+        if not cfg.enabled:
+            return out
+        agents: dict[str, Any] = {}
+        for agent in self.agents.values():
+            t = self._agent_throttle(agent.agent_id, agent.timeframe, now)
+            if t is None:
+                continue
+            until = self.gate.throttle_cooldown_until(t)
+            agents[agent.agent_id] = {**t.model_dump(mode="json", exclude={"agent_id"}),
+                                      "cooldown_until": until.isoformat() if until is not None else None,
+                                      "blocked": self.gate.throttle_reasons(t, now)}
+        out["agents"] = agents
+        return out
+
     def _write_state(self) -> None:
         st = self.state
         payload = {
@@ -2252,6 +2305,8 @@ class Engine:
             "tick_errors_total": self.tick_errors_total, "ticks_dropped": self.ticks_dropped,
             "last_tick_error_at": self._last_tick_error_at.isoformat() if self._last_tick_error_at is not None else None,
             "sessions": session_table_cache(self.sessions),
+            # BACKLOG 21: per-agent loss-streak and entry-rate throttle (settings; per agent when on), on the tick clock
+            "throttle": self._throttle_state(self._last_tick.ts_utc if self._last_tick is not None else self.clock()),
             "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account

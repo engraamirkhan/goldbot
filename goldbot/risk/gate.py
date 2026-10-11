@@ -15,9 +15,10 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import Record
-from goldbot.config import RiskSettings
+from goldbot.config import RiskSettings, ThrottleSettings, tf_seconds
 from goldbot.data.timeutil import floor_tf, risk_day
 from goldbot.risk import sizing
+from goldbot.risk.throttle import AgentThrottle
 
 log = logging.getLogger("goldbot.risk")
 
@@ -64,6 +65,8 @@ class RiskLimits(Record):
     # BACKLOG 29: absolute daily loss limit, account currency; entries refused when loss so far + this trade's stop
     # risk > min(daily_cap x day-start equity, this). None = off
     daily_loss_limit_abs: float | None = None
+    # BACKLOG 21 (playbook G-6): per-agent loss-streak and entry-rate throttle; off by default (owner: thresholds)
+    throttle: ThrottleSettings = Field(default_factory=ThrottleSettings)
 
     @classmethod
     def from_settings(cls, risk: RiskSettings, *, tiny_live: bool) -> RiskLimits:
@@ -76,7 +79,7 @@ class RiskLimits(Record):
                    dd_stage1_clear=risk.drawdown_stage1_clear, max_positions=risk.max_positions_per_account,
                    max_spread_points=risk.max_spread_points, stale_tick_seconds=risk.stale_tick_seconds,
                    min_target_over_cost=risk.min_target_over_cost,
-                   min_lot_risk_cap=None if tiny_live else risk.min_lot_risk_cap)
+                   min_lot_risk_cap=None if tiny_live else risk.min_lot_risk_cap, throttle=risk.throttle)
 
 
 class AccountState(Record):
@@ -214,6 +217,35 @@ class RiskGate:
         cap = min(cap, self.limits.max_risk_per_trade)
         return cap * sizing.SIZE_DOWN_RISK if size_down else cap
 
+    def throttle_cooldown_until(self, t: AgentThrottle) -> pd.Timestamp | None:
+        """When the loss-streak block lifts: the last full loss's exit plus `throttle.cooldown_bars` bars of the agent's
+        timeframe; None when unknown (no loss, or a timeframe the config does not know)."""
+        if t.last_loss_utc is None:
+            return None
+        try:
+            bar_s = tf_seconds(t.timeframe)
+        except ValueError:
+            return None
+        return pd.Timestamp(t.last_loss_utc) + pd.Timedelta(seconds=self.limits.throttle.cooldown_bars * bar_s)
+
+    def throttle_reasons(self, t: AgentThrottle | None, now_utc: pd.Timestamp | None) -> list[str]:
+        """BACKLOG 21 (playbook G-6: "an agent makes no entries until ... Never affects exits"): `throttle_loss_streak`
+        while the agent's streak of full losses is at least `throttle.loss_streak` and its cooldown has not passed (a
+        winning shadow trade has already ended the streak in `t`); `throttle_entry_rate` once it has made
+        `max_entries_per_day_per_agent` entries this risk day. Nothing when the throttle is off or no facts are given.
+        Fails closed: without a clock or a known cooldown a streak keeps refusing."""
+        cfg = self.limits.throttle
+        if not cfg.enabled or t is None:
+            return []
+        out = []
+        if t.loss_streak >= cfg.loss_streak:
+            until = self.throttle_cooldown_until(t)
+            if now_utc is None or until is None or now_utc < until:
+                out.append("throttle_loss_streak")
+        if t.entries_today >= cfg.max_entries_per_day_per_agent:
+            out.append("throttle_entry_rate")
+        return out
+
     def margin_for(self, intent: Intent, lots: float, notional: float,
                    margin_required: MarginFn | None) -> tuple[float, str]:
         """Design (Hard limits): margin is "checked with order_calc_margin and against the FCA retail cap of 1:20".
@@ -240,9 +272,10 @@ class RiskGate:
         return cap, f"1:20 {cap:.2f} >= broker {broker:.2f}"
 
     def check(self, intent: Intent, st: AccountState, now_utc: pd.Timestamp | None = None,
-              margin_required: MarginFn | None = None) -> GateDecision:
+              margin_required: MarginFn | None = None, throttle: AgentThrottle | None = None) -> GateDecision:
         """`margin_required(side, lots, price)` is the broker's margin figure (`broker_margin(broker, symbol)`);
-        without it the margin check uses the 1:20 figure alone and says so in `margin_note`."""
+        without it the margin check uses the 1:20 figure alone and says so in `margin_note`. `throttle` is the
+        intent's agent's throttle facts (BACKLOG 21), judged at `now_utc` (`throttle_reasons`)."""
         L = self.limits
         reasons: list[str] = []
         self.update_stage(st)
@@ -278,6 +311,7 @@ class RiskGate:
             reasons.append("spread_too_wide")
         if st.open_positions >= L.max_positions:
             reasons.append("max_positions")
+        reasons += self.throttle_reasons(throttle, now_utc)
         day_loss = 1 - st.equity / st.day_start_equity if st.day_start_equity else 0.0
         week_loss = 1 - st.equity / st.week_start_equity if st.week_start_equity else 0.0
         if day_loss >= L.daily_cap:

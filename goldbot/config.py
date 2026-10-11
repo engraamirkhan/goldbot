@@ -77,6 +77,18 @@ class Blackout(_Section):
     events: list[str]
 
 
+class ThrottleSettings(_Section):
+    """BACKLOG 21 (playbook G-6), the system analogue of revenge trading and overtrading: per agent, after
+    `loss_streak` consecutive full losses no entries until `cooldown_bars` bars of its timeframe pass or a winning
+    shadow trade occurs; at most `max_entries_per_day_per_agent` entries per risk day. Entries only, never exits.
+    Off until the owner sets the thresholds (risk-policy values: playbook section 7)."""
+
+    enabled: bool = False
+    loss_streak: int = Field(3, ge=1)
+    cooldown_bars: int = Field(4, ge=1)
+    max_entries_per_day_per_agent: int = Field(3, ge=1)
+
+
 class RiskSettings(_Section):
     risk_per_trade: float = Field(gt=0, le=0.01)
     risk_per_trade_tiny_live: float = Field(gt=0, le=0.01)
@@ -102,6 +114,8 @@ class RiskSettings(_Section):
     # health: an engine whose broker reads (positions(), deal history) failed this many times in a row FAILs and the
     # owner is alerted on Telegram; fewer is a warning (entries are blocked from the first failure, exits keep trying)
     positions_unreadable_alert: int = Field(5, ge=1)
+    # BACKLOG 21: per-agent loss-streak and entry-rate throttle (goldbot/risk/throttle.py); off by default
+    throttle: ThrottleSettings = Field(default_factory=ThrottleSettings)
 
 
 class CostSettings(_Section):

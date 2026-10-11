@@ -737,6 +737,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`combined_daily_loss_abs`) when the combined day loss reaches 50. Exits never consult it. engine_<account>.json
   carries `daily_loss_limit` and `daily_loss_remaining`; health shows them on the daily cap line and warns when none
   is left. Not done: the approval card's "remaining daily allowance" (ui-ux follow-up).
+- Per-agent loss-streak and entry-rate throttle (2026-10-11, BACKLOG 21, playbook G-6, row R35; **off by default**,
+  needs trading-safety review): `risk.throttle: {enabled: false, loss_streak: 3, cooldown_bars: 4,
+  max_entries_per_day_per_agent: 3}`. When enabled, RiskGate refuses an agent's entries with `throttle_loss_streak`
+  after `loss_streak` consecutive full losses (closed trades of that agent on that account with R <= -0.9; any other
+  trade ends the streak) until `cooldown_bars` bars of the agent's timeframe have passed since the last one or a
+  winning taken shadow trade of that agent closes after it, and with `throttle_entry_rate` once it has made
+  `max_entries_per_day_per_agent` entries in the risk day (00:00 UTC). Entries only (decision and approval re-check);
+  exits never consult it. No new state file: the facts are derived from the closed-trade record, the open book and the
+  shadow book (`goldbot/risk/throttle.py`), so a restart keeps them; while off the engine reads nothing for it.
+  engine_<account>.json carries `throttle` (settings; per agent when on: streak, last loss, cooldown end, entries
+  today, `blocked`); health `throttle:<account>` warns and alerts on Telegram while an agent is throttled. Owner: set
+  the thresholds and turn it on (settings.local.yaml `risk: { throttle: { enabled: true, ... } }`, restart the
+  engine). Not done: the playbook's "until the next session" variant and a cross-account count (both accounts run the
+  same agents; each account counts its own), the dashboard/approval card do not show it yet (ui-ux follow-up).
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on

@@ -42,7 +42,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 18 | Tier-2 event blackout and proximity feature (G-3) | Market and macro preparation · RUN | S | proposed (owner: adopt) |
 | 19 | Open-risk (heat) cap and same-direction stacking (G-4) | Capital and drawdown management · RUN | S | proposed (owner: value) |
 | 20 | Drawdown / risk-of-ruin Monte Carlo report (G-5) | Capital and drawdown management · RUN | S | tool built (results need data) |
-| 21 | Per-agent loss-streak and entry-rate throttle (G-6) | Discipline (system analogue) · RUN | S | proposed (owner: thresholds) |
+| 21 | Per-agent loss-streak and entry-rate throttle (G-6) | Discipline (system analogue) · RUN | S | built, off by default (owner: set thresholds and enable; trading-safety review pending) |
 | 22 | Min-lot sizing-feasibility report (G-7) | Position sizing · RUN | S | tool built (results need data; account size answered: £1,000 GBP) |
 | 23 | MAE/MFE in closed-trade and shadow records (G-9) | Post-trade review · FIND | S | proposed |
 | 24 | DST-aware sessions and deterministic calendars (D-1, D-2) | Idea generation (honesty) · FIND | M | proposed |
@@ -256,6 +256,10 @@ execution items need trading-safety review. Feature items need quant review.
   6 and 12 months. Reporting only. Golden test on a fixed seed.
 - **21 (G-6).** After 3 consecutive full stop-outs in a risk day, or more than N entries in a session, an agent
   makes no entries until the next session. Logged and alerted. Never affects exits.
+  **Built 2026-10-11, off by default (TRACEABILITY R35):** `risk.throttle: {enabled: false, loss_streak: 3,
+  cooldown_bars: 4, max_entries_per_day_per_agent: 3}`; the clearing rule is the cooldown (bars of the agent's
+  timeframe) or a winning shadow trade, and the rate is per risk day (00:00 UTC), per agent per account. Owner: set
+  the thresholds and enable (playbook section 7, item 4). Needs trading-safety review.
 - **22 (G-7).** `run.py sizing-feasibility`: per agent, the minimum equity at which the minimum lot stays within
   1.2× target risk at the current ATR and phase risk rate. Written as phase-gate evidence.
 - **23 (G-9).** Maximum adverse and favourable excursion in R on every shadow and closed trade, shown by exit

@@ -1051,6 +1051,29 @@ def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timest
         return []
 
 
+def check_throttle(ctx: HealthContext, account_id: str) -> list[Check]:
+    """BACKLOG 21 (playbook G-6: "Logged and alerted"): while the per-agent throttle is on, warn (and tell the owner,
+    NOTIFY_ON_WARN) when RiskGate is refusing an agent's entries for a loss streak or the daily entry rate; ok
+    otherwise. Nothing while the throttle is off or the engine has not published it."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    if not f.exists():
+        return []
+    try:
+        th = _read_json(f).get("throttle") or {}
+        if not th.get("enabled"):
+            return []
+        agents = {str(k): v for k, v in (th.get("agents") or {}).items()}
+        blocked = {a: list(v.get("blocked") or []) for a, v in agents.items() if v.get("blocked")}
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []                                   # check_engine reports the unreadable file
+    name = f"throttle:{account_id}"
+    if not blocked:
+        return [Check(name=name, status="ok", reason=f"{account_id}: no agent throttled ({len(agents)} watched)")]
+    detail = "; ".join(f"{a} {','.join(r)} (streak {agents[a].get('loss_streak')}, "
+                       f"{agents[a].get('entries_today')} entries today)" for a, r in sorted(blocked.items()))
+    return [Check(name=name, status="warn", reason=f"{account_id}: entries throttled: {detail}; exits unaffected")]
+
+
 def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
     """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
     restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
@@ -1147,6 +1170,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             tick_errors = check_tick_errors(ctx, a.account_id)
             checks += [tick_errors] if tick_errors is not None else []
             checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
+            checks += check_throttle(ctx, a.account_id)
             bridge = check_bridge(ctx, a.account_id)
             checks += [bridge] if bridge is not None else []
             clock = check_server_clock(ctx, a)
@@ -1186,7 +1210,8 @@ class WatchState(Record):
 
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
-NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:")
+NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:",
+                  "throttle:")
 
 
 def _alerting(name: str, status: str) -> bool:
