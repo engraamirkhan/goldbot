@@ -17,6 +17,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from goldbot.data.timeutil import NY_PLUS_7, server_wall
 from goldbot.execution.broker import OrderResult, Tick
 from goldbot.ops import health
 from goldbot.ops import run as ops_run
@@ -33,8 +34,10 @@ NAN = Tick(ts_utc=WED, bid=math.nan, ask=math.nan)
 class _FlakyClose(_StopStuck):
     """The first `fail` closes are refused (a requote); later ones fill."""
     fail = 0
+    calls = 0
 
     def close(self, position_id: int, lots: float | None = None) -> OrderResult:
+        self.calls += 1
         if self.fail > 0:
             self.fail -= 1
             return OrderResult(ok=False, retcode=10004, order_id=None, position_id=position_id, filled_lots=0.0,
@@ -240,3 +243,87 @@ def test_the_supervisor_traceback_is_logged_once_then_rate_limited(tmp_path, cap
             ops_run.supervisor_pass(sup, hb)
     tracebacks = [r for r in caplog.records if r.exc_info]
     assert len(tracebacks) == 1
+
+
+# ---------------------------------------------------------------------------------------------- re-verification NEW-1/2
+CUT = FRI + pd.Timedelta(minutes=30)                                    # Friday 21:30 server (NY+7) = 18:30 UTC
+
+
+def server_date(t: pd.Timestamp) -> str:
+    return server_wall(t, NY_PLUS_7)[0].date().isoformat()
+
+
+def _winner_before_the_cut(tmp_path: Path) -> tuple[Any, _FlakyClose, list[pd.Timestamp], int]:
+    eng, pb, host, pid = _setup(tmp_path, start=FRI + pd.Timedelta(minutes=20))   # long from 2400.2
+    host[0] = CUT - pd.Timedelta(seconds=1)
+    pb.on_tick(_tick(host[0], 2410.0))
+    eng.on_tick(_tick(host[0], 2410.0))                                 # a valid quote just before the cut: a winner
+    return eng, pb, host, pid
+
+
+def test_one_crossed_quote_just_after_the_cut_never_flattens_a_winner(tmp_path):
+    eng, pb, host, pid = _winner_before_the_cut(tmp_path)
+    host[0] = CUT + pd.Timedelta(seconds=2)
+    eng.on_tick(Tick(ts_utc=host[0], bid=2410.5, ask=2410.0))           # crossed
+    assert pid in _open_ids(pb)
+    assert not any(d.get("action") == "weekend_close_no_quote" for d in eng.decisions)
+
+
+def test_a_rejected_tighten_then_one_nan_tick_never_flattens_a_winner(tmp_path):
+    eng, pb, host, pid = _winner_before_the_cut(tmp_path)
+    host[0] = CUT + pd.Timedelta(seconds=1)
+    pb.on_tick(_tick(host[0], 2410.0))
+    eng.on_tick(_tick(host[0], 2410.0))
+    eng._refresh_account(_tick(host[0], 2410.0))                        # the account refresh runs the weekend rule
+    assert any(d.get("action") == "weekend_tighten" and not d["ok"] for d in eng.decisions)   # _StopStuck refused it
+    host[0] += pd.Timedelta(seconds=1)
+    eng.on_tick(Tick(ts_utc=host[0], bid=math.nan, ask=math.nan))
+    assert pid in _open_ids(pb)
+
+
+def test_a_feed_dead_for_a_minute_after_the_cut_with_no_valid_quote_since_flattens(tmp_path):
+    eng, pb, host, pid = _winner_before_the_cut(tmp_path)
+    host[0] = CUT
+    _nan_feed(eng, host, 30)
+    assert pid in _open_ids(pb)
+    _nan_feed(eng, host, 31)
+    assert pid not in _open_ids(pb)
+
+
+def test_the_priceless_time_barrier_needs_a_dead_feed_for_a_minute(tmp_path):
+    eng, pb, host, pid = _setup(tmp_path)
+    eng.open[pid].bars_held, eng.open[pid].max_bars = 5, 2              # already past its barrier
+    host[0] = WED + pd.Timedelta(seconds=1)
+    eng.on_tick(Tick(ts_utc=host[0], bid=math.nan, ask=math.nan))       # one bad quote: left to the next bar close
+    assert pid in _open_ids(pb)
+    _nan_feed(eng, host, 60)
+    assert pid not in _open_ids(pb)
+
+
+def test_a_winner_held_over_the_weekend_is_not_time_exited_by_a_bad_quote_at_the_reopen(tmp_path):
+    eng, pb, host, pid = _setup(tmp_path, start=FRI)
+    eng._weekend_done = server_date(CUT)                                # Friday's rule already ran
+    tr = eng.open[pid]
+    tr.bars_held, tr.max_bars = 3, 20                                   # 17 decision bars of market time left
+    eng._closed_through = pd.Timestamp("2026-10-30 20:45", tz="UTC")
+    host[0] = pd.Timestamp("2026-11-02 00:00", tz="UTC")                # Monday 00:00 UTC, the market reopened
+    _nan_feed(eng, host, 90)                                            # 54 h of wall time, a handful of open bars
+    assert pid in _open_ids(pb)
+
+
+def test_the_engine_dead_feed_threshold_equals_the_health_one():
+    from goldbot.engine.runner import QUOTE_DEAD_S
+    assert QUOTE_DEAD_S == health.QUOTE_INVALID_FAIL_S
+
+
+def test_a_refused_close_that_is_not_market_closed_is_resent_at_most_once_a_second(tmp_path):
+    eng, pb, host, pid = _setup(tmp_path)
+    pb.fail = 100
+    eng._try_close(pid, "time_exit", WED)
+    for i in range(1, 4):                                               # valid ticks every 0.25 s
+        host[0] = WED + pd.Timedelta(seconds=0.25 * i)
+        eng.on_tick(_tick(host[0], 2401.0 + i * 0.01))
+    assert pb.calls == 1
+    host[0] = WED + pd.Timedelta(seconds=1.0)
+    eng.on_tick(_tick(host[0], 2401.5))
+    assert pb.calls == 2

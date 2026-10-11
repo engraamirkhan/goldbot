@@ -35,7 +35,7 @@ from goldbot.data.news import shock_window
 from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
-from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
+from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_to_utc, server_wall
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
 from goldbot.execution.broker import Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
@@ -79,6 +79,12 @@ LATE_BARS_BLOCK = 3
 # TICK_ERROR_LOG_S with a count, and the engine state is rewritten at most every TICK_ERROR_STATE_S while failing.
 TICK_ERROR_LOG_S = 60.0
 TICK_ERROR_STATE_S = 10.0
+# a feed whose every quote has been invalid this long (host clock) is dead: only then do the priceless time barrier and
+# the priceless Friday flatten act (re-verification NEW-1/2: never on a single bad quote). Equal to health's
+# QUOTE_INVALID_FAIL_S (a test keeps them equal). Decided closes and the kill switch never wait for it
+QUOTE_DEAD_S = 60.0
+# a close refused for any reason but a closed market is re-sent no sooner than this (re-verification LOW-A)
+CLOSE_RETRY_MIN_S = 1.0
 TICK_LOG_MAX = 20_000        # ticks kept for the store while writes fail (a full disk): the oldest are dropped
 # a position frozen at its broker stop or target (MAE/MFE, BACKLOG 23) that exits later than this was not taken there:
 # the path after the freeze was not seen and the record says approximate
@@ -376,6 +382,7 @@ class Engine:
         # an invalid feed (a dropped quote or a last_tick read that raised): since when on the host clock (engine state,
         # health FAILs after QUOTE_INVALID_FAIL_S), and when the state file was last written meanwhile
         self._quote_invalid_since: pd.Timestamp | None = None
+        self._last_valid_quote: pd.Timestamp | None = None   # host clock of the last valid quote (the Friday flatten)
         self._invalid_state_written: pd.Timestamp | None = None
         self._dq_repeats: dict[str, int] = {}        # ticks folded into the pending event of each check (LOW-1)
         self._load_orders()
@@ -459,6 +466,7 @@ class Engine:
             return []
         self._quote_invalid_since = self._invalid_state_written = None
         prev, self._last_tick = self._last_tick, t
+        self._last_valid_quote = self._host_now()
         if self._error_awaits_tick:     # date a pending tick error by this tick's stamp (never earlier than it was)
             self._error_tick_ts = t.ts_utc if self._error_tick_ts is None else max(self._error_tick_ts, t.ts_utc)
             self._error_awaits_tick = False
@@ -537,23 +545,39 @@ class Engine:
         self._guard(self._flush_closed)
 
     def _host_clock_exits(self, now: pd.Timestamp) -> None:
-        """Without a price: a trade past its time barrier (max_bars decision bars since it opened) is closed
-        (`time_exit`), and from the Friday weekend cut (server time) every position of this engine is closed
-        (`weekend_close_no_quote`): with no valid quote the losers cannot be told from the winners, and a flat book is
-        the side of the weekend rule that cannot gap through a stop. Once per Friday, like `_weekend_rule`; a refused
+        """Without a price, and only once the feed is dead (re-verification NEW-1/2): never on a single bad quote.
+
+        Time barrier: a trade whose `bars_held` plus the whole decision bars elapsed since the last processed close
+        (`_closed_through`, or its entry bar) during open market hours (the session table) reaches `max_bars` is closed
+        (`time_exit`), once quotes have been invalid for QUOTE_DEAD_S. A weekend or a daily break never counts.
+
+        Friday flatten: past the weekend cut (server time) and before the weekend rule completed, every position of
+        this engine is closed (`weekend_close_no_quote`: no valid quote tells losers from winners, and a flat book
+        cannot gap through a stop) only when the feed has been invalid since before the cut, or for QUOTE_DEAD_S with no
+        valid quote since the cut. Otherwise `_weekend_rule` runs on the next valid quote. Once per Friday; a refused
         close is retried every pass (`_retry_closes`)."""
-        sec = tf_seconds(self.cfg.decision_tf)
-        for pid, tr in list(self.open.items()):
-            opened = tr.opened_utc or tr.entry_bar_ts
-            if pid not in self._close_due and opened is not None and \
-                    (now - opened).total_seconds() >= tr.max_bars * sec:
-                self._try_close(pid, "time_exit", now, clock="host")
+        since = self._quote_invalid_since
+        dead = since is not None and (now - since).total_seconds() >= QUOTE_DEAD_S
+        if dead:
+            sec = tf_seconds(self.cfg.decision_tf)
+            for pid, tr in list(self.open.items()):
+                opened = tr.opened_utc or tr.entry_bar_ts
+                bases = [x for x in (self._closed_through, opened.floor(f"{sec}s") if opened is not None else None)
+                         if x is not None]
+                if pid in self._close_due or not bases:
+                    continue
+                if tr.bars_held + self._open_bars(max(bases), now) >= tr.max_bars:   # bars_held: closes processed
+                    self._try_close(pid, "time_exit", now, clock="host")
         srv = server_wall(now, self.cfg.server_tz)[0]
         h, m = (int(x) for x in self.cfg.weekend_cut.split(":"))
         if not (srv.weekday() == 4 and srv.hour * 60 + srv.minute >= h * 60 + m) \
                 or self._weekend_done == srv.date().isoformat():
             return
         self.state.weekend = True
+        cut = server_to_utc(pd.DatetimeIndex([srv.normalize() + pd.Timedelta(hours=h, minutes=m)]), self.cfg.server_tz)[0]
+        last_valid = self._last_valid_quote
+        if since is None or not (since <= cut or (dead and (last_valid is None or last_valid < cut))):
+            return                                        # a valid quote since the cut: `_weekend_rule` decides
         positions = self._read_positions("the no-quote weekend flatten is retried next pass")
         if positions is None:
             return
@@ -566,6 +590,20 @@ class Engine:
         if done:
             self._weekend_done = srv.date().isoformat()
             self._save_risk_state()
+
+    def _open_bars(self, base: pd.Timestamp, now: pd.Timestamp) -> int:
+        """Whole decision bars from `base` to `now` whose start the session table calls open; 0 when the table cannot
+        answer (the time exit then waits for a bar close; the broker's stop stays in place)."""
+        sec = tf_seconds(self.cfg.decision_tf)
+        n = min(int((now - base).total_seconds() // sec), 7 * 86400 // sec)
+        if n <= 0:
+            return 0
+        try:
+            starts = pd.date_range(base, periods=n, freq=f"{sec}s")
+            return int(np.asarray(self.sessions.is_open(starts)).sum())
+        except Exception as exc:                          # noqa: BLE001 - a broken table never closes a trade
+            log.warning("session table unusable for the priceless time barrier (%s)", type(exc).__name__)
+            return 0
 
     def _due_close(self, t: Tick, bar_open: pd.Timestamp) -> pd.Timestamp | None:
         """Design (D10): "Bar close is detected by clock (close time plus 1.5 s grace), not by tick arrival." The bar
@@ -1166,7 +1204,8 @@ class Engine:
         closed-trade record) only when the broker confirms the close. A failure keeps the close due (`_retry_closes`,
         every tick): refused with a market-closed retcode (MARKET_CLOSED_RETCODES) it is backed off reconcile_every_s
         of tick time, doubling per consecutive refusal up to modify_backoff_max_s; any other refusal (requote, price
-        changed) or a raising call is retried on the next tick. Automatic: never gated."""
+        changed) or a raising call is retried on the first tick CLOSE_RETRY_MIN_S later (`_retry_wait`). Automatic:
+        never gated."""
         now = now if now is not None else self._last_tick.ts_utc if self._last_tick is not None else pd.Timestamp.now("UTC")
         tr = self.open.get(pid)
         err: str | None = None
@@ -1195,18 +1234,28 @@ class Engine:
             wait = min(self.cfg.reconcile_every_s * 2 ** fails, self.cfg.modify_backoff_max_s)
             self._close_backoff[pid] = (fails + 1, now + pd.Timedelta(seconds=wait))
         else:
-            self._close_backoff.pop(pid, None)            # transient: the next tick tries again
+            self._close_backoff.pop(pid, None)            # transient: again CLOSE_RETRY_MIN_S later (`_retry_wait`)
         return res
 
     def _backing_off(self, pid: int, now: pd.Timestamp) -> bool:
         return pid in self._close_backoff and now < self._close_backoff[pid][1]
 
+    def _retry_wait(self, pid: int, now: pd.Timestamp) -> bool:
+        """True while a due close must not be re-sent yet: backing off after a market-closed refusal, or tried less
+        than CLOSE_RETRY_MIN_S ago (re-verification LOW-A: a requote is not re-sent several times a second). An
+        attempt stamped after `now` (the host and tick clocks disagree) never delays the retry."""
+        if self._backing_off(pid, now):
+            return True
+        due = self._close_due.get(pid)
+        last = due[2] if due is not None else None
+        return last is not None and 0 <= (now - last).total_seconds() < CLOSE_RETRY_MIN_S
+
     def _retry_closes(self, now: pd.Timestamp) -> None:
         """Every tick: re-send each close the engine decided that has not succeeded (kill switch, weekend loser, time
         exit, hard flat, trail, blackout, engine stop), unless it is backing off after a market-closed refusal or was
-        already tried on this tick. A position the broker no longer lists is left to `_sweep_closed`, which records it
+        tried less than CLOSE_RETRY_MIN_S ago (`_retry_wait`). A position the broker no longer lists is left to `_sweep_closed`, which records it
         once its exit deal is seen. An unreadable book skips this tick (the next one retries)."""
-        due = [pid for pid, (_, _, last) in self._close_due.items() if last != now and not self._backing_off(pid, now)]
+        due = [pid for pid in self._close_due if not self._retry_wait(pid, now)]
         if not due:
             return
         positions = self._read_positions("closes are retried next tick")
@@ -1232,7 +1281,7 @@ class Engine:
         now = t.ts_utc
         through = [(pid, tr) for pid, tr in self.open.items()
                    if tr.sl is not None and tr.side * ((t.bid if tr.side > 0 else t.ask) - tr.sl) <= 0
-                   and not self._backing_off(pid, now)]
+                   and not self._retry_wait(pid, now)]
         if not through:
             return
         positions = self._read_positions("the engine stop check is retried next tick")

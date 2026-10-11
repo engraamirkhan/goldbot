@@ -1254,6 +1254,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   quotes in market hours, and FAILs (alerted) on `supervisor_error` and `engine_state_unreadable` halts. Repeated
   bad quotes are one DQ event with a count; every health check is guarded; the seed is printed after each run
   (tests/conftest.py).
+  Re-verification fixes: the priceless Friday flatten and time barrier never act on a single bad quote. The
+  flatten needs the feed invalid since before the cut, or dead for `QUOTE_DEAD_S` (60 s, = health's threshold)
+  with no valid quote since the cut; otherwise `_weekend_rule` decides on the next valid quote. The time
+  barrier needs a dead feed and counts `bars_held` plus open-market decision bars since `_closed_through`
+  (never wall time over a weekend). A refused close that is not market-closed is re-sent at most once a second
+  (`CLOSE_RETRY_MIN_S`). BACKLOG 43: confirm a zero-equity read before the kill switch (needs an ADR).
 - October batch rollout (SRE, 2026-10-11): `docs/deploy/2026-10-batch.md`.
   - The owner's ordered steps for the two Oracle VMs, to be done by Fri 23 Oct: pre-checks (restic plus a local
     copy, preflight, health baseline); engines stopped; MT5 box first, because the new brain needs the bridge's
