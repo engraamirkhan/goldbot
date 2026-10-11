@@ -4,7 +4,7 @@ rank: 8
 title: Q1 2027 pre-registered trial queue
 stage: Idea generation · FIND
 size: S
-status: in progress (draft; owner rulings A-D, K_eff and costs-v1 recorded 2026-10-11, daily floor 150 committed; reservation planned at 8 unless H-06 counts >= 150; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, 48, `macro-v1`)
+status: in progress (draft; owner rulings recorded 2026-10-11; research director decision (c), H-01 kept as a retire test only if its recount is >= 150, H-06 withdrawn below 150; reservation 8, or 7; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, `macro-v1`)
 ---
 
 ### 5. Q1 2027 pre-registered trial queue

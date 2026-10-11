@@ -27,7 +27,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | done (PR #62) |
 | 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | done (PR #60) |
 | 4 | FRED macro data pipeline | Market and macro preparation · FIND | M | done (PR #61) |
-| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (draft; owner rulings A-D, K_eff and costs-v1 recorded 2026-10-11, daily floor 150 committed; reservation planned at 8 unless H-06 counts >= 150; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, 48, `macro-v1`) |
+| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (draft; owner rulings recorded 2026-10-11; research director decision (c), H-01 kept as a retire test only if its recount is >= 150, H-06 withdrawn below 150; reservation 8, or 7; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, `macro-v1`) |
 | 6 | Live exit policies and blackout early close | Trade management, exit · FIND + RUN | M | in review (safety fixes) |
 | 7 | Ops alerts: heartbeats, FAILED_EXEC, weekly cap | Operational resilience · RUN | S–M | done (PR #62) |
 | 8 | Stop rule and gate thresholds in code | Capital and drawdown management · RUN | S | done (owner sign-off and engine trade record open) |
