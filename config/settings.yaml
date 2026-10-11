@@ -215,6 +215,20 @@ drift:                               # design: Drift and health (goldbot/researc
 # created; the owner role belongs only to this address.
 # auth:
 #   owner_email: owner@example.com
+#
+# Owner-only "email me a sign-in link" (goldbot/api/mailer.py; docs/OWNER_GUIDE.md "Email sign-in link"). Off unless
+# enabled; the link still needs the authenticator code. Set the real values in settings.local.yaml only:
+#   auth:
+#     mail:
+#       enabled: true
+#       host: smtp.gmail.com           # plain SMTP + STARTTLS
+#       port: 587
+#       from_address: you@example.com  # the Gmail account the App Password belongs to
+#       username: null                 # SMTP login; null means from_address
+#       dashboard_origin: https://dash.example.com   # https only: the link is <origin>/#signin=<token>
+#       timeout_s: 10                  # connect + each SMTP command
+# The SMTP password (a Google App Password) is never a setting: `python -m goldbot.ops.accounts set smtp-password`
+# stores it in the OS keyring.
 
 gates:                               # design: Roadmap gates and stop rule (goldbot/ops/gates_phase.py; `run.py gates`)
   # The design wants these "committed in writing before the first paper trade". Uncommented values are the design's

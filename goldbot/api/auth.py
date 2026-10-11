@@ -23,7 +23,7 @@
   service relays). Lost authenticator: the owner creates a one-time reset link (24 h) that sets a new password and
   enrols a new authenticator; the owner can instead log in with a recovery code, which also enrols a new
   authenticator. A password change, a forgot-password and disabling an account delete that account's open reset
-  links.
+  links; a password change, a forgot-password and a recovery-code sign-in also delete its email sign-in links.
 * TOTP: each code is accepted once. The newest time step a user has spent is stored, and any code for that step or
   an earlier one is refused (RFC 6238 section 5.2), on login, password change, forgot-password, /rearm and /mode.
 * Timing: login and recovery-login run scrypt against a dummy hash for an unknown email, so the response time does
@@ -46,6 +46,16 @@
   owner session must not set a new password and authenticator. The owner recovers with a recovery code.
 * Sessions: random bearer tokens with 12 h expiry, stored server-side as SHA-256 hashes, so they can be revoked
   and survive an API restart.
+* Email sign-in link (owner only): `request_email_link` reveals nothing about the address (the API always returns
+  one generic 200), and issues a link only when the address is `auth.owner_email` (trimmed, case-insensitive), that
+  account exists, is the owner and is enabled, and mail is configured. The token is random (32 bytes), stored as a
+  SHA-256 hash, single-use and valid 15 minutes. At most 3 requests an hour per address and per client IP, counted
+  whatever the address: a flood can delay the owner's link for up to an hour, but password sign-in still works.
+  `redeem_email_link` STILL needs a current authenticator code: the link replaces the password, never the second
+  factor, because this account approves real-money entries. Any redeem of a live link deletes every outstanding link
+  of the account (a wrong code burns the link, so a stolen link gets one guess, and that guess counts towards the
+  sign-in lockout); an unknown or expired token counts against the client IP only, so garbage tokens cannot lock the
+  owner out. The link carries the token in the URL fragment (`#signin=`), so it is never in a log or a Referer.
 * Audit: every login, failed login, invite, role change, password or authenticator change and decision is appended
   to the append-only `audit` table.
 
@@ -86,6 +96,8 @@ IP_LOCKOUT_FAILURES = 20                 # failures per client IP per window, ac
 LOCK_NOTICE_EVERY_S = 3600             # at most one code-lockout notice to the owner per hour
 OWNER_RESET_REFUSED = "the owner account cannot be reset with a link; sign in with a recovery code instead"
 SESSION_TTL_H, INVITE_TTL_H, RESET_TTL_H = 12, 72, 24
+EMAIL_LINK_TTL_S, EMAIL_LINK_PER_HOUR, EMAIL_LINK_WINDOW_S = 900, 3, 3600
+EMAIL_LINK_REFUSED = "sign-in link invalid or expired, or wrong authenticator code"
 RECOVERY_CODES = 10
 
 
@@ -197,6 +209,13 @@ class PasswordReset(Record):
     created_by: str
 
 
+class EmailLink(Record):
+    """The owner's one-time email sign-in link (token hash only)."""
+    token_hash: str
+    email: str
+    expires: float
+
+
 class Enrolment(Record):
     """A new authenticator; recovery_codes only when the owner account is created (shown once, never stored)."""
     email: str
@@ -217,6 +236,8 @@ _USERS: RecordRepo[User] = RecordRepo("users", User, key="email", columns={
 _INVITES: RecordRepo[Invite] = RecordRepo("invites", Invite, key="token_sha256", columns={
     "token_sha256": lambda i: i.token_hash, "email": lambda i: i.email, "expires_ns": lambda i: int(i.expires * 1e9)})
 _RESETS: RecordRepo[PasswordReset] = RecordRepo("password_resets", PasswordReset, key="token_sha256", columns={
+    "token_sha256": lambda r: r.token_hash, "email": lambda r: r.email, "expires_ns": lambda r: int(r.expires * 1e9)})
+_EMAIL_LINKS: RecordRepo[EmailLink] = RecordRepo("email_links", EmailLink, key="token_sha256", columns={
     "token_sha256": lambda r: r.token_hash, "email": lambda r: r.email, "expires_ns": lambda r: int(r.expires * 1e9)})
 
 
@@ -659,6 +680,7 @@ class AuthStore:
                 _USERS.upsert(conn, cur)
                 conn.execute("DELETE FROM sessions WHERE email = ? AND token_sha256 != ?", (u.email, _token_hash(token)))
                 conn.execute("DELETE FROM password_resets WHERE email = ?", (u.email,))
+                conn.execute("DELETE FROM email_links WHERE email = ?", (u.email,))
                 self._release(conn, r)
                 _audit(conn, "password_change", email=u.email)
         if not ok:
@@ -703,6 +725,7 @@ class AuthStore:
                 _USERS.upsert(conn, cur)
                 conn.execute("DELETE FROM sessions WHERE email = ?", (email,))
                 conn.execute("DELETE FROM password_resets WHERE email = ?", (email,))
+                conn.execute("DELETE FROM email_links WHERE email = ?", (email,))
                 self._release(conn, r)
                 if owner:
                     left = int(conn.execute("SELECT COUNT(*) FROM recovery_codes WHERE email = ? AND used_ns IS NULL",
@@ -833,6 +856,7 @@ class AuthStore:
                 _USERS.upsert(conn, cur)
                 conn.execute("DELETE FROM sessions WHERE email = ?", (email,))
                 conn.execute("DELETE FROM totp_steps WHERE email = ?", (email,))         # a new authenticator
+                conn.execute("DELETE FROM email_links WHERE email = ?", (email,))
                 tok = self._new_session(conn, email)
                 self._release(conn, r)
                 left = int(conn.execute("SELECT COUNT(*) FROM recovery_codes WHERE email = ? AND used_ns IS NULL",
@@ -841,6 +865,84 @@ class AuthStore:
         if spent != 1:
             self._fail(email, "recovery_login_failed", ip)
         return RecoveryLogin(token=tok, email=email, role=u.role, totp_uri=totp_uri(secret, email), recovery_codes_left=left)
+
+    # ------------------------------------------------------------------ owner email sign-in link
+    def request_email_link(self, email: str, ip: str | None = None, *, enabled: bool) -> str | None:
+        """The token to mail, or None. Never raises and never says why: the caller answers every request the same.
+        A link only when mail is configured (`enabled`), the address is `auth.owner_email` (trimmed, case-
+        insensitive) and that account is the enabled owner (`is_owner`). Every request counts towards the hourly
+        limit, per address and per client IP (EMAIL_LINK_PER_HOUR), before anything else is checked. Audited without
+        the token: `email_link_sent`, `email_link_refused`, `email_link_rate_limited`, `email_link_unavailable`."""
+        norm = _norm_email(email) or ""
+        now = time.time_ns()
+        keys = [f"email:{norm}"] + ([f"ip:{ip}"] if ip else [])
+        with self.db.write() as conn:
+            conn.execute("DELETE FROM email_link_requests WHERE ts_ns <= ?", (now - EMAIL_LINK_WINDOW_S * 10**9,))
+            counts = [int(conn.execute("SELECT COUNT(*) FROM email_link_requests WHERE key = ?", (k,)).fetchone()[0])
+                      for k in keys]
+            where = {"email": norm, **({"ip": ip} if ip else {})}
+            if max(counts) >= EMAIL_LINK_PER_HOUR:
+                _audit(conn, "email_link_rate_limited", **where)
+                return None
+            conn.executemany("INSERT INTO email_link_requests (key, ts_ns) VALUES (?, ?)", [(k, now) for k in keys])
+            if not enabled:
+                _audit(conn, "email_link_unavailable", reason="mail not configured", **where)
+                return None
+            u = _USERS.get(conn, norm) if norm else None
+            if self.owner_email is None or norm != self.owner_email or not self.is_owner(u):
+                _audit(conn, "email_link_refused", **where)
+                return None
+            token = secrets.token_urlsafe(32)
+            _EMAIL_LINKS.upsert(conn, EmailLink(token_hash=_token_hash(token), email=norm,
+                                                expires=time.time() + EMAIL_LINK_TTL_S))
+            _audit(conn, "email_link_sent", **where)
+        return token
+
+    def _count_ip_failure(self, ip: str | None, locked_event: str) -> None:
+        """A failure that names no account (an unknown or expired sign-in link): counted against the client IP only,
+        in one write transaction; PermissionError while that IP is locked."""
+        if not ip:
+            return
+        now = time.time_ns()
+        with self.db.write() as conn:
+            conn.execute("DELETE FROM auth_failures WHERE ts_ns <= ?", (now - LOCKOUT_WINDOW_S * 10**9,))
+            n = int(conn.execute("SELECT COUNT(*) FROM auth_failures WHERE key = ?", (f"ip:{ip}",)).fetchone()[0])
+            if n >= IP_LOCKOUT_FAILURES:
+                _audit(conn, locked_event, ip=ip)
+            else:
+                conn.execute("INSERT INTO auth_failures (key, ts_ns) VALUES (?, ?)", (f"ip:{ip}", now))
+        if n >= IP_LOCKOUT_FAILURES:
+            raise PermissionError("too many attempts; wait 15 minutes")
+
+    def redeem_email_link(self, token: str, code: str, ttl_h: int = SESSION_TTL_H, ip: str | None = None) -> str:
+        """A session for the owner from a live link AND a current authenticator code (the link replaces the password,
+        never the second factor). Any redeem of a live link deletes every outstanding link of the account, so the
+        link is single-use and a wrong code burns it; that attempt counts under `email:<owner>` like a failed sign-in.
+        An unknown or expired token counts against the IP only. One message for every cause (EMAIL_LINK_REFUSED)."""
+        th = _token_hash(token)
+        with self.db.connection() as conn:
+            link0 = _EMAIL_LINKS.get(conn, th)
+        if link0 is None or link0.expires < time.time() or link0.email != self.owner_email:
+            self._count_ip_failure(ip, "email_link_locked")
+            self.audit("email_link_redeem_failed", reason="unknown or expired link", **({"ip": ip} if ip else {}))
+            raise PermissionError(EMAIL_LINK_REFUSED)
+        email = link0.email
+        r = self._reserve(email, "email_link_locked", ip)          # counted before the check: a burst gets 5
+        tok: str | None = None
+        with self.db.write() as conn:
+            link = _EMAIL_LINKS.get(conn, th)
+            if link is not None and link.expires >= time.time():
+                conn.execute("DELETE FROM email_links WHERE email = ?", (email,))     # single use, and the others
+                cur = _USERS.get(conn, email)
+                if self.is_owner(cur) and cur is not None and self._spend_totp(conn, cur, code):
+                    tok = self._new_session(conn, email, ttl_h)
+                    self._release(conn, r)
+                    _audit(conn, "email_link_login", email=email, **({"ip": ip} if ip else {}))
+        if tok is None:
+            self.audit("email_link_redeem_failed", email=email, reason="wrong code, used link or not the owner",
+                       **({"ip": ip} if ip else {}))
+            raise PermissionError(EMAIL_LINK_REFUSED)
+        return tok
 
     # ------------------------------------------------------------------ admin (owner only)
     def _require(self, email: str, role: Role) -> User:
@@ -945,6 +1047,7 @@ def revoke_sessions_cli(argv: list[str]) -> int:
     return 0
 
 
-__all__ = ["AuthStore", "User", "Invite", "PasswordReset", "Enrolment", "RecoveryLogin", "import_users", "import_users_json",
+__all__ = ["AuthStore", "User", "Invite", "PasswordReset", "EmailLink", "EMAIL_LINK_PER_HOUR", "EMAIL_LINK_TTL_S",
+           "EMAIL_LINK_REFUSED", "Enrolment", "RecoveryLogin", "import_users", "import_users_json",
            "import_audit_jsonl", "owner_conflict", "owner_health_note", "check_password_policy", "has_role",
            "totp_code", "totp_step", "totp_verify", "new_totp_secret", "totp_uri", "ROLES", "GRANTABLE", "env_setup_code_hint", "os"]
