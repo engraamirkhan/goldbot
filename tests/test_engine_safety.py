@@ -2,16 +2,21 @@
 order ids, reconciliation of stops, weekend/rollover windows, the combined exposure cap, the supervisor's combined
 size-down, feature-version checks, stale data and the 12% re-arm conditions."""
 import json
+import logging
+import time
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from goldbot.base import schema_skew
 from goldbot.engine import Engine, EngineConfig
 from goldbot.execution.broker import OrderIntent, OrderResult, Tick
 from goldbot.execution.paper import PaperBroker
+from goldbot.ops.gates_phase import load_closed_trades
 from goldbot.specialists import SPECIALISTS
 from goldbot.telegram.approvals import ApprovalCenter, Proposal
+from goldbot.telegram.bus import ApprovalBus
 
 OWNER = 111
 T0 = pd.Timestamp("2025-03-05 10:00", tz="UTC")       # a Wednesday
@@ -74,6 +79,57 @@ def test_a_restart_after_an_unconfirmed_send_adopts_the_fill_from_the_broker(tmp
     assert again.open[pos.position_id].agent_id == agent.agent_id
     assert again._orders["icm-demo-2-a"].status == "filled"
     assert any(d.get("action") == "reconcile_adopt_sent" for d in again.decisions)
+
+
+def test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote(tmp_path):
+    """ADR 0010 (rollback = restart, X7): fields a newer engine added to a sent order, an open trade or a queued
+    closed-trade record are ignored. The ids, the open trade and the queued record survive, so the older engine
+    starts, manages the exit and never re-sends."""
+    eng, pb = _engine(tmp_path)
+    agent = SPECIALISTS["session_open"]()
+    eng._execute(_prop("icm-demo-1-a"), agent, 0.1, 2396.0, 2406.0, requested=2400.2)
+    [pos] = pb.positions()
+    path = tmp_path / "orders_icm-demo.json"
+    saved = json.loads(path.read_text())
+    new = {"future_field": {"from": "a newer release"}}
+    saved["sent"]["icm-demo-1-a"].update(new)
+    trade = {**saved["open"][str(pos.position_id)], **new}
+    saved["open"][str(pos.position_id)] = trade
+    saved["closing"] = [{"position_id": 999, "trade": trade, "reason": "stop", "at": T0.isoformat(), **new}]
+    path.write_text(json.dumps(saved))
+    again, _ = _engine(tmp_path, pb)
+    assert "icm-demo-1-a" in again.sent_ids and again._orders["icm-demo-1-a"].status == "filled"
+    assert again.open[pos.position_id].agent_id == agent.agent_id
+    assert again._closes == [] and 999 in {t.position_id for t in load_closed_trades(tmp_path)[0]}   # written on start
+    again._execute(_prop("icm-demo-1-a"), agent, 0.1, 2396.0, 2406.0, requested=2400.2)
+    assert len(pb.positions()) == 1                                    # never re-sent
+
+
+def test_a_restart_warns_about_an_orders_file_table_this_release_does_not_know(tmp_path, caplog):
+    """ADR 0010: a top-level table a newer release added to the orders file (it could hold client ids or broker
+    orders) is not read by this release, so the start says so instead of dropping it silently."""
+    eng, pb = _engine(tmp_path)
+    eng._execute(_prop("icm-demo-1-a"), SPECIALISTS["session_open"](), 0.1, 2396.0, 2406.0, requested=2400.2)
+    path = tmp_path / "orders_icm-demo.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "brackets": {"x": 1}}))
+    caplog.set_level(logging.WARNING, logger="goldbot.base")
+    again, _ = _engine(tmp_path, pb)
+    assert "icm-demo-1-a" in again.sent_ids
+    assert [r for r in caplog.records if "brackets" in r.getMessage()]
+    assert schema_skew()[("orders_<account>.json", "orders file", ("brackets",))] >= 1
+
+
+def test_a_restart_archives_an_expired_proposal_a_newer_release_wrote(tmp_path):
+    """ADR 0010: an expired proposal with a field this release does not know is still archived on start, so the
+    dashboard and Telegram stop listing it."""
+    bus = ApprovalBus(tmp_path)
+    old = _prop("icm-demo-9-a").model_copy(update={"created": time.time() - 600})
+    (bus.pending_dir / "icm-demo-9-a.json").write_text(json.dumps({**json.loads(old.model_dump_json()), "future": 1}))
+    pb = PaperBroker(equity=10_000)
+    pb.on_tick(_tick(T0))
+    Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), owner_user_id=OWNER),
+           pb, [], {}, ApprovalCenter({OWNER}, bus=bus))
+    assert not (bus.pending_dir / "icm-demo-9-a.json").exists() and (bus.done_dir / "icm-demo-9-a.json").exists()
 
 
 def test_a_restart_after_an_unfilled_send_marks_it_unfilled_and_keeps_the_id(tmp_path):

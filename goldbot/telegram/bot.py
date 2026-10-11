@@ -90,16 +90,18 @@ class TelegramBot:  # pragma: no cover - needs network + token
         n = 0
         while True:
             try:
+                # every outbox call reads or writes aux.db (busy_timeout up to 5 s): it runs in a worker thread, as
+                # the health pass does, so a busy database never delays the owner's Approve/Reject callbacks
                 if self.outbox is None:
-                    self.outbox = Outbox(self.state_dir, self.bus)
+                    self.outbox = await asyncio.to_thread(Outbox, self.state_dir, self.bus)
                 outbox = self.outbox
-                self.send_guard.retry(outbox, time.monotonic())
-                for p in outbox.unsent_proposals():
+                await asyncio.to_thread(self.send_guard.retry, outbox, time.monotonic())
+                for p in await asyncio.to_thread(outbox.unsent_proposals):
                     if not self.send_guard.should_send(p.proposal_id):
                         continue                    # went out already; its mark is being retried
                     msgs = await self.send_proposal(p)
-                    self.send_guard.record(outbox, p.proposal_id, msgs, time.monotonic())
-                for pid, outcome, msgs in outbox.finished():
+                    await asyncio.to_thread(self.send_guard.record, outbox, p.proposal_id, msgs, time.monotonic())
+                for pid, outcome, msgs in await asyncio.to_thread(outbox.finished):
                     for chat, mid in msgs:
                         try:
                             await self.app.bot.edit_message_reply_markup(chat, mid, reply_markup=None)
@@ -108,7 +110,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
                         except Exception as exc:
                             log.warning("could not update %s: %s", pid, exc)
                 if n % max(int(30 / self.poll_s), 1) == 0:          # reports every ~30 s
-                    texts, ack = outbox.pending_reports()
+                    texts, ack = await asyncio.to_thread(outbox.pending_reports)
                     delivered = True
                     for text in texts:
                         for uid in self.owner_ids:
@@ -119,7 +121,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
                                 log.warning("could not send a report to an owner: %s", exc)
                     # only after delivery: a failed batch is retried, at most REPORT_ATTEMPTS passes (ReportRetry)
                     if ack is not None and self.report_retry.should_ack(ack, delivered):
-                        outbox.ack_reports(ack)
+                        await asyncio.to_thread(outbox.ack_reports, ack)
             except Exception:
                 log.exception("telegram pump")
             if n % max(int(HEALTH_EVERY_S / self.poll_s), 1) == 0:

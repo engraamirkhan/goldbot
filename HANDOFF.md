@@ -458,7 +458,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   old ledger cached the file and the news and agents processes overwrote each other). Not done: news_spend.json
   (`data/news_collector.py` was out of scope), switching api/app.py to query aux.db.
   Trading-safety review fixes (same day): exports run after the commit and never raise (a locked file on Windows no
-  longer undoes a spend booking or stops a scheduler job); concurrent exporters converge through `exports.seq`.
+  longer undoes a spend booking or stops a scheduler job); exporters and the foreign-file check are serialised by aux.db's write lock (render, hash record and file write
+  in one transaction; 2026-10-11: the lock-free version took our own export for a foreign write under load).
   Rollback safety: telegram_outbox.json is rewritten in its old format for one release; a file another release
   wrote (hash differs from this code's last export) is merged back once (spend: larger per month; scheduler: newer
   slot; outbox: its sent list and offset; runs appended only to the file are adopted) and counted in
@@ -765,8 +766,34 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Not done: the playbook's "until the next session" variant, a cross-account count, a provisional loss for a record
   lost before a restart (only its id persists; health already fails on `closed_records_lost`), and the dashboard /
   approval card (ui-ux follow-up).
+- Entry windows from the calendar (2026-10-11, BACKLOG 17, 18, playbook G-2, G-3, row R36; **off by default**; needs
+  trading-safety review): `risk.blackout.tier2: {enabled: false, before_min: 5, after_min: 15}` refuses entries
+  `tier2_blackout` around tier-2 USD events in the live Forex Factory archive (the G-3 list is now tier 2 whatever the
+  feed's impact, `TIER2_PATTERNS`, so claims moved from tier 3 to 2; nothing in production read tier 2 before);
+  `risk.reopen: {enabled: false, after_daily_reopen_min: 10, after_monday_open_min: 30}` refuses `reopen_window` after
+  each reopen of the broker session table (weekly window after a 12 h+ closure); `risk.holidays: {enabled: false,
+  file: config/holidays_cme_metals.yaml}` refuses `holiday_thin` on listed server dates (version `cme-metals-v1`,
+  valid 2026-2028; a test re-derives it from the rules). An enabled tier-2 or holiday window without its calendar
+  refuses `calendar_unavailable` (no store, unreadable or empty archive window, missing or expired list); a session
+  table that raises counts as inside the reopen window. Edges inclusive. Disabled windows add nothing in the gate
+  (`RiskGate.window_reasons`) and the engine computes nothing for them. Exits never read these flags. New module
+  goldbot/risk/windows.py; the runner's `_entry_windows` sits beside `_blackout` and shares its calendar read
+  (`_calendar_events`). Owner: adopt (OWNER_GUIDE section 4). Not done: UK/JP/CN holidays and early closes, engine
+  state/dashboard display of the window flags (the decisions journal carries the reasons), the 2029 list.
+  Trading-safety review (merge after fixes, no HIGH) fixes in: engine_<account>.json `windows` (flags, holiday version
+  and valid_through, latest calendar event and fetch, `calendar_unavailable_since` and reason); health
+  `check_entry_windows` (`entry_windows:<account>:calendar` FAIL after 30 min unavailable with the market open,
+  `:calendar_age` WARN on a fetch over 36 h old, `:holiday_list` WARN within 90 days of its end; Telegram); one log
+  line per transition; CI fails a year before the holiday list ends. Tier-2 availability now needs the newest fetch
+  under 7 days old and the archive covering through now + 24 h (to the end of its latest event's Forex Factory week),
+  and a Sunday 18:00 UTC fetch (`calendar_archive_sunday`) archives the new week before the open. Holiday list v2:
+  "US federal holidays as a proxy (not measured)", Columbus and Veterans Day out, the day after Thanksgiving and
+  Easter Monday in, tested against a hand-reviewed set. Any error in the window computation sets
+  calendar_unavailable and the reopen flag; a bar close whose account read raises still manages open trades. ADR 0008
+  and econ_calendar.py document the two tier-2 definitions. New BACKLOG 45 (measure the listed days) and 46 (replay
+  the windows and a `research_pass` filter) come before adoption.
 - Open-risk heat cap and open-risk daily projection (2026-10-11, BACKLOG 19 playbook G-4 and BACKLOG 35 review
-  MEDIUM-4, row R36; **both off by default**; needs trading-safety review). The engine computes, on every account
+  MEDIUM-4, row R38; **both off by default**; needs trading-safety review). The engine computes, on every account
   refresh, each open position's remaining stop risk (max(0, loss from the current close price to its SL) x lots x
   contract x the broker's conversion, account currency; `goldbot/risk/open_risk.py`) and the positions per side, and
   publishes `open_risk` (null = unknown), `open_risk_positions`, `open_long`, `open_short`, `limits.heat` and
@@ -779,7 +806,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   true, ... }, project_open_risk: true }`, restart the engine. Not done: the cross-account sum and count (the
   supervisor does not publish open risk or side counts yet), health lines and the dashboard budget (ui-ux).
 - Auto entries at one bar close each see the previous fill (2026-10-11, trading-safety review HIGH on BACKLOG 19,
-  pre-existing; row R36). Before, in auto mode every entry decided at one bar close was checked against the account as
+  pre-existing; row R38). Before, in auto mode every entry decided at one bar close was checked against the account as
   read before the first one filled, so `max_positions`, the combined cap, the heat cap and the same-direction cap could
   each be passed within a bar close (propose mode was safe: the approval re-check reads afresh). Now
   `Engine._after_auto_order` re-reads the account after each auto order (`_refresh_account` on the broker's last
@@ -794,9 +821,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   counted through `note_tick_error` (entries blocked until a clean decision bar), the decision is journalled
   `auto_unconfirmed:<ExceptionType>`, and its pending_orders row stays `sending`, so it is never re-sent and a position
   that did open is picked up by reconciliation (adopted in this engine's magic range) or by the restart check.
-- Open-risk review LOWs (2026-10-11, row R36): LOW-1 a failure computing the open risk sets it unknown and never
+- Open-risk review LOWs (2026-10-11, row R38): LOW-1 a failure computing the open risk sets it unknown and never
   aborts the account refresh, and a failed account read at the bar close no longer skips `_manage_open` (exits still
-  run; that close's entries are refused `data_quality_error`); LOW-2 `AccountState.open_risk` defaults to unknown
+  run, then the error propagates and no entry is decided on that close: the base branch's review-L3 rule, kept at the
+  merge); LOW-2 `AccountState.open_risk` defaults to unknown
   (None) until the engine has read the positions; LOW-3 health `open_risk:<account>` warns and tells the owner on
   Telegram (`NOTIFY_ON_WARN`) while the open risk is unknown and the heat cap, or the projection with an absolute limit,
   is on; LOW-4 "per account vs combined same-side count" is an owner decision in OWNER_GUIDE section 4.
@@ -963,23 +991,25 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - Persisted state is read tolerantly, built strictly (2026-10-11, ADR 0010): a rollback used to skip closed trades,
   hide proposals or stop services when a newer release had added a field. `goldbot/base.py` `load_record` /
   `load_record_json` drop unknown keys at every level (WARNING once per source/model/fields, `schema_skew()`). A wrong
-  type, a missing field or bad JSON still fails, and construction stays `forbid`. Applied to gates_phase, bus (not
-  `Control`), automode, shadow, ruin, scheduler, model registry, population, director, costs, health, digest, outbox,
+  type, a missing field or bad JSON still fails, and construction stays `forbid`. Applied to gates_phase, bus proposals
+  (`Control` and `BusDecision` stay strict: an unknown field means halted / the decision is skipped and expires), automode, shadow, ruin, scheduler, model registry, population, director, costs, health, digest, outbox,
   crossfeed and jobs; `RecordRepo(..., tolerant=False)` is the default (auth stays strict).
   The pydantic floor is now 2.12. New rule AGENT_STANDARDS S12: every new persisted field has a default that is safe
-  when missing. Guard: `tests/test_persistence_compat.py` (a compat case per persisted model, plus an AST allowlist).
-  **Follow-ups, ranked:**
-  1. `goldbot/engine/runner.py` (left out because another lane is editing it): `_load_orders` (~:1752-1759):
-     `SentOrder.model_validate(v)`, `OpenTrade.model_validate(v)` and `PendingClose.model_validate(v)` become
-     `load_record(<Model>, v, source="orders_<account>.json")`. Until then, a rollback across a field added to these
-     models stops the older engine's start (no entries, and exits only by broker stop/target). Then
-     `_archive_stale_proposals` (~:394): `Proposal.model_validate_json(f.read_text())` becomes
-     `load_record_json(Proposal, f.read_text(), source="approvals/pending")`. Remove the four `TEMPORARY` entries in
-     `tests/test_persistence_compat.py` in the same change, which goes to the trading-safety reviewer.
-  2. `goldbot/execution/bridge.py` `_decode` (:126): records coming back from the MT5 box (Position, Tick,
-     BrokerTerms, TradingSession) can be read tolerantly, because the MT5 box is updated by hand and can run a
-     different version from the brain. `OrderIntent` (an order request) stays strict. On the MT5 box, pydantic is pinned only by
-     `mt5_bootstrap.sh` (`>=2.6`, deploys use `--no-deps`), so raise that pin with it (root-run script: security review).
+  when missing, and a new restriction is encoded so an older release fails closed (a new `Literal` value, never a new
+  boolean). Guard: `tests/test_persistence_compat.py`: a compat case per persisted model; an AST allowlist keyed by
+  file, function and receiver; strict models never read tolerantly (any `*load_record*` call or
+  `RecordRepo(tolerant=...)`); tolerant reads name their class; no left-to-right or discriminated unions in tolerant
+  models.
+  Engine follow-up done (2026-10-11): `runner.py` `_load_orders` (SentOrder/OpenTrade/PendingClose) and
+  `_archive_stale_proposals` read with `load_record*`, so a rollback no longer stops the older engine from starting.
+  `mt5_bootstrap.sh` pins `pydantic>=2.12`; an existing MT5 box is upgraded once by hand (RUNBOOK 0.5).
+  **Follow-up:** `goldbot/execution/bridge.py` `_decode` (:126): records coming back from the MT5 box (Position,
+  Tick, BrokerTerms, TradingSession) can be read tolerantly, because the MT5 box is updated by hand and can run a
+  different version from the brain. `OrderIntent` (an order request) stays strict. Needs the MT5 box on pydantic 2.12
+  (RUNBOOK 0.5: book flat or weekend, version check, `systemctl is-active`).
+  Review LOWs (2026-10-11): a refused decision is logged once per proposal and counted (`base.note_schema_skew`), and
+  an unknown top-level table in `orders_<account>.json` is logged and counted at engine start; S12 now requires a
+  reviewed rollback story for a new table that carries client ids or broker orders.
 - H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
   (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
   version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London
@@ -1351,6 +1381,31 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- Non-finite state fails closed (October safety batch, 2026-10-11, TRACEABILITY R37 and S7): `RiskGate.check`
+  refuses first with `invalid_state` plus `invalid:<field>` when any number it reads (equity, HWM, day/week
+  start, margin, spread, tick ages, exposure, stop/target/ATR/cost, multiplier, price, contract terms,
+  `acct_per_usd`) is NaN or infinite; None stays the explicit "unknown" (a USD account with a NaN conversion is
+  now refused, not taken as 1). `_tick_ok` drops a quote with a non-finite bid or ask as `non_finite_quote` (entries
+  blocked; the next valid tick runs the exits). `account_fx("", x)` is None. The supervisor treats a non-finite or
+  wrongly typed engine-file number as `engine_state_unreadable` (halt); `ops.run.supervisor_pass` publishes
+  `supervisor_error` instead of dying when `evaluate` raises. An engine file without `ts` now halts too (engines
+  always write it). Dev extras gain pytest-randomly: every run is in random order (seed in the header; reproduce
+  with `-p randomly --randomly-seed=<n>`, opt out with `-p no:randomly`).
+  Safety review fixes (same day): the gate's guard is `invalid_fields` (reason `invalid_state` / `invalid:<field>`,
+  after the flag reasons) and also requires price, ATR, stop, contract, volumes and equity > 0; an approval on a
+  quote that breaks the tick price rules is refused (`bad_quote:<check>`). A dropped quote or a raising
+  `last_tick` runs `Engine.no_quote_pass`: decided closes retried, a pending kill-switch flatten, host-clock time
+  barriers, and from the Friday cut every own position closed (`weekend_close_no_quote`: no price to tell losers
+  from winners). The state keeps being written with `quote_invalid_since`; health FAILs after 60 s of invalid
+  quotes in market hours, and FAILs (alerted) on `supervisor_error` and `engine_state_unreadable` halts. Repeated
+  bad quotes are one DQ event with a count; every health check is guarded; the seed is printed after each run
+  (tests/conftest.py).
+  Re-verification fixes: the priceless Friday flatten and time barrier never act on a single bad quote. The
+  flatten needs only a dead feed (invalid for `QUOTE_DEAD_S`, 60 s, = health's threshold), whatever happened
+  around the cut; a shorter gap leaves it to `_weekend_rule` on the next valid quote. The time
+  barrier needs a dead feed and counts `bars_held` plus open-market decision bars since `_closed_through`
+  (never wall time over a weekend). A refused close that is not market-closed is re-sent at most once a second
+  (`CLOSE_RETRY_MIN_S`). BACKLOG 44: confirm a zero-equity read before the kill switch (needs an ADR).
 - October batch rollout (SRE, 2026-10-11): `docs/deploy/2026-10-batch.md`.
   - The owner's ordered steps for the two Oracle VMs, to be done by Fri 23 Oct: pre-checks (restic plus a local
     copy, preflight, health baseline); engines stopped; MT5 box first, because the new brain needs the bridge's

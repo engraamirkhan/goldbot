@@ -276,7 +276,7 @@ def test_a_failing_open_risk_computation_never_aborts_the_account_refresh(tmp_pa
     assert _published(tmp_path)["open_risk"] is None
 
 
-def test_a_failed_account_read_at_the_bar_close_still_manages_open_positions_and_blocks_entries(tmp_path):
+def test_a_failed_account_read_at_the_bar_close_still_manages_open_positions_and_places_nothing(tmp_path):
     # LOW-1: a broker that cannot report the account at the bar close must not skip exits (time exits, policies)
     from goldbot.engine import Engine
     from tests.test_auto_same_close import _run, _two
@@ -300,14 +300,16 @@ def test_a_failed_account_read_at_the_bar_close_still_manages_open_positions_and
         managed.append(dec)
         real(self, dec)
 
+    pb = NoAccount(equity=10_000, adverse_slip_points=0.0)
     Engine._manage_open = spy                                  # type: ignore[method-assign]
     try:
-        eng, pb, dec = _run(tmp_path, _two(), RiskLimits(), pb=NoAccount(equity=10_000, adverse_slip_points=0.0))
+        # the base branch's review-L3 rule, kept at the merge: exits first, then the error propagates (tick_error
+        # through the run loop) and no entry is decided on this close
+        with pytest.raises(RuntimeError, match="account_info failed"):
+            _run(tmp_path, _two(), RiskLimits(), pb=pb)
     finally:
         Engine._manage_open = real                             # type: ignore[method-assign]
-    actions = [str(d["action"]) for d in dec if d.get("agent")]
     assert managed and not pb.positions()
-    assert actions and all(a.startswith("gate:") and "data_quality_error" in a for a in actions), actions
 
 
 def test_health_warns_and_alerts_when_the_open_risk_is_unknown_while_a_rule_is_on(tmp_path):

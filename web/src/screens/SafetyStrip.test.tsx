@@ -44,6 +44,14 @@ describe("SafetyStrip", () => {
     expect(screen.getByRole("status")).toHaveTextContent("New entries allowed");
   });
 
+  it("words the summary with the API's entry status, so it agrees with the Overview panel", () => {
+    const entry_status = { state: "waiting" as const, headline: "No new trades for now: Market closed", notes: [], exits: "x", as_of: null,
+      blocks: [{ code: "market_closed", text: "Market closed", fix: "Nothing to do.", kind: "wait" as const, scope: "account" as const,
+                 agent_id: null, at: null, at_label: null, runbook: null, runbook_url: null }] };
+    render(<SafetyStrip status={status()} accounts={[account({ entry_status })]} />);
+    expect(screen.getByRole("status")).toHaveTextContent("New entries blocked: Market closed");
+  });
+
   it("says when no engine is reporting", () => {
     render(<SafetyStrip status={status()} accounts={[]} />);
     expect(screen.getByRole("status")).toHaveTextContent("No engines reporting");
@@ -71,6 +79,21 @@ describe("SafetyStrip", () => {
     render(<SafetyStrip status={status()} accounts={[account()]} />);
     expect(chip("Loss budget")).toHaveTextContent("not reported");
     expect(chip("Loss budget")).toHaveClass("idle");
+  });
+
+  it("never says allowed from stale data: a warning with the report's time instead", () => {
+    const t0 = new Date(2026, 9, 14, 14, 2).getTime();      // local 14:02
+    const stale = "Safety state from 14:02, can't reach the server; check before approving";
+    const { rerender } = render(<SafetyStrip status={status()} accounts={[account()]} updatedAt={t0} now={t0 + 20_000} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(stale);
+    expect(screen.getByRole("alert")).toHaveClass("warn");
+    expect(screen.queryByText("New entries allowed")).toBeNull();
+    rerender(<SafetyStrip status={status()} accounts={[account()]} updatedAt={t0} now={t0 + 1_000} error />);
+    expect(screen.getByRole("alert")).toHaveTextContent(stale);
+    expect(screen.queryByText("New entries allowed")).toBeNull();
+    rerender(<SafetyStrip status={status()} accounts={[account()]} updatedAt={t0} now={t0 + 1_000} />);
+    expect(screen.getByRole("status")).toHaveTextContent("New entries allowed");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("shows loading and error states", () => {

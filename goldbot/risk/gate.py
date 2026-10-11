@@ -15,7 +15,15 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import Record
-from goldbot.config import HeatSettings, RiskSettings, ThrottleSettings, tf_seconds
+from goldbot.config import (
+    HeatSettings,
+    HolidaySettings,
+    ReopenSettings,
+    RiskSettings,
+    ThrottleSettings,
+    Tier2Blackout,
+    tf_seconds,
+)
 from goldbot.data.timeutil import floor_tf, risk_day
 from goldbot.risk import sizing
 from goldbot.risk.throttle import AgentThrottle
@@ -71,6 +79,11 @@ class RiskLimits(Record):
     heat: HeatSettings = Field(default_factory=HeatSettings)
     # BACKLOG 35: the absolute daily projection also counts open positions' remaining stop risk; off by default
     project_open_risk: bool = False
+    # BACKLOG 17/18 (playbook G-2, G-3): entry windows around tier-2 events, after reopens and on thin-liquidity days;
+    # off by default (the owner adopts them). The engine raises the AccountState flags; check() refuses only when on
+    tier2: Tier2Blackout = Field(default_factory=Tier2Blackout)
+    reopen: ReopenSettings = Field(default_factory=ReopenSettings)
+    holidays: HolidaySettings = Field(default_factory=HolidaySettings)
 
     @classmethod
     def from_settings(cls, risk: RiskSettings, *, tiny_live: bool) -> RiskLimits:
@@ -84,7 +97,8 @@ class RiskLimits(Record):
                    max_spread_points=risk.max_spread_points, stale_tick_seconds=risk.stale_tick_seconds,
                    min_target_over_cost=risk.min_target_over_cost,
                    min_lot_risk_cap=None if tiny_live else risk.min_lot_risk_cap, throttle=risk.throttle,
-                   heat=risk.heat, project_open_risk=risk.project_open_risk)
+                   heat=risk.heat, project_open_risk=risk.project_open_risk,
+                   tier2=risk.blackout.tier2, reopen=risk.reopen, holidays=risk.holidays)
 
 
 class AccountState(Record):
@@ -117,6 +131,11 @@ class AccountState(Record):
     clock_mismatch: bool = False      # the server-clock probe measured a > 5 min offset (goldbot/ops/server_clock.py)
     market_closed: bool = False       # the broker session table (D13) says the market is closed now
     tick_error: bool = False          # a tick raised in the engine; cleared after TICK_ERROR_CLEAR_TICKS clean ticks
+    # BACKLOG 17/18 entry windows (goldbot/risk/windows.py), raised by the engine only for windows that are enabled
+    tier2_blackout: bool = False      # inside -before/+after of a tier-2 USD event (risk.blackout.tier2)
+    reopen_window: bool = False       # just after the daily reopen or the weekly open (risk.reopen)
+    holiday_thin: bool = False        # a thin-liquidity server date of the holiday list (risk.holidays)
+    calendar_unavailable: bool = False  # an enabled calendar window has no calendar to judge by (fail closed)
     bridge_incompatible: bool = False  # the MT5 bridge lacks a method, protocol or zone this brain needs (BACKLOG 42)
     # BACKLOG 19/35: what this account's open positions can still lose down to their stops, account currency
     # (goldbot/risk/open_risk.py); None = unknown (not read yet, a position without SL, or no usable conversion; review
@@ -161,6 +180,29 @@ class GateDecision(Record):
     margin_needed: float = 0.0     # account currency: the margin the level check used, max(broker figure, 1:20 figure)
     risk_amount: float = 0.0       # account currency lost at the stop by the allowed lots
     margin_note: str = ""          # which figure won, or why the broker's could not be used (fallback to 1:20)
+
+
+# every number the entry check and the sizing read (October safety batch, HIGH; trading-safety review MEDIUM-3): a limit
+# written `if x > limit: refuse` lets NaN through, because every comparison with NaN is False, and a zero or negative
+# price, ATR, stop, contract or volume makes the sizing meaningless. `acct_per_usd` may be None ("unknown": the
+# explicit fx_conversion_unavailable refusal); `open_positions` is an int and cannot be NaN
+_STATE_NUMBERS = ("equity", "balance_closed_hwm", "day_start_equity", "week_start_equity", "margin_used",
+                  "last_tick_age_s", "spread_points", "open_lots", "open_notional", "other_lots", "other_notional",
+                  "other_equity", "tick_ahead_s")
+_INTENT_NUMBERS = ("p", "target_atr", "stop_atr", "atr_usd", "cost_atr", "multiplier", "price", "contract_oz",
+                   "volume_step", "volume_min", "volume_max", "stops_level_points", "acct_per_usd")
+_POSITIVE_STATE = ("equity",)
+_POSITIVE_INTENT = ("price", "atr_usd", "stop_atr", "contract_oz", "volume_step", "volume_min", "volume_max")
+
+
+def invalid_fields(intent: Intent, st: AccountState) -> list[str]:
+    """The state and intent fields the gate reads that are NaN or infinite, or not > 0 where only a positive number
+    means anything (`_POSITIVE_*`). None is left to the explicit handling."""
+    def bad(obj: Any, f: str, positive: tuple[str, ...]) -> bool:
+        v = getattr(obj, f)
+        return v is not None and (not math.isfinite(v) or (f in positive and not v > 0))
+    return [f for f in _STATE_NUMBERS if bad(st, f, _POSITIVE_STATE)] + \
+        [f for f in _INTENT_NUMBERS if bad(intent, f, _POSITIVE_INTENT)]
 
 
 def _family_has_target(intent: Intent) -> bool:
@@ -281,6 +323,24 @@ class RiskGate:
             out.append("open_risk_unknown")
         return out
 
+    def window_reasons(self, st: AccountState) -> list[str]:
+        """BACKLOG 17 (playbook G-2: "no entries on those days. No entries for 15 min after each daily reopen and 30
+        min after the weekly open ... Exits are untouched") and BACKLOG 18 (G-3: "a -5/+15 min entry blackout from
+        config"): `tier2_blackout`, `reopen_window`, `holiday_thin`, and `calendar_unavailable` when an enabled
+        calendar window (tier 2, holidays) has no calendar to judge by. A window that is off adds nothing whatever the
+        flags say, so with all three off every decision is what it was before they existed."""
+        L = self.limits
+        out = []
+        if L.tier2.enabled and st.tier2_blackout:
+            out.append("tier2_blackout")
+        if L.reopen.enabled and st.reopen_window:
+            out.append("reopen_window")
+        if L.holidays.enabled and st.holiday_thin:
+            out.append("holiday_thin")
+        if (L.tier2.enabled or L.holidays.enabled) and st.calendar_unavailable:
+            out.append("calendar_unavailable")
+        return out
+
     def margin_for(self, intent: Intent, lots: float, notional: float,
                    margin_required: MarginFn | None) -> tuple[float, str]:
         """Design (Hard limits): margin is "checked with order_calc_margin and against the FCA retail cap of 1:20".
@@ -310,10 +370,17 @@ class RiskGate:
               margin_required: MarginFn | None = None, throttle: AgentThrottle | None = None) -> GateDecision:
         """`margin_required(side, lots, price)` is the broker's margin figure (`broker_margin(broker, symbol)`);
         without it the margin check uses the 1:20 figure alone and says so in `margin_note`. `throttle` is the
-        intent's agent's throttle facts (BACKLOG 21), judged at `now_utc` (`throttle_reasons`)."""
+        intent's agent's throttle facts (BACKLOG 21), judged at `now_utc` (`throttle_reasons`).
+
+        A number outside its domain (NaN, infinite, or not > 0 where it must be: `invalid_fields`) refuses the entry
+        (`invalid_state`, then `invalid:<field>` for each) after the flag reasons and before any limit or the sizing
+        reads it; the stage machine does not run on it (a zero equity read is not a 100% drawdown). The gate fails
+        closed, never open, on state it cannot compare. Entries only; exits never call the gate."""
+        bad = invalid_fields(intent, st)
         L = self.limits
         reasons: list[str] = []
-        self.update_stage(st)
+        if not bad:
+            self.update_stage(st)
         if st.supervisor_halt:
             reasons.append("supervisor_halt")
         if st.owner_halt:
@@ -324,6 +391,7 @@ class RiskGate:
             reasons.append("data_quality_error")
         if st.in_blackout:
             reasons.append("news_blackout")
+        reasons += self.window_reasons(st)
         if st.in_rollover:
             reasons.append("rollover")
         if st.weekend:
@@ -349,6 +417,9 @@ class RiskGate:
         if st.open_positions >= L.max_positions:
             reasons.append("max_positions")
         reasons += self.throttle_reasons(throttle, now_utc)
+        if bad:
+            log.warning("entry refused: invalid state %s", bad)
+            return GateDecision(allowed=False, reasons=[*reasons, "invalid_state", *(f"invalid:{f}" for f in bad)])
         day_loss = 1 - st.equity / st.day_start_equity if st.day_start_equity else 0.0
         week_loss = 1 - st.equity / st.week_start_equity if st.week_start_equity else 0.0
         if day_loss >= L.daily_cap:

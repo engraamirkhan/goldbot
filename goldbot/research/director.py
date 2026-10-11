@@ -294,7 +294,7 @@ class ResearchPlan(FrozenRecord):
     @classmethod
     def load(cls, path: str | Path) -> ResearchPlan | None:
         p = Path(path)
-        return load_record(cls, json.loads(p.read_text()), source="research_plan") if p.exists() else None
+        return load_record(ResearchPlan, json.loads(p.read_text()), source="research_plan") if p.exists() else None
 
 
 # ---------------------------------------------------------------------------------------------- budget and holdout

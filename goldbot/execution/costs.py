@@ -75,7 +75,7 @@ class BrokerTerms(FrozenRecord):
     @classmethod
     def load(cls, path: str | Path) -> "BrokerTerms | None":
         p = Path(path)
-        return load_record(cls, json.loads(p.read_text()), source="broker_terms") if p.exists() else None
+        return load_record(BrokerTerms, json.loads(p.read_text()), source="broker_terms") if p.exists() else None
 
 
 class CostTable(FrozenRecord):
@@ -146,7 +146,7 @@ class CostTable(FrozenRecord):
         p = Path(path)
         if not p.exists():
             return None
-        return load_record(cls, json.loads(p.read_text()), source="cost_table")
+        return load_record(CostTable, json.loads(p.read_text()), source="cost_table")
 
 
 def spread_table(ticks: pd.DataFrame, sessions: SessionTable = DEFAULT_SESSIONS) -> dict[str, SpreadStat]:
