@@ -146,6 +146,21 @@ way (13 → 9).
   calendar: 13.5 years from about 2012-04 × ~250; minus stale-GVZ days and data gaps).
 - **Feature version:** `f-93fbe9386d` (default + macro drivers + `day_type` v1), with `day_type`'s inputs recorded
   on the row (GVZ and calendar both present).
+- **Code (E-4, built 2026-10-11):** `goldbot/research/h16.py`, run as `research_pass.py --h16 --first-oos-month
+  YYYY-MM --macro macro/ --us-calendar calendar/` (refused with `--discover`, `--cpcv`, `--score-holdout`, `--pooled`,
+  `--day-type`, `--positioning`, `--us-calendar-features`, `--variants`, a `--from-year` after 2010, or without GVZ or
+  the calendar). The 1m bars, the macro rows and the calendar rows are cut at `research.holdout_from` before anything
+  is resampled or built. Each full-score input is taken as known at 06:30 UTC on D (`DECISION_UTC`). Both models are
+  fitted by `fit_har(regressors=...)` with the same monthly refits and purge. D's forecast uses the latest fit at or
+  before the previous stub-free day's close, as `har_forecast` does, so the baseline is the published
+  `opp_har_range_hat`. `--first-oos-month` must equal the frozen month written here. When the rule on the data gives
+  another month the run is refused before any forecast is read, and nothing is recorded. The pre-registration row
+  uses `h16.h16_config()` (family `h16_opportunity_score`; same config hash as the result row). The run records one
+  trial (status `evaluated`) holding both rho, the gain, the quintile means and ratio, n, the first OOS month, the
+  dropped-day counts (GVZ-stale, no HAR forecast, no full forecast), the feature version and the verdict
+  (continue/fail). Reported only: the 20-day block-bootstrap interval (1,000 resamples, seed 0) and the drop-one
+  contributions. The rule's boundaries are inclusive, with a 1e-12 tolerance for float representation only. Not
+  built: the London+60 / NY+60 refreshes (diagnostics).
 
 ### H-17 Trend-day continuation with a runner (V0 and V1: two trials)
 
@@ -294,7 +309,7 @@ way (13 → 9).
 | Data (new) | **E-1** historical tier-1 schedule 2010-01 .. 2025-09 (scheduled times from BLS, BEA and Fed calendars; no outcomes), loadable as research `ctx["events"]`. The live archive is forward-only and research passes no events today | H-16, H-17, H-14, H-18 |
 | Engineering (new) | **E-2** 15m two-sided discovery candidate spec with the cost gate | H-14 |
 | Engineering (new) | **E-3** `trend_day` and `event_continuation` screening specialists | H-17, H-18 |
-| Engineering (new) | **E-4** an evaluation path for H-16 that records one registry trial and prints the reading rule | H-16 |
+| Engineering (new) | **E-4** an evaluation path for H-16 that records one registry trial and prints the reading rule. **Built 2026-10-11** (`goldbot/research/h16.py`, `research_pass.py --h16 --first-oos-month YYYY-MM`; quant review pending) | H-16 |
 | Engineering (new) | **E-5** protect in-quarter allocations (survivors, Q1 follow-ups) from automated spending of the unreserved remainder | budget integrity |
 
 ## Not in Q2, and why
@@ -315,7 +330,7 @@ way (13 → 9).
 - [ ] Q1 2027 verdicts recorded (or the follow-up reserve kept as written)
 - [x] Quant rulings Q-1, Q-2, Q-3 recorded here (2026-10-10)
 - [ ] Owner ruling O-1 recorded, or H-18 withdrawn
-- [ ] BACKLOG 30a, 31, E-1, E-2, E-3, E-4 merged and tested; E-5 decided
+- [ ] BACKLOG 30a, 31, E-1, E-2, E-3, E-4 merged and tested; E-5 decided (E-4 built 2026-10-11, quant review pending)
 - [ ] Event counts owed above recorded (events only, no labels or outcomes); H-17 withdrawn if < 1,000
 - [ ] `costs-v1` published (or the priors accepted and stated); `macro-v1` present for H-16
 - [ ] `research.reserved_trials_quarter` for Q2 set to the number of queued rows

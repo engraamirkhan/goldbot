@@ -924,8 +924,22 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     - The gap anchors on the first bar at or after the 18:00 New York reopen.
     - The noise ratio's session starts on the bar containing the open.
     - `daily_bars` refuses bars out of time order.
-  - Still owed: E-4 (H-16's evaluation path, which cuts the bars at holdout_from before features), and the
-    first-out-of-sample month counted from data before the freeze (about 2012-04; the rule is in the Q2 draft).
+  - Still owed: the first out-of-sample month counted from data before the freeze (about 2012-04; the rule is in
+    the Q2 draft). E-4 is built (next bullet).
+- H-16 evaluation path, E-4 (2026-10-11, needs quant review). `goldbot/research/h16.py` plus `research_pass.py --h16
+  --first-oos-month YYYY-MM --macro DIR --us-calendar DIR` runs H-16's pre-registered test once and records ONE trial
+  (family `h16_opportunity_score`, status `evaluated`, feature version `f-93fbe9386d`). The run is linked to its queued
+  pre-registration, or else to an unused ad-hoc one; the pre-registration config is `h16.h16_config()`.
+  - The 1m bars, the macro rows and the calendar rows are cut at `research.holdout_from` before anything is resampled.
+    Every full-score input is as known at 06:30 UTC on D.
+  - HAR (4 coefficients) and full (11 coefficients) both go through `fit_har(regressors=...)` on the monthly refits
+    with the 1-day purge. GVZ-stale days are dropped from both models and counted.
+  - Reading rule as pre-registered: rho gain >= 0.05 AND top/bottom quintile mean W/A >= 1.5, inclusive.
+  - A wrong `--first-oos-month` is refused before any forecast is read; the message gives the rule's month and
+    nothing is recorded. A budget refusal also writes nothing.
+  - Reported only: the 20-day block-bootstrap interval and the drop-one contributions. Not built: the London+60 /
+    NY+60 refreshes.
+  - Nothing was run on real data and no real registry was written. Use the frozen month once it is counted.
 - Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
   (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
   before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each
