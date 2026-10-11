@@ -71,6 +71,7 @@ def test_every_call_needs_the_token_and_only_broker_methods_are_served(bridge):
     assert r.status_code == 403
     # no server_tz on the paper broker, no commit given: only the protocol (BACKLOG 42), no account data
     assert requests.get(f"{url}/health", timeout=5).json() == {"ok": True, "api_version": bridge_mod.API_VERSION,
+                                                               "min_compatible": bridge_mod.MIN_COMPATIBLE,
                                                                "methods": sorted(bridge_mod.METHODS)}
     with pytest.raises(ValueError):
         make_handler(pb, "short")                                # weak tokens refused

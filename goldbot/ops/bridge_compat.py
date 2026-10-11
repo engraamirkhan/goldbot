@@ -7,11 +7,14 @@ reports on its unauthenticated GET /health (goldbot/execution/bridge.py) its `se
 `methods` it serves and the `commit` it runs; this module reads that and judges it:
 
 * `incompatible` (entries refused with the gate reason `bridge_incompatible`, health FAIL, preflight blocker): a method
-  the brain calls is missing, the protocol version is older than the brain's, the zone differs, or the bridge does
-  not report these at all (a bridge older than this check, or something else answering on the port).
-* `unreachable`: /health did not answer (network, tunnel, 5xx). Not a block by itself: without the bridge there are no
-  ticks, so the stale-data rule already blocks entries; the engine keeps its last verdict (`next_verdict`), health
-  reports it (`bridge:<account>` fails).
+  the brain calls is missing, the protocol versions do not meet each other's `min_compatible`, the zone differs or is
+  not a zone name, or the bridge does not report these at all (a bridge older than this check, junk on the port, a
+  /health body over 64 KiB).
+* `unchecked` (also refuses entries as `bridge_incompatible`): the engine has not confirmed the bridge yet (it starts
+  in this state), has only ever seen /health unreachable, or its last confirmation is over 5 minutes old.
+* `unreachable`: /health did not answer (network, tunnel, 5xx, the total read deadline). After an earlier reachable
+  `ok` it is not a block by itself (no ticks either: the stale-data rule blocks entries) until the `ok` ages out;
+  after an `incompatible` that verdict is kept (`next_verdict`); health reports it (`bridge:<account>` fails).
 * `ok`; a different commit on the two boxes is reported (health warning) but never blocks: doc-only commits differ.
 
 Exits never read any of this: the verdict is one RiskGate input for entries only. The engine checks at start and every
@@ -20,24 +23,30 @@ Nothing here carries the bridge URL into a reason (it names the tunnel endpoint)
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+import pandas as pd
 import requests
 from pydantic import Field
 
-from goldbot.base import FrozenRecord
+from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.config import ROOT
-from goldbot.execution.bridge import API_VERSION, METHODS
+from goldbot.execution.bridge import API_VERSION, METHODS, MIN_COMPATIBLE
 
 log = logging.getLogger("goldbot.bridge_compat")
 
-CompatStatus = Literal["ok", "incompatible", "unreachable"]
-CHECK_TIMEOUT_S = 5.0                    # /health answers without touching the terminal
+CompatStatus = Literal["ok", "incompatible", "unreachable", "unchecked"]
+CHECK_TIMEOUT_S = 5.0                    # /health answers without touching the terminal; also the total read deadline
+MAX_HEALTH_BYTES = 64 * 1024             # the bridge's report is ~400 bytes; anything larger is not it
+MAX_VERDICT_AGE_S = 300.0                # an ok older than this counts as unchecked (checks run every 60 s)
 REQUIRED_METHODS = frozenset(METHODS)    # every method this brain's RemoteBroker calls
+_TZ = re.compile(r"^[A-Za-z0-9_+\-/]{1,64}$")             # a zone name (Europe/Athens, NY+7); anything else is refused
 _SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")     # sha-1 or sha-256 object names
 
 
@@ -79,42 +88,66 @@ def repo_commit(root: Path = ROOT) -> str | None:
             sha = head
     except (OSError, ValueError):
         return None
-    return sha if sha is not None and _SHA.match(sha) else None
+    return sha if sha is not None and _SHA.fullmatch(sha) else None
 
 
 class BridgeInfo(FrozenRecord):
-    """What the bridge's GET /health said. `reachable` False: no answer at all; `problem` set: it answered, but not
-    with a bridge's report (older bridge without /health, junk)."""
+    """What the bridge's GET /health said. `reachable` False: no answer in time; `problem` set: it answered, but not
+    with a bridge's report (older bridge without /health, junk, a body over MAX_HEALTH_BYTES)."""
 
     reachable: bool
     problem: str | None = None
     server_tz: str | None = None
+    server_tz_invalid: bool = False      # reported, but not a zone name (never echoed)
     api_version: int | None = None
+    min_compatible: int | None = None
     methods: list[str] | None = None
     commit: str | None = None
 
 
+def _int(v: Any) -> int | None:
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
 def read_bridge_info(url: str, timeout_s: float = CHECK_TIMEOUT_S, get: Callable[..., Any] = requests.get) -> BridgeInfo:
-    """GET <url>/health (no token, nothing reaches the terminal)."""
+    """GET <url>/health (no token, nothing reaches the terminal), streamed: at most MAX_HEALTH_BYTES are read and the
+    whole read ends at a monotonic deadline of `timeout_s` (a per-read timeout alone lets a slow drip run forever)."""
+    deadline = time.monotonic() + timeout_s
     try:
-        r = get(f"{url.rstrip('/')}/health", timeout=timeout_s)
+        r = get(f"{url.rstrip('/')}/health", timeout=timeout_s, stream=True)
     except requests.RequestException as exc:
         return BridgeInfo(reachable=False, problem=f"/health unreachable ({type(exc).__name__})")
-    if r.status_code >= 500:
-        return BridgeInfo(reachable=False, problem=f"/health answered HTTP {r.status_code}")
-    if r.status_code != 200:
-        return BridgeInfo(reachable=True, problem=f"/health answered HTTP {r.status_code} (a bridge without /health)")
     try:
-        body = r.json()
+        if r.status_code >= 500:
+            return BridgeInfo(reachable=False, problem=f"/health answered HTTP {r.status_code}")
+        if r.status_code != 200:
+            return BridgeInfo(reachable=True, problem=f"/health answered HTTP {r.status_code} (a bridge without /health)")
+        buf = bytearray()
+        for chunk in r.iter_content(4096):
+            buf += chunk
+            if len(buf) > MAX_HEALTH_BYTES:
+                return BridgeInfo(reachable=True, problem="/health answered over 64 KiB: not the bridge's report")
+            if time.monotonic() > deadline:
+                return BridgeInfo(reachable=False, problem=f"/health not read within the {timeout_s:g} s deadline")
+    except requests.RequestException as exc:
+        return BridgeInfo(reachable=False, problem=f"/health unreadable ({type(exc).__name__})")
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
+    try:
+        body = json.loads(bytes(buf))
     except ValueError:
         body = None
     if not isinstance(body, dict) or body.get("ok") is not True:
         return BridgeInfo(reachable=True, problem="/health answered, but not with the bridge's report")
-    tz, ver, methods, commit = body.get("server_tz"), body.get("api_version"), body.get("methods"), body.get("commit")
-    return BridgeInfo(reachable=True, server_tz=tz if isinstance(tz, str) else None,
-                      api_version=ver if isinstance(ver, int) and not isinstance(ver, bool) else None,
+    tz, methods, commit = body.get("server_tz"), body.get("methods"), body.get("commit")
+    tz_ok = isinstance(tz, str) and _TZ.fullmatch(tz) is not None
+    return BridgeInfo(reachable=True, server_tz=tz if tz_ok else None, server_tz_invalid=tz is not None and not tz_ok,
+                      api_version=_int(body.get("api_version")), min_compatible=_int(body.get("min_compatible")),
                       methods=[m for m in methods if isinstance(m, str)] if isinstance(methods, list) else None,
-                      commit=commit if isinstance(commit, str) and _SHA.match(commit) else None)
+                      commit=commit if isinstance(commit, str) and _SHA.fullmatch(commit) else None)
 
 
 def _short(sha: str | None) -> str:
@@ -122,7 +155,9 @@ def _short(sha: str | None) -> str:
 
 
 class BridgeCompat(FrozenRecord):
-    """The verdict on one bridge. `blocks`: entries are refused (`bridge_incompatible`)."""
+    """The verdict on one bridge. `blocks`: entries are refused (`bridge_incompatible`). `checked_at`: when the bridge
+    last answered a check (None: never confirmed); a verdict older than MAX_VERDICT_AGE_S counts as unchecked
+    (`effective`)."""
 
     status: CompatStatus
     reason: str
@@ -131,33 +166,48 @@ class BridgeCompat(FrozenRecord):
     bridge_commit: str | None = None
     brain_commit: str | None = None
     commit_differs: bool = False
+    checked_at: UtcTimestamp | None = None
 
     @property
     def blocks(self) -> bool:
-        return self.status == "incompatible"
+        return self.status in ("incompatible", "unchecked")
 
 
-def assess(info: BridgeInfo, server_tz: str, brain_commit: str | None, *,
-           required: frozenset[str] = REQUIRED_METHODS, api_version: int = API_VERSION) -> BridgeCompat:
-    """The verdict for a /health report against this brain's methods, protocol version, zone and commit."""
+def unchecked(why: str, checked_at: pd.Timestamp | None = None) -> BridgeCompat:
+    """Not confirmed (engine starting, never reached, or the last confirmation too old): blocks entries."""
+    return BridgeCompat(status="unchecked", reason=f"bridge not confirmed: {why}", checked_at=checked_at)
+
+
+def assess(info: BridgeInfo, server_tz: str, brain_commit: str | None, *, now: pd.Timestamp | None = None,
+           required: frozenset[str] = REQUIRED_METHODS, api_version: int = API_VERSION,
+           min_compatible: int = MIN_COMPATIBLE) -> BridgeCompat:
+    """The verdict for a /health report against this brain's methods, protocol versions, zone and commit. `now` stamps
+    `checked_at` on a reachable answer (default: the host clock)."""
     if not info.reachable:
         return BridgeCompat(status="unreachable", reason=f"{info.problem or '/health unreachable'}: compatibility not "
                             "checked (no ticks either: the stale-data rule blocks entries)", brain_commit=brain_commit)
+    at = now if now is not None else pd.Timestamp.now("UTC")
     problems: list[str] = []
     missing: list[str] = []
     if info.problem is not None:
         problems.append(info.problem)
-    elif info.methods is None or info.api_version is None:
+    elif info.methods is None or info.api_version is None or info.min_compatible is None:
         problems.append("the bridge does not report its protocol (older than BACKLOG 42): deploy this commit to the "
                         "MT5 box")
     else:
         missing = sorted(required - set(info.methods))
         if missing:
             problems.append(f"the bridge lacks {', '.join(missing)}")
-        if info.api_version < api_version:
-            problems.append(f"bridge protocol v{info.api_version} is older than this brain's v{api_version}")
+        if info.api_version < min_compatible:
+            problems.append(f"bridge protocol v{info.api_version} is below this brain's min_compatible "
+                            f"v{min_compatible}")
+        if api_version < info.min_compatible:
+            problems.append(f"this brain's protocol v{api_version} is below the bridge's min_compatible "
+                            f"v{info.min_compatible}")
     if info.problem is None:
-        if info.server_tz is None:
+        if info.server_tz_invalid:
+            problems.append("the bridge reports an invalid server_tz")
+        elif info.server_tz is None:
             problems.append("the bridge does not report its server_tz")
         elif info.server_tz != server_tz:
             problems.append(f"the bridge converts with server_tz {info.server_tz}, this brain uses {server_tz}")
@@ -168,9 +218,9 @@ def assess(info: BridgeInfo, server_tz: str, brain_commit: str | None, *,
     if problems:
         return BridgeCompat(status="incompatible", missing=missing, bridge_api_version=info.api_version,
                             bridge_commit=info.commit, brain_commit=brain_commit, commit_differs=differs,
-                            reason="; ".join(problems) + commit_note)
+                            reason="; ".join(problems) + commit_note, checked_at=at)
     return BridgeCompat(status="ok", bridge_api_version=info.api_version, bridge_commit=info.commit,
-                        brain_commit=brain_commit, commit_differs=differs,
+                        brain_commit=brain_commit, commit_differs=differs, checked_at=at,
                         reason=f"bridge protocol v{info.api_version} serves every method this brain calls, both use "
                                f"server_tz {server_tz}{commit_note}")
 
@@ -181,11 +231,30 @@ def check_bridge(url: str, server_tz: str, brain_commit: str | None, timeout_s: 
 
 
 def next_verdict(prev: BridgeCompat | None, new: BridgeCompat) -> BridgeCompat:
-    """The verdict the engine applies: an unreachable /health keeps a previous `incompatible` (nothing shows the bridge
-    changed; a restarted bridge answers on the next check), otherwise the new one."""
-    if new.status == "unreachable" and prev is not None and prev.blocks:
+    """The verdict the engine applies. An unreachable /health never confirms a bridge: with no earlier reachable verdict
+    (none, or unchecked) it stays `unchecked` (blocking); after an `incompatible` that verdict is kept; after an `ok`
+    the unreachable verdict applies (no block by itself: stale data blocks) and keeps the ok's `checked_at`, so it
+    ages into `unchecked` after MAX_VERDICT_AGE_S (`effective`). Any reachable verdict replaces the previous one."""
+    if new.status != "unreachable":
+        return new
+    if prev is None or prev.status == "unchecked":
+        return unchecked(new.reason.split(":")[0], prev.checked_at if prev is not None else None)
+    if prev.blocks:
         return prev.model_copy(update={"reason": f"{prev.reason} (last verdict kept: {new.reason.split(':')[0]})"})
-    return new
+    return new.model_copy(update={"checked_at": prev.checked_at})
+
+
+def effective(v: BridgeCompat, now: pd.Timestamp, max_age_s: float = MAX_VERDICT_AGE_S) -> BridgeCompat:
+    """`v`, or `unchecked` when it does not block and the bridge was last confirmed over `max_age_s` ago (or never):
+    a hung check thread or a long silence must not leave an old `ok` in force."""
+    if v.blocks:
+        return v
+    if v.checked_at is None:
+        return unchecked("never confirmed")
+    age = (now - v.checked_at).total_seconds()
+    if age > max_age_s:
+        return unchecked(f"last confirmed {age / 60:.0f} min ago (over {max_age_s / 60:g} min)", v.checked_at)
+    return v
 
 
 class BridgeCompatChecker:

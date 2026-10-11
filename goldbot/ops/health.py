@@ -1163,16 +1163,43 @@ def check_bridge_compat(ctx: HealthContext, account: AccountRef) -> Check | None
     if v.blocks:
         return Check(name=name, status="fail", reason=f"{v.reason}: the engine refuses entries (bridge_incompatible), "
                      "exits unaffected; deploy the brain's commit to the MT5 box (RUNBOOK: bridge compatibility)")
+    try:
+        engine = _read_json(ctx.state_dir / f"engine_{account.account_id}.json").get("bridge_compat") or {}
+    except (ValueError, OSError, AttributeError):
+        engine = {}
+    if not isinstance(engine, dict):
+        engine = {}
     if v.status == "unreachable":
-        try:
-            engine = _read_json(ctx.state_dir / f"engine_{account.account_id}.json").get("bridge_compat") or {}
-        except (ValueError, OSError, AttributeError):
-            engine = {}
         if engine.get("status") == "incompatible":
             return Check(name=name, status="fail", reason=f"{v.reason}; the engine's last verdict still refuses "
                          f"entries: {str(engine.get('reason', ''))[:200]}")
         return Check(name=name, status="warn", reason=v.reason)
+    stale = _engine_bridge_unconfirmed(ctx, engine)
+    if stale is not None:                 # the bridge answers, but the engine's own check has not confirmed it
+        return Check(name=name, status="warn", reason=f"{v.reason}; {stale}")
     return Check(name=name, status="warn" if v.commit_differs else "ok", reason=v.reason)
+
+
+def _engine_bridge_unconfirmed(ctx: HealthContext, engine: dict[str, Any]) -> str | None:
+    """Why the engine's published bridge verdict leaves entries refused although this probe passed (`unchecked`, or an
+    ok whose `checked_at` is over 5 min old: its check thread may be stuck), or None. No verdict published: None."""
+    from goldbot.ops.bridge_compat import MAX_VERDICT_AGE_S
+    status = engine.get("status")
+    if status is None or status == "incompatible":
+        return None
+    if status == "unchecked":
+        return f"the engine has not confirmed the bridge ({str(engine.get('reason', ''))[:120]}): entries refused"
+    raw = engine.get("checked_at")
+    try:
+        at = pd.Timestamp(raw) if isinstance(raw, str) else None
+        age = float("inf") if at is None else \
+            (ctx.now - (at if at.tzinfo is not None else at.tz_localize("UTC"))).total_seconds()
+    except (TypeError, ValueError):
+        age = float("inf")
+    if age != age or age > MAX_VERDICT_AGE_S:        # NaT or too old
+        return (f"the engine has not confirmed the bridge for over {MAX_VERDICT_AGE_S / 60:g} min (its check may be "
+                "stuck): entries refused as unchecked")
+    return None
 
 
 def _engine_sessions(ctx: HealthContext, account_id: str) -> SessionTable:

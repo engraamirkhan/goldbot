@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 from goldbot.config import DEFAULT_SETTINGS
-from goldbot.execution.bridge import API_VERSION, METHODS
+from goldbot.execution.bridge import API_VERSION, METHODS, MIN_COMPATIBLE
 from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.ops import accounts
 from goldbot.ops import preflight as pf
@@ -194,6 +194,7 @@ def server(tmp_path, cfg):
                   tick_reader=lambda url, tok, sym: Tick(ts_utc=pd.Timestamp.now("UTC"), bid=2000.0, ask=2000.3),
                   bridge_tz=lambda url: "Europe/Athens",
                   bridge_info=lambda url: BridgeInfo(reachable=True, server_tz="Europe/Athens", api_version=API_VERSION,
+                                                     min_compatible=MIN_COMPATIBLE,
                                                      methods=sorted(METHODS), commit=COMMIT),
                   commit=COMMIT, load_accounts=registry, disk_usage=lambda p: (100e9, 50e9, 50e9),
                   meminfo=lambda: {"MemAvailable": 20_000_000, "MemTotal": 24_000_000})
@@ -272,6 +273,7 @@ def test_bridge_converting_with_another_server_tz_blocks_preflight(server):
 
 def test_an_incompatible_bridge_blocks_preflight_and_a_commit_mismatch_only_warns(server):
     older = BridgeInfo(reachable=True, server_tz="Europe/Athens", api_version=API_VERSION,
+                       min_compatible=MIN_COMPATIBLE,
                        methods=sorted(set(METHODS) - {"loss_per_lot"}), commit=COMMIT)
     ctx = server(bridge_info=lambda url: older)
     item = {i.name: i for i in pf.run_preflight(ctx)}["bridge_compat"]

@@ -555,16 +555,19 @@ hypotheses that go through the trial registry in a future quarter's budget.
     - Save `goldbot run health --out` before the switch and run `--baseline` after the 90 s wait.
     - Roll back on a new FAIL, except checks that need the market open while it is closed.
     - Log the failing check names.
-  - **42.** *(implemented 2026-10-11 except the deploy-offer line; awaiting trading-safety and security review)*
-    - Done: the bridge reports its commit, protocol `api_version` (pinned to the method table by a test) and served
+  - **42.** *(done 2026-10-11; trading-safety and security review fixes M1, M2, L1-L3 applied)*
+    - Done: the bridge reports its commit, protocol `api_version` and `min_compatible` (pinned with
+      `protocol_digest()`: method table, RemoteBroker and MT5Broker signatures, wire record fields) and served
       `methods` on `/health`, beside `server_tz` (goldbot/execution/bridge.py).
     - Done: the engine checks the bridge at start and every 60 s off the tick loop (goldbot/ops/bridge_compat.py,
       goldbot/ops/run.py) and refuses entries with `bridge_incompatible` (fail closed, exits never gated) on a
-      missing method (e.g. `loss_per_lot`), an older protocol, another `server_tz` or no report. Health fails
-      `bridge_compat:<account>` (one check for zone and protocol, instead of `bridge_server_tz:<account>`) and
-      alerts on Telegram; preflight `bridge_compat` blocks. A commit mismatch alone warns. An unreachable `/health`
-      does not block by itself (stale data does) and keeps the engine's last verdict.
-    - Open: the Telegram deploy offer says when the MT5 box runs an older commit than the one offered.
+      missing method (e.g. `loss_per_lot`), versions below each other's `min_compatible`, another or invalid
+      `server_tz` or no report. The engine starts `unchecked` (blocking); an unreachable `/health` never confirms a
+      bridge, and an ok over 5 min old counts as unchecked. `/health` reads are bounded (64 KiB, 5 s total). Health
+      fails `bridge_compat:<account>` (one check for zone and protocol, instead of `bridge_server_tz:<account>`) and
+      alerts on Telegram; preflight `bridge_compat` blocks. A commit mismatch alone warns.
+    - Done: the Telegram deploy offer says when the MT5 box runs an older commit than the one offered
+      (goldbot/ops/deploy.py `mt5_notes`).
     - Trading-safety review.
 
 ## Needs the owner
