@@ -335,11 +335,15 @@ def test_ruin_never_reports_infinity_even_for_a_wipe_out_trade():
     assert all(np.isfinite(v) for v in est.model_dump().values() if isinstance(v, float))
 
 
-def test_ruin_rows_cover_compounding_fixed_and_a_zero_edge_stress(result):
+def test_ruin_rows_cover_both_sizings_with_and_without_the_samples_edge(result):
     methods = [r.method for r in result.summary.ruin]
-    assert len(methods) == 3
-    assert "compounding" in methods[0] and "fixed stakes" in methods[1] and "zero edge" in methods[2]
+    assert len(methods) == 4
+    assert "compounding" in methods[0] and "zero edge" not in methods[0]
+    assert "fixed stakes" in methods[1] and "zero edge" not in methods[1]
+    assert "compounding" in methods[2] and "zero edge" in methods[2]
+    assert "fixed stakes" in methods[3] and "zero edge" in methods[3]
     assert all(0.0 <= r.p_ruin <= r.p_halved <= 1.0 for r in result.summary.ruin)
+    assert "(compounding / fixed / zero edge compounding / zero edge fixed)" in oh.console_summary(result)
 
 
 # ---------------------------------------------------------------- statistics added in review
@@ -381,7 +385,7 @@ def test_hypothesis_seeds_are_labelled_in_sample(result):
 def test_seeds_state_the_slices_examined_and_the_bonferroni_bar(result):
     md = oh.render_markdown(result)
     k = result.summary.slices_examined
-    assert k >= 10 and f"K = {k} slices examined" in md and "Bonferroni" in md
+    assert k >= 10 and f"K = {k} slices examined" in md and "Bonferroni" in md and "Student's t" in md
     assert result.summary.bonferroni_t > 2.5
     assert any("differ from the owner's other entries" in s.hypothesis for s in result.seeds)
 
@@ -486,3 +490,223 @@ def test_the_commit_hook_passes_this_repositorys_own_sources():
     files = [str(p) for p in (root / "goldbot").rglob("*.py")] + [str(p) for p in (root / "tests").rglob("*.py")]
     files += [str(root / "docs" / "OWNER_GUIDE.md"), str(root / "HANDOFF.md")]
     assert hook.offending(files) == []
+
+
+def test_the_commit_hook_passes_every_tracked_file_in_the_repository():
+    import subprocess
+    hook = _hook()
+    root = Path(oh.__file__).resolve().parents[2]
+    done = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=False)
+    if done.returncode != 0:
+        pytest.skip("not a git checkout")
+    files = [str(root / f) for f in done.stdout.decode().split("\0") if f and (root / f).is_file()]
+    assert len(files) > 100
+    assert hook.offending(files) == []
+
+
+STAMPS = [f"2026.0{m}.1{d} 1{d}:0{m}:00" for m in range(1, 4) for d in range(3)]   # 9 MT5 server stamps
+RU_HEADER = ["Время", "Позиция", "Символ", "Тип", "Объем", "Цена", "S / L", "T / P", "Время", "Цена", "Комиссия",
+             "Своп", "Прибыль"]
+
+
+def _translated_rows(section: str, header: list[str], width: int = 13) -> list[list[str]]:
+    """A section title, a header row and six position rows (two server stamps each), cut to `width` columns."""
+    rows: list[list[str]] = [[section], header]
+    for i, s in enumerate(STAMPS[:6]):
+        rows.append([s, str(TICKET0 + i), "XAUUSD", "buy", "0.01", "2 650.00", "", "", STAMPS[i + 1], "2 651.00",
+                     "0.00", "0.00", "0.80"][:width])
+    return rows
+
+
+def _plain_html(rows: list[list[str]]) -> bytes:
+    body = "".join("<tr>" + "".join(f"<td>{escape(c)}</td>" for c in r) + "</tr>" for r in rows)
+    return f"<html><body><table>{body}</table></body></html>".encode("utf-16")
+
+
+@pytest.mark.parametrize("section", ["Позиции", "Сделки", "Positionen", "Posiciones", "Transacciones"])
+def test_the_commit_hook_rejects_a_translated_html_report(tmp_path, section):
+    hook = _hook()
+    p = tmp_path / "history.html"
+    p.write_bytes(_plain_html(_translated_rows(section, RU_HEADER, width=6)))     # narrow rows: the title decides
+    assert hook.offending([str(p)]) == [str(p)]
+
+
+def test_the_commit_hook_rejects_a_wide_dated_table_whatever_its_language(tmp_path):
+    hook = _hook()
+    p = tmp_path / "history.htm"
+    p.write_bytes(_plain_html(_translated_rows("Ιστορικό", ["x"] * 13)))     # unknown title, MT5-shaped rows
+    assert hook.offending([str(p)]) == [str(p)]
+
+
+def test_the_commit_hook_rejects_a_translated_xlsx_report(tmp_path):
+    hook = _hook()
+    p = tmp_path / "history.xlsx"
+    report_xlsx(_translated_rows("Позиции", RU_HEADER), p)
+    assert hook.offending([str(p)]) == [str(p)]
+
+
+@pytest.mark.parametrize("label", ["Счет", "Счёт", "Konto", "Cuenta"])
+def test_the_commit_hook_rejects_a_translated_account_label_with_a_number(tmp_path, label):
+    hook = _hook()
+    p = tmp_path / "notes.txt"
+    p.write_text(f"{label}: " + "12345678 (EUR, X, demo)\n", encoding="utf-8")
+    assert hook.offending([str(p)]) == [str(p)]
+
+
+def test_the_commit_hook_parses_unclosed_cells_and_tags_in_linear_time(tmp_path):
+    import time as _time
+    hook = _hook()
+    cells = tmp_path / "cells.html"
+    cells.write_text("<table><tr>" + "<td>x" * 50_000, encoding="utf-8")
+    tag = tmp_path / "tag.txt"
+    tag.write_text("Account: <" + "a" * 50_000, encoding="utf-8")
+    t0 = _time.perf_counter()
+    assert hook.offending([str(cells), str(tag)]) == []
+    assert _time.perf_counter() - t0 < 1.0
+
+
+def test_the_commit_hook_drops_hidden_cells_before_the_shape_rule(tmp_path):
+    hook = _hook()
+    rows = _translated_rows("Ιστορικό", ["x"] * 13)
+    body = "".join("<tr>" + ('<td class="hidden">c</td><td style="display: none">d</td>' if i > 1 else "")
+                   + "".join(f"<td>{escape(c)}</td>" for c in r) + "</tr>" for i, r in enumerate(rows))
+    p = tmp_path / "hidden.html"
+    p.write_bytes(f"<table>{body}</table>".encode("utf-16"))
+    assert hook.offending([str(p)]) == [str(p)]
+
+
+@pytest.mark.parametrize("delim,name", [(",", "history.csv"), ("\t", "history.tsv"), (";", "export.txt")])
+def test_the_commit_hook_rejects_a_translated_delimited_export(tmp_path, delim, name):
+    hook = _hook()
+    p = tmp_path / name
+    p.write_text("\n".join(delim.join(r) for r in _translated_rows("Позиции", RU_HEADER)), encoding="utf-8")
+    assert hook.offending([str(p)]) == [str(p)]
+
+
+def test_the_commit_hook_scans_a_bounded_number_of_xlsx_members(tmp_path, monkeypatch):
+    hook = _hook()
+    p = tmp_path / "many.xlsx"
+    with zipfile.ZipFile(p, "w") as z:
+        for i in range(hook.MAX_ZIP_MEMBERS + 50):
+            z.writestr(f"xl/worksheets/sheet{i}.xml", "<worksheet/>")
+    opened: list[str] = []
+    real_open = zipfile.ZipFile.open
+
+    def counting_open(self, name, *a, **kw):
+        opened.append(getattr(name, "filename", name))
+        return real_open(self, name, *a, **kw)
+    monkeypatch.setattr(zipfile.ZipFile, "open", counting_open)
+    assert hook.offending([str(p)]) == []
+    assert len(opened) <= 2 * hook.MAX_ZIP_MEMBERS
+
+
+def test_the_commit_hook_reads_at_most_its_byte_budget_from_an_xlsx(tmp_path, monkeypatch):
+    hook = _hook()
+    p = tmp_path / "big.xlsx"
+    with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("xl/sharedStrings.xml", "<sst>" + " " * 5000 + "</sst>")
+        z.writestr("xl/worksheets/sheet1.xml", "<worksheet>" + " " * 5000 + "Account: " + "1234567</worksheet>")
+    assert hook.offending([str(p)]) == [str(p)]
+    monkeypatch.setattr(hook, "MAX_TOTAL_BYTES", 1000)
+    assert hook.offending([str(p)]) == []          # the account line lies past the budget: never read
+
+
+def test_the_commit_hook_ignores_a_table_with_too_few_stamps_or_no_report_shape(tmp_path):
+    hook = _hook()
+    few = tmp_path / "few.html"
+    few.write_bytes(_plain_html(_translated_rows("Позиции", RU_HEADER, width=6)[:6]))    # 4 stamped rows
+    narrow = tmp_path / "narrow.html"
+    narrow.write_bytes(_plain_html([["Changelog"]] + [[s, "release"] for s in STAMPS]))  # stamps, no MT5 shape
+    assert hook.offending([str(few), str(narrow)]) == []
+
+
+# ---------------------------------------------------------------- follow-up review (t bar, DST sessions, matching)
+
+def test_a_slices_bonferroni_bar_is_students_t_on_its_own_degrees_of_freedom():
+    import statistics
+    k = 30
+    normal = statistics.NormalDist().inv_cdf(1 - oh.FAMILY_ALPHA / (2 * k))
+    assert oh.slice_bar(12, k) > normal + 0.5                 # 11 degrees of freedom: a much higher bar
+    assert oh.slice_bar(10, k) > oh.slice_bar(40, k) > oh.slice_bar(400, k) > normal
+    assert oh.slice_bar(10**7, k) == pytest.approx(normal, abs=1e-3)
+
+
+def test_a_small_slice_between_the_normal_and_the_t_bar_is_reported_below_it():
+    import statistics
+    k = 30
+    normal = statistics.NormalDist().inv_cdf(1 - oh.FAMILY_ALPHA / (2 * k))
+    t_mid = (normal + oh.slice_bar(12, k)) / 2
+    g = oh.GroupStat(key="london", n=12, net=1.0, mean=0.1, win_rate=0.6, t_stat=t_mid, n_r=12, mean_r=0.3)
+    text = oh._slice(g, 40, k)
+    assert "below" in text and "clears" not in text and f"{oh.slice_bar(12, k):.2f}" in text
+    big = g.model_copy(update={"n": 5000, "t_stat": oh.slice_bar(5000, k) + 0.01})
+    assert "clears" in oh._slice(big, 6000, k)
+
+
+def _position(seq: int, open_utc: str, close_utc: str) -> oh.Position:
+    return oh.Position(seq=seq, symbol="XAUUSD", side="buy", lots=0.01, open_utc=pd.Timestamp(open_utc, tz="UTC"),
+                       close_utc=pd.Timestamp(close_utc, tz="UTC"), entry=2650.0, exit=2651.0, sl=2645.0,
+                       profit=0.8)
+
+
+def test_by_session_labels_follow_each_dates_dst_not_a_fixed_utc_table():
+    # 07:30 UTC is after the London open in July (08:00 BST = 07:00 UTC) but before it in December (08:00 GMT);
+    # 12:40 UTC is after the New York open in July (08:30 EDT = 12:30 UTC) but before it in December (13:30 UTC)
+    rep = oh.Report(currency="USD", source_format="test", positions=[
+        _position(1, "2026-07-01 07:30", "2026-07-01 07:50"), _position(2, "2026-12-01 07:30", "2026-12-01 07:50"),
+        _position(3, "2026-07-01 12:40", "2026-07-01 12:50"), _position(4, "2026-12-01 12:40", "2026-12-01 12:50")])
+    r = oh.analyse(rep, start_balance=50.0, n_paths=50)
+    assert {t.seq: t.session for t in r.trades} == {1: "london", 2: "asia", 3: "newyork", 4: "london"}
+    assert "By session (local exchange clocks, DST per date)" in oh.render_markdown(r)
+
+
+OPEN_A, OPEN_B = "2026.10.01 10:05:12", "2026.10.01 11:00:00"
+
+
+def _two_buys(position_opens: tuple[str, str], order_opens: tuple[str, str]) -> list[list[str]]:
+    """Two XAUUSD buys (final stops 2655 / 2656, above the entry) and two filled opening orders with stops 2640 /
+    2645 whose tickets do not match the positions', so only the (symbol, side, open time) fallback can pair them."""
+    rows: list[list[str]] = [["Positions"],
+                             ["Time", "Position", "Symbol", "Type", "Volume", "Price", "S / L", "T / P", "Time",
+                              "Price", "Commission", "Swap", "Profit"]]
+    for i, (ot, final_sl) in enumerate(zip(position_opens, ("2655.00", "2656.00"))):
+        rows.append([ot, str(TICKET0 + i), "XAUUSD", "buy", "0.01", "2 650.00", final_sl, "", "2026.10.01 12:00:00",
+                     "2 660.00", "0.00", "0.00", _num(_profit("buy", 0.01, 2650.0, 2660.0))])
+    rows += [[], ["Orders"], ["Open Time", "Order", "Symbol", "Type", "Volume", "Price", "S / L", "T / P", "Time",
+                              "State", "Comment"]]
+    for i, (ot, sl) in enumerate(zip(order_opens, ("2 640.00", "2 645.00"))):
+        rows.append([ot, str(i + 1), "XAUUSD", "buy", "0.01 / 0.01", "market", sl, "", ot, "filled", ""])
+    return rows
+
+
+def _report_with(position_opens: tuple[str, str], order_opens: tuple[str, str], tmp_path: Path) -> oh.Report:
+    p = tmp_path / "orders.html"
+    p.write_bytes(report_html(_two_buys(position_opens, order_opens)))
+    return oh.load_report(p)
+
+
+def _initial(rep: oh.Report) -> list[float | None]:
+    return [x.initial_sl for x in sorted(rep.positions, key=lambda x: x.sl or 0.0)]
+
+
+def test_an_open_time_shared_by_two_orders_falls_back_to_the_final_stop(tmp_path):
+    rep = _report_with((OPEN_A, OPEN_B), (OPEN_A, OPEN_A), tmp_path)
+    assert _initial(rep) == [None, None]
+    r = oh.analyse(rep, start_balance=50.0, n_paths=50)
+    assert {t.risk_source for t in r.trades} == {"sl_moved"}       # both final stops sit above the entry
+
+
+def test_an_open_time_shared_by_two_positions_is_not_paired_with_one_order(tmp_path):
+    assert _initial(_report_with((OPEN_A, OPEN_A), (OPEN_A, OPEN_B), tmp_path)) == [None, None]
+
+
+def test_a_unique_open_time_still_pairs_a_position_with_its_order(tmp_path):
+    assert _initial(_report_with((OPEN_A, OPEN_B), (OPEN_A, OPEN_B), tmp_path)) == [2640.0, 2645.0]
+
+
+def test_an_order_without_a_stop_still_makes_its_open_time_ambiguous():
+    cols = {c: i for i, c in enumerate(("time", "order", "symbol", "type", "sl", "state"))}
+    t = "2026.10.01 10:05:12"
+    _, by_open = oh._initial_stops(cols, [[t, "1", "XAUUSD", "buy", "2640", "filled"],
+                                          [t, "2", "XAUUSD", "buy", "", "filled"]])
+    assert by_open == {}

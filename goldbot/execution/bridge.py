@@ -29,6 +29,7 @@ keyring of each machine (`mt5-bridge-url-<account>`, `mt5-bridge-token-<account>
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import logging
@@ -73,6 +74,14 @@ METHODS: dict[str, tuple[str, bool]] = {
     "modify": ("OrderResult", False),
     "close": ("OrderResult", False),
 }
+# The wire protocol's version, reported on GET /health with the served METHODS (BACKLOG 42, gap G6): bump it whenever a
+# method is added, removed or changes its arguments, result or a wire record's fields. tests/test_bridge_compat.py pins
+# (API_VERSION, MIN_COMPATIBLE, protocol_digest()) so any such change without a bump fails CI. MIN_COMPATIBLE is the
+# oldest peer version this code still interoperates with, in both directions: the brain refuses entries when its
+# API_VERSION is below the bridge's MIN_COMPATIBLE, or the bridge's API_VERSION is below its own MIN_COMPATIBLE, or the
+# bridge lacks a method it calls (goldbot/ops/bridge_compat.py). Exits are never gated by it.
+API_VERSION = 2
+MIN_COMPATIBLE = 2
 _RECORDS: dict[str, type[BaseModel]] = {"SymbolInfo": SymbolInfo, "AccountInfo": AccountInfo, "Tick": Tick, "OrderResult": OrderResult,
             "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent, "TradingSession": TradingSession}
 MAX_BODY = 1_000_000
@@ -132,7 +141,9 @@ def _decode(v: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------------------------- server
-def make_handler(broker: Any, token: str) -> type[BaseHTTPRequestHandler]:
+def make_handler(broker: Any, token: str, *, commit: str | None = None) -> type[BaseHTTPRequestHandler]:
+    """`commit`: the commit this bridge process runs (read once at start), reported on /health so the brain can see
+    when the two boxes run different code. Nothing on /health is a secret: zone, commit (public repo), protocol."""
     if len(token) < 32:
         raise ValueError("bridge token must be at least 32 characters")
 
@@ -159,6 +170,11 @@ def make_handler(broker: Any, token: str) -> type[BaseHTTPRequestHandler]:
             tz = getattr(broker, "server_tz", None)      # the zone this box converts MT5 stamps with (not a secret)
             if isinstance(tz, str):
                 body["server_tz"] = tz
+            body["api_version"] = API_VERSION
+            body["min_compatible"] = MIN_COMPATIBLE
+            body["methods"] = sorted(METHODS)                # exactly what do_POST serves
+            if commit is not None:
+                body["commit"] = commit
             self._reply(200, body)
 
         def do_POST(self) -> None:
@@ -197,9 +213,10 @@ def make_handler(broker: Any, token: str) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def serve(broker: Any, host: str, port: int, token: str) -> None:  # pragma: no cover - blocking loop
+def serve(broker: Any, host: str, port: int, token: str,
+          commit: str | None = None) -> None:  # pragma: no cover - blocking loop
     """One request at a time (HTTPServer, not ThreadingHTTPServer): the MetaTrader5 package is not thread-safe."""
-    httpd = HTTPServer((host, port), make_handler(broker, token))
+    httpd = HTTPServer((host, port), make_handler(broker, token, commit=commit))
     log.info("bridge serving %s on %s:%d", type(broker).__name__, host, port)
     httpd.serve_forever()
 
@@ -247,6 +264,26 @@ class GuardedBroker:
         if name in METHODS and METHODS[name][1]:
             return getattr(self._b, name)
         raise AttributeError(name)
+
+
+def protocol_digest() -> str:
+    """sha-256 over what makes the wire protocol: METHODS (name, result, retry-safety), the signature of each method on
+    the brain's side (RemoteBroker) and on the terminal's side behind the bridge (MT5Broker, the dispatch target; with
+    GuardedBroker's own override where it has one), and the field names of every wire record. Pinned with API_VERSION
+    by tests/test_bridge_compat.py."""
+    import inspect
+
+    from goldbot.execution.mt5_adapter import (
+        MT5Broker,  # imports without the MetaTrader5 package (lazy inside)
+    )
+
+    def sig(cls: type, name: str) -> str:
+        fn = cls.__dict__.get(name) if cls is GuardedBroker else getattr(cls, name, None)
+        return str(inspect.signature(fn)) if fn is not None else "-"
+    parts = [[m, ret, retry, sig(RemoteBroker, m), sig(MT5Broker, m), sig(GuardedBroker, m)]
+             for m, (ret, retry) in sorted(METHODS.items())]
+    records = [[n, sorted(cls.model_fields)] for n, cls in sorted(_RECORDS.items())]
+    return hashlib.sha256(json.dumps([parts, records]).encode()).hexdigest()
 
 
 # ---------------------------------------------------------------------------------------------- client

@@ -96,9 +96,43 @@ class DeployWatch:
         if ci_status(new, self.fetch) != "yes":
             return None
         subjects = self.git("log", "--format=%s", f"{cur}..{new}").splitlines()
-        pending = {"sha": new, "from": cur, "subjects": subjects[:15], "n_commits": len(subjects)}
+        pending = {"sha": new, "from": cur, "subjects": subjects[:15], "n_commits": len(subjects),
+                   "mt5": self.mt5_notes(new)}
         _write(self.dir / "pending.json", pending)
         return pending
+
+    def mt5_notes(self, new: str) -> list[str]:
+        """One line per bridged engine whose MT5 box does not run `new` (G6, BACKLOG 42): the one-click deploy updates
+        only the brain. Read from the bridge verdict each engine publishes in engine_<account>.json; a commit is
+        handed to the VCS only after it matched the SHA pattern. Read-only; never raises."""
+        notes: list[str] = []
+        for f in sorted(self.log.parent.glob("engine_*.json")):
+            account = f.stem[len("engine_"):]
+            try:
+                compat = json.loads(f.read_text()).get("bridge_compat")
+            except (ValueError, OSError, AttributeError):
+                continue
+            if not isinstance(compat, dict):
+                continue                                  # no bridge (paper, local terminal) or not checked
+            commit = compat.get("bridge_commit")
+            if commit is None:
+                if compat.get("status") in ("incompatible", "ok"):
+                    notes.append(f"MT5 box ({account}) does not report its commit (older than BACKLOG 42): deploy "
+                                 f"the MT5 box first (`sudo goldbot-deploy {new[:8]}` there)")
+                continue
+            if not isinstance(commit, str) or not SHA.fullmatch(commit):     # never echoed, never handed to the VCS
+                notes.append(f"MT5 box ({account}) reports an unrecognised commit: check it before deploying")
+                continue
+            if commit == new:
+                continue
+            try:
+                self.git("merge-base", "--is-ancestor", commit, new)
+                notes.append(f"MT5 box ({account}) runs {commit[:8]}, older than this version: deploy the MT5 box "
+                             f"first if this release changes the bridge (`sudo goldbot-deploy {new[:8]}` there)")
+            except (subprocess.CalledProcessError, OSError):
+                notes.append(f"MT5 box ({account}) runs {commit[:8]}, not an ancestor of this version: check it "
+                             "before deploying")
+        return notes
 
     def approve(self, sha: str, by: int) -> bool:
         """The owner approved `sha` (must be the commit on offer). The root deploy script applies it."""

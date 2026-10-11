@@ -2,7 +2,7 @@
 # A PROXY, NOT MEASURED: these are days on which liquidity is expected to be thin (US federal holidays on which CME
 # metals close or trade short, Good Friday, Easter Monday, the day after Thanksgiving, 24/26/31 Dec, 1/2 Jan).
 # Columbus Day and Veterans Day are left out: CME metals trade normally on them. Whether the listed days really have
-# wider spreads and fewer ticks is measured before adoption (BACKLOG 43). Weekdays only (closed at weekends anyway).
+# wider spreads and fewer ticks is measured before adoption (BACKLOG 45). Weekdays only (closed at weekends anyway).
 # Each date is a broker SERVER date (Europe/Athens by default), whose midnight is 17:00 New York, the CME trading-day
 # roll, so a listed date blocks the CME trading day of that name (an hour late in the US/EU DST gap weeks).
 # Edited by hand and reviewed like code: tests/test_entry_windows.py holds the same hand-reviewed set and fails on any

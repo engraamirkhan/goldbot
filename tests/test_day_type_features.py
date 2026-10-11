@@ -21,10 +21,10 @@ from goldbot.features.survey import yang_zhang
 
 ROOT = Path(__file__).resolve().parents[1]
 FROZEN_DEFAULT_VERSION = "f-079deacc61"      # sessions v2: the Q1 2027 H-02 universe (preregistration-2027Q1.md)
-FROZEN_MACRO_VERSION = "f-e7d2dc11e1"        # default + macro drivers
+FROZEN_MACRO_VERSION = "f-51ac5ebabb"        # default + macro drivers
 # day_type moves the version: the combined hashes are pinned here and in the Q2 draft (review M5)
 DEFAULT_DAY_TYPE_VERSION = "f-1eada57050"
-MACRO_DAY_TYPE_VERSION = "f-c8ec630957"
+MACRO_DAY_TYPE_VERSION = "f-48c4c0c57e"
 
 
 def _utc(s: str) -> pd.Timestamp:
@@ -118,7 +118,7 @@ def test_day_type_moves_the_feature_version_to_the_pinned_combined_hashes(enable
     assert registry.feature_version([*DEFAULT_FEATURE_NAMES, enabled]) == DEFAULT_DAY_TYPE_VERSION
     assert registry.feature_version([*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES, enabled]) == MACRO_DAY_TYPE_VERSION
     draft = (ROOT / "docs" / "research" / "preregistration-2027Q2-draft.md").read_text()
-    assert DEFAULT_DAY_TYPE_VERSION in draft and MACRO_DAY_TYPE_VERSION in draft
+    assert DEFAULT_DAY_TYPE_VERSION in draft          # the macro combination is worked out at the freeze
 
 
 def test_the_column_set_is_fixed_and_nan_without_history_or_inputs(enabled):

@@ -151,3 +151,23 @@ def test_engine_keeps_one_position_or_proposal_per_agent(tmp_path):
     eng.pending["q1"] = (Intent(agent_id=spec.agent_id, side=1, p=0.6, target_atr=1.5, stop_atr=1.0, atr_usd=4.0,
                                 cost_atr=0.1, multiplier=1.0, price=2400.0), p, spec)
     assert eng._busy(spec.agent_id)
+
+
+def test_pending_lists_a_proposal_written_by_a_newer_release(tmp_path):
+    """ADR 0010: a newer engine's extra field must not hide a live proposal from the owner, or refuse the decision."""
+    bus = ApprovalBus(tmp_path)
+    p = _p("p-new")
+    row = {**json.loads(p.model_dump_json()), "future_field": {"x": 1}}
+    (bus.pending_dir / "p-new.json").write_text(json.dumps(row))
+    assert [q.proposal_id for q in bus.pending()] == ["p-new"]
+    assert bus.get("p-new") == p
+    assert bus.submit("p-new", approve=True, reason_code=None, by="dashboard:o").approve
+
+
+def test_a_control_file_with_an_unknown_field_fails_closed_to_halted(tmp_path):
+    """ADR 0010 strict allowlist: control.json is never read tolerantly. A field this release does not know could be
+    a halt condition it cannot honour, so the file counts as unreadable: halted, propose-and-approve."""
+    bus = ApprovalBus(tmp_path)
+    (tmp_path / "control.json").write_text(json.dumps({"halted": False, "future_halt_reason": "x"}))
+    c = bus.control()
+    assert c.halted is True and c.approval_mode == "propose"

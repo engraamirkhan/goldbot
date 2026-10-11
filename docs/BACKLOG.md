@@ -259,7 +259,8 @@ execution items need trading-safety review. Feature items need quant review.
   closed takes the weekly window) and `risk.holidays: {enabled: false}` from the versioned list
   `config/holidays_cme_metals.yaml` (US federal holidays as a proxy, not measured, less Columbus and Veterans Day;
   Good Friday, Easter Monday, the day after Thanksgiving, 24/26/31 Dec, 1/2 Jan; 2026-2028; by server date = CME
-  trading day; missing or expired = `calendar_unavailable`; measured before adoption, item 43; replay, item 44). Reasons `reopen_window`, `holiday_thin`.
+  trading day; missing or expired = `calendar_unavailable`; measured before adoption, item 45; replay, item 46).
+  Reasons `reopen_window`, `holiday_thin`.
   Not covered: UK, JP and CN holidays and early closes (the list is US/CME only; a broker-reported short session
   already blocks as `market_closed`). Owner: adopt and set the minutes (10 vs the playbook's 15). Needs
   trading-safety review.
@@ -569,20 +570,43 @@ hypotheses that go through the trial registry in a future quarter's budget.
     - Save `goldbot run health --out` before the switch and run `--baseline` after the 90 s wait.
     - Roll back on a new FAIL, except checks that need the market open while it is closed.
     - Log the failing check names.
-  - **42.**
-    - The bridge reports its commit on `/health`.
-    - The engine refuses entries (fail closed, exits never gated) and health fails `bridge_server_tz:<account>`
-      when the bridge's `server_tz` differs from its own.
-    - The Telegram deploy offer says when the MT5 box runs an older commit than the one offered.
+  - **42.** *(done 2026-10-11; trading-safety and security review fixes M1, M2, L1-L3 applied)*
+    - Done: the bridge reports its commit, protocol `api_version` and `min_compatible` (pinned with
+      `protocol_digest()`: method table, RemoteBroker and MT5Broker signatures, wire record fields) and served
+      `methods` on `/health`, beside `server_tz` (goldbot/execution/bridge.py).
+    - Done: the engine checks the bridge at start and every 60 s off the tick loop (goldbot/ops/bridge_compat.py,
+      goldbot/ops/run.py) and refuses entries with `bridge_incompatible` (fail closed, exits never gated) on a
+      missing method (e.g. `loss_per_lot`), versions below each other's `min_compatible`, another or invalid
+      `server_tz` or no report. The engine starts `unchecked` (blocking); an unreachable `/health` never confirms a
+      bridge, and an ok over 5 min old counts as unchecked. `/health` reads are bounded (64 KiB, 5 s total). Health
+      fails `bridge_compat:<account>` (one check for zone and protocol, instead of `bridge_server_tz:<account>`) and
+      alerts on Telegram; preflight `bridge_compat` blocks. A commit mismatch alone warns.
+    - Done: the Telegram deploy offer says when the MT5 box runs an older commit than the one offered
+      (goldbot/ops/deploy.py `mt5_notes`).
     - Trading-safety review.
-- **43. Measure the holiday list before it is adopted (performance analyst; review M3, 2026-10-11).** Value: the
+- **43. The engine publishes why it refuses entries (trading-safety review; from the entry-status review of 66ba8f9,
+  ADR 0011).** Value: the dashboard's entry status (docs/ux/entry-status.md) still mirrors in the API which published
+  flags block entries, and cannot see rollover, the Friday weekend cut or per-trade refusals; a closed market and a dead
+  engine are told apart only by the session table. Acceptance:
+  - `RiskGate.account_reasons(st, now)` returns the account-level reasons (everything in `check()` that does not
+    depend on the intent: halts, data, clock, market closed, rollover, weekend, spread, positions, caps, throttle per
+    agent); `check()` calls it, so the two cannot drift; test: for every flag, `check()` refuses with exactly the
+    reasons `account_reasons` lists plus the intent's own;
+  - the engine publishes `entry_blocks` (that list, codes only) in `engine_<account>.json` at every state write, and
+    the last per-trade refusal per agent (`fx_conversion_unavailable`, `min_lot_exceeds_risk`, `margin_level_floor`,
+    `combined_exposure_cap`, `daily_loss_limit_abs`) with its time;
+  - the engine writes its state on the host clock while the market is closed too (a heartbeat, at least every 60 s),
+    so silence always means a fault;
+  - the API then prefers `entry_blocks` (already merged when present) and the flag mapping and the `min_lot` fallback
+    in `goldbot/api/entry_status.py` go; exits are never gated by any of it.
+- **45. Measure the holiday list before it is adopted (performance analyst; review M3, 2026-10-11).** Value: the
   holiday window (item 17, `config/holidays_cme_metals.yaml`) is a proxy, not a measurement; blocking entries on a
   day that trades normally costs signals for nothing. Do: for every listed day in the stored ticks and bars, the
   median spread, tick count per hour and 15m ATR against matched normal days (same weekday, the two weeks either
   side, holidays excluded), by session. Report which listed days are thin and which are not, and any unlisted day
   that is (UK, JP, CN holidays, early closes). Acceptance: a table per day type with the ratio and its interval; the
   list is changed (new version, hand-reviewed set in the test) only on that evidence. Reporting only; quant review.
-- **44. Replay the entry windows before adopting any (performance analyst, strategy researcher; review M4).**
+- **46. Replay the entry windows before adopting any (performance analyst, strategy researcher; review M4).**
   Value: each window (items 17, 18) removes entries; whether the removed ones were worse than the kept ones is
   unknown. Do: over the shadow book and the backtest candidates, the fraction of entries each window (tier 2,
   reopen, holiday, alone and together) would have filtered, and R of the filtered vs kept trades, by family and

@@ -174,6 +174,22 @@ def test_record_repo_rejects_a_drifted_body(tmp_path):
         conn.close()
 
 
+def test_a_tolerant_record_repo_reads_a_newer_body_and_still_rejects_a_wrong_type(tmp_path):
+    """ADR 0010: persisted state (tolerant=True) drops a newer release's field; a wrong type still fails."""
+    tolerant = RecordRepo("things", _Thing, key="name", columns={"name": lambda t: t.name, "size": lambda t: t.size},
+                          tolerant=True)
+    conn = _things_db(tmp_path)
+    try:
+        conn.execute("INSERT INTO things VALUES ('x', 1, ?)", (json.dumps({"name": "x", "size": 1, "colour": "red"}),))
+        assert tolerant.get(conn, "x") == _Thing(name="x", size=1)
+        assert tolerant.select(conn) == [_Thing(name="x", size=1)]
+        conn.execute("INSERT INTO things VALUES ('y', 1, ?)", (json.dumps({"name": "y", "size": "big"}),))
+        with pytest.raises(ValidationError):
+            tolerant.get(conn, "y")
+    finally:
+        conn.close()
+
+
 def _thing_loader(path, conn):
     rows = [_Thing(**r) for r in json.loads(path.read_text())]
     conn.execute("CREATE TABLE IF NOT EXISTS things (name TEXT PRIMARY KEY, size INTEGER NOT NULL, "

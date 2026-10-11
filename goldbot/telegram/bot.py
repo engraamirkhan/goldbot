@@ -186,6 +186,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
                     more = f"\n… and {new['n_commits'] - len(new['subjects'])} more" if new["n_commits"] > len(new["subjects"]) else ""
                     text = (f"🚀 New version ready ({new['sha'][:8]}, CI passed):\n"
                             + "\n".join(f"• {s}" for s in new["subjects"]) + more
+                            + "".join(f"\n⚠️ {n}" for n in new.get("mt5", []))
                             + "\n\nDeploy restarts the services (open positions keep their stops; the engine reconciles).")
                     kb = InlineKeyboardMarkup([[InlineKeyboardButton("Deploy", callback_data=f"dep:{new['sha']}"),
                                                 InlineKeyboardButton("Skip", callback_data=f"skp:{new['sha']}")]])

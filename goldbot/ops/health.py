@@ -11,7 +11,9 @@ talks to the network, a broker or Telegram, so the whole module is unit-tested w
 
 Secrets are checked for PRESENCE only: the report names missing keys and never contains a value. The network
 probes, the MT5 bridge's /health through the tunnel and the broker's latest tick for the server-clock check
-(`goldbot/ops/server_clock.py`), are injected (`HealthContext.bridge_probe`, `tick_reader`); tests leave them unset.
+(`goldbot/ops/server_clock.py`) and the bridge's reported protocol, methods, zone and commit
+(`goldbot/ops/bridge_compat.py`), are injected (`HealthContext.bridge_probe`, `tick_reader`, `bridge_info`); tests
+leave them unset.
 
 Operational alerts (design S5, R11, X6) are checks too: a service heartbeat silent for 5 minutes fails, and a tripped
 daily or weekly loss cap and an order that failed after the retries warn with `NOTIFY_ON_WARN`, so the Telegram alert
@@ -38,7 +40,7 @@ from typing import Any, Callable, Literal, cast
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, Record, UtcTimestamp, write_atomic
+from goldbot.base import FrozenRecord, Record, UtcTimestamp, load_record_json, write_atomic
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
 from goldbot.data.crossfeed import check_reconciliation
@@ -118,6 +120,8 @@ class HealthContext(Record):
     sessions: SessionTable = DEFAULT_SESSIONS
     bridge_probe: Callable[[str], str | None] | None = None   # url -> None when /health answers, else why not
     tick_reader: Callable[[str, str], Any] | None = None      # (account_id, symbol) -> broker Tick (read-only); None: no bridge
+    bridge_info: Callable[[str], Any] | None = None           # url -> bridge_compat.BridgeInfo from /health; None: not probed
+    commit: str | None = None                                 # this checkout's commit, compared with the bridge's
     clock: Callable[[], pd.Timestamp] | None = None           # host UTC read after a network probe; None: use `now`
     last_run: UtcTimestamp | None = None                      # the previous health run (health_last.json), if any
 
@@ -138,11 +142,13 @@ class HealthContext(Record):
         except Exception as exc:
             a_err = f"{type(exc).__name__}: {exc}"
         from goldbot.execution.bridge import probe_health
+        from goldbot.ops.bridge_compat import read_bridge_info, repo_commit
         return cls(state_dir=Path(state_dir), now=now if now is not None else pd.Timestamp.now("UTC"),
                    settings=settings, settings_error=s_err, accounts=accs, accounts_error=a_err,
                    get_secret=accounts.get_secret, bridge_probe=lambda url: probe_health(url, BRIDGE_TIMEOUT_S),
                    clock=lambda: pd.Timestamp.now("UTC"), last_run=_last_run(Path(state_dir)),
-                   tick_reader=bridge_tick_reader)
+                   tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),
+                   commit=repo_commit())
 
 
 def bridge_tick_reader(account_id: str, symbol: str) -> Any:
@@ -379,7 +385,7 @@ TICK_ERROR_RECENT_S = 15 * 60   # a tick error this recent is reported even afte
 def _last_run(state_dir: Path) -> pd.Timestamp | None:
     """When the previous health report was recorded (state/health_last.json), or None."""
     try:
-        return WatchState.model_validate_json((state_dir / WATCH_FILE).read_text(encoding="utf-8")).ts
+        return load_record_json(WatchState, (state_dir / WATCH_FILE).read_text(encoding="utf-8"), source=WATCH_FILE).ts
     except (ValueError, OSError):
         return None
 
@@ -926,7 +932,7 @@ def check_alert_loop(ctx: HealthContext) -> Check:
     if not f.exists():
         return Check(name="alerts", status="warn", reason="health alerts never ran (Telegram service not started)")
     try:
-        ts = WatchState.model_validate_json(f.read_text(encoding="utf-8")).ts
+        ts = load_record_json(WatchState, f.read_text(encoding="utf-8"), source=WATCH_FILE).ts
     except (ValueError, OSError) as exc:
         return Check(name="alerts", status="warn", reason=f"health_last.json unreadable: {exc}")
     age = (ctx.now - ts).total_seconds() if ts is not None else float("inf")
@@ -1192,6 +1198,81 @@ def check_bridge(ctx: HealthContext, account_id: str) -> Check | None:
     return Check(name=name, status="ok", reason="bridge answers /health")
 
 
+def check_bridge_compat(ctx: HealthContext, account: AccountRef) -> Check | None:
+    """BACKLOG 42 (gap G6): the bridge's /health against this checkout (goldbot/ops/bridge_compat.py). FAIL when a
+    method this brain calls is missing, the protocol is older, the zone differs or the bridge does not report them: the
+    engine refuses entries (`bridge_incompatible`) until the MT5 box runs a compatible commit; exits are unaffected.
+    A different commit alone is a warning (doc-only commits differ). /health unreachable is a warning here
+    (`bridge:<account>` fails for it) unless the engine's last verdict still blocks. Omitted without a bridge URL or
+    an info reader."""
+    try:
+        url = ctx.get_secret(f"mt5-bridge-url-{account.account_id}")
+    except Exception:
+        url = None
+    if not url or ctx.bridge_info is None or account.server_tz is None:
+        return None
+    from goldbot.ops.bridge_compat import BridgeInfo, assess
+    name = f"bridge_compat:{account.account_id}"
+    try:
+        info = ctx.bridge_info(url)
+    except Exception as exc:              # the type only: a message can name the tunnel endpoint
+        info = BridgeInfo(reachable=False, problem=f"/health unreadable ({type(exc).__name__})")
+    v = assess(info, account.server_tz, ctx.commit)
+    if v.blocks:
+        return Check(name=name, status="fail", reason=f"{v.reason}: the engine refuses entries (bridge_incompatible), "
+                     "exits unaffected; deploy the brain's commit to the MT5 box (RUNBOOK: bridge compatibility)")
+    try:
+        engine = _read_json(ctx.state_dir / f"engine_{account.account_id}.json").get("bridge_compat") or {}
+    except (ValueError, OSError, AttributeError):
+        engine = {}
+    if not isinstance(engine, dict):
+        engine = {}
+    if v.status == "unreachable":
+        if engine.get("status") == "incompatible":
+            return Check(name=name, status="fail", reason=f"{v.reason}; the engine's last verdict still refuses "
+                         f"entries: {str(engine.get('reason', ''))[:200]}")
+        return Check(name=name, status="warn", reason=v.reason)
+    stale = _engine_bridge_unconfirmed(ctx, engine)
+    if stale is not None:                 # the bridge answers, but the engine's own check has not confirmed it
+        why, past_grace = stale
+        return Check(name=name, status="fail" if past_grace else "warn", reason=f"{v.reason}; {why}")
+    return Check(name=name, status="warn" if v.commit_differs else "ok", reason=v.reason)
+
+
+def _age_s(now: pd.Timestamp, raw: Any) -> float:
+    """Seconds since an ISO stamp from a state file; infinity when missing or unreadable (assume the worst)."""
+    try:
+        at = pd.Timestamp(raw) if isinstance(raw, str) else None
+        if at is None or pd.isna(at):
+            return float("inf")
+        return (now - (at if at.tzinfo is not None else at.tz_localize("UTC"))).total_seconds()
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def _engine_bridge_unconfirmed(ctx: HealthContext, engine: dict[str, Any]) -> tuple[str, bool] | None:
+    """Why the engine's published bridge verdict leaves entries refused although this probe passed, and whether it is
+    past the grace period (FAIL, alerted) rather than inside it (warn): `unchecked` for over UNCHECKED_GRACE_S, or an ok
+    whose `checked_at` is over MAX_VERDICT_AGE_S old (its check thread may be stuck). A missing stamp counts as past
+    grace. No verdict published, or an incompatible one (failed above when the probe agrees): None. Not done through
+    NOTIFY_ON_WARN: a commit mismatch on the same check must stay quiet."""
+    from goldbot.ops.bridge_compat import MAX_VERDICT_AGE_S, UNCHECKED_GRACE_S
+    status = engine.get("status")
+    if status is None or status == "incompatible":
+        return None
+    if status == "unchecked":
+        age = _age_s(ctx.now, engine.get("unchecked_since"))
+        span = "since an unknown time" if age == float("inf") else f"for {age / 60:.1f} min"
+        return (f"the engine has not confirmed the bridge {span} ({str(engine.get('reason', ''))[:120]}): entries "
+                "refused (bridge_incompatible); it retries every 60 s and replaces a hung check, restart the engine "
+                "if this persists", age > UNCHECKED_GRACE_S)
+    age = _age_s(ctx.now, engine.get("checked_at"))
+    if age > MAX_VERDICT_AGE_S:
+        return (f"the engine has not confirmed the bridge for over {MAX_VERDICT_AGE_S / 60:g} min (its check may be "
+                "stuck): entries refused as unchecked", True)
+    return None
+
+
 def _engine_sessions(ctx: HealthContext, account_id: str) -> SessionTable:
     """The broker session table the engine last wrote to engine_<account>.json (D13), else `ctx.sessions`."""
     try:
@@ -1247,6 +1328,8 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += check_entry_windows(ctx, a.account_id)
             bridge = check_bridge(ctx, a.account_id)
             checks += [bridge] if bridge is not None else []
+            compat = check_bridge_compat(ctx, a)
+            checks += [compat] if compat is not None else []
             clock = check_server_clock(ctx, a)
             checks += [clock] if clock is not None else []
         checks += [check_heartbeat(ctx, s) for s in HEARTBEAT_SERVICES]
@@ -1337,7 +1420,8 @@ class HealthWatch:
     def __init__(self, state_dir: str | Path):
         self.path = Path(state_dir) / WATCH_FILE
         try:
-            self.state = WatchState.model_validate_json(self.path.read_text(encoding="utf-8")) if self.path.exists() else WatchState()
+            self.state = (load_record_json(WatchState, self.path.read_text(encoding="utf-8"), source=WATCH_FILE)
+                          if self.path.exists() else WatchState())
         except (ValueError, OSError):
             self.state = WatchState()       # unreadable: start clean (current fails are announced once more)
 
@@ -1365,7 +1449,7 @@ def _load_report(path: str) -> HealthReport | None:
     if not p.exists():
         return None
     try:
-        return HealthReport.model_validate_json(p.read_text(encoding="utf-8"))
+        return load_record_json(HealthReport, p.read_text(encoding="utf-8"), source="health report")
     except ValueError:
         return None
 

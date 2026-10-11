@@ -525,3 +525,33 @@ def test_select_in_fold_ranks_groups_by_the_joint_permutation_measure():
     groups = {c: ("sig" if c == "info" else "pad") for c in POOL}
     sel = select_in_fold(feats, labels, folds[0], POOL, CFG.model_copy(update={"group_top_k": 1}), groups)
     assert sel.group_frequency["sig"] >= 0.9 and sel.group_frequency.get("pad", 0.0) <= 0.1
+
+
+def test_the_group_measure_rows_are_purged_by_label_exit_and_averaged_over_repeats():
+    """Quant re-review LOW: the rows the joint permutation is scored on are the fold's training rows outside the
+    subsample whose label interval [ts_utc, ts_exit] overlaps no subsample row's (fold-internal, by label exit, not
+    whole weeks), and the measure averages `permutation_repeats` shuffles."""
+    from goldbot.research.discovery import group_permutation_importance, purged_rest
+    t0 = pd.Timestamp("2024-01-01", tz="UTC")
+    ts = pd.DatetimeIndex([t0 + pd.Timedelta(days=d) for d in range(14)])
+    te = ts + pd.Timedelta(days=2)                              # every label lives two days
+    sub = np.zeros(14, dtype=bool)
+    sub[[6, 7]] = True                                          # subsample labels cover day 6 .. day 9
+    rest = purged_rest(ts, te, sub)
+    # rows 4/5 exit on days 6/7 (overlap), 8/9 enter on days 8/9 (overlap); 0-3 and 10-13 are clean
+    assert rest.tolist() == [0, 1, 2, 3, 10, 11, 12, 13]
+    week = np.asarray(ts.isocalendar().week, dtype=int)                  # the old +-1 week purge kept far fewer rows
+    near = np.isin(week, np.concatenate([week[sub] + d for d in (-1, 0, 1)]))
+    assert len(rest) > int((~near).sum())
+    assert purged_rest(ts, te, np.zeros(14, dtype=bool)).tolist() == list(range(14))
+    rng = np.random.default_rng(0)
+    a = rng.normal(size=600)
+    y = (rng.random(600) < 1 / (1 + np.exp(-2 * a))).astype(int)
+    Z = pd.DataFrame({"a": a, "b": rng.normal(size=600)})
+
+    def predict(X: pd.DataFrame) -> np.ndarray:
+        return 1 / (1 + np.exp(-2 * X["a"].to_numpy()))
+    g = np.random.default_rng(0)                                # three shuffles drawn in turn from one stream
+    one = [group_permutation_importance(predict, Z, y, [[0]], g)[0] for _ in range(3)]
+    three = group_permutation_importance(predict, Z, y, [[0]], np.random.default_rng(0), repeats=3)[0]
+    assert np.isclose(three, np.mean(one))

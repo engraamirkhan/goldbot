@@ -130,6 +130,7 @@ class AccountState(Record):
     reopen_window: bool = False       # just after the daily reopen or the weekly open (risk.reopen)
     holiday_thin: bool = False        # a thin-liquidity server date of the holiday list (risk.holidays)
     calendar_unavailable: bool = False  # an enabled calendar window has no calendar to judge by (fail closed)
+    bridge_incompatible: bool = False  # the MT5 bridge lacks a method, protocol or zone this brain needs (BACKLOG 42)
 
 
 class Intent(Record):
@@ -350,6 +351,8 @@ class RiskGate:
             reasons.append("market_closed")
         if st.tick_error:
             reasons.append("tick_error")
+        if st.bridge_incompatible:
+            reasons.append("bridge_incompatible")
         if st.data_recovering:
             reasons.append("data_recovering")
         if st.spread_points > L.max_spread_points:

@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from goldbot.base import Record, UtcTimestamp, write_atomic
+from goldbot.base import Record, UtcTimestamp, load_record_json, write_atomic
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.quality import DQEvent, check_bars, confirm_spikes, events_frame
 from goldbot.data.resample import BAR_COLUMNS, ticks_to_1m
@@ -207,7 +207,7 @@ def check_reconciliation(ctx: "HealthContext", account_id: str) -> "Check":
     if not f.exists():
         return Check(name=name, status="ok", reason="no reconciliation yet (feed_reconcile has not run)")
     try:
-        r = ReconcileReport.model_validate_json(f.read_text())
+        r = load_record_json(ReconcileReport, f.read_text(), source="reconcile_<account>.json")
     except (ValueError, OSError) as exc:
         return Check(name=name, status="warn", reason=f"reconcile file unreadable: {exc}")
     age_h = (ctx.now - r.ts_utc).total_seconds() / 3600

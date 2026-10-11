@@ -106,6 +106,10 @@ def last_reopen(sessions: SessionTable, now: pd.Timestamp, horizon: pd.Timedelta
     """(the instant r in [now - horizon, now] from which the market has been open through `now` after being closed
     just before r, whether it ended a long closure) or None: closed at `now`, or open throughout the horizon.
     Scanned on whole seconds (session boundaries are whole seconds): minute steps back, then bisection to the second."""
+    # Known edge (review L4): at a broker table's `covers_from`, `is_open` switches from the static rule to the broker's
+    # windows, so where the two disagree (e.g. the static break still running when the broker's session has already
+    # begun) the switch itself looks like a reopen and refuses entries for up to the reopen window. Rare (once per
+    # table refresh, only where the tables differ) and it only refuses entries, so it is accepted rather than special-cased.
     base = pd.Timestamp(now).floor("s")
     steps = int(horizon // pd.Timedelta(minutes=1)) + 1
     grid = [base - pd.Timedelta(minutes=k) for k in range(steps + 1)]
