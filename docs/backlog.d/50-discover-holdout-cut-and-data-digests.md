@@ -4,7 +4,7 @@ rank: 43
 title: --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners
 stage: Idea generation (integrity) · FIND
 size: M
-status: proposed (quant review F2 of BACKLOG 47, 2026-10-11; due before the 2026-12-11 freeze)
+status: implemented 2026-10-11 (TRACEABILITY M43; quant review pending)
 ---
 - **50. --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners (quant review
   F2 of BACKLOG 47, 2026-10-11).** Value: H-02's queued row hashes the exact first and last 1m bar the run loads

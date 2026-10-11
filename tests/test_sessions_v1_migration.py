@@ -153,7 +153,11 @@ def test_a_v2_challenger_trains_on_the_v2_features():
 
 # --------------------------------------------------------------------------- the pre-registration pins the version
 def _gates(passed: bool) -> dict[str, Any]:
-    return {"gates": {"passed": passed}}
+    return {"gates": {"passed": passed}, **_COSTS}
+
+
+# the cost treatment a research row records (registry.passed_gates counts only rows with it)
+_COSTS = {"swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0}, "cost_source": "PRIORS ONLY: test"}
 
 
 def test_a_result_on_another_feature_version_than_its_preregistration_records_the_deviation(tmp_path):
@@ -187,7 +191,7 @@ def test_a_discovery_survivor_needs_its_holdout_pass_on_the_same_feature_version
     reg.record(agent_id="a", family="trend", config=cfg, feature_version="f-v2v2v2v2v2", rationale="r",
                results=_gates(True))
     reg.record(agent_id="a", family="trend", config=cfg, feature_version="f-v1v1v1v1v1", rationale="r",
-               results={"holdout_verdict": {"passed": True}}, status="holdout")
+               results={"holdout_verdict": {"passed": True}, **_COSTS}, status="holdout")
     assert not reg.passed_gates("trend", cfg, feature_version="f-v2v2v2v2v2")
     assert reg.passed_gates("trend", cfg)                                         # any version (as before)
 

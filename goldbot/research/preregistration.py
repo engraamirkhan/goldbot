@@ -16,6 +16,8 @@ registry is left alone), refuses a row of the quarter it does not know, and refu
 started unless `allow_late` states a reason, in which case the rows are written as ad-hoc pre-registrations naming
 their rule (`queue=False`, `rule_ref`) that hold no reservation, and no slot is written (a slot exists only before its
 quarter). A pre-registration is not a trial (`registry.is_trial`): nothing here spends budget or writes an outcome.
+Every row's plan pins the data-v1 yearly files' sha256 digests of the research window (`plan_quarter(data_digests=)`),
+which the runners verify before any look (BACKLOG 50); a plan without them is not writable.
 """
 from __future__ import annotations
 
@@ -214,6 +216,7 @@ class QuarterPlan(FrozenRecord):
     budget: int
     rows: list[PlannedRow]
     slots: list[PlannedSlot]
+    data_digests: dict[str, str] | None = None         # data-v1 file -> sha256 of the research window (BACKLOG 50)
 
     @property
     def active_rows(self) -> list[PlannedRow]:
@@ -221,10 +224,14 @@ class QuarterPlan(FrozenRecord):
 
     @property
     def open_items(self) -> list[str]:
-        """What the spec still owes (a pending row, the freeze commit): no write of any kind until settled."""
+        """What the spec still owes (a pending row, the freeze commit, the data-v1 digests): no write of any kind until
+        settled."""
         out = [f"{r.id} pending: {r.pending}" for r in self.active_rows if r.pending]
         if self.freeze_commit is None:
             out.append("freeze_commit is empty (the pre-registration's freeze commit fills {commit})")
+        if not self.data_digests:
+            out.append("data_digests are empty: pass --bars (the data-v1 yearly files) so every queued row pins the "
+                       "research window's sha256 digests")
         return out
 
     @property
@@ -371,14 +378,21 @@ def _plan_row(row: SpecRow, qs: QuarterSpec, research: Any, rules: set[str]) -> 
                       withdrawn=row.withdrawn)
 
 
-def plan_quarter(qs: QuarterSpec, *, research: Any, doc_text: str, quarter: str) -> QuarterPlan:
+def plan_quarter(qs: QuarterSpec, *, research: Any, doc_text: str, quarter: str,
+                 data_digests: dict[str, str] | None = None) -> QuarterPlan:
     """Validate `qs` against the pre-registration (`doc_text`), the registry's rules and the quarter's budget, and
     return the rows and slots as they will be written. SpecError for anything the registry, the doc or the budget
-    would not accept. `research`: the settings' research section (trial budget, reservation, holdout)."""
+    would not accept. `research`: the settings' research section (trial budget, reservation, holdout).
+
+    `data_digests` (`release.bar_file_digests` of the data-v1 yearly files up to research.holdout_from's year): put in
+    every row's `plan` so the runners verify them before any look (BACKLOG 50: "Record data-v1 parquet sha256 digests
+    in the plan, and have runners verify them for every queued row"); without them the plan is not writable."""
     if qs.quarter != quarter:
         raise SpecError(f"the spec is for quarter {qs.quarter}, not {quarter}")
     doc, rules = _norm(doc_text), reading_rules(doc_text)
     rows = [_plan_row(r, qs, research, rules) for r in qs.rows]
+    if data_digests:
+        rows = [r.model_copy(update={"plan": {**r.plan, "data_digests": dict(data_digests)}}) for r in rows]
     by_id = {r.id: r for r in qs.rows}
     slots: list[PlannedSlot] = []
     for s in qs.slots:
@@ -406,7 +420,8 @@ def plan_quarter(qs: QuarterSpec, *, research: Any, doc_text: str, quarter: str)
         raise SpecError(f"{n} queued rows and slots exceed the {quarter} trial budget of {budget} "
                         f"(research.trial_budget_quarter, an owner decision)")
     return QuarterPlan(quarter=quarter, source=qs.source, freeze_commit=qs.freeze_commit, reservation=qs.reservation,
-                       setting=research.reserved_for(quarter), budget=budget, rows=rows, slots=slots)
+                       setting=research.reserved_for(quarter), budget=budget, rows=rows, slots=slots,
+                       data_digests=dict(data_digests) if data_digests else None)
 
 
 # ---------------------------------------------------------------------------------------------- writing
@@ -549,7 +564,11 @@ def render_plan(plan: QuarterPlan, rows: list[dict[str, Any]] | None = None) -> 
     rows = rows or []
     lines = [f"# {plan.quarter} pre-registered queue from {plan.source} (freeze commit {plan.freeze_commit or '-'})",
              f"reservation {plan.reservation} = {len(plan.active_rows)} queued rows + {len(plan.slots)} contingent slots;"
-             f" trial budget {plan.budget}; a pre-registration is not a trial (no budget spent, no outcome)", ""]
+             f" trial budget {plan.budget}; a pre-registration is not a trial (no budget spent, no outcome)"]
+    digests = plan.data_digests or {}
+    lines += [f"data-v1 digests: {len(digests)} files pinned in every row's plan (research window; runners verify "
+              f"them before any look)" if digests else "data-v1 digests: none (pass --bars)"]
+    lines += [f"- {name} sha256 {h}" for name, h in sorted(digests.items())] + [""]
     parents: dict[str, dict[str, Any] | None] = {}
     for p in plan.rows:
         found = None if p.config_hash is None else _existing_row(rows, p, plan.quarter)

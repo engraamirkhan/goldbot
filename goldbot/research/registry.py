@@ -17,7 +17,9 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P2):
 * the pre-registered queue's reservation (research.reserved_trials_quarter, director.reserved_trials): the manual paths
   (research_pass.py, discovery) check through `check_budget_reserved`, so only a run matching a pending queued
   `preregistered` row (family and config hash) may spend the reserved trials, and it is linked to that row; any other
-  run gets budget - used - reserved. A queued row counts in its `target_quarter` (default `planned_quarter`: the
+  run gets budget - used - reserved, except that a manual run whose family and agent have a pending queued row with
+  another config hash is refused rather than falling back (`QueuedConfigMismatch`, BACKLOG 50; the runners also
+  verify the data-v1 digests the row pins). A queued row counts in its `target_quarter` (default `planned_quarter`: the
   next quarter when written within PLAN_AHEAD_DAYS of its start), and a trial uses it up whichever quarter it runs in.
   A queued row must be written before its target quarter starts (`director.is_queued`);
   a pre-registration a run writes for itself just before it runs (`preregister`'s default `queue=False`, an ad-hoc
@@ -82,6 +84,11 @@ class TrialBudgetExceeded(ValueError):
 class PreregisteredForLaterQuarter(TrialBudgetExceeded):
     """The configuration is pre-registered (queued) for a quarter that has not started: running it now would spend this
     quarter's budget on a trial the plan put in a later one, and read it by a rule meant for later data."""
+
+
+class QueuedConfigMismatch(TrialBudgetExceeded):
+    """The quarter holds a pending queued row of the run's family and agent with another config hash: the run is
+    refused rather than charged to the open budget (BACKLOG 50; `director.queued_mismatch`)."""
 
 
 def config_hash(config: dict) -> str:
@@ -176,6 +183,14 @@ def quarter_trials(rows: list[dict[str, Any]], quarter: str) -> int:
         if quarter_of(ts) == quarter:
             n += 1
     return n
+
+
+def _costs_charged(results: dict[str, Any]) -> bool:
+    """The result records the research cost treatment: the swap it charged (`swap`, a SwapSpec dump) and a stated cost
+    source (`cost_source`, e.g. "PRIORS ONLY: ..." or the cost table it used); `passed_gates`."""
+    swap = results.get("swap")
+    source = results.get("cost_source")
+    return isinstance(swap, dict) and "long_usd_per_lot" in swap and isinstance(source, str) and bool(source.strip())
 
 
 class TrialRegistry:
@@ -492,7 +507,8 @@ class TrialRegistry:
         return q
 
     def check_budget_reserved(self, jobs: Sequence[tuple[str, dict[str, Any]]], cap: int, reserved_setting: int,
-                              now: datetime | None = None, *, retired: Collection[str] | None = None
+                              now: datetime | None = None, *, retired: Collection[str] | None = None,
+                              agents: Sequence[str | None] | None = None
                               ) -> tuple[str, list[dict[str, Any] | None]]:
         """`check_budget` for `jobs` ((family, config) each) that honours the pre-registered queue's reservation, as
         the analyst, the director and the label grid do (a job whose config is queued for a later quarter is refused,
@@ -508,20 +524,27 @@ class TrialRegistry:
         allowed configs); anything else raises TrialBudgetExceeded rather than falling back to the open budget
         (withdraw the pre-registration to run it from there). One row covers one run. A slot never covers a retired
         family (`retired`, default the settings' research.retired_families: fail closed when a caller forgets).
+        `agents` (one per job; the manual runners research_pass.py and `--discover` pass them): a job with no pending
+        queued row, no slot and no later row, whose family and agent (None: the family alone) have a pending queued row
+        of the quarter with another config hash, raises QueuedConfigMismatch instead of falling back to the open budget
+        (BACKLOG 50, `director.queued_mismatch`).
         Raises TrialBudgetExceeded; returns (the quarter, the matching pre-registration or None, per job)."""
         # director imports this module, so the import is local
         from goldbot.research.director import (
             later_preregistration,
             later_refusal,
             pending_preregistration,
+            queued_mismatch,
             reserved_trials,
             slot_preregistration,
             slot_refusal,
         )
+        if agents is not None and len(agents) != len(jobs):
+            raise ValueError(f"agents names one agent per job: {len(agents)} for {len(jobs)} jobs")
         q = quarter_of(now)
         rows = self._rows()
         preregs: list[dict[str, Any] | None] = []
-        for family, config in jobs:
+        for i, (family, config) in enumerate(jobs):
             h = config_hash(config)
             p = pending_preregistration(rows, q, family, h)
             if p is None and (s := slot_preregistration(rows, family, h)) is not None:
@@ -538,6 +561,8 @@ class TrialRegistry:
             later = None if p is not None else later_preregistration(rows, q, family, config_hash(config))
             if later is not None:
                 raise PreregisteredForLaterQuarter(later_refusal(family, later))
+            if p is None and agents is not None and (why := queued_mismatch(rows, q, family, agents[i], config, h)):
+                raise QueuedConfigMismatch(why)
             preregs.append(None if p is not None and any(p is c for c in preregs) else p)   # one row covers one run
         n_open = sum(p is None for p in preregs)
         reserved = reserved_trials(rows, q, reserved_setting).reserved
@@ -564,10 +589,17 @@ class TrialRegistry:
         configuration chosen from a feature-discovery trial (config key FROM_DISCOVERY_KEY) must ALSO have passed its
         holdout scoring: its features were picked on the same window the walk-forward scored, which the deflated
         Sharpe corrects only partly (quant review; preregistration-2027Q1.md). `feature_version`: only rows run on
-        that feature version count, for the gates and the holdout pass alike (None: any version)."""
+        that feature version count, for the gates and the holdout pass alike (None: any version).
+
+        Cost treatment (quant review, 2026-10-11): every research run charges swap and states where its costs came
+        from, so a row counts only when its results record the swap it charged (`results.swap`) and its cost source
+        (`results.cost_source`). A pass from before swap was charged is not a pass of the swap-charged configuration.
+        Swap is deliberately not part of `config_hash` (folding it in would move every pinned hash); the swap rates
+        themselves may differ between rows (a measured cost table refines the prior), the treatment may not."""
         h = config_hash(config)
         rows = [r for r in self._rows() if r.get("family") == family and r.get("config_hash") == h
-                and (feature_version is None or r.get("feature_version") == feature_version)]
+                and (feature_version is None or r.get("feature_version") == feature_version)
+                and _costs_charged(r.get("results") or {})]
         gates_ok = any(r.get("status") == "evaluated"
                        and ((r.get("results") or {}).get("gates") or {}).get("passed") is True for r in rows)
         if not gates_ok or not config.get(FROM_DISCOVERY_KEY):
