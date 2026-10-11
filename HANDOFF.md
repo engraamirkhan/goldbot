@@ -765,6 +765,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Not done: the playbook's "until the next session" variant, a cross-account count, a provisional loss for a record
   lost before a restart (only its id persists; health already fails on `closed_records_lost`), and the dashboard /
   approval card (ui-ux follow-up).
+- Entry windows from the calendar (2026-10-11, BACKLOG 17, 18, playbook G-2, G-3, row R36; **off by default**; needs
+  trading-safety review): `risk.blackout.tier2: {enabled: false, before_min: 5, after_min: 15}` refuses entries
+  `tier2_blackout` around tier-2 USD events in the live Forex Factory archive (the G-3 list is now tier 2 whatever the
+  feed's impact, `TIER2_PATTERNS`, so claims moved from tier 3 to 2; nothing in production read tier 2 before);
+  `risk.reopen: {enabled: false, after_daily_reopen_min: 10, after_monday_open_min: 30}` refuses `reopen_window` after
+  each reopen of the broker session table (weekly window after a 12 h+ closure); `risk.holidays: {enabled: false,
+  file: config/holidays_cme_metals.yaml}` refuses `holiday_thin` on listed server dates (version `cme-metals-v1`,
+  valid 2026-2028; a test re-derives it from the rules). An enabled tier-2 or holiday window without its calendar
+  refuses `calendar_unavailable` (no store, unreadable or empty archive window, missing or expired list); a session
+  table that raises counts as inside the reopen window. Edges inclusive. Disabled windows add nothing in the gate
+  (`RiskGate.window_reasons`) and the engine computes nothing for them. Exits never read these flags. New module
+  goldbot/risk/windows.py; the runner's `_entry_windows` sits beside `_blackout` and shares its calendar read
+  (`_calendar_events`). Owner: adopt (OWNER_GUIDE section 4). Not done: UK/JP/CN holidays and early closes, engine
+  state/dashboard display of the window flags (the decisions journal carries the reasons), the 2029 list.
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on

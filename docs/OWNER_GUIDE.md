@@ -71,6 +71,14 @@ Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decisio
 | Paid calendar feed (C) | Not for Q1 |
 | Other instruments (D) | Defer until the slow-TSMOM verdict |
 | Per-agent throttle thresholds (BACKLOG 21, built, off) | Turn on at 3 full losses / 4 bars cooldown / 3 entries a day. The caps are **per decision, per account** (each account counts its own; checked at every entry). After the cooldown the count stays: one more full loss blocks again, until a real shadow win (target or >= 0.25R) of the live model |
+| Tier-2 news blackout (BACKLOG 18, built, off) | No new entries from 5 min before to 15 min after a tier-2 US release (PPI, retail sales, ISM, GDP, JOLTS, jobless claims, FOMC minutes, Fed chair, any other high-impact USD item in the Forex Factory calendar). If the calendar is missing, entries stop (`calendar_unavailable`). Recommend: on before tiny-live |
+| Reopen window (BACKLOG 17, built, off) | No new entries for 10 min after each daily reopen and for 30 min after the Monday open (the playbook proposed 15 min daily). Read from the broker's session hours. Recommend: on before tiny-live |
+| Holiday days (BACKLOG 17, built, off) | No new entries on the days in `config/holidays_cme_metals.yaml` (US federal holidays, Good Friday, 24/26/31 Dec, 1/2 Jan; 2026-2028). If the list runs out, entries stop until it is extended. Recommend: on before tiny-live |
+
+How to turn these on: on the server, add them to `config/settings.local.yaml`, for example
+`risk: { blackout: { tier2: { enabled: true } }, reopen: { enabled: true }, holidays: { enabled: true } }`, then
+restart the engines. They only stop **new entries**; exits and stops always run. Refusals show in the decisions journal
+as `tier2_blackout`, `reopen_window`, `holiday_thin` or `calendar_unavailable`.
 
 ## 4a. Share your own trading record (private)
 The research team turns how you trade by hand into hypotheses it can test. Your MT5 report holds your account
