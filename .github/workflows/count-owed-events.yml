@@ -1,0 +1,50 @@
+name: count-owed-events
+# Counts the events the pre-registrations owe from real data BEFORE their freeze (docs/research/preregistration-2027Q1.md
+# H-04; docs/research/preregistration-2027Q2-draft.md H-16, H-17, H-18, H-14; H-01 recount), without any outcome: no
+# label, return or price after a decision bar is read (scripts/count_owed_events.py, tests/test_count_owed_events.py).
+# Runs on GitHub's runners because Claude sandboxes cannot download release assets. Reads the published releases
+# data-v1 (1m bars), macro-v1 (GVZ for H-16) and calendar-v1 (tier-1 schedule) when present; every input is cut at
+# research.holdout_from before anything is built. Writes nothing back: the table goes to the step summary and the
+# JSON to an artefact, to be pasted into the pre-registrations before the freeze.
+# Cost: about 10-20 runner-minutes per manual run (download ~ the data-v1 assets research.yml also fetches, resampling
+# 2010-2025 1m bars); no schedule, so nothing recurring. Artefact a few kB, kept 90 days.
+on:
+  workflow_dispatch:
+permissions: {}   # least privilege: the token has no scopes unless a job grants them
+concurrency:
+  group: count-owed-events
+  cancel-in-progress: false
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read   # read the release assets (public, read-only; nothing is uploaded to a release)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e .
+      - name: download data-v1, macro-v1 and calendar-v1 (files only, no store)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/fetch_data_release.py --download-only --macro --us-calendar
+          ls -la raw raw-macro raw-calendar 2>/dev/null || true
+      - name: count (no labels, returns or outcomes)
+        run: |
+          set -euo pipefail
+          python scripts/count_owed_events.py --bars raw --macro raw-macro --us-calendar raw-calendar \
+            --out-json owed_counts.json --out-md owed_counts.md
+          cat owed_counts.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: owed-counts
+          path: |
+            owed_counts.json
+            owed_counts.md
+          if-no-files-found: warn
+          retention-days: 90

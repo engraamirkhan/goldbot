@@ -95,11 +95,12 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.release import (  # noqa: E402
+    read_bar_files,
     read_macro_files,
     read_positioning_files,
     read_us_calendar_files,
 )
-from goldbot.data.resample import BAR_COLUMNS, mid, resample_bars  # noqa: E402
+from goldbot.data.resample import mid, resample_bars  # noqa: E402
 from goldbot.execution.costs import SwapSpec, load_research_cost_table, research_costs  # noqa: E402
 from goldbot.features import day_type as day_type_features  # noqa: E402
 from goldbot.features import positioning as positioning_features  # noqa: E402
@@ -136,20 +137,11 @@ from goldbot.specialists import SPECIALISTS, Specialist  # noqa: E402
 
 
 def load_bars(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
-    """Concatenate the yearly 1m files; bars with an error-level data-quality flag are dropped."""
-    frames = []
-    for f in sorted(folder.glob("xauusd_1m_dukascopy_*.parquet")):
-        year = int(f.stem.rsplit("_", 1)[1])
-        if from_year <= year <= to_year:
-            frames.append(pd.read_parquet(f))
-    if not frames:
-        raise SystemExit(f"no xauusd_1m_dukascopy_<year>.parquet files for {from_year}-{to_year} in {folder}")
-    b = pd.concat(frames, ignore_index=True)
-    b["ts_utc"] = pd.to_datetime(b["ts_utc"], utc=True)
-    b["visible_at"] = pd.to_datetime(b["visible_at"], utc=True)
-    flags = b["dq_flag"].fillna("").astype(str) if "dq_flag" in b else pd.Series("", index=b.index)
-    b = b[~flags.str.startswith("error")]
-    return b.drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)[BAR_COLUMNS]
+    """Concatenate the yearly 1m files; bars with an error-level data-quality flag are dropped (`read_bar_files`)."""
+    try:
+        return read_bar_files(folder, from_year, to_year)
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc)) from None
 
 
 def load_macro(path: str) -> tuple[pd.DataFrame | None, dict[str, Any]]:

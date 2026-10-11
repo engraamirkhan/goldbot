@@ -979,6 +979,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- **Owed pre-registration counts (2026-10-11): run count-owed-events and paste the counts before the freeze.**
+  `.github/workflows/count-owed-events.yml` (workflow_dispatch only; dispatchable once it is on `main`) downloads
+  data-v1, macro-v1 and calendar-v1 (`fetch_data_release.py --download-only`), cuts every input at
+  `research.holdout_from` and runs `scripts/count_owed_events.py`: Q1 H-04 entries and the 7h-rule drops (asia_drift's
+  own `candidates` + `complete_windows`), an H-01 recount, Q2 H-16 `first_oos_month` + `expected_eval_days` (h16's
+  rule and evaluation-set masks on placebo prices: timestamps, GVZ dates and calendar rows only), H-17, H-18 and H-14.
+  No label, return or price after a decision bar is read (AST and truncation guards in
+  `tests/test_count_owed_events.py`). The table is in the step summary, the JSON in the `owed-counts` artefact; paste
+  them into `docs/research/preregistration-2027Q1.md` (H-04) and `preregistration-2027Q2-draft.md` (H-16/17/18/14).
+  H-17, H-18 and H-14 are counted from the written rule ("spec-derived") until `trend_day`, `event_continuation` and
+  E-2 are merged; recount with their own code before the Q2 freeze. About 10-20 runner-minutes per run.
 - VRP/purge follow-ups (2026-10-11): `macro_drivers` v5 stub rule from declared bar lengths (macro `f-51ac5ebabb`,
   macro + day_type `f-48c4c0c57e`); context frames use one `pipeline.CONTEXT_FEATURES` list (engine too, no behaviour
   change); group-measure rows purged by label exit (`discovery.purged_rest`).
@@ -1012,6 +1023,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Review LOWs (2026-10-11): a refused decision is logged once per proposal and counted (`base.note_schema_skew`), and
   an unknown top-level table in `orders_<account>.json` is logged and counted at engine start; S12 now requires a
   reviewed rollback story for a new table that carries client ids or broker orders.
+  Skew reaches the owner (2026-10-11, review follow-up; needs trading-safety and SRE review): the engine publishes a
+  bounded `schema_skew` block in `engine_<account>.json` (`base.schema_skew_summary`: distinct sources, reads, any
+  refused, at most 20 entries with refused ones first, 10 field paths each). Health `schema_skew:<account>` WARNs
+  (Telegram, NOTIFY_ON_WARN) while any is present and names at most 5 sources (~400 characters, then "+N more"), and
+  FAILs for an hour after a strict reader refused a record (an owner's click dropped by the approval bus;
+  `last_refused_utc`, `SKEW_REFUSED_FAIL_S`), then WARNs naming the refusal time; a new refusal FAILs and alerts
+  again (SRE review). Process-lifetime: the counts clear when the engine restarts and next writes its state (on a
+  tick or bar, so a weekend restart keeps the old block until the Sunday open). The check is guarded like the
+  others (a raising check is a FAIL named `schema_skew:<account>`). Only the engine's own reads are counted; skew read by the API, Telegram or
+  supervisor processes is still log-only. Also pinned: a holiday list with a misspelt key (`valid_thru:`, renamed or
+  added beside the real key) fails closed as `calendar_unavailable`, RiskGate refuses entries, exits still run.
 - H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
   (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
   version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London

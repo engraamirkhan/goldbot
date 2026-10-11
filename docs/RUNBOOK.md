@@ -192,7 +192,14 @@ and the rest still arrives. It never contains account numbers or emails.
   lock, same wait for a pending entry, same restart order and 90 s check. If the rollback is unstable, the version
   that ran before is restored. Telegram reports *rolled_back_manual* (or *rollback_reverted*); the `deploy` health
   check warns until the next deploy. A pending Telegram deploy approval is cancelled by the rollback. Telegram offers
-  the newer version again: tap **Skip** until the fix is merged.
+  the newer version again: tap **Skip** until the fix is merged. After a rollback the health check
+  `schema_skew:<account>` may warn: the older engine is reading state the newer one wrote and ignoring its new
+  fields (it names the files). That is expected after a rollback. If it **fails**, an approve/reject click was
+  dropped because the older release could not read it; that proposal expired unapplied. Roll forward (or approve
+  again on the next card). The failure turns into a warning an hour after the refusal (the warning keeps its time);
+  another refused click fails and alerts again. The counts live in the running engine: a restart clears them, but
+  the engine rewrites `engine_<account>.json` only on a tick or a bar, so health keeps showing the old block until
+  the first tick after the restart (over a weekend: the Sunday open).
 * Before anything is touched, every deploy and rollback also checks:
   * **aux.db.** A target from before schema compatibility (no `compat_back_to` in its `goldbot/db/migrations.py`)
     cannot open aux.db at schema 5. The script stops every service (inputs, supervisor, engines last), steps aux.db
@@ -1003,6 +1010,19 @@ Steps on the brain (or the VPS), on a gap day while the market is open:
    research alone. Outside the gap weeks the two zones are identical and nothing can be learned.
 
 `goldbot run preflight` runs the same measurement (`server_clock`, blocking on a measured mismatch).
+
+### Entry windows (reopen, holidays, tier-2 news)
+
+Three entry windows (BACKLOG 17/18, `goldbot/risk/windows.py`), each off until adopted in `risk.reopen`,
+`risk.holidays` and `risk.blackout.tier2`. The engine publishes them in `windows` in `engine_<account>.json`; the
+dashboard's Entry status and Telegram `/status` name them. Entries only: exits never read them.
+
+| Code | Meaning | Clears |
+|---|---|---|
+| `reopen_window` | Just after the daily reopen (`after_daily_reopen_min`) or the weekly open (`after_monday_open_min`), read from the broker session table. Also raised when the session table cannot be read (fail closed). | By itself at the end of the window. |
+| `holiday_thin` | Today's broker server date is on the holiday list (`config/holidays_cme_metals.yaml`). | By itself at server midnight of the first unlisted day. |
+| `tier2_blackout` | Within `before_min` / `after_min` of a second-tier US release in the live calendar. | By itself `after_min` after the release. |
+| `calendar_unavailable` | An enabled calendar window has nothing to judge by: the economic calendar's newest fetch is older than 7 days or does not cover the next 24 h, or the holiday list is missing, unreadable or does not cover today. | When the calendar fetch runs again (Feeds tab; `calendar_unavailable_reason` in the engine state says which), or when a holiday list with a new `version` covering today is deployed. Health (`check_entry_windows`) warns 90 days before the list runs out. |
 
 ### Bridge compatibility
 

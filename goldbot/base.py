@@ -43,12 +43,23 @@ def _to_utc_timestamp(v: Any) -> pd.Timestamp:
     return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
 
 
+# A UTC pandas Timestamp that round-trips through JSON (ISO 8601). Use it for every timestamp field that is
+# persisted: a bare pd.Timestamp field only accepts Timestamp instances, so reading a saved file back would fail.
+UtcTimestamp = Annotated[pd.Timestamp, BeforeValidator(_to_utc_timestamp),
+                         PlainSerializer(lambda t: t.isoformat(), return_type=str, when_used="json")]
+
+
 M = TypeVar("M", bound=BaseModel)
 SkewKey = tuple[str, str, tuple[str, ...]]          # (source, model, unknown field paths)
 
 _log = logging.getLogger(__name__)
 _skew_lock = threading.Lock()
 _skew: Counter[SkewKey] = Counter()
+_refused: set[SkewKey] = set()                     # keys a strict reader refused (an owner's click dropped)
+_last_refused: pd.Timestamp | None = None          # wall clock of the latest refusal (health bounds its FAIL on it)
+
+SKEW_SUMMARY_MAX = 20       # entries published in engine_<account>.json (refused first); the rest only counted
+SKEW_FIELDS_MAX = 10        # field paths per published entry
 
 
 def _unknown_fields(value: Any, path: str = "") -> list[str]:
@@ -76,6 +87,10 @@ def note_schema_skew(source: str, model: str, fields: Sequence[str], *, refused:
     with _skew_lock:
         first = key not in _skew
         _skew[key] += 1
+        if refused:
+            global _last_refused
+            _refused.add(key)
+            _last_refused = pd.Timestamp.now(tz="UTC")
     if first:
         what = "refused by a strict reader" if refused else "ignored"
         _log.warning("%s: %s written by a newer release has fields this release does not know (%s): %s",
@@ -97,6 +112,44 @@ def schema_skew() -> dict[SkewKey, int]:
     state written by a newer release is being read by this one (expected only after a rollback)."""
     with _skew_lock:
         return dict(_skew)
+
+
+class SkewEntry(FrozenRecord):
+    source: str
+    model: str
+    fields: list[str]                # at most SKEW_FIELDS_MAX
+    count: int                       # reads since the process started
+    refused: bool                    # a strict reader refused the record (ADR 0010 allowlist) instead of ignoring fields
+
+
+class SkewSummary(FrozenRecord):
+    """The bounded `schema_skew` block of engine_<account>.json, read by health (`check_schema_skew`)."""
+    count: int                       # distinct (source, model, fields)
+    reads: int                       # reads of all of them
+    refused: bool                    # any entry refused: an owner's click was dropped
+    entries: list[SkewEntry]         # refused first, then by source; at most SKEW_SUMMARY_MAX
+    truncated: int                   # entries left out of `entries`
+    # wall clock of the latest refusal: health FAILs for SKEW_REFUSED_FAIL_S after it, then WARNs. None with refused
+    # set (a block from before this field) reads as a fresh refusal (FAIL)
+    last_refused_utc: UtcTimestamp | None = None
+
+
+def skew_summary(counts: Mapping[SkewKey, int], refused: set[SkewKey], last_refused: pd.Timestamp | None = None,
+                 limit: int = SKEW_SUMMARY_MAX) -> SkewSummary:
+    """`counts` as a SkewSummary of at most `limit` entries, refused ones first so a dropped click is never the entry
+    the bound leaves out."""
+    keys = sorted(counts, key=lambda k: (k not in refused, k))
+    entries = [SkewEntry(source=k[0], model=k[1], fields=list(k[2][:SKEW_FIELDS_MAX]), count=counts[k],
+                         refused=k in refused) for k in keys[:limit]]
+    return SkewSummary(count=len(keys), reads=sum(counts.values()), refused=any(k in refused for k in keys),
+                       entries=entries, truncated=max(0, len(keys) - limit), last_refused_utc=last_refused)
+
+
+def schema_skew_summary() -> SkewSummary:
+    """`schema_skew()` for the engine state file, so skew reaches the owner through health, not only the log."""
+    with _skew_lock:
+        counts, refused, last = dict(_skew), set(_refused), _last_refused
+    return skew_summary(counts, refused, last)
 
 
 def load_record(cls: type[M], data: Any, *, source: str) -> M:
@@ -122,12 +175,6 @@ def load_record_json(cls: type[M], text: str | bytes, *, source: str) -> M:
         return m
     note_schema_skew(source, cls.__name__, unknown)
     return cls.model_validate_json(text, extra="ignore")
-
-
-# A UTC pandas Timestamp that round-trips through JSON (ISO 8601). Use it for every timestamp field that is
-# persisted: a bare pd.Timestamp field only accepts Timestamp instances, so reading a saved file back would fail.
-UtcTimestamp = Annotated[pd.Timestamp, BeforeValidator(_to_utc_timestamp),
-                         PlainSerializer(lambda t: t.isoformat(), return_type=str, when_used="json")]
 
 
 def _fsync_dir(d: Path) -> None:

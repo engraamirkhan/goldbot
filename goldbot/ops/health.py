@@ -40,7 +40,15 @@ from typing import Any, Callable, Literal, cast
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, Record, UtcTimestamp, load_record_json, write_atomic
+from goldbot.base import (
+    FrozenRecord,
+    Record,
+    SkewSummary,
+    UtcTimestamp,
+    load_record,
+    load_record_json,
+    write_atomic,
+)
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
 from goldbot.data.crossfeed import check_reconciliation
@@ -1206,6 +1214,66 @@ def check_entry_windows(ctx: HealthContext, account_id: str) -> list[Check]:
     return out
 
 
+SKEW_REFUSED_FAIL_S = 3600         # a refused record (a dropped click) FAILs this long after the refusal, then WARNs
+SKEW_REASON_SOURCES = 5            # sources named in the reason (refused first); the rest as "+N more"
+SKEW_REASON_CHARS = 400            # length of the named-sources part of the reason
+
+
+def _skew_sources(s: SkewSummary) -> str:
+    """At most SKEW_REASON_SOURCES sources (refused first, as published) in about SKEW_REASON_CHARS characters, then
+    "+N more (health --json)" for the distinct sources not named."""
+    shown = s.entries[:SKEW_REASON_SOURCES]
+    text = ", ".join(f"{e.source} ({e.model}: {','.join(e.fields)})" + (" [refused]" if e.refused else "")
+                     for e in shown)
+    if len(text) > SKEW_REASON_CHARS:
+        text = text[:SKEW_REASON_CHARS - 3].rstrip() + "..."
+    left = s.count - len(shown)
+    return text + (f" +{left} more (health --json)" if left > 0 else "")
+
+
+def check_schema_skew(ctx: HealthContext, account_id: str) -> Check | None:
+    """ADR 0010: "persisted state is read tolerantly, built strictly", and state written by a newer release (expected
+    only after a rollback) must reach the owner, not only the log. From the engine's bounded `schema_skew` block:
+    `schema_skew:<account>` WARNs (NOTIFY_ON_WARN) while the engine has read any such state, naming the sources, and
+    FAILs for SKEW_REFUSED_FAIL_S after a strict reader refused a record (an owner's approve/reject click dropped by
+    the approval bus; the proposal expires); after that it WARNs naming the refusal and its time, and a new refusal
+    FAILs (and alerts) again. A block without `last_refused_utc` (an older engine) reads as a fresh refusal. The
+    counts live in the engine process: they clear when it restarts and next writes its state (on a tick or a bar).
+    None while the engine has not published the block (no file or an older engine); check_engine reports an
+    unreadable file."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    if not f.exists():
+        return None
+    try:
+        raw = _read_json(f).get("schema_skew")
+    except (ValueError, OSError, AttributeError, TypeError):
+        return None
+    if raw is None:
+        return None
+    name = f"schema_skew:{account_id}"
+    try:
+        s = load_record(SkewSummary, raw, source="engine_<account>.json:schema_skew")
+    except ValueError as exc:
+        return Check(name=name, status="warn", reason=f"{account_id}: schema_skew block unreadable ({type(exc).__name__})")
+    if not s.count:
+        return Check(name=name, status="ok", reason=f"{account_id}: no state from a newer release read")
+    srcs = _skew_sources(s)
+    if s.refused:
+        at = s.last_refused_utc
+        fresh = at is None or (ctx.now - at).total_seconds() <= SKEW_REFUSED_FAIL_S
+        when = f"at {at:%Y-%m-%d %H:%M} UTC" if at is not None else "(time unknown)"
+        if fresh:
+            return Check(name=name, status="fail",
+                         reason=f"{account_id}: a strict reader refused state from a newer release {when}, so an "
+                                f"owner's click was dropped and the proposal expires; roll forward: {srcs}")
+        return Check(name=name, status="warn",
+                     reason=f"{account_id}: an owner's click was refused {when} (over {SKEW_REFUSED_FAIL_S // 60} min "
+                            f"ago, the proposal expired) and state from a newer release is read; roll forward: {srcs}")
+    return Check(name=name, status="warn",
+                 reason=f"{account_id}: state written by a newer release is read with its new fields ignored "
+                        f"({s.count} source(s), {s.reads} read(s)), expected only after a rollback: {srcs}")
+
+
 def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
     """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
     restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
@@ -1394,6 +1462,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += g(f"throttle:{i}", lambda: check_throttle(ctx, i))
             checks += g(f"open_risk:{i}", lambda: check_open_risk(ctx, i))
             checks += g(f"entry_windows:{i}", lambda: check_entry_windows(ctx, i))
+            checks += g(f"schema_skew:{i}", lambda: check_schema_skew(ctx, i))
             checks += g(f"bridge:{i}", lambda: check_bridge(ctx, i))
             checks += g(f"bridge_compat:{i}", lambda: check_bridge_compat(ctx, a))
             checks += g(f"server_clock:{i}", lambda: check_server_clock(ctx, a))
@@ -1450,7 +1519,7 @@ class WatchState(Record):
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:",
-                  "throttle:", "entry_windows:", "open_risk:")
+                  "throttle:", "entry_windows:", "open_risk:", "schema_skew:")
 
 
 def _alerting(name: str, status: str) -> bool:
