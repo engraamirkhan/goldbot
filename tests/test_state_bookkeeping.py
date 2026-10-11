@@ -510,6 +510,24 @@ def test_the_outbox_merge_is_a_union_that_keeps_pending_proposals_and_the_furthe
     assert merged.new_reports() == []                                       # the older offset does not replay
 
 
+def test_the_outbox_merge_skips_file_entries_whose_proposal_is_already_archived(tmp_path):
+    """A stale file from a rolled-back release must not bring back a finished proposal: its outcome edit would be
+    sent a second time."""
+    center = ApprovalCenter({1}, bus=ApprovalBus(tmp_path))
+    center.propose(_p("done"))
+    center.propose(_p("open"))
+    box = Outbox(tmp_path)
+    box.mark_sent("done", [(42, 1)])
+    ApprovalBus(tmp_path).submit("done", False, "news", by="dashboard:o@x.io")
+    center.poll_bus()                                                       # archived with its outcome
+    assert box.finished() == [("done", "REJECTED", [(42, 1)])]              # the outcome edit went out once
+    (tmp_path / "telegram_outbox.json").write_text(json.dumps(
+        {"sent": {"done": [[42, 1]], "open": [[42, 2]]}, "reports_offset": None}))   # the older release's stale view
+    merged = Outbox(tmp_path)
+    assert merged.sent == {"open": [(42, 2)]}
+    assert merged.finished() == []
+
+
 def test_a_report_batch_failing_for_one_recipient_is_acknowledged_after_a_few_passes():
     from goldbot.telegram.outbox import ReportRetry, ReportsAck
     retry = ReportRetry(attempts=3)

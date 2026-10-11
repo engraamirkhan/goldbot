@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import Field
@@ -74,17 +75,21 @@ def import_outbox_json(path: Path, conn: sqlite3.Connection) -> int:
     return merge_outbox_json(path, conn)
 
 
-def merge_outbox_json(path: Path, conn: sqlite3.Connection, pending: set[str] | None = None) -> int:
+def merge_outbox_json(path: Path, conn: sqlite3.Connection, pending: set[str] | None = None,
+                      archived: Callable[[str], bool] | None = None) -> int:
     """Merge a file an older release wrote after a rollback, as a union: every proposal it lists is sent (its
-    messages win), a proposal only the DB lists is kept while it is still pending on the bus (`pending`; None keeps
-    all), so neither side's send is repeated and an outcome that release already reported is not reported again.
-    Each report cursor takes the larger of the two positions (nothing is replayed twice)."""
+    messages win) unless the bus has already archived it with an outcome (`archived`: its outcome edit went out, so
+    a stale file must not bring it back and repeat the edit); a proposal only the DB lists is kept while it is still
+    pending on the bus (`pending`; None keeps all), so neither side's send is repeated and an outcome that release
+    already reported is not reported again. Each report cursor takes the larger of the two positions (nothing is
+    replayed twice)."""
     st = load_record_json(OutboxState, path.read_text(), source="telegram_outbox.json")
-    keep = set(st.sent) | {pid for pid in outbox_sent(conn) if pending is None or pid in pending}
+    st_sent = {pid: m for pid, m in st.sent.items() if archived is None or not archived(pid)}
+    keep = set(st_sent) | {pid for pid in outbox_sent(conn) if pending is None or pid in pending}
     for pid in outbox_sent(conn):
         if pid not in keep:
             outbox_forget(conn, pid)
-    for pid, msgs in st.sent.items():
+    for pid, msgs in st_sent.items():
         outbox_mark_sent(conn, pid, msgs)
     if st.reports_offset is not None:
         rid, line = cursor_from_line_offset(conn, st.reports_offset), st.reports_offset
@@ -92,7 +97,7 @@ def merge_outbox_json(path: Path, conn: sqlite3.Connection, pending: set[str] | 
         if cur is not None:
             rid, line = max(rid, cur[0]), max(line, cur[1])
         set_outbox_cursor(conn, rid, line)
-    return len(st.sent) + (st.reports_offset is not None)
+    return len(st_sent) + (st.reports_offset is not None)
 
 
 OUTBOX_IMPORT = ImportSpec(source=OUTBOX_FILE, kind="aux", loader=import_outbox_json, once=True, backup=True)
@@ -105,8 +110,10 @@ class Outbox:
         AgentRunLog(self.dir)                     # imports/adopts agent_runs.jsonl first (the cursor maps onto it)
         self.db = Database.open(self.dir, "aux")
         pending = {p.proposal_id for p in self.bus.pending()}
-        if dual_read(self.db, OUTBOX_IMPORT, self.dir, lambda path, conn: merge_outbox_json(path, conn, pending),
-                     outbox_document):
+        def archived(pid: str) -> bool:
+            return self.bus.outcome(pid) is not None
+        if dual_read(self.db, OUTBOX_IMPORT, self.dir,
+                     lambda path, conn: merge_outbox_json(path, conn, pending, archived), outbox_document):
             self._export()
 
     def _export(self) -> None:
