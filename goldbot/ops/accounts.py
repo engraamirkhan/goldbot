@@ -33,13 +33,14 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 import yaml
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from goldbot.base import Record, write_private
 from goldbot.config import ROOT
 from goldbot.data.timeutil import server_zone
 
 ACCOUNTS_FILE = ROOT / "config" / "accounts.yaml"
+ACCOUNT_ID_LOGIN = re.compile(r"\d{5,}")      # an account name with this could carry an MT5 login: refused at load
 PHASE_FILE = ROOT / "state" / "phase_state.json"
 SERVICE = "goldbot"
 
@@ -65,6 +66,16 @@ class Account(Record):
     # BACKLOG 29 / ADR 0004: the owner's absolute daily loss limit for THIS account, in its own deposit currency
     # (icm-demo: 50 = £50). None = off. Per account because one number read in different currencies is not one limit
     daily_loss_limit_abs: float | None = Field(None, gt=0)
+
+    # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
+    model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
+
+    @field_validator("account_id")
+    @classmethod
+    def _no_login_in_name(cls, v: str) -> str:
+        """Backstop of load_accounts' own check (goldbot/telegram/entry_text.account_name is the display backstop)."""
+        _check_account_name(v)
+        return v
 
     @field_validator("server_tz")
     @classmethod
@@ -169,11 +180,20 @@ def _edit_yaml_line(path: Path, account_id: str, key: str, value: str) -> None:
     raise KeyError(f"{account_id}.{key} not found in {path}")
 
 
+def _check_account_name(name: str) -> None:
+    """A name with 5+ digits in a row could carry an MT5 login (the repo is public; names reach the dashboard,
+    Telegram /status and the digest). Plain ValueError giving only the length, never the name."""
+    if ACCOUNT_ID_LOGIN.search(name):
+        raise ValueError(f"an account name in config/accounts.yaml has 5 or more digits in a row (could be a login): "
+                         f"rename it ({len(name)} characters)")
+
+
 def load_accounts(path: Path | None = None) -> dict[str, Account]:
     path = _accounts_path(path)
     raw = yaml.safe_load(path.read_text())
     out = {}
     for aid, a in raw["accounts"].items():
+        _check_account_name(str(aid))      # before the keyring lookup and the record: the error never echoes it
         login = a.get("login")
         if login is None:
             stored = get_secret(login_key(aid))

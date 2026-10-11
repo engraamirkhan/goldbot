@@ -38,6 +38,7 @@ import pandas as pd
 
 from goldbot.base import Record, load_record_json, write_atomic
 from goldbot.config import ROOT, Settings
+from goldbot.telegram.entry_text import digest_line as entry_digest_line
 
 STATE_FILE = "telegram_digest.json"
 LATE_LIMIT = pd.Timedelta(hours=6)
@@ -390,6 +391,7 @@ def build_digest(state_dir: str | Path, now: pd.Timestamp, *, report: Any = None
     lines += _section(lambda: month_line(sd, now - pd.Timedelta(days=1)), "Month so far")
     lines += _section(lambda: open_line(sd), "Open now")
     lines += _section(lambda: risk_lines(sd, settings), "Risk")
+    lines += _section(lambda: entry_digest_line(sd, now, settings), "Entries")    # the /status words, accounts not OPEN
     lines += research_lines(sd, settings, registry_path, now)
     lines += _section(lambda: decisions_line(sd, roadmap), "For you")
     return "\n".join(lines)
