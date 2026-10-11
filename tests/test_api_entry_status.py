@@ -262,7 +262,8 @@ def test_every_gate_and_supervisor_reason_has_owner_text():
         found |= set(re.findall(r'reasons\.append\("([a-z0-9_]+)"\)', src))
         found |= set(re.findall(r'reasons=\["([a-z0-9_]+)"\]', src))
         found |= set(re.findall(r'return \["(throttle_[a-z_]+)"\]', src))
-        found |= set(re.findall(r'out\.append\("(throttle_[a-z_]+)"\)', src))
+        # every helper that collects reasons into `out` (throttle, entry windows, open risk): not only throttle_*
+        found |= set(re.findall(r'out\.append\("([a-z0-9_]+)"\)', src))
     found |= {"no_supervisor_heartbeat", "supervisor_state_unreadable", "supervisor_heartbeat_stale"}
     assert len(found) > 25
     assert found <= set(es.REASONS), sorted(found - set(es.REASONS))
