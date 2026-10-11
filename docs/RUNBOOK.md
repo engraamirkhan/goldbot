@@ -25,7 +25,7 @@ Everything below is done from your Mac: the Oracle website in a browser, and the
 
 | VM | Oracle shape (Always Free) | What runs there |
 | --- | --- | --- |
-| **brain** | VM.Standard.A1.Flex (ARM), 4 OCPU, 24 GB, Ubuntu 24.04 | engine, supervisor, scheduler (retraining), dashboard API, Telegram, news |
+| **brain** | VM.Standard.A1.Flex (ARM), 2 OCPU, 12 GB (the Always Free total since mid-2026), Ubuntu 24.04 | engine, supervisor, scheduler (retraining), dashboard API, Telegram, news |
 | **mt5** | VM.Standard.E2.1.Micro (x86), 1 GB, Ubuntu 24.04 | MT5 terminal under Wine + the goldbot bridge |
 
 The engine reaches the terminal through the bridge (`goldbot/execution/bridge.py`) on Oracle's private network.
@@ -42,7 +42,7 @@ record decides whether it is reliable enough.
 
 ### 0.2 Create the two VMs (browser)
 Compute -> Instances -> Create, both in the same VCN (the wizard's default network):
-1. **brain**: image Ubuntu 24.04, shape *Ampere* VM.Standard.A1.Flex with 4 OCPU / 24 GB, paste the contents of
+1. **brain**: image Ubuntu 24.04, shape *Ampere* VM.Standard.A1.Flex with 2 OCPU / 12 GB (Oracle halved the free A1 total in 2026; more than that is billed or may be terminated), paste the contents of
    `~/.ssh/id_ed25519.pub` (`cat ~/.ssh/id_ed25519.pub` in Terminal). If it says *out of capacity*, try another
    availability domain or retry later; this is common for free ARM VMs.
 2. **mt5**: image Ubuntu 24.04, shape *AMD* VM.Standard.E2.1.Micro, same SSH key.
@@ -53,16 +53,19 @@ Compute -> Instances -> Create, both in the same VCN (the wizard's default netwo
    127.0.0.1.
 
 ### 0.3 The MT5 box
+Root runs the bootstrap, so it runs only a copy whose hash you checked on your Mac, at a commit on `main`
+(`<SHA>`, `<HASH>`: docs/deploy/first-deploy.md step 0 shows how to get both). Run it inside `tmux new -s boot`; it
+ignores a dropped connection and logs to `/root/goldbot-bootstrap.log`.
 ```bash
 ssh ubuntu@<mt5 public ip>
-git clone https://github.com/engraamirkhan/goldbot.git /tmp/goldbot
-sudo bash /tmp/goldbot/goldbot/ops/linux/mt5_bootstrap.sh
+curl -fsSLo mt5_bootstrap.sh https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/linux/mt5_bootstrap.sh
+echo "<HASH>  mt5_bootstrap.sh" | sha256sum -c - && sudo bash mt5_bootstrap.sh <SHA>
 ```
 Log in to your IC Markets demo **once** (MT5 keeps the login; goldbot never sees the password):
 1. On the VM: `sudo systemctl start goldbot-vnc`.
 2. On your Mac, a second Terminal window: `ssh -L 5900:localhost:5900 ubuntu@<mt5 public ip>`.
 3. In Finder: Go -> Connect to Server -> `vnc://localhost:5900` (macOS Screen Sharing; leave the password empty).
-4. In that window start the terminal if it is not open (`sudo -u mt5 env DISPLAY=:99 wine 'C:\MT5\ICMarkets\terminal64.exe' &`
+4. In that window start the terminal if it is not open (`sudo -u mt5 -H env DISPLAY=:99 wine 'C:\MT5\ICMarkets\terminal64.exe' &`
    on the VM), then File -> Login to Trade Account: your login, password, server **ICMarketsSC-Demo**, tick
    **Save password**. Check `XAUUSD` is in Market Watch, and enable Tools -> Options -> Expert Advisors ->
    *Allow algorithmic trading*. Close the terminal.
@@ -73,14 +76,15 @@ Bridge address and token:
 goldbot-mt5 accounts bridge-serve icm-demo     # your MT5 login number, then 127.0.0.1:8765; prints a token ONCE
 sudo systemctl start goldbot-bridge@icm-demo
 ```
-Copy the token straight into the next step; do not save it anywhere else. The bridge refuses to start unless the
+Copy the token straight into `goldbot run setup` on the brain (step 2); do not save it anywhere else. Do this
+step only when the brain is installed and you are about to run setup, so the token is never left in a window. The bridge refuses to start unless the
 terminal is logged in to that login on ICMarketsSC-Demo as a **demo** account.
 
 ### 0.4 The brain
 ```bash
 ssh ubuntu@<brain public ip>
-git clone https://github.com/engraamirkhan/goldbot.git /tmp/goldbot
-sudo bash /tmp/goldbot/goldbot/ops/linux/brain_bootstrap.sh   # ends by printing a "ssh-ed25519 ..." key line
+curl -fsSLo brain_bootstrap.sh https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/linux/brain_bootstrap.sh
+echo "<HASH>  brain_bootstrap.sh" | sha256sum -c - && sudo bash brain_bootstrap.sh <SHA>   # ends with a "ssh-ed25519 ..." line
 ```
 On the MT5 box: `sudo goldbot-mt5-authorize '<that ssh-ed25519 line>'` (the key may only forward to the bridge).
 Back on the brain:

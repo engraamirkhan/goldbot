@@ -301,7 +301,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   not pulled. The workflow has not run yet (first run: Actions -> data-macro -> Run workflow).
 - Free hosting without Windows (2026-10-10, owner: MT5 + $0 hosting, Mac only): two Oracle Cloud Always Free VMs.
   The MT5 terminal runs under Wine on an x86 E2.1.Micro with the bridge (`goldbot/execution/bridge.py`,
-  `run.py bridge <account>`); everything else runs on an Ampere A1 (4 OCPU / 24 GB) under systemd
+  `run.py bridge <account>`); everything else runs on an Ampere A1 (2 OCPU / 12 GB, the Always Free total since mid-2026) under systemd
   (`goldbot/ops/linux/`: `brain_bootstrap.sh`, `mt5_bootstrap.sh`, units). The engine uses `RemoteBroker` when the
   keyring holds `mt5-bridge-url-<account>` + `mt5-bridge-token-<account>`. Bridge safety (from the trading-safety and
   security review): both ends verify the terminal's login, server and demo/real against the registry
