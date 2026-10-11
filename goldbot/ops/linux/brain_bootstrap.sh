@@ -18,6 +18,14 @@ apt-get update -y
 DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates chrony build-essential xz-utils restic
 systemctl enable --now chrony
 
+# What root installs (systemd units, the root-run deploy script) comes from root's OWN shallow clone in a root-only
+# directory, never from $ROOT: the service user can write that tree and its .git, and it runs code (pip/npm/Wine
+# installs) before the installs below. docs/AGENT_STANDARDS.md "Root-run tooling".
+OPS_SRC=$(mktemp -d /root/goldbot-ops.XXXXXX)
+trap 'rm -rf -- "$OPS_SRC"' EXIT
+git clone -q --depth 1 "$REPO" "$OPS_SRC/src"
+OPS=$OPS_SRC/src/goldbot/ops/linux
+
 id goldbot >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/goldbot --shell /usr/sbin/nologin goldbot
 [ -d "$ROOT/.git" ] || git clone "$REPO" "$ROOT"
 mkdir -p "$ROOT/state" "$ROOT/logs" "$ROOT/models" "$ROOT/data"
@@ -51,7 +59,7 @@ cd /opt/goldbot && exec sudo -u goldbot -H env PYTHON_KEYRING_BACKEND=keyring.ba
 WRAP
 chmod 755 /usr/local/bin/goldbot
 
-for u in supervisor engine@ api scheduler telegram news bridge-tunnel; do install -m 644 "$ROOT/goldbot/ops/linux/systemd/goldbot-$u.service" /etc/systemd/system/; done
+for u in supervisor engine@ api scheduler telegram news bridge-tunnel; do install -m 644 "$OPS/systemd/goldbot-$u.service" /etc/systemd/system/; done
 systemctl daemon-reload
 for s in goldbot-supervisor goldbot-engine@icm-demo goldbot-api goldbot-scheduler goldbot-telegram goldbot-news; do
   systemctl enable "$s"
@@ -72,12 +80,13 @@ echo "bridge tunnel key (authorise it on the MT5 box with: sudo goldbot-mt5-auth
 cat /var/lib/goldbot/.ssh/id_ed25519.pub
 
 # Deploys: only versions the owner approves (Telegram [Deploy] or `sudo goldbot-deploy latest`), never by itself.
-# The script runs as root, so a root-owned copy is installed; the repo copy (writable by the service user) is never run
-# as root. After reviewing a change to it: sudo install -m 755 -o root -g root <repo>/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy
+# The script runs as root, so a root-owned copy is installed from root's own clone ($OPS); the repo copy (writable by
+# the service user) is never run or installed as root. To update it later: RUNBOOK 0.5 "Installing a new
+# goldbot-deploy" (root downloads it from GitHub at the commit; the owner checks its sha256 off-box first).
 mkdir -p /etc/goldbot
 echo brain > /etc/goldbot/role
-install -m 755 -o root -g root "$ROOT/goldbot/ops/linux/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
-install -m 644 "$ROOT/goldbot/ops/linux/systemd/goldbot-deploy.service" "$ROOT/goldbot/ops/linux/systemd/goldbot-deploy.timer" /etc/systemd/system/
+install -m 755 -o root -g root "$OPS/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
+install -m 644 "$OPS/systemd/goldbot-deploy.service" "$OPS/systemd/goldbot-deploy.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable goldbot-deploy.timer
 

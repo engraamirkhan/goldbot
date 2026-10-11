@@ -506,7 +506,10 @@ hypotheses that go through the trial registry in a future quarter's budget.
     `settings.local.yaml` merged over the target's tracked `settings.yaml` (the tracked files passed CI with the target
     code; `accounts.yaml` is tracked and has no local overlay), and it runs on an extracted copy of the target's code
     before the checkout, so a refusal changes nothing. A failed manual rollback restores the version that ran before
-    and logs `rollback_reverted`.
+    and logs `rollback_reverted`. Security review fixes (same day): root installs the script only from GitHub with
+    an off-box sha256 (RUNBOOK 0.5), the bootstraps install units and the script from root's own clone, an optional
+    root-owned `/etc/goldbot/rollback-floor`, `ran_here` counts only real runs, output to root's terminal is
+    filtered, and `tests/test_root_tooling_rules.py` enforces the root-run tooling rule (docs/AGENT_STANDARDS.md).
   - **37 (HIGH).** In `switch_to`, after the checkout and before any restart:
     - when the target's `goldbot/db/migrations.py` lacks `compat_back_to` and `state/aux.db` is at schema 5, stop
       every `goldbot-*` service, run the step-back as the service user, then restart (same logic as

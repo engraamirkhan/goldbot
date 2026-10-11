@@ -37,14 +37,23 @@ pytestmark = pytest.mark.skipif(BASH is None or shutil.which("git") is None,
 HARNESS = r"""
 set -euo pipefail
 source "$SCRIPT"
-ROOT=$T/root; VAR=$T/var; LOG=$VAR/deploys.jsonl; LOCK=$T/lock; ROLE_FILE=$T/role
+ROOT=$T/root; VAR=$T/var; LOG=$VAR/deploys.jsonl; LOCK=$T/lock; ROLE_FILE=$T/role; ROLLBACK_FLOOR=$T/floor
 APPROVED=$ROOT/state/deploy/approved.json; PY_BRAIN=$PYTHON
+if [ -n "${FAKE_HEAD:-}" ]; then
+  eval "$(declare -f g | sed '1s/^g ()/real_g ()/')"
+  g() { if [ "$1 ${2:-}" = "rev-parse HEAD" ]; then echo "$FAKE_HEAD"; else real_g "$@"; fi; }
+fi
 id() { echo 0; }
 install() { mkdir -p "${@: -1}"; }
 flock() { return 0; }
 sleep() { :; }
-mtime() { echo 9999999999; }
-sudo() { while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -H) shift ;; *) break ;; esac; done; "$@"; }
+stat() { echo 9999999999; }                     # GNU stat -c %Y, run only through sudo -u (as the owner)
+sudo() {
+  local who=root; while [ $# -gt 0 ]; do case "$1" in -u) who=$2; shift 2 ;; -H) shift ;; *) break ;; esac; done
+  echo "$who $*" >> "$T/sudo.log"
+  [ -z "${EVIL:-}" ] || printf 'svc\033]0;owned\007\033[2Jout\n' >&2   # service-user output with terminal escapes
+  "$@"
+}
 curl() { cat "$T/ci.json"; }
 systemctl() { echo "$*" >> "$T/systemctl.log"; "$PYTHON" "$T/systemctl_stub.py" "$@"; }
 main "$@"
@@ -213,10 +222,10 @@ class Box:
         p.write_text(text)
         return p
 
-    def run(self, *args: str) -> subprocess.CompletedProcess[str]:
+    def run(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         env = {"T": str(self.t), "SCRIPT": str(SCRIPT), "PYTHON": sys.executable,
                "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
-               "HOME": str(self.t)}
+               "HOME": str(self.t), **(env or {})}
         assert BASH is not None
         return subprocess.run([BASH, str(self.t / "harness.sh"), *args], capture_output=True, text=True, env=env,
                               timeout=120)
@@ -303,8 +312,13 @@ def test_rollback_needs_ci_or_a_previous_run_here(tmp_path):
     p = box.run("--rollback", box.c1)
     assert p.returncode == 1 and "neither passed CI nor ran here" in box.records()[-1]["detail"]
     assert box.head() == box.c2
-    with (tmp_path / "var" / "deploys.jsonl").open("a") as f:           # c1 ran before the deploy to c2
-        f.write(json.dumps({"result": "deployed", "from": box.c1, "to": box.c2}) + "\n")
+    with (tmp_path / "var" / "deploys.jsonl").open("a") as f:           # a refusal's "from" proves nothing
+        f.write(json.dumps({"result": "refused", "from": box.c1, "to": box.c2}) + "\n")
+        f.write(json.dumps({"result": "deployed", "from": box.c1, "to": box.c2}) + "\n")   # nor a deploy's "from"
+    p = box.run("--rollback", box.c1)
+    assert p.returncode == 1 and "neither passed CI nor ran here" in box.records()[-1]["detail"]
+    with (tmp_path / "var" / "deploys.jsonl").open("a") as f:           # c1 was the result of a deploy
+        f.write(json.dumps({"result": "deployed", "from": "0" * 40, "to": box.c1}) + "\n")
     p = box.run("--rollback", box.c1)
     assert p.returncode == 0, p.stdout + p.stderr
     assert box.head() == box.c1
@@ -388,3 +402,49 @@ def test_the_settings_check_works_with_the_real_settings_model(tmp_path):
     assert check("risk:\n  min_lot_risk_cap: 0.01\n").strip().endswith("rc=0")
     out = check("risk:\n  not_a_key: 0.75\n")
     assert "unknown risk.not_a_key local" in out and "rc=3" in out and "0.75" not in out
+
+
+def test_ran_here_counts_rolled_back_from_but_never_refused(tmp_path):
+    box = Box(tmp_path, running="c2", aux=5)
+    box.ci("failure")
+    (tmp_path / "var").mkdir()
+    with (tmp_path / "var" / "deploys.jsonl").open("w") as f:          # c1 ran, then was restored after a failure
+        f.write(json.dumps({"result": "rolled_back", "from": box.c1, "to": "f" * 40}) + "\n")
+    p = box.run("--rollback", box.c1)
+    assert p.returncode == 0, p.stdout + p.stderr
+
+
+def test_a_running_commit_that_is_not_a_sha_is_refused(tmp_path):
+    box = Box(tmp_path, running="c2", aux=5)
+    p = box.run("--rollback", box.c1, env={"FAKE_HEAD": "--output=/etc/x"})
+    assert p.returncode == 1 and "running commit" in box.records()[-1]["detail"]
+    assert box.head() == box.c2 and box.actions() == []
+
+
+def test_the_rollback_floor_blocks_older_targets(tmp_path):
+    box = Box(tmp_path, running="c2", aux=5)
+    (tmp_path / "floor").write_text(box.c2 + "\n")
+    p = box.run("--rollback", box.c1)
+    assert p.returncode == 1 and "rollback floor" in box.records()[-1]["detail"]
+    assert box.head() == box.c2 and box.actions() == []
+    (tmp_path / "floor").write_text("not a sha\n")
+    p = box.run("--rollback", box.c1)
+    assert p.returncode == 1 and "rollback floor" in box.records()[-1]["detail"]
+    (tmp_path / "floor").write_text(box.c1 + "\n")                     # the floor itself is allowed
+    p = box.run("--rollback", box.c1)
+    assert p.returncode == 0, p.stdout + p.stderr
+
+
+def test_the_heartbeat_is_statted_as_the_service_user(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    assert box.run(box.c2).returncode == 0
+    log = (tmp_path / "sudo.log").read_text().splitlines()
+    assert any(line.startswith("goldbot stat -c %Y") and "supervisor.json" in line for line in log)
+    assert not any(line.startswith("root ") for line in log)
+
+
+def test_service_user_output_reaches_roots_terminal_without_escapes(tmp_path):
+    box = Box(tmp_path, running="c2", aux=5)
+    p = box.run("--rollback", box.c1, env={"EVIL": "1"})
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "svc" in p.stdout + p.stderr and "\x1b" not in p.stdout + p.stderr and "\x07" not in p.stdout + p.stderr

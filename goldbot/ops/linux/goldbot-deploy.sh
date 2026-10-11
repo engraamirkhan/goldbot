@@ -27,12 +27,20 @@
 # other read or write under /opt/goldbot (approval removal, aux.db, settings, the scheduler status, the temporary
 # copy of the target's code for the settings check) runs as the service user via `sudo -u`. Root runs repo code
 # never: the Python that reads repo or state data runs as the service user; root's own python3 only parses
-# deploys.jsonl (root-owned) and JSON it is piped, with -I (no cwd or environment on sys.path).
+# deploys.jsonl (root-owned) and at most 1 MiB of JSON it is piped, with -I (no cwd or environment on sys.path).
+# Everything printed to root's terminal is filtered to printable ASCII (no terminal escapes from service-user output).
+# git runs as the service user with GIT_NO_REPLACE_OBJECTS=1. The service user controls .git, so ancestry answers
+# are trusted only as far as that account is; the installed copy of THIS script is therefore never taken from that
+# git (docs/AGENT_STANDARDS.md "Root-run tooling": fetched from GitHub by root and hash-checked off-box).
+#
+# Optional rollback floor: /etc/goldbot/rollback-floor (root-owned, one 40-hex commit id). `--rollback` refuses any
+# target that is not that commit or a descendant of it (for example, never below the auth hardening).
 set -euo pipefail
 ROOT=/opt/goldbot
 REPO_API=https://api.github.com/repos/engraamirkhan/goldbot
 ACTIONS_APP_ID=15368
 ROLE_FILE=/etc/goldbot/role
+ROLLBACK_FLOOR=/etc/goldbot/rollback-floor
 VAR=/var/lib/goldbot-deploy
 LOG=$VAR/deploys.jsonl
 LOCK=/run/goldbot-deploy.lock
@@ -43,11 +51,11 @@ MODE=approval
 DROP_KEYS=0
 INTERRUPT_JOBS=0
 
-g() { sudo -u "$OWNER" -H git -C "$ROOT" "$@"; }
+g() { sudo -u "$OWNER" -H env GIT_NO_REPLACE_OBJECTS=1 git -C "$ROOT" "$@"; }
 as_owner() { sudo -u "$OWNER" -H "$@"; }
 is_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
 enabled() { systemctl is-enabled --quiet "$1" 2>/dev/null; }
-mtime() { stat -c %Y "$1"; }
+mtime() { as_owner stat -c %Y -- "$1"; }             # state/ is the service user's: never stat it as root
 pypath() { if [ "$ROLE" = mt5 ]; then echo "Z:$1"; else echo "$1"; fi; }   # Wine Python sees / as Z:
 
 publish_log() {  # copy for Telegram and the health check, written as the service user (root never touches state/)
@@ -95,7 +103,8 @@ runs = {r['name']: r for r in json.load(sys.stdin).get('check_runs', [])}
 print('yes' if all(runs.get(n, {}).get('conclusion') == 'success' for n in ('backend', 'frontend')) else 'no')" || echo no
 }
 
-ran_here() {  # $1 ran on this box before: the running commit of any logged attempt, or the result of a deploy
+ran_here() {  # $1 ran on this box before: the result of a deploy or an owner's rollback, or the version a failed
+  # deploy restored; never a refusal (its "from" is only what ran when something was refused)
   [ -f "$LOG" ] || return 1
   python3 -I - "$LOG" "$1" <<'PY'
 import json, sys
@@ -105,7 +114,9 @@ for line in open(path, encoding="utf-8"):
         r = json.loads(line)
     except ValueError:
         continue
-    if r.get("from") == sha or (r.get("to") == sha and r.get("result") in ("deployed", "rolled_back_manual")):
+    result = r.get("result")
+    if (r.get("to") == sha and result in ("deployed", "rolled_back_manual")) or \
+            (r.get("from") == sha and result in ("rolled_back", "rollback_reverted")):
         sys.exit(0)
 sys.exit(1)
 PY
@@ -239,11 +250,12 @@ for key in keys:
                 break
 stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 bak = f"{path}.{stamp}.bak"
-fd = os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)                   # best effort: Linux has it; Windows (Wine) does not
+fd = os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o600)
 with os.fdopen(fd, "w", encoding="utf-8") as fh:
     fh.write(raw)
 tmp = f"{path}.tmp"
-fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | NOFOLLOW, 0o600)
 with os.fdopen(fd, "w", encoding="utf-8") as fh:
     fh.write(yaml.safe_dump(data, sort_keys=False) if data else "")
 os.replace(tmp, path)
@@ -321,7 +333,7 @@ PY
 )
 running_jobs() {  # scheduler jobs mid-run: aux.db through the running code, else scheduler.json (as the service user)
   as_owner bash -c 'cd -- "$1" && { "$2" -m goldbot.db scheduler-status --state-dir state 2>/dev/null \
-    || cat state/scheduler.json 2>/dev/null; }' _ "$ROOT" "$PY_BRAIN" | python3 -I -c "$JOBS_PY" || true
+    || cat state/scheduler.json 2>/dev/null; }' _ "$ROOT" "$PY_BRAIN" | head -c 1048576 | python3 -I -c "$JOBS_PY" || true
 }
 
 guard_scheduler() {  # brain: refuse while a job runs; stop the scheduler first, then check again
@@ -395,7 +407,8 @@ switch_to() {  # $1 from, $2 to; returns non-zero on any failure (the caller rol
 }
 
 written_since_restart() {  # the heartbeat file was written by the restarted process (not the old one)
-  [ -f "$1" ] && [ "$(mtime "$1")" -gt "${STARTED:-0}" ]
+  local t; t=$(mtime "$1" 2>/dev/null) || return 1
+  [[ "$t" =~ ^[0-9]+$ ]] && [ "$t" -gt "${STARTED:-0}" ]
 }
 
 healthy() {  # every enabled service up, and not restarted by systemd since our restart, for 90 s; a new supervisor heartbeat
@@ -412,8 +425,16 @@ healthy() {  # every enabled service up, and not restarted by systemd since our 
   fi
 }
 
+floor_allows() {  # $1 target: no floor, or the floor itself or a descendant of it; an unreadable floor allows nothing
+  [ -e "$ROLLBACK_FLOOR" ] || [ -L "$ROLLBACK_FLOOR" ] || return 0
+  [ -f "$ROLLBACK_FLOOR" ] && [ ! -L "$ROLLBACK_FLOOR" ] || return 1
+  local floor; floor=$(head -c 41 "$ROLLBACK_FLOOR" | tr -d '[:space:]')
+  is_sha "$floor" && g merge-base --is-ancestor "$floor" "$1" 2>/dev/null
+}
+
 main() {
   [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+  exec > >(LC_ALL=C tr -cd '[:print:]\n\t') 2>&1          # no terminal escapes reach root's terminal or journal
   ROLE=$(cat "$ROLE_FILE" 2>/dev/null || echo brain)
   if [ "$ROLE" = mt5 ]; then OWNER=mt5; else OWNER=goldbot; fi
   TARGET=""
@@ -450,11 +471,14 @@ main() {
 
   g fetch -q origin main
   CUR=$(g rev-parse HEAD)
+  is_sha "$CUR" || { CUR=""; refuse "the running commit could not be read as a commit id; nothing changed"; }
   if [ "$CUR" = "$TARGET" ]; then drop_approval; [ -n "$MANUAL" ] && echo "already running $TARGET"; exit 0; fi
   g merge-base --is-ancestor "$TARGET" origin/main || refuse "commit is not on main"
   if [ "$MODE" = rollback ]; then
     g merge-base --is-ancestor "$TARGET" "$CUR" \
       || refuse "a rollback goes only to an older commit of the running one (for a newer one: goldbot-deploy <sha>)"
+    floor_allows "$TARGET" \
+      || refuse "target is below the rollback floor ($ROLLBACK_FLOOR), or the floor is not a known commit id"
     if [ "$(ci_passed "$TARGET")" != yes ] && ! ran_here "$TARGET"; then
       refuse "rollback target neither passed CI nor ran here before"
     fi

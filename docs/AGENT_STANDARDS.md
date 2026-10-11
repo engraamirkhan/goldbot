@@ -31,6 +31,17 @@ file. The product owner accepts work against them; the release manager does not 
 - `actions/checkout` sets `persist-credentials: false` unless the job pushes with git.
 - Run `actionlint` (with shellcheck installed) before committing a workflow change; it must be clean.
 
+## Root-run tooling (anyone editing `goldbot/ops/linux/` or a runbook that uses `sudo`)
+- Anything root installs or executes is fetched by root from a source outside the service user's control (GitHub
+  over HTTPS, root's own clone in a root-only directory) and hash-checked against a value computed off-box (the
+  owner's own clone). The service user's tree (`/opt/goldbot`) is never a source for root.
+- A hash of the service user's git object store is not verification: that account owns `.git` and can swap a blob
+  (`git replace`, rewritten objects), so `sudo -u goldbot git show ... | sha256sum` proves nothing.
+- No runbook runs root `chmod`, `chown`, `cp`, `rm`, `mv`, `tee` or `install` on a path under `/opt/goldbot`; use
+  `sudo -u <service user>`. Root-run scripts read and write service-user paths only through `sudo -u`.
+- Enforced by `tests/test_root_tooling_rules.py` (runbooks and `goldbot/ops/linux/*.sh`, comments included); the
+  security reviewer signs off every change to a root-run script before its root copy is reinstalled.
+
 ## Leadership
 The `program-director` leads delivery (roadmap, waves, integration, risk register, owner reporting); the
 `product-owner` owns what is built and accepts it. The `research-director` leads the research team

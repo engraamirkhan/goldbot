@@ -132,7 +132,7 @@ sudo -u goldbot nano /opt/goldbot/config/settings.local.yaml
 #   auth: {owner_email: <you>}
 #   telegram: {allowed_user_ids: [<your id>]}
 ```
-then `sudo chmod 600 /opt/goldbot/config/settings.local.yaml`, and the backup keys as in 0.6.
+then `sudo -u goldbot chmod 600 /opt/goldbot/config/settings.local.yaml`, and the backup keys as in 0.6.
 
 Start everything (supervisor first):
 ```bash
@@ -190,11 +190,31 @@ and the rest still arrives. It never contains account numbers or emails.
   * **Scheduler jobs.** While a job runs, a manual deploy is refused and a Telegram approval waits. The scheduler is
     stopped first and checked again. `--interrupt-jobs` deploys anyway (that job's slot is not re-run).
   * Only `enabled` units are restarted, so a stray, disabled engine instance is never started.
-* The health check `deploy` shows the last result. If the deploy script itself changed, review it (security
-  reviewer) and run
-  `sudo install -m 755 -o root -g root /opt/goldbot/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy`.
-  Check: `sha256sum /usr/local/sbin/goldbot-deploy /opt/goldbot/goldbot/ops/linux/goldbot-deploy.sh` prints two
-  equal hashes.
+* **Rollback floor.** `/etc/goldbot/rollback-floor` (optional, root-owned, one commit id): `--rollback` refuses any
+  commit older than it. Set it after a deploy that must never be undone (for example the auth hardening,
+  docs/deploy/2026-10-batch.md 8.1). Removing it is your decision.
+* The health check `deploy` shows the last result.
+* **Installing a new goldbot-deploy** (when a release changes `goldbot/ops/linux/goldbot-deploy.sh`, after the
+  security reviewer signed it off). Root runs it, so root never takes it from `/opt/goldbot`:
+
+  1. **On your Mac** (your own clone, not the box): check the commit is on GitHub's `main`, then note the script's hash at the
+     commit you deploy.
+     ```bash
+     git -C <your goldbot clone> fetch -q origin && git -C <your goldbot clone> show <SHA>:goldbot/ops/linux/goldbot-deploy.sh | shasum -a 256
+     git -C <your goldbot clone> merge-base --is-ancestor <SHA> origin/main && echo on-main
+     ```
+     Without `on-main` (or if `git show` says the commit is unknown), stop.
+  2. **On the box**, root downloads that commit's copy from GitHub into a root-only folder, checks it against the
+     hash from step 1, and installs it only if they match (`sha256sum -c` prints `OK`, otherwise nothing is installed):
+     ```bash
+     sudo install -d -m 700 -o root -g root /root/goldbot-deploy-new
+     sudo curl -fsSL -o /root/goldbot-deploy-new/goldbot-deploy https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/linux/goldbot-deploy.sh
+     echo "<HASH FROM STEP 1>  /root/goldbot-deploy-new/goldbot-deploy" | sudo sha256sum -c - \
+       && sudo install -m 755 -o root -g root /root/goldbot-deploy-new/goldbot-deploy /usr/local/sbin/goldbot-deploy
+     sudo rm -rf /root/goldbot-deploy-new
+     ```
+     Never install it from `/opt/goldbot` or from `sudo -u goldbot git show`. The service user can write that tree and
+     its `.git` (`git replace` can swap the file), so a hash computed there proves nothing.
 * **If a deploy says `refused`:** the detail says why and nothing was changed. **If it says `failed`:** the rollback
   did not recover every service. Run `journalctl -u 'goldbot-*' -n 200` and `goldbot run health`, then start the
   units by hand (supervisor first). For aux.db errors, see docs/deploy/2026-10-batch.md 5.1.
@@ -800,7 +820,7 @@ nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what
 | `max_positions` | Two positions already open on this account. | Normal. |
 | `daily_cap` / `weekly_cap` | This account lost 2% / 5% measured from its equity when the engine started. | The engine does not yet reset its day/week starting equity at 00:00 UTC (`new_day` in `goldbot/risk/gate.py` is not called), so these clear only when the engine restarts. Review the losses before restarting. |
 | `negative_ev`, `target_below_cost_floor` | After costs the trade has no edge, or the target is below 2.5x the round-trip cost. | Normal filtering; check the cost table if it happens to every candidate. |
-| `min_lot_exceeds_risk`, `margin_level_floor` | Minimum lot would risk too much, or margin level would fall below 300%. | Account too small for the stop; normal on small demos. On the £1,000 demo, 15m needs the minimum-lot exception: `risk: { min_lot_risk_cap: 0.01 }` in `config\settings.local.yaml` (never applies in tiny-live). |
+| `min_lot_exceeds_risk`, `margin_level_floor` | Minimum lot would risk too much, or margin level would fall below 300%. | Account too small for the stop; normal on small demos. On a small demo, 15m needs the minimum-lot exception: `risk: { min_lot_risk_cap: 0.01 }` in `config\settings.local.yaml` (never applies in tiny-live). |
 | `fx_conversion_unavailable` | The account is not in USD and the terminal gave no USD -> account-currency conversion (`order_calc_profit` / tick value), or the terminal's symbol info was unreadable. | Check the terminal is logged in and XAUUSD is in Market Watch; entries resume when it answers. Exits are unaffected. |
 | `daily_loss_limit_abs` | Today's loss plus this trade's full stop risk would exceed min(2% of the day-start equity, the account's `daily_loss_limit_abs` in `config\accounts.yaml`, e.g. £50 on icm-demo). Equal is allowed; the supervisor halts once the combined loss reaches the limit. | Normal; clears at 00:00 UTC. `engine_<account>.json` shows `daily_loss_limit` and `daily_loss_remaining`. |
 | `supervisor_halt` with `mixed_account_currencies` | Running engines report different deposit currencies (e.g. GBP and USD); equities are never summed across currencies. Health names the files. | Stop the engine that should not run (or delete its leftover `engine_<account>.json`), see "Currency rollout" below. |

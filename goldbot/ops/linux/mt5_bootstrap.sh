@@ -32,12 +32,20 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --install-recommends winehq-st
 DEBIAN_FRONTEND=noninteractive apt-get install -y git curl xvfb x11vnc chrony
 systemctl enable --now chrony
 
+# What root installs (systemd units, the root-run deploy script) comes from root's OWN shallow clone in a root-only
+# directory, never from $ROOT: the service user can write that tree and its .git, and it runs code (pip/npm/Wine
+# installs) before the installs below. docs/AGENT_STANDARDS.md "Root-run tooling".
+OPS_SRC=$(mktemp -d /root/goldbot-ops.XXXXXX)
+trap 'rm -rf -- "$OPS_SRC"' EXIT
+git clone -q --depth 1 "$REPO" "$OPS_SRC/src"
+OPS=$OPS_SRC/src/goldbot/ops/linux
+
 id mt5 >/dev/null 2>&1 || useradd --create-home --shell /bin/bash mt5
 [ -d "$ROOT/.git" ] || git clone "$REPO" "$ROOT"
 mkdir -p "$ROOT/state" "$ROOT/logs" && chown -R mt5:mt5 "$ROOT" && chmod 700 "$ROOT/state"
 
-install -m 644 "$ROOT"/goldbot/ops/linux/systemd/goldbot-xvfb.service "$ROOT"/goldbot/ops/linux/systemd/goldbot-bridge@.service \
-  "$ROOT"/goldbot/ops/linux/systemd/goldbot-vnc.service /etc/systemd/system/
+install -m 644 "$OPS"/systemd/goldbot-xvfb.service "$OPS"/systemd/goldbot-bridge@.service \
+  "$OPS"/systemd/goldbot-vnc.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now goldbot-xvfb
 
@@ -82,11 +90,12 @@ chmod 755 /usr/local/bin/goldbot-mt5
 systemctl enable goldbot-bridge@icm-demo
 
 # Deploys: only versions the owner approves (Telegram [Deploy] or `sudo goldbot-deploy latest`), never by itself.
-# The script runs as root, so a root-owned copy is installed; the repo copy (writable by the service user) is never run
-# as root. After reviewing a change to it: sudo install -m 755 -o root -g root <repo>/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy
+# The script runs as root, so a root-owned copy is installed from root's own clone ($OPS); the repo copy (writable by
+# the service user) is never run or installed as root. To update it later: RUNBOOK 0.5 "Installing a new
+# goldbot-deploy" (root downloads it from GitHub at the commit; the owner checks its sha256 off-box first).
 mkdir -p /etc/goldbot
 echo mt5 > /etc/goldbot/role
-install -m 755 -o root -g root "$ROOT/goldbot/ops/linux/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
+install -m 755 -o root -g root "$OPS/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
 # the MT5 box is updated by hand only (sudo goldbot-deploy latest): no deploy timer here
 
 echo "MT5 box installed. Next: log in to MT5 once over VNC, then bridge-serve (docs/RUNBOOK.md)."
