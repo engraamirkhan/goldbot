@@ -55,7 +55,15 @@ from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, sizing
 from goldbot.risk.gate import REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
-from goldbot.risk.windows import HolidayList, calendar_gap, load_holidays, reopen_window, server_date
+from goldbot.risk.windows import (
+    HolidayList,
+    calendar_gap,
+    holiday_end,
+    load_holidays,
+    reopen_window,
+    reopen_window_end,
+    server_date,
+)
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal, ceil_cent
 
@@ -300,6 +308,8 @@ class Engine:
         self._unavailable_why: str | None = None
         self._reopen_fault = False
         self._calendar_seen: tuple[pd.Timestamp | None, pd.Timestamp | None] = (None, None)
+        # when each window the gate refuses on ends (tier2_until, reopen_until, holiday), for the owner's displays
+        self._window_ends: dict[str, Any] = {}
         # the dashboard's account view (goldbot/ops/account_view.py), published in the state file; reporting only.
         # From the broker: balance, currency and margin (never the login or server), the symbol's lot terms; from the
         # bars: ATR(14) per ladder timeframe, refreshed at bar closes
@@ -2368,6 +2378,7 @@ class Engine:
         L3). Each fault is logged once when it starts (review M1), and its start is published in the engine state for
         health (`check_entry_windows`). Entries only (RiskGate); no exit path reads these flags."""
         st = self.state
+        self._window_ends = {}
         try:
             tier2, reopen, thin, why, reopen_fault = self._window_flags(tick_ts, now, sessions)
         except Exception as exc:
@@ -2406,13 +2417,19 @@ class Engine:
                 self._calendar_seen = (pd.Timestamp(pd.to_datetime(ev["ts_utc"], utc=True).max()),
                                        pd.Timestamp(pd.to_datetime(ev["received_utc"], utc=True).max())
                                        if "received_utc" in ev.columns else None)
-                tier2 = blackout_window(ev, tick_ts, L.tier2.before_min, L.tier2.after_min, tier=2) is not None
+                hit = blackout_window(ev, tick_ts, L.tier2.before_min, L.tier2.after_min, tier=2)
+                tier2 = hit is not None
+                if hit is not None:
+                    self._window_end("tier2_until",
+                                     lambda: pd.Timestamp(hit["ts_utc"]) + pd.Timedelta(minutes=L.tier2.after_min))
             why = why or calendar_gap(ev, tick_ts)
         if L.reopen.enabled:
             try:
                 reopen = reopen_window(sessions, now, L.reopen)
             except Exception as exc:
                 reopen, reopen_fault = True, f"session table unusable ({type(exc).__name__}: {exc})"
+            if reopen and reopen_fault is None:
+                self._window_end("reopen_until", lambda: reopen_window_end(sessions, now, L.reopen))
         if L.holidays.enabled:
             hl = self._holiday_list()
             day = server_date(sessions, now)
@@ -2422,7 +2439,17 @@ class Engine:
                 why = why or f"holiday list {hl.version} does not cover {day} (valid {hl.valid_from}..{hl.valid_through})"
             else:
                 thin = hl.thin(day) is not None
+                if thin:
+                    self._window_end("holiday", lambda: holiday_end(hl, sessions, now))
         return tier2, reopen, thin, why, reopen_fault
+
+    def _window_end(self, key: str, compute: Callable[[], Any]) -> None:
+        """When a window the gate is refusing on ends, for the state file and the owner's displays only: an error here
+        never changes a flag (it only leaves the time unknown)."""
+        try:
+            self._window_ends[key] = compute()
+        except Exception as exc:
+            log.warning("entry windows: %s not computed (%s: %s)", key, type(exc).__name__, exc)
 
     def _windows_state(self) -> dict:
         """The entry windows for engine_<account>.json and health (`check_entry_windows`, review M1)."""
@@ -2432,6 +2459,8 @@ class Engine:
 
         def iso(x: pd.Timestamp | None) -> str | None:
             return None if x is None or pd.isna(x) else pd.Timestamp(x).isoformat()
+        ends = self._window_ends
+        holiday = ends.get("holiday")
         return {"enabled": {"tier2": L.tier2.enabled, "reopen": L.reopen.enabled, "holidays": L.holidays.enabled},
                 "tier2_blackout": st.tier2_blackout, "reopen_window": st.reopen_window,
                 "holiday_thin": st.holiday_thin, "calendar_unavailable": st.calendar_unavailable,
@@ -2439,7 +2468,12 @@ class Engine:
                 "calendar_unavailable_reason": self._unavailable_why,
                 "holiday_version": hl.version if hl is not None else None,
                 "holiday_valid_through": hl.valid_through.isoformat() if hl is not None else None,
-                "calendar_latest_ts_utc": iso(latest), "calendar_received_utc": iso(received)}
+                "calendar_latest_ts_utc": iso(latest), "calendar_received_utc": iso(received),
+                # when each window ends (display only): the owner's screens show the running gate's own times
+                "tier2_until": iso(ends.get("tier2_until")) if st.tier2_blackout else None,
+                "reopen_until": iso(ends.get("reopen_until")) if st.reopen_window else None,
+                "holiday_name": holiday[0] if holiday and st.holiday_thin else None,
+                "holiday_until": iso(holiday[1]) if holiday and st.holiday_thin else None}
 
     def _busy(self, agent_id: str) -> bool:
         return any(t.agent_id == agent_id for t in self.open.values()) or \

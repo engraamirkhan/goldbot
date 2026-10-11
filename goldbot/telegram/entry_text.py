@@ -20,8 +20,10 @@ No login, server or host: only the account's config name, mode and the API's map
 """
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
+from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
@@ -30,6 +32,7 @@ from goldbot.api import entry_status as es
 from goldbot.api.schema import EntryBlock, EntryStatus
 from goldbot.config import Settings
 
+log = logging.getLogger(__name__)
 _DIGITS = re.compile(r"\d{5,}")
 MAX_LINES = 15                 # per account: one phone screen
 BADGE = {"open": "OPEN", "partial": "PARTLY OPEN", "waiting": "PAUSED", "blocked": "BLOCKED"}
@@ -139,6 +142,24 @@ def status_message(state_dir: str | Path, now: pd.Timestamp, *, tz: str, setting
     except Exception:                       # noqa: BLE001 - reporting only; never an empty or OPEN reply
         parts = [FAILED]
     return "\n\n".join([title, *parts, *([footer] if footer else [])])
+
+
+def status_reply(state_dir: str | Path, now: pd.Timestamp, *, tz: str, bus: Any,
+                 load: Callable[[], Settings | None]) -> str:
+    """What the bot sends for /status: settings re-read (the RiskGate's defaults when they fail to load, as the API),
+    the approval mode and pending count from the bus as the footer, then `status_message`. Any failure answers with
+    FAILED: the owner never gets silence."""
+    try:
+        try:
+            settings = load()
+        except Exception:                   # noqa: BLE001 - a bad settings edit: the defaults
+            settings = None
+        c = bus.control()
+        footer = f"Approval mode: {c.approval_mode or 'propose (default)'} · pending proposals: {len(bus.pending())}"
+        return status_message(state_dir, now, tz=tz, settings=settings, footer=footer)
+    except Exception:                       # noqa: BLE001
+        log.exception("/status reply failed")
+        return FAILED
 
 
 def digest_line(state_dir: str | Path, now: pd.Timestamp, settings: Settings | None) -> list[str]:

@@ -152,6 +152,33 @@ def test_an_entry_window_reaches_status_in_the_apis_words():
     assert t.index("Needs you:") < t.index("• Economic calendar") < t.index("Waits:") < t.index("• Second-tier")
 
 
+class _Bus:
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+
+    def control(self) -> Any:
+        if self.fail:
+            raise OSError("control.json gone")
+        from goldbot.telegram.bus import Control
+        return Control()
+
+    def pending(self) -> list:
+        return []
+
+
+def test_the_reply_carries_the_footer_and_any_failure_still_answers(tmp_path):
+    """Review (trading safety, LOW): /status never answers with nothing. A failing control file, pending list, settings
+    load or build replies with the FAILED text."""
+    sd = _state(tmp_path)
+    ok = et.status_reply(sd, WED, tz=LONDON, bus=_Bus(), load=lambda: None)
+    assert ok.endswith("Approval mode: propose (default) · pending proposals: 0") and "OPEN · icm-demo" in ok
+
+    def bad_settings() -> Any:
+        raise ValueError("bad yaml")
+    assert "OPEN · icm-demo" in et.status_reply(sd, WED, tz=LONDON, bus=_Bus(), load=bad_settings)   # defaults
+    assert et.status_reply(sd, WED, tz=LONDON, bus=_Bus(fail=True), load=lambda: None) == et.FAILED
+
+
 def test_a_bad_zone_falls_back_to_utc():
     t = et.account_text("icm-demo", "demo", status(engine(market_closed=True, ts=SAT.timestamp()), now=SAT),
                         now=SAT, tz="Not/AZone")

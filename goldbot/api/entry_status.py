@@ -21,7 +21,7 @@ import json
 import logging
 import math
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -33,7 +33,6 @@ from goldbot.config import Settings
 from goldbot.data.calendar import (
     DEFAULT_SESSIONS,
     SessionTable,
-    server_midnight_utc,
     session_table_from_cache,
 )
 from goldbot.data.timeutil import floor_tf
@@ -41,7 +40,7 @@ from goldbot.ops.account_view import LossBudget, Milestones, loss_budget, milest
 from goldbot.ops.health import ENGINE_FAIL_S
 from goldbot.risk.gate import RiskLimits
 from goldbot.risk.supervisor import Supervisor, SupervisorLimits
-from goldbot.risk.windows import last_reopen, load_holidays, server_date
+from goldbot.risk.windows import holiday_end, load_holidays, reopen_window_end
 
 log = logging.getLogger("goldbot.api.entry_status")
 
@@ -315,49 +314,45 @@ def _throttle_blocks(th: Any, now: pd.Timestamp) -> tuple[list[EntryBlock], int]
 
 
 def _reopen_until(sessions: Any, now: pd.Timestamp, limits: RiskLimits) -> pd.Timestamp | None:
-    """The end of the reopen window `now` is in (goldbot/risk/windows.py arithmetic on the published session table);
-    None when it cannot be placed (the engine failed closed on an unreadable table, or the tables disagree)."""
+    """Fallback for an engine that does not publish `reopen_until`: the end of the reopen window on the published
+    session table, with the minutes read here (only when the settings read here have the window on). None when it
+    cannot be placed."""
+    if not limits.reopen.enabled:
+        return None
     try:
-        cfg = limits.reopen
-        daily, weekly = pd.Timedelta(minutes=cfg.after_daily_reopen_min), pd.Timedelta(minutes=cfg.after_monday_open_min)
-        hit = last_reopen(_table(sessions), now, max(daily, weekly))
-        if hit is None:
-            return None
-        end = hit[0] + (weekly if hit[1] else daily)
-        return end if end >= now else None
+        return reopen_window_end(_table(sessions), now, limits.reopen)
     except Exception:                       # noqa: BLE001 - reporting only: no time is promised
         log.exception("reopen window end not computed")
         return None
 
 
 def _holiday(sessions: Any, now: pd.Timestamp, limits: RiskLimits) -> tuple[str | None, pd.Timestamp | None]:
-    """(today's holiday name from the configured list, server midnight of the first unlisted day after it, as UTC);
-    (None, None) when the list or the table cannot be read."""
+    """Fallback for an engine that does not publish `holiday_name` / `holiday_until`: from the configured list;
+    (None, None) when the list or the table cannot be read or today is not listed."""
     try:
-        hl = load_holidays(limits.holidays.file)
-        table = _table(sessions)
-        today = server_date(table, now)
-        day = today + timedelta(days=1)
-        while hl.thin(day) is not None and day - today < timedelta(days=14):
-            day += timedelta(days=1)
-        return hl.thin(today), server_midnight_utc(day, table.server_tz)
+        hit = holiday_end(load_holidays(limits.holidays.file), _table(sessions), now)
     except Exception:                       # noqa: BLE001
         log.exception("holiday window unreadable")
         return None, None
+    return hit if hit is not None else (None, None)
 
 
 def _window_blocks(w: Any, sessions: Any, now: pd.Timestamp, limits: RiskLimits) -> list[EntryBlock]:
-    """The engine's entry windows (`windows` in engine_<account>.json, BACKLOG 17/18), refused as the RiskGate refuses
-    them: only for a window enabled in the gate's limits and in the engine's own `enabled` (a window that is off is
-    ignored whatever its flag, as the engine's fail-closed path raises flags regardless). The engine's free-text
+    """The engine's entry windows (`windows` in engine_<account>.json, BACKLOG 17/18), refused as the running
+    RiskGate refuses them. Whether a window is on comes from the engine's own `enabled` alone (the running gate's
+    setting; a window it has off is ignored whatever its flag, since its fail-closed path raises flags regardless);
+    with no `enabled` published a raised flag is shown. The settings read here (`limits`) never hide a window: a
+    settings edit without a restart, or settings that fail to load, would otherwise show OPEN while the gate refuses.
+    Times are the engine's own (`tier2_until`, `reopen_until`, `holiday_until`, `holiday_name`); the limits are only a
+    fallback for wording and times when it does not publish them. The engine's free-text
     `calendar_unavailable_reason` is only read to choose between two mapped texts, never shown."""
     if not isinstance(w, dict):
         return []
     enabled = w.get("enabled")
-    on: dict[str, Any] = enabled if isinstance(enabled, dict) else {}
-    tier2 = limits.tier2.enabled and on.get("tier2") is True
-    reopen = limits.reopen.enabled and on.get("reopen") is True
-    holidays = limits.holidays.enabled and on.get("holidays") is True
+
+    def on(key: str) -> bool:
+        return enabled.get(key) is True if isinstance(enabled, dict) else True
+    tier2, reopen, holidays = on("tier2"), on("reopen"), on("holidays")
     out = []
     if (tier2 or holidays) and w.get("calendar_unavailable") is True:
         why = w.get("calendar_unavailable_reason")
@@ -367,14 +362,23 @@ def _window_blocks(w: Any, sessions: Any, now: pd.Timestamp, limits: RiskLimits)
                          fix=HOLIDAY_LIST_FIX if holiday_list else None,
                          at=_ts(w.get("calendar_unavailable_since")), at_label="since"))
     if tier2 and w.get("tier2_blackout") is True:
+        until = _ts(w.get("tier2_until"))
         t2 = limits.tier2
-        out.append(block("tier2_blackout", fix=f"{NOTHING}: entries resume {t2.after_min} min after the release (the "
-                                               f"pause starts {t2.before_min} min before it)."))
+        fix = None if until is not None or not t2.enabled else \
+            f"{NOTHING}: entries resume {t2.after_min} min after the release (the pause starts {t2.before_min} min before it)."
+        out.append(block("tier2_blackout", fix=fix, at=until, at_label="until"))
     if reopen and w.get("reopen_window") is True:
-        out.append(block("reopen_window", at=_reopen_until(sessions, now, limits), at_label="until"))
+        until = _ts(w.get("reopen_until"))
+        out.append(block("reopen_window", at=until if until is not None else _reopen_until(sessions, now, limits),
+                         at_label="until"))
     if holidays and w.get("holiday_thin") is True:
-        name, until = _holiday(sessions, now, limits)
-        out.append(block("holiday_thin", text=f"Holiday trading ({name[:60]}): thin market, entries paused"
+        name = w.get("holiday_name") if isinstance(w.get("holiday_name"), str) else None
+        until = _ts(w.get("holiday_until"))
+        if name is None or until is None:
+            fb_name, fb_until = _holiday(sessions, now, limits)
+            name, until = name or fb_name, until if until is not None else fb_until
+        name = name.strip()[:60] if name else None
+        out.append(block("holiday_thin", text=f"Holiday trading ({name}): thin market, entries paused"
                          if name else None, at=until, at_label="until"))
     return out
 

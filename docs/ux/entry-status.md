@@ -123,12 +123,14 @@ re-arms on this page when ready."
 The engine does not publish rollover, the Friday weekend cut, or per-trade refusals (fx conversion, heat cap): the
 panel shows them once the engine publishes `entry_blocks` (ADR 0011).
 
-The entry windows (`windows` in the engine state, BACKLOG 17/18) are mapped, each only when enabled in the RiskGate's
-limits and the engine's `enabled`: `reopen_window` (wait, "until" the window's end from the session table),
-`holiday_thin` (wait, names the holiday from the configured list, "until" server midnight of the first unlisted day),
-`tier2_blackout` (wait, no time: the fix gives the minutes before/after the release; the engine does not publish the
-event time yet), `calendar_unavailable` (act, "since"; holiday-list or economic-calendar wording chosen from the
-engine's reason prefix, the reason itself never shown).
+The entry windows (`windows` in the engine state, BACKLOG 17/18) are mapped. Whether a window is on comes from the
+engine's own `windows.enabled` alone (the running gate's setting); the settings the API reads never hide a window (a
+settings edit without a restart, or settings that fail to load, must not show OPEN while the gate refuses). With no
+`enabled` published, a raised flag is shown. Times are the engine's own (`tier2_until`, `reopen_until`,
+`holiday_name`, `holiday_until`); the API's settings are a fallback for wording and times only:
+`reopen_window` (wait, "until"), `holiday_thin` (wait, names the holiday, "until" server midnight of the first unlisted
+day), `tier2_blackout` (wait, "until" the release + after-minutes), `calendar_unavailable` (act, "since"; holiday-list
+or economic-calendar wording chosen from the engine's reason prefix, the reason itself never shown).
 
 ## Telegram `/status` and the daily digest
 

@@ -272,17 +272,11 @@ class TelegramBot:  # pragma: no cover - needs network + token
         await update.message.reply_text(text)
 
     def _status_text(self) -> str:
+        """Any failure (control file, pending list, settings, build) replies with entry_text.FAILED, never nothing."""
         from goldbot.config import load_settings
-        from goldbot.telegram.entry_text import status_message
-        try:
-            settings = load_settings()
-        except Exception:                       # a bad settings edit: the RiskGate's design defaults, as the API
-            settings = None
-        c = self.bus.control()
-        footer = (f"Approval mode: {c.approval_mode or 'propose (default)'} · "
-                  f"pending proposals: {len(self.bus.pending())}")
-        return status_message(self.state_dir, pd.Timestamp.now("UTC"), tz=self.settings.owner_tz, settings=settings,
-                              footer=footer)
+        from goldbot.telegram.entry_text import status_reply
+        return status_reply(self.state_dir, pd.Timestamp.now("UTC"), tz=self.settings.owner_tz, bus=self.bus,
+                            load=load_settings)
 
     # ------------------------------------------------------------ credential prompts in
     def prompt_sync(self, message: str, secret: bool) -> str:

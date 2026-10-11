@@ -405,7 +405,36 @@ def test_a_window_that_is_off_never_blocks_whatever_its_flag():
     off = windows(enabled={"tier2": False, "reopen": False, "holidays": False}, tier2_blackout=True, reopen_window=True,
                   holiday_thin=True, calendar_unavailable=True)
     assert codes(status(engine(windows=off), limits=window_limits())) == []
-    assert codes(status(engine(windows=windows(reopen_window=True, calendar_unavailable=True)))) == []   # limits off
+
+
+def test_the_engines_own_enabled_decides_even_when_the_settings_read_here_say_off():
+    """Review (trading safety, MEDIUM): the running gate's setting is the engine's `windows.enabled`. A settings edit
+    without a restart, or settings that fail to load (RiskLimits() defaults: every window off), must never hide a
+    window the gate is refusing on."""
+    s = status(engine(windows=windows(reopen_window=True, calendar_unavailable=True)))     # default limits: all off
+    assert codes(s) == ["calendar_unavailable", "reopen_window"] and s.state == "blocked"
+    for flag in ("tier2_blackout", "reopen_window", "holiday_thin", "calendar_unavailable"):
+        s = status(engine(windows=windows(**{flag: True})), limits=RiskLimits())
+        assert s.state != "open" and codes(s) == [flag], flag
+    # no `enabled` published: nothing to go on, so a raised flag is shown (the safe side of a display)
+    s = status(engine(windows={"reopen_window": True}), limits=RiskLimits())
+    assert codes(s) == ["reopen_window"]
+
+
+def test_times_the_engine_publishes_win_over_ones_worked_out_here():
+    w = windows(tier2_blackout=True, reopen_window=True, holiday_thin=True,
+                tier2_until="2026-10-14T14:12:00+00:00", reopen_until="2026-10-14T14:07:00+00:00",
+                holiday_name="Day after Thanksgiving", holiday_until="2026-10-15T21:00:00+00:00")
+    s = status(engine(windows=w), limits=RiskLimits())
+    by = {b.code: b for b in s.blocks}
+    assert (by["tier2_blackout"].at_label, by["tier2_blackout"].at) == \
+        ("until", pd.Timestamp("2026-10-14 14:12", tz="UTC").to_pydatetime())
+    assert by["reopen_window"].at == pd.Timestamp("2026-10-14 14:07", tz="UTC").to_pydatetime()
+    assert by["holiday_thin"].text == "Holiday trading (Day after Thanksgiving): thin market, entries paused"
+    assert by["holiday_thin"].at == pd.Timestamp("2026-10-15 21:00", tz="UTC").to_pydatetime()
+    assert s.clears_at == pd.Timestamp("2026-10-15 21:00", tz="UTC").to_pydatetime()
+    # the fallback wording from the limits read here never claims minutes it does not know
+    assert by["tier2_blackout"].fix == es.REASONS["tier2_blackout"].fix
 
 
 @pytest.mark.parametrize("junk", [{"windows": "x"}, {"windows": {"enabled": "all", "reopen_window": True}},

@@ -432,6 +432,30 @@ def test_engine_publishes_the_windows_block_and_logs_once_per_transition(tmp_pat
     assert len([r for r in caplog.records if "calendar_unavailable" in r.getMessage()]) == 2
 
 
+def test_the_windows_block_says_when_each_window_ends(tmp_path):
+    """Review (trading safety, LOW): the engine publishes when its own windows end, so the owner's displays show the
+    running gate's times, not ones re-derived from settings that may have changed since it started."""
+    def block(eng: Engine) -> dict:
+        eng._write_state()
+        return json.loads((Path(eng.cfg.state_dir) / "engine_icm-demo.json").read_text())["windows"]
+    eng, pb = _engine(tmp_path / "t2", RiskLimits(tier2=Tier2Blackout(enabled=True)), _feed("-05:00", "2026-01-15"))
+    _at(eng, pb, pd.Timestamp("2026-01-15 13:30", tz="UTC"))                # PPI (tier 2) at 13:30 UTC, +15 min
+    w = block(eng)
+    assert pd.Timestamp(w["tier2_until"]) == pd.Timestamp("2026-01-15 13:45", tz="UTC")
+    assert w["reopen_until"] is None and w["holiday_name"] is None and w["holiday_until"] is None
+    eng, pb = _engine(tmp_path / "ro", RiskLimits(reopen=ReopenSettings(enabled=True), holidays=HolidaySettings(enabled=True)))
+    _at(eng, pb, DAILY["winter"] + 3 * M)
+    w = block(eng)
+    assert pd.Timestamp(w["reopen_until"]) == DAILY["winter"] + 10 * M and w["tier2_until"] is None
+    _at(eng, pb, pd.Timestamp("2026-11-26 15:00", tz="UTC"))                # Thanksgiving; the 27th is listed too
+    w = block(eng)
+    assert w["holiday_name"] == "Thanksgiving Day"
+    assert pd.Timestamp(w["holiday_until"]) == pd.Timestamp("2026-11-27 22:00", tz="UTC")   # Sat 00:00 Athens
+    assert w["reopen_until"] is None
+    _at(eng, pb, pd.Timestamp("2026-11-25 15:00", tz="UTC"))
+    assert block(eng)["holiday_name"] is None and block(eng)["holiday_until"] is None
+
+
 def test_a_raising_window_computation_fails_closed_and_logs_once(tmp_path, monkeypatch, caplog):
     import goldbot.engine.runner as runner_mod
     eng, pb = _engine(tmp_path, ON, _feed("-05:00", "2026-01-15"))

@@ -42,6 +42,20 @@ def test_prompt_stores_and_reuses_credential(isolated):
     assert acc_mod.load_accounts(isolated)["icm-demo"].login == 12345      # read back from the keyring
 
 
+def test_an_account_name_that_looks_like_a_login_fails_at_load(isolated):
+    """Account names reach the owner's dashboard, Telegram /status and the digest: a name carrying 5+ digits (an MT5
+    login) is refused when config/accounts.yaml is loaded (the displays also cut such runs, as a backstop)."""
+    import yaml
+    raw = yaml.safe_load(isolated.read_text())
+    raw["accounts"]["icm-demo-51234567"] = raw["accounts"].pop("icm-demo")
+    isolated.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="5 or more digits"):
+        acc_mod.load_accounts(isolated)
+    assert acc_mod.Account.model_fields["account_id"]
+    for ok in ("icm-demo", "icm-live", "ftmo-2026"):
+        assert acc_mod.ACCOUNT_ID_LOGIN.search(ok) is None
+
+
 def test_the_committed_registry_holds_no_login_numbers():
     import yaml
     raw = yaml.safe_load(acc_mod.ACCOUNTS_FILE.read_text())
