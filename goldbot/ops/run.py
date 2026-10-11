@@ -111,6 +111,22 @@ def refresh_sessions(source: Any, now: "pd.Timestamp", current: "SessionTable | 
     return r.collect(now, current)
 
 
+def apply_bridge_compat(eng: Any, new: Any) -> None:
+    """Hand the engine the bridge verdict (goldbot/ops/bridge_compat.py, BACKLOG 42): an unreachable /health keeps an
+    earlier `incompatible` (`next_verdict`); a change of status is logged once. The engine's gate reads the flag for
+    entries only (`bridge_incompatible`); exits never do. None (the check did not finish in time) changes nothing."""
+    from goldbot.ops.bridge_compat import next_verdict
+    if new is None:
+        return
+    prev = eng.bridge_compat
+    verdict = next_verdict(prev, new)
+    if prev is None or prev.status != verdict.status:
+        level = logging.ERROR if verdict.blocks else logging.WARNING if verdict.status != "ok" else logging.INFO
+        log.log(level, "bridge %s: %s%s", verdict.status, verdict.reason,
+                " -- entries refused (bridge_incompatible), exits unaffected" if verdict.blocks else "")
+    eng.set_bridge_compat(verdict)
+
+
 def engine_pass(eng: Any, broker: Any, symbol: str) -> bool:
     """One pass of the engine loop: read the latest tick and feed it. Any exception (an AssertionError too) is recorded
     on the engine (`tick_error`: entries blocked until a clean decision bar, rate-limited logging, alerted by health)
@@ -225,6 +241,12 @@ def run_engine(account_id: str) -> None:
     if table is not None:
         eng.set_sessions(table)
     refresher = SessionRefresher(sessions)
+    compat: Any = None                      # BACKLOG 42: the bridge's methods, protocol and zone against this brain's
+    if bridge is not None:
+        from goldbot.ops.bridge_compat import BridgeCompatChecker, check_bridge, repo_commit
+        brain_commit, url, tz = repo_commit(), bridge[0], acc.server_tz
+        compat = BridgeCompatChecker(lambda: check_bridge(url, tz, brain_commit))
+        apply_bridge_compat(eng, compat.run_once())          # once, before the loop starts
     warm = eng.warm_start(pd.Timestamp.now("UTC"))
     log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f", account_id,
              type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade)
@@ -241,9 +263,16 @@ def run_engine(account_id: str) -> None:
                 eng.set_sessions(table)
         except Exception:
             log.exception("session refresh failed; keeping the last table")
+        if compat is not None:                     # a finished bridge check is applied; the loop never waits for it
+            try:
+                apply_bridge_compat(eng, compat.collect())
+            except Exception:
+                log.exception("bridge compatibility verdict not applied; keeping the last one")
         if time.time() - last_check > 60:          # promotions by the scheduler take effect without a restart
             last_check = time.time()
             refresher.start(pd.Timestamp.now("UTC"))   # once per server day the read reaches the broker
+            if compat is not None:
+                compat.start()                     # GET /health on its own thread (BACKLOG 42)
             now_m = mtimes()
             if now_m != seen:
                 seen = now_m
@@ -393,8 +422,10 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     if why:                                        # e.g. the terminal's saved login is a live account
         broker.shutdown()
         raise SystemExit(f"refusing to serve {account_id}: {why}")
+    from goldbot.ops.bridge_compat import repo_commit
     serve(GuardedBroker(broker, magic_base=acc.magic_base,
-                        verify=lambda info: accounts.verify_terminal_account(acc, info)), host, int(port), token)
+                        verify=lambda info: accounts.verify_terminal_account(acc, info)), host, int(port), token,
+          commit=repo_commit())           # read once: the code this process runs, reported on /health (BACKLOG 42)
 
 
 def run_api() -> None:

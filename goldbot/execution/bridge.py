@@ -73,6 +73,11 @@ METHODS: dict[str, tuple[str, bool]] = {
     "modify": ("OrderResult", False),
     "close": ("OrderResult", False),
 }
+# The wire protocol's version, reported on GET /health with the served METHODS (BACKLOG 42, gap G6): bump it whenever a
+# method is added, removed or changes its arguments or result. tests/test_bridge_compat.py pins it to a digest of
+# METHODS so a change to the table without a bump fails CI. The brain refuses entries against a bridge whose version is
+# lower or that lacks a method it calls (goldbot/ops/bridge_compat.py); exits are never gated by it.
+API_VERSION = 1
 _RECORDS: dict[str, type[BaseModel]] = {"SymbolInfo": SymbolInfo, "AccountInfo": AccountInfo, "Tick": Tick, "OrderResult": OrderResult,
             "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent, "TradingSession": TradingSession}
 MAX_BODY = 1_000_000
@@ -132,7 +137,9 @@ def _decode(v: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------------------------- server
-def make_handler(broker: Any, token: str) -> type[BaseHTTPRequestHandler]:
+def make_handler(broker: Any, token: str, *, commit: str | None = None) -> type[BaseHTTPRequestHandler]:
+    """`commit`: the commit this bridge process runs (read once at start), reported on /health so the brain can see
+    when the two boxes run different code. Nothing on /health is a secret: zone, commit (public repo), protocol."""
     if len(token) < 32:
         raise ValueError("bridge token must be at least 32 characters")
 
@@ -159,6 +166,10 @@ def make_handler(broker: Any, token: str) -> type[BaseHTTPRequestHandler]:
             tz = getattr(broker, "server_tz", None)      # the zone this box converts MT5 stamps with (not a secret)
             if isinstance(tz, str):
                 body["server_tz"] = tz
+            body["api_version"] = API_VERSION
+            body["methods"] = sorted(METHODS)                # exactly what do_POST serves
+            if commit is not None:
+                body["commit"] = commit
             self._reply(200, body)
 
         def do_POST(self) -> None:
@@ -197,9 +208,10 @@ def make_handler(broker: Any, token: str) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def serve(broker: Any, host: str, port: int, token: str) -> None:  # pragma: no cover - blocking loop
+def serve(broker: Any, host: str, port: int, token: str,
+          commit: str | None = None) -> None:  # pragma: no cover - blocking loop
     """One request at a time (HTTPServer, not ThreadingHTTPServer): the MetaTrader5 package is not thread-safe."""
-    httpd = HTTPServer((host, port), make_handler(broker, token))
+    httpd = HTTPServer((host, port), make_handler(broker, token, commit=commit))
     log.info("bridge serving %s on %s:%d", type(broker).__name__, host, port)
     httpd.serve_forever()
 

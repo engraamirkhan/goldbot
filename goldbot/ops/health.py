@@ -11,7 +11,9 @@ talks to the network, a broker or Telegram, so the whole module is unit-tested w
 
 Secrets are checked for PRESENCE only: the report names missing keys and never contains a value. The network
 probes, the MT5 bridge's /health through the tunnel and the broker's latest tick for the server-clock check
-(`goldbot/ops/server_clock.py`), are injected (`HealthContext.bridge_probe`, `tick_reader`); tests leave them unset.
+(`goldbot/ops/server_clock.py`) and the bridge's reported protocol, methods, zone and commit
+(`goldbot/ops/bridge_compat.py`), are injected (`HealthContext.bridge_probe`, `tick_reader`, `bridge_info`); tests
+leave them unset.
 
 Operational alerts (design S5, R11, X6) are checks too: a service heartbeat silent for 5 minutes fails, and a tripped
 daily or weekly loss cap and an order that failed after the retries warn with `NOTIFY_ON_WARN`, so the Telegram alert
@@ -118,6 +120,8 @@ class HealthContext(Record):
     sessions: SessionTable = DEFAULT_SESSIONS
     bridge_probe: Callable[[str], str | None] | None = None   # url -> None when /health answers, else why not
     tick_reader: Callable[[str, str], Any] | None = None      # (account_id, symbol) -> broker Tick (read-only); None: no bridge
+    bridge_info: Callable[[str], Any] | None = None           # url -> bridge_compat.BridgeInfo from /health; None: not probed
+    commit: str | None = None                                 # this checkout's commit, compared with the bridge's
     clock: Callable[[], pd.Timestamp] | None = None           # host UTC read after a network probe; None: use `now`
     last_run: UtcTimestamp | None = None                      # the previous health run (health_last.json), if any
 
@@ -138,11 +142,13 @@ class HealthContext(Record):
         except Exception as exc:
             a_err = f"{type(exc).__name__}: {exc}"
         from goldbot.execution.bridge import probe_health
+        from goldbot.ops.bridge_compat import read_bridge_info, repo_commit
         return cls(state_dir=Path(state_dir), now=now if now is not None else pd.Timestamp.now("UTC"),
                    settings=settings, settings_error=s_err, accounts=accs, accounts_error=a_err,
                    get_secret=accounts.get_secret, bridge_probe=lambda url: probe_health(url, BRIDGE_TIMEOUT_S),
                    clock=lambda: pd.Timestamp.now("UTC"), last_run=_last_run(Path(state_dir)),
-                   tick_reader=bridge_tick_reader)
+                   tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),
+                   commit=repo_commit())
 
 
 def bridge_tick_reader(account_id: str, symbol: str) -> Any:
@@ -1096,6 +1102,41 @@ def check_bridge(ctx: HealthContext, account_id: str) -> Check | None:
     return Check(name=name, status="ok", reason="bridge answers /health")
 
 
+def check_bridge_compat(ctx: HealthContext, account: AccountRef) -> Check | None:
+    """BACKLOG 42 (gap G6): the bridge's /health against this checkout (goldbot/ops/bridge_compat.py). FAIL when a
+    method this brain calls is missing, the protocol is older, the zone differs or the bridge does not report them: the
+    engine refuses entries (`bridge_incompatible`) until the MT5 box runs a compatible commit; exits are unaffected.
+    A different commit alone is a warning (doc-only commits differ). /health unreachable is a warning here
+    (`bridge:<account>` fails for it) unless the engine's last verdict still blocks. Omitted without a bridge URL or
+    an info reader."""
+    try:
+        url = ctx.get_secret(f"mt5-bridge-url-{account.account_id}")
+    except Exception:
+        url = None
+    if not url or ctx.bridge_info is None or account.server_tz is None:
+        return None
+    from goldbot.ops.bridge_compat import BridgeInfo, assess
+    name = f"bridge_compat:{account.account_id}"
+    try:
+        info = ctx.bridge_info(url)
+    except Exception as exc:              # the type only: a message can name the tunnel endpoint
+        info = BridgeInfo(reachable=False, problem=f"/health unreadable ({type(exc).__name__})")
+    v = assess(info, account.server_tz, ctx.commit)
+    if v.blocks:
+        return Check(name=name, status="fail", reason=f"{v.reason}: the engine refuses entries (bridge_incompatible), "
+                     "exits unaffected; deploy the brain's commit to the MT5 box (RUNBOOK: bridge compatibility)")
+    if v.status == "unreachable":
+        try:
+            engine = _read_json(ctx.state_dir / f"engine_{account.account_id}.json").get("bridge_compat") or {}
+        except (ValueError, OSError, AttributeError):
+            engine = {}
+        if engine.get("status") == "incompatible":
+            return Check(name=name, status="fail", reason=f"{v.reason}; the engine's last verdict still refuses "
+                         f"entries: {str(engine.get('reason', ''))[:200]}")
+        return Check(name=name, status="warn", reason=v.reason)
+    return Check(name=name, status="warn" if v.commit_differs else "ok", reason=v.reason)
+
+
 def _engine_sessions(ctx: HealthContext, account_id: str) -> SessionTable:
     """The broker session table the engine last wrote to engine_<account>.json (D13), else `ctx.sessions`."""
     try:
@@ -1149,6 +1190,8 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
             bridge = check_bridge(ctx, a.account_id)
             checks += [bridge] if bridge is not None else []
+            compat = check_bridge_compat(ctx, a)
+            checks += [compat] if compat is not None else []
             clock = check_server_clock(ctx, a)
             checks += [clock] if clock is not None else []
         checks += [check_heartbeat(ctx, s) for s in HEARTBEAT_SERVICES]
