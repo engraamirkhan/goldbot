@@ -23,6 +23,17 @@ MIN_ROWS = 120                   # the synthetic history is short; the CLI alway
 N_BOOT = 50
 
 
+@pytest.fixture(autouse=True)
+def restore_features():
+    """Every test leaves the feature registry as it found it (other modules see the default set; day_type is opt-in)."""
+    feats, signed = dict(feat_registry.FEATURES), dict(feat_registry.SIGNED)
+    yield
+    feat_registry.FEATURES.clear()
+    feat_registry.FEATURES.update(feats)
+    feat_registry.SIGNED.clear()
+    feat_registry.SIGNED.update(signed)
+
+
 def _utc(s: str) -> pd.Timestamp:
     return pd.Timestamp(s, tz="UTC")
 
@@ -240,17 +251,6 @@ def test_full_score_inputs_are_known_at_0630_utc_on_the_day(planted):
 
 
 # --------------------------------------------------------------------------- one trial in the registry
-@pytest.fixture(autouse=True)
-def restore_features():
-    """h16_feature_version registers the opt-in day_type feature: restore the registry after every test."""
-    feats, signed = dict(feat_registry.FEATURES), dict(feat_registry.SIGNED)
-    yield
-    feat_registry.FEATURES.clear()
-    feat_registry.FEATURES.update(feats)
-    feat_registry.SIGNED.clear()
-    feat_registry.SIGNED.update(signed)
-
-
 @pytest.fixture(scope="module")
 def frozen(planted) -> tuple[str, int]:
     """(first OOS month, evaluable days) as counted before the freeze on the synthetic bars."""
@@ -301,7 +301,7 @@ def test_the_run_writes_exactly_one_trial_row_with_the_reading_and_counts(plante
     assert r["config"] == _config(frozen) and r["config_hash"] == pre["config_hash"]
     assert r["preregistration"]["ts"] == pre["ts"] and "deviation" not in r["preregistration"]
     out = r["results"]
-    assert out["kind"] == "range_test"
+    assert out["kind"] == "range_test" and out["code_hash"] == h16.code_hash() == r["config"]["code_hash"]
     for k in ("rho_full", "rho_har", "rho_gain", "quintile_ratio", "n", "first_oos_month", "dropped_gvz_stale",
               "dropped_no_har", "dropped_no_full", "dropped_no_full_by_reason", "verdict", "feature_version"):
         assert k in out
@@ -334,6 +334,38 @@ def test_a_second_run_of_the_same_configuration_is_refused_even_with_a_fresh_pre
     with pytest.raises(ValueError, match="already run"):
         _run(reg, planted)
     assert len(_trials(reg)) == 1
+
+
+def test_any_earlier_h16_trial_refuses_a_new_preregistration_with_another_config():
+    """The reviewer's probe: a run with month 2012-04, then a new unused pre-registration with 2012-05."""
+    from goldbot.research.registry import config_hash
+    fv = h16.h16_feature_version()
+    c1, c2 = h16.h16_config("2012-04", 3380), h16.h16_config("2012-05", 3380)
+    ran = {"trial": 1, "family": h16.FAMILY, "config": c1, "config_hash": config_hash(c1), "status": "evaluated",
+           "ts": "2027-04-02T00:00:00+00:00", "agent_id": "h16-eval"}
+    pre2 = {"trial": 2, "family": h16.FAMILY, "config": c2, "config_hash": config_hash(c2), "status": "preregistered",
+            "ts": "2027-04-03T00:00:00+00:00", "feature_version": fv, "agent_id": "x"}
+    with pytest.raises(ValueError, match="already run"):
+        h16.h16_preregistration([ran, pre2])
+    assert h16.h16_preregistration([pre2]) is pre2
+
+
+def test_the_code_hash_is_preregistered_and_a_mismatch_is_refused(planted, tmp_path, frozen):
+    cfg = _config(frozen)
+    assert cfg["code_hash"] == h16.code_hash() and len(cfg["code_hash"]) == 12
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    _prereg(reg, {**cfg, "code_hash": "000000000000"})
+    with pytest.raises(ValueError, match="h16.py"):
+        _run(reg, planted)
+    assert _trials(reg) == []
+
+
+def test_working_out_the_feature_version_leaves_the_feature_registry_unchanged():
+    from goldbot.features.registry import FEATURES, SIGNED
+    FEATURES.pop(dt.NAME, None)
+    before, signed = dict(FEATURES), dict(SIGNED)
+    v = h16.h16_feature_version()
+    assert v.startswith("f-") and FEATURES == before and SIGNED == signed and dt.NAME not in FEATURES
 
 
 def test_the_run_is_refused_before_reading_when_the_feature_version_differs_from_the_preregistration(
@@ -414,7 +446,9 @@ def test_days_without_a_full_forecast_are_counted_by_the_missing_input(planted):
 def test_h16_pins_what_it_reads_the_day_type_family_version():
     from goldbot.features.registry import feature_version
     assert not hasattr(h16, "PINNED_FEATURE_VERSION")
-    assert h16.h16_feature_version() == feature_version(["day_type"])
+    v = h16.h16_feature_version()
+    dt.enable()                                   # restored by the autouse fixture
+    assert v == feature_version(["day_type"])
 
 
 # --------------------------------------------------------------------------- research_pass --h16

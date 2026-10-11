@@ -39,10 +39,11 @@ noise ratio (diagnostics only).
 
 H-16 runs once, against its pre-registration (quant review of E-4, H1/M1/M2). Under the registry lock and before
 anything is read, `run_trial` refuses when
-* a trial row of FAMILY with the pre-registered config hash already exists (a second look, whatever its link);
+* any trial row of FAMILY already exists, whatever its config (a second look, however re-configured);
 * there is not exactly one unused (not run, not withdrawn) pre-registration of FAMILY;
 * its config is not `h16_config(first_oos_month, expected_eval_days)` with the run's minimum fit rows (the frozen month
-  and the frozen evaluable-day count are in the hashed config, and the run reads them from it);
+  and the frozen evaluable-day count are in the hashed config, and the run reads them from it), or its `code_hash` is
+  not this module's source hash now;
 * its feature version is not the one worked out now. H-16 pins what it reads, `feature_version(["day_type"])` (the
   GVZ series is named in the config), worked out at the freeze and checked at run time: a version change is a refusal,
   never a read followed by a recorded deviation. tests/test_day_type_golden.py ties day_type's outputs to
@@ -53,7 +54,9 @@ It then evaluates and writes ONE `TrialRegistry.record` row (family FAMILY, stat
 """
 from __future__ import annotations
 
+import hashlib
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Collection, Literal, overload
 
 import numpy as np
@@ -76,7 +79,7 @@ BOOT_BLOCK_DAYS = 20                                 # reported, not in the rule
 BOOT_RESAMPLES = 1000
 BOOT_SEED = 0
 MIN_EVAL_SHARE = 0.9                                 # n below 90% of the frozen evaluable-day count: refused
-GVZ_SERIES = "GVZCLS"                                # FRED's CBOE gold volatility index (macro series gold_vix)
+GVZ_SERIES = "GVZCLS"                                # informational: GVZ is pinned by the day_type golden test
 FEATURE_NAMES = ("day_type",)                        # what H-16 reads; their version is H-16's feature version
 KIND = "range_test"
 EXTRA_REGRESSORS = ("ln_gvz_rv", "tier1_count", "ln_prev_range_atr", "nr4", "nr7", "inside_day", "gap_atr")
@@ -91,20 +94,36 @@ Verdict = Literal["continue", "fail"]
 def h16_config(first_oos_month: str, expected_eval_days: int, min_rows: int = dt.MIN_FIT_ROWS) -> dict[str, Any]:
     """The configuration H-16's pre-registration and result rows share (same config hash). The frozen first OOS month
     ("YYYY-MM") and the frozen evaluable-day count, both counted from the calendar and data gaps before the freeze, are
-    part of it, so they are pre-registered with the rule."""
+    part of it, so they are pre-registered with the rule, as is `code_hash()` (this module's source). `gvz_series` is
+    informational: what GVZ means to the inputs is pinned by tests/test_day_type_golden.py and day_type.VERSION."""
     return {"hypothesis": HYPOTHESIS, "timeframe": TIMEFRAME, "target": "ln(W_D / A_D), 08:00 London - 16:30 New York",
             "baseline": list(HAR_REGRESSORS), "full": list(FULL_REGRESSORS), "decision_utc": "06:30",
             "refit": dt.REFIT_SCHEDULE, "min_fit_rows": int(min_rows), "purge_days": int(dt.FIT_PURGE.days),
             "rule": {"rho_gain": RHO_GAIN, "quintile_ratio": QUINTILE_RATIO, "min_eval_share": MIN_EVAL_SHARE},
             "first_oos_month": str(pd.Period(first_oos_month, "M")), "expected_eval_days": int(expected_eval_days),
-            "feature_names": list(FEATURE_NAMES), "gvz_series": GVZ_SERIES, "day_type_version": dt.VERSION}
+            "feature_names": list(FEATURE_NAMES), "gvz_series": GVZ_SERIES, "day_type_version": dt.VERSION,
+            "code_hash": code_hash()}
 
 
 def h16_feature_version() -> str:
-    """H-16's feature version: `feature_version(["day_type"])`, what it reads (registers the opt-in day_type)."""
-    from goldbot.features.registry import feature_version
-    dt.enable()
-    return feature_version(list(FEATURE_NAMES))
+    """H-16's feature version: `feature_version(["day_type"])`, what it reads. The opt-in day_type is registered only
+    for the hash and the feature registry is restored, so nothing else sees it (the default set is unchanged)."""
+    from goldbot.features import registry as feat_registry
+    feats, signed = dict(feat_registry.FEATURES), dict(feat_registry.SIGNED)
+    try:
+        dt.enable()
+        return feat_registry.feature_version(list(FEATURE_NAMES))
+    finally:
+        feat_registry.FEATURES.clear()
+        feat_registry.FEATURES.update(feats)
+        feat_registry.SIGNED.clear()
+        feat_registry.SIGNED.update(signed)
+
+
+def code_hash() -> str:
+    """sha1 (12 hex) of this module's source: the evaluation code H-16 is pre-registered with (in the config, so a
+    changed h16.py is refused before anything is read)."""
+    return hashlib.sha1(Path(__file__).read_bytes()).hexdigest()[:12]
 
 
 # --------------------------------------------------------------------------- holdout cut (before any feature)
@@ -376,16 +395,19 @@ def h16_preregistration(rows: list[dict[str, Any]], min_rows: int = dt.MIN_FIT_R
     unused = [r for r in rows if r.get("status") == PREREGISTERED and r.get("family") == FAMILY
               and isinstance(r.get("config"), dict) and not is_withdrawn(rows, r)
               and preregistration_run(rows, r) is None]
-    hashes = {r.get("config_hash") for r in unused}
-    ran = [r for r in rows if is_trial(r) and r.get("family") == FAMILY and r.get("config_hash") in hashes]
+    ran = [r for r in rows if is_trial(r) and r.get("family") == FAMILY]      # any config: one look, ever
     if ran:
-        raise ValueError(f"H-16 config {ran[0].get('config_hash')} was already run (trial #{ran[0].get('trial')}): "
+        raise ValueError(f"H-16 was already run (trial #{ran[0].get('trial')}, config {ran[0].get('config_hash')}): "
                          "H-16 runs once; its result stands")
     if len(unused) != 1:
         raise ValueError(f"H-16 needs exactly one unused pre-registration of family {FAMILY}, found {len(unused)}"
                          + (" (no unused pre-registration: write it with h16_config(...) first)" if not unused else ""))
     pre = unused[0]
     cfg = pre["config"]
+    if cfg.get("code_hash") != code_hash():
+        raise ValueError(f"pre-registration #{pre.get('trial')} was written with h16.py {cfg.get('code_hash')} but the "
+                         f"code is now {code_hash()}: H-16 is refused rather than run by other code (withdraw and "
+                         "pre-register again before the run, or restore h16.py)")
     try:
         want = h16_config(str(cfg["first_oos_month"]), int(cfg["expected_eval_days"]), min_rows)
     except (KeyError, TypeError, ValueError):
@@ -419,7 +441,8 @@ def run_trial(reg: TrialRegistry, bars: pd.DataFrame, macro: pd.DataFrame | None
                                  frozen_first_oos_month=config["first_oos_month"],
                                  expected_eval_days=config["expected_eval_days"], min_rows=min_rows,
                                  feature_version=fv, n_boot=n_boot)
-        results = {**result.model_dump(mode="json"), "inputs": input_info or {}, "config_hash": config_hash(config)}
+        results = {**result.model_dump(mode="json"), "inputs": input_info or {}, "config_hash": config_hash(config),
+                   "code_hash": code_hash()}
         row = reg.record(agent_id=AGENT_ID, family=FAMILY, config=config, feature_version=fv,
                          rationale=rationale, results=results, status="evaluated", budget_quarter=quarter,
                          preregistration=prereg)

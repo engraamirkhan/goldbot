@@ -30,8 +30,9 @@ is fixed and a change after seeing data makes it exploratory.
 - **Feature versions:** `f-079deacc61` (sessions v2, DST-aware) for 15m rules and discovery; `f-e7d2dc11e1` (was `f-f999b359e2` before macro drivers v3 added the VRP spread, amended 2026-10-11) where
   the macro drivers are used (no Q2 trial since H-16 pins `day_type` alone, below). The opt-in `day_type` family (BACKLOG 30a) is not in the default set, so it
   leaves `f-079deacc61` and `f-e7d2dc11e1` unchanged. A feature set that includes it has its own version (pinned in
-  `tests/test_day_type_features.py`): **`f-1eada57050`** (default + `day_type` v1) and **`f-c8ec630957`** (default +
-  macro drivers v3 + `day_type` v1; was `f-93fbe9386d` before macro v3). Each row that uses `day_type` also records its inputs (`day_type`: family version,
+  `tests/test_day_type_features.py`): **`f-1eada57050`** (default + `day_type` v1); the default + macro
+  drivers + `day_type` hash moves with every macro-driver version, so it is worked out at the freeze (no Q2 trial uses
+  it: H-16 pins `day_type` alone). Each row that uses `day_type` also records its inputs (`day_type`: family version,
   GVZ present, calendar present, refit schedule, minimum fit rows). `research_pass --day-type` refuses to run without
   `--us-calendar`, with `--discover` or `--cpcv`, or with `--from-year` after 2010. A run on another version is
   recorded with a `deviation` (`TrialRegistry.record`), per ADR 0006.
@@ -161,10 +162,12 @@ way (13 → 9).
   `--score-holdout`, `--pooled`, `--day-type`, `--positioning`, `--us-calendar-features`, `--variants`, a
   `--from-year` after 2010, or without GVZ or the calendar).
   - H-16 runs once, against its pre-registration. Under the registry lock and before anything is read, the run is
-    refused when a trial of `h16_opportunity_score` with the pre-registered config hash exists, when there is not
+    refused when any trial of `h16_opportunity_score` exists (whatever its config), when there is not
     exactly one unused pre-registration of the family, when its config is not
-    `h16.h16_config(first_oos_month, expected_eval_days)` (500 rows), when its feature version differs from the one
-    worked out at run time, or when the budget is spent. The frozen month and day count are read from that config.
+    `h16.h16_config(first_oos_month, expected_eval_days)` (500 rows), when its `code_hash` (sha1 of `h16.py`'s source,
+    also on the result row) differs from the code's now, when its feature version differs from the one worked out at
+    run time, or when the budget is spent. `gvz_series` in the config is informational: what GVZ means to the inputs
+    is pinned by `tests/test_day_type_golden.py` and `day_type.VERSION`. The frozen month and day count are read from that config.
   - The 1m bars, the macro rows and the calendar rows are cut at `research.holdout_from` before anything is resampled
     or built. Each full-score input is taken as known at 06:30 UTC on D (`DECISION_UTC`).
   - Both models are fitted by `fit_har(regressors=...)` with the same monthly refits and purge. D's forecast uses the

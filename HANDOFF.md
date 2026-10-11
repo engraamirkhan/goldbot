@@ -961,15 +961,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   plus `research_pass.py --h16 --macro DIR --us-calendar DIR` runs H-16's pre-registered test once and records ONE
   trial (family `h16_opportunity_score`, status `evaluated`, `results.kind` = `range_test`).
   - It runs only against its pre-registration. Under the registry lock and before anything is read, the run is refused
-    when H-16's config already ran, when there is not exactly one unused H-16 pre-registration, when that config is not
-    `h16.h16_config(first_oos_month, expected_eval_days)` with 500 rows, when its feature version differs from
+    when any H-16 trial exists (whatever its config), when there is not exactly one unused H-16 pre-registration, when
+    that config is not `h16.h16_config(first_oos_month, expected_eval_days)` with 500 rows, when its `code_hash`
+    (h16.py's source, also on the result row) differs, when its feature version differs from
     `feature_version(["day_type"])` worked out now (`f-52c853166b` for day_type v1), or when the budget is spent.
   - The frozen month and the frozen evaluable-day count live in the hashed config; the run reads them from it. A
     different month from the baseline-fit rule, fewer than 90% of the frozen days (checked before any statistic) or a
     NaN statistic is refused, and nothing is recorded.
   - `tests/test_day_type_golden.py` (+ `tests/data/day_type_v1_golden.parquet`) ties day_type's outputs to
-    `day_type.VERSION`: changing them without a bump fails CI (`python tests/test_day_type_golden.py` writes the file
+    `day_type.VERSION` (so `gvz_series` in the config is informational): changing them without a bump fails CI (`python tests/test_day_type_golden.py` writes the file
     for a new version).
+  - `h16_feature_version()` restores the feature registry (day_type stays opt-in for every other caller).
   - The 1m bars, the macro rows and the calendar rows are cut at `research.holdout_from` before anything is resampled.
     Every full-score input is as known at 06:30 UTC on D.
   - HAR (4 coefficients) and full (11 coefficients) both go through `fit_har(regressors=...)` on the monthly refits

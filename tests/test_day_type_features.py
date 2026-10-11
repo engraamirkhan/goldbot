@@ -118,7 +118,7 @@ def test_day_type_moves_the_feature_version_to_the_pinned_combined_hashes(enable
     assert registry.feature_version([*DEFAULT_FEATURE_NAMES, enabled]) == DEFAULT_DAY_TYPE_VERSION
     assert registry.feature_version([*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES, enabled]) == MACRO_DAY_TYPE_VERSION
     draft = (ROOT / "docs" / "research" / "preregistration-2027Q2-draft.md").read_text()
-    assert DEFAULT_DAY_TYPE_VERSION in draft and MACRO_DAY_TYPE_VERSION in draft
+    assert DEFAULT_DAY_TYPE_VERSION in draft          # the macro combination is worked out at the freeze
 
 
 def test_the_column_set_is_fixed_and_nan_without_history_or_inputs(enabled):
