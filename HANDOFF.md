@@ -767,7 +767,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   whenever the P&L (and R) are in it, "USD" only for the unconverted own-fills fallback, None only on legacy records,
   so the monthly report's `r_understated` flags only pre-fix trades; the digest sums rows whose `pnl_currency` is
   None or the account's currency (engine_<account>.json) and names the rest "(n in USD not summed)". Follow-up for
-  the dashboard lane: `monthly_report.account_month` still sums every row's P&L, including a USD fallback row.
+  the dashboard lane: `monthly_report.account_month` still sums every row's P&L, including a USD fallback row
+  (done 2026-10-11, next bullet).
+- No cross-currency money sums anywhere (2026-10-11, final-review follow-ups, row S6): with no fresh engine the
+  supervisor sums stale files' money only when they all report one currency, otherwise none (lots and notional still
+  count) and publishes `no_fresh_engine`. The digest sums P&L per currency and prints each with the account's own
+  symbol from engine_<account>.json ("net +£5.00 · -$10.90"; "(currency not reported)" when unknown; the
+  `monthly_report.money` formatter, as the web's Intl formatting). The monthly report keeps rows in another currency
+  out of the P&L, chained return, days and drawdown (R still counts them) and says "(1 in USD not summed)" in the
+  report and the month-to-date digest line (`AccountMonth.pnl_excluded`, `pnl_note`).
 - Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
   `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
   minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both

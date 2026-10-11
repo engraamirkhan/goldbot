@@ -56,7 +56,8 @@ def _full_state(sd: Path) -> Path:
             fh.write(t.model_dump_json() + "\n")
     (sd / f"engine_{ACCOUNT}.json").write_text(json.dumps({
         "account": ACCOUNT, "stage": "size_down", "equity": 9_700, "balance_closed_hwm": 10_000,
-        "day_start_equity": 9_800, "week_start_equity": 10_000, "open_positions": 1, "open_lots": 0.1}))
+        "day_start_equity": 9_800, "week_start_equity": 10_000, "open_positions": 1, "open_lots": 0.1,
+        "currency": "USD"}))           # the digest prints money in the account's own currency (BACKLOG 28)
     (sd / "control.json").write_text(json.dumps({"halted": True, "by": f"dashboard:{EMAIL}", "ts": YDAY.timestamp(),
                                                  "reason": "news"}))
     (sd / "drift.json").write_text(json.dumps({"system_halt": {"reasons": ["cusum"]}}))
