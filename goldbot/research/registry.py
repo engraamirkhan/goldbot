@@ -26,7 +26,10 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P2):
   derivation rule) holds one reserved trial for a run that cannot be configured before the quarter (a discovery's
   k-th survivor, a follow-up, a survivor's holdout scoring). It holds only while its condition can still be met and
   is freed by its own rule otherwise (`director.reserved_trials`, no row written); an in-quarter ad-hoc
-  pre-registration naming it (`preregister(slot_ref=)`) uses it once, and only by the rule (`check_budget_reserved`);
+  pre-registration naming it (`preregister(slot_ref=)`) uses it once, and only for exactly the derived configuration,
+  never a retired family (`check_budget_reserved`, `director.slot_refusal`);
+* verdicts (`record_verdict`): the evaluator's first reading of a trial ("continue"/"stop"/"inconclusive"), not a
+  trial; a rule-only parent's follow-up slots go live on "continue";
 * withdrawal (`withdraw`): a "withdrawn" row naming a pre-registration that has not run. Not a trial, no budget; the
   named row leaves the queue and frees its reserved trial. reserved = max(setting - run - withdrawn - expired slots,
   pending, 0);
@@ -49,7 +52,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Collection, Iterator, Sequence
 
 LOCK_STALE_S = 4 * 3600          # a lock older than this was left by a crashed writer (a trial runs well under it)
 LOCK_WAIT_S = 6 * 3600
@@ -57,11 +60,16 @@ LOCK_WAIT_S = 6 * 3600
 
 PREREGISTERED = "preregistered"
 WITHDRAWN = "withdrawn"                 # a withdrawal of a pre-registration (`TrialRegistry.withdraw`): not a trial
+VERDICT = "verdict"                     # an evaluator's reading of a trial (`TrialRegistry.record_verdict`): not a trial
+VERDICT_DECISIONS: tuple[str, ...] = ("continue", "stop", "inconclusive")
 DISCOVERY = "discovery"
-FROM_DISCOVERY_KEY = "from_discovery"   # set on a config whose features came from a discovery trial (its trial number)
-SURVIVOR_KEY = "survivor"               # ... and the discovery survivor (feature or group) the config tests
+FROM_DISCOVERY_KEY = "from_discovery"   # set on a config whose features came from a discovery trial: its `row_ref`
+SURVIVOR_KEY = "survivor"               # ... and the discovery survivor (cluster, group or feature) the config tests
 SLOT_KINDS: tuple[str, ...] = ("survivor", "followup", "holdout")
-NOT_TRIALS = frozenset({PREREGISTERED, WITHDRAWN})
+NOT_TRIALS = frozenset({PREREGISTERED, WITHDRAWN, VERDICT})
+# the parent's pre-registered reading rule a survivor/holdout slot (and a discovery's follow-up) is read by: H-02's
+# (preregistration-2027Q1.md: cluster stability >= 0.6 AND OOF AUC >= 0.53 with the lower 95% bound > 0.50)
+DEFAULT_SLOT_RULE: dict[str, float] = {"min_stability": 0.6, "min_auc": 0.53, "min_auc_lower_bound": 0.5}
 
 
 class TrialBudgetExceeded(ValueError):
@@ -225,7 +233,8 @@ class TrialRegistry:
 
     def preregister(self, *, agent_id: str, family: str, config: dict, feature_version: str, rationale: str,
                     reading_rule: str, plan: dict[str, Any] | None = None, queue: bool = False,
-                    target_quarter: str | None = None, slot_ref: dict[str, Any] | None = None) -> dict:
+                    target_quarter: str | None = None, slot_ref: dict[str, Any] | None = None,
+                    rule_ref: str | None = None) -> dict:
         """Write the pre-registration of the next trial BEFORE it runs: its config (hashed as the result row will be),
         the rule its result will be read by, and the plan (e.g. the number of features to be screened). Not a trial:
         it carries the number the result row will take. By default (`queue=False`) it is the pre-registration a run
@@ -240,7 +249,11 @@ class TrialRegistry:
         `slot_ref` (a slot row from `reserve_slot`, or its `row_ref`): this ad-hoc pre-registration claims that
         contingent slot (ADR 0007). It is recorded, not judged, here: `check_budget_reserved` covers the run from the
         reservation only when the slot is live and the config satisfies its derivation rule, and refuses it otherwise.
-        Only for `queue=False`, and only naming a slot row of this registry (ValueError otherwise)."""
+        Only for `queue=False`, and only naming a slot row of this registry (ValueError otherwise).
+
+        `rule_ref`: the pre-registered rule this ad-hoc run follows (e.g. "preregistration-2027Q1.md#reserve"); in a
+        quarter under the E-5 cap (research.open_budget_preregistered_only) the analyst spends the open budget only on
+        such a row (`director.rule_preregistration`)."""
         if target_quarter is not None and not queue:
             raise ValueError("target_quarter is only for a queued pre-registration: pass queue=True as well")
         slot_row = None
@@ -262,6 +275,8 @@ class TrialRegistry:
             row["queue"] = False
             if slot_row is not None:
                 row["slot_ref"] = row_ref(slot_row)
+            if rule_ref:
+                row["rule_ref"] = rule_ref
         else:
             target = target_quarter or planned_quarter(ts)
             if ts >= quarter_start(target):
@@ -273,7 +288,10 @@ class TrialRegistry:
         return row
 
     def reserve_slot(self, parent_ref: dict[str, Any], kind: str, k: int, derivation_rule: str, target_quarter: str,
-                     *, agent_id: str = "research-director", rationale: str = "") -> dict:
+                     *, agent_id: str = "research-director", rationale: str = "",
+                     survivor_pool: Sequence[str] | None = None, rule: dict[str, float] | None = None,
+                     family: str | None = None, config_hashes: Sequence[str] | None = None,
+                     overrides: dict[str, Any] | None = None) -> dict:
         """Pre-register a contingent slot of `target_quarter` (ADR 0007): a queued `preregistered` row with no config
         hash, holding one reserved trial for a run whose configuration cannot exist before the quarter (e.g. the k-th
         survivor of a discovery that runs in the quarter), chosen later by `derivation_rule`, written now. Kinds
@@ -283,7 +301,13 @@ class TrialRegistry:
         otherwise (`director.reserved_trials`); it is used by exactly one in-quarter ad-hoc pre-registration naming it
         (`preregister(slot_ref=)`) that satisfies the rule (`check_budget_reserved`). `parent_ref`: the parent's
         pre-registration or trial row (or its `row_ref`); a survivor or holdout slot's parent is a discovery. Written
-        with the registry's clock, before `target_quarter` starts (ValueError otherwise, as for any queued row)."""
+        with the registry's clock, before `target_quarter` starts (ValueError otherwise, as for any queued row).
+
+        Fixed in the row before the quarter (quant re-review): `rule`, the parent's reading rule the slot is read by
+        (DEFAULT_SLOT_RULE: H-02's); `survivor_pool`, the pre-registered survivors in priority order (H-02: its
+        hypothesis clusters H-03/05/07/08/10; None: the discovery's own survivor unit); and for a follow-up the
+        `family` and the allowed configurations (`config_hashes`, or `overrides` every allowed config contains),
+        without which a follow-up slot is refused."""
         if kind not in SLOT_KINDS:
             raise ValueError(f"slot kind must be one of {SLOT_KINDS}, got {kind!r}")
         if isinstance(k, bool) or not isinstance(k, int) or k < 1:
@@ -300,6 +324,14 @@ class TrialRegistry:
             raise ValueError(f"no parent row {row_ref(parent_ref)} (a pre-registration or trial) in {self.path}")
         if kind != "followup" and not str(parent.get("family", "")).startswith("discovery_"):
             raise ValueError(f"a {kind} slot's parent is a discovery (family discovery_*), not {parent.get('family')}")
+        followup: dict[str, Any] = {}
+        if kind == "followup":
+            if not family:
+                raise ValueError("a follow-up slot fixes its family before the quarter (family=)")
+            if not config_hashes and not overrides:
+                raise ValueError("a follow-up slot fixes its allowed configurations before the quarter: pass "
+                                 "config_hashes or overrides")
+            followup = {"family": family, "config_hashes": list(config_hashes or []), "overrides": dict(overrides or {})}
         from goldbot.research.director import is_withdrawn  # director imports this module
         if any(r.get("slot", {}).get("kind") == kind and r["slot"].get("k") == k
                and refers_to(r["slot"].get("parent"), parent) and not is_withdrawn(rows, r)
@@ -311,7 +343,10 @@ class TrialRegistry:
             "rationale": rationale or f"contingent {kind} slot {k} of #{parent.get('trial')}", "results": {},
             "status": PREREGISTERED, "reading_rule": derivation_rule, "plan": {}, "queue": True,
             "target_quarter": target_quarter,
-            "slot": {"parent": row_ref(parent), "kind": kind, "k": k, "derivation_rule": derivation_rule},
+            "slot": {"parent": row_ref(parent), "kind": kind, "k": k, "derivation_rule": derivation_rule,
+                     "rule": {**DEFAULT_SLOT_RULE, **(rule or {})},
+                     "survivor_pool": list(survivor_pool) if survivor_pool is not None else None,
+                     **({"followup": followup} if followup else {})},
         }
         self._append(row)
         return row
@@ -337,6 +372,33 @@ class TrialRegistry:
             "trial": self.n_trials + 1, "ts": self._stamp().isoformat(), "agent_id": agent_id,
             "family": target.get("family"), "config_hash": target.get("config_hash"), "status": WITHDRAWN,
             "withdraws": row_ref(target), "reason": reason, "results": {},
+        }
+        self._append(row)
+        return row
+
+    def record_verdict(self, ref: dict[str, Any], decision: str, reason: str, *, rule: str = "",
+                       agent_id: str = "evaluator") -> dict:
+        """Record the evaluator's reading of a trial by its pre-registered rule (decision in VERDICT_DECISIONS): a
+        "verdict" row naming the trial. Not a trial: no budget, no deflated-Sharpe count. A rule-only parent (H-01,
+        H-04, the tsmom 4h continuity trial) writes no reading verdict itself, so its follow-up slots go live only on
+        this row's "continue" (`director._Ledger.slot_state`); a discovery's own recorded reading verdict is never
+        replaced by one. The first verdict of a trial is final (ValueError for a second, an unknown trial or decision,
+        or an empty reason)."""
+        from goldbot.research.director import verdict_of
+        if decision not in VERDICT_DECISIONS:
+            raise ValueError(f"a verdict decision is one of {VERDICT_DECISIONS}, got {decision!r}")
+        if not reason.strip():
+            raise ValueError("a verdict states its reason")
+        rows = self._rows()
+        target = next((r for r in rows if is_trial(r) and refers_to(row_ref(ref), r)), None)
+        if target is None:
+            raise ValueError(f"no trial row {row_ref(ref)} in {self.path}")
+        if verdict_of(rows, target) is not None:
+            raise ValueError(f"trial #{target.get('trial')} already has its verdict: it is final")
+        row: dict[str, Any] = {
+            "trial": self.n_trials + 1, "ts": self._stamp().isoformat(), "agent_id": agent_id,
+            "family": target.get("family"), "config_hash": target.get("config_hash"), "status": VERDICT,
+            "verdict_of": row_ref(target), "decision": decision, "reason": reason, "rule": rule, "results": {},
         }
         self._append(row)
         return row
@@ -404,7 +466,8 @@ class TrialRegistry:
         return q
 
     def check_budget_reserved(self, jobs: Sequence[tuple[str, dict[str, Any]]], cap: int, reserved_setting: int,
-                              now: datetime | None = None) -> tuple[str, list[dict[str, Any] | None]]:
+                              now: datetime | None = None, *, retired: Collection[str] | None = None
+                              ) -> tuple[str, list[dict[str, Any] | None]]:
         """`check_budget` for `jobs` ((family, config) each) that honours the pre-registered queue's reservation, as
         the analyst, the director and the label grid do (a job whose config is queued for a later quarter is refused,
         PreregisteredForLaterQuarter): a job matching a pending queued `preregistered` row of the
@@ -413,10 +476,12 @@ class TrialRegistry:
         cap - used - reserved (`director.reserved_trials`, `reserved_setting` = research.reserved_trials_quarter).
         A job with no pending queued row but an unused ad-hoc pre-registration claiming a contingent slot
         (`preregister(slot_ref=)`, `director.slot_preregistration`) is covered by that slot only when
-        `director.slot_refusal` finds nothing wrong (slot of this quarter and live, `from_discovery` = the parent's
-        trial number, the claimed survivor the k-th of the parent's recorded ranking, a holdout of survivor trial k's
-        passing config); anything else raises TrialBudgetExceeded rather than falling back to the open budget (withdraw
-        the pre-registration to run it from there). One row covers one run.
+        `director.slot_refusal` finds nothing wrong (slot of this quarter and live; a survivor or holdout slot: the
+        parent's family and spec, `from_discovery` = the parent's `row_ref`, the claimed survivor the k-th of the
+        parent's pre-registered ranking and its recorded members as the features; a follow-up: the slot's family and
+        allowed configs); anything else raises TrialBudgetExceeded rather than falling back to the open budget
+        (withdraw the pre-registration to run it from there). One row covers one run. A slot never covers a retired
+        family (`retired`, default the settings' research.retired_families: fail closed when a caller forgets).
         Raises TrialBudgetExceeded; returns (the quarter, the matching pre-registration or None, per job)."""
         # director imports this module, so the import is local
         from goldbot.research.director import (
@@ -434,7 +499,10 @@ class TrialRegistry:
             h = config_hash(config)
             p = pending_preregistration(rows, q, family, h)
             if p is None and (s := slot_preregistration(rows, family, h)) is not None:
-                why = slot_refusal(rows, q, s, family, config, h)
+                if retired is None:
+                    from goldbot.config import load_settings
+                    retired = {e.family for e in load_settings().research.retired_families}
+                why = slot_refusal(rows, q, s, family, config, h, retired=retired)
                 if why is not None:
                     raise TrialBudgetExceeded(
                         f"{family} config {h}: pre-registration #{s.get('trial')} claims a contingent slot, but {why}. "

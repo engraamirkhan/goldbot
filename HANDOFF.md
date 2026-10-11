@@ -866,13 +866,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   13 -> **9** (5 queued + 4 H-02 survivor slots); 13 would have locked 8 of 20 Q1 trials all quarter. New
   `TrialRegistry.reserve_slot(parent_ref, kind, k, derivation_rule, target_quarter)` (survivor / followup / holdout,
   written before the quarter), `preregister(slot_ref=)` to use one in-quarter, `withdraw(ref, reason)` (not a trial).
-  A slot holds only while its condition can still be met and is freed by its rule (`director._Ledger`); a claim is
-  covered only for the k-th recorded survivor with `from_discovery` = the parent's trial number, else
-  TrialBudgetExceeded. reserved = max(setting - run - withdrawn - expired slots, pending, 0). Group-unit discovery
-  refuses survivor groups over `max_selected` (the look is still recorded) and needs explicit `group_top_k`; the
-  discovery row records `survivor_groups_n_features` and `group_map_sha256`. Docs: preregistration-2027Q1.md
-  amended (dated 2026-10-10), Q2 draft carries rulings Q-1/Q-2/Q-3. **Before 2027-01-01:** write the 4 survivor slots
-  on H-02's queued row (`reserve_slot(h02, "survivor", k, ..., "2027Q1")`, k = 1..4). Quant re-review pending.
+  A slot holds only while its condition can still be met and is freed by its rule (`director._Ledger`).
+  reserved = max(setting - run - withdrawn - expired slots, pending, 0). **Re-review fixes (2026-10-11, ADR 0007
+  amendment):** a slot covers only its derived config (parent family + spec, `from_discovery` = parent `row_ref`, the
+  k-th survivor and exactly its recorded members; follow-ups fix family + allowed configs; never a retired family);
+  survivor slots are live only when the parent reads continue under its rule (AUC >= 0.53, LB > 0.50) and >= k
+  pre-registered clusters pass (H-02 now groups by `discovery.H02_CLUSTERS`, `--families cluster`); evaluator
+  verdicts (`record_verdict`) drive rule-only follow-ups; group mode forwards whole groups while they fit and records
+  the rest; `reserved_trials_quarter` is keyed by quarter (`{"2027Q1": 9}`); E-5 cap for 2027Q1
+  (`open_budget_preregistered_only`): the analyst spends the open budget only on a `rule_ref` pre-registration or the
+  shared retired exploration trial, the grid none. **Before 2027-01-01:** write the 4 survivor slots on H-02's queued
+  row (`reserve_slot(h02, "survivor", k, ..., "2027Q1", survivor_pool=["H-03", "H-05", "H-07", "H-08", "H-10"])`,
+  k = 1..4) and H-02's config with `clusters = H02_CLUSTERS`, group mode `cluster`.
 - Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
   (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
   before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each

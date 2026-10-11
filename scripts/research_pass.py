@@ -86,7 +86,7 @@ from goldbot.research.pipeline import (  # noqa: E402
     research_feature_names,
     run_pool,
 )
-from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry  # noqa: E402
+from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, quarter_of  # noqa: E402
 from goldbot.research.screen import (  # noqa: E402
     is_inconclusive,
     min_events_for,
@@ -469,7 +469,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     try:
         quarter, preregs = reg.check_budget_reserved([(j.family, j.config) for j in jobs],
                                                      settings.research.trial_budget_quarter,
-                                                     settings.research.reserved_trials_quarter)
+                                                     settings.research.reserved_for(quarter_of()),
+                                                     retired={e.family for e in settings.research.retired_families})
     except TrialBudgetExceeded as exc:
         raise SystemExit(str(exc)) from None
     years_span = (b1["ts_utc"].iloc[-1] - b1["ts_utc"].iloc[0]).days / 365.25
@@ -562,7 +563,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
 def _discovery_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--discover", action="store_true",
                     help="ONE pre-registered feature-discovery trial (goldbot/research/discovery.py) on --specialist")
-    ap.add_argument("--families", nargs="?", const="family", default="column", choices=["column", "feature", "family"],
+    ap.add_argument("--families", nargs="?", const="family", default="column", choices=["column", "feature", "family", "cluster"],
                     help="--discover: group features by registry family (bare flag), by producing feature, or not")
     ap.add_argument("--discover-config", default="{}", help="--discover: JSON overrides of DiscoveryConfig")
 
@@ -577,7 +578,7 @@ def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.D
         cfg = DiscoveryConfig(**json.loads(args.discover_config))
         row, text = discovery_pass(SPECIALISTS[args.specialist](**variants[0]), b1, reg,
                                    budget_cap=settings.research.trial_budget_quarter,
-                                   reserved_setting=settings.research.reserved_trials_quarter, cfg=cfg,
+                                   reserved_setting=settings.research.reserved_for(quarter_of()), cfg=cfg,
                                    group_mode=args.families,
                                    extra_cost_usd=extra_cost, swap=swap, holdout=holdout,
                                    ctx={"macro": macro} if macro is not None else None, rationale=args.rationale,

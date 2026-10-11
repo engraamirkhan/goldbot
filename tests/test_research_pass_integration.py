@@ -478,7 +478,7 @@ def test_an_ad_hoc_run_cannot_spend_the_reserved_trials_and_a_preregistered_run_
     from goldbot.research.registry import TrialRegistry, quarter_of
     from goldbot.specialists import SPECIALISTS
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
-    _research_settings(monkeypatch, trial_budget_quarter=2, reserved_trials_quarter=1)
+    _research_settings(monkeypatch, trial_budget_quarter=2, reserved_trials_quarter={quarter_of(): 1})
     reg = TrialRegistry(registry)
     reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={})
     monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
@@ -499,7 +499,7 @@ def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, m
     from goldbot.research.director import reserved_trials
     from goldbot.research.registry import TrialRegistry, quarter_of
     registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
-    _research_settings(monkeypatch, trial_budget_quarter=2, reserved_trials_quarter=1)
+    _research_settings(monkeypatch, trial_budget_quarter=2, reserved_trials_quarter={quarter_of(): 1})
     monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
                                       "--report", str(report), "--specialist", "session_open", "--discover",
                                       "--discover-config", '{"n_subsamples": 4, "top_k": 5}'])

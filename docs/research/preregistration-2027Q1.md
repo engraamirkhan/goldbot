@@ -36,17 +36,31 @@ promotion.
 ## Order and budget (5 queued + 4 contingent H-02 survivor slots of 20; amended 2026-10-10)
 
 **Reserved in code (amendment 2026-10-10, before the freeze; no reading rule changes; ADR 0007):**
-`research.reserved_trials_quarter: 9` (config/settings.yaml) = **5 queued + 4 contingent H-02 survivor slots**, held
+`research.reserved_trials_quarter: {"2027Q1": 9}` (config/settings.yaml; keyed by quarter, so no other quarter holds
+any) = **5 queued + 4 contingent H-02 survivor slots**, held
 before the research director or the monthly label grid can spend any of the quarter's 20 (`research/director.py`
 `reserved_trials`: reserved = max(9 - run - withdrawn - expired slots, pending, 0)). The 5 queued rows are H-02, H-01,
 H-06, H-04 and tsmom 4h continuity; each trial run against its `preregistered` row uses one up, and a queued row is
 always covered. Rows 6-9 are written before 2027-01-01 as four survivor slots on H-02's queued row
-(`TrialRegistry.reserve_slot(h02_row, "survivor", k, derivation_rule, "2027Q1")`, k = 1..4; derivation rule: "the
-k-th H-02 survivor by recorded stability, `results.discovery`, run as its own pre-registered trial with
-`from_discovery` = H-02's trial number and `survivor` = its name"). After H-02 runs, slot k stays held only if H-02
-recorded at least k survivors; the others are freed automatically. Survivor k's trial is pre-registered in the
-quarter (`preregister(..., slot_ref=slot_k)`) and uses the slot only if it is exactly the k-th survivor. A row
-dropped before it runs is withdrawn (`TrialRegistry.withdraw`), which frees its trial. The director and the grid get
+(`TrialRegistry.reserve_slot(h02_row, "survivor", k, derivation_rule, "2027Q1", survivor_pool=["H-03", "H-05",
+"H-07", "H-08", "H-10"])`, k = 1..4, with the default slot rule `{"min_stability": 0.6, "min_auc": 0.53,
+"min_auc_lower_bound": 0.5}`). **Derivation rule (amended 2026-10-11 after the quant re-review, before the freeze):**
+"slot k is live only if H-02's recorded reading verdict is *continue* with OOF AUC >= 0.53 and the lower 95% bound
+> 0.50, AND at least k of the hypothesis clusters H-03, H-05, H-07, H-08, H-10 have group stability >= 0.6
+(`results.discovery.group_stability`; H-02 groups by these clusters, `discovery.H02_CLUSTERS`); clusters are ranked
+by group stability (ties by that order), and survivor k's trial is H-02's family (`tsmom`), spec and label exactly,
+with inputs = `side` + cluster k's recorded members (`results.discovery.group_members`), tagged `from_discovery` =
+H-02's row reference (timestamp and config hash) and `survivor` = the cluster id". Otherwise the slot is freed by this
+rule. Survivor k's trial is pre-registered in the quarter (`preregister(..., slot_ref=slot_k)`) and uses the slot only
+if it is exactly that configuration (`director.slot_refusal`); a retired family is never covered. No holdout slots
+are written for Q1: any holdout scoring of a survivor comes from the open budget under the E-5 cap. A row dropped
+before it runs is withdrawn (`TrialRegistry.withdraw`), which frees its trial. **E-5 cap for 2027Q1**
+(`research.open_budget_preregistered_only: ["2027Q1"]`): research-plan section 5 rules out further fast-tsmom
+horizons (R-06), so the open budget is not the director's default tsmom pool: the research analyst spends it only on
+an ad-hoc pre-registration naming a pre-registered rule (`rule_ref`) or on the retired families' one shared
+exploration trial, and the label grid spends none. Follow-ups of H-01/H-04/tsmom 4h go live only on the evaluator's
+recorded verdict "continue" (`TrialRegistry.record_verdict`), if follow-up slots are written for them before the
+freeze (each fixes its family and allowed configs). The director and the grid get
 at most 20 - used - reserved (11 if nothing else runs first). *Superseded:* "13 planned + 7 reserve" held 8 trials
 all quarter that no run could spend, because in-quarter survivor rows could not draw on the reservation.
 
@@ -86,14 +100,20 @@ stamped before its row's quarter would never use the row up.
 ### H-02 Feature discovery
 - Config: label = 4h triple barrier, target 3.0 ATR / stop 1.5 ATR / 12 bars (tsmom 4h defaults), candidates = every 4h
   bar (no rule), side from the sign of the 20-day vol-scaled return; features = every registered family (incl.
-  trader-toolkit, survey and macro), grouped by family (`--families`); survivors go forward as features, so K_eff =
-  features screened (group stability is reported by summed member importance per subsample, top-k over groups, with
-  `group_top_k: 3` set explicitly in the config: the value the default rule gives here, written out per quant ruling
-  Q-3, 2026-10-10; it changes no reading rule).
+  trader-toolkit, survey and macro), grouped by **hypothesis cluster** (`--families cluster`, `DiscoveryConfig.clusters
+  = discovery.H02_CLUSTERS`: H-03 `macro_gvz*`, `realised_vol`, `vol_estimators`; H-05 `round_numbers`,
+  `support_resistance`, `swings`; H-07 `macro_vix*`, `macro_spx*`; H-08 `session_zones`, `market_structure`; H-10
+  `jumps`, `calendar_events`; first match wins; every other column in its feature family's group; each cluster <= 39
+  columns, checked before any look; amended 2026-10-11 so the "feature cluster" of the reading rule has a recorded
+  stability); survivors go forward as features, so K_eff = features screened (group stability is reported by summed
+  member importance per subsample, top-k over groups, with `group_top_k: 3` set explicitly in the config, per quant
+  ruling Q-3, 2026-10-10).
 - Method: stability selection inside each training fold only (50 subsamples x 50%), top-40 by gain; permutation
   importance on an inner split as a tie-break.
 - Reading rule (decided now): a feature cluster **survives** if its selection stability >= 0.6 across folds AND the
-  walk-forward on the selected set has OOF AUC >= 0.53 with the lower 95% bound > 0.50. Survivors earn their own
+  walk-forward on the selected set has OOF AUC >= 0.53 with the lower 95% bound > 0.50 (cluster = a hypothesis
+  cluster above; its selection stability = its group stability; the AUC condition is H-02's recorded reading
+  verdict "continue"). Survivors earn their own
   trial (rows 6-9); if no cluster survives, rows 6-9 are cancelled and their budget returns to reserve.
 
 ### H-01 Slow TSMOM

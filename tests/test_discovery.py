@@ -370,20 +370,36 @@ def _stability_frames(sizes: dict[str, int], stab: dict[str, float]) -> tuple[pd
     return feat, grp
 
 
-def test_group_mode_refuses_rather_than_truncating_survivor_groups_over_max_selected():
-    """Quant ruling Q-3: K_eff = groups screened is honest only if every member of every survivor group goes forward."""
+def test_group_mode_forwards_whole_groups_in_stability_order_while_they_fit_and_records_the_rest():
+    """Quant MEDIUM 4: K_eff = groups screened stays honest when only whole groups go forward; a group that does not
+    fit (and every one after it) is recorded as skipped, never truncated."""
     from goldbot.research.discovery import survivor_selection
     cfg = DiscoveryConfig(survivor_unit="group", group_top_k=3, max_selected=39)
-    feat, grp = _stability_frames({"sweeps": 25, "levels": 20, "noise": 5}, {"sweeps": 0.9, "levels": 0.8, "noise": 0.1})
-    with pytest.raises(ValueError, match=r"45 members.*max_selected 39"):
-        survivor_selection(feat, grp, cfg)
+    feat, grp = _stability_frames({"sweeps": 25, "levels": 20, "jumps": 10, "noise": 5},
+                                  {"sweeps": 0.9, "levels": 0.8, "jumps": 0.75, "noise": 0.1})
+    groups, selected, n_features, skipped = survivor_selection(feat, grp, cfg)
+    assert groups == ["sweeps"] and skipped == ["levels", "jumps"] and len(selected) == 25
+    assert n_features == {"sweeps": 25}
     feat, grp = _stability_frames({"sweeps": 25, "levels": 14, "noise": 5}, {"sweeps": 0.9, "levels": 0.8, "noise": 0.1})
-    groups, selected, n_features = survivor_selection(feat, grp, cfg)
-    assert groups == ["sweeps", "levels"] and len(selected) == 39 and n_features == {"sweeps": 25, "levels": 14}
+    groups, selected, n_features, skipped = survivor_selection(feat, grp, cfg)
+    assert groups == ["sweeps", "levels"] and len(selected) == 39 and skipped == []
     # feature mode keeps the best max_selected features (K_eff = features screened is unaffected by the cut)
     feat, grp = _stability_frames({"a": 30, "b": 20}, {"a": 0.9, "b": 0.8})
-    _, selected, _ = survivor_selection(feat, grp, DiscoveryConfig(max_selected=39))
-    assert len(selected) == 39
+    _, selected, _, skipped = survivor_selection(feat, grp, DiscoveryConfig(max_selected=39))
+    assert len(selected) == 39 and skipped == []
+
+
+def test_group_mode_refuses_a_group_over_max_selected_before_any_look_at_the_data(monkeypatch):
+    from goldbot.research import discovery as disc_mod
+    labels, gross, feats = _synthetic()
+    folds = list(walk_forward_splits(labels, **WINDOW))
+    looked: list[int] = []
+    monkeypatch.setattr(disc_mod, "select_in_fold", lambda *a, **k: looked.append(1))
+    big = {c: "one_group" for c in POOL}                       # 10 columns in one group, max_selected 3
+    cfg = CFG.model_copy(update={"survivor_unit": "group", "group_top_k": 1, "max_selected": 3})
+    with pytest.raises(ValueError, match=r"one_group has 10 columns.*max_selected 3"):
+        run_discovery("synthetic-6", labels, gross, feats, folds, "f-test", WINDOW, POOL, cfg, big, "family")
+    assert looked == []
 
 
 def test_group_survivor_unit_needs_an_explicit_group_top_k():
@@ -406,6 +422,28 @@ def test_group_discovery_reports_the_feature_count_beside_each_survivor_group():
     assert gd["survivor_groups_n_features"] == {s: sum(1 for c in POOL if groups[c] == s) for s in g.survivor_groups}
     from goldbot.research.discovery import group_map_hash
     assert gd["group_map_sha256"] == group_map_hash(groups) != group_map_hash({**groups, "info": "fam_c"})
+    assert gd["group_members"] == {g_: [c for c in POOL if groups[c] == g_] for g_ in set(groups.values())}
+    assert gd["skipped_survivor_groups"] == [] and gd["reading_verdict"]["decision"] in ("continue", "stop",
+                                                                                         "inconclusive")
     text = render_discovery(g, {"specialist": "s", "from_year": 2021, "to_year": 2023, "tf": "4h", "trial": 1,
                                 "prereg_ts": "t", "n_trials_effective": 4})
     assert all(f"{s} ({gd['survivor_groups_n_features'][s]} features)" in text for s in g.survivor_groups)
+
+
+def test_cluster_grouping_maps_columns_to_the_preregistered_hypothesis_clusters_first_match_wins():
+    """H-02 groups by hypothesis cluster (rows 6-9), so cluster stability is the group stability the slots rank by."""
+    from goldbot.research.discovery import H02_CLUSTERS
+    clusters = {"H-03": ["macro_gvz*"], "H-07": ["macro_vix*", "macro_spx*"], "H-10": ["jump_*"]}
+    cols = ["macro_gvz", "d1_macro_gvz_chg20", "macro_vix_chg5", "macro_spx_dd20", "jump_z", "atr_14"]
+    g = column_groups(cols, "cluster", clusters=clusters)
+    assert g == {"macro_gvz": "H-03", "d1_macro_gvz_chg20": "H-03", "macro_vix_chg5": "H-07",
+                 "macro_spx_dd20": "H-07", "jump_z": "H-10", "atr_14": "atr_14"}
+    with pytest.raises(ValueError, match="clusters"):
+        column_groups(cols, "cluster")
+    assert list(H02_CLUSTERS) == ["H-03", "H-05", "H-07", "H-08", "H-10"]
+    from goldbot.research.discovery import check_group_sizes
+    cfg = DiscoveryConfig(max_selected=3, clusters=clusters)
+    wide_family = {**{f"atr_{i}": "volatility" for i in range(9)}, "jump_z": "H-10"}
+    check_group_sizes(wide_family, cfg, "cluster")             # a family group never becomes a trial's inputs
+    with pytest.raises(ValueError, match="H-10 has 4 columns"):
+        check_group_sizes({f"jump_{i}": "H-10" for i in range(4)}, cfg, "cluster")

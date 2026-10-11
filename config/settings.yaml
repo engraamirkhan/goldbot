@@ -122,12 +122,16 @@ research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
   label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
-  reserved_trials_quarter: 9         # held for the pre-registered queue (docs/research/preregistration-2027Q1.md: 5 queued
-                                     #   rows + 4 contingent H-02 survivor slots, ADR 0007): the director, the label grid and
-                                     #   the research analyst spend only 20 - used - reserved, where reserved = max(this -
-                                     #   run - withdrawn - expired slots, pending, 0). A trial run against a queued row, or
-                                     #   using a live slot by its derivation rule, uses one up; a withdrawn row or a slot
-                                     #   whose condition can no longer be met frees one; revisit each quarter
+  reserved_trials_quarter:           # held for each quarter's pre-registered queue; a quarter not listed holds none
+    "2027Q1": 9                      #   preregistration-2027Q1.md: 5 queued rows + 4 contingent H-02 survivor slots (ADR
+                                     #   0007). The director, the label grid and the analyst spend only 20 - used -
+                                     #   reserved, reserved = max(this - run - withdrawn - expired slots, pending, 0). A
+                                     #   trial run against a queued row, or using a live slot by its derivation rule, uses
+                                     #   one up; a withdrawn row or a slot whose condition can no longer be met frees one
+  open_budget_preregistered_only:    # E-5 cap: in these quarters the analyst spends the open budget only on an ad-hoc
+    - "2027Q1"                       #   pre-registration naming a pre-registered rule (rule_ref), plus the retired
+                                     #   families' one shared exploration trial; the label grid spends none (research-plan
+                                     #   section 5: no further fast-tsmom horizons, R-06)
   retired_families:                  # mirrors docs/research/hypotheses.md section B (a test checks they agree). The retired
                                      #   families SHARE 1 exploration trial a quarter (best post-retirement evidence, else a
                                      #   rotation) and each is reinstated only by out-of-sample attribution after its

@@ -78,8 +78,12 @@ rows therefore locks the excess for the whole quarter. **Updated 2026-10-10 (ADR
 protected by **contingent slots** written before 2027-04-01 (`TrialRegistry.reserve_slot`): H-14 survivor slots
 k = 1, 2 on H-14's queued row, and holdout slots where a rule calls for one; a slot is held only while its condition
 can still be met (reserved = max(setting − run − withdrawn − expired slots, pending, 0)) and is used only by the
-k-th survivor's own pre-registration (`slot_ref`). Q1 follow-ups depend on Q1 verdicts and are written as `followup`
-slots on their Q1 parent rows where the parent is known before the freeze. **Recommendation:** set the Q2 value to
+k-th survivor's own pre-registration (`slot_ref`) running exactly the derived configuration (H-14's family, spec
+and label, the group's recorded members), and only while H-14 reads continue under its rule. Q1 follow-ups depend on
+Q1 verdicts and are written as `followup` slots on their Q1 parent rows where the parent is known before the freeze;
+each fixes its family and allowed configurations, and a rule-only parent's follow-up goes live only on the
+evaluator's recorded verdict "continue" (`TrialRegistry.record_verdict`). The setting is keyed by quarter
+(`{"2027Q2": n}`), and the E-5 cap (`research.open_budget_preregistered_only`) can be extended to 2027Q2. **Recommendation:** set the Q2 value to
 queued rows + slots at freeze; this answers E-5 for the in-quarter allocations. Q1's setting was corrected the same
 way (13 → 9).
 
@@ -203,10 +207,11 @@ way (13 → 9).
 - **Q-3 conditions (ruled 2026-10-10):** every group has **≤ 39 columns** (a survivor group plus `side` must fit one
   model); the column → group map is **frozen by its hash** (`discovery.group_map_hash`, sha256 of the sorted map,
   written here at the freeze and recorded on the discovery row as `group_map_sha256`; a different hash at run time
-  is a deviation read against this rule); and when the surviving groups together exceed 39 columns the run
-  **refuses rather than truncates** (`discovery.survivor_selection`; the look is still recorded as the trial, with no
-  survivors), because K_eff = groups screened is honest only if whole groups go forward. The report gives each
-  survivor group's feature count beside it.
+  is a deviation read against this rule); a single group over 39 columns is refused before any look; otherwise the
+  walk-forward and its verdict run and are recorded, and the surviving groups go forward **whole, never truncated**,
+  in group-stability order while they fit within 39 columns, the rest recorded as `skipped_survivor_groups`
+  (`discovery.survivor_selection`, amended 2026-10-11 after the quant re-review), because K_eff = groups screened is
+  honest only if whole groups go forward. The report gives each survivor group's feature count beside it.
 - **Reading rule:**
   - A group **survives** if it is selected in ≥ 70% of folds (frequency ≥ 0.6) AND the walk-forward on the selected
     set has out-of-fold AUC ≥ 0.53 with block-bootstrap lower 95% bound > 0.50 AND the pre-set rule (trade when p ≥

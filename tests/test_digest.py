@@ -104,8 +104,8 @@ def test_digest_renders_every_section_from_fixture_state(tmp_path: Path) -> None
     assert "Risk: stage size_down · drawdown 3.0% from peak (halt at 12%) · day loss 1.0% of 2.0% cap · week 3.0% of 5.0% cap" in text
     assert "owner halt since Fri 09 Oct 10:00 UTC" in text and "drift system halt" in text
     assert "supervisor combined-cap halt" in text
-    assert "next pre-registered trial #3 (carry) · budget 2026Q4: 2 of 20 trials used, 8 reserved for " \
-           "pre-registered, 10 open" in text
+    assert "next pre-registered trial #3 (carry) · budget 2026Q4: 2 of 20 trials used, 1 reserved for " \
+           "pre-registered, 17 open" in text
     assert "Attribution: best session london +0.21R/trade net (n 64) · worst exit time -0.15R/trade net (n 41)" in text
     assert "👉 For you: 1 approval pending · 3 owner decisions open (see OWNER_GUIDE) · 1 deploy on offer" in text
 
@@ -226,8 +226,8 @@ def test_digest_counts_a_preregistration_run_without_its_link_by_the_directors_m
         {"trial": 2, "ts": "2026-10-05T00:00:00+00:00", "status": "preregistered", "family": "carry", "queue": False},
     )) + "\n")
     text = build_digest(tmp_path, NOW, settings=load_settings(), roadmap=tmp_path / "nope.md", registry_path=reg)
-    assert "Research: no pre-registered trial waiting · budget 2026Q4: 1 of 20 trials used, 8 reserved for " \
-           "pre-registered, 11 open" in text
+    assert "Research: no pre-registered trial waiting · budget 2026Q4: 1 of 20 trials used, 0 reserved for " \
+           "pre-registered, 19 open" in text
 
 
 def test_digest_shows_next_quarters_queue_in_the_quarter_before(tmp_path: Path) -> None:
@@ -239,5 +239,5 @@ def test_digest_shows_next_quarters_queue_in_the_quarter_before(tmp_path: Path) 
          "config_hash": "h2", "target_quarter": "2027Q1"},
     )) + "\n")
     text = build_digest(tmp_path, NOW, settings=load_settings(), roadmap=tmp_path / "nope.md", registry_path=reg)
-    assert "Research: no pre-registered trial waiting · budget 2026Q4: 0 of 20 trials used, 9 reserved for " \
-           "pre-registered, 11 open · next quarter: 2 queued" in text
+    assert "Research: no pre-registered trial waiting · budget 2026Q4: 0 of 20 trials used, 0 reserved for " \
+           "pre-registered, 20 open · next quarter: 2 queued" in text

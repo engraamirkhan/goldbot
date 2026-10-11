@@ -85,7 +85,7 @@ import json
 import math
 import re
 import statistics
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -99,10 +99,12 @@ from goldbot.research.attribution import T_SIGNIFICANT
 from goldbot.research.population import DSR_PROMOTE, MIN_RANK_TRADES
 from goldbot.research.promotion import MIN_SHADOW_TRADES, PerfStats
 from goldbot.research.registry import (
+    DEFAULT_SLOT_RULE,
     DISCOVERY,
     FROM_DISCOVERY_KEY,
     PREREGISTERED,
     SURVIVOR_KEY,
+    VERDICT,
     WITHDRAWN,
     is_trial,
     quarter_of,
@@ -371,9 +373,6 @@ def retired_quarter_trials(rows: list[dict[str, Any]], quarter: str, retired: se
 
 
 # ---------------------------------------------------------------------------------------------- the queue's ledger
-SLOT_STATES: tuple[str, ...] = ("pending", "live", "used", "expired", "withdrawn")
-
-
 class _Ledger:
     """Everything the reservation derives from the registry rows, computed once per call and never written back:
 
@@ -388,6 +387,7 @@ class _Ledger:
     def __init__(self, rows: list[dict[str, Any]]):
         self.rows = rows
         self.wrefs = [r.get("withdraws") for r in rows if r.get("status") == WITHDRAWN]
+        self.verdicts = [r for r in rows if r.get("status") == VERDICT]
         self.slots = [r for r in rows if r.get("status") == PREREGISTERED and isinstance(r.get("slot"), dict)]
         self.queued = [r for r in rows if is_queued(r) and not r.get("slot") and not self.withdrawn(r)]
         self.qrun = {id(self.queued[i]): rows[j] for i, j in _match_map(rows, self.queued).items()}
@@ -434,14 +434,32 @@ class _Ledger:
         parent = self.named(slot["slot"].get("parent"))
         return None if parent is None else self.run_of(parent)
 
+    def verdict(self, run: dict[str, Any]) -> str | None:
+        """The evaluator's first recorded verdict decision on trial `run` (`TrialRegistry.record_verdict`), or None."""
+        return next((str(v.get("decision")) for v in self.verdicts if refers_to(v.get("verdict_of"), run)), None)
+
+    def reads_continue(self, run: dict[str, Any], rule: dict[str, Any]) -> bool:
+        """The parent was read "continue" by its pre-registered rule: a discovery by its own recorded reading verdict,
+        checked against the slot's rule (decision "continue", OOF AUC >= min_auc, lower bound > min_auc_lower_bound);
+        any other parent by the evaluator's verdict row."""
+        if run.get("status") == DISCOVERY:
+            v = ((run.get("results") or {}).get("discovery") or {}).get("reading_verdict") or {}
+            auc, lb = _num(v.get("oof_auc")), _num(v.get("auc_lower_bound"))
+            return (v.get("decision") == "continue" and auc is not None and lb is not None
+                    and auc >= float(rule.get("min_auc", DEFAULT_SLOT_RULE["min_auc"]))
+                    and lb > float(rule.get("min_auc_lower_bound", DEFAULT_SLOT_RULE["min_auc_lower_bound"])))
+        return self.verdict(run) == "continue"
+
     def slot_state(self, slot: dict[str, Any]) -> str:
         """One of SLOT_STATES, derived (ADR 0007): "used" once a trial used it; "withdrawn"; otherwise held
         ("pending") while its condition can still be met, usable ("live") once it is, freed ("expired") once it cannot:
-          survivor k: the parent has not run (pending), or it ran and recorded >= k survivors (live);
-          followup k: the parent has not run (pending), or it ran and was read "continue" (live);
-          holdout k:  the parent ran with >= k survivors and survivor trial k (the parent's k-th survivor:
-                      `from_discovery` + `survivor` in its config) has not run yet (pending), or ran and passed its
-                      gates (live).
+          survivor k: the parent has not run (pending), or it was read "continue" by its pre-registered rule AND has
+                      >= k survivors under that rule (`slot_survivors`) (live);
+          followup k: the parent has not run, or (rule-only parent) has no evaluator verdict yet (pending), or it was
+                      read "continue" (live);
+          holdout k:  survivor k exists as above and survivor trial k has not run yet (pending), or ran as an
+                      evaluated trial and passed its gates (live); survivor slot k used by a run that is not an
+                      evaluated trial of survivor k, or a failed gate, frees it.
         A parent withdrawn before it ran, or one no row names, frees the slot."""
         if id(slot) in self.slot_use:
             return "used"
@@ -453,23 +471,33 @@ class _Ledger:
         if run is None:
             return "expired" if parent is None or self.withdrawn(parent) else "pending"
         kind, k = str(meta.get("kind")), int(meta.get("k") or 0)
+        rule = meta.get("rule") or DEFAULT_SLOT_RULE
         if kind == "followup":
-            return "live" if _read_continue(run) else "expired"
-        names = discovery_survivors(run)
+            if run.get("status") != DISCOVERY and self.verdict(run) is None:
+                return "pending"
+            return "live" if self.reads_continue(run, rule) else "expired"
+        if not self.reads_continue(run, rule):
+            return "expired"
+        names = [n for n, _ in slot_survivors(run, meta)]
         if k < 1 or len(names) < k:
             return "expired"
         if kind == "survivor":
             return "live"
         tried = self.survivor_trials(run, names[k - 1])
-        if not tried:
-            return "pending"
-        return "live" if any(_gates_passed(t) for t in tried) else "expired"
+        if tried:
+            return "live" if any(_gates_passed(t) for t in tried) else "expired"
+        used = [s for s in self.slots if s["slot"].get("kind") == "survivor" and s["slot"].get("k") == k
+                and parent is not None and refers_to(s["slot"].get("parent"), parent) and id(s) in self.slot_use]
+        return "expired" if used else "pending"
 
     def survivor_trials(self, parent_run: dict[str, Any], name: str) -> list[dict[str, Any]]:
-        """Walk-forward trials (status "evaluated") of the parent's survivor `name`."""
-        n = _num(parent_run.get("trial"))
+        """Walk-forward trials (status "evaluated") of the parent's survivor `name` (`from_discovery` names the
+        parent's row by `row_ref`, which registry_sync keeps)."""
         return [t for t in self.rows if t.get("status") == "evaluated" and _cfg(t).get(SURVIVOR_KEY) == name
-                and n is not None and _num(_cfg(t).get(FROM_DISCOVERY_KEY)) == n]
+                and refers_to(_cfg(t).get(FROM_DISCOVERY_KEY), parent_run)]
+
+
+SLOT_STATES: tuple[str, ...] = ("pending", "live", "used", "expired", "withdrawn")
 
 
 def _cfg(row: dict[str, Any]) -> dict[str, Any]:
@@ -481,24 +509,35 @@ def _gates_passed(row: dict[str, Any]) -> bool:
     return ((row.get("results") or {}).get("gates") or {}).get("passed") is True
 
 
-def _read_continue(row: dict[str, Any]) -> bool:
-    """The parent's recorded reading: a discovery's reading verdict "continue", else its design gates passed."""
-    res = row.get("results") or {}
-    verdict = (res.get("discovery") or {}).get("reading_verdict") or res.get("reading_verdict") or {}
-    if verdict:
-        return bool(verdict.get("decision") == "continue")
-    return _gates_passed(row)
+def slot_survivors(row: dict[str, Any], meta: dict[str, Any] | None = None) -> list[tuple[str, list[str]]]:
+    """A discovery trial's survivors under the slot's pre-registered rule, best first, each with its recorded members.
+
+    With a `survivor_pool` (H-02: its hypothesis clusters H-03/05/07/08/10, which H-02 groups by, so each cluster's
+    group stability is recorded): the pool's groups with `group_stability` >= rule min_stability, ranked by stability
+    (pool order breaks ties); a group outside the pool (e.g. a feature family) is never a survivor. Without a pool:
+    the discovery's own unit: groups that went forward (`survivor_groups`) when survivor_unit is "group", else the
+    selected features with `stability` >= min_stability; ranked the same way. Members: `group_members[group]`, or
+    the feature itself. Empty for anything that is not a discovery."""
+    disc = (row.get("results") or {}).get("discovery") or {}
+    meta = meta or {}
+    rule = meta.get("rule") or DEFAULT_SLOT_RULE
+    floor = float(rule.get("min_stability", DEFAULT_SLOT_RULE["min_stability"]))
+    members = disc.get("group_members") or {}
+    pool = meta.get("survivor_pool")
+    if pool is not None or disc.get("survivor_unit") == "group":
+        stab = disc.get("group_stability") or {}
+        cands = [str(g) for g in (pool if pool is not None else disc.get("survivor_groups") or [])]
+        ok = [g for g in cands if (_num(stab.get(g)) or 0.0) >= floor]
+        ranked = sorted(ok, key=lambda g: -(_num(stab.get(g)) or 0.0))
+        return [(g, sorted(str(c) for c in members.get(g) or [])) for g in ranked]
+    stab = disc.get("stability") or {}
+    feats = [str(x) for x in disc.get("selected") or [] if (_num(stab.get(x)) or 0.0) >= floor]
+    return [(f, [f]) for f in sorted(feats, key=lambda x: -(_num(stab.get(x)) or 0.0))]
 
 
 def discovery_survivors(row: dict[str, Any]) -> list[str]:
-    """A discovery trial's recorded survivors, best first: `results.discovery.survivor_groups` when whole groups go
-    forward (survivor_unit "group"), else `selected` (features), ranked by recorded stability (`group_stability` /
-    `stability`, descending; the recorded order breaks ties). Empty for anything that is not a discovery."""
-    disc = (row.get("results") or {}).get("discovery") or {}
-    group = disc.get("survivor_unit") == "group"
-    names = [str(x) for x in (disc.get("survivor_groups") if group else disc.get("selected")) or []]
-    stab = disc.get("group_stability" if group else "stability") or {}
-    return sorted(names, key=lambda x: -(_num(stab.get(x)) or 0.0))
+    """The names of `slot_survivors` under the default rule and the discovery's own unit."""
+    return [n for n, _ in slot_survivors(row)]
 
 
 def slot_state(rows: list[dict[str, Any]], slot: dict[str, Any]) -> str:
@@ -508,6 +547,11 @@ def slot_state(rows: list[dict[str, Any]], slot: dict[str, Any]) -> str:
     if row is None:
         raise KeyError(f"no slot row {row_ref(slot)}")
     return led.slot_state(row)
+
+
+def verdict_of(rows: list[dict[str, Any]], trial: dict[str, Any]) -> str | None:
+    """The evaluator's verdict decision on `trial`, or None (`TrialRegistry.record_verdict`)."""
+    return _Ledger(rows).verdict(trial)
 
 
 def preregistration_run(rows: list[dict[str, Any]], prereg: dict[str, Any]) -> dict[str, Any] | None:
@@ -531,13 +575,28 @@ def slot_preregistration(rows: list[dict[str, Any]], family: str, config_hash: s
                  and id(r) not in led.adhoc_run and not led.withdrawn(r)), None)
 
 
+def rule_preregistration(rows: list[dict[str, Any]], family: str, config_hash: str) -> dict[str, Any] | None:
+    """The latest ad-hoc pre-registration of exactly this family and config that names a pre-registered rule
+    (`rule_ref`), claims no slot, is not withdrawn and no trial has used yet, or None: what a quarter under the E-5
+    cap (research.open_budget_preregistered_only) requires before the analyst spends the open budget."""
+    led = _Ledger(rows)
+    return next((r for r in reversed(rows) if r.get("status") == PREREGISTERED and r.get("queue") is False
+                 and r.get("rule_ref") and not r.get("slot_ref") and r.get("family") == family
+                 and r.get("config_hash") == config_hash and id(r) not in led.adhoc_run and not led.withdrawn(r)),
+                None)
+
+
 def slot_refusal(rows: list[dict[str, Any]], quarter: str, prereg: dict[str, Any], family: str,
-                 config: dict[str, Any], config_hash: str) -> str | None:
+                 config: dict[str, Any], config_hash: str, *, retired: Collection[str] = ()) -> str | None:
     """Why a run of `config` may NOT be covered by the slot its ad-hoc pre-registration claims, or None when it is
-    covered: the slot is of `quarter` and live, the config's `from_discovery` is the parent's trial number (survivor
-    and holdout slots, and a follow-up of a discovery; another follow-up runs the parent's family), a survivor slot's
-    claimed `survivor` is the k-th of the parent's recorded ranking (`discovery_survivors`), and a holdout slot's run is
-    survivor trial k's configuration, which passed its gates."""
+    covered (quant re-review: a slot covers only its derived configuration):
+      * never a retired family (`retired`: the retired-family limit is never bypassed);
+      * the slot is of `quarter` and live (`_Ledger.slot_state`);
+      * survivor / holdout: the family and every spec key of the parent discovery (`config.specialist`,
+        `config.spec`: its label and candidates), `from_discovery` = the parent's `row_ref`, the claimed `survivor`
+        the k-th of `slot_survivors`, and `features` (less `side`) exactly that survivor's recorded members; a holdout
+        also exactly survivor trial k's configuration, which passed its gates;
+      * follow-up: the slot's fixed family, and a config whose hash is allowed or that contains every fixed override."""
     led = _Ledger(rows)
     slot = led.slot_named(prereg.get("slot_ref"))
     if slot is None:
@@ -545,28 +604,44 @@ def slot_refusal(rows: list[dict[str, Any]], quarter: str, prereg: dict[str, Any
     meta = slot["slot"]
     kind, k = str(meta.get("kind")), int(meta.get("k") or 0)
     what = f"{kind} slot {k} of #{(meta.get('parent') or {}).get('trial')}"
+    if family in set(retired):
+        return f"{family} is a retired family: a slot never covers it (only the shared exploration trial may) ({what})"
     if prereg_quarter(slot) != quarter:
         return f"the {what} is for {prereg_quarter(slot)}, not {quarter}"
     state = led.slot_state(slot)
     run = led.parent_run(slot)
     if state != "live" or run is None:
         return f"the {what} is {state}, not live"
-    n = _num(run.get("trial"))
-    if kind != "followup" or run.get("status") == DISCOVERY:
-        fd = config.get(FROM_DISCOVERY_KEY)
-        if n is None or _num(fd) != n:
-            return f"the config's from_discovery {fd!r} is not the parent's trial number {run.get('trial')} ({what})"
-    elif family != run.get("family"):
-        return f"a follow-up of #{run.get('trial')} runs its family {run.get('family')}, not {family} ({what})"
-    if kind in ("survivor", "holdout"):
-        name = discovery_survivors(run)[k - 1]
-        if kind == "survivor" and config.get(SURVIVOR_KEY) != name:
-            return (f"it claims survivor {config.get(SURVIVOR_KEY)!r}, but rank {k} of #{run.get('trial')}'s recorded "
-                    f"ranking is {name!r} ({what})")
-        if kind == "holdout" and not any(_gates_passed(t) and t.get("family") == family
-                                         and t.get("config_hash") == config_hash
-                                         for t in led.survivor_trials(run, name)):
-            return f"the {what} covers only survivor trial {k}'s configuration ({name!r}, gates passed)"
+    if kind == "followup":
+        fu = meta.get("followup") or {}
+        if family != fu.get("family"):
+            return f"the {what} runs family {fu.get('family')}, not {family}"
+        overrides = fu.get("overrides") or {}
+        allowed = config_hash in (fu.get("config_hashes") or []) or (
+            bool(overrides) and all(config.get(key) == val for key, val in overrides.items()))
+        return None if allowed else f"the config is not one of the {what}'s allowed configurations"
+    if not refers_to(config.get(FROM_DISCOVERY_KEY), run):
+        return (f"the config's from_discovery {config.get(FROM_DISCOVERY_KEY)!r} does not name the parent discovery "
+                f"#{run.get('trial')} (its row_ref: ts and config hash) ({what})")
+    parent_cfg = _cfg(run)
+    if family != parent_cfg.get("specialist"):
+        return f"the {what} runs the parent's family {parent_cfg.get('specialist')}, not {family}"
+    raw_spec = parent_cfg.get("spec")
+    spec: dict[str, Any] = raw_spec if isinstance(raw_spec, dict) else {}
+    diff = sorted(key for key, val in spec.items() if config.get(key) != val)
+    if diff:
+        return f"the config's spec differs from the parent's label and candidates in {diff} ({what})"
+    survivors = slot_survivors(run, meta)
+    name, members = survivors[k - 1]
+    if config.get(SURVIVOR_KEY) != name:
+        return (f"it claims survivor {config.get(SURVIVOR_KEY)!r}, but rank {k} of #{run.get('trial')}'s "
+                f"pre-registered ranking is {name!r} ({what})")
+    feats = sorted(str(c) for c in config.get("features") or [] if c != "side")
+    if feats != members:
+        return f"the config's features {feats} are not survivor {name!r}'s recorded members {members} ({what})"
+    if kind == "holdout" and not any(_gates_passed(t) and t.get("family") == family
+                                     and t.get("config_hash") == config_hash for t in led.survivor_trials(run, name)):
+        return f"the {what} covers only survivor trial {k}'s configuration ({name!r}, gates passed)"
     return None
 
 

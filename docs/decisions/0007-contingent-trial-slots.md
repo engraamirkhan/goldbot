@@ -45,6 +45,38 @@ while the survivors compete for the 7 open trials with the director's pool and t
 - `from_discovery` holds the parent's trial number. `registry_sync` renumbers rows on merge, so a config written
   before a merge that reorders earlier trials would no longer match; merges keep time order, so this needs rows
   written out of order on two hosts, and the refusal fails closed (no reserved trial is spent).
-- Group-unit discovery (quant ruling Q-3) refuses survivor groups whose members exceed `max_selected` instead of
-  truncating them (the look is still recorded as the trial, with no survivors), and a group-unit config must set
-  `group_top_k` explicitly.
+- Group-unit discovery (quant ruling Q-3) never truncates a survivor group, and a group-unit config must set
+  `group_top_k` explicitly (forward-while-fits since the amendment below).
+
+## Amendment 2026-10-11 (quant re-review of 1f83a8a; before the freeze)
+- **A slot covers only its derived configuration** (`director.slot_refusal`). Survivor or holdout: the parent
+  discovery's family and every spec key (`config.specialist`, `config.spec`: label and candidates), `from_discovery`
+  naming the parent, the claimed `survivor` the k-th of the pre-registered ranking, and `features` (less `side`)
+  exactly that survivor's recorded members (`results.discovery.group_members`). Follow-up: the family and allowed
+  configs fixed in the slot row before the quarter (`config_hashes` or `overrides`); a follow-up slot without them
+  is refused. A slot never covers a retired family (the retired-family limit is never bypassed; `retired` defaults to
+  the settings' list).
+- **Slots follow the parent's reading rule.** A survivor slot is live only if the parent discovery's recorded
+  reading verdict is "continue" with OOF AUC >= 0.53 and lower bound > 0.50 (the slot's `rule`), AND at least k
+  survivors pass under that rule. For H-02 the survivors are its pre-registered hypothesis clusters
+  (`survivor_pool`: H-03/05/07/08/10), which H-02 now groups by (`--families cluster`, `discovery.H02_CLUSTERS`), so
+  each cluster's group stability is recorded and the ranking is by group stability among clusters >= 0.6, not by
+  single features. Derivation-rule text amended in `preregistration-2027Q1.md`.
+- **Evaluator verdicts** (`TrialRegistry.record_verdict`, status `verdict`, not a trial, first verdict final): a
+  rule-only parent (H-01, H-04, tsmom 4h) writes no reading verdict, so its follow-up slots stay pending until the
+  evaluator records one and go live only on "continue". A discovery's own verdict is never replaced.
+- **Group mode** runs and records the walk-forward and its verdict first, then forwards whole groups in
+  group-stability order while they fit within `max_selected`, recording the rest as `skipped_survivor_groups`
+  (K_eff = groups screened still holds). It refuses before any look only when one group exceeds `max_selected`
+  (in cluster mode with feature survivors: one cluster).
+- A holdout slot expires once its survivor slot was used by a run that is not an evaluated trial of survivor k. No
+  holdout slots are written for Q1.
+- `from_discovery` holds the parent's `row_ref` (timestamp and config hash, truthy for `passed_gates`), so
+  registry_sync renumbering cannot break a match. This supersedes the consequence noted above.
+- `research.reserved_trials_quarter` is keyed by quarter (`{"2027Q1": 9}`, default 0), so a setting never applies to
+  whatever quarter is current.
+- **E-5 cap** (`research.open_budget_preregistered_only: ["2027Q1"]`): research-plan section 5 rules out further
+  fast-tsmom horizons (R-06), yet the director's pool would default the 11 open trials to tsmom. In a capped quarter
+  the research analyst spends the open budget only on an ad-hoc pre-registration naming a pre-registered rule
+  (`preregister(rule_ref=)`, linked to the run) or on the retired families' one shared exploration trial; the label
+  grid spends none.
