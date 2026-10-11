@@ -3,6 +3,7 @@ London) with signal, not noise. Read on a phone, so it stays under about 15 line
 
 * status   all good / attention needed, from the health report, failing and warning checks named;
 * yesterday (the previous UTC day)  proposals made, approved, rejected, expired; trades closed with net P&L ($) and R
+           from net rows only, gross-only trades (costs not recorded) shown apart and never labelled net
            (state/closed_trades_*.jsonl via goldbot.ops.gates_phase.load_closed_trades); the month so far (time-weighted
            %, trades, R, average per trading day; goldbot.ops.monthly_report), once it has a closed trade; open
            positions now;
@@ -195,16 +196,33 @@ def trades_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp) -> list
         ccy = {str(e.get("account")): str(e.get("currency") or "").strip().upper() for e in _engines(state_dir)}
     except ValueError:
         ccy = {}
-    sums: dict[str, float] = {}
-    for t in day:
-        c = (t.pnl_currency or ccy.get(t.account_id, "")).strip().upper()
-        sums[c] = sums.get(c, 0.0) + t.pnl
-    net = " · ".join(money(v, c or None) + ("" if c else " (currency not reported)")
-                     for c, v in sorted(sums.items(), key=lambda kv: (kv[0] not in ccy.values(), kv[0] == "", kv[0])))
-    rs = [t.r for t in day if t.r is not None]
-    r = f" · {sum(rs):+.2f}R" + (f" ({len(rs)} of {len(day)} with R)" if len(rs) < len(day) else "") if rs else " · R n/a"
-    wins = sum(t.pnl > 0 for t in day)
-    return [f"• Closed {_plural(len(day), 'trade')}: net {net}{r} ({wins} won, {len(day) - wins} lost){warn}"]
+    def summed(rows: list[Any]) -> str:
+        sums: dict[str, float] = {}
+        for t in rows:
+            c = (t.pnl_currency or ccy.get(t.account_id, "")).strip().upper()
+            sums[c] = sums.get(c, 0.0) + t.pnl
+        return " · ".join(money(v, c or None) + ("" if c else " (currency not reported)")
+                          for c, v in sorted(sums.items(), key=lambda kv: (kv[0] not in ccy.values(), kv[0] == "", kv[0])))
+
+    # finance audit GAP-05 (as perf_report.py): net figures from net rows only (gates_phase.pnl_basis); the rest are
+    # shown apart as "N trades gross only (costs not recorded)", so nothing gross is labelled net
+    from goldbot.ops.gates_phase import pnl_basis
+    net_rows = [t for t in day if pnl_basis(t) == "net"]
+    gross_rows = [t for t in day if pnl_basis(t) != "net"]
+    if net_rows:
+        rs = [t.r for t in net_rows if t.r is not None]
+        r = f" · {sum(rs):+.2f}R" + (f" ({len(rs)} of {len(net_rows)} with R)" if len(rs) < len(net_rows) else "") \
+            if rs else " · R n/a"
+        wins = sum(t.pnl > 0 for t in net_rows)
+        net = f"net {summed(net_rows)}{r} ({wins} won, {len(net_rows) - wins} lost)"
+    else:
+        net = "net not recorded"
+    gross = ""
+    if gross_rows:
+        grs = [t.r for t in gross_rows if t.r is not None]
+        gross = (f" · {_plural(len(gross_rows), 'trade')} gross only (costs not recorded): {summed(gross_rows)}"
+                 + (f" · {sum(grs):+.2f}R" if grs else "") + " gross")
+    return [f"• Closed {_plural(len(day), 'trade')}: {net}{gross}{warn}"]
 
 
 def month_line(state_dir: Path, yesterday: pd.Timestamp) -> list[str]:
