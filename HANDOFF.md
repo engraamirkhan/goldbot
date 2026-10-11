@@ -959,19 +959,24 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Engine follow-up done (2026-10-11): `runner.py` `_load_orders` (SentOrder/OpenTrade/PendingClose) and
   `_archive_stale_proposals` read with `load_record*`, so a rollback no longer stops the older engine from starting.
   `mt5_bootstrap.sh` pins `pydantic>=2.12`; an existing MT5 box is upgraded once by hand (RUNBOOK 0.5).
-  **Follow-up:** `goldbot/execution/bridge.py` `_decode` (:126): records coming back from the MT5 box (Position,
-  Tick, BrokerTerms, TradingSession) can be read tolerantly, because the MT5 box is updated by hand and can run a
-  different version from the brain. `OrderIntent` (an order request) stays strict. Needs the MT5 box on pydantic 2.12
-  (RUNBOOK 0.5: book flat or weekend, version check, `systemctl is-active`).
+  Bridge follow-up done (2026-10-11): `goldbot/execution/bridge.py` `_decode(..., response=True)` reads what the
+  MT5 box sends back (Position, Tick, AccountInfo, SymbolInfo, BrokerTerms, TradingSession, OrderResult) with
+  `load_record` (source `bridge-response`), because the box is updated by hand and can run a newer release. The
+  bridge server's arguments (`response=False`) and `OrderIntent` in either direction stay strict: an order request
+  with an unknown field is refused. Protocol digest unchanged, `API_VERSION` stays 2. The MT5 box needs no pydantic
+  upgrade for this (only the brain calls `load_record`); the RUNBOOK 0.5 upgrade stays recommended for parity.
   Review LOWs (2026-10-11): a refused decision is logged once per proposal and counted (`base.note_schema_skew`), and
   an unknown top-level table in `orders_<account>.json` is logged and counted at engine start; S12 now requires a
   reviewed rollback story for a new table that carries client ids or broker orders.
   Skew reaches the owner (2026-10-11, review follow-up; needs trading-safety and SRE review): the engine publishes a
   bounded `schema_skew` block in `engine_<account>.json` (`base.schema_skew_summary`: distinct sources, reads, any
   refused, at most 20 entries with refused ones first, 10 field paths each). Health `schema_skew:<account>` WARNs
-  (Telegram, NOTIFY_ON_WARN) while any is present and names the sources, and FAILs when a strict reader refused a
-  record (an owner's click dropped by the approval bus). Process-lifetime: it stays until the engine restarts on a
-  release that knows the fields. Only the engine's own reads are counted; skew read by the API, Telegram or
+  (Telegram, NOTIFY_ON_WARN) while any is present and names at most 5 sources (~400 characters, then "+N more"), and
+  FAILs for an hour after a strict reader refused a record (an owner's click dropped by the approval bus;
+  `last_refused_utc`, `SKEW_REFUSED_FAIL_S`), then WARNs naming the refusal time; a new refusal FAILs and alerts
+  again (SRE review). Process-lifetime: the counts clear when the engine restarts and next writes its state (on a
+  tick or bar, so a weekend restart keeps the old block until the Sunday open). The check is guarded like the
+  others (a raising check is a FAIL named `schema_skew:<account>`). Only the engine's own reads are counted; skew read by the API, Telegram or
   supervisor processes is still log-only. Also pinned: a holiday list with a misspelt key (`valid_thru:`, renamed or
   added beside the real key) fails closed as `calendar_unavailable`, RiskGate refuses entries, exits still run.
 - H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
@@ -1345,6 +1350,31 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- Non-finite state fails closed (October safety batch, 2026-10-11, TRACEABILITY R37 and S7): `RiskGate.check`
+  refuses first with `invalid_state` plus `invalid:<field>` when any number it reads (equity, HWM, day/week
+  start, margin, spread, tick ages, exposure, stop/target/ATR/cost, multiplier, price, contract terms,
+  `acct_per_usd`) is NaN or infinite; None stays the explicit "unknown" (a USD account with a NaN conversion is
+  now refused, not taken as 1). `_tick_ok` drops a quote with a non-finite bid or ask as `non_finite_quote` (entries
+  blocked; the next valid tick runs the exits). `account_fx("", x)` is None. The supervisor treats a non-finite or
+  wrongly typed engine-file number as `engine_state_unreadable` (halt); `ops.run.supervisor_pass` publishes
+  `supervisor_error` instead of dying when `evaluate` raises. An engine file without `ts` now halts too (engines
+  always write it). Dev extras gain pytest-randomly: every run is in random order (seed in the header; reproduce
+  with `-p randomly --randomly-seed=<n>`, opt out with `-p no:randomly`).
+  Safety review fixes (same day): the gate's guard is `invalid_fields` (reason `invalid_state` / `invalid:<field>`,
+  after the flag reasons) and also requires price, ATR, stop, contract, volumes and equity > 0; an approval on a
+  quote that breaks the tick price rules is refused (`bad_quote:<check>`). A dropped quote or a raising
+  `last_tick` runs `Engine.no_quote_pass`: decided closes retried, a pending kill-switch flatten, host-clock time
+  barriers, and from the Friday cut every own position closed (`weekend_close_no_quote`: no price to tell losers
+  from winners). The state keeps being written with `quote_invalid_since`; health FAILs after 60 s of invalid
+  quotes in market hours, and FAILs (alerted) on `supervisor_error` and `engine_state_unreadable` halts. Repeated
+  bad quotes are one DQ event with a count; every health check is guarded; the seed is printed after each run
+  (tests/conftest.py).
+  Re-verification fixes: the priceless Friday flatten and time barrier never act on a single bad quote. The
+  flatten needs only a dead feed (invalid for `QUOTE_DEAD_S`, 60 s, = health's threshold), whatever happened
+  around the cut; a shorter gap leaves it to `_weekend_rule` on the next valid quote. The time
+  barrier needs a dead feed and counts `bars_held` plus open-market decision bars since `_closed_through`
+  (never wall time over a weekend). A refused close that is not market-closed is re-sent at most once a second
+  (`CLOSE_RETRY_MIN_S`). BACKLOG 44: confirm a zero-equity read before the kill switch (needs an ADR).
 - October batch rollout (SRE, 2026-10-11): `docs/deploy/2026-10-batch.md`.
   - The owner's ordered steps for the two Oracle VMs, to be done by Fri 23 Oct: pre-checks (restic plus a local
     copy, preflight, health baseline); engines stopped; MT5 box first, because the new brain needs the bridge's

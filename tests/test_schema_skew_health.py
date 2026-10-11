@@ -24,10 +24,12 @@ def fresh_skew(monkeypatch):
     """The skew counter is process-wide; each test starts from an empty one."""
     monkeypatch.setattr(base, "_skew", Counter())
     monkeypatch.setattr(base, "_refused", set())
+    monkeypatch.setattr(base, "_last_refused", None)
 
 
 def test_the_summary_is_empty_when_nothing_was_read_from_a_newer_release(fresh_skew):
-    assert base.schema_skew_summary() == SkewSummary(count=0, reads=0, refused=False, entries=[], truncated=0)
+    assert base.schema_skew_summary() == SkewSummary(count=0, reads=0, refused=False, entries=[], truncated=0,
+                                                       last_refused_utc=None)
 
 
 def test_the_summary_names_source_model_fields_count_and_whether_the_entry_was_refused(fresh_skew):
@@ -36,6 +38,8 @@ def test_the_summary_names_source_model_fields_count_and_whether_the_entry_was_r
     note_schema_skew("approvals/decisions:p1", "BusDecision", ["max_lots"], refused=True)
     s = base.schema_skew_summary()
     assert (s.count, s.reads, s.refused, s.truncated) == (2, 3, True, 0)
+    assert s.last_refused_utc is not None                                     # wall clock of the refusal
+    assert abs((pd.Timestamp.now(tz="UTC") - s.last_refused_utc).total_seconds()) < 60
     assert [(e.source, e.model, e.fields, e.count, e.refused) for e in s.entries] == [
         ("approvals/decisions:p1", "BusDecision", ["max_lots"], 1, True),        # refused first
         ("risk_<account>.json", "RiskState", ["new_cap"], 2, False)]
@@ -65,7 +69,7 @@ def test_the_engine_state_file_publishes_the_schema_skew_summary(tmp_path, fresh
     note_schema_skew("approvals/decisions:icm-demo-1-x", "BusDecision", ["max_lots"], refused=True)
     eng._write_state()
     sk = json.loads((tmp_path / "engine_icm-demo.json").read_text())["schema_skew"]
-    assert sk["refused"] is True and sk["count"] == 1
+    assert sk["refused"] is True and sk["count"] == 1 and pd.Timestamp(sk["last_refused_utc"]).tzinfo is not None
     assert sk["entries"] == [{"source": "approvals/decisions:icm-demo-1-x", "model": "BusDecision",
                               "fields": ["max_lots"], "count": 1, "refused": True}]
 
@@ -80,9 +84,11 @@ def _publish(tmp_path: Path, skew: object) -> None:
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"account": "icm-demo", "schema_skew": skew}))
 
 
-def _summary(*entries: tuple[str, str, list[str], int, bool]) -> dict:
+def _summary(*entries: tuple[str, str, list[str], int, bool], refused_at: pd.Timestamp | None = None) -> dict:
     counts = Counter({(s, m, tuple(f)): n for s, m, f, n, _ in entries})
-    return skew_summary(counts, {(s, m, tuple(f)) for s, m, f, _, r in entries if r}).model_dump(mode="json")
+    refused = {(s, m, tuple(f)) for s, m, f, _, r in entries if r}
+    at = refused_at if refused_at is not None else NOW - pd.Timedelta(minutes=1)
+    return skew_summary(counts, refused, at if refused else None).model_dump(mode="json")
 
 
 def test_health_is_ok_without_skew_and_silent_for_an_engine_that_does_not_publish_it(tmp_path):
@@ -111,11 +117,60 @@ def test_health_fails_when_an_owner_click_was_refused(tmp_path):
     assert "approvals/decisions:p1" in c.reason and "click" in c.reason
 
 
-def test_health_names_how_many_sources_the_bounded_summary_left_out(tmp_path):
-    many = [(f"src{i:02d}", "M", ["x"], 1, False) for i in range(SKEW_SUMMARY_MAX + 5)]
+def test_health_names_at_most_five_sources_in_about_400_characters_and_how_many_it_left_out(tmp_path):
+    many = [(f"state/some_long_file_name_{i:02d}.json", "SomeLongModelName", [f"field_{j}" for j in range(10)], 1,
+             False) for i in range(SKEW_SUMMARY_MAX + 5)]
     _publish(tmp_path, _summary(*many))
     c = health.check_schema_skew(_ctx(tmp_path), "icm-demo")
-    assert c is not None and c.status == "warn" and "+5 more" in c.reason
+    assert c is not None and c.status == "warn"
+    assert c.reason.endswith("+20 more (health --json)")                  # 25 distinct, 5 named
+    assert sum(f"some_long_file_name_{i:02d}" in c.reason for i in range(25)) <= 5
+    assert len(c.reason) <= 600                                          # ~400 for the list plus the sentence
+
+
+def test_a_refusal_fails_for_59_minutes_then_warns_with_its_time(tmp_path):
+    def at(minutes: int) -> health.Check:
+        _publish(tmp_path, _summary(("approvals/decisions:p1", "BusDecision", ["max_lots"], 1, True),
+                                    refused_at=NOW - pd.Timedelta(minutes=minutes)))
+        c = health.check_schema_skew(_ctx(tmp_path), "icm-demo")
+        assert c is not None
+        return c
+    assert health.SKEW_REFUSED_FAIL_S == 3600
+    assert at(59).status == "fail"
+    late = at(61)
+    assert late.status == "warn" and "refused" in late.reason and "2026-01-15 14:59" in late.reason
+    assert "approvals/decisions:p1" in late.reason
+
+
+def test_an_older_block_without_the_refusal_time_reads_as_fail(tmp_path):
+    block = _summary(("approvals/decisions:p1", "BusDecision", ["max_lots"], 1, True))
+    del block["last_refused_utc"]
+    _publish(tmp_path, block)
+    c = health.check_schema_skew(_ctx(tmp_path), "icm-demo")
+    assert c is not None and c.status == "fail"
+
+
+def test_a_new_refusal_after_the_warn_fails_again_and_re_alerts(tmp_path):
+    watch = health.HealthWatch(tmp_path)
+    key = ("approvals/decisions:p1", "BusDecision", ["max_lots"], 1, True)
+    _publish(tmp_path, _summary(key, refused_at=NOW - pd.Timedelta(minutes=90)))
+    report = health.run_checks(_ctx(tmp_path))
+    assert {c.name: c.status for c in report.checks}["schema_skew:icm-demo"] == "warn"
+    watch.record(report)
+    _publish(tmp_path, _summary(key, ("approvals/decisions:p2", "BusDecision", ["max_lots"], 1, True),
+                                refused_at=NOW - pd.Timedelta(minutes=2)))
+    text = watch.poll(health.run_checks(_ctx(tmp_path)))
+    assert text is not None and "FAIL schema_skew:icm-demo" in text
+
+
+def test_a_skew_check_that_raises_is_a_fail_of_its_own(tmp_path, monkeypatch):
+    _publish(tmp_path, _summary())
+
+    def boom(*_a, **_k):
+        raise TypeError("corrupt")
+    monkeypatch.setattr(health, "check_schema_skew", boom)
+    got = {c.name: c.status for c in health.run_checks(_ctx(tmp_path)).checks}
+    assert got["schema_skew:icm-demo"] == "fail"
 
 
 def test_a_malformed_skew_block_warns_instead_of_raising(tmp_path):
@@ -132,7 +187,7 @@ def test_run_checks_includes_the_skew_check_per_account_and_alerts_once_per_chan
     first = watch.poll(report)
     assert first is not None and "WARN schema_skew:icm-demo" in first
     again = watch.poll(health.run_checks(_ctx(tmp_path)))
-    assert again is None or "schema_skew:icm-demo:" not in again                         # not repeated
+    assert again is None                                                                  # not repeated
     _publish(tmp_path, _summary(("approvals/decisions:p1", "BusDecision", ["max_lots"], 1, True)))
     worse = watch.poll(health.run_checks(_ctx(tmp_path)))
     assert worse is not None and "FAIL schema_skew:icm-demo" in worse                     # warn -> fail alerts again

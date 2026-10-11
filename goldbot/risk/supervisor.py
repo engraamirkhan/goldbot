@@ -13,8 +13,10 @@ account together therefore needs a conversion here first (not built)."""
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
+from typing import Any
 
 from goldbot.base import Record, write_atomic
 from goldbot.config import RiskSettings
@@ -36,6 +38,34 @@ class SupervisorLimits(Record):
                    dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2)
 
 
+# the engine-file numbers the supervisor reads: `ts` must be present, the rest may be absent (read as 0 / off) but when
+# present must be finite numbers. `daily_loss_limit_abs` may also be null (off)
+_REQUIRED_NUMBERS = ("ts",)
+_OPTIONAL_NUMBERS = ("equity", "day_start_equity", "week_start_equity", "balance_closed_hwm", "open_lots",
+                     "open_notional")
+_NULLABLE_NUMBERS = ("daily_loss_limit_abs",)
+
+
+def _finite_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def engine_fault(e: dict) -> str | None:
+    """Why an engine file's numbers cannot be used (a null, a string, a bool, NaN or infinity), None when they can.
+    October safety batch, MEDIUM: such a file failed open (a NaN equity made every combined cap False) or crashed
+    the supervisor (`None + 0`, `float("x")`), so it is treated exactly as an unparsable file."""
+    for k in _REQUIRED_NUMBERS:
+        if not _finite_number(e.get(k)):
+            return k
+    for k in _OPTIONAL_NUMBERS:
+        if k in e and not _finite_number(e[k]):
+            return k
+    for k in _NULLABLE_NUMBERS:
+        if e.get(k) is not None and not _finite_number(e[k]):
+            return k
+    return None
+
+
 def _currency(e: dict) -> str | None:
     """An engine file's deposit currency, upper case; None when it does not say."""
     return str(e.get("currency") or "").strip().upper() or None
@@ -49,8 +79,10 @@ class Supervisor:
         self.unreadable: list[str] = []
 
     def read_engines(self) -> list[dict]:
-        """Engine state files; one that cannot be parsed is listed in `self.unreadable` (engines write atomically,
-        so an unreadable file is a real fault and evaluate() halts on it rather than leaving the engine out)."""
+        """Engine state files; one that cannot be parsed, or whose numbers are not finite numbers (`engine_fault`),
+        is listed in `self.unreadable` (engines write atomically, so an unreadable file is a real fault and evaluate()
+        halts on it, `engine_state_unreadable`, rather than leaving the engine out). Its money and exposure are not
+        summed: nothing in it can be trusted, and the halt blocks every entry meanwhile."""
         out = []
         self.unreadable = []
         for f in sorted(self.dir.glob("engine_*.json")):
@@ -58,6 +90,9 @@ class Supervisor:
                 d = json.loads(f.read_text())
                 if not isinstance(d, dict):
                     raise ValueError("not an object")
+                bad = engine_fault(d)
+                if bad is not None:
+                    raise ValueError(f"{bad} is not a finite number")
                 d["_file"] = f.name                     # named in the mixed-currency halt (health, Telegram)
                 out.append(d)
             except (ValueError, OSError):
@@ -69,7 +104,7 @@ class Supervisor:
         # the currency check counts only engines that are running (heartbeat fresh): a file left by an engine that no
         # longer runs must not halt the book (review MEDIUM-1)
         now = time.time()
-        fresh = [e for e in engines if now - float(e.get("ts", 0) or 0) <= self.limits.heartbeat_max_age_s]
+        fresh = [e for e in engines if now - e["ts"] <= self.limits.heartbeat_max_age_s]
         currencies = {str(e.get("account")): _currency(e) for e in fresh}
         currency_files = {str(e.get("account")): str(e.get("_file", "")) for e in fresh}
         mixed = len(fresh) > 1 and len({c or "?" for c in currencies.values()}) > 1
@@ -115,7 +150,7 @@ class Supervisor:
             reasons.append("engine_state_unreadable")     # fail closed: its equity cannot be counted
         if mixed:
             reasons.append("mixed_account_currencies")    # fail closed: GBP and USD equity are never summed
-        stale = [e["account"] for e in engines if time.time() - e.get("ts", 0) > self.limits.heartbeat_max_age_s]
+        stale = [e.get("account") for e in engines if time.time() - e["ts"] > self.limits.heartbeat_max_age_s]
         # combined exposure: engines block entries that would take the sum past the cap (RiskGate)
         exposure = {str(e.get("account")): {"lots": float(e.get("open_lots", 0.0)), "notional": float(e.get("open_notional", 0.0)),
                                             # a file kept out of the money adds no equity (the gate's other_equity)
@@ -131,6 +166,15 @@ class Supervisor:
                  "daily_cap": self.limits.daily_cap, "combined_day_start_equity": day0,
                  "weekly_cap": self.limits.weekly_cap, "combined_week_start_equity": wk0}
         write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)   # heartbeat: never half-written
+        return state
+
+    def error_halt(self, exc: BaseException) -> dict:
+        """The state published when evaluate() raised: a fresh heartbeat that halts every engine's entries
+        (`supervisor_error`), so a supervisor bug fails closed and visibly instead of killing the service (engines
+        would then halt only once the heartbeat went stale). Names the exception type, never its message."""
+        state = {"ts": time.time(), "halt": True, "reasons": ["supervisor_error"], "error": type(exc).__name__,
+                 "unreadable_engines": self.unreadable}
+        write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)
         return state
 
     @staticmethod

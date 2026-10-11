@@ -169,9 +169,9 @@ and the rest still arrives. It never contains account numbers or emails.
   after 90 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
 * The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
   release note mentions the bridge.
-  Deploys there never upgrade Python packages (`--no-deps`). An MT5 box set up before ADR 0010 needs pydantic 2.12 or
-  newer before the bridge follow-up in HANDOFF is deployed (today's bridge runs without it). Do it once, by hand,
-  **with the book flat or at the weekend** (restarting the bridge cuts the engine off from the terminal for a moment):
+  Deploys there never upgrade Python packages (`--no-deps`). An MT5 box set up before ADR 0010 should get pydantic
+  2.12 or newer so it matches new boxes (the bridge runs without it: only the brain reads bridge records
+  tolerantly). Do it once, by hand, **with the book flat or at the weekend** (restarting the bridge cuts the engine off from the terminal for a moment):
   1. `sudo systemctl stop goldbot-bridge@icm-demo` (one unit per account; stop each). Wine cannot replace a
      pydantic_core file the running bridge has loaded, so a running bridge can leave a half-installed package.
   2. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install 'pydantic>=2.12,<3'`
@@ -194,9 +194,12 @@ and the rest still arrives. It never contains account numbers or emails.
   check warns until the next deploy. A pending Telegram deploy approval is cancelled by the rollback. Telegram offers
   the newer version again: tap **Skip** until the fix is merged. After a rollback the health check
   `schema_skew:<account>` may warn: the older engine is reading state the newer one wrote and ignoring its new
-  fields (it names the files). That is expected and clears when the engine restarts on the newer release. If it
-  **fails**, an approve/reject click was dropped because the older release could not read it; that proposal expired
-  unapplied. Roll forward (or approve again on the next card) and restart the engine to clear it.
+  fields (it names the files). That is expected after a rollback. If it **fails**, an approve/reject click was
+  dropped because the older release could not read it; that proposal expired unapplied. Roll forward (or approve
+  again on the next card). The failure turns into a warning an hour after the refusal (the warning keeps its time);
+  another refused click fails and alerts again. The counts live in the running engine: a restart clears them, but
+  the engine rewrites `engine_<account>.json` only on a tick or a bar, so health keeps showing the old block until
+  the first tick after the restart (over a weekend: the Sunday open).
 * Before anything is touched, every deploy and rollback also checks:
   * **aux.db.** A target from before schema compatibility (no `compat_back_to` in its `goldbot/db/migrations.py`)
     cannot open aux.db at schema 5. The script stops every service (inputs, supervisor, engines last), steps aux.db
