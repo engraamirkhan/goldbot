@@ -754,7 +754,8 @@ def check_feature_versions(ctx: HealthContext) -> Check:
 
 def check_deploy(ctx: HealthContext) -> Check:
     """The last deploy attempt (state/deploys.jsonl, written by goldbot-deploy): a rollback warns, a failed rollback
-    fails; a deploy is only ever started by the owner (Telegram [Deploy] or `sudo goldbot-deploy`)."""
+    fails; a deploy is only ever started by the owner (Telegram [Deploy] or `sudo goldbot-deploy`). An owner's
+    rollback (`goldbot-deploy --rollback`) warns too: an older version runs on purpose until the next deploy."""
     f = ctx.state_dir / "deploys.jsonl"
     if not f.exists():
         return Check(name="deploy", status="ok", reason="no deploy recorded yet")
@@ -763,7 +764,8 @@ def check_deploy(ctx: HealthContext) -> Check:
     except (ValueError, OSError, IndexError) as exc:
         return Check(name="deploy", status="warn", reason=f"deploys.jsonl unreadable: {exc}")
     msg = f"{last.get('result')} {str(last.get('to', ''))[:8]} on {last.get('role')} at {last.get('ts')}: {last.get('detail', '')}"
-    status = {"failed": "fail", "rolled_back": "warn", "refused": "warn"}.get(str(last.get("result")), "ok")
+    status = {"failed": "fail", "rolled_back": "warn", "refused": "warn", "rolled_back_manual": "warn",
+              "rollback_reverted": "warn"}.get(str(last.get("result")), "ok")
     return Check(name="deploy", status=cast(Status, status), reason=msg)
 
 

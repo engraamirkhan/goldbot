@@ -166,12 +166,38 @@ and the rest still arrives. It never contains account numbers or emails.
 * When a new version is merged and has passed CI, Telegram shows *New version ready* with the list of changes and
   **[Deploy] [Skip]**. Deploy restarts the services within a minute (never while an entry waits for your click; open
   positions keep their broker-side stops and the engine reconciles on start), checks every service is still running
-  after 60 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
+  after 90 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
 * The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
   release note mentions the bridge.
 * By hand on either VM: `sudo goldbot-deploy latest` (or a specific commit id). Same checks, same rollback.
-* The health check `deploy` shows the last result. If the deploy script itself changed, review it and run
+* **Going back by hand:** `sudo goldbot-deploy --rollback <older commit id>`. It accepts only an older commit of the
+  one that runs, on `main`, that passed CI or ran on this box before (`/var/lib/goldbot-deploy/deploys.jsonl`). Same
+  lock, same wait for a pending entry, same restart order and 90 s check. If the rollback is unstable, the version
+  that ran before is restored. Telegram reports *rolled_back_manual* (or *rollback_reverted*); the `deploy` health
+  check warns until the next deploy. A pending Telegram deploy approval is cancelled by the rollback. Telegram offers
+  the newer version again: tap **Skip** until the fix is merged.
+* Before anything is touched, every deploy and rollback also checks:
+  * **aux.db.** A target from before schema compatibility (no `compat_back_to` in its `goldbot/db/migrations.py`)
+    cannot open aux.db at schema 5. The script stops every service (inputs, supervisor, engines last), steps aux.db
+    back 5 -> 4 as the service user with every row kept, then starts them (supervisor first). Any other version the
+    target does not know is refused, with nothing changed. The next forward deploy re-applies 5.
+  * **settings.local.yaml.** It is validated with the target's own `Settings`. A key the target does not know (for
+    example `risk.min_lot_risk_cap` on code from before the October batch) would stop every service, so the deploy
+    is refused and the message names the keys, never their values. Edit the file, or add
+    `--drop-unknown-local-keys`: unknown keys are moved aside and the original is kept as
+    `config/settings.local.yaml.<UTC time>.bak`. Put them back after the next forward deploy. An invalid value is
+    never dropped.
+  * **Scheduler jobs.** While a job runs, a manual deploy is refused and a Telegram approval waits. The scheduler is
+    stopped first and checked again. `--interrupt-jobs` deploys anyway (that job's slot is not re-run).
+  * Only `enabled` units are restarted, so a stray, disabled engine instance is never started.
+* The health check `deploy` shows the last result. If the deploy script itself changed, review it (security
+  reviewer) and run
   `sudo install -m 755 -o root -g root /opt/goldbot/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy`.
+  Check: `sha256sum /usr/local/sbin/goldbot-deploy /opt/goldbot/goldbot/ops/linux/goldbot-deploy.sh` prints two
+  equal hashes.
+* **If a deploy says `refused`:** the detail says why and nothing was changed. **If it says `failed`:** the rollback
+  did not recover every service. Run `journalctl -u 'goldbot-*' -n 200` and `goldbot run health`, then start the
+  units by hand (supervisor first). For aux.db errors, see docs/deploy/2026-10-batch.md 5.1.
 
 ### 0.6 Backups and restore (brain)
 The scheduler backs up the brain's state every day at 22:15 UTC with `restic`. The backup is encrypted on the
