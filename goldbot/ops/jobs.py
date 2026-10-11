@@ -1137,6 +1137,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "agents_weekly": agents_weekly,
     "monthly_research": monthly_research,
     "calendar_archive": calendar_archive,
+    "calendar_archive_sunday": calendar_archive,  # the new Forex Factory week before the weekly open (review M2)
     "agents_presession": agents_presession,
     "recalibrate": recalibrate,
     "drift_watch": drift_watch,

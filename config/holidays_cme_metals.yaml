@@ -1,13 +1,16 @@
 # Thin-liquidity days for gold (BACKLOG 17, playbook G-2), read by RiskGate's holiday window (`risk.holidays`).
-# Versioned list, edited by hand and reviewed like code: US federal holidays (observed dates), Good Friday, and
-# 24 Dec, 26 Dec, 31 Dec, 1 Jan, 2 Jan. Weekdays only (the market is closed at weekends anyway). Each date is a
-# broker SERVER date (Europe/Athens by default), whose midnight is 17:00 New York, i.e. the CME trading-day roll, so a
-# listed date blocks the whole CME trading day of that name. tests/test_entry_windows.py re-derives every year here
-# from the rules and fails on a typo or a missing day.
+# A PROXY, NOT MEASURED: these are days on which liquidity is expected to be thin (US federal holidays on which CME
+# metals close or trade short, Good Friday, Easter Monday, the day after Thanksgiving, 24/26/31 Dec, 1/2 Jan).
+# Columbus Day and Veterans Day are left out: CME metals trade normally on them. Whether the listed days really have
+# wider spreads and fewer ticks is measured before adoption (BACKLOG 43). Weekdays only (closed at weekends anyway).
+# Each date is a broker SERVER date (Europe/Athens by default), whose midnight is 17:00 New York, the CME trading-day
+# roll, so a listed date blocks the CME trading day of that name (an hour late in the US/EU DST gap weeks).
+# Edited by hand and reviewed like code: tests/test_entry_windows.py holds the same hand-reviewed set and fails on any
+# difference, and CI fails when `valid_through` is less than a year away.
 # After `valid_through` (or before `valid_from`) the list is unavailable: with `risk.holidays.enabled` entries are
-# refused as `calendar_unavailable` (fail closed) until a new version is added. Extend it before it runs out.
-version: cme-metals-v1
-source: "US federal holidays (5 U.S.C. 6103, observed dates) + Good Friday + 24/26/31 Dec and 1/2 Jan"
+# refused as `calendar_unavailable` (fail closed) and health warns 90 days ahead. Extend it before it runs out.
+version: cme-metals-v2
+source: "US federal holidays as a proxy (not measured), less Columbus and Veterans Day; Good Friday, Easter Monday, day after Thanksgiving; 24/26/31 Dec, 1/2 Jan"
 valid_from: 2026-01-01
 valid_through: 2028-12-31
 days:
@@ -16,13 +19,13 @@ days:
   2026-01-19: "Martin Luther King Jr. Day"
   2026-02-16: "Presidents' Day"
   2026-04-03: "Good Friday"
+  2026-04-06: "Easter Monday"
   2026-05-25: "Memorial Day"
   2026-06-19: "Juneteenth"
   2026-07-03: "Independence Day (observed)"
   2026-09-07: "Labor Day"
-  2026-10-12: "Columbus Day"
-  2026-11-11: "Veterans Day"
   2026-11-26: "Thanksgiving Day"
+  2026-11-27: "Day after Thanksgiving"
   2026-12-24: "24 December"
   2026-12-25: "Christmas Day"
   2026-12-31: "31 December"
@@ -30,24 +33,24 @@ days:
   2027-01-18: "Martin Luther King Jr. Day"
   2027-02-15: "Presidents' Day"
   2027-03-26: "Good Friday"
+  2027-03-29: "Easter Monday"
   2027-05-31: "Memorial Day"
   2027-06-18: "Juneteenth (observed)"
   2027-07-05: "Independence Day (observed)"
   2027-09-06: "Labor Day"
-  2027-10-11: "Columbus Day"
-  2027-11-11: "Veterans Day"
   2027-11-25: "Thanksgiving Day"
+  2027-11-26: "Day after Thanksgiving"
   2027-12-24: "Christmas Day (observed); 24 December"
   2027-12-31: "New Year's Day (observed); 31 December"
   2028-01-17: "Martin Luther King Jr. Day"
   2028-02-21: "Presidents' Day"
   2028-04-14: "Good Friday"
+  2028-04-17: "Easter Monday"
   2028-05-29: "Memorial Day"
   2028-06-19: "Juneteenth"
   2028-07-04: "Independence Day"
   2028-09-04: "Labor Day"
-  2028-10-09: "Columbus Day"
-  2028-11-10: "Veterans Day (observed)"
   2028-11-23: "Thanksgiving Day"
+  2028-11-24: "Day after Thanksgiving"
   2028-12-25: "Christmas Day"
   2028-12-26: "26 December"

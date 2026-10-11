@@ -257,8 +257,9 @@ execution items need trading-safety review. Feature items need quant review.
   **Built 2026-10-11, off by default (TRACEABILITY R36):** `risk.reopen: {enabled: false, after_daily_reopen_min: 10,
   after_monday_open_min: 30}` from the broker session table (DST per the server clock; a reopen after 12 h or more
   closed takes the weekly window) and `risk.holidays: {enabled: false}` from the versioned list
-  `config/holidays_cme_metals.yaml` (US federal holidays, Good Friday, 24/26/31 Dec, 1/2 Jan, 2026-2028, by server
-  date = CME trading day; missing or expired = `calendar_unavailable`). Reasons `reopen_window`, `holiday_thin`.
+  `config/holidays_cme_metals.yaml` (US federal holidays as a proxy, not measured, less Columbus and Veterans Day;
+  Good Friday, Easter Monday, the day after Thanksgiving, 24/26/31 Dec, 1/2 Jan; 2026-2028; by server date = CME
+  trading day; missing or expired = `calendar_unavailable`; measured before adoption, item 43; replay, item 44). Reasons `reopen_window`, `holiday_thin`.
   Not covered: UK, JP and CN holidays and early closes (the list is US/CME only; a broker-reported short session
   already blocks as `market_closed`). Owner: adopt and set the minutes (10 vs the playbook's 15). Needs
   trading-safety review.
@@ -574,6 +575,21 @@ hypotheses that go through the trial registry in a future quarter's budget.
       when the bridge's `server_tz` differs from its own.
     - The Telegram deploy offer says when the MT5 box runs an older commit than the one offered.
     - Trading-safety review.
+- **43. Measure the holiday list before it is adopted (performance analyst; review M3, 2026-10-11).** Value: the
+  holiday window (item 17, `config/holidays_cme_metals.yaml`) is a proxy, not a measurement; blocking entries on a
+  day that trades normally costs signals for nothing. Do: for every listed day in the stored ticks and bars, the
+  median spread, tick count per hour and 15m ATR against matched normal days (same weekday, the two weeks either
+  side, holidays excluded), by session. Report which listed days are thin and which are not, and any unlisted day
+  that is (UK, JP, CN holidays, early closes). Acceptance: a table per day type with the ratio and its interval; the
+  list is changed (new version, hand-reviewed set in the test) only on that evidence. Reporting only; quant review.
+- **44. Replay the entry windows before adopting any (performance analyst, strategy researcher; review M4).**
+  Value: each window (items 17, 18) removes entries; whether the removed ones were worse than the kept ones is
+  unknown. Do: over the shadow book and the backtest candidates, the fraction of entries each window (tier 2,
+  reopen, holiday, alone and together) would have filtered, and R of the filtered vs kept trades, by family and
+  timeframe; add a `research_pass.py --entry-windows` filter option that drops signals inside the enabled windows
+  (point in time: the archive as known at the signal, `available_utc` joins), so trials can be run with and without.
+  No trial budget is spent by the replay itself. Acceptance: the table per window, family and timeframe, attached to
+  the owner's adopt decision (OWNER_GUIDE section 4). Quant review.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.

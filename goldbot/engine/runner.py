@@ -54,7 +54,7 @@ from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, sizing
 from goldbot.risk.gate import REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
-from goldbot.risk.windows import HolidayList, load_holidays, reopen_window, server_date
+from goldbot.risk.windows import HolidayList, calendar_gap, load_holidays, reopen_window, server_date
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal, ceil_cent
 
@@ -287,6 +287,12 @@ class Engine:
         self._blackout_event: dict | None = None
         # BACKLOG 17 holiday list: loaded once, when the window is first needed; (loaded, list or None if unusable)
         self._holidays: tuple[bool, HolidayList | None] = (False, None)
+        # entry-window faults (review M1): when calendar_unavailable started (None while known) and why; whether the
+        # reopen window is unknown; the archive's latest event and newest fetch, for the state file and health
+        self._unavailable_since: pd.Timestamp | None = None
+        self._unavailable_why: str | None = None
+        self._reopen_fault = False
+        self._calendar_seen: tuple[pd.Timestamp | None, pd.Timestamp | None] = (None, None)
         # the dashboard's account view (goldbot/ops/account_view.py), published in the state file; reporting only.
         # From the broker: balance, currency and margin (never the login or server), the symbol's lot terms; from the
         # bars: ATR(14) per ladder timeframe, refreshed at bar closes
@@ -652,7 +658,13 @@ class Engine:
             self._update_ladder(complete)
         except Exception as exc:                 # noqa: BLE001 - reporting only: a bar close never fails on it
             log.warning("milestone ATR not updated: %s", type(exc).__name__)
-        self._refresh_account(last_tick)
+        try:
+            self._refresh_account(last_tick)
+        except Exception:
+            # exits first (review L3): an account read that fails must not skip this bar's position management (time
+            # exits, policies); no entry is decided on this close, and the error propagates as before
+            self._manage_open(base.dec)
+            raise
         self._manage_open(base.dec)
         self.center.sweep_expired()
         regime = self._regime(base.X, close_ts)
@@ -2204,35 +2216,84 @@ class Engine:
     def _entry_windows(self, tick_ts: pd.Timestamp, now: pd.Timestamp, sessions: SessionTable) -> None:
         """BACKLOG 17/18 entry windows into AccountState, each only when it is enabled in the gate's limits (off, its
         flag stays False and RiskGate ignores it anyway). Tier 2 is judged on tick time like the tier-1 blackout; the
-        reopen and holiday windows on the clock the session table's market_closed uses. Fails closed: a missing or
-        unreadable calendar or holiday list is `calendar_unavailable`, a session table that raises is inside the
-        reopen window. Entries only (RiskGate); no exit path reads these flags."""
-        st, L = self.state, self.gate.limits
-        unavailable = tier2 = reopen = thin = False
+        reopen and holiday windows on the clock the session table's market_closed uses. Fails closed: a calendar or
+        holiday list that is missing, unreadable, stale or does not cover the next 24 h is `calendar_unavailable`; a
+        session table that raises is inside the reopen window; any other error in the computation sets both (review
+        L3). Each fault is logged once when it starts (review M1), and its start is published in the engine state for
+        health (`check_entry_windows`). Entries only (RiskGate); no exit path reads these flags."""
+        st = self.state
+        try:
+            tier2, reopen, thin, why, reopen_fault = self._window_flags(tick_ts, now, sessions)
+        except Exception as exc:
+            tier2, reopen, thin = False, True, False
+            why = reopen_fault = f"window computation failed ({type(exc).__name__}: {exc})"
+        if why is not None and self._unavailable_since is None:
+            self._unavailable_since = now
+            log.warning("entry windows: calendar_unavailable (%s); entries refused until it clears, exits unaffected",
+                        why)
+        elif why is None and self._unavailable_since is not None:
+            log.info("entry windows: calendar known again (unavailable since %s)", self._unavailable_since)
+            self._unavailable_since = None
+        if reopen_fault is not None and not self._reopen_fault:
+            log.warning("entry windows: reopen window unknown (%s); entries refused as reopen_window", reopen_fault)
+        self._reopen_fault = reopen_fault is not None
+        self._unavailable_why = why
+        st.tier2_blackout, st.reopen_window, st.holiday_thin = tier2, reopen, thin
+        st.calendar_unavailable = why is not None
+
+    def _window_flags(self, tick_ts: pd.Timestamp, now: pd.Timestamp, sessions: SessionTable
+                      ) -> tuple[bool, bool, bool, str | None, str | None]:
+        """(tier2_blackout, reopen_window, holiday_thin, why the calendar is unavailable or None, why the reopen window
+        is unknown or None) for the enabled windows."""
+        L = self.gate.limits
+        tier2 = reopen = thin = False
+        why: str | None = None
+        reopen_fault: str | None = None
         if L.tier2.enabled:
             ev: pd.DataFrame | None = None
             try:
                 ev = self._calendar_events(tick_ts) if self.store is not None else None
+                why = None if self.store is not None else "no data store"
             except Exception as exc:
-                log.warning("calendar unreadable (%s): entries blocked as calendar_unavailable", type(exc).__name__)
-            if ev is None:
-                unavailable = True
-            else:
+                why = f"calendar unreadable ({type(exc).__name__}: {exc})"
+            if ev is not None:
+                self._calendar_seen = (pd.Timestamp(pd.to_datetime(ev["ts_utc"], utc=True).max()),
+                                       pd.Timestamp(pd.to_datetime(ev["received_utc"], utc=True).max())
+                                       if "received_utc" in ev.columns else None)
                 tier2 = blackout_window(ev, tick_ts, L.tier2.before_min, L.tier2.after_min, tier=2) is not None
+            why = why or calendar_gap(ev, tick_ts)
         if L.reopen.enabled:
             try:
                 reopen = reopen_window(sessions, now, L.reopen)
             except Exception as exc:
-                log.warning("session table unusable for the reopen window (%s): entries blocked", type(exc).__name__)
-                reopen = True
+                reopen, reopen_fault = True, f"session table unusable ({type(exc).__name__}: {exc})"
         if L.holidays.enabled:
             hl = self._holiday_list()
             day = server_date(sessions, now)
-            if hl is None or not hl.covers(day):
-                unavailable = True
+            if hl is None:
+                why = why or f"holiday list {L.holidays.file} unusable"
+            elif not hl.covers(day):
+                why = why or f"holiday list {hl.version} does not cover {day} (valid {hl.valid_from}..{hl.valid_through})"
             else:
                 thin = hl.thin(day) is not None
-        st.tier2_blackout, st.reopen_window, st.holiday_thin, st.calendar_unavailable = tier2, reopen, thin, unavailable
+        return tier2, reopen, thin, why, reopen_fault
+
+    def _windows_state(self) -> dict:
+        """The entry windows for engine_<account>.json and health (`check_entry_windows`, review M1)."""
+        L, st = self.gate.limits, self.state
+        hl = self._holidays[1] if L.holidays.enabled else None
+        latest, received = self._calendar_seen
+
+        def iso(x: pd.Timestamp | None) -> str | None:
+            return None if x is None or pd.isna(x) else pd.Timestamp(x).isoformat()
+        return {"enabled": {"tier2": L.tier2.enabled, "reopen": L.reopen.enabled, "holidays": L.holidays.enabled},
+                "tier2_blackout": st.tier2_blackout, "reopen_window": st.reopen_window,
+                "holiday_thin": st.holiday_thin, "calendar_unavailable": st.calendar_unavailable,
+                "calendar_unavailable_since": iso(self._unavailable_since),
+                "calendar_unavailable_reason": self._unavailable_why,
+                "holiday_version": hl.version if hl is not None else None,
+                "holiday_valid_through": hl.valid_through.isoformat() if hl is not None else None,
+                "calendar_latest_ts_utc": iso(latest), "calendar_received_utc": iso(received)}
 
     def _busy(self, agent_id: str) -> bool:
         return any(t.agent_id == agent_id for t in self.open.values()) or \
@@ -2546,6 +2607,7 @@ class Engine:
             "last_tick_error_at": self._last_tick_error_at.isoformat() if self._last_tick_error_at is not None else None,
             "sessions": session_table_cache(self.sessions),
             # BACKLOG 21: per-agent loss-streak and entry-rate throttle (settings; per agent when on), on the tick clock
+            "windows": self._windows_state(),        # BACKLOG 17/18 entry windows (health: check_entry_windows)
             "throttle": self._throttle_state(self._last_tick.ts_utc if self._last_tick is not None else self.clock()),
             "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
         }

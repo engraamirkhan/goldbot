@@ -2,12 +2,14 @@
 RiskGate refuses entries `tier2_blackout`, `reopen_window` and `holiday_thin`, and `calendar_unavailable` when an
 enabled window has no calendar to judge by (fail closed). Exits are never gated. Every edge is checked in both DST
 regimes on fake clocks (tick time)."""
+import json
+import logging
 from datetime import date, time
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
-from pandas.tseries.holiday import GoodFriday, USFederalHolidayCalendar
 
 from goldbot.config import ROOT, HolidaySettings, ReopenSettings, Tier2Blackout, load_settings
 from goldbot.data.calendar import SessionTable, TradingSession
@@ -16,6 +18,7 @@ from goldbot.data.store import Store
 from goldbot.engine import Engine, EngineConfig
 from goldbot.execution.broker import Tick
 from goldbot.execution.paper import PaperBroker
+from goldbot.ops import health
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
 from goldbot.risk.windows import HolidayList, last_reopen, load_holidays, reopen_window, server_date
 from goldbot.specialists.session_open import SessionOpenSpecialist
@@ -125,9 +128,9 @@ def test_tier2_blackout_covers_5_minutes_before_to_15_after_in_both_dst_regimes(
 def _engine(tmp_path: Path, limits: RiskLimits, calendar: list[dict] | None = None, data: bool = True,
             **cfg) -> tuple[Engine, PaperBroker]:
     root = tmp_path / "data"
-    if calendar is not None:
-        Store(root).append("calendar_events", parse_ff_week(calendar, pd.Timestamp("2026-01-01", tz="UTC"), TIER1),
-                           source="forexfactory")
+    if calendar is not None:                       # fetched the day before its first event, as the daily job would
+        received = pd.Timestamp(calendar[0]["date"]).tz_convert("UTC") - pd.Timedelta(days=1)
+        Store(root).append("calendar_events", parse_ff_week(calendar, received, TIER1), source="forexfactory")
     pb = PaperBroker(equity=10_000, commission_per_lot_side=0.0, adverse_slip_points=0.0)
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), owner_user_id=111,
                               data_root=str(root) if data else None, **cfg),
@@ -238,19 +241,50 @@ def test_a_session_table_that_raises_fails_the_reopen_window_closed(tmp_path, mo
 
 
 # ---------------------------------------------------------------------------------------------- holidays (BACKLOG 17)
-def test_the_shipped_holiday_list_matches_the_rules_for_every_year_it_covers():
+# Hand-reviewed (review M3, 2026-10-11): US federal holidays on which CME metals close or trade short, as a proxy for
+# thin liquidity (not measured), Good Friday, Easter Monday (London shut), the day after Thanksgiving, 24/26/31 Dec,
+# 1/2 Jan; weekdays only. Columbus Day and Veterans Day are left out: CME metals trade normally on them.
+REVIEWED_DAYS = {
+    date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 19), date(2026, 2, 16), date(2026, 4, 3), date(2026, 4, 6),
+    date(2026, 5, 25), date(2026, 6, 19), date(2026, 7, 3), date(2026, 9, 7), date(2026, 11, 26), date(2026, 11, 27),
+    date(2026, 12, 24), date(2026, 12, 25), date(2026, 12, 31),
+    date(2027, 1, 1), date(2027, 1, 18), date(2027, 2, 15), date(2027, 3, 26), date(2027, 3, 29), date(2027, 5, 31),
+    date(2027, 6, 18), date(2027, 7, 5), date(2027, 9, 6), date(2027, 11, 25), date(2027, 11, 26), date(2027, 12, 24),
+    date(2027, 12, 31),
+    date(2028, 1, 17), date(2028, 2, 21), date(2028, 4, 14), date(2028, 4, 17), date(2028, 5, 29), date(2028, 6, 19),
+    date(2028, 7, 4), date(2028, 9, 4), date(2028, 11, 23), date(2028, 11, 24), date(2028, 12, 25), date(2028, 12, 26),
+}
+
+
+def test_the_shipped_holiday_list_is_exactly_the_hand_reviewed_set():
     hl = load_holidays(load_settings().risk.holidays.file)
-    assert hl.version == "cme-metals-v1" and hl.valid_from == date(2026, 1, 1) and hl.valid_through >= date(2028, 1, 1)
-    start, end = pd.Timestamp(hl.valid_from), pd.Timestamp(hl.valid_through)
-    want = {d.date() for d in USFederalHolidayCalendar().holidays(start, end)}
-    want |= {d.date() for d in GoodFriday.dates(start, end)}
-    want |= {date(y, m, d) for y in range(start.year, end.year + 1) for m, d in ((12, 24), (12, 26), (12, 31), (1, 1),
-                                                                                 (1, 2))}
-    assert set(hl.days) == {d for d in want if d.weekday() < 5 and hl.valid_from <= d <= hl.valid_through}
+    assert hl.version == "cme-metals-v2" and hl.valid_from == date(2026, 1, 1) and hl.valid_through == date(2028, 12, 31)
+    assert set(hl.days) == REVIEWED_DAYS
+    assert "proxy (not measured)" in hl.source
+    for d in (date(2026, 10, 12), date(2026, 11, 11), date(2027, 10, 11), date(2027, 11, 11), date(2028, 10, 9),
+              date(2028, 11, 10)):                         # Columbus Day, Veterans Day: CME metals trade normally
+        assert hl.thin(d) is None, d
+    assert hl.thin(date(2026, 11, 27)) and hl.thin(date(2026, 4, 6))       # day after Thanksgiving, Easter Monday
+
+
+def test_the_shipped_holiday_list_does_not_expire_within_a_year():
+    """CI guard (review M1): enabled, an expired list refuses every entry, so CI fails a year ahead of that."""
+    hl = load_holidays(load_settings().risk.holidays.file)
+    assert hl.valid_through - date.today() > pd.Timedelta(days=365).to_pytimedelta(), hl.valid_through
+
+
+def test_the_us_eu_gap_week_puts_the_server_day_an_hour_after_the_cme_roll():
+    """Review L2, pinned: on Good Friday 2027 New York is on EDT (from 14 March) and Athens still on EET (until 28
+    March), so server midnight is 22:00 UTC = 18:00 New York, one hour after the 17:00 CME roll."""
+    hl = load_holidays(load_settings().risk.holidays.file)
+    cme_roll = pd.Timestamp("2027-03-25 21:00", tz="UTC")              # 17:00 EDT
+    assert server_date(STATIC, cme_roll) == date(2027, 3, 25) and hl.thin(date(2027, 3, 25)) is None
+    assert server_date(STATIC, cme_roll + pd.Timedelta(minutes=59, seconds=59)) == date(2027, 3, 25)
+    assert server_date(STATIC, cme_roll + pd.Timedelta(hours=1)) == date(2027, 3, 26) and hl.thin(date(2027, 3, 26))
 
 
 @pytest.mark.parametrize("regime,day,midnight_utc", [
-    ("winter", date(2026, 11, 26), "2026-11-25 22:00"),    # Thanksgiving; server midnight = 17:00 New York (EST)
+    ("winter", date(2026, 1, 19), "2026-01-18 22:00"),     # MLK Day; server midnight = 17:00 New York (EST)
     ("summer", date(2026, 6, 19), "2026-06-18 21:00"),     # Juneteenth; server midnight = 17:00 New York (EDT)
 ])
 def test_a_holiday_is_its_whole_server_day_at_both_edges_in_both_dst_regimes(regime, day, midnight_utc):
@@ -269,7 +303,7 @@ def test_engine_raises_the_holiday_flag_on_a_listed_day_only(tmp_path):
     st = _at(eng, pb, thanksgiving)
     assert st.holiday_thin and not st.calendar_unavailable
     assert "holiday_thin" in eng.gate.check(_intent(), st).reasons
-    assert not _at(eng, pb, thanksgiving + pd.Timedelta(days=1)).holiday_thin
+    assert not _at(eng, pb, thanksgiving - pd.Timedelta(days=1)).holiday_thin
     off, pb2 = _engine(tmp_path / "off", RiskLimits())
     assert not _at(off, pb2, thanksgiving).holiday_thin
 
@@ -322,3 +356,160 @@ def test_exits_run_while_every_window_refuses_entries(tmp_path):
     eng.on_tick(hit)
     assert not pb.positions()
     assert any(d["action"] == "engine_stop_close" for d in eng.decisions)
+
+
+# ---------------------------------------------------------------------------------------------- review fixes (M1, M2, L3)
+def _week(day: str, offset: str = "-05:00") -> list[dict]:
+    """A Forex Factory week reduced to two events: one on `day` and one late on that week's Saturday evening."""
+    d = pd.Timestamp(day)
+    sat = d + pd.Timedelta(days=(5 - d.dayofweek) % 7)
+    return [{"title": "PPI m/m", "country": "USD", "date": f"{d:%Y-%m-%d}T08:30:00{offset}", "impact": "High"},
+            {"title": "Bank Holiday", "country": "NZD", "date": f"{sat:%Y-%m-%d}T18:30:00{offset}", "impact": "Low"}]
+
+
+def test_sunday_open_with_only_last_week_archived_fails_closed_until_the_sunday_fetch(tmp_path):
+    """Review M2: the window held a row of last week (Saturday evening), so "any row in the window" called the
+    calendar known at the Sunday open although nothing of the new week was. Availability now needs the archive to
+    cover through now + 24 h; the Sunday 18:00 UTC fetch archives the new week before the open."""
+    from goldbot.ops.jobs import JOBS, JobContext, calendar_archive
+    from goldbot.research.model_registry import ModelRegistry
+    from goldbot.research.population import Population
+    from goldbot.research.registry import TrialRegistry
+    eng, pb = _engine(tmp_path, RiskLimits(tier2=Tier2Blackout(enabled=True)), _week("2026-01-08"))
+    open_ = WEEKLY["winter"] + 3 * M                                     # Sunday 23:05 UTC
+    st = _at(eng, pb, open_)
+    assert st.calendar_unavailable and "calendar_unavailable" in eng.gate.check(_intent(), st).reasons
+    friday = pd.Timestamp("2026-01-09 20:00", tz="UTC")                   # this week archived: no Friday stop
+    assert not _at(eng, pb, friday).calendar_unavailable
+    sched = load_settings().scheduler.calendar_archive_sunday
+    assert (sched.kind, sched.weekday, sched.at) == ("weekly", 6, "18:00")
+    assert JOBS["calendar_archive_sunday"] is calendar_archive
+    ctx = JobContext(settings=load_settings(), store=Store(tmp_path / "data"), state_dir=tmp_path,
+                     models=ModelRegistry(tmp_path / "m"), trials=TrialRegistry(tmp_path / "t.jsonl"), accounts=[],
+                     population=Population(tmp_path / "p.json"), fetch_calendar=lambda: json.dumps(_week("2026-01-13")))
+    calendar_archive(ctx, pd.Timestamp("2026-01-11 18:00", tz="UTC"))
+    assert not _at(eng, pb, open_ + M).calendar_unavailable
+
+
+def test_a_calendar_whose_newest_fetch_is_over_a_week_old_is_unavailable(tmp_path):
+    eng, pb = _engine(tmp_path, RiskLimits(tier2=Tier2Blackout(enabled=True)))
+    Store(tmp_path / "data").append("calendar_events", parse_ff_week(_week("2026-01-15"), pd.Timestamp(
+        "2026-01-05", tz="UTC"), TIER1), source="forexfactory")
+    assert _at(eng, pb, pd.Timestamp("2026-01-15 10:00", tz="UTC")).calendar_unavailable
+
+
+def test_engine_publishes_the_windows_block_and_logs_once_per_transition(tmp_path, monkeypatch, caplog):
+    lim = RiskLimits(tier2=Tier2Blackout(enabled=True), holidays=HolidaySettings(enabled=True))
+    eng, pb = _engine(tmp_path, lim, _feed("-05:00", "2026-01-15"))
+    t0 = pd.Timestamp("2026-01-15 13:30", tz="UTC")
+    _at(eng, pb, t0)
+    eng._write_state()
+    w = json.loads((tmp_path / "engine_icm-demo.json").read_text())["windows"]
+    assert w["enabled"] == {"tier2": True, "reopen": False, "holidays": True}
+    assert w["tier2_blackout"] is True and w["reopen_window"] is False and w["holiday_thin"] is False
+    assert w["calendar_unavailable"] is False and w["calendar_unavailable_since"] is None
+    assert w["holiday_version"] == "cme-metals-v2" and w["holiday_valid_through"] == "2028-12-31"
+    assert pd.Timestamp(w["calendar_latest_ts_utc"]) == pd.Timestamp("2026-01-15 19:00", tz="UTC")
+    assert pd.Timestamp(w["calendar_received_utc"]) == pd.Timestamp("2026-01-14 13:30", tz="UTC")
+    assert eng.store is not None
+    real_read = eng.store.read
+
+    def broken(*_a, **_k):
+        raise OSError("disk gone")
+    caplog.set_level(logging.WARNING, logger="goldbot.engine")
+    monkeypatch.setattr(eng.store, "read", broken)
+    for k in range(3):
+        _at(eng, pb, t0 + (k + 1) * M)
+    eng._write_state()
+    w = json.loads((tmp_path / "engine_icm-demo.json").read_text())["windows"]
+    assert w["calendar_unavailable"] and pd.Timestamp(w["calendar_unavailable_since"]) == t0 + M
+    assert "OSError" in w["calendar_unavailable_reason"]
+    assert len([r for r in caplog.records if "calendar_unavailable" in r.getMessage()]) == 1
+    monkeypatch.setattr(eng.store, "read", real_read)
+    assert not _at(eng, pb, t0 + 5 * M).calendar_unavailable
+    monkeypatch.setattr(eng.store, "read", broken)
+    _at(eng, pb, t0 + 6 * M)
+    assert len([r for r in caplog.records if "calendar_unavailable" in r.getMessage()]) == 2
+
+
+def test_a_raising_window_computation_fails_closed_and_logs_once(tmp_path, monkeypatch, caplog):
+    import goldbot.engine.runner as runner_mod
+    eng, pb = _engine(tmp_path, ON, _feed("-05:00", "2026-01-15"))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("zone data broken")
+    monkeypatch.setattr(runner_mod, "server_date", boom)
+    caplog.set_level(logging.WARNING, logger="goldbot.engine")
+    for k in range(3):
+        st = _at(eng, pb, pd.Timestamp("2026-01-15 16:00", tz="UTC") + k * M)
+        assert st.calendar_unavailable and st.reopen_window
+    assert len([r for r in caplog.records if "calendar_unavailable" in r.getMessage()]) == 1
+
+
+def test_a_failing_account_read_at_a_bar_close_still_manages_open_trades(tmp_path, monkeypatch):
+    """Review L3: exits first. The account refresh raising at a bar close used to skip `_manage_open` for that bar."""
+    from goldbot.engine.runner import _Frame
+    eng, pb = _engine(tmp_path, RiskLimits())
+    close = pd.Timestamp("2026-01-15 14:00", tz="UTC")
+    eng.bars_1m = pd.DataFrame({"visible_at": pd.date_range(close - pd.Timedelta(minutes=500), close, freq="1min")})
+    dec = pd.DataFrame({"ts_utc": [close], "visible_at": [close]})
+    frame = _Frame(dec=dec, m=pd.DataFrame(), X=pd.DataFrame({"f": [1.0]}), atr=pd.Series(np.ones(1)))
+    managed: list[pd.DataFrame] = []
+    monkeypatch.setattr(eng, "_rebuild_bars", lambda: None)
+    monkeypatch.setattr(eng, "_frame", lambda *a, **k: frame)
+    monkeypatch.setattr(eng, "_manage_open", lambda d: managed.append(d))
+
+    def refused(tick):
+        raise ConnectionError("terminal gone")
+    monkeypatch.setattr(eng, "_refresh_account", refused)
+    with pytest.raises(ConnectionError):
+        eng.on_bar_close(close, Tick(ts_utc=close, bid=2400.0, ask=2400.2))
+    assert len(managed) == 1
+
+
+def _health_state(tmp_path: Path, **windows) -> None:
+    base = {"enabled": {"tier2": True, "reopen": True, "holidays": True}, "tier2_blackout": False,
+            "reopen_window": False, "holiday_thin": False, "calendar_unavailable": False,
+            "calendar_unavailable_since": None, "calendar_unavailable_reason": None,
+            "holiday_version": "cme-metals-v2", "holiday_valid_through": "2028-12-31",
+            "calendar_latest_ts_utc": "2026-01-16T19:00:00+00:00", "calendar_received_utc": "2026-01-15T06:10:00+00:00"}
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"account": "icm-demo", "windows": {**base, **windows}}))
+
+
+def test_health_entry_windows_fails_when_the_calendar_stays_unavailable_with_the_market_open(tmp_path):
+    now = pd.Timestamp("2026-01-15 16:00", tz="UTC")                   # Thursday, market open
+    ctx = health.HealthContext(state_dir=tmp_path, now=now, get_secret=lambda k: None)
+
+    def status(**w) -> dict[str, str]:
+        _health_state(tmp_path, **w)
+        return {c.name: c.status for c in health.check_entry_windows(ctx, "icm-demo")}
+    assert set(status().values()) == {"ok"}
+    assert status(calendar_unavailable=True, calendar_unavailable_since=(now - 31 * M).isoformat(),
+                  calendar_unavailable_reason="no events")["entry_windows:icm-demo:calendar"] == "fail"
+    assert status(calendar_unavailable=True, calendar_unavailable_since=(now - 29 * M).isoformat())[
+        "entry_windows:icm-demo:calendar"] == "ok"
+    saturday = health.HealthContext(state_dir=tmp_path, now=pd.Timestamp("2026-01-17 12:00", tz="UTC"),
+                                    get_secret=lambda k: None)
+    _health_state(tmp_path, calendar_unavailable=True, calendar_unavailable_since="2026-01-17T05:00:00+00:00",
+                  calendar_received_utc="2026-01-17T06:10:00+00:00")
+    assert {c.status for c in health.check_entry_windows(saturday, "icm-demo")} == {"ok"}   # market closed
+
+
+def test_health_entry_windows_warns_on_a_stale_fetch_and_a_holiday_list_near_its_end(tmp_path):
+    now = pd.Timestamp("2026-01-15 16:00", tz="UTC")
+    ctx = health.HealthContext(state_dir=tmp_path, now=now, get_secret=lambda k: None)
+    _health_state(tmp_path, calendar_received_utc=(now - pd.Timedelta(hours=37)).isoformat(),
+                  holiday_valid_through="2026-04-15")
+    got = {c.name: c for c in health.check_entry_windows(ctx, "icm-demo")}
+    age, hol = got["entry_windows:icm-demo:calendar_age"], got["entry_windows:icm-demo:holiday_list"]
+    assert age.status == "warn" and hol.status == "warn" and "2026-04-15" in hol.reason
+    assert health._alerting(age.name, "warn") and health._alerting(hol.name, "warn")       # Telegram
+    _health_state(tmp_path, calendar_received_utc=(now - pd.Timedelta(hours=35)).isoformat(),
+                  holiday_valid_through="2026-04-15")
+    assert {c.name: c.status for c in health.check_entry_windows(ctx, "icm-demo")}[
+        "entry_windows:icm-demo:calendar_age"] == "ok"
+    _health_state(tmp_path, holiday_valid_through="2026-04-16")                             # 91 days ahead
+    assert {c.name: c.status for c in health.check_entry_windows(ctx, "icm-demo")}[
+        "entry_windows:icm-demo:holiday_list"] == "ok"
+    _health_state(tmp_path, enabled={"tier2": False, "reopen": False, "holidays": False})
+    assert health.check_entry_windows(ctx, "icm-demo") == []

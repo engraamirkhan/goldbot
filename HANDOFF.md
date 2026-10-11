@@ -779,6 +779,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   goldbot/risk/windows.py; the runner's `_entry_windows` sits beside `_blackout` and shares its calendar read
   (`_calendar_events`). Owner: adopt (OWNER_GUIDE section 4). Not done: UK/JP/CN holidays and early closes, engine
   state/dashboard display of the window flags (the decisions journal carries the reasons), the 2029 list.
+  Trading-safety review (merge after fixes, no HIGH) fixes in: engine_<account>.json `windows` (flags, holiday version
+  and valid_through, latest calendar event and fetch, `calendar_unavailable_since` and reason); health
+  `check_entry_windows` (`entry_windows:<account>:calendar` FAIL after 30 min unavailable with the market open,
+  `:calendar_age` WARN on a fetch over 36 h old, `:holiday_list` WARN within 90 days of its end; Telegram); one log
+  line per transition; CI fails a year before the holiday list ends. Tier-2 availability now needs the newest fetch
+  under 7 days old and the archive covering through now + 24 h (to the end of its latest event's Forex Factory week),
+  and a Sunday 18:00 UTC fetch (`calendar_archive_sunday`) archives the new week before the open. Holiday list v2:
+  "US federal holidays as a proxy (not measured)", Columbus and Veterans Day out, the day after Thanksgiving and
+  Easter Monday in, tested against a hand-reviewed set. Any error in the window computation sets
+  calendar_unavailable and the reopen flag; a bar close whose account read raises still manages open trades. ADR 0008
+  and econ_calendar.py document the two tier-2 definitions. New BACKLOG 43 (measure the listed days) and 44 (replay
+  the windows and a `research_pass` filter) come before adoption.
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on

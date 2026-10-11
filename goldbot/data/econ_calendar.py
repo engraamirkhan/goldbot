@@ -7,6 +7,11 @@ to `after_min` after each tier-1 event. Tier 2 is the playbook's G-3 list (TIER2
 JOLTS, claims, FOMC minutes, Fed chair; USD, whatever impact the feed gives them) and any other high-impact USD event;
 `risk.blackout.tier2` blocks entries around them once the owner enables it (BACKLOG 18). Tier 3 is everything else.
 
+Two tier-2 definitions (ADR 0008, amended): this archive's (above, live) and calendar-v1's fixed event-type list
+(goldbot/data/us_calendar.py `TIERS`, research). Rows archived before 2026-10-11 were tiered by impact alone (claims
+were tier 3); no trial or report cites the archive's `tier` column across that date without re-tiering the rows with
+the current `tier_of` first.
+
 The scheduled time is known in advance, so using it for "minutes to the next event" is not lookahead; anything about
 the outcome (actual vs forecast) must join on `received_utc`.
 """

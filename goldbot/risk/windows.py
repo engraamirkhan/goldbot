@@ -8,6 +8,10 @@
   server midnight is 17:00 New York, the CME trading-day roll, so a listed date covers the CME trading day of that
   name; in the weeks when only one side of the Atlantic has changed clocks the roll is an hour off.
 * Tier 2 (`risk.blackout.tier2`) uses goldbot.data.econ_calendar.blackout_window on the live calendar (engine).
+  The calendar counts as known (`calendar_gap`) only when its newest fetch is under CALENDAR_MAX_AGE old and the
+  archive covers through now + CALENDAR_LOOKAHEAD: a Forex Factory week runs Sunday to Saturday, New York time, so the
+  archive covers to the end of the week of its latest event (review M2: a row of last week no longer passes for the
+  new week at the Sunday open).
 
 These functions only say whether `now` is inside a window; RiskGate turns the engine's flags into entry refusals
 (`reopen_window`, `holiday_thin`, `tier2_blackout`, `calendar_unavailable`). Exits never read them.
@@ -16,6 +20,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -26,6 +31,9 @@ from goldbot.config import ROOT, ReopenSettings, load_yaml
 from goldbot.data.calendar import SessionTable
 from goldbot.data.timeutil import server_wall
 
+FF_TZ = ZoneInfo("America/New_York")          # Forex Factory's weeks: Sunday 00:00 to Sunday 00:00, New York
+CALENDAR_LOOKAHEAD = pd.Timedelta(hours=24)   # the archive must cover at least this far ahead of now
+CALENDAR_MAX_AGE = pd.Timedelta(days=7)       # and its newest fetch be at most this old
 # a reopen whose market was also closed this long before it ends a long closure (the weekend, a holiday closure) and
 # takes the weekly window; the daily break is about an hour, an early close about five
 LONG_CLOSURE = pd.Timedelta(hours=12)
@@ -59,6 +67,30 @@ def load_holidays(path: str | Path) -> HolidayList:
     turns that into `calendar_unavailable` (fail closed)."""
     p = Path(path)
     return HolidayList.model_validate(load_yaml(p if p.is_absolute() else ROOT / p))
+
+
+def ff_week_end(ts: pd.Timestamp) -> pd.Timestamp:
+    """The end (next Sunday 00:00 New York, as UTC) of the Forex Factory week holding `ts`."""
+    local = pd.Timestamp(ts).tz_convert(FF_TZ)
+    sunday = local.normalize().tz_localize(None) + pd.Timedelta(days=7 - (local.dayofweek + 1) % 7)
+    return pd.Timestamp(sunday).tz_localize(FF_TZ).tz_convert("UTC")
+
+
+def calendar_gap(events: pd.DataFrame | None, now: pd.Timestamp) -> str | None:
+    """Why the archived calendar cannot judge entries at `now` (`calendar_unavailable`), or None when it can: no
+    events around now, no fetch time, a newest fetch older than CALENDAR_MAX_AGE (or stamped in the future), or an
+    archive that does not cover through now + CALENDAR_LOOKAHEAD."""
+    if events is None or events.empty:
+        return "no events archived around now"
+    if "received_utc" not in events.columns:
+        return "archive rows carry no fetch time"
+    received = pd.Timestamp(pd.to_datetime(events["received_utc"], utc=True).max())
+    if pd.isna(received) or received > now or now - received > CALENDAR_MAX_AGE:
+        return f"newest fetch {received} is not within {CALENDAR_MAX_AGE} before now"
+    covered = ff_week_end(pd.Timestamp(pd.to_datetime(events["ts_utc"], utc=True).max()))
+    if covered < now + CALENDAR_LOOKAHEAD:
+        return f"archive covers only until {covered.isoformat()}"
+    return None
 
 
 def server_date(sessions: SessionTable, now: pd.Timestamp) -> date:

@@ -1089,6 +1089,64 @@ def check_throttle(ctx: HealthContext, account_id: str) -> list[Check]:
     return out
 
 
+WINDOWS_UNAVAILABLE_FAIL = pd.Timedelta(minutes=30)   # calendar_unavailable this long with the market open: FAIL
+WINDOWS_FETCH_WARN = pd.Timedelta(hours=36)            # newest calendar fetch older than this: WARN
+WINDOWS_HOLIDAY_WARN_DAYS = 90                         # holiday list ending within this many days: WARN
+
+
+def check_entry_windows(ctx: HealthContext, account_id: str) -> list[Check]:
+    """BACKLOG 17/18 entry windows fail closed (`calendar_unavailable` refuses every entry), so the owner must hear
+    when that happens (review M1), from the engine's `windows` block. Checks, only for enabled windows:
+    `entry_windows:<account>:calendar` FAILs once the calendar has been unavailable over 30 min with the market open
+    (ok while the market is closed or for shorter spells, which the Sunday fetch and the 5-minute re-read clear);
+    `entry_windows:<account>:calendar_age` (tier 2) warns when the newest Forex Factory fetch is over 36 h old;
+    `entry_windows:<account>:holiday_list` warns when the holiday list ends within 90 days. Warnings reach Telegram
+    (NOTIFY_ON_WARN). Nothing while every window is off or the engine has not published the block."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    if not f.exists():
+        return []
+    try:
+        w = _read_json(f).get("windows") or {}
+        on = {k: bool(v) for k, v in (w.get("enabled") or {}).items()}
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []                                   # check_engine reports the unreadable file
+    if not any(on.values()):
+        return []
+    out = []
+    pre = f"entry_windows:{account_id}"
+    if on.get("tier2") or on.get("holidays"):
+        since = pd.Timestamp(w["calendar_unavailable_since"]) if w.get("calendar_unavailable_since") else None
+        if not w.get("calendar_unavailable") or since is None:
+            out.append(Check(name=f"{pre}:calendar", status="ok", reason=f"{account_id}: calendar known"))
+        else:
+            lasted = ctx.now - since
+            open_ = _market_open_throughout(ctx, WINDOWS_UNAVAILABLE_FAIL.total_seconds())
+            bad = lasted > WINDOWS_UNAVAILABLE_FAIL and open_
+            why = w.get("calendar_unavailable_reason") or "unknown"
+            out.append(Check(name=f"{pre}:calendar", status="fail" if bad else "ok",
+                             reason=f"{account_id}: calendar_unavailable since {since:%Y-%m-%d %H:%M} UTC ({why}): "
+                                    "entries refused, exits unaffected"
+                                    + ("" if bad else " (market closed or under 30 min)")))
+    if on.get("tier2"):
+        rec = pd.Timestamp(w["calendar_received_utc"]) if w.get("calendar_received_utc") else None
+        if rec is None or ctx.now - rec > WINDOWS_FETCH_WARN:
+            out.append(Check(name=f"{pre}:calendar_age", status="warn",
+                             reason=f"{account_id}: newest calendar fetch {rec or 'never'} is over 36 h old; check the "
+                                    "calendar_archive job"))
+        else:
+            out.append(Check(name=f"{pre}:calendar_age", status="ok",
+                             reason=f"{account_id}: calendar fetched {rec:%Y-%m-%d %H:%M} UTC"))
+    if on.get("holidays") and w.get("holiday_valid_through"):
+        end = pd.Timestamp(w["holiday_valid_through"]).date()
+        left = (end - ctx.now.date()).days
+        near = left <= WINDOWS_HOLIDAY_WARN_DAYS
+        out.append(Check(name=f"{pre}:holiday_list", status="warn" if near else "ok",
+                         reason=f"{account_id}: holiday list {w.get('holiday_version')} valid through {end} ({left} d)"
+                                + ("; extend config/holidays_cme_metals.yaml or every entry is refused after it"
+                                   if near else "")))
+    return out
+
+
 def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
     """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
     restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
@@ -1186,6 +1244,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += [tick_errors] if tick_errors is not None else []
             checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
             checks += check_throttle(ctx, a.account_id)
+            checks += check_entry_windows(ctx, a.account_id)
             bridge = check_bridge(ctx, a.account_id)
             checks += [bridge] if bridge is not None else []
             clock = check_server_clock(ctx, a)
@@ -1237,7 +1296,7 @@ class WatchState(Record):
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:",
-                  "throttle:")
+                  "throttle:", "entry_windows:")
 
 
 def _alerting(name: str, status: str) -> bool:

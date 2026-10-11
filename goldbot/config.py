@@ -201,6 +201,9 @@ class SchedulerSettings(_Section):
     cpcv_quarterly: ScheduleSettings = ScheduleSettings(kind="monthly", at="14:00", weekday=6, months=[1, 4, 7, 10],
                                                         max_late_hours=30)
     attribution: ScheduleSettings = ScheduleSettings(kind="daily", at="23:50", max_late_hours=20)
+    # review M2 (BACKLOG 18): a second calendar fetch on Sunday afternoon, so the new Forex Factory week is archived
+    # before the weekly open (an enabled tier-2 window refuses entries until the archive covers the next 24 h)
+    calendar_archive_sunday: ScheduleSettings = ScheduleSettings(kind="weekly", at="18:00", weekday=6, max_late_hours=3)
 
 
 class BackupSettings(_Section):
