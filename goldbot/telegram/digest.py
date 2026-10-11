@@ -94,10 +94,6 @@ def _json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _money(x: float) -> str:
-    return f"{'+' if x >= 0 else '-'}${abs(x):,.2f}"
-
-
 def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
@@ -191,27 +187,23 @@ def trades_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp) -> list
     warn = " (⚠️ unreadable record lines skipped)" if err else ""
     if not day:
         return [f"• Trades closed: none{warn}"]
-    # money in the account currency only (BACKLOG 28): a row counts when its pnl_currency is None (legacy) or the
-    # account's currency from engine_<account>.json; others (the unconverted USD fallback) are named, not summed
+    # P&L summed per currency, never across (BACKLOG 28): a row's currency is its pnl_currency, or for a legacy row
+    # the account's currency from engine_<account>.json; each sum is printed with its own symbol ("+£5.00 · -$10.90")
+    from goldbot.ops.monthly_report import money
     try:
-        ccy = {str(e.get("account")): str(e.get("currency") or "").upper() for e in _engines(state_dir)}
+        ccy = {str(e.get("account")): str(e.get("currency") or "").strip().upper() for e in _engines(state_dir)}
     except ValueError:
         ccy = {}
-
-    def counts(t: Any) -> bool:
-        return t.pnl_currency is None or t.pnl_currency.upper() == ccy.get(t.account_id, "")
-
-    pnl = sum(t.pnl for t in day if counts(t))
-    left: dict[str, int] = {}
+    sums: dict[str, float] = {}
     for t in day:
-        if not counts(t):
-            left[str(t.pnl_currency)] = left.get(str(t.pnl_currency), 0) + 1
-    if left:
-        warn = "".join(f" ({n} in {c} not summed)" for c, n in sorted(left.items())) + warn
+        c = (t.pnl_currency or ccy.get(t.account_id, "")).strip().upper()
+        sums[c] = sums.get(c, 0.0) + t.pnl
+    net = " · ".join(money(v, c or None) + ("" if c else " (currency not reported)")
+                     for c, v in sorted(sums.items(), key=lambda kv: (kv[0] not in ccy.values(), kv[0] == "", kv[0])))
     rs = [t.r for t in day if t.r is not None]
     r = f" · {sum(rs):+.2f}R" + (f" ({len(rs)} of {len(day)} with R)" if len(rs) < len(day) else "") if rs else " · R n/a"
     wins = sum(t.pnl > 0 for t in day)
-    return [f"• Closed {_plural(len(day), 'trade')}: net {_money(pnl)}{r} ({wins} won, {len(day) - wins} lost){warn}"]
+    return [f"• Closed {_plural(len(day), 'trade')}: net {net}{r} ({wins} won, {len(day) - wins} lost){warn}"]
 
 
 def month_line(state_dir: Path, yesterday: pd.Timestamp) -> list[str]:
@@ -310,11 +302,11 @@ def _trial_line(settings: Settings | None, registry_path: Path | None, now: pd.T
     from goldbot.research.director import _prereg_matches, reserved_trials
     from goldbot.research.registry import quarter_of, quarter_start, quarter_trials
     budget = settings.research.trial_budget_quarter if settings is not None else 20
-    setting = settings.research.reserved_trials_quarter if settings is not None else 0
     rows: list[dict[str, Any]] = []
     if registry_path is not None and registry_path.exists():
         rows = [json.loads(x) for x in registry_path.read_text(encoding="utf-8").splitlines() if x.strip()]
     q = quarter_of(_utc(now).to_pydatetime())
+    setting = settings.research.reserved_for(q) if settings is not None else 0
     used = quarter_trials(rows, q)
     reserved = reserved_trials(rows, q, setting).reserved
     budget_txt = (f"budget {q}: {used} of {budget} trials used, {reserved} reserved for pre-registered, "

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { AccountSummary, DecidedProposal, Proposal, Status } from "./api";
-import { REASONS, blockers, cardState, countdown, money, via } from "./approval";
+import { REASONS, blockers, budgetLine, cardMoney, cardState, countdown, money, pct, via } from "./approval";
 import { featureValue, plainFeature } from "./features";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 const at = (s: number) => new Date(NOW + s * 1000).toISOString();
 const prop = (expiresIn: number): Proposal => ({
   proposal_id: "p", account_id: "icm-demo", agent_id: "a", side: "long", lots: 0.05, entry: 1, stop: 0, target: 2, p: 0.6,
-  ev_r: 0.2, spread_points: 20, top_features: [], expires_at: at(expiresIn),
+  ev_r: 0.2, spread_points: 20, top_features: [], expires_at: at(expiresIn), min_lot_exception: false,
 });
 const status = (over: Partial<Status> = {}): Status => ({
   mode: "propose", halted: false, pending: 0, supervisor: {}, supervisor_halt: false, supervisor_reasons: [], drift_halt: false,
@@ -92,5 +92,35 @@ describe("plainFeature", () => {
     expect(featureValue(31.234)).toBe("31.2");
     expect(featureValue(-0.2)).toBe("-0.20");
     expect(featureValue(1234.4)).toBe("1234");
+  });
+});
+
+describe("card money", () => {
+  it("writes percentages as the owner does", () => {
+    expect(pct(0.0082)).toBe("0.82%");
+    expect(pct(0.005)).toBe("0.5%");
+    expect(pct(0.01)).toBe("1%");
+  });
+
+  it("uses the account currency, falls back to an older engine's USD figure, else nothing", () => {
+    const gbp = { ...prop(60), entry: 2400, stop: 2396, target: 2406, currency: "GBP", risk_amount: 8.2, reward_amount: 12.3 };
+    expect(cardMoney(gbp)).toEqual({ risk: "£8.20", reward: "£12.30", usd: false });
+    expect(cardMoney({ ...prop(60), risk_usd: 20, reward_amount: 30 })).toEqual({ risk: "$20.00", reward: "$30.00", usd: true });
+    expect(cardMoney(prop(60))).toBeNull();
+    // never below the gate's figure: up to the cent; the budget left rounds down
+    expect(cardMoney({ ...prop(60), currency: "GBP", risk_amount: 8.2012 })?.risk).toBe("£8.21");
+    expect(cardMoney({ ...prop(60), currency: "GBP", risk_amount: 8.21 })?.risk).toBe("£8.21");
+  });
+
+  it("says what is left if this loses, spent, or unknown", () => {
+    const base = { ...prop(60), currency: "GBP", risk_amount: 8.2 };
+    expect(budgetLine({ ...base, loss_left: 11.8, loss_left_period: "today" })).toEqual(
+      { text: "£11.80 left today if this loses (open trades aside)", tone: "ok" });
+    expect(budgetLine({ ...base, loss_left: 3.15, loss_left_period: "this week" })).toEqual(
+      { text: "£3.15 left this week if this loses (open trades aside)", tone: "ok" });
+    expect(budgetLine({ ...base, loss_left: 0, loss_left_period: "today" })).toEqual(
+      { text: "No loss budget left today if this loses (open trades aside): new entries stop", tone: "warn" });
+    expect(budgetLine(base)).toEqual({ text: "Loss budget left today: unknown", tone: "idle" });
+    expect(budgetLine({ ...base, loss_left: 11.789, loss_left_period: "today" }).text).toMatch(/^£11\.78 left/);
   });
 });

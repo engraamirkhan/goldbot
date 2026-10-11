@@ -11,6 +11,7 @@ import pandas as pd
 
 from goldbot.config import ROOT, TelegramSettings
 from goldbot.ops import accounts
+from goldbot.ops.account_view import proposal_budget_from_state
 from goldbot.ops.deploy import DeployWatch
 from goldbot.ops.health import HealthContext, HealthWatch, run_checks
 from goldbot.telegram import automode
@@ -192,7 +193,9 @@ class TelegramBot:  # pragma: no cover - needs network + token
                         await self.app.bot.send_message(uid, text, reply_markup=kb)
             if report:
                 for r in self.deploy.new_results():
-                    icon = {"deployed": "✅", "rolled_back": "↩️", "failed": "🛑", "refused": "⛔"}.get(r.get("result", ""), "ℹ️")
+                    icon = {"deployed": "✅", "rolled_back": "↩️", "rolled_back_manual": "↩️", "rollback_reverted": "⚠️",
+                            "deployed_degraded": "⚠️",
+                            "failed": "🛑", "refused": "⛔"}.get(r.get("result", ""), "ℹ️")
                     text = f"{icon} deploy {r.get('result')} on {r.get('role')}: {str(r.get('to', ''))[:8]} — {r.get('detail', '')}"
                     for uid in self.owner_ids:
                         await self.app.bot.send_message(uid, text)
@@ -205,9 +208,12 @@ class TelegramBot:  # pragma: no cover - needs network + token
                                     for r in ("news", "cost", "discretion")],
                                    [InlineKeyboardButton("Reject: duplicate", callback_data=f"no:{p.proposal_id}:duplicate"),
                                     InlineKeyboardButton("Reject: other", callback_data=f"no:{p.proposal_id}:other")]])
+        # the loss budget left if this loses, from the engine's and supervisor's state files (unknown if unreadable)
+        budget = await asyncio.to_thread(proposal_budget_from_state, self.state_dir, p.account_id, p.risk_amount)
+        text = p.text(budget)
         sent = []
         for uid in self.owner_ids:
-            m = await self.app.bot.send_message(uid, p.text(), reply_markup=kb)
+            m = await self.app.bot.send_message(uid, text, reply_markup=kb)
             sent.append((uid, m.message_id))
         return sent
 

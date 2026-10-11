@@ -76,12 +76,18 @@ class Supervisor:
         # money is summed in ONE currency only (re-verification MEDIUM): a stale engine's equity, day/week start, HWM
         # and published limit count only when its currency equals the fresh engines' single currency. A different or
         # missing one stays out of every money sum (it would dilute the combined caps, the 12% halt and the notional
-        # cap), while its open lots and notional stay in the exposure (the strict direction). With no fresh engine
-        # (nothing can enter) every file counts, as before
-        kinds = set(currencies.values())
-        single = next(iter(kinds)) if len(kinds) == 1 else None
-        money = engines if not fresh else fresh + [e for e in engines if not any(e is f for f in fresh)
-                                                   and single is not None and _currency(e) == single]
+        # cap), while its open lots and notional stay in the exposure (the strict direction). With no fresh engine the
+        # same rule applies to the stale files themselves: their money is summed only when they all report one
+        # currency, otherwise no money is summed (lots and notional still are) and `no_fresh_engine` says so
+        if fresh:
+            kinds = set(currencies.values())
+            single = next(iter(kinds)) if len(kinds) == 1 else None
+            money = fresh + [e for e in engines if not any(e is f for f in fresh)
+                             and single is not None and _currency(e) == single]
+        else:
+            stale_kinds = {_currency(e) for e in engines}
+            one = len(stale_kinds) == 1 and None not in stale_kinds
+            money = list(engines) if one else []
         excluded = sorted(str(e.get("_file", "")) for e in engines if not any(e is m for m in money))
         eq = sum(e.get("equity", 0.0) for e in money)
         day0 = sum(e.get("day_start_equity", 0.0) for e in money)
@@ -120,7 +126,7 @@ class Supervisor:
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
                  "unreadable_engines": self.unreadable, "currencies": currencies, "currency_files": currency_files,
-                 "money_excluded": excluded, "day_loss_amount": day_loss_amount, "daily_loss_limit_abs": abs_limit,
+                 "money_excluded": excluded, "no_fresh_engine": bool(engines) and not fresh, "day_loss_amount": day_loss_amount, "daily_loss_limit_abs": abs_limit,
                  # the dashboard's loss budget (goldbot/ops/account_view.py): the combined caps and their (one-currency) bases
                  "daily_cap": self.limits.daily_cap, "combined_day_start_equity": day0,
                  "weekly_cap": self.limits.weekly_cap, "combined_week_start_equity": wk0}

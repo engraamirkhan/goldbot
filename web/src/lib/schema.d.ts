@@ -929,6 +929,8 @@ export interface components {
             account_id: string;
             /** Agent Id */
             agent_id: string;
+            /** Currency */
+            currency?: string | null;
             /** Decided By */
             decided_by?: string | null;
             /** Entry */
@@ -940,8 +942,17 @@ export interface components {
              * Format: date-time
              */
             expires_at: string;
+            /** Loss Left */
+            loss_left?: number | null;
+            /** Loss Left Period */
+            loss_left_period?: ("today" | "this week") | null;
             /** Lots */
             lots: number;
+            /**
+             * Min Lot Exception
+             * @default false
+             */
+            min_lot_exception: boolean;
             /** P */
             p: number;
             /** Proposal Id */
@@ -953,6 +964,16 @@ export interface components {
              * @default []
              */
             refusal: string[];
+            /** Reward Amount */
+            reward_amount?: number | null;
+            /** Risk Amount */
+            risk_amount?: number | null;
+            /** Risk Cap */
+            risk_cap?: number | null;
+            /** Risk Fraction */
+            risk_fraction?: number | null;
+            /** Risk Normal */
+            risk_normal?: number | null;
             /** Risk Usd */
             risk_usd?: number | null;
             /**
@@ -1429,6 +1450,8 @@ export interface components {
             account_id: string;
             /** Agent Id */
             agent_id: string;
+            /** Currency */
+            currency?: string | null;
             /** Entry */
             entry: number;
             /** Ev R */
@@ -1438,12 +1461,31 @@ export interface components {
              * Format: date-time
              */
             expires_at: string;
+            /** Loss Left */
+            loss_left?: number | null;
+            /** Loss Left Period */
+            loss_left_period?: ("today" | "this week") | null;
             /** Lots */
             lots: number;
+            /**
+             * Min Lot Exception
+             * @default false
+             */
+            min_lot_exception: boolean;
             /** P */
             p: number;
             /** Proposal Id */
             proposal_id: string;
+            /** Reward Amount */
+            reward_amount?: number | null;
+            /** Risk Amount */
+            risk_amount?: number | null;
+            /** Risk Cap */
+            risk_cap?: number | null;
+            /** Risk Fraction */
+            risk_fraction?: number | null;
+            /** Risk Normal */
+            risk_normal?: number | null;
             /** Risk Usd */
             risk_usd?: number | null;
             /**

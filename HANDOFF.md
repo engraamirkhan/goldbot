@@ -136,6 +136,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   or the dashboard (any approver); re-arm only on the dashboard by the owner with an authenticator code. Engines in
   production (`halt_checks`) also block entries when the supervisor's heartbeat is missing or stale. Exits are
   never gated.
+- An approved order never exceeds its card (ADR 0009, 2026-10-11): the approval re-check can only reduce the size
+  (`min(gate lots, card lots)`, journalled `approval_size_capped`), and a risk at the sent lots more than 2% above the
+  card's `risk_amount` (the broker's conversion moved) is refused `risk_above_approved`. Proposals carry the
+  account-currency risk, the minimum-lot note fields and the card's money (docs/ux/approval-card.md); restart
+  engine, Telegram and API together with the engine last when deploying a proposal-format change (RUNBOOK).
 - Clone mutations (`population.mutate_agent`): perturbed barriers/thresholds, a different feature subset
   (`feature_seed`: seeded 40 of the eligible features) or a different timeframe for breakout and mean_reversion
   (15m <-> 1h, holding horizon kept).
@@ -737,6 +742,29 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`combined_daily_loss_abs`) when the combined day loss reaches 50. Exits never consult it. engine_<account>.json
   carries `daily_loss_limit` and `daily_loss_remaining`; health shows them on the daily cap line and warns when none
   is left. Not done: the approval card's "remaining daily allowance" (ui-ux follow-up).
+- Per-agent loss-streak and entry-rate throttle (2026-10-11, BACKLOG 21, playbook G-6, row R35; **off by default**;
+  trading-safety review: merge after fixes, fixes in): `risk.throttle: {enabled: false, loss_streak: 3,
+  cooldown_bars: 4, max_entries_per_day_per_agent: 3}`. The caps are per decision, per account: each account counts
+  its own trades for an agent and RiskGate checks them at every entry decision (proposal and approval re-check), so
+  across two accounts an agent can make up to twice the daily cap. When enabled, RiskGate refuses an agent's entries
+  with `throttle_loss_streak` after `loss_streak` consecutive full losses (R <= -0.9; without R, a `stop`/`stop_out`
+  exit at a loss; any other trade ends the streak) until `cooldown_bars` bars of the agent's timeframe have passed
+  since the last one, or a real shadow win (target hit or >= 0.25R; never a scratch) of the agent's **current live
+  model version**, entered after that loss, closes. The count persists after the cooldown: one more full loss
+  re-blocks at once, until a qualifying win. `throttle_entry_rate` once it has made `max_entries_per_day_per_agent`
+  entries in the risk day (00:00 UTC); `throttle_unknown` (that agent only) if its facts cannot be derived. Exits
+  never consult it. No new state file: facts come from the closed-trade record, the open book, the shadow book (read
+  only while a streak is cooling down, cached by mtime) and, review HIGH-1, closes the engine has seen but not yet
+  recorded (a broker stop found by the bar-close sweep is written after that close's decisions; a write that keeps
+  failing), each counted as a provisional full loss so the loss just taken counts at the very next decision. Engine
+  `live_versions` (agent -> champion version) is set by `ops.run` with the models. engine_<account>.json carries
+  `throttle` (settings; per agent: streak, provisional losses, last loss, cooldown end, entries today, `blocked`; or
+  `error`). Health has one check per agent, `throttle:<account>:<agent>`: warn + Telegram while throttled, FAIL when a
+  streak block has no cooldown end, on `throttle_unknown`, or when the state could not be published. Owner: set the
+  thresholds and turn it on (settings.local.yaml `risk: { throttle: { enabled: true, ... } }`, restart the engine).
+  Not done: the playbook's "until the next session" variant, a cross-account count, a provisional loss for a record
+  lost before a restart (only its id persists; health already fails on `closed_records_lost`), and the dashboard /
+  approval card (ui-ux follow-up).
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on
@@ -767,7 +795,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   whenever the P&L (and R) are in it, "USD" only for the unconverted own-fills fallback, None only on legacy records,
   so the monthly report's `r_understated` flags only pre-fix trades; the digest sums rows whose `pnl_currency` is
   None or the account's currency (engine_<account>.json) and names the rest "(n in USD not summed)". Follow-up for
-  the dashboard lane: `monthly_report.account_month` still sums every row's P&L, including a USD fallback row.
+  the dashboard lane: `monthly_report.account_month` still sums every row's P&L, including a USD fallback row
+  (done 2026-10-11, next bullet).
+- No cross-currency money sums anywhere (2026-10-11, final-review follow-ups, row S6): with no fresh engine the
+  supervisor sums stale files' money only when they all report one currency, otherwise none (lots and notional still
+  count) and publishes `no_fresh_engine`. The digest sums P&L per currency and prints each with the account's own
+  symbol from engine_<account>.json ("net +£5.00 · -$10.90"; "(currency not reported)" when unknown; the
+  `monthly_report.money` formatter, as the web's Intl formatting). The monthly report keeps rows in another currency
+  out of the P&L, chained return, days and drawdown (R still counts them) and says "(1 in USD not summed)" in the
+  report and the month-to-date digest line (`AccountMonth.pnl_excluded`, `pnl_note`).
 - Dashboard security review fixes (2026-10-10, TRACEABILITY U13-U16): the authenticator codes of `/api/automode`,
   `/api/rearm` and Telegram `/mode` now go through `AuthStore.verify_code_guarded` (5 wrong codes per account in 15
   minutes plus the per-IP limit; events `mode_failed`/`mode_locked`, `rearm_failed`/`rearm_locked`; shared by both
@@ -862,6 +898,65 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
+  (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
+  version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London
+  extremes; H-10 jumps only), a before-look check that each cluster has an informative column, and the size-neutral
+  joint permutation group measure (group_top_k 3). Follow-up slots need an exact default+overrides config;
+  `record_verdict` refuses discovery rows and checks screened rows against the pre-registered decision; survivor claims
+  may carry only spec keys + tags; E-5 manual rows record `rule_ref` (`research_pass.py --rule-ref`). Open before the
+  freeze: H-10's news / no-news split (opt-in `jump_news` + calendar into `--discover`) if wanted.
+- Contingent trial slots and withdrawal (2026-10-10, ADR 0007, quant ruling on the Q1 reservation): `reserved_trials_quarter`
+  13 -> **9** (5 queued + 4 H-02 survivor slots); 13 would have locked 8 of 20 Q1 trials all quarter. New
+  `TrialRegistry.reserve_slot(parent_ref, kind, k, derivation_rule, target_quarter)` (survivor / followup / holdout,
+  written before the quarter), `preregister(slot_ref=)` to use one in-quarter, `withdraw(ref, reason)` (not a trial).
+  A slot holds only while its condition can still be met and is freed by its rule (`director._Ledger`).
+  reserved = max(setting - run - withdrawn - expired slots, pending, 0). **Re-review fixes (2026-10-11, ADR 0007
+  amendment):** a slot covers only its derived config (parent family + spec, `from_discovery` = parent `row_ref`, the
+  k-th survivor and exactly its recorded members; follow-ups fix family + allowed configs; never a retired family);
+  survivor slots are live only when the parent reads continue under its rule (AUC >= 0.53, LB > 0.50) and >= k
+  pre-registered clusters pass (H-02 now groups by `discovery.H02_CLUSTERS`, `--families cluster`); evaluator
+  verdicts (`record_verdict`) drive rule-only follow-ups; group mode forwards whole groups while they fit and records
+  the rest; `reserved_trials_quarter` is keyed by quarter (`{"2027Q1": 9}`); E-5 cap for 2027Q1
+  (`open_budget_preregistered_only`): the analyst spends the open budget only on a `rule_ref` pre-registration or the
+  shared retired exploration trial, the grid none. **Before 2027-01-01:** write the 4 survivor slots on H-02's queued
+  row (`reserve_slot(h02, "survivor", k, ..., "2027Q1", survivor_pool=["H-03", "H-05", "H-07", "H-08", "H-10"])`,
+  k = 1..4) and H-02's config with `clusters = H02_CLUSTERS`, group mode `cluster`.
+- Opportunity-day features, BACKLOG 30a (2026-10-11). The quant and data review said "merge after fixes"; the fixes
+  are in the follow-up commit (H1, M1-M9, L1-L5). `goldbot/features/day_type.py` is the opt-in `day_type` family
+  (version 1). Importing it registers nothing. `enable()` registers it, and `research_pass --day-type` is the only
+  caller, so `DEFAULT_FEATURE_NAMES`, `f-079deacc61` (the Q1 H-02 universe) and `f-f999b359e2` (with macro) are
+  unchanged. Sets that include day_type are pinned: `f-1eada57050` (default + day_type) and `f-93fbe9386d` (+ macro).
+  Each trial row records `day_type: {family, version, gvz, us_calendar, refit_schedule, min_fit_rows}`.
+  - research_pass refuses `--day-type` without `--us-calendar`, with `--discover` or `--cpcv`, or with `--from-year`
+    after 2010.
+  - The US calendar branch (7c12fbd) is merged in here. `--us-calendar` now only fills `ctx["us_calendar"]`. The
+    `tier1_events`/`tier2_events` families need `--us-calendar-features`, so H-17 can read only the HAR columns.
+  - Day: 22:00 UTC rollover, inside the daily break in both DST regimes. A day spanning under 12 h is a stub and is
+    dropped from the daily inputs. A daily value is visible at D 22:00 UTC and is joined with `asof_join`.
+  - Columns: `opp_har_range_hat`, `opp_har_cut33/50/80`, `opp_har_band`, `opp_gvz_rv`, `opp_gvz_stale`,
+    `opp_prev_range_atr`, `opp_nr4`, `opp_nr7`, `opp_inside_day`, `opp_gap_atr`, `opp_noise_ratio`,
+    `opp_tier1_today`, `opp_min_to_first_tier1`. Definitions are in the module docstring.
+  - HAR target is H-16's: y = ln(W / A_{k-1}). W is the 08:00 London to 16:30 New York window range, each on its
+    local clock. A is the mean true range of 20 stub-free opportunity days, which is not the 1d-bar ATR (see DESIGN).
+    W, and with it the forecast and the noise ratio, is NaN on bars longer than 1h.
+  - Refit for month M: at the close of the last weekday opportunity day before M (Friday when M starts at a
+    weekend), on rows closed at least 1 day earlier, with at least 500 rows.
+  - Reading taken: the reviewers asked for "the last stub-free day". That is not known at the previous day's close (a
+    truncation cut inside a month-end stub would see a different fit), so the rule is calendar weekdays. It differs
+    only when the last weekday of a month is a stub.
+  - Each `HarFit` stores its 0.33/0.5/0.8 fitted-value quantiles. `fit_har(regressors=...)` takes any column list,
+    for E-4's full model. The fold-fit hook is `har_forecast(refit_at=...)`, or ctx `day_type_refit_at` /
+    `day_type_min_fit_rows`.
+  - The tier-1 count is of distinct releases: an FOMC statement and its press conference count as one. It reads
+    `ctx["us_calendar"]`, and an integration test goes from `read_us_calendar_files` through `tier1_columns`.
+  - Other rules:
+    - GVZ is stale after 5 US business days counted on value_date (`driver_frames` now carries value_date).
+    - The gap anchors on the first bar at or after the 18:00 New York reopen.
+    - The noise ratio's session starts on the bar containing the open.
+    - `daily_bars` refuses bars out of time order.
+  - Still owed: E-4 (H-16's evaluation path, which cuts the bars at holdout_from before features), and the
+    first-out-of-sample month counted from data before the freeze (about 2012-04; the rule is in the Q2 draft).
 - Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
   (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
   before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each
@@ -938,6 +1033,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   of the store's bars; `--price P --stop-distance D` without data. Neither has been run on real bars or trades yet
   (the Mac VM has no store data); run both on the VPS/brain and attach to phase-gate evidence and the H-01
   account-size decision.
+- MAE/MFE on closed and shadow trades (2026-10-11, BACKLOG 23, playbook G-9, row V6; trading-safety and quant
+  reviewed, fixes in): one definition in `goldbot/labels/excursion.py` (exit-side price: a long's MAE from the bid
+  low, a short's from the ask high; R of the initial risk from price, gross of costs; the time each extreme was first
+  reached; the exit bar under the labels' stop-first convention, whose biases are listed there and beside the
+  attribution table). `ShadowTrade` computes it from the bars between entry and exit (`label_excursions` gives the
+  same for labels; parity tested with and without exit policies). `ClosedTrade` gets it from every tick while the
+  engine holds the position (`Engine._track_excursions`, after the per-tick exits): a price at a broker-held SL/TP
+  freezes the track, a price through an engine-only stop whose close is being retried counts raw, and the record adds
+  the actual exit fill. No extreme is ever after the exit: a track that saw a late-noticed manual or broker close is
+  rebuilt from the stored 1m bars up to the exit, and a close confirmed without deals never folds the quote read at
+  that moment; both, restarts and adopted positions are flagged `excursion_approx`; when nothing of the path was observed (no usable track, no covering bar) the fields stay empty rather than 0R/0R. The 60 s freeze tolerance is tested on both sides. An orphan adopted without an
+  order record keeps prices but no R. Tracking is reporting only: a failure is logged, never a tick error, never
+  blocks an exit or the record. Monthly report: exact and approximate medians apart. Not done: the owner's MT5
+  statement analysis (`research/owner_history.py`) has no price path. **Rollback:** the new keys (`excursion`,
+  `excursion_approx`, `risk_known` in `orders_<account>.json`; `mae_*`/`mfe_*` in `shadow_book.json`) fail to load
+  on an older build (`extra="forbid"`): roll back only when flat (no open trades or shadow trades), or strip those
+  keys first. The cross-cutting fix (load persisted state with `extra="ignore"`, an ADR) is a separate change.
 - **Follow-up once the gate lanes merge:** `goldbot/risk/sizing.py` holds RiskGate's sizing arithmetic and stage
   machine as pure functions (`effective_risk`, `size_lots`, `stop_distance`, `next_stage`, `MIN_LOT_TOLERANCE`), used
   by the two reports above; `goldbot/risk/gate.py` still has its own copy (it was being edited by other lanes) and
@@ -1000,6 +1112,91 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `macro.fetch_cot_gold` / `gld_holdings_from_csv` (no holiday rule, GLD stamped 06:30 ET) are removed. Not yet: the
   workflow has never run (Actions -> data-positioning -> Run workflow); `research.yml` has no positioning input; the
   cleaner opt-in home is `goldbot/research/pipeline.py` OPT_IN_FEATURES (outside this lane).
+- US calendar, tiers 1 and 2, point in time (2026-10-10, BACKLOG 18 data part, playbook G-3, research finding E-1,
+  row D27, ADR 0008; review fixes 2026-10-11):
+  - **Pipeline.** `goldbot/data/us_calendar.py` + `scripts/us_calendar_data.py` +
+    `.github/workflows/data-us-calendar.yml` (Sundays 06:17 UTC) publish `us_calendar.parquet` on release
+    `calendar-v1`, 2010 onwards.
+  - **Tier 1** keeps the labels in code (`econ_calendar.TIER1_PATTERNS`, settings blackout events):
+    - CPI, NFP (Employment Situation) and PCE (Personal Income and Outlays) come from FRED `fred/release/dates`
+      (ids 10/50/54).
+    - The FOMC statement and press conference come from the Fed's `fomccalendars.htm` + `fomchistorical<year>.htm`.
+      Only scheduled meetings count.
+    - A press conference is listed where the page links one, and at every meeting from 2019.
+    - FOMC times by era: statement 14:15 until April 2011, 12:30 on 2011-12 press days, 14:00 from 2013; press
+      conference 14:15 in 2011-12, 14:30 from 2013.
+  - **Tier 2:**
+    - PPI, retail sales, GDP (all estimates; GDP is tier 2 because it is not on the tier-1 list in code), JOLTS and
+      claims come from FRED (ids 46/9/53/192/180).
+    - FOMC minutes use the page's Released date, or the statement + 21 days when there is none yet.
+    - ISM manufacturing and services are rule-derived (1st/3rd US business day, 10:00 ET).
+    - Fed speakers are not covered.
+  - **Checks.** Every FRED id is checked against the release name FRED returns.
+  - **Times.** New York wall times are converted per date, so DST is right.
+  - **Availability.**
+    - `available_utc` is the event minus 7 days.
+    - For agency releases, it is raised to the shutdown floors (2013, 2018-19, 2025; conservative, not checked to
+      the day). The Fed is exempt.
+    - It is never later than the event.
+    - Later runs stamp a late-added event at first sight and add `cancelled` rows for future events that disappear.
+    - Published rows are never rewritten (`check_keeps_history`; exit 2 and nothing is published if a row would be
+      lost).
+  - **No actual/consensus columns**: there is no free, licence-compatible source.
+  - **Opt-in features** in `goldbot/features/us_calendar.py`. `enable()` returns `tier1_events` and `tier2_events`:
+    - tier 1: `min_to_next_tier1_pit`, `min_since_last_tier1_pit`, `tier1_count_today`;
+    - tier 2: `min_to_next_tier2_pit`, `min_since_last_tier2_pit`, `tier2_count_today`;
+    - minutes are capped at 7 days, and counts are per New York day;
+    - they are joined through `known_timeline` + `asof_join` on available_utc;
+    - they are not in DEFAULT_FEATURE_NAMES, so feature_version is unchanged.
+  - **Research** loads it with `research_pass.py --us-calendar DIR` (not with --discover or --cpcv), and
+    `fetch_data_release.py --us-calendar` downloads it to raw-calendar/. There is no store table.
+  - **Verified offline** (Fed pages fetched from the Mac sandbox): the parsers read 2010, 2011, 2015, 2017, 2019,
+    2020 and 2021-2027 correctly. That is 8 scheduled meetings a year, 7 in 2020 (March 17-18 was cancelled), with
+    unscheduled meetings and notation votes skipped.
+  - **Review fixes (2026-10-11):**
+    - **Backfill.** last_ok is kept per event type. A type that failed on an earlier run is backfilled with rule
+      stamps when it comes back (H1).
+    - **FOMC meeting count.** A Fed year panel or page with fewer than 6 meetings fails the source.
+    - **Mass cancellation.** A run that would cancel more than 2 future events of a type is refused for that type
+      (M1).
+    - **Hand-checked cancellations** (`MANUAL_EVENTS`) (M2):
+      - the March 2020 FOMC;
+      - the BLS dates in the 2013, 2025 and 2026 lapses, verified on the bls.gov lapse tables (2013 via the copy on
+        Calculated Risk);
+      - the 2019 GDP advance;
+      - the 2025 PCE releases.
+      The original 2013 and 2018-19 Census and BEA dates are not in the table because they could not be verified.
+    - **Spacing quarantine.** Monthly releases less than 20 days apart are kept out unless they are in
+      `SPACING_EXEMPT`.
+    - **Count table.** A per-type, per-year count table goes in the step summary (M3).
+    - **Press-conference links.** The check ignores case and the Fed's `fomcpressconf` spelling. Expected press
+      conferences: 3 in 2011, 5 in 2012 and 4 in 2013-18, all counted on the Fed's pages, so the review's
+      "4 a year for 2011-2018" holds only for 2013-18 (M4).
+    - **Per-agency floors.** 2018-19 covers Census and BEA only; a January 2026 lapse floor was added (M5).
+    - **GDP split.** `gdp_advance` is split out and stays tier 2. **Promoting it to tier 1 is an owner /
+      trading-safety decision.**
+    - **Minutes date.** It is tied to the Minutes block, with a 14-28 day gap check (L1).
+    - **ISM.** The research line counts the rule rows; `--us-calendar-exclude-rule` and `RULE_OVERRIDES` are added
+      (L2).
+    - **Column names.** The tier-2 minute columns now carry `_pit` (L4).
+    - **Retail name check.** It is now `Advance Monthly Sales for Retail` (L5).
+  - **Re-verification fixes (2026-10-11):**
+    - **Close pairs.** Both rows of a close monthly pair are quarantined, so a phantom listed first is never kept
+      (M-R1).
+    - **2026 lapse.** The floor is BLS only. Its manual rows are cancelled one minute before each event instead of
+      at the unverified lapse start.
+    - **Recovery path.** `--allow-cancellations TYPE` is a one-shot, audited override, with a RUNBOOK step (L-R1).
+    - **GDP advance.** A late GDP advance is flagged; overrides are 2019-02-28, 2025-12-23 and 2026-02-20, each
+      verified (L-R2).
+    - **Old metadata.** Source-keyed `last_ok` metadata is refused (L-R3).
+  - **GATE: no trial may cite `tier1_events` or `tier2_events` until a quant review of the first live run's count
+    table (step summary) has signed it off.**
+  - **Not yet:**
+    - The owner must add the repo secret `FRED_API_KEY` (a free key from fred.stlouisfed.org) and run the workflow.
+    - The FRED ids and the release-date history were not checked live, because there is no key in the sandbox. The
+      name check fails loudly if they are wrong.
+    - PCE's 08:30 ET time for 2010-2012 is not verified.
+    - The RiskGate tier-2 blackout (-5/+15 min) waits for the owner's adopt decision.
 - Minor traceability fixes (2026-10-10, gap item 20): `walkforward.splits_for` / `window_for` take an optional
   `settings` (its `walkforward` months and `labels` purge/embargo replace `WINDOWS`; 1d keeps the constant), row M15
   stays partial until the research callers (`pipeline.run_specialist`/`run_pool`, `discovery.discover`) pass it
@@ -1046,8 +1243,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- October batch rollout (SRE, 2026-10-11): `docs/deploy/2026-10-batch.md`.
+  - The owner's ordered steps for the two Oracle VMs, to be done by Fri 23 Oct: pre-checks (restic plus a local
+    copy, preflight, health baseline); engines stopped; MT5 box first, because the new brain needs the bridge's
+    `loss_per_lot`; then the brain; then the checks on `supervisor.json` and `aux.db`; the minimum-lot setting in
+    settings.local.yaml only after the deploy; the first-hour health lines; the 26-30 Oct clock measurement, with
+    the NY+7 switch brain first under `/halt`; the rollback plan.
+  - Found: `goldbot-deploy`'s automatic rollback from this batch ends in `failed`, because aux.db stays at schema 5
+    and the old dashboard refuses it. A rollback with `risk.min_lot_risk_cap` set stops every service, because the
+    old Settings forbid the key. A manual rollback to an older commit is refused.
+  - BACKLOG 37-42 (37-39 HIGH). Use the manual sequence, not Telegram's Deploy button, for this batch.
 - FYI for the OWNER (no decision needed, 2026-10-10): `research.reserved_trials_quarter: 13` holds the 13 trials
   of the Q1 2027 pre-registration (`docs/research/preregistration-2027Q1.md`) before the research director and the
+- FYI for the OWNER (no decision needed, 2026-10-10; 13 -> 9 by ADR 0007): `research.reserved_trials_quarter: 9` holds the 5 queued
+  trials and 4 contingent H-02 survivor slots of the Q1 2027 pre-registration (`docs/research/preregistration-2027Q1.md`) before the research director and the
   label grid can spend any; the budget itself (20) is unchanged. Revisit the number with each quarter's
   pre-registration. Residual: the research analyst's `run_trial` tool still checks the full quarter budget, not the
   reservation (left out of this change's scope).

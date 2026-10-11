@@ -67,7 +67,17 @@ test("owner approves one proposal and rejects the other with a reason", async ({
   await expect(waiting).toHaveCount(2);
   const long = waiting.and(page.locator(".long"));
   await expect(long.locator(".dir")).toHaveText(/LONG/);
-  await expect(long.getByText("$20")).toBeVisible();                           // $ risk from the engine
+  await expect(long.getByText("£8.20", { exact: true })).toBeVisible();         // risk in the account currency
+  await expect(long.getByText("(0.82% of equity)")).toBeVisible();
+  await expect(long.getByText("Smallest trade size: above the normal 0.5%, within your 1% cap.")).toBeVisible();
+  await expect(long.getByText("Loss budget left today: unknown")).toBeVisible();   // no engine reporting yet
+  await expect(long.getByText("−£8.20")).toBeVisible();                         // the stop in money
+  const short0 = waiting.and(page.locator(".short"));
+  await expect(short0.getByText("$20.00", { exact: true })).toBeVisible();      // an older engine: dollars, labelled
+  await expect(short0.getByText("(USD)")).toBeVisible();
+  await page.setViewportSize({ width: 360, height: 800 });
+  const lbox = await long.boundingBox();
+  expect(lbox && lbox.x >= 0 && lbox.x + lbox.width <= 360).toBe(true);        // the card fits the phone
 
   await long.getByRole("button", { name: "Approve" }).click();
   await expect(waiting).toHaveCount(1);

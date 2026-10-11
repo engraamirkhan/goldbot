@@ -56,7 +56,8 @@ def _full_state(sd: Path) -> Path:
             fh.write(t.model_dump_json() + "\n")
     (sd / f"engine_{ACCOUNT}.json").write_text(json.dumps({
         "account": ACCOUNT, "stage": "size_down", "equity": 9_700, "balance_closed_hwm": 10_000,
-        "day_start_equity": 9_800, "week_start_equity": 10_000, "open_positions": 1, "open_lots": 0.1}))
+        "day_start_equity": 9_800, "week_start_equity": 10_000, "open_positions": 1, "open_lots": 0.1,
+        "currency": "USD"}))           # the digest prints money in the account's own currency (BACKLOG 28)
     (sd / "control.json").write_text(json.dumps({"halted": True, "by": f"dashboard:{EMAIL}", "ts": YDAY.timestamp(),
                                                  "reason": "news"}))
     (sd / "drift.json").write_text(json.dumps({"system_halt": {"reasons": ["cusum"]}}))
@@ -104,8 +105,8 @@ def test_digest_renders_every_section_from_fixture_state(tmp_path: Path) -> None
     assert "Risk: stage size_down · drawdown 3.0% from peak (halt at 12%) · day loss 1.0% of 2.0% cap · week 3.0% of 5.0% cap" in text
     assert "owner halt since Fri 09 Oct 10:00 UTC" in text and "drift system halt" in text
     assert "supervisor combined-cap halt" in text
-    assert "next pre-registered trial #3 (carry) · budget 2026Q4: 2 of 20 trials used, 12 reserved for " \
-           "pre-registered, 6 open" in text
+    assert "next pre-registered trial #3 (carry) · budget 2026Q4: 2 of 20 trials used, 1 reserved for " \
+           "pre-registered, 17 open" in text
     assert "Attribution: best session london +0.21R/trade net (n 64) · worst exit time -0.15R/trade net (n 41)" in text
     assert "👉 For you: 1 approval pending · 3 owner decisions open (see OWNER_GUIDE) · 1 deploy on offer" in text
 
@@ -226,8 +227,8 @@ def test_digest_counts_a_preregistration_run_without_its_link_by_the_directors_m
         {"trial": 2, "ts": "2026-10-05T00:00:00+00:00", "status": "preregistered", "family": "carry", "queue": False},
     )) + "\n")
     text = build_digest(tmp_path, NOW, settings=load_settings(), roadmap=tmp_path / "nope.md", registry_path=reg)
-    assert "Research: no pre-registered trial waiting · budget 2026Q4: 1 of 20 trials used, 12 reserved for " \
-           "pre-registered, 7 open" in text
+    assert "Research: no pre-registered trial waiting · budget 2026Q4: 1 of 20 trials used, 0 reserved for " \
+           "pre-registered, 19 open" in text
 
 
 def test_digest_shows_next_quarters_queue_in_the_quarter_before(tmp_path: Path) -> None:
@@ -239,5 +240,5 @@ def test_digest_shows_next_quarters_queue_in_the_quarter_before(tmp_path: Path) 
          "config_hash": "h2", "target_quarter": "2027Q1"},
     )) + "\n")
     text = build_digest(tmp_path, NOW, settings=load_settings(), roadmap=tmp_path / "nope.md", registry_path=reg)
-    assert "Research: no pre-registered trial waiting · budget 2026Q4: 0 of 20 trials used, 13 reserved for " \
-           "pre-registered, 7 open · next quarter: 2 queued" in text
+    assert "Research: no pre-registered trial waiting · budget 2026Q4: 0 of 20 trials used, 0 reserved for " \
+           "pre-registered, 20 open · next quarter: 2 queued" in text

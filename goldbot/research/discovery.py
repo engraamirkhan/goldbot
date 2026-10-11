@@ -10,8 +10,11 @@ Choosing which features a model uses is a look at the data, so it happens inside
   `n_subsamples` half-samples drawn by weekly block (serially correlated candidates stay together), a shallow
   LightGBM (or an L1-logistic regression) fitted on each, and a record of which features land in the top `top_k` by
   importance. A feature's frequency in the fold is the share of subsamples that put it in the top k; a group's is the
-  share of subsamples in which its SUMMED member importance ranks in the top `group_top_k` groups (so near-copies that
-  split one signal's importance do not deflate their group, and a large group gains only what its members earn).
+  share of subsamples in which its JOINT PERMUTATION importance (`group_permutation_importance`: the log-loss increase
+  on the fold's training rows outside the subsample when all its members are permuted together) ranks in the top
+  `group_top_k` groups: size-neutral (dead members add nothing, so a large group gains nothing by size) and
+  redundancy-safe (near-copies are permuted together, so splitting one signal does not deflate its group); ADR 0007
+  amendment 2026-10-11. With one column per group the column's own importance is used (the same ranking).
   Optionally a confirmation by permutation importance on an inner validation split of the same training rows (the
   last `inner_val_frac` of them in time; inner training rows whose label reaches the validation start minus the
   walk-forward's purge are dropped, `inner_split`): the feature must also reduce the validation log-loss;
@@ -37,8 +40,11 @@ survivor beat every screened column, not just every group), `n_groups_screened` 
 """
 from __future__ import annotations
 
+import fnmatch
+import hashlib
+import json
 import math
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import numpy as np
 import pandas as pd
@@ -61,8 +67,31 @@ from goldbot.research.pipeline import (
 )
 from goldbot.research.walkforward import Fold, splits_for, window_for
 
-GroupMode = Literal["column", "feature", "family"]
-GROUP_MODES: tuple[str, ...] = ("column", "feature", "family")
+GroupMode = Literal["column", "feature", "family", "cluster"]
+GROUP_MODES: tuple[str, ...] = ("column", "feature", "family", "cluster")
+# H-02's pre-registered hypothesis clusters (preregistration-2027Q1.md rows 6-9; group mode "cluster"; amended
+# 2026-10-11 to follow hypotheses.md exactly): each entry is a registered feature (all its columns) or a column name or
+# glob (context prefixes h1_/h4_/d1_/w1_ stripped); first match wins, in this order; every other column stays in its
+# feature family's group (realised_vol and vol_estimators in volatility, swings and bos_* in structure). A cluster's
+# group stability is what H-02's survivor slots rank by (director.slot_survivors).
+H02_CLUSTERS: dict[str, list[str]] = {
+    "H-03": ["macro_gvz*", "macro_vrp"],                            # gold VRP: GVZ and the GVZ^2 - HAR-RV^2 spread
+    "H-05": ["round_numbers", "support_resistance",                 # stop-cluster levels: rounds, S/R, prior day/week
+             "pdh_dist_atr", "pdl_dist_atr", "pwh_dist_atr", "pwl_dist_atr"],
+    "H-07": ["macro_vix*", "macro_spx*"],                           # equity-stress haven
+    "H-08": ["sweep_*", "sess_high_dist_atr", "sess_low_dist_atr",  # sweeps of the session / Asia / London extremes
+             "prev_sess_high_dist_atr", "prev_sess_low_dist_atr", "asia_high_dist_atr", "asia_low_dist_atr",
+             "london_high_dist_atr", "london_low_dist_atr"],
+    "H-10": ["jumps"],                                              # post-jump behaviour: jumps only (no news split)
+}
+
+
+def cluster_of(column: str, owner: str | None, clusters: dict[str, list[str]]) -> str | None:
+    """The first cluster with an entry naming `column`'s producing feature (`owner`) or matching the column (context
+    prefix stripped) as a name or glob, else None."""
+    base = _CONTEXT_PREFIX.sub("", column)
+    return next((cid for cid, entries in clusters.items()
+                 if any(e == owner or fnmatch.fnmatchcase(base, e) for e in entries)), None)
 WEEK_NS = 7 * 86_400 * 10**9
 
 # Reading rule, written into the pre-registration before the run (survey 4b, decided in advance)
@@ -78,7 +107,7 @@ def reading_rule(survivor_unit: str = "feature") -> str:
             "stability share of folds; at most five go forward, and every later trial of one uses n_trials_effective "
             "(registry trials + features screened)"
             if survivor_unit == "feature" else
-            "survivors are whole groups: groups whose fold frequency (summed member importance in the top groups) "
+            "survivors are whole groups: groups whose fold frequency (joint permutation importance in the top groups) "
             "reaches the threshold in >= the stability share of folds; at most five go forward as whole groups, and "
             "every later trial of one uses n_trials_effective (registry trials + groups screened)")
     return (
@@ -103,7 +132,7 @@ class DiscoveryConfig(FrozenRecord):
     n_subsamples: int = 50              # half-samples per fold
     subsample_frac: float = 0.5         # share of the training fold's weeks in each subsample
     top_k: int = 10                     # a subsample "selects" its top_k features by importance
-    group_top_k: int | None = None      # ... and its top groups by summed importance (None: top_k's share of groups)
+    group_top_k: int | None = None      # ... and its top groups by joint permutation importance (None: top_k's share)
     survivor_unit: Literal["feature", "group"] = "feature"   # what goes forward; sets K_eff (features or groups)
     method: Literal["lgbm", "l1"] = "lgbm"
     l1_c: float = 0.05                  # inverse L1 strength (method "l1"; standardised inputs)
@@ -114,6 +143,7 @@ class DiscoveryConfig(FrozenRecord):
     permutation_repeats: int = 3
     max_selected: int = MAX_FEATURES - 1   # `side` is always the 40th input
     seed: int = 0
+    clusters: dict[str, list[str]] | None = None   # group mode "cluster": the pre-registered map (e.g. H02_CLUSTERS)
 
 
 class FoldSelection(Record):
@@ -121,7 +151,7 @@ class FoldSelection(Record):
     n_train: int
     n_subsamples: int                   # subsamples actually fitted (a one-class subsample is skipped)
     frequency: dict[str, float]         # feature -> share of subsamples with it in the top k
-    group_frequency: dict[str, float]   # group -> share of subsamples with its summed importance in the top groups
+    group_frequency: dict[str, float]   # group -> share of subsamples with its joint permutation importance in the top
     permutation: dict[str, float] | None = None   # feature -> validation log-loss increase when permuted
     selected: list[str]                 # the fold model's inputs besides `side`
     fallback: bool = False              # nothing reached the threshold: the top_k most frequent were used
@@ -144,15 +174,19 @@ class DiscoveryResult(Record):
 
 # ---------------------------------------------------------------------------------------------- groups
 def column_groups(columns: list[str], mode: str, m: pd.DataFrame | None = None, names: list[str] | None = None,
-                  ctx: dict | None = None, holdout_start: pd.Timestamp | None = None) -> dict[str, str]:
+                  ctx: dict | None = None, holdout_start: pd.Timestamp | None = None,
+                  clusters: dict[str, list[str]] | None = None) -> dict[str, str]:
     """Group of each column. "column": itself; "feature" / "family": the registered feature that produced it (found by
     running each feature on the last 2,000 bars of `m` BEFORE `holdout_start`, so no holdout bar is read) or that
-    feature's family. A context column (h1_/h4_/d1_/w1_) joins its base column's group; a column no feature claims is
-    its own group."""
+    feature's family; "cluster": the first pre-registered cluster (`clusters`, e.g. H02_CLUSTERS) with an entry
+    naming the column's feature or matching it as a glob, else its family. A context column (h1_/h4_/d1_/w1_) joins
+    its base column's group; a column no feature claims is its own group."""
     if mode not in GROUP_MODES:
         raise ValueError(f"unknown group mode {mode!r}; one of {GROUP_MODES}")
     if mode == "column":
         return {c: c for c in columns}
+    if mode == "cluster" and not clusters:
+        raise ValueError("group mode 'cluster' needs the pre-registered clusters map (DiscoveryConfig.clusters)")
     owner: dict[str, str] = {}
     if m is not None:
         if holdout_start is not None:
@@ -170,7 +204,11 @@ def column_groups(columns: list[str], mode: str, m: pd.DataFrame | None = None, 
     out = {}
     for c in columns:
         who = owner.get(c) or owner.get(_CONTEXT_PREFIX.sub("", c))
-        out[c] = c if who is None else (who if mode == "feature" else FEATURES[who].family)
+        hit = cluster_of(c, who, clusters or {})
+        if mode == "cluster" and hit is not None:
+            out[c] = hit
+        else:
+            out[c] = c if who is None else (who if mode == "feature" else FEATURES[who].family)
     return out
 
 
@@ -182,23 +220,51 @@ def _design(X: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     return X[cols]
 
 
-def _fit_importance(Z: pd.DataFrame, y: np.ndarray, w: np.ndarray, cols: list[str], cfg: DiscoveryConfig,
-                    seed: int) -> np.ndarray:
-    """Importance of each of `cols` (gain for LightGBM, |coefficient| for L1-logistic) on one subsample."""
+Predict = Callable[[pd.DataFrame], np.ndarray]
+
+
+def _fit_model(Z: pd.DataFrame, y: np.ndarray, w: np.ndarray, cols: list[str], cfg: DiscoveryConfig,
+               seed: int) -> tuple[np.ndarray, Predict]:
+    """(importance of each of `cols`: gain for LightGBM, |coefficient| for L1-logistic, the fitted model's
+    probability of a target hit) on one subsample."""
     if cfg.method == "lgbm":
         import lightgbm as lgb
         mdl = lgb.LGBMClassifier(**{**SELECT_PARAMS, "random_state": seed}).fit(Z, y, sample_weight=w)
         imp = pd.Series(mdl.booster_.feature_importance("gain"), index=list(Z.columns))
-        return imp.reindex(cols).fillna(0.0).to_numpy(dtype=float)
+        return (imp.reindex(cols).fillna(0.0).to_numpy(dtype=float),
+                lambda X: np.asarray(mdl.predict_proba(X))[:, 1])
     from sklearn.linear_model import LogisticRegression
     A = Z.apply(pd.to_numeric, errors="coerce").astype(float)
-    A = A.fillna(A.median()).fillna(0.0)
-    sd = A.std().replace(0.0, 1.0)
-    A = (A - A.mean()) / sd
+    med = A.median()
+    A = A.fillna(med).fillna(0.0)
+    mu, sd = A.mean(), A.std().replace(0.0, 1.0)
     lr = LogisticRegression(penalty="l1", solver="liblinear", C=cfg.l1_c, random_state=seed)
-    lr.fit(A.to_numpy(), y, sample_weight=w)
+    lr.fit(((A - mu) / sd).to_numpy(), y, sample_weight=w)
     coef = pd.Series(np.abs(lr.coef_[0]), index=list(Z.columns))
-    return coef.reindex(cols).fillna(0.0).to_numpy(dtype=float)
+
+    def predict(X: pd.DataFrame) -> np.ndarray:
+        B = X.apply(pd.to_numeric, errors="coerce").astype(float).fillna(med).fillna(0.0)
+        return np.asarray(lr.predict_proba(((B - mu) / sd).to_numpy()))[:, 1]
+    return coef.reindex(cols).fillna(0.0).to_numpy(dtype=float), predict
+
+
+def group_permutation_importance(predict: Predict, Z: pd.DataFrame, y: np.ndarray, members: list[list[int]],
+                                 rng: np.random.Generator) -> np.ndarray:
+    """Per group: the log-loss increase on `Z` when every member column is permuted with ONE shared row permutation
+    (joint permutation importance). Size-neutral: dead members change nothing, so padding a group does not raise it;
+    redundancy-safe: near-copies are permuted together, so splitting one signal across copies does not lower it (ADR
+    0007 amendment, 2026-10-11). 0 for a group with no member."""
+    yv = y.astype(float)
+    base = _log_loss(yv, predict(Z))
+    out = np.zeros(len(members))
+    for j, cols in enumerate(members):
+        if not cols:
+            continue
+        perm = rng.permutation(len(Z))
+        Zp = Z.copy()
+        Zp.iloc[:, cols] = Z.iloc[perm, cols].to_numpy()
+        out[j] = _log_loss(yv, predict(Zp)) - base
+    return out
 
 
 def inner_split(ts: pd.DatetimeIndex, te: pd.DatetimeIndex, inner_val_frac: float,
@@ -241,7 +307,7 @@ GROUP_TOP_K_FLOOR = 3          # groups a subsample selects at least (when that 
 
 
 def group_top_k(cfg: DiscoveryConfig, n_features: int, n_groups: int) -> int:
-    """Groups a subsample "selects" by summed importance: cfg.group_top_k, else top_k's share of the pool applied to
+    """Groups a subsample "selects" by joint permutation importance: cfg.group_top_k, else top_k's share of the pool applied to
     the groups (ceil(top_k * n_groups / n_features)), with a floor of GROUP_TOP_K_FLOOR when several groups exist: with
     one group per subsample the frequencies would sum to at most 1 and a second real group could never survive the
     0.6 threshold (quant review of dab47c7)."""
@@ -271,18 +337,28 @@ def select_in_fold(feats: pd.DataFrame, labels: pd.DataFrame, fold: Fold, pool: 
     gpos = {g: j for j, g in enumerate(gkeys)}
     gidx = np.array([gpos[groups[c]] for c in pool])
     gk = group_top_k(cfg, len(pool), len(gkeys))
+    singletons = len(gkeys) == len(pool)
     ghits = dict.fromkeys(gkeys, 0)
     Z_all = _design(X, pool)
+    zpos = {c: j for j, c in enumerate(Z_all.columns)}         # `side` may lead the design matrix
+    members = [[zpos[c] for c in pool if groups[c] == g] for g in gkeys]
     fitted = 0
     for s in range(cfg.n_subsamples):
         rows = np.flatnonzero(np.isin(week, rng.choice(weeks, size=n_pick, replace=False)))
         if len(np.unique(y[rows])) < 2:
             continue
-        imp = _fit_importance(Z_all.iloc[rows], y[rows], w[rows], pool, cfg, seed=cfg.seed * 1000 + fold.k * 100 + s)
+        seed = cfg.seed * 1000 + fold.k * 100 + s
+        imp, predict = _fit_model(Z_all.iloc[rows], y[rows], w[rows], pool, cfg, seed=seed)
         order = [i for i in np.argsort(-imp, kind="stable")[: cfg.top_k] if imp[i] > 0]
         for i in order:
             hits[pool[i]] += 1
-        gimp = np.bincount(gidx, weights=imp, minlength=len(gkeys))      # summed member importance per group
+        if singletons:          # one column per group: the column's own importance is its group's (size-neutral)
+            gimp: np.ndarray = np.bincount(gidx, weights=imp, minlength=len(gkeys)).astype(float)
+        else:                   # joint permutation importance on the training fold's rows outside the subsample
+            rest = np.setdiff1d(np.arange(len(y)), rows)
+            gimp = (group_permutation_importance(predict, Z_all.iloc[rest], y[rest], members,
+                                                 np.random.default_rng([cfg.seed, fold.k, s]))
+                    if len(rest) and len(np.unique(y[rest])) == 2 else np.zeros(len(gkeys)))
         for j in np.argsort(-gimp, kind="stable")[:gk]:
             if gimp[j] > 0:
                 ghits[gkeys[j]] += 1
@@ -322,6 +398,88 @@ def stability_tables(sels: list[FoldSelection], pool: list[str], groups: dict[st
     size = pd.Series([groups[c] for c in pool]).value_counts()
     grp = table(gkeys, [s.group_frequency for s in sels], {"n_features": [int(size[g]) for g in gkeys]})
     return feat, grp
+
+
+def group_map_hash(groups: dict[str, str]) -> str:
+    """sha256 of the column -> group map (sorted JSON): frozen in a group-unit pre-registration (quant ruling Q-3) and
+    recorded on the discovery row, so a different grouping at run time is visible as a deviation."""
+    return hashlib.sha256(json.dumps(groups, sort_keys=True).encode()).hexdigest()
+
+
+def check_group_config(cfg: DiscoveryConfig) -> None:
+    """A group-unit discovery pre-registers `group_top_k` explicitly (quant ruling Q-3; ValueError otherwise)."""
+    if cfg.survivor_unit == "group" and cfg.group_top_k is None:
+        raise ValueError("survivor_unit 'group' needs group_top_k set explicitly in the pre-registered config "
+                         "(quant ruling Q-3): it decides the group frequencies the survivors are read from")
+
+
+def check_group_sizes(groups: dict[str, str], cfg: DiscoveryConfig, group_mode: str) -> None:
+    """Before any look at the data (quant re-review, MEDIUM 4): when whole groups go forward (survivor_unit "group")
+    or a cluster becomes a survivor trial's inputs (group mode "cluster"), every group that can go forward (in cluster mode with feature unit: each cluster) must fit one model:
+    <= max_selected columns besides `side` (ValueError naming the group otherwise)."""
+    if cfg.survivor_unit != "group" and group_mode != "cluster":
+        return
+    sizes: dict[str, int] = {}
+    for g in groups.values():
+        sizes[g] = sizes.get(g, 0) + 1
+    if cfg.survivor_unit != "group":     # cluster mode, feature unit: only a cluster becomes a trial's inputs
+        sizes = {g: n for g, n in sizes.items() if g in (cfg.clusters or {})}
+    big = {g: n for g, n in sizes.items() if n > cfg.max_selected}
+    if big:
+        raise ValueError(f"{', '.join(f'{g} has {n} columns' for g, n in big.items())}, over max_selected "
+                         f"{cfg.max_selected}: a whole group must fit one model (quant ruling Q-3); pre-register "
+                         f"smaller groups")
+
+
+def check_cluster_columns(feats: pd.DataFrame, pool: list[str], groups: dict[str, str], cfg: DiscoveryConfig,
+                          group_mode: str) -> dict[str, dict[str, int]] | None:
+    """Group mode "cluster", before any look at the labels (quant re-review, freeze item): every pre-registered cluster
+    has at least one column in the pool that is not all NaN and not constant on the candidate rows (feature values
+    only; with macro opted in, H-03 and H-07 have their GVZ/VIX columns). Returns {cluster: {columns, informative}},
+    recorded on the discovery row; ValueError naming each cluster without one (or None outside cluster mode)."""
+    if group_mode != "cluster":
+        return None
+    out: dict[str, dict[str, int]] = {}
+    for cid in cfg.clusters or {}:
+        cols = [c for c in pool if groups.get(c) == cid]
+        good = 0
+        for c in cols:
+            v = pd.to_numeric(feats[c], errors="coerce").dropna()
+            good += int(v.nunique() > 1)
+        out[cid] = {"columns": len(cols), "informative": good}
+    empty = [cid for cid, c in out.items() if c["informative"] == 0]
+    if empty:
+        raise ValueError(f"{', '.join(f'{cid} has no non-constant, non-NaN column' for cid in empty)} in the pool "
+                         f"(macro opted in? feature set as pre-registered?): every H-02 cluster must be screenable")
+    return out
+
+
+def survivor_selection(feat_t: pd.DataFrame, grp_t: pd.DataFrame,
+                       cfg: DiscoveryConfig) -> tuple[list[str], list[str], dict[str, int], list[str]]:
+    """(groups forward, the selected features, n_features per group forward, survivor groups skipped).
+
+    Feature unit: the features with stability >= stability_threshold, best first, at most max_selected (K_eff = every
+    feature screened, so cutting the list costs nothing in honesty); nothing is skipped. Group unit (quant ruling Q-3,
+    re-review MEDIUM 4): the survivor groups go forward WHOLE in group-stability order while their members fit within
+    max_selected; the first that does not fit and every one after it are recorded as skipped, never truncated (a
+    partial group would be a feature-level choice that K_eff = groups screened does not pay for). A group-unit config
+    pre-registers `group_top_k` explicitly (ValueError otherwise)."""
+    surv_all = [str(g) for g in grp_t.index[grp_t["stability"] >= cfg.stability_threshold]]
+    sizes = {str(g): n for g, n in grp_t["n_features"].items()}
+    if cfg.survivor_unit == "group":
+        check_group_config(cfg)
+        forward: list[str] = []
+        total = 0
+        for g in surv_all:
+            if total + int(sizes[g]) > cfg.max_selected:
+                break
+            forward.append(g)
+            total += int(sizes[g])
+        skipped = surv_all[len(forward):]
+        surv = feat_t[feat_t["group"].isin(forward)]
+        return forward, [str(c) for c in surv.index], {g: int(sizes[g]) for g in forward}, skipped
+    surv = feat_t[feat_t["stability"] >= cfg.stability_threshold]
+    return surv_all, [str(c) for c in surv.index[: cfg.max_selected]], {g: int(sizes[g]) for g in surv_all}, []
 
 
 def auc_lower_bound(y: np.ndarray, p: np.ndarray, ts: pd.DatetimeIndex, n_boot: int = 500, seed: int = 0,
@@ -364,16 +522,14 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
                   swap: Any = None) -> DiscoveryResult:
     """Fold-internal stability selection, then the walk-forward of a model fitted in each fold on that fold's own
     selection (cross-fitted calibration and gates as every walk-forward). `labels` carries weight."""
+    check_group_config(cfg)              # before any look at the data
     groups = groups or {c: c for c in pool}
+    check_group_sizes(groups, cfg, group_mode)
+    cluster_columns = check_cluster_columns(feats, pool, groups, cfg, group_mode)
     purge = int(window.get("purge_days", 0))
     sels = [select_in_fold(feats, labels, f, pool, cfg, groups, purge_days=purge) for f in folds]
     feat_t, grp_t = stability_tables(sels, pool, groups, cfg)
-    surv_groups = list(grp_t.index[grp_t["stability"] >= cfg.stability_threshold])
-    if cfg.survivor_unit == "group":     # whole groups go forward: their members, best first
-        surv = feat_t[feat_t["group"].isin(surv_groups)]
-    else:
-        surv = feat_t[feat_t["stability"] >= cfg.stability_threshold]
-    selected = list(surv.index[: cfg.max_selected])
+    surv_groups, selected, surv_n, skipped = survivor_selection(feat_t, grp_t, cfg)
     res = _walk_forward(agent_id, labels, gross, feats, ["side", *selected], folds, version, n_trials=n_trials,
                         trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd, holdout=holdout,
                         score_holdout=False, window=window, swap=swap,
@@ -392,7 +548,11 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     k_eff = len(pool) if cfg.survivor_unit == "feature" else n_groups
     res.metrics["discovery"] = {
         "config": cfg.model_dump(), "group_mode": group_mode, "n_features_screened": len(pool),
-        "n_groups_screened": n_groups, "survivor_unit": cfg.survivor_unit, "k_eff": k_eff, "selected": selected, "survivor_groups": surv_groups,
+        "n_groups_screened": n_groups, "survivor_unit": cfg.survivor_unit, "k_eff": k_eff, "selected": selected,
+        "survivor_groups": surv_groups, "survivor_groups_n_features": surv_n, "skipped_survivor_groups": skipped,
+        "group_map_sha256": group_map_hash(groups), "group_measure": "joint_permutation",
+        **({"cluster_columns": cluster_columns} if cluster_columns is not None else {}),
+        "group_members": {g: [c for c in pool if groups[c] == g] for g in dict.fromkeys(groups[c] for c in pool)},
         "folds": [{"k": s.k, "n_train": s.n_train, "n_subsamples": s.n_subsamples, "selected": s.selected,
                    "fallback": s.fallback,
                    "frequency": {c: round(v, 4) for c, v in s.frequency.items() if v > 0},
@@ -471,9 +631,15 @@ def render_discovery(d: DiscoveryResult, meta: dict[str, Any], top: int = 25) ->
         lines.append(f"| {c} | {r['group']} | " + " | ".join(f"{r[f]:.2f}" for f in folds)
                      + f" | {r['mean_freq']:.2f} | {r['stability']:.2f} |")
     cfg = m["discovery"]["config"]
+    sizes = {str(g): n for g, n in d.group_table["n_features"].items()}
     lines += ["", f"Frequency = share of a fold's subsamples with the feature in the top {cfg['top_k']} (a group: its "
-                  f"summed member importance in the top groups); stability = share of folds with frequency >= {cfg['freq_threshold']}.",
-              f"Survivor groups (stability >= {cfg['stability_threshold']}): {', '.join(d.survivor_groups) or 'none'}",
+                  f"joint permutation importance in the top groups); stability = share of folds with frequency >= {cfg['freq_threshold']}.",
+              f"Survivor groups (stability >= {cfg['stability_threshold']}): "
+              + (", ".join(f"{g} ({int(sizes[g])} features)" for g in d.survivor_groups)
+                 or "none"),
+              "Survivor groups skipped (whole groups only, over max_selected): "
+              + (", ".join(f"{g} ({int(sizes[g])} features)" for g in m["discovery"].get("skipped_survivor_groups", []))
+                 or "none"),
               f"Selected set ({len(d.selected)} of at most {cfg['max_selected']} + side): {', '.join(d.selected) or 'none'}",
               ""]
     for name, g in (("Design gates", m.get("gates")), ("Design gates, rule-only (informational)", m.get("rule_only_gates"))):
@@ -488,7 +654,8 @@ def render_discovery(d: DiscoveryResult, meta: dict[str, Any], top: int = 25) ->
 def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, reserved_setting: int,
                    cfg: DiscoveryConfig, group_mode: str = "column", extra_cost_usd: float = 0.0, swap: Any = None,
                    holdout: Window | None = None, ctx: dict | None = None, rationale: str = "",
-                   cost_source: str = "settings priors") -> tuple[dict[str, Any], str]:
+                   cost_source: str = "settings priors", rule_ref: str | None = None,
+                   capped: bool = False) -> tuple[dict[str, Any], str]:
     """`research_pass.py --discover`: budget check (one trial), the pre-registration row, then the run and its result
     row (status "discovery"). Call under `reg.locked()`. Returns (result row, report).
 
@@ -508,12 +675,15 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     )
     from goldbot.research.registry import DISCOVERY
 
+    check_group_config(cfg)              # before the budget check, the pre-registration and any look
     names = research_feature_names(ctx)
     family = discovery_family(spec.family)
     config = {"specialist": spec.family, "spec": spec.config, "discovery": cfg.model_dump(), "group_mode": group_mode,
               "features": names, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
               "holdout": None if holdout is None else [str(holdout[0]), str(holdout[1])]}
     quarter, (prereg,) = reg.check_budget_reserved([(family, config)], budget_cap, reserved_setting)
+    from goldbot.research.director import cited_rule
+    cited = cited_rule(prereg, rule_ref, capped=capped)      # E-5: a capped run cites its pre-registered rule
     if prereg is None:
         prereg = reg.preregister(agent_id=spec.agent_id, family=family, config=config,
                                  feature_version=feature_version(names), rationale=rationale,
@@ -530,14 +700,14 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
         raise ValueError(f"{spec.family} produced no labelled candidates; nothing to discover")
     pool = discovery_pool(prep)
     groups = column_groups(pool, group_mode, frame[0], names, ctx,
-                           holdout_start=None if holdout is None else pd.Timestamp(holdout[0]))
+                           holdout_start=None if holdout is None else pd.Timestamp(holdout[0]), clusters=cfg.clusters)
     n_eff = reg.n_trials_effective + 1
     d = discover(prep, cfg, groups, group_mode, n_trials=n_eff, extra_cost_usd=extra_cost_usd, holdout=holdout)
     metrics = {**d.result.metrics, "lookahead": leak, "cost_source": cost_source,
                "bars_from": config["bars_from"], "bars_to": config["bars_to"]}
     row = reg.record(agent_id=spec.agent_id, family=family, config=config, feature_version=d.result.feature_version,
                      rationale=rationale, results=metrics, status=DISCOVERY, budget_quarter=quarter,
-                     preregistration=prereg)
+                     preregistration=prereg, rule_ref=cited)
     bad = leak["lookahead_columns"]
     text = render_discovery(d, {"specialist": spec.family, "from_year": int(b1["ts_utc"].iloc[0].year),
                                 "to_year": int(b1["ts_utc"].iloc[-1].year), "tf": tf, "trial": row["trial"],

@@ -76,7 +76,7 @@ from goldbot.api.schema import (
     UserRef,
     UserRow,
 )
-from goldbot.ops.account_view import loss_budget, margin_level_pct, milestones
+from goldbot.ops.account_view import LossBudget, loss_budget, margin_level_pct, milestones, proposal_budget
 from goldbot.telegram.approvals import Outcome
 from goldbot.telegram.approvals import Proposal as BusProposal
 from goldbot.telegram.bus import ApprovalBus
@@ -129,10 +129,10 @@ class State:
     def engines(self) -> list[dict]:
         out = []
         for f in self.dir.glob("engine_*.json"):
-            try:
+            try:                               # torn (ValueError) or unreadable (OSError): skipped, never a 500
                 out.append(json.loads(f.read_text()))
-            except json.JSONDecodeError:
-                pass
+            except (OSError, ValueError):
+                log.warning("engine state %s unreadable: skipped", f.name)
         return out
 
     def drift_halt(self) -> list[str] | None:
@@ -443,15 +443,40 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                        loss_budget=view(loss_budget, e, sup, engines), milestones=view(milestones, e)))
         return rows
 
-    def card(p: BusProposal) -> dict[str, Any]:
+    def card(p: BusProposal, budget: LossBudget | None = None) -> dict[str, Any]:
         return dict(proposal_id=p.proposal_id, account_id=p.account_id, agent_id=p.agent_id,
                     side="long" if p.side > 0 else "short", lots=p.lots, entry=p.entry, stop=p.stop, target=p.target,
                     p=p.p, ev_r=p.ev_r, spread_points=p.spread_points, top_features=p.top_features, risk_usd=p.risk_usd,
+                    currency=p.currency, risk_amount=p.risk_amount, risk_fraction=p.risk_fraction,
+                    min_lot_exception=p.min_lot_exception, risk_normal=p.risk_normal, risk_cap=p.risk_cap,
+                    reward_amount=p.reward_amount, loss_left=budget.remaining if budget else None,
+                    loss_left_period=budget.period if budget else None,
                     expires_at=datetime.fromtimestamp(p.created + p.window_s, tz=timezone.utc))
 
     @app.get("/api/proposals", response_model=list[Proposal])
     def proposals(_: User = Depends(auth)) -> list[Proposal]:
-        return [Proposal(**card(p)) for p in st.bus.pending()]
+        pending = st.bus.pending()
+        engines: list[dict] = []
+        sup: dict = {}
+        if pending:
+            try:                               # reporting only: unreadable state leaves the budget unknown
+                engines = st.engines()
+            except (OSError, ValueError):
+                log.exception("engine states unreadable: proposal budgets unknown")
+            try:                               # a torn supervisor.json only drops the combined caps
+                s = st.supervisor()
+                sup = s if isinstance(s, dict) else {}
+            except (OSError, ValueError):
+                sup = {}
+
+        def budget(p: BusProposal) -> LossBudget | None:
+            """The loss budget left if this trade loses, in the account currency only (never a USD fallback)."""
+            try:
+                return proposal_budget(engines, sup, p.account_id, p.risk_amount)
+            except Exception:                  # noqa: BLE001 - reporting only: a bad state file shows as unknown
+                log.exception("proposal budget failed")
+                return None
+        return [Proposal(**card(p, budget(p))) for p in pending]
 
     @app.get("/api/proposals/recent", response_model=list[DecidedProposal])
     def recent_proposals(_: User = Depends(auth)) -> list[DecidedProposal]:

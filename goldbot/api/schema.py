@@ -46,7 +46,18 @@ class Proposal(BaseModel):
     top_features: list[tuple[str, float]]
     expires_at: datetime
     tradingview_url: str | None = None
-    risk_usd: float | None = None           # account currency lost at the stop (lots x stop distance x 100 oz)
+    risk_usd: float | None = None           # USD lost at the stop (lots x stop distance x 100 oz); older engines
+    # the card's money (docs/ux/approval-card.md), in `currency`, the broker account's; null from older engines
+    currency: str | None = None
+    risk_amount: float | None = None        # lost if the stop is hit (the RiskGate's sizing)
+    risk_fraction: float | None = None      # risk_amount / equity, as the gate sized it
+    min_lot_exception: bool = False         # the smallest trade size, above the normal risk, within the cap
+    risk_normal: float | None = None        # the normal risk per trade, fraction of equity
+    risk_cap: float | None = None           # the minimum-lot cap that applied, fraction of equity
+    reward_amount: float | None = None      # won at the target (risk x target / stop distance, before costs);
+    #                                         in `currency`, or USD with only risk_usd
+    loss_left: float | None = None          # the account's loss budget left if this trade loses, now (pending only)
+    loss_left_period: Literal["today", "this week"] | None = None
 
 
 class DecidedProposal(Proposal):
@@ -509,10 +520,10 @@ class ResearchPlanView(BaseModel):
 
 class PlanReservation(BaseModel):
     """Trials of the quarter held for the pre-registered queue (research/director.py Reservation)."""
-    setting: int                            # research.reserved_trials_quarter
-    run: int                                # trials already run against the quarter's preregistered rows
-    pending: int                            # preregistered rows not yet run
-    reserved: int                           # max(setting - run, pending)
+    setting: int                            # research.reserved_trials_quarter for the plan's quarter (keyed by quarter)
+    run: int                                # queued rows of the quarter a trial ran, and slots a trial used
+    pending: int                            # queued rows not yet run, and slots still held or live
+    reserved: int                           # max(setting - run - withdrawn - expired slots, pending, 0)
 
 
 class RetiredFamilyView(BaseModel):

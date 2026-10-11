@@ -188,7 +188,8 @@ def first_release(macro: pd.DataFrame, series: str) -> pd.DataFrame:
 
 
 def driver_frames(macro: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """column -> DataFrame(available_utc, column): each derived driver on its own availability timeline."""
+    """column -> DataFrame(available_utc, column, value_date): each derived driver on its own availability timeline
+    (value_date: the latest observation the value uses)."""
     out: dict[str, pd.DataFrame] = {}
     for col, (series, how, w) in DRIVERS.items():
         s = first_release(macro, series)
@@ -202,7 +203,8 @@ def driver_frames(macro: pd.DataFrame) -> dict[str, pd.DataFrame]:
             x = (v - r.mean()) / r.std()
         else:
             x = v
-        f = pd.DataFrame({"available_utc": s["available_utc"], col: x.to_numpy()})
+        # value_date rides along (day_type's GVZ staleness counts business days on it); joins read only `col`
+        f = pd.DataFrame({"available_utc": s["available_utc"], col: x.to_numpy(), "value_date": s["value_date"]})
         # several observations can become public at once (a week of H.10 dollar values on one Tuesday): the latest
         # observation is the current value, so keep one row per stamp (an as-of join would pick among ties arbitrarily)
         out[col] = f.drop_duplicates("available_utc", keep="last").dropna().reset_index(drop=True)

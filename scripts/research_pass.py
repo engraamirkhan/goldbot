@@ -40,6 +40,23 @@ point-in-time COT and GLD columns (goldbot/features/positioning.py: managed-mone
 4-week change, GLD tonnes 5/20-day % change) to the candidate frame and the leakage check, under the same rules as
 macro (the feature version includes them). Not available with --discover.
 
+US calendar (opt-in): `--us-calendar DIR` (the release calendar-v1, from the data-us-calendar workflow) loads the
+point-in-time tier-1/tier-2 schedule into ctx["us_calendar"] (what day_type's tier-1 columns read). The calendar's own
+feature families (goldbot/features/us_calendar.py `tier1_events`/`tier2_events`: minutes to the next and since the
+last event of each tier, capped at 7 days, and the tier's event count on the New York day) are added only with
+`--us-calendar-features`, so a run can use the calendar through day_type alone (H-17: "HAR column only"). Not
+available with --discover or --cpcv. The report line says how many rows are rule-derived (ISM);
+`--us-calendar-exclude-rule` leaves them out.
+
+Opportunity-day features (opt-in, BACKLOG 30a): `--day-type` adds the `day_type` family (goldbot/features/day_type.py:
+H-16's HAR session-window range forecast with its monthly expanding refit and band cuts, GVZ over realised volatility
+with a staleness flag (with --macro), prior-day range, NR4/NR7, inside day, reopen gap, the DST-aware noise ratio and
+the tier-1 columns) to the candidate frame and the leakage check. It requires --us-calendar (so the tier-1 columns
+are never silently NaN), --from-year 2010 or earlier (the daily inputs warm up from the start of the data), and is
+refused with --discover or --cpcv. Its inputs (GVZ present, calendar present, refit schedule, min fit rows) and family
+version are recorded on the trial row (`day_type`).
+
+
 Combinatorial purged CV (M16, goldbot/research/cpcv.py): `--cpcv <trial#> [<trial#> ...]` re-evaluates registered
 walk-forward trials on 6 time groups of the research window (15 purged splits, 5 backtest paths) and, for several
 trials, the probability of backtest overfitting across them. It is not a trial: no budget slot, no registry row; the
@@ -50,6 +67,7 @@ passed the gates (docs/decisions/0003-cpcv-and-pbo-can-only-veto.md), so a trial
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
       [--specialist session_open | --pooled 15m] [--from-year 2010] [--to-year 2026] [--rationale "..."] \
       [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table costs_measured.json] [--macro macro/] [--positioning positioning/]
+      [--us-calendar calendar/ [--us-calendar-features]] [--day-type]
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report cpcv.md --cpcv 12 [13 14] [--diagnostic]
 """
 from __future__ import annotations
@@ -66,12 +84,19 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
-from goldbot.data.release import read_macro_files, read_positioning_files  # noqa: E402
+from goldbot.data.release import (  # noqa: E402
+    read_macro_files,
+    read_positioning_files,
+    read_us_calendar_files,
+)
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
 from goldbot.execution.costs import SwapSpec, load_research_cost_table, research_costs  # noqa: E402
+from goldbot.features import day_type as day_type_features  # noqa: E402
 from goldbot.features import positioning as positioning_features  # noqa: E402
+from goldbot.features import us_calendar as us_calendar_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.features.registry import feature_version  # noqa: E402
+from goldbot.research.director import cited_rule  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
     POOLED_FEATURES,
@@ -86,7 +111,7 @@ from goldbot.research.pipeline import (  # noqa: E402
     research_feature_names,
     run_pool,
 )
-from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry  # noqa: E402
+from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, quarter_of  # noqa: E402
 from goldbot.research.screen import (  # noqa: E402
     is_inconclusive,
     min_events_for,
@@ -152,13 +177,83 @@ def _positioning_line(info: dict[str, Any] | None) -> str:
     return f"- positioning features: {info['detail']}" if info else "- positioning features: off"
 
 
-def feature_ctx(macro: pd.DataFrame | None, positioning: pd.DataFrame | None) -> tuple[dict | None, list[str] | None]:
+def load_us_calendar(path: str, exclude_rule: bool = False) -> tuple[pd.DataFrame | None, dict[str, Any]]:
+    """The US calendar release for ctx["us_calendar"], or None with the reason (recorded in the trial and reported).
+    The detail says how many rows are rule-derived (ISM, source `rule`); `exclude_rule` leaves them out."""
+    if not path:
+        return None, {"used": False, "detail": "off (no --us-calendar)"}
+    df = read_us_calendar_files(Path(path))
+    if df.empty:
+        return None, {"used": False, "detail": f"off: no calendar release at {path} (run the data-us-calendar "
+                                                f"workflow; `gh release download calendar-v1 -D {path}`)"}
+    n_rule = int((df["source"] == "rule").sum())
+    if exclude_rule:
+        df = df[df["source"] != "rule"].reset_index(drop=True)
+    ev = pd.DatetimeIndex(df["event_utc"])
+    rule = "rule rows excluded" if exclude_rule else f"{n_rule:,} rule-derived (ISM) rows"
+    return df, {"used": True, "event_types": sorted(df["event_type"].unique()), "rule_rows_excluded": exclude_rule,
+                "detail": f"on: {df['event_type'].nunique()} event types ({rule}), events {ev.min():%Y-%m-%d} .. "
+                          f"{ev.max():%Y-%m-%d}, joined as of available_utc"}
+
+
+def _us_calendar_line(info: dict[str, Any] | None) -> str:
+    return f"- US calendar features: {info['detail']}" if info else "- US calendar features: off"
+
+
+DAY_TYPE_MAX_FROM_YEAR = 2010     # day_type's daily inputs warm up from the first data year (H-16: OOS from ~2012-04)
+
+
+def day_type_info(on: bool, macro: pd.DataFrame | None = None,
+                  us_calendar: pd.DataFrame | None = None) -> dict[str, Any]:
+    """What the trial row records about the opt-in day_type family: its own version and its inputs (review M4)."""
+    if not on:
+        return {"used": False, "detail": "off (no --day-type)"}
+    gvz = macro is not None and len(macro) > 0 and bool((macro["series"] == "gold_vix").any())
+    cal = us_calendar is not None and len(us_calendar) > 0
+    return {"used": True, "family": day_type_features.FAMILY, "version": day_type_features.VERSION,
+            "gvz": gvz, "us_calendar": cal, "refit_schedule": day_type_features.REFIT_SCHEDULE,
+            "min_fit_rows": day_type_features.MIN_FIT_ROWS,
+            "detail": f"on: family {day_type_features.FAMILY} v{day_type_features.VERSION} "
+                      f"({len(day_type_features.COLUMNS)} columns; GVZ {'on' if gvz else 'off'}, calendar "
+                      f"{'on' if cal else 'off'}; HAR refit {day_type_features.REFIT_SCHEDULE}, "
+                      f">= {day_type_features.MIN_FIT_ROWS} rows)"}
+
+
+def _day_type_line(info: dict[str, Any] | None) -> str:
+    return f"- day_type features: {info['detail']}" if info else "- day_type features: off"
+
+
+def day_type_refusal(args: argparse.Namespace, us_calendar: pd.DataFrame | None) -> str | None:
+    """Why `--day-type` cannot run with these arguments (None = it can)."""
+    if not getattr(args, "day_type", False):
+        return None
+    if getattr(args, "discover", False) or getattr(args, "cpcv", None):
+        return "--day-type is not wired into --discover or --cpcv; run it without them"
+    if us_calendar is None or len(us_calendar) == 0:
+        return "--day-type needs --us-calendar (its tier-1 columns would otherwise be NaN on every row)"
+    if int(args.from_year) > DAY_TYPE_MAX_FROM_YEAR:
+        return (f"--day-type needs --from-year {DAY_TYPE_MAX_FROM_YEAR} or earlier: the HAR fit and the daily inputs "
+                "are computed from the start of the bars, so a later start moves the first out-of-sample month")
+    return None
+
+
+def feature_ctx(macro: pd.DataFrame | None, positioning: pd.DataFrame | None,
+                us_calendar: pd.DataFrame | None = None, *, calendar_features: bool = False,
+                day_type: bool = False) -> tuple[dict | None, list[str] | None]:
     """ctx for the features and the explicit feature list: None (the pipeline's default, with macro when passed)
-    unless positioning is on, which registers and appends the opt-in positioning feature."""
-    ctx = {k: v for k, v in (("macro", macro), ("positioning", positioning)) if v is not None}
-    if positioning is None:
+    unless an opt-in family is on, which registers and appends it. A calendar always goes into ctx["us_calendar"]
+    (day_type reads it); the calendar's own families join only with `calendar_features`."""
+    ctx = {k: v for k, v in (("macro", macro), ("positioning", positioning), ("us_calendar", us_calendar))
+           if v is not None}
+    cal_on = calendar_features and us_calendar is not None
+    if positioning is None and not cal_on and not day_type:
         return ctx or None, None
-    return ctx, [*research_feature_names(ctx), positioning_features.enable()]
+    extra = [positioning_features.enable()] if positioning is not None else []
+    if cal_on:
+        extra += us_calendar_features.enable()
+    if day_type:
+        extra.append(day_type_features.enable())
+    return ctx, [*research_feature_names(ctx), *extra]
 
 
 def per_year(oof: pd.DataFrame, threshold: float | None) -> pd.DataFrame:
@@ -201,6 +296,8 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              f"- cost source: {m.get('cost_source', 'settings priors')}",
              _macro_line(m.get("macro")),
              _positioning_line(m.get("positioning")),
+             _us_calendar_line(m.get("us_calendar")),
+             _day_type_line(m.get("day_type")),
              _holdout_line(m.get("holdout")),
              f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
@@ -393,6 +490,9 @@ def main() -> int:
     ap.add_argument("--from-year", type=int, default=2010)
     ap.add_argument("--to-year", type=int, default=2100)
     ap.add_argument("--rationale", default="baseline walk-forward on Dukascopy 1m bars")
+    ap.add_argument("--rule-ref", default=None,
+                    help="the pre-registered rule this run follows (e.g. preregistration-2027Q1.md#reserve); required "
+                         "in a quarter under the E-5 cap unless the run matches a queued, slot or rule_ref row")
     ap.add_argument("--variants", default="[{}]", help="JSON list of config overrides; each is one recorded trial")
     ap.add_argument("--extra-cost-usd", type=float, default=None,
                     help="round-trip slippage + commission per oz beyond the spread (default: settings prior + commission)")
@@ -412,6 +512,14 @@ def main() -> int:
                     help="with --cpcv: allow trials that failed the gates; output is diagnostic, not evidence (ADR 0003)")
     ap.add_argument("--positioning", default="",
                     help="folder or Parquet of the positioning-v1 release: adds the opt-in COT/GLD features")
+    ap.add_argument("--us-calendar-exclude-rule", action="store_true",
+                    help="with --us-calendar: leave out the rule-derived (ISM) rows")
+    ap.add_argument("--us-calendar", default="",
+                    help="folder or Parquet of the calendar-v1 release: the point-in-time schedule in ctx")
+    ap.add_argument("--us-calendar-features", action="store_true",
+                    help="with --us-calendar: adds the opt-in tier1_events/tier2_events families")
+    ap.add_argument("--day-type", action="store_true",
+                    help="adds the opt-in day_type opportunity features (BACKLOG 30a; needs --us-calendar)")
     _discovery_args(ap)
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
@@ -435,6 +543,15 @@ def main() -> int:
     print(_positioning_line(positioning_info)[2:], flush=True)
     if args.discover and positioning is not None:
         raise SystemExit("--positioning is not wired into --discover yet; run it without --discover")
+    us_calendar, us_calendar_info = load_us_calendar(args.us_calendar, args.us_calendar_exclude_rule)
+    print(_us_calendar_line(us_calendar_info)[2:], flush=True)
+    refusal = day_type_refusal(args, us_calendar)
+    if refusal:
+        raise SystemExit(refusal)
+    if (args.discover or args.cpcv) and us_calendar is not None:
+        raise SystemExit("--us-calendar is not wired into --discover or --cpcv yet; run it without them")
+    if args.us_calendar_features and us_calendar is None:
+        raise SystemExit("--us-calendar-features needs --us-calendar")
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
         if args.cpcv:
@@ -443,14 +560,19 @@ def main() -> int:
             return _discover(args, variants, b1, reg, settings, extra_cost, swap, holdout, cost_source, macro)
         return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings, swap=swap,
                     cost_source=cost_source, macro=macro, macro_info=macro_info, positioning=positioning,
-                    positioning_info=positioning_info)
+                    positioning_info=positioning_info, us_calendar=us_calendar, us_calendar_info=us_calendar_info)
 
 
 def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
          b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any, *, swap: SwapSpec, cost_source: str,
          macro: pd.DataFrame | None = None, macro_info: dict[str, Any] | None = None,
-         positioning: pd.DataFrame | None = None, positioning_info: dict[str, Any] | None = None) -> int:
-    feat_ctx, feat_names = feature_ctx(macro, positioning)
+         positioning: pd.DataFrame | None = None, positioning_info: dict[str, Any] | None = None,
+         us_calendar: pd.DataFrame | None = None, us_calendar_info: dict[str, Any] | None = None) -> int:
+    day_type = bool(getattr(args, "day_type", False))
+    feat_ctx, feat_names = feature_ctx(macro, positioning, us_calendar,
+                                       calendar_features=bool(getattr(args, "us_calendar_features", False)),
+                                       day_type=day_type)
+    dt_info = day_type_info(day_type, macro, us_calendar)
     if args.score_holdout:
         if holdout is None:
             raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
@@ -469,8 +591,14 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     try:
         quarter, preregs = reg.check_budget_reserved([(j.family, j.config) for j in jobs],
                                                      settings.research.trial_budget_quarter,
-                                                     settings.research.reserved_trials_quarter)
+                                                     settings.research.reserved_for(quarter_of()),
+                                                     retired={e.family for e in settings.research.retired_families})
     except TrialBudgetExceeded as exc:
+        raise SystemExit(str(exc)) from None
+    # E-5 cap: a manual row cites its pre-registered rule (recorded as rule_ref; refused when a capped run cites none)
+    try:
+        rule_refs = [cited_rule(p, args.rule_ref, capped=settings.research.open_budget_capped(quarter)) for p in preregs]
+    except ValueError as exc:
         raise SystemExit(str(exc)) from None
     years_span = (b1["ts_utc"].iloc[-1] - b1["ts_utc"].iloc[0]).days / 365.25
     zero_volume = float((b1["tick_count"].astype(float) <= 0).mean())
@@ -479,7 +607,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     frames: dict[str, tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, Any], tuple[pd.DataFrame, pd.DataFrame]]] = {}
     sections, rows = [], []
     title = jobs[0].family
-    for job, prereg in zip(jobs, preregs, strict=True):
+    for job, prereg, rule_ref in zip(jobs, preregs, rule_refs, strict=True):
         tf = job.timeframe
         if tf not in frames:                       # bars, context, decision frame and lookahead check once per timeframe
             b_dec = resample_bars(b1, tf)
@@ -513,7 +641,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         split = None if args.score_holdout else rule_only_split(pd.concat([p.labels for p in preps], ignore_index=True))
         common = {"lookahead": leak, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
                   "screen": scr, "screen_skipped": skipped, "cost_source": cost_source, "macro": macro_info,
-                  "positioning": positioning_info, "rule_only_split": split}
+                  "positioning": positioning_info, "us_calendar": us_calendar_info, "day_type": dt_info,
+                  "rule_only_split": split}
         rationale = args.rationale + (f" | overrides {json.dumps(job.overrides, sort_keys=True)}" if job.overrides else "")
         if scr is not None and (screen_only or (not scr["passed"] and not args.skip_screen)):
             n = int(sum(len(p.labels) for p in preps))
@@ -521,7 +650,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                                        "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
             row = reg.record(agent_id=agent_id, family=job.family, config=job.config, feature_version=version,
                              rationale=rationale, results=metrics, status="screened", budget_quarter=quarter,
-                             preregistration=prereg)
+                             preregistration=prereg, rule_ref=rule_ref)
             print(f"{json.dumps(job.overrides) or 'defaults'}: screen {scr['verdict']} ({n} events) [{time.time() - t0:.0f}s]", flush=True)
             text = render_screen_failed(scr, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0, "n": n,
                                                     "swap": swap.model_dump(), "cost_source": cost_source,
@@ -539,9 +668,11 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             metrics = {**res.metrics, "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
             row = reg.record(agent_id=res.agent_id, family=job.family, config=job.config, feature_version=res.feature_version,
                              rationale=rationale, results=metrics, status="holdout" if args.score_holdout else "evaluated",
-                             budget_quarter=quarter, preregistration=prereg)
+                             budget_quarter=quarter, preregistration=prereg, rule_ref=rule_ref)
             res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped, "cost_source": cost_source,
-                           "macro": macro_info, "positioning": positioning_info, "rule_only_split": split}
+                           "macro": macro_info, "positioning": positioning_info, "us_calendar": us_calendar_info,
+                           "day_type": dt_info,
+                           "rule_only_split": split}
             years = per_year(res.oof, res.metrics.get("threshold"))
             text = render_report(res, years, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0})
         if job.overrides:
@@ -562,7 +693,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
 def _discovery_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--discover", action="store_true",
                     help="ONE pre-registered feature-discovery trial (goldbot/research/discovery.py) on --specialist")
-    ap.add_argument("--families", nargs="?", const="family", default="column", choices=["column", "feature", "family"],
+    ap.add_argument("--families", nargs="?", const="family", default="column", choices=["column", "feature", "family", "cluster"],
                     help="--discover: group features by registry family (bare flag), by producing feature, or not")
     ap.add_argument("--discover-config", default="{}", help="--discover: JSON overrides of DiscoveryConfig")
 
@@ -577,11 +708,12 @@ def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.D
         cfg = DiscoveryConfig(**json.loads(args.discover_config))
         row, text = discovery_pass(SPECIALISTS[args.specialist](**variants[0]), b1, reg,
                                    budget_cap=settings.research.trial_budget_quarter,
-                                   reserved_setting=settings.research.reserved_trials_quarter, cfg=cfg,
+                                   reserved_setting=settings.research.reserved_for(quarter_of()), cfg=cfg,
                                    group_mode=args.families,
                                    extra_cost_usd=extra_cost, swap=swap, holdout=holdout,
                                    ctx={"macro": macro} if macro is not None else None, rationale=args.rationale,
-                                   cost_source=cost_source)
+                                   cost_source=cost_source, rule_ref=args.rule_ref,
+                                   capped=settings.research.open_budget_capped(quarter_of()))
     except (TrialBudgetExceeded, ValueError) as exc:
         raise SystemExit(str(exc)) from None
     Path(args.report).write_text(text)
