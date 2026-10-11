@@ -53,6 +53,7 @@ from goldbot.base import (
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
 from goldbot.data.crossfeed import check_reconciliation
+from goldbot.ops.watchdog import loop_heartbeat_path
 from goldbot.risk.supervisor import engine_fault
 
 Status = Literal["ok", "warn", "fail"]
@@ -63,6 +64,11 @@ SUPERVISOR_WARN_S = 20
 SUPERVISOR_FAIL_S = 60            # engines block entries when the supervisor heartbeat is older than this
 ENGINE_WARN_S = 20 * 60           # engines write their state at every 15m bar close
 ENGINE_FAIL_S = 45 * 60
+# the engine loop's own heartbeat (goldbot/ops/watchdog.py LoopWatch, rewritten every 15 s whatever the feed does): a
+# hung loop shows within minutes, not after ENGINE_FAIL_S; the systemd watchdog restarts it at WatchdogSec=300 s
+LOOP_WARN_S = 60
+LOOP_FAIL_S = 150
+LOOP_STARTING_FAIL_S = 15 * 60    # a start longer than this (watchdog.STARTUP_MAX_S, the unit's TimeoutStartSec) fails
 SCHEDULER_HEARTBEAT_FAIL_S = 5 * 60   # run_forever saves every 30 s while idle
 JOB_OVERDUE_GRACE_S = 15 * 60
 JOB_RUNNING_FAIL_H = 12.0         # a job "running" this long means the scheduler died mid-job
@@ -425,6 +431,41 @@ def _last_run(state_dir: Path) -> pd.Timestamp | None:
         return load_record_json(WatchState, (state_dir / WATCH_FILE).read_text(encoding="utf-8"), source=WATCH_FILE).ts
     except (ValueError, OSError):
         return None
+
+
+def check_engine_loop(ctx: HealthContext, account_id: str) -> Check:
+    """The engine loop turns (state/heartbeat_engine-<account>.json, `goldbot.ops.watchdog.LoopWatch`). Judged
+    whatever the market: the loop runs and beats with no ticks at all (weekend, daily break, dead feed), so a stale
+    beat is a stuck loop or a dead process, and a stuck loop also stops the exits this engine manages. WARN when the
+    file is missing (an engine that never ran, or a release older than the loop heartbeat)."""
+    name = f"engine_loop:{account_id}"
+    f = loop_heartbeat_path(ctx.state_dir, account_id)
+    if not f.exists():
+        return Check(name=name, status="warn",
+                     reason=f"no loop heartbeat: engine {account_id} never ran (or runs a release that predates it)")
+    try:
+        hb = _read_json(f)
+        ts, started = float(hb["ts"]), float(hb.get("started") or hb["ts"])
+        phase = str(hb.get("phase", "loop"))
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        return Check(name=name, status="fail", reason=f"loop heartbeat unreadable: {exc}")
+    now = _epoch(ctx.now)
+    age = now - ts
+    if age > LOOP_FAIL_S:
+        what = "start" if phase == "starting" else "loop"
+        return Check(name=name, status="fail",
+                     reason=f"engine {what} silent for {_age(age)} (> {LOOP_FAIL_S} s): stuck or not running; exits "
+                            f"this engine manages are not running (stops rest with the broker), the systemd watchdog "
+                            f"restarts a stuck loop after 300 s")
+    if phase == "starting":
+        up = now - started
+        if up > LOOP_STARTING_FAIL_S:
+            return Check(name=name, status="fail",
+                         reason=f"engine still starting after {_age(up)} (> {LOOP_STARTING_FAIL_S // 60} min)")
+        return Check(name=name, status="warn", reason=f"engine starting for {_age(up)} (reconcile, warm start)")
+    if age > LOOP_WARN_S:
+        return Check(name=name, status="warn", reason=f"last loop pass {_age(age)} ago (> {LOOP_WARN_S} s)")
+    return Check(name=name, status="ok", reason=f"loop turning, last pass {_age(age)} ago")
 
 
 def check_tick_errors(ctx: HealthContext, account_id: str) -> Check | None:
@@ -989,6 +1030,26 @@ def check_alert_loop(ctx: HealthContext) -> Check:
     return Check(name="alerts", status="ok", reason=f"last pass {_age(age)} ago")
 
 
+def check_deadman(ctx: HealthContext) -> Check:
+    """The outside dead man's switch (goldbot/ops/deadman.py) is configured: presence and shape of the keyring URL,
+    never its value. Whether pings arrive is judged by the outside service itself (a missed ping is its alert)."""
+    from goldbot.ops.deadman import DEADMAN_KEY, SET_HINT, url_problem
+    try:
+        url = (ctx.get_secret(DEADMAN_KEY) or "").strip()
+    except Exception as exc:                 # noqa: BLE001 - presence check only
+        return Check(name="deadman", status="warn", reason=f"deadman-url unreadable ({type(exc).__name__})")
+    if not url:
+        return Check(name="deadman", status="warn",
+                     reason=f"dead man's switch not set: nobody is told if this server dies. Create a free "
+                            f"Healthchecks.io check, then {SET_HINT} (docs/deploy/first-deploy.md)")
+    problem = url_problem(url)
+    if problem:
+        return Check(name="deadman", status="warn", reason=f"{problem}; store the check's https ping URL with {SET_HINT}")
+    every = ctx.settings.telegram.deadman_every_min if ctx.settings is not None else 2
+    return Check(name="deadman", status="ok",
+                 reason=f"set; the Telegram service pings every {every} min while healthy, <url>/fail on a FAIL")
+
+
 # --------------------------------------------------------------------------------------------- operational alerts
 log = logging.getLogger("goldbot.health")
 
@@ -1517,6 +1578,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
         for a in ctx.accounts:
             i = a.account_id
             checks += g(f"engine:{i}", lambda: check_engine(ctx, i)) + g(f"risk_state:{i}", lambda: check_risk_state(ctx, i))
+            checks += g(f"engine_loop:{i}", lambda: check_engine_loop(ctx, i))
             checks += g(f"tick_errors:{i}", lambda: check_tick_errors(ctx, i))
             checks += g(f"loss_caps:{i}", lambda: check_loss_caps(ctx, i)) + g(f"order_failed:{i}", lambda: check_failed_orders(ctx, i))
             checks += g(f"throttle:{i}", lambda: check_throttle(ctx, i))
@@ -1540,7 +1602,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += g("costs_published", lambda: check_costs_published(ctx))
         for fn in (check_data_quality, check_drift, check_model_watch, check_feature_versions, check_deploy,
                    check_backup_age, check_backup_prune, check_restore_drill, check_news, check_agent_spend,
-                   check_approvals, check_email_link, check_alert_loop):
+                   check_approvals, check_email_link, check_alert_loop, check_deadman):
             checks += g(fn.__name__.removeprefix("check_"), lambda: fn(ctx))
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 

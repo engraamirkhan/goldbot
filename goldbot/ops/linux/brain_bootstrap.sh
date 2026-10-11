@@ -34,6 +34,17 @@ if [ "$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)" -lt 4000000 ] && ! swapon 
   grep -q /swapfile /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
 fi
 
+# A watchdog SIGABRT (goldbot-engine@ WatchdogSec) must not leave process memory, which holds tokens and the
+# file-store secrets, in a core file or a crash report. A pipe core_pattern (apport, systemd-coredump) ignores
+# LimitCORE=0, so apport is turned off and no process dumps core (persisted in sysctl.d; 60- sorts after
+# systemd-coredump's 50-coredump.conf). docs/deploy/first-deploy.md checks /proc/sys/kernel/core_pattern.
+echo "core_pattern was: $(head -c 200 /proc/sys/kernel/core_pattern 2>/dev/null || echo unreadable)"
+systemctl disable --now apport.service 2>/dev/null || true
+if [ -f /etc/default/apport ]; then sed -i 's/^enabled=1/enabled=0/' /etc/default/apport; fi
+printf '%s\n' '# goldbot: no core files or crash reports (they would hold secrets)' 'kernel.core_pattern=|/bin/false' \
+  > /etc/sysctl.d/60-goldbot-no-core.conf
+sysctl -q -p /etc/sysctl.d/60-goldbot-no-core.conf || echo "WARNING: kernel.core_pattern not applied now (applies at boot)"
+
 apt-get update -y
 # restic: encrypted off-host backups of the state (goldbot/ops/backup.py, run by the scheduler as user goldbot)
 DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates chrony build-essential xz-utils restic
@@ -96,6 +107,21 @@ chmod 755 /usr/local/bin/goldbot
 
 for u in supervisor engine@ api scheduler telegram news bridge-tunnel; do install -m 644 "$OPS/systemd/goldbot-$u.service" /etc/systemd/system/; done
 systemctl daemon-reload
+# Rollback floor (review MEDIUM-1): a release older than the engine watchdog never sends READY=1, so under
+# Type=notify it trades for up to TimeoutStartSec (15 min) and is then stopped, over and over. Seeded once with the
+# commit root installed these units from (root's own clone); a floor already there (the owner's) is left as it is.
+# RUNBOOK 0.5 "Rollback floor".
+install -d -m 755 -o root -g root /etc/goldbot
+if ! { [ -e /etc/goldbot/rollback-floor ] || [ -L /etc/goldbot/rollback-floor ]; }; then
+  floor=${REF:-$(git -C "$OPS_SRC/src" rev-parse HEAD)}
+  if [[ "$floor" =~ ^[0-9a-f]{40}$ ]]; then
+    printf '%s\n' "$floor" > "$OPS_SRC/rollback-floor"
+    install -m 644 -o root -g root "$OPS_SRC/rollback-floor" /etc/goldbot/rollback-floor
+    echo "rollback floor set to $floor"
+  else
+    echo "WARNING: no rollback floor written (commit id unreadable)"
+  fi
+fi
 for s in goldbot-supervisor goldbot-engine@icm-demo goldbot-api goldbot-scheduler goldbot-telegram goldbot-news; do
   systemctl enable "$s"
 done

@@ -34,7 +34,7 @@ from goldbot.base import (
     unknown_fields_json,
     write_atomic,
 )
-from goldbot.telegram.approvals import REASON_CODES, Proposal
+from goldbot.telegram.approvals import REASON_CODES, Outcome, Proposal, decision_channel
 
 
 class BusDecision(Record):
@@ -99,7 +99,18 @@ class ApprovalBus:
         return out
 
     def archive(self, p: Proposal) -> None:
-        """Called by the engine when a proposal is finished (approved, rejected or expired)."""
+        """Called by the engine when a proposal is finished (approved, rejected or expired). The owner's decision time
+        and channel are kept on the archived proposal (finance audit GAP-10): taken from the decision file, which is
+        deleted here, when the proposal does not already carry them. Only for an approved or rejected proposal: an
+        expired one, or a stale one archived on restart (outcome None), was decided by nobody, whatever click came
+        late. An unreadable decision file (malformed, newer, or an OSError) is "no decision": the archive and the
+        engine start that calls it never fail on it (trading-safety review LOW-2, LOW-3)."""
+        if p.decided_ts is None and p.outcome in (Outcome.APPROVED, Outcome.REJECTED):
+            try:
+                for dec in self.decisions_for({p.proposal_id}):             # strict; malformed or newer: none
+                    p = p.model_copy(update={"decided_ts": dec.ts, "decided_channel": decision_channel(dec.by)})
+            except OSError:
+                pass
         _write_atomic(self.done_dir / f"{p.proposal_id}.json", p.model_dump_json())
         for d in (self.pending_dir, self.decisions_dir):
             (d / f"{p.proposal_id}.json").unlink(missing_ok=True)

@@ -73,6 +73,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   clash is caught by the `docs-assemble` pre-commit hook (which CI runs) and fixed by `fix-ids`. Lanes are merged
   with `scripts/docs_assemble.py merge <branch>`, which also absorbs branches that still edit the old rendered
   files. Never edit the rendered files.
+- **Outside dead man's switch and a hash-pinned MT5 box (SRE, 2026-10-11; first-deploy risks 1 and 2).**
+  - Alerts no longer depend only on the brain. After each health pass, the Telegram service pings a Healthchecks.io
+    check (free tier; ADR 0014, `goldbot/ops/deadman.py`). It sends an ok ping every `telegram.deadman_every_min`
+    (2) min while health has no FAIL, and `<url>/fail` (body: failing check names only) on a FAIL or an undelivered
+    Telegram alert. The URL is keyring-only (`goldbot accounts set deadman-url`) and never logged. When it is unset,
+    nothing is sent and health `deadman` WARNs. Owner steps: first-deploy.md P7 and 8b, RUNBOOK section 6 "Outside
+    alert". Tests: `tests/test_deadman.py`.
+  - The Wine MT5 box's Windows-Python packages come from `goldbot/ops/linux/mt5-bridge-requirements.txt`. The file
+    is rendered from uv.lock by `scripts/bridge_requirements.py` (CPython 3.11 win_amd64 wheels, sha256) and
+    installed with `pip install --require-hashes --no-deps --only-binary :all:`. pip is no longer upgraded and goldbot
+    is no longer built editable (a `.pth` instead). goldbot-deploy reinstalls the packages when uv.lock changes, with
+    the bridges stopped. CI check: `tests/test_bridge_requirements.py`. An existing MT5 box moves onto the file once,
+    by hand (RUNBOOK 0.5).
 - Email sign-in link, security re-verify nits on 1a8bf43. `auth.mail.dashboard_origin` now refuses any
   whitespace, control character, `\` or `;`, and an empty host. It is stored as the normalised lower-case
   `scheme://netloc`. `coarse_ip` gives the IPv4 /16 for an IPv4-mapped IPv6 address (`::ffff:203.0.113.45` ->
@@ -92,6 +105,32 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - UX: a failed redeem goes straight to "Email me a sign-in link" (the old link is spent).
   - RUNBOOK: aux.db schema 6 cannot be stepped back to 4. Releases since state-store step 3 open it; older ones are
     refused by the deploy.
+- Engine loop heartbeat and watchdogs (2026-10-11, SRE first-deploy risk). A hung engine used to show only after 45
+  minutes. Now each loop pass writes `state/heartbeat_engine-<account>.json`, with or without ticks
+  (goldbot/ops/watchdog.py `LoopWatch`). Health check `engine_loop:<account>` FAILs after 150 s.
+  goldbot-engine@.service is `Type=notify` with `WatchdogSec=300`, so systemd restarts a stuck loop, and the
+  restart reconciles with the broker as usual. On the MT5 box, `goldbot-bridge-watchdog@.timer` restarts a bridge
+  that stops answering `GET /health`. Hosts set up earlier need the units reinstalled, then the rollback floor set
+  to this commit: RUNBOOK "Engine loop stuck, and the watchdogs". Tests: tests/test_engine_watchdog.py.
+- The record now carries what the monthly finance audit needs (2026-10-11, docs/finance/audit-framework.md gaps
+  GAP-01/02/03/04/05/10/13; TRACEABILITY X18). `ClosedTrade` gains `decision_price`, `decision_spread_points` and
+  `decision_utc` (the signal, from the proposal) next to `requested_price` (the quote the order was priced from: in
+  propose mode the quote at the owner's approval), so side x (requested - decision) is the cost of the 90 s wait;
+  `timeframe`, `family` and `model_version` (the agent's champion registry version); `initial_sl`, `final_sl`,
+  `final_tp`; `money_source` (broker | engine) and `pnl_basis`, "gross" unless commission and swap are both known, so
+  a fallback record is never summed as net. The entry facts travel as `EntryAudit` on the pending order and the open
+  trade, so a restart or a recovered fill keeps them. Exit legs (engine closes, the scale-out, broker stop and target
+  fills against their level) go to a new store table `exit_fills`, kept apart from `fills` so the entry slippage
+  table is unchanged; the legs are buffered in memory and written by `_flush_closed` after the tick's exits, so an
+  exit never waits on a file write (a failed write keeps them for the next flush). The archived proposal keeps
+  `decided_ts` and `decided_channel` ("telegram" | "dashboard", no id), taken by `bus.archive` from the decision file
+  for approved or rejected proposals only (a stale one archived on restart takes none; an unreadable file is "no
+  decision"). The paper broker's deals now say `swap` None (not modelled), so paper records are gross. The journal
+  `order` row now names its proposal (GAP-12). Every new field defaults to unknown (ADR 0010). Not done: the monthly
+  report and digest do not yet read `pnl_basis` (PR-1 must exclude "gross" rows from net), no health count of gross
+  records, no fx on the record (GAP-06), no broker reconciliation (GAP-08). The existing `decided_by` /
+  `decided_via` still keep the Telegram id and dashboard email in approvals/done on the VPS: BACKLOG 52.
+  Tests: tests/test_finance_audit_record.py.
 - First demo deploy (SRE, 2026-10-11): `docs/deploy/first-deploy.md` is the owner's 60-90 min session (case A, fresh
   install). The brain runs on Oracle Ampere A1, now **2 OCPU / 12 GB**, the Always Free total since mid-2026 (it was
   4 / 24). MT5 runs on a bridge box. Day 1 tries both bridge options:
@@ -122,6 +161,28 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   failures logged and audited by exception type only. `goldbot run mail-test` checks the setup. Rollback note: aux.db
   schema 6 is additive, so every release since state-store step 3 opens it; a release from before step 3 is refused
   by the deploy (no 6 -> 4 step-back yet). Needs security review.
+- **Owner history: security and quant review fixes to bd5324e (2026-10-11, M43).** The `no-mt5-report` hook now
+  catches the following, whatever the file is called:
+  - a CSV with a UTF-8 BOM (Excel "CSV UTF-8");
+  - the analyser's private markdown, by its title line, and its JSON summary, by both of its source keys;
+  - a gzip, decompressed up to 20 MB;
+  - a zip, by each member's name and by each member's content within the byte budget. Archives are opened one
+    level deep.
+
+  Refusal messages show only `~/Personal project/trade-history`, never a path. `main` turns both refusals into a
+  plain exit. `.share.md` now states how the USD conversion was found ("implied by N trades" / "assumed 1.0"),
+  never the rate. The module docstring records the rule: nothing that multiplies with USD/oz into an amount (lots,
+  ounces, the rate) may enter `.share.md`.
+- **Owner history: shareable summary, in-repo input refused, hook covers every input format (2026-10-11; owner
+  approved the owner-method study, M43).** `python -m goldbot.ops.run owner-history` now refuses a report inside any
+  git work tree before opening it, and prints only the shareable summary (`render_share`, also written as
+  `owner_history_*.share.md`): win rate, mean R or net USD/oz, holding-time quantiles, session/hour/weekday/side/
+  holding histograms with each slice's verdict against the Bonferroni bar, winning and losing streaks, drawdown %,
+  risk per trade and leverage relative to equity, and K. No account identifier, ticket or account-currency amount;
+  the money figures stay in the private `.md`. The `no-mt5-report` hook now also rejects an English MT5 Positions /
+  Orders / Deals header row in CSV, TSV, HTML or xlsx (any trade count, any stamp format) and the analyser's own
+  outputs. Not built: a separate `scripts/owner_history.py` (the entry point already exists; a second one would
+  drift). Needs quant and security review.
 - **Performance report: quant review fixes (2026-10-11; follow-up to 207c9ef, re-review pending).**
   `goldbot/ops/perf_report.py` reads the record-gap lane's fields when present: `pnl_basis`, `money_source`,
   `family`, `timeframe`, `model_version` and `decision_price`.
@@ -190,6 +251,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the guard test that every gate and supervisor reason has owner text read only `throttle_*` from the `out.append`
   helpers and now reads them all, which is how the two open-risk codes were found unworded (`heat_cap` left
   FUTURE). Tests: tests/test_startup_error_exposure.py, tests/test_api_entry_status.py.
+- Engine watchdog review fixes (2026-10-11, recommended for the first demo deploy on Tue 13 Oct).
+  - MEDIUM-1: brain_bootstrap.sh writes the bootstrap commit to `/etc/goldbot/rollback-floor` when no floor exists
+    (root-owned, 0644).
+  - LOW-1: the loop heartbeat now carries `last_pass_s` and `max_pass_s`, and any pass over 30 s is logged.
+  - LOW-2: both bootstraps turn apport off and set `kernel.core_pattern=|/bin/false` in sysctl.d.
+  - LOW-3: the bridge watchdog needs at least 1 probe and a timeout of at least 1 s.
+  - docs/deploy/first-deploy.md: a core_pattern and floor check (1d), watchdog acceptance plus a `kill -STOP` drill
+    (6W), and a `WatchdogSec=0` fallback.
 - GitHub `engraamirkhan/goldbot`. PR 36 (2026-10-01..04 work) is merged into `main`; follow-up work goes on branch
   `claude/gifted-goldberg-lcb7pl` restarted from `main` (Claude sessions do not push to `main` directly). CI (`ci.yml`) runs pre-commit, backend lint/mypy/unit/integration, frontend eslint/tsc/vitest, an API
   contract check and Playwright e2e as separate jobs, and opens one issue labelled `ci` with each failed job's output.

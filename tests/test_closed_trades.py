@@ -85,7 +85,7 @@ def test_a_broker_side_target_is_recorded_once_with_net_pnl_r_and_commission(tmp
                                                                             side, 0.1)
     assert t.exit_reason == "target" and t.entry_price == 2000.0 and t.exit_price == target
     assert t.entry_utc == T0 and t.exit_utc == T0 + pd.Timedelta(minutes=30)
-    assert t.commission == pytest.approx(2 * COMM * 0.1) and t.swap == 0.0
+    assert t.commission == pytest.approx(2 * COMM * 0.1) and t.swap is None    # paper does not model swap
     assert t.pnl == pytest.approx(gross - 2 * COMM * 0.1)
     assert t.r == pytest.approx(t.pnl / (TREND.label_spec.stop_atr * 0.1 * 100))
     assert t.ret == pytest.approx(t.pnl / (2000.0 * 0.1 * 100)) and t.equity_before > 0

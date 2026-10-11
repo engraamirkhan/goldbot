@@ -121,6 +121,42 @@ class ClosedTrade(FrozenRecord):
     # also when ticks after the exit reached the track, when the exit time or price is not the broker's (a close
     # confirmed without deals), or when the position outlived a freeze at its broker stop or target
     excursion_approx: bool | None = None
+    # finance audit (docs/finance/audit-framework.md). Every field below is None on records from before it existed,
+    # so "unknown" is never read as a value. GAP-02: the decision price (the quote at the signal, Proposal.entry) and
+    # spread, apart from the quote the order was priced from (in propose mode the quote at the owner's approval): side x
+    # (requested_price - decision_price) is the cost of the approval wait. GAP-01 / GAP-13: what made the trade
+    decision_price: float | None = None
+    decision_spread_points: float | None = None
+    decision_utc: UtcTimestamp | None = None     # host clock when the proposal was made (Proposal.created)
+    requested_price: float | None = None
+    timeframe: str | None = None
+    family: str | None = None
+    model_version: str | None = None             # the agent's champion registry version; None when none was loaded
+    # GAP-03: the stop at entry (None for an orphan adopted without an order record, whose entry stop is unknown) and
+    # the stop and target the engine held at the exit; the stop history between them is the journal's `trail`,
+    # `weekend_tighten`, `orphan_stop` and `reinstate_stops` rows. Exit fills against their asked price: store
+    # `exit_fills` (GAP-04)
+    initial_sl: float | None = None
+    final_sl: float | None = None
+    final_tp: float | None = None
+    # GAP-05: "broker" when pnl comes from the broker's deals, "engine" from the engine's own fills. "net" only when
+    # both commission and swap are known and inside pnl; otherwise "gross" (never summed as net)
+    money_source: Literal["broker", "engine"] | None = None
+    pnl_basis: Literal["net", "gross"] | None = None
+
+
+class EntryAudit(FrozenRecord):
+    """The entry facts the closed record carries for the finance audit (GAP-01, GAP-02, GAP-13), fixed when the order
+    is sent and kept with the pending order and the open trade, so a restart or a recovered fill keeps them. Field
+    names are ClosedTrade's."""
+
+    decision_price: float | None = None
+    decision_spread_points: float | None = None
+    decision_utc: UtcTimestamp | None = None
+    requested_price: float | None = None
+    timeframe: str | None = None
+    family: str | None = None
+    model_version: str | None = None
 
 
 class GateItem(FrozenRecord):

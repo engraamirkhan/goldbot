@@ -358,6 +358,9 @@ class TelegramSettings(_Section):
     digest_at: str = Field("06:45", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     # the owner's time zone for Telegram /status times (UTC is shown beside each); an unknown zone shows UTC only
     owner_tz: str = "Europe/London"
+    # outside dead man's switch (goldbot/ops/deadman.py, ADR 0014): healthy pings at most this often; the check's
+    # period on Healthchecks.io must match (grace 3 min), so a dead brain is reported within ~6 min
+    deadman_every_min: int = Field(2, ge=1, le=60)
 
 
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
