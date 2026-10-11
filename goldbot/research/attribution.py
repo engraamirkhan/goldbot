@@ -1,7 +1,10 @@
 """Deterministic performance attribution (BACKLOG item 12, TRACEABILITY G12): where R is made or lost and why,
 computed by code every day from the shadow book (every candidate, taken or not), the engines' fills and orders and
 the canonical cost table -> state/attribution.json and the markdown summary state/attribution.md. The exit mix also
-carries each exit type's median MAE / MFE in R (BACKLOG 23, playbook G-9; labels/excursion.py).
+carries each exit type's median MAE / MFE in R (BACKLOG 23, playbook G-9; labels/excursion.py). Known biases of the
+labels' exit-bar convention: a stop exit's MAE is -1 R and a target exit's MFE is target / stop in R by construction
+(marked "fixed": no information); stop-first understates the MFE of a bar that touched both levels; a gapped stop is
+filled at the stop, so shadow MAE on stops is not comparable with live MAE (which includes the gap).
 
 Unit of account: one closed shadow trade, in R (its own initial risk, |entry - stop|). The shadow book trades at the
 paying side of the quote (labels' mechanics), so its R already pays the spread and nothing else. Per trade:
@@ -495,7 +498,12 @@ def render_markdown(rep: AttributionReport) -> str:
         if k in rep.exits:
             e = rep.exits[k]
             lines.append(f"| {k} | {e.n} | {e.share:.0%} | {_fmt(e.mean_r_net)} | {_fmt(e.t_stat, '+.2f')} | {e.verdict} | "
-                         f"{_fmt(e.mae_r_median, '+.2f')} | {_fmt(e.mfe_r_median, '+.2f')} |")
+                         f"{_fmt(e.mae_r_median, '+.2f')}{' (fixed)' if k == 'stop' else ''} | "
+                         f"{_fmt(e.mfe_r_median, '+.2f')}{' (fixed)' if k == 'target' else ''} |")
+    lines += ["", "MAE / MFE follow the labels' exit-bar convention (stop first): (fixed) = set by construction (a stop "
+              "exit's MAE is -1 R, a target exit's MFE is target / stop); the MFE of a bar that touched both levels is "
+              "understated; a gapped stop fills at the stop, so shadow MAE on stops is not comparable with live. A "
+              "scaled trade's figures cover the whole position until its final exit."]
     c = rep.costs
     lines += ["", "## Costs per taken trade (R)", "", f"Source: {c.source}.", "",
               "| session | " + " | ".join(COMPONENTS) + " |", "|---|" + "---:|" * len(COMPONENTS),

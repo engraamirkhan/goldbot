@@ -107,7 +107,9 @@ class ClosedTrade(FrozenRecord):
     pnl_currency: str | None = None
     # MAE / MFE (BACKLOG 23, labels/excursion.py): the worst and best exit-side price while the engine held the
     # position (bid for a long, ask for a short; the exit fill included), in R of the initial risk from price (gross
-    # of costs; MAE <= 0) and when each was first reached. None on older records and when tracking failed.
+    # of costs; MAE <= 0) and when each was first reached, never after `exit_utc`. None on older records and when
+    # tracking failed; R also None when the initial stop is unknown (an adopted orphan without an order record). A
+    # scaled position's figures cover the whole position until its final exit (the scale-out changes size, not path)
     mae_price: float | None = None
     mae_r: float | None = None
     mae_utc: UtcTimestamp | None = None
@@ -115,7 +117,9 @@ class ClosedTrade(FrozenRecord):
     mfe_r: float | None = None
     mfe_utc: UtcTimestamp | None = None
     # True when part of the path was not seen by ticks (a restart, an adopted or never-tracked position): that part is
-    # filled from the stored 1m bars wholly inside the trade, so an extreme in a gap the bars do not cover is missed
+    # filled from the stored 1m bars wholly inside the trade, so an extreme in a gap the bars do not cover is missed;
+    # also when ticks after the exit reached the track, when the exit time or price is not the broker's (a close
+    # confirmed without deals), or when the position outlived a freeze at its broker stop or target
     excursion_approx: bool | None = None
 
 

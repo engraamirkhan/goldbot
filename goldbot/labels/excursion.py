@@ -8,7 +8,9 @@ One definition for the three places that report it, so they agree:
   the bid low and its MFE from the bid high; a short's MAE from the ask high and its MFE from the ask low. A trade
   entered on the paying side therefore starts with an MAE of at least the spread.
 * The track starts at the entry price at entry time (excursion 0). A later price counts only if strictly beyond the
-  extreme so far, so the time is the first time the extreme was reached.
+  extreme so far, so the time is the first time the extreme was reached. In labels and the shadow book "entry time"
+  is the signal bar's open (`entry_ts`, as the shadow book stamps the trade), so an extreme that never moved off the
+  entry price carries that stamp; live, it is the fill time.
 * Bars are counted from the first bar after the signal bar through the exit bar, as the labels' barrier search. On
   the exit bar bars carry no intra-bar order, so the labels' convention decides (stop first, conservative): a stop or
   trail exit counts the adverse side only up to the exit price and none of that bar's favourable side (the stop is
@@ -16,6 +18,17 @@ One definition for the three places that report it, so they agree:
   adverse side; a time or hard-flat exit (at the bar's close) counts the whole bar. A stop gapped through is filled at
   the stop in labels and shadow (labels.exit_policy), so their MAE never exceeds -1 R on a stop; the live MAE includes
   the broker's actual fill.
+* Known biases of that convention (attribution shows them beside the exit mix): a stop exit's MAE is -1 R and a target
+  exit's MFE is target / stop in R BY CONSTRUCTION, so those two cells carry no information; the stop-first rule
+  understates the MFE of a bar that touched both levels (it may have reached the target first) and the stop-at-stop
+  fill understates a gapped stop's MAE. Shadow and live MAE on stops are therefore not comparable (live includes the
+  gap). Scaled positions: MAE / MFE cover the whole position until its final exit; the scale-out changes the size,
+  not the path.
+* Live (engine/runner.py): the track stops at the last tick before the exit. A price through the stop or target the
+  broker holds freezes it (the broker takes the position there; the record adds the actual fill); a price through a
+  stop only the engine holds while its close is being retried is the trade's real excursion and is folded as it is.
+  Extremes after the exit time (a manual or broker close seen late) are never kept: the record rebuilds from stored
+  bars up to the exit and says approximate.
 * R is from price, gross of costs: side x (extreme - entry) / |entry - initial stop|. MAE in R is <= 0 (adverse),
   MFE in R >= 0 except on a trade that never traded through its entry price.
 """
@@ -40,6 +53,10 @@ class Excursion(Record):
     mae_utc: UtcTimestamp
     mfe_price: float
     mfe_utc: UtcTimestamp
+    # live track only: the last tick folded (the approximation never reads bars past it when the exit time is unknown)
+    # and when a price reached the broker-held stop or target (nothing is folded after it)
+    last_utc: UtcTimestamp | None = None
+    frozen_utc: UtcTimestamp | None = None
 
     @classmethod
     def start(cls, entry: float, at: pd.Timestamp) -> Excursion:

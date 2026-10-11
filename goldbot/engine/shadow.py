@@ -64,7 +64,9 @@ class ShadowTrade(Record):
     state: PolicyState | None = None  # trailed stop, best price, scale-out fill, hard-flat deadline
     scored_feature_version: str | None = None   # the frame version the model scored (None: older book)
     # MAE / MFE from the bars, as the labels (labels/excursion.py): price and bar time run while open; R (of the
-    # initial risk |entry - stop|) set at the exit. None on a trade opened before the change (its first bars unseen)
+    # initial risk |entry - stop|) set at the exit. None on a trade opened before the change (its first bars unseen).
+    # The track starts at `entry` stamped `entry_ts` (the signal bar's open). A scaled trade's figures cover the whole
+    # position until its final exit. A stop exit's MAE is -1 R by construction (gaps filled at the stop)
     mae_price: float | None = None
     mae_utc: UtcTimestamp | None = None
     mfe_price: float | None = None

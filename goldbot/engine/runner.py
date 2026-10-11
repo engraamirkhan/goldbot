@@ -78,6 +78,9 @@ LATE_BARS_BLOCK = 3
 TICK_ERROR_LOG_S = 60.0
 TICK_ERROR_STATE_S = 10.0
 TICK_LOG_MAX = 20_000        # ticks kept for the store while writes fail (a full disk): the oldest are dropped
+# a position frozen at its broker stop or target (MAE/MFE, BACKLOG 23) that exits later than this was not taken there:
+# the path after the freeze was not seen and the record says approximate
+EXCURSION_FREEZE_TOLERANCE_S = 60.0
 
 
 class Model(Protocol):
@@ -204,6 +207,9 @@ class OpenTrade(Record):
     # the stored 1m bars and flags it
     excursion: Excursion | None = None
     excursion_approx: bool = False
+    # False for an orphan adopted without an order record: its initial stop is the broker's current one (maybe trailed
+    # since entry), so the record leaves R-based excursions empty (prices and times are still recorded)
+    risk_known: bool = True
 
 
 class PendingClose(Record):
@@ -1293,7 +1299,7 @@ class Engine:
                        client_order_id=rec.client_order_id if rec is not None else p.comment or None,
                        open_price=p.open_price, initial_sl=rec.sl if rec is not None else p.sl,
                        initial_lots=rec.lots if rec is not None else p.lots, opened_utc=p.open_time_utc,
-                       excursion_approx=True)
+                       excursion_approx=True, risk_known=rec is not None)
         if agent is not None:
             atr_usd = rec.atr_usd if rec is not None and rec.atr_usd is not None else \
                 self._implied_atr(agent, p.open_price, tr.initial_sl)
@@ -1900,6 +1906,9 @@ class Engine:
             log.exception("deal history unreadable for position %s; recorded from the engine's fills", pid)
             info = None
         known = info or {}
+        # neither the broker's deals nor the engine's own close fill: the price is the quote read now and the time the
+        # moment the engine noticed, neither of them the trade's (MAE/MFE never folds them, BACKLOG 23)
+        synthetic = info is None and px is None
         entry = tr.open_price if tr.open_price is not None else known.get("entry_price") or tr.entry
         if entry is None:
             raise ValueError("entry price unknown")
@@ -1961,7 +1970,8 @@ class Engine:
                           exit_reason=reason, r=r, commission=commission, swap=swap, pnl_currency=pnl_currency,
                           partial_lots=tr.scaled_lots,
                           **self._closed_excursion(pid, tr, entry, tr.opened_utc or tr.entry_bar_ts, exit_utc,
-                                                   px if px is not None else exit_px))
+                                                   None if synthetic else px if px is not None else exit_px,
+                                                   exit_known=not synthetic))
         append_closed_trade(Path(self.cfg.state_dir), rec)
         self._recorded.add(pid)
         log.info("closed trade recorded: position %s %s, pnl %.2f", pid, reason, pnl)   # the exit itself is journalled
@@ -1969,23 +1979,31 @@ class Engine:
     # ------------------------------------------------------------------ MAE / MFE (BACKLOG 23, reporting only)
     def _track_excursions(self, t: Tick) -> None:
         """Fold this tick into each open position's MAE / MFE (labels/excursion.py): the exit-side price (bid for a long,
-        ask for a short), clamped at the stop and target this engine expects at the broker, so the ticks between a
-        server-side exit and the engine noticing it never count (the record adds the actual exit fill). Runs after
-        every exit of the tick. Reporting only: a failure is logged (once per kind, then counted) and never raised or
-        made a tick error, so it can neither block an exit nor an entry; the position's record is then approximate."""
-        for tr in self.open.values():
+        ask for a short). Runs after the tick's per-tick exits (`_stop_check`, `_retry_closes`, the kill switch, the
+        scale-out); bar-close and reconcile exits on the same tick follow it, and their fill is added by the record.
+        A price at or through the stop or target the broker holds freezes the track (the broker takes the position
+        there; nothing after it is folded, the record adds the actual fill). A price through a stop only the engine
+        holds while its close is being retried (`_close_due`: the position is still open) is folded as it is, never
+        clamped. Reporting only: a failure is logged (once per kind, then counted) and never raised or made a tick
+        error, so it can neither block an exit nor an entry; the position's record is then approximate."""
+        for pid, tr in self.open.items():
             try:
                 entry = tr.open_price if tr.open_price is not None else tr.entry
                 if entry is None or (tr.opened_utc is not None and t.ts_utc < tr.opened_utc):
                     continue
-                px = t.bid if tr.side > 0 else t.ask
-                if tr.sl is not None and tr.side * (px - tr.sl) < 0:
-                    px = tr.sl
-                if tr.tp is not None and tr.side * (px - tr.tp) > 0:
-                    px = tr.tp
                 if tr.excursion is None:
                     tr.excursion = Excursion.start(entry, tr.opened_utc or t.ts_utc)
-                tr.excursion.fold(tr.side, px, t.ts_utc)
+                ex = tr.excursion
+                if ex.frozen_utc is not None:
+                    continue
+                px = t.bid if tr.side > 0 else t.ask
+                at_broker_level = (tr.sl is not None and tr.side * (px - tr.sl) <= 0) or \
+                    (tr.tp is not None and tr.side * (px - tr.tp) >= 0)
+                if at_broker_level and pid not in self._close_due:
+                    ex.frozen_utc = t.ts_utc
+                    continue
+                ex.fold(tr.side, px, t.ts_utc)
+                ex.last_utc = t.ts_utc
             except Exception as exc:
                 tr.excursion_approx = True
                 kind = type(exc).__name__
@@ -1995,24 +2013,39 @@ class Engine:
                     log.warning("MAE/MFE tracking failed (%s); reporting only, trading continues", kind, exc_info=exc)
 
     def _closed_excursion(self, pid: int, tr: OpenTrade, entry: float, entry_utc: pd.Timestamp,
-                          exit_utc: pd.Timestamp, exit_fill: float | None) -> dict[str, Any]:
-        """The ClosedTrade MAE / MFE fields: the tick track plus the exit fill. When ticks did not see the whole path
-        (`excursion_approx`, or no track at all) the stored 1m bars wholly inside [entry, exit] on the exit side are
-        folded in and the record says approximate. Never raises: a failure leaves the fields empty (the trade is
-        still recorded)."""
+                          exit_utc: pd.Timestamp, exit_fill: float | None, *, exit_known: bool = True) -> dict[str, Any]:
+        """The ClosedTrade MAE / MFE fields: the tick track plus the exit fill, every extreme at or before `exit_utc`.
+        The record is approximate, and the stored 1m bars wholly inside the trade on the exit side are folded in, when
+        ticks did not see the whole path: `excursion_approx` (a restart, an adopted position), no track at all, the
+        position outlived a freeze at its broker level by more than EXCURSION_FREEZE_TOLERANCE_S, or `exit_known` is
+        False (no deals and no close fill: the bars stop at the last tick folded and no exit price is folded). A track
+        with an extreme after the exit (a manual or broker close seen late) is dropped and rebuilt from the bars up to
+        the exit. R is left empty when the initial stop is not the trade's (`risk_known`). Never raises: a failure
+        leaves the fields empty (the trade is still recorded)."""
         try:
-            ex = tr.excursion.model_copy() if tr.excursion is not None else Excursion.start(entry, entry_utc)
-            approx = tr.excursion_approx or tr.excursion is None
+            track = tr.excursion
+            approx = tr.excursion_approx or track is None or not exit_known
+            bars_end = exit_utc
+            if not exit_known:
+                exit_fill = None
+                bars_end = track.last_utc if track is not None and track.last_utc is not None else entry_utc
+            if track is not None and track.frozen_utc is not None and exit_known and \
+                    (exit_utc - track.frozen_utc).total_seconds() > EXCURSION_FREEZE_TOLERANCE_S:
+                approx = True
+            if track is not None and (track.mae_utc > exit_utc or track.mfe_utc > exit_utc):
+                track, approx = None, True
+            ex = track.model_copy() if track is not None else Excursion.start(entry, entry_utc)
             fav_col, adv_col = ("bid_high", "bid_low") if tr.side > 0 else ("ask_low", "ask_high")
             b = self.bars_1m
             if approx and not b.empty and {"ts_utc", fav_col, adv_col} <= set(b.columns):
                 ts = pd.to_datetime(b["ts_utc"], utc=True)
-                inside = b[(ts >= entry_utc) & (ts + pd.Timedelta(minutes=1) <= exit_utc)]
+                inside = b[(ts >= entry_utc) & (ts + pd.Timedelta(minutes=1) <= bars_end)]
                 for at, fav, adv in zip(pd.to_datetime(inside["ts_utc"], utc=True), inside[fav_col], inside[adv_col]):
                     ex.fold(tr.side, float(adv), at, float(fav), at)
             if exit_fill is not None:
                 ex.fold(tr.side, float(exit_fill), exit_utc)
-            return {**ex.summary(tr.side, entry, tr.initial_sl), "excursion_approx": approx}
+            out = ex.summary(tr.side, entry, tr.initial_sl if tr.risk_known else None)
+            return {**out, "excursion_approx": approx}
         except Exception:
             log.warning("MAE/MFE not recorded for position %s; the trade is recorded without it", pid, exc_info=True)
             return {}

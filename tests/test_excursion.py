@@ -14,13 +14,17 @@ from goldbot.config import AttributionSettings
 from goldbot.engine import runner
 from goldbot.engine.runner import OpenTrade
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, VersionBook
-from goldbot.execution.broker import Tick
+from goldbot.execution.broker import OrderIntent, OrderResult, Tick
 from goldbot.labels.excursion import label_excursions
 from goldbot.labels.triple_barrier import BarrierSpec, one_at_a_time, triple_barrier
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade
 from goldbot.ops.monthly_report import build_monthly_report, format_report
-from goldbot.research.attribution import CostModel, build_report
+from goldbot.research.attribution import AttributionReport, CostModel, build_report, render_markdown
 from tests.test_closed_trades import TREND, _engine, _enter, _records, _settle
+from tests.test_exit_policies import BREAKOUT as BREAKOUT_P
+from tests.test_exit_policies import SESSION as SESSION_P
+from tests.test_exit_policies import TREND as TREND_P
+from tests.test_exit_policies import _random_bars
 from tests.test_shadow import _bars
 
 T0 = pd.Timestamp("2025-03-03 08:00", tz="UTC")
@@ -241,17 +245,24 @@ def _closed(pid: int, mae_r: float | None, mfe_r: float | None, approx: bool | N
                        excursion_approx=approx if mae_r is not None else None)
 
 
-def test_the_monthly_report_shows_the_median_mae_and_mfe_in_r(tmp_path: Path):
-    for i, (mae, mfe, ap) in enumerate([(-0.2, 1.5, False), (-0.6, 0.4, True), (-1.0, 0.1, False), (None, None, None)]):
+def test_the_monthly_report_keeps_approximate_excursions_out_of_the_exact_median(tmp_path: Path):
+    """Exact records give the median; records filled from bars across a restart get their own median and count."""
+    rows = [(-0.2, 1.5, False), (-0.4, 1.0, False), (-0.6, 0.5, False), (-3.0, 4.0, True), (-2.0, 3.0, True),
+            (None, None, None)]
+    for i, (mae, mfe, ap) in enumerate(rows):
         append_closed_trade(tmp_path, _closed(i, mae, mfe, ap))
     rep = build_monthly_report(tmp_path, month="2026-10", now=pd.Timestamp("2026-11-01 06:00", tz="UTC"))
-    (a,) = rep.accounts
-    assert a.mae_r_median == pytest.approx(-0.6) and a.mfe_r_median == pytest.approx(0.4)
-    assert a.excursion_trades == 3 and a.excursion_approx == 1
-    assert "median MAE -0.60R · median MFE +0.40R over 3 trades (1 approximate" in format_report(rep)
+    (acc,) = rep.accounts
+    assert acc.mae_r_median == pytest.approx(-0.4) and acc.mfe_r_median == pytest.approx(1.0)
+    assert acc.excursion_trades == 3
+    assert acc.approx_mae_r_median == pytest.approx(-2.5) and acc.approx_mfe_r_median == pytest.approx(3.5)
+    assert acc.excursion_approx == 2
+    text = format_report(rep)
+    assert "median MAE -0.40R · median MFE +1.00R over 3 trades" in text
+    assert "approximate (restart): median MAE -2.50R · median MFE +3.50R over 2" in text
 
 
-def test_attribution_shows_median_mae_and_mfe_by_exit_type():
+def _attribution_report() -> AttributionReport:
     entry, risk = 2400.0, 10.0
     trades = []
     for i in range(6):
@@ -266,8 +277,133 @@ def test_attribution_shows_median_mae_and_mfe_by_exit_type():
                                   mae_r=-1.0 if stop else -0.1 * i, mfe_r=0.2 * i if stop else 2.0))
     free = CostModel(spread_usd={}, slippage_usd={}, slippage_prior_usd=0.0, commission_usd_per_oz=0.0, swap=None,
                      source="test")
-    rep = build_report(trades, now=pd.Timestamp("2026-10-09 23:50", tz="UTC"), costs=free,
-                       settings=AttributionSettings(window_days=180, min_trades=30, calibration_bins=10,
-                                                    calibration_min_bin=10))
+    return build_report(trades, now=pd.Timestamp("2026-10-09 23:50", tz="UTC"), costs=free,
+                        settings=AttributionSettings(window_days=180, min_trades=30, calibration_bins=10,
+                                                     calibration_min_bin=10))
+
+
+def test_attribution_shows_median_mae_and_mfe_by_exit_type():
+    rep = _attribution_report()
     assert rep.exits["stop"].mae_r_median == pytest.approx(-1.0) and rep.exits["stop"].mfe_r_median == pytest.approx(0.4)
     assert rep.exits["target"].mae_r_median == pytest.approx(-0.3) and rep.exits["target"].mfe_r_median == 2.0
+
+
+def test_attribution_marks_the_stop_mae_and_target_mfe_as_fixed_by_construction():
+    md = render_markdown(_attribution_report())
+    assert "-1.00 (fixed)" in md and "+2.00 (fixed)" in md
+    assert "not comparable with live" in md
+
+
+# ---------------------------------------------------------------------------------------------- review fixes (a91f01f)
+def _extremes_by_exit(t: ClosedTrade) -> bool:
+    return t.mae_utc is not None and t.mfe_utc is not None and t.mae_utc <= t.exit_utc and t.mfe_utc <= t.exit_utc
+
+
+def test_a_run_up_after_a_manual_broker_close_never_enters_the_mfe(tmp_path):
+    """A manual close at the broker: the engine keeps seeing ticks until its sweep. The record's extremes must all lie
+    at or before the deal's exit time; the track is rebuilt from bars up to the exit and flagged approximate."""
+    eng, pb = _engine(tmp_path, TREND)
+    pid = _enter(eng, pb, TREND)
+    eng.on_tick(_q(1, 2000.5, 2000.5))
+    pb.on_tick(_q(2, 2000.6, 2000.6))
+    pb.close(pid)                                    # the owner closes it in the terminal
+    eng.on_tick(_q(3, 2002.0, 2002.0))               # run-up the engine still folds before the sweep
+    _settle(eng)
+    (t,) = _records(tmp_path)
+    assert t.exit_utc == _at(2) and _extremes_by_exit(t)
+    assert t.mfe_price is not None and t.mfe_price <= 2000.6 + 1e-9 and t.excursion_approx is True
+
+
+def test_a_close_confirmed_without_deals_never_folds_the_quote_seen_at_the_sweep(tmp_path, monkeypatch):
+    """No exit deal ever: the record falls back to the engine's own figures. The quote read at that moment is not the
+    trade's: the excursion stops at the last tick the engine folded, and the record is approximate."""
+    eng, pb = _engine(tmp_path, TREND)
+    pid = _enter(eng, pb, TREND)
+    eng.on_tick(_q(1, 2000.5, 2000.5))
+    pb.on_tick(_q(2, 2000.6, 2000.6))
+    pb.close(pid)
+    monkeypatch.setattr(pb, "deals_since", lambda since: pd.DataFrame())
+    pb.on_tick(_q(5, 2003.0, 2003.0))                # the quote when the engine records it
+    for _ in range(10):
+        _settle(eng)
+    (t,) = _records(tmp_path)
+    assert _extremes_by_exit(t) and t.mfe_price == pytest.approx(2000.5) and t.mfe_utc == _at(1)
+    assert t.excursion_approx is True
+
+
+def test_ticks_through_the_engine_stop_count_raw_while_its_close_is_being_retried(tmp_path, monkeypatch):
+    """The engine's stop is tighter than the broker's and its close is refused: the position is still open, so the
+    price beyond the engine's stop is the trade's real excursion (never clamped at a stop that is not in place)."""
+    eng, pb = _engine(tmp_path, TREND)
+    pid = _enter(eng, pb, TREND)
+    eng.open[pid].sl = 1999.8
+    real = pb.close
+    monkeypatch.setattr(pb, "close", lambda position_id, lots=None: OrderResult(
+        ok=False, retcode=10004, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="requote"))
+    eng.on_tick(_q(1, 1999.5, 1999.5))               # through the engine stop; the close is refused
+    assert pid in eng.open and pid in eng._close_due
+    monkeypatch.setattr(pb, "close", real)
+    eng.on_tick(_q(2, 1999.6, 1999.6))               # the reinstated broker stop (or the retry) takes it
+    _settle(eng)
+    (t,) = _records(tmp_path)
+    assert t.mae_price == pytest.approx(1999.5) and t.mae_utc == _at(1)
+
+
+def test_a_broker_stop_freezes_the_track_and_the_record_stays_exact(tmp_path):
+    eng, pb = _engine(tmp_path, TREND)
+    _enter(eng, pb, TREND)
+    eng.on_tick(_q(1, 1998.5, 1998.5))               # the broker's stop fills the gap at 1998.5
+    eng.on_tick(_q(2, 1990.0, 1990.0))
+    _settle(eng)
+    (t,) = _records(tmp_path)
+    assert t.mae_price == pytest.approx(1998.5) and _extremes_by_exit(t) and t.excursion_approx is False
+
+
+def test_an_adopted_orphan_without_an_order_record_keeps_prices_but_no_r(tmp_path):
+    """Its stop is the broker's current one, maybe trailed since entry: R against it would be wrong, so R stays empty."""
+    eng, pb = _engine(tmp_path, TREND)
+    pb.on_tick(_q(0, 2000.0, 2000.0))
+    res = pb.place_order(OrderIntent(client_order_id="manual-1", symbol="XAUUSD", side=1, lots=0.1, sl=1999.0,
+                                     tp=2010.0, magic=eng._magic(TREND.family), comment="manual-1"))
+    assert res.position_id is not None
+    _settle(eng)
+    assert res.position_id in eng.open
+    eng.on_tick(_q(1, 1999.5, 1999.5))
+    eng._kill_switch(everything=True)
+    eng._save_orders()
+    (t,) = _records(tmp_path)
+    assert t.mae_price == pytest.approx(1999.5) and t.mae_r is None and t.mfe_r is None
+
+
+@pytest.mark.parametrize("agent", [TREND_P, BREAKOUT_P, SESSION_P], ids=["trail", "scale_out", "hard_flat"])
+def test_shadow_excursions_equal_the_labels_under_an_exit_policy(tmp_path, agent):
+    policy = agent.exit_spec
+    bars = _random_bars(seed=1, vol=1.0)
+    atr = pd.Series(np.full(len(bars), 2.0))
+    spec = BarrierSpec(target_atr=2.5, stop_atr=1.25, max_bars=16)
+    idx = np.arange(20, 360, 7)
+    signals = pd.DataFrame({"idx": idx, "side": np.where(idx % 2 == 0, 1, -1)})
+    labels = one_at_a_time(triple_barrier(bars, signals, spec, atr, policy=policy))
+    want = label_excursions(bars, labels, spec.stop_atr, atr).set_index(labels["idx"])
+    book = ShadowBook(tmp_path)
+    book.track("v1", bars["ts_utc"].iloc[0])
+    sig = dict(zip(signals["idx"], signals["side"]))
+    for i in range(len(bars)):
+        bar = bars.iloc[i]
+        book.on_bar(bar)
+        if i in sig:
+            book.open_trade(version="v1", agent_id="a", side=int(sig[i]), bar_ts=bar["ts_utc"],
+                            entry=float(bar["ask_close"] if sig[i] > 0 else bar["bid_close"]), atr_usd=2.0,
+                            target_atr=2.5, stop_atr=1.25, max_bars=16, p=0.6, policy=policy)
+    closed = {t.entry_ts: t for t in book.books["v1"].closed}
+    checked = 0
+    for i in want.index:
+        t = closed.get(bars["ts_utc"].iloc[i])
+        if t is None:                                # still open at the end of the path
+            continue
+        w = want.loc[i]
+        assert t.mae_price == pytest.approx(w["mae_price"]) and t.mfe_price == pytest.approx(w["mfe_price"]), i
+        assert t.mae_r == pytest.approx(w["mae_r"]) and t.mfe_r == pytest.approx(w["mfe_r"]), i
+        assert t.mae_utc == w["mae_utc"] and t.mfe_utc == w["mfe_utc"], i
+        checked += 1
+    assert checked > 5
