@@ -26,6 +26,14 @@ trap '' PIPE HUP
 exec > >(tee -a "$LOG" --output-error=warn 2>/dev/null; cat > /dev/null) 2>&1
 echo "== goldbot brain bootstrap $(date -u +%FT%TZ) ref=${REF:-main}"
 
+# Fallback host (docs/deploy/first-deploy.md "If Oracle has no A1 capacity"): on a box with under 4 GB of RAM (a 1 GB
+# x86 micro) a 4 GB swap file keeps the dashboard build and the Saturday retrain from being killed. The A1 shape
+# (12 GB) gets none.
+if [ "$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)" -lt 4000000 ] && ! swapon --show | grep -q /swapfile; then
+  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  grep -q /swapfile /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+fi
+
 apt-get update -y
 # restic: encrypted off-host backups of the state (goldbot/ops/backup.py, run by the scheduler as user goldbot)
 DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates chrony build-essential xz-utils restic

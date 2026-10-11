@@ -6,7 +6,8 @@ SSH for the first deploy (docs/deploy/first-deploy.md). They must:
   the code the owner checked on GitHub's main, whatever merges in between;
 * ignore SIGHUP and SIGPIPE before the first change (docs/AGENT_STANDARDS.md "Root-run tooling") and keep a root-only
   log, so a dropped session never leaves a half-installed box with no record;
-* give the 1 GB MT5 box 4 GB of swap (docs/deploy/free-hosting-options.md)."""
+* give the 1 GB MT5 box 4 GB of swap, and a brain on a fallback box under 4 GB the same
+  (docs/deploy/free-hosting-options.md)."""
 from __future__ import annotations
 
 import re
@@ -66,3 +67,9 @@ def test_both_clones_land_on_the_pinned_commit(role):
 
 def test_the_mt5_box_gets_4_gb_of_swap():
     assert "fallocate -l 4G /swapfile" in _text("mt5")
+
+
+def test_a_small_fallback_brain_gets_swap_and_the_a1_shape_none():
+    s = _text("brain")
+    assert "-lt 4000000 ] && ! swapon --show | grep -q /swapfile" in s and "fallocate -l 4G /swapfile" in s
+    assert s.index("fallocate -l 4G") < s.index("npm ci")
