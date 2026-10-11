@@ -40,6 +40,7 @@ and does not follow this column.
 | 3 | H-13 | **Volatility-forecast cost filter**: skip any candidate whose HAR-forecast move is < 3× its round trip | proposed (infrastructure) | Costs decide most outcomes | D | all | Raises net R per trade by removing trades that cannot pay their costs. Not alpha | 0 (applied to every family; report net R with and without) |
 | 5 | H-14 | **15m scalping set** (owner request): liquidity-sweep fades, stop-cluster/round-number reactions, session-open flow and news-jump continuation on 15m, each gated by expected move ≥ 3× round-trip cost | proposed; screen in a 15m discovery trial first | Microstructure mechanisms (Osler 2003/2005); costs dominate at 15m (0.2–0.4 R), so only cost-gated setups | D | 15m | Must show gross edge several times cost; Q4 15m families showed none | 1 (15m discovery) + survivors |
 | 17 | H-15 | **Liquidation rebound** (playbook C-1): after a day when gold falls *with* the S&P 500 and the VIX jumps (dash for cash), long gold 5–15 days. Distinct from H-07, which assumes haven buying | proposed; feature-first (playbook D-8 into H-02) | Forced cross-asset deleveraging sells gold, and it usually recovers (2008, Mar 2020). Mar 2026 is in the holdout and is not usable as evidence | D, F (VIXCLS, SP500) | 1d | Unknown; few events (< 1,000, owner ruling on the daily floor) | 0 until it survives H-02 |
+| 24 | H-24 | **West-hours drift (short)**: short at the New York open (08:30 New York), flat at 16:00 New York, stop 1.5 ATR(1h), every trading day. The Western leg of the mechanism H-04 tests in Asia | proposed (2026-10-11, session-coverage review A4); **conditional on H-04 continue**, funded from Q2's Q1-follow-up reserve; no trial before H-04's verdict | Same thesis as H-04: Asian physical/ETF demand vs Western selling (SoA B2). The 2026 press figures fall in the holdout and are not evidence | D | 1h | As thin as H-04 (≤ 0.03% per session vs a round trip of about 0.025–0.03%). Short side, intraday: no swap. About 4,000 events. 1h stop, so it needs M2 (£1,650) | 1 if H-04 continues |
 
 Folded into existing rows by `xauusd-trader-playbook.md` (no new trials):
 - $100 round-number step: H-05.
@@ -110,6 +111,48 @@ evidence grade; plausible gross edge against cost; information value for other i
 | H-12 | 12 | 21 | Feature only |
 | H-23 | A2 #8 | 22 | Blocked on intraday USD data |
 | H-22 | A2 #7 | 23 | Folklore grade; feature only |
+
+## A4. Session coverage (research director, 2026-10-11)
+
+The owner asked whether all three daily sessions are covered. Session clocks (`goldbot/data/calendar.py`, DST per
+date): **Tokyo** 08:00–15:00 Tokyo = 23:00–06:00 UTC all year. **London** 08:00–16:30 London = 08:00–16:30 UTC in
+winter, 07:00–15:30 UTC in summer. **New York** 08:30–16:00 New York = 13:30–21:00 UTC in winter, 12:30–20:00 UTC in
+summer. "Trades" means the hypothesis enters or holds a position in that session. "Uses" means it reads that session
+only as an input.
+
+**Live and shadow: nothing.** No agent has passed the gates, so no champion or challenger proposes trades, and the
+shadow book is empty (scorecard section 1). Every row below is queued or proposed.
+
+| ID | State | TF | Entry window / holding | Tokyo | London | New York | Tradeable at £1,000 (M1)? |
+|---|---|---|---|---|---|---|---|
+| H-02 (+ survivor slots H-03/05/07/08/10) | queued Q1 | 4h | any 4h bar; 12-bar (48 h) label | trades | trades | trades | no (M3) |
+| H-01, H-06 | queued Q1 | 1d signal, 4h execution | first 4h bar after the daily settlement; held up to ~28 days | trades (held) | trades (held) | trades (held) | no (M4) |
+| tsmom 4h continuity (C4H) | queued Q1 | 4h | any 4h bar; 48 h | trades | trades | trades | no (M3) |
+| H-04 Asia drift | queued Q1 | 1h | long 00:00–07:00 UTC, flat before London | **trades** (09:00 Tokyo to the close, plus the hour before London) | — | — | no (M2, and the owner's click at ~01:00 UK) |
+| H-13 overlay | Q1 and Q2 | all | every trial | as the trial | as the trial | as the trial | n/a (0 trials) |
+| H-16 opportunity score | Q2 draft | daily | forecast at 06:30 UTC of the 08:00 London .. 16:30 New York range | uses (overnight range inputs) | forecast target | forecast target | selector, no trades |
+| H-19 overlay | Q2 draft | all | every Q2 trial | as the trial | as the trial | as the trial | n/a |
+| H-17 trend day | Q2 draft | 15m | entries 09:00 London .. 10:30 New York; flat 16:30 New York | — | **trades** | **trades** | yes (M1) |
+| H-14 15m discovery (+ ≤ 2 survivors) | Q2 draft | 15m | candidates 08:00 London .. 16:00 New York | uses (Asia extremes in the sweep group) | **trades** | **trades** | yes (M1) |
+| H-18 event continuation | Q2 draft, conditional | 15m | release + 30 min (08:30 ET releases, FOMC 14:00 ET); flat 16:30 New York | — | — | **trades** | yes (M1) |
+| H-24 West-hours drift | proposed, conditional | 1h | short 08:30–16:00 New York | — | — | **trades** | no (M2) |
+| H-11 | blocked (consensus feed) | 15m–4h | after US releases | — | — | trades | yes (M1) |
+| H-03, H-07, H-15 | proposed (daily) | 1d | multi-day | held | held | held | no (M4) |
+| H-05, H-08, H-10 | at 15m inside H-14; at 4h inside H-02 | 15m / 4h | as H-14 / H-02 | 4h only | trades | trades | 15m form yes |
+| H-09, H-12, H-20, H-21, H-22, H-23 | features only | — | — | — | — | — | n/a |
+
+**Coverage.** London and New York are covered at 15m, the only timeframe £1,000 can trade, by three Q2 ideas
+(H-17, H-14, H-18) and one selector (H-16). Tokyo is covered by one queued idea, H-04, at 1h (not tradeable until
+M2), and by the multi-day holds, none tradeable at £1,000.
+
+**Gaps and decisions** (against the budget: Q1 is fixed; Q2 has 20 with 7 free and 6 Q1-follow-up slots):
+
+| Gap | Pre-register within the budget? | Reason |
+|---|---|---|
+| **G-1. Tokyo at 15m: nothing** | **No, recorded only.** Revisit if H-04 continues (a 15m execution of Asia drift becomes a Q3 neighbour), if the owner's export shows his edge in Tokyo hours (`owner-method-study.md`), or if auto mode is enabled on the demo (BACKLOG 15) | (1) Entries need the owner's click within 90 s, and 23:00–06:00 UTC is midnight to 07:00 in the UK. Live would trade a small, self-selected subset of research events. (2) Spreads are widest and the range smallest in Asian hours (playbook 2.2), so fixed USD costs are the largest share of R. That is the opposite of the opportunity-day thesis. (3) The one Asian-hours mechanism with any evidence (physical and ETF demand) is H-04 already. Asian extremes still feed London trades through H-14's sweep group |
+| **G-2. The Western leg of the Asia/West mechanism** | **Yes, conditionally: H-24**, added to Q2's Q1-follow-up reserve, live only if H-04 reads continue (1 trial). Not run unconditionally | One mechanism predicts both legs. A null Asian leg removes most of the prior for the Western leg, so spending a trial before H-04's verdict buys little. H-24 is distinct from R-05 (intraday momentum: a signal from the morning move) and R-08 (London-fix front-running): it is a clock rule with a demand-flow reason |
+| G-3. 06:00–07:00/08:00 UTC (between Tokyo and London), and 16:00–17:00 New York | No | Thin hours with no mechanism in the literature reviewed. The daily reopen window is a risk rule (BACKLOG 17), not an edge |
+| G-4. H-16 forecasts the London–New York range only | No | Nothing trades in Tokyo at M1, so a Tokyo range forecast has no user. Revisit with G-1 |
 
 ## B. Retired: do not re-test without new evidence
 
