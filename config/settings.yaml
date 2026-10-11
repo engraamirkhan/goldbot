@@ -140,6 +140,7 @@ scheduler:
   attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
 
   feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day
+  broker_ledger:    { kind: daily,   at: "23:25", max_late_hours: 20 }                  # GAP-07/08: balance snapshot, positions + balance vs broker
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -283,3 +284,11 @@ attribution:                         # daily deterministic attribution (goldbot/
   calibration_bins: 10               # equal-width bins of p for predicted-vs-realised
   calibration_min_bin: 10            # bins with fewer candidates are marked noise
   trade_rows: 300                    # most recent per-trade cost rows kept in state/attribution.json
+
+ledger:                              # broker ledger (goldbot/ops/ledger.py; finance audit GAP-07/08, RC-8/RC-9); read-only
+  balance_tolerance: 0.05            # account currency a day: a balance change its deals do not explain beyond this FAILs
+  balance_tolerance_per_deal: 0.01   #   ... plus this per deal in the day (RC-9: 0.01 per trade)
+  price_tolerance: 0.01              # $/oz: closed record vs broker entry/exit price; further is a mismatch (WARN)
+  pnl_tolerance: 0.01                # account currency per trade: closed record vs the broker's deals (WARN)
+  close_grace_minutes: 15            # a broker close this recent may not be recorded yet: not reported missing
+  max_age_hours: 48                  # health warns when the last ledger report is older

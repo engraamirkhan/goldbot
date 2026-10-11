@@ -18,12 +18,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 182 |
+| implemented | 183 |
 | partial | 16 |
 | missing | 3 |
 | deviates | 6 |
 | in review | 9 |
-| **total** | **216** |
+| **total** | **217** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -265,6 +265,7 @@ tests/test_sizing_parity.py::test_sizing_module_matches_the_gate and ::test_stag
 | X15 | Webhook: "accepts POSTs only from TradingView's published IPs" | implemented | goldbot/webhook/app.py:24, 79-83 (peer address) | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar (IP check disabled in test) |
 | X16 | Webhook: "verifies an HMAC over the payload in constant time, rejects replayed nonces" | deviates | constant-time shared secret in the body (goldbot/webhook/app.py:84; TradingView cannot sign) plus content-hash idempotency; no nonce | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar |
 | X17 | "upserts on a content hash so retries are idempotent" | implemented | goldbot/webhook/app.py:40, 87-90 | tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar |
+| X18 | Reconciliation with the broker (finance audit RC-8, RC-9; GAP-07, GAP-08): "Every engine position (magic in the account's range) in the broker's deals has exactly one closed record or is still open; no closed record without broker deals" and "Opening balance + net closed P&L + deposits - withdrawals = closing balance" | implemented | goldbot/ops/ledger.py `run_ledger` (read-only: account, positions, deals_since read twice around the account until equal; snapshot, MT5 balance deals as deposit/withdrawal/credit/adjustment, tie-out with ledger.balance_tolerance + per deal, trades by position id: missing, extra, mismatch on side/lots/prices/pnl/pnl currency, close grace) -> aux.db migration 7 `broker_ledger` (balance_snapshots, balance_deals, ledger_reports; additive); scheduler job `broker_ledger` (goldbot/ops/jobs.py, daily 23:25 UTC); health `crossfeed.check_reconciliation` = worse of the D12 feed report and `ledger.ledger_status` (trade difference warn, unexplained balance fail, stale > 48 h warn; counts only); `python -m goldbot.ops.ledger show <account>`. No new bridge method: `deals_since` already returns every deal type | tests/test_broker_ledger.py::test_balance_change_explained_by_pnl_commission_swap_and_deposits_ties_out; ::test_balance_change_beyond_the_tolerance_fails; ::test_balance_deals_are_captured_as_deposits_and_withdrawals_with_their_time; ::test_broker_closed_position_without_a_closed_record_is_missing; ::test_closed_record_without_broker_deals_is_extra; ::test_closed_record_differing_from_the_broker_is_mismatched_on_that_field; ::test_open_positions_are_compared_and_reported_missing_or_extra; ::test_reconcile_check_warns_on_a_trade_mismatch_and_fails_on_an_unexplained_balance_change |
 
 ## Phases, accounts and credentials [Demo first, live by gate; Logins and credentials]
 

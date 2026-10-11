@@ -184,6 +184,35 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS email_link_requests_key ON email_link_requests(key, ts_ns)",
     )),
+    # additive: the broker ledger (goldbot/ops/ledger.py; finance audit GAP-07, GAP-08). Amounts only: never a login,
+    # server or deal comment. key = '<account>|<UTC date>' (one snapshot and one report per account and day; a re-run
+    # replaces it) or '<account>|<deal ticket>' (a balance deal is booked once)
+    Migration(version=7, name="broker_ledger", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS balance_snapshots (
+               key TEXT PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               ts_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS balance_snapshots_account ON balance_snapshots(account_id, ts_ns)",
+        # deposits, withdrawals, credit and broker adjustments from the deal history (MT5 non-trade deals)
+        f"""CREATE TABLE IF NOT EXISTS balance_deals (
+               key TEXT PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               ts_ns INTEGER NOT NULL,
+               kind TEXT NOT NULL,
+               {_BODY}
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS balance_deals_account ON balance_deals(account_id, ts_ns)",
+        f"""CREATE TABLE IF NOT EXISTS ledger_reports (
+               key TEXT PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               ts_ns INTEGER NOT NULL,
+               status TEXT NOT NULL,
+               {_BODY}
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS ledger_reports_account ON ledger_reports(account_id, ts_ns)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (_IMPORTS,)      # steps 5-7 (halts, approvals, orders) append here
