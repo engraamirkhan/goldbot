@@ -77,6 +77,20 @@ def _positions_get(**kw: Any) -> Any:
     return got
 
 
+def _position_ticket(res: Any) -> int:
+    """The position a filled market order opened or joined (trading-safety MEDIUM-A). In MT5 a position's ticket is the
+    ticket of the ORDER that opened it, never the deal's: the filling deal names its position (`history_deals_get(
+    ticket=deal)[0].position_id`, also right on a netting account where the fill joins an existing position); when the
+    deal cannot be read (None, empty, an error, not synced yet) the order ticket, which is the position's on a hedging
+    account. Verify on the demo terminal."""
+    try:
+        deals = mt5.history_deals_get(ticket=res.deal)
+        pid = int(deals[0].position_id) if deals else 0
+    except Exception:                                   # the order ticket is still the right answer on hedging
+        pid = 0
+    return pid if pid > 0 else int(res.order)
+
+
 def _send_failed(position_id: int) -> OrderResult:
     """order_send returned None (a terminal error): a refused result the engine retries, never a crash."""
     return OrderResult(ok=False, retcode=-1, order_id=None, position_id=position_id, filled_lots=0.0, price=None,
@@ -317,7 +331,7 @@ class MT5Broker:
                 return OrderResult(ok=False, retcode=getattr(chk, "retcode", -1), order_id=None, position_id=None, filled_lots=0.0, price=None, message=f"order_check: {getattr(chk, 'comment', '')}")
             res = mt5.order_send(req)
             if res is not None and res.retcode == RETCODE_DONE:
-                return OrderResult(ok=True, retcode=res.retcode, order_id=res.order, position_id=res.deal, filled_lots=res.volume, price=res.price, message=res.comment)
+                return OrderResult(ok=True, retcode=res.retcode, order_id=res.order, position_id=_position_ticket(res), filled_lots=res.volume, price=res.price, message=res.comment)
             if res is not None and res.retcode in (RETCODE_REQUOTE, RETCODE_REJECT) and attempt < 2:
                 time.sleep(0.5)
                 tick = mt5.symbol_info_tick(intent.symbol)

@@ -793,6 +793,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (None) until the engine has read the positions; LOW-3 health `open_risk:<account>` warns and tells the owner on
   Telegram (`NOTIFY_ON_WARN`) while the open risk is unknown and the heat cap, or the projection with an absolute limit,
   is on; LOW-4 "per account vs combined same-side count" is an owner decision in OWNER_GUIDE section 4.
+- MT5 adapter reports the position ticket, not the deal ticket (2026-10-11, trading-safety re-verification MEDIUM-A):
+  `place_order` returned `position_id=res.deal`, but an MT5 position's ticket is its opening ORDER's, so the engine
+  keyed `self.open` by a number the terminal never lists (a phantom close at the next sweep, the real position adopted
+  as an orphan). `mt5_adapter._position_ticket` now asks the filling deal (`history_deals_get(ticket=deal)[0]
+  .position_id`, right on netting accounts too) and falls back to `res.order`. Tests on a fake terminal whose deal and
+  order tickets differ (tests/test_mt5_position_ticket.py, including the engine keying and a sweep + reconcile that
+  keep the trade). **Verify on the demo terminal:** after the first demo fill, the engine's `open` position id and the
+  `adopt_orphan` count in the decisions journal (expected: the terminal's position ticket, no orphan adopted).
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on
