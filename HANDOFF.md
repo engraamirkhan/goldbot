@@ -737,20 +737,29 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`combined_daily_loss_abs`) when the combined day loss reaches 50. Exits never consult it. engine_<account>.json
   carries `daily_loss_limit` and `daily_loss_remaining`; health shows them on the daily cap line and warns when none
   is left. Not done: the approval card's "remaining daily allowance" (ui-ux follow-up).
-- Per-agent loss-streak and entry-rate throttle (2026-10-11, BACKLOG 21, playbook G-6, row R35; **off by default**,
-  needs trading-safety review): `risk.throttle: {enabled: false, loss_streak: 3, cooldown_bars: 4,
-  max_entries_per_day_per_agent: 3}`. When enabled, RiskGate refuses an agent's entries with `throttle_loss_streak`
-  after `loss_streak` consecutive full losses (closed trades of that agent on that account with R <= -0.9; any other
-  trade ends the streak) until `cooldown_bars` bars of the agent's timeframe have passed since the last one or a
-  winning taken shadow trade of that agent closes after it, and with `throttle_entry_rate` once it has made
-  `max_entries_per_day_per_agent` entries in the risk day (00:00 UTC). Entries only (decision and approval re-check);
-  exits never consult it. No new state file: the facts are derived from the closed-trade record, the open book and the
-  shadow book (`goldbot/risk/throttle.py`), so a restart keeps them; while off the engine reads nothing for it.
-  engine_<account>.json carries `throttle` (settings; per agent when on: streak, last loss, cooldown end, entries
-  today, `blocked`); health `throttle:<account>` warns and alerts on Telegram while an agent is throttled. Owner: set
-  the thresholds and turn it on (settings.local.yaml `risk: { throttle: { enabled: true, ... } }`, restart the
-  engine). Not done: the playbook's "until the next session" variant and a cross-account count (both accounts run the
-  same agents; each account counts its own), the dashboard/approval card do not show it yet (ui-ux follow-up).
+- Per-agent loss-streak and entry-rate throttle (2026-10-11, BACKLOG 21, playbook G-6, row R35; **off by default**;
+  trading-safety review: merge after fixes, fixes in): `risk.throttle: {enabled: false, loss_streak: 3,
+  cooldown_bars: 4, max_entries_per_day_per_agent: 3}`. The caps are per decision, per account: each account counts
+  its own trades for an agent and RiskGate checks them at every entry decision (proposal and approval re-check), so
+  across two accounts an agent can make up to twice the daily cap. When enabled, RiskGate refuses an agent's entries
+  with `throttle_loss_streak` after `loss_streak` consecutive full losses (R <= -0.9; without R, a `stop`/`stop_out`
+  exit at a loss; any other trade ends the streak) until `cooldown_bars` bars of the agent's timeframe have passed
+  since the last one, or a real shadow win (target hit or >= 0.25R; never a scratch) of the agent's **current live
+  model version**, entered after that loss, closes. The count persists after the cooldown: one more full loss
+  re-blocks at once, until a qualifying win. `throttle_entry_rate` once it has made `max_entries_per_day_per_agent`
+  entries in the risk day (00:00 UTC); `throttle_unknown` (that agent only) if its facts cannot be derived. Exits
+  never consult it. No new state file: facts come from the closed-trade record, the open book, the shadow book (read
+  only while a streak is cooling down, cached by mtime) and, review HIGH-1, closes the engine has seen but not yet
+  recorded (a broker stop found by the bar-close sweep is written after that close's decisions; a write that keeps
+  failing), each counted as a provisional full loss so the loss just taken counts at the very next decision. Engine
+  `live_versions` (agent -> champion version) is set by `ops.run` with the models. engine_<account>.json carries
+  `throttle` (settings; per agent: streak, provisional losses, last loss, cooldown end, entries today, `blocked`; or
+  `error`). Health has one check per agent, `throttle:<account>:<agent>`: warn + Telegram while throttled, FAIL when a
+  streak block has no cooldown end, on `throttle_unknown`, or when the state could not be published. Owner: set the
+  thresholds and turn it on (settings.local.yaml `risk: { throttle: { enabled: true, ... } }`, restart the engine).
+  Not done: the playbook's "until the next session" variant, a cross-account count, a provisional loss for a record
+  lost before a restart (only its id persists; health already fails on `closed_records_lost`), and the dashboard /
+  approval card (ui-ux follow-up).
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on

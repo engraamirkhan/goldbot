@@ -78,9 +78,10 @@ class Blackout(_Section):
 
 
 class ThrottleSettings(_Section):
-    """BACKLOG 21 (playbook G-6), the system analogue of revenge trading and overtrading: per agent, after
-    `loss_streak` consecutive full losses no entries until `cooldown_bars` bars of its timeframe pass or a winning
-    shadow trade occurs; at most `max_entries_per_day_per_agent` entries per risk day. Entries only, never exits.
+    """BACKLOG 21 (playbook G-6), the system analogue of revenge trading and overtrading: per agent per account,
+    after `loss_streak` consecutive full losses no entries until `cooldown_bars` bars of its timeframe pass or a real
+    shadow win of its live model entered after the last loss (the count persists past the cooldown until such a win);
+    at most `max_entries_per_day_per_agent` entries per risk day. Checked at every entry decision; never exits.
     Off until the owner sets the thresholds (risk-policy values: playbook section 7)."""
 
     enabled: bool = False

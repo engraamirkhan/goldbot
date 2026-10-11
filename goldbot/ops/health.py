@@ -1052,9 +1052,12 @@ def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timest
 
 
 def check_throttle(ctx: HealthContext, account_id: str) -> list[Check]:
-    """BACKLOG 21 (playbook G-6: "Logged and alerted"): while the per-agent throttle is on, warn (and tell the owner,
-    NOTIFY_ON_WARN) when RiskGate is refusing an agent's entries for a loss streak or the daily entry rate; ok
-    otherwise. Nothing while the throttle is off or the engine has not published it."""
+    """BACKLOG 21 (playbook G-6: "Logged and alerted"): while the per-agent throttle is on, one check per agent
+    (`throttle:<account>:<agent>`, so each newly throttled agent alerts on its own, review MEDIUM-1). It warns (and
+    tells the owner, NOTIFY_ON_WARN) while RiskGate refuses the agent's entries for a loss streak or the daily entry
+    rate, and is ok otherwise. It FAILs when the block cannot lift by itself or the facts are unknown: a loss-streak
+    block without a cooldown end (unknown timeframe), `throttle_unknown`, or a throttle state the engine could not
+    publish (`throttle:<account>`). Nothing while the throttle is off or the engine has not published it."""
     f = ctx.state_dir / f"engine_{account_id}.json"
     if not f.exists():
         return []
@@ -1062,16 +1065,26 @@ def check_throttle(ctx: HealthContext, account_id: str) -> list[Check]:
         th = _read_json(f).get("throttle") or {}
         if not th.get("enabled"):
             return []
-        agents = {str(k): v for k, v in (th.get("agents") or {}).items()}
-        blocked = {a: list(v.get("blocked") or []) for a, v in agents.items() if v.get("blocked")}
+        error = th.get("error")
+        agents = {str(k): dict(v) for k, v in (th.get("agents") or {}).items()}
     except (ValueError, OSError, AttributeError, TypeError):
         return []                                   # check_engine reports the unreadable file
-    name = f"throttle:{account_id}"
-    if not blocked:
-        return [Check(name=name, status="ok", reason=f"{account_id}: no agent throttled ({len(agents)} watched)")]
-    detail = "; ".join(f"{a} {','.join(r)} (streak {agents[a].get('loss_streak')}, "
-                       f"{agents[a].get('entries_today')} entries today)" for a, r in sorted(blocked.items()))
-    return [Check(name=name, status="warn", reason=f"{account_id}: entries throttled: {detail}; exits unaffected")]
+    if error:
+        return [Check(name=f"throttle:{account_id}", status="fail",
+                      reason=f"{account_id}: throttle state not published ({error}); entries are judged per decision")]
+    out = []
+    for a, v in sorted(agents.items()):
+        name, blocked = f"throttle:{account_id}:{a}", [str(r) for r in v.get("blocked") or []]
+        facts = (f"streak {v.get('loss_streak')}, {v.get('entries_today')} entries today, cooldown until "
+                 f"{v.get('cooldown_until') or 'n/a'}")
+        if not blocked:
+            out.append(Check(name=name, status="ok", reason=f"{account_id} {a}: not throttled ({facts})"))
+            continue
+        stuck = "throttle_unknown" in blocked or ("throttle_loss_streak" in blocked and not v.get("cooldown_until"))
+        out.append(Check(name=name, status="fail" if stuck else "warn",
+                         reason=f"{account_id} {a}: entries throttled: {','.join(blocked)} ({facts})"
+                                + ("; the block cannot lift by itself" if stuck else "") + "; exits unaffected"))
+    return out
 
 
 def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:

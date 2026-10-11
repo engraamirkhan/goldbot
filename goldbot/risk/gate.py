@@ -217,26 +217,34 @@ class RiskGate:
         cap = min(cap, self.limits.max_risk_per_trade)
         return cap * sizing.SIZE_DOWN_RISK if size_down else cap
 
+    def throttle_cooldown(self, timeframe: str) -> pd.Timedelta | None:
+        """`throttle.cooldown_bars` bars of `timeframe`; None for a timeframe the config does not know."""
+        try:
+            bar_s = tf_seconds(timeframe)
+        except ValueError:
+            return None
+        return pd.Timedelta(seconds=self.limits.throttle.cooldown_bars * bar_s)
+
     def throttle_cooldown_until(self, t: AgentThrottle) -> pd.Timestamp | None:
         """When the loss-streak block lifts: the last full loss's exit plus `throttle.cooldown_bars` bars of the agent's
         timeframe; None when unknown (no loss, or a timeframe the config does not know)."""
-        if t.last_loss_utc is None:
+        cooldown = self.throttle_cooldown(t.timeframe)
+        if t.last_loss_utc is None or cooldown is None:
             return None
-        try:
-            bar_s = tf_seconds(t.timeframe)
-        except ValueError:
-            return None
-        return pd.Timestamp(t.last_loss_utc) + pd.Timedelta(seconds=self.limits.throttle.cooldown_bars * bar_s)
+        return pd.Timestamp(t.last_loss_utc) + cooldown
 
     def throttle_reasons(self, t: AgentThrottle | None, now_utc: pd.Timestamp | None) -> list[str]:
         """BACKLOG 21 (playbook G-6: "an agent makes no entries until ... Never affects exits"): `throttle_loss_streak`
         while the agent's streak of full losses is at least `throttle.loss_streak` and its cooldown has not passed (a
-        winning shadow trade has already ended the streak in `t`); `throttle_entry_rate` once it has made
-        `max_entries_per_day_per_agent` entries this risk day. Nothing when the throttle is off or no facts are given.
-        Fails closed: without a clock or a known cooldown a streak keeps refusing."""
+        qualifying shadow win has already ended the streak in `t`); `throttle_entry_rate` once it has made
+        `max_entries_per_day_per_agent` entries this risk day; `throttle_unknown` when the engine could not derive the
+        facts. Nothing when the throttle is off or no facts are given. Fails closed: without a clock or a known
+        cooldown a streak keeps refusing."""
         cfg = self.limits.throttle
         if not cfg.enabled or t is None:
             return []
+        if t.unknown:
+            return ["throttle_unknown"]
         out = []
         if t.loss_streak >= cfg.loss_streak:
             until = self.throttle_cooldown_until(t)
