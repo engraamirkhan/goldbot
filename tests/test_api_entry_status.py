@@ -14,8 +14,10 @@ from fastapi.testclient import TestClient
 from goldbot.api import entry_status as es
 from goldbot.api.app import create_app
 from goldbot.api.auth import totp_code
-from goldbot.ops.account_view import LossBudget, LossCap
+from goldbot.ops.account_view import LossBudget, LossCap, Milestones
+from goldbot.ops.health import ENGINE_FAIL_S
 from goldbot.risk.gate import RiskLimits
+from goldbot.risk.supervisor import SupervisorLimits
 
 # Wednesday 14:00 UTC: gold trades (static table: Athens server time 17:00)
 WED = pd.Timestamp("2026-10-14 14:00", tz="UTC")
@@ -37,7 +39,7 @@ def engine(**over) -> dict:
 
 def status(e: dict, now: pd.Timestamp = WED, **kw):
     args: dict[str, Any] = dict(owner_halt=None, supervisor_reasons=None, drift_reasons=None, budget=None,
-                                limits=RiskLimits())
+                                limits=RiskLimits(), milestones=None, is_owner=True)
     args.update(kw)
     return es.account_entry_status(e, now=now, **args)
 
@@ -117,6 +119,12 @@ def test_halts_from_the_owner_supervisor_and_drift_watch_are_named_with_their_fi
     assert codes(s) == ["owner_halt", "supervisor_heartbeat_stale", "drift_system_halt"]
     assert all(b.kind == "act" for b in s.blocks) and s.state == "blocked"
     assert "Re-arm" in s.blocks[0].fix
+    # a viewer or approver is not told to re-arm (only the owner can)
+    viewer = status(engine(), owner_halt="telegram", is_owner=False)
+    assert "Re-arm on this page" not in viewer.blocks[0].fix and "owner" in viewer.blocks[0].fix
+    # supervisor reasons that are not codes never reach the screen
+    junk = status(engine(), supervisor_reasons=["combined_daily_cap", "engine_icm-demo.json bad", "x" * 80])
+    assert codes(junk) == ["combined_daily_cap"]
     # a supervisor halt without reasons still blocks
     assert codes(status(engine(), supervisor_reasons=[])) == ["supervisor_halt"]
 
@@ -143,12 +151,37 @@ def test_a_paper_engine_is_not_blocked_by_an_unknown_account_class():
     assert codes(status(engine(mode="paper", account_class="unknown"))) == []
 
 
-def test_a_silent_engine_says_since_when_and_that_broker_stops_still_protect_open_trades():
-    s = status(engine(ts=(WED - pd.Timedelta(minutes=5)).timestamp(), market_closed=True))
+def test_a_silent_engine_while_the_market_is_open_past_the_health_threshold_needs_the_owner():
+    gone = WED - pd.Timedelta(seconds=ENGINE_FAIL_S + 300)
+    s = status(engine(ts=gone.timestamp()))
     [b] = s.blocks
     assert (b.code, b.at_label, b.kind) == ("engine_not_reporting", "since", "act")
-    assert b.at == (WED - pd.Timedelta(minutes=5)).to_pydatetime()
+    assert b.at == gone.to_pydatetime() and s.state == "blocked"
     assert "stop and target" in s.exits and s.exits != status(engine()).exits
+
+
+def test_a_short_silence_is_status_unknown_never_open():
+    quiet = WED - pd.Timedelta(seconds=SupervisorLimits().heartbeat_max_age_s + 240)
+    s = status(engine(ts=quiet.timestamp()))
+    [b] = s.blocks
+    assert (b.code, b.kind, b.at_label) == ("status_unknown", "wait", "since")
+    assert s.state == "waiting" and s.headline.startswith("No new trades for now")
+
+
+def test_an_engine_idle_while_the_market_is_closed_is_market_closed_not_a_fault():
+    """The engine writes nothing while the market is closed: never blame it (review H1)."""
+    last = SAT - pd.Timedelta(hours=15)
+    s = status(engine(ts=last.timestamp(), market_closed=False), now=SAT)
+    [b] = s.blocks
+    assert (b.code, b.kind, b.at_label) == ("market_closed", "wait", "opens")
+    assert b.text == "Market closed (engine idle while closed)"
+    assert b.at == pd.Timestamp("2026-10-18 22:02", tz="UTC").to_pydatetime()
+    assert s.state == "waiting" and s.as_of == last.to_pydatetime()
+
+
+def test_a_report_stamped_in_the_future_counts_as_not_reporting():
+    s = status(engine(ts=(WED + pd.Timedelta(minutes=5)).timestamp()))
+    assert codes(s) == ["engine_not_reporting"] and s.blocks[0].at is None
 
 
 def test_reasons_the_engine_publishes_itself_are_used_and_unknown_ones_render_generically():
@@ -162,6 +195,59 @@ def test_reasons_the_engine_publishes_itself_are_used_and_unknown_ones_render_ge
 def test_a_recent_tick_error_the_engine_carried_on_from_is_a_note_not_a_block():
     s = status(engine(tick_errors_total=4, last_tick_error_at=(WED - pd.Timedelta(minutes=4)).isoformat()))
     assert s.state == "open" and s.notes and "carried on" in s.notes[0]
+
+
+def test_a_balance_too_small_for_any_timeframe_says_so():
+    ms = Milestones(rule="r", rungs=[], tradeable=[], next_timeframe="15m", next_equity=1500.0)
+    s = status(engine(), milestones=ms)
+    assert codes(s) == ["min_lot_exceeds_risk"] and s.blocks[0].kind == "wait"
+    assert codes(status(engine(), milestones=ms.model_copy(update={"pending": "pending broker terms"}))) == []
+    assert codes(status(engine(), milestones=ms.model_copy(update={"tradeable": ["4h"]}))) == []
+
+
+def test_every_spent_cap_is_its_own_block_and_the_headline_says_when_the_last_clears():
+    caps = [LossCap(name="absolute daily limit", label="x", period="today", limit=50.0, used=50.0, remaining=0.0),
+            LossCap(name="account 5.0% weekly cap", label="x", period="this week", limit=50.0, used=52.0, remaining=0.0),
+            LossCap(name="combined 1.5% daily cap", label="x", period="today", limit=15.0, used=5.0, remaining=10.0)]
+    b = LossBudget(limit=50.0, used=50.0, remaining=0.0, binding="absolute daily limit", binding_label="x",
+                   period="today", caps=caps)
+    s = status(engine(), budget=b, supervisor_reasons=["combined_weekly_cap"])
+    assert codes(s)[:2] == ["daily_loss_limit_abs", "weekly_cap"]
+    by = {x.code: x for x in s.blocks}
+    assert by["daily_loss_limit_abs"].at == pd.Timestamp("2026-10-15", tz="UTC").to_pydatetime()
+    assert by["weekly_cap"].at == pd.Timestamp("2026-10-18", tz="UTC").to_pydatetime()
+    assert s.clears_at == pd.Timestamp("2026-10-18", tz="UTC").to_pydatetime()
+    # something that needs the owner, or a block without a time: no promise of when it clears
+    assert status(engine(), budget=b, owner_halt="x").clears_at is None
+
+
+def test_the_drawdown_texts_come_from_the_limits():
+    s = status(engine(stage="halted"), limits=RiskLimits(dd_stage2=0.10),
+               supervisor_reasons=["combined_drawdown_halt"], combined_dd=0.15)
+    by = {x.code: x for x in s.blocks}
+    assert "10% below its high" in by["drawdown_halt"].text
+    assert "15% below their high" in by["combined_drawdown_halt"].text
+
+
+def test_a_blackout_without_a_title_still_blocks():
+    s = status(engine(blackout={"kind": "calendar"}))
+    assert [(b.code, b.text) for b in s.blocks] == [("news_blackout", "News blackout")]
+
+
+def test_a_failed_build_says_status_unknown_and_points_to_health():
+    s = es.unknown_status()
+    assert s.state == "blocked" and [b.code for b in s.blocks] == ["status_unknown"]
+    assert s.blocks[0].kind == "act" and s.blocks[0].runbook == "Health check"
+
+
+def test_every_owner_text_is_for_a_real_or_declared_reason():
+    """The other direction: no wording for a reason nothing raises (typos, renamed codes), unless declared."""
+    root = Path(__file__).resolve().parents[1]
+    src = "".join((root / f).read_text() for f in ("goldbot/risk/gate.py", "goldbot/risk/supervisor.py",
+                                                   "goldbot/engine/runner.py"))
+    for code in es.REASONS:
+        assert f'"{code}"' in src or code in es.API_ONLY | es.FUTURE, code
+    assert not (es.API_ONLY & es.FUTURE)
 
 
 def test_every_gate_and_supervisor_reason_has_owner_text():
@@ -218,7 +304,22 @@ def test_a_missing_supervisor_blocks_entries_as_the_engine_sees_it(tmp_path):
 
 
 @pytest.mark.parametrize("junk", [{"throttle": "x"}, {"server_clock": 3}, {"bridge_compat": []}, {"entry_blocks": "a"},
-                                  {"ts": "soon"}, {"sessions": None, "market_closed": True}, {"blackout": "CPI"}])
+                                  {"ts": "soon"}, {"sessions": None, "market_closed": True}, {"blackout": "CPI"},
+                                  {"ts": None}, {"sessions": {"broker_windows": "x"}, "ts": 0}])
 def test_junk_engine_fields_never_break_the_status(junk):
     s = status(engine(**junk))
     assert s.state in ("open", "partial", "waiting", "blocked")
+
+
+def test_a_status_that_cannot_be_built_is_never_shown_as_open(tmp_path, monkeypatch):
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps(engine(ts=time.time())))
+    (tmp_path / "supervisor.json").write_text(json.dumps({"ts": time.time(), "halt": False, "reasons": []}))
+
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("bug")
+    monkeypatch.setattr(es, "account_entry_status", boom)
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
+    c = TestClient(app)
+    [row] = c.get("/api/accounts", headers=_owner(c, app)).json()
+    assert row["entry_status"]["state"] == "blocked"
+    assert [b["code"] for b in row["entry_status"]["blocks"]] == ["status_unknown"]

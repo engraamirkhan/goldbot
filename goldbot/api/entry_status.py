@@ -9,7 +9,7 @@ from the RiskGate's own limits (`RiskLimits.from_settings`), never a copy, so th
 
 Reasons the RiskGate only knows per trade (negative EV, fx conversion, heat cap) are listed when the engine publishes
 them in `entry_blocks`; rollover and the Friday weekend cut are not published yet (the engine should publish
-`entry_blocks`, ADR 0010). A reason with no entry in `REASONS` renders generically, never as nothing.
+`entry_blocks`, ADR 0011, BACKLOG 43). A reason with no entry in `REASONS` renders generically, never as nothing.
 
 Nothing free-text from the engine reaches the owner (probe reasons name zones and commits, supervisor reasons name
 files): only mapped codes, numbers, agent ids and the news title the dashboard already shows.
@@ -26,15 +26,20 @@ import pandas as pd
 from pydantic import BaseModel
 
 from goldbot.api.schema import EntryBlock, EntryStatus
-from goldbot.data.calendar import DEFAULT_SESSIONS, session_table_from_cache
+from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
 from goldbot.data.timeutil import floor_tf
-from goldbot.ops.account_view import LossBudget
+from goldbot.ops.account_view import LossBudget, Milestones
+from goldbot.ops.health import ENGINE_FAIL_S
 from goldbot.risk.gate import RiskLimits
+from goldbot.risk.supervisor import SupervisorLimits
 
 log = logging.getLogger("goldbot.api.entry_status")
 
 RUNBOOK_URL = "https://github.com/engraamirkhan/goldbot/blob/main/docs/RUNBOOK.md"
-ENGINE_SILENT_S = 60.0              # the supervisor's heartbeat rule (SupervisorLimits.heartbeat_max_age_s)
+# Engine silence (review H1): within the supervisor's heartbeat (SupervisorLimits.heartbeat_max_age_s) the report is
+# current; past it, the market closed at now is "market closed" (the engine idles), past health's ENGINE_FAIL_S with the
+# market open throughout is "engine not reporting" (act), anything in between is "status unknown" (wait), never OPEN.
+CODE = re.compile(r"[a-z0-9_]{1,64}")      # anything else from a state file is never shown (review L6)
 TICK_ERROR_NOTE_S = 15 * 60         # health warns this long after an error the engine carried on from
 NEXT_OPEN_SEARCH = pd.Timedelta(days=8)
 
@@ -64,6 +69,8 @@ def _r(text: str, fix: str, kind: Literal["act", "wait"], runbook: str | None = 
 # The display order within a kind (what needs the owner comes first overall). Every RiskGate and supervisor reason has
 # an entry (tests/test_api_entry_status.py::test_every_gate_and_supervisor_reason_has_owner_text).
 REASONS: dict[str, Reason] = {
+    "status_unknown": _r("Engine status unknown: no recent report",
+                         "Usually a short gap; if it lasts, check the engine service and the Health tab.", "wait", HEALTH),
     "engine_not_reporting": _r("Engine not reporting", "Check the engine service is running and restart it if not.",
                                "act", HEALTH),
     "owner_halt": _r("New entries halted by you or an approver",
@@ -149,6 +156,11 @@ REASONS: dict[str, Reason] = {
                                    f"{NOTHING}: the strategy needs a target before it trades.", "wait"),
 }
 _ORDER = {code: i for i, code in enumerate(REASONS)}
+API_ONLY = frozenset({"engine_not_reporting", "status_unknown"})       # raised here, not by the engine
+# worded ahead of the lanes adding them (bridge check, playbook G-items); the engine publishes them in entry_blocks
+FUTURE = frozenset({"bridge_incompatible", "heat_cap", "tier2_blackout", "reopen_window", "holiday_thin"})
+RESETS_DAILY = frozenset({"combined_daily_cap", "combined_daily_loss_abs", "daily_cap", "daily_loss_limit_abs"})
+RESETS_WEEKLY = frozenset({"combined_weekly_cap", "weekly_cap"})
 _SYMBOL = {"GBP": "£", "USD": "$", "EUR": "€"}
 
 
@@ -199,42 +211,66 @@ def _next_week(now: pd.Timestamp) -> pd.Timestamp:
     return floor_tf(pd.DatetimeIndex([now]), 7 * 86400)[0] + pd.Timedelta(days=7)    # weeks start Sunday 00:00 UTC
 
 
+def _table(sessions: Any) -> SessionTable:
+    """The engine's session table as it publishes it; the static one when missing or malformed."""
+    t = session_table_from_cache(sessions) if isinstance(sessions, dict) else None
+    return t or DEFAULT_SESSIONS
+
+
 def next_open(sessions: Any, now: pd.Timestamp) -> pd.Timestamp | None:
     """The first minute the engine's session table (as it publishes it) says the market is open; None if not found."""
     try:
-        table = session_table_from_cache(sessions) if isinstance(sessions, dict) else None
-        table = table or DEFAULT_SESSIONS
         grid = pd.date_range(now.ceil("min"), now + NEXT_OPEN_SEARCH, freq="min")
-        is_open = table.is_open(grid)
-        hits = is_open.nonzero()[0]
+        hits = _table(sessions).is_open(grid).nonzero()[0]
         return pd.Timestamp(grid[hits[0]]) if len(hits) else None
     except Exception:                       # noqa: BLE001 - reporting only: no reopen time is shown
         log.exception("next market open not computed")
         return None
 
 
+def _open_at(sessions: Any, *ts: pd.Timestamp) -> bool | None:
+    """Whether the published table says the market is open at every one of `ts`; None when it cannot be read."""
+    try:
+        return bool(_table(sessions).is_open(pd.DatetimeIndex(list(ts))).all())
+    except Exception:                       # noqa: BLE001
+        log.exception("session table unreadable")
+        return None
+
+
 def block(code: str, *, text: str | None = None, agent: str | None = None, at: pd.Timestamp | None = None,
-          at_label: Literal["opens", "until", "resets", "since"] | None = None) -> EntryBlock:
+          at_label: Literal["opens", "until", "resets", "since"] | None = None, fix: str | None = None) -> EntryBlock:
     r = REASONS.get(code)
     if r is None:                           # a newer engine's reason: shown, never dropped
         r = Reason(text=f"New entries paused ({code.replace('_', ' ')})",
                    fix="See the Runbook; the Health tab may say more.", kind="act")
     body = text if text is not None else r.text.replace("{agent}", agent or "a strategy")
-    return EntryBlock(code=code, scope="agent" if agent else "account", agent_id=agent, text=body, fix=r.fix,
-                      kind=r.kind, at=_dt(at) if at_label else None, at_label=at_label if at is not None else None,
-                      runbook=r.runbook, runbook_url=runbook_url(r.runbook))
+    return EntryBlock(code=code, scope="agent" if agent else "account", agent_id=agent, text=body,
+                      fix=fix if fix is not None else r.fix, kind=r.kind, at=_dt(at) if at_label else None,
+                      at_label=at_label if at is not None else None, runbook=r.runbook, runbook_url=runbook_url(r.runbook))
 
 
-def _budget_block(budget: LossBudget, currency: Any, now: pd.Timestamp) -> EntryBlock:
-    week = budget.period == "this week"
-    amount = money(budget.limit, currency)
-    if budget.binding.startswith("combined"):
+def _cap_block(name: str, period: str, limit: float, used: float, currency: Any, now: pd.Timestamp) -> EntryBlock:
+    """One spent loss cap (account_view.LossCap) with its own reset time."""
+    week = period == "this week"
+    amount = money(limit, currency)
+    when = "this week" if week else "today"
+    state = "reached" if used >= limit - 0.005 else "nearly reached: less than the smallest trade left"
+    if name.startswith("combined"):
         code = "combined_weekly_cap" if week else "combined_daily_cap"
-        text = f"All accounts together reached {'this week' if week else 'today'}'s {amount} loss limit"
+        text = f"All accounts together: {when}'s {amount} loss limit {state}"
     else:
-        code = "weekly_cap" if week else ("daily_loss_limit_abs" if budget.binding.startswith("absolute") else "daily_cap")
-        text = f"{'This week' if week else 'Today'}'s {amount} loss limit reached"
+        code = "weekly_cap" if week else ("daily_loss_limit_abs" if name.startswith("absolute") else "daily_cap")
+        text = f"{when.capitalize()}'s {amount} loss limit {state}"
     return block(code, text=text, at=_next_week(now) if week else _next_day(now), at_label="resets")
+
+
+def _budget_blocks(budget: LossBudget, currency: Any, now: pd.Timestamp) -> list[EntryBlock]:
+    spent = [c for c in budget.caps if c.remaining <= 0]
+    if spent:
+        return [_cap_block(c.name, c.period, c.limit, c.used, currency, now) for c in spent]
+    if budget.remaining <= 0:
+        return [_cap_block(budget.binding, budget.period, budget.limit, budget.used, currency, now)]
+    return []
 
 
 def _throttle_blocks(th: Any, now: pd.Timestamp) -> tuple[list[EntryBlock], int]:
@@ -246,7 +282,7 @@ def _throttle_blocks(th: Any, now: pd.Timestamp) -> tuple[list[EntryBlock], int]
     for aid, v in agents.items():
         if not isinstance(v, dict) or not isinstance(v.get("blocked"), list):
             continue
-        for code in [str(c) for c in v["blocked"]]:
+        for code in [str(c) for c in v["blocked"] if CODE.fullmatch(str(c))]:
             if code == "throttle_loss_streak":
                 n = _num(v.get("loss_streak"))
                 text = f"{aid} paused after {int(n)} losses in a row" if n else None
@@ -260,12 +296,26 @@ def _throttle_blocks(th: Any, now: pd.Timestamp) -> tuple[list[EntryBlock], int]
     return out, len(agents)
 
 
+def _pct(x: float) -> str:
+    return f"{100 * x:.0f}%" if abs(100 * x - round(100 * x)) < 1e-9 else f"{100 * x:.1f}%"
+
+
+def unknown_status() -> EntryStatus:
+    """When the status could not be built (a bug or a state file the API cannot read): never OPEN."""
+    b = block("status_unknown", text="Entry status couldn't be worked out",
+              fix="Check the Health tab; the engine still applies every rule itself.")
+    b = b.model_copy(update={"kind": "act"})
+    return EntryStatus(state="blocked", headline=f"No new trades known: {b.text}", blocks=[b], exits=EXITS_OK)
+
+
 def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: str | None,
                          supervisor_reasons: list[str] | None, drift_reasons: list[str] | None,
-                         budget: LossBudget | None, limits: RiskLimits) -> EntryStatus:
+                         budget: LossBudget | None, limits: RiskLimits, milestones: Milestones | None = None,
+                         is_owner: bool = True, combined_dd: float | None = None) -> EntryStatus:
     """owner_halt: who halted (None: not halted); supervisor_reasons: the supervisor's halt as the engine reads it
     (None: no halt; empty: a halt without reasons); drift_reasons: the drift watch's system halt (None: none);
-    budget: the account's loss budget (account_view.loss_budget)."""
+    budget: the account's loss budget (account_view.loss_budget); milestones: its ladder (account_view.milestones);
+    is_owner: the viewer may re-arm; combined_dd: the supervisor's combined drawdown halt (SupervisorLimits)."""
     now = pd.Timestamp(now).tz_convert("UTC")
     found: list[EntryBlock] = []
     notes: list[str] = []
@@ -276,42 +326,69 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
 
     ts = _num(e.get("ts"))
     reported = pd.Timestamp(ts, unit="s", tz="UTC") if ts is not None else None
-    silent = reported is None or (now - reported).total_seconds() > ENGINE_SILENT_S
+    heartbeat = SupervisorLimits().heartbeat_max_age_s
+    age = (now - reported).total_seconds() if reported is not None else None
+    future = age is not None and age < -heartbeat               # a clock fault: not a report (review L4)
+    silent = age is None or future or age > heartbeat
+    sessions = e.get("sessions")
+    budget_blocks = _budget_blocks(budget, e.get("currency"), now) if budget is not None and not silent else []
 
+    for b in budget_blocks:                 # first, so their reset times survive the supervisor's same codes
+        add(b)
     if owner_halt is not None:
-        add(block("owner_halt"))
+        add(block("owner_halt", fix=None if is_owner else "The owner re-arms on this page when ready."))
     if supervisor_reasons is not None:
-        for r in supervisor_reasons or ["supervisor_halt"]:
-            add(block(r))
+        codes = [r for r in supervisor_reasons if CODE.fullmatch(r)]
+        if supervisor_reasons and not codes:
+            codes = ["supervisor_halt"]
+        for r in codes or ["supervisor_halt"]:
+            if r == "combined_drawdown_halt":
+                dd = combined_dd if combined_dd is not None else SupervisorLimits().dd_stage2
+                add(block(r, text=f"All accounts together are {_pct(dd)} below their high: trading stopped"))
+            elif r in RESETS_DAILY:
+                add(block(r, at=_next_day(now), at_label="resets"))
+            elif r in RESETS_WEEKLY:
+                add(block(r, at=_next_week(now), at_label="resets"))
+            else:
+                add(block(r))
     if drift_reasons is not None:
         add(block("drift_system_halt"))
+
     if silent:
-        add(block("engine_not_reporting", at=reported, at_label="since"))
+        closed_now = _open_at(sessions, now) is False
+        if closed_now:                      # the engine is idle while the market is closed: never a fault (review H1)
+            add(block("market_closed", text="Market closed (engine idle while closed)", at=next_open(sessions, now),
+                      at_label="opens"))
+        elif not future and age is not None and age > ENGINE_FAIL_S \
+                and _open_at(sessions, now, now - pd.Timedelta(seconds=ENGINE_FAIL_S)):
+            add(block("engine_not_reporting", at=reported, at_label="since"))    # health fails it too
+        elif future or age is None:
+            add(block("engine_not_reporting"))
+        else:
+            add(block("status_unknown", at=reported, at_label="since"))
     else:
-        if budget is not None and budget.remaining <= 0:
-            add(_budget_block(budget, e.get("currency"), now))
         if e.get("stage") == "halted":
-            add(block("drawdown_halt"))
+            add(block("drawdown_halt", text=f"This account is {_pct(limits.dd_stage2)} below its high: trading stopped"))
         bc = e.get("bridge_compat")
-        if isinstance(bc, dict) and bc.get("status") == "incompatible":
+        if isinstance(bc, dict) and bc.get("status") == "incompatible":     # published by the bridge-check lane
             add(block("bridge_incompatible"))
         sc = e.get("server_clock")
         if isinstance(sc, dict) and sc.get("status") == "mismatch":
             add(block("server_clock_mismatch"))
         if (_num(e.get("tick_ahead_s")) or 0.0) > limits.max_tick_ahead_s:
             add(block("tick_from_future"))
-        age = _num(e.get("last_tick_age_s"))
-        if e.get("stale_bars") is True or (age is not None and age > limits.stale_tick_seconds):
+        tick_age = _num(e.get("last_tick_age_s"))
+        if e.get("stale_bars") is True or (tick_age is not None and tick_age > limits.stale_tick_seconds):
             add(block("stale_data"))
         if e.get("account_class") == "unknown" and e.get("mode") != "paper":
             add(block("account_class_unknown"))
         if e.get("market_closed") is True:
-            opens = next_open(e.get("sessions"), now)
-            add(block("market_closed", at=opens, at_label="opens"))
+            add(block("market_closed", at=next_open(sessions, now), at_label="opens"))
         bo = e.get("blackout")
-        if isinstance(bo, dict) and bo.get("title"):
-            shock = bo.get("kind") == "news_shock"
-            add(block("news_blackout", text=f"{'News shock' if shock else 'News blackout'}: {str(bo['title'])[:80]}"))
+        if isinstance(bo, dict):            # a blackout is on whatever its title (review L3)
+            label = "News shock" if bo.get("kind") == "news_shock" else "News blackout"
+            title = str(bo.get("title") or "").strip()[:80]
+            add(block("news_blackout", text=f"{label}: {title}" if title else label))
         if e.get("tick_error") is True:
             add(block("tick_error"))
         if e.get("dq_error") is True:
@@ -325,10 +402,12 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
         n_open = _num(e.get("open_positions"))
         if n_open is not None and n_open >= limits.max_positions:
             add(block("max_positions", text=f"Already {int(n_open)} trades open (limit {limits.max_positions})"))
+        if milestones is not None and not milestones.tradeable and milestones.pending is None:
+            add(block("min_lot_exceeds_risk"))      # until the engine publishes it (BACKLOG 43)
         published = e.get("entry_blocks")
-        if isinstance(published, list):
+        if isinstance(published, list):     # the engine's own reasons win; the mapping above is the fallback
             for code in published:
-                if isinstance(code, str) and re.fullmatch(r"[a-z0-9_]{1,64}", code):
+                if isinstance(code, str) and CODE.fullmatch(code):
                     add(block(code))
         last_err = _ts(e.get("last_tick_error_at"))
         if e.get("tick_error") is not True and last_err is not None \
@@ -347,14 +426,18 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
     held = sorted({b.agent_id for b in found if b.agent_id})
     everyone = n_agents > 0 and len(held) >= n_agents
     stopping = account if account else (found if everyone else [])
+    clears: pd.Timestamp | None = None
     if stopping:
         state: Literal["open", "partial", "waiting", "blocked"] = \
             "blocked" if any(b.kind == "act" for b in stopping) else "waiting"
         more = f" (+{len(found) - 1} more)" if len(found) > 1 else ""
         headline = f"No new trades{'' if state == 'blocked' else ' for now'}: {stopping[0].text}{more}"
+        if state == "waiting" and all(b.at is not None and b.at_label != "since" for b in stopping):
+            clears = max(pd.Timestamp(b.at) for b in stopping if b.at is not None)
     elif held:
         state, headline = "partial", f"Can take new trades, except {', '.join(str(a) for a in held)}"
     else:
         state, headline = "open", "Can take new trades"
     return EntryStatus(state=state, headline=headline, blocks=found, notes=notes,
-                       exits=EXITS_SILENT if silent else EXITS_OK, as_of=_dt(reported))
+                       exits=EXITS_SILENT if silent and _open_at(sessions, now) is not False else EXITS_OK,
+                       as_of=_dt(reported), clears_at=_dt(clears))

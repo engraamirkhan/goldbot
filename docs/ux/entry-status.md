@@ -5,7 +5,7 @@ The Overview answers it first, one block per account, in plain words, with the n
 Runbook section. Exits never depend on any of this; every block says so.
 
 Code: `goldbot/api/entry_status.py` (reasons, words, next steps), `AccountSummary.entry_status` on `GET /api/accounts`,
-`web/src/screens/EntryStatus.tsx` (layout), `web/src/lib/entry.ts` (time text, badges). Decision record: ADR 0010.
+`web/src/screens/EntryStatus.tsx` (layout), `web/src/lib/entry.ts` (time text, badges). Decision record: ADR 0011.
 
 ## Data
 
@@ -16,7 +16,9 @@ Code: `goldbot/api/entry_status.py` (reasons, words, next steps), `AccountSummar
 | Supervisor halt | `Supervisor.engine_should_halt`: exactly what the engines read (missing, stale or unreadable heartbeat included) |
 | Drift system halt | `state/drift.json` (unreadable halts, as in the engine) |
 | Engine flags | `engine_<account>.json`: `ts`, `stage`, `market_closed` + `sessions` (reopen time), `server_clock.status`, `tick_ahead_s`, `last_tick_age_s`, `stale_bars`, `tick_error`, `last_tick_error_at`, `tick_errors_total`, `dq_error`, `data_recovering`, `spread_points`, `open_positions`, `account_class`, `blackout`, `throttle.agents[*].blocked` + `cooldown_until`, `bridge_compat.status`, and `entry_blocks` when an engine publishes it |
-| Loss limits | `account_view.loss_budget`: the binding cap, its amount in the account currency, spent when nothing is left |
+| Loss limits | `account_view.loss_budget.caps`: one block per spent cap (account daily/weekly, absolute, combined), each with its amount in the account currency and its own reset (00:00 UTC; Sunday 00:00 UTC for weekly) |
+| Balance too small | `account_view.milestones`: no tradeable timeframe (and no broker terms pending) is `min_lot_exceeds_risk` until the engine publishes it |
+| Drawdown texts | `RiskLimits.dd_stage2` and `SupervisorLimits.dd_stage2` from settings ("12%" is never hard-coded) |
 | Thresholds (stale tick, tick ahead, spread, positions) | `RiskLimits.from_settings` (the RiskGate's own limits), never a copy |
 
 Free text from the engine (probe reasons, bridge commits, supervisor file names) never reaches the screen: only mapped
@@ -28,7 +30,8 @@ codes, numbers, strategy ids and the news title. No login, server or host is eve
 |---|---|---|---|
 | `open` | **OPEN**, green | Nothing blocks a new trade | "Can take new trades" |
 | `partial` | **PARTLY OPEN**, amber | The account can trade; named strategies are held back (throttle) | "Can take new trades, except trend-g0" |
-| `waiting` | **PAUSED**, amber | No new trade; every reason clears by itself | "No new trades for now: Market closed" |
+| `waiting` | **PAUSED**, amber | No new trade; every reason clears by itself | "No new trades for now: Market closed"; with `clears_at` (every reason has a time): "· clears Sun 01:00 your time (in 2 d 11 h)", the last of them |
+| (stale) | **UNKNOWN**, grey | The data is older than 15 s or the last refresh failed: the rows are the last report, under a banner | as reported |
 | `blocked` | **BLOCKED**, red | No new trade and something needs the owner or an operator | "No new trades: Broker clock differs from the expected time zone (+1 more)" |
 
 Red only for blocked (something must be done before trading resumes). Every block is a word badge first, colour second.
@@ -64,9 +67,13 @@ above the tiles, the halt control and the account cards.
 | Case | Shown |
 |---|---|
 | Loading | Heading plus one placeholder block of the final height (`aria-busy`, "Loading entry status"): no shift when it fills |
+| Server unreachable or data older than 15 s (after data) | Amber banner, `role=alert`: "Can't reach the server since 14:02; below is the last report." Every badge turns grey **UNKNOWN**; the reasons stay as last reported |
 | Error (no data yet) | Amber, `role=alert`: "Entry status unavailable: the dashboard can't reach the server (retrying). Exits keep running on the engine." A failed refresh after data keeps the last data |
 | Empty (no engine file) | Amber: "No engine is reporting, so no new trades can open. Start the engine; the Health tab shows what is running." |
-| Engine silent (> 60 s, the supervisor's rule) | Blocked: "Engine not reporting · since 14:02 your time (5 min ago)"; exits line: "Open trades keep the stop and target placed at the broker; the engine's own exits (time exit, weekend rule) resume when it reports again." Other engine flags are not shown (they are stale) |
+| Engine silent, market closed now (published session table) | Paused: "Market closed (engine idle while closed) · opens …"; the header's "as of" is the last report. The engine writes nothing while closed, so it is never blamed |
+| Engine silent past the supervisor's 60 s heartbeat, market open | Paused: "Engine status unknown: no recent report · since …" (wait), never OPEN |
+| Engine silent past health's ENGINE_FAIL_S (45 min) with the market open throughout, or a report stamped > 60 s in the future, or no `ts` | Blocked: "Engine not reporting · since 14:02 your time (50 min ago)"; exits line: "Open trades keep the stop and target placed at the broker; the engine's own exits (time exit, weekend rule) resume when it reports again." Other engine flags are not shown (they are stale) |
+| Status could not be built (a bug, an unreadable input) | Blocked: "Entry status couldn't be worked out", pointing to the Health tab; never OPEN |
 | Older API (no `entry_status`) | Grey: "Entry status not reported by this server version." |
 | Note (never blocks) | Muted line under the reasons: a tick error the engine carried on from in the last 15 min; bridge and brain on different commits |
 
@@ -106,8 +113,13 @@ The safety strip on the Approvals tab and the proposal card's warning use the sa
 (`entryBlockers` in `web/src/lib/entry.ts`), so the Overview and Approvals never disagree. A strategy's own throttle
 counts on that strategy's proposal card only.
 
-## Gaps (for the engine lane)
+## Viewer and approver
+
+Only the owner re-arms: an owner halt tells the owner "Re-arm on this page when ready" and everyone else "The owner
+re-arms on this page when ready."
+
+## Gaps (for the engine lane, BACKLOG 43)
 
 The engine does not publish rollover, the Friday weekend cut, or per-trade refusals (fx conversion, heat cap): the
-panel shows them once the engine publishes `entry_blocks` (ADR 0010). Telegram `/status` should reuse
+panel shows them once the engine publishes `entry_blocks` (ADR 0011). Telegram `/status` should reuse
 `entry_status.account_entry_status` so both channels say the same words.

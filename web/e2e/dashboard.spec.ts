@@ -296,18 +296,20 @@ test("once the engine reports, Overview shows the live balance, today's loss bud
 test("entry status says in plain words why an account can't trade, when it resumes and that exits keep running", async ({ page }) => {
   const dir = info().state_dir;
   const engine = JSON.parse(readFileSync(join(dir, "engine_icm-demo.json"), "utf8"));
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  // written after sign-in (which may wait for a fresh authenticator code): a report older than the supervisor's
+  // 60 s heartbeat, or stamped in the future, reads as "not reporting"
   const until = new Date(Date.now() + 90 * 60_000).toISOString();
   writeFileSync(join(dir, "engine_icm-demo.json"), JSON.stringify({
-    ...engine, ts: Date.now() / 1000 + 3600, market_closed: true, sessions: { server_tz: "Europe/Athens", source: "static" },
+    ...engine, ts: Date.now() / 1000, market_closed: true, sessions: { server_tz: "Europe/Athens", source: "static" },
     server_clock: { status: "mismatch", reason: "server clock reads UTC+3" }, login: 99887766,
     throttle: { enabled: true, loss_streak: 3, max_entries_per_day_per_agent: 3, agents: {
       "trend-g0": { timeframe: "1h", loss_streak: 3, cooldown_until: until, blocked: ["throttle_loss_streak"] } } },
   }));
-  await page.setViewportSize({ width: 360, height: 800 });
-  await page.goto("/");
-  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
   const row = page.getByRole("article", { name: "Entry status icm-demo" });
-  await expect(row.getByText("Blocked", { exact: true })).toBeVisible();
+  await expect(row.getByText("Blocked", { exact: true })).toBeVisible({ timeout: 15_000 });
   await expect(row.getByText("No new trades: Broker clock differs from the expected time zone (+2 more)")).toBeVisible();
   await expect(row.getByText("Needs you")).toBeVisible();
   await expect(row.getByRole("link", { name: "Runbook: Server clock (US-EU DST gap weeks)" })).toHaveAttribute(

@@ -81,6 +81,27 @@ describe("EntryStatusPanel", () => {
     expect(within(row()).getByText(/carried on/)).toBeInTheDocument();
   });
 
+  it("greys the last report out with a banner when the server is unreachable or the data is old", () => {
+    const t0 = new Date(2026, 9, 14, 14, 2).getTime();      // local 14:02
+    const { rerender } = render(<EntryStatusPanel accounts={[acct(es())]} updatedAt={t0} now={t0 + 20_000} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Can't reach the server since 14:02; below is the last report");
+    expect(within(row()).getByText("Unknown")).toHaveClass("entry-badge");
+    expect(within(row()).queryByText("Open")).toBeNull();
+    expect(row()).toHaveClass("idle");
+    rerender(<EntryStatusPanel accounts={[acct(es())]} updatedAt={t0} now={t0 + 5_000} error />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Can't reach the server since 14:02");
+    rerender(<EntryStatusPanel accounts={[acct(es())]} updatedAt={t0} now={t0 + 5_000} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(within(row()).getByText("Open")).toBeInTheDocument();
+  });
+
+  it("says when a paused account clears, in the owner's time", () => {
+    render(<EntryStatusPanel now={Date.parse("2026-10-14T14:00:00Z")} accounts={[acct(es({
+      state: "waiting", headline: "No new trades for now: Today's £50 loss limit reached (+1 more)",
+      clears_at: "2026-10-18T00:00:00Z", blocks: [blk({ code: "daily_loss_limit_abs", text: "Today's £50 loss limit reached" })] }))]} />);
+    expect(within(row()).getByText(/^clears .* your time \(in 3 d 10 h\)$/)).toHaveAttribute("title", "2026-10-18 00:00 UTC");
+  });
+
   it("says so when this server does not report the status", () => {
     render(<EntryStatusPanel accounts={[acct(null)]} />);
     expect(within(row()).getByText(/not reported by this server/)).toBeInTheDocument();

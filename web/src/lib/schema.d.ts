@@ -1061,6 +1061,8 @@ export interface components {
             as_of?: string | null;
             /** Blocks */
             blocks: components["schemas"]["EntryBlock"][];
+            /** Clears At */
+            clears_at?: string | null;
             /** Exits */
             exits: string;
             /** Headline */

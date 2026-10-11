@@ -7,6 +7,11 @@ export const BADGE: Record<EntryStatus["state"], string> = { open: "Open", parti
 export const TONE: Record<EntryStatus["state"], Tone> = { open: "ok", partial: "warn", waiting: "warn", blocked: "bad" };
 
 const MIN = 60_000;
+/** Data older than this (three missed 5 s polls) is the last report, not the current state. */
+export const STALE_MS = 15_000;
+
+/** "14:02" in the owner's zone. */
+export const localHm = (ms: number) => new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
 
 function span(ms: number): string {
   const m = Math.max(1, Math.round(Math.abs(ms) / MIN));
@@ -18,7 +23,7 @@ function span(ms: number): string {
 
 /** "opens Sun 23:02 your time (in 1 d 12 h)": the owner's zone, the weekday when not today, how long until (or ago);
  *  `utc` for the hover title. */
-export function whenText(iso: string, label: NonNullable<EntryBlock["at_label"]>, now: number): { text: string; utc: string } {
+export function whenText(iso: string, label: NonNullable<EntryBlock["at_label"]> | "clears", now: number): { text: string; utc: string } {
   const d = new Date(iso);
   const t = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
   const today = new Date(now).toDateString() === d.toDateString();

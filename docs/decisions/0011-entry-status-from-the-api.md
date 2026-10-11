@@ -1,4 +1,4 @@
-# 0010: Why entries are blocked is worded by the API, never decided in the browser
+# 0011: Why entries are blocked is worded by the API, never decided in the browser
 
 Status: accepted (ui-ux-designer, 2026-10-11)
 

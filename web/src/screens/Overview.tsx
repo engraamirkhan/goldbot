@@ -12,7 +12,8 @@ export function Overview() {
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
   return (
     <section>
-      <EntryStatusPanel loading={accounts.isLoading} error={accounts.isError} accounts={accounts.data} />
+      <EntryStatusPanel loading={accounts.isLoading} error={accounts.isError} accounts={accounts.data}
+                        updatedAt={accounts.dataUpdatedAt || undefined} />
       <div className="tiles">
         <div className="tile"><span>Mode</span><strong>{status.data?.mode ?? "…"}</strong></div>
         <div className={`tile ${status.data?.halted ? "bad" : ""}`}><span>Halted</span><strong>{status.data ? (status.data.halted ? "yes" : "no") : "…"}</strong></div>

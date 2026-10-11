@@ -1375,6 +1375,18 @@
       "title": "Blocks",
       "type": "array"
      },
+     "clears_at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Clears At"
+     },
      "exits": {
       "title": "Exits",
       "type": "string"

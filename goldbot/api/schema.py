@@ -33,6 +33,7 @@ class EntryStatus(BaseModel):
     notes: list[str] = []                   # worth knowing, never blocking ("price error 4 min ago, carried on")
     exits: str                              # what still protects open trades
     as_of: datetime | None = None           # the engine's last report
+    clears_at: datetime | None = None       # waiting only: when the last reason clears by itself, if every one says
 
 
 class AccountSummary(BaseModel):

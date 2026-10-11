@@ -286,3 +286,6 @@ td a { color: inherit; }
 .entry-blocks a { display: inline-flex; align-items: center; min-height: 44px; }
 .entry-note { font-size: 14px; color: var(--muted); }
 .entry-exits { font-size: 14px; }
+.entry-banner { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--warn-tint); color: var(--warn-fg);
+  font-weight: 600; font-size: 14px; }
+.entry-row.idle .entry-badge { color: var(--muted); background: transparent; }

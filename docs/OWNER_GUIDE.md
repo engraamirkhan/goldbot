@@ -40,8 +40,10 @@ If the wizard cannot be used, the manual commands are in [RUNBOOK 0.4](RUNBOOK.m
   blackout, today's loss limit reached); it says when. **BLOCKED** (red): no, and something needs you; the reason
   is tagged **Needs you**, says what to do, and links the Runbook section (e.g. "Broker clock differs from the
   expected time zone", Runbook: Server clock). Times are in your phone's time zone; hold or hover for UTC. Exits
-  always keep running; if the engine itself has gone silent, the block says since when and that your open trades
-  still have their stop and target at the broker. The Approvals tab's safety strip uses the same reasons.
+  always keep running; if the engine itself has gone silent while the market is open, the block says since when and
+  that your open trades still have their stop and target at the broker (a silent engine while the market is closed is
+  normal and shows as "Market closed"). If the dashboard can't reach the server, a banner says since when and every
+  badge turns grey **UNKNOWN**: what you see is the last report. The Approvals tab's safety strip uses the same reasons.
   [Spec](ux/entry-status.md)
 - **Health tab:** each check reads ok, warn or fail with a reason, plus drift and drawdown per strategy.
 - **Your account (Overview):** once the engine is connected to the broker, each account card shows the **balance** and
