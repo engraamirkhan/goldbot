@@ -536,6 +536,34 @@ def test_the_rules_are_read_from_the_pre_registration_at_its_freeze_commit() -> 
         script.doc_text("docs/research/no-such-file.md", head)
 
 
+def test_the_spec_carries_h02s_full_pinned_discovery_config_with_the_cluster_map_written_out() -> None:
+    """preregistration-2027Q1.md "Pinned discovery config": the full DiscoveryConfig.model_dump(), which the spec and
+    the queued row carry verbatim, clusters written out as the full map. Naming the map or writing it out builds the
+    same config and hash, and the spec still plans (the other rows' pinned hashes unchanged)."""
+    from goldbot.research.discovery import H02_CLUSTERS, DiscoveryConfig
+    from goldbot.research.preregistration import SpecRow, _discovery_config
+    block = DOC.read_text().split("**Pinned discovery config.**", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
+    pinned = yaml.safe_load(block)
+    assert pinned["clusters"] == "discovery.H02_CLUSTERS"
+    want = {**pinned, "clusters": H02_CLUSTERS}
+    spec = yaml.safe_load(SPEC.read_text())
+    h02 = next(r for r in spec["rows"] if r["id"] == "H-02")
+    assert h02["discovery"] == want                                     # verbatim, the map written out
+    assert DiscoveryConfig(**h02["discovery"]).model_dump() == want      # the whole dump: no default left implicit
+    research = load_settings().research
+    plan = plan_quarter(QuarterSpec.model_validate(spec), research=research, doc_text=DOC.read_text(), quarter=Q)
+    assert {r.id: r.config_hash for r in plan.rows if r.config_hash} == {
+        "H-01": "561030150146", "H-06": "5650ad206bda", "H-04": "3d33124f210c", "C4H": "184bddf12019"}
+    # with the doc's variant and bars range the full map and the named map hash the same
+    tsmom = SPECIALISTS["tsmom"](timeframe="4h", max_bars=12)
+    base = {**h02, "variant": {"timeframe": "4h", "max_bars": 12}, "pending": None,
+            "bars_from": "2010-01-03 23:00:00+00:00", "bars_to": "2025-09-30 23:59:00+00:00"}
+    full, _ = _discovery_config(SpecRow.model_validate(base), tsmom, research)
+    named, _ = _discovery_config(SpecRow.model_validate({**base, "discovery": {**want, "clusters": "H02_CLUSTERS"}}),
+                                 tsmom, research)
+    assert config_hash(full) == config_hash(named) and full["discovery"] == want
+
+
 def test_a_freeze_commit_that_is_not_an_ancestor_of_head_is_refused(tmp_path: Path,
                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
     """A commit on another branch holds the file too, but its rules were never merged: `git merge-base --is-ancestor
