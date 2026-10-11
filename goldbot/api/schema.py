@@ -5,9 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from goldbot.ops.account_view import LossBudget, Milestones
+
+
+class ApiRequest(BaseModel):
+    """Base of every request body: unknown fields are rejected (422), never silently dropped, so a misspelt or
+    attacker-supplied field on a security-relevant request (sign-in, invite, reset, recovery, TOTP, mode, re-arm,
+    halt, approvals) cannot pass unnoticed. Response models stay plain BaseModel."""
+    model_config = ConfigDict(extra="forbid")
 
 
 class EntryBlock(BaseModel):
@@ -99,7 +106,7 @@ class DecidedProposal(Proposal):
     decided_by: str | None = None
 
 
-class Decision(BaseModel):
+class Decision(ApiRequest):
     proposal_id: str
     action: Literal["approve", "reject"]
     reason_code: Literal["news", "cost", "discretion", "duplicate", "other"] | None = None
@@ -138,7 +145,7 @@ class AuthState(BaseModel):
     users: int
 
 
-class SetupRequest(BaseModel):
+class SetupRequest(ApiRequest):
     setup_code: str = ""
     email: str
     password: str
@@ -153,7 +160,7 @@ class SetupResponse(TotpEnrolment):
     recovery_codes: list[str]
 
 
-class LoginRequest(BaseModel):
+class LoginRequest(ApiRequest):
     email: str = ""
     password: str = ""
     totp: str = ""
@@ -166,7 +173,7 @@ class LoginResponse(BaseModel):
     email: str
 
 
-class InviteRequest(BaseModel):
+class InviteRequest(ApiRequest):
     email: str
     role: GrantableRole = "viewer"
 
@@ -176,7 +183,7 @@ class InviteResponse(BaseModel):
     expires_h: int
 
 
-class AcceptRequest(BaseModel):
+class AcceptRequest(ApiRequest):
     token: str = ""
     password: str = ""
 
@@ -198,12 +205,12 @@ class UserRow(BaseModel):
     last_login: float | None
 
 
-class RoleChange(BaseModel):
+class RoleChange(ApiRequest):
     email: str
     role: GrantableRole
 
 
-class UserRef(BaseModel):
+class UserRef(ApiRequest):
     email: str
 
 
@@ -211,14 +218,14 @@ class Ok(BaseModel):
     ok: bool = True
 
 
-class ChangePasswordRequest(BaseModel):
+class ChangePasswordRequest(ApiRequest):
     """Logged in. Revokes the user's other sessions."""
     current_password: str = ""
     totp: str = ""
     new_password: str = ""
 
 
-class ForgotPasswordRequest(BaseModel):
+class ForgotPasswordRequest(ApiRequest):
     """Self-service reset with a current authenticator code; the owner account also needs one of its recovery codes
     (spent). The same 403 for an unknown email, a wrong code or a missing recovery code."""
     email: str = ""
@@ -232,13 +239,13 @@ class ResetLinkResponse(BaseModel):
     expires_h: int
 
 
-class ResetRequest(BaseModel):
+class ResetRequest(ApiRequest):
     """Owner-issued one-time link: sets a new password and enrols a new authenticator."""
     token: str = ""
     new_password: str = ""
 
 
-class RecoveryLoginRequest(BaseModel):
+class RecoveryLoginRequest(ApiRequest):
     """Owner only: a one-time recovery code in place of the authenticator code."""
     email: str = ""
     password: str = ""
@@ -250,7 +257,7 @@ class RecoveryLoginResponse(LoginResponse):
     recovery_codes_left: int
 
 
-class RecoveryCodesRequest(BaseModel):
+class RecoveryCodesRequest(ApiRequest):
     password: str = ""
     totp: str = ""
 
@@ -268,11 +275,11 @@ class DecisionResult(BaseModel):
     outcome: str                    # SUBMITTED: the engine applies it (and re-checks the RiskGate) on its next tick
 
 
-class HaltRequest(BaseModel):
+class HaltRequest(ApiRequest):
     reason: str | None = None
 
 
-class RearmRequest(BaseModel):
+class RearmRequest(ApiRequest):
     totp: str                       # a fresh authenticator code: re-arming needs a second factor (design)
 
 
@@ -642,7 +649,7 @@ class AutoModeView(BaseModel):
     error: str | None = None                # the evidence could not be read (fails closed: not eligible)
 
 
-class ModeChangeRequest(BaseModel):
+class ModeChangeRequest(ApiRequest):
     mode: Literal["auto", "propose"]
     totp: str = Field("", max_length=16)    # auto only: the owner's one-time authenticator code
 

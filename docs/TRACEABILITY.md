@@ -17,12 +17,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 178 |
+| implemented | 179 |
 | partial | 16 |
 | missing | 3 |
 | deviates | 6 |
 | in review | 8 |
-| **total** | **211** |
+| **total** | **212** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -131,6 +131,7 @@ tests/test_sizing_parity.py::test_sizing_module_matches_the_gate and ::test_stag
 | U16 | API responses (sessions, recovery codes, enrolment URIs, invite and reset tokens) are never cached | implemented | goldbot/api/app.py `no_referrer` middleware (`Cache-Control: no-store` on `/api/`) | tests/test_api_code_lockout.py::test_auth_responses_are_never_cached |
 | U17 | The owner account cannot be reset with a reset link (a stolen owner session could otherwise set a new password and authenticator); the owner recovers with a recovery code | implemented | goldbot/api/auth.py `create_reset_link`, `use_reset_link` (`OWNER_RESET_REFUSED`) | tests/test_api_security_followup.py::test_no_reset_link_can_be_made_for_the_owner_account; ::test_an_owner_reset_link_already_stored_is_refused |
 | U18 | The code lockout never gates halt or propose: after five wrong codes the dashboard halt, Telegram /halt (bus.set_halt) and /mode propose still work and sign-in stays open | implemented | goldbot/api/app.py `halt` (no code); goldbot/telegram/automode.py `mode_command` (propose needs no code); goldbot/telegram/bot.py `_on_command` (/halt); goldbot/api/auth.py `_reserve` (code key separate from sign-in) | tests/test_api_security_followup.py::test_the_code_lockout_never_gates_halt_or_propose; ::test_telegram_halt_through_the_bot_still_halts_while_codes_are_locked |
+| U19 | API request bodies reject unknown fields with 422 instead of silently dropping them (sign-in, invite, reset, password change, recovery, TOTP, mode, re-arm, halt, approvals; security item from the ADR 0010 architect) | implemented | goldbot/api/schema.py `ApiRequest` (`extra="forbid"`), the base of every request body model; response models unchanged; web/openapi.json marks them `additionalProperties: false`; goldbot/api/app.py `validation_error` returns each 422 error as type, loc and msg only (no `input` or `ctx`: the rejected value is never echoed, security review LOW) | tests/test_api_request_bodies.py::test_every_request_body_model_forbids_extra_fields; ::test_a_misspelt_password_key_is_rejected_without_echoing_the_password; ::test_a_missing_field_error_does_not_echo_the_request_body; ::test_the_unknown_field_table_covers_every_request_route; ::test_each_request_endpoint_rejects_an_unknown_field_with_422 (18 routes) |
 
 ## Data and time [Data architecture]
 
