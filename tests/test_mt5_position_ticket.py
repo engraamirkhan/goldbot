@@ -27,7 +27,7 @@ Send = namedtuple("Send", "retcode order deal volume price comment")
 Chk = namedtuple("Chk", "retcode comment")
 Deal = namedtuple("Deal", "ticket order position_id")
 Pos = namedtuple("Pos", "ticket symbol type volume price_open sl tp magic comment time_msc profit")
-Acc = namedtuple("Acc", "login equity balance margin margin_free leverage currency server trade_mode")
+Acc = namedtuple("Acc", "login equity balance margin margin_free leverage currency server trade_mode margin_mode")
 
 
 def _fake(deal_lookup: Any) -> SimpleNamespace:
@@ -53,7 +53,7 @@ def _fake(deal_lookup: Any) -> SimpleNamespace:
         TRADE_ACTION_SLTP=6, ORDER_TIME_GTC=0, ORDER_FILLING_FOK=0, ORDER_FILLING_IOC=1, ORDER_FILLING_RETURN=2,
         COPY_TICKS_ALL=-1, symbol_info=lambda s: Sym(s, 2, 0.01, 100.0, 0.01, 0.01, 50.0, 0, 2, 4, True),
         symbol_info_tick=lambda s: MTick(1_741_168_800_000, 2400.0, 2400.2, 6),
-        account_info=lambda: Acc(1, 10_000.0, 10_000.0, 0.0, 10_000.0, 20, "USD", "s", 0),
+        account_info=lambda: Acc(1, 10_000.0, 10_000.0, 0.0, 10_000.0, 20, "USD", "s", 0, 2),
         order_check=lambda req: Chk(0, ""), order_send=order_send, positions_get=positions_get,
         history_deals_get=history_deals_get, book=book)
 
@@ -128,3 +128,10 @@ def test_the_engine_keys_the_trade_by_the_position_and_reconcile_keeps_it(monkey
     assert set(eng.open) == {ORDER}
     actions = {d.get("action") for d in eng.decisions}
     assert not actions & {"adopt_orphan", "close_unconfirmed"}, actions
+
+
+@pytest.mark.parametrize(("raw", "mode"), [(2, "hedging"), (0, "netting"), (1, "exchange"), (7, None)])
+def test_the_adapter_reports_the_account_margin_mode(monkeypatch, raw, mode):
+    fake = _fake(by_order(FILL))
+    fake.account_info = lambda: Acc(1, 10_000.0, 10_000.0, 0.0, 10_000.0, 20, "USD", "s", 0, raw)
+    assert _adapter(monkeypatch, fake).account().margin_mode == mode

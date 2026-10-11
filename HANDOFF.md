@@ -834,7 +834,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   as an orphan). `mt5_adapter._position_ticket` now reads the order's deals (`history_deals_get(ticket=res.order)`:
   MT5's `ticket=` selects by ORDER, review MEDIUM-1) and takes `position_id` from the deal whose ticket is `res.deal`
   (right on netting accounts too), else falls back to `res.order`; an older order numbered like the fill's deal is
-  never taken. Tests on a fake terminal whose deal and
+  never taken. The terminal account must also be **hedging**: `AccountInfo.margin_mode` (MT5 ACCOUNT_MARGIN_MODE_*)
+  and `accounts.verify_terminal_account` refuse netting, exchange or an unreported mode at start, on every order and in
+  preflight, since fills on a netting account join one position per symbol. An older bridge does not report the mode,
+  so **update the MT5 bridge before the brain** or the engine refuses to start (open positions keep their broker
+  stops). Tests on a fake terminal whose deal and
   order tickets differ (tests/test_mt5_position_ticket.py, including the engine keying and a sweep + reconcile that
   keep the trade). **Verify on the demo terminal:** after the first demo fill, the engine's `open` position id and the
   `adopt_orphan` count in the decisions journal (expected: the terminal's position ticket, no orphan adopted).

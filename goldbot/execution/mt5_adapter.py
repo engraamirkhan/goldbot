@@ -223,8 +223,9 @@ class MT5Broker:
     def account(self) -> AccountInfo:
         a = mt5.account_info()
         mode = {0: "demo", 1: "contest", 2: "real"}.get(int(getattr(a, "trade_mode", -1)))   # ACCOUNT_TRADE_MODE_*
+        margin = {0: "netting", 1: "exchange", 2: "hedging"}.get(int(getattr(a, "margin_mode", -1)))  # ACCOUNT_MARGIN_MODE_*
         return AccountInfo(login=a.login, equity=a.equity, balance=a.balance, margin=a.margin, margin_free=a.margin_free, leverage=a.leverage, currency=a.currency, server=a.server,
-                           trade_mode=mode)
+                           trade_mode=mode, margin_mode=margin)
 
     # ------------------------------------------------------------------ data
     def _mt5_time(self, utc: pd.Timestamp) -> datetime:
