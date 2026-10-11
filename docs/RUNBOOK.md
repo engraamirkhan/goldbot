@@ -430,6 +430,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `monthly_research` | First Sunday of the month 08:00 | Bounded label-grid research; summary in `state\research_<YYYY-MM>.md`. |
 | `backup` | Daily 22:15 | Brain only: encrypted `restic` backup of the databases, state files, trial registry, models and the brain's own Parquet to Oracle Object Storage, append only (old snapshots are thinned monthly from your Mac to 14 daily, 8 weekly and 12 monthly); result in `state/backup_last.json` (section 0.6). |
 | `restore_drill` | Sunday 10:00 | Restores the latest backup to a temporary folder and verifies checksums, database integrity, row counts and model checksums; result in `state/restore_drill_last.json`. |
+| `broker_ledger` | Daily 23:25 | Read-only: each account's balance, equity, margin and currency, the deposits and withdrawals in the broker's deal history, the balance tied out against the day's deals, and every goldbot position compared with the broker by position id. Stored in `aux.db`; health check `reconcile:<account>` (section 6, "Broker reconciliation"). |
 
 The staff-agent jobs and headline scoring only run when the `anthropic-api-key` secret is stored; otherwise the
 job records "skipped" and headlines are collected unscored. Their total spend is capped by
@@ -1077,6 +1078,35 @@ lost bridge reply:
   an older release never reports ready. It still starts and trades for up to 15 min, until `TimeoutStartSec`. Then
   systemd stops it with SIGTERM and starts it again, over and over. Every cycle restarts the engine in the middle of
   whatever it was doing, and `systemctl restart` (and so a deploy) waits up to 15 min and then fails.
+
+### Broker reconciliation (`reconcile:<account>`)
+
+One check per account, the worse of two daily reports: the feed check (`feed_reconcile`, the engine's 1m bars against
+the broker's) and the broker ledger (`broker_ledger`). The ledger part:
+
+* **warn**: a position differs between goldbot and the broker. `missing` means the broker has it (open, or closed by
+  its deals) and goldbot has no record; `extra` means goldbot has a record the broker knows nothing of; `mismatch`
+  names the field (side, lots, entry or exit price, P&L, P&L currency). Also warns on broker adjustment deals (a
+  charge, correction, bonus or interest), on an unreadable orders or closed-trade file, and when the last report is
+  more than 48 hours old.
+* **fail**: the balance moved by more than the tolerance beyond what the day's deals explain (trade P&L, commission,
+  swap, fees, deposits and withdrawals). Something changed your balance that the deal history does not show. Compare
+  with the broker's statement before the next trade.
+
+The health reason gives counts only. To see the amounts, run this on the brain:
+
+```bash
+sudo -u goldbot /opt/goldbot/.venv/bin/python -m goldbot.ops.ledger show <account> --state /opt/goldbot/state
+```
+
+It prints the latest report, the daily snapshots and the deposits and withdrawals of the last 31 days (`--days N` for
+more). It opens `aux.db` read-only, so it is safe to run while the services are up. The output contains your
+balances, so keep it off GitHub.
+
+The first run is a baseline with nothing to tie out against. Its deposits are listed with `"baseline": true` because
+they are already in the opening balance. A balance operation marked `"follows_cancel": true` may be the broker
+reversing a cancelled deal, not a deposit or withdrawal of yours; check the broker's statement. Nothing here trades:
+the job only reads the account, the positions and the deal history.
 
 ### Currency rollout (one time: the update that brings currency-correct sizing, BACKLOG 28/25/29)
 

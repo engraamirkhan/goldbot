@@ -582,9 +582,10 @@ def _agent_runner(settings: Settings, store: Store,
 
 
 def _job_broker(acc: Any) -> Any:
-    """A read-only Broker for the scheduler's feed_reconcile (D12): the account's bridge when one is configured, else
-    on Windows the terminal's own saved login (attach without logging in, as the bridge does); None elsewhere. Only
-    get_bars and symbol_info are called on it."""
+    """A read-only Broker for the scheduler's feed_reconcile (D12) and broker_ledger (GAP-07/08): the account's bridge
+    when one is configured, else on Windows the terminal's own saved login (attach without logging in, as the bridge
+    does); None elsewhere. Only read-only methods are called on it: get_bars, symbol_info, account, positions and
+    deals_since (all retry-safe bridge methods; never an order)."""
     from goldbot.ops import accounts
     bridge = accounts.bridge_endpoint(acc.account_id)
     if bridge is not None:
@@ -621,7 +622,7 @@ def run_scheduler() -> None:
                      sync_bars=lambda store: sync_release(store, token=gh_token),   # bars (data-v1) + macro (macro-v1)
                      sync_trials=(lambda path: sync_registry(path, gh_token)) if gh_token else None,
                      population=Population(Path("state") / "population.json"),
-                     broker_for=_job_broker)       # feed_reconcile: engine bars vs the broker's own M1 (D12)
+                     broker_for=_job_broker)       # feed_reconcile (D12) and broker_ledger (GAP-07/08), read-only
     if settings.costs.publish_release:          # measured costs for research.yml (release costs-v1)
         if gh_token:
             ctx.upload_costs = costs_uploader(gh_token)

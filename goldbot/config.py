@@ -218,6 +218,9 @@ class SchedulerSettings(_Section):
     cpcv_quarterly: ScheduleSettings = ScheduleSettings(kind="monthly", at="14:00", weekday=6, months=[1, 4, 7, 10],
                                                         max_late_hours=30)
     attribution: ScheduleSettings = ScheduleSettings(kind="daily", at="23:50", max_late_hours=20)
+    # broker ledger (goldbot/ops/ledger.py, finance audit GAP-07/GAP-08): balance snapshot, deposits and withdrawals,
+    # positions and balance reconciled with the broker. Every day: the deal history still changes on weekends
+    broker_ledger: ScheduleSettings = ScheduleSettings(kind="daily", at="23:25", max_late_hours=20)
     # review M2 (BACKLOG 18): a second calendar fetch on Sunday afternoon, so the new Forex Factory week is archived
     # before the weekly open (an enabled tier-2 window refuses entries until the archive covers the next 24 h)
     calendar_archive_sunday: ScheduleSettings = ScheduleSettings(kind="weekly", at="18:00", weekday=6, max_late_hours=3)
@@ -257,6 +260,19 @@ class AttributionSettings(_Section):
     calibration_bins: int = Field(10, ge=2, le=50)        # equal-width bins of p
     calibration_min_bin: int = Field(10, ge=1)            # a calibration bin with fewer candidates is noise
     trade_rows: int = Field(300, ge=0, le=5000)           # most recent per-trade cost rows kept in the JSON
+
+
+class LedgerSettings(_Section):
+    """Broker ledger (goldbot/ops/ledger.py; finance audit GAP-07, GAP-08, checks RC-8 and RC-9). Read-only: it never
+    places, changes or closes an order. RC-9: "Opening balance + net closed P&L + deposits - withdrawals = closing
+    balance"; a daily difference beyond `balance_tolerance` + `balance_tolerance_per_deal` x deals FAILs the health
+    check reconcile:<account>, a trade that differs from the broker's deals WARNs."""
+    balance_tolerance: float = Field(0.05, ge=0)          # account currency, per day: rounding, not money
+    balance_tolerance_per_deal: float = Field(0.01, ge=0) # plus this per deal in the day (audit RC-9: 0.01 per trade)
+    price_tolerance: float = Field(0.01, ge=0)            # $/oz (one XAUUSD point): record vs broker entry/exit price
+    pnl_tolerance: float = Field(0.01, ge=0)              # account currency per trade (audit RC-9: 0.01 per trade)
+    close_grace_minutes: int = Field(15, ge=0, le=1440)   # a broker close this recent may not be recorded yet
+    max_age_hours: float = Field(48.0, gt=0)              # health warns when the last ledger report is older
 
 
 class RetiredFamily(_Section):
@@ -486,6 +502,7 @@ class Settings(_Section):
     gaps: GapSettings = Field(default_factory=GapSettings)
     backup: BackupSettings = Field(default_factory=BackupSettings)
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)
+    ledger: LedgerSettings = Field(default_factory=LedgerSettings)
 
     @model_validator(mode="after")
     def _walkforward_has_purge_and_embargo(self) -> Settings:

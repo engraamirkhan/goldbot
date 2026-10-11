@@ -33,7 +33,7 @@ from goldbot.execution.costs import (
     SpreadStat,
     load_research_cost_table,
 )
-from goldbot.ops import health, jobs, scheduler
+from goldbot.ops import health, jobs, ledger, scheduler
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research import ruin
 from goldbot.research.director import ResearchPlan
@@ -207,9 +207,32 @@ def case_reconcile(tmp: Path) -> None:
     assert "unreadable" not in crossfeed.check_reconciliation(ctx, "icm-demo").reason
 
 
+def case_ledger(tmp: Path) -> None:
+    """aux.db broker ledger rows (snapshot, balance deal, report) with a field from a newer release."""
+    from goldbot.db import Database
+    db = Database.open(tmp, "aux")
+    snap = ledger.BalanceSnapshot(account_id="icm-demo", ts_utc=T0, balance=1000.0, equity=990.0, margin=10.0,
+                                  margin_free=980.0, currency="GBP")
+    deal = ledger.BalanceDeal(account_id="icm-demo", ticket=5, ts_utc=T0, kind="deposit", deal_type=2, amount=50.0)
+    for table, row in (("balance_snapshots", ledger.SNAPSHOTS.row(snap)), ("balance_deals", ledger.DEALS.row(deal))):
+        row["body"] = json.dumps(_newer(json.loads(row["body"])))
+        with db.write() as conn:
+            conn.execute(f"INSERT INTO {table} ({', '.join(row)}) VALUES ({', '.join(':' + c for c in row)})", row)
+    assert ledger.snapshots(db, "icm-demo") == [snap] and ledger.balance_deals(db, "icm-demo") == [deal]
+    rep = ledger.LedgerReport(account_id="icm-demo", ts_utc=T0, window_from=T0 - pd.Timedelta(days=1), currency="GBP",
+                              positions_checked=1, matched=0, pending=0, status="warn",
+                              diffs=[ledger.TradeDiff(position_id=7, kind="missing", where="closed")])
+    row = ledger.REPORTS.row(rep)
+    row["body"] = json.dumps({**_newer(json.loads(row["body"])), "diffs": _newer(json.loads(row["body"])["diffs"])})
+    with db.write() as conn:
+        conn.execute("INSERT INTO ledger_reports (key, account_id, ts_ns, status, body) "
+                     "VALUES (:key, :account_id, :ts_ns, :status, :body)", row)
+    assert ledger.latest_report(tmp, "icm-demo") == rep
+
+
 CASES = [case_closed_trade, case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
-         case_scheduler, case_health, case_digest, case_outbox, case_reconcile]
+         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.__name__.removeprefix("case_") for c in CASES])
@@ -221,7 +244,8 @@ def test_every_persisted_record_model_has_a_compat_case():
     """A new persisted model must add a case above (and a default that is safe when missing, AGENT_STANDARDS S12)."""
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
-               DigestState, OutboxState, crossfeed.ReconcileReport,
+               DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
+               ledger.BalanceSnapshot, ledger.BalanceDeal,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,
