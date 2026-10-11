@@ -315,7 +315,8 @@ def test_the_bridge_watchdog_is_installed_from_roots_clone_and_enabled():
 
 # ------------------------------------------------------------------------------------------------ bridge watchdog
 def _bridge_watchdog(tmp_path: Path, *, active: bool = True, up_s: int = 3600, curl_ok: bool = True,
-                     restarted_meanwhile: bool = False, args: tuple[str, ...] = ("icm-demo",)) -> tuple[int, str, str]:
+                     restarted_meanwhile: bool = False, args: tuple[str, ...] = ("icm-demo",),
+                     env: dict[str, str] | None = None) -> tuple[int, str, str]:
     """The script with fake systemctl / curl / date first on PATH (only the test copy's PATH line is changed)."""
     fake = tmp_path / "bin"
     fake.mkdir()
@@ -350,7 +351,8 @@ if [ "$1" = -d ]; then echo {now - up_s}; else echo {now}; fi
     assert src.count("PATH=/usr/sbin:/usr/bin:/sbin:/bin\n") == 1
     copy = tmp_path / "wd.sh"
     copy.write_text(src.replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin\n", f"PATH={fake}:/usr/bin:/bin\n"))
-    r = subprocess.run([BASH, str(copy), *args], capture_output=True, text=True, timeout=30)
+    r = subprocess.run([BASH, str(copy), *args], capture_output=True, text=True, timeout=30,
+                       env={**os.environ, **(env or {})})
     return r.returncode, r.stdout, log.read_text() if log.exists() else ""
 
 
@@ -381,3 +383,83 @@ def test_bridge_watchdog_does_not_restart_when_it_should_not(tmp_path, kw):
 def test_bridge_watchdog_refuses_bad_arguments(tmp_path, args):
     rc, _, calls = _bridge_watchdog(tmp_path, args=args)
     assert rc == 2 and calls == ""
+
+
+@pytest.mark.skipif(not BASH, reason="needs bash")
+@pytest.mark.parametrize("env", [{"GOLDBOT_BRIDGE_PROBES": "0"}, {"GOLDBOT_BRIDGE_PROBE_TIMEOUT_S": "0"},
+                                 {"GOLDBOT_BRIDGE_PROBES": "007"}], ids=["no_probes", "zero_timeout", "leading_zero"])
+def test_bridge_watchdog_needs_at_least_one_probe_with_a_timeout(tmp_path, env):
+    """Review LOW-3: 0 probes would restart without probing; a 0 s timeout means no timeout at all for curl."""
+    rc, _, calls = _bridge_watchdog(tmp_path, curl_ok=False, env=env)
+    assert rc == 2 and "restart" not in calls, calls
+
+
+# ------------------------------------------------------------------------------------------------ review follow-ups
+def test_the_heartbeat_records_pass_durations_and_warns_on_a_slow_pass(tmp_path, caplog):
+    """Review LOW-1: how close real passes come to WatchdogSec, measured on the host (last and max pass)."""
+    clock, mono = FakeClock(), FakeClock(50.0)
+    w = LoopWatch(tmp_path, "icm-demo", beat_every_s=0, notify_every_s=5, clock=clock, monotonic=mono,
+                  notify=_recorder([]))
+    w.ready()
+    w.tick()
+    mono.t += 0.5
+    w.tick()
+    b = _beat(tmp_path)
+    assert b["last_pass_s"] == pytest.approx(0.5) and b["max_pass_s"] == pytest.approx(0.5)
+    mono.t += 42.0
+    with caplog.at_level("WARNING", logger="goldbot.ops.watchdog"):
+        w.tick()
+    b = _beat(tmp_path)
+    assert b["last_pass_s"] == pytest.approx(42.0) and b["max_pass_s"] == pytest.approx(42.0)
+    assert any("42" in r.getMessage() and "pass" in r.getMessage() for r in caplog.records), caplog.text
+    caplog.clear()
+    mono.t += 1.0
+    with caplog.at_level("WARNING", logger="goldbot.ops.watchdog"):
+        w.tick()
+    b = _beat(tmp_path)
+    assert b["last_pass_s"] == pytest.approx(1.0) and b["max_pass_s"] == pytest.approx(42.0) and not caplog.records
+    assert watchdog.SLOW_PASS_S == 30
+
+
+BOOT = {"brain": LINUX / "brain_bootstrap.sh", "mt5": LINUX / "mt5_bootstrap.sh"}
+
+
+def test_brain_bootstrap_seeds_the_rollback_floor_right_after_the_units():
+    """Review MEDIUM-1: a release older than the watchdog never sends READY=1, so under Type=notify it trades for up
+    to TimeoutStartSec and is then stopped, over and over. The brain's floor is seeded with the bootstrap commit
+    (root-verified) when there is none, root-owned 0644, never through a symlink."""
+    text = BOOT["brain"].read_text()
+    units = text.index('install -m 644 "$OPS/systemd/goldbot-$u.service" /etc/systemd/system/')
+    block = text[units:text.index("systemctl enable \"$s\"", units)]
+    assert "/etc/goldbot/rollback-floor" in block
+    assert '[ -e /etc/goldbot/rollback-floor ] || [ -L /etc/goldbot/rollback-floor ]' in block   # kept as it is
+    assert "install -m 644 -o root -g root" in block and 'install -d -m 755 -o root -g root /etc/goldbot' in block
+    assert '^[0-9a-f]{40}$' in block                         # only a full commit id is written
+    assert 'rev-parse HEAD' in block and '"$OPS_SRC/src"' in block   # without a ref: root's own clone, never $ROOT
+    assert "$ROOT" not in block.replace('"$OPS/systemd/goldbot-$u.service"', "")
+
+
+@pytest.mark.parametrize("role", sorted(BOOT))
+def test_bootstraps_turn_off_core_dumps_and_crash_reports(role):
+    """Review LOW-2: a watchdog SIGABRT must not leave the engine's memory (tokens, secrets) in a core file or an
+    apport crash report; a pipe core_pattern ignores LimitCORE=0."""
+    text = BOOT[role].read_text()
+    i = text.index("kernel.core_pattern=|/bin/false")
+    assert "/etc/sysctl.d/" in text[i - 400:i + 400] and "/proc/sys/kernel/core_pattern" in text
+    assert "apport" in text[i - 800:i + 800]
+    first_service = text.index("systemctl enable")
+    assert i < first_service or role == "mt5" and i < text.index("systemctl enable goldbot-bridge@")
+
+
+def test_runbook_says_what_an_older_release_does_under_type_notify():
+    text = (Path(__file__).resolve().parents[1] / "docs" / "RUNBOOK.md").read_text()
+    assert "restart in a loop" not in text
+    assert "trades for up to 15 min" in text
+
+
+def test_first_deploy_has_watchdog_acceptance_and_the_fallback():
+    text = (Path(__file__).resolve().parents[1] / "docs" / "deploy" / "first-deploy.md").read_text()
+    for needle in ("systemctl show -p ActiveState,WatchdogUSec,StatusText goldbot-engine@icm-demo",
+                   "engine loop running", "engine_loop", "kill -STOP", "Watchdog timeout", "WatchdogSec=0",
+                   "/proc/sys/kernel/core_pattern"):
+        assert needle in text, needle

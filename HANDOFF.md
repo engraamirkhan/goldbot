@@ -182,6 +182,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the guard test that every gate and supervisor reason has owner text read only `throttle_*` from the `out.append`
   helpers and now reads them all, which is how the two open-risk codes were found unworded (`heat_cap` left
   FUTURE). Tests: tests/test_startup_error_exposure.py, tests/test_api_entry_status.py.
+- Engine watchdog review fixes (2026-10-11, recommended for the first demo deploy on Tue 13 Oct).
+  - MEDIUM-1: brain_bootstrap.sh writes the bootstrap commit to `/etc/goldbot/rollback-floor` when no floor exists
+    (root-owned, 0644).
+  - LOW-1: the loop heartbeat now carries `last_pass_s` and `max_pass_s`, and any pass over 30 s is logged.
+  - LOW-2: both bootstraps turn apport off and set `kernel.core_pattern=|/bin/false` in sysctl.d.
+  - LOW-3: the bridge watchdog needs at least 1 probe and a timeout of at least 1 s.
+  - docs/deploy/first-deploy.md: a core_pattern and floor check (1d), watchdog acceptance plus a `kill -STOP` drill
+    (6W), and a `WatchdogSec=0` fallback.
 - GitHub `engraamirkhan/goldbot`. PR 36 (2026-10-01..04 work) is merged into `main`; follow-up work goes on branch
   `claude/gifted-goldberg-lcb7pl` restarted from `main` (Claude sessions do not push to `main` directly). CI (`ci.yml`) runs pre-commit, backend lint/mypy/unit/integration, frontend eslint/tsc/vitest, an API
   contract check and Playwright e2e as separate jobs, and opens one issue labelled `ci` with each failed job's output.

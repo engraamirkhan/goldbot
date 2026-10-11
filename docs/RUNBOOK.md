@@ -1023,8 +1023,11 @@ lost bridge reply:
   `sudo systemctl daemon-reload` and restart the engines.
 - MT5 box: install the two `goldbot-bridge-watchdog@` units and the `/usr/local/sbin/goldbot-bridge-watchdog` script
   the same way, then run `sudo systemctl enable --now goldbot-bridge-watchdog@icm-demo.timer`.
-- Then set the rollback floor (`/etc/goldbot/rollback-floor`, 0.5) to the watchdog commit. Under `Type=notify`, an
-  older release never reports ready and would restart in a loop.
+- Then set the rollback floor (`/etc/goldbot/rollback-floor`, 0.5) to the watchdog commit. A new brain gets it from
+  the bootstrap, which writes the bootstrap commit there when no floor exists. Why it matters: under `Type=notify`,
+  an older release never reports ready. It still starts and trades for up to 15 min, until `TimeoutStartSec`. Then
+  systemd stops it with SIGTERM and starts it again, over and over. Every cycle restarts the engine in the middle of
+  whatever it was doing, and `systemctl restart` (and so a deploy) waits up to 15 min and then fails.
 
 ### Currency rollout (one time: the update that brings currency-correct sizing, BACKLOG 28/25/29)
 

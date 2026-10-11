@@ -23,8 +23,12 @@ inst=${1-}
 port=${2-8765}
 [[ "$inst" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { echo "usage: goldbot-bridge-watchdog <account> [port]"; exit 2; }
 [[ "$port" =~ ^[0-9]{1,5}$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || { echo "bad port: $port"; exit 2; }
-for n in "$GRACE_S" "$PROBES" "$PROBE_GAP_S" "$PROBE_TIMEOUT_S"; do
+for n in "$GRACE_S" "$PROBE_GAP_S"; do
   [[ "$n" =~ ^[0-9]{1,6}$ ]] || { echo "bad setting: $n"; exit 2; }
+done
+# at least one probe (0 would restart without probing) and a real timeout (curl -m 0 means none at all)
+for n in "$PROBES" "$PROBE_TIMEOUT_S"; do
+  [[ "$n" =~ ^[1-9][0-9]{0,5}$ ]] || { echo "bad setting: $n (must be at least 1)"; exit 2; }
 done
 unit="goldbot-bridge@$inst.service"
 

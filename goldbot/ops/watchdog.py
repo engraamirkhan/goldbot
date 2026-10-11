@@ -37,6 +37,7 @@ log = logging.getLogger(__name__)
 LOOP_BEAT_EVERY_S = 15.0       # loop heartbeat file rewritten at most this often (health FAILs after LOOP_FAIL_S)
 NOTIFY_EVERY_S = 5.0           # WATCHDOG=1 at most this often (the unit's WatchdogSec is 300 s)
 STARTUP_MAX_S = 15 * 60.0      # the start is fed this long at most; the unit's TimeoutStartSec matches
+SLOW_PASS_S = 30.0             # a loop pass longer than this is logged (WatchdogSec is 300 s): measured headroom
 
 
 def loop_heartbeat_path(state_dir: str | Path, account_id: str) -> Path:
@@ -68,13 +69,17 @@ def sd_notify(message: str, env: Mapping[str, str] | None = None) -> bool:
 class LoopWatch:
     def __init__(self, state_dir: str | Path, account_id: str, *, beat_every_s: float = LOOP_BEAT_EVERY_S,
                  notify_every_s: float = NOTIFY_EVERY_S, startup_max_s: float = STARTUP_MAX_S,
-                 clock: Callable[[], float] = time.time, notify: Callable[[str], bool] = sd_notify) -> None:
+                 clock: Callable[[], float] = time.time, monotonic: Callable[[], float] = time.monotonic,
+                 notify: Callable[[str], bool] = sd_notify) -> None:
         self.path = loop_heartbeat_path(state_dir, account_id).absolute()   # the cwd may change later
         self.account_id = account_id
         self.beat_every_s, self.notify_every_s, self.startup_max_s = beat_every_s, notify_every_s, startup_max_s
-        self.clock, self.notify = clock, notify
+        self.clock, self.monotonic, self.notify = clock, monotonic, notify
         self.started = clock()
         self.passes = 0
+        self.last_pass_s: float | None = None    # wall time between the last two passes (monotonic clock)
+        self.max_pass_s: float | None = None     # the longest since the loop started: headroom to WatchdogSec
+        self._last_tick: float | None = None
         self._last_beat: float | None = None
         self._last_notify: float | None = None
         self._stop = threading.Event()
@@ -83,7 +88,8 @@ class LoopWatch:
 
     def _write(self, phase: str, now: float) -> bool:
         doc = {"service": f"engine-{self.account_id}", "phase": phase, "ts": now, "started": self.started,
-               "passes": self.passes, "pid": os.getpid()}
+               "passes": self.passes, "last_pass_s": self.last_pass_s, "max_pass_s": self.max_pass_s,
+               "pid": os.getpid()}
         try:
             with self._lock:
                 write_atomic(self.path, json.dumps(doc), durable=False)   # rewritten constantly: no fsync
@@ -133,6 +139,15 @@ class LoopWatch:
         """Once per pass of the engine loop, from the loop thread only (a thread feeding the watchdog would hide a
         stuck loop). Never raises."""
         self.passes += 1
+        mono = self.monotonic()
+        if self._last_tick is not None:
+            pass_s = mono - self._last_tick
+            self.last_pass_s = pass_s
+            self.max_pass_s = pass_s if self.max_pass_s is None else max(self.max_pass_s, pass_s)
+            if pass_s > SLOW_PASS_S:
+                log.warning("engine %s loop pass took %.1f s (> %.0f s; the watchdog restarts at 300 s)",
+                            self.account_id, pass_s, SLOW_PASS_S)
+        self._last_tick = mono
         now = self.clock()
         if self._last_beat is None or now - self._last_beat >= self.beat_every_s:
             self._write("loop", now)

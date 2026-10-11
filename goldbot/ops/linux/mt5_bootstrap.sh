@@ -33,6 +33,17 @@ if ! swapon --show | grep -q /swapfile; then
   grep -q /swapfile /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
 fi
 
+# A watchdog SIGABRT (goldbot-engine@ WatchdogSec) must not leave process memory, which holds tokens and the
+# file-store secrets, in a core file or a crash report. A pipe core_pattern (apport, systemd-coredump) ignores
+# LimitCORE=0, so apport is turned off and no process dumps core (persisted in sysctl.d; 60- sorts after
+# systemd-coredump's 50-coredump.conf). docs/deploy/first-deploy.md checks /proc/sys/kernel/core_pattern.
+echo "core_pattern was: $(head -c 200 /proc/sys/kernel/core_pattern 2>/dev/null || echo unreadable)"
+systemctl disable --now apport.service 2>/dev/null || true
+if [ -f /etc/default/apport ]; then sed -i 's/^enabled=1/enabled=0/' /etc/default/apport; fi
+printf '%s\n' '# goldbot: no core files or crash reports (they would hold secrets)' 'kernel.core_pattern=|/bin/false' \
+  > /etc/sysctl.d/60-goldbot-no-core.conf
+sysctl -q -p /etc/sysctl.d/60-goldbot-no-core.conf || echo "WARNING: kernel.core_pattern not applied now (applies at boot)"
+
 dpkg --add-architecture i386
 install -d -m 755 /etc/apt/keyrings
 curl -fsSLo /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
