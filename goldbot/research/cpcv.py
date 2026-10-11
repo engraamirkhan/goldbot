@@ -284,11 +284,6 @@ def cpcv_eligible(row: dict[str, Any]) -> str | None:
     return None
 
 
-def gates_passed(row: dict[str, Any]) -> bool:
-    """The trial passed the design's gates (results.gates.passed is True)."""
-    return ((row.get("results") or {}).get("gates") or {}).get("passed") is True
-
-
 def selection_set(rows: list[dict[str, Any]], families: set[str], timeframe: str) -> list[int]:
     """Every registered trial of `families` on `timeframe`, screened ones included (all were looks the passing config
     was chosen among), as trial numbers; pre-registrations and holdout scorings are not alternatives."""

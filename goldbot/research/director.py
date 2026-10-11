@@ -106,6 +106,7 @@ from goldbot.research.registry import (
     SURVIVOR_KEY,
     VERDICT,
     WITHDRAWN,
+    gate_pass_counts,
     is_trial,
     quarter_of,
     quarter_start,
@@ -485,7 +486,7 @@ class _Ledger:
             return "live"
         tried = self.survivor_trials(run, names[k - 1])
         if tried:
-            return "live" if any(_gates_passed(t) for t in tried) else "expired"
+            return "live" if any(gate_pass_counts(t) for t in tried) else "expired"
         used = [s for s in self.slots if s["slot"].get("kind") == "survivor" and s["slot"].get("k") == k
                 and parent is not None and refers_to(s["slot"].get("parent"), parent) and id(s) in self.slot_use]
         return "expired" if used else "pending"
@@ -503,10 +504,6 @@ SLOT_STATES: tuple[str, ...] = ("pending", "live", "used", "expired", "withdrawn
 def _cfg(row: dict[str, Any]) -> dict[str, Any]:
     c = row.get("config")
     return c if isinstance(c, dict) else {}
-
-
-def _gates_passed(row: dict[str, Any]) -> bool:
-    return ((row.get("results") or {}).get("gates") or {}).get("passed") is True
 
 
 def slot_survivors(row: dict[str, Any], meta: dict[str, Any] | None = None) -> list[tuple[str, list[str]]]:
@@ -741,7 +738,7 @@ def slot_refusal(rows: list[dict[str, Any]], quarter: str, prereg: dict[str, Any
     feats = sorted(str(c) for c in config.get("features") or [] if c != "side")
     if feats != members:
         return f"the config's features {feats} are not survivor {name!r}'s recorded members {members} ({what})"
-    if kind == "holdout" and not any(_gates_passed(t) and t.get("family") == family
+    if kind == "holdout" and not any(gate_pass_counts(t) and t.get("family") == family
                                      and t.get("config_hash") == config_hash for t in led.survivor_trials(run, name)):
         return f"the {what} covers only survivor trial {k}'s configuration ({name!r}, gates passed)"
     return None

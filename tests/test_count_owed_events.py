@@ -341,7 +341,7 @@ def test_h04_sample_rule_drops_an_entry_whose_window_has_a_gap(b1: pd.DataFrame)
 def test_h06_count_is_the_slow_macro_presets_own_candidates_against_the_h01_signals(b1_long: pd.DataFrame,
                                                                                     macro_long: pd.DataFrame):
     b1, macro = b1_long, macro_long
-    out, ev = co.count_h06(b1, macro, daily_floor=150)
+    out, ev = co.count_h06(b1, macro, retire_floor=150)
     h01, h01_ev = co.count_h01(b1)
     assert out["status"] == "counted" and "tsmom-g0-fed4baec9f" in out["source"]    # the pinned H-06 agent id
     assert "candidates_in_context" in out["source"] and "slow_macro" in out["source"]
@@ -349,7 +349,9 @@ def test_h06_count_is_the_slow_macro_presets_own_candidates_against_the_h01_sign
     assert out["h01_signals"] == h01["signals"]
     assert out["signals"] + out["dropped_macro_missing"] + out["dropped_disagree"] == h01["signals"]
     assert 0 < out["one_at_a_time_lower_bound"] <= out["signals"]
-    assert out["daily_floor"] == 150 and out["below_floor"] == (out["one_at_a_time_lower_bound"] < 150)
+    # 150 is the retire floor (withdrawal rule), not a pass floor: the key says so
+    assert out["retire_floor"] == 150 and "daily_floor" not in out
+    assert out["below_retire_floor"] == (out["one_at_a_time_lower_bound"] < 150)
     # every H-06 event is an H-01 signal (same time, same side): the gate only removes
     h01_keys = set(zip(utc_index(h01_ev["decision_utc"]), h01_ev["side"], strict=True))
     assert set(zip(utc_index(ev["decision_utc"]), ev["side"], strict=True)) <= h01_keys
@@ -511,15 +513,20 @@ def test_nothing_at_or_after_the_holdout_reaches_any_count():
     late = np.asarray(utc_index(macro["available_utc"]) >= pd.Timestamp(HOLDOUT, tz="UTC"))
     moved = macro.copy()
     moved.loc[late, "value"] = moved.loc[late, "value"].to_numpy() * 1.5
-    a = co.run(raw, macro, _calendar(), holdout_from=HOLDOUT, extra_cost_usd=EXTRA, min_rows=MIN_ROWS, daily_floor=150)
+    a = co.run(raw, macro, _calendar(), holdout_from=HOLDOUT, extra_cost_usd=EXTRA, min_rows=MIN_ROWS, retire_floor=150,
+               pass_floor=1000)
     b = co.run(_perturbed(raw, pd.Timestamp(HOLDOUT, tz="UTC")), moved, _calendar(), holdout_from=HOLDOUT,
-               extra_cost_usd=EXTRA, min_rows=MIN_ROWS, daily_floor=150)
+               extra_cost_usd=EXTRA, min_rows=MIN_ROWS, retire_floor=150, pass_floor=1000)
     assert late.any() and a["counts"] == b["counts"]
     assert a["counts"]["H-06"]["status"] == "counted"
     assert pd.Timestamp(a["meta"]["bars_to"], tz="UTC") < pd.Timestamp(HOLDOUT, tz="UTC")
     text = co.markdown(a)
     assert "| Q1 H-04 | asia_drift entries" in text and "expected_eval_days" in text
     assert "| H-04 entries |" in text and "| Q1 H-06 |" in text and "| H-06 signals |" in text
+    # the markdown states which floor is which: 150 only retires, a pass needs screen_min_events
+    assert "retire floor" in text and "daily floor" not in text
+    assert ("150 is the retire floor (research.screen_min_events_daily): below it a daily rule is withdrawn or "
+            "retired, never passed; a pass needs research.screen_min_events (1,000) events") in text
 
 
 def test_missing_calendar_is_reported_not_counted():

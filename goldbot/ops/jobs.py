@@ -940,7 +940,7 @@ def cpcv_quarterly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     sidecar is local to the scheduler host (registry_sync does not carry it; docs/decisions/0002). Report ->
     state/cpcv_<quarter>.md. One trial's failure does not stop the others; the job fails at the end if any did."""
     from goldbot.research import cpcv
-    from goldbot.research.registry import quarter_of
+    from goldbot.research.registry import gate_pass_counts, quarter_of
     synced = _sync_trials(ctx)
     r = ctx.settings.research
     holdout = r.holdout_window()
@@ -954,8 +954,7 @@ def cpcv_quarterly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         except (KeyError, ValueError, TypeError):
             return None
 
-    passing = [x for x in rows if timeframe(x) is not None
-               and ((x.get("results") or {}).get("gates") or {}).get("passed") is True]
+    passing = [x for x in rows if timeframe(x) is not None and gate_pass_counts(x)]
     end = min(slot, holdout[0]) if holdout is not None else slot
     start = end - pd.DateOffset(months=12 * 30)                 # everything the store has
     out: dict[str, Any] = {"quarter": q, "trials": {}, "errors": {}, "registry_sync": synced}

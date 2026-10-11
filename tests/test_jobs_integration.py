@@ -36,6 +36,8 @@ from goldbot.specialists.base import AgentIdentity
 
 pytestmark = pytest.mark.integration
 
+# the research cost treatment a row records: only then does its gate pass count (registry.gate_pass_counts)
+COSTS = {"swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0}, "cost_source": "PRIORS ONLY: test"}
 ACC = Account(account_id="icm-demo", broker="icm", mode="demo", server="ICMarketsSC-Demo", login=None, terminal_path="",
               server_tz="Europe/Athens", symbol="XAUUSD", magic_base=260100, enabled=True)
 
@@ -196,11 +198,11 @@ def test_cpcv_quarterly_attaches_evidence_to_gate_passing_trials_without_new_tri
     cfg = {**SPECIALISTS["session_open"].default_config, "asia_range_max_atr_d": 1.2}
     peer = {**SPECIALISTS["session_open"].default_config, "asia_range_max_atr_d": 1.5}
     stale = ctx.trials.record(agent_id="a", family="session_open", config=cfg, feature_version="v", rationale="r",
-                              results={"gates": {"passed": True}})
+                              results={"gates": {"passed": True}, **COSTS})
     ctx.trials.record(agent_id="b", family="session_open", config=peer, feature_version="v", rationale="r",
                       results={"gates": {"passed": False}})
     ctx.trials.record(agent_id="c", family="session_open", config=cfg, feature_version="v", rationale="r",
-                      results={"gates": {"passed": True}}, status="holdout")      # a holdout scoring is never re-run
+                      results={"gates": {"passed": True}, **COSTS}, status="holdout")      # a holdout scoring is never re-run
     slot = pd.Timestamp("2025-10-05 14:00", tz="UTC")
     # a trial recorded with other features than the store's bars build now is skipped, not re-run on new inputs
     first = cpcv_quarterly(ctx, slot)
@@ -209,7 +211,7 @@ def test_cpcv_quarterly_attaches_evidence_to_gate_passing_trials_without_new_tri
     assert not ctx.trials.evidence(kind="cpcv") and not first["errors"]
     version = msg.split("feature version ")[1].split(" differs")[0]
     passed = ctx.trials.record(agent_id="a", family="session_open", config=cfg, feature_version=version,
-                               rationale="r", results={"gates": {"passed": True}})
+                               rationale="r", results={"gates": {"passed": True}, **COSTS})
     ctx.trials.record(agent_id="b", family="session_open", config=peer, feature_version=version, rationale="r",
                       results={"gates": {"passed": False}})
     n = ctx.trials.n_trials

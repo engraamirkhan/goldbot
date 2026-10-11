@@ -45,11 +45,22 @@ def _release(folder: Path, years: range = range(2010, 2027)) -> Path:
     return folder
 
 
-def _written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bars: Path) -> TrialRegistry:
+LATER_FROM = "2015-01-04 23:00:00+00:00"               # a discovery row whose bars start after data-v1's first year
+
+
+def _later_spec() -> dict[str, Any]:
+    """The test spec with discovery D's bars starting in 2015."""
+    spec = _complete_spec(reservation=4)
+    spec["rows"][0] = {**spec["rows"][0], "bars_from": LATER_FROM}
+    return spec
+
+
+def _written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bars: Path,
+             spec: dict[str, Any] | None = None) -> TrialRegistry:
     """The test spec's queued rows (discovery D, H-01) written with the research window's digests of `bars`."""
     _clock(monkeypatch, BEFORE)
     reg = TrialRegistry(tmp_path / "registry.jsonl")
-    plan = plan_quarter(QuarterSpec.model_validate(_complete_spec(reservation=4)), research=_research(4),
+    plan = plan_quarter(QuarterSpec.model_validate(spec or _complete_spec(reservation=4)), research=_research(4),
                         doc_text=DOC_TEXT, quarter=Q,
                         data_digests=bar_file_digests(bars, to_year=HOLDOUT_FROM.year))
     write_quarter(reg, plan)
@@ -152,6 +163,46 @@ def test_the_writer_pins_the_research_windows_data_v1_digests_in_every_queued_ro
     assert any("data_digests" in item for item in plan.open_items) and not plan.writable
 
 
+def test_each_row_pins_the_files_from_the_year_of_its_bars_from_and_records_the_pinned_years(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    bars = _release(tmp_path / "raw")
+    reg = _written(tmp_path, monkeypatch, bars, _later_spec())
+    d, h01 = [r for r in reg._rows() if not r.get("slot")]
+    last = HOLDOUT_FROM.year
+    assert sorted(d["plan"]["data_digests"]) == [f"xauusd_1m_dukascopy_{y}.parquet" for y in range(2015, last + 1)]
+    assert d["plan"]["data_years"] == [2015, last]
+    # a specialist row has no bars_from: it pins every research-window file, from data-v1's first year
+    assert len(h01["plan"]["data_digests"]) == last - 2010 + 1 and h01["plan"]["data_years"] == [2010, last]
+
+
+def test_a_discovery_row_with_a_later_bars_from_runs_from_that_year(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    bars = _release(tmp_path / "raw")
+    reg = _written(tmp_path, monkeypatch, bars, _later_spec())
+    written = reg._rows()[0]
+    rp = _research_pass(monkeypatch)
+    seen = _stop_at_link(monkeypatch)
+    b1 = pd.DataFrame({"ts_utc": pd.to_datetime(["2015-01-04 23:00:00", "2017-06-01 00:00:00", "2025-09-30 20:59:00",
+                                                 "2026-10-05 12:00:00"], utc=True)})
+    with pytest.raises(_Linked):
+        _discover(rp, tmp_path, reg, bars, b1, from_year=2015)
+    assert seen["prereg"] is not None and seen["prereg"]["ts"] == written["ts"]
+    # reading other years than the row's pinned ones is still refused, naming the row's pinned range
+    before = reg.path.read_text()
+    with pytest.raises(SystemExit, match=r"read by this run but not pinned.*pins years 2015-"):
+        _discover(rp, tmp_path, reg, bars, b1, from_year=2014)
+    assert reg.path.read_text() == before
+
+
+def test_a_bars_from_after_every_file_is_refused_at_planning(tmp_path: Path):
+    from goldbot.research.preregistration import SpecError
+    spec = _complete_spec(reservation=4)
+    spec["rows"][0] = {**spec["rows"][0], "bars_from": "2025-09-30 20:00:00+00:00"}
+    with pytest.raises(SpecError, match="bars_from"):
+        plan_quarter(QuarterSpec.model_validate(spec), research=_research(4), doc_text=DOC_TEXT, quarter=Q,
+                     data_digests=bar_file_digests(_release(tmp_path / "raw", range(2010, 2025)),
+                                                   to_year=HOLDOUT_FROM.year))
+
+
 def test_the_writer_script_computes_the_digests_from_bars_and_refuses_a_write_without_them(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
     from tests.test_preregister_quarter import SPEC, _script
@@ -162,7 +213,7 @@ def test_the_writer_script_computes_the_digests_from_bars_and_refuses_a_write_wi
     assert script.main(["--quarter", Q, "--from", str(SPEC), "--registry", str(reg_path), "--dry-run",
                         "--bars", str(bars)]) == 0
     out = capsys.readouterr().out
-    assert f"data-v1 digests: {HOLDOUT_FROM.year - 2010 + 1} files" in out
+    assert f"data-v1 digests: {HOLDOUT_FROM.year - 2010 + 1} research-window files" in out
     assert "xauusd_1m_dukascopy_2026.parquet" not in out                    # after the holdout: never pinned
     with pytest.raises(SystemExit, match="data_digests"):
         script.main(["--quarter", Q, "--from", str(SPEC), "--registry", str(reg_path)])

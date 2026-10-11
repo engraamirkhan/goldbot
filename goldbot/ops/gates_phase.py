@@ -61,6 +61,7 @@ from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, load_record_json
 from goldbot.config import GateSettings, Settings
 from goldbot.ops.accounts import GATES
 from goldbot.research.metrics import max_drawdown
+from goldbot.research.registry import costs_recorded
 
 CLOSED_TRADES_FILE = "closed_trades.jsonl"
 EVIDENCE_FILE = "gate_evidence.json"
@@ -324,11 +325,15 @@ def _trial_rows(path: Path) -> list[dict[str, Any]]:
 
 
 def best_backtest_trial(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The evaluated walk-forward trial (never a holdout scoring) with the highest model-filtered DSR."""
+    """The evaluated walk-forward trial (never a holdout scoring) with the highest model-filtered DSR, among rows that
+    record the research cost treatment (`registry.costs_recorded`: the swap charged and the cost source stated). Quant
+    review, 2026-10-11: "A pass from before swap was charged is not a pass of the swap-charged configuration", so a
+    pre-swap row is not backtest evidence for the backtest -> paper gate, whatever its DSR."""
     def dsr(r: dict[str, Any]) -> float:
         v = ((r.get("results") or {}).get("model_filtered") or {}).get("dsr")
         return float(v) if v is not None else -1.0
-    cands = [r for r in rows if r.get("status") == "evaluated" and (r.get("results") or {}).get("model_filtered")]
+    cands = [r for r in rows if r.get("status") == "evaluated" and (r.get("results") or {}).get("model_filtered")
+             and costs_recorded(r.get("results") or {})]
     return max(cands, key=dsr) if cands else None
 
 

@@ -49,12 +49,17 @@ def write_phase(state: Path, recorded: dict[str, pd.Timestamp]) -> None:
         "gate_log": [{"gate": g, "ts_utc": recorded[g].strftime("%Y-%m-%dT%H:%M:%SZ"), "evidence": {"text": "t"}} for g in gates]}))
 
 
+# the research cost treatment a row records (results.swap, results.cost_source): only then does its gate pass count
+COSTS: dict = {"swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0}, "cost_source": "PRIORS ONLY: test"}
+
+
 def write_trial(path: Path, *, dsr: float = 0.97, n: int = 600, mean_ret: float = 0.002, max_dd: float = 0.05,
                 years_passed: bool = True, status: str = "evaluated") -> None:
     row = {"trial": 7, "family": "session_open", "status": status,
            "results": {"model_filtered": {"n": n, "dsr": dsr, "mean_ret": mean_ret, "max_dd": max_dd},
                        "gates": {"passed": years_passed, "checks": [
-                           {"name": "positive_years", "passed": years_passed, "detail": "positive years [2019, 2021, 2024]"}]}}}
+                           {"name": "positive_years", "passed": years_passed, "detail": "positive years [2019, 2021, 2024]"}]},
+                       **COSTS}}
     path.write_text(json.dumps(row) + "\n")
 
 
