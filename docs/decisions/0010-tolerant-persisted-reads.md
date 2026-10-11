@@ -59,7 +59,9 @@ nothing covered the record bodies.
 
 ## Consequences
 - A rollback no longer drops closed trades, hides proposals or stops services because of a newer release's fields.
-  `schema_skew()` and the log line show that skew is happening (expected only after a rollback).
+  `schema_skew()` and the log line show that skew is happening (expected only after a rollback). The engine
+  publishes a bounded summary (`schema_skew` in engine_<account>.json) and health `schema_skew:<account>` warns the
+  owner, failing when a decision was refused (2026-10-11 follow-up). Skew read by other processes stays log-only.
 - A field added by the newer release is lost if the older release rewrites that record. S12 makes this safe by
   construction: the field's default applies when the newer release reads the record again.
 - A rollback across a field added to `SentOrder`, `OpenTrade` or `PendingClose` no longer stops the older engine

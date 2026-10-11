@@ -40,7 +40,15 @@ from typing import Any, Callable, Literal, cast
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, Record, UtcTimestamp, load_record_json, write_atomic
+from goldbot.base import (
+    FrozenRecord,
+    Record,
+    SkewSummary,
+    UtcTimestamp,
+    load_record,
+    load_record_json,
+    write_atomic,
+)
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
 from goldbot.data.crossfeed import check_reconciliation
@@ -1153,6 +1161,41 @@ def check_entry_windows(ctx: HealthContext, account_id: str) -> list[Check]:
     return out
 
 
+def check_schema_skew(ctx: HealthContext, account_id: str) -> Check | None:
+    """ADR 0010: "persisted state is read tolerantly, built strictly", and state written by a newer release (expected
+    only after a rollback) must reach the owner, not only the log. From the engine's bounded `schema_skew` block:
+    `schema_skew:<account>` WARNs (NOTIFY_ON_WARN) while the engine has read any such state, naming the sources, and
+    FAILs when a strict reader refused a record (an owner's approve/reject click dropped by the approval bus; the
+    proposal expires). It stays so until the engine restarts on a release that knows the fields. None while the
+    engine has not published the block (no file or an older engine); check_engine reports an unreadable file."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    if not f.exists():
+        return None
+    try:
+        raw = _read_json(f).get("schema_skew")
+    except (ValueError, OSError, AttributeError, TypeError):
+        return None
+    if raw is None:
+        return None
+    name = f"schema_skew:{account_id}"
+    try:
+        s = load_record(SkewSummary, raw, source="engine_<account>.json:schema_skew")
+    except ValueError as exc:
+        return Check(name=name, status="warn", reason=f"{account_id}: schema_skew block unreadable ({type(exc).__name__})")
+    if not s.count:
+        return Check(name=name, status="ok", reason=f"{account_id}: no state from a newer release read")
+    srcs = ", ".join(f"{e.source} ({e.model}: {','.join(e.fields)})" for e in s.entries)
+    more = f" +{s.truncated} more" if s.truncated else ""
+    if s.refused:
+        refused = ", ".join(e.source for e in s.entries if e.refused)
+        return Check(name=name, status="fail",
+                     reason=f"{account_id}: a strict reader refused state from a newer release, so an owner's click "
+                            f"was dropped and the proposal expires ({refused}); roll forward. All: {srcs}{more}")
+    return Check(name=name, status="warn",
+                 reason=f"{account_id}: state written by a newer release is read with its new fields ignored "
+                        f"({s.count} source(s), {s.reads} read(s)), expected only after a rollback: {srcs}{more}")
+
+
 def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
     """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
     restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
@@ -1326,6 +1369,8 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
             checks += check_throttle(ctx, a.account_id)
             checks += check_entry_windows(ctx, a.account_id)
+            skew = check_schema_skew(ctx, a.account_id)
+            checks += [skew] if skew is not None else []
             bridge = check_bridge(ctx, a.account_id)
             checks += [bridge] if bridge is not None else []
             compat = check_bridge_compat(ctx, a)
@@ -1379,7 +1424,7 @@ class WatchState(Record):
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:",
-                  "throttle:", "entry_windows:")
+                  "throttle:", "entry_windows:", "schema_skew:")
 
 
 def _alerting(name: str, status: str) -> bool:

@@ -20,7 +20,7 @@ import pandas as pd
 import pytest
 from pydantic import BaseModel, Field
 
-from goldbot.base import Record
+from goldbot.base import Record, SkewSummary
 from goldbot.config import load_settings
 from goldbot.data import crossfeed
 from goldbot.engine.runner import OpenTrade, PendingClose, SentOrder
@@ -224,7 +224,10 @@ def test_every_persisted_record_model_has_a_compat_case():
                DigestState, OutboxState, crossfeed.ReconcileReport,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
-               SentOrder, OpenTrade, PendingClose}
+               SentOrder, OpenTrade, PendingClose,
+               # engine_<account>.json `schema_skew`: tests/test_schema_skew_health.py::
+               # test_health_reads_a_skew_block_a_newer_engine_wrote
+               SkewSummary}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 

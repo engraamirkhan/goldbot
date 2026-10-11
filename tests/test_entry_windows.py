@@ -513,3 +513,39 @@ def test_health_entry_windows_warns_on_a_stale_fetch_and_a_holiday_list_near_its
         "entry_windows:icm-demo:holiday_list"] == "ok"
     _health_state(tmp_path, enabled={"tier2": False, "reopen": False, "holidays": False})
     assert health.check_entry_windows(ctx, "icm-demo") == []
+
+
+@pytest.mark.parametrize("edit", [
+    lambda t: t.replace("valid_through:", "valid_thru:"),                          # the key itself misspelt
+    lambda t: t.replace("valid_through: 2028-12-31", "valid_through: 2028-12-31\nvalid_thru: 2029-12-31"),
+], ids=["renamed", "extension-under-a-misspelt-key"])
+def test_a_holiday_list_with_a_misspelt_key_fails_closed_and_exits_still_run(tmp_path, edit):
+    """A hand edit that misspells `valid_through` (here `valid_thru:`) must not pass silently: HolidayList forbids
+    unknown keys, so with the holiday window on the engine sets `calendar_unavailable`, RiskGate refuses entries with
+    that reason, and a stop is still taken (entries only; exits are never gated). The second case keeps the real key
+    and adds the misspelt one (an intended extension): only extra="forbid" catches it."""
+    text = edit((ROOT / "config" / "holidays_cme_metals.yaml").read_text())
+    assert "\nvalid_thru:" in text
+    bad = tmp_path / "holidays_misspelt.yaml"
+    bad.write_text(text)
+    eng, pb = _engine(tmp_path, RiskLimits(holidays=HolidaySettings(enabled=True, file=str(bad))), data=False)
+    t0 = pd.Timestamp("2026-11-24 15:00", tz="UTC")                   # an ordinary Tuesday, listed in no version
+    pb.on_tick(Tick(ts_utc=t0, bid=2000.0, ask=2000.0))
+    agent = eng.agents[next(iter(eng.agents))]
+    ls = agent.label_spec
+    prop = Proposal(proposal_id=f"icm-demo-{int(t0.timestamp())}-x", account_id="icm-demo", agent_id=agent.agent_id,
+                    side=1, lots=0.1, entry=2000.0, stop=2000.0 - ls.stop_atr, target=2000.0 + ls.target_atr, p=0.6,
+                    ev_r=0.1, spread_points=0.0, top_features=[])
+    eng._execute(prop, agent, 0.1, 2000.0 - ls.stop_atr, 2000.0 + ls.target_atr, requested=2000.0, atr_usd=1.0)
+    (pid,) = eng.open
+    st = _at(eng, pb, t0 + M, px=2000.0)
+    assert st.calendar_unavailable and not st.holiday_thin
+    assert "unusable" in (eng._unavailable_why or "")
+    assert "calendar_unavailable" in eng.gate.check(_intent(), st).reasons
+    pos = pb._positions[pid]
+    pb._positions[pid] = pos.model_copy(update={"sl": None})   # stop lost at the broker: the engine's own check acts
+    hit = Tick(ts_utc=t0 + 2 * M, bid=2000.0 - 2 * ls.stop_atr, ask=2000.0 - 2 * ls.stop_atr)
+    pb.on_tick(hit)
+    eng.on_tick(hit)
+    assert not pb.positions()
+    assert any(d["action"] == "engine_stop_close" for d in eng.decisions)
