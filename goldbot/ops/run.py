@@ -224,16 +224,12 @@ def run_supervisor() -> None:
 def refuse_start(account_id: str, why: str, info: Any = None, state_dir: str | Path = "state") -> NoReturn:
     """End an engine start the terminal-account check refused (review LOW-A): `startup_error` goes into
     engine_<account>.json first, so health names the cause instead of showing a stale engine, then SystemExit. The
-    deposit currency is kept for the supervisor's currency check; no login, server or balance is written."""
-    import json
-
-    from goldbot.base import write_atomic
+    deposit currency is kept for the supervisor's currency check; no login, server or balance is written. Merged into
+    the previous engine file (review LOW-D: the last-known exposure keeps counting; `write_startup_error`)."""
+    from goldbot.risk.supervisor import write_startup_error
     currency = str(getattr(info, "currency", "") or "").strip().upper() or None
     try:
-        Path(state_dir).mkdir(parents=True, exist_ok=True)
-        write_atomic(Path(state_dir, f"engine_{account_id}.json"), json.dumps({
-            "account": account_id, "ts": time.time(), "dq_error": True, "dq_checks": ["startup_refused"],
-            "stage": "unknown", "currency": currency, "startup_error": why[:300]}), durable=False)
+        write_startup_error(state_dir, account_id, why, dq_checks=["startup_refused"], currency=currency)
     except OSError:
         log.exception("startup refusal not written to the engine state")
     raise SystemExit(why)

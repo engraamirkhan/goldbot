@@ -61,7 +61,7 @@ from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, open_risk, sizing
 from goldbot.risk.gate import REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
-from goldbot.risk.supervisor import Supervisor
+from goldbot.risk.supervisor import Supervisor, write_startup_error
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
 from goldbot.risk.windows import (
     HolidayList,
@@ -2100,11 +2100,10 @@ class Engine:
         except Exception as exc:
             # fail closed (the engine does not start), but say why: the health check then shows an unreadable
             # terminal instead of a merely stale engine (trading-safety review)
-            write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps({
-                "account": self.cfg.account_id, "ts": time.time(), "dq_error": True,
-                "currency": self._account_currency() or None,     # the supervisor's currency check (review MEDIUM-1)
-                "dq_checks": ["positions_unreadable"], "stage": "unknown",
-                "startup_error": f"{type(exc).__name__}: {exc}"[:300]}), durable=False)
+            # (review LOW-D) merged into the last engine file, so its exposure keeps counting at the supervisor
+            write_startup_error(self.cfg.state_dir, self.cfg.account_id, f"{type(exc).__name__}: {exc}",
+                                dq_checks=["positions_unreadable"],
+                                currency=self._account_currency() or None)   # the supervisor's currency check
             raise
         for cid, rec in self._orders.items():
             if rec.status == "sending":

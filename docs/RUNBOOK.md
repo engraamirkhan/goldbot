@@ -1051,6 +1051,9 @@ hedging (`engine:<account>` FAILs with "engine refused to start: ... deploy the 
 names the version). While the engine is down nothing manages open trades beyond their broker stops, so update the
 brain first only when no position is open.
 
+**Rollback order: roll back the brain first, then the MT5 box** (the reverse of a deploy), so no step leaves a newer
+brain next to an older bridge.
+
 Fix (the MT5 box first, always, when a release adds a bridge method):
 1. On the MT5 box: `sudo goldbot-deploy <sha the brain runs>`, then `sudo systemctl restart goldbot-bridge@<account>`.
 2. On the brain: `curl -fsS http://127.0.0.1:8765/health ; echo` shows `api_version`, `min_compatible`, `methods`,
