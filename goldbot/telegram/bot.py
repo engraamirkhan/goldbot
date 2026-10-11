@@ -156,8 +156,8 @@ class TelegramBot:  # pragma: no cover - needs network + token
             self.health.record(report)          # only after delivery: a failed send is retried next pass
         except Exception:
             log.exception("health pass")
-        if report is not None:
-            await asyncio.to_thread(self.deadman.after_health, report, delivered=delivered)   # never raises
+        if report is not None:      # off the pump (security review M1): a hung ping never delays a proposal
+            self.app.create_task(asyncio.to_thread(self.deadman.after_health, report, delivered=delivered))
 
     async def _digest_pass(self) -> None:
         """The daily owner digest, once per slot (state/telegram_digest.json); a slot missed while this service was

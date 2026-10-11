@@ -2,9 +2,13 @@
 secret) never reaching a log or a health reason."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
+import threading
+import time
 import urllib.error
-import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pandas as pd
@@ -114,45 +118,172 @@ def test_fail_url_keeps_a_query_and_a_trailing_slash_does_not_double():
     TimeoutError(f"timed out {URL}"),
     RuntimeError(URL),
 ])
-def test_a_failed_ping_never_raises_never_logs_the_url_and_is_retried(exc, caplog):
+def test_a_failed_ping_never_raises_never_logs_the_url_and_backs_off(exc, caplog):
+    """Security review M1: a failed attempt counts for the cadence, so a dead endpoint is tried once per period, not
+    on every one-minute pass. A change of state is still tried at once."""
     calls: list[str] = []
 
     def boom(u: str, b: bytes | None) -> None:
         calls.append(u)
         raise exc
-    dm, _, clock = make(ping=boom)
+    dm, _, clock = make(ping=boom, every_min=2)
     with caplog.at_level(logging.DEBUG):
         assert dm.after_health(report()) is None
         clock.t += 60
-        assert dm.after_health(report()) is None              # not accepted: retried on the next pass, not per period
-    assert len(calls) == 2
+        assert dm.after_health(report()) is None              # backing off: not attempted
+        assert len(calls) == 1
+        clock.t += 60
+        assert dm.after_health(report()) is None              # one period after the failed attempt: tried again
+        assert len(calls) == 2
+        clock.t += 1
+        assert dm.after_health(report("engine:x")) is None     # a state change is tried at once
+        assert calls[-1].endswith("/fail") and len(calls) == 3
     assert "secret-uuid" not in caplog.text and "hc-ping" not in caplog.text
     assert "dead man's switch ping failed" in caplog.text
 
 
-def test_http_ping_uses_get_for_ok_and_post_for_fail(monkeypatch):
-    seen: list[tuple[str, str, bytes | None, float]] = []
+def test_a_ping_in_flight_skips_new_ones():
+    """Security review M1: while one ping hangs, later passes do not stack more threads behind it."""
+    release, started = threading.Event(), threading.Event()
+    calls: list[str] = []
 
-    class Resp:
-        status = 200
-        headers: dict[str, str] = {}
+    def slow(u: str, b: bytes | None) -> None:
+        calls.append(u)
+        started.set()
+        release.wait(5)
+    dm, _, clock = make(ping=slow)
+    t = threading.Thread(target=dm.after_health, args=(report(),))
+    t.start()
+    assert started.wait(5)
+    clock.t += 600
+    t0 = time.monotonic()
+    assert dm.after_health(report("engine:x")) is None          # skipped at once, not queued
+    assert time.monotonic() - t0 < 0.5 and len(calls) == 1
+    release.set()
+    t.join(5)
+    clock.t += 1
+    assert dm.after_health(report("engine:x")) == "fail" and len(calls) == 2   # free again after it finished
 
-        def __enter__(self) -> "Resp":
-            return self
 
-        def __exit__(self, *a: object) -> None:
-            return None
+def test_fail_body_names_are_sanitised():
+    dm, sent, _ = make()
+    dm.after_health(report("engine:icm-demo", "bad name\n<script>", "ok_name.v2@x"))
+    assert sent[0][1] == b"failing: bad_name__script_, engine:icm-demo, ok_name.v2_x"
 
-    def fake_urlopen(req: urllib.request.Request, timeout: float) -> Resp:
-        seen.append((req.full_url, req.get_method(), req.data, timeout))   # type: ignore[arg-type]
-        return Resp()
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    deadman.http_ping(URL, None)
-    deadman.http_ping(URL + "/fail", b"failing: x")
-    assert seen == [(URL, "GET", None, deadman.PING_TIMEOUT_S), (URL + "/fail", "POST", b"failing: x", deadman.PING_TIMEOUT_S)]
-    Resp.status = 302
-    with pytest.raises(urllib.error.HTTPError):
-        deadman.http_ping(URL, None)
+
+# ------------------------------------------------------------------------------------------------ http_ping, local server
+class _Handler(BaseHTTPRequestHandler):
+    hits: list[tuple[str, str, bytes]] = []
+    mode = "ok"
+
+    def _serve(self) -> None:
+        n = int(self.headers.get("Content-Length") or 0)
+        type(self).hits.append((self.command, self.path, self.rfile.read(n) if n else b""))
+        if self.path.startswith("/target"):
+            self.send_response(200)
+        elif type(self).mode == "redirect":
+            self.send_response(302)
+            self.send_header("Location", "/target")
+        elif type(self).mode == "slow":
+            time.sleep(2)
+            self.send_response(200)
+        else:
+            self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_GET = do_POST = _serve
+
+    def log_message(self, *a: object) -> None:
+        return None
+
+
+@pytest.fixture
+def server():
+    _Handler.hits, _Handler.mode = [], "ok"
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}"
+    srv.shutdown()
+    srv.server_close()
+
+
+def test_http_ping_uses_get_for_ok_and_post_for_fail(server):
+    deadman.http_ping(server + "/u", None)
+    deadman.http_ping(server + "/u/fail", b"failing: x")
+    assert _Handler.hits == [("GET", "/u", b""), ("POST", "/u/fail", b"failing: x")]
+
+
+@pytest.mark.parametrize("body", [None, b"failing: x"])
+def test_http_ping_refuses_redirects(server, body):
+    """Security review L1: a redirect is a failure and is never followed (GET or POST)."""
+    _Handler.mode = "redirect"
+    with pytest.raises(urllib.error.HTTPError) as e:
+        deadman.http_ping(server + "/u", body)
+    assert e.value.code == 302
+    assert [h[1] for h in _Handler.hits] == ["/u"]               # /target was never requested
+
+
+def test_http_ping_has_an_overall_deadline(server, monkeypatch):
+    """Security review M1: a hung endpoint ends the attempt at the deadline (socket timeouts alone do not bound it)."""
+    _Handler.mode = "slow"
+    monkeypatch.setattr(deadman, "PING_TIMEOUT_S", 5.0)
+    monkeypatch.setattr(deadman, "PING_DEADLINE_S", 0.3)
+    t0 = time.monotonic()
+    with pytest.raises(TimeoutError):
+        deadman.http_ping(server + "/u", None)
+    assert time.monotonic() - t0 < 1.5
+
+
+def test_ping_timeouts_are_short():
+    assert deadman.PING_TIMEOUT_S <= 5.0 and deadman.PING_TIMEOUT_S < deadman.PING_DEADLINE_S <= 10.0
+
+
+# ------------------------------------------------------------------------------------------------ the Telegram pump
+def test_the_health_pass_does_not_wait_for_the_ping(monkeypatch):
+    """Security review M1: the pump that sends proposals (the owner's 90 s window) never waits on the ping."""
+    from goldbot.telegram import bot as botmod
+    release, started = threading.Event(), threading.Event()
+
+    def slow(u: str, b: bytes | None) -> None:
+        started.set()
+        release.wait(10)
+    monkeypatch.setattr(botmod, "run_checks", lambda ctx: report())
+    monkeypatch.setattr(botmod.HealthContext, "from_runtime", classmethod(lambda cls, state_dir: None))
+
+    async def go() -> float:
+        tasks: list[asyncio.Task[Any]] = []
+
+        class App:
+            def create_task(self, coro: Any) -> asyncio.Task[Any]:
+                t = asyncio.get_running_loop().create_task(coro)
+                tasks.append(t)
+                return t
+
+        b = object.__new__(botmod.TelegramBot)
+        b.app, b.owner_ids, b.state_dir = App(), set(), "unused"
+        b.health = type("W", (), {"alert": lambda self, r: None, "record": lambda self, r: None})()
+        b.deadman = make(ping=slow)[0]
+        t0 = time.monotonic()
+        await asyncio.wait_for(b._health_pass(), 3)
+        took = time.monotonic() - t0
+        assert await asyncio.to_thread(started.wait, 5)          # the ping did start, off the pump
+        release.set()
+        await asyncio.gather(*tasks)
+        return took
+    assert asyncio.run(go()) < 1.0
+
+
+def test_mt5_bootstrap_checks_the_python_installer_before_running_it():
+    """Security review L2: the Windows Python installer is checked against a pinned sha256 before Wine runs it."""
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "goldbot/ops/linux/mt5_bootstrap.sh").read_text(encoding="utf-8")
+    m = re.search(r"^PY_SHA256=([0-9a-f]{64})\b", text, re.M)
+    assert m, "PY_SHA256 must be a 64-hex pin"
+    check, run = text.index("sha256sum -c"), text.index("wine python.exe")
+    assert check < run
+    assert "python.exe\" | sha256sum -c" in text or "python.exe' | sha256sum -c" in text or 'python.exe" | sha256sum -c' in text
 
 
 def test_a_broken_keyring_does_not_stop_the_pass():
