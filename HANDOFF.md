@@ -1012,7 +1012,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   freezes the track, a price through an engine-only stop whose close is being retried counts raw, and the record adds
   the actual exit fill. No extreme is ever after the exit: a track that saw a late-noticed manual or broker close is
   rebuilt from the stored 1m bars up to the exit, and a close confirmed without deals never folds the quote read at
-  that moment; both, restarts and adopted positions are flagged `excursion_approx`. An orphan adopted without an
+  that moment; both, restarts and adopted positions are flagged `excursion_approx`; when nothing of the path was observed (no usable track, no covering bar) the fields stay empty rather than 0R/0R. The 60 s freeze tolerance is tested on both sides. An orphan adopted without an
   order record keeps prices but no R. Tracking is reporting only: a failure is logged, never a tick error, never
   blocks an exit or the record. Monthly report: exact and approximate medians apart. Not done: the owner's MT5
   statement analysis (`research/owner_history.py`) has no price path. **Rollback:** the new keys (`excursion`,
