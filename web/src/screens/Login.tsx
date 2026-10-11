@@ -2,11 +2,30 @@ import { FormEvent, useEffect, useState } from "react";
 import { api, setToken, setUser } from "../lib/api";
 import { takeLinkTokens } from "../lib/links";
 
-type ModeT = "login" | "setup" | "accept" | "forgot" | "reset" | "recover";
+// Every way in, one screen. Sign-in always needs the authenticator code: the emailed link (owner only, when the
+// server has mail configured) replaces the password, never the code, because this account approves real-money entries.
+type ModeT = "login" | "setup" | "accept" | "forgot" | "reset" | "recover" | "emailLink" | "signin";
+
+const TITLE: Record<ModeT, string> = {
+  login: "Sign in", setup: "Create the owner account", accept: "Accept your invite", forgot: "Reset your password",
+  reset: "Set a new password", recover: "Sign in with a recovery code", emailLink: "Email me a sign-in link",
+  signin: "Finish signing in",
+};
 
 const SUBMIT: Record<ModeT, string> = {
   login: "Sign in", setup: "Create owner account", accept: "Accept invite", forgot: "Set new password",
-  reset: "Set password and authenticator", recover: "Sign in with recovery code",
+  reset: "Set password and authenticator", recover: "Sign in with recovery code", emailLink: "Send the link",
+  signin: "Sign in",
+};
+
+const INTRO: Partial<Record<ModeT, string>> = {
+  setup: "First run: create the owner account. The setup code is printed in the server log (and sent to Telegram when configured).",
+  accept: "You have been invited. Choose a password (12+ characters); you will then add goldbot to your authenticator app.",
+  reset: "Your owner sent you this link. Choose a new password (12+ characters); you will then add goldbot to your authenticator app again.",
+  forgot: "Enter your email, a code from your authenticator app and a new password (12+ characters). The owner account also needs one of its recovery codes. Lost the authenticator too? Ask the owner for a reset link.",
+  recover: "Owner only: sign in with a recovery code instead of the authenticator; you will then add goldbot to a new authenticator.",
+  emailLink: "Owner account only. We email a one-time link that works for 15 minutes. You will still need the code from your authenticator app.",
+  signin: "Enter the code from your authenticator app to finish signing in. The link works once, for 15 minutes.",
 };
 
 export function Login({ onLogin }: { onLogin: () => void }) {
@@ -17,28 +36,38 @@ export function Login({ onLogin }: { onLogin: () => void }) {
   const [setupCode, setSetupCode] = useState("");
   const [inviteToken, setInviteToken] = useState(() => takeLinkTokens().invite);
   const [resetToken, setResetToken] = useState(() => takeLinkTokens().reset);
+  const [signinToken, setSigninToken] = useState(() => takeLinkTokens().signin);
+  const [emailLinkOn, setEmailLinkOn] = useState(false);
   const [recoveryCode, setRecoveryCode] = useState("");
   const [totpUri, setTotpUri] = useState<string | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [after, setAfter] = useState<(() => void) | null>(null);
+  const [busy, setBusy] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     api.authState().then((s) => {
-      if (s.needs_setup) setMode("setup"); else if (inviteToken) setMode("accept"); else if (resetToken) setMode("reset");
+      setEmailLinkOn(s.email_link);
+      if (s.needs_setup) setMode("setup");
+      else if (inviteToken) setMode("accept");
+      else if (resetToken) setMode("reset");
+      else if (signinToken) setMode("signin");
     }).catch(() => {});
-  }, [inviteToken, resetToken]);
+  }, [inviteToken, resetToken, signinToken]);
 
   function go(m: ModeT) { setMode(m); setErr(null); setInfo(null); setPassword(""); setCode(""); setRecoveryCode(""); }
 
+  function signedIn(r: { token: string; email: string; role: "owner" | "approver" | "viewer" }) {
+    setToken(r.token); setUser({ email: r.email, role: r.role }); onLogin();
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault();
-    setErr(null); setInfo(null);
+    setErr(null); setInfo(null); setBusy(true);
     try {
       if (mode === "login") {
-        const r = await api.login(email, password, code);
-        setToken(r.token); setUser({ email: r.email, role: r.role }); onLogin();
+        signedIn(await api.login(email, password, code));
       } else if (mode === "setup") {
         const r = await api.setup(setupCode, email, password);
         setRecoveryCodes(r.recovery_codes); setTotpUri(r.totp_uri);
@@ -51,12 +80,24 @@ export function Login({ onLogin }: { onLogin: () => void }) {
       } else if (mode === "forgot") {
         await api.forgotPassword(email, code, password, recoveryCode);
         go("login"); setInfo("Password changed. Sign in with the new password.");
+      } else if (mode === "emailLink") {
+        const r = await api.emailLink(email);
+        setInfo(r.detail);
+      } else if (mode === "signin") {
+        const r = await api.redeemEmailLink(signinToken, code);
+        setSigninToken("");
+        signedIn(r);
       } else {
         const r = await api.recoveryLogin(email, password, code);
         setToken(r.token); setUser({ email: r.email, role: r.role });
         setTotpUri(r.totp_uri); setInfo(`${r.recovery_codes_left} recovery codes left.`); setAfter(() => onLogin);
       }
-    } catch (ex) { setErr((ex as Error).message); }
+    } catch (ex) {
+      setErr((ex as Error).message);
+      if (mode === "signin") setCode("");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (totpUri) {
@@ -64,6 +105,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
     return (
       <div className="login">
         <h1>goldbot</h1>
+        <h2>Add goldbot to your authenticator</h2>
         <p>Add this account to your authenticator app (Google Authenticator, 1Password, Authy…), then sign in.</p>
         <p className="mono">{secret}</p>
         <a href={totpUri}>Open in authenticator app</a>
@@ -73,7 +115,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
             <ul className="mono" aria-label="Recovery codes">{recoveryCodes.map((c) => <li key={c}>{c}</li>)}</ul>
           </>
         )}
-        {info && <p className="muted">{info}</p>}
+        {info && <p className="muted" role="status">{info}</p>}
         <button onClick={() => {
           setTotpUri(null); setRecoveryCodes([]); setPassword(""); setInviteToken(""); setResetToken(""); history.replaceState(null, "", "/");
           if (after) after(); else go("login");
@@ -83,30 +125,36 @@ export function Login({ onLogin }: { onLogin: () => void }) {
   }
 
   const newPassword = mode === "setup" || mode === "accept" || mode === "reset" || mode === "forgot";
+  const showEmail = mode === "login" || mode === "setup" || mode === "forgot" || mode === "recover" || mode === "emailLink";
+  const showPassword = mode !== "emailLink" && mode !== "signin";
+  const showCode = mode === "login" || mode === "forgot" || mode === "signin";
   return (
-    <form className="login" onSubmit={submit}>
+    <form className="login" onSubmit={submit} aria-labelledby="login-title">
       <h1>goldbot</h1>
-      {mode === "setup" && <p>First run: create the owner account. The setup code is printed in the server log (and sent to Telegram when configured).</p>}
-      {mode === "accept" && <p>You have been invited. Choose a password (12+ characters); you will then enrol an authenticator.</p>}
-      {mode === "reset" && <p>Choose a new password (12+ characters); you will then enrol a new authenticator.</p>}
-      {mode === "forgot" && <p>Forgot your password? Enter your email, a current authenticator code and a new password (12+ characters). The owner account also needs one of its recovery codes. Lost the authenticator too? Ask the owner for a reset link.</p>}
-      {mode === "recover" && <p>Owner only: sign in with a recovery code instead of the authenticator; you will enrol a new authenticator.</p>}
+      <h2 id="login-title">{TITLE[mode]}</h2>
+      {INTRO[mode] && <p className="muted">{INTRO[mode]}</p>}
       {mode === "setup" && <label>Setup code<input value={setupCode} onChange={(e) => setSetupCode(e.target.value)} autoFocus /></label>}
-      {mode !== "accept" && mode !== "reset" && <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" /></label>}
-      <label>{mode === "forgot" ? "New password" : "Password"}<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={newPassword ? "new-password" : "current-password"} /></label>
-      {(mode === "login" || mode === "forgot") && <label>Authenticator code<input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" /></label>}
-      {mode === "forgot" && <label>Recovery code (owner account only)<input value={recoveryCode} onChange={(e) => setRecoveryCode(e.target.value)} autoComplete="off" /></label>}
-      {mode === "recover" && <label>Recovery code<input value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" /></label>}
-      <button type="submit">{SUBMIT[mode]}</button>
-      {info && <p className="muted">{info}</p>}
-      {err && <p className="err">{err}</p>}
+      {showEmail && <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" autoCapitalize="none" spellCheck={false} required /></label>}
+      {showPassword && <label>{newPassword && mode !== "setup" ? "New password" : "Password"}<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={newPassword ? "new-password" : "current-password"} required /></label>}
+      {showCode && <label>Authenticator code<input className="code" value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" pattern="[0-9 ]*" autoComplete="one-time-code" autoFocus={mode === "signin"} required /></label>}
+      {mode === "forgot" && <label>Recovery code (owner account only)<input value={recoveryCode} onChange={(e) => setRecoveryCode(e.target.value)} autoComplete="off" autoCapitalize="none" /></label>}
+      {mode === "recover" && <label>Recovery code<input value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" autoCapitalize="none" required /></label>}
+      <button type="submit" disabled={busy}>{SUBMIT[mode]}</button>
+      {info && <p className="muted" role="status">{info}</p>}
+      {err && <p className="err" role="alert">{err}</p>}
       {mode === "login" && (
-        <p className="muted">
-          <button type="button" className="link" onClick={() => go("forgot")}>Forgot password</button>{" · "}
+        <nav className="alt" aria-label="Other ways to sign in">
+          <button type="button" className="link" onClick={() => go("forgot")}>Forgot password?</button>
+          {emailLinkOn && <button type="button" className="link" onClick={() => go("emailLink")}>Email me a sign-in link</button>}
           <button type="button" className="link" onClick={() => go("recover")}>Use a recovery code</button>
-        </p>
+        </nav>
       )}
-      {(mode === "forgot" || mode === "recover") && <button type="button" className="link" onClick={() => go("login")}>Back to sign in</button>}
+      {mode === "signin" && err && emailLinkOn && (
+        <button type="button" className="link" onClick={() => { setSigninToken(""); go("emailLink"); }}>Email me a new link</button>
+      )}
+      {(mode === "forgot" || mode === "recover" || mode === "emailLink" || mode === "signin") && (
+        <button type="button" className="link" onClick={() => { setSigninToken(""); go("login"); }}>Back to sign in</button>
+      )}
     </form>
   );
 }

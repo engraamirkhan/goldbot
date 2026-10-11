@@ -167,6 +167,23 @@ AUX: tuple[Migration, ...] = (
                last_ns INTEGER NOT NULL
            ) STRICT""",
     )),
+    # additive, like step 5: only new tables, so a rollback to the release before still opens the file
+    Migration(version=6, name="email_links", additive=True, statements=(
+        # the owner's one-time email sign-in links (token hashes only; 15 min; the authenticator is still required)
+        f"""CREATE TABLE IF NOT EXISTS email_links (
+               token_sha256 TEXT PRIMARY KEY,
+               email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+               expires_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS email_links_email ON email_links(email)",
+        # link requests for the hourly limit, keyed 'email:<address>' or 'ip:<address>'; pruned to the hour on insert
+        """CREATE TABLE IF NOT EXISTS email_link_requests (
+               key TEXT NOT NULL,
+               ts_ns INTEGER NOT NULL
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS email_link_requests_key ON email_link_requests(key, ts_ns)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (_IMPORTS,)      # steps 5-7 (halts, approvals, orders) append here

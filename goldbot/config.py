@@ -359,10 +359,47 @@ class TelegramSettings(_Section):
     owner_tz: str = "Europe/London"
 
 
+_LOCAL_HTTP = ("http://localhost", "http://127.0.0.1")
+
+
+class MailSettings(_Section):
+    """Outgoing mail for the owner's email sign-in link (goldbot/api/mailer.py): plain SMTP with STARTTLS (Gmail:
+    smtp.gmail.com:587 and a Google App Password). Off unless enabled, with every address set only in the server's
+    git-ignored config/settings.local.yaml (the repo is public). The SMTP password is never a setting: it lives in the
+    OS keyring as `smtp-password` (`python -m goldbot.ops.accounts set smtp-password`)."""
+    enabled: bool = False
+    host: str | None = None
+    port: int = Field(587, ge=1, le=65535)                  # STARTTLS submission port
+    from_address: str | None = None
+    username: str | None = None                             # the SMTP login; unset means from_address
+    dashboard_origin: str | None = None                     # https://dash.example.com: the link the email carries
+    timeout_s: float = Field(10.0, gt=0, le=60)             # connect + each SMTP command
+
+    @field_validator("dashboard_origin")
+    @classmethod
+    def _origin(cls, v: str | None) -> str | None:
+        """https only (the link carries a sign-in token), except a local dev origin; no trailing slash."""
+        if v is None:
+            return None
+        v = v.strip().rstrip("/")
+        if not (v.startswith("https://") or v.startswith(_LOCAL_HTTP)):
+            raise ValueError("auth.mail.dashboard_origin must be an https:// origin")
+        return v
+
+    @model_validator(mode="after")
+    def _complete_when_enabled(self) -> MailSettings:
+        if self.enabled:
+            missing = [k for k in ("host", "from_address", "dashboard_origin") if not getattr(self, k)]
+            if missing:
+                raise ValueError(f"auth.mail is enabled but {', '.join(missing)} is not set")
+        return self
+
+
 class AuthSettings(_Section):
     """Dashboard owner. The repo is public: set owner_email only in the server's git-ignored
     config/settings.local.yaml. Unset, the owner account cannot be created (bootstrap refuses)."""
     owner_email: str | None = None
+    mail: MailSettings = Field(default_factory=MailSettings)
 
 
 class DriftSettings(_Section):

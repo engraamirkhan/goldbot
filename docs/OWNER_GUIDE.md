@@ -29,7 +29,23 @@ For Aamir. Each step links to its [RUNBOOK](RUNBOOK.md) section.
 
 If the wizard cannot be used, the manual commands are in [RUNBOOK 0.4](RUNBOOK.md#04-the-brain) under "By hand".
 
+**Optional: email sign-in link (owner only).** Lets you sign in from an emailed link plus your authenticator code,
+without typing the password. Free with Gmail:
+1. Google Account -> Security: turn on 2-Step Verification, then **App passwords** -> name it `goldbot` -> copy the
+   16 letters (shown once).
+2. Terminal (brain): `goldbot accounts set smtp-password` and paste them at the hidden prompt. They go to the
+   server's keyring only, never a file.
+3. Add the `auth: mail:` block to the server's `config/settings.local.yaml` with your Gmail address and dashboard
+   hostname ([RUNBOOK 2.10](RUNBOOK.md#210-dashboard-first-run-create-the-owner-account), "Email sign-in link").
+   Use `you@example.com`-style placeholders anywhere you write it down outside the server.
+4. `goldbot run mail-test` -> a test email arrives; `sudo systemctl restart goldbot-api`. The login page now shows
+   **Email me a sign-in link**.
+
 ## 3. Daily use
+- **Signing in:** email, password and the authenticator code. **Forgot password?** resets it with your
+  authenticator code and one recovery code. **Email me a sign-in link** (once set up) mails you a link that works
+  once for 15 minutes; it still asks for the authenticator code. Anyone typing another address sees the same message
+  and nothing is sent. [More](RUNBOOK.md#210-dashboard-first-run-create-the-owner-account)
 - **Morning digest:** at 06:45 UTC Telegram sends one message: all good or what needs attention, yesterday's trades, risk, and decisions waiting for you. [More](RUNBOOK.md#05-daily-use)
 - **Approve:** Telegram shows direction, lots, entry, stop, target, probability, spread. Tap **Approve**, or a **Reject** reason. Or the dashboard **Approvals** tab. After 90 s it expires. [More](RUNBOOK.md#approving-or-rejecting-an-entry)
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)

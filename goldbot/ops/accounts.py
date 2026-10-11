@@ -16,6 +16,7 @@ CLI:
   python -m goldbot.ops.accounts list
   python -m goldbot.ops.accounts add icm-demo          # prompts for login + password, stores in keyring
   python -m goldbot.ops.accounts set tradingview-webhook-secret
+  python -m goldbot.ops.accounts set smtp-password      # the SMTP (Gmail App) password for email sign-in links
   python -m goldbot.ops.accounts bridge-serve icm-demo # MT5 box: listen address + a new token (printed once)
   python -m goldbot.ops.accounts bridge-use icm-demo   # engine box: bridge URL + that token
   python -m goldbot.ops.accounts unlock-live icm-live  # refused unless the gate has passed

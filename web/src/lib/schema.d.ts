@@ -72,6 +72,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/email-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Email Link
+         * @description Owner only, the same generic 200 for every address, configured or not (AuthStore.request_email_link).
+         */
+        post: operations["email_link_api_auth_email_link_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/email-link/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Email Link Redeem
+         * @description The link's token AND a current authenticator code (the link replaces the password, not the second factor).
+         */
+        post: operations["email_link_redeem_api_auth_email_link_redeem_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/invite": {
         parameters: {
             query?: never;
@@ -767,6 +807,11 @@ export interface components {
         };
         /** AuthState */
         AuthState: {
+            /**
+             * Email Link
+             * @default false
+             */
+            email_link: boolean;
             /** Needs Setup */
             needs_setup: boolean;
             /** Users */
@@ -1017,6 +1062,46 @@ export interface components {
         DecisionResult: {
             /** Outcome */
             outcome: string;
+        };
+        /**
+         * EmailLinkRedeemRequest
+         * @description The token from the link's fragment AND a current authenticator code: the link replaces the password only.
+         */
+        EmailLinkRedeemRequest: {
+            /**
+             * Token
+             * @default
+             */
+            token: string;
+            /**
+             * Totp
+             * @default
+             */
+            totp: string;
+        };
+        /**
+         * EmailLinkRequest
+         * @description Owner only, but the answer is the same generic 200 for every address (nothing can be enumerated).
+         */
+        EmailLinkRequest: {
+            /**
+             * Email
+             * @default
+             */
+            email: string;
+        };
+        /** EmailLinkResponse */
+        EmailLinkResponse: {
+            /**
+             * Detail
+             * @default If this address can use email sign-in, a link is on its way
+             */
+            detail: string;
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
         };
         /**
          * EntryBlock
@@ -2093,6 +2178,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AcceptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    email_link_api_auth_email_link_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailLinkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    email_link_redeem_api_auth_email_link_redeem_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailLinkRedeemRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResponse"];
                 };
             };
             /** @description Validation Error */

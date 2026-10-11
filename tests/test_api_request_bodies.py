@@ -23,6 +23,8 @@ VALID_BODIES: dict[str, dict[str, Any]] = {
     "/api/auth/reset": {"token": "t", "new_password": "b"},
     "/api/auth/recovery/login": {"email": "o@x.io", "password": "a", "recovery_code": "c"},
     "/api/auth/recovery/codes": {"password": "a", "totp": "000000"},
+    "/api/auth/email-link": {"email": "o@x.io"},
+    "/api/auth/email-link/redeem": {"token": "t", "totp": "000000"},
     "/api/users/role": {"email": "v@x.io", "role": "approver"},
     "/api/users/disable": {"email": "v@x.io"},
     "/api/users/enable": {"email": "v@x.io"},
