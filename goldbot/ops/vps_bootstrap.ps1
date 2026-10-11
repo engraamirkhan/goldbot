@@ -27,6 +27,7 @@ $ErrorActionPreference = "Stop"
 $NodeMajor = "22"              # match CI (.github/workflows/ci.yml NODE_VERSION)
 $Repo = "https://github.com/engraamirkhan/goldbot.git"
 $Root = "C:\goldbot"
+$UvVersion = "0.11.15"         # pinned uv (security review L1); bump deliberately
 
 # Windows ACLs (security review H1b): the tree and the terminals are written by Administrators only; the service user
 # reads them and writes only its own folders (and its terminal's folder, which MT5's live update writes). Without
@@ -81,7 +82,10 @@ function Install-BridgeOnly {
   }
   try { Add-LocalGroupMember -Group Users -Member $BridgeUser -ErrorAction Stop } catch { Write-Host "$BridgeUser already in Users" }
 
-  foreach ($id in "Python.Python.3.11", "Git.Git", "NSSM.NSSM", "Tailscale.Tailscale") {
+  # Python for the whole machine (C:\Program Files): a per-user install under the admin's profile is unreadable for
+  # goldbot-bridge, and the venv's python.exe runs the base interpreter
+  winget install -e --id Python.Python.3.11 --scope machine --silent --accept-package-agreements --accept-source-agreements
+  foreach ($id in "Git.Git", "NSSM.NSSM", "Tailscale.Tailscale") {
     winget install -e --id $id --silent --accept-package-agreements --accept-source-agreements
   }
   $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
@@ -99,8 +103,9 @@ function Install-BridgeOnly {
   Set-Location $Root
   New-Item -ItemType Directory -Force -Path "$Root\state", "$Root\logs", "C:\MT5\ICMarkets" | Out-Null
   # exact versions from uv.lock (security review L1). Run as Administrator: the bridge user may only read the tree.
-  python -m pip install --upgrade uv
-  python -m uv sync --frozen --extra live --python 3.11     # goldbot + MetaTrader5 (win32) + pydantic>=2.12 (ADR 0010)
+  # copies, not hardlinks (a hardlink keeps the admin's uv cache ACL); the machine-wide Python only, never a uv-managed one
+  python -m pip install --upgrade "uv==$UvVersion"
+  python -m uv sync --frozen --link-mode copy --python-preference only-system --extra live --python 3.11     # goldbot + MetaTrader5 + pydantic>=2.12
   if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
   if (-not (Test-Path "C:\MT5\ICMarkets\terminal64.exe")) {       # one terminal: the path config/accounts.yaml expects
     $mt5 = "$env:TEMP\mt5setup.exe"
@@ -117,11 +122,16 @@ function Install-BridgeOnly {
   Set-Service sshd -StartupType Automatic
   Start-Service sshd
   # SSH only on the Tailscale interface and from Tailscale addresses (security review L4)
-  $rule = Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue
-  if ($rule) { $rule | Set-NetFirewallRule -InterfaceAlias "Tailscale" -RemoteAddress "100.64.0.0/10" }
-  else {                       # some images install sshd without its firewall rule
+  if (-not (Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue)) {   # some images lack it
     New-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -DisplayName "OpenSSH Server (sshd)" -Direction Inbound -Protocol TCP `
-      -LocalPort 22 -Action Allow -InterfaceAlias "Tailscale" -RemoteAddress "100.64.0.0/10" | Out-Null
+      -LocalPort 22 -Action Allow -RemoteAddress "100.64.0.0/10" | Out-Null
+  }
+  # Bind to the Tailscale adapter when it exists; before `tailscale up` it may not, and that must not stop the install
+  try {
+    Set-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -InterfaceAlias "Tailscale" -RemoteAddress "100.64.0.0/10" -ErrorAction Stop
+  } catch {
+    Set-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -RemoteAddress "100.64.0.0/10"
+    Write-Warning "SSH is limited to Tailscale addresses (100.64.0.0/10) but not yet bound to the Tailscale adapter. After 'tailscale up' run: Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -InterfaceAlias Tailscale"
   }
   if (-not (Get-LocalUser -Name "mt5" -ErrorAction SilentlyContinue)) {
     $bytes = New-Object byte[] 32                                   # a password nobody ever sees: key logins only
@@ -165,7 +175,15 @@ Match User mt5
   nssm set $svc AppRestartDelay 10000
   nssm set $svc Start SERVICE_AUTO_START
   nssm set $svc ObjectName ".\$BridgeUser" $cred.GetNetworkCredential().Password | Out-Null
+  # the service user must be able to run the venv and import the bridge (Python, packages and tree readable for it)
+  $check = Start-Process -FilePath $py -ArgumentList '-c "import goldbot.execution.bridge, MetaTrader5; print(1)"' `
+    -Credential (New-Object System.Management.Automation.PSCredential(".\$BridgeUser", $cred.Password)) `
+    -WorkingDirectory $Root -LoadUserProfile -WindowStyle Hidden -Wait -PassThru
   $cred = $null
+  if ($check.ExitCode -ne 0) {
+    throw "$BridgeUser cannot run $py (exit $($check.ExitCode)): check that Python is installed for all users and that icacls $Root lists $BridgeUser (RX)"
+  }
+  Write-Host "check: $BridgeUser runs the bridge's Python"
   Stop-Transcript | Out-Null
   Write-Host "Bridge box installed. The bridge service is NOT started (the SSH server is). Restart Windows once (pagefile)."
   Write-Host "Then (docs/deploy/first-deploy.md):"
@@ -176,7 +194,7 @@ Match User mt5
 
 if ($BridgeOnly) { Install-BridgeOnly; exit 0 }
 
-winget install -e --id Python.Python.3.11 --silent --accept-package-agreements --accept-source-agreements
+winget install -e --id Python.Python.3.11 --scope machine --silent --accept-package-agreements --accept-source-agreements
 winget install -e --id Git.Git --silent --accept-package-agreements --accept-source-agreements
 winget install -e --id NSSM.NSSM --silent --accept-package-agreements --accept-source-agreements
 winget install -e --id Tailscale.Tailscale --silent --accept-package-agreements --accept-source-agreements
@@ -198,8 +216,8 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
 
 if (-not (Test-Path $Root)) { git clone $Repo $Root }
 Set-Location $Root
-python -m pip install --upgrade pip uv
-python -m uv sync --frozen --extra live --python 3.11      # exact versions from uv.lock; `uv venv` alone has no pip
+python -m pip install --upgrade pip "uv==$UvVersion"
+python -m uv sync --frozen --link-mode copy --python-preference only-system --extra live --python 3.11   # uv.lock; copies; machine Python
 if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
 
 # Dashboard: the API serves web/dist (re-run these two lines after every git pull that touches web/)

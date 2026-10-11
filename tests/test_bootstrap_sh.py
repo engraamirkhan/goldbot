@@ -97,3 +97,9 @@ def test_switching_the_tunnel_target_restarts_a_running_tunnel():
     s = _text("brain")
     assert "systemctl enable goldbot-bridge-tunnel && systemctl restart goldbot-bridge-tunnel" in s
     assert "enable --now goldbot-bridge-tunnel" not in s
+
+
+def test_deploys_install_from_the_lockfile_and_react_to_it():
+    s = (LINUX / "goldbot-deploy.sh").read_text(encoding="utf-8")
+    assert "uv sync -q --frozen --extra live --python 3.11" in s and "uv pip install" not in s
+    assert "grep -qE '^(pyproject.toml|uv.lock)$'" in s

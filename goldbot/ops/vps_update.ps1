@@ -65,7 +65,7 @@ function Install-Bridge([string]$Sha) {
   git checkout --detach $Sha | Out-Host
   if ($LASTEXITCODE -ne 0) { Write-Warning "git checkout $Sha failed"; $ok = $false }
   if ($ok) {
-    python -m uv sync --frozen --extra live --python 3.11 | Out-Host     # exact versions from uv.lock (ADR 0010 pin)
+    python -m uv sync --frozen --link-mode copy --python-preference only-system --extra live --python 3.11 | Out-Host     # uv.lock; copies
     if ($LASTEXITCODE -ne 0) { Write-Warning "uv sync failed"; $ok = $false }
   }
   nssm start "goldbot-bridge-$Account" | Out-Host    # always: a stopped bridge cuts the engine off from the terminal
@@ -176,7 +176,7 @@ function Get-RunningJobs {
 function Install-Commit([string]$Sha, [string]$OldSha) {
   git checkout --detach $Sha | Out-Host
   if ($LASTEXITCODE -ne 0) { Write-Warning "git checkout $Sha failed"; return $false }
-  python -m uv sync --frozen --extra live --python 3.11 | Out-Host   # same as vps_bootstrap.ps1 (uv.lock)
+  python -m uv sync --frozen --link-mode copy --python-preference only-system --extra live --python 3.11 | Out-Host   # as vps_bootstrap.ps1
   if ($LASTEXITCODE -ne 0) { Write-Warning "uv sync failed"; return $false }
   Sync-AuxSchema                                  # services are stopped here
   # rebuild the dashboard only when web/ changed (the API serves web\dist)

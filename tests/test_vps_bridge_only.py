@@ -30,7 +30,7 @@ def _body(text: str, func: str) -> str:
 
 def test_bridge_only_leaves_before_the_all_in_one_install():
     branch = BOOT.index("if ($BridgeOnly) { Install-BridgeOnly; exit 0 }")
-    for marker in ("winget install -e --id Python.Python.3.11 --silent", "npm ci", "$svcs = @(", "--id Cloudflare.cloudflared"):
+    for marker in ("winget install -e --id NSSM.NSSM --silent", "npm ci", "$svcs = @(", "--id Cloudflare.cloudflared"):
         assert branch < BOOT.index(marker), marker
 
 
@@ -51,7 +51,7 @@ def test_bridge_only_guards_its_inputs_and_sets_the_pagefile():
 
 def test_the_tunnel_is_tailscale_only_and_forwarding_only():
     body = _body(BOOT, "Install-BridgeOnly")
-    assert 'Set-NetFirewallRule -InterfaceAlias "Tailscale" -RemoteAddress "100.64.0.0/10"' in body
+    assert '-InterfaceAlias "Tailscale" -RemoteAddress "100.64.0.0/10"' in body
     block = body[body.index("Match User mt5"):body.index('"@')]
     for line in ("AuthorizedKeysFile __PROGRAMDATA__/ssh/goldbot_authorized_keys", "PasswordAuthentication no",
                  "AllowTcpForwarding local", "PermitOpen 127.0.0.1:8765", "PermitTTY no", "X11Forwarding no"):
@@ -139,10 +139,10 @@ def test_m2_the_mt5_installer_must_carry_a_valid_metaquotes_signature():
 
 def test_l1_python_packages_come_from_the_lockfile():
     body = _body(BOOT, "Install-BridgeOnly")
-    assert "python -m uv sync --frozen --extra live --python 3.11" in body
+    assert "python -m uv sync --frozen --link-mode copy --python-preference only-system --extra live --python 3.11" in body
     assert "pip install -e" not in body
     upd = _body(UPD, "Install-Bridge")
-    assert "uv sync --frozen --extra live" in upd and "pip install -e" not in upd
+    assert "uv sync --frozen --link-mode copy --python-preference only-system --extra live --python 3.11" in upd and "pip install -e" not in upd
 
 
 def test_l2_an_existing_tree_on_another_commit_is_called_out():
@@ -164,7 +164,7 @@ def test_no_pip_into_a_venv_uv_made_without_pip(name):
     for m in re.finditer(r"uv venv(?![^\n]*--seed)", text):
         assert "-m pip install" not in text[m.end():], name
     assert not re.search(r"(\.venv\\Scripts\\python|\$py)\s+-m pip install", text), name
-    assert "uv sync --frozen --extra live --python 3.11" in text
+    assert "uv sync --frozen --link-mode copy --python-preference only-system --extra live --python 3.11" in text
 
 
 def test_every_download_uses_basic_parsing():
@@ -185,4 +185,36 @@ def test_a_missing_ssh_firewall_rule_is_created_tailscale_only():
     body = _body(BOOT, "Install-BridgeOnly")
     assert 'New-NetFirewallRule -Name "OpenSSH-Server-In-TCP"' in body
     new = body[body.index("New-NetFirewallRule"):body.index("| Out-Null", body.index("New-NetFirewallRule"))]
-    assert '-InterfaceAlias "Tailscale" -RemoteAddress "100.64.0.0/10"' in new and "-LocalPort 22" in new
+    assert '-RemoteAddress "100.64.0.0/10"' in new and "-LocalPort 22" in new
+
+
+# ---------------------------------------------------------------------- re-review fixes
+def test_binding_to_the_tailscale_adapter_cannot_stop_the_install():
+    """Before `tailscale up` the adapter may not exist: the bind is tried, and on failure the rule keeps the
+    Tailscale address scope and the owner is told the one command to bind it later (first-deploy.md 3A)."""
+    body = _body(BOOT, "Install-BridgeOnly")
+    start = body.index("  try {\n    Set-NetFirewallRule")
+    tr = body[start:body.index("\n  }\n", body.index("} catch {", start))]
+    assert '-InterfaceAlias "Tailscale" -RemoteAddress "100.64.0.0/10" -ErrorAction Stop' in tr
+    catch = tr[tr.index("} catch {"):]
+    assert 'Set-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -RemoteAddress "100.64.0.0/10"' in catch
+    assert "Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -InterfaceAlias Tailscale" in catch and "throw" not in catch
+
+
+def test_python_is_machine_wide_and_uv_pinned_and_copying():
+    assert BOOT.count("winget install -e --id Python.Python.3.11 --scope machine") == 2
+    assert "Python.Python.3.11\", " not in BOOT                      # not in a per-user foreach any more
+    assert re.search(r'\$UvVersion = "\d+\.\d+\.\d+"', BOOT) and BOOT.count('"uv==$UvVersion"') == 2
+    for text in (BOOT, UPD):
+        for line in text.splitlines():
+            if "-m uv sync" in line and not line.lstrip().startswith("#"):
+                assert "--link-mode copy" in line and "--python-preference only-system" in line, line
+
+
+def test_the_bootstrap_proves_the_service_user_can_run_the_bridge_python():
+    body = _body(BOOT, "Install-BridgeOnly")
+    chk = body[body.index("$check = Start-Process"):body.index('Write-Host "check:')]
+    assert "-FilePath $py" in chk and "import goldbot.execution.bridge, MetaTrader5" in chk
+    assert '".\\$BridgeUser"' in chk and "-Wait -PassThru" in chk
+    assert "if ($check.ExitCode -ne 0) {" in chk and "throw" in chk
+    assert body.index('nssm set $svc ObjectName') < body.index("$check = Start-Process") < body.index("$cred = $null")
