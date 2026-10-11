@@ -50,13 +50,14 @@ from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_close
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, sizing
-from goldbot.risk.gate import REARM_PHRASE, Stage, broker_margin, new_day
+from goldbot.risk.gate import REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal, ceil_cent
 
 log = logging.getLogger("goldbot.engine")
 LOT_TERMS_WARN_S = 600.0     # the account view's symbol-info warning, at most this often
+APPROVED_RISK_TOLERANCE = 1.02   # ADR 0009: the risk sent may exceed the approved card's by 2% (fx moves), no more
 # MT5 trade retcodes that mean the market will not take an order now (10017 TRADE_DISABLED, 10018 MARKET_CLOSED): a
 # close refused with one of these is backed off; any other failure (requote 10004/10021, price changed 10020, a
 # raising call) is retried on the next tick, so an exit is never delayed by a transient refusal
@@ -872,9 +873,12 @@ class Engine:
                                                "price": now_px})
             gd = self.gate.check(intent, self.state,  # re-check at approval time
                                  margin_required=broker_margin(self.broker, self.cfg.symbol))
+            lots = gd.lots
+            if gd.allowed:
+                gd, lots = self._within_card(gd, prop, agent)
             if gd.allowed:
                 price = tick.ask if prop.side > 0 else tick.bid
-                self._execute(prop, agent, gd.lots, price - prop.side * gd.stop_distance,
+                self._execute(prop, agent, lots, price - prop.side * gd.stop_distance,
                               price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price,
                               atr_usd=intent.atr_usd)
             else:
@@ -883,6 +887,20 @@ class Engine:
                 if self.center.bus is not None:
                     self.center.bus.archive(p)          # the dashboard shows "refused at approval", not "approved"
         self._write_state()
+
+    def _within_card(self, gd: GateDecision, prop: Proposal, agent: Specialist) -> tuple[GateDecision, float]:
+        """ADR 0009: the order never exceeds the card the owner approved. The re-check's lots are capped at the card's
+        (equity may have risen during the window); the risk at the lots sent may exceed the card's by at most
+        APPROVED_RISK_TOLERANCE (the broker's conversion moved), else the approval is refused `risk_above_approved`.
+        Only ever reduces: a smaller re-check size is sent as the gate decided it."""
+        lots = min(gd.lots, prop.lots)
+        if lots < gd.lots:
+            self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "approval_size_capped",
+                                   "proposal": prop.proposal_id, "gate_lots": gd.lots, "lots": lots})
+        risk = gd.risk_amount * lots / gd.lots if gd.lots > 0 else gd.risk_amount
+        if prop.risk_amount is not None and risk > prop.risk_amount * APPROVED_RISK_TOLERANCE + 1e-9:
+            return gd.model_copy(update={"allowed": False, "reasons": ["risk_above_approved"]}), lots
+        return gd, lots
 
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float,
                  atr_usd: float | None = None) -> None:
