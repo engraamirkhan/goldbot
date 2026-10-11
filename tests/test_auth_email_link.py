@@ -406,3 +406,127 @@ def test_the_mail_test_command_prints_only_the_error_type(monkeypatch, capsys):
     assert mailer_mod.main(["test"]) == 1
     out = capsys.readouterr().out
     assert "SMTPRecipientsRefused" in out and OWNER not in out
+
+
+# ----------------------------------------------------------------------------- security review follow-ups (fe58fae)
+def _owner_store(tmp_path):
+    s = AuthStore(tmp_path, owner_email=OWNER)
+    e = s.bootstrap_owner(s.setup_code or "", OWNER, PW)
+    return s, _secret(e.totp_uri)
+
+
+def _links(s: AuthStore) -> int:
+    with s.db.connection() as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM email_links").fetchone()[0])
+
+
+def test_a_link_sign_in_queues_a_telegram_notice_with_a_coarse_network_hint_only(tmp_path):
+    s, secret = _owner_store(tmp_path)
+    token = s.request_email_link(OWNER, ip="203.0.113.45", enabled=True)
+    assert token is not None
+    s.redeem_email_link(token, totp_code(secret), ip="203.0.113.45")
+    rows = [json.loads(line) for line in (tmp_path / "agent_runs.jsonl").read_text().splitlines()]
+    notice = rows[-1]["detail"]
+    assert rows[-1]["role"] == "account_security" and "emailed sign-in link" in notice
+    assert "203.0.x.x" in notice and "203.0.113.45" not in notice and token not in notice
+    assert "revoke-sessions" in notice
+
+
+def test_the_coarse_network_hint_never_carries_a_full_address():
+    from goldbot.api.auth import coarse_ip
+    assert coarse_ip("203.0.113.45") == "203.0.x.x"
+    assert coarse_ip("2001:db8:1:2::5") == "2001:db8::/32"
+    assert coarse_ip(None) == coarse_ip("testclient") == "an unknown network"
+
+
+def test_a_link_sign_in_also_emails_the_owner_without_the_token(api):
+    c, _, fake, secret = api
+    _ask(c, OWNER)
+    token = _token(fake.sent[0][2])
+    assert _redeem(c, token, totp_code(secret)).status_code == 200
+    assert len(fake.sent) == 2
+    to, subject, body = fake.sent[1]
+    assert to == OWNER and "sign-in" in subject.lower()
+    assert token not in body and "#signin=" not in body and "an unknown network" in body
+
+
+def test_a_failed_redeem_sends_no_sign_in_notice(api):
+    c, _, fake, _ = api
+    _ask(c, OWNER)
+    _redeem(c, _token(fake.sent[0][2]), "000000")
+    assert len(fake.sent) == 1
+
+
+@pytest.mark.parametrize("origin", [
+    "https://user:pw@dash.test", "https://dash.test/path", "https://dash.test?x=1", "https://dash.test#f",
+    "https://", "ftp://dash.test", "http://dash.test", "http://localhost.evil.test", "http://127.0.0.1.nip.io",
+    "https://dash.test/#signin=x", "javascript:alert(1)", "dash.test"])
+def test_a_bad_dashboard_origin_is_refused(origin):
+    with pytest.raises(ValidationError):
+        MailSettings(enabled=True, host="smtp.test", from_address="bot@x.io", dashboard_origin=origin)
+
+
+@pytest.mark.parametrize("origin, kept", [
+    ("https://dash.test", "https://dash.test"), ("https://dash.test/", "https://dash.test"),
+    ("https://dash.test:8443", "https://dash.test:8443"), ("http://localhost:5173", "http://localhost:5173"),
+    ("http://127.0.0.1:8787", "http://127.0.0.1:8787"), ("http://[::1]:8787", "http://[::1]:8787")])
+def test_a_good_dashboard_origin_is_kept(origin, kept):
+    m = MailSettings(enabled=True, host="smtp.test", from_address="bot@x.io", dashboard_origin=origin)
+    assert m.dashboard_origin == kept
+
+
+def test_signing_a_user_out_everywhere_also_deletes_their_email_links(tmp_path):
+    s, _ = _owner_store(tmp_path)
+    assert s.request_email_link(OWNER, enabled=True) is not None
+    s.revoke_sessions(OWNER, OWNER)
+    assert _links(s) == 0
+
+
+def test_the_server_side_revoke_sessions_command_also_deletes_email_links(tmp_path, capsys):
+    from goldbot.api.auth import revoke_sessions_cli
+    s, _ = _owner_store(tmp_path)
+    assert s.request_email_link(OWNER, enabled=True) is not None
+    assert revoke_sessions_cli(["--state", str(tmp_path)]) == 0
+    assert _links(s) == 0 and "email sign-in link" in capsys.readouterr().out
+
+
+def test_health_warns_when_the_owner_address_keeps_hitting_the_link_limit(tmp_path):
+    from goldbot.api.auth import email_link_health_note
+    s, _ = _owner_store(tmp_path)
+    assert email_link_health_note(tmp_path, OWNER, time.time()) is None
+    for i in range(EMAIL_LINK_PER_HOUR + 3):
+        s.request_email_link(OWNER, ip=f"10.0.0.{i}", enabled=True)
+    note = email_link_health_note(tmp_path, OWNER, time.time())
+    assert note is not None and "3 " in note and OWNER not in note
+    assert email_link_health_note(tmp_path, OWNER, time.time() + 2 * 86400) is None      # only the last 24 h
+    assert email_link_health_note(tmp_path / "nowhere", OWNER, time.time()) is None
+
+
+def test_the_health_check_reports_repeated_link_rate_limiting_as_a_warning(tmp_path):
+    import pandas as pd
+
+    from goldbot.ops import health
+    from tests.test_health import make_ctx
+    s, _ = _owner_store(tmp_path)
+    base = load_settings()
+    settings = base.model_copy(update={"auth": base.auth.model_copy(update={"owner_email": OWNER})})
+    now = pd.Timestamp.now(tz="UTC")
+    assert health.check_email_link(make_ctx(tmp_path, now=now, settings=settings)).status == "ok"
+    for i in range(EMAIL_LINK_PER_HOUR + 3):
+        s.request_email_link(OWNER, ip=f"10.0.0.{i}", enabled=True)
+    c = health.check_email_link(make_ctx(tmp_path, now=pd.Timestamp.now(tz="UTC"), settings=settings))
+    assert c.status == "warn" and OWNER not in c.reason
+
+
+def test_mailer_readiness_is_cached_for_a_minute():
+    calls: list[str] = []
+    clock = [1000.0]
+
+    def secret(key: str) -> str:
+        calls.append(key)
+        return "pw"
+    m = mailer_mod.SmtpMailer(MAIL, secret=secret, clock=lambda: clock[0])
+    assert m.ready() and m.ready()
+    assert len(calls) == 1
+    clock[0] += mailer_mod.READY_CACHE_S + 1
+    assert m.ready() and len(calls) == 2

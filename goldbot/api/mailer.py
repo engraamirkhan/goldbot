@@ -16,12 +16,14 @@ from __future__ import annotations
 import smtplib
 import ssl
 import sys
+import time
 from email.message import EmailMessage
 from typing import Callable, Protocol
 
 from goldbot.config import MailSettings
 
 SMTP_PASSWORD_KEY = "smtp-password"
+READY_CACHE_S = 60.0                     # how long `SmtpMailer.ready()` trusts its last keyring lookup
 SecretLookup = Callable[[str], str | None]
 
 
@@ -46,11 +48,15 @@ def _keyring_secret(key: str) -> str | None:
 
 class SmtpMailer:
     """SMTP submission with STARTTLS (a verified TLS context) and login; the password is looked up per send, so
-    storing it needs no API restart."""
+    storing it needs no API restart. `ready()` is cached for READY_CACHE_S: it runs on every /api/auth/state and
+    email-link request, and a keyring lookup per request is needless load (security review L5)."""
 
-    def __init__(self, settings: MailSettings, secret: SecretLookup = _keyring_secret):
+    def __init__(self, settings: MailSettings, secret: SecretLookup = _keyring_secret,
+                 clock: Callable[[], float] = time.monotonic):
         self.settings = settings
         self._secret = secret
+        self._clock = clock
+        self._ready: tuple[float, bool] | None = None        # (checked at, answer)
 
     def _password(self) -> str | None:
         try:
@@ -59,8 +65,13 @@ class SmtpMailer:
             return None
 
     def ready(self) -> bool:
+        now = self._clock()
+        if self._ready is not None and now - self._ready[0] < READY_CACHE_S:
+            return self._ready[1]
         s = self.settings
-        return bool(s.enabled and s.host and s.from_address and s.dashboard_origin) and self._password() is not None
+        ok = bool(s.enabled and s.host and s.from_address and s.dashboard_origin) and self._password() is not None
+        self._ready = (now, ok)
+        return ok
 
     def send(self, to: str, subject: str, body: str) -> None:
         s = self.settings
@@ -85,6 +96,18 @@ def email_link_message(origin: str, token: str, ttl_min: int) -> tuple[str, str]
             f"authenticator app.\n\n"
             f"If this wasn't you, ignore this email: nobody can sign in with the link without your authenticator "
             f"code.\n")
+
+
+def sign_in_notice_message(when_utc: str, network: str) -> tuple[str, str]:
+    """(subject, body) of the notice sent after every sign-in with an emailed link: no token, and only a coarse
+    network hint (`auth.coarse_ip`), never the full address."""
+    return ("goldbot: new sign-in with an emailed link",
+            f"Someone signed in to the goldbot dashboard as the owner with an emailed sign-in link and the "
+            f"authenticator code, at {when_utc}, from {network}.\n\n"
+            f"If this was you, there is nothing to do.\n\n"
+            f"If it was not you, your mailbox and your authenticator are both compromised: on the server run "
+            f"`python -m goldbot.ops.run revoke-sessions` (signs everyone out and cancels every sign-in link), set "
+            f"auth.mail.enabled to false, change your password and your email password, and check the audit trail.\n")
 
 
 def mailer_from_settings(settings: MailSettings) -> SmtpMailer | None:

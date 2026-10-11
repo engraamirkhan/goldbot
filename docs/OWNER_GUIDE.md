@@ -46,6 +46,9 @@ without typing the password. Free with Gmail:
   authenticator code and one recovery code. **Email me a sign-in link** (once set up) mails you a link that works
   once for 15 minutes; it still asks for the authenticator code. Anyone typing another address sees the same message
   and nothing is sent. [More](RUNBOOK.md#210-dashboard-first-run-create-the-owner-account)
+  No link? Sign in with your password. If it keeps happening, check for `email_link_rate_limited` in the audit
+  trail (the Health tab warns too). Every link sign-in sends you a Telegram message and an email. If one was not
+  you, follow its instructions straight away.
 - **Morning digest:** at 06:45 UTC Telegram sends one message: all good or what needs attention, yesterday's trades, risk, and decisions waiting for you. [More](RUNBOOK.md#05-daily-use)
 - **Approve:** Telegram shows direction, lots, entry, stop, target, probability, spread. Tap **Approve**, or a **Reject** reason. Or the dashboard **Approvals** tab. After 90 s it expires. [More](RUNBOOK.md#approving-or-rejecting-an-entry)
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)

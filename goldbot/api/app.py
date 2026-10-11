@@ -38,10 +38,11 @@ from goldbot.api.auth import (
     SESSION_TTL_H,
     AuthStore,
     User,
+    coarse_ip,
     env_setup_code_hint,
     has_role,
 )
-from goldbot.api.mailer import Mailer, email_link_message, mailer_from_settings
+from goldbot.api.mailer import Mailer, email_link_message, mailer_from_settings, sign_in_notice_message
 from goldbot.api.schema import (
     AcceptRequest,
     AcceptResponse,
@@ -250,18 +251,28 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         """The owner's email sign-in link is offered: auth.mail enabled and complete, and the SMTP password stored."""
         return mail.enabled and mailer is not None and mailer.ready()
 
-    def send_email_link(token: str) -> None:
-        """Runs after the generic answer has gone, in the thread pool (SMTP has its own timeout). A failure is
-        logged and audited by exception type only: smtplib's errors can carry the address and the message."""
-        to, origin = st.auth.owner_email, mail.dashboard_origin
-        if mailer is None or to is None or origin is None:
+    def mail_owner(subject: str, text: str, what: str, failed_event: str) -> None:
+        """Runs after the answer has gone, in the thread pool (SMTP has its own timeout). A failure is logged and
+        audited by exception type only: smtplib's errors can carry the address and the message."""
+        to = st.auth.owner_email
+        if mailer is None or to is None:
             return
-        subject, text = email_link_message(origin, token, EMAIL_LINK_TTL_S // 60)
         try:
             mailer.send(to, subject, text)
-        except Exception as exc:                # noqa: BLE001 - the caller already has its generic answer
-            log.warning("email sign-in link not sent: %s", type(exc).__name__)
-            st.auth.audit("email_link_send_failed", error=type(exc).__name__)
+        except Exception as exc:                # noqa: BLE001 - the caller already has its answer
+            log.warning("%s not sent: %s", what, type(exc).__name__)
+            st.auth.audit(failed_event, error=type(exc).__name__)
+
+    def send_email_link(token: str) -> None:
+        if mail.dashboard_origin is not None:
+            subject, text = email_link_message(mail.dashboard_origin, token, EMAIL_LINK_TTL_S // 60)
+            mail_owner(subject, text, "email sign-in link", "email_link_send_failed")
+
+    def send_sign_in_notice(ip: str | None) -> None:
+        """ADR 0013: every sign-in with an emailed link is also mailed to the owner (the Telegram notice is queued
+        by AuthStore.redeem_email_link). No token, only a coarse network hint."""
+        subject, text = sign_in_notice_message(time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()), coarse_ip(ip))
+        mail_owner(subject, text, "sign-in notice", "email_link_notice_failed")
     app = FastAPI(title="goldbot api", version="0.2")
     app.state.st = st
     hint = env_setup_code_hint(st.auth)
@@ -340,15 +351,18 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return EmailLinkResponse()
 
     @app.post("/api/auth/email-link/redeem")
-    def email_link_redeem(body: EmailLinkRedeemRequest, request: Request) -> LoginResponse:
-        """The link's token AND a current authenticator code (the link replaces the password, not the second factor)."""
+    def email_link_redeem(body: EmailLinkRedeemRequest, request: Request, background: BackgroundTasks) -> LoginResponse:
+        """The link's token AND a current authenticator code (the link replaces the password, not the second factor).
+        A success also emails the owner a sign-in notice (ADR 0013)."""
+        ip = client_ip(request)
         try:
-            tok = st.auth.redeem_email_link(body.token, body.totp, ip=client_ip(request))
+            tok = st.auth.redeem_email_link(body.token, body.totp, ip=ip)
         except PermissionError as exc:
             raise HTTPException(403, str(exc))
         u = st.auth.session_user(tok)
         if u is None:
             raise HTTPException(403, "invalid credentials")
+        background.add_task(send_sign_in_notice, ip)
         return LoginResponse(token=tok, expires_in=SESSION_TTL_H * 3600, role=u.role, email=u.email)
 
     @app.post("/api/auth/logout")

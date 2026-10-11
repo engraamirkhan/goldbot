@@ -961,6 +961,17 @@ def check_approvals(ctx: HealthContext) -> Check:
                         f"({_age(oldest[0]) if oldest[0] != float('inf') else 'unreadable'}); the engine never archived them")
 
 
+def check_email_link(ctx: HealthContext) -> Check:
+    """The owner's email sign-in link hitting its hourly limit again and again (goldbot/api/auth.py
+    `email_link_health_note`): warn, never fail, since password sign-in still works. Never names the address."""
+    from goldbot.api.auth import email_link_health_note
+    owner = ctx.settings.auth.owner_email if ctx.settings is not None else None
+    note = email_link_health_note(ctx.state_dir, owner, _epoch(ctx.now))
+    if note:
+        return Check(name="email_link", status="warn", reason=note)
+    return Check(name="email_link", status="ok", reason="no repeated sign-in link rate limiting")
+
+
 def check_alert_loop(ctx: HealthContext) -> Check:
     f = ctx.state_dir / WATCH_FILE
     if not f.exists():
@@ -1526,7 +1537,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += g("costs_published", lambda: check_costs_published(ctx))
         for fn in (check_data_quality, check_drift, check_model_watch, check_feature_versions, check_deploy,
                    check_backup_age, check_backup_prune, check_restore_drill, check_news, check_agent_spend,
-                   check_approvals, check_alert_loop):
+                   check_approvals, check_email_link, check_alert_loop):
             checks += g(fn.__name__.removeprefix("check_"), lambda: fn(ctx))
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 

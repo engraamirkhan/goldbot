@@ -78,14 +78,26 @@ describe("Login", () => {
     expect(onLogin).toHaveBeenCalled();
   });
 
-  it("explains a failed sign-in link and offers a new one", async () => {
+  it("after a failed sign-in link goes straight to asking for a new one (the old link is spent)", async () => {
     const { api } = await setup("#signin=tok-2");
     vi.spyOn(api, "redeemEmailLink").mockRejectedValue(new Error("sign-in link invalid or expired, or wrong authenticator code"));
     await screen.findByRole("heading", { name: "Finish signing in" });
     type("Authenticator code", "000000");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("invalid or expired");
-    expect(screen.getByRole("button", { name: "Email me a new link" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Email me a sign-in link" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("invalid or expired");
+    expect(screen.getByRole("alert")).toHaveTextContent("Ask for a new link");
+    expect(screen.getByRole("button", { name: "Send the link" })).toBeInTheDocument();
+  });
+
+  it("after a failed sign-in link goes back to sign in when the server cannot send links", async () => {
+    const { api } = await setup("#signin=tok-3", false);
+    vi.spyOn(api, "redeemEmailLink").mockRejectedValue(new Error("sign-in link invalid or expired, or wrong authenticator code"));
+    await screen.findByRole("heading", { name: "Finish signing in" });
+    type("Authenticator code", "000000");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("invalid or expired");
   });
 
   it("does not offer the email link when the server has no mail configured", async () => {

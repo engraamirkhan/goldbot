@@ -4,6 +4,7 @@ from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -359,7 +360,7 @@ class TelegramSettings(_Section):
     owner_tz: str = "Europe/London"
 
 
-_LOCAL_HTTP = ("http://localhost", "http://127.0.0.1")
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 
 class MailSettings(_Section):
@@ -378,13 +379,25 @@ class MailSettings(_Section):
     @field_validator("dashboard_origin")
     @classmethod
     def _origin(cls, v: str | None) -> str | None:
-        """https only (the link carries a sign-in token), except a local dev origin; no trailing slash."""
+        """An origin only (the link carries a sign-in token): https with a host and no user info, path, query or
+        fragment; http only for exactly localhost, 127.0.0.1 or ::1 (local dev). One trailing slash is dropped."""
         if v is None:
             return None
-        v = v.strip().rstrip("/")
-        if not (v.startswith("https://") or v.startswith(_LOCAL_HTTP)):
-            raise ValueError("auth.mail.dashboard_origin must be an https:// origin")
-        return v
+        v = v.strip()
+        v = v[:-1] if v.endswith("/") and not v.endswith("//") else v
+        bad = ValueError("auth.mail.dashboard_origin must be an origin like https://dash.example.com (no path, "
+                         "query, fragment or user info; http only for localhost)")
+        try:
+            u = urlsplit(v)
+            u.port                                          # noqa: B018 - raises on a malformed port
+        except ValueError:
+            raise bad from None
+        if not u.netloc or u.username is not None or u.password is not None or u.path or u.query or u.fragment \
+                or "#" in v or "?" in v:
+            raise bad
+        if u.scheme == "https" or (u.scheme == "http" and u.hostname in _LOCAL_HOSTS):
+            return v
+        raise bad
 
     @model_validator(mode="after")
     def _complete_when_enabled(self) -> MailSettings:

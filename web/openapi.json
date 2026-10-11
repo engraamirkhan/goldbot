@@ -4240,7 +4240,7 @@
   },
   "/api/auth/email-link/redeem": {
    "post": {
-    "description": "The link's token AND a current authenticator code (the link replaces the password, not the second factor).",
+    "description": "The link's token AND a current authenticator code (the link replaces the password, not the second factor).\nA success also emails the owner a sign-in notice (ADR 0013).",
     "operationId": "email_link_redeem_api_auth_email_link_redeem_post",
     "requestBody": {
      "content": {

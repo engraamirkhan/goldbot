@@ -93,8 +93,15 @@ export function Login({ onLogin }: { onLogin: () => void }) {
         setTotpUri(r.totp_uri); setInfo(`${r.recovery_codes_left} recovery codes left.`); setAfter(() => onLogin);
       }
     } catch (ex) {
-      setErr((ex as Error).message);
-      if (mode === "signin") setCode("");
+      const msg = (ex as Error).message;
+      if (mode === "signin") {
+        // any failed redeem spends the link on the server: go straight to asking for a new one
+        setSigninToken("");
+        go(emailLinkOn ? "emailLink" : "login");
+        setErr(emailLinkOn ? `${msg}. Ask for a new link below.` : msg);
+      } else {
+        setErr(msg);
+      }
     } finally {
       setBusy(false);
     }
@@ -148,9 +155,6 @@ export function Login({ onLogin }: { onLogin: () => void }) {
           {emailLinkOn && <button type="button" className="link" onClick={() => go("emailLink")}>Email me a sign-in link</button>}
           <button type="button" className="link" onClick={() => go("recover")}>Use a recovery code</button>
         </nav>
-      )}
-      {mode === "signin" && err && emailLinkOn && (
-        <button type="button" className="link" onClick={() => { setSigninToken(""); go("emailLink"); }}>Email me a new link</button>
       )}
       {(mode === "forgot" || mode === "recover" || mode === "emailLink" || mode === "signin") && (
         <button type="button" className="link" onClick={() => { setSigninToken(""); go("login"); }}>Back to sign in</button>

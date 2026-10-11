@@ -653,8 +653,14 @@ an App Password (Google Account -> Security -> 2-Step Verification -> App passwo
    (`sudo systemctl restart goldbot-api`, VPS: `nssm restart goldbot-api`) so the login page offers the link.
 4. If a link never arrives: the API log says `email sign-in link not sent: <error type>` (never the address or the
    link), and the audit table has `email_link_send_failed`. `SMTPAuthenticationError` means the App Password is wrong
-   or revoked: store a new one (step 1); no restart is needed. To turn the feature off, set `enabled: false` and
-   restart the API.
+   or revoked: store a new one (step 1); no restart is needed. If the audit table has `email_link_rate_limited`
+   instead, the 3-an-hour limit was hit: wait an hour or sign in with the password. The `email_link` health check
+   warns when that happens 3 or more times in 24 h. To turn the feature off, set `enabled: false` and restart the API.
+5. Every sign-in with a link sends you a Telegram notice and an email ("new sign-in with an emailed link": time and a
+   rough network such as `203.0.x.x`, never the link). If it was not you, your mailbox and your authenticator are
+   both exposed: run `python -m goldbot.ops.run revoke-sessions` on the server (signs everyone out and cancels every
+   open link), set `enabled: false`, then change your password and your email password. The accepted risk and its
+   limits are in [ADR 0013](decisions/0013-email-sign-in-link-accepted-risk.md).
 
 ---
 
@@ -1119,5 +1125,11 @@ fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back,
 
   It refuses unless the file is at schema 5. Later versions record which older versions can still open the file,
   so this step is not needed again for changes that only add tables.
+* **aux.db schema 6 (email sign-in links, 2026-10-11) cannot be stepped back to 4.** Schema 6 only adds tables, so
+  every release from state-store step 3 on (commit 596386d, 2026-10-10, schema 5 or later) opens a schema 6 file as
+  it is. A release from before step 3 knows only schema 4. The updater and `goldbot-deploy` refuse to install such a
+  release ("aux.db is at schema 6 ... no step-back is known; nothing changed"), and the one-liner above refuses too.
+  Do not delete schema_version rows by hand to get round it. Roll back to a release from 2026-10-10 or later, or ask
+  a Claude session for a 6 -> 4 step-back.
 * The script stops the scheduler first and checks again that no job started in between; if one did, it was
   interrupted by the stop: the script starts the scheduler again, stops nothing else and refuses the update.

@@ -68,6 +68,7 @@ import base64
 import functools
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -98,6 +99,7 @@ OWNER_RESET_REFUSED = "the owner account cannot be reset with a link; sign in wi
 SESSION_TTL_H, INVITE_TTL_H, RESET_TTL_H = 12, 72, 24
 EMAIL_LINK_TTL_S, EMAIL_LINK_PER_HOUR, EMAIL_LINK_WINDOW_S = 900, 3, 3600
 EMAIL_LINK_REFUSED = "sign-in link invalid or expired, or wrong authenticator code"
+EMAIL_LINK_ABUSE_WARN = 3                # owner-address requests refused by the hourly limit in 24 h -> health warn
 RECOVERY_CODES = 10
 
 
@@ -354,6 +356,45 @@ class _Reservation(FrozenRecord):
     rows: list[int]
     prev: int
     new: int
+
+
+def coarse_ip(ip: str | None) -> str:
+    """A network hint for an owner notice, never the full address: IPv4 /16 ('203.0.x.x'), IPv6 /32
+    ('2001:db8::/32'); anything else (no address, a test client) is 'an unknown network'."""
+    try:
+        addr = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return "an unknown network"
+    if addr.version == 4:
+        a, b, _, _ = str(addr).split(".")
+        return f"{a}.{b}.x.x"
+    return str(ipaddress.ip_network(f"{addr}/32", strict=False))
+
+
+def email_link_health_note(state_dir: str | Path, owner_email: str | None, now_s: float) -> str | None:
+    """For the health check: a warning when email sign-in link requests for the owner's address were refused by the
+    hourly limit EMAIL_LINK_ABUSE_WARN or more times in the last 24 h (someone may be requesting links, or the owner
+    is locked out of that path). Never names the address. Opens aux.db read-only; missing file or table: None."""
+    owner = _norm_email(owner_email)
+    p = db_path(state_dir, "aux")
+    if owner is None or not p.exists():
+        return None
+    since = int((now_s - 86400) * 1e9)
+    try:
+        conn = sqlite3.connect(f"{p.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            n = int(conn.execute("SELECT COUNT(*) FROM audit WHERE event = 'email_link_rate_limited' AND ts_ns > ? "
+                                 "AND ts_ns <= ? AND json_extract(body, '$.email') = ?",
+                                 (since, int(now_s * 1e9), owner)).fetchone()[0])
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        log.warning("aux.db unreadable: %s", exc)
+        return None
+    if n < EMAIL_LINK_ABUSE_WARN:
+        return None
+    return (f"{n} email sign-in link requests for the owner's address hit the hourly limit in the last 24 h: someone "
+            f"may be requesting links (password sign-in still works; see email_link_rate_limited in the audit trail)")
 
 
 def _mask(email: str) -> str:
@@ -942,6 +983,12 @@ class AuthStore:
             self.audit("email_link_redeem_failed", email=email, reason="wrong code, used link or not the owner",
                        **({"ip": ip} if ip else {}))
             raise PermissionError(EMAIL_LINK_REFUSED)
+        # ADR 0013: with mail on, mailbox + authenticator is enough to sign in, so every such sign-in is announced
+        self._notify_owner(f"Signed in to the dashboard as the owner with an emailed sign-in link and the "
+                           f"authenticator code at {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}, from "
+                           f"{coarse_ip(ip)}. If this was not you, your mailbox and authenticator are both exposed: "
+                           f"on the server run `python -m goldbot.ops.run revoke-sessions`, set auth.mail.enabled to "
+                           f"false, then change your password and check the audit trail.")
         return tok
 
     # ------------------------------------------------------------------ admin (owner only)
@@ -998,12 +1045,14 @@ class AuthStore:
             _audit(conn, "enable", by=by_email, email=email)
 
     def revoke_sessions(self, by_email: str, email: str) -> int:
-        """Sign a user out everywhere; returns the number of sessions ended."""
+        """Sign a user out everywhere; returns the number of sessions ended. Their email sign-in links go in the same
+        transaction (a link is a session waiting to happen)."""
         self._require(by_email, "owner")
         with self.db.write() as conn:
             if _USERS.get(conn, email.lower()) is None:
                 raise KeyError(email)
             n = conn.execute("DELETE FROM sessions WHERE email = ?", (email.lower(),)).rowcount
+            conn.execute("DELETE FROM email_links WHERE email = ?", (email.lower(),))
             _audit(conn, "revoke_sessions", by=by_email, email=email, sessions=n)
         return int(n)
 
@@ -1027,7 +1076,7 @@ def revoke_sessions_cli(argv: list[str]) -> int:
     """`python -m goldbot.ops.run revoke-sessions [--state DIR]`: run on the server, needs no dashboard sign-in."""
     import argparse
     ap = argparse.ArgumentParser(prog="python -m goldbot.ops.run revoke-sessions",
-                                 description="Sign every dashboard account out (all sessions).")
+                                 description="Sign every dashboard account out (all sessions and email sign-in links).")
     ap.add_argument("--state", default="state", help="the state directory holding aux.db (default: state)")
     args = ap.parse_args(argv)
     path = db_path(args.state, "aux").resolve()
@@ -1042,12 +1091,14 @@ def revoke_sessions_cli(argv: list[str]) -> int:
         return 2
     with db.write() as conn:
         n = int(conn.execute("DELETE FROM sessions").rowcount)
-        _audit(conn, "revoke_all_sessions", by="server:revoke-sessions", sessions=n)
-    print(f"revoked {n} session{'s' if n != 1 else ''} in {path}; every account must sign in again")
+        links = int(conn.execute("DELETE FROM email_links").rowcount)      # same transaction (security review L2)
+        _audit(conn, "revoke_all_sessions", by="server:revoke-sessions", sessions=n, email_links=links)
+    print(f"revoked {n} session{'s' if n != 1 else ''} and {links} email sign-in link{'s' if links != 1 else ''} "
+          f"in {path}; every account must sign in again")
     return 0
 
 
 __all__ = ["AuthStore", "User", "Invite", "PasswordReset", "EmailLink", "EMAIL_LINK_PER_HOUR", "EMAIL_LINK_TTL_S",
            "EMAIL_LINK_REFUSED", "Enrolment", "RecoveryLogin", "import_users", "import_users_json",
-           "import_audit_jsonl", "owner_conflict", "owner_health_note", "check_password_policy", "has_role",
+           "import_audit_jsonl", "owner_conflict", "owner_health_note", "coarse_ip", "email_link_health_note", "check_password_policy", "has_role",
            "totp_code", "totp_step", "totp_verify", "new_totp_secret", "totp_uri", "ROLES", "GRANTABLE", "env_setup_code_hint", "os"]

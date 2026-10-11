@@ -104,6 +104,7 @@ export interface paths {
         /**
          * Email Link Redeem
          * @description The link's token AND a current authenticator code (the link replaces the password, not the second factor).
+         *     A success also emails the owner a sign-in notice (ADR 0013).
          */
         post: operations["email_link_redeem_api_auth_email_link_redeem_post"];
         delete?: never;
