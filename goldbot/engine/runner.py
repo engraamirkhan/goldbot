@@ -1434,13 +1434,16 @@ class Engine:
         tick's exits. A leg without a filled price is not logged."""
         if self.store is None or filled is None:
             return
-        requested = level if level is not None else \
-            (quote.bid if tr.side > 0 else quote.ask) if quote is not None else np.nan
-        self._exit_fills.append({"ts_utc": at, "position_id": pid, "client_order_id": tr.client_order_id,
-                                 "agent_id": tr.agent_id, "side": tr.side, "lots": float(lots), "kind": kind,
-                                 "requested": float(requested), "filled": float(filled),
-                                 "spread": quote.ask - quote.bid if quote is not None else np.nan,
-                                 "retcode": retcode})
+        try:   # never raises: it runs after a confirmed close, outside any try (trading-safety re-check)
+            requested = level if level is not None else \
+                (quote.bid if tr.side > 0 else quote.ask) if quote is not None else np.nan
+            self._exit_fills.append({"ts_utc": at, "position_id": pid, "client_order_id": tr.client_order_id,
+                                     "agent_id": tr.agent_id, "side": tr.side, "lots": float(lots), "kind": kind,
+                                     "requested": float(requested), "filled": float(filled),
+                                     "spread": quote.ask - quote.bid if quote is not None else np.nan,
+                                     "retcode": retcode})
+        except Exception:
+            log.exception("exit fill for position %s not buffered", pid)
 
     def _flush_exit_fills(self) -> None:
         """Write the buffered exit legs in one append (called from `_flush_closed`, after the tick's exits and the
