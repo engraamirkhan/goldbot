@@ -2,6 +2,7 @@
  "components": {
   "schemas": {
    "AcceptRequest": {
+    "additionalProperties": false,
     "properties": {
      "password": {
       "default": "",
@@ -803,6 +804,7 @@
     "type": "object"
    },
    "ChangePasswordRequest": {
+    "additionalProperties": false,
     "description": "Logged in. Revokes the user's other sessions.",
     "properties": {
      "current_password": {
@@ -1197,6 +1199,7 @@
     "type": "object"
    },
    "Decision": {
+    "additionalProperties": false,
     "properties": {
      "action": {
       "enum": [
@@ -1510,6 +1513,7 @@
     "type": "object"
    },
    "ForgotPasswordRequest": {
+    "additionalProperties": false,
     "description": "Self-service reset with a current authenticator code; the owner account also needs one of its recovery codes\n(spent). The same 403 for an unknown email, a wrong code or a missing recovery code.",
     "properties": {
      "email": {
@@ -1573,6 +1577,7 @@
     "type": "object"
    },
    "HaltRequest": {
+    "additionalProperties": false,
     "properties": {
      "reason": {
       "anyOf": [
@@ -1931,6 +1936,7 @@
     "type": "object"
    },
    "InviteRequest": {
+    "additionalProperties": false,
     "properties": {
      "email": {
       "title": "Email",
@@ -2063,6 +2069,7 @@
     "type": "object"
    },
    "LoginRequest": {
+    "additionalProperties": false,
     "properties": {
      "email": {
       "default": "",
@@ -2363,6 +2370,7 @@
     "type": "object"
    },
    "ModeChangeRequest": {
+    "additionalProperties": false,
     "properties": {
      "mode": {
       "enum": [
@@ -2873,6 +2881,7 @@
     "type": "object"
    },
    "RearmRequest": {
+    "additionalProperties": false,
     "properties": {
      "totp": {
       "title": "Totp",
@@ -2886,6 +2895,7 @@
     "type": "object"
    },
    "RecoveryCodesRequest": {
+    "additionalProperties": false,
     "properties": {
      "password": {
       "default": "",
@@ -2918,6 +2928,7 @@
     "type": "object"
    },
    "RecoveryLoginRequest": {
+    "additionalProperties": false,
     "description": "Owner only: a one-time recovery code in place of the authenticator code.",
     "properties": {
      "email": {
@@ -3341,6 +3352,7 @@
     "type": "object"
    },
    "ResetRequest": {
+    "additionalProperties": false,
     "description": "Owner-issued one-time link: sets a new password and enrols a new authenticator.",
     "properties": {
      "new_password": {
@@ -3443,6 +3455,7 @@
     "type": "object"
    },
    "RoleChange": {
+    "additionalProperties": false,
     "properties": {
      "email": {
       "title": "Email",
@@ -3465,6 +3478,7 @@
     "type": "object"
    },
    "SetupRequest": {
+    "additionalProperties": false,
     "properties": {
      "email": {
       "title": "Email",
@@ -3803,6 +3817,7 @@
     "type": "object"
    },
    "UserRef": {
+    "additionalProperties": false,
     "properties": {
      "email": {
       "title": "Email",
