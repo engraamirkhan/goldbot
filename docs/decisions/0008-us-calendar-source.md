@@ -112,5 +112,13 @@ Options:
   - The original dates of non-BLS releases in the 2013 and 2018-19 shutdowns are not in the hand-checked table
     because they could not be verified: Census retail sales, and the 2013 BEA GDP and PCE.
   - PCE at 08:30 ET in 2010-2012 is unverified.
+- Two tier-2 definitions exist (amended 2026-10-11, review L1 of BACKLOG 17/18):
+  - this calendar (calendar-v1, research): tier 2 is the fixed list of event types above (`TIERS`);
+  - the live Forex Factory archive (store table `calendar_events`, used by the engine's tier-2 entry window): tier 2
+    is the G-3 list matched by title (`econ_calendar.TIER2_PATTERNS`, whatever the feed's impact) plus any other
+    high-impact USD event. Rows archived before 2026-10-11 were tiered by impact alone (claims, rated Medium, were
+    tier 3).
+  - Rule: no trial or report may cite the archive's `tier` column across 2026-10-11 without re-tiering the archived
+    rows with the current `tier_of` first; research uses calendar-v1's tiers.
 - What would change this: a licensed consensus feed (D-4), FRED changing its terms or ids (the name check would catch
   it), or the Fed redesigning its pages (the meeting-count guard would fail the source).

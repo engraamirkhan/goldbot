@@ -244,8 +244,11 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "strict: an owner decision is never applied without a field this release does not know; skipped, it expires",
     ("goldbot/telegram/bus.py", "ApprovalBus.recent", "BusDecision"): "strict: as decisions_for (the decided cards)",
     ("goldbot/execution/bridge.py", "_decode", "cls"):
-        "strict: records crossing the bridge (order requests are never guessed; responses: HANDOFF follow-up)",
+        "strict: order requests crossing the bridge (the server's arguments, and OrderIntent in either direction) "
+        "are never guessed; responses from the MT5 box go through load_record (GENERIC_MODEL_ARGS)",
     ("goldbot/db/repo.py", "RecordRepo._load", "self.model"): "RecordRepo: strict unless built with tolerant=True",
+    ("goldbot/risk/windows.py", "load_holidays", "HolidayList"):
+        "strict: hand-edited config (a misspelt key fails: calendar_unavailable)",
     ("goldbot/research/min_lot.py", "min_lot_feasibility", "Feasibility"):
         "not persisted: built from a dict in the same function",
     ("goldbot/data/news.py", "score_batch", "HeadlineScore"): "not persisted: the LLM's answer, validated strictly",
@@ -261,7 +264,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
 # Models that fail closed: never read tolerantly, by load_record or by RecordRepo(..., tolerant=True).
 STRICT_MODELS = {"User", "Invite", "PasswordReset", "Control", "Settings", "BusDecision"}
 # The only tolerant reads whose model is not a class named at the call: (file, function) -> the argument.
-GENERIC_MODEL_ARGS = {("goldbot/db/repo.py", "RecordRepo._load"): "self.model"}
+GENERIC_MODEL_ARGS = {("goldbot/db/repo.py", "RecordRepo._load"): "self.model",
+                      # the wire record named by "__record__", from bridge._RECORDS minus _REQUEST_RECORDS
+                      ("goldbot/execution/bridge.py", "_decode"): "cls"}
 TOLERANT_FUNCS = ("load_record", "load_record_json")
 
 
@@ -409,6 +414,16 @@ def test_tolerant_models_have_no_left_to_right_or_discriminated_unions():
             cls = next(iter(models[f.model]))
         problems += _core_schema_problems(cls.__pydantic_core_schema__, f"{f.rel} {f.model}")
     assert problems == []
+
+
+def test_bridge_responses_are_read_tolerantly_only_for_response_records_that_may_be():
+    """The bridge's generic read (`_decode`, `cls`) covers bridge._RECORDS minus the request records: none of them is
+    a strict model or has a left-to-right/discriminated union, and an order request (OrderIntent) is never tolerant."""
+    from goldbot.execution import bridge
+    assert "OrderIntent" in bridge._REQUEST_RECORDS and bridge._REQUEST_RECORDS <= set(bridge._RECORDS)
+    responses = {n: c for n, c in bridge._RECORDS.items() if n not in bridge._REQUEST_RECORDS}
+    assert set(responses) & STRICT_MODELS == set()
+    assert [p for n, c in responses.items() for p in _core_schema_problems(c.__pydantic_core_schema__, n)] == []
 
 
 def test_the_union_check_flags_left_to_right_and_discriminated_unions():

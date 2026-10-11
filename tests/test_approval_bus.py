@@ -1,11 +1,13 @@
 """Approvals across processes: engine -> bus -> dashboard/Telegram -> bus -> engine, the owner halt, and what the
 Telegram service sends."""
 import json
+import logging
 import time
 
 import pandas as pd
 import pytest
 
+from goldbot.base import schema_skew
 from goldbot.db.bookkeeping import AgentRunLog
 from goldbot.engine import ConstantModel, Engine, EngineConfig
 from goldbot.execution.broker import Tick
@@ -187,3 +189,20 @@ def test_a_decision_with_an_unknown_field_is_skipped_and_the_proposal_expires(tm
     engine.pending["a"].created = time.time() - 120
     assert [x.outcome for x in engine.sweep_expired()] == [Outcome.EXPIRED]
     assert bus.outcome("a") == "EXPIRED_UNAPPROVED"
+
+
+def test_a_refused_decision_is_logged_once_per_proposal_and_counted(tmp_path, caplog):
+    """ADR 0010: a decision skipped for a field this release does not know is not silent. A WARNING is logged once per
+    proposal id, and every read is counted in schema_skew() (the owner's click would otherwise vanish unexplained)."""
+    caplog.set_level(logging.WARNING, logger="goldbot.base")
+    bus = ApprovalBus(tmp_path)
+    for pid in ("skew-a", "skew-b"):
+        bus.publish(_p(pid))
+        bus.submit(pid, True, None, by="dashboard:o")
+        f = bus.decisions_dir / f"{pid}.json"
+        f.write_text(json.dumps({**json.loads(f.read_text()), "max_lots": 0.01}))
+    for _ in range(3):
+        assert bus.decisions_for({"skew-a", "skew-b"}) == []
+    warned = [r.getMessage() for r in caplog.records if "max_lots" in r.getMessage()]
+    assert len(warned) == 2 and any("skew-a" in m for m in warned) and any("skew-b" in m for m in warned)
+    assert schema_skew()[("approvals/decisions:skew-a", "BusDecision", ("max_lots",))] == 3

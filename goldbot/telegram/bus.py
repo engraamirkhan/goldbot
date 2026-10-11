@@ -26,7 +26,14 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from goldbot.base import Record, create_exclusive, load_record_json, write_atomic
+from goldbot.base import (
+    Record,
+    create_exclusive,
+    load_record_json,
+    note_schema_skew,
+    unknown_fields_json,
+    write_atomic,
+)
 from goldbot.telegram.approvals import REASON_CODES, Proposal
 
 
@@ -77,12 +84,18 @@ class ApprovalBus:
         for pid in sorted(proposal_ids):
             f = self.decisions_dir / f"{pid}.json"
             if f.exists():
+                text = ""                 # read_text can raise UnicodeDecodeError (a ValueError) before assigning
                 try:
+                    text = f.read_text()
                     # strict on purpose (ADR 0010 allowlist): a decision is never applied without a field this release
                     # does not know (a newer condition or size limit); it is skipped and the proposal expires
-                    out.append(BusDecision.model_validate_json(f.read_text()))
+                    out.append(BusDecision.model_validate_json(text))
                 except ValueError:
-                    continue          # half-written by a crashed writer, or from a newer release; the window expires it
+                    # from a newer release: logged once per proposal and counted, so the click does not vanish
+                    # unexplained; otherwise half-written by a crashed writer. Either way the window expires it.
+                    if unknown := unknown_fields_json(BusDecision, text):
+                        note_schema_skew(f"approvals/decisions:{pid}", "BusDecision", unknown, refused=True)
+                    continue
         return out
 
     def archive(self, p: Proposal) -> None:

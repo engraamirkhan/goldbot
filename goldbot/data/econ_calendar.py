@@ -3,7 +3,14 @@
 The VPS fetches the week's feed once a day (scheduler job `calendar_archive`), keeps every row with the time it was
 received, and the engines read upcoming events from the store. Tier 1 is the design's blackout list for gold: US CPI,
 NFP, FOMC (statement, rate decision, press conference) and PCE; the RiskGate blocks entries from `before_min` before
-to `after_min` after each tier-1 event. Tier 2 is any other high-impact USD event, tier 3 everything else.
+to `after_min` after each tier-1 event. Tier 2 is the playbook's G-3 list (TIER2_PATTERNS: PPI, retail sales, ISM, GDP,
+JOLTS, claims, FOMC minutes, Fed chair; USD, whatever impact the feed gives them) and any other high-impact USD event;
+`risk.blackout.tier2` blocks entries around them once the owner enables it (BACKLOG 18). Tier 3 is everything else.
+
+Two tier-2 definitions (ADR 0008, amended): this archive's (above, live) and calendar-v1's fixed event-type list
+(goldbot/data/us_calendar.py `TIERS`, research). Rows archived before 2026-10-11 were tiered by impact alone (claims
+were tier 3); no trial or report cites the archive's `tier` column across that date without re-tiering the rows with
+the current `tier_of` first.
 
 The scheduled time is known in advance, so using it for "minutes to the next event" is not lookahead; anything about
 the outcome (actual vs forecast) must join on `received_utc`.
@@ -27,6 +34,18 @@ TIER1_PATTERNS = {
     "FOMC": r"\bFOMC (?:Statement|Press Conference)\b|Federal Funds Rate",   # design: statement and presser
     "PCE": r"\bPCE\b",
 }
+# BACKLOG 18 (playbook G-3) tier-2 USD events by title. Forex Factory rates some of them Medium (claims), so impact
+# alone would miss them; Fed speakers other than the chair stay tier 3.
+TIER2_PATTERNS = {
+    "PPI": r"\bPPI\b",
+    "retail_sales": r"\bRetail Sales\b",
+    "ISM": r"\bISM\b",
+    "GDP": r"\bGDP\b",
+    "JOLTS": r"\bJOLTS\b",
+    "claims": r"\bUnemployment Claims\b",
+    "FOMC_minutes": r"\bFOMC Meeting Minutes\b",
+    "Fed_chair": r"\bFed Chair\b",
+}
 COLUMNS = ["event_id", "ts_utc", "country", "title", "impact", "tier", "forecast", "previous", "received_utc"]
 
 
@@ -36,7 +55,7 @@ def tier_of(country: str, title: str, impact: str, tier1_events: list[str]) -> i
             pat = TIER1_PATTERNS.get(name.upper())
             if pat and re.search(pat, title, flags=re.IGNORECASE):
                 return 1
-        if impact.lower() == "high":
+        if impact.lower() == "high" or any(re.search(p, title, flags=re.IGNORECASE) for p in TIER2_PATTERNS.values()):
             return 2
     return 3
 
@@ -72,11 +91,13 @@ def fetch_ff_week(url: str = FF_THIS_WEEK, timeout: float = 20.0) -> str:   # pr
         return r.read().decode("utf-8")
 
 
-def blackout_window(events: pd.DataFrame, now: pd.Timestamp, before_min: int, after_min: int) -> dict[str, Any] | None:
-    """The tier-1 event whose window [ts - before, ts + after] contains `now`, or None."""
+def blackout_window(events: pd.DataFrame, now: pd.Timestamp, before_min: int, after_min: int,
+                    tier: int = 1) -> dict[str, Any] | None:
+    """The event of `tier` (1: the news blackout; 2: the tier-2 window, BACKLOG 18) whose window [ts - before,
+    ts + after] contains `now`, or None."""
     if events.empty:
         return None
-    ev = events[events["tier"] == 1]
+    ev = events[events["tier"] == tier]
     ts = pd.DatetimeIndex(pd.to_datetime(ev["ts_utc"], utc=True))
     inside = (ts - pd.Timedelta(minutes=before_min) <= now) & (now <= ts + pd.Timedelta(minutes=after_min))
     if not inside.any():

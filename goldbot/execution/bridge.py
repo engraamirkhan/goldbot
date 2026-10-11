@@ -43,6 +43,7 @@ import pandas as pd
 import requests
 from pydantic import BaseModel
 
+from goldbot.base import load_record
 from goldbot.data.calendar import TradingSession
 from goldbot.execution.broker import (
     AccountInfo,
@@ -84,6 +85,8 @@ API_VERSION = 2
 MIN_COMPATIBLE = 2
 _RECORDS: dict[str, type[BaseModel]] = {"SymbolInfo": SymbolInfo, "AccountInfo": AccountInfo, "Tick": Tick, "OrderResult": OrderResult,
             "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent, "TradingSession": TradingSession}
+# Records the brain sends as arguments: always decoded strictly, even inside a response (ADR 0010, `_decode`).
+_REQUEST_RECORDS = frozenset({"OrderIntent"})
 MAX_BODY = 1_000_000
 SOCKET_TIMEOUT_S = 5            # a connection that sends nothing for this long is dropped
 ORDER_MAX_AGE_S = 10.0          # an order call older than this when the terminal gets to it is refused
@@ -119,7 +122,13 @@ def _encode(v: Any) -> Any:
     return v
 
 
-def _decode(v: Any) -> Any:
+def _decode(v: Any, *, response: bool) -> Any:
+    """Wire JSON -> Python. ADR 0010: "read tolerantly, build strictly", but an order request is never guessed.
+
+    `response=True` (the brain reading what the MT5 box sent back): the box is updated by hand and can run a newer
+    release, so its records are read with `load_record` (unknown fields dropped and counted in `schema_skew()`; a
+    wrong type or a missing field still raises). `response=False` (the bridge server reading the brain's arguments)
+    and request records (`_REQUEST_RECORDS`) in either direction stay strict: an unknown field fails the call."""
     if isinstance(v, dict) and "__frame__" in v:
         f = v["__frame__"]
         df = pd.DataFrame(f["data"], columns=f["columns"])
@@ -132,11 +141,14 @@ def _decode(v: Any) -> Any:
         cls = _RECORDS.get(v["__record__"])
         if cls is None:
             raise BridgeError(f"unknown record type {v['__record__']!r}")
-        return cls.model_validate(_decode(v["data"]))
+        data = _decode(v["data"], response=response)
+        if response and v["__record__"] not in _REQUEST_RECORDS:
+            return load_record(cls, data, source="bridge-response")
+        return cls.model_validate(data)
     if isinstance(v, dict):
-        return {k: _decode(x) for k, x in v.items()}
+        return {k: _decode(x, response=response) for k, x in v.items()}
     if isinstance(v, list):
-        return [_decode(x) for x in v]
+        return [_decode(x, response=response) for x in v]
     return v
 
 
@@ -202,7 +214,7 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None) -> type[
                 if not METHODS[method][1] and not -ORDER_MAX_AGE_S < age < ORDER_MAX_AGE_S:
                     self._reply(409, {"error": f"{method} is {age:.1f} s old; refused (stale)"})
                     return
-                args = [_decode(a) for a in req.get("args", [])]
+                args = [_decode(a, response=False) for a in req.get("args", [])]
                 result = getattr(broker, method)(*args)
             except Exception as exc:                                  # the terminal's error goes back to the caller
                 log.exception("bridge call failed")
@@ -343,7 +355,7 @@ class RemoteBroker:
                 except ValueError:
                     msg = r.text[:200]
                 raise BridgeError(f"bridge {method}: HTTP {r.status_code} {msg}")
-            return _decode(r.json()["result"])
+            return _decode(r.json()["result"], response=True)
         raise AssertionError("unreachable")
 
     def symbol_info(self, symbol: str) -> SymbolInfo:
