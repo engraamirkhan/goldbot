@@ -40,11 +40,22 @@ point-in-time COT and GLD columns (goldbot/features/positioning.py: managed-mone
 4-week change, GLD tonnes 5/20-day % change) to the candidate frame and the leakage check, under the same rules as
 macro (the feature version includes them). Not available with --discover.
 
-US calendar (opt-in): `--us-calendar DIR` (the release calendar-v1, from the data-us-calendar workflow) adds the
-point-in-time tier-1 and tier-2 event columns (goldbot/features/us_calendar.py: minutes to the next and since the last
-event of each tier, capped at 7 days, and the tier's event count on the New York day), under the same rules as
-positioning. Not available with --discover or --cpcv. The report line says how many rows are rule-derived (ISM);
+US calendar (opt-in): `--us-calendar DIR` (the release calendar-v1, from the data-us-calendar workflow) loads the
+point-in-time tier-1/tier-2 schedule into ctx["us_calendar"] (what day_type's tier-1 columns read). The calendar's own
+feature families (goldbot/features/us_calendar.py `tier1_events`/`tier2_events`: minutes to the next and since the
+last event of each tier, capped at 7 days, and the tier's event count on the New York day) are added only with
+`--us-calendar-features`, so a run can use the calendar through day_type alone (H-17: "HAR column only"). Not
+available with --discover or --cpcv. The report line says how many rows are rule-derived (ISM);
 `--us-calendar-exclude-rule` leaves them out.
+
+Opportunity-day features (opt-in, BACKLOG 30a): `--day-type` adds the `day_type` family (goldbot/features/day_type.py:
+H-16's HAR session-window range forecast with its monthly expanding refit and band cuts, GVZ over realised volatility
+with a staleness flag (with --macro), prior-day range, NR4/NR7, inside day, reopen gap, the DST-aware noise ratio and
+the tier-1 columns) to the candidate frame and the leakage check. It requires --us-calendar (so the tier-1 columns
+are never silently NaN), --from-year 2010 or earlier (the daily inputs warm up from the start of the data), and is
+refused with --discover or --cpcv. Its inputs (GVZ present, calendar present, refit schedule, min fit rows) and family
+version are recorded on the trial row (`day_type`).
+
 
 Combinatorial purged CV (M16, goldbot/research/cpcv.py): `--cpcv <trial#> [<trial#> ...]` re-evaluates registered
 walk-forward trials on 6 time groups of the research window (15 purged splits, 5 backtest paths) and, for several
@@ -56,7 +67,7 @@ passed the gates (docs/decisions/0003-cpcv-and-pbo-can-only-veto.md), so a trial
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
       [--specialist session_open | --pooled 15m] [--from-year 2010] [--to-year 2026] [--rationale "..."] \
       [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table costs_measured.json] [--macro macro/] [--positioning positioning/]
-      [--us-calendar calendar/]
+      [--us-calendar calendar/ [--us-calendar-features]] [--day-type]
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report cpcv.md --cpcv 12 [13 14] [--diagnostic]
 """
 from __future__ import annotations
@@ -80,6 +91,7 @@ from goldbot.data.release import (  # noqa: E402
 )
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
 from goldbot.execution.costs import SwapSpec, load_research_cost_table, research_costs  # noqa: E402
+from goldbot.features import day_type as day_type_features  # noqa: E402
 from goldbot.features import positioning as positioning_features  # noqa: E402
 from goldbot.features import us_calendar as us_calendar_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
@@ -187,17 +199,59 @@ def _us_calendar_line(info: dict[str, Any] | None) -> str:
     return f"- US calendar features: {info['detail']}" if info else "- US calendar features: off"
 
 
+DAY_TYPE_MAX_FROM_YEAR = 2010     # day_type's daily inputs warm up from the first data year (H-16: OOS from ~2012-04)
+
+
+def day_type_info(on: bool, macro: pd.DataFrame | None = None,
+                  us_calendar: pd.DataFrame | None = None) -> dict[str, Any]:
+    """What the trial row records about the opt-in day_type family: its own version and its inputs (review M4)."""
+    if not on:
+        return {"used": False, "detail": "off (no --day-type)"}
+    gvz = macro is not None and len(macro) > 0 and bool((macro["series"] == "gold_vix").any())
+    cal = us_calendar is not None and len(us_calendar) > 0
+    return {"used": True, "family": day_type_features.FAMILY, "version": day_type_features.VERSION,
+            "gvz": gvz, "us_calendar": cal, "refit_schedule": day_type_features.REFIT_SCHEDULE,
+            "min_fit_rows": day_type_features.MIN_FIT_ROWS,
+            "detail": f"on: family {day_type_features.FAMILY} v{day_type_features.VERSION} "
+                      f"({len(day_type_features.COLUMNS)} columns; GVZ {'on' if gvz else 'off'}, calendar "
+                      f"{'on' if cal else 'off'}; HAR refit {day_type_features.REFIT_SCHEDULE}, "
+                      f">= {day_type_features.MIN_FIT_ROWS} rows)"}
+
+
+def _day_type_line(info: dict[str, Any] | None) -> str:
+    return f"- day_type features: {info['detail']}" if info else "- day_type features: off"
+
+
+def day_type_refusal(args: argparse.Namespace, us_calendar: pd.DataFrame | None) -> str | None:
+    """Why `--day-type` cannot run with these arguments (None = it can)."""
+    if not getattr(args, "day_type", False):
+        return None
+    if getattr(args, "discover", False) or getattr(args, "cpcv", None):
+        return "--day-type is not wired into --discover or --cpcv; run it without them"
+    if us_calendar is None or len(us_calendar) == 0:
+        return "--day-type needs --us-calendar (its tier-1 columns would otherwise be NaN on every row)"
+    if int(args.from_year) > DAY_TYPE_MAX_FROM_YEAR:
+        return (f"--day-type needs --from-year {DAY_TYPE_MAX_FROM_YEAR} or earlier: the HAR fit and the daily inputs "
+                "are computed from the start of the bars, so a later start moves the first out-of-sample month")
+    return None
+
+
 def feature_ctx(macro: pd.DataFrame | None, positioning: pd.DataFrame | None,
-                us_calendar: pd.DataFrame | None = None) -> tuple[dict | None, list[str] | None]:
+                us_calendar: pd.DataFrame | None = None, *, calendar_features: bool = False,
+                day_type: bool = False) -> tuple[dict | None, list[str] | None]:
     """ctx for the features and the explicit feature list: None (the pipeline's default, with macro when passed)
-    unless positioning or the US calendar is on, which registers and appends the opt-in features."""
+    unless an opt-in family is on, which registers and appends it. A calendar always goes into ctx["us_calendar"]
+    (day_type reads it); the calendar's own families join only with `calendar_features`."""
     ctx = {k: v for k, v in (("macro", macro), ("positioning", positioning), ("us_calendar", us_calendar))
            if v is not None}
-    if positioning is None and us_calendar is None:
+    cal_on = calendar_features and us_calendar is not None
+    if positioning is None and not cal_on and not day_type:
         return ctx or None, None
     extra = [positioning_features.enable()] if positioning is not None else []
-    if us_calendar is not None:
+    if cal_on:
         extra += us_calendar_features.enable()
+    if day_type:
+        extra.append(day_type_features.enable())
     return ctx, [*research_feature_names(ctx), *extra]
 
 
@@ -242,6 +296,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              _macro_line(m.get("macro")),
              _positioning_line(m.get("positioning")),
              _us_calendar_line(m.get("us_calendar")),
+             _day_type_line(m.get("day_type")),
              _holdout_line(m.get("holdout")),
              f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
@@ -456,7 +511,11 @@ def main() -> int:
     ap.add_argument("--us-calendar-exclude-rule", action="store_true",
                     help="with --us-calendar: leave out the rule-derived (ISM) rows")
     ap.add_argument("--us-calendar", default="",
-                    help="folder or Parquet of the calendar-v1 release: adds the opt-in tier-1/tier-2 event features")
+                    help="folder or Parquet of the calendar-v1 release: the point-in-time schedule in ctx")
+    ap.add_argument("--us-calendar-features", action="store_true",
+                    help="with --us-calendar: adds the opt-in tier1_events/tier2_events families")
+    ap.add_argument("--day-type", action="store_true",
+                    help="adds the opt-in day_type opportunity features (BACKLOG 30a; needs --us-calendar)")
     _discovery_args(ap)
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
@@ -482,8 +541,13 @@ def main() -> int:
         raise SystemExit("--positioning is not wired into --discover yet; run it without --discover")
     us_calendar, us_calendar_info = load_us_calendar(args.us_calendar, args.us_calendar_exclude_rule)
     print(_us_calendar_line(us_calendar_info)[2:], flush=True)
+    refusal = day_type_refusal(args, us_calendar)
+    if refusal:
+        raise SystemExit(refusal)
     if (args.discover or args.cpcv) and us_calendar is not None:
         raise SystemExit("--us-calendar is not wired into --discover or --cpcv yet; run it without them")
+    if args.us_calendar_features and us_calendar is None:
+        raise SystemExit("--us-calendar-features needs --us-calendar")
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
         if args.cpcv:
@@ -500,7 +564,11 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
          macro: pd.DataFrame | None = None, macro_info: dict[str, Any] | None = None,
          positioning: pd.DataFrame | None = None, positioning_info: dict[str, Any] | None = None,
          us_calendar: pd.DataFrame | None = None, us_calendar_info: dict[str, Any] | None = None) -> int:
-    feat_ctx, feat_names = feature_ctx(macro, positioning, us_calendar)
+    day_type = bool(getattr(args, "day_type", False))
+    feat_ctx, feat_names = feature_ctx(macro, positioning, us_calendar,
+                                       calendar_features=bool(getattr(args, "us_calendar_features", False)),
+                                       day_type=day_type)
+    dt_info = day_type_info(day_type, macro, us_calendar)
     if args.score_holdout:
         if holdout is None:
             raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
@@ -564,7 +632,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         split = None if args.score_holdout else rule_only_split(pd.concat([p.labels for p in preps], ignore_index=True))
         common = {"lookahead": leak, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
                   "screen": scr, "screen_skipped": skipped, "cost_source": cost_source, "macro": macro_info,
-                  "positioning": positioning_info, "us_calendar": us_calendar_info, "rule_only_split": split}
+                  "positioning": positioning_info, "us_calendar": us_calendar_info, "day_type": dt_info,
+                  "rule_only_split": split}
         rationale = args.rationale + (f" | overrides {json.dumps(job.overrides, sort_keys=True)}" if job.overrides else "")
         if scr is not None and (screen_only or (not scr["passed"] and not args.skip_screen)):
             n = int(sum(len(p.labels) for p in preps))
@@ -593,6 +662,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                              budget_quarter=quarter, preregistration=prereg)
             res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped, "cost_source": cost_source,
                            "macro": macro_info, "positioning": positioning_info, "us_calendar": us_calendar_info,
+                           "day_type": dt_info,
                            "rule_only_split": split}
             years = per_year(res.oof, res.metrics.get("threshold"))
             text = render_report(res, years, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0})

@@ -28,9 +28,13 @@ is fixed and a change after seeing data makes it exploratory.
 - **DSR trial count:** `registry.n_trials_effective` + 1 at run time = 20 (Q4 2026) + every Q1 and Q2 trial recorded
   so far + H-02's K_eff (Q1, conservative default: added to every later trial) + H-14's K_eff once it has run.
 - **Feature versions:** `f-079deacc61` (sessions v2, DST-aware) for 15m rules and discovery; `f-f999b359e2` where
-  the macro drivers are used (H-16 only). The opt-in `day_type` family (BACKLOG 30a) is outside the default hash, so it
-  does not move either version; its own family version is recorded on each row that uses it. A run on another
-  version is recorded with a `deviation` (`TrialRegistry.record`), per ADR 0006.
+  the macro drivers are used (H-16 only). The opt-in `day_type` family (BACKLOG 30a) is not in the default set, so it
+  leaves `f-079deacc61` and `f-f999b359e2` unchanged. A feature set that includes it has its own version (pinned in
+  `tests/test_day_type_features.py`): **`f-1eada57050`** (default + `day_type` v1) and **`f-93fbe9386d`** (default +
+  macro drivers + `day_type` v1). Each row that uses `day_type` also records its inputs (`day_type`: family version,
+  GVZ present, calendar present, refit schedule, minimum fit rows). `research_pass --day-type` refuses to run without
+  `--us-calendar`, with `--discover` or `--cpcv`, or with `--from-year` after 2010. A run on another version is
+  recorded with a `deviation` (`TrialRegistry.record`), per ADR 0006.
 - **Opportunity-day report (BACKLOG 33)** is printed for every trade-producing trial: £/day distribution re-sized to
   a £1,000 GBP account (0.01 lot or refused), opportunity days captured (ADR 0004 §6 definition and OD §3.4's stricter
   one), stand-aside accuracy, drawdown. **Reported, never part of a reading rule.**
@@ -91,31 +95,46 @@ way (13 → 9).
 
 ### H-16 Opportunity score (range forecast; no trades)
 
-- **Unit:** one row per trading day D with a London session in the data, 2010-01-04 .. 2025-09-30. Out-of-sample
-  rows from the first month with ≥ 500 prior rows (about 2012-01) to 2025-09.
+- **Unit:** one row per stub-free `day_type` opportunity day D (22:00 UTC rollover; a day spanning under 12 hours of
+  bars is a stub), 2010-01-04 .. 2025-09-30. Daily inputs are computed from the first bar of 2010
+  (`research_pass --day-type` refuses a later `--from-year`). The bars are cut at `research.holdout_from`
+  (2025-10-01) before E-4 builds any feature, so no holdout bar is loaded.
+- **First out-of-sample month (frozen rule):** the first calendar month M whose fit at M's refit instant (below) has
+  ≥ 500 usable rows. Every later month to 2025-09 is out of sample. By the calendar this is about **2012-04**: about
+  44 days of warm-up (20-day ATR, its one-day lag, 22-day regressors and their one-day lag) plus 500 rows. The exact
+  month is counted from the data before the freeze and written here; it is not chosen after seeing any result.
 - **Target:** y_D = ln(W_D ÷ A_D). W_D = high − low of the 15m mid bars from 08:00 London to 16:30 New York on D
-  (DST-aware local clocks, the window the Q2 rules trade). A_D = mean of the last 20 stub-free daily true ranges
-  (mid; Friday stubs dropped as `time_series_momentum.drop_stub_days`), the value visible at 06:30 UTC on D.
+  (DST-aware local clocks, the window the Q2 rules trade; bars starting at or after 08:00 Europe/London and before
+  16:30 America/New_York). A_D = mean of the last 20 true ranges of stub-free `day_type` days (mid, 22:00 UTC
+  rollover) through D−1, the value visible at 06:30 UTC on D. This ATR(1d) is not the 1d-bar ATR of the decision
+  frame (13:30 New York settlement days, Wilder smoothing). Code: `goldbot/features/day_type.py` `daily_inputs`.
 - **Baseline (HAR-only):** OLS of y_D on ln of the mean of w_d = W_d ÷ A_d over the previous 1, 5 and 22 trading
   days, plus an intercept.
 - **Full score:** the baseline plus, all visible at 06:30 UTC on D:
-  - ln(GVZ ÷ YZ20 annualised), GVZ by `asof_join` on `available_utc` (D−2's close at the London open; OD 1.8); a day
-    with no GVZ observation in the last 5 business days is dropped from **both** models' evaluation (count reported);
-  - number of tier-1 releases scheduled on D (E-1; scheduled times only);
+  - ln(GVZ ÷ YZ20 annualised), GVZ by `asof_join` on `available_utc` (D−2's close at the London open; OD 1.8). A day
+    is dropped from **both** models' evaluation (count reported) when the latest known GVZ `value_date` is more than
+    5 US business days (`US_BDAY`, federal holidays skipped) before D (`opp_gvz_stale` = 1);
+  - number of distinct tier-1 releases scheduled on D, as known at 06:30 UTC (E-1; scheduled times only; an FOMC
+    statement and its press conference count as one release, `day_type.RELEASE_OF`);
   - ln(prior stub-free daily range ÷ A_D); NR4, NR7 and inside-day flags on stub-free daily bars (H-20);
   - |reopen gap| ÷ A_D at the last reopen before 06:30 UTC (the Sunday reopen on Mondays, else the daily reopen).
   - No direction term, no `side`, nothing after 06:30 UTC on D.
-- **Fitting:** OLS refitted at each calendar month start on every prior row (expanding, ≥ 500 rows, 1-day purge).
-  Predictions for the month use that fit. *Deviation from the default 1d walk-forward (60/12/12 expanding), to be
-  confirmed by the quant reviewer (Q-2):* the models have 4 and 11 coefficients, 500 days is ample, and a monthly
-  refit gives about 3 more out-of-sample years (from 2012 instead of 2015) than the default window; H-17 uses the
-  same scheme.
-- **Quant ruling Q-2 (2026-10-10): the monthly expanding refit is approved**, with two values frozen at the freeze
-  and never moved after: (a) the **first out-of-sample month** = the first calendar month whose start has ≥ 500
-  prior evaluable rows, counted from the calendar and data gaps only (no target, no outcome), written here as a
-  month (expected 2012-01); (b) the **refit instant** = 00:00 UTC on the first calendar day of each month: the fit
-  uses only rows whose target window closed before that instant minus the 1-day purge, and predicts every day D of
-  that month. No other refit schedule or window is tried under H-16.
+- **Fitting:** OLS refitted once a month on every earlier row whose target day closed at least 1 day before the
+  refit instant (expanding, ≥ 500 rows, 1-day purge).
+  - **Refit instant for month M:** the close (22:00 UTC) of the last weekday opportunity day before M's first day.
+    When M starts at a weekend this is Friday's close, so Monday gets M's fit.
+  - The rule is calendar-only, so it is known in advance. "The last stub-free day" would not be: whether that day
+    becomes a stub is known only at its own close.
+  - A forecast emitted at day k's close uses the latest fit whose refit instant is at or before that close. The
+    fitted-value quantiles 0.33, 0.5 and 0.8 of each fit are stored with it (`HarFit.fitted_quantiles`) and are
+    emitted per row as `opp_har_cut33/50/80` and `opp_har_band` for H-17 and H-19.
+  - Code: `day_type.fit_har` (any column list, so the full model shares it), `monthly_refits` and `har_forecast`.
+  - **Quant ruling Q-2 (2026-10-11): approved.** The models have 4 and 11 coefficients, 500 days is ample, and a
+    monthly refit gives about 3 more out-of-sample years (from 2012 instead of 2015) than the default 1d walk-forward
+    (60/12/12 expanding). H-17 uses the same scheme.
+  - **Frozen first out-of-sample month:** the first calendar month whose refit has ≥ 500 prior evaluable rows,
+    counted from the calendar and data gaps only (no target, no outcome) and written here as a month before the
+    freeze (expected about 2012-04). No other refit schedule or window is tried under H-16.
 - **Reading rule** (from `hypotheses.md` A2, unchanged): **continue** if, pooled out of sample, Spearman
   ρ(full, y) − ρ(HAR, y) ≥ 0.05, AND the mean W/A of the full score's top quintile is ≥ 1.5 × its bottom quintile's.
   **Fail:** the day factor (30b) uses HAR alone, and GVZ, events and compression are retired as range inputs.
@@ -123,9 +142,10 @@ way (13 → 9).
   contribution; the London+60 and NY+60 refreshes with the noise ratio (H-21) as diagnostics.
 - **Counting:** one trial (counted for honesty though it tests range, not returns). It produces no trades, so no
   DSR, no event floor, and no opportunity-day report.
-- **Events owed from data before the freeze:** the number of evaluable days (expected ≈ 3,440 out of sample by the
-  calendar: 13.75 years × ~250; minus missing-GVZ days and data gaps).
-- **Feature version:** `f-f999b359e2` (macro drivers) plus `day_type`'s recorded family version.
+- **Events owed from data before the freeze:** the number of evaluable days (expected ≈ 3,380 out of sample by the
+  calendar: 13.5 years from about 2012-04 × ~250; minus stale-GVZ days and data gaps).
+- **Feature version:** `f-93fbe9386d` (default + macro drivers + `day_type` v1), with `day_type`'s inputs recorded
+  on the row (GVZ and calendar both present).
 
 ### H-17 Trend-day continuation with a runner (V0 and V1: two trials)
 
@@ -169,10 +189,14 @@ way (13 → 9).
   - Fewer than 1,000 events: inconclusive (event floor). "Continue" permits only pre-registered model research or
     shadow; it is not a promotion.
 - **Events owed from data before the freeze (events only, no labels or returns):** high days with a qualifying
-  breach, 2012-01 .. 2025-09. Calendar upper bound ≈ 1,720 (half of ≈ 3,440 days); the OD estimate is 1,000–1,500.
+  breach, from H-16's first out-of-sample month (about 2012-04) to 2025-09.
+  Calendar upper bound ≈ 1,690 (half of ≈ 3,380 days); the OD estimate is 1,000–1,500.
   **If the count is below 1,000, both H-17 rows are withdrawn before the freeze (no trial spent) and their slots go
   to the free reserve;** the median cut is not moved to raise the count.
-- **Feature version:** `f-079deacc61` plus `day_type`'s recorded family version (HAR column only).
+- **Feature version:** `f-1eada57050` (default + `day_type` v1). Only `opp_har_range_hat` and `opp_har_cut50` are
+  read: the "HAR column only" condition. The calendar enters through `ctx["us_calendar"]` for the blackout and
+  day_type's tier-1 columns, which are not read. The `tier1_events`/`tier2_events` families stay off
+  (`--us-calendar-features` not passed).
 - **Retired-family overlap (quant ruling Q-1, needed before the freeze).** H-17 re-uses ideas of R-02 (session-open
   breakout, 15m) and R-05 (intraday momentum). Its claim to be new evidence is the ex-ante range condition and the
   runner exit (OD §5.1). If the quant reviewer rules it a retired-family re-test, H-17 can run only through the
