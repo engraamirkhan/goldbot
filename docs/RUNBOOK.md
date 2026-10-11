@@ -818,6 +818,25 @@ was a network blip.
 Issues labelled `ci` and `data` (`data-dukascopy failure for <year>`) mean a bar download failed; the next
 Saturday run or a manual run of `data-dukascopy` retries it.
 
+### US calendar: a type refused for mass cancellations
+
+A `data-us-calendar failure` issue whose report says `REFUSED for this run (would cancel more future events than
+allowed ...)` means one download would have cancelled more than 2 future events of one type. That is usually a
+truncated download. It can also be a real schedule change, such as a shutdown or an agency moving a series. Nothing
+is lost: the type's published rows are kept and its `last_ok` does not move.
+
+1. **Verify the cancellations against the agency's own schedule** (BLS, Census, BEA, DOL or the Fed). Check that the
+   listed dates really were cancelled or moved. If the next run's download is complete again, do nothing more.
+2. **If the change is real, record it.** Either:
+   - **Hand-check it (preferred).** Add each cancelled date to `MANUAL_EVENTS` in `goldbot/data/us_calendar.py`,
+     with its event type, original date, cancellation time and source, in a reviewed PR. The next run then keeps
+     history and records the cancellation exactly.
+   - **Or apply it once.** Run the workflow once with `--allow-cancellations TYPE`: either a one-off
+     `workflow_dispatch` edit, or locally with
+     `python scripts/us_calendar_data.py --existing prev/us_calendar.parquet --allow-cancellations TYPE`, then upload
+     the file. Every use is written to the step summary as an `AUDIT:` line naming the type and the number of
+     cancellations. Never leave the flag in the scheduled run.
+
 ### Health check
 
 `python -m goldbot.ops.run health` lists every check (settings, secrets present, disk, supervisor heartbeat, halt,
@@ -830,10 +849,12 @@ when that loop has stopped).
 
 ### Currency rollout (one time: the update that brings currency-correct sizing, BACKLOG 28/25/29)
 
+On the two Oracle VMs follow the ordered rollout in [docs/deploy/2026-10-batch.md](deploy/2026-10-batch.md) instead (MT5 box first, aux.db rollback, minimum-lot setting, gap-week clock check).
+
 Engines now publish their deposit currency and the supervisor halts every account when running engines disagree
 (`mixed_account_currencies`). Do this update with every engine stopped, not engine by engine:
 
-1. Stop all engines (`nssm stop goldbot-engine-icm-demo`, and any other engine service), then the supervisor.
+1. Stop all engines (`nssm stop goldbot-engine-icm` and `nssm stop goldbot-engine-vantage` on Windows; `sudo systemctl stop goldbot-engine@icm-demo` on the Oracle brain), then the supervisor.
 2. Delete `state\engine_<account>.json` of every account that will not run (with this release `vantage-demo` is
    `enabled: false` in `config\accounts.yaml`). A file older than 60 s does not trigger the currency halt, and if
    its currency differs (or is missing) its money is not summed, but its open lots still count as exposure and the

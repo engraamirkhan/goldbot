@@ -47,7 +47,10 @@ def golden_bars() -> pd.DataFrame:
 def test_the_v1_implementations_reproduce_the_pre_fix_features_exactly():
     got = build_features(golden_bars(), SESSIONS, versions=V1).drop(columns=["ts_utc"])
     want = pd.read_parquet(GOLDEN)
-    pd.testing.assert_frame_equal(got.reset_index(drop=True), want.reset_index(drop=True), check_exact=True)
+    # the fixture was written on macOS; Linux libm differs in the last ulp of a few divisions, so compare to 1e-12
+    # relative (NaN positions and every column must still match). The same-run v1-vs-v1 check below stays exact.
+    pd.testing.assert_frame_equal(got.reset_index(drop=True), want.reset_index(drop=True), check_exact=False,
+                                  rtol=1e-12, atol=1e-12)
 
 
 def test_the_v1_feature_set_hashes_to_the_pre_fix_default_version():
