@@ -753,6 +753,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- Contingent trial slots and withdrawal (2026-10-10, ADR 0007, quant ruling on the Q1 reservation): `reserved_trials_quarter`
+  13 -> **9** (5 queued + 4 H-02 survivor slots); 13 would have locked 8 of 20 Q1 trials all quarter. New
+  `TrialRegistry.reserve_slot(parent_ref, kind, k, derivation_rule, target_quarter)` (survivor / followup / holdout,
+  written before the quarter), `preregister(slot_ref=)` to use one in-quarter, `withdraw(ref, reason)` (not a trial).
+  A slot holds only while its condition can still be met and is freed by its rule (`director._Ledger`); a claim is
+  covered only for the k-th recorded survivor with `from_discovery` = the parent's trial number, else
+  TrialBudgetExceeded. reserved = max(setting - run - withdrawn - expired slots, pending, 0). Group-unit discovery
+  refuses survivor groups over `max_selected` (the look is still recorded) and needs explicit `group_top_k`; the
+  discovery row records `survivor_groups_n_features` and `group_map_sha256`. Docs: preregistration-2027Q1.md
+  amended (dated 2026-10-10), Q2 draft carries rulings Q-1/Q-2/Q-3. **Before 2027-01-01:** write the 4 survivor slots
+  on H-02's queued row (`reserve_slot(h02, "survivor", k, ..., "2027Q1")`, k = 1..4). Quant re-review pending.
 - Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
   (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
   before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each
@@ -937,8 +948,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
-- FYI for the OWNER (no decision needed, 2026-10-10): `research.reserved_trials_quarter: 13` holds the 13 trials
-  of the Q1 2027 pre-registration (`docs/research/preregistration-2027Q1.md`) before the research director and the
+- FYI for the OWNER (no decision needed, 2026-10-10; 13 -> 9 by ADR 0007): `research.reserved_trials_quarter: 9` holds the 5 queued
+  trials and 4 contingent H-02 survivor slots of the Q1 2027 pre-registration (`docs/research/preregistration-2027Q1.md`) before the research director and the
   label grid can spend any; the budget itself (20) is unchanged. Revisit the number with each quarter's
   pre-registration. Residual: the research analyst's `run_trial` tool still checks the full quarter budget, not the
   reservation (left out of this change's scope).

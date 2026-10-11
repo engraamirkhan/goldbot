@@ -37,6 +37,8 @@ survivor beat every screened column, not just every group), `n_groups_screened` 
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from typing import Any, Literal
 
@@ -324,6 +326,54 @@ def stability_tables(sels: list[FoldSelection], pool: list[str], groups: dict[st
     return feat, grp
 
 
+def group_map_hash(groups: dict[str, str]) -> str:
+    """sha256 of the column -> group map (sorted JSON): frozen in a group-unit pre-registration (quant ruling Q-3) and
+    recorded on the discovery row, so a different grouping at run time is visible as a deviation."""
+    return hashlib.sha256(json.dumps(groups, sort_keys=True).encode()).hexdigest()
+
+
+class GroupTruncationRefused(ValueError):
+    """Group unit: the survivor groups' members exceed max_selected, and whole groups are never truncated (Q-3)."""
+
+    def __init__(self, survivor_n: dict[str, int], members: int, max_selected: int, message: str):
+        super().__init__(message)
+        self.survivor_n, self.members, self.max_selected = survivor_n, members, max_selected
+
+
+def check_group_config(cfg: DiscoveryConfig) -> None:
+    """A group-unit discovery pre-registers `group_top_k` explicitly (quant ruling Q-3; ValueError otherwise)."""
+    if cfg.survivor_unit == "group" and cfg.group_top_k is None:
+        raise ValueError("survivor_unit 'group' needs group_top_k set explicitly in the pre-registered config "
+                         "(quant ruling Q-3): it decides the group frequencies the survivors are read from")
+
+
+def survivor_selection(feat_t: pd.DataFrame, grp_t: pd.DataFrame,
+                       cfg: DiscoveryConfig) -> tuple[list[str], list[str], dict[str, int]]:
+    """(survivor groups, the selected features, n_features per survivor group) from the stability tables.
+
+    Feature unit: the features with stability >= stability_threshold, best first, at most max_selected (K_eff = every
+    feature screened, so cutting the list costs nothing in honesty). Group unit (quant ruling Q-3): every member of
+    every survivor group goes forward, so when their members exceed max_selected this REFUSES (ValueError) instead of
+    truncating: after a cut the model would carry a partial group chosen by feature rank, a feature-level choice that
+    K_eff = groups screened does not pay for. A group-unit config must also pre-register `group_top_k` explicitly
+    (ValueError otherwise), since it sets the group frequencies the survivors are read from."""
+    surv_groups = [str(g) for g in grp_t.index[grp_t["stability"] >= cfg.stability_threshold]]
+    sizes = {str(g): n for g, n in grp_t["n_features"].items()}
+    surv_n = {g: int(sizes[g]) for g in surv_groups}
+    if cfg.survivor_unit == "group":     # whole groups go forward: their members, best first
+        check_group_config(cfg)
+        surv = feat_t[feat_t["group"].isin(surv_groups)]
+        if len(surv) > cfg.max_selected:
+            raise GroupTruncationRefused(surv_n, len(surv), cfg.max_selected,
+                f"survivor groups {', '.join(f'{g} ({n})' for g, n in surv_n.items())} have {len(surv)} members, over "
+                f"max_selected {cfg.max_selected}: whole groups go forward (K_eff = groups screened), so they are not "
+                f"truncated (quant ruling Q-3). Pre-register smaller groups (<= {cfg.max_selected} columns in all) or "
+                f"survivor_unit 'feature'")
+        return surv_groups, [str(c) for c in surv.index], surv_n
+    surv = feat_t[feat_t["stability"] >= cfg.stability_threshold]
+    return surv_groups, [str(c) for c in surv.index[: cfg.max_selected]], surv_n
+
+
 def auc_lower_bound(y: np.ndarray, p: np.ndarray, ts: pd.DatetimeIndex, n_boot: int = 500, seed: int = 0,
                     alpha: float = 0.05) -> float | None:
     """Lower alpha/2 quantile of the AUC under a weekly block bootstrap (candidates in a week resampled together)."""
@@ -364,16 +414,12 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
                   swap: Any = None) -> DiscoveryResult:
     """Fold-internal stability selection, then the walk-forward of a model fitted in each fold on that fold's own
     selection (cross-fitted calibration and gates as every walk-forward). `labels` carries weight."""
+    check_group_config(cfg)              # before any look at the data
     groups = groups or {c: c for c in pool}
     purge = int(window.get("purge_days", 0))
     sels = [select_in_fold(feats, labels, f, pool, cfg, groups, purge_days=purge) for f in folds]
     feat_t, grp_t = stability_tables(sels, pool, groups, cfg)
-    surv_groups = list(grp_t.index[grp_t["stability"] >= cfg.stability_threshold])
-    if cfg.survivor_unit == "group":     # whole groups go forward: their members, best first
-        surv = feat_t[feat_t["group"].isin(surv_groups)]
-    else:
-        surv = feat_t[feat_t["stability"] >= cfg.stability_threshold]
-    selected = list(surv.index[: cfg.max_selected])
+    surv_groups, selected, surv_n = survivor_selection(feat_t, grp_t, cfg)
     res = _walk_forward(agent_id, labels, gross, feats, ["side", *selected], folds, version, n_trials=n_trials,
                         trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd, holdout=holdout,
                         score_holdout=False, window=window, swap=swap,
@@ -392,7 +438,8 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     k_eff = len(pool) if cfg.survivor_unit == "feature" else n_groups
     res.metrics["discovery"] = {
         "config": cfg.model_dump(), "group_mode": group_mode, "n_features_screened": len(pool),
-        "n_groups_screened": n_groups, "survivor_unit": cfg.survivor_unit, "k_eff": k_eff, "selected": selected, "survivor_groups": surv_groups,
+        "n_groups_screened": n_groups, "survivor_unit": cfg.survivor_unit, "k_eff": k_eff, "selected": selected,
+        "survivor_groups": surv_groups, "survivor_groups_n_features": surv_n, "group_map_sha256": group_map_hash(groups),
         "folds": [{"k": s.k, "n_train": s.n_train, "n_subsamples": s.n_subsamples, "selected": s.selected,
                    "fallback": s.fallback,
                    "frequency": {c: round(v, 4) for c, v in s.frequency.items() if v > 0},
@@ -471,9 +518,12 @@ def render_discovery(d: DiscoveryResult, meta: dict[str, Any], top: int = 25) ->
         lines.append(f"| {c} | {r['group']} | " + " | ".join(f"{r[f]:.2f}" for f in folds)
                      + f" | {r['mean_freq']:.2f} | {r['stability']:.2f} |")
     cfg = m["discovery"]["config"]
+    sizes = {str(g): n for g, n in d.group_table["n_features"].items()}
     lines += ["", f"Frequency = share of a fold's subsamples with the feature in the top {cfg['top_k']} (a group: its "
                   f"summed member importance in the top groups); stability = share of folds with frequency >= {cfg['freq_threshold']}.",
-              f"Survivor groups (stability >= {cfg['stability_threshold']}): {', '.join(d.survivor_groups) or 'none'}",
+              f"Survivor groups (stability >= {cfg['stability_threshold']}): "
+              + (", ".join(f"{g} ({int(sizes[g])} features)" for g in d.survivor_groups)
+                 or "none"),
               f"Selected set ({len(d.selected)} of at most {cfg['max_selected']} + side): {', '.join(d.selected) or 'none'}",
               ""]
     for name, g in (("Design gates", m.get("gates")), ("Design gates, rule-only (informational)", m.get("rule_only_gates"))):
@@ -508,6 +558,7 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     )
     from goldbot.research.registry import DISCOVERY
 
+    check_group_config(cfg)              # before the budget check, the pre-registration and any look
     names = research_feature_names(ctx)
     family = discovery_family(spec.family)
     config = {"specialist": spec.family, "spec": spec.config, "discovery": cfg.model_dump(), "group_mode": group_mode,
@@ -532,7 +583,20 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     groups = column_groups(pool, group_mode, frame[0], names, ctx,
                            holdout_start=None if holdout is None else pd.Timestamp(holdout[0]))
     n_eff = reg.n_trials_effective + 1
-    d = discover(prep, cfg, groups, group_mode, n_trials=n_eff, extra_cost_usd=extra_cost_usd, holdout=holdout)
+    try:
+        d = discover(prep, cfg, groups, group_mode, n_trials=n_eff, extra_cost_usd=extra_cost_usd, holdout=holdout)
+    except GroupTruncationRefused as exc:
+        # the fold selection already looked at the data: the look is recorded as the trial, with no survivors (the
+        # walk-forward on whole groups never ran, so the reading rule cannot pass), then the refusal is raised
+        n_groups = len(set(groups[c] for c in pool))
+        reg.record(agent_id=spec.agent_id, family=family, config=config, feature_version=prep.feature_version,
+                   rationale=rationale, status=DISCOVERY, budget_quarter=quarter, preregistration=prereg,
+                   results={"discovery": {"refused": str(exc), "survivor_unit": cfg.survivor_unit,
+                                          "group_mode": group_mode, "n_features_screened": len(pool),
+                                          "n_groups_screened": n_groups, "k_eff": n_groups, "selected": [],
+                                          "survivor_groups": [], "refused_survivor_groups": exc.survivor_n},
+                            "lookahead": leak, "cost_source": cost_source})
+        raise
     metrics = {**d.result.metrics, "lookahead": leak, "cost_source": cost_source,
                "bars_from": config["bars_from"], "bars_to": config["bars_to"]}
     row = reg.record(agent_id=spec.agent_id, family=family, config=config, feature_version=d.result.feature_version,

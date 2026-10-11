@@ -522,7 +522,7 @@ def test_settings_and_the_hypotheses_doc_agree_on_the_retired_families():
     doc, problems = hypotheses_retired(text, FAMILIES)
     assert not problems and set(doc) == {"breakout", "intraday_momentum", "mean_reversion", "session_open", "trend"}
     assert {e.family for e in s.retired_families} == set(doc) and "tsmom" not in doc
-    assert s.reserved_trials_quarter == 13                  # docs/research/preregistration-2027Q1.md: 13 planned of 20
+    assert s.reserved_trials_quarter == 9                   # preregistration-2027Q1.md: 5 queued + 4 H-02 survivor slots (ADR 0007)
     assert load_hypotheses("/nonexistent/hypotheses.md") is None and ATTRIBUTION_FILE == REPORT_FILE
 
 
@@ -698,18 +698,18 @@ def test_runners_refuse_a_config_preregistered_for_a_later_quarter(tmp_path, mon
 
 
 def test_research_director_job_reads_attribution_settings_and_the_reservation(tmp_path):
-    ctx = _ctx(tmp_path)                                   # the real settings: 13 reserved, five retired families
+    ctx = _ctx(tmp_path)                                   # the real settings: 9 reserved, five retired families
     now = pd.Timestamp.now("UTC")
     report = _report({"tsmom": (400, 3.0)}, as_of=now - pd.Timedelta(hours=1), start=now - pd.Timedelta(days=20))
     (tmp_path / ATTRIBUTION_FILE).write_text(json.dumps(report))
     out = research_director(ctx, now)
     plan = ResearchPlan.load(tmp_path / PLAN_FILE)
     assert plan is not None and plan.attribution_as_of is not None and plan.hypotheses_sha256 is not None
-    assert plan.quarter_reserved == out["quarter_reserved"] == 13 and plan.hypotheses_drift == []
-    assert plan.total_budget == DEFAULT_QUARTER_BUDGET - 13 == sum(plan.budget.values())
+    assert plan.quarter_reserved == out["quarter_reserved"] == 9 and plan.hypotheses_drift == []
+    assert plan.total_budget == DEFAULT_QUARTER_BUDGET - 9 == sum(plan.budget.values())
     retired = ("breakout", "intraday_momentum", "mean_reversion", "session_open", "trend")
     assert sum(plan.budget[f] for f in retired) == 1       # retired: ONE exploration trial shared by all five
-    assert plan.budget["tsmom"] == 6 and sorted(out["retired"]) == sorted(plan.retired_floor)
+    assert plan.budget["tsmom"] == 10 and sorted(out["retired"]) == sorted(plan.retired_floor)
     assert out["retired_explore"] == plan.retired_explore and plan.retired_explore in retired
     # no promoted model version in this registry: the attribution rows are not out-of-sample evidence
     assert all(s.attribution is not None and s.attribution.n == 0 for s in plan.evidence)

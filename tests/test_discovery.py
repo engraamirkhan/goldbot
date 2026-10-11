@@ -195,7 +195,7 @@ def test_family_mode_with_feature_survivors_pays_for_every_feature_screened_and_
     row = {"status": DISCOVERY, "results": {"discovery": disc}}
     assert n_trials_effective([row]) == 1 + len(POOL)
     g = run_discovery("synthetic-4", labels, gross, feats, folds, "f-test", WINDOW, POOL,
-                      CFG.model_copy(update={"survivor_unit": "group"}), groups, "family")
+                      CFG.model_copy(update={"survivor_unit": "group", "group_top_k": 3}), groups, "family")
     gd = g.result.metrics["discovery"]
     assert gd["survivor_unit"] == "group" and gd["k_eff"] == n_groups
     assert "fam_a" in g.survivor_groups and set(g.selected) <= {c for c in POOL if groups[c] in g.survivor_groups}
@@ -357,3 +357,55 @@ def test_a_link_to_a_preregistration_matches_its_timestamp_not_only_its_number(t
                results={}, status=DISCOVERY, preregistration=jit)
     r = reserved_trials(reg._rows(), q, 0)
     assert (r.run, r.pending, r.reserved) == (0, 1, 1)           # the queued row is still pending
+
+
+def _stability_frames(sizes: dict[str, int], stab: dict[str, float]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Feature and group stability tables as `stability_tables` returns them (sorted by stability)."""
+    cols = [(f"{g}_{i}", g) for g, n in sizes.items() for i in range(n)]
+    feat = pd.DataFrame({"group": [g for _, g in cols], "mean_freq": 0.7, "stability": [stab[g] for _, g in cols]},
+                        index=[c for c, _ in cols]).sort_values("stability", ascending=False, kind="stable")
+    grp = pd.DataFrame({"n_features": list(sizes.values()), "mean_freq": 0.7,
+                        "stability": [stab[g] for g in sizes]}, index=list(sizes)).sort_values(
+        "stability", ascending=False, kind="stable")
+    return feat, grp
+
+
+def test_group_mode_refuses_rather_than_truncating_survivor_groups_over_max_selected():
+    """Quant ruling Q-3: K_eff = groups screened is honest only if every member of every survivor group goes forward."""
+    from goldbot.research.discovery import survivor_selection
+    cfg = DiscoveryConfig(survivor_unit="group", group_top_k=3, max_selected=39)
+    feat, grp = _stability_frames({"sweeps": 25, "levels": 20, "noise": 5}, {"sweeps": 0.9, "levels": 0.8, "noise": 0.1})
+    with pytest.raises(ValueError, match=r"45 members.*max_selected 39"):
+        survivor_selection(feat, grp, cfg)
+    feat, grp = _stability_frames({"sweeps": 25, "levels": 14, "noise": 5}, {"sweeps": 0.9, "levels": 0.8, "noise": 0.1})
+    groups, selected, n_features = survivor_selection(feat, grp, cfg)
+    assert groups == ["sweeps", "levels"] and len(selected) == 39 and n_features == {"sweeps": 25, "levels": 14}
+    # feature mode keeps the best max_selected features (K_eff = features screened is unaffected by the cut)
+    feat, grp = _stability_frames({"a": 30, "b": 20}, {"a": 0.9, "b": 0.8})
+    _, selected, _ = survivor_selection(feat, grp, DiscoveryConfig(max_selected=39))
+    assert len(selected) == 39
+
+
+def test_group_survivor_unit_needs_an_explicit_group_top_k():
+    from goldbot.research.discovery import survivor_selection
+    feat, grp = _stability_frames({"a": 2}, {"a": 0.9})
+    with pytest.raises(ValueError, match="group_top_k"):
+        survivor_selection(feat, grp, DiscoveryConfig(survivor_unit="group"))
+
+
+def test_group_discovery_reports_the_feature_count_beside_each_survivor_group():
+    from goldbot.research.discovery import render_discovery
+    labels, gross, feats = _synthetic()
+    folds = list(walk_forward_splits(labels, **WINDOW))
+    groups = {c: ("fam_a" if c in ("info", "noise_0", "noise_1") else "fam_b" if c.startswith("noise") else "fam_c")
+              for c in POOL}
+    g = run_discovery("synthetic-5", labels, gross, feats, folds, "f-test", WINDOW, POOL,
+                      CFG.model_copy(update={"survivor_unit": "group", "group_top_k": 3}), groups, "family")
+    gd = g.result.metrics["discovery"]
+    assert g.survivor_groups
+    assert gd["survivor_groups_n_features"] == {s: sum(1 for c in POOL if groups[c] == s) for s in g.survivor_groups}
+    from goldbot.research.discovery import group_map_hash
+    assert gd["group_map_sha256"] == group_map_hash(groups) != group_map_hash({**groups, "info": "fam_c"})
+    text = render_discovery(g, {"specialist": "s", "from_year": 2021, "to_year": 2023, "tf": "4h", "trial": 1,
+                                "prereg_ts": "t", "n_trials_effective": 4})
+    assert all(f"{s} ({gd['survivor_groups_n_features'][s]} features)" in text for s in g.survivor_groups)

@@ -27,8 +27,10 @@ Statistical budget (docs/proposals/2026-10-design-improvements.md, P1/P2): every
 for any later real discovery, so the director plans only what is left of the quarter's trial budget
 (`research.trial_budget_quarter`, DEFAULT_QUARTER_BUDGET when that setting does not exist), counted from the trial
 registry, AFTER the pre-registered queue's reservation (`reserved_trials`): budget - used - reserved, where reserved =
-max(`research.reserved_trials_quarter` - trials run against one of the quarter's `preregistered` registry rows, the
-quarter's preregistered rows not yet run; a queued row belongs to its `target_quarter`, `prereg_quarter`). The monthly label grid is held to the same remainder. At most GRID_SHARE of
+max(`research.reserved_trials_quarter` - run - withdrawn - expired slots, pending, 0) over the quarter's queued
+`preregistered` rows (a queued row belongs to its `target_quarter`, `prereg_quarter`), contingent slots included
+(ADR 0007: a survivor, follow-up or holdout slot holds a trial only while its pre-registered condition can still be
+met; `withdraw` frees a row). The monthly label grid is held to the same remainder. At most GRID_SHARE of
 a family's allowance may be spent by the label grid (none while `research.label_grid_paused`). Trials recorded with
 status "holdout" are never read as evidence: the held-out year is scored once per configuration and must not steer
 the search.
@@ -63,7 +65,7 @@ retired date, reason, registry trials). docs/research/hypotheses.md section B mi
 sha256 and any disagreement (`retired_drift`), but the doc never changes the allocation by itself. The retired
 families SHARE one exploration budget of RETIRED_EXPLORATION trial a quarter (less the trials any of them already had
 this quarter) and get nothing from the evidence pool: five retired families taking one trial each would spend five of
-the seven trials a 20-trial quarter leaves after the 13 reserved (director re-verify). The trial goes to the retired,
+the seven trials a 20-trial quarter left after 13 reserved (director re-verify; 9 since ADR 0007). The trial goes to the retired,
 clean family with the best post-retirement evidence (attribution after its retirement date, shrunk t > 0, the highest
 first, ties by name); without any, to the next family of a deterministic rotation by quarter (`retired_exploration`).
 A retired family is reinstated (back to the normal floor and pool) by one source only: its attribution
@@ -96,7 +98,19 @@ from goldbot.config import RetiredFamily
 from goldbot.research.attribution import T_SIGNIFICANT
 from goldbot.research.population import DSR_PROMOTE, MIN_RANK_TRADES
 from goldbot.research.promotion import MIN_SHADOW_TRADES, PerfStats
-from goldbot.research.registry import PREREGISTERED, is_trial, quarter_of, quarter_start, quarter_trials
+from goldbot.research.registry import (
+    DISCOVERY,
+    FROM_DISCOVERY_KEY,
+    PREREGISTERED,
+    SURVIVOR_KEY,
+    WITHDRAWN,
+    is_trial,
+    quarter_of,
+    quarter_start,
+    quarter_trials,
+    refers_to,
+    row_ref,
+)
 
 Z_FULL = 3.0                     # three standard errors above chance counts as full evidence
 DSR_BAR = DSR_PROMOTE            # 0.95: the deflated-Sharpe bar the gates use
@@ -176,9 +190,11 @@ class AttributionEvidence(FrozenRecord):
 class Reservation(FrozenRecord):
     """Trials of the quarter held for the pre-registered queue (`reserved_trials`)."""
     setting: int                      # research.reserved_trials_quarter
-    run: int                          # trials of the quarter run against one of its preregistered rows
-    pending: int                      # preregistered rows of the quarter not yet run
-    reserved: int                     # max(setting - run, pending)
+    run: int                          # the quarter's queued rows a trial ran, and slots a trial used
+    pending: int                      # queued rows not yet run, and slots still held or live
+    withdrawn: int = 0                # queued rows and slots a withdrawal row names (TrialRegistry.withdraw)
+    expired: int = 0                  # slots whose condition can no longer be met (freed by their own rule)
+    reserved: int                     # max(setting - run - withdrawn - expired, pending, 0)
 
 
 class EvidenceMove(FrozenRecord):
@@ -332,7 +348,9 @@ def is_queued(row: dict[str, Any]) -> bool:
     """A `preregistered` row of the pre-registered queue (the only kind that holds and may use the reservation): not
     marked `queue: false`, and, when it names a `target_quarter`, written before that quarter started. A row written
     once its quarter is under way (e.g. just before its own run) is ad hoc: it neither holds nor uses the reservation.
-    A row written before `target_quarter` existed is queued in the quarter of its timestamp, as it always was."""
+    A row written before `target_quarter` existed is queued in the quarter of its timestamp, as it always was. A
+    withdrawal row (status "withdrawn") is never queued; a queued row that a withdrawal names is skipped by the queue
+    (`_Ledger`): queuedness is a property of the row, a withdrawal is a later row."""
     if row.get("status") != PREREGISTERED or row.get("queue", True) is False:
         return False
     target = row.get("target_quarter")
@@ -352,27 +370,242 @@ def retired_quarter_trials(rows: list[dict[str, Any]], quarter: str, retired: se
     return sum(1 for r in rows if is_trial(r) and r.get("family") in retired and _row_quarter(r) == quarter)
 
 
+# ---------------------------------------------------------------------------------------------- the queue's ledger
+SLOT_STATES: tuple[str, ...] = ("pending", "live", "used", "expired", "withdrawn")
+
+
+class _Ledger:
+    """Everything the reservation derives from the registry rows, computed once per call and never written back:
+
+    * `queued`: the queued `preregistered` rows that are not contingent slots and not withdrawn (all quarters), and
+      `qrun` the trial row each was run against (`_match_map`);
+    * `adhoc_run`: the trial row that used each ad-hoc (`queue: false`) pre-registration, by its link (timestamp and
+      config hash); a pre-registration is used by its first linked trial only;
+    * `slot_use`: the trial that used each contingent slot: the first trial, stamped once the slot's quarter started,
+      run against an ad-hoc pre-registration whose `slot_ref` names the slot (so a slot is used exactly once);
+    * `withdrawn(row)`: a "withdrawn" row names it (`TrialRegistry.withdraw`)."""
+
+    def __init__(self, rows: list[dict[str, Any]]):
+        self.rows = rows
+        self.wrefs = [r.get("withdraws") for r in rows if r.get("status") == WITHDRAWN]
+        self.slots = [r for r in rows if r.get("status") == PREREGISTERED and isinstance(r.get("slot"), dict)]
+        self.queued = [r for r in rows if is_queued(r) and not r.get("slot") and not self.withdrawn(r)]
+        self.qrun = {id(self.queued[i]): rows[j] for i, j in _match_map(rows, self.queued).items()}
+        adhoc = [r for r in rows if r.get("status") == PREREGISTERED and r.get("queue") is False]
+        self.adhoc_run: dict[int, dict[str, Any]] = {}
+        order: list[tuple[dict[str, Any], dict[str, Any]]] = []          # (ad-hoc row, its trial) in trial order
+        for t in rows:
+            link = t.get("preregistration") if is_trial(t) else None
+            if not isinstance(link, dict) or link.get("ts") is None:
+                continue
+            p = next((a for a in adhoc if id(a) not in self.adhoc_run and a.get("ts") == link.get("ts")
+                      and link.get("config_hash") in (None, a.get("config_hash"))), None)
+            if p is not None:
+                self.adhoc_run[id(p)] = t
+                order.append((p, t))
+        self.slot_use: dict[int, dict[str, Any]] = {}
+        for p, t in order:
+            slot = self.slot_named(p.get("slot_ref"))
+            start = None if slot is None else _quarter_start_or_none(prereg_quarter(slot))
+            t_ts = _row_ts(t)
+            if slot is not None and id(slot) not in self.slot_use and start is not None and t_ts is not None \
+                    and t_ts >= start:
+                self.slot_use[id(slot)] = t
+
+    def withdrawn(self, row: dict[str, Any]) -> bool:
+        return any(refers_to(w, row) for w in self.wrefs)
+
+    def slot_named(self, ref: Any) -> dict[str, Any] | None:
+        return next((s for s in self.slots if refers_to(ref, s)), None)
+
+    def named(self, ref: Any) -> dict[str, Any] | None:
+        """The pre-registration or trial row `ref` names (never a withdrawal)."""
+        return next((r for r in self.rows if r.get("status") != WITHDRAWN and refers_to(ref, r)), None)
+
+    def run_of(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        """The trial row that ran `row` (a trial row is its own run), or None while it has not run."""
+        if is_trial(row):
+            return row
+        if row.get("slot"):
+            return self.slot_use.get(id(row))
+        return self.qrun.get(id(row)) or self.adhoc_run.get(id(row))
+
+    def parent_run(self, slot: dict[str, Any]) -> dict[str, Any] | None:
+        parent = self.named(slot["slot"].get("parent"))
+        return None if parent is None else self.run_of(parent)
+
+    def slot_state(self, slot: dict[str, Any]) -> str:
+        """One of SLOT_STATES, derived (ADR 0007): "used" once a trial used it; "withdrawn"; otherwise held
+        ("pending") while its condition can still be met, usable ("live") once it is, freed ("expired") once it cannot:
+          survivor k: the parent has not run (pending), or it ran and recorded >= k survivors (live);
+          followup k: the parent has not run (pending), or it ran and was read "continue" (live);
+          holdout k:  the parent ran with >= k survivors and survivor trial k (the parent's k-th survivor:
+                      `from_discovery` + `survivor` in its config) has not run yet (pending), or ran and passed its
+                      gates (live).
+        A parent withdrawn before it ran, or one no row names, frees the slot."""
+        if id(slot) in self.slot_use:
+            return "used"
+        if self.withdrawn(slot):
+            return "withdrawn"
+        meta = slot["slot"]
+        parent = self.named(meta.get("parent"))
+        run = None if parent is None else self.run_of(parent)
+        if run is None:
+            return "expired" if parent is None or self.withdrawn(parent) else "pending"
+        kind, k = str(meta.get("kind")), int(meta.get("k") or 0)
+        if kind == "followup":
+            return "live" if _read_continue(run) else "expired"
+        names = discovery_survivors(run)
+        if k < 1 or len(names) < k:
+            return "expired"
+        if kind == "survivor":
+            return "live"
+        tried = self.survivor_trials(run, names[k - 1])
+        if not tried:
+            return "pending"
+        return "live" if any(_gates_passed(t) for t in tried) else "expired"
+
+    def survivor_trials(self, parent_run: dict[str, Any], name: str) -> list[dict[str, Any]]:
+        """Walk-forward trials (status "evaluated") of the parent's survivor `name`."""
+        n = _num(parent_run.get("trial"))
+        return [t for t in self.rows if t.get("status") == "evaluated" and _cfg(t).get(SURVIVOR_KEY) == name
+                and n is not None and _num(_cfg(t).get(FROM_DISCOVERY_KEY)) == n]
+
+
+def _cfg(row: dict[str, Any]) -> dict[str, Any]:
+    c = row.get("config")
+    return c if isinstance(c, dict) else {}
+
+
+def _gates_passed(row: dict[str, Any]) -> bool:
+    return ((row.get("results") or {}).get("gates") or {}).get("passed") is True
+
+
+def _read_continue(row: dict[str, Any]) -> bool:
+    """The parent's recorded reading: a discovery's reading verdict "continue", else its design gates passed."""
+    res = row.get("results") or {}
+    verdict = (res.get("discovery") or {}).get("reading_verdict") or res.get("reading_verdict") or {}
+    if verdict:
+        return bool(verdict.get("decision") == "continue")
+    return _gates_passed(row)
+
+
+def discovery_survivors(row: dict[str, Any]) -> list[str]:
+    """A discovery trial's recorded survivors, best first: `results.discovery.survivor_groups` when whole groups go
+    forward (survivor_unit "group"), else `selected` (features), ranked by recorded stability (`group_stability` /
+    `stability`, descending; the recorded order breaks ties). Empty for anything that is not a discovery."""
+    disc = (row.get("results") or {}).get("discovery") or {}
+    group = disc.get("survivor_unit") == "group"
+    names = [str(x) for x in (disc.get("survivor_groups") if group else disc.get("selected")) or []]
+    stab = disc.get("group_stability" if group else "stability") or {}
+    return sorted(names, key=lambda x: -(_num(stab.get(x)) or 0.0))
+
+
+def slot_state(rows: list[dict[str, Any]], slot: dict[str, Any]) -> str:
+    """The state of a contingent slot row (`TrialRegistry.reserve_slot`) in `rows`, one of SLOT_STATES."""
+    led = _Ledger(rows)
+    row = led.slot_named(row_ref(slot))
+    if row is None:
+        raise KeyError(f"no slot row {row_ref(slot)}")
+    return led.slot_state(row)
+
+
+def preregistration_run(rows: list[dict[str, Any]], prereg: dict[str, Any]) -> dict[str, Any] | None:
+    """The trial that ran (used) this pre-registration (queued, ad hoc or slot), or None."""
+    led = _Ledger(rows)
+    row = led.named(row_ref(prereg))
+    return None if row is None else led.run_of(row)
+
+
+def is_withdrawn(rows: list[dict[str, Any]], row: dict[str, Any]) -> bool:
+    """A withdrawal row in `rows` names `row`."""
+    return _Ledger(rows).withdrawn(row)
+
+
+def slot_preregistration(rows: list[dict[str, Any]], family: str, config_hash: str) -> dict[str, Any] | None:
+    """The latest ad-hoc pre-registration of exactly this family and config that claims a slot (`slot_ref`), is not
+    withdrawn and no trial has used yet, or None."""
+    led = _Ledger(rows)
+    return next((r for r in reversed(rows) if r.get("status") == PREREGISTERED and r.get("queue") is False
+                 and r.get("slot_ref") and r.get("family") == family and r.get("config_hash") == config_hash
+                 and id(r) not in led.adhoc_run and not led.withdrawn(r)), None)
+
+
+def slot_refusal(rows: list[dict[str, Any]], quarter: str, prereg: dict[str, Any], family: str,
+                 config: dict[str, Any], config_hash: str) -> str | None:
+    """Why a run of `config` may NOT be covered by the slot its ad-hoc pre-registration claims, or None when it is
+    covered: the slot is of `quarter` and live, the config's `from_discovery` is the parent's trial number (survivor
+    and holdout slots, and a follow-up of a discovery; another follow-up runs the parent's family), a survivor slot's
+    claimed `survivor` is the k-th of the parent's recorded ranking (`discovery_survivors`), and a holdout slot's run is
+    survivor trial k's configuration, which passed its gates."""
+    led = _Ledger(rows)
+    slot = led.slot_named(prereg.get("slot_ref"))
+    if slot is None:
+        return f"its slot_ref {prereg.get('slot_ref')} names no slot row"
+    meta = slot["slot"]
+    kind, k = str(meta.get("kind")), int(meta.get("k") or 0)
+    what = f"{kind} slot {k} of #{(meta.get('parent') or {}).get('trial')}"
+    if prereg_quarter(slot) != quarter:
+        return f"the {what} is for {prereg_quarter(slot)}, not {quarter}"
+    state = led.slot_state(slot)
+    run = led.parent_run(slot)
+    if state != "live" or run is None:
+        return f"the {what} is {state}, not live"
+    n = _num(run.get("trial"))
+    if kind != "followup" or run.get("status") == DISCOVERY:
+        fd = config.get(FROM_DISCOVERY_KEY)
+        if n is None or _num(fd) != n:
+            return f"the config's from_discovery {fd!r} is not the parent's trial number {run.get('trial')} ({what})"
+    elif family != run.get("family"):
+        return f"a follow-up of #{run.get('trial')} runs its family {run.get('family')}, not {family} ({what})"
+    if kind in ("survivor", "holdout"):
+        name = discovery_survivors(run)[k - 1]
+        if kind == "survivor" and config.get(SURVIVOR_KEY) != name:
+            return (f"it claims survivor {config.get(SURVIVOR_KEY)!r}, but rank {k} of #{run.get('trial')}'s recorded "
+                    f"ranking is {name!r} ({what})")
+        if kind == "holdout" and not any(_gates_passed(t) and t.get("family") == family
+                                         and t.get("config_hash") == config_hash
+                                         for t in led.survivor_trials(run, name)):
+            return f"the {what} covers only survivor trial {k}'s configuration ({name!r}, gates passed)"
+    return None
+
+
 def reserved_trials(rows: list[dict[str, Any]], quarter: str, setting: int) -> Reservation:
     """Trials of `quarter` held for the pre-registered queue, counted BEFORE the director's pool and the label grid:
-    max(setting - run, pending). `run` counts the quarter's queued `preregistered` rows (`prereg_quarter`: their
-    target quarter) that a trial was run against, in whatever quarter it ran (linked by `preregistration.trial`, or the
-    same family and config hash with a trial number at or after the pre-registration's); `pending` counts the
-    quarter's preregistered rows not yet run. So the reservation shrinks only as the pre-registered plan is executed,
-    a queued pre-registration is always covered, a Q1 plan written in December counts in Q1, and a row is never
-    counted twice."""
-    prereg, matched = _prereg_matches(rows, quarter)
-    run, pending = len(matched), len(prereg) - len(matched)
-    return Reservation(setting=setting, run=run, pending=pending, reserved=max(setting - run, pending, 0))
+    max(setting - run - withdrawn - expired, pending, 0) (ADR 0007), over the quarter's queued rows (`prereg_quarter`:
+    their target quarter), contingent slots included. `run` counts those a trial was run against, in whatever quarter
+    it ran (linked by `preregistration`, or the same family and config hash with a trial number at or after the
+    pre-registration's), and the slots a trial used; `withdrawn` those a withdrawal row names
+    (`TrialRegistry.withdraw`); `expired` the slots whose condition can no longer be met (`_Ledger.slot_state`);
+    `pending` the rest: queued rows not yet run and slots still held or live. So the reservation shrinks only as the
+    plan is executed, withdrawn or freed by its own pre-registered rule, a queued pre-registration is always covered,
+    a Q1 plan written in December counts in Q1, and a row is never counted twice. No row is written to derive it."""
+    led = _Ledger(rows)
+    run = withdrawn = expired = pending = 0
+    for p in rows:
+        if not is_queued(p) or prereg_quarter(p) != quarter:
+            continue
+        if p.get("slot"):
+            state = led.slot_state(p)
+        elif led.withdrawn(p):
+            state = "withdrawn"
+        else:
+            state = "used" if id(p) in led.qrun else "pending"
+        run += state == "used"
+        withdrawn += state == "withdrawn"
+        expired += state == "expired"
+        pending += state in ("pending", "live")
+    return Reservation(setting=setting, run=run, pending=pending, withdrawn=withdrawn, expired=expired,
+                       reserved=max(setting - run - withdrawn - expired, pending, 0))
 
 
 def later_preregistration(rows: list[dict[str, Any]], quarter: str, family: str,
                           config_hash: str) -> dict[str, Any] | None:
     """The oldest queued `preregistered` row for exactly this family and config whose target quarter comes after
-    `quarter` and that no trial has used up, or None. A runner refuses such a config (`later_refusal`): an early run
-    would neither use the row up (`_match_preregistrations`) nor be the pre-registered trial."""
-    queued = [r for r in rows if is_queued(r)]
-    used = _match_preregistrations(rows, queued)
-    return next((p for i, p in enumerate(queued) if i not in used and str(prereg_quarter(p) or "") > quarter
+    `quarter`, that no trial has used up and that is not withdrawn, or None. A runner refuses such a config
+    (`later_refusal`): an early run would neither use the row up (`_match_map`) nor be the pre-registered trial."""
+    led = _Ledger(rows)
+    return next((p for p in led.queued if id(p) not in led.qrun and str(prereg_quarter(p) or "") > quarter
                  and p.get("family") == family and p.get("config_hash") == config_hash), None)
 
 
@@ -385,33 +618,51 @@ def later_refusal(family: str, row: dict[str, Any]) -> str:
 def pending_preregistration(rows: list[dict[str, Any]], quarter: str, family: str,
                             config_hash: str) -> dict[str, Any] | None:
     """The oldest `preregistered` row of `quarter` for exactly this family and config that no trial has run yet (the
-    `reserved_trials` matching), or None. A trial run against it uses the reservation, not the open budget."""
+    `reserved_trials` matching), or None. A trial run against it uses the reservation, not the open budget. A slot
+    row has no config hash, so it is never this one; a slot is used through `slot_preregistration`."""
     prereg, matched = _prereg_matches(rows, quarter)
     return next((p for i, p in enumerate(prereg) if i not in matched and p.get("family") == family
                  and p.get("config_hash") == config_hash), None)
 
 
 def _prereg_matches(rows: list[dict[str, Any]], quarter: str) -> tuple[list[dict[str, Any]], set[int]]:
-    """(the quarter's queued preregistered rows, indices of those a trial was run against). The matching runs over
-    the whole registry, oldest first, so a trial uses up exactly one pre-registration whichever quarter either is in
-    (a row targeting 2027Q1 written on 2026-12-30 and run on 2027-01-04 is run), and is then filtered to the rows of
-    `quarter` (`prereg_quarter`). A pre-registration a run wrote for itself just before running (`queue: false`,
-    `TrialRegistry.preregister`) is not part of the queue: it neither holds nor uses the reservation."""
-    queued = [r for r in rows if is_queued(r)]
-    used = _match_preregistrations(rows, queued)
-    keep = [i for i, p in enumerate(queued) if prereg_quarter(p) == quarter]
-    return [queued[i] for i in keep], {j for j, i in enumerate(keep) if i in used}
+    """(the quarter's queued preregistered rows that still count, indices of those a trial ran or used): the queued
+    rows not withdrawn, plus the contingent slots neither withdrawn nor expired. The matching runs over the whole
+    registry, oldest first, so a trial uses up exactly one pre-registration whichever quarter either is in (a row
+    targeting 2027Q1 written on 2026-12-30 and run on 2027-01-04 is run), and is then filtered to the rows of `quarter`
+    (`prereg_quarter`). A pre-registration a run wrote for itself just before running (`queue: false`,
+    `TrialRegistry.preregister`) is not part of the queue: it neither holds nor uses the reservation, except that one
+    claiming a live slot (`slot_refusal` None) uses that slot."""
+    led = _Ledger(rows)
+    out: list[dict[str, Any]] = []
+    matched: set[int] = set()
+    for p in rows:
+        if not is_queued(p) or prereg_quarter(p) != quarter:
+            continue
+        if p.get("slot"):
+            state = led.slot_state(p)
+            if state in ("withdrawn", "expired"):
+                continue
+            used = state == "used"
+        elif led.withdrawn(p):
+            continue
+        else:
+            used = id(p) in led.qrun
+        if used:
+            matched.add(len(out))
+        out.append(p)
+    return out, matched
 
 
-def _match_preregistrations(rows: list[dict[str, Any]], prereg: list[dict[str, Any]]) -> set[int]:
-    """Indices of `prereg` that a trial row of `rows` was run against. Each trial uses at most one, and never a row
+def _match_map(rows: list[dict[str, Any]], prereg: list[dict[str, Any]]) -> dict[int, int]:
+    """{index in `prereg`: index in `rows` of the trial run against it}. Each trial uses at most one, and never a row
     whose quarter (`prereg_quarter`) had not started when the trial was stamped (an early run of a later quarter's
     config is not that quarter's pre-registered trial). A link names its row; an unlinked trial uses the same family
     and config hash, preferring a row of its own quarter, then the oldest."""
     starts = [_quarter_start_or_none(prereg_quarter(p)) for p in prereg]
     quarters = [prereg_quarter(p) for p in prereg]
-    matched: set[int] = set()
-    for t in rows:
+    matched: dict[int, int] = {}
+    for j, t in enumerate(rows):
         if not is_trial(t):
             continue
         raw = t.get("preregistration")
@@ -433,7 +684,7 @@ def _match_preregistrations(rows: list[dict[str, Any]], prereg: list[dict[str, A
                     and n >= int(_num(p.get("trial")) or 0):
                 cands.append(i)
         if cands:
-            matched.add(next((i for i in cands if quarters[i] == t_q), cands[0]))
+            matched[next((i for i in cands if quarters[i] == t_q), cands[0])] = j
     return matched
 
 

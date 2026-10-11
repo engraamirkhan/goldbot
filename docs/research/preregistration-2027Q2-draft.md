@@ -74,11 +74,14 @@ survivor trials after its verdict. H-18 last, only if ruled.
 target_quarter="2027Q2")`). Rows written once Q2 has started (H-14 survivors, most Q1 follow-ups) cannot be queued,
 cannot draw on the reservation, and must fit in 20 − used − reserved (`TrialRegistry.check_budget_reserved`,
 `director.reserved_trials`: reserved = max(setting − queued rows run, pending)). A setting above the number of queued
-rows therefore locks the excess for the whole quarter. **Recommendation:** set the Q2 value to the number of queued
-rows at freeze (4, or 5 with H-18). The in-quarter allocations above are then protected only by discipline; if any
-automated path (the research director's pool, the analyst) can spend the unreserved remainder in Q2, it must be
-paused or capped for the quarter (engineering item E-5). The same arithmetic applies to Q1's setting of 13 against
-its queueable rows; that is flagged to the program director, not changed here.
+rows therefore locks the excess for the whole quarter. **Updated 2026-10-10 (ADR 0007):** in-quarter rows can now be
+protected by **contingent slots** written before 2027-04-01 (`TrialRegistry.reserve_slot`): H-14 survivor slots
+k = 1, 2 on H-14's queued row, and holdout slots where a rule calls for one; a slot is held only while its condition
+can still be met (reserved = max(setting − run − withdrawn − expired slots, pending, 0)) and is used only by the
+k-th survivor's own pre-registration (`slot_ref`). Q1 follow-ups depend on Q1 verdicts and are written as `followup`
+slots on their Q1 parent rows where the parent is known before the freeze. **Recommendation:** set the Q2 value to
+queued rows + slots at freeze; this answers E-5 for the in-quarter allocations. Q1's setting was corrected the same
+way (13 → 9).
 
 ## Trials and reading rules
 
@@ -103,6 +106,12 @@ its queueable rows; that is flagged to the program director, not changed here.
   confirmed by the quant reviewer (Q-2):* the models have 4 and 11 coefficients, 500 days is ample, and a monthly
   refit gives about 3 more out-of-sample years (from 2012 instead of 2015) than the default window; H-17 uses the
   same scheme.
+- **Quant ruling Q-2 (2026-10-10): the monthly expanding refit is approved**, with two values frozen at the freeze
+  and never moved after: (a) the **first out-of-sample month** = the first calendar month whose start has ≥ 500
+  prior evaluable rows, counted from the calendar and data gaps only (no target, no outcome), written here as a
+  month (expected 2012-01); (b) the **refit instant** = 00:00 UTC on the first calendar day of each month: the fit
+  uses only rows whose target window closed before that instant minus the 1-day purge, and predicts every day D of
+  that month. No other refit schedule or window is tried under H-16.
 - **Reading rule** (from `hypotheses.md` A2, unchanged): **continue** if, pooled out of sample, Spearman
   ρ(full, y) − ρ(HAR, y) ≥ 0.05, AND the mean W/A of the full score's top quintile is ≥ 1.5 × its bottom quintile's.
   **Fail:** the day factor (30b) uses HAR alone, and GVZ, events and compression are retired as range inputs.
@@ -145,6 +154,14 @@ its queueable rows; that is flagged to the program director, not changed here.
   - **Continue with fixed exits only** if V0 passes, the low half is below the high half, and V1 fails or is below V0
     (runner retired for this family).
   - **Retired as a repeat of R-02 / R-05** if the low half's gross mean R ≥ the high half's, whatever else holds.
+  - **Quant ruling Q-1 (2026-10-10), binding on the rules above:** "the low half is below the high half" means a
+    **Welch difference test, t ≥ 2.0**, on the high-half minus low-half gross mean R computed over **weekly blocks**
+    (each ISO week's trades averaged into one value per half, so serially correlated days count once; unequal
+    variances). t < 2.0 counts as "not below" and retires H-17 as a repeat of R-02 / R-05. **V1 is conditional on V0
+    passing:** V1's screen is read only if V0 passes its screen and the Welch test; otherwise V1 is recorded as run
+    and not read (it still costs its trial). **A fail is final:** a retirement under this rule joins the R-02 / R-05
+    retirement records in `hypotheses.md` section B, and H-17 is not re-tested under another range condition, median
+    cut or exit without the reinstatement path of those retired families.
   - Fewer than 1,000 events: inconclusive (event floor). "Continue" permits only pre-registered model research or
     shadow; it is not a promotion.
 - **Events owed from data before the freeze (events only, no labels or returns):** high days with a qualifying
@@ -156,7 +173,8 @@ its queueable rows; that is flagged to the program director, not changed here.
   breakout, 15m) and R-05 (intraday momentum). Its claim to be new evidence is the ex-ante range condition and the
   runner exit (OD §5.1). If the quant reviewer rules it a retired-family re-test, H-17 can run only through the
   shared retired-family exploration trial, which the director's code allocates (`research/director.py`), and both
-  rows are withdrawn.
+  rows are withdrawn. **Ruled 2026-10-10 (Q-1):** H-17 may run as new evidence only under the Welch difference test,
+  V0-first and fail-is-final conditions written in its reading rule.
 
 ### H-14 15m scalping discovery (one trial)
 
@@ -174,13 +192,21 @@ its queueable rows; that is flagged to the program director, not changed here.
   slow context was screened at 4h by H-02, and keeping them out holds the group count down. If playbook D-5 ($100
   step, LBMA auction and 08:30 ET windows) lands before the freeze, this line is amended to include it.
 - **Discovery config** (aligned with H-02's frozen row; any other difference is listed at the freeze):
-  `{"n_subsamples": 50, "subsample_frac": 0.5, "survivor_unit": "group", "method": "lgbm", "freq_threshold": 0.6,
-  "stability_threshold": 0.7, "permutation": true, "seed": 0}`. Walk-forward: the 15m window (train 24 / test 3 /
+  `{"n_subsamples": 50, "subsample_frac": 0.5, "survivor_unit": "group", "group_top_k": 3, "method": "lgbm",
+  "freq_threshold": 0.6, "stability_threshold": 0.7, "permutation": true, "seed": 0}` (`group_top_k` explicit, as
+  every group-unit config must be: the code refuses one without it). Walk-forward: the 15m window (train 24 / test 3 /
   step 3 months, purge 2 days, embargo 1 day).
 - **Survivor unit = group (quant ruling Q-3).** At 15m the question is which mechanism (sweep, level, session flow,
   jump) carries information, not which column, and K_eff = groups screened (about 10–15) instead of features (about
   300). Under the conservative default every later trial's DSR count carries this K_eff, so the feature unit would
   add ~300 to every trial for the rest of the program.
+- **Q-3 conditions (ruled 2026-10-10):** every group has **≤ 39 columns** (a survivor group plus `side` must fit one
+  model); the column → group map is **frozen by its hash** (`discovery.group_map_hash`, sha256 of the sorted map,
+  written here at the freeze and recorded on the discovery row as `group_map_sha256`; a different hash at run time
+  is a deviation read against this rule); and when the surviving groups together exceed 39 columns the run
+  **refuses rather than truncates** (`discovery.survivor_selection`; the look is still recorded as the trial, with no
+  survivors), because K_eff = groups screened is honest only if whole groups go forward. The report gives each
+  survivor group's feature count beside it.
 - **Reading rule:**
   - A group **survives** if it is selected in ≥ 70% of folds (frequency ≥ 0.6) AND the walk-forward on the selected
     set has out-of-fold AUC ≥ 0.53 with block-bootstrap lower 95% bound > 0.50 AND the pre-set rule (trade when p ≥
@@ -228,9 +254,9 @@ its queueable rows; that is flagged to the program director, not changed here.
 |---|---|---|
 | Owner | **O-1** event floor for scheduled-event families (options in `research-plan.md` §9; recommendation: pool with tier-2 once it exists; until then H-18 waits) | H-18 |
 | Owner | Raw-spread account confirmed (otherwise no 15m result can trade at £1,000) | H-17, H-14, H-18 use, not runs |
-| Quant | **Q-1** H-17's overlap with retired R-02 / R-05 | H-17 |
-| Quant | **Q-2** H-16's expanding monthly refit instead of the default 1d window | H-16, H-17 |
-| Quant | **Q-3** H-14's survivor unit = group (K_eff) | H-14 |
+| Quant | **Q-1** H-17's overlap with retired R-02 / R-05 (ruled 2026-10-10: Welch t ≥ 2.0 on weekly blocks, V1 after V0, fail final) | H-17 |
+| Quant | **Q-2** H-16's expanding monthly refit instead of the default 1d window (approved 2026-10-10, first OOS month and refit instant frozen) | H-16, H-17 |
+| Quant | **Q-3** H-14's survivor unit = group (K_eff) (ruled 2026-10-10: groups ≤ 39 columns, frozen group-map hash, refuse rather than truncate) | H-14 |
 | Engineering | BACKLOG **30a** `day_type` opt-in features, with a fold-fit hook for the HAR coefficients and the truncation tests | H-16, H-17, overlays |
 | Engineering | BACKLOG **31** `flat_at_local` (and parity across labels, shadow and live) | H-17, H-14, H-18 |
 | Engineering | BACKLOG **32** gate EV from the measured mean winner | H-17 V1, H-18 before any shadow or live use |
@@ -258,7 +284,7 @@ its queueable rows; that is flagged to the program director, not changed here.
 ## Freeze checklist (by 2027-03-31)
 
 - [ ] Q1 2027 verdicts recorded (or the follow-up reserve kept as written)
-- [ ] Quant rulings Q-1, Q-2, Q-3 recorded here
+- [x] Quant rulings Q-1, Q-2, Q-3 recorded here (2026-10-10)
 - [ ] Owner ruling O-1 recorded, or H-18 withdrawn
 - [ ] BACKLOG 30a, 31, E-1, E-2, E-3, E-4 merged and tested; E-5 decided
 - [ ] Event counts owed above recorded (events only, no labels or outcomes); H-17 withdrawn if < 1,000

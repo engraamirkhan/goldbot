@@ -33,12 +33,22 @@ promotion.
   code: `TrialRegistry.passed_gates` requires it for configs tagged `from_discovery`) before it
   can be promoted.
 
-## Order and budget (13 planned of 20; 7 reserve)
+## Order and budget (5 queued + 4 contingent H-02 survivor slots of 20; amended 2026-10-10)
 
-**Reserved in code:** `research.reserved_trials_quarter: 13` (config/settings.yaml) holds these 13 trials before the
-research director or the monthly label grid can spend any of the quarter's 20 (`research/director.py`
-`reserved_trials`). Each trial run against its `preregistered` registry row uses one up; a queued preregistered row is
-always covered. The director and the grid get at most 20 - used - reserved (7 if nothing else runs first).
+**Reserved in code (amendment 2026-10-10, before the freeze; no reading rule changes; ADR 0007):**
+`research.reserved_trials_quarter: 9` (config/settings.yaml) = **5 queued + 4 contingent H-02 survivor slots**, held
+before the research director or the monthly label grid can spend any of the quarter's 20 (`research/director.py`
+`reserved_trials`: reserved = max(9 - run - withdrawn - expired slots, pending, 0)). The 5 queued rows are H-02, H-01,
+H-06, H-04 and tsmom 4h continuity; each trial run against its `preregistered` row uses one up, and a queued row is
+always covered. Rows 6-9 are written before 2027-01-01 as four survivor slots on H-02's queued row
+(`TrialRegistry.reserve_slot(h02_row, "survivor", k, derivation_rule, "2027Q1")`, k = 1..4; derivation rule: "the
+k-th H-02 survivor by recorded stability, `results.discovery`, run as its own pre-registered trial with
+`from_discovery` = H-02's trial number and `survivor` = its name"). After H-02 runs, slot k stays held only if H-02
+recorded at least k survivors; the others are freed automatically. Survivor k's trial is pre-registered in the
+quarter (`preregister(..., slot_ref=slot_k)`) and uses the slot only if it is exactly the k-th survivor. A row
+dropped before it runs is withdrawn (`TrialRegistry.withdraw`), which frees its trial. The director and the grid get
+at most 20 - used - reserved (11 if nothing else runs first). *Superseded:* "13 planned + 7 reserve" held 8 trials
+all quarter that no run could spend, because in-quarter survivor rows could not draw on the reservation.
 
 **Who may spend the reservation (decided 2026-10-10, quant review).** Every path that records a trial checks the same
 reservation (`TrialRegistry.check_budget_reserved`, `research_pass.py` and `--discover` included): only a run whose
@@ -67,9 +77,9 @@ stamped before its row's quarter would never use the row up.
 | 3 | H-01 | Slow TSMOM | owner ruling A | 1 |
 | 4 | H-06 | Macro-conditioned slow TSMOM | H-01 run; macro release | 1 |
 | 5 | H-04 | Asia-session drift | none | 1 |
-| 6-9 | H-03, H-05, H-07, H-08, H-10 | Each only if its features survive H-02 (stability >= 0.6) | H-02 | 1 each, at most 4 |
+| 6-9 | H-03, H-05, H-07, H-08, H-10 | Each only if its features survive H-02 (stability >= 0.6); contingent survivor slots k = 1..4 (amended 2026-10-10) | H-02 | 1 each, at most 4 |
 | 10 | tsmom 4h, max_bars 12, with swap | The trial refused by the budget guard on 2026-10-09, kept for continuity | none | 1 |
-| - | reserve | follow-ups decided by these rules only | | 7 |
+| - | reserve | follow-ups decided by these rules only (open budget, not reserved) | | 11 |
 
 ## Trials and reading rules
 
@@ -77,7 +87,9 @@ stamped before its row's quarter would never use the row up.
 - Config: label = 4h triple barrier, target 3.0 ATR / stop 1.5 ATR / 12 bars (tsmom 4h defaults), candidates = every 4h
   bar (no rule), side from the sign of the 20-day vol-scaled return; features = every registered family (incl.
   trader-toolkit, survey and macro), grouped by family (`--families`); survivors go forward as features, so K_eff =
-  features screened (group stability is reported by summed member importance per subsample, top-k over groups).
+  features screened (group stability is reported by summed member importance per subsample, top-k over groups, with
+  `group_top_k: 3` set explicitly in the config: the value the default rule gives here, written out per quant ruling
+  Q-3, 2026-10-10; it changes no reading rule).
 - Method: stability selection inside each training fold only (50 subsamples x 50%), top-40 by gain; permutation
   importance on an inner split as a tie-break.
 - Reading rule (decided now): a feature cluster **survives** if its selection stability >= 0.6 across folds AND the
@@ -285,7 +297,7 @@ stamped before its row's quarter would never use the row up.
   decide, the code keeps 1,000 for every rule (`screen_min_events_daily: null`), under which H-01 can only be
   inconclusive (fewer events than the floor is inconclusive whatever the sign or t).
   - `research.screen_min_events_daily` must be committed in settings before the run.
-- **B. Trial budget.** 13 planned + 7 reserve fits the default 20; raising it is yours to decide.
+- **B. Trial budget.** 5 queued + 4 contingent H-02 survivor slots (reservation 9, amended 2026-10-10, ADR 0007) + 11 open fits the default 20; raising it is yours to decide.
 - **C. Paid economic-calendar consensus feed** (H-11 needs surprises); otherwise H-11 stays blocked.
 - **D. Other instruments** (large-tick futures where trend still works) are out of scope unless you decide otherwise.
 
