@@ -108,6 +108,8 @@ class PreflightContext(Record):
     terminal_account: Callable[[str, str], Any] = _terminal_account
     tick_reader: Callable[[str, str, str], Any] = _last_tick        # (url, token, symbol) -> latest Tick
     bridge_tz: Callable[[str], str | None] = _bridge_tz             # url -> the bridge's server_tz (None: not reported)
+    bridge_info: Callable[[str], Any] | None = None                 # url -> bridge_compat.BridgeInfo (None: not checked)
+    commit: str | None = None                                       # this checkout's commit (compared, never blocks)
     load_accounts: Callable[[], dict[str, Any]] = _load_accounts
     disk_usage: Callable[[str], Any] = shutil.disk_usage
     meminfo: Callable[[], dict[str, int]] = read_meminfo
@@ -116,8 +118,10 @@ class PreflightContext(Record):
     def from_runtime(cls, account_id: str = "icm-demo") -> "PreflightContext":
         from goldbot.execution.bridge import probe_health
         from goldbot.ops import accounts
+        from goldbot.ops.bridge_compat import read_bridge_info, repo_commit
         return cls(account_id=account_id, get_secret=accounts.get_secret,
-                   bridge_probe=lambda url: probe_health(url, health.BRIDGE_TIMEOUT_S))
+                   bridge_probe=lambda url: probe_health(url, health.BRIDGE_TIMEOUT_S),
+                   bridge_info=lambda url: read_bridge_info(url, health.BRIDGE_TIMEOUT_S), commit=repo_commit())
 
 
 def _has(ctx: PreflightContext, key: str) -> bool:
@@ -210,6 +214,7 @@ def run_preflight(ctx: PreflightContext) -> list[Item]:
     else:
         items.append(_terminal_item(ctx, url, token, acc_fix))
         items.append(_bridge_tz_item(ctx, url))
+        items.append(_bridge_compat_item(ctx, url))
         items.append(_server_clock_item(ctx, url, token, hctx))
 
     # 6. dashboard build
@@ -285,6 +290,36 @@ def _bridge_tz_item(ctx: PreflightContext, url: str) -> Item:
         return Item(name="bridge_server_tz", status="fail", fix=fix,
                     detail=f"the bridge converts with {theirs}, this brain uses {acc.server_tz}")
     return Item(name="bridge_server_tz", status="ok", fix=fix, detail=f"bridge and brain both use {theirs}")
+
+
+def _bridge_compat_item(ctx: PreflightContext, url: str) -> Item:
+    """BACKLOG 42: the bridge serves every method and the protocol version this brain calls, with the same zone
+    (goldbot/ops/bridge_compat.py). Incompatible blocks: the engine would refuse every entry (`bridge_incompatible`).
+    A different commit on the two boxes only warns."""
+    from goldbot.ops.bridge_compat import BridgeInfo, assess
+    aid = ctx.account_id
+    fix = (f"deploy this brain's commit to the MT5 box first (`sudo goldbot-deploy <sha>` there), then `sudo systemctl "
+           f"restart goldbot-bridge@{aid}` and run preflight again (RUNBOOK: bridge compatibility)")
+    if ctx.bridge_info is None:
+        return Item(name="bridge_compat", status="warn", blocking=False, fix=fix, detail="not checked: no /health reader")
+    try:
+        acc = ctx.load_accounts().get(aid)
+    except Exception as exc:
+        return Item(name="bridge_compat", status="warn", blocking=False, fix=fix,
+                    detail=f"not checked: config/accounts.yaml does not load ({type(exc).__name__})")
+    if acc is None:
+        return Item(name="bridge_compat", status="warn", blocking=False, fix=fix, detail="not checked: account unknown")
+    try:
+        info = ctx.bridge_info(url)
+    except Exception as exc:              # the type only: a message could carry the URL
+        info = BridgeInfo(reachable=False, problem=f"/health unreadable ({type(exc).__name__})")
+    v = assess(info, acc.server_tz, ctx.commit)
+    if v.blocks:
+        return Item(name="bridge_compat", status="fail", fix=fix,
+                    detail=f"{v.reason}: the engine would refuse every entry (bridge_incompatible)")
+    if v.status == "unreachable" or v.commit_differs:
+        return Item(name="bridge_compat", status="warn", blocking=False, fix=fix, detail=v.reason)
+    return Item(name="bridge_compat", status="ok", fix=fix, detail=v.reason)
 
 
 def _server_clock_item(ctx: PreflightContext, url: str, token: str, hctx: health.HealthContext) -> Item:

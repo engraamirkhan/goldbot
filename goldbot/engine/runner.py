@@ -47,6 +47,7 @@ from goldbot.labels.excursion import Excursion
 from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.ops import server_clock
 from goldbot.ops.account_view import LADDER_TIMEFRAMES
+from goldbot.ops.bridge_compat import BridgeCompat
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
@@ -318,6 +319,7 @@ class Engine:
         # it outside the tick path, so on_tick never calls the broker for sessions); read with no I/O
         self.sessions: SessionTable = SessionTable(server_tz=cfg.server_tz)
         self.clock_probe: server_clock.ServerClockProbe | None = None   # latest server-clock measurement
+        self.bridge_compat: BridgeCompat | None = None   # BACKLOG 42: run.py's bridge verdict; None: no bridge / unchecked
         self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)
         self.tick_errors_total = 0                     # since the engine started (engine state, health)
         self._last_tick_error_at: pd.Timestamp | None = None   # host clock (live) for health and the state file
@@ -1496,6 +1498,12 @@ class Engine:
         `refresh_sessions`); used for market_closed, feed staleness and the server-clock probe."""
         self.sessions = table
 
+    def set_bridge_compat(self, compat: BridgeCompat | None) -> None:
+        """The MT5 bridge's compatibility verdict (goldbot/ops/bridge_compat.py), checked by the run loop outside the
+        tick path; an incompatible bridge refuses entries (`bridge_incompatible`). Exits never read it."""
+        self.bridge_compat = compat
+        self.state.bridge_incompatible = compat is not None and compat.blocks
+
     def _probe_clock(self, tick: Tick, now: pd.Timestamp, sessions: SessionTable) -> server_clock.ServerClockProbe:
         """The server-clock probe on the tick this refresh already holds (no broker call): its stamp, converted with
         server_tz, against the host clock. Any error is "not measured", which never blocks (stale and closed-market
@@ -2490,6 +2498,7 @@ class Engine:
             # BACKLOG 21: per-agent loss-streak and entry-rate throttle (settings; per agent when on), on the tick clock
             "throttle": self._throttle_state(self._last_tick.ts_utc if self._last_tick is not None else self.clock()),
             "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
+            "bridge_compat": self.bridge_compat.model_dump(mode="json") if self.bridge_compat is not None else None,
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check

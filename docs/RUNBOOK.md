@@ -833,6 +833,7 @@ nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what
 | `tick_from_future` | The last tick is stamped more than 10 s ahead of this server's clock: wrong `server_tz` in a DST gap week, or a host or broker clock fault. | See "Server clock (US-EU DST gap weeks)" below. |
 | `tick_error` | Processing a tick raised (a terminal or bridge fault, a full disk, a bug). The engine logs it (first of each type, then once a minute with a count) and carries on; exits run before anything that writes files or reads the account. Health fails `engine:<account>` while it blocks, and warns on Telegram (`tick_errors:<account>`) for 15 minutes after an error or when one happened since the previous health run. Clears when a whole decision bar closes with no error. | Read the engine log (`journalctl -u goldbot-engine@<account>` on the brain); if it repeats, restart the engine. Exits keep running. |
 | `server_clock_mismatch` | The broker's measured UTC offset differs from `server_tz` by more than 5 min while gold trades (`server_clock` in `engine_<account>.json`). Clears after 60 s of agreeing ticks. | See "Server clock (US-EU DST gap weeks)" below. |
+| `bridge_incompatible` | The MT5 bridge runs older or different code than the brain: it lacks a method the brain calls (e.g. `loss_per_lot`), the protocol versions do not meet each other's `min_compatible`, it converts with another (or an invalid) `server_tz`, or it does not report these at all (a bridge from before this check); also while the engine has not confirmed the bridge (`unchecked`: starting, never reached, or last confirmed over 5 min ago). Checked at engine start and every 60 s off the tick loop; `bridge_compat` in `engine_<account>.json` names what is missing. Exits are unaffected. | See "Bridge compatibility" below. |
 | `market_closed` | The broker's session table (read once per server day; static hours if the read fails) says the market is closed, e.g. a holiday early close. | Wait for the reopen; `session_source` in `engine_<account>.json` says whether the broker's own hours are used. |
 | `spread_too_wide` | Spread above 45 points ($0.45). | Usually rollover or news; wait. |
 | `max_positions` | Two positions already open on this account. | Normal. |
@@ -990,6 +991,33 @@ Steps on the brain (or the VPS), on a gap day while the market is open:
    research alone. Outside the gap weeks the two zones are identical and nothing can be learned.
 
 `goldbot run preflight` runs the same measurement (`server_clock`, blocking on a measured mismatch).
+
+### Bridge compatibility
+
+The brain and the MT5 box are deployed separately (BACKLOG 42). The bridge reports on its unauthenticated
+`GET /health` its `server_tz`, protocol `api_version` and `min_compatible`, the `methods` it serves and the commit it
+runs; nothing there is a secret. The brain reads at most 64 KiB within a 5 s total deadline. The engine starts with
+entries refused (`unchecked`) and compares the report with its own at start and every 60 s, on its own thread:
+
+| Verdict | Means | Effect |
+| --- | --- | --- |
+| incompatible | a method missing, either side's `api_version` below the other's `min_compatible`, another or an invalid `server_tz`, or no report at all (or a body over 64 KiB) | entries refused (`bridge_incompatible`); health `bridge_compat:<account>` FAIL (Telegram); preflight `bridge_compat` blocks. Exits, closes and the kill switch are unaffected |
+| commits differ | both boxes compatible, different commits (doc-only changes, or a deploy half done) | health warning only, no block, no Telegram |
+| unchecked | the engine is starting, has only ever seen `/health` unreachable, or last confirmed the bridge over 5 min ago (a stuck check) | entries refused (`bridge_incompatible`). When the bridge itself answers, health `bridge_compat:<account>` warns "not confirmed" for the first 2 min, then FAILs (Telegram); an ok over 5 min old FAILs at once. The engine replaces a check thread hung over 15 s on its next 60 s tick and every `/health` read has a hard 5 s deadline, so it heals itself; if the FAIL persists, `sudo systemctl restart goldbot-engine@<account>` |
+| unreachable | `/health` did not answer after the bridge was confirmed ok | no block by itself (no ticks either, so `stale_data` blocks) until the ok is 5 min old; `bridge:<account>` fails; an earlier incompatible is kept |
+
+Fix (the MT5 box first, always, when a release adds a bridge method):
+1. On the MT5 box: `sudo goldbot-deploy <sha the brain runs>`, then `sudo systemctl restart goldbot-bridge@<account>`.
+2. On the brain: `curl -fsS http://127.0.0.1:8765/health ; echo` shows `api_version`, `min_compatible`, `methods`,
+   `commit`;
+   `goldbot run preflight | grep bridge_compat` must be ✅.
+3. The engine picks the new verdict up within 60 s (no restart needed); `goldbot run health | grep bridge_compat`.
+
+A developer who adds, removes or changes a bridge method (its signature on `RemoteBroker` or `MT5Broker`, or a wire
+record's fields) bumps `API_VERSION` in `goldbot/execution/bridge.py`, and `MIN_COMPATIBLE` when older peers can no
+longer interoperate (`tests/test_bridge_compat.py` pins both to `protocol_digest()` and fails otherwise), and says
+"deploy the MT5 box first" in the PR. The Telegram "New version ready" offer warns when an MT5 box runs an older
+commit than the one offered.
 
 ### Updating the VPS to a new version
 
