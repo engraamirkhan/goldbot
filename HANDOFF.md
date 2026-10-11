@@ -857,6 +857,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   a misspelt or attacker-supplied field on an auth, mode, re-arm, halt or approval request is a 422 instead of being
   dropped. Response models are unchanged. A guard test fails when a new body route uses a model without it. The web
   client sends exactly the declared keys (web/src/lib/api.ts checked); schema.d.ts is unchanged by the regeneration.
+  The 422 body lists each error as type, loc and msg only (`validation_error` handler in `create_app`): FastAPI's
+  default `input`/`ctx` would echo the rejected value, e.g. a password under a misspelt key (security review LOW).
 
 - Live account view and monthly report (2026-10-10, TRACEABILITY V1-V5; ADR 0004, BACKLOG 26 backend): the engine
   publishes in `engine_<account>.json` the broker's `balance`, `currency`, `margin`, `margin_free` (never login or

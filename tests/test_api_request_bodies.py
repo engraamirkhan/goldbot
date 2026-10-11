@@ -77,3 +77,23 @@ def test_each_request_endpoint_rejects_an_unknown_field_with_422(app_client, pat
     errors = r.json()["detail"]
     assert [e["type"] for e in errors] == ["extra_forbidden"]
     assert errors[0]["loc"] == ["body", "is_owner"]
+
+
+# The 422 body names the field and the rule, never the value: a password sent under a misspelt key, or the whole body
+# on a `missing` error, must not be echoed back (security review LOW on 1a14ed8).
+def test_a_misspelt_password_key_is_rejected_without_echoing_the_password(app_client):
+    _, c = app_client
+    r = c.post("/api/auth/login", json={"email": "o@x.io", "pasword": "HUNTER2-SECRET", "totp": "000000"})
+    assert r.status_code == 422
+    assert "HUNTER2-SECRET" not in r.text
+    assert {"type": "extra_forbidden", "loc": ["body", "pasword"]}.items() <= r.json()["detail"][0].items()
+
+
+def test_a_missing_field_error_does_not_echo_the_request_body(app_client):
+    _, c = app_client
+    r = c.post("/api/auth/setup", json={"setup_code": "x", "password": "HUNTER2-SECRET"})
+    assert r.status_code == 422
+    assert "HUNTER2-SECRET" not in r.text
+    errors = r.json()["detail"]
+    assert [(e["type"], e["loc"]) for e in errors] == [("missing", ["body", "email"])]
+    assert all(set(e) == {"type", "loc", "msg"} for e in errors)

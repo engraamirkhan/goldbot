@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
@@ -253,6 +254,13 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         """Fault text from the services (job errors): the owner reads it whole; other roles get the exception type
         and no paths (explain.redact)."""
         return text if st.auth.is_owner(u) else explain.redact(text)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        """422 with each error's type, location and message only: FastAPI's default also echoes `input` (the rejected
+        value, e.g. a password under a misspelt key, or the whole body on a `missing` error) and `ctx`."""
+        return JSONResponse(status_code=422, content={
+            "detail": [{"type": e["type"], "loc": list(e["loc"]), "msg": e["msg"]} for e in exc.errors()]})
 
     @app.middleware("http")
     async def no_referrer(request: Request, call_next: Callable[[Request], Any]) -> Response:
