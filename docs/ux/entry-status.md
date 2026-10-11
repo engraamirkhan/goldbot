@@ -121,5 +121,38 @@ re-arms on this page when ready."
 ## Gaps (for the engine lane, BACKLOG 43)
 
 The engine does not publish rollover, the Friday weekend cut, or per-trade refusals (fx conversion, heat cap): the
-panel shows them once the engine publishes `entry_blocks` (ADR 0011). Telegram `/status` should reuse
-`entry_status.account_entry_status` so both channels say the same words.
+panel shows them once the engine publishes `entry_blocks` (ADR 0011).
+
+The entry windows (`windows` in the engine state, BACKLOG 17/18) are mapped, each only when enabled in the RiskGate's
+limits and the engine's `enabled`: `reopen_window` (wait, "until" the window's end from the session table),
+`holiday_thin` (wait, names the holiday from the configured list, "until" server midnight of the first unlisted day),
+`tier2_blackout` (wait, no time: the fix gives the minutes before/after the release; the engine does not publish the
+event time yet), `calendar_unavailable` (act, "since"; holiday-list or economic-calendar wording chosen from the
+engine's reason prefix, the reason itself never shown).
+
+## Telegram `/status` and the daily digest
+
+`/status` is built by `goldbot/telegram/entry_text.py` from `entry_status.statuses_from_state`, the same inputs and the
+same `account_entry_status` as the panel, so both channels say the same words. Plain text (no parse_mode), one block per
+account, at most 15 lines each:
+
+```
+Entry status · Wed 14 Oct 15:00 BST (14:00 UTC)
+
+BLOCKED · icm-demo (demo) · as of 15:00 BST            badge word, config name, mode, last report (owner's zone)
+No new trades: Broker clock differs ... (+1 more)      the API's headline (+ "· clears ..." when it says)
+Needs you:                                             act reasons first, each with its fix on the next line
+• Broker clock differs from the expected time zone
+  → See the Runbook: Server clock. ...
+Waits:                                                 wait reasons with their time; a timed "Nothing to do" fix omitted
+• Market closed · opens Sun 23:02 BST (22:02 UTC, in 1 d 12 h)
+Exits keep running: open trades keep their stop, target and automatic exits.
+
+Approval mode: propose · pending proposals: 0
+```
+
+Times are in `telegram.owner_tz` (default Europe/London) with UTC beside them; an unknown zone shows UTC only. Blocks
+that do not fit are counted ("+N more on the dashboard"), never dropped silently. "on this page" in a fix reads "on the
+dashboard (Overview)". A config name with 5+ digits is cut to its last two ("icm-demo-…67"). No engine: "No engine has
+reported yet ..."; a failed build: BLOCKED with "Entry status couldn't be worked out" (never OPEN). The daily digest
+carries one line: "Entries not open: icm-demo PAUSED (Market closed)" or "Entries: open on every account".

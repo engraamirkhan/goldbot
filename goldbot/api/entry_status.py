@@ -2,8 +2,9 @@
 it, in the owner's words. Reporting only: nothing here gates an order (the RiskGate does, in the engine).
 
 Built from what the engine publishes in state/engine_<account>.json (the RiskGate's account-level inputs: drawdown
-stage, data flags, market_closed, server_clock, tick_error, throttle, bridge_compat, blackout and, from engines that
-publish it, `entry_blocks`), the supervisor's halt as the engine reads it (`Supervisor.engine_should_halt`), the owner's
+stage, data flags, market_closed, server_clock, tick_error, throttle, bridge_compat, blackout, the entry `windows`
+(reopen, holiday, tier-2 news, calendar unavailable; BACKLOG 17/18) and, from engines that publish it,
+`entry_blocks`), the supervisor's halt as the engine reads it (`Supervisor.engine_should_halt`), the owner's
 halt (control.json), the drift watch's system halt and the loss budget (goldbot/ops/account_view.py). Thresholds come
 from the RiskGate's own limits (`RiskLimits.from_settings`), never a copy, so the browser holds no policy at all.
 
@@ -16,22 +17,31 @@ files): only mapped codes, numbers, agent ids and the news title the dashboard a
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
 from pydantic import BaseModel
 
 from goldbot.api.schema import EntryBlock, EntryStatus
-from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
+from goldbot.config import Settings
+from goldbot.data.calendar import (
+    DEFAULT_SESSIONS,
+    SessionTable,
+    server_midnight_utc,
+    session_table_from_cache,
+)
 from goldbot.data.timeutil import floor_tf
-from goldbot.ops.account_view import LossBudget, Milestones
+from goldbot.ops.account_view import LossBudget, Milestones, loss_budget, milestones
 from goldbot.ops.health import ENGINE_FAIL_S
 from goldbot.risk.gate import RiskLimits
-from goldbot.risk.supervisor import SupervisorLimits
+from goldbot.risk.supervisor import Supervisor, SupervisorLimits
+from goldbot.risk.windows import last_reopen, load_holidays, server_date
 
 log = logging.getLogger("goldbot.api.entry_status")
 
@@ -48,6 +58,9 @@ CLOCK = "Server clock (US-EU DST gap weeks)"
 HALT = "Halt and re-arm"
 UPDATE = "Updating the VPS to a new version"
 HEALTH = "Health check"
+WINDOWS = "Entry windows (reopen, holidays, tier-2 news)"
+HOLIDAY_LIST_FIX = ("Deploy a holiday list (config/holidays_cme_metals.yaml) with a new version that covers today; "
+                    "entries resume once it loads.")
 
 EXITS_OK = "Exits keep running: open trades keep their stop, target and automatic exits."
 EXITS_SILENT = ("Open trades keep the stop and target placed at the broker; the engine's own exits (time exit, "
@@ -105,17 +118,22 @@ REASONS: dict[str, Reason] = {
     "account_class_unknown": _r("Account type (raw or standard) not identified yet",
                                 "Usually clears once the engine has measured the broker's costs; see the Runbook "
                                 "if it lasts.", "act"),
+    "calendar_unavailable": _r("Economic calendar out of date: entries refused to be safe",
+                               "Check the calendar feed on the Feeds tab (it needs a fetch from the last 7 days that "
+                               "covers the next 24 h); entries resume once it is current.", "act", WINDOWS),
     "throttle_unknown": _r("{agent}: recent losses couldn't be checked",
                            "Usually clears at the next decision; check the Health tab if it lasts.", "act", HEALTH),
     "market_closed": _r("Market closed", f"{NOTHING}: it reopens by itself.", "wait"),
     "weekend": _r("Weekend: no new trades from Friday evening", f"{NOTHING}: entries resume when the market reopens.",
                   "wait"),
-    "holiday_thin": _r("Holiday trading: thin market, entries paused", f"{NOTHING}: entries resume on a normal day.",
-                       "wait"),
-    "reopen_window": _r("Market just reopened: waiting for prices to settle", f"{NOTHING}.", "wait"),
+    "holiday_thin": _r("Holiday trading: thin market, entries paused",
+                       f"{NOTHING}: entries resume on the next normal trading day.", "wait", WINDOWS),
+    "reopen_window": _r("Market just reopened: waiting for prices to settle",
+                        f"{NOTHING}: entries resume a few minutes after the reopen.", "wait", WINDOWS),
     "rollover": _r("Daily rollover around broker midnight", f"{NOTHING}: entries resume in a few minutes.", "wait"),
     "news_blackout": _r("News blackout", f"{NOTHING}: entries resume after the event.", "wait"),
-    "tier2_blackout": _r("Second-tier news blackout", f"{NOTHING}: entries resume after the release.", "wait"),
+    "tier2_blackout": _r("Second-tier US news: entries paused around the release",
+                         f"{NOTHING}: entries resume shortly after the release.", "wait", WINDOWS),
     "daily_loss_limit_abs": _r("Today's loss limit reached", f"{NOTHING}: it resets at the start of the next day.",
                                "wait"),
     "daily_cap": _r("Today's loss limit reached", f"{NOTHING}: it resets at the start of the next day.", "wait"),
@@ -158,7 +176,7 @@ REASONS: dict[str, Reason] = {
 _ORDER = {code: i for i, code in enumerate(REASONS)}
 API_ONLY = frozenset({"engine_not_reporting", "status_unknown"})       # raised here, not by the engine
 # worded ahead of the lanes adding them (bridge check, playbook G-items); the engine publishes them in entry_blocks
-FUTURE = frozenset({"bridge_incompatible", "heat_cap", "tier2_blackout", "reopen_window", "holiday_thin"})
+FUTURE = frozenset({"bridge_incompatible", "heat_cap"})
 RESETS_DAILY = frozenset({"combined_daily_cap", "combined_daily_loss_abs", "daily_cap", "daily_loss_limit_abs"})
 RESETS_WEEKLY = frozenset({"combined_weekly_cap", "weekly_cap"})
 _SYMBOL = {"GBP": "£", "USD": "$", "EUR": "€"}
@@ -296,6 +314,71 @@ def _throttle_blocks(th: Any, now: pd.Timestamp) -> tuple[list[EntryBlock], int]
     return out, len(agents)
 
 
+def _reopen_until(sessions: Any, now: pd.Timestamp, limits: RiskLimits) -> pd.Timestamp | None:
+    """The end of the reopen window `now` is in (goldbot/risk/windows.py arithmetic on the published session table);
+    None when it cannot be placed (the engine failed closed on an unreadable table, or the tables disagree)."""
+    try:
+        cfg = limits.reopen
+        daily, weekly = pd.Timedelta(minutes=cfg.after_daily_reopen_min), pd.Timedelta(minutes=cfg.after_monday_open_min)
+        hit = last_reopen(_table(sessions), now, max(daily, weekly))
+        if hit is None:
+            return None
+        end = hit[0] + (weekly if hit[1] else daily)
+        return end if end >= now else None
+    except Exception:                       # noqa: BLE001 - reporting only: no time is promised
+        log.exception("reopen window end not computed")
+        return None
+
+
+def _holiday(sessions: Any, now: pd.Timestamp, limits: RiskLimits) -> tuple[str | None, pd.Timestamp | None]:
+    """(today's holiday name from the configured list, server midnight of the first unlisted day after it, as UTC);
+    (None, None) when the list or the table cannot be read."""
+    try:
+        hl = load_holidays(limits.holidays.file)
+        table = _table(sessions)
+        today = server_date(table, now)
+        day = today + timedelta(days=1)
+        while hl.thin(day) is not None and day - today < timedelta(days=14):
+            day += timedelta(days=1)
+        return hl.thin(today), server_midnight_utc(day, table.server_tz)
+    except Exception:                       # noqa: BLE001
+        log.exception("holiday window unreadable")
+        return None, None
+
+
+def _window_blocks(w: Any, sessions: Any, now: pd.Timestamp, limits: RiskLimits) -> list[EntryBlock]:
+    """The engine's entry windows (`windows` in engine_<account>.json, BACKLOG 17/18), refused as the RiskGate refuses
+    them: only for a window enabled in the gate's limits and in the engine's own `enabled` (a window that is off is
+    ignored whatever its flag, as the engine's fail-closed path raises flags regardless). The engine's free-text
+    `calendar_unavailable_reason` is only read to choose between two mapped texts, never shown."""
+    if not isinstance(w, dict):
+        return []
+    enabled = w.get("enabled")
+    on: dict[str, Any] = enabled if isinstance(enabled, dict) else {}
+    tier2 = limits.tier2.enabled and on.get("tier2") is True
+    reopen = limits.reopen.enabled and on.get("reopen") is True
+    holidays = limits.holidays.enabled and on.get("holidays") is True
+    out = []
+    if (tier2 or holidays) and w.get("calendar_unavailable") is True:
+        why = w.get("calendar_unavailable_reason")
+        holiday_list = holidays and isinstance(why, str) and why.startswith("holiday list")
+        out.append(block("calendar_unavailable",
+                         text="Holiday list out of date: entries refused to be safe" if holiday_list else None,
+                         fix=HOLIDAY_LIST_FIX if holiday_list else None,
+                         at=_ts(w.get("calendar_unavailable_since")), at_label="since"))
+    if tier2 and w.get("tier2_blackout") is True:
+        t2 = limits.tier2
+        out.append(block("tier2_blackout", fix=f"{NOTHING}: entries resume {t2.after_min} min after the release (the "
+                                               f"pause starts {t2.before_min} min before it)."))
+    if reopen and w.get("reopen_window") is True:
+        out.append(block("reopen_window", at=_reopen_until(sessions, now, limits), at_label="until"))
+    if holidays and w.get("holiday_thin") is True:
+        name, until = _holiday(sessions, now, limits)
+        out.append(block("holiday_thin", text=f"Holiday trading ({name[:60]}): thin market, entries paused"
+                         if name else None, at=until, at_label="until"))
+    return out
+
+
 def _pct(x: float) -> str:
     return f"{100 * x:.0f}%" if abs(100 * x - round(100 * x)) < 1e-9 else f"{100 * x:.1f}%"
 
@@ -405,6 +488,8 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
         if milestones is not None and not milestones.tradeable and milestones.pending is None:
             # inferred from the ladder, not reported by the engine (BACKLOG 43): worded as likely
             add(block("min_lot_exceeds_risk", text="Likely: the smallest trade risks too much on every timeframe"))
+        for b in _window_blocks(e.get("windows"), sessions, now, limits):
+            add(b)
         published = e.get("entry_blocks")
         if isinstance(published, list):     # the engine's own reasons win; the mapping above is the fallback
             for code in published:
@@ -442,3 +527,89 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
     return EntryStatus(state=state, headline=headline, blocks=found, notes=notes,
                        exits=EXITS_SILENT if silent and _open_at(sessions, now) is not False else EXITS_OK,
                        as_of=_dt(reported), clears_at=_dt(clears))
+
+
+# ----------------------------------------------------------------------------- from the state directory
+def read_drift_halt(state_dir: str | Path) -> list[str] | None:
+    """Reasons for the drift watch's system halt (state/drift.json), None when there is none. Read the way the
+    engines read it: missing restricts nothing, unreadable or invalid halts entries (fail closed)."""
+    f = Path(state_dir) / "drift.json"
+    if not f.exists():
+        return None
+    try:
+        d = json.loads(f.read_text())
+    except (ValueError, OSError):
+        return ["drift.json unreadable"]
+    if not isinstance(d, dict):
+        return ["drift.json invalid"]
+    sh = d.get("system_halt")
+    if not sh:
+        return None
+    reasons = sh.get("reasons") if isinstance(sh, dict) else None
+    return [str(r) for r in reasons] if isinstance(reasons, list) and reasons else ["drift system halt"]
+
+
+def entry_inputs(state_dir: str | Path, settings: Settings | None, *, is_owner: bool) -> dict[str, Any]:
+    """What every account's entry status shares, for the dashboard and Telegram alike: the owner's halt
+    (control.json), the supervisor's halt as the engines read it, the drift watch's system halt, the RiskGate's and the
+    supervisor's limits from settings (the defaults when missing or unreadable) and whether the reader may re-arm."""
+    from goldbot.telegram.bus import ApprovalBus  # lazily: the telegram package imports this module
+    c = ApprovalBus(state_dir).control()
+    halt, why = Supervisor.engine_should_halt(state_dir)
+    try:
+        limits = RiskLimits.from_settings(settings.risk, tiny_live=False) if settings is not None else RiskLimits()
+        sup_limits = SupervisorLimits.from_settings(settings.risk) if settings is not None else SupervisorLimits()
+    except Exception:                      # noqa: BLE001 - a bad settings edit: the defaults
+        limits, sup_limits = RiskLimits(), SupervisorLimits()
+    return dict(owner_halt=(c.by or "unknown") if c.halted else None,
+                supervisor_reasons=[r for r in why.split(",") if r] if halt else None,
+                drift_reasons=read_drift_halt(state_dir), limits=limits, combined_dd=sup_limits.dd_stage2,
+                is_owner=is_owner)
+
+
+def statuses_from_state(state_dir: str | Path, now: pd.Timestamp, settings: Settings | None, *,
+                        is_owner: bool = True) -> list[tuple[str, str, EntryStatus]]:
+    """(account id, mode, entry status) for every engine that reports, sorted by account; built exactly as the
+    dashboard's /api/accounts builds it (loss budget, ladder, shared inputs). A status that cannot be built is
+    `unknown_status()`, never OPEN; a torn engine file is skipped, as the API skips it."""
+    sd = Path(state_dir)
+    engines: list[dict[str, Any]] = []
+    for f in sorted(sd.glob("engine_*.json")):
+        try:
+            e = json.loads(f.read_text())
+        except (OSError, ValueError):
+            log.warning("engine state %s unreadable: skipped", f.name)
+            continue
+        if isinstance(e, dict):
+            engines.append(e)
+    try:
+        sup = json.loads((sd / "supervisor.json").read_text()) if (sd / "supervisor.json").exists() else {}
+    except (OSError, ValueError):
+        sup = {}
+    sup = sup if isinstance(sup, dict) else {}
+    try:
+        inputs: dict[str, Any] | None = entry_inputs(sd, settings, is_owner=is_owner)
+    except Exception:                      # noqa: BLE001 - reporting only: every account shows status unknown
+        log.exception("entry status inputs failed")
+        inputs = None
+    out = []
+    for e in engines:
+        status: EntryStatus | None = None
+        if inputs is not None:
+            try:
+                status = account_entry_status(e, now=now, budget=_quiet(loss_budget, e, sup, engines),
+                                              milestones=_quiet(milestones, e), **inputs)
+            except Exception:              # noqa: BLE001
+                log.exception("entry status failed")
+        mode = e.get("mode")
+        out.append((str(e.get("account") or "unknown"), mode if isinstance(mode, str) else "unknown",
+                    status or unknown_status()))
+    return sorted(out, key=lambda x: x[0])
+
+
+def _quiet(fn: Any, *args: Any) -> Any:
+    try:
+        return fn(*args)
+    except Exception:                      # noqa: BLE001 - as the API: a bad view is null, never a failed status
+        log.exception("account view %s failed", getattr(fn, "__name__", fn))
+        return None

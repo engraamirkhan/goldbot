@@ -326,3 +326,89 @@ def test_a_status_that_cannot_be_built_is_never_shown_as_open(tmp_path, monkeypa
     [row] = c.get("/api/accounts", headers=_owner(c, app)).json()
     assert row["entry_status"]["state"] == "blocked"
     assert [b["code"] for b in row["entry_status"]["blocks"]] == ["status_unknown"]
+
+
+# ----------------------------------------------------------------------------- entry windows (BACKLOG 17/18)
+def windows(**over: Any) -> dict:
+    w: dict[str, Any] = {"enabled": {"tier2": True, "reopen": True, "holidays": True}, "tier2_blackout": False,
+                         "reopen_window": False, "holiday_thin": False, "calendar_unavailable": False,
+                         "calendar_unavailable_since": None, "calendar_unavailable_reason": None}
+    w.update(over)
+    return w
+
+
+def window_limits() -> RiskLimits:
+    from goldbot.config import HolidaySettings, ReopenSettings, Tier2Blackout
+    return RiskLimits(tier2=Tier2Blackout(enabled=True, before_min=5, after_min=15),
+                      reopen=ReopenSettings(enabled=True, after_daily_reopen_min=10, after_monday_open_min=30),
+                      holidays=HolidaySettings(enabled=True))
+
+
+WINDOW_CODES = ("tier2_blackout", "reopen_window", "holiday_thin", "calendar_unavailable")
+
+
+def test_window_reasons_are_live_not_future():
+    assert not (set(WINDOW_CODES) & es.FUTURE)
+    assert set(WINDOW_CODES) <= set(es.REASONS)
+
+
+def test_a_tier2_blackout_says_how_long_entries_wait_around_the_release():
+    s = status(engine(windows=windows(tier2_blackout=True)), limits=window_limits())
+    [b] = s.blocks
+    assert (b.code, b.kind, b.text) == ("tier2_blackout", "wait", "Second-tier US news: entries paused around the release")
+    assert b.fix == "Nothing to do: entries resume 15 min after the release (the pause starts 5 min before it)."
+    assert s.state == "waiting"
+
+
+def test_the_reopen_window_says_until_when_from_the_session_table():
+    # the weekly open: Monday 01:02 Athens = Sunday 22:02 UTC; the weekly window (30 min) ends 22:32 UTC
+    now = pd.Timestamp("2026-10-18 22:10", tz="UTC")
+    s = status(engine(ts=now.timestamp(), windows=windows(reopen_window=True)), now=now, limits=window_limits())
+    [b] = s.blocks
+    assert (b.code, b.kind, b.at_label) == ("reopen_window", "wait", "until")
+    assert b.at == pd.Timestamp("2026-10-18 22:32", tz="UTC").to_pydatetime()
+    assert s.clears_at == b.at
+    # a reopen window the session table cannot place (the engine failed closed) still blocks, with no time promised
+    s = status(engine(windows=windows(reopen_window=True)), limits=window_limits())
+    assert codes(s) == ["reopen_window"] and s.blocks[0].at is None
+
+
+def test_a_holiday_names_the_day_and_clears_at_the_first_normal_server_day():
+    now = pd.Timestamp("2026-11-26 14:00", tz="UTC")             # Thanksgiving; the 27th is listed too
+    s = status(engine(ts=now.timestamp(), windows=windows(holiday_thin=True)), now=now, limits=window_limits())
+    [b] = s.blocks
+    assert (b.code, b.kind, b.at_label) == ("holiday_thin", "wait", "until")
+    assert b.text == "Holiday trading (Thanksgiving Day): thin market, entries paused"
+    assert b.at == pd.Timestamp("2026-11-27 22:00", tz="UTC").to_pydatetime()   # Sat 00:00 Athens (EET, UTC+2)
+
+
+def test_an_unavailable_calendar_needs_the_owner_and_says_which_list_and_since_when():
+    since = (WED - pd.Timedelta(hours=2)).isoformat()
+    s = status(engine(windows=windows(calendar_unavailable=True, calendar_unavailable_since=since,
+                                      calendar_unavailable_reason="newest fetch 2026-10-01 is not within 7 days")),
+               limits=window_limits())
+    [b] = s.blocks
+    assert (b.code, b.kind, b.at_label) == ("calendar_unavailable", "act", "since")
+    assert b.at == pd.Timestamp(since).to_pydatetime() and "economic calendar" in b.text.lower()
+    assert "Feeds" in b.fix and s.state == "blocked"
+    assert "2026-10-01" not in json.dumps(s.model_dump(mode="json"))       # the engine's free text never shows
+    hol = status(engine(windows=windows(calendar_unavailable=True,
+                                        calendar_unavailable_reason="holiday list cme-metals-v2 does not cover 2029-01-02")),
+                 limits=window_limits())
+    assert "holiday list" in hol.blocks[0].text.lower() and "holidays_cme_metals.yaml" in hol.blocks[0].fix
+    assert "cme-metals-v2" not in json.dumps(hol.model_dump(mode="json"))
+
+
+def test_a_window_that_is_off_never_blocks_whatever_its_flag():
+    """The engine's error path raises reopen_window and calendar_unavailable even for windows that are off; the
+    RiskGate ignores them, so the status does too."""
+    off = windows(enabled={"tier2": False, "reopen": False, "holidays": False}, tier2_blackout=True, reopen_window=True,
+                  holiday_thin=True, calendar_unavailable=True)
+    assert codes(status(engine(windows=off), limits=window_limits())) == []
+    assert codes(status(engine(windows=windows(reopen_window=True, calendar_unavailable=True)))) == []   # limits off
+
+
+@pytest.mark.parametrize("junk", [{"windows": "x"}, {"windows": {"enabled": "all", "reopen_window": True}},
+                                  {"windows": {"enabled": {"holidays": True}, "holiday_thin": "yes"}}])
+def test_junk_windows_never_break_the_status(junk):
+    assert status(engine(**junk), limits=window_limits()).state in ("open", "partial", "waiting", "blocked")

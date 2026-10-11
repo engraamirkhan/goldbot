@@ -1004,6 +1004,19 @@ Steps on the brain (or the VPS), on a gap day while the market is open:
 
 `goldbot run preflight` runs the same measurement (`server_clock`, blocking on a measured mismatch).
 
+### Entry windows (reopen, holidays, tier-2 news)
+
+Three entry windows (BACKLOG 17/18, `goldbot/risk/windows.py`), each off until adopted in `risk.reopen`,
+`risk.holidays` and `risk.blackout.tier2`. The engine publishes them in `windows` in `engine_<account>.json`; the
+dashboard's Entry status and Telegram `/status` name them. Entries only: exits never read them.
+
+| Code | Meaning | Clears |
+|---|---|---|
+| `reopen_window` | Just after the daily reopen (`after_daily_reopen_min`) or the weekly open (`after_monday_open_min`), read from the broker session table. Also raised when the session table cannot be read (fail closed). | By itself at the end of the window. |
+| `holiday_thin` | Today's broker server date is on the holiday list (`config/holidays_cme_metals.yaml`). | By itself at server midnight of the first unlisted day. |
+| `tier2_blackout` | Within `before_min` / `after_min` of a second-tier US release in the live calendar. | By itself `after_min` after the release. |
+| `calendar_unavailable` | An enabled calendar window has nothing to judge by: the economic calendar's newest fetch is older than 7 days or does not cover the next 24 h, or the holiday list is missing, unreadable or does not cover today. | When the calendar fetch runs again (Feeds tab; `calendar_unavailable_reason` in the engine state says which), or when a holiday list with a new `version` covering today is deployed. Health (`check_entry_windows`) warns 90 days before the list runs out. |
+
 ### Bridge compatibility
 
 The brain and the MT5 box are deployed separately (BACKLOG 42). The bridge reports on its unauthenticated
