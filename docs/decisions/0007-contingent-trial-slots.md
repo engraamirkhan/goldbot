@@ -109,3 +109,16 @@ while the survivors compete for the 7 open trials with the director's pool and t
 - A survivor-slot claim may hold only the parent's spec keys plus `from_discovery`, `survivor` and `features`.
 - In an E-5 quarter a manual `research_pass` / `--discover` row records the rule it cites (`rule_ref`: `--rule-ref`,
   the pre-registration's own, its slot or the queued row); a capped run citing none is refused (`director.cited_rule`).
+
+## Amendment 2026-10-11 (third quant re-review; before the freeze)
+- Screened-row decision rules are keyed on the linked pre-registration's `rule_id` (H-01, H-04, C4H), never on the
+  config's shape. H-01's "continue" also needs >= 3 positive net years incl. 2021/22 on long-only
+  (`rule_only_split` now records long-only years). The tsmom 4h continuity rule allows only "stop" (net mean R <= 0)
+  or "inconclusive" (not retired), never "continue". An unknown screened trial with a passing screen may "continue"
+  only when the verdict cites its linked pre-registration's reading rule exactly.
+- H-10: a jumps-only result is inconclusive for H-10; only the news-split version can retire or continue it.
+- `macro_vrp`'s HAR-RV drops stub days (a UTC day whose bars span < 12 h, e.g. the Sunday reopen), as H-01 and H-16
+  do; `macro_drivers` is version 4 and the macro feature version is `f-ac2be79efe` (macro + `day_type`:
+  `f-7a3cad1466`).
+- The joint permutation group measure averages `permutation_repeats` shuffles and scores on rows at least one week
+  from every subsample week (`purged_rest`).

@@ -13,11 +13,12 @@ the VIX level, `macro_vix_chg5` its 5-observation change (about a trading week),
 its 20-observation high minus 1 (<= 0). Each is computed on the series' first releases and joined like the drivers;
 NaN until the release carries the series.
 
-VRP spread (H-03, version 3; quant re-review before the Q1 freeze): `macro_vrp` = GVZ^2 - HAR-RV^2 in annualised vol
+VRP spread (H-03, version 3, stub days dropped since version 4; quant re-reviews before the Q1 freeze): `macro_vrp` = GVZ^2 - HAR-RV^2 in annualised vol
 points squared. HAR-RV^2 is the equal-weight HAR of daily realised variance (Corsi 2009 without a fitted regression,
 so nothing is estimated): (RV_d + mean RV over 5 days + mean RV over 22 days) / 3 x 252 x 100^2, where RV of a UTC
 day is the sum of squared log-close returns of the bars in that day, and a bar on day D sees only days before D (its
-own day is not complete). GVZ is the as-of joined `macro_gvz`. NaN until 22 completed days and a GVZ value exist, or
+own day is not complete). A stub day, whose bars span fewer than MIN_DAY_SPAN_H hours (the Sunday reopen; a short
+holiday session), is dropped, as H-01's daily inputs and H-16 drop theirs (stub-free convention, version 4). GVZ is the as-of joined `macro_gvz`. NaN until 22 completed days and a GVZ value exist, or
 when the frame carries no closes.
 """
 from __future__ import annotations
@@ -27,11 +28,13 @@ import pandas as pd
 
 from goldbot.data.macro import DRIVERS, driver_frames, first_release
 from goldbot.data.store import asof_join
+from goldbot.data.timeutil import epoch_ns
 from goldbot.features.registry import FeatureCtx, feature
 
 EQUITY_STRESS = ("macro_vix", "macro_vix_chg5", "macro_spx_dd20")
 VRP = "macro_vrp"
 HAR_DAYS = (1, 5, 22)                 # daily, weekly, monthly realised-variance horizons (equal weights)
+MIN_DAY_SPAN_H = 12.0                 # a UTC day whose bars span fewer hours is a stub (time_series_momentum's threshold)
 
 
 def har_rv2_annualised(df: pd.DataFrame) -> np.ndarray:
@@ -44,7 +47,11 @@ def har_rv2_annualised(df: pd.DataFrame) -> np.ndarray:
     day = ts.floor("D")
     r = np.log(df["close"].to_numpy(dtype=float))
     r2 = pd.Series(np.diff(r, prepend=np.nan) ** 2)
-    rv = r2.groupby(day.to_numpy()).sum(min_count=1).dropna()
+    rv = r2.groupby(day.to_numpy()).sum(min_count=1)
+    gaps = np.diff(epoch_ns(ts)) if n > 1 else np.array([], dtype=np.int64)
+    bar_s = float(np.median(gaps[gaps > 0])) / 1e9 if (gaps > 0).any() else 0.0
+    span_h = pd.Series(np.ones(n)).groupby(day.to_numpy()).sum() * bar_s / 3600
+    rv = rv[(span_h >= MIN_DAY_SPAN_H).to_numpy()].dropna()             # stub days dropped (stub-free convention)
     if rv.empty:
         return np.full(n, np.nan)
     d1, w, m = (rv.rolling(h, min_periods=h).mean() for h in HAR_DAYS)
@@ -70,7 +77,7 @@ def equity_stress_frames(macro: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
 # directional for a meta-label model: rising real yields or a rising dollar mean opposite things for a long and a short;
 # so do equity stress moves (a VIX jump or an S&P drawdown is the haven-bid case)
-@feature("macro_drivers", "macro", version="3",
+@feature("macro_drivers", "macro", version="4",
          signed={"macro_real_yield_chg20": 0.0, "macro_real_yield_z252": 0.0, "macro_dollar_chg20": 0.0,
                  "macro_vix_chg5": 0.0, "macro_spx_dd20": 0.0})
 def f_macro_drivers(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
