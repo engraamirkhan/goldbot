@@ -46,6 +46,7 @@ describe("ProposalCard", () => {
     render(<ProposalCard p={p(60, gbp)} now={NOW} canDecide blockers={[]} />);
     expect(screen.getByText("£8.20")).toBeInTheDocument();
     expect(screen.getByText(/0.82% of equity/)).toBeInTheDocument();
+    expect(screen.getByText(/if the stop is hit, before costs/)).toBeInTheDocument();
     expect(screen.queryByText("(USD)")).toBeNull();
     expect(screen.getByText("−£8.20")).toBeInTheDocument();          // lost at the stop
     expect(screen.getByText("+£12.06")).toBeInTheDocument();         // won at the target
@@ -60,9 +61,9 @@ describe("ProposalCard", () => {
 
   it("shows the loss budget left if this loses, spent, or unknown, and none on decided cards", () => {
     const { rerender } = render(<ProposalCard p={p(60, gbp)} now={NOW} canDecide blockers={[]} />);
-    expect(screen.getByText("£11.80 left today if this loses")).toBeInTheDocument();
+    expect(screen.getByText("£11.80 left today if this loses (open trades aside)")).toBeInTheDocument();
     rerender(<ProposalCard p={p(60, { ...gbp, loss_left: 0 })} now={NOW} canDecide blockers={[]} />);
-    expect(screen.getByText("No loss budget left today if this loses: new entries stop")).toBeInTheDocument();
+    expect(screen.getByText("No loss budget left today if this loses (open trades aside): new entries stop")).toBeInTheDocument();
     rerender(<ProposalCard p={p(60, { ...gbp, loss_left: null, loss_left_period: null })} now={NOW} canDecide blockers={[]} />);
     expect(screen.getByText("Loss budget left today: unknown")).toBeInTheDocument();
     rerender(<ProposalCard p={{ ...decided("approved"), ...gbp }} now={NOW} canDecide blockers={[]} />);

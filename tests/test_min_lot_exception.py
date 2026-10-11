@@ -208,7 +208,10 @@ def test_a_proposal_carries_the_account_currency_risk_and_the_exception_for_the_
     props = list(center.pending.values()) + center.log
     assert props
     for p in props:
-        assert p.currency == "USD" and p.min_lot_exception and p.risk_normal == 0.0001 and p.risk_cap == 0.01
+        assert p.currency == "USD" and p.min_lot_exception and p.risk_cap == 0.01
+        # the gate's effective target at this conviction (risk per trade x the bounded multiplier), below the risk taken
+        assert p.risk_normal is not None and 0 < p.risk_normal <= 0.0001 * 1.5
+        assert p.risk_fraction is not None and p.risk_fraction > p.risk_normal
         assert p.risk_amount is not None and p.risk_amount > 0 and p.risk_fraction is not None
         assert p.risk_fraction == pytest.approx(p.risk_amount / 10_000, rel=0.05)      # of equity, as the gate sizes
         assert p.risk_amount == pytest.approx(p.risk_usd, abs=0.01)                    # a USD account: fx is 1

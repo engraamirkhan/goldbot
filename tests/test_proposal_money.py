@@ -8,9 +8,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from goldbot.api.app import create_app
+from goldbot.api.app import State, create_app
 from goldbot.ops.account_view import loss_budget, proposal_budget, proposal_budget_from_state
-from goldbot.telegram.approvals import Proposal, cash, pct
+from goldbot.telegram.approvals import Proposal, cash, ceil_cent, pct
 from goldbot.telegram.bus import ApprovalBus
 from tests.test_api import _owner_headers
 
@@ -93,9 +93,9 @@ def test_telegram_text_shows_money_in_the_account_currency_with_the_min_lot_note
     b = loss_budget(_engine(), {}, [_engine()], trade_risk=8.2)
     lines = p.text(b).splitlines()
     assert lines[0] == "🔵 SHORT 0.01 lots XAUUSD"
-    assert lines[1] == "risk £8.20 (0.82% of equity) if the stop is hit"
+    assert lines[1] == "risk £8.20 (0.82% of equity) if the stop is hit, before costs"
     assert lines[2] == "smallest trade size: above the normal 0.5%, within your 1% cap"
-    assert lines[3] == "£11.80 left today if this loses"
+    assert lines[3] == "£11.80 left today if this loses (open trades aside)"
     assert lines[4] == "entry 2400.20  stop 2404.20 (−£8.20)  target 2394.20 (+£12.30)"
     assert lines[5] == "p=0.62  EV=+0.31R  spread 22pt"
     assert lines[-1] == "⏱ approve within 90s or it expires · exits are automatic"
@@ -107,13 +107,13 @@ def test_telegram_text_without_the_exception_spent_budget_or_unknown_budget():
     assert "smallest trade" not in txt
     assert "loss budget left today: unknown" in txt
     spent = loss_budget(_engine(equity=980.0), {}, [_engine()], trade_risk=4.1)
-    assert "no loss budget left today if this loses: new entries stop" in p.text(spent)
+    assert "no loss budget left today if this loses (open trades aside): new entries stop" in p.text(spent)
     week = _engine(day_start_equity=995.0, week_start_equity=1045.0)        # up £5 today, down £45 this week
-    assert "£3.15 left this week if this loses" in p.text(loss_budget(week, {}, [week], trade_risk=4.1))
+    assert "£3.15 left this week if this loses (open trades aside)" in p.text(loss_budget(week, {}, [week], trade_risk=4.1))
 
 
 def test_telegram_text_from_an_older_engine_labels_the_dollar_figure():
-    assert _prop().text().splitlines()[1] == "risk $4.00 (USD) if the stop is hit"
+    assert _prop().text().splitlines()[1] == "risk $4.00 (USD) if the stop is hit, before costs"
     assert "stop 2404.20 (−$4.00)" in _prop().text()
     txt = _prop(risk_usd=None).text()
     assert "risk: not reported by this engine version" in txt and "stop 2404.20  target" in txt
@@ -148,3 +148,32 @@ def test_api_decided_cards_carry_no_live_budget(tmp_path):
     c = TestClient(app)
     rows = c.get("/api/proposals/recent", headers=_owner_headers(c, app)).json()
     assert rows[0]["risk_amount"] == 8.2 and rows[0]["loss_left"] is None
+
+
+# ---------------------------------------------------------------------------------------------- review fixes
+def test_unreadable_engine_files_never_fail_the_approval_list_or_the_accounts(tmp_path, monkeypatch):
+    bus = ApprovalBus(tmp_path)
+    bus.publish(_prop(**GBP_MIN_LOT))
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
+    (tmp_path / "engine_broken.json").mkdir()                   # read_text raises IsADirectoryError (an OSError)
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
+    c = TestClient(app)
+    h = _owner_headers(c, app)
+    r = c.get("/api/proposals", headers=h)
+    assert r.status_code == 200 and r.json()[0]["loss_left"] == pytest.approx(11.80)    # the bad file is skipped
+    assert c.get("/api/accounts", headers=h).status_code == 200
+
+    def unreadable(self: State) -> list[dict]:
+        raise OSError("disk gone")
+    monkeypatch.setattr(State, "engines", unreadable)
+    r = c.get("/api/proposals", headers=h)
+    assert r.status_code == 200 and r.json()[0]["loss_left"] is None and r.json()[0]["risk_amount"] == 8.2
+
+
+def test_the_shown_risk_is_never_below_the_gates():
+    assert ceil_cent(8.2012) == 8.21 and ceil_cent(8.21) == 8.21 and ceil_cent(8.2) == 8.2 and ceil_cent(0.0) == 0.0
+    assert "risk £8.21 " in _prop(currency="GBP", risk_amount=8.2012, risk_fraction=0.0082).text()
+    assert "stop 2404.20 (−£8.21)" in _prop(currency="GBP", risk_amount=8.2012).text()
+    # the budget left is shown rounded down: never more room than there is
+    b = loss_budget(_engine(), {}, [_engine()], trade_risk=8.2012)
+    assert b is not None and "£11.79 left today" in _prop(currency="GBP", risk_amount=8.2012).text(b)

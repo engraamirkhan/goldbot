@@ -129,10 +129,10 @@ class State:
     def engines(self) -> list[dict]:
         out = []
         for f in self.dir.glob("engine_*.json"):
-            try:
+            try:                               # torn (ValueError) or unreadable (OSError): skipped, never a 500
                 out.append(json.loads(f.read_text()))
-            except json.JSONDecodeError:
-                pass
+            except (OSError, ValueError):
+                log.warning("engine state %s unreadable: skipped", f.name)
         return out
 
     def drift_halt(self) -> list[str] | None:
@@ -459,7 +459,10 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         engines: list[dict] = []
         sup: dict = {}
         if pending:
-            engines = st.engines()
+            try:                               # reporting only: unreadable state leaves the budget unknown
+                engines = st.engines()
+            except (OSError, ValueError):
+                log.exception("engine states unreadable: proposal budgets unknown")
             try:                               # a torn supervisor.json only drops the combined caps
                 s = st.supervisor()
                 sup = s if isinstance(s, dict) else {}

@@ -55,7 +55,7 @@ export function ProposalCard({ p, now, canDecide, blockers, busy = false, error,
           : <strong title="This engine version does not report the risk">—</strong>}
         {money?.usd && <span className="muted"> (USD)</span>}
         {money && !money.usd && p.risk_fraction != null && <span> ({pct(p.risk_fraction)} of equity)</span>}
-        <span className="muted"> if the stop is hit</span>
+        <span className="muted"> if the stop is hit, before costs</span>
       </p>
       {p.min_lot_exception && (
         <p className="info-note">

@@ -46,6 +46,13 @@ export function pct(fraction: number): string {
   return `${(100 * fraction).toFixed(2).replace(/\.?0+$/, "")}%`;
 }
 
+/** Up to the cent: a risk is never shown below the RiskGate's figure (goldbot.telegram.approvals.ceil_cent). */
+export const ceilCent = (x: number) => Math.ceil(Number((x * 100).toFixed(6))) / 100;
+/** Down to the cent: a budget left is never shown larger than it is. */
+export const floorCent = (x: number) => Math.floor(Number((x * 100).toFixed(6))) / 100;
+/** The budget does not reserve open positions' stop risk; the card says so. */
+export const OPEN_ASIDE = "(open trades aside)";
+
 /** The card's stop risk and target gain as text: in the account currency, else an older engine's USD figure
  * (`usd`: the card labels it), else null. */
 export function cardMoney(p: AnyProposal): { risk: string; reward: string | null; usd: boolean } | null {
@@ -53,16 +60,17 @@ export function cardMoney(p: AnyProposal): { risk: string; reward: string | null
   const amount = usd ? p.risk_usd : p.risk_amount;
   if (amount == null) return null;
   const ccy = usd ? "USD" : p.currency;
-  return { risk: cash(amount, ccy), reward: p.reward_amount == null ? null : cash(p.reward_amount, ccy), usd };
+  return { risk: cash(ceilCent(amount), ccy), reward: p.reward_amount == null ? null : cash(p.reward_amount, ccy), usd };
 }
 
 /** The account's loss budget left if this trade loses (live from the API; pending cards only). */
 export function budgetLine(p: AnyProposal): { text: string; tone: Tone } {
   if (p.loss_left == null || !p.loss_left_period) return { text: "Loss budget left today: unknown", tone: "idle" };
-  if (p.loss_left <= 0) {
-    return { text: `No loss budget left ${p.loss_left_period} if this loses: new entries stop`, tone: "warn" };
+  const left = floorCent(p.loss_left);
+  if (left <= 0) {
+    return { text: `No loss budget left ${p.loss_left_period} if this loses ${OPEN_ASIDE}: new entries stop`, tone: "warn" };
   }
-  return { text: `${cash(p.loss_left, p.currency)} left ${p.loss_left_period} if this loses`, tone: "ok" };
+  return { text: `${cash(left, p.currency)} left ${p.loss_left_period} if this loses ${OPEN_ASIDE}`, tone: "ok" };
 }
 
 export function signed(x: number, digits = 2): string {

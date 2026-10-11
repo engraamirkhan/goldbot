@@ -53,7 +53,7 @@ from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, sizing
 from goldbot.risk.gate import REARM_PHRASE, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
 from goldbot.specialists.base import Specialist
-from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
+from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal, ceil_cent
 
 log = logging.getLogger("goldbot.engine")
 LOT_TERMS_WARN_S = 600.0     # the account view's symbol-info warning, at most this often
@@ -747,9 +747,11 @@ class Engine:
         and the cap that applied (halved in the size-down stage, as the gate applied it). Display only."""
         exc = "min_lot_exception" in gd.reasons
         size_down = self.state.stage == Stage.SIZE_DOWN or self.state.combined_size_down
-        return {"currency": intent.account_currency or None, "risk_amount": round(gd.risk_amount, 2),
+        # the risk shown is rounded UP to the cent (never below the gate's); the normal risk is the gate's effective
+        # target at this conviction (halved and capped in size-down), so the note never contradicts the cap
+        return {"currency": intent.account_currency or None, "risk_amount": ceil_cent(gd.risk_amount),
                 "risk_fraction": round(gd.risk_fraction, 5), "min_lot_exception": exc,
-                "risk_normal": self.gate.limits.risk_per_trade,
+                "risk_normal": sizing.effective_risk(self.gate.limits, size_down, intent.multiplier).target,
                 "risk_cap": self.gate.min_lot_cap(size_down) if exc else None}
 
     def _note_min_lot_risk(self, terms: dict[str, Any], stop_distance: float) -> None:

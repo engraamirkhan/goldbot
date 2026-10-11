@@ -107,16 +107,20 @@ describe("card money", () => {
     expect(cardMoney(gbp)).toEqual({ risk: "£8.20", reward: "£12.30", usd: false });
     expect(cardMoney({ ...prop(60), risk_usd: 20, reward_amount: 30 })).toEqual({ risk: "$20.00", reward: "$30.00", usd: true });
     expect(cardMoney(prop(60))).toBeNull();
+    // never below the gate's figure: up to the cent; the budget left rounds down
+    expect(cardMoney({ ...prop(60), currency: "GBP", risk_amount: 8.2012 })?.risk).toBe("£8.21");
+    expect(cardMoney({ ...prop(60), currency: "GBP", risk_amount: 8.21 })?.risk).toBe("£8.21");
   });
 
   it("says what is left if this loses, spent, or unknown", () => {
     const base = { ...prop(60), currency: "GBP", risk_amount: 8.2 };
     expect(budgetLine({ ...base, loss_left: 11.8, loss_left_period: "today" })).toEqual(
-      { text: "£11.80 left today if this loses", tone: "ok" });
+      { text: "£11.80 left today if this loses (open trades aside)", tone: "ok" });
     expect(budgetLine({ ...base, loss_left: 3.15, loss_left_period: "this week" })).toEqual(
-      { text: "£3.15 left this week if this loses", tone: "ok" });
+      { text: "£3.15 left this week if this loses (open trades aside)", tone: "ok" });
     expect(budgetLine({ ...base, loss_left: 0, loss_left_period: "today" })).toEqual(
-      { text: "No loss budget left today if this loses: new entries stop", tone: "warn" });
+      { text: "No loss budget left today if this loses (open trades aside): new entries stop", tone: "warn" });
     expect(budgetLine(base)).toEqual({ text: "Loss budget left today: unknown", tone: "idle" });
+    expect(budgetLine({ ...base, loss_left: 11.789, loss_left_period: "today" }).text).toMatch(/^£11\.78 left/);
   });
 });

@@ -33,10 +33,12 @@ Phone (360 px, 16 px gutters, single column):
 └────────────────────────────────────────────┘
 ┃ [▲ LONG] 0.05 lots XAUUSD            1:12  ┃   direction badge, size, countdown (tabular digits)
 ┃ ███████████████████████░░░░░░░░░░░░░░░░░░  ┃   progress bar, 90 s window
-┃ RISK £8.20 (0.82% of equity) if the stop is hit ┃   account currency; share of equity as the gate sized it
+┃ RISK £8.20 (0.82% of equity) if the stop is    ┃   account currency, rounded UP to the cent; share of
+┃ hit, before costs                              ┃   equity as the gate sized it
 ┃ ┌ Smallest trade size: above the normal  ┐ ┃   blue info note, only with the minimum-lot exception
 ┃ └ 0.5%, within your 1% cap.              ┘ ┃
-┃ LOSS BUDGET £11.80 left today if this loses┃   live; amber when nothing is left; muted "unknown"
+┃ LOSS BUDGET £11.80 left today if this loses┃   live, rounded DOWN; amber when nothing is left;
+┃ (open trades aside)                        ┃   muted "unknown"
 ┃ Entry      Stop        Target              ┃
 ┃ 2400.25    2396.00     2406.50             ┃
 ┃            −4.25       +6.25               ┃   distance from entry in price
@@ -71,10 +73,10 @@ follow under "Decided in the last 10 minutes", with no buttons.
 | Refused at approval | approved, RiskGate refused | Red note: "Refused at approval. The RiskGate blocked the order (owner halt); nothing was sent." |
 | Expired | clock reached 0, or engine archived it | Neutral note: "Expired. Nobody approved within 90 s; no order." No buttons, no timer |
 | Minimum lot | sized by the minimum-lot exception | Blue note: "Smallest trade size: above the normal 0.5%, within your 1% cap." Information, not a warning: the gate allowed it within the owner's cap |
-| Budget left | pending, engine reporting | "LOSS BUDGET £11.80 left today if this loses" ("this week" when the weekly cap binds) |
-| Budget spent | the trade's stop would use the rest | Amber: "No loss budget left today if this loses: new entries stop" |
+| Budget left | pending, engine reporting | "LOSS BUDGET £11.80 left today if this loses (open trades aside)" ("this week" when the weekly cap binds). Open positions' stop risk is not reserved, so the card says so |
+| Budget spent | the trade's stop would use the rest | Amber: "No loss budget left today if this loses (open trades aside): new entries stop" |
 | Budget unknown | no engine file, or an older engine (USD risk only) | Muted: "Loss budget left today: unknown" |
-| Older engine | only `risk_usd` | "RISK $20.00 (USD) if the stop is hit", no share of equity, no budget |
+| Older engine | only `risk_usd` | "RISK $20.00 (USD) if the stop is hit, before costs", no share of equity, no budget |
 | Blocked | a halt or blackout is active | Amber note above the buttons: "New entries are blocked (…): the RiskGate will refuse this at approval." Approve stays available; the gate decides |
 
 Every decided note ends with the channel ("via Telegram", "via dashboard (email)") when known.
@@ -96,6 +98,9 @@ supervisor halt, drift halt, news blackout or news shock, drawdown halt, account
   local; UTC is in the hover title. Risk is never shown in dollars unlabelled: a USD figure from an older engine says
   "(USD)".
 - The share is "of equity" (what the RiskGate sizes on), not "of balance": with a position open they differ.
+- Risk is rounded up and the budget left rounded down to the cent: the card never shows less risk or more room than
+  the RiskGate computed. The normal risk in the min-lot note is the gate's effective target at this conviction
+  (halved and capped in the size-down stage), so the note never reads "above 0.5%, within 0.5%".
 
 ## Accessibility
 
@@ -113,9 +118,9 @@ The message carries the card's essentials in the card's order:
 
 ```
 🟢 LONG 0.01 lots XAUUSD
-risk £8.20 (0.82% of equity) if the stop is hit
+risk £8.20 (0.82% of equity) if the stop is hit, before costs
 smallest trade size: above the normal 0.5%, within your 1% cap
-£11.80 left today if this loses
+£11.80 left today if this loses (open trades aside)
 entry 2400.25  stop 2396.25 (−£8.20)  target 2406.25 (+£12.30)
 p=0.62  EV=+0.31R  spread 22pt
 why: atr_14 +0.40, adx_14 -0.20
@@ -126,7 +131,7 @@ icm-demo · session_open-g0-abc
 The min-lot line appears only with the exception. The budget line is computed when the message is sent (the
 Telegram service reads engine_<account>.json and supervisor.json via `account_view.proposal_budget_from_state`);
 "loss budget left today: unknown" when it cannot be read. An older engine's line reads "risk $20.00 (USD) if the
-stop is hit"; with no risk at all, "risk: not reported by this engine version". Buttons stay as they are: Approve,
+stop is hit, before costs"; with no risk at all, "risk: not reported by this engine version". Buttons stay as they are: Approve,
 then the five reason codes.
 
 Live updates: the budget line is one line on desktop and at 360 px except the spent wording, which can wrap once; it
