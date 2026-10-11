@@ -189,6 +189,11 @@ def run_engine(account_id: str) -> None:
         # no champion for an agent -> no model -> the engine never proposes for it (no placeholder probabilities)
         return ModelRegistry(settings.research.models_dir).champion_models()
 
+    def live_versions() -> dict[str, str]:
+        # agent -> its champion's version: only that version's shadow wins clear its loss-streak throttle (BACKLOG 21)
+        reg = ModelRegistry(settings.research.models_dir)
+        return {aid: ch.version for aid in reg.agent_ids() if (ch := reg.champion(aid)) is not None}
+
     def shadow_set() -> dict:
         return ModelRegistry(settings.research.models_dir).shadow_models()
 
@@ -212,7 +217,7 @@ def run_engine(account_id: str) -> None:
                               shock_min_relevance=settings.news.shock_min_relevance, live_clock=True,
                               approval_window_s=settings.risk.approval_window_seconds), broker, agents,
                  champions(), center, limits=limits, shadow_models=shadow_set() if shadow_host else None,
-                 live_shares=live_shares)
+                 live_shares=live_shares, live_versions=live_versions())
     from goldbot.data.calendar import BrokerSessions, SessionTable
     # the session read runs on its own thread: through the bridge it gets its own client (a requests.Session is not
     # shared across threads); MT5Broker.trading_sessions makes no terminal call (documented hours)
@@ -251,7 +256,7 @@ def run_engine(account_id: str) -> None:
                     agents, live_shares = population_view()
                     eng.agents = {a.agent_id: a for a in agents}
                     eng.live_shares = live_shares
-                    eng.models = champions()
+                    eng.models, eng.live_versions = champions(), live_versions()
                     if shadow_host:
                         eng.set_shadow_models(shadow_set())
                     log.info("reloaded: %d agents, %d live, models %s, shadow %s", len(eng.agents), len(live_shares),

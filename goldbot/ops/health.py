@@ -1053,6 +1053,42 @@ def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timest
         return []
 
 
+def check_throttle(ctx: HealthContext, account_id: str) -> list[Check]:
+    """BACKLOG 21 (playbook G-6: "Logged and alerted"): while the per-agent throttle is on, one check per agent
+    (`throttle:<account>:<agent>`, so each newly throttled agent alerts on its own, review MEDIUM-1). It warns (and
+    tells the owner, NOTIFY_ON_WARN) while RiskGate refuses the agent's entries for a loss streak or the daily entry
+    rate, and is ok otherwise. It FAILs when the block cannot lift by itself or the facts are unknown: a loss-streak
+    block without a cooldown end (unknown timeframe), `throttle_unknown`, or a throttle state the engine could not
+    publish (`throttle:<account>`). Nothing while the throttle is off or the engine has not published it."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    if not f.exists():
+        return []
+    try:
+        th = _read_json(f).get("throttle") or {}
+        if not th.get("enabled"):
+            return []
+        error = th.get("error")
+        agents = {str(k): dict(v) for k, v in (th.get("agents") or {}).items()}
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []                                   # check_engine reports the unreadable file
+    if error:
+        return [Check(name=f"throttle:{account_id}", status="fail",
+                      reason=f"{account_id}: throttle state not published ({error}); entries are judged per decision")]
+    out = []
+    for a, v in sorted(agents.items()):
+        name, blocked = f"throttle:{account_id}:{a}", [str(r) for r in v.get("blocked") or []]
+        facts = (f"streak {v.get('loss_streak')}, {v.get('entries_today')} entries today, cooldown until "
+                 f"{v.get('cooldown_until') or 'n/a'}")
+        if not blocked:
+            out.append(Check(name=name, status="ok", reason=f"{account_id} {a}: not throttled ({facts})"))
+            continue
+        stuck = "throttle_unknown" in blocked or ("throttle_loss_streak" in blocked and not v.get("cooldown_until"))
+        out.append(Check(name=name, status="fail" if stuck else "warn",
+                         reason=f"{account_id} {a}: entries throttled: {','.join(blocked)} ({facts})"
+                                + ("; the block cannot lift by itself" if stuck else "") + "; exits unaffected"))
+    return out
+
+
 def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
     """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
     restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
@@ -1149,6 +1185,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             tick_errors = check_tick_errors(ctx, a.account_id)
             checks += [tick_errors] if tick_errors is not None else []
             checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
+            checks += check_throttle(ctx, a.account_id)
             bridge = check_bridge(ctx, a.account_id)
             checks += [bridge] if bridge is not None else []
             clock = check_server_clock(ctx, a)
@@ -1188,7 +1225,8 @@ class WatchState(Record):
 
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
-NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:")
+NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:",
+                  "throttle:")
 
 
 def _alerting(name: str, status: str) -> bool:
