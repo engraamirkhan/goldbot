@@ -334,6 +334,12 @@ stamped before its row's quarter would never use the row up.
   less the entries the sample rule drops) can only be lower; to be recorded here before the freeze by a run with
   data-v1 present, together with **the number of candidate entries whose 7th bar does not close exactly 7 h after
   entry (exit - entry != 7 h)**, which the sample rule drops.
+  **Run count-owed-events and paste the counts before the freeze** (Actions -> count-owed-events -> Run workflow;
+  `scripts/count_owed_events.py`: the specialist's own `candidates` + `complete_windows` on data-v1 cut at the holdout,
+  no label, return or outcome read). Paste its H-04 rows here: entries, dropped by the 7h sample rule (with their
+  dates), calendar upper bound, days without a decision bar, ATR warm-up and the entry whose window crosses the
+  holdout, with the run's commit. The same run recounts H-01 (signals by side, one-at-a-time lower bound) as a check
+  against the 2,154 / 154 above; a difference is explained here before the freeze.
 
 ### tsmom 4h with swap (continuity)
 - Config: `variants=[{"timeframe": "4h", "max_bars": 12}]`, as refused on 2026-10-09.
@@ -356,4 +362,5 @@ stamped before its row's quarter would never use the row up.
 - [ ] `costs-v1` measured table published from the VPS (or the priors accepted and stated)
 - [ ] `macro-v1` release present
 - [ ] `research_pass.py --discover` merged and tested
+- [ ] count-owed-events run on data-v1 and its counts pasted here (H-04 entries and the 7h-rule drops; H-01 recount)
 - [ ] each trial's `preregistered` registry row written with this file's commit id

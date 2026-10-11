@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from goldbot.data.resample import resample_bars
+from goldbot.data.resample import BAR_COLUMNS, resample_bars
 from goldbot.data.store import Store
 
 log = logging.getLogger(__name__)
@@ -93,6 +93,42 @@ def sync_release_bars(store: Store, *, years: tuple[int, int] | None = None, raw
     files = [download(a, raw_dir, token) for a in list_assets(token)
              if years is None or years[0] <= asset_year(a["name"]) <= years[1]]
     return load_into_store(store, files)
+
+
+def download_release(tag: str, raw_dir: Path, *, token: str | None = None,
+                     years: tuple[int, int] | None = None) -> list[Path]:
+    """Download release `tag`'s Parquet assets into `raw_dir` without loading the store (for a workflow that reads
+    the files directly, e.g. scripts/count_owed_events.py). `years` filters yearly bar files (data-v1). [] when the
+    release does not exist yet; other network errors propagate. Re-running skips unchanged files (idempotent)."""
+    token = token or os.environ.get("GH_TOKEN")
+    try:
+        assets = list_assets(token, tag=tag)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return []
+        raise
+    return [download(a, raw_dir, token) for a in assets
+            if years is None or years[0] <= asset_year(a["name"]) <= years[1]]
+
+
+def read_bar_files(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
+    """The yearly 1m files (xauusd_1m_dukascopy_<year>.parquet, release data-v1) for `from_year`..`to_year` as one
+    frame in time order (BAR_COLUMNS, timestamps UTC), de-duplicated on ts_utc; bars with an error-level data-quality
+    flag are dropped (quarantined at ingest, never used). FileNotFoundError when no file matches. The one bar loader
+    research shares (scripts/research_pass.py, scripts/count_owed_events.py)."""
+    frames = []
+    for f in sorted(Path(folder).glob("xauusd_1m_dukascopy_*.parquet")):
+        year = int(f.stem.rsplit("_", 1)[1])
+        if from_year <= year <= to_year:
+            frames.append(pd.read_parquet(f))
+    if not frames:
+        raise FileNotFoundError(f"no xauusd_1m_dukascopy_<year>.parquet files for {from_year}-{to_year} in {folder}")
+    b = pd.concat(frames, ignore_index=True)
+    b["ts_utc"] = pd.to_datetime(b["ts_utc"], utc=True)
+    b["visible_at"] = pd.to_datetime(b["visible_at"], utc=True)
+    flags = b["dq_flag"].fillna("").astype(str) if "dq_flag" in b else pd.Series("", index=b.index)
+    b = b[~flags.str.startswith("error")]
+    return b.drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)[BAR_COLUMNS]
 
 
 # ------------------------------------------------------------------ macro series (data-macro workflow, release macro-v1)
