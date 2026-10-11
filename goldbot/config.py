@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -203,9 +203,12 @@ class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
     trial_budget_quarter: int = Field(20, ge=1, le=500)   # pre-registered trials per calendar quarter, all families
-    # trials of the quarter held for the pre-registered queue (director.reserved_trials): the research director and
-    # the monthly label grid spend only budget - used - reserved
-    reserved_trials_quarter: int = Field(0, ge=0, le=500)
+    # trials held for the pre-registered queue (director.reserved_trials), PER QUARTER ({"2027Q1": 9}; a quarter not
+    # listed holds none): the research director, the label grid and the analyst spend only budget - used - reserved
+    reserved_trials_quarter: dict[str, int] = Field(default_factory=dict)
+    # quarters under the E-5 cap: the analyst spends the open budget only on an ad-hoc pre-registration naming a
+    # pre-registered rule (`rule_ref`), plus the retired families' one shared exploration trial; the label grid none
+    open_budget_preregistered_only: list[str] = Field(default_factory=list)
     retired_families: list[RetiredFamily] = Field(default_factory=list)
     holdout_from: date | None = date(2025, 10, 1)          # research never sees this window unless scoring it
     holdout_to: date | None = date(2026, 9, 30)            # inclusive
@@ -224,6 +227,32 @@ class ResearchSettings(_Section):
     recal_window_days: int = Field(182, ge=7)         # outcomes exited within this many days
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
+
+    @field_validator("reserved_trials_quarter")
+    @classmethod
+    def _quarter_keys(cls, v: dict[str, int]) -> dict[str, int]:
+        import re
+        for q, n in v.items():
+            if not re.fullmatch(r"\d{4}Q[1-4]", q) or not 0 <= n <= 500:
+                raise ValueError(f"reserved_trials_quarter maps a quarter like 2027Q1 to 0..500 trials, got {q!r}: {n!r}")
+        return v
+
+    @field_validator("open_budget_preregistered_only")
+    @classmethod
+    def _quarters(cls, v: list[str]) -> list[str]:
+        import re
+        bad = [q for q in v if not re.fullmatch(r"\d{4}Q[1-4]", q)]
+        if bad:
+            raise ValueError(f"open_budget_preregistered_only lists quarters like 2027Q1, got {bad}")
+        return v
+
+    def reserved_for(self, quarter: str) -> int:
+        """Trials of `quarter` held for its pre-registered queue (0 for a quarter not listed)."""
+        return int(self.reserved_trials_quarter.get(quarter, 0))
+
+    def open_budget_capped(self, quarter: str) -> bool:
+        """`quarter` is under the E-5 cap (open_budget_preregistered_only)."""
+        return quarter in self.open_budget_preregistered_only
 
     def holdout_window(self) -> tuple[pd.Timestamp, pd.Timestamp] | None:
         """[start, end) in UTC, or None when no holdout is configured."""

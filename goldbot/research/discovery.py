@@ -37,6 +37,9 @@ survivor beat every screened column, not just every group), `n_groups_screened` 
 """
 from __future__ import annotations
 
+import fnmatch
+import hashlib
+import json
 import math
 from typing import Any, Literal
 
@@ -61,8 +64,19 @@ from goldbot.research.pipeline import (
 )
 from goldbot.research.walkforward import Fold, splits_for, window_for
 
-GroupMode = Literal["column", "feature", "family"]
-GROUP_MODES: tuple[str, ...] = ("column", "feature", "family")
+GroupMode = Literal["column", "feature", "family", "cluster"]
+GROUP_MODES: tuple[str, ...] = ("column", "feature", "family", "cluster")
+# H-02's pre-registered hypothesis clusters (preregistration-2027Q1.md rows 6-9; group mode "cluster"): each entry is a
+# registered feature (all its columns) or a column glob (context prefixes h1_/h4_/d1_/w1_ stripped); first match
+# wins, in this order; every other column stays in its feature family's group. A cluster's group stability is what
+# H-02's survivor slots rank by (director.slot_survivors).
+H02_CLUSTERS: dict[str, list[str]] = {
+    "H-03": ["macro_gvz*", "realised_vol", "vol_estimators"],      # gold VRP: GVZ against realised volatility
+    "H-05": ["round_numbers", "support_resistance", "swings"],     # stop-cluster levels
+    "H-07": ["macro_vix*", "macro_spx*"],                           # equity-stress haven
+    "H-08": ["session_zones", "market_structure"],                  # liquidity sweep reversal
+    "H-10": ["jumps", "calendar_events"],                           # post-jump behaviour
+}
 WEEK_NS = 7 * 86_400 * 10**9
 
 # Reading rule, written into the pre-registration before the run (survey 4b, decided in advance)
@@ -114,6 +128,7 @@ class DiscoveryConfig(FrozenRecord):
     permutation_repeats: int = 3
     max_selected: int = MAX_FEATURES - 1   # `side` is always the 40th input
     seed: int = 0
+    clusters: dict[str, list[str]] | None = None   # group mode "cluster": the pre-registered map (e.g. H02_CLUSTERS)
 
 
 class FoldSelection(Record):
@@ -144,15 +159,19 @@ class DiscoveryResult(Record):
 
 # ---------------------------------------------------------------------------------------------- groups
 def column_groups(columns: list[str], mode: str, m: pd.DataFrame | None = None, names: list[str] | None = None,
-                  ctx: dict | None = None, holdout_start: pd.Timestamp | None = None) -> dict[str, str]:
+                  ctx: dict | None = None, holdout_start: pd.Timestamp | None = None,
+                  clusters: dict[str, list[str]] | None = None) -> dict[str, str]:
     """Group of each column. "column": itself; "feature" / "family": the registered feature that produced it (found by
     running each feature on the last 2,000 bars of `m` BEFORE `holdout_start`, so no holdout bar is read) or that
-    feature's family. A context column (h1_/h4_/d1_/w1_) joins its base column's group; a column no feature claims is
-    its own group."""
+    feature's family; "cluster": the first pre-registered cluster (`clusters`, e.g. H02_CLUSTERS) with an entry
+    naming the column's feature or matching it as a glob, else its family. A context column (h1_/h4_/d1_/w1_) joins
+    its base column's group; a column no feature claims is its own group."""
     if mode not in GROUP_MODES:
         raise ValueError(f"unknown group mode {mode!r}; one of {GROUP_MODES}")
     if mode == "column":
         return {c: c for c in columns}
+    if mode == "cluster" and not clusters:
+        raise ValueError("group mode 'cluster' needs the pre-registered clusters map (DiscoveryConfig.clusters)")
     owner: dict[str, str] = {}
     if m is not None:
         if holdout_start is not None:
@@ -169,8 +188,14 @@ def column_groups(columns: list[str], mode: str, m: pd.DataFrame | None = None, 
                 owner.setdefault(str(c), n)
     out = {}
     for c in columns:
-        who = owner.get(c) or owner.get(_CONTEXT_PREFIX.sub("", c))
-        out[c] = c if who is None else (who if mode == "feature" else FEATURES[who].family)
+        base = _CONTEXT_PREFIX.sub("", c)
+        who = owner.get(c) or owner.get(base)
+        hit = next((cid for cid, entries in (clusters or {}).items()
+                    if any(e == who if "*" not in e else fnmatch.fnmatchcase(base, e) for e in entries)), None)
+        if mode == "cluster" and hit is not None:
+            out[c] = hit
+        else:
+            out[c] = c if who is None else (who if mode == "feature" else FEATURES[who].family)
     return out
 
 
@@ -324,6 +349,65 @@ def stability_tables(sels: list[FoldSelection], pool: list[str], groups: dict[st
     return feat, grp
 
 
+def group_map_hash(groups: dict[str, str]) -> str:
+    """sha256 of the column -> group map (sorted JSON): frozen in a group-unit pre-registration (quant ruling Q-3) and
+    recorded on the discovery row, so a different grouping at run time is visible as a deviation."""
+    return hashlib.sha256(json.dumps(groups, sort_keys=True).encode()).hexdigest()
+
+
+def check_group_config(cfg: DiscoveryConfig) -> None:
+    """A group-unit discovery pre-registers `group_top_k` explicitly (quant ruling Q-3; ValueError otherwise)."""
+    if cfg.survivor_unit == "group" and cfg.group_top_k is None:
+        raise ValueError("survivor_unit 'group' needs group_top_k set explicitly in the pre-registered config "
+                         "(quant ruling Q-3): it decides the group frequencies the survivors are read from")
+
+
+def check_group_sizes(groups: dict[str, str], cfg: DiscoveryConfig, group_mode: str) -> None:
+    """Before any look at the data (quant re-review, MEDIUM 4): when whole groups go forward (survivor_unit "group")
+    or a cluster becomes a survivor trial's inputs (group mode "cluster"), every group that can go forward (in cluster mode with feature unit: each cluster) must fit one model:
+    <= max_selected columns besides `side` (ValueError naming the group otherwise)."""
+    if cfg.survivor_unit != "group" and group_mode != "cluster":
+        return
+    sizes: dict[str, int] = {}
+    for g in groups.values():
+        sizes[g] = sizes.get(g, 0) + 1
+    if cfg.survivor_unit != "group":     # cluster mode, feature unit: only a cluster becomes a trial's inputs
+        sizes = {g: n for g, n in sizes.items() if g in (cfg.clusters or {})}
+    big = {g: n for g, n in sizes.items() if n > cfg.max_selected}
+    if big:
+        raise ValueError(f"{', '.join(f'{g} has {n} columns' for g, n in big.items())}, over max_selected "
+                         f"{cfg.max_selected}: a whole group must fit one model (quant ruling Q-3); pre-register "
+                         f"smaller groups")
+
+
+def survivor_selection(feat_t: pd.DataFrame, grp_t: pd.DataFrame,
+                       cfg: DiscoveryConfig) -> tuple[list[str], list[str], dict[str, int], list[str]]:
+    """(groups forward, the selected features, n_features per group forward, survivor groups skipped).
+
+    Feature unit: the features with stability >= stability_threshold, best first, at most max_selected (K_eff = every
+    feature screened, so cutting the list costs nothing in honesty); nothing is skipped. Group unit (quant ruling Q-3,
+    re-review MEDIUM 4): the survivor groups go forward WHOLE in group-stability order while their members fit within
+    max_selected; the first that does not fit and every one after it are recorded as skipped, never truncated (a
+    partial group would be a feature-level choice that K_eff = groups screened does not pay for). A group-unit config
+    pre-registers `group_top_k` explicitly (ValueError otherwise)."""
+    surv_all = [str(g) for g in grp_t.index[grp_t["stability"] >= cfg.stability_threshold]]
+    sizes = {str(g): n for g, n in grp_t["n_features"].items()}
+    if cfg.survivor_unit == "group":
+        check_group_config(cfg)
+        forward: list[str] = []
+        total = 0
+        for g in surv_all:
+            if total + int(sizes[g]) > cfg.max_selected:
+                break
+            forward.append(g)
+            total += int(sizes[g])
+        skipped = surv_all[len(forward):]
+        surv = feat_t[feat_t["group"].isin(forward)]
+        return forward, [str(c) for c in surv.index], {g: int(sizes[g]) for g in forward}, skipped
+    surv = feat_t[feat_t["stability"] >= cfg.stability_threshold]
+    return surv_all, [str(c) for c in surv.index[: cfg.max_selected]], {g: int(sizes[g]) for g in surv_all}, []
+
+
 def auc_lower_bound(y: np.ndarray, p: np.ndarray, ts: pd.DatetimeIndex, n_boot: int = 500, seed: int = 0,
                     alpha: float = 0.05) -> float | None:
     """Lower alpha/2 quantile of the AUC under a weekly block bootstrap (candidates in a week resampled together)."""
@@ -364,16 +448,13 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
                   swap: Any = None) -> DiscoveryResult:
     """Fold-internal stability selection, then the walk-forward of a model fitted in each fold on that fold's own
     selection (cross-fitted calibration and gates as every walk-forward). `labels` carries weight."""
+    check_group_config(cfg)              # before any look at the data
     groups = groups or {c: c for c in pool}
+    check_group_sizes(groups, cfg, group_mode)
     purge = int(window.get("purge_days", 0))
     sels = [select_in_fold(feats, labels, f, pool, cfg, groups, purge_days=purge) for f in folds]
     feat_t, grp_t = stability_tables(sels, pool, groups, cfg)
-    surv_groups = list(grp_t.index[grp_t["stability"] >= cfg.stability_threshold])
-    if cfg.survivor_unit == "group":     # whole groups go forward: their members, best first
-        surv = feat_t[feat_t["group"].isin(surv_groups)]
-    else:
-        surv = feat_t[feat_t["stability"] >= cfg.stability_threshold]
-    selected = list(surv.index[: cfg.max_selected])
+    surv_groups, selected, surv_n, skipped = survivor_selection(feat_t, grp_t, cfg)
     res = _walk_forward(agent_id, labels, gross, feats, ["side", *selected], folds, version, n_trials=n_trials,
                         trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd, holdout=holdout,
                         score_holdout=False, window=window, swap=swap,
@@ -392,7 +473,10 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     k_eff = len(pool) if cfg.survivor_unit == "feature" else n_groups
     res.metrics["discovery"] = {
         "config": cfg.model_dump(), "group_mode": group_mode, "n_features_screened": len(pool),
-        "n_groups_screened": n_groups, "survivor_unit": cfg.survivor_unit, "k_eff": k_eff, "selected": selected, "survivor_groups": surv_groups,
+        "n_groups_screened": n_groups, "survivor_unit": cfg.survivor_unit, "k_eff": k_eff, "selected": selected,
+        "survivor_groups": surv_groups, "survivor_groups_n_features": surv_n, "skipped_survivor_groups": skipped,
+        "group_map_sha256": group_map_hash(groups),
+        "group_members": {g: [c for c in pool if groups[c] == g] for g in dict.fromkeys(groups[c] for c in pool)},
         "folds": [{"k": s.k, "n_train": s.n_train, "n_subsamples": s.n_subsamples, "selected": s.selected,
                    "fallback": s.fallback,
                    "frequency": {c: round(v, 4) for c, v in s.frequency.items() if v > 0},
@@ -471,9 +555,15 @@ def render_discovery(d: DiscoveryResult, meta: dict[str, Any], top: int = 25) ->
         lines.append(f"| {c} | {r['group']} | " + " | ".join(f"{r[f]:.2f}" for f in folds)
                      + f" | {r['mean_freq']:.2f} | {r['stability']:.2f} |")
     cfg = m["discovery"]["config"]
+    sizes = {str(g): n for g, n in d.group_table["n_features"].items()}
     lines += ["", f"Frequency = share of a fold's subsamples with the feature in the top {cfg['top_k']} (a group: its "
                   f"summed member importance in the top groups); stability = share of folds with frequency >= {cfg['freq_threshold']}.",
-              f"Survivor groups (stability >= {cfg['stability_threshold']}): {', '.join(d.survivor_groups) or 'none'}",
+              f"Survivor groups (stability >= {cfg['stability_threshold']}): "
+              + (", ".join(f"{g} ({int(sizes[g])} features)" for g in d.survivor_groups)
+                 or "none"),
+              "Survivor groups skipped (whole groups only, over max_selected): "
+              + (", ".join(f"{g} ({int(sizes[g])} features)" for g in m["discovery"].get("skipped_survivor_groups", []))
+                 or "none"),
               f"Selected set ({len(d.selected)} of at most {cfg['max_selected']} + side): {', '.join(d.selected) or 'none'}",
               ""]
     for name, g in (("Design gates", m.get("gates")), ("Design gates, rule-only (informational)", m.get("rule_only_gates"))):
@@ -508,6 +598,7 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     )
     from goldbot.research.registry import DISCOVERY
 
+    check_group_config(cfg)              # before the budget check, the pre-registration and any look
     names = research_feature_names(ctx)
     family = discovery_family(spec.family)
     config = {"specialist": spec.family, "spec": spec.config, "discovery": cfg.model_dump(), "group_mode": group_mode,
@@ -530,7 +621,7 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
         raise ValueError(f"{spec.family} produced no labelled candidates; nothing to discover")
     pool = discovery_pool(prep)
     groups = column_groups(pool, group_mode, frame[0], names, ctx,
-                           holdout_start=None if holdout is None else pd.Timestamp(holdout[0]))
+                           holdout_start=None if holdout is None else pd.Timestamp(holdout[0]), clusters=cfg.clusters)
     n_eff = reg.n_trials_effective + 1
     d = discover(prep, cfg, groups, group_mode, n_trials=n_eff, extra_cost_usd=extra_cost_usd, holdout=holdout)
     metrics = {**d.result.metrics, "lookahead": leak, "cost_source": cost_source,

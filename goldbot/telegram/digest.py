@@ -302,11 +302,11 @@ def _trial_line(settings: Settings | None, registry_path: Path | None, now: pd.T
     from goldbot.research.director import _prereg_matches, reserved_trials
     from goldbot.research.registry import quarter_of, quarter_start, quarter_trials
     budget = settings.research.trial_budget_quarter if settings is not None else 20
-    setting = settings.research.reserved_trials_quarter if settings is not None else 0
     rows: list[dict[str, Any]] = []
     if registry_path is not None and registry_path.exists():
         rows = [json.loads(x) for x in registry_path.read_text(encoding="utf-8").splitlines() if x.strip()]
     q = quarter_of(_utc(now).to_pydatetime())
+    setting = settings.research.reserved_for(q) if settings is not None else 0
     used = quarter_trials(rows, q)
     reserved = reserved_trials(rows, q, setting).reserved
     budget_txt = (f"budget {q}: {used} of {budget} trials used, {reserved} reserved for pre-registered, "
