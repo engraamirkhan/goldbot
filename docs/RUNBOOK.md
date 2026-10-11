@@ -54,7 +54,7 @@ Compute -> Instances -> Create, both in the same VCN (the wizard's default netwo
 
 ### 0.3 The MT5 box
 Root runs the bootstrap, so it runs only a copy whose hash you checked on your Mac, at a commit on `main`
-(`<SHA>`, `<HASH>`: docs/deploy/first-deploy.md step 0 shows how to get both). Run it inside `tmux new -s boot`; it
+(`<SHA>`, `<HASH>`: docs/deploy/first-deploy.md P6 shows how to get both). Run it inside `tmux new -s boot`; it
 ignores a dropped connection and logs to `/root/goldbot-bootstrap.log`.
 ```bash
 ssh ubuntu@<mt5 public ip>

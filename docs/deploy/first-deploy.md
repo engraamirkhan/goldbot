@@ -85,7 +85,9 @@ the brain needs about 1 GB at rest. The Saturday retrain will run slowly in swap
    * image **Windows Server 2025 Datacenter** (it includes `winget`), the `[smalldisk]` variant if offered;
    * size **B2ats v2**; OS disk **Premium SSD, 64 GiB** (the free allowance is two 64 GB P6 disks);
    * region near London;
-   * an administrator user name and password (password manager);
+   * an administrator user name and password (password manager). This account is only for you over Remote Desktop.
+     The bridge runs as its own non-admin user, `goldbot-bridge`. The install creates it and asks you to choose its
+     password, so save a second password manager entry for it before step 1b;
    * public inbound ports: **RDP only, source = My IP**.
    Re-check each choice against the free-services list as you create it.
 3. On the Mac, install **Windows App** (Mac App Store) for Remote Desktop.
@@ -97,21 +99,25 @@ the brain needs about 1 GB at rest. The Saturday retrain will run slowly in swap
 2. Open your new bot and press **Start**.
 3. Message **@userinfobot** to see your numeric id.
 
-**P6. Get the commit and the hashes (Mac, 5 min).** Do this after the release manager says PR #74 and the
-first-deploy fixes are merged and CI is green on `main`.
+**P6. Get the commit and the hashes (Mac, 5 min).** The release manager names the deploy commit on issue #34, once
+PR #74 and the first-deploy fixes are merged. That commit is `<SHA>`.
 ```bash
 cd ~/myproject/goldbot && git fetch -q origin
-SHA=$(git rev-parse origin/main); echo $SHA
-git merge-base --is-ancestor $SHA origin/main && echo on-main
+SHA=<SHA from issue 34>
+git branch -r --contains $SHA | grep -qx '  origin/main' && echo on-main
+gh api repos/engraamirkhan/goldbot/commits/$SHA/check-runs --jq '.check_runs[] | "\(.name) \(.conclusion)"'
 for f in linux/brain_bootstrap.sh linux/mt5_bootstrap.sh vps_bootstrap.ps1; do
   echo "$f $(git show $SHA:goldbot/ops/$f | shasum -a 256 | cut -c1-64)"; done
 ```
 Write down `<SHA>` and the three `<HASH>` values. They are public.
 
-**Check:** `on-main` printed, and `git show $SHA:goldbot/ops/vps_bootstrap.ps1 | grep -c BridgeOnly` prints more
-than 0.
+**Check:**
+* `on-main` is printed;
+* `backend success` and `frontend success` are listed. Without `gh`, open the commit page on GitHub and look for
+  the green tick;
+* `git show $SHA:goldbot/ops/vps_bootstrap.ps1 | grep -c BridgeOnly` prints more than 0.
 
-**Stop if:** either check fails. You are on the wrong commit; ask for the right one.
+**Stop if:** any check fails. You are on the wrong commit; ask for the right one.
 
 Have ready: `<mt5-login>` and the MT5 demo password (typed only into the MT5 terminal), the bot token, your Telegram id, your email, an authenticator
 app on your phone.
@@ -133,15 +139,15 @@ and then `brain installed`. Copy the `ssh-ed25519 ...` line; it is a public key 
 **1b. option A, Windows.** In Windows App, connect to `<azure-ip>`. Open **PowerShell as Administrator**:
 ```powershell
 cd $env:USERPROFILE
-Invoke-WebRequest https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/vps_bootstrap.ps1 -OutFile vps_bootstrap.ps1
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/vps_bootstrap.ps1 -OutFile vps_bootstrap.ps1
 (Get-FileHash .\vps_bootstrap.ps1 -Algorithm SHA256).Hash -eq "<HASH-vps>".ToUpper()
 ```
 **Expect:** `True`. **Stop if** it prints `False`.
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\vps_bootstrap.ps1 -BridgeOnly -RunAs ".\<windows-user>" -Ref <SHA>
+powershell -ExecutionPolicy Bypass -File .\vps_bootstrap.ps1 -BridgeOnly -Ref <SHA>
 ```
-It asks once for that Windows user's password (for the service). **Expect** about 25 min, ending
-`Bridge box installed, nothing started`. Then **restart Windows** (Start -> Power -> Restart) so the pagefile takes
+It asks you once to choose the `goldbot-bridge` password; use the one from your password manager. **Expect** about
+25 min. The SSH server is started; the bridge service is not. The script ends `Bridge box installed`. Then **restart Windows** (Start -> Power -> Restart) so the pagefile takes
 effect, and reconnect.
 
 **1c. option B, Oracle micro** (Mac: `ssh ubuntu@<mt5-ip>`, `tmux new -s boot`):
@@ -157,7 +163,9 @@ repairing one.
 
 ### 2. Log in to MT5 once (5 min per option)
 
-**A (Windows, in Remote Desktop):** start `C:\MT5\ICMarkets\terminal64.exe`. Then:
+**A (Windows, in Remote Desktop).** Start the terminal **as the bridge user**, so the saved login belongs to the
+account the service runs as. In PowerShell:
+`runas /user:goldbot-bridge C:\MT5\ICMarkets\terminal64.exe`. It asks for the `goldbot-bridge` password. Then:
 1. File -> Login to Trade Account: `<mt5-login>`, password, server **ICMarketsSC-Demo**, tick **Save password**.
 2. Check that `XAUUSD` is in Market Watch.
 3. Tools -> Options -> Expert Advisors -> tick **Allow algorithmic trading**.
@@ -177,7 +185,8 @@ one.
 ### 3. Link the brain to the bridge (10 min)
 
 **A (Windows over Tailscale)**
-1. Windows, PowerShell: `tailscale up` and sign in to your Tailscale account in the browser it opens.
+1. Windows, PowerShell as Administrator: `tailscale up --unattended` (it keeps running when you sign out of Remote
+   Desktop). Sign in to your Tailscale account in the browser it opens.
 2. brain: install Tailscale from its signed package source, then sign in:
    ```bash
    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
@@ -202,12 +211,13 @@ while the bridge is not started yet; that is fine.
 Do these two back to back. The token is shown once; type it straight into setup.
 
 1. Bridge box, start the bridge with a new token.
-   * **A**, PowerShell as `<windows-user>` (not Administrator), in `C:\goldbot`:
+   * **A**: in PowerShell, run as the bridge user (asks for its password). A new window opens:
      ```powershell
-     .\.venv\Scripts\python -m goldbot.ops.accounts bridge-serve icm-demo
-     nssm start goldbot-bridge-icm-demo
+     runas /user:goldbot-bridge "cmd /k cd /d C:\goldbot && .venv\Scripts\python -m goldbot.ops.accounts bridge-serve icm-demo"
      ```
-   * **B**: `goldbot-mt5 accounts bridge-serve icm-demo`, then `sudo systemctl start goldbot-bridge@icm-demo`.
+     Then, in the **Administrator** PowerShell: `nssm restart goldbot-bridge-icm-demo`.
+   * **B**: in a fresh `tmux new -s token`, run `goldbot-mt5 accounts bridge-serve icm-demo`, then
+     `sudo systemctl restart goldbot-bridge@icm-demo`.
 
    It asks for `<mt5-login>`, then the listen address: type `127.0.0.1:8765`. It prints the token once.
 2. brain: `goldbot run setup`. Answer each step:
@@ -221,7 +231,12 @@ Do these two back to back. The token is shown once; type it straight into setup.
    | 5 | your email |
    | 6, 7, 8 | press Enter to skip (backups are set up tomorrow, Part 4) |
 
-3. Close the bridge window that showed the token, and delete the token message from @BotFather's chat.
+3. Remove the token from every screen:
+   * **A**: close the `runas` window;
+   * **B**: `tmux kill-session -t token`, which also discards its scrollback;
+   * a plain window: `clear`, then close it.
+
+   Then delete the bot-token message in @BotFather's chat.
 
 ### 5. Preflight (5 min)
 
@@ -247,6 +262,17 @@ sleep 60 && goldbot run health
 journalctl -u goldbot-engine@icm-demo -n 20 --no-pager
 ```
 
+Seed the news calendar now. Otherwise the tier-1 blackout has no calendar until the scheduler's 06:10 UTC run
+tomorrow. The scheduler only waits for the next slot after its first start:
+```bash
+cd /opt/goldbot && sudo -u goldbot -H env PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring .venv/bin/python -c "
+import pandas as pd; from goldbot.config import load_settings; from goldbot.data.store import Store
+from goldbot.data.econ_calendar import parse_ff_week, fetch_ff_week
+s = load_settings(); df = parse_ff_week(fetch_ff_week(), pd.Timestamp.now('UTC'), s.risk.blackout.events)
+print(Store(s.data_root).append('calendar_events', df, source='forexfactory'), 'calendar events stored')"
+```
+**Expect:** a number above 0, then `calendar events stored`.
+
 **Expect:**
 * the engine log says `engine icm-demo started (RemoteBroker), models: []`;
 * health shows no FAIL lines, apart from the ones listed below;
@@ -262,13 +288,25 @@ Normal for now (warnings):
 **Check both boxes run the same code:**
 * brain: `sudo -u goldbot git -C /opt/goldbot rev-parse HEAD`
 * B: `sudo -u mt5 git -C /opt/goldbot rev-parse HEAD`
-* A: `git -C C:\goldbot rev-parse HEAD`
+* A, in the Administrator PowerShell: `git -c safe.directory=C:/goldbot -C C:\goldbot rev-parse HEAD`
 
 Each must print `<SHA>`.
 
+**Check the bridge box is locked down (option A, 2 min):**
+* Windows, Administrator PowerShell: `icacls C:\goldbot`. It must list no `Authenticated Users` and no
+  `BUILTIN\Users` entry; only SYSTEM, Administrators and `goldbot-bridge` (read).
+* brain: the tunnel key must not run commands. This must **fail**, with no user name printed:
+  ```bash
+  sudo -u goldbot ssh -o BatchMode=yes -i /var/lib/goldbot/.ssh/id_ed25519 mt5@<windows-tailscale-ip> whoami
+  ```
+  For option B, use `mt5@<mt5-private-ip>`.
+
+**Stop if** either check fails: stop the bridge (`nssm stop goldbot-bridge-icm-demo`) and report it.
+
 **6B. Switch the brain to option B** (only if A failed):
-1. `sudo goldbot-tunnel <mt5-private-ip>`
-2. `goldbot run setup`: step 2 only, with the token from B's `bridge-serve`.
+1. `sudo goldbot-tunnel <mt5-private-ip>`. This restarts the running tunnel onto B.
+2. `goldbot run setup`: step 2 only, with the token from B's `bridge-serve` (run in `tmux new -s token`, as in step
+   4).
 3. `sudo systemctl restart goldbot-engine@icm-demo`, then `goldbot run preflight`.
 
 **Roll back (any time):**
