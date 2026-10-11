@@ -442,6 +442,12 @@ director's cycle report of 2026-10-11. None changes a reading rule written above
     only pre-registering model research, and the model stage fails the gates on so few candidates. So the floor can
     retire but never promote. A screen with 150-999 events **can** still read "pass". If "retire-only" is meant in
     that stricter sense, it is a code change for the quant reviewer and the implementer, not made here.
+  - **Strict reading (owner, 2026-10-11; code changed 2026-10-11, before any outcome was seen).** The owner ruled
+    the floor retire-only in the strict sense: `screen_verdict` now takes a retire floor and a pass floor
+    (`screen.screen_floors`: the daily override is the retire floor, `research.screen_min_events` the pass floor). A
+    daily rule with 150-999 events reads `fail` when it misses the sign or the t, and `inconclusive (event floor)`
+    otherwise; it never reads `pass`, so it never reaches the model stage and H-01's coded rule reads it
+    `inconclusive`. No reading rule above changes.
 - **B. Trial budget: 20 a quarter, unchanged.** 4 or 5 queued rows + 4 contingent H-02 survivor slots (ADR 0007),
   the rest open.
 - **C. Consensus feed: none.** H-11 stays blocked.

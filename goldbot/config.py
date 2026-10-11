@@ -284,7 +284,8 @@ class ResearchSettings(_Section):
     holdout_to: date | None = date(2026, 9, 30)            # inclusive
     # primary-signal screen event floor (research.screen, P4); changing it is an owner decision, set before the run
     screen_min_events: int = Field(1000, ge=1)
-    screen_min_events_daily: int | None = Field(None, ge=1)   # rules whose signal is on daily bars; None: the floor above
+    # rules whose signal is on daily bars: retire-only (a pass still needs screen_min_events); None: the floor above
+    screen_min_events_daily: int | None = Field(None, ge=1)
     director_floor: int = Field(2, ge=0, le=200)        # research director: exploration trials per family per month
     label_grid_step: float = Field(0.25, gt=0, lt=1)
     cost_window_days: int = Field(30, ge=1)

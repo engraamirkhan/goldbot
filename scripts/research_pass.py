@@ -126,10 +126,10 @@ from goldbot.research.pipeline import (  # noqa: E402
 from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, quarter_of  # noqa: E402
 from goldbot.research.screen import (  # noqa: E402
     is_inconclusive,
-    min_events_for,
     rule_only_split,
     rule_only_split_lines,
     screen,
+    screen_floors,
     screen_lines,
     signal_timeframe,
 )
@@ -671,9 +671,10 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         # ctx: the point-in-time tables a candidate rule reads (H-06's macro gate); the frame is already built
         preps = [prepare(s, b_dec, context, ctx=feat_ctx, extra_cost_usd=extra_cost, holdout=holdout,
                          score_holdout=args.score_holdout, frame=frame, swap=swap) for s in job.specs]
-        # event floor: research.screen_min_events, or the daily-signal override (owner ruling A), set before the run
-        floor = min_events_for(tf if job.pooled else signal_timeframe(job.specs[0]), settings.research)
-        scr = None if args.score_holdout else screen(preps if job.pooled else preps[0], floor)
+        # event floors: research.screen_min_events, or the daily-signal override (owner ruling A), set before the run;
+        # the daily override is retire-only, so a pass still needs research.screen_min_events
+        floors = screen_floors(tf if job.pooled else signal_timeframe(job.specs[0]), settings.research)
+        scr = None if args.score_holdout else screen(preps if job.pooled else preps[0], *floors)
         # a family under its pre-registered rule-only screen (Specialist.screening, e.g. asia_drift) never reaches the
         # model stage, pass or fail, with or without --skip-screen: the screen row records the look (quant review M2)
         screen_only = scr is not None and not job.pooled and job.specs[0].screening
@@ -845,9 +846,11 @@ def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[s
         lines += ["Screen passed; rule-only screen: no model was fitted. The family is under its pre-registered screen "
                   "(`Specialist.screening`); model research on it needs its own pre-registration."]
     elif is_inconclusive(scr):
-        lines += [f"Screen inconclusive (event floor): {scr['n']:,} events, fewer than the "
-                  f"{scr['min_events']:,} the floor needs. No model was fitted. This recorded, charged trial cannot "
-                  "retire the hypothesis; it is not evidence for promotion either."]
+        pass_n = int(scr.get("pass_min_events") or scr["min_events"])
+        short = (f"fewer than the {pass_n:,} a pass needs (the {scr['min_events']:,}-event floor is retire-only)"
+                 if scr["n"] >= scr["min_events"] else f"fewer than the {scr['min_events']:,} the floor needs")
+        lines += [f"Screen inconclusive (event floor): {scr['n']:,} events, {short}. No model was fitted. This "
+                  "recorded, charged trial cannot retire the hypothesis; it is not evidence for promotion either."]
     else:
         lines += ["Screen failed: no model was fitted. The rule is retired from model research (it may still serve as a "
                   "feature); `--skip-screen` fits a model anyway and is recorded as such."]
