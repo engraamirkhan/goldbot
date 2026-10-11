@@ -173,13 +173,17 @@ and the rest still arrives. It never contains account numbers or emails.
   after 90 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
 * The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
   release note mentions the bridge.
-  Deploys there never upgrade Python packages (`--no-deps`). An MT5 box set up before ADR 0010 should get pydantic
-  2.12 or newer so it matches new boxes (the bridge runs without it: only the brain reads bridge records
-  tolerantly). Do it once, by hand, **with the book flat or at the weekend** (restarting the bridge cuts the engine off from the terminal for a moment):
+  Its Windows-Python packages come only from `goldbot/ops/linux/mt5-bridge-requirements.txt`: exact versions and
+  sha256 hashes rendered from `uv.lock` (`python scripts/bridge_requirements.py write`; CI fails when it is stale),
+  wheels only. A deploy reinstalls them when `uv.lock` or that file changed. An MT5 box set up before this file
+  existed (unpinned packages, maybe pydantic older than 2.12) should be brought onto it once, by hand, **with the book
+  flat or at the weekend** (restarting the bridge cuts the engine off from the terminal for a moment):
   1. `sudo systemctl stop goldbot-bridge@icm-demo` (one unit per account; stop each). Wine cannot replace a
      pydantic_core file the running bridge has loaded, so a running bridge can leave a half-installed package.
-  2. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install 'pydantic>=2.12,<3'`
-  3. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -c "import pydantic, pydantic_core; from pydantic import BaseModel; print(pydantic.VERSION, pydantic_core.__version__)"`
+  2. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install --require-hashes --no-deps --only-binary :all: -r Z:/opt/goldbot/goldbot/ops/linux/mt5-bridge-requirements.txt`
+     (a hash mismatch stops it with nothing changed: do not work around it, report it, it means a download was not
+     what uv.lock recorded)
+  3. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -c "import pydantic, pydantic_core, MetaTrader5, goldbot.execution.bridge; print(pydantic.VERSION)"`
      must print 2.12 or newer and no error.
   4. `sudo systemctl start goldbot-bridge@icm-demo` (each account). Wait about 20 s, then
      `systemctl is-active goldbot-bridge@icm-demo` must print `active` and `systemctl show -p NRestarts

@@ -87,9 +87,11 @@ sudo -u mt5 -H bash -lc "
   wine python.exe /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
   curl -fsSLo mt5setup.exe https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe
   wine mt5setup.exe /auto /path:'C:\\MT5\\ICMarkets'
-  wine python -m pip install --upgrade pip
-  wine python -m pip install MetaTrader5 pandas numpy pyarrow 'pydantic>=2.12,<3' pyyaml requests keyring
-  wine python -m pip install --no-deps -e 'Z:$ROOT'
+  # exact versions and sha256 from uv.lock (scripts/bridge_requirements.py), wheels only, nothing unpinned: no pip
+  # self-upgrade, and goldbot is put on the path with a .pth file instead of an editable build (that would fetch an
+  # unpinned setuptools into the build environment)
+  wine python -m pip install --require-hashes --no-deps --only-binary :all: -r 'Z:$ROOT/goldbot/ops/linux/mt5-bridge-requirements.txt'
+  wine python -c 'import pathlib, sysconfig; pathlib.Path(sysconfig.get_paths()[\"purelib\"], \"goldbot.pth\").write_text(\"Z:$ROOT\\n\")'
 "
 
 # the brain's tunnel key: forwarding to the bridge port only; any command runs /bin/false (`ssh -N` opens none)

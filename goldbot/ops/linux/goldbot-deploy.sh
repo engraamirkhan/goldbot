@@ -52,6 +52,7 @@ LOG=$VAR/deploys.jsonl
 LOCK=/run/goldbot-deploy.lock
 APPROVED=$ROOT/state/deploy/approved.json
 PY_BRAIN=$ROOT/.venv/bin/python           # run only as the service user
+BRIDGE_REQS=goldbot/ops/linux/mt5-bridge-requirements.txt   # MT5 box: hash-pinned from uv.lock (scripts/bridge_requirements.py)
 MANUAL=""
 MODE=approval
 DROP_KEYS=0
@@ -385,8 +386,14 @@ install_for() {  # reinstall Python deps / rebuild the dashboard only when they 
       sudo -u goldbot -H bash -c "cd $ROOT && /var/lib/goldbot/.local/bin/uv sync -q --frozen --extra live --python 3.11" || return 1
     fi
     if grep -q '^web/' <<< "$changed"; then sudo -u goldbot -H bash -c "cd $ROOT/web && npm ci --silent && npm run build" || return 1; fi
-  elif grep -q '^pyproject.toml$' <<< "$changed"; then
-    sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install -q --no-deps -e "Z:$ROOT" || return 1
+  elif grep -qE "^(uv.lock|$BRIDGE_REQS)\$" <<< "$changed" && as_owner test -f "$ROOT/$BRIDGE_REQS"; then
+    # MT5 box: exact versions + sha256 from uv.lock, wheels only (scripts/bridge_requirements.py). A commit from before
+    # the file existed (a rollback) keeps the installed packages: older code never pinned them anyway. The bridges stop
+    # first: Wine cannot replace a .pyd a running bridge has loaded (half-installed package); switch_to starts them.
+    local svcs; mapfile -t svcs < <(services)
+    stop_all "${svcs[@]}" || return 1
+    sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install -q --require-hashes --no-deps \
+      --only-binary :all: -r "Z:$ROOT/$BRIDGE_REQS" || return 1
   fi
   return 0
 }
