@@ -64,6 +64,14 @@ APPROVED_RISK_TOLERANCE = 1.02   # ADR 0009: the risk sent may exceed the approv
 # close refused with one of these is backed off; any other failure (requote 10004/10021, price changed 10020, a
 # raising call) is retried on the next tick, so an exit is never delayed by a transient refusal
 MARKET_CLOSED_RETCODES = frozenset({10017, 10018})
+# MT5 trade-server retcodes that mean the order was definitely NOT placed (requote, reject, cancelled, invalid request /
+# volume / price / stops, trade disabled, market closed, no money, prices changed, no quotes, invalid expiration, too
+# many requests, no changes, autotrading off, locked, frozen, invalid filling, limits, position closed, close-only,
+# FIFO); the paper broker's duplicate refusal is 10027. Anything else that is not a fill (-1 send failed, 10008 placed,
+# 10010 partial, 10011 processing error, 10012 timeout, 10023 order state changed, 10031 no connection, unknown codes)
+# is ambiguous: auto entries stop for the rest of that bar close (trading-safety review HIGH, BACKLOG 19 review)
+DEFINITE_REJECT_RETCODES = frozenset({10004, 10006, 10007, *range(10013, 10023), *range(10024, 10031),
+                                      *range(10033, 10046)})
 # design (D10): a bar close is detected by clock, close time plus this grace, not by the next bar's first tick
 BAR_CLOSE_GRACE_S = 1.5
 LATE_TICK_WARN_S = 60.0      # at most one late_tick data-quality warning per this many seconds (every one is counted)
@@ -370,6 +378,11 @@ class Engine:
         # side read at most once a minute for it (side -> (minute, account currency per USD or None))
         self._open_risk_rows: list[dict[str, Any]] = []
         self._open_fx: dict[int, tuple[pd.Timestamp, float | None]] = {}
+        # position ids in the last successful positions() read, None while unread (the auto-entry fill check)
+        self._position_ids: set[int] | None = None
+        # (bar close, why): auto entries stopped for the rest of that bar close after an ambiguous order or a failed
+        # account re-read (review HIGH); a later bar close trades again on a fresh read
+        self._auto_paused: tuple[pd.Timestamp, str] | None = None
         self._unconfirmed: dict[int, int] = {}
         # position -> (consecutive market-closed refusals, next attempt): closes back off only when the market is closed
         self._close_backoff: dict[int, tuple[int, pd.Timestamp]] = {}
@@ -912,8 +925,13 @@ class Engine:
                             risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2),
                             **self._card_money(gd, intent))
             if self.cfg.approval_mode == "auto":
-                self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
+                if self._auto_paused is not None and self._auto_paused[0] == close_ts:
+                    decisions.append(self._record(agent, close_ts, p, mult, f"auto_paused:{self._auto_paused[1]}",
+                                                  scored_fv=sfv))
+                    continue
+                res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
                 decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid, scored_fv=sfv))
+                self._after_auto_order(res, gd, side, close_ts)
             else:
                 self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
                 self.center.propose(prop)
@@ -970,12 +988,54 @@ class Engine:
             return gd.model_copy(update={"allowed": False, "reasons": ["risk_above_approved"]}), lots
         return gd, lots
 
+    def _after_auto_order(self, res: OrderResult | None, gd: GateDecision, side: int, close_ts: pd.Timestamp) -> None:
+        """Trading-safety review HIGH (BACKLOG 19 review): every auto entry at one bar close must see the previous
+        one, or `max_positions`, the combined cap, the heat cap and the same-direction cap can each be passed within a
+        bar close. After an order the account is read again (`_refresh_account` on the broker's last tick). A fill the
+        positions read does not show yet is added conservatively: one more position on its side, its lots and notional,
+        the gate's margin, and its stop risk scaled to the filled lots (unknown open risk stays unknown). An ambiguous
+        result (neither a fill nor a definite reject, `DEFINITE_REJECT_RETCODES`) or a failed re-read stops auto entries
+        for the rest of this bar close. `res` None: nothing was sent (a duplicate), nothing changes."""
+        if res is None:
+            return
+        filled = res.ok and res.position_id is not None
+        if not filled and res.retcode in DEFINITE_REJECT_RETCODES:
+            return                                      # nothing placed: the facts are unchanged
+        if not filled:
+            self._auto_paused = (close_ts, "unconfirmed_order")
+            log.warning("auto entry result unconfirmed (retcode %s): auto entries stop for this bar close", res.retcode)
+        try:
+            self._refresh_account(self.broker.last_tick(self.cfg.symbol))
+            seen = self._position_ids is not None and res.position_id in self._position_ids
+        except Exception as exc:                        # fail closed: no further auto entry on unknown facts
+            log.warning("account re-read after an auto entry failed (%s): auto entries stop for this bar close",
+                        type(exc).__name__)
+            self._auto_paused = self._auto_paused or (close_ts, "account_unread")
+            seen = False
+        if not filled or seen:
+            return
+        st, lots = self.state, float(res.filled_lots)
+        st.open_positions += 1
+        st.open_lots = round(st.open_lots + lots, 6)
+        px = self._price or res.price           # USD notional at the mid, as `_refresh_account` publishes it
+        if px:
+            st.open_notional = st.open_lots * self._contract_size() * px
+        if side > 0:
+            st.open_long += 1
+        else:
+            st.open_short += 1
+        st.margin_used += gd.margin_needed
+        if st.open_risk is not None:
+            st.open_risk += gd.risk_amount * lots / gd.lots if gd.lots > 0 else gd.risk_amount
+
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float,
-                 atr_usd: float | None = None) -> None:
+                 atr_usd: float | None = None) -> OrderResult | None:
+        """Sends the order (pending_orders row first) and returns the broker's result; None when the proposal was sent
+        before and nothing is sent now."""
         if prop.proposal_id in self.sent_ids:       # sent before (this process or before a restart): never again
             self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "duplicate_suppressed",
                                    "proposal": prop.proposal_id})
-            return
+            return None
         magic = self._magic(agent.family)
         oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
@@ -1005,6 +1065,7 @@ class Engine:
                                   "agent_id": agent.agent_id, "side": prop.side, "lots": res.filled_lots, "requested": requested,
                                   "filled": res.price, "order_type": "market", "retcode": res.retcode, "commission": np.nan}])
             self.store.append("fills", fill, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+        return res
 
     @staticmethod
     def _attach_policy(tr: OpenTrade, agent: Specialist, *, entry: float, atr_usd: float | None,
@@ -1471,9 +1532,10 @@ class Engine:
         if positions is not None:
             st.open_positions = len(positions)
             st.open_lots = round(sum(p.lots for p in positions), 6)   # every position on the account is exposure
+            self._position_ids = {p.position_id for p in positions}
             self._note_open_risk(positions, tick)
         else:                                   # unknown book: unknown open risk (entries are blocked anyway)
-            st.open_risk, self._open_risk_rows = None, []
+            st.open_risk, self._open_risk_rows, self._position_ids = None, [], None
         st.open_notional = st.open_lots * self._contract_size() * (tick.bid + tick.ask) / 2   # USD, terminal contract
         st.spread_points = (tick.ask - tick.bid) / 0.01
         now = self._now(tick)

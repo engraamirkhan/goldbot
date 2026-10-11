@@ -777,10 +777,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   without SL, on another symbol, or without a usable conversion makes the open risk unknown: `open_risk_unknown` while
   either rule is on (fail closed). Exits never consult any of it. Owner: settings.local.yaml `risk: { heat: { enabled:
   true, ... }, project_open_risk: true }`, restart the engine. Not done: the cross-account sum and count (the
-  supervisor does not publish open risk or side counts yet), health lines and the dashboard budget (ui-ux). Found while
-  building it, pre-existing and unchanged: in auto mode, entries decided at the same bar close are all checked against
-  the account state read before the first one fills, so `max_positions`, the combined cap and these new caps can each
-  be passed once within one bar close (propose mode re-checks at approval with a fresh read).
+  supervisor does not publish open risk or side counts yet), health lines and the dashboard budget (ui-ux).
+- Auto entries at one bar close each see the previous fill (2026-10-11, trading-safety review HIGH on BACKLOG 19,
+  pre-existing; row R36). Before, in auto mode every entry decided at one bar close was checked against the account as
+  read before the first one filled, so `max_positions`, the combined cap, the heat cap and the same-direction cap could
+  each be passed within a bar close (propose mode was safe: the approval re-check reads afresh). Now
+  `Engine._after_auto_order` re-reads the account after each auto order (`_refresh_account` on the broker's last
+  tick); a fill the positions read does not show yet is added conservatively (one more position on its side, its
+  lots, the gate's margin, its stop risk); an ambiguous result (neither a fill nor a definite reject,
+  `DEFINITE_REJECT_RETCODES`) or a failed re-read stops auto entries for the rest of that bar close, journalled as
+  `auto_paused:unconfirmed_order` / `auto_paused:account_unread`. Two timeframes closing together share it.
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on
