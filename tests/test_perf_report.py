@@ -137,7 +137,8 @@ def test_missing_fields_are_reported_as_not_recorded_never_guessed(tmp_path):
     for dim in ("family", "agent", "timeframe", "session", "side", "day_type"):
         assert "not recorded" in _groups(a, dim), dim
     assert a.overall.trades == 2 and a.overall.r_trades == 1 and a.overall.gross_trades == 1
-    assert a.overall.net_pnl == pytest.approx(11.0)
+    assert a.overall.net_pnl == pytest.approx(16.0)        # the legacy row without costs or pnl_basis: basis unknown
+    assert a.not_recorded["pnl_basis"] == 1 and a.overall.r_trades == 1
     assert a.not_recorded["r"] == 1 and a.not_recorded["commission"] == 1 and a.not_recorded["entry_utc"] == 1
     assert a.not_recorded["agent_id"] == 1
     md = format_markdown(rep)
@@ -148,11 +149,12 @@ def test_record_gap_fields_are_used_when_a_newer_record_carries_them(tmp_path):
     _engine(tmp_path)
     t = _ct(1, "2026-10-05 10:00", 16.0, 2.0, agent=None, entry_utc="2026-10-05 09:00")
     raw = json.loads(t.model_dump_json())
-    raw.update(family="trend", timeframe="4h", session="newyork", day_type="opportunity")   # added by the gap lane
+    raw.update(family="trend", timeframe="4h", model_version="v7", pnl_basis="net", money_source="broker")   # gap lane
     (tmp_path / f"closed_trades_{ACC}.jsonl").write_text(json.dumps(raw) + "\n")
     [a] = build_performance_report(tmp_path, start=START, end=END, now=NOW).accounts
     assert set(_groups(a, "family")) == {"trend"} and set(_groups(a, "timeframe")) == {"4h"}
-    assert set(_groups(a, "session")) == {"newyork"} and set(_groups(a, "day_type")) == {"opportunity"}
+    assert set(_groups(a, "session")) == {"london"}                # derived from the entry (09:00 UTC, BST)
+    assert a.money_sources == {"broker": 1}
 
 
 def test_a_torn_line_is_reported_and_the_rest_still_counts(tmp_path):
@@ -232,10 +234,10 @@ def test_owner_decisions_are_counted_and_rejected_and_expired_signals_get_their_
     cf = {c.outcome: c for c in ap.counterfactual}
     rej, exp = cf["rejected"], cf["expired"]
     assert (rej.proposals, rej.matched, rej.still_open, rej.unmatched) == (3, 2, 1, 0)
-    assert rej.net_r == pytest.approx(2.0) and rej.wins == 1
+    assert rej.sum_r == pytest.approx(2.0) and rej.wins == 1
     assert rej.money == pytest.approx(16.0) and rej.money_trades == 2 and rej.currency == "GBP"   # R x risk_amount
-    assert (exp.matched, exp.unmatched) == (1, 1) and exp.net_r == pytest.approx(-1.0)
-    assert cf["approved"].net_r == pytest.approx(2.0)
+    assert (exp.matched, exp.unmatched) == (1, 1) and exp.sum_r == pytest.approx(-1.0)
+    assert cf["approved"].sum_r == pytest.approx(2.0)
     assert rej.sufficient is False and rej.verdict.startswith("insufficient sample")
     md = format_markdown(build_performance_report(tmp_path, start=START, end=END, now=NOW))
     assert "Owner decisions" in md and "would have" in md
@@ -294,14 +296,14 @@ def test_realised_slippage_from_the_fills_is_set_against_the_cost_table_by_sessi
 
 
 # ---------------------------------------------------------------------------------------------- north star
-def _bars(data: Path, opp_day: str) -> None:
-    """30-minute bars on weekday opportunity days from 2026-08-24: range 10 every day, 30 on `opp_day`."""
+def _bars(data: Path, opp_day: str, *, opp_amp: float = 15.0, source: str = "dukascopy") -> None:
+    """30-minute bars on weekday opportunity days from 2026-08-24: range 10 every day, 2 x opp_amp on `opp_day`."""
     from goldbot.features.day_type import opportunity_day
     ts = pd.date_range("2026-08-23 22:00", "2026-10-09 21:30", freq="30min", tz="UTC")
     day = opportunity_day(ts)
     ts = ts[day.dayofweek < 5]
     day = opportunity_day(ts)
-    amp = np.where(day == pd.Timestamp(opp_day), 15.0, 5.0)
+    amp = np.where(day == pd.Timestamp(opp_day), opp_amp, 5.0)
     mid = 2000.0
     df = pd.DataFrame({"ts_utc": ts})
     for side, off in (("bid", -0.1), ("ask", 0.1)):
@@ -309,7 +311,7 @@ def _bars(data: Path, opp_day: str) -> None:
         df[f"{side}_high"] = mid + amp + off
         df[f"{side}_low"] = mid - amp + off
         df[f"{side}_close"] = mid + off
-    Store(data).append("bars_1m", df, source="dukascopy")
+    Store(data).append("bars_1m", df, source=source)
 
 
 def test_opportunity_day_capture_against_the_fifty_pound_north_star(tmp_path):
@@ -328,7 +330,7 @@ def test_opportunity_day_capture_against_the_fifty_pound_north_star(tmp_path):
     assert ns.traded_opportunity_days == 1 and ns.captured_1r == 1 and ns.days_50_plus_on_opportunity == 1
     assert ns.pnl_on_opportunity_days == pytest.approx(52.0) and ns.pnl_on_other_days == pytest.approx(-8.0)
     dt = _groups(a, "day_type")
-    assert dt["opportunity"].trades == 1 and dt["ordinary"].trades == 1
+    assert dt["opportunity (ex post)"].trades == 1 and dt["ordinary (ex post)"].trades == 1
     assert a.days.days_50_plus == 1 and a.days.traded_days == 2 and a.days.weekdays == 5
     md = format_markdown(rep)
     assert "North star" in md and "£50" in md
@@ -461,3 +463,210 @@ def test_a_family_with_several_timeframes_outside_the_population_has_its_timefra
 def test_the_default_output_folder_is_kept_out_of_the_public_repo():
     root = Path(__file__).resolve().parents[1]
     assert "/reports/" in (root / ".gitignore").read_text().splitlines()
+
+
+# ---------------------------------------------------------------------------------------------- quant review (207c9ef)
+def _raw(state: Path, t: ClosedTrade, **extra) -> None:
+    """Append a closed-trade line carrying fields of the record-gap lane (not in ClosedTrade yet)."""
+    raw = json.loads(t.model_dump_json())
+    raw.update(extra)
+    with open(state / f"closed_trades_{t.account_id}.jsonl", "a") as fh:
+        fh.write(json.dumps(raw) + "\n")
+
+
+def test_a_gross_row_goes_to_the_gross_column_and_a_net_not_recorded_bucket(tmp_path):
+    _engine(tmp_path)
+    _raw(tmp_path, _ct(1, "2026-10-05 10:00", 16.0, 2.0, entry_utc="2026-10-05 09:00"), pnl_basis="net",
+         money_source="broker")
+    _raw(tmp_path, _ct(2, "2026-10-06 10:00", 9.0, 1.0, entry_utc="2026-10-06 09:00", commission=None, swap=None),
+         pnl_basis="gross", money_source="engine_fills")
+    _raw(tmp_path, _ct(3, "2026-10-07 10:00", 4.0, 0.5, entry_utc="2026-10-07 09:00", commission=None, swap=None))
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
+    [a] = rep.accounts
+    o = a.overall
+    assert o.trades == 3
+    assert o.net_pnl == pytest.approx(16.0) and o.money_trades == 1                 # the net row only
+    assert o.net_r == pytest.approx(2.0) and o.r_trades == 1
+    assert o.gross_pnl == pytest.approx(16.5 + 9.0) and o.gross_trades == 2         # derived + the gross row
+    assert o.gross_r == pytest.approx(2.0 + 0.5 / 8.0 + 1.0) and o.gross_r_trades == 2
+    assert o.gross_only == 1 and o.basis_not_recorded == 1
+    assert a.not_recorded["pnl_basis"] == 1
+    assert a.money_sources == {"broker": 1, "engine_fills": 1, "not recorded": 1}
+    assert a.days.traded_days == 1                                                    # money per day: net rows only
+    md = format_markdown(rep)
+    assert "net not recorded (gross only, 1)" in md and "basis not recorded (1)" in md
+
+
+def test_the_shadow_table_reports_a_gross_sum_of_r_and_marks_the_reading_gross(tmp_path):
+    _engine(tmp_path)
+    _proposal(tmp_path, "2026-10-06 09:00", Outcome.REJECTED, reason="news")
+    _book(tmp_path, [_shadow("2026-10-06 09:00", exit_price=2030.0)])
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
+    [cf] = rep.accounts[0].approvals.counterfactual
+    assert cf.sum_r == pytest.approx(3.0) and cf.verdict.endswith("(gross)")
+    js = json.loads(rep.model_dump_json())["accounts"][0]["approvals"]["counterfactual"][0]
+    assert "sum_r" in js and "net_r" not in js and js["verdict"].endswith("(gross)")
+    md = format_markdown(rep)
+    assert "sum R (gross)" in md and "| net R |" not in md.split("Owner decisions")[1].split("Costs")[0]
+
+
+def test_limits_use_the_risk_gates_windows_utc_day_and_week_from_sunday(tmp_path):
+    _engine(tmp_path)
+    # both on opportunity day Tue 6 Oct, but on two risk days (00:00 UTC): neither day alone reaches the 2% cap
+    append_closed_trade(tmp_path, _ct(1, "2026-10-05 23:30", -12.0, -1.5, equity_before=1000.0))
+    append_closed_trade(tmp_path, _ct(2, "2026-10-06 00:30", -12.0, -1.5, equity_before=988.0))
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
+    d = rep.accounts[0].drawdown
+    assert d.worst_day_loss == pytest.approx(12.0) and d.worst_day in ("2026-10-05", "2026-10-06")
+    assert d.days_at_daily_limit == 0
+    assert d.worst_week == "2026-10-04" and d.worst_week_loss == pytest.approx(24.0)   # week from Sunday 00:00 UTC
+    md = format_markdown(rep)
+    assert "closed-trade, lower bound" in md and "daily risk summary" in md
+
+
+def test_a_sunday_evening_trade_is_in_the_new_risk_week(tmp_path):
+    _engine(tmp_path)
+    append_closed_trade(tmp_path, _ct(1, "2026-10-04 23:00", -5.0, -0.5))      # Sun 23:00 UTC: opportunity day Mon 5
+    append_closed_trade(tmp_path, _ct(2, "2026-10-09 12:00", -5.0, -0.5, equity_before=995.0))
+    d = build_performance_report(tmp_path, start=START, end=END, now=NOW).accounts[0].drawdown
+    assert d.worst_week == "2026-10-04" and d.worst_week_loss == pytest.approx(10.0)
+
+
+def test_shadow_matching_ignores_taken_and_reports_it_and_follows_the_model_version(tmp_path):
+    _engine(tmp_path)
+    p1 = _proposal(tmp_path, "2026-10-06 09:00", Outcome.REJECTED, reason="news")
+    p2 = _proposal(tmp_path, "2026-10-06 10:00", Outcome.REJECTED, reason="news")
+    p3 = _proposal(tmp_path, "2026-10-06 11:00", Outcome.REJECTED, reason="news")
+    for p, v in ((p1, "v2"), (p2, "v1"), (p3, "v9")):                      # the record-gap lane's model_version
+        f = tmp_path / "approvals" / "done" / f"{p.proposal_id}.json"
+        f.write_text(json.dumps({**json.loads(f.read_text()), "model_version": v}))
+    untaken = _shadow("2026-10-06 10:00", exit_price=2010.0)
+    untaken.taken = False
+    _book(tmp_path, [
+        _shadow("2026-10-06 09:00", exit_price=2030.0, version="v1", p=0.6),    # p nearest, but not the card's model
+        _shadow("2026-10-06 09:00", exit_price=1990.0, version="v2", p=0.3),    # the card's model: -1R
+        untaken,                                                               # v1, below its threshold: still matched
+        _shadow("2026-10-06 11:00", exit_price=2030.0, version="v1"),           # v9 is not in the book
+    ])
+    [a] = build_performance_report(tmp_path, start=START, end=END, now=NOW).accounts
+    [cf] = a.approvals.counterfactual
+    assert cf.matched == 2 and cf.sum_r == pytest.approx(-1.0 + 1.0) and cf.taken == 1
+    assert cf.unmatched == 1 and cf.unmatched_reasons == {"model version not in the shadow book": 1}
+
+
+def test_legacy_proposals_fall_back_to_the_nearest_p_and_unmatched_ones_say_why(tmp_path):
+    _engine(tmp_path)
+    _proposal(tmp_path, "2026-10-06 09:00", Outcome.EXPIRED)
+    _proposal(tmp_path, "2026-10-06 10:00", Outcome.EXPIRED)                 # no shadow trade at that bar
+    p = _proposal(tmp_path, "2026-10-06 11:00", Outcome.EXPIRED)
+    f = tmp_path / "approvals" / "done" / f"{p.proposal_id}.json"
+    odd = f.with_name("odd.json")
+    odd.write_text(json.dumps({**json.loads(f.read_text()), "proposal_id": "manual-card"}))
+    f.unlink()
+    _book(tmp_path, [_shadow("2026-10-06 09:00", exit_price=2030.0, version="v1", p=0.59),
+                     _shadow("2026-10-06 09:00", exit_price=1990.0, version="v2", p=0.2)])
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
+    [cf] = rep.accounts[0].approvals.counterfactual
+    assert cf.matched == 1 and cf.sum_r == pytest.approx(3.0)
+    assert cf.unmatched_reasons == {"no shadow trade for this agent, side and signal bar": 1,
+                                    "no signal bar in the proposal id": 1}
+    assert "no shadow trade for this agent, side and signal bar" in format_markdown(rep)
+
+
+def test_calibration_compares_approved_signals_shadow_r_with_their_live_net_r(tmp_path):
+    _engine(tmp_path)
+    p = _proposal(tmp_path, "2026-10-05 09:00", Outcome.APPROVED)
+    _book(tmp_path, [_shadow("2026-10-05 09:00", exit_price=2020.0)])                   # shadow +2R gross
+    t = _ct(1, "2026-10-05 11:00", 12.0, 1.5, entry_utc="2026-10-05 09:00")
+    _raw(tmp_path, t.model_copy(update={"client_order_id": p.proposal_id}), pnl_basis="net")
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
+    c = rep.accounts[0].approvals.calibration
+    assert c is not None and c.pairs == 1
+    assert c.shadow_sum_r == pytest.approx(2.0) and c.live_sum_r == pytest.approx(1.5)
+    assert c.mean_gap_r == pytest.approx(-0.5) and c.sufficient is False
+    assert "Calibration" in format_markdown(rep)
+
+
+def test_north_star_selects_by_entry_day_and_counts_open_trades_as_pending(tmp_path):
+    _engine(tmp_path)
+    data = tmp_path / "data"
+    _bars(data, "2026-10-09")
+    # entered Fri 9 Oct (an opportunity day), closed Mon 12 Oct: outside the trade tables, inside the north star
+    append_closed_trade(tmp_path, _ct(1, "2026-10-12 09:00", 55.0, 6.8, entry_utc="2026-10-09 09:00"))
+    # entered before the range, closed inside: in the trade tables, not in the north star
+    append_closed_trade(tmp_path, _ct(2, "2026-10-05 09:00", 8.0, 1.0, entry_utc="2026-10-02 09:00"))
+    (tmp_path / f"orders_{ACC}.json").write_text(json.dumps({
+        "sent": {}, "closing": [], "records_lost": 0,
+        "open": {"7": {"opened_utc": "2026-10-09T13:00:00Z", "agent_id": SO, "side": 1}}}))
+    [a] = build_performance_report(tmp_path, start=START, end=END, now=NOW, data_root=data).accounts
+    assert a.overall.trades == 1
+    ns = a.north_star
+    assert ns.opportunity_days == 1 and ns.traded_opportunity_days == 1 and ns.captured_1r == 1
+    assert ns.days_50_plus_on_opportunity == 1 and ns.pnl_on_opportunity_days == pytest.approx(55.0)
+    assert ns.pnl_on_other_days is None and ns.pending_open == 1
+
+
+def test_the_22_utc_rollover_decides_the_day(tmp_path):
+    _engine(tmp_path)
+    append_closed_trade(tmp_path, _ct(1, "2026-10-09 21:59", 8.0, 1.0))         # Fri 9 Oct: in the range
+    append_closed_trade(tmp_path, _ct(2, "2026-10-09 22:00", 8.0, 1.0))         # opportunity day Sat 10: out
+    append_closed_trade(tmp_path, _ct(3, "2026-10-04 22:00", 8.0, 1.0))         # Sun 22:00: Monday 5, in
+    [a] = build_performance_report(tmp_path, start=START, end=END, now=NOW).accounts
+    assert a.overall.trades == 2
+
+
+def test_the_days_own_range_is_not_in_the_atr_it_is_compared_with(tmp_path):
+    """Prior ATR 10: a 15.2 range is >= 1.5 x 10 (an opportunity day); with the day in its own ATR (10.26) it is not."""
+    _engine(tmp_path)
+    data = tmp_path / "data"
+    _bars(data, "2026-10-07", opp_amp=7.6)
+    append_closed_trade(tmp_path, _ct(1, "2026-10-07 10:00", 8.0, 1.0, entry_utc="2026-10-07 09:00"))
+    ns = build_performance_report(tmp_path, start=START, end=END, now=NOW, data_root=data).accounts[0].north_star
+    assert ns.opportunity_days == 1
+
+
+def test_day_types_read_the_pinned_bar_source_only(tmp_path):
+    _engine(tmp_path)
+    data = tmp_path / "data"
+    _bars(data, "2026-10-07")
+    _bars(data, "2026-10-05", source="synthetic", opp_amp=40.0)                 # another source: never read
+    append_closed_trade(tmp_path, _ct(1, "2026-10-05 10:00", 8.0, 1.0, entry_utc="2026-10-05 09:00"))
+    ns = build_performance_report(tmp_path, start=START, end=END, now=NOW, data_root=data).accounts[0].north_star
+    assert ns.opportunity_days == 1 and ns.captured_1r == 0
+
+
+def test_sufficiency_counts_trades_with_r_not_all_trades(tmp_path):
+    _engine(tmp_path)
+    for i in range(MIN_TRADES):
+        append_closed_trade(tmp_path, _ct(100 + i, "2026-10-06 10:00", 8.0, None if i == 0 else 1.0))
+    o = build_performance_report(tmp_path, start=START, end=END, now=NOW).accounts[0].overall
+    assert o.trades == MIN_TRADES and o.r_trades == MIN_TRADES - 1
+    assert o.sufficient is False and o.r_ci90 is None and o.verdict.startswith("insufficient sample")
+
+
+def test_the_header_gives_the_group_count_and_a_multiple_comparisons_caveat(tmp_path):
+    _engine(tmp_path)
+    _base_trades(tmp_path)
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
+    assert rep.groups == sum(len(v) for v in rep.accounts[0].by.values()) and rep.groups_with_reading == 0
+    head = format_markdown(rep).split("## ")[0]
+    assert f"{rep.groups} groups" in head and "by chance" in head
+
+
+def test_bar_classified_day_types_are_labelled_ex_post(tmp_path):
+    _engine(tmp_path)
+    data = tmp_path / "data"
+    _bars(data, "2026-10-07")
+    append_closed_trade(tmp_path, _ct(1, "2026-10-07 10:00", 8.0, 1.0, entry_utc="2026-10-07 09:00"))
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW, data_root=data)
+    assert set(_groups(rep.accounts[0], "day_type")) == {"opportunity (ex post)"}
+    assert "By day type (ex post" in format_markdown(rep)
+
+
+def test_decision_price_gives_the_recorded_entry_slippage(tmp_path):
+    _engine(tmp_path)
+    t = _ct(1, "2026-10-05 10:00", 8.0, 1.0, entry_utc="2026-10-05 09:00")     # long, filled at 2000.0
+    _raw(tmp_path, t, pnl_basis="net", decision_price=1999.8, initial_sl=1990.0)
+    _raw(tmp_path, _ct(2, "2026-10-06 10:00", 8.0, 1.0, side=-1), pnl_basis="net", decision_price=2000.1)
+    c = build_performance_report(tmp_path, start=START, end=END, now=NOW).accounts[0].costs
+    assert c.entry_slippage_trades == 2 and c.entry_slippage_mean_usd == pytest.approx((0.2 + 0.1) / 2)

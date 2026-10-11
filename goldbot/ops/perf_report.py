@@ -1,42 +1,54 @@
 """Performance report for the performance-analyst and finance-auditor agents (north-star: ADR 0004 section 6;
 evaluation: docs/research/opportunity-days.md section 3.4), from the local state, read only.
 
-    python -m goldbot.ops.run perf-report [--state DIR] [--data-root DIR] [--from YYYY-MM-DD] [--to YYYY-MM-DD]
-                                          [--account ID] [--out DIR] [--json]
+    python -m goldbot.ops.run perf-report [--state DIR] [--data-root DIR] [--bars-source NAME] [--from YYYY-MM-DD]
+                                          [--to YYYY-MM-DD] [--account ID] [--out DIR] [--json]
     python scripts/performance_report.py ...          (the same, from a state folder copied to the Mac)
 
-Writes `perf_<from>_<to>.md` and `perf_<from>_<to>.json` to `--out` (default `reports`, which may not be inside the
-state folder) and prints the markdown (`--json`: the JSON). Per account, for the opportunity days `--from`..`--to`
-(day D runs D-1 22:00 to D 22:00 UTC, features/day_type.py, so the Sunday reopen belongs to Monday; default the month
-so far):
+Writes `perf_<from>_<to>.md` and `perf_<from>_<to>.json` to `--out` (default `reports`, gitignored, never inside the
+state folder or the data root) and prints the markdown (`--json`: the JSON). Per account, for the opportunity days
+`--from`..`--to` (day D runs D-1 22:00 to D 22:00 UTC, features/day_type.py, so the Sunday reopen belongs to Monday;
+default the month so far); trades are in the range by their exit's opportunity day:
 
 * net and gross R and money per trade and per day (per weekday in the range, traded or not), overall and by family,
   agent, timeframe, session (`DEFAULT_SESSIONS.session_label` at the entry: asia, the Tokyo session; london; newyork),
-  side and day type. Gross is before commission and swap (spread and slippage are inside the fill prices); gross R is
-  gross over the initial risk, the risk being net P&L / net R;
-* owner decisions: proposals approved, rejected (by reason) and expired, and what the rejected and expired signals (and
-  the approved ones, for comparison) did in the shadow book: the shadow trade of the same agent, side and signal bar
-  (the proposal id carries the signal bar's close; with several model versions, the one whose p is nearest the card's),
-  in R of its own initial stop, gross, with the shadow book's optimistic gap fills (engine/shadow.py), and in money as
-  R x the card's stop risk;
+  side and day type (ex post). The P&L basis decides the column (quant review of 207c9ef, item 1):
+  - a row with `pnl_basis` "net", or a legacy row (no `pnl_basis`) that records both commission and swap, is net: its
+    P&L and R are the net columns, and its gross (P&L + commission - swap) and gross R (gross / initial risk, the risk
+    being net P&L / net R) the gross columns;
+  - a row with `pnl_basis` "gross" goes to the gross columns only, counted as "net not recorded (gross only, N)";
+  - any other row has its basis not recorded: counted in the trades, in no money or R column ("basis not recorded").
+  Readings, money per day, the north star and drawdown use net rows only;
+* owner decisions: proposals approved, rejected (by reason) and expired, and what each signal did in the shadow book:
+  the shadow trade of the same agent, side and signal bar (the proposal id carries the signal bar's close), taken by
+  the shadow model or not (`taken` is reported), of the proposal's `model_version` when it records one, else (legacy
+  cards) the version whose p is nearest the card's. R of the shadow trade's own initial stop, GROSS (no commission or
+  swap, gaps filled at the stop: engine/shadow.py), summed (`sum_r`) and in money as R x the card's stop risk; every
+  unmatched proposal says why. A calibration row sets the approved signals' shadow R against their own live net R (the
+  closed trade whose client order id is the proposal id);
 * realised against modelled costs where both exist: commission against the cost table's (state/costs_<account>.json)
-  per-lot commission, only when the account's currency is USD (no conversion is recorded, so none is guessed); with
-  `--data-root`, the fills' slippage by session against the table's cell or its prior;
-* north-star capture (ADR 0004 section 6 KPI): with `--data-root` bars, an opportunity day is a stub-free weekday whose
-  range is at least 1.5 x ATR(1d) of the 20 stub-free days before it (day_type.daily_inputs); captured = the trades
-  entered on it made at least 1 R; and the days at £50 or more on them (GBP accounts);
-* drawdown against the limits: closed-trade drawdown against the 8% / 12% stages, the worst day against the daily cap
-  and the absolute limit, the worst week against the weekly cap, and the engine's live drawdown from its high-water mark;
+  per-lot commission, only when the account's currency is USD (no conversion is recorded, so none is guessed); entry
+  slippage from the record's `decision_price`; with `--data-root`, the fills' slippage by session against the table;
+* north-star capture (ADR 0004 section 6 KPI), over the trades ENTERED on the range's days (whenever they closed):
+  with `--data-root` bars (source `--bars-source`, default dukascopy), an opportunity day is a stub-free weekday whose
+  range is at least 1.5 x ATR(1d) of the 20 stub-free days BEFORE it (day_type.daily_inputs; the day's own range is not
+  in its ATR). This is ex post: the day's range is known only at its close. Captured = the trades entered on it made at
+  least 1 R net; days at £50 or more (GBP accounts); open trades entered on an opportunity day are "pending";
+* drawdown against the limits, closed-trade, lower bound: realised P&L in the RiskGate's own windows (the risk day
+  from 00:00 UTC, `timeutil.risk_day`; the risk week from Sunday 00:00 UTC, gate `_risk_week`) against the daily cap
+  and the absolute limit, the weekly cap and the 8% / 12% stages. Floating losses and open risk are not seen; the exact
+  figures need a daily risk summary from the engine, which does not exist yet;
 * with `--data-root`, the journal: proposals, gate refusals by reason, orders and failed orders.
 
 Design rule (the brief to the performance-analyst): "sample sizes everywhere, with no conclusion drawn from fewer than
 ~30 trades". Every figure carries its count; an interval and a reading ("mean R above zero") are given only from
-MIN_TRADES trades, and below that the row says "insufficient sample" instead.
+MIN_TRADES trades with a net R, and below that the row says "insufficient sample" instead. The header gives the number
+of groups: with many groups some 90% intervals exclude zero by chance alone.
 
-Missing data is never guessed: a field a record does not carry is counted under "not recorded". Fields a newer record
-may add (RECORD_GAP_FIELDS: family, timeframe, session, day type) are used when present; otherwise the family comes
-from the agent id (`AgentIdentity.agent_id` is `<family>-g<generation>-<hash>`), the timeframe from the population
-(state/population.json) or a family with one timeframe, the session from the entry time, the day type from the bars.
+Missing data is never guessed: a field a record does not carry is counted under "not recorded". The record-gap lane's
+fields (RECORD_GAP_FIELDS) are read tolerantly when present; otherwise the family comes from the agent id
+(`AgentIdentity.agent_id` is `<family>-g<generation>-<hash>`) and the timeframe from the population
+(state/population.json) or a family with one timeframe. The lane's `initial_sl` is not read: R is the engine's.
 
 Read only: nothing under the state folder or the data root is written (a Store is opened only on an existing root).
 No identifiers reach the output: no position or order ids, broker or server names, proposal ids or who decided.
@@ -60,6 +72,7 @@ import pandas as pd
 from goldbot.base import FrozenRecord, load_record, load_record_json
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
+from goldbot.data.timeutil import floor_tf, risk_day
 from goldbot.engine.shadow import ShadowTrade, VersionBook
 from goldbot.execution.costs import SESSIONS, CostTable
 from goldbot.ops.gates_phase import ClosedTrade, load_closed_trade_rows
@@ -69,41 +82,47 @@ MIN_TRADES = 30                  # below this no interval and no reading, only t
 NORTH_STAR_GBP = 50.0            # ADR 0004 section 6: days at £50+ are counted, never aimed at
 OPPORTUNITY_RANGE_ATR = 1.5      # ADR 0004 section 6 KPI: daily range >= 1.5 x ATR(1d)
 CAPTURE_R = 1.0                  # ... on which the system made >= 1 R
+BARS_SOURCE = "dukascopy"        # the bars_1m source the day types are read from (data/release.py load_into_store)
 NOT_RECORDED = "not recorded"
+OPPORTUNITY, ORDINARY = "opportunity (ex post)", "ordinary (ex post)"
 DIMENSIONS = ("family", "agent", "timeframe", "session", "side", "day_type")
-# fields a newer closed-trade record may carry (the record-gap lane): used as written, never re-derived
-RECORD_GAP_FIELDS = {"family": "family", "timeframe": "timeframe", "session": "session", "day_type": "day_type"}
+# the record-gap lane's fields (closed-trade record; model_version also on the proposal), read tolerantly when present
+RECORD_GAP_FIELDS = ("family", "timeframe", "model_version", "pnl_basis", "money_source", "decision_price")
 SESSION_NAMES = {"asia": "asia (Tokyo)", "london": "london (London)", "newyork": "newyork (New York)"}
 AGENT_ID = re.compile(r"^([a-z0-9_]+)-g\d+-[0-9a-f]{10}$")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€"}
+NO_BAR, NO_SHADOW, NO_VERSION = ("no signal bar in the proposal id", "no shadow trade for this agent, side and signal bar",
+                                 "model version not in the shadow book")
 
 
 # ---------------------------------------------------------------------------------------------- records
 class GroupStats(FrozenRecord):
     key: str
     trades: int
-    net_pnl: float | None = None           # account currency, rows in it only (money_trades)
+    net_pnl: float | None = None           # net rows in the account currency (money_trades)
     money_trades: int = 0
-    gross_pnl: float | None = None         # before commission and swap, over the trades that record both
+    gross_pnl: float | None = None         # net rows that record commission and swap, plus gross rows
     gross_trades: int = 0
     net_r: float | None = None
-    r_trades: int = 0
+    r_trades: int = 0                      # net rows with an R: the readings rest on these
     gross_r: float | None = None
     gross_r_trades: int = 0
+    gross_only: int = 0                    # pnl_basis "gross": net not recorded
+    basis_not_recorded: int = 0            # no pnl_basis and not a legacy net row
     mean_r: float | None = None
     mean_pnl: float | None = None
     pnl_per_day: float | None = None       # per weekday in the range, traded or not
     r_per_day: float | None = None
-    win_rate: float | None = None          # share of trades with R > 0 (R recorded)
-    r_ci90: tuple[float, float] | None = None   # Student-t, only from MIN_TRADES trades with R
+    win_rate: float | None = None          # share of net R > 0
+    r_ci90: tuple[float, float] | None = None   # Student-t, only from MIN_TRADES net R
     sufficient: bool
     verdict: str
 
 
 class DayStats(FrozenRecord):
     weekdays: int
-    traded_days: int
+    traded_days: int                       # days with a net row (by the exit's opportunity day)
     mean_per_weekday: float | None = None
     median_traded_day: float | None = None
     best_day: str | None = None
@@ -114,7 +133,7 @@ class DayStats(FrozenRecord):
 
 
 class NorthStar(FrozenRecord):
-    source: str | None = None              # "bars" when opportunity days were classified
+    source: str | None = None              # "bars (<source>), ex post" when opportunity days were classified
     classified_days: int = 0               # weekdays in the range with a range and a prior ATR(1d)
     opportunity_days: int | None = None
     traded_opportunity_days: int | None = None
@@ -123,6 +142,7 @@ class NorthStar(FrozenRecord):
     pnl_on_opportunity_days: float | None = None
     pnl_on_other_days: float | None = None
     r_on_opportunity_days: float | None = None
+    pending_open: int | None = None        # open trades entered on an opportunity day (state/orders_<account>.json)
     note: str = ""
 
 
@@ -145,22 +165,25 @@ class CostReport(FrozenRecord):
     modelled_commission_total: float | None = None   # USD: the table's per-lot commission x 2 sides x lots
     commission_vs_model: float | None = None   # realised / modelled, same currency only
     commission_note: str | None = None
+    entry_slippage_trades: int = 0             # records with a decision_price (record-gap lane)
+    entry_slippage_mean_usd: float | None = None   # side x (fill - decision price), $/oz, positive = worse
     cost_table_built_utc: str | None = None
     slippage: list[SlippageRow] = []
 
 
 class DrawdownReport(FrozenRecord):
+    """Closed-trade, lower bound: realised P&L only, in the RiskGate's windows."""
     max_drawdown_pct: float | None = None      # closed-trade return index over the range
     dd_stage1_pct: float
     dd_stage2_pct: float
-    worst_day: str | None = None
+    worst_day: str | None = None               # risk day (UTC date, timeutil.risk_day)
     worst_day_loss: float | None = None        # the largest net loss (> 0), account currency; None: no losing day
-    worst_day_pct: float | None = None         # of the equity before the day's first trade
+    worst_day_pct: float | None = None         # of the equity before the day's first closed trade
     daily_cap_pct: float
     daily_loss_limit_abs: float | None = None
     days_at_daily_limit: int = 0
-    worst_week: str | None = None
-    worst_week_loss: float | None = None       # None: no losing week (ISO weeks of the exit day)
+    worst_week: str | None = None              # risk week, by its Sunday (gate._risk_week)
+    worst_week_loss: float | None = None       # None: no losing week
     worst_week_pct: float | None = None
     weekly_cap_pct: float
     engine_drawdown_pct: float | None = None   # live equity against the closed-balance high-water mark
@@ -169,17 +192,31 @@ class DrawdownReport(FrozenRecord):
 
 
 class ShadowOutcome(FrozenRecord):
+    """What the proposals of one outcome did in the shadow book: gross R (no commission or swap, optimistic fills)."""
     outcome: str                               # approved | rejected | expired
     proposals: int
     matched: int = 0                           # closed shadow trade found
+    taken: int = 0                             # of the matched, the shadow model's p cleared its threshold
     still_open: int = 0
     unmatched: int = 0
-    net_r: float | None = None
-    mean_r: float | None = None
+    unmatched_reasons: dict[str, int] = {}
+    sum_r: float | None = None                 # gross
+    mean_r: float | None = None                # gross
     wins: int = 0
-    money: float | None = None                 # sum of R x the card's stop risk
+    money: float | None = None                 # sum of R x the card's stop risk (gross)
     money_trades: int = 0
     currency: str | None = None
+    sufficient: bool
+    verdict: str                               # ends "(gross)"
+
+
+class Calibration(FrozenRecord):
+    """Approved signals with both a closed shadow trade and a live net row: live net R against shadow gross R."""
+    pairs: int
+    shadow_sum_r: float | None = None
+    live_sum_r: float | None = None
+    mean_gap_r: float | None = None            # mean of (live net R - shadow gross R)
+    gap_ci90: tuple[float, float] | None = None
     sufficient: bool
     verdict: str
 
@@ -193,6 +230,7 @@ class ApprovalReport(FrozenRecord):
     gate_refused_after_approval: int = 0
     reasons: dict[str, int] = {}
     counterfactual: list[ShadowOutcome] = []
+    calibration: Calibration | None = None     # None without approved proposals
 
 
 class JournalReport(FrozenRecord):
@@ -217,6 +255,7 @@ class AccountReport(FrozenRecord):
     approvals: ApprovalReport
     journal: JournalReport | None = None
     not_recorded: dict[str, int]
+    money_sources: dict[str, int] = {}         # the record's money_source (record-gap lane), "not recorded" without
     money_note: str | None = None
 
 
@@ -226,6 +265,8 @@ class PerformanceReport(FrozenRecord):
     as_of_utc: str
     weekdays: int
     min_trades: int = MIN_TRADES
+    groups: int = 0                            # group rows across every account and dimension
+    groups_with_reading: int = 0
     accounts: list[AccountReport]
     errors: list[str] = []
 
@@ -233,12 +274,18 @@ class PerformanceReport(FrozenRecord):
 class _Row(FrozenRecord):
     """One closed trade with what the report derives from it."""
     trade: ClosedTrade
-    exit_day: str
+    exit_day: str                              # opportunity day of the exit
     entry_day: str | None
-    money: bool                                # pnl in the account's currency
-    gross: float | None
-    risk: float | None                         # initial risk in account currency (pnl / r)
+    risk_day: str                              # RiskGate day (UTC date) of the exit
+    risk_week: str                             # RiskGate week (its Sunday) of the exit
+    basis: str | None                          # "net" | "gross" | None (not recorded)
+    net_pnl: float | None                      # net rows in the account currency
+    net_r: float | None
+    gross_pnl: float | None
     gross_r: float | None
+    risk: float | None                         # initial risk in account currency (P&L / R of the same basis)
+    money_source: str | None
+    decision_price: float | None
     dims: dict[str, str]
 
 
@@ -260,14 +307,14 @@ def _ci90(xs: list[float]) -> tuple[float, float]:
     return (m - half, m + half)
 
 
-def _reading(n: int, ci: tuple[float, float] | None) -> str:
+def _reading(n: int, ci: tuple[float, float] | None, what: str = "mean R") -> str:
     if n < MIN_TRADES or ci is None:
         return f"insufficient sample ({n} < {MIN_TRADES} trades): no conclusion"
     if ci[0] > 0:
-        return "mean R above zero (90% interval)"
+        return f"{what} above zero (90% interval)"
     if ci[1] < 0:
-        return "mean R below zero (90% interval)"
-    return "mean R not distinguishable from zero (90% interval)"
+        return f"{what} below zero (90% interval)"
+    return f"{what} not distinguishable from zero (90% interval)"
 
 
 def _read_json(path: Path) -> Any:
@@ -277,23 +324,32 @@ def _read_json(path: Path) -> Any:
         return None
 
 
+def _num(v: Any) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+
+
+def _text(v: Any) -> str | None:
+    return v if isinstance(v, str) and v else None
+
+
 def _group(key: str, rows: list[_Row], weekdays: int) -> GroupStats:
-    money = [r for r in rows if r.money]
-    rs = [r.trade.r for r in rows if r.trade.r is not None]
-    gross = [r.gross for r in money if r.gross is not None]
+    net = [r.net_pnl for r in rows if r.net_pnl is not None]
+    rs = [r.net_r for r in rows if r.net_r is not None]
+    gross = [r.gross_pnl for r in rows if r.gross_pnl is not None]
     grs = [r.gross_r for r in rows if r.gross_r is not None]
-    net = sum(r.trade.pnl for r in money) if money else None
+    net_sum = sum(net) if net else None
     net_r = sum(rs) if rs else None
     ci = _ci90(rs) if len(rs) >= MIN_TRADES else None
     return GroupStats(
-        key=key, trades=len(rows), net_pnl=net, money_trades=len(money), gross_pnl=sum(gross) if gross else None,
+        key=key, trades=len(rows), net_pnl=net_sum, money_trades=len(net), gross_pnl=sum(gross) if gross else None,
         gross_trades=len(gross), net_r=net_r, r_trades=len(rs), gross_r=sum(grs) if grs else None,
-        gross_r_trades=len(grs), mean_r=float(np.mean(rs)) if rs else None,
-        mean_pnl=net / len(money) if net is not None else None,
-        pnl_per_day=net / weekdays if net is not None and weekdays else None,
+        gross_r_trades=len(grs), gross_only=sum(r.basis == "gross" for r in rows),
+        basis_not_recorded=sum(r.basis is None for r in rows), mean_r=float(np.mean(rs)) if rs else None,
+        mean_pnl=net_sum / len(net) if net_sum is not None else None,
+        pnl_per_day=net_sum / weekdays if net_sum is not None and weekdays else None,
         r_per_day=net_r / weekdays if net_r is not None and weekdays else None,
         win_rate=sum(x > 0 for x in rs) / len(rs) if rs else None, r_ci90=ci,
-        sufficient=len(rows) >= MIN_TRADES and ci is not None, verdict=_reading(len(rs), ci))
+        sufficient=len(rs) >= MIN_TRADES and ci is not None, verdict=_reading(len(rs), ci))
 
 
 # ---------------------------------------------------------------------------------------------- state readers
@@ -320,55 +376,66 @@ def _timeframe(agent_id: str | None, family: str | None, population: dict[str, d
     return cls.timeframe if cls is not None and not cls.timeframes else None
 
 
-def _gap(raw: dict[str, Any], dim: str) -> str | None:
-    v = raw.get(RECORD_GAP_FIELDS[dim])
-    return v if isinstance(v, str) and v else None
-
-
 def _dims(t: ClosedTrade, raw: dict[str, Any], population: dict[str, dict[str, Any]],
           day_types: dict[str, str] | None, entry_day: str | None) -> dict[str, str]:
     m = AGENT_ID.match(t.agent_id or "")
-    family = _gap(raw, "family") or (m.group(1) if m else None)
-    tf = _gap(raw, "timeframe") or _timeframe(t.agent_id, family, population)
-    session = _gap(raw, "session")
-    if session is None and t.entry_utc is not None:
-        session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([t.entry_utc]))[0])
-    day_type = _gap(raw, "day_type")
-    if day_type is None and day_types is not None and entry_day is not None:
-        day_type = day_types.get(entry_day)
+    family = _text(raw.get("family")) or (m.group(1) if m else None)
+    tf = _text(raw.get("timeframe")) or _timeframe(t.agent_id, family, population)
+    session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([t.entry_utc]))[0]) if t.entry_utc is not None \
+        else None
+    day_type = day_types.get(entry_day) if day_types is not None and entry_day is not None else None
     side = {1: "long", -1: "short"}.get(t.side or 0)
     return {"family": family or NOT_RECORDED, "agent": t.agent_id or NOT_RECORDED, "timeframe": tf or NOT_RECORDED,
             "session": session or NOT_RECORDED, "side": side or NOT_RECORDED, "day_type": day_type or NOT_RECORDED}
 
 
+def pnl_basis(t: ClosedTrade, raw: dict[str, Any]) -> str | None:
+    """"net" | "gross" from the record's `pnl_basis`; a legacy row without it is net only when it records both
+    commission and swap (the broker's deals, net of every cost); anything else is not recorded (quant review, item 1)."""
+    b = raw.get("pnl_basis")
+    if b in ("net", "gross"):
+        return str(b)
+    if b is None and t.commission is not None and t.swap is not None:
+        return "net"
+    return None
+
+
 def _row(t: ClosedTrade, raw: dict[str, Any], ccy: str | None, population: dict[str, dict[str, Any]],
          day_types: dict[str, str] | None) -> _Row:
-    money = t.pnl_currency is None or ccy is None or t.pnl_currency.upper() == ccy.upper()
-    gross = t.pnl + t.commission - t.swap if t.commission is not None and t.swap is not None else None
-    risk = t.pnl / t.r if t.r not in (None, 0) and t.pnl != 0 and money else None
-    gross_r = gross / risk if gross is not None and risk is not None and risk > 0 else None
+    same_ccy = t.pnl_currency is None or ccy is None or t.pnl_currency.upper() == ccy.upper()
+    basis = pnl_basis(t, raw)
+    risk = t.pnl / t.r if basis is not None and same_ccy and t.r not in (None, 0) and t.pnl != 0 else None
+    risk = risk if risk is not None and risk > 0 else None
+    if basis == "net":
+        net_pnl = t.pnl if same_ccy else None
+        net_r = t.r
+        gross = t.pnl + t.commission - t.swap if t.commission is not None and t.swap is not None and same_ccy else None
+        gross_r = gross / risk if gross is not None and risk is not None else None
+    elif basis == "gross":
+        net_pnl, net_r, gross, gross_r = None, None, t.pnl if same_ccy else None, t.r
+    else:
+        net_pnl = net_r = gross = gross_r = None
     entry_day = opp_day(t.entry_utc) if t.entry_utc is not None else None
-    return _Row(trade=t, exit_day=opp_day(t.exit_utc), entry_day=entry_day, money=money, gross=gross,
-                risk=risk if risk is not None and risk > 0 else None, gross_r=gross_r,
-                dims=_dims(t, raw, population, day_types, entry_day))
+    ex = pd.DatetimeIndex([t.exit_utc])
+    return _Row(trade=t, exit_day=opp_day(t.exit_utc), entry_day=entry_day, risk_day=f"{risk_day(ex)[0]:%Y-%m-%d}",
+                risk_week=f"{floor_tf(ex, 7 * 86400)[0]:%Y-%m-%d}", basis=basis, net_pnl=net_pnl, net_r=net_r,
+                gross_pnl=gross, gross_r=gross_r, risk=risk, money_source=_text(raw.get("money_source")),
+                decision_price=_num(raw.get("decision_price")), dims=_dims(t, raw, population, day_types, entry_day))
 
 
-def _proposals(state: Path) -> tuple[list[Proposal], list[Proposal]]:
-    """Finished proposals (approvals/done) and those still pending, read without creating a folder."""
-    out: list[Proposal] = []
-    root = state / "approvals"
-    for f in sorted((root / "done").glob("*.json")) if (root / "done").is_dir() else []:
+def _proposals(state: Path, folder: str) -> list[tuple[Proposal, dict[str, Any]]]:
+    """Proposals in approvals/<folder> with their raw JSON (the lane's model_version), read without creating a folder."""
+    d = state / "approvals" / folder
+    out = []
+    for f in sorted(d.glob("*.json")) if d.is_dir() else []:
         try:
-            out.append(load_record_json(Proposal, f.read_text(encoding="utf-8"), source="approvals/done"))
+            text = f.read_text(encoding="utf-8")
+            p = load_record_json(Proposal, text, source=f"approvals/{folder}")
+            raw = json.loads(text)
         except (OSError, ValueError):
             continue
-    pending: list[Proposal] = []
-    for f in sorted((root / "pending").glob("*.json")) if (root / "pending").is_dir() else []:
-        try:
-            pending.append(load_record_json(Proposal, f.read_text(encoding="utf-8"), source="approvals/pending"))
-        except (OSError, ValueError):
-            continue
-    return out, pending
+        out.append((p, raw if isinstance(raw, dict) else {}))
+    return out
 
 
 def _signal_close(p: Proposal) -> pd.Timestamp | None:
@@ -387,7 +454,7 @@ def _shadow_trades(state: Path) -> tuple[list[ShadowTrade], str | None]:
         return [], "shadow_book.json unreadable"
     out: list[ShadowTrade] = []
     try:
-        for k, v in raw.items():
+        for v in raw.values():
             b = load_record(VersionBook, v, source="shadow_book.json")
             out.extend(b.closed + b.open)
     except ValueError:
@@ -402,12 +469,39 @@ def _shadow_r(t: ShadowTrade) -> float | None:
     return t.side * (t.exit - t.entry) / risk
 
 
-def _match(p: Proposal, close: pd.Timestamp | None, shadow: list[ShadowTrade]) -> ShadowTrade | None:
+def match_shadow(p: Proposal, model_version: str | None,
+                 shadow: list[ShadowTrade]) -> tuple[ShadowTrade | None, str | None]:
+    """(shadow trade, None) or (None, why). Same agent, side and signal bar, whether the shadow model took it or not
+    (quant review, item 4); of the card's model version when the proposal records one (item 5), else the version whose
+    p is nearest the card's (legacy proposals)."""
+    close = _signal_close(p)
     if close is None:
-        return None
-    cands = [t for t in shadow if t.agent_id == p.agent_id and t.side == p.side and t.taken
+        return None, NO_BAR
+    cands = [t for t in shadow if t.agent_id == p.agent_id and t.side == p.side
              and t.entry_ts + pd.Timedelta(seconds=tf_seconds(t.timeframe)) == close]
-    return min(cands, key=lambda t: abs(t.p - p.p)) if cands else None
+    if not cands:
+        return None, NO_SHADOW
+    if model_version is not None:
+        same = [t for t in cands if t.version == model_version]
+        return (same[0], None) if same else (None, NO_VERSION)
+    return min(cands, key=lambda t: abs(t.p - p.p)), None
+
+
+def _open_entries(state: Path, account: str) -> list[pd.Timestamp]:
+    """Entry times of the positions still open (or closed but not recorded yet) in state/orders_<account>.json."""
+    d = _read_json(state / f"orders_{account}.json")
+    if not isinstance(d, dict):
+        return []
+    trades = list(d["open"].values()) if isinstance(d.get("open"), dict) else []
+    trades += [c.get("trade") for c in d.get("closing", []) if isinstance(c, dict)]
+    out = []
+    for t in trades:
+        if isinstance(t, dict) and isinstance(t.get("opened_utc"), str):
+            try:
+                out.append(pd.Timestamp(t["opened_utc"]).tz_convert("UTC"))
+            except (ValueError, TypeError):
+                continue
+    return out
 
 
 # ---------------------------------------------------------------------------------------------- data root readers
@@ -418,15 +512,16 @@ def _store(data_root: Path | None) -> Any:
     return Store(data_root)            # the root exists, so its mkdir writes nothing
 
 
-def _day_types(store: Any, start: str, end: str) -> tuple[dict[str, str] | None, int, set[str]]:
-    """Opportunity day -> "opportunity" | "ordinary" for the stub-free days with a prior ATR(1d) (ADR 0004 section 6:
-    range >= 1.5 x ATR(1d), the ATR of the ATR_DAYS stub-free days before the day), from the stored 1m bars (mid).
-    Returns (types, classified weekdays in the range, opportunity days in the range)."""
+def _day_types(store: Any, start: str, end: str,
+               source: str = BARS_SOURCE) -> tuple[dict[str, str] | None, int, set[str]]:
+    """Opportunity day -> OPPORTUNITY | ORDINARY (ex post) for the stub-free days with a prior ATR(1d) (ADR 0004
+    section 6: range >= 1.5 x ATR(1d), the ATR of the ATR_DAYS stub-free days before the day, never including it), from
+    the stored 1m bars of `source` (mid). Returns (types, classified weekdays in the range, opportunity days in it)."""
     from goldbot.features.day_type import ATR_DAYS, daily_bars, daily_inputs
     if store is None:
         return None, 0, set()
     lo = pd.Timestamp(start, tz="UTC") - pd.Timedelta(days=3 * ATR_DAYS)
-    bars = store.read("bars_1m", start=lo, end=pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1))
+    bars = store.read("bars_1m", source=source, start=lo, end=pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1))
     if bars.empty:
         return None, 0, set()
     bars = bars.drop_duplicates("ts_utc", keep="last").sort_values("ts_utc")
@@ -439,13 +534,13 @@ def _day_types(store: Any, start: str, end: str) -> tuple[dict[str, str] | None,
         else:
             return None, 0, set()
     inp = daily_inputs(daily_bars(df.reset_index(drop=True)))
-    prior_atr = inp["atr"].shift(1)
+    prior_atr = inp["atr"].shift(1)                       # the ATR known at the day's open: the day itself left out
     out: dict[str, str] = {}
     for day, rng, atr in zip(inp["day"], inp["range"], prior_atr):
         if pd.notna(atr) and atr > 0 and pd.notna(rng):
-            out[f"{pd.Timestamp(day):%Y-%m-%d}"] = "opportunity" if rng >= OPPORTUNITY_RANGE_ATR * atr else "ordinary"
+            out[f"{pd.Timestamp(day):%Y-%m-%d}"] = OPPORTUNITY if rng >= OPPORTUNITY_RANGE_ATR * atr else ORDINARY
     days = {d for d in out if start <= d <= end and date.fromisoformat(d).weekday() < 5}
-    return out, len(days), {d for d in days if out[d] == "opportunity"}
+    return out, len(days), {d for d in days if out[d] == OPPORTUNITY}
 
 
 def _slippage(store: Any, account: str, start: str, end: str, table: CostTable | None) -> list[SlippageRow]:
@@ -506,8 +601,8 @@ def _journal(store: Any, account: str, start: str, end: str) -> JournalReport | 
 def _days(rows: list[_Row], weekdays: int, ccy: str | None) -> DayStats:
     per: dict[str, float] = {}
     for r in rows:
-        if r.money:
-            per[r.exit_day] = per.get(r.exit_day, 0.0) + r.trade.pnl
+        if r.net_pnl is not None:
+            per[r.exit_day] = per.get(r.exit_day, 0.0) + r.net_pnl
     if not per:
         return DayStats(weekdays=weekdays, traded_days=0)
     best, worst = max(per, key=lambda d: per[d]), min(per, key=lambda d: per[d])
@@ -518,38 +613,46 @@ def _days(rows: list[_Row], weekdays: int, ccy: str | None) -> DayStats:
                     days_50_plus=sum(v >= NORTH_STAR_GBP for v in per.values()) if ccy == "GBP" else None)
 
 
-def _north_star(rows: list[_Row], ccy: str | None, classified: int, opp: set[str], have_bars: bool) -> NorthStar:
+def _north_star(rows: list[_Row], ccy: str | None, classified: int, opp: set[str], have_bars: bool,
+                open_entries: list[pd.Timestamp], source: str) -> NorthStar:
+    """`rows`: the account's trades ENTERED on the range's days (quant review, item 6), whenever they closed."""
     if not have_bars:
         return NorthStar(note=f"opportunity days {NOT_RECORDED}: they need the stored bars (--data-root)")
     per_pnl: dict[str, float] = {}
     per_r: dict[str, float] = {}
     for r in rows:
-        if r.entry_day is None:
-            continue
-        if r.money:
-            per_pnl[r.entry_day] = per_pnl.get(r.entry_day, 0.0) + r.trade.pnl
-        if r.trade.r is not None:
-            per_r[r.entry_day] = per_r.get(r.entry_day, 0.0) + r.trade.r
-    traded = {d for d in per_pnl.keys() | per_r.keys()}
+        assert r.entry_day is not None
+        if r.net_pnl is not None:
+            per_pnl[r.entry_day] = per_pnl.get(r.entry_day, 0.0) + r.net_pnl
+        if r.net_r is not None:
+            per_r[r.entry_day] = per_r.get(r.entry_day, 0.0) + r.net_r
     on = [r for r in rows if r.entry_day in opp]
-    off = [r for r in rows if r.entry_day is not None and r.entry_day not in opp]
-    note = "days by the entry's opportunity day; trades without an entry time are left out"
+    off = [r for r in rows if r.entry_day not in opp]
+    note = ("ex post: a day's range is known only at its close; trades by their entry's opportunity day (net rows), "
+            "trades without an entry time left out")
     if ccy != "GBP":
         note += f"; the £50 north star is in GBP and this account reports {ccy or 'no currency'}"
+
+    def total(xs: list[float | None]) -> float | None:
+        vals = [x for x in xs if x is not None]
+        return sum(vals) if vals else None
     return NorthStar(
-        source="bars", classified_days=classified, opportunity_days=len(opp), traded_opportunity_days=len(traded & opp),
+        source=f"bars ({source}), ex post", classified_days=classified, opportunity_days=len(opp),
+        traded_opportunity_days=len({r.entry_day for r in on}),
         captured_1r=sum(per_r.get(d, 0.0) >= CAPTURE_R for d in opp),
         days_50_plus_on_opportunity=sum(per_pnl.get(d, 0.0) >= NORTH_STAR_GBP for d in opp) if ccy == "GBP" else None,
-        pnl_on_opportunity_days=sum(r.trade.pnl for r in on if r.money) if on else None,
-        pnl_on_other_days=sum(r.trade.pnl for r in off if r.money) if off else None,
-        r_on_opportunity_days=sum(r.trade.r for r in on if r.trade.r is not None) if on else None, note=note)
+        pnl_on_opportunity_days=total([r.net_pnl for r in on]), pnl_on_other_days=total([r.net_pnl for r in off]),
+        r_on_opportunity_days=total([r.net_r for r in on]),
+        pending_open=sum(opp_day(t) in opp for t in open_entries), note=note)
 
 
 def _costs(rows: list[_Row], ccy: str | None, table: CostTable | None, slippage: list[SlippageRow]) -> CostReport:
-    com = [r for r in rows if r.trade.commission is not None and r.money]
-    swp = [r for r in rows if r.trade.swap is not None and r.money]
+    com = [r for r in rows if r.trade.commission is not None and r.net_pnl is not None]
+    swp = [r for r in rows if r.trade.swap is not None and r.net_pnl is not None]
     cost_r = [(r.trade.commission - r.trade.swap) / r.risk for r in rows
               if r.trade.commission is not None and r.trade.swap is not None and r.risk is not None]
+    entry = [r.trade.side * (r.trade.entry_price - r.decision_price) for r in rows
+             if r.decision_price is not None and r.trade.side in (1, -1) and r.trade.entry_price is not None]
     modelled = vs = None
     note = None
     if table is not None:
@@ -557,7 +660,7 @@ def _costs(rows: list[_Row], ccy: str | None, table: CostTable | None, slippage:
         if com and len(lots) == len(com):
             modelled = sum(2 * table.commission_per_lot_side_usd * lot for lot in lots)
             if (ccy or "").upper() == "USD" and modelled > 0:
-                vs = sum(r.trade.commission for r in com) / modelled  # type: ignore[misc]
+                vs = sum(r.trade.commission for r in com if r.trade.commission is not None) / modelled
             else:
                 note = (f"not comparable: realised in {ccy or 'an unreported currency'}, modelled in USD "
                         "(no conversion is recorded)")
@@ -566,10 +669,12 @@ def _costs(rows: list[_Row], ccy: str | None, table: CostTable | None, slippage:
     else:
         note = f"cost table {NOT_RECORDED} (state/costs_<account>.json)"
     return CostReport(
-        commission_trades=len(com), commission_total=sum(r.trade.commission for r in com) if com else None,  # type: ignore[misc]
-        swap_trades=len(swp), swap_total=sum(r.trade.swap for r in swp) if swp else None,  # type: ignore[misc]
+        commission_trades=len(com),
+        commission_total=sum(r.trade.commission for r in com if r.trade.commission is not None) if com else None,
+        swap_trades=len(swp), swap_total=sum(r.trade.swap for r in swp if r.trade.swap is not None) if swp else None,
         cost_r_mean=float(np.mean(cost_r)) if cost_r else None, cost_r_trades=len(cost_r),
         modelled_commission_total=modelled, commission_vs_model=vs, commission_note=note,
+        entry_slippage_trades=len(entry), entry_slippage_mean_usd=float(np.mean(entry)) if entry else None,
         cost_table_built_utc=table.built_utc.isoformat() if table is not None else None, slippage=slippage)
 
 
@@ -593,26 +698,30 @@ def _limits(engine: dict[str, Any]) -> tuple[float, float, float, float, float |
 
 
 def _drawdown(rows: list[_Row], engine: dict[str, Any]) -> DrawdownReport:
+    """Closed-trade, lower bound (quant review, item 3): net rows grouped by the RiskGate's own windows, the risk day
+    (00:00 UTC, timeutil.risk_day) and the risk week (Sunday 00:00 UTC, gate._risk_week)."""
     daily, weekly, s1, s2, abs_lim, source = _limits(engine)
-    money = sorted((r for r in rows if r.money), key=lambda r: r.trade.exit_utc)
+    money = sorted((r for r in rows if r.net_pnl is not None), key=lambda r: r.trade.exit_utc)
     idx, peak, dd = 1.0, 1.0, 0.0
     days: dict[str, list[_Row]] = {}
     weeks: dict[str, list[_Row]] = {}
     for r in money:
-        idx *= 1 + r.trade.pnl / r.trade.equity_before
+        idx *= 1 + (r.net_pnl or 0.0) / r.trade.equity_before
         peak = max(peak, idx)
         dd = max(dd, 1 - idx / peak)
-        days.setdefault(r.exit_day, []).append(r)
-        y, w, _ = date.fromisoformat(r.exit_day).isocalendar()
-        weeks.setdefault(f"{y}-W{w:02d}", []).append(r)
+        days.setdefault(r.risk_day, []).append(r)
+        weeks.setdefault(r.risk_week, []).append(r)
+
+    def loss(v: list[_Row]) -> float:
+        return -sum(r.net_pnl or 0.0 for r in v)
 
     def worst(groups: dict[str, list[_Row]]) -> tuple[str | None, float | None, float | None]:
         """The period with the largest net loss; none when no period lost money (only losses meet a limit)."""
-        loss = {k: -sum(r.trade.pnl for r in v) for k, v in groups.items()}
-        if not loss or max(loss.values()) <= 0:
+        losses = {k: loss(v) for k, v in groups.items()}
+        if not losses or max(losses.values()) <= 0:
             return None, None, None
-        k = max(loss, key=lambda x: loss[x])
-        return k, loss[k], 100 * loss[k] / groups[k][0].trade.equity_before
+        k = max(losses, key=lambda x: losses[x])
+        return k, losses[k], 100 * losses[k] / groups[k][0].trade.equity_before
 
     wd, wdl, wdp = worst(days)
     ww, wwl, wwp = worst(weeks)
@@ -620,7 +729,7 @@ def _drawdown(rows: list[_Row], engine: dict[str, Any]) -> DrawdownReport:
     for v in days.values():
         start_eq = v[0].trade.equity_before
         limit = daily * start_eq if abs_lim is None else min(daily * start_eq, abs_lim)
-        at_limit += -sum(r.trade.pnl for r in v) >= limit
+        at_limit += loss(v) >= limit
     eq, hwm = engine.get("equity"), engine.get("balance_closed_hwm")
     eng_dd = 100 * (hwm - eq) / hwm if isinstance(eq, (int, float)) and isinstance(hwm, (int, float)) and hwm > 0 \
         else None
@@ -633,14 +742,33 @@ def _drawdown(rows: list[_Row], engine: dict[str, Any]) -> DrawdownReport:
         engine_stage=stage if isinstance(stage, str) else None, limits_source=source)
 
 
-def _approvals(props: list[Proposal], pending: int, shadow: list[ShadowTrade]) -> ApprovalReport:
-    by: dict[str, list[Proposal]] = {"approved": [], "rejected": [], "expired": []}
+def _calibration(approved: list[tuple[Proposal, dict[str, Any]]], shadow: list[ShadowTrade],
+                 live: dict[str, _Row]) -> Calibration:
+    shadow_rs, live_rs = [], []
+    for p, raw in approved:
+        t, _ = match_shadow(p, _text(raw.get("model_version")), shadow)
+        sr = _shadow_r(t) if t is not None else None
+        row = live.get(p.proposal_id)
+        if sr is not None and row is not None and row.net_r is not None:
+            shadow_rs.append(sr)
+            live_rs.append(row.net_r)
+    gaps = [lv - sh for lv, sh in zip(live_rs, shadow_rs)]
+    ci = _ci90(gaps) if len(gaps) >= MIN_TRADES else None
+    return Calibration(pairs=len(gaps), shadow_sum_r=sum(shadow_rs) if gaps else None,
+                       live_sum_r=sum(live_rs) if gaps else None, mean_gap_r=float(np.mean(gaps)) if gaps else None,
+                       gap_ci90=ci, sufficient=ci is not None,
+                       verdict=_reading(len(gaps), ci, what="live net R minus shadow gross R"))
+
+
+def _approvals(props: list[tuple[Proposal, dict[str, Any]]], pending: int, shadow: list[ShadowTrade],
+               live: dict[str, _Row]) -> ApprovalReport:
+    by: dict[str, list[tuple[Proposal, dict[str, Any]]]] = {"approved": [], "rejected": [], "expired": []}
     names = {Outcome.APPROVED: "approved", Outcome.REJECTED: "rejected", Outcome.EXPIRED: "expired"}
-    for p in props:
+    for p, raw in props:
         if p.outcome is not None:
-            by[names[p.outcome]].append(p)
+            by[names[p.outcome]].append((p, raw))
     reasons: dict[str, int] = {}
-    for p in by["rejected"]:
+    for p, _ in by["rejected"]:
         k = p.reason_code or NOT_RECORDED
         reasons[k] = reasons.get(k, 0) + 1
     cf = []
@@ -649,31 +777,35 @@ def _approvals(props: list[Proposal], pending: int, shadow: list[ShadowTrade]) -
             continue
         rs: list[float] = []
         money: list[float] = []
-        still = unmatched = 0
+        still = taken = 0
+        why: dict[str, int] = {}
         ccys = set()
-        for p in ps:
-            t = _match(p, _signal_close(p), shadow)
+        for p, raw in ps:
+            t, reason = match_shadow(p, _text(raw.get("model_version")), shadow)
             if t is None:
-                unmatched += 1
+                why[reason or NOT_RECORDED] = why.get(reason or NOT_RECORDED, 0) + 1
                 continue
             r = _shadow_r(t)
             if r is None:
                 still += 1
                 continue
             rs.append(r)
+            taken += t.taken
             if p.risk_amount is not None:
                 money.append(r * p.risk_amount)
                 ccys.add(p.currency)
         cf.append(ShadowOutcome(
-            outcome=name, proposals=len(ps), matched=len(rs), still_open=still, unmatched=unmatched,
-            net_r=sum(rs) if rs else None, mean_r=float(np.mean(rs)) if rs else None, wins=sum(r > 0 for r in rs),
+            outcome=name, proposals=len(ps), matched=len(rs), taken=taken, still_open=still,
+            unmatched=sum(why.values()), unmatched_reasons=dict(sorted(why.items())),
+            sum_r=sum(rs) if rs else None, mean_r=float(np.mean(rs)) if rs else None, wins=sum(r > 0 for r in rs),
             money=sum(money) if money and len(ccys) == 1 else None, money_trades=len(money) if len(ccys) == 1 else 0,
             currency=next(iter(ccys)) if len(ccys) == 1 else None, sufficient=len(rs) >= MIN_TRADES,
-            verdict=_reading(len(rs), _ci90(rs) if len(rs) >= MIN_TRADES else None)))
+            verdict=_reading(len(rs), _ci90(rs) if len(rs) >= MIN_TRADES else None) + " (gross)"))
     return ApprovalReport(proposals=len(props), approved=len(by["approved"]), rejected=len(by["rejected"]),
                           expired=len(by["expired"]), open=pending,
-                          gate_refused_after_approval=sum(p.gate_refusal is not None for p in by["approved"]),
-                          reasons=dict(sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))), counterfactual=cf)
+                          gate_refused_after_approval=sum(p.gate_refusal is not None for p, _ in by["approved"]),
+                          reasons=dict(sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))), counterfactual=cf,
+                          calibration=_calibration(by["approved"], shadow, live) if by["approved"] else None)
 
 
 def _proposal_day(p: Proposal) -> str:
@@ -683,7 +815,8 @@ def _proposal_day(p: Proposal) -> str:
 
 # ---------------------------------------------------------------------------------------------- build
 def build_performance_report(state_dir: str | Path, *, start: str, end: str, data_root: str | Path | None = None,
-                             account: str | None = None, now: pd.Timestamp | None = None) -> PerformanceReport:
+                             account: str | None = None, now: pd.Timestamp | None = None,
+                             bars_source: str = BARS_SOURCE) -> PerformanceReport:
     """The report for opportunity days `start`..`end` (YYYY-MM-DD, inclusive). Reads only."""
     state = Path(state_dir)
     now = pd.Timestamp.now(tz="UTC") if now is None else now.tz_convert("UTC")
@@ -693,37 +826,41 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
     if err:
         errors.append(err)
     store = _store(Path(data_root) if data_root is not None else None)
-    day_types, classified, opp = _day_types(store, start, end)
+    day_types, classified, opp = _day_types(store, start, end, bars_source)
     population = _population(state)
     shadow, serr = _shadow_trades(state)
     if serr:
         errors.append(serr)
-    done, pending_props = _proposals(state)
-    by_acc: dict[str, list[tuple[ClosedTrade, dict[str, Any]]]] = {}
+    all_by: dict[str, list[tuple[ClosedTrade, dict[str, Any]]]] = {}
     for t, raw in rows_raw:
-        if start <= opp_day(t.exit_utc) <= end:
-            by_acc.setdefault(t.account_id, []).append((t, raw))
-    props_by: dict[str, list[Proposal]] = {}
-    for p in done:
+        all_by.setdefault(t.account_id, []).append((t, raw))
+    props_by: dict[str, list[tuple[Proposal, dict[str, Any]]]] = {}
+    for p, raw in _proposals(state, "done"):
         if start <= _proposal_day(p) <= end:
-            props_by.setdefault(p.account_id, []).append(p)
+            props_by.setdefault(p.account_id, []).append((p, raw))
     pending_by: dict[str, int] = {}
-    for p in pending_props:
+    for p, _ in _proposals(state, "pending"):
         if start <= _proposal_day(p) <= end:
             pending_by[p.account_id] = pending_by.get(p.account_id, 0) + 1
-    accounts = sorted(set(by_acc) | set(props_by) | set(pending_by))
+    in_range = {a for a, ts in all_by.items()
+                if any(start <= opp_day(t.exit_utc) <= end or (t.entry_utc is not None and start <= opp_day(t.entry_utc)
+                                                              <= end) for t, _ in ts)}
+    accounts = sorted(in_range | set(props_by) | set(pending_by))
     if account is not None:
         accounts = [a for a in accounts if a == account]
     out = []
     for acc in accounts:
         engine = _read_json(state / f"engine_{acc}.json")
         engine = engine if isinstance(engine, dict) else {}
-        trades = by_acc.get(acc, [])
+        everything = all_by.get(acc, [])
         ccy = engine.get("currency") if isinstance(engine.get("currency"), str) else None
         if ccy is None:
-            seen = {t.pnl_currency for t, _ in trades if t.pnl_currency}
+            seen = {t.pnl_currency for t, _ in everything if t.pnl_currency}
             ccy = next(iter(seen)) if len(seen) == 1 else None
-        rows = [_row(t, raw, ccy, population, day_types) for t, raw in trades]
+        all_rows = [_row(t, raw, ccy, population, day_types) for t, raw in everything]
+        rows = [r for r in all_rows if start <= r.exit_day <= end]
+        entered = [r for r in all_rows if r.entry_day is not None and start <= r.entry_day <= end]
+        live = {r.trade.client_order_id: r for r in all_rows if r.trade.client_order_id}
         try:
             table = CostTable.load(state / f"costs_{acc}.json")
         except ValueError:
@@ -734,21 +871,30 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
               for dim in DIMENSIONS}
         not_rec = {f: sum(getattr(r.trade, f) is None for r in rows)
                    for f in ("agent_id", "side", "entry_utc", "r", "commission", "swap", "lots")}
+        not_rec["pnl_basis"] = sum(r.basis is None for r in rows)
         not_rec.update({dim: sum(r.dims[dim] == NOT_RECORDED for r in rows) for dim in DIMENSIONS})
-        excluded = sum(not r.money for r in rows)
+        sources: dict[str, int] = {}
+        for r in rows:
+            k = r.money_source or NOT_RECORDED
+            sources[k] = sources.get(k, 0) + 1
+        excluded = sum(not (r.trade.pnl_currency is None or ccy is None or r.trade.pnl_currency.upper() == ccy.upper())
+                       for r in rows)
         modes = {r.trade.mode for r in rows}
         out.append(AccountReport(
             account_id=acc, mode=next(iter(modes)) if len(modes) == 1 else ("mixed" if modes else None), currency=ccy,
             overall=_group("all", rows, weekdays), by=by, days=_days(rows, weekdays, ccy),
-            north_star=_north_star(rows, ccy, classified, opp, day_types is not None),
+            north_star=_north_star(entered, ccy, classified, opp, day_types is not None, _open_entries(state, acc),
+                                   bars_source),
             costs=_costs(rows, ccy, table, _slippage(store, acc, start, end, table)),
             drawdown=_drawdown(rows, engine),
-            approvals=_approvals(props_by.get(acc, []), pending_by.get(acc, 0), shadow),
+            approvals=_approvals(props_by.get(acc, []), pending_by.get(acc, 0), shadow, live),
             journal=_journal(store, acc, start, end), not_recorded={k: v for k, v in not_rec.items() if v},
+            money_sources=dict(sorted(sources.items())),
             money_note=f"{excluded} trade(s) in another currency counted in trades and R, not in money"
             if excluded else None))
+    groups = [g for a in out for gs in a.by.values() for g in gs]
     return PerformanceReport(start=start, end=end, as_of_utc=now.isoformat(), weekdays=weekdays, accounts=out,
-                             errors=errors)
+                             groups=len(groups), groups_with_reading=sum(g.sufficient for g in groups), errors=errors)
 
 
 # ---------------------------------------------------------------------------------------------- markdown
@@ -776,23 +922,36 @@ def _table(dim: str, groups: list[GroupStats], ccy: str | None) -> list[str]:
     lines = ["| " + dim.replace("_", " ") + " | trades | net | gross | net R | gross R | mean R | per trade | per day "
              "| R per day | win | 90% interval | reading |", "|" + " --- |" * 13]
     for g in groups:
+        net = _money(g.net_pnl, ccy) + "".join(
+            [f"; net not recorded (gross only, {g.gross_only})" if g.gross_only else "",
+             f"; basis not recorded ({g.basis_not_recorded})" if g.basis_not_recorded else ""])
         gross = _money(g.gross_pnl, ccy) + (f" (gross on {g.gross_trades} of {g.trades})"
                                              if g.gross_trades != g.trades else "")
         gr = _r(g.gross_r) + (f" ({g.gross_r_trades} of {g.trades})" if g.gross_r_trades != g.trades else "")
         nr = _r(g.net_r) + (f" ({g.r_trades} of {g.trades})" if g.r_trades != g.trades else "")
         ci = f"{g.r_ci90[0]:+.2f} to {g.r_ci90[1]:+.2f}" if g.r_ci90 else "-"
         win = f"{100 * g.win_rate:.0f}%" if g.win_rate is not None else NOT_RECORDED
-        lines.append(f"| {_label(dim, g.key)} | {g.trades} | {_money(g.net_pnl, ccy)} | {gross} | {nr} | {gr} | "
+        lines.append(f"| {_label(dim, g.key)} | {g.trades} | {net} | {gross} | {nr} | {gr} | "
                      f"{_r(g.mean_r)} | {_money(g.mean_pnl, ccy)} | {_money(g.pnl_per_day, ccy)} | {_r(g.r_per_day)} | "
                      f"{win} | {ci} | {g.verdict} |")
     return lines
 
 
+def _heading(dim: str) -> str:
+    if dim == "day_type":
+        return "By day type (ex post: classified from the day's own range, known only at its close)"
+    return f"By {dim.replace('_', ' ')}"
+
+
 def format_markdown(rep: PerformanceReport) -> str:
     L = [f"# goldbot performance report: {rep.start} to {rep.end}", "",
          f"As of {rep.as_of_utc[:16].replace('T', ' ')} UTC. Opportunity days (D runs D-1 22:00 to D 22:00 UTC), "
-         f"{rep.weekdays} weekdays. No interval or reading from fewer than {rep.min_trades} trades: such rows say "
-         "\"insufficient sample\". Gross is before commission and swap. Reporting only.", ""]
+         f"{rep.weekdays} weekdays. No interval or reading from fewer than {rep.min_trades} trades with a net R: such "
+         "rows say \"insufficient sample\". Net columns hold net rows only; gross is before commission and swap. "
+         "Reporting only.", "",
+         f"{rep.groups} groups across {len(DIMENSIONS)} dimensions, {rep.groups_with_reading} with a reading. With many "
+         "groups some 90% intervals exclude zero by chance alone (about 1 group in 10 with no edge at all): read a "
+         "single group's interval as a lead to test, not a finding.", ""]
     if not rep.accounts:
         L.append("No closed trades or proposals in this range.")
     for a in rep.accounts:
@@ -801,9 +960,11 @@ def format_markdown(rep: PerformanceReport) -> str:
         L += [f"## {a.account_id} ({a.mode or 'mode ' + NOT_RECORDED}, {c or 'currency ' + NOT_RECORDED})", ""]
         if a.money_note:
             L += [f"Note: {a.money_note}.", ""]
+        if a.money_sources:
+            L += ["Money source: " + ", ".join(f"{k} {v}" for k, v in a.money_sources.items()) + ".", ""]
         L += ["### Overall", ""] + _table("all", [o], c) + [""]
         for dim in DIMENSIONS:
-            L += [f"### By {dim.replace('_', ' ')}", ""] + _table(dim, a.by[dim], c) + [""]
+            L += [f"### {_heading(dim)}", ""] + _table(dim, a.by[dim], c) + [""]
         d = a.days
         L += ["### Days", "",
               f"- traded {d.traded_days} of {d.weekdays} weekdays; mean {_money(d.mean_per_weekday, c)} per weekday; "
@@ -816,9 +977,10 @@ def format_markdown(rep: PerformanceReport) -> str:
         if n.opportunity_days is None:
             L += [f"- {n.note}", ""]
         else:
-            L += [f"- opportunity days (range >= {OPPORTUNITY_RANGE_ATR} x ATR(1d)): {n.opportunity_days} of "
-                  f"{n.classified_days} classified weekdays; traded on {n.traded_opportunity_days}",
-                  f"- captured (>= {CAPTURE_R:g} R made): {n.captured_1r} of {n.opportunity_days}; at £50 or more: "
+            L += [f"- opportunity days (range >= {OPPORTUNITY_RANGE_ATR} x the prior ATR(1d), {n.source}): "
+                  f"{n.opportunity_days} of {n.classified_days} classified weekdays; traded on "
+                  f"{n.traded_opportunity_days}; pending (open trades entered on one): {n.pending_open}",
+                  f"- captured (>= {CAPTURE_R:g} R net made): {n.captured_1r} of {n.opportunity_days}; at £50 or more: "
                   f"{n.days_50_plus_on_opportunity if n.days_50_plus_on_opportunity is not None else '-'}",
                   f"- on opportunity days {_money(n.pnl_on_opportunity_days, c)} ({_r(n.r_on_opportunity_days)}); "
                   f"on other days {_money(n.pnl_on_other_days, c)}",
@@ -830,20 +992,34 @@ def format_markdown(rep: PerformanceReport) -> str:
               f"{ap.gate_refused_after_approval}), rejected {ap.rejected} ({reasons}), expired {ap.expired}; "
               f"still open {ap.open}", ""]
         if ap.counterfactual:
-            L += ["What the signals would have done in the shadow book (gross, gaps filled at the stop: optimistic):", "",
-                  "| outcome | proposals | matched | still open | no shadow trade | net R | mean R | wins | money "
-                  "(R x card risk) | reading |", "|" + " --- |" * 10]
+            L += ["What the signals would have done in the shadow book (GROSS: no commission or swap, gaps filled at "
+                  "the stop, so optimistic; matched whether or not the shadow model took the trade):", "",
+                  "| outcome | proposals | matched | taken by the shadow model | still open | no shadow trade | "
+                  "sum R (gross) | mean R (gross) | wins | money (R x card risk, gross) | reading |",
+                  "|" + " --- |" * 11]
             for s in ap.counterfactual:
-                L.append(f"| {s.outcome} | {s.proposals} | {s.matched} | {s.still_open} | {s.unmatched} | "
-                         f"{_r(s.net_r)} | {_r(s.mean_r)} | {s.wins} | {_money(s.money, s.currency)} | {s.verdict} |")
+                L.append(f"| {s.outcome} | {s.proposals} | {s.matched} | {s.taken} | {s.still_open} | {s.unmatched} | "
+                         f"{_r(s.sum_r)} | {_r(s.mean_r)} | {s.wins} | {_money(s.money, s.currency)} | {s.verdict} |")
+            for s in ap.counterfactual:
+                if s.unmatched_reasons:
+                    L.append(f"- {s.outcome}, no shadow trade: "
+                             + "; ".join(f"{k} ({v})" for k, v in s.unmatched_reasons.items()))
             L.append("")
+        if ap.calibration is not None:
+            cb = ap.calibration
+            L += ["Calibration (approved signals with a live net row): "
+                  f"{cb.pairs} pairs; shadow {_r(cb.shadow_sum_r)} gross, live {_r(cb.live_sum_r)} net; mean gap "
+                  f"(live - shadow) {_r(cb.mean_gap_r)}; {cb.verdict}", ""]
         k = a.costs
+        entry = (f"{k.entry_slippage_mean_usd:+.3f} $/oz over {k.entry_slippage_trades}"
+                 if k.entry_slippage_mean_usd is not None else NOT_RECORDED + " (no decision_price)")
         L += ["### Costs (realised against modelled)", "",
-              f"- commission {_money(k.commission_total, c, sign=False)} on {k.commission_trades} of {o.trades} trades; swap "
-              f"{_money(k.swap_total, c)} on {k.swap_trades}; mean cost {_r(k.cost_r_mean)} per trade over "
+              f"- commission {_money(k.commission_total, c, sign=False)} on {k.commission_trades} of {o.trades} trades; "
+              f"swap {_money(k.swap_total, c)} on {k.swap_trades}; mean cost {_r(k.cost_r_mean)} per trade over "
               f"{k.cost_r_trades}",
               f"- modelled commission {_money(k.modelled_commission_total, 'USD', sign=False)}; realised / modelled "
-              + (f"{k.commission_vs_model:.2f}" if k.commission_vs_model is not None else (k.commission_note or "-"))]
+              + (f"{k.commission_vs_model:.2f}" if k.commission_vs_model is not None else (k.commission_note or "-")),
+              f"- entry slippage from the records (fill against the decision price): {entry}"]
         if k.slippage:
             L += ["", "| session | fills | realised slippage $/oz | modelled $/oz | model from | sample |",
                   "|" + " --- |" * 6]
@@ -853,20 +1029,23 @@ def format_markdown(rep: PerformanceReport) -> str:
                 L.append(f"| {_label('session', sl.session)} | {sl.fills} | {real} | {mod} | "
                          f"{sl.modelled_from or '-'} | {'ok' if sl.sufficient else f'insufficient (< {MIN_TRADES})'} |")
         else:
-            L.append(f"- slippage {NOT_RECORDED} (needs fills under --data-root)")
+            L.append(f"- slippage from fills {NOT_RECORDED} (needs fills under --data-root)")
         L.append("")
         dd = a.drawdown
         abs_txt = _money(dd.daily_loss_limit_abs, c, sign=False) if dd.daily_loss_limit_abs is not None else "off"
         day_txt = (f"{dd.worst_day}: {_money(-dd.worst_day_loss, c)} ({_pct(dd.worst_day_pct)})"
                    if dd.worst_day is not None and dd.worst_day_loss is not None else "none: no losing day")
-        week_txt = (f"{dd.worst_week}: {_money(-dd.worst_week_loss, c)} ({_pct(dd.worst_week_pct)})"
+        week_txt = (f"from {dd.worst_week}: {_money(-dd.worst_week_loss, c)} ({_pct(dd.worst_week_pct)})"
                     if dd.worst_week is not None and dd.worst_week_loss is not None else "none: no losing week")
-        L += ["### Drawdown against the limits", "",
+        L += ["### Drawdown against the limits (closed-trade, lower bound)", "",
+              "- realised net P&L only, in the RiskGate's windows (risk day from 00:00 UTC, risk week from Sunday "
+              "00:00 UTC). A lower bound on what the RiskGate saw: intraday floating losses and its open-risk "
+              "projection are not in it; the exact figures need a daily risk summary from the engine (not built yet).",
               f"- closed-trade drawdown {_pct(dd.max_drawdown_pct)} (size-down {dd.dd_stage1_pct:.0f}%, halt "
               f"{dd.dd_stage2_pct:.0f}%)",
-              f"- worst day {day_txt}; daily cap {dd.daily_cap_pct:.1f}%, absolute {abs_txt}; days at the daily "
+              f"- worst risk day {day_txt}; daily cap {dd.daily_cap_pct:.1f}%, absolute {abs_txt}; days at the daily "
               f"limit: {dd.days_at_daily_limit}",
-              f"- worst week {week_txt}; weekly cap {dd.weekly_cap_pct:.1f}%",
+              f"- worst risk week {week_txt}; weekly cap {dd.weekly_cap_pct:.1f}%",
               f"- engine now: drawdown {_pct(dd.engine_drawdown_pct)} from the closed-balance high-water mark, stage "
               f"{dd.engine_stage or NOT_RECORDED}; limits from {dd.limits_source}", ""]
         if a.journal is not None:
@@ -895,6 +1074,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="goldbot.ops.run perf-report", description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--state", default="state", help="state folder (read only; a copy works)")
     ap.add_argument("--data-root", help="Parquet store for bars, fills and the journal (read only; optional)")
+    ap.add_argument("--bars-source", default=BARS_SOURCE, help="bars_1m source for the day types (default dukascopy)")
     ap.add_argument("--from", dest="start", help="first opportunity day YYYY-MM-DD (default: the month's first)")
     ap.add_argument("--to", dest="end", help="last opportunity day YYYY-MM-DD (default: today)")
     ap.add_argument("--account", help="one account only")
@@ -915,7 +1095,8 @@ def main(argv: list[str] | None = None) -> int:
         print("--out must not be inside the state folder or the data root (the report never writes there)",
               file=sys.stderr)
         return 2
-    rep = build_performance_report(state, start=start, end=end, data_root=a.data_root, account=a.account, now=now)
+    rep = build_performance_report(state, start=start, end=end, data_root=a.data_root, account=a.account, now=now,
+                                   bars_source=a.bars_source)
     md, js = format_markdown(rep), rep.model_dump_json(indent=2)
     out.mkdir(parents=True, exist_ok=True)
     (out / f"perf_{start}_{end}.md").write_text(md, encoding="utf-8")
