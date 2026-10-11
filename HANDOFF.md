@@ -979,6 +979,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Review LOWs (2026-10-11): a refused decision is logged once per proposal and counted (`base.note_schema_skew`), and
   an unknown top-level table in `orders_<account>.json` is logged and counted at engine start; S12 now requires a
   reviewed rollback story for a new table that carries client ids or broker orders.
+  Skew reaches the owner (2026-10-11, review follow-up; needs trading-safety and SRE review): the engine publishes a
+  bounded `schema_skew` block in `engine_<account>.json` (`base.schema_skew_summary`: distinct sources, reads, any
+  refused, at most 20 entries with refused ones first, 10 field paths each). Health `schema_skew:<account>` WARNs
+  (Telegram, NOTIFY_ON_WARN) while any is present and names at most 5 sources (~400 characters, then "+N more"), and
+  FAILs for an hour after a strict reader refused a record (an owner's click dropped by the approval bus;
+  `last_refused_utc`, `SKEW_REFUSED_FAIL_S`), then WARNs naming the refusal time; a new refusal FAILs and alerts
+  again (SRE review). Process-lifetime: the counts clear when the engine restarts and next writes its state (on a
+  tick or bar, so a weekend restart keeps the old block until the Sunday open). The check is guarded like the
+  others (a raising check is a FAIL named `schema_skew:<account>`). Only the engine's own reads are counted; skew read by the API, Telegram or
+  supervisor processes is still log-only. Also pinned: a holiday list with a misspelt key (`valid_thru:`, renamed or
+  added beside the real key) fails closed as `calendar_unavailable`, RiskGate refuses entries, exits still run.
 - H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
   (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
   version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London

@@ -27,7 +27,15 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
-from goldbot.base import Record, UtcTimestamp, load_record, load_record_json, note_schema_skew, write_atomic
+from goldbot.base import (
+    Record,
+    UtcTimestamp,
+    load_record,
+    load_record_json,
+    note_schema_skew,
+    schema_skew_summary,
+    write_atomic,
+)
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_cache
 from goldbot.data.econ_calendar import blackout_window
@@ -2759,6 +2767,8 @@ class Engine:
             "throttle": self._throttle_state(self._last_tick.ts_utc if self._last_tick is not None else self.clock()),
             "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
             "bridge_compat": self.bridge_compat.model_dump(mode="json") if self.bridge_compat is not None else None,
+            # ADR 0010: state from a newer release read by this process, bounded (health: check_schema_skew)
+            "schema_skew": schema_skew_summary().model_dump(mode="json"),
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check

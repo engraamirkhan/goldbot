@@ -192,7 +192,14 @@ and the rest still arrives. It never contains account numbers or emails.
   lock, same wait for a pending entry, same restart order and 90 s check. If the rollback is unstable, the version
   that ran before is restored. Telegram reports *rolled_back_manual* (or *rollback_reverted*); the `deploy` health
   check warns until the next deploy. A pending Telegram deploy approval is cancelled by the rollback. Telegram offers
-  the newer version again: tap **Skip** until the fix is merged.
+  the newer version again: tap **Skip** until the fix is merged. After a rollback the health check
+  `schema_skew:<account>` may warn: the older engine is reading state the newer one wrote and ignoring its new
+  fields (it names the files). That is expected after a rollback. If it **fails**, an approve/reject click was
+  dropped because the older release could not read it; that proposal expired unapplied. Roll forward (or approve
+  again on the next card). The failure turns into a warning an hour after the refusal (the warning keeps its time);
+  another refused click fails and alerts again. The counts live in the running engine: a restart clears them, but
+  the engine rewrites `engine_<account>.json` only on a tick or a bar, so health keeps showing the old block until
+  the first tick after the restart (over a weekend: the Sunday open).
 * Before anything is touched, every deploy and rollback also checks:
   * **aux.db.** A target from before schema compatibility (no `compat_back_to` in its `goldbot/db/migrations.py`)
     cannot open aux.db at schema 5. The script stops every service (inputs, supervisor, engines last), steps aux.db
