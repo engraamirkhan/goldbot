@@ -66,7 +66,7 @@ sudo -u mt5 -H bash -lc "
   curl -fsSLo mt5setup.exe https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe
   wine mt5setup.exe /auto /path:'C:\\MT5\\ICMarkets'
   wine python -m pip install --upgrade pip
-  wine python -m pip install MetaTrader5 pandas numpy pyarrow 'pydantic>=2.12' pyyaml requests keyring
+  wine python -m pip install MetaTrader5 pandas numpy pyarrow 'pydantic>=2.12,<3' pyyaml requests keyring
   wine python -m pip install --no-deps -e 'Z:$ROOT'
 "
 
