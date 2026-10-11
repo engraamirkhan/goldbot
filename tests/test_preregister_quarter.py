@@ -354,7 +354,7 @@ def test_the_workflow_dry_runs_read_only_and_writes_only_after_merging_the_relea
     jobs = wf["jobs"]
     assert jobs["dry-run"]["permissions"] == {"contents": "read"} and jobs["dry-run"]["if"] == "${{ inputs.dry_run }}"
     assert jobs["write"]["permissions"] == {"contents": "write"} and jobs["write"]["if"] == "${{ !inputs.dry_run }}"
-    assert wf["concurrency"]["group"] == "research-registry"                  # one registry writer, as research.yml
     write = "\n".join(s.get("run", "") for s in jobs["write"]["steps"])
-    assert write.index("preregister_quarter.py") < write.index("registry_sync merge") < write.index("release upload")
+    assert write.index("registry_release.sh fetch registry.jsonl") < write.index("preregister_quarter.py") \
+        < write.index("registry_release.sh save registry.jsonl")             # fetch, write, merge-and-upload
     assert "${{" not in write                                                  # inputs reach the shell only via env

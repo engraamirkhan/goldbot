@@ -14,9 +14,8 @@ on:
       dry_run:    { description: "print the rows only; write nothing", type: boolean, default: true }
       allow_late: { description: "after the quarter started: the reason (writes ad-hoc rows naming their rule, no slots)", default: "" }
 permissions: {}   # least privilege: the token has no scopes unless a job grants them; inputs reach the shell only via env:
-concurrency:
-  group: research-registry   # one writer at a time for registry.jsonl, shared with research.yml
-  cancel-in-progress: false
+# The registry is read and saved by scripts/registry_release.sh: a failed read fails the job (never an empty start
+# that would overwrite the published registry), and an upload with fewer lines than the published copy is refused.
 jobs:
   dry-run:
     if: ${{ inputs.dry_run }}
@@ -38,7 +37,7 @@ jobs:
           SPEC: ${{ inputs.spec }}
         run: |
           set -euo pipefail
-          gh release download research-v1 -p registry.jsonl || echo "no registry yet"
+          scripts/registry_release.sh fetch registry.jsonl
           python scripts/preregister_quarter.py --quarter "$QUARTER" --from "$SPEC" --registry registry.jsonl \
             --dry-run | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -48,6 +47,9 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write   # upload registry.jsonl to release research-v1
+    concurrency:
+      group: research-registry   # one writer at a time for registry.jsonl, shared with research.yml (dry runs never wait)
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -63,16 +65,9 @@ jobs:
           ALLOW_LATE: ${{ inputs.allow_late }}
         run: |
           set -euo pipefail
-          gh release download research-v1 -p registry.jsonl || echo "no registry yet; starting empty"
+          scripts/registry_release.sh fetch registry.jsonl
           LATE=(); if [ -n "$ALLOW_LATE" ]; then LATE=(--allow-late "$ALLOW_LATE"); fi
           python scripts/preregister_quarter.py --quarter "$QUARTER" --from "$SPEC" --registry registry.jsonl \
             "${LATE[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: save the registry
-        run: |
-          set -euo pipefail
-          # union with whatever another writer pushed meanwhile, so no row is dropped
-          gh release download research-v1 -p registry.jsonl -O registry.remote.jsonl || touch registry.remote.jsonl
-          python -m goldbot.research.registry_sync merge registry.jsonl registry.remote.jsonl -o registry.jsonl
-          gh release view research-v1 >/dev/null 2>&1 || gh release create research-v1 --title "Research trial registry" \
-            --notes "registry.jsonl: every evaluated trial (feeds the deflated Sharpe). Written by the research workflow." --latest=false
-          gh release upload research-v1 registry.jsonl --clobber
+        run: scripts/registry_release.sh save registry.jsonl   # union with the published copy, then upload
