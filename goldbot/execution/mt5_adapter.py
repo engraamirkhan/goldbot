@@ -79,13 +79,17 @@ def _positions_get(**kw: Any) -> Any:
 
 def _position_ticket(res: Any) -> int:
     """The position a filled market order opened or joined (trading-safety MEDIUM-A). In MT5 a position's ticket is the
-    ticket of the ORDER that opened it, never the deal's: the filling deal names its position (`history_deals_get(
-    ticket=deal)[0].position_id`, also right on a netting account where the fill joins an existing position); when the
-    deal cannot be read (None, empty, an error, not synced yet) the order ticket, which is the position's on a hedging
-    account. Verify on the demo terminal."""
+    ticket of the ORDER that opened it, never the deal's. `history_deals_get(ticket=X)` selects the deals of ORDER X
+    (review MEDIUM-1: asking with the deal ticket would return an unrelated older order's deals), so the order's deals
+    are read and the one whose ticket is the fill's (`res.deal`) names the position, which is also right on a netting
+    account where the fill joins an existing position. When that deal cannot be read (None, empty, an error, not
+    synced yet) the order ticket, which is the position's on a hedging account. Verify on the demo terminal."""
+    pid = 0
     try:
-        deals = mt5.history_deals_get(ticket=res.deal)
-        pid = int(deals[0].position_id) if deals else 0
+        for d in mt5.history_deals_get(ticket=res.order) or ():
+            if int(d.ticket) == int(res.deal):
+                pid = int(d.position_id)
+                break
     except Exception:                                   # the order ticket is still the right answer on hedging
         pid = 0
     return pid if pid > 0 else int(res.order)

@@ -1,8 +1,9 @@
 """Trading-safety re-verification MEDIUM-A: in MT5 a position's ticket is the ticket of the ORDER that opened it, not of
 the deal that filled it. The adapter reported `position_id=res.deal`, so the engine keyed `self.open` by a number the
 terminal never lists as a position: the next sweep could record a phantom close and reconciliation adopt the real
-position as an orphan. The adapter now resolves the position from the filling deal (`history_deals_get(ticket=deal)
-[0].position_id`) and falls back to the order ticket when the deal cannot be read.
+position as an orphan. The adapter now resolves the position from the filling deal. `history_deals_get(ticket=X)`
+filters on the ORDER ticket (review MEDIUM-1), so the adapter asks for the order's deals and takes the position of the
+deal whose ticket is the fill's; it falls back to the order ticket when the deal cannot be read.
 
 Needs verification on the demo terminal (fake mt5 here)."""
 from collections import namedtuple
@@ -42,7 +43,7 @@ def _fake(deal_lookup: Any) -> SimpleNamespace:
         return list(book)
 
     def history_deals_get(*a: Any, **kw: Any) -> Any:
-        if "ticket" in kw:
+        if "ticket" in kw:                              # MT5: `ticket=` selects the deals of that ORDER
             return deal_lookup(kw["ticket"])
         return ()
 
@@ -63,12 +64,20 @@ def _adapter(monkeypatch: pytest.MonkeyPatch, fake: SimpleNamespace) -> mt5_adap
                                  symbol="XAUUSD", account_label="icm-demo")
 
 
+def by_order(*deals: Deal) -> Any:
+    """A deal history queried as MT5 does: `history_deals_get(ticket=X)` returns the deals of order X."""
+    return lambda order: tuple(d for d in deals if d.order == order)
+
+
+FILL = Deal(DEAL, ORDER, ORDER)                         # deal 111 filled order 222, opening position 222
+
+
 def _intent(cid: str = "icm-demo-x") -> OrderIntent:
     return OrderIntent(client_order_id=cid, symbol="XAUUSD", side=1, lots=0.1, sl=2390.0, tp=2430.0, magic=1001)
 
 
 @pytest.mark.parametrize(("lookup", "why"), [
-    (lambda t: (Deal(t, ORDER, ORDER),) if t == DEAL else (), "the deal names its position"),
+    (by_order(FILL), "the deal names its position"),
     (lambda t: None, "history_deals_get failed: the order ticket"),
     (lambda t: (), "deal not synced yet: the order ticket"),
 ])
@@ -79,8 +88,23 @@ def test_a_filled_order_reports_the_position_ticket_not_the_deal_ticket(monkeypa
 
 def test_the_deal_lookup_wins_when_it_names_another_position(monkeypatch):
     # a fill that netted into an existing position (netting accounts): the deal's position_id is the truth
-    res = _adapter(monkeypatch, _fake(lambda t: (Deal(t, ORDER, 999),))).place_order(_intent())
+    res = _adapter(monkeypatch, _fake(by_order(Deal(DEAL, ORDER, 999)))).place_order(_intent())
     assert res.position_id == 999
+
+
+def test_a_past_order_whose_ticket_equals_the_fill_deal_is_never_taken(monkeypatch):
+    # review MEDIUM-1: order and deal tickets share a number space; an older ORDER numbered 111 (the new fill's deal
+    # ticket) has its own deal and position. Asking `ticket=deal` would return that unrelated position (777)
+    past = Deal(555, DEAL, 777)
+    assert _adapter(monkeypatch, _fake(by_order(past, FILL))).place_order(_intent()).position_id == ORDER
+    # and with the new fill not synced yet, the order ticket, never the past position
+    assert _adapter(monkeypatch, _fake(by_order(past))).place_order(_intent()).position_id == ORDER
+
+
+def test_only_the_deal_with_the_fills_ticket_counts(monkeypatch):
+    # an order with several deals (a partial fill then the rest): the deal whose ticket is res.deal names the position
+    other = Deal(333, ORDER, 888)
+    assert _adapter(monkeypatch, _fake(by_order(other, FILL))).place_order(_intent()).position_id == ORDER
 
 
 def test_a_raising_deal_lookup_falls_back_to_the_order_ticket(monkeypatch):
@@ -91,7 +115,7 @@ def test_a_raising_deal_lookup_falls_back_to_the_order_ticket(monkeypatch):
 
 
 def test_the_engine_keys_the_trade_by_the_position_and_reconcile_keeps_it(monkeypatch, tmp_path):
-    fake = _fake(lambda t: (Deal(t, ORDER, ORDER),) if t == DEAL else ())
+    fake = _fake(by_order(FILL))
     broker = _adapter(monkeypatch, fake)
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", mode="demo", state_dir=str(tmp_path),
                               owner_user_id=111, magic_base=1000), broker, [TrendSpecialist()], {})

@@ -831,8 +831,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - MT5 adapter reports the position ticket, not the deal ticket (2026-10-11, trading-safety re-verification MEDIUM-A):
   `place_order` returned `position_id=res.deal`, but an MT5 position's ticket is its opening ORDER's, so the engine
   keyed `self.open` by a number the terminal never lists (a phantom close at the next sweep, the real position adopted
-  as an orphan). `mt5_adapter._position_ticket` now asks the filling deal (`history_deals_get(ticket=deal)[0]
-  .position_id`, right on netting accounts too) and falls back to `res.order`. Tests on a fake terminal whose deal and
+  as an orphan). `mt5_adapter._position_ticket` now reads the order's deals (`history_deals_get(ticket=res.order)`:
+  MT5's `ticket=` selects by ORDER, review MEDIUM-1) and takes `position_id` from the deal whose ticket is `res.deal`
+  (right on netting accounts too), else falls back to `res.order`; an older order numbered like the fill's deal is
+  never taken. Tests on a fake terminal whose deal and
   order tickets differ (tests/test_mt5_position_ticket.py, including the engine keying and a sweep + reconcile that
   keep the trade). **Verify on the demo terminal:** after the first demo fill, the engine's `open` position id and the
   `adopt_orphan` count in the decisions journal (expected: the terminal's position ticket, no orphan adopted).
