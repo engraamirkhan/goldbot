@@ -4,7 +4,7 @@ rank: 8
 title: Q1 2027 pre-registered trial queue
 stage: Idea generation · FIND
 size: S
-status: in progress (draft; freeze by 2026-12-31)
+status: in progress (draft; readiness list with owners and dates in `preregistration-2027Q1.md` 2026-10-11; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, 48, `macro-v1`)
 ---
 
 ### 5. Q1 2027 pre-registered trial queue

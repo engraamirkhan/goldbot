@@ -27,7 +27,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | done (PR #62) |
 | 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | done (PR #60) |
 | 4 | FRED macro data pipeline | Market and macro preparation · FIND | M | done (PR #61) |
-| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (draft; freeze by 2026-12-31) |
+| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (draft; readiness list with owners and dates in `preregistration-2027Q1.md` 2026-10-11; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, 48, `macro-v1`) |
 | 6 | Live exit policies and blackout early close | Trade management, exit · FIND + RUN | M | in review (safety fixes) |
 | 7 | Ops alerts: heartbeats, FAILED_EXEC, weekly cap | Operational resilience · RUN | S–M | done (PR #62) |
 | 8 | Stop rule and gate thresholds in code | Capital and drawdown management · RUN | S | done (owner sign-off and engine trade record open) |
@@ -61,6 +61,9 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 40 | `goldbot-deploy`: scheduler-job guard; restart only enabled units | Operational resilience · RUN | S | done (SRE, 2026-10-11; `guard_scheduler`, `--interrupt-jobs`; security review pending) |
 | 41 | `goldbot-deploy`: health checks against a baseline after the restart | Operational resilience · RUN | S | done (SRE, 2026-10-11; `health_out`/`health_worse`, result `deployed_degraded`, no automatic rollback) |
 | 42 | Bridge/brain version and server_tz agreement checked at run time | Operational resilience, execution · RUN | S | proposed (SRE, G6; trading-safety review) |
+| 47 | Pre-registration writer for the shared registry (queued rows, slots, sync to `research-v1`) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; needed by 2026-12-04 for the Q1 freeze) |
+| 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | in review (built 2026-10-11: tsmom preset `slow_macro`, agent `tsmom-g0-fed4baec9f`, and `count_h06` in count-owed-events; quant review of the readings (a)-(e) in `preregistration-2027Q1.md` H-06; count pasted once `macro-v1` exists; by 2026-12-04, else H-06 is withdrawn by its rule) |
+| 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; settings and `hypotheses.md` B together) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -627,6 +630,32 @@ hypotheses that go through the trial registry in a future quarter's budget.
   (point in time: the archive as known at the signal, `available_utc` joins), so trials can be run with and without.
   No trial budget is spent by the replay itself. Acceptance: the table per window, family and timeframe, attached to
   the owner's adopt decision (OWNER_GUIDE section 4). Quant review.
+
+- **47. Pre-registration writer for the shared registry (research director, 2026-10-11).**
+  Value: the Q1 queue is held in code only once its rows exist, but `TrialRegistry.preregister(queue=True,
+  target_quarter=)` and `reserve_slot` are library calls with no command or workflow. The registry lives on release
+  `research-v1` (checked 2026-10-11: 20 Q4 rows, no `preregistered` row, no slot). Do: a `scripts/` command plus a
+  `workflow_dispatch` job that takes a reviewed JSON spec (rows with family, config, feature version, rationale with
+  the freeze commit, `rule_id`; slots with parent, kind, k, derivation rule, survivor pool), writes them under the
+  registry lock, unions with `research-v1` before and after (`registry_sync`), and prints the written rows. It
+  refuses a spec whose config hash differs from the pre-registration's, and it refuses to write a queued row once its
+  quarter has started (the existing guard). Acceptance: a dry-run mode that prints rows without writing; tests on a
+  temporary registry; the Q1 spec (5 rows + 4 slots, or 4 + 4 if H-06 is withdrawn) checked by the quant reviewer
+  before the real run. Security review (workflow token scope). Depends on: none.
+- **48. H-06 macro-gate preset on slow tsmom (research director, 2026-10-11).** Value: H-06 is in the Q1 queue but
+  has no implementation (the `tsmom` presets hold only `slow`). Do: a preset that keeps H-01's candidates only when
+  the 20-day change in DFII10 and in the broad dollar index (from `macro-v1`, `asof_join` on `available_utc`, as known
+  at the signal bar's close) both agree with the side; a missing value drops the candidate. Add its events-only count
+  (signals by side, the one-at-a-time lower bound) to count-owed-events. Acceptance: tests that the gate reads no
+  value after the signal bar; agent id pinned; count pasted into `preregistration-2027Q1.md`. If the lower bound is
+  below the daily floor in force, or this is not merged by 2026-12-04, H-06 is withdrawn before the freeze and
+  `reserved_trials_quarter` 2027Q1 becomes 8 (rule in the pre-registration). Quant review. Depends on: `macro-v1`.
+- **49. Retired-family trial lists match the registry (research director, 2026-10-11).** Value: the registry on
+  `research-v1` holds four `mean_reversion` trials (#3, #5, #10, #12) and four `trend` trials (#2, #4, #9, #14), but
+  `research.retired_families` and `hypotheses.md` B list `[3]` and `[2]`. The total (20) and so the DSR count are
+  unaffected, but the governance mirror and the registry disagree. Do: correct both lists in one change (the director's
+  `retired_drift` check fails if only one moves). Acceptance: `tests/test_director.py` green; lists equal the
+  registry's trial numbers. Depends on: none.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.

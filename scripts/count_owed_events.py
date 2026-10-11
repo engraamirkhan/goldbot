@@ -7,6 +7,9 @@ Owed counts (docs/research/preregistration-2027Q1.md, docs/research/preregistrat
 * H-01 slow TSMOM (Q1, recount on the current code; informational): daily signals by side
   (`TimeSeriesMomentumSpecialist.candidates_in_context`, preset `slow`) and the one-at-a-time lower bound with every
   trade held to its 124-bar time barrier.
+* H-06 macro-gated slow TSMOM (Q1): the same, through the preset `slow_macro`'s own `candidates_in_context` with
+  ctx["macro"] (DFII10 and broad-dollar 20-day changes as known at the signal bar's close), the H-01 signals the gate
+  removes (no macro value / disagreeing) and whether the lower bound is below the daily floor in force (withdrawal).
 * H-16 (Q2): the frozen first out-of-sample month (`h16.first_oos_month`) and `expected_eval_days`, the evaluation set
   of `h16.evaluate_h16` (finite target, not GVZ-stale, both forecasts present), counted on PLACEBO prices: the function
   receives the real 15m bar timestamps only and builds seeded random-walk prices on them, so whether a day is
@@ -181,15 +184,16 @@ def count_h04(b1: pd.DataFrame) -> tuple[dict[str, Any], pd.DataFrame]:
 
 
 # --------------------------------------------------------------------------- H-01 slow TSMOM recount (Q1)
-def count_h01(b1: pd.DataFrame) -> tuple[dict[str, Any], pd.DataFrame]:
-    """Slow TSMOM daily signals (preset `slow`) in the research window (time barrier closes before the cut) and the
-    one-at-a-time lower bound with every trade held to its time barrier (bar timestamps only)."""
+def _tsmom_signals(b1: pd.DataFrame, preset: str, ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A tsmom preset's own `candidates_in_context` on the cut bars, kept in the research window (time barrier closes
+    before the cut), and the one-at-a-time lower bound with every trade held to its time barrier (bar timestamps
+    only)."""
     cls = SPECIALISTS["tsmom"]
-    spec = cls(**cls.presets["slow"])
+    spec = cls(**cls.presets[preset])
     dec = resample_bars(b1, spec.timeframe).reset_index(drop=True)
     context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(spec.timeframe)}
     m = mid(dec)
-    cands = spec.candidates_in_context(m, pd.DataFrame(index=m.index), context)
+    cands = spec.candidates_in_context(m, pd.DataFrame(index=m.index), context, ctx)
     hold = int(spec.config["max_bars"]) + 1
     idx = cands["idx"].to_numpy(dtype=int)
     inside = idx + hold < len(dec)
@@ -200,11 +204,54 @@ def count_h01(b1: pd.DataFrame) -> tuple[dict[str, Any], pd.DataFrame]:
         if close[i] > busy:
             lower += 1
             busy = close[i + hold]
-    ts = utc_index(dec["visible_at"])[idx]
+    return {"spec": spec, "m": m, "idx": idx, "side": side, "lower": lower, "ts": utc_index(dec["visible_at"])[idx]}
+
+
+def count_h01(b1: pd.DataFrame) -> tuple[dict[str, Any], pd.DataFrame]:
+    """Slow TSMOM daily signals (preset `slow`) in the research window and the one-at-a-time lower bound."""
+    r = _tsmom_signals(b1, "slow")
+    side, ts = r["side"], r["ts"]
     summary = {"status": "counted",
-               "source": f"repo code path: tsmom preset slow ({spec.agent_id}) .candidates_in_context",
-               "signals": len(idx), "long": int((side == 1).sum()), "short": int((side == -1).sum()),
-               "one_at_a_time_lower_bound": lower, "per_year": per_year(ts)}
+               "source": f"repo code path: tsmom preset slow ({r['spec'].agent_id}) .candidates_in_context",
+               "signals": len(r["idx"]), "long": int((side == 1).sum()), "short": int((side == -1).sum()),
+               "one_at_a_time_lower_bound": r["lower"], "per_year": per_year(ts)}
+    return summary, pd.DataFrame({"decision_utc": ts, "side": side})
+
+
+# --------------------------------------------------------------------------- H-06 macro-gated slow TSMOM (Q1)
+H06_SERIES = {"real_yield_10y": "DFII10", "broad_dollar": "DTWEXBGS"}       # macro-v1 `series` -> FRED id
+
+
+def count_h06(b1: pd.DataFrame, macro: pd.DataFrame | None,
+              daily_floor: int | None = None) -> tuple[dict[str, Any], pd.DataFrame]:
+    """H-06 signals by side (preset `slow_macro`: H-01's candidates kept when the 20-day DFII10 and broad-dollar
+    changes, as known at the signal bar's close, agree with the side) and the one-at-a-time lower bound, through the
+    preset's own `candidates_in_context` with ctx["macro"] (macro rows already cut at the holdout). The H-01 signals
+    the gate removes are split into no macro value and disagreeing. `below_floor` compares the lower bound with the
+    daily event floor in force, the pre-registration's withdrawal rule."""
+    cls = SPECIALISTS["tsmom"]
+    source = (f"repo code path: tsmom preset slow_macro ({cls(**cls.presets['slow_macro']).agent_id}) "
+              ".candidates_in_context(ctx={'macro': macro-v1})")
+    if macro is None or len(macro) == 0:
+        return _not_counted("macro-v1 missing (the DFII10 / broad-dollar gate is part of the rule)", source), \
+            pd.DataFrame({"decision_utc": pd.DatetimeIndex([], tz="UTC")})
+    absent = [sid for name, sid in H06_SERIES.items() if name not in set(macro["series"].astype(str))]
+    if absent:
+        return _not_counted(f"macro-v1 lacks {', '.join(absent)}", source), \
+            pd.DataFrame({"decision_utc": pd.DatetimeIndex([], tz="UTC")})
+    ctx = {"macro": macro}
+    r, h01 = _tsmom_signals(b1, "slow_macro", ctx), _tsmom_signals(b1, "slow")
+    agree = r["spec"].macro_agreement(r["m"], macro).to_numpy(dtype=float)[h01["idx"]]
+    missing = int((~np.isfinite(agree).all(axis=1)).sum())
+    side, ts = r["side"], r["ts"]
+    summary: dict[str, Any] = {
+        "status": "counted", "source": source,
+        "signals": len(r["idx"]), "long": int((side == 1).sum()), "short": int((side == -1).sum()),
+        "one_at_a_time_lower_bound": r["lower"], "h01_signals": len(h01["idx"]),
+        "dropped_macro_missing": missing, "dropped_disagree": len(h01["idx"]) - len(r["idx"]) - missing,
+        "daily_floor": daily_floor,
+        "below_floor": None if daily_floor is None else bool(r["lower"] < daily_floor),
+        "per_year": per_year(ts)}
     return summary, pd.DataFrame({"decision_utc": ts, "side": side})
 
 
@@ -452,6 +499,13 @@ def markdown(result: dict[str, Any]) -> str:
         ("Q1 H-01", "slow TSMOM signals (long / short), recount", f"{get('H-01', 'signals')} ({get('H-01', 'long')} / "
          f"{get('H-01', 'short')})", c["H-01"].get("source", "")),
         ("Q1 H-01", "one-at-a-time lower bound (124-bar hold)", get("H-01", "one_at_a_time_lower_bound"), ""),
+        ("Q1 H-06", "macro-gated slow TSMOM signals (long / short)", f"{get('H-06', 'signals')} "
+         f"({get('H-06', 'long')} / {get('H-06', 'short')})", c["H-06"].get("source", c["H-06"].get("reason", ""))),
+        ("Q1 H-06", "one-at-a-time lower bound / daily floor in force / below floor (withdrawal rule)",
+         f"{get('H-06', 'one_at_a_time_lower_bound')} / {get('H-06', 'daily_floor')} / {get('H-06', 'below_floor')}",
+         ""),
+        ("Q1 H-06", "H-01 signals removed by the gate: no macro value / disagreeing",
+         f"{get('H-06', 'dropped_macro_missing')} / {get('H-06', 'dropped_disagree')}", ""),
         ("Q2 H-16", "frozen first OOS month (`first_oos_month`)", get("H-16", "first_oos_month"),
          c["H-16"].get("source", "")),
         ("Q2 H-16", "`expected_eval_days`", get("H-16", "expected_eval_days"), c["H-16"].get("reason", "")),
@@ -478,6 +532,7 @@ def markdown(result: dict[str, Any]) -> str:
     lines += ["", "### Per year", "", "| Count | " + " | ".join(str(y) for y in range(2010, 2026)) + " |",
               "|---|" + "---|" * 16]
     for label, h, k in (("H-04 entries", "H-04", "per_year"), ("H-01 signals", "H-01", "per_year"),
+                        ("H-06 signals", "H-06", "per_year"),
                         ("H-16 eval days", "H-16", "per_year"), ("H-17 high", "H-17", "high_per_year"),
                         ("H-17 low", "H-17", "low_per_year"), ("H-18 pass", "H-18", "per_year_pass"),
                         ("H-14 bars", "H-14", "per_year")):
@@ -489,14 +544,16 @@ def markdown(result: dict[str, Any]) -> str:
 
 
 def run(b1: pd.DataFrame, macro: pd.DataFrame | None, cal: pd.DataFrame | None, *, holdout_from: Any,
-        extra_cost_usd: float, min_rows: int = dt.MIN_FIT_ROWS) -> dict[str, Any]:
-    """Every owed count on inputs cut at the holdout (module docstring)."""
+        extra_cost_usd: float, min_rows: int = dt.MIN_FIT_ROWS, daily_floor: int | None = None) -> dict[str, Any]:
+    """Every owed count on inputs cut at the holdout (module docstring). `daily_floor`: the event floor in force for
+    daily-signal rules (H-06's withdrawal rule compares its lower bound with it)."""
     b1, macro, cal = cut_inputs(b1, macro, cal, holdout_from)
     if len(b1) == 0:
         raise SystemExit("no bars before the holdout")
     ts15 = utc_index(resample_bars(b1, "15m")["ts_utc"])
     h16_out, _ = count_h16(ts15, macro, cal, min_rows=min_rows)
-    counts = {"H-04": count_h04(b1)[0], "H-01": count_h01(b1)[0], "H-16": h16_out,
+    counts = {"H-04": count_h04(b1)[0], "H-01": count_h01(b1)[0],
+              "H-06": count_h06(b1, macro, daily_floor)[0], "H-16": h16_out,
               "H-17": count_h17(b1, cal, h16_out.get("first_oos_month"), min_rows=min_rows)[0],
               "H-18": count_h18(b1, cal)[0], "H-14": count_h14(b1, cal, extra_cost_usd)[0]}
     ts = utc_index(b1["ts_utc"])
@@ -529,8 +586,11 @@ def main() -> int:
         raise SystemExit(str(exc)) from None
     macro = read_macro_files(Path(args.macro))
     cal = read_us_calendar_files(Path(args.us_calendar))
+    research = settings.research          # the daily-signal floor in force (null: the default floor), as the screen
+    daily_floor = (research.screen_min_events_daily if research.screen_min_events_daily is not None
+                   else research.screen_min_events)
     result = run(b1, macro if len(macro) else None, cal if len(cal) else None, holdout_from=holdout_from,
-                 extra_cost_usd=settings_extra_cost_usd(settings))
+                 extra_cost_usd=settings_extra_cost_usd(settings), daily_floor=int(daily_floor))
     Path(args.out_json).write_text(json.dumps(result, indent=2, default=str))
     text = markdown(result)
     Path(args.out_md).write_text(text)

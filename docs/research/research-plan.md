@@ -129,7 +129,7 @@ demo this year. Both lanes are kept: Q1 already funds the slow lane; Q2 funds th
 | Quarter | Trials | Content | Status |
 |---|---|---|---|
 | Q4 2026 | 20/20 | Primary-signal screens of the original families | spent; all retired or failed (R-01..R-07) |
-| Q1 2027 | 13 reserved + 7 reserve | H-02, H-01, H-06, H-04, Q1 survivor rows, tsmom 4h continuity; H-13 overlay | frozen draft, freeze by 2027-01-01 (`preregistration-2027Q1.md`; **not altered here**) |
+| Q1 2027 | 9 reserved (5 queued + 4 H-02 survivor slots; ADR 0007) + 11 open | H-02, H-01, H-06, H-04, Q1 survivor rows, tsmom 4h continuity; H-13 overlay | frozen draft, freeze by 2027-01-01 (`preregistration-2027Q1.md`; **not altered here**) |
 | Q2 2027 | 4 planned + 3 conditional + 6 Q1 follow-up reserve + 7 free reserve | H-16, H-17 V0/V1, H-14 (+ ≤ 2 survivors), H-18 if ruled; H-13 and H-19 overlays | DRAFT (`preregistration-2027Q2-draft.md`), freeze by 2027-03-31 |
 | Q3 2027 (outline) | ≤ 20 | Neighbours of Q2 passers only: H-17 with the full H-16 score (if H-16 passes), V2/V3 exits if V1 beats V0, 1h versions of 15m survivors if M2 is near; H-18 with tier-2 events if the calendar archive exists | not drafted |
 | Q4 2027 (outline) | ≤ 20 | Quarterly SoA refresh decides; if every 15m trial through Q3 is null, see section 7 | not drafted |
