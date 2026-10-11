@@ -34,7 +34,7 @@ from goldbot.base import (
     unknown_fields_json,
     write_atomic,
 )
-from goldbot.telegram.approvals import REASON_CODES, Proposal
+from goldbot.telegram.approvals import REASON_CODES, Outcome, Proposal, decision_channel
 
 
 class BusDecision(Record):
@@ -99,7 +99,13 @@ class ApprovalBus:
         return out
 
     def archive(self, p: Proposal) -> None:
-        """Called by the engine when a proposal is finished (approved, rejected or expired)."""
+        """Called by the engine when a proposal is finished (approved, rejected or expired). The owner's decision time
+        and channel are kept on the archived proposal (finance audit GAP-10): taken from the decision file, which is
+        deleted here, when the proposal does not already carry them. Never for an expired proposal (a click after the
+        window decided nothing); an unreadable decision file leaves them empty."""
+        if p.decided_ts is None and p.outcome != Outcome.EXPIRED:
+            for dec in self.decisions_for({p.proposal_id}):                 # strict; unreadable: none
+                p = p.model_copy(update={"decided_ts": dec.ts, "decided_channel": decision_channel(dec.by)})
         _write_atomic(self.done_dir / f"{p.proposal_id}.json", p.model_dump_json())
         for d in (self.pending_dir, self.decisions_dir):
             (d / f"{p.proposal_id}.json").unlink(missing_ok=True)

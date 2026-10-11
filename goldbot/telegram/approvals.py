@@ -55,6 +55,11 @@ def pct(fraction: float) -> str:
     return f"{100 * fraction:.2f}".rstrip("0").rstrip(".") + "%"
 
 
+def decision_channel(by: str) -> str:
+    """"telegram:<id>" -> "telegram", "dashboard:<email>" -> "dashboard": the channel without the identity."""
+    return by.split(":", 1)[0]
+
+
 class Outcome(str, Enum):
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
@@ -67,12 +72,12 @@ class Proposal(Record):
     agent_id: str
     side: int
     lots: float
-    entry: float
+    entry: float                         # the decision price: the quote at the signal, never updated at approval
     stop: float
     target: float
     p: float
     ev_r: float
-    spread_points: float
+    spread_points: float                 # the spread at the signal (finance GAP-02: both go on the closed record)
     top_features: list[tuple[str, float]]
     risk_usd: float | None = None        # USD lost if the stop is hit: lots x stop distance x 100 oz (older engines)
     # the approval card's money (owner request), from the RiskGate's sizing; None/False from older engines
@@ -88,6 +93,11 @@ class Proposal(Record):
     reason_code: str | None = None
     decided_by: int | None = None
     decided_via: str | None = None       # "telegram:<id>" | "dashboard:<email>" for decisions from the bus
+    # finance audit GAP-10: when the owner decided (epoch s, the decision's own clock) and through which channel
+    # ("telegram" | "dashboard"), kept on the archived proposal; the channel is the word before ":" and never carries
+    # an id. None for an expired proposal and on proposals archived before these fields existed
+    decided_ts: float | None = None
+    decided_channel: str | None = None
     gate_refusal: list[str] | None = None    # approved, but the RiskGate re-check at approval time refused the order
 
     @property
@@ -180,6 +190,7 @@ class ApprovalCenter:
                 done.append(self._finish(p, Outcome.EXPIRED))
                 continue
             p.decided_via = d.by
+            p.decided_ts, p.decided_channel = d.ts, decision_channel(d.by)
             p.reason_code = None if d.approve else d.reason_code
             done.append(self._finish(p, Outcome.APPROVED if d.approve else Outcome.REJECTED))
         return done
@@ -195,6 +206,7 @@ class ApprovalCenter:
         if not approve and reason_code not in REASON_CODES:
             raise ValueError(f"rejection needs a reason code from {REASON_CODES}")
         p.decided_by = user_id
+        p.decided_ts, p.decided_channel = time.time(), "telegram"     # the in-process path is the Telegram bot
         p.reason_code = None if approve else reason_code
         return self._finish(p, Outcome.APPROVED if approve else Outcome.REJECTED)
 

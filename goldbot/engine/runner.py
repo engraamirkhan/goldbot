@@ -56,7 +56,7 @@ from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.ops import server_clock
 from goldbot.ops.account_view import LADDER_TIMEFRAMES
 from goldbot.ops.bridge_compat import BridgeCompat
-from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
+from goldbot.ops.gates_phase import ClosedTrade, EntryAudit, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, open_risk, sizing
@@ -254,6 +254,7 @@ class OpenTrade(Record):
     # False for an orphan adopted without an order record: its initial stop is the broker's current one (maybe trailed
     # since entry), so the record leaves R-based excursions empty (prices and times are still recorded)
     risk_known: bool = True
+    audit: EntryAudit | None = None   # finance audit entry facts for the record; None: adopted or saved before them
 
 
 class PendingClose(Record):
@@ -281,6 +282,7 @@ class SentOrder(Record):
     status: str = "sending"         # sending -> filled | rejected | unfilled (restart found no fill)
     position_id: int | None = None
     atr_usd: float | None = None    # the signal bar's ATR: a fill recovered on restart gets its exit policy back
+    audit: EntryAudit | None = None  # finance audit entry facts, handed to a fill recovered on restart
 
 
 class Engine:
@@ -1211,12 +1213,17 @@ class Engine:
                                    "proposal": prop.proposal_id})
             return None
         magic = self._magic(agent.family)
+        # finance audit GAP-01/02/13: the signal's quote and spread (the proposal) next to the quote priced from now
+        audit = EntryAudit(decision_price=prop.entry, decision_spread_points=prop.spread_points,
+                           decision_utc=pd.Timestamp(prop.created, unit="s", tz="UTC"), requested_price=requested,
+                           timeframe=agent.timeframe, family=agent.family,
+                           model_version=self.live_versions.get(agent.agent_id))
         oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
         # pending_orders row persisted BEFORE sending: a crash between send and result is reconciled on restart
         self._orders_record(prop.proposal_id, agent_id=agent.agent_id, side=prop.side, magic=magic, lots=lots,
                             max_bars=self._base_bars(agent), sl=oi.sl, tp=oi.tp, ts=pd.Timestamp.now("UTC"),
-                            atr_usd=atr_usd)
+                            atr_usd=atr_usd, audit=audit)
         res = self.broker.place_order(oi)
         rec = self._orders[prop.proposal_id]
         rec.status, rec.position_id = ("filled", res.position_id) if res.ok and res.position_id is not None else ("rejected", None)
@@ -1227,11 +1234,12 @@ class Engine:
                            entry_bar_ts=pd.Timestamp.now('UTC'), max_bars=self._base_bars(agent), sl=oi.sl, tp=oi.tp,
                            client_order_id=prop.proposal_id, open_price=fill_px, initial_sl=oi.sl,
                            initial_lots=res.filled_lots, opened_utc=opened,
-                           equity_before=self.state.equity if self.state.equity > 0 else None)
+                           equity_before=self.state.equity if self.state.equity > 0 else None, audit=audit)
             self._attach_policy(tr, agent, entry=fill_px, atr_usd=atr_usd, opened=opened)
             self.open[res.position_id] = tr
         self._save_orders()
-        self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order", "ok": res.ok,
+        self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order",
+                               "proposal": prop.proposal_id, "ok": res.ok,
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots})
         if self.store is not None and res.ok and res.price is not None:
             # requested vs filled feeds the nightly slippage table
@@ -1383,6 +1391,7 @@ class Engine:
         now = now if now is not None else self._last_tick.ts_utc if self._last_tick is not None else pd.Timestamp.now("UTC")
         tr = self.open.get(pid)
         err: str | None = None
+        quote = self._last_tick                           # the quote the close was decided on (exit fill log)
         try:
             res = self.broker.close(pid)
         except Exception as e:                            # one position never stops the others
@@ -1401,6 +1410,8 @@ class Engine:
             if tr is not None:
                 self.open.pop(pid, None)
                 self._note_closed(pid, tr, action, res)
+                self._log_exit_fill(pid, tr, action, res.filled_lots or tr.lots, res.price, at=now, quote=quote,
+                                    retcode=res.retcode)
             return res
         self._close_due[pid] = (action, dict(extra), now)
         if res.retcode in MARKET_CLOSED_RETCODES:
@@ -1410,6 +1421,30 @@ class Engine:
         else:
             self._close_backoff.pop(pid, None)            # transient: again CLOSE_RETRY_MIN_S later (`_retry_wait`)
         return res
+
+    def _log_exit_fill(self, pid: int, tr: OpenTrade, kind: str, lots: float, filled: float | None, *,
+                       at: pd.Timestamp, quote: Tick | None = None, level: float | None = None,
+                       retcode: int | None = None) -> None:
+        """Finance audit GAP-04: one exit leg in store `exit_fills`, requested vs filled as `fills` keeps entries. The
+        requested price is the exit side of the quote the engine decided on (bid for a long) for its own closes and
+        the scale-out, and the stop or target level for a broker stop or target fill; slippage is side x (requested -
+        filled). Kept apart from `fills`, which the entry slippage table reads. Never raises: an exit never waits on
+        its log, and a leg without a filled price is not logged."""
+        if self.store is None or filled is None:
+            return
+        try:
+            requested = level if level is not None else \
+                (quote.bid if tr.side > 0 else quote.ask) if quote is not None else np.nan
+            row = pd.DataFrame([{"ts_utc": at, "position_id": pid, "client_order_id": tr.client_order_id,
+                                 "agent_id": tr.agent_id, "side": tr.side, "lots": float(lots), "kind": kind,
+                                 "requested": float(requested), "filled": float(filled),
+                                 "spread": quote.ask - quote.bid if quote is not None else np.nan,
+                                 "retcode": retcode}])
+            row = row.astype({"client_order_id": "string", "agent_id": "string", "kind": "string",
+                              "retcode": "Int64"})              # one schema even when a value is missing
+            self.store.append("exit_fills", row, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+        except Exception:
+            log.exception("exit fill of position %s (%s) not logged", pid, kind)
 
     def _backing_off(self, pid: int, now: pd.Timestamp) -> bool:
         return pid in self._close_backoff and now < self._close_backoff[pid][1]
@@ -1514,6 +1549,7 @@ class Engine:
                     ((tr.scaled_price or px) * tr.scaled_lots + px * done) / (tr.scaled_lots + done)
                 tr.scaled_lots = round(tr.scaled_lots + done, 8)
                 tr.lots, tr.scaled = round(tr.lots - done, 8), True
+                self._log_exit_fill(pid, tr, "scale_out", done, res.price, at=t.ts_utc, quote=t, retcode=res.retcode)
                 self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "scale_out", "position": pid,
                                        "lots": lots, "ok": res.ok, "retcode": res.retcode, "price": res.price})
             except Exception as e:                        # one position never stops the loop
@@ -1644,7 +1680,8 @@ class Engine:
                        client_order_id=rec.client_order_id if rec is not None else p.comment or None,
                        open_price=p.open_price, initial_sl=rec.sl if rec is not None else p.sl,
                        initial_lots=rec.lots if rec is not None else p.lots, opened_utc=p.open_time_utc,
-                       excursion_approx=True, risk_known=rec is not None)
+                       excursion_approx=True, risk_known=rec is not None,
+                       audit=rec.audit if rec is not None else None)
         if agent is not None:
             atr_usd = rec.atr_usd if rec is not None and rec.atr_usd is not None else \
                 self._implied_atr(agent, p.open_price, tr.initial_sl)
@@ -2057,11 +2094,12 @@ class Engine:
         return Path(self.cfg.state_dir, f"orders_{self.cfg.account_id}.json")   # not engine_*: the supervisor globs those
 
     def _orders_record(self, cid: str, *, agent_id: str, side: int, magic: int, lots: float, max_bars: int, sl: float,
-                       tp: float, ts: pd.Timestamp, atr_usd: float | None = None) -> None:
+                       tp: float, ts: pd.Timestamp, atr_usd: float | None = None,
+                       audit: EntryAudit | None = None) -> None:
         """Write the id to the pending_orders table (atomically, on disk) before order_send."""
         self.sent_ids.add(cid)
         self._orders[cid] = SentOrder(client_order_id=cid, ts_utc=ts, agent_id=agent_id, side=side, magic=magic, lots=lots,
-                                      max_bars=max_bars, sl=sl, tp=tp, atr_usd=atr_usd)
+                                      max_bars=max_bars, sl=sl, tp=tp, atr_usd=atr_usd, audit=audit)
         self._save_orders()
 
     def _save_orders(self) -> None:
@@ -2141,7 +2179,8 @@ class Engine:
                                                         max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp,
                                                         client_order_id=cid, open_price=pos.open_price,
                                                         initial_sl=rec.sl, initial_lots=rec.lots,
-                                                        opened_utc=pos.open_time_utc, excursion_approx=True)
+                                                        opened_utc=pos.open_time_utc, excursion_approx=True,
+                                                        audit=rec.audit)
             agent = self.agents.get(rec.agent_id)
             if agent is not None:
                 atr_usd = rec.atr_usd if rec.atr_usd is not None else self._implied_atr(agent, pos.open_price, rec.sl)
@@ -2183,7 +2222,7 @@ class Engine:
         rec.position_id = pid
         tr = OpenTrade(position_id=pid, agent_id=rec.agent_id, side=rec.side, lots=rec.lots, entry_bar_ts=rec.ts_utc,
                        max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp, client_order_id=cid, initial_sl=rec.sl,
-                       initial_lots=rec.lots, opened_utc=rec.ts_utc)
+                       initial_lots=rec.lots, opened_utc=rec.ts_utc, audit=rec.audit)
         self._note_closed(pid, tr, "broker_close")
 
     def _sweep_closed(self, live: set[int]) -> None:
@@ -2294,6 +2333,7 @@ class Engine:
         else:
             reason = str(last["type"]) if last["type"] in ("stop", "target") else None
         return {"exit_price": float((ex["price"] * ex[vol]).sum()) / lots, "exit_utc": pd.Timestamp(last["ts_utc"]),
+                "last_price": float(last["price"]), "last_lots": float(last[vol]),
                 "pnl": pnl, "commission": None if comm is None else -(comm + fee), "swap": swap,
                 "entry_price": float(ent["price"].iloc[0]) if not ent.empty else None,
                 "lots": float(ent[vol].sum()) if not ent.empty else None, "reason": reason}, True
@@ -2301,7 +2341,10 @@ class Engine:
     def _record_closed(self, pid: int, tr: OpenTrade, reason: str, px: float | None, at: pd.Timestamp) -> None:
         """One ClosedTrade for a fully closed position (scale-out folded in: see gates_phase.ClosedTrade), appended
         durably to state/closed_trades.jsonl. Money from the broker's deals when it reports them (net P&L with
-        commission and swap); otherwise from the engine's own fills at the contract size (commission and swap None)."""
+        commission and swap); otherwise from the engine's own fills at the contract size (commission and swap None).
+        Finance audit: `money_source` says which, and `pnl_basis` is "gross" unless commission and swap are both known
+        (GAP-05); the stops (GAP-03) and the entry facts (`OpenTrade.audit`: GAP-01/02/13) go on the record, and a
+        broker stop or target fill is logged against its level in `exit_fills` (GAP-04)."""
         if pid in self._recorded:
             return
         try:
@@ -2373,10 +2416,19 @@ class Engine:
                           entry_utc=tr.opened_utc or tr.entry_bar_ts, entry_price=entry, exit_price=exit_px,
                           exit_reason=reason, r=r, commission=commission, swap=swap, pnl_currency=pnl_currency,
                           partial_lots=tr.scaled_lots,
+                          # finance audit: GAP-03 stops, GAP-05 where the money came from and whether it is net
+                          initial_sl=tr.initial_sl if tr.risk_known else None, final_sl=tr.sl, final_tp=tr.tp,
+                          money_source="broker" if info is not None else "engine",
+                          pnl_basis="net" if commission is not None and swap is not None else "gross",
+                          **(tr.audit or EntryAudit(timeframe=tr.timeframe)).model_dump(),
                           **self._closed_excursion(pid, tr, entry, tr.opened_utc or tr.entry_bar_ts, exit_utc,
                                                    None if synthetic else px if px is not None else exit_px,
                                                    exit_known=not synthetic))
         append_closed_trade(Path(self.cfg.state_dir), rec)
+        level = {"stop": tr.sl, "target": tr.tp}.get(info["reason"]) if info is not None else None
+        if info is not None and level is not None:     # GAP-04: a broker stop or target fill against its level
+            self._log_exit_fill(pid, tr, info["reason"], info["last_lots"], info["last_price"], at=exit_utc,
+                                level=level)
         self._recorded.add(pid)
         self._throttle_closed.append(rec)
         log.info("closed trade recorded: position %s %s, pnl %.2f", pid, reason, pnl)   # the exit itself is journalled
