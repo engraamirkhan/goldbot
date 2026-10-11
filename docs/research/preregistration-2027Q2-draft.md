@@ -295,8 +295,10 @@ way (13 → 9).
     at the freeze, its named version is pinned and the H-14 count is recounted with it. Otherwise the prior is pinned:
     round trip = the candidate 15m bar's own Dukascopy mean spread (`spread_mean`, USD/oz) + the settings extra cost
     (`execution.costs.settings_extra_cost_usd`, 0.37 $/oz today; written into the config and so into its hash), and
-    `costs-v1` is a reported sensitivity only. Nothing switches between the count, the freeze and the run. The extra cost is checked to be 0.37 $/oz at the run (count-owed-events records the
-    check; a different value is a deviation stated in the report).
+    `costs-v1` is a reported sensitivity only. Nothing switches between the count, the freeze and the run. **The run applies the extra cost frozen in the
+    config** (0.37 $/oz today), whatever `settings.yaml` says at the run. A different settings value is only
+    reported (count-owed-events records the check); it never changes the gate or the labels (quant review,
+    2026-10-11).
   - Both sides are labelled for every candidate (two rows, `side` the 40th input), so the label depends on no primary
     (survey 4b). Both rows of a bar always fall in the same fold and are purged together.
   - Label: triple barrier, target 3.0 / stop 1.5 × Wilder ATR(14) of 15m mid bars at the candidate close, time
@@ -308,7 +310,10 @@ way (13 → 9).
 - **Discovery config** (aligned with H-02's frozen row; any other difference is listed at the freeze):
   `{"n_subsamples": 50, "subsample_frac": 0.5, "survivor_unit": "group", "group_top_k": 3, "method": "lgbm",
   "freq_threshold": 0.6, "stability_threshold": 0.7, "permutation": true, "seed": 0}` (`group_top_k` explicit, as
-  every group-unit config must be: the code refuses one without it). Walk-forward: the 15m window (train 24 / test 3 /
+  every group-unit config must be: the code refuses one without it). **Differences from H-02's pinned config (Q1,
+  amended 2026-10-11, quant review F1):** stability_threshold 0.7 here vs 0.6 there (P-7), and `top_k` is unpinned
+  here, so the code default of 10 would apply, vs 39 there. At the Q2 freeze the full `DiscoveryConfig.model_dump()`
+  is written here, as for H-02, with `top_k` chosen before any count. Walk-forward: the 15m window (train 24 / test 3 /
   step 3 months, purge 2 days, embargo 1 day).
 - **Survivor unit = group (quant ruling Q-3).** At 15m the question is which mechanism (sweep, level, session flow,
   jump) carries information, not which column, and K_eff = groups screened (about 10–15) instead of features (about

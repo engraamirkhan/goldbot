@@ -107,8 +107,16 @@ stamped before its row's quarter would never use the row up.
 ## Trials and reading rules
 
 ### H-02 Feature discovery
-- Config: label = 4h triple barrier, target 3.0 ATR / stop 1.5 ATR / 12 bars (tsmom 4h defaults), candidates = every 4h
-  bar (no rule), side from the sign of the 20-day vol-scaled return; features = every registered family (incl.
+- Config: label = 4h triple barrier, target 3.0 ATR / stop 1.5 ATR / 12 bars. **Candidates (amended 2026-10-11,
+  quant review F1 of the registry writer, before any outcome; the earlier "every 4h bar (no rule), side from the sign
+  of the 20-day vol-scaled return" cannot be executed: `--discover` takes its candidates from the specialist):** the
+  candidates of `tsmom` with the variant `{"timeframe": "4h", "max_bars": 12}` (agent `tsmom-g0-76d7b19171`, config
+  `lb_fast_h 24, lb_mid_h 120, lb_slow_h 480, vol_window_h 96, min_score 0.5, schedule_h 4, target_atr 3.0,
+  stop_atr 1.5, max_bars 12`). A 4h bar is a candidate when |tsmom_score| >= 0.5, where tsmom_score is the mean of
+  the 1-, 5- and 20-day (6, 30 and 120 four-hour bars) vol-scaled returns, with volatility over 24 bars. The side is
+  the sign of that score, not of the 20-day return. Candidates are thinned one position at a time
+  (`labels.one_at_a_time`) on the labels above. This is the same candidate rule as Q4 trial #17 and the 4h
+  continuity trial; H-02's row differs from both by its discovery config. Features = every registered family (incl.
   trader-toolkit, survey and macro), grouped by **hypothesis cluster** (`--families cluster`, `DiscoveryConfig.clusters
   = discovery.H02_CLUSTERS`, amended 2026-10-11 after the quant re-review to follow `hypotheses.md` exactly):
   - **H-03** gold VRP: `macro_gvz*` and the explicit spread `macro_vrp` = GVZ^2 - HAR-RV^2 (built point-in-time in the
@@ -138,8 +146,35 @@ stamped before its row's quarter would never use the row up.
   permutation importance** (all a cluster's columns permuted together on the training fold's rows outside each
   subsample; ADR 0007 amendment 2026-10-11), top-k over groups with `group_top_k: 3` set explicitly in the config
   (quant ruling Q-3).
-- Method: stability selection inside each training fold only (50 subsamples x 50%), top-40 by gain; permutation
-  importance on an inner split as a tie-break.
+- Method (amended 2026-10-11, quant review F1, before any outcome): stability selection inside each training fold
+  only (50 subsamples x 50%). Each subsample selects its **top 39** features by gain (`top_k: 39` = `max_selected:
+  39`, because `side` is the 40th input; the earlier "top-40" is withdrawn). **Permutation confirmation**, not a
+  tie-break: a feature with permutation importance <= 0 on the inner validation split (20%, 3 repeats) is dropped
+  from the fold's selection (`permutation: true`). A feature or cluster is selected in a fold when its frequency is
+  >= 0.6 (`freq_threshold: 0.6`). It is stable when that holds in >= 60% of folds (`stability_threshold: 0.6`, matching
+  the reading and slot rules; the code's default of 0.7 does not apply).
+- **Pinned discovery config.** The full `DiscoveryConfig.model_dump()`, which the registry writer's spec and the
+  queued row carry verbatim (any other value is a different configuration):
+
+  ```yaml
+  clusters: discovery.H02_CLUSTERS   # the full map, written out in the spec: H-03, H-05, H-07, H-08, H-10 as listed above
+  freq_threshold: 0.6
+  group_top_k: 3
+  inner_val_frac: 0.2
+  l1_c: 0.05
+  max_selected: 39
+  method: lgbm
+  n_subsamples: 50
+  permutation: true
+  permutation_repeats: 3
+  seed: 0
+  stability_threshold: 0.6
+  subsample_frac: 0.5
+  survivor_unit: feature
+  top_k: 39
+  ```
+
+  (`l1_c` is unused with `method: lgbm` but is pinned, because it is part of the dump.)
 - Reading rule (decided now): a feature cluster **survives** if its selection stability >= 0.6 across folds AND the
   walk-forward on the selected set has OOF AUC >= 0.53 with the lower 95% bound > 0.50 (cluster = a hypothesis
   cluster above; its selection stability = its group stability; the AUC condition is H-02's recorded reading
@@ -426,7 +461,7 @@ and this file's freeze commit in the rationale, stamped by the registry's clock,
 
 | Row | Config (exact) | `rule_id` | Feature version | Owner | Date |
 |---|---|---|---|---|---|
-| H-02 | `--discover --families cluster`, `clusters = discovery.H02_CLUSTERS`, `survivor_unit=feature`, `group_top_k: 3`, label 4h TB 3.0/1.5/12, macro on, bars range 2010-01-01 .. 2025-09-30 written into the config | none (read by the discovery verdict) | `f-51ac5ebabb` (default + macro drivers v5) | strategy researcher writes the config; quant reviewer checks it | config 2026-12-11; row 2026-12-18 .. 12-23 |
+| H-02 | `--discover --families cluster`, `--specialist tsmom --variants '[{"timeframe": "4h", "max_bars": 12}]'`, the pinned `DiscoveryConfig` dump above (top_k 39, permutation confirmation, freq/stability 0.6, group_top_k 3, survivor_unit feature, H02_CLUSTERS), label 4h TB 3.0/1.5/12, macro on, bars range 2010-01-01 .. 2025-09-30 written into the config | none (read by the discovery verdict) | `f-51ac5ebabb` (default + macro drivers v5) | strategy researcher writes the config; quant reviewer checks it | config 2026-12-11; row 2026-12-18 .. 12-23 |
 | H-01 | `tsmom`, `variants ["slow"]`, agent `tsmom-g0-c12c9afb24` | **`H-01`** | `f-079deacc61` | strategy researcher | row 2026-12-18 .. 12-23 |
 | H-06 | frozen macro-gate preset (above), only if it survives its withdrawal rule | none: evaluator cites the rule | `f-51ac5ebabb` | strategy researcher (spec), implementer (preset), quant reviewer | spec 2026-11-08; preset 2026-12-04; row 2026-12-18 .. 12-23 or withdrawn |
 | H-04 | `asia_drift`, `variants [{}]`, agent `asia_drift-g0-98dc13a518` | **`H-04`** | `f-079deacc61` | strategy researcher | row 2026-12-18 .. 12-23 |
