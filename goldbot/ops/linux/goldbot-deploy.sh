@@ -381,8 +381,8 @@ stop_all() {  # inputs first, then the supervisor, engines and bridges last (exi
 install_for() {  # reinstall Python deps / rebuild the dashboard only when they changed between $1 and $2
   local changed; changed=$(g diff --name-only "$1" "$2")
   if [ "$ROLE" = brain ]; then
-    if grep -q '^pyproject.toml$' <<< "$changed"; then
-      sudo -u goldbot -H bash -c "cd $ROOT && /var/lib/goldbot/.local/bin/uv pip install -q --python .venv/bin/python -e '.[live]'" || return 1
+    if grep -qE '^(pyproject.toml|uv.lock)$' <<< "$changed"; then     # exact versions from uv.lock, as the bootstrap
+      sudo -u goldbot -H bash -c "cd $ROOT && /var/lib/goldbot/.local/bin/uv sync -q --frozen --extra live --python 3.11" || return 1
     fi
     if grep -q '^web/' <<< "$changed"; then sudo -u goldbot -H bash -c "cd $ROOT/web && npm ci --silent && npm run build" || return 1; fi
   elif grep -q '^pyproject.toml$' <<< "$changed"; then

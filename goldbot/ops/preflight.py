@@ -28,7 +28,7 @@ from goldbot.ops.setup_wizard import RESTIC_KEYS
 
 Status = Literal["ok", "warn", "fail"]
 MARK = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
-MEM_FAIL_GB, MEM_WARN_GB = 0.5, 1.5        # MemAvailable before any service runs (24 GB brain; services need ~2 GB)
+MEM_FAIL_GB, MEM_WARN_GB = 0.5, 1.5        # MemAvailable before any service runs (12 GB A1 brain; services need ~2 GB)
 SETUP = "goldbot run setup"
 TUNNEL_UNIT = "goldbot-bridge-tunnel"
 DEPLOY_TIMER = "goldbot-deploy.timer"
@@ -378,7 +378,7 @@ def _time_sync(ctx: PreflightContext) -> Item:
 
 
 def _memory(ctx: PreflightContext) -> Item:
-    fix = "free memory: `sudo systemctl stop goldbot-vnc` and other leftovers, check `top`; the brain needs the 24 GB shape"
+    fix = "free memory: `sudo systemctl stop goldbot-vnc` and other leftovers, check `top`; the brain needs the A1 shape (12 GB)"
     info = ctx.meminfo()
     if "MemAvailable" not in info:
         return Item(name="memory", status="fail", detail="cannot read /proc/meminfo (run preflight on the brain)", fix=fix)

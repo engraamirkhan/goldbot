@@ -2,6 +2,8 @@
 #
 #   .\goldbot\ops\vps_update.ps1 -Ref origin/main            # or a tag / commit sha
 #   .\goldbot\ops\vps_update.ps1 -Ref <sha> -Force           # even while a scheduler job is running
+#   .\goldbot\ops\vps_update.ps1 -Ref <sha> -BridgeOnly      # a bridge box (vps_bootstrap.ps1 -BridgeOnly): only its
+#                                                            # bridge service; the brain's health judges the rest
 #
 # What it does, in order:
 #   1. records a health baseline and the current commit (the rollback target);
@@ -33,12 +35,60 @@
 param(
   [Parameter(Mandatory = $true)][string]$Ref,
   [switch]$Force,
+  [switch]$BridgeOnly,           # the bridge box of a Linux brain: stop the bridge, check out, install, start, check
+  [string]$Account = "icm-demo",
   [int]$SettleSeconds = 90       # wait after start: supervisor heartbeat (5 s), scheduler, first news poll
 )
 $ErrorActionPreference = "Stop"
 $Root = "C:\goldbot"
 $py = "$Root\.venv\Scripts\python.exe"
 Set-Location $Root
+
+# ---- bridge box (vps_bootstrap.ps1 -BridgeOnly). Do it with the book flat or at the weekend: while the bridge is
+# down the brain's engine cannot reach the terminal (it restarts every 10 s and reconciles on reconnect; open positions
+# keep their broker-side stop and target). The bridge is healthy when GET /health answers with the new commit and the
+# service has not restarted; otherwise the previous commit is restored the same way.
+function Test-Bridge([string]$Sha) {
+  $before = (Get-CimInstance Win32_Service -Filter "Name='goldbot-bridge-$Account'").ProcessId
+  Start-Sleep -Seconds $SettleSeconds
+  $after = (Get-CimInstance Win32_Service -Filter "Name='goldbot-bridge-$Account'").ProcessId
+  if (-not $after -or $after -ne $before) { Write-Warning "bridge service restarted or stopped during the check"; return $false }
+  try { $h = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 10 } catch { Write-Warning "bridge /health did not answer"; return $false }
+  if (-not $h.ok -or $h.commit -ne $Sha) { Write-Warning "bridge /health reports commit $($h.commit), expected $Sha"; return $false }
+  Write-Host "bridge healthy on $Sha (api_version $($h.api_version), zone $($h.server_tz))"
+  return $true
+}
+
+function Install-Bridge([string]$Sha) {
+  nssm stop "goldbot-bridge-$Account" | Out-Host
+  $ok = $true
+  git checkout --detach $Sha | Out-Host
+  if ($LASTEXITCODE -ne 0) { Write-Warning "git checkout $Sha failed"; $ok = $false }
+  if ($ok) {
+    python -m uv sync --frozen --link-mode copy --python-preference only-system --extra live --python 3.11 | Out-Host     # uv.lock; copies
+    if ($LASTEXITCODE -ne 0) { Write-Warning "uv sync failed"; $ok = $false }
+  }
+  nssm start "goldbot-bridge-$Account" | Out-Host    # always: a stopped bridge cuts the engine off from the terminal
+  Start-Sleep -Seconds 5
+  return $ok
+}
+
+if ($BridgeOnly) {
+  if ($Account -notmatch '^[a-z0-9-]{1,40}$') { throw "-Account must be an account id from config/accounts.yaml" }
+  $OldSha = (git rev-parse HEAD).Trim()
+  git fetch origin
+  if ($LASTEXITCODE -ne 0) { throw "git fetch failed; nothing was stopped" }
+  $NewSha = git rev-parse --verify --quiet "$Ref^{commit}"
+  if ($LASTEXITCODE -ne 0 -or -not $NewSha) { throw "unknown ref $Ref; nothing was stopped" }
+  $NewSha = "$NewSha".Trim()
+  if ($NewSha -eq $OldSha) { Write-Host "already at $NewSha; nothing to do"; exit 0 }
+  Write-Host "bridge update $OldSha -> $NewSha (rollback target $OldSha)"
+  if ((Install-Bridge $NewSha) -and (Test-Bridge $NewSha)) { Write-Host "bridge update to $NewSha done"; exit 0 }
+  Write-Warning "bridge update to $NewSha failed; rolling back to $OldSha"
+  if ((Install-Bridge $OldSha) -and (Test-Bridge $OldSha)) { Write-Warning "rolled back to $OldSha (healthy)"; exit 1 }
+  Write-Warning "ROLLBACK to $OldSha is not healthy either: read logs\goldbot-bridge-$Account.err"
+  exit 2
+}
 
 # Service names exactly as registered by vps_bootstrap.ps1, in STOP order (start order is built below).
 $StopOrder = @(
@@ -126,8 +176,8 @@ function Get-RunningJobs {
 function Install-Commit([string]$Sha, [string]$OldSha) {
   git checkout --detach $Sha | Out-Host
   if ($LASTEXITCODE -ne 0) { Write-Warning "git checkout $Sha failed"; return $false }
-  & $py -m pip install -e ".[live]" | Out-Host   # same extras as vps_bootstrap.ps1
-  if ($LASTEXITCODE -ne 0) { Write-Warning "pip install failed"; return $false }
+  python -m uv sync --frozen --link-mode copy --python-preference only-system --extra live --python 3.11 | Out-Host   # as vps_bootstrap.ps1
+  if ($LASTEXITCODE -ne 0) { Write-Warning "uv sync failed"; return $false }
   Sync-AuxSchema                                  # services are stopped here
   # rebuild the dashboard only when web/ changed (the API serves web\dist)
   git diff --quiet $OldSha $Sha -- web

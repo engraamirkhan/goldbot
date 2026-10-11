@@ -3,7 +3,9 @@
 # scheduler (retrain, research jobs), dashboard API, Telegram and news services under systemd. The MT5 terminal runs
 # on the second VM (mt5_bootstrap.sh) and is reached through the bridge (goldbot/execution/bridge.py).
 #
-#   curl -fsSL https://raw.githubusercontent.com/engraamirkhan/goldbot/main/goldbot/ops/linux/brain_bootstrap.sh | sudo bash
+#   sudo bash brain_bootstrap.sh <40-hex commit id>   # the commit the owner checked is on GitHub's main (recommended;
+#                                                     # docs/deploy/first-deploy.md: download it and check its sha256)
+#   sudo bash brain_bootstrap.sh                      # whatever main is at this moment
 #
 # Credentials are NEVER in this script. Afterwards the owner stores them with `goldbot accounts ...` (docs/RUNBOOK.md,
 # section "Free hosting on Oracle Cloud"). Services are installed but not started.
@@ -11,7 +13,26 @@ set -euo pipefail
 REPO=https://github.com/engraamirkhan/goldbot.git
 ROOT=/opt/goldbot
 NODE_MAJOR=22                       # match CI (.github/workflows/ci.yml NODE_VERSION)
+REF=${1:-}
+LOG=/root/goldbot-bootstrap.log
+if [ -n "$REF" ] && ! [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "usage: sudo bash brain_bootstrap.sh [<40-hex commit id on main>]"; exit 2
+fi
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+# A dropped SSH session must not stop the install half-way (docs/AGENT_STANDARDS.md "Root-run tooling"): SIGHUP and
+# SIGPIPE are ignored from here on (children inherit it), and everything is also written to a root-only log. When the
+# terminal is gone, tee keeps writing the log and `cat` drains the pipe, so no write fails.
+trap '' PIPE HUP
+exec > >(tee -a "$LOG" --output-error=warn 2>/dev/null; cat > /dev/null) 2>&1
+echo "== goldbot brain bootstrap $(date -u +%FT%TZ) ref=${REF:-main}"
+
+# Fallback host (docs/deploy/first-deploy.md "If Oracle has no A1 capacity"): on a box with under 4 GB of RAM (a 1 GB
+# x86 micro) a 4 GB swap file keeps the dashboard build and the Saturday retrain from being killed. The A1 shape
+# (12 GB) gets none.
+if [ "$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)" -lt 4000000 ] && ! swapon --show | grep -q /swapfile; then
+  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  grep -q /swapfile /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+fi
 
 apt-get update -y
 # restic: encrypted off-host backups of the state (goldbot/ops/backup.py, run by the scheduler as user goldbot)
@@ -23,7 +44,13 @@ systemctl enable --now chrony
 # installs) before the installs below. docs/AGENT_STANDARDS.md "Root-run tooling".
 OPS_SRC=$(mktemp -d /root/goldbot-ops.XXXXXX)
 trap 'rm -rf -- "$OPS_SRC"' EXIT
-git clone -q --depth 1 "$REPO" "$OPS_SRC/src"
+if [ -n "$REF" ]; then             # exactly the commit the owner checked off-box (git verifies the content by its id)
+  git init -q "$OPS_SRC/src" && git -C "$OPS_SRC/src" fetch -q --depth 1 "$REPO" "$REF" \
+    && git -C "$OPS_SRC/src" checkout -q --detach FETCH_HEAD
+  [ "$(git -C "$OPS_SRC/src" rev-parse HEAD)" = "$REF" ] || { echo "fetched commit is not $REF"; exit 1; }
+else
+  git clone -q --depth 1 "$REPO" "$OPS_SRC/src"
+fi
 OPS=$OPS_SRC/src/goldbot/ops/linux
 
 id goldbot >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/goldbot --shell /usr/sbin/nologin goldbot
@@ -32,6 +59,10 @@ id goldbot >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib
 if [ ! -d "$ROOT/.git" ]; then
   install -d -m 755 -o goldbot -g goldbot "$ROOT"   # root-ok: creates /opt/goldbot in root-owned /opt, empty so far
   sudo -u goldbot -H git clone -q "$REPO" "$ROOT"
+  [ -z "$REF" ] || sudo -u goldbot -H git -C "$ROOT" checkout -q --detach "$REF"   # same code as root's copy above
+elif [ -n "$REF" ]; then          # a re-run never moves an installed tree; say so when it is on another commit
+  head=$(sudo -u goldbot -H git -C "$ROOT" rev-parse HEAD 2>/dev/null | tr -cd '0-9a-f' | head -c 40)
+  [ "$head" = "$REF" ] || echo "WARNING: $ROOT is at $head, not $REF: left as it is (update it with sudo goldbot-deploy $REF)"
 fi
 sudo -u goldbot mkdir -p "$ROOT/state" "$ROOT/logs" "$ROOT/models" "$ROOT/data"
 sudo -u goldbot chmod 700 "$ROOT/state"   # the secrets file (no desktop keyring on a server) lives here, owner-only
@@ -39,7 +70,7 @@ sudo -u goldbot chmod 700 "$ROOT/state"   # the secrets file (no desktop keyring
 # Python 3.11 via uv (same minor version as CI)
 sudo -u goldbot -H bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh"
 UV=/var/lib/goldbot/.local/bin/uv
-sudo -u goldbot -H bash -c "cd $ROOT && $UV venv --python 3.11 .venv && $UV pip install --python .venv/bin/python -e '.[live]'"
+sudo -u goldbot -H bash -c "cd $ROOT && $UV sync --frozen --extra live --python 3.11"   # exact versions from uv.lock
 
 # Node 22 for the dashboard build (official tarball, checked against the published SHA-256)
 if ! node --version 2>/dev/null | grep -q "^v$NODE_MAJOR\."; then
@@ -77,7 +108,7 @@ cat > /usr/local/bin/goldbot-tunnel <<'WRAP'
 # sudo goldbot-tunnel <mt5 private ip>   -> starts the SSH tunnel to the MT5 bridge
 set -euo pipefail
 echo "MT5_HOST=${1:?mt5 private ip}" > /etc/goldbot/bridge.env
-systemctl enable --now goldbot-bridge-tunnel
+systemctl enable goldbot-bridge-tunnel && systemctl restart goldbot-bridge-tunnel   # also moves a running tunnel
 WRAP
 chmod 755 /usr/local/bin/goldbot-tunnel
 echo "bridge tunnel key (authorise it on the MT5 box with: sudo goldbot-mt5-authorize '<this line>'):"
