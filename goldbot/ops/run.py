@@ -43,6 +43,7 @@ if TYPE_CHECKING:   # service entry points import lazily; these are for annotati
     from goldbot.data.calendar import SessionTable
     from goldbot.data.store import Store
     from goldbot.ops.accounts import Account
+    from goldbot.ops.watchdog import LoopWatch
     from goldbot.risk import RiskLimits
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -236,7 +237,29 @@ def refuse_start(account_id: str, why: str, info: Any = None, state_dir: str | P
     raise SystemExit(why)
 
 
+def start_loop_watch(account_id: str, state_dir: str | Path = "state") -> "LoopWatch":
+    """The engine's LoopWatch, started: Python tracebacks of every thread go to stderr (the journal) on the
+    watchdog's SIGABRT, and phase "starting" beats feed the watchdog until `ready()` (a long reconcile or model load
+    never trips it)."""
+    import faulthandler
+
+    from goldbot.ops.watchdog import LoopWatch
+    if sys.stderr is not None:
+        faulthandler.enable()                      # SIGABRT from WatchdogSec: where the loop was stuck, in the log
+    watch = LoopWatch(state_dir, account_id)
+    watch.starting()
+    return watch
+
+
 def run_engine(account_id: str) -> None:
+    watch = start_loop_watch(account_id)       # loop heartbeat + systemd watchdog (goldbot/ops/watchdog.py)
+    try:
+        _run_engine(account_id, watch)
+    finally:                                   # a refused or failed start: no beats from a process on its way out
+        watch.stop()
+
+
+def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     from pathlib import Path
 
     import pandas as pd
@@ -341,7 +364,9 @@ def run_engine(account_id: str) -> None:
 
     seen = mtimes()
     last_check = time.time()
+    watch.ready()                                  # READY=1: from here only this loop feeds the watchdog
     while True:
+        watch.tick()                               # every pass, ticks or none: a stuck loop stops beating
         engine_pass(eng, broker, acc.symbol)
         try:                                       # D13: a finished background read is applied; the loop never waits
             table = refresher.collect(pd.Timestamp.now("UTC"), eng.sessions)

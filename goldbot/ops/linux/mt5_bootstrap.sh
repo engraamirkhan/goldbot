@@ -73,7 +73,10 @@ sudo -u mt5 mkdir -p "$ROOT/state" "$ROOT/logs"
 sudo -u mt5 chmod 700 "$ROOT/state"
 
 install -m 644 "$OPS"/systemd/goldbot-xvfb.service "$OPS"/systemd/goldbot-bridge@.service \
-  "$OPS"/systemd/goldbot-vnc.service /etc/systemd/system/
+  "$OPS"/systemd/goldbot-vnc.service "$OPS"/systemd/goldbot-bridge-watchdog@.service \
+  "$OPS"/systemd/goldbot-bridge-watchdog@.timer /etc/systemd/system/
+# root-run, so root's copy from its own clone (never the mt5-writable tree): restarts a bridge stuck in a terminal call
+install -m 755 -o root -g root "$OPS/goldbot-bridge-watchdog.sh" /usr/local/sbin/goldbot-bridge-watchdog
 systemctl daemon-reload
 systemctl enable --now goldbot-xvfb
 
@@ -122,6 +125,7 @@ cd /opt/goldbot && exec sudo -u mt5 -H env DISPLAY=:99 WINEDEBUG=-all PYTHON_KEY
 WRAP
 chmod 755 /usr/local/bin/goldbot-mt5
 systemctl enable goldbot-bridge@icm-demo
+systemctl enable --now goldbot-bridge-watchdog@icm-demo.timer   # idle until the bridge has run 5 min
 
 # Deploys: only versions the owner approves (Telegram [Deploy] or `sudo goldbot-deploy latest`), never by itself.
 # The script runs as root, so a root-owned copy is installed from root's own clone ($OPS); the repo copy (writable by

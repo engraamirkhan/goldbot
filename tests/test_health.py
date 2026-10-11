@@ -407,6 +407,7 @@ def healthy_state(tmp_path: Path) -> None:
     write(tmp_path / "news_feeds.json", {"a": {"ok": True, "ts": NOW.isoformat()}})
     for svc in health.HEARTBEAT_SERVICES:
         write(health.heartbeat_path(tmp_path, svc), {"service": svc, "ts": ago(30)})
+    write(tmp_path / "heartbeat_engine-icm-demo.json", {"phase": "loop", "ts": ago(5), "started": ago(3600)})
     last_night = (NOW - pd.Timedelta(hours=16)).isoformat()
     write(tmp_path / "backup_last.json", {"ts": last_night, "ok": True, "last_ok_ts": last_night})
     write(tmp_path / "restore_drill_last.json", {"ts": (NOW - pd.Timedelta(days=3)).isoformat(), "ok": True, "files": 9})
