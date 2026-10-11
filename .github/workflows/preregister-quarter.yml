@@ -1,0 +1,78 @@
+name: preregister-quarter
+# Writes a quarter's pre-registered queued rows and contingent slots (docs/research/preregistration-<quarter>.yaml,
+# reviewed with its markdown) into the shared trial registry on release research-v1 (BACKLOG 47;
+# scripts/preregister_quarter.py). Runs on GitHub's runners because Claude sandboxes cannot download release assets.
+# Dry run (the default): prints the rows, read-only token, nothing uploaded. Write: unions the release copy before and
+# after (goldbot.research.registry_sync, as research.yml does) and uploads registry.jsonl. Idempotent: re-running adds
+# nothing. Refused on or after the quarter's first day unless allow_late gives a reason. A pre-registration is not a
+# trial: no budget is spent and no outcome is written. Cost: about 2 runner-minutes per manual run; no schedule.
+on:
+  workflow_dispatch:
+    inputs:
+      quarter:    { description: "quarter the rows are queued for", default: "2027Q1" }
+      spec:       { description: "reviewed spec (YAML)", default: "docs/research/preregistration-2027Q1.yaml" }
+      dry_run:    { description: "print the rows only; write nothing", type: boolean, default: true }
+      allow_late: { description: "after the quarter started: the reason (writes ad-hoc rows naming their rule, no slots)", default: "" }
+permissions: {}   # least privilege: the token has no scopes unless a job grants them; inputs reach the shell only via env:
+concurrency:
+  group: research-registry   # one writer at a time for registry.jsonl, shared with research.yml
+  cancel-in-progress: false
+jobs:
+  dry-run:
+    if: ${{ inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read   # checkout and read the research-v1 release asset; nothing is uploaded
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e .
+      - name: print the rows against the shared registry
+        env:
+          QUARTER: ${{ inputs.quarter }}
+          SPEC: ${{ inputs.spec }}
+        run: |
+          set -euo pipefail
+          gh release download research-v1 -p registry.jsonl || echo "no registry yet"
+          python scripts/preregister_quarter.py --quarter "$QUARTER" --from "$SPEC" --registry registry.jsonl \
+            --dry-run | tee -a "$GITHUB_STEP_SUMMARY"
+
+  write:
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write   # upload registry.jsonl to release research-v1
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e .
+      - name: write the rows and slots
+        env:
+          QUARTER: ${{ inputs.quarter }}
+          SPEC: ${{ inputs.spec }}
+          ALLOW_LATE: ${{ inputs.allow_late }}
+        run: |
+          set -euo pipefail
+          gh release download research-v1 -p registry.jsonl || echo "no registry yet; starting empty"
+          LATE=(); if [ -n "$ALLOW_LATE" ]; then LATE=(--allow-late "$ALLOW_LATE"); fi
+          python scripts/preregister_quarter.py --quarter "$QUARTER" --from "$SPEC" --registry registry.jsonl \
+            "${LATE[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: save the registry
+        run: |
+          set -euo pipefail
+          # union with whatever another writer pushed meanwhile, so no row is dropped
+          gh release download research-v1 -p registry.jsonl -O registry.remote.jsonl || touch registry.remote.jsonl
+          python -m goldbot.research.registry_sync merge registry.jsonl registry.remote.jsonl -o registry.jsonl
+          gh release view research-v1 >/dev/null 2>&1 || gh release create research-v1 --title "Research trial registry" \
+            --notes "registry.jsonl: every evaluated trial (feeds the deflated Sharpe). Written by the research workflow." --latest=false
+          gh release upload research-v1 registry.jsonl --clobber

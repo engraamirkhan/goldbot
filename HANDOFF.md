@@ -942,6 +942,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- **Pre-registration writer (BACKLOG 47, 2026-10-11; quant review pending).** `scripts/preregister_quarter.py
+  --quarter 2027Q1 --from docs/research/preregistration-2027Q1.yaml [--dry-run] [--allow-late REASON]`, and the
+  `preregister-quarter` workflow (workflow_dispatch; dry run by default with a read-only token; the write job merges
+  `research-v1` before and after and uploads, `concurrency: research-registry` shared with research.yml). The YAML is
+  the reviewed extract of the markdown: each config is rebuilt the way its runner builds it (`resolve_variant`, now
+  shared with `research_pass.py`; `discovery_trial_config`, shared with `discovery_pass`) and checked against its
+  pinned hash, agent id and feature version; reading rules and the slot derivation rule must be the markdown's text
+  word for word; rows + slots = `reservation` = `research.reserved_trials_quarter` <= 20. Writes through
+  `preregister(queue=True, target_quarter=)` / `reserve_slot` under the lock, idempotent, never a trial. **Not
+  writable yet, by design:** H-02's config (tsmom variant, DiscoveryConfig beyond survivor_unit/group_top_k/clusters,
+  bars_from/bars_to) is owed by the strategy researcher (2026-12-11), H-06 by BACKLOG 48 (or `withdrawn:` +
+  `reservation: 8` + settings 8), and `freeze_commit` by the research director (2026-12-14). On or after 2027-01-01
+  only `--allow-late` writes, as ad-hoc rows naming their rule (no reservation, no slots). For the quant reviewer: the
+  markdown's H-02 method ("top-40 by gain", "permutation importance ... as a tie-break", survival at stability >= 0.6)
+  differs from `DiscoveryConfig` defaults (`top_k` 10, `permutation` False, `stability_threshold` 0.7); the H-02 YAML
+  must set them explicitly. H-02's config holds the exact first/last 1m bar the run loads, so a data-v1 refresh
+  between the write and the run breaks the match (fails closed: the run is not covered by the reservation).
 - **Owed pre-registration counts (2026-10-11): run count-owed-events and paste the counts before the freeze.**
   `.github/workflows/count-owed-events.yml` (workflow_dispatch only; dispatchable once it is on `main`) downloads
   data-v1, macro-v1 and calendar-v1 (`fetch_data_release.py --download-only`), cuts every input at

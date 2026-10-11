@@ -412,7 +412,7 @@ and run there, and its table is pasted here with the run's commit:
 | `macro-v1` published (`data-macro` dispatched on `main`) | data engineer, via the program director | 2026-10-18 |
 | `calendar-v1` published (`data-us-calendar` on `main`; needed by Q2, not by Q1) | data engineer | 2026-10-18 |
 | `costs-v1` published from the VPS, or "priors accepted" written here by the research director | owner and SRE (VPS step, BACKLOG 1); research director records the fallback | 2026-12-11 / fallback 2026-12-14 |
-| A pre-registration writer: a command plus a `workflow_dispatch` job that writes queued rows and slots into the shared registry under its lock and syncs `research-v1` (BACKLOG 47) | implementer; quant and security reviewers | 2026-12-04 |
+| A pre-registration writer: a command plus a `workflow_dispatch` job that writes queued rows and slots into the shared registry under its lock and syncs `research-v1` (BACKLOG 47; built 2026-10-11 as `scripts/preregister_quarter.py` + the `preregister-quarter` workflow, from `preregistration-2027Q1.yaml`, which must be updated with this file: H-02's config, H-06 or its withdrawal, the freeze commit) | implementer; quant and security reviewers | 2026-12-04 |
 | H-06 preset merged and counted, or withdrawn by its rule (BACKLOG 48) | strategy researcher, implementer | 2026-12-04 |
 | H-10: no `jump_news` for Q1 (decided here). H-10 reads jumps only, which is inconclusive for H-10 by its rule, so the feature version stays put | research director | done 2026-10-11 |
 | Feature-version line final (`f-079deacc61`; macro `f-51ac5ebabb`); any later bump amends it first | quant reviewer | 2026-12-11 |

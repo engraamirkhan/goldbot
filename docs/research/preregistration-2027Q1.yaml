@@ -1,0 +1,104 @@
+# Machine-readable extract of docs/research/preregistration-2027Q1.md ("Q1 readiness", tables 1 and 2), read by
+# scripts/preregister_quarter.py (BACKLOG 47). The markdown file is the source of truth: every reading rule and the
+# slot derivation rule below must appear in it word for word (whitespace aside), every config is rebuilt the way its
+# runner builds it (research_pass.py / --discover) and checked against the pinned config_hash, agent_id and
+# feature_version, and the rows + slots must equal `reservation` and research.reserved_trials_quarter. Nothing is
+# written while a row is `pending` or `freeze_commit` is empty; `--dry-run` prints the rows at any time.
+quarter: "2027Q1"
+source: docs/research/preregistration-2027Q1.md
+freeze_commit: null          # the freeze commit of the markdown file (research director, 2026-12-14); fills {commit}
+reservation: 9               # 5 queued + 4 H-02 survivor slots; 8 if H-06 is withdrawn by its rule
+
+rows:
+  - id: H-02
+    kind: discovery
+    specialist: tsmom
+    variant: null            # pending: the label/candidate spec of H-02 (written by the strategy researcher)
+    discovery:
+      survivor_unit: feature
+      group_top_k: 3
+      clusters: H02_CLUSTERS # discovery.H02_CLUSTERS, by name
+    group_mode: cluster
+    macro: true
+    bars_from: null          # pending: the exact first and last 1m bar the run loads (its config holds both)
+    bars_to: null
+    feature_version: f-51ac5ebabb
+    rationale: "H-02 feature discovery (preregistration-2027Q1.md, commit {commit})"
+    reading_rule: >-
+      a feature cluster **survives** if its selection stability >= 0.6 across folds AND the
+      walk-forward on the selected set has OOF AUC >= 0.53 with the lower 95% bound > 0.50 (cluster = a hypothesis
+      cluster above; its selection stability = its group stability; the AUC condition is H-02's recorded reading
+      verdict "continue"). Survivors earn their own
+      trial (rows 6-9); if no cluster survives, rows 6-9 are cancelled and their budget returns to reserve.
+    pending: >-
+      the H-02 config (tsmom label/candidate variant, the DiscoveryConfig beyond survivor_unit/group_top_k/clusters,
+      and bars_from/bars_to) is written by the strategy researcher and checked by the quant reviewer (due 2026-12-11)
+
+  - id: H-01
+    specialist: tsmom
+    variant: slow
+    agent_id: tsmom-g0-c12c9afb24
+    config_hash: "561030150146"
+    feature_version: f-079deacc61
+    rule_id: H-01
+    rationale: "H-01 slow TSMOM (preregistration-2027Q1.md, commit {commit})"
+    reading_rule: >-
+      **continue** if the P4 screen passes (gross mean R > 0, t >= 2.0, on the event
+      floor ruled in A) AND net mean R > 0 with t >= 1.65 AND positive net years >= 3 incl. 2021 or 2022, on both sides
+      together and on long-only (swap bias above). **Stop slow trend in gold** if net mean R <= 0 on both sides together
+      (the literature's best case then does not survive our costs), or if the screen fails on at least the floor's events.
+      If both sides together pass but long-only net mean R <= 0 or long-only t < 1.65, the result is **inconclusive
+      (short-only edge under a flattering short-swap prior)** (added 2026-10-11, before any outcome was seen). **Inconclusive** if
+      the screen has fewer events than the floor (whatever the sign or t), OR if the screen passes but net mean R > 0
+      with t < 1.65, or with fewer than 3 positive net years (or none in 2021/2022): recorded and charged, cannot retire
+      the hypothesis and does not continue it. A "continue" means only that model research on slow TSMOM may be
+      pre-registered; it is not a promotion.
+
+  - id: H-06
+    specialist: tsmom
+    variant: null            # pending: the frozen macro-gate preset (BACKLOG 48)
+    macro: true
+    feature_version: f-51ac5ebabb
+    rationale: "H-06 macro-conditioned slow TSMOM (preregistration-2027Q1.md, commit {commit})"
+    reading_rule: >-
+      **continue** only if net mean R exceeds H-01's by >= 0.03 R AND 2022-2024 net is positive (the period
+      the yield link broke). Otherwise the macro gate is retired.
+    pending: >-
+      no implementation yet (BACKLOG 48, due 2026-12-04); withdrawn by its rule if not merged and counted by then:
+      set `withdrawn:` to the reason and `reservation` to 8
+
+  - id: H-04
+    specialist: asia_drift
+    variant: {}
+    agent_id: asia_drift-g0-98dc13a518
+    config_hash: 3d33124f210c
+    feature_version: f-079deacc61
+    rule_id: H-04
+    rationale: "H-04 Asia-session drift (preregistration-2027Q1.md, commit {commit})"
+    reading_rule: >-
+      **continue** if gross t >= 2.0 on >= 1,000 events AND net mean R > 0.
+
+  - id: C4H
+    specialist: tsmom
+    variant: {timeframe: 4h, max_bars: 12}
+    agent_id: tsmom-g0-76d7b19171
+    config_hash: 184bddf12019
+    feature_version: f-079deacc61
+    rule_id: C4H
+    rationale: "tsmom 4h with swap, continuity (preregistration-2027Q1.md, commit {commit})"
+    reading_rule: >-
+      if net mean R <= 0, the 4h tsmom horizon is retired (H-01 supersedes it).
+
+slots:
+  - parent: H-02
+    kind: survivor
+    k: [1, 2, 3, 4]
+    survivor_pool: [H-03, H-05, H-07, H-08, H-10]
+    rule: {min_stability: 0.6, min_auc: 0.53, min_auc_lower_bound: 0.5}
+    derivation_rule: >-
+      slot k is live only if H-02's recorded reading verdict is *continue* with OOF AUC >= 0.53 and the lower 95% bound
+      > 0.50, AND at least k of the hypothesis clusters H-03, H-05, H-07, H-08, H-10 have group stability >= 0.6
+      (`results.discovery.group_stability`; H-02 groups by these clusters, `discovery.H02_CLUSTERS`); clusters are ranked
+      by group stability (ties by that order), and survivor k's trial is H-02's family (`tsmom`), spec and label exactly,
+      with inputs = `side` + cluster k's recorded members (`results.discovery.group_members`), tagged `from_discovery` =
+      H-02's row reference (timestamp and config hash) and `survivor` = the cluster id

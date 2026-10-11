@@ -469,30 +469,18 @@ def parse_variants(family: str, raw: str) -> list[dict[str, Any]]:
     """`--variants` JSON: a list of config overrides, one trial each ([{}] = the family's defaults); a string names one
     of the family's presets (e.g. '["slow"]' for tsmom, H-01) and stands for its overrides. Keys must be settings of
     the family (its defaults or optional settings, or timeframe / feature_seed); a typo must not silently run the
-    defaults."""
-    from goldbot.specialists.base import FEATURE_SEED_KEY, TIMEFRAME_KEY
-    cls = SPECIALISTS[family]
+    defaults. One resolver with the pre-registration writer (`preregistration.resolve_variant`), so a queued row and
+    the run hash the same config."""
+    from goldbot.research.preregistration import resolve_variant
     variants = json.loads(raw)
     if isinstance(variants, (dict, str)):
         variants = [variants]
-    if isinstance(variants, list):
-        for i, v in enumerate(variants):
-            if isinstance(v, str):
-                if v not in cls.presets:
-                    raise SystemExit(f"unknown {family} preset {v!r}; presets: {sorted(cls.presets)}")
-                variants[i] = dict(cls.presets[v])
-    if not isinstance(variants, list) or not variants or not all(isinstance(v, dict) for v in variants):
+    if not isinstance(variants, list) or not variants or not all(isinstance(v, (dict, str)) for v in variants):
         raise SystemExit("--variants must be a JSON list of objects or preset names, e.g. '[{}, {\"band_z\": 1.5}]'")
-    allowed = set(cls.default_config) | set(cls.optional_config) | {TIMEFRAME_KEY, FEATURE_SEED_KEY}
-    for v in variants:
-        bad = sorted(set(v) - allowed)
-        if bad:
-            raise SystemExit(f"unknown {family} settings {bad}; allowed: {sorted(allowed)}")
-        try:
-            SPECIALISTS[family](**v)         # rejects e.g. a timeframe the family cannot run on
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from None
-    return variants
+    try:
+        return [resolve_variant(family, v) for v in variants]
+    except ValueError as exc:                # unknown preset or setting, or e.g. a timeframe the family cannot run on
+        raise SystemExit(str(exc)) from None
 
 
 def summary_table(rows: list[dict[str, Any]]) -> str:
