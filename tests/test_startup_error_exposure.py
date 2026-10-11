@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from goldbot.engine import Engine, EngineConfig
@@ -76,3 +77,24 @@ def test_the_supervisor_halts_on_a_refused_engine_and_still_counts_its_exposure(
     assert s["startup_refused_engines"] == ["engine_icm-demo.json"]
     _running_file(tmp_path, "icm-demo")                                           # the engine started: cleared
     assert "engine_startup_refused" not in Supervisor(tmp_path, SupervisorLimits()).evaluate()["reasons"]
+
+
+def test_a_successful_start_after_a_refusal_clears_the_supervisor_halt(tmp_path):
+    # re-verify follow-up: the refusal marker must not outlive the refusal (the engine's first state write replaces it)
+    from goldbot.execution.broker import Tick
+    from goldbot.execution.paper import PaperBroker
+    _running_file(tmp_path, "icm-demo", startup_error="refusing to trade icm-demo: margin mode unknown")
+    assert "engine_startup_refused" in Supervisor(tmp_path, SupervisorLimits()).evaluate()["reasons"]
+    pb = PaperBroker()
+    pb.on_tick(Tick(ts_utc=pd.Timestamp.now("UTC"), bid=2_400.0, ask=2_400.2))
+    eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path)), pb, [], {})
+    eng._write_state()
+    assert "startup_error" not in _read(tmp_path)
+    s = Supervisor(tmp_path, SupervisorLimits()).evaluate()
+    assert "engine_startup_refused" not in s["reasons"] and s["startup_refused_engines"] == []
+
+
+def test_the_owner_text_for_a_refused_start_offers_retiring_the_account():
+    from goldbot.api import entry_status as es
+    r = es.REASONS["engine_startup_refused"]
+    assert "retire that account" in r.fix

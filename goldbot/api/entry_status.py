@@ -98,7 +98,8 @@ REASONS: dict[str, Reason] = {
     "engine_state_unreadable": _r("The supervisor can't read an engine's state file",
                                   "Restart the engine that wrote it.", "act"),
     "engine_startup_refused": _r("An engine refused to start: entries stopped on every account",
-                                 "Health shows the cause on the engine line; fix it and restart that engine.", "act"),
+                                 "Health shows the cause on the engine line; fix it and restart that engine, "
+                                 "or retire that account.", "act"),
     "open_risk_unknown": _r("Open risk can't be measured (a trade without a stop?)",
                             "Put a stop on every open trade; the Health tab names the account.", "act"),
     "mixed_account_currencies": _r("Engines report different account currencies",
