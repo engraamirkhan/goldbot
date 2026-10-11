@@ -45,6 +45,8 @@ CompatStatus = Literal["ok", "incompatible", "unreachable", "unchecked"]
 CHECK_TIMEOUT_S = 5.0                    # /health answers without touching the terminal; also the total read deadline
 MAX_HEALTH_BYTES = 64 * 1024             # the bridge's report is ~400 bytes; anything larger is not it
 MAX_VERDICT_AGE_S = 300.0                # an ok older than this counts as unchecked (checks run every 60 s)
+UNCHECKED_GRACE_S = 120.0                # health: an engine unchecked longer than this FAILs (Telegram); warns inside
+HUNG_AFTER_S = 3 * CHECK_TIMEOUT_S       # a check thread alive this long is abandoned and replaced (daemon thread)
 REQUIRED_METHODS = frozenset(METHODS)    # every method this brain's RemoteBroker calls
 _TZ = re.compile(r"^[A-Za-z0-9_+\-/]{1,64}$")             # a zone name (Europe/Athens, NY+7); anything else is refused
 _SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")     # sha-1 or sha-256 object names
@@ -110,8 +112,27 @@ def _int(v: Any) -> int | None:
 
 
 def read_bridge_info(url: str, timeout_s: float = CHECK_TIMEOUT_S, get: Callable[..., Any] = requests.get) -> BridgeInfo:
-    """GET <url>/health (no token, nothing reaches the terminal), streamed: at most MAX_HEALTH_BYTES are read and the
-    whole read ends at a monotonic deadline of `timeout_s` (a per-read timeout alone lets a slow drip run forever)."""
+    """GET <url>/health (no token, nothing reaches the terminal), streamed: at most MAX_HEALTH_BYTES are read, and the
+    whole GET runs on a daemon thread joined with a hard deadline of `timeout_s`. requests' timeout is per socket read,
+    so a server dripping header bytes would otherwise hold the call far longer; an abandoned read ends when the socket
+    does (one at most per check, i.e. per minute)."""
+    box: dict[str, BridgeInfo] = {}
+
+    def work() -> None:
+        try:
+            box["info"] = _read_bridge_info(url, timeout_s, get)
+        except Exception as exc:                      # the type only: a message can name the tunnel endpoint
+            box["info"] = BridgeInfo(reachable=False, problem=f"/health unreadable ({type(exc).__name__})")
+    t = threading.Thread(target=work, name="bridge-health-get", daemon=True)
+    t.start()
+    t.join(timeout_s)
+    info = box.get("info")
+    if t.is_alive() or info is None:
+        return BridgeInfo(reachable=False, problem=f"/health not read within the {timeout_s:g} s deadline")
+    return info
+
+
+def _read_bridge_info(url: str, timeout_s: float, get: Callable[..., Any]) -> BridgeInfo:
     deadline = time.monotonic() + timeout_s
     try:
         r = get(f"{url.rstrip('/')}/health", timeout=timeout_s, stream=True)
@@ -167,15 +188,21 @@ class BridgeCompat(FrozenRecord):
     brain_commit: str | None = None
     commit_differs: bool = False
     checked_at: UtcTimestamp | None = None
+    unchecked_since: UtcTimestamp | None = None          # when the engine became unchecked (kept while it stays so)
 
     @property
     def blocks(self) -> bool:
         return self.status in ("incompatible", "unchecked")
 
 
-def unchecked(why: str, checked_at: pd.Timestamp | None = None) -> BridgeCompat:
-    """Not confirmed (engine starting, never reached, or the last confirmation too old): blocks entries."""
-    return BridgeCompat(status="unchecked", reason=f"bridge not confirmed: {why}", checked_at=checked_at)
+def unchecked(why: str, checked_at: pd.Timestamp | None = None, *, now: pd.Timestamp | None = None,
+              since: pd.Timestamp | None = None) -> BridgeCompat:
+    """Not confirmed (engine starting, never reached, or the last confirmation too old): blocks entries.
+    `unchecked_since` is `since` when it continues an earlier unchecked verdict, else `now` (default: the host clock),
+    so health can tell a start-up moment from an engine stuck blocked (UNCHECKED_GRACE_S)."""
+    at = since if since is not None else now if now is not None else pd.Timestamp.now("UTC")
+    return BridgeCompat(status="unchecked", reason=f"bridge not confirmed: {why}", checked_at=checked_at,
+                        unchecked_since=at)
 
 
 def assess(info: BridgeInfo, server_tz: str, brain_commit: str | None, *, now: pd.Timestamp | None = None,
@@ -238,7 +265,8 @@ def next_verdict(prev: BridgeCompat | None, new: BridgeCompat) -> BridgeCompat:
     if new.status != "unreachable":
         return new
     if prev is None or prev.status == "unchecked":
-        return unchecked(new.reason.split(":")[0], prev.checked_at if prev is not None else None)
+        return unchecked(new.reason.split(":")[0], prev.checked_at if prev is not None else None,
+                         since=prev.unchecked_since if prev is not None else None)
     if prev.blocks:
         return prev.model_copy(update={"reason": f"{prev.reason} (last verdict kept: {new.reason.split(':')[0]})"})
     return new.model_copy(update={"checked_at": prev.checked_at})
@@ -250,10 +278,10 @@ def effective(v: BridgeCompat, now: pd.Timestamp, max_age_s: float = MAX_VERDICT
     if v.blocks:
         return v
     if v.checked_at is None:
-        return unchecked("never confirmed")
+        return unchecked("never confirmed", now=now)
     age = (now - v.checked_at).total_seconds()
     if age > max_age_s:
-        return unchecked(f"last confirmed {age / 60:.0f} min ago (over {max_age_s / 60:g} min)", v.checked_at)
+        return unchecked(f"last confirmed {age / 60:.0f} min ago (over {max_age_s / 60:g} min)", v.checked_at, now=now)
     return v
 
 
@@ -262,14 +290,22 @@ class BridgeCompatChecker:
     `start()` launches it, `collect()` returns the verdict once it finished, else None. A check that raised is an
     `unreachable` verdict naming the exception type only."""
 
-    def __init__(self, check: Callable[[], BridgeCompat]) -> None:
-        self.check = check
+    def __init__(self, check: Callable[[], BridgeCompat], *, clock: Callable[[], float] = time.monotonic,
+                 hung_after_s: float = HUNG_AFTER_S) -> None:
+        self.check, self.clock, self.hung_after_s = check, clock, hung_after_s
         self._thread: threading.Thread | None = None
+        self._started = 0.0
         self._box: dict[str, BridgeCompat] = {}
 
     def start(self) -> bool:
+        """Launch a check unless one runs. Self-healing: a check alive longer than `hung_after_s` is abandoned (a
+        daemon thread; its late result goes to its own box and is never collected) and a new one starts, so a hung
+        read cannot keep the engine `unchecked` for good. Called once per minute: at most one leaked thread a minute."""
         if self._thread is not None:
-            return False
+            if not self._thread.is_alive() or self.clock() - self._started <= self.hung_after_s:
+                return False                         # finished (collect it) or still inside its time
+            log.warning("bridge check alive %.0f s (> %.0f s): abandoned, starting a new one",
+                        self.clock() - self._started, self.hung_after_s)
         box: dict[str, BridgeCompat] = {}
 
         def work() -> None:
@@ -279,6 +315,7 @@ class BridgeCompatChecker:
                 box["verdict"] = BridgeCompat(status="unreachable", reason=f"check failed ({type(exc).__name__})")
         self._box = box
         self._thread = threading.Thread(target=work, name="bridge-compat", daemon=True)
+        self._started = self.clock()
         self._thread.start()
         return True
 

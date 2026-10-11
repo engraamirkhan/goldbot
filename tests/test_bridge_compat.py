@@ -283,7 +283,11 @@ def test_a_slow_drip_health_is_cut_at_the_total_deadline():
     r = _Resp(200, itertools.repeat(b" "), delay=0.1)                               # each chunk within any read timeout
     t0 = time.monotonic()
     info = bc.read_bridge_info("u", timeout_s=0.5, get=lambda *a, **k: r)
-    assert time.monotonic() - t0 < 2.0 and r.closed
+    assert time.monotonic() - t0 < 2.0
+    end = time.monotonic() + 2.0                          # the abandoned read closes its response on its own deadline
+    while not r.closed and time.monotonic() < end:
+        time.sleep(0.02)
+    assert r.closed
     assert not info.reachable and "deadline" in (info.problem or "")
 
 
@@ -418,6 +422,63 @@ def test_a_stale_verdict_blocks_the_engine_until_a_fresh_check(tmp_path, current
     assert eng.gate.check(_intent(), eng.state).allowed
 
 
+def test_unchecked_since_is_stamped_once_and_kept_while_unchecked():
+    first = bc.unchecked("engine starting", now=WED)
+    assert first.unchecked_since == WED
+    dead = BridgeCompat(status="unreachable", reason="/health unreachable (ConnectTimeout): x")
+    later = bc.next_verdict(first, dead)
+    assert later.status == "unchecked" and later.unchecked_since == WED              # not reset by each failure
+    ok = BridgeCompat(status="ok", reason="fine", checked_at=WED)
+    aged = bc.effective(ok, WED + pd.Timedelta(minutes=6))
+    assert aged.status == "unchecked" and aged.unchecked_since == WED + pd.Timedelta(minutes=6)
+
+
+def test_a_hung_check_thread_is_replaced_a_verdict_collected_and_entries_reopen(tmp_path, current_bridge):
+    """N1/N2: a check stuck past 3 x CHECK_TIMEOUT_S is abandoned (daemon thread) and a new one started."""
+    eng, pb, _ = _engine(tmp_path)
+    eng._refresh_account(_tick(WED))
+    hang = threading.Event()
+    calls = [0]
+
+    def check() -> BridgeCompat:
+        calls[0] += 1
+        if calls[0] == 1:
+            hang.wait(30)                                                      # the first check never returns
+        return check_bridge(current_bridge, TZ, SHA_A)
+    clock = [1000.0]
+    c = BridgeCompatChecker(check, clock=lambda: clock[0])
+    begin_bridge_check(eng, c, timeout_s=0.2)
+    assert _compat(eng).status == "unchecked" and eng.gate.check(_intent(), eng.state).reasons == ["bridge_incompatible"]
+    clock[0] += bc.HUNG_AFTER_S - 1
+    assert not c.start()                                                       # still inside the hung window
+    clock[0] += 2                                                              # past 3 x CHECK_TIMEOUT_S
+    assert c.start()                                                           # abandoned and replaced
+    deadline = time.monotonic() + 10
+    got = None
+    while got is None and time.monotonic() < deadline:
+        got = c.collect()
+        time.sleep(0.02)
+    assert got is not None and got.status == "ok"
+    apply_bridge_compat(eng, got)
+    assert eng.gate.check(_intent(), eng.state).allowed                        # entries reopen
+    hang.set()
+
+
+def test_the_get_runs_under_a_hard_deadline_even_when_it_blocks():
+    """N2: requests' timeout is per read; a server dripping header bytes holds get() far longer. The whole GET runs in
+    a thread joined with the deadline."""
+    gate = threading.Event()
+
+    def blocking_get(*a: Any, **k: Any) -> Any:
+        gate.wait(10)
+        raise AssertionError("unreachable")
+    t0 = time.monotonic()
+    info = bc.read_bridge_info("u", timeout_s=0.5, get=blocking_get)
+    gate.set()
+    assert time.monotonic() - t0 < 1.5
+    assert not info.reachable and "deadline" in (info.problem or "")
+
+
 def test_the_checker_runs_off_the_loop_and_a_raising_check_is_unreachable():
     gate = threading.Event()
 
@@ -480,17 +541,38 @@ def test_health_reports_an_unreachable_bridge_and_fails_while_the_engine_still_b
     assert c2 is not None and c2.status == "fail" and "loss_per_lot" in c2.reason
 
 
-def test_health_warns_when_the_engine_has_not_confirmed_the_bridge_for_five_minutes(tmp_path, current_bridge):
+def _engine_verdict(tmp_path: Path, **compat: Any) -> None:
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"bridge_compat": compat}))
+
+
+def test_health_fails_and_alerts_when_the_engine_has_not_confirmed_the_bridge_past_grace(tmp_path, current_bridge):
+    """N1: the probe passes but the engine stays blocked (stuck check): FAIL (Telegram) past the grace period."""
     ctx = _hctx(tmp_path, lambda url: bc.read_bridge_info(current_bridge))
-    old = (WED - pd.Timedelta(minutes=7)).isoformat()
-    (tmp_path / "engine_icm-demo.json").write_text(json.dumps(
-        {"bridge_compat": {"status": "ok", "reason": "fine", "checked_at": old}}))
+    _engine_verdict(tmp_path, status="ok", reason="fine", checked_at=(WED - pd.Timedelta(minutes=7)).isoformat())
+    c = health.check_bridge_compat(ctx, ctx.accounts[0])
+    assert c is not None and c.status == "fail" and "not confirmed" in c.reason        # ok aged past 5 min
+    text = health.alert_text({}, health.HealthReport(ts=WED, status="fail", checks=[c]))
+    assert text is not None and "FAIL bridge_compat:icm-demo" in text
+    _engine_verdict(tmp_path, status="unchecked", reason="engine starting", checked_at=None,
+                    unchecked_since=(WED - pd.Timedelta(seconds=bc.UNCHECKED_GRACE_S + 30)).isoformat())
+    c2 = health.check_bridge_compat(ctx, ctx.accounts[0])
+    assert c2 is not None and c2.status == "fail" and "not confirmed" in c2.reason     # unchecked past 2 min
+    _engine_verdict(tmp_path, status="unchecked", reason="engine starting", checked_at=None)
+    c3 = health.check_bridge_compat(ctx, ctx.accounts[0])
+    assert c3 is not None and c3.status == "fail"                                      # no stamp: assume the worst
+
+
+def test_health_warns_inside_the_grace_period(tmp_path, current_bridge):
+    ctx = _hctx(tmp_path, lambda url: bc.read_bridge_info(current_bridge))
+    _engine_verdict(tmp_path, status="unchecked", reason="engine starting", checked_at=None,
+                    unchecked_since=(WED - pd.Timedelta(seconds=30)).isoformat())
     c = health.check_bridge_compat(ctx, ctx.accounts[0])
     assert c is not None and c.status == "warn" and "not confirmed" in c.reason
-    (tmp_path / "engine_icm-demo.json").write_text(json.dumps(
-        {"bridge_compat": {"status": "unchecked", "reason": "engine starting", "checked_at": None}}))
-    c2 = health.check_bridge_compat(ctx, ctx.accounts[0])
-    assert c2 is not None and c2.status == "warn" and "not confirmed" in c2.reason
+    assert health.alert_text({}, health.HealthReport(ts=WED, status="warn", checks=[c])) is None   # quiet inside
+
+
+def test_health_warns_when_the_engine_has_not_confirmed_the_bridge_for_five_minutes(tmp_path, current_bridge):
+    ctx = _hctx(tmp_path, lambda url: bc.read_bridge_info(current_bridge))
     fresh = (WED - pd.Timedelta(minutes=1)).isoformat()
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(
         {"bridge_compat": {"status": "ok", "reason": "fine", "checked_at": fresh}}))

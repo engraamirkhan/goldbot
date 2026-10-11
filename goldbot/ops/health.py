@@ -1176,29 +1176,42 @@ def check_bridge_compat(ctx: HealthContext, account: AccountRef) -> Check | None
         return Check(name=name, status="warn", reason=v.reason)
     stale = _engine_bridge_unconfirmed(ctx, engine)
     if stale is not None:                 # the bridge answers, but the engine's own check has not confirmed it
-        return Check(name=name, status="warn", reason=f"{v.reason}; {stale}")
+        why, past_grace = stale
+        return Check(name=name, status="fail" if past_grace else "warn", reason=f"{v.reason}; {why}")
     return Check(name=name, status="warn" if v.commit_differs else "ok", reason=v.reason)
 
 
-def _engine_bridge_unconfirmed(ctx: HealthContext, engine: dict[str, Any]) -> str | None:
-    """Why the engine's published bridge verdict leaves entries refused although this probe passed (`unchecked`, or an
-    ok whose `checked_at` is over 5 min old: its check thread may be stuck), or None. No verdict published: None."""
-    from goldbot.ops.bridge_compat import MAX_VERDICT_AGE_S
+def _age_s(now: pd.Timestamp, raw: Any) -> float:
+    """Seconds since an ISO stamp from a state file; infinity when missing or unreadable (assume the worst)."""
+    try:
+        at = pd.Timestamp(raw) if isinstance(raw, str) else None
+        if at is None or pd.isna(at):
+            return float("inf")
+        return (now - (at if at.tzinfo is not None else at.tz_localize("UTC"))).total_seconds()
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def _engine_bridge_unconfirmed(ctx: HealthContext, engine: dict[str, Any]) -> tuple[str, bool] | None:
+    """Why the engine's published bridge verdict leaves entries refused although this probe passed, and whether it is
+    past the grace period (FAIL, alerted) rather than inside it (warn): `unchecked` for over UNCHECKED_GRACE_S, or an ok
+    whose `checked_at` is over MAX_VERDICT_AGE_S old (its check thread may be stuck). A missing stamp counts as past
+    grace. No verdict published, or an incompatible one (failed above when the probe agrees): None. Not done through
+    NOTIFY_ON_WARN: a commit mismatch on the same check must stay quiet."""
+    from goldbot.ops.bridge_compat import MAX_VERDICT_AGE_S, UNCHECKED_GRACE_S
     status = engine.get("status")
     if status is None or status == "incompatible":
         return None
     if status == "unchecked":
-        return f"the engine has not confirmed the bridge ({str(engine.get('reason', ''))[:120]}): entries refused"
-    raw = engine.get("checked_at")
-    try:
-        at = pd.Timestamp(raw) if isinstance(raw, str) else None
-        age = float("inf") if at is None else \
-            (ctx.now - (at if at.tzinfo is not None else at.tz_localize("UTC"))).total_seconds()
-    except (TypeError, ValueError):
-        age = float("inf")
-    if age != age or age > MAX_VERDICT_AGE_S:        # NaT or too old
+        age = _age_s(ctx.now, engine.get("unchecked_since"))
+        span = "since an unknown time" if age == float("inf") else f"for {age / 60:.1f} min"
+        return (f"the engine has not confirmed the bridge {span} ({str(engine.get('reason', ''))[:120]}): entries "
+                "refused (bridge_incompatible); it retries every 60 s and replaces a hung check, restart the engine "
+                "if this persists", age > UNCHECKED_GRACE_S)
+    age = _age_s(ctx.now, engine.get("checked_at"))
+    if age > MAX_VERDICT_AGE_S:
         return (f"the engine has not confirmed the bridge for over {MAX_VERDICT_AGE_S / 60:g} min (its check may be "
-                "stuck): entries refused as unchecked")
+                "stuck): entries refused as unchecked", True)
     return None
 
 

@@ -120,7 +120,10 @@ class DeployWatch:
                     notes.append(f"MT5 box ({account}) does not report its commit (older than BACKLOG 42): deploy "
                                  f"the MT5 box first (`sudo goldbot-deploy {new[:8]}` there)")
                 continue
-            if not isinstance(commit, str) or not SHA.fullmatch(commit) or commit == new:
+            if not isinstance(commit, str) or not SHA.fullmatch(commit):     # never echoed, never handed to the VCS
+                notes.append(f"MT5 box ({account}) reports an unrecognised commit: check it before deploying")
+                continue
+            if commit == new:
                 continue
             try:
                 self.git("merge-base", "--is-ancestor", commit, new)

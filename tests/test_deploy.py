@@ -142,6 +142,14 @@ def test_the_offer_is_silent_when_the_mt5_box_runs_the_offered_commit_and_flags_
     junk = tmp_path / "j"
     junk.mkdir()
     (junk / "engine_icm-demo.json").write_text("{not json")
-    _engine_state(junk, "x", {"status": "ok", "bridge_commit": "--upload-pack=evil"})   # never passed to the VCS
-    offer = _watch(junk, _Git(A, B)).check()
-    assert offer is not None and offer["mt5"] == []
+    _engine_state(junk, "x", {"status": "ok", "bridge_commit": "--upload-pack=evil"})
+    seen: list[tuple[str, ...]] = []
+
+    class _Rec(_Git):
+        def __call__(self, *args: str) -> str:
+            seen.append(args)
+            return super().__call__(*args)
+    offer = _watch(junk, _Rec(A, B)).check()
+    assert offer is not None and len(offer["mt5"]) == 1                            # N3: said, not silently dropped
+    assert "unrecognised commit" in offer["mt5"][0] and "upload-pack" not in offer["mt5"][0]   # never echoed
+    assert not any("--upload-pack=evil" in a for call in seen for a in call)     # never passed to the VCS

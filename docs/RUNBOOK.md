@@ -999,7 +999,7 @@ entries refused (`unchecked`) and compares the report with its own at start and 
 | --- | --- | --- |
 | incompatible | a method missing, either side's `api_version` below the other's `min_compatible`, another or an invalid `server_tz`, or no report at all (or a body over 64 KiB) | entries refused (`bridge_incompatible`); health `bridge_compat:<account>` FAIL (Telegram); preflight `bridge_compat` blocks. Exits, closes and the kill switch are unaffected |
 | commits differ | both boxes compatible, different commits (doc-only changes, or a deploy half done) | health warning only, no block, no Telegram |
-| unchecked | the engine is starting, has only ever seen `/health` unreachable, or last confirmed the bridge over 5 min ago (a stuck check) | entries refused (`bridge_incompatible`); health `bridge_compat:<account>` warns "not confirmed" when the bridge itself answers |
+| unchecked | the engine is starting, has only ever seen `/health` unreachable, or last confirmed the bridge over 5 min ago (a stuck check) | entries refused (`bridge_incompatible`). When the bridge itself answers, health `bridge_compat:<account>` warns "not confirmed" for the first 2 min, then FAILs (Telegram); an ok over 5 min old FAILs at once. The engine replaces a check thread hung over 15 s on its next 60 s tick and every `/health` read has a hard 5 s deadline, so it heals itself; if the FAIL persists, `sudo systemctl restart goldbot-engine@<account>` |
 | unreachable | `/health` did not answer after the bridge was confirmed ok | no block by itself (no ticks either, so `stale_data` blocks) until the ok is 5 min old; `bridge:<account>` fails; an earlier incompatible is kept |
 
 Fix (the MT5 box first, always, when a release adds a bridge method):

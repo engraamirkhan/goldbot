@@ -301,7 +301,9 @@ def run_engine(account_id: str) -> None:
             except Exception:                      # fail closed for entries; exits never read the verdict
                 log.exception("bridge compatibility verdict not applied; entries refused until the next check")
                 from goldbot.ops.bridge_compat import unchecked
-                eng.set_bridge_compat(unchecked("verdict could not be applied"))
+                prev = eng.bridge_compat
+                eng.set_bridge_compat(unchecked("verdict could not be applied", since=prev.unchecked_since
+                                                if prev is not None and prev.status == "unchecked" else None))
         if time.time() - last_check > 60:          # promotions by the scheduler take effect without a restart
             last_check = time.time()
             refresher.start(pd.Timestamp.now("UTC"))   # once per server day the read reaches the broker
