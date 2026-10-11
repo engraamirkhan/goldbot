@@ -447,3 +447,111 @@ def test_cluster_grouping_maps_columns_to_the_preregistered_hypothesis_clusters_
     check_group_sizes(wide_family, cfg, "cluster")             # a family group never becomes a trial's inputs
     with pytest.raises(ValueError, match="H-10 has 4 columns"):
         check_group_sizes({f"jump_{i}": "H-10" for i in range(4)}, cfg, "cluster")
+
+
+def test_h02_clusters_follow_the_hypotheses_and_send_the_rest_to_their_family():
+    """Freeze item (quant re-review): H-03 = GVZ + the VRP spread; H-05 = levels incl. prior day/week extremes; H-08 =
+    sweeps + session/Asia/London extremes; H-10 = jumps only; realised vol, swings and breaks stay in their family."""
+    from goldbot.research.discovery import H02_CLUSTERS, cluster_of
+    owners = {"macro_gvz": "macro_drivers", "macro_gvz_chg20": "macro_drivers", "macro_vrp": "macro_drivers",
+              "macro_vix": "macro_drivers", "macro_spx_dd20": "macro_drivers", "rv_20": "realised_vol",
+              "yz_vol": "vol_estimators", "round_dist": "round_numbers", "sr_dist": "support_resistance",
+              "pdh_dist_atr": "session_zones", "pwl_dist_atr": "session_zones", "sweep_high": "market_structure",
+              "sweep_dir": "market_structure", "bos_event": "market_structure", "bars_since_bos": "market_structure",
+              "asia_high_dist_atr": "session_zones", "london_low_dist_atr": "session_zones",
+              "sess_high_dist_atr": "session_zones", "prev_sess_low_dist_atr": "session_zones",
+              "newyork_high_dist_atr": "session_zones", "prev_sess_pos": "session_zones", "hh": "swings",
+              "jump_z": "jumps", "min_to_next_tier1": "calendar_events"}
+    want = {"macro_gvz": "H-03", "macro_gvz_chg20": "H-03", "macro_vrp": "H-03", "macro_vix": "H-07",
+            "macro_spx_dd20": "H-07", "round_dist": "H-05", "sr_dist": "H-05", "pdh_dist_atr": "H-05",
+            "pwl_dist_atr": "H-05", "sweep_high": "H-08", "sweep_dir": "H-08", "asia_high_dist_atr": "H-08",
+            "london_low_dist_atr": "H-08", "sess_high_dist_atr": "H-08", "prev_sess_low_dist_atr": "H-08",
+            "jump_z": "H-10"}
+    for col, owner in owners.items():
+        assert cluster_of(col, owner, H02_CLUSTERS) == want.get(col), col
+    assert cluster_of("d1_macro_vrp", "macro_drivers", H02_CLUSTERS) == "H-03"       # a context column joins it
+
+
+def test_cluster_mode_refuses_a_cluster_with_no_informative_column_before_any_look(monkeypatch):
+    from goldbot.research import discovery as disc_mod
+    labels, gross, feats = _synthetic()
+    feats = feats.assign(flat=1.0, gone=np.nan)
+    folds = list(walk_forward_splits(labels, **WINDOW))
+    pool = [*POOL, "flat", "gone"]
+    looked: list[int] = []
+    real = disc_mod.select_in_fold
+    def spy(*a: Any, **k: Any) -> Any:
+        looked.append(1)
+        return real(*a, **k)
+    monkeypatch.setattr(disc_mod, "select_in_fold", spy)
+    clusters = {"H-A": ["info"], "H-B": ["flat", "gone"]}
+    groups = {c: ("H-A" if c == "info" else "H-B" if c in ("flat", "gone") else "noise") for c in pool}
+    cfg = CFG.model_copy(update={"clusters": clusters, "group_top_k": 3})
+    with pytest.raises(ValueError, match=r"H-B has no non-constant, non-NaN column"):
+        run_discovery("synthetic-7", labels, gross, feats, folds, "f-test", WINDOW, pool, cfg, groups, "cluster")
+    assert looked == []
+    ok = {**groups, "noise_0": "H-B"}
+    d = run_discovery("synthetic-8", labels, gross, feats, folds, "f-test", WINDOW, pool, cfg, ok, "cluster")
+    cc = d.result.metrics["discovery"]["cluster_columns"]
+    assert cc == {"H-A": {"columns": 1, "informative": 1}, "H-B": {"columns": 3, "informative": 1}}
+
+
+def test_group_permutation_importance_is_size_neutral_and_redundancy_safe():
+    """ADR 0007 amendment: a group's measure is the loss increase when ALL its members are permuted together, so
+    padding a group with dead columns does not raise it, and near-copies that split one signal do not lower it."""
+    from goldbot.research.discovery import group_permutation_importance
+    rng = np.random.default_rng(0)
+    n = 4000
+    a = rng.normal(size=n)
+    y = (rng.random(n) < 1 / (1 + np.exp(-2 * a))).astype(int)
+    noise = rng.normal(size=(n, 20))
+    Z = pd.DataFrame({"a": a, "a1": a, "a2": a, **{f"z{i}": noise[:, i] for i in range(20)}})
+
+    def predict(X: pd.DataFrame) -> np.ndarray:            # reads the signal as the mean of its copies
+        return 1 / (1 + np.exp(-2 * X[["a", "a1", "a2"]].mean(axis=1).to_numpy()))
+    alone = group_permutation_importance(predict, Z, y, [[0, 1, 2], list(range(3, 23))], np.random.default_rng(1))
+    padded = group_permutation_importance(predict, Z, y, [list(range(23)), [3]], np.random.default_rng(1))
+    split = group_permutation_importance(predict, Z, y, [[0], [1], [2]], np.random.default_rng(1))
+    assert alone[0] > 0.05 and abs(alone[1]) < 1e-12               # dead columns have no measure
+    assert np.isclose(padded[0], alone[0], rtol=0.15)             # 20 dead members do not raise the group
+    assert split.max() < alone[0] / 2                             # each copy alone is a fraction of the group
+
+
+def test_select_in_fold_ranks_groups_by_the_joint_permutation_measure():
+    """A one-column informative group beats a 9-column noise group under group_top_k 1 (summed gain over many noise
+    columns could otherwise rank by size)."""
+    labels, gross, feats = _synthetic()
+    folds = list(walk_forward_splits(labels, **WINDOW))
+    groups = {c: ("sig" if c == "info" else "pad") for c in POOL}
+    sel = select_in_fold(feats, labels, folds[0], POOL, CFG.model_copy(update={"group_top_k": 1}), groups)
+    assert sel.group_frequency["sig"] >= 0.9 and sel.group_frequency.get("pad", 0.0) <= 0.1
+
+
+def test_the_group_measure_rows_are_purged_by_label_exit_and_averaged_over_repeats():
+    """Quant re-review LOW: the rows the joint permutation is scored on are the fold's training rows outside the
+    subsample whose label interval [ts_utc, ts_exit] overlaps no subsample row's (fold-internal, by label exit, not
+    whole weeks), and the measure averages `permutation_repeats` shuffles."""
+    from goldbot.research.discovery import group_permutation_importance, purged_rest
+    t0 = pd.Timestamp("2024-01-01", tz="UTC")
+    ts = pd.DatetimeIndex([t0 + pd.Timedelta(days=d) for d in range(14)])
+    te = ts + pd.Timedelta(days=2)                              # every label lives two days
+    sub = np.zeros(14, dtype=bool)
+    sub[[6, 7]] = True                                          # subsample labels cover day 6 .. day 9
+    rest = purged_rest(ts, te, sub)
+    # rows 4/5 exit on days 6/7 (overlap), 8/9 enter on days 8/9 (overlap); 0-3 and 10-13 are clean
+    assert rest.tolist() == [0, 1, 2, 3, 10, 11, 12, 13]
+    week = np.asarray(ts.isocalendar().week, dtype=int)                  # the old +-1 week purge kept far fewer rows
+    near = np.isin(week, np.concatenate([week[sub] + d for d in (-1, 0, 1)]))
+    assert len(rest) > int((~near).sum())
+    assert purged_rest(ts, te, np.zeros(14, dtype=bool)).tolist() == list(range(14))
+    rng = np.random.default_rng(0)
+    a = rng.normal(size=600)
+    y = (rng.random(600) < 1 / (1 + np.exp(-2 * a))).astype(int)
+    Z = pd.DataFrame({"a": a, "b": rng.normal(size=600)})
+
+    def predict(X: pd.DataFrame) -> np.ndarray:
+        return 1 / (1 + np.exp(-2 * X["a"].to_numpy()))
+    g = np.random.default_rng(0)                                # three shuffles drawn in turn from one stream
+    one = [group_permutation_importance(predict, Z, y, [[0]], g)[0] for _ in range(3)]
+    three = group_permutation_importance(predict, Z, y, [[0]], np.random.default_rng(0), repeats=3)[0]
+    assert np.isclose(three, np.mean(one))

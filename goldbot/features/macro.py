@@ -12,6 +12,15 @@ published by scripts/fred_macro.py under their series ids with the next-business
 the VIX level, `macro_vix_chg5` its 5-observation change (about a trading week), `macro_spx_dd20` the S&P 500 close over
 its 20-observation high minus 1 (<= 0). Each is computed on the series' first releases and joined like the drivers;
 NaN until the release carries the series.
+
+VRP spread (H-03, version 3, stub days dropped since version 4; quant re-reviews before the Q1 freeze): `macro_vrp` = GVZ^2 - HAR-RV^2 in annualised vol
+points squared. HAR-RV^2 is the equal-weight HAR of daily realised variance (Corsi 2009 without a fitted regression,
+so nothing is estimated): (RV_d + mean RV over 5 days + mean RV over 22 days) / 3 x 252 x 100^2, where RV of a UTC
+day is the sum of squared log-close returns of the bars in that day, and a bar on day D sees only days before D (its
+own day is not complete). A stub day, whose bars' declared lengths (visible_at - ts_utc; version 5) sum to fewer
+than MIN_DAY_SPAN_H hours (the Sunday reopen; a short
+holiday session), is dropped, as H-01's daily inputs and H-16 drop theirs (stub-free convention, version 4). GVZ is the as-of joined `macro_gvz`. NaN until 22 completed days and a GVZ value exist, or
+when the frame carries no closes.
 """
 from __future__ import annotations
 
@@ -20,9 +29,44 @@ import pandas as pd
 
 from goldbot.data.macro import DRIVERS, driver_frames, first_release
 from goldbot.data.store import asof_join
+from goldbot.data.timeutil import epoch_ns
 from goldbot.features.registry import FeatureCtx, feature
 
 EQUITY_STRESS = ("macro_vix", "macro_vix_chg5", "macro_spx_dd20")
+VRP = "macro_vrp"
+HAR_DAYS = (1, 5, 22)                 # daily, weekly, monthly realised-variance horizons (equal weights)
+MIN_DAY_SPAN_H = 12.0                 # a UTC day whose bars span fewer hours is a stub (time_series_momentum's threshold)
+
+
+def har_rv2_annualised(df: pd.DataFrame) -> np.ndarray:
+    """Per bar: the equal-weight HAR of daily realised variance over completed, stub-free UTC days before the bar's
+    day, in annualised vol points squared (module docstring); NaN before 22 completed days, without closes, or
+    without the declared bar lengths (`visible_at`). Computed on the decision frame only: context frames never carry
+    macro features (`pipeline.CONTEXT_FEATURES`)."""
+    n = len(df)
+    if n == 0 or "close" not in df.columns:
+        return np.full(n, np.nan)
+    ts = pd.DatetimeIndex(pd.to_datetime(df["ts_utc"], utc=True))
+    day = ts.floor("D")
+    r = np.log(df["close"].to_numpy(dtype=float))
+    r2 = pd.Series(np.diff(r, prepend=np.nan) ** 2)
+    rv = r2.groupby(day.to_numpy()).sum(min_count=1)
+    # a day's span is its bars' DECLARED lengths (visible_at - ts_utc, written by the resampler), never inferred from
+    # the data's spacing; a frame that declares no timeframe gets no HAR (fail closed)
+    if "visible_at" not in df.columns:
+        return np.full(n, np.nan)
+    vis = pd.DatetimeIndex(pd.to_datetime(df["visible_at"], utc=True))
+    length_h = (epoch_ns(vis) - epoch_ns(ts)) / 3.6e12
+    span_h = pd.Series(length_h).groupby(day.to_numpy()).sum()
+    rv = rv[(span_h >= MIN_DAY_SPAN_H).to_numpy()].dropna()             # stub days dropped (stub-free convention)
+    if rv.empty:
+        return np.full(n, np.nan)
+    d1, w, m = (rv.rolling(h, min_periods=h).mean() for h in HAR_DAYS)
+    har = (d1 + w + m) / 3 * 252 * 100**2
+    # a bar on day D sees the HAR as of the last completed day strictly before D
+    pos = np.searchsorted(rv.index.to_numpy(), day.to_numpy(), side="left") - 1
+    vals = har.to_numpy(dtype=float)
+    return np.where(pos >= 0, vals[np.clip(pos, 0, None)], np.nan)
 
 
 def equity_stress_frames(macro: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -40,14 +84,15 @@ def equity_stress_frames(macro: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
 # directional for a meta-label model: rising real yields or a rising dollar mean opposite things for a long and a short;
 # so do equity stress moves (a VIX jump or an S&P drawdown is the haven-bid case)
-@feature("macro_drivers", "macro", version="2",
+@feature("macro_drivers", "macro", version="5",
          signed={"macro_real_yield_chg20": 0.0, "macro_real_yield_z252": 0.0, "macro_dollar_chg20": 0.0,
                  "macro_vix_chg5": 0.0, "macro_spx_dd20": 0.0})
 def f_macro_drivers(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """20-observation change and 1-year z-score of the 10y real yield, 20-observation dollar change, GVZ level and
     its 20-observation change, VIX level and 5-observation change, S&P 500 drawdown from its 20-observation high, as
-    known at each bar. NaN columns without macro data (the column set is fixed)."""
-    out = pd.DataFrame({c: np.full(len(df), np.nan) for c in (*DRIVERS, *EQUITY_STRESS)}, index=df.index)
+    known at each bar, and the VRP spread GVZ^2 - HAR-RV^2 (version 3, module docstring). NaN columns without macro
+    data (the column set is fixed)."""
+    out = pd.DataFrame({c: np.full(len(df), np.nan) for c in (*DRIVERS, *EQUITY_STRESS, VRP)}, index=df.index)
     macro = ctx.get("macro")
     if macro is None or len(macro) == 0:
         return out
@@ -57,4 +102,5 @@ def f_macro_drivers(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
             continue
         joined = asof_join(bars, frame).sort_values("_row")     # asof_join sorts by time; restore the bar order
         out[col] = joined[col].to_numpy()
+    out[VRP] = out["macro_gvz"].to_numpy(dtype=float) ** 2 - har_rv2_annualised(df)
     return out

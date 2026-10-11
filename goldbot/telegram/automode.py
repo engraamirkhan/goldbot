@@ -30,7 +30,7 @@ from typing import Any
 import pandas as pd
 from scipy import stats
 
-from goldbot.base import Record, write_atomic
+from goldbot.base import Record, load_record_json, write_atomic
 from goldbot.config import TelegramSettings, tf_seconds
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
 from goldbot.telegram.approvals import Outcome, Proposal
@@ -176,7 +176,7 @@ def _finished_proposals(bus: ApprovalBus) -> list[Proposal]:
     out = []
     for f in bus.done_dir.glob("*.json"):
         try:
-            out.append(Proposal.model_validate_json(f.read_text()))
+            out.append(load_record_json(Proposal, f.read_text(), source="approvals/done"))
         except (ValueError, OSError):
             continue
     return out

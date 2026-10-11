@@ -34,9 +34,13 @@
 # git (docs/AGENT_STANDARDS.md "Root-run tooling": fetched from GitHub by root and hash-checked off-box).
 #
 # Optional rollback floor: /etc/goldbot/rollback-floor (root-owned, one 40-hex commit id). `--rollback` refuses any
-# target that is not that commit or a descendant of it (for example, never below the auth hardening). The answer of
-# the service user's git is cross-checked with GitHub's compare API (root, curl) whenever GitHub answers; offline,
-# the git answer stands (accepted residual risk: that account could rewrite its .git while the box is offline).
+# target that is not that commit or a descendant of it (for example, never below the auth hardening). Both the
+# service user's git and GitHub's compare API (root, curl) must say so: when GitHub cannot confirm (offline, rate
+# limit, an unreadable answer) the rollback is refused, and the owner removes the floor deliberately to proceed.
+#
+# Health baseline (brain): `goldbot run health --out` runs as the service user before the switch and again after the
+# 90 s check. A check that got worse (ok < warn < fail) is reported as `deployed_degraded` with its name, on
+# Telegram too; it is not rolled back automatically (exits are never gated; the owner decides).
 set -euo pipefail
 ROOT=/opt/goldbot
 REPO_API=https://api.github.com/repos/engraamirkhan/goldbot
@@ -117,7 +121,7 @@ for line in open(path, encoding="utf-8"):
     except ValueError:
         continue
     result = r.get("result")
-    if (r.get("to") == sha and result in ("deployed", "rolled_back_manual")) or \
+    if (r.get("to") == sha and result in ("deployed", "deployed_degraded", "rolled_back_manual")) or \
             (r.get("from") == sha and result in ("rolled_back", "rollback_reverted")):
         sys.exit(0)
 sys.exit(1)
@@ -427,16 +431,21 @@ healthy() {  # every enabled service up, and not restarted by systemd since our 
   fi
 }
 
-floor_allows() {  # $1 target: no floor, or the floor itself or a descendant of it; an unreadable floor allows nothing
+floor_allows() {  # $1 target. 0: no floor, or the floor itself or a descendant of it (git AND GitHub agree);
+  # 1: below the floor, or an unreadable floor; 2: GitHub cannot confirm (offline, rate limit, unreadable answer)
   [ -e "$ROLLBACK_FLOOR" ] || [ -L "$ROLLBACK_FLOOR" ] || return 0
   [ -f "$ROLLBACK_FLOOR" ] && [ ! -L "$ROLLBACK_FLOOR" ] || return 1
   local floor; floor=$(head -c 41 "$ROLLBACK_FLOOR" | tr -d '[:space:]')
   is_sha "$floor" && g merge-base --is-ancestor "$floor" "$1" 2>/dev/null || return 1
-  [ "$(github_descends "$floor" "$1")" != no ]          # GitHub has the last word when it answers
+  case "$(github_descends "$floor" "$1")" in
+    yes) return 0 ;;
+    no) return 1 ;;
+    *) return 2 ;;
+  esac
 }
 
 github_descends() {  # $1 floor, $2 target: yes / no / unknown, from GitHub's compare API (root, not the service user's
-  # .git, which that account can rewrite); unknown when offline, so the git answer above stands
+  # .git, which that account can rewrite); unknown when offline or rate-limited, which refuses (floor_allows)
   curl -fsS -m 20 -H "Accept: application/vnd.github+json" "$REPO_API/compare/$1...$2?per_page=1" 2>/dev/null \
     | head -c 8388608 | python3 -I -c "
 import json, sys
@@ -445,6 +454,34 @@ try:
 except Exception:
     s = None
 print({'ahead': 'yes', 'identical': 'yes', 'behind': 'no', 'diverged': 'no'}.get(s, 'unknown'))" || echo unknown
+}
+
+# ---------------------------------------------------------------- health baseline (BACKLOG 41)
+WORSE_PY=$(cat <<'PY'
+import json, re, sys
+RANK = {"ok": 0, "warn": 1, "fail": 2}
+def load(path):
+    with open(path, encoding="utf-8") as fh:
+        return {str(c["name"]): RANK.get(c.get("status"), 0) for c in json.loads(fh.read(8388608))["checks"]}
+before, after = load(sys.argv[1]), load(sys.argv[2])
+worse = sorted(n for n, r in after.items() if r > before.get(n, 0))
+print(",".join(n if re.fullmatch(r"[A-Za-z0-9_.:@-]{1,64}", n) else "<check>" for n in worse))
+PY
+)
+HEALTH_BEFORE=logs/health_before_deploy.json
+HEALTH_AFTER=logs/health_after_deploy.json
+
+health_out() {  # $1 file under $ROOT: `goldbot run health --out`, as the service user, with the code that runs now
+  local t=(); command -v timeout > /dev/null && t=(timeout 180)
+  as_owner bash -c 'cd -- "$1" && mkdir -p logs && rm -f -- "$3" && "${@:4}" "$2" -m goldbot.ops.run health --out "$3" > /dev/null 2>&1; test -s "$3"' \
+    _ "$ROOT" "$PY_BRAIN" "$1" "${t[@]}"
+}
+
+health_worse() {  # names of checks worse after than before ("" when none or when either report is missing)
+  local out
+  out=$(as_owner bash -c 'cd -- "$1" && python3 -I -c "$2" "$3" "$4"' _ "$ROOT" "$WORSE_PY" "$HEALTH_BEFORE" "$HEALTH_AFTER" \
+    2>/dev/null | head -c 2000) || return 0
+  [[ "$out" =~ ^[A-Za-z0-9_.:@,\<\>-]*$ ]] && echo "$out"
 }
 
 main() {
@@ -497,8 +534,12 @@ main() {
   if [ "$MODE" = rollback ]; then
     g merge-base --is-ancestor "$TARGET" "$CUR" \
       || refuse "a rollback goes only to an older commit of the running one (for a newer one: goldbot-deploy <sha>)"
-    floor_allows "$TARGET" \
-      || refuse "target is below the rollback floor ($ROLLBACK_FLOOR), or the floor is not a known commit id"
+    local frc=0; floor_allows "$TARGET" || frc=$?
+    case "$frc" in
+      0) ;;
+      2) refuse "GitHub can't confirm the floor; remove $ROLLBACK_FLOOR deliberately to proceed" ;;
+      *) refuse "target is below the rollback floor ($ROLLBACK_FLOOR), or the floor is not a known commit id" ;;
+    esac
     if [ "$(ci_passed "$TARGET")" != yes ] && ! ran_here "$TARGET"; then
       refuse "rollback target neither passed CI nor ran here before"
     fi
@@ -517,6 +558,10 @@ main() {
   [[ "$aux" != refuse* ]] \
     || refuse "aux.db is at schema ${aux#refuse }, which the target cannot open and no step-back is known; nothing changed"
   check_settings
+  BASELINE=0
+  if [ "$ROLE" = brain ]; then
+    if health_out "$HEALTH_BEFORE"; then BASELINE=1; else echo "note: no health baseline (health did not run); no comparison after the deploy"; fi
+  fi
   guard_scheduler
   if [ "$MODE" = rollback ] && as_owner test -e "$APPROVED"; then   # a newer approved version must not follow
     as_owner rm -f -- "$APPROVED"
@@ -528,8 +573,12 @@ main() {
   local ok=$?
   drop_approval
   if [ "$ok" = 0 ]; then
+    local worse=""
+    if [ "$BASELINE" = 1 ]; then health_out "$HEALTH_AFTER" && worse=$(health_worse); fi
     if [ "$MODE" = rollback ]; then
-      log rolled_back_manual "$CUR" "$TARGET" "${DROPPED}older version restored on the owner's request; all services stable for 90 s"
+      log rolled_back_manual "$CUR" "$TARGET" "${DROPPED}${worse:+degraded: $worse; }older version restored on the owner's request; all services stable for 90 s"
+    elif [ -n "$worse" ]; then
+      log deployed_degraded "$CUR" "$TARGET" "${DROPPED}deployed (degraded: $worse); all services stable for 90 s${MANUAL:+ (manual)}; not rolled back: goldbot run health"
     else
       log deployed "$CUR" "$TARGET" "${DROPPED}all services stable for 90 s${MANUAL:+ (manual)}"
     fi

@@ -34,6 +34,17 @@ If the wizard cannot be used, the manual commands are in [RUNBOOK 0.4](RUNBOOK.m
 - **Approve:** Telegram shows direction, lots, entry, stop, target, probability, spread. Tap **Approve**, or a **Reject** reason. Or the dashboard **Approvals** tab. After 90 s it expires. [More](RUNBOOK.md#approving-or-rejecting-an-entry)
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)
 - **Deploy:** Telegram *New version ready* -> **[Deploy]**. Never while an entry waits; rolls back by itself if a service fails. [More](RUNBOOK.md#05-daily-use)
+- **Entry status (top of Overview):** one block per account answers "can it take new trades right now?".
+  **OPEN** (green): yes. **PARTLY OPEN** (amber): yes, except the strategies named (e.g. "trend-g0 paused after 3
+  losses in a row, until 14:30 your time"). **PAUSED** (amber): no, and it clears by itself (market closed, news
+  blackout, today's loss limit reached); it says when. **BLOCKED** (red): no, and something needs you; the reason
+  is tagged **Needs you**, says what to do, and links the Runbook section (e.g. "Broker clock differs from the
+  expected time zone", Runbook: Server clock). Times are in your phone's time zone; hold or hover for UTC. Exits
+  always keep running; if the engine itself has gone silent while the market is open, the block says since when and
+  that your open trades still have their stop and target at the broker (a silent engine while the market is closed is
+  normal and shows as "Market closed"). If the dashboard can't reach the server, a banner says since when and every
+  badge turns grey **UNKNOWN**: what you see is the last report. The Approvals tab's safety strip uses the same reasons.
+  [Spec](ux/entry-status.md)
 - **Health tab:** each check reads ok, warn or fail with a reason, plus drift and drawdown per strategy.
 - **Your account (Overview):** once the engine is connected to the broker, each account card shows the **balance** and
   **equity** in the account's currency (equity includes open trades), today's change since 00:00 UTC, the margin level,

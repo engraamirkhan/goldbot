@@ -80,3 +80,55 @@ while the survivors compete for the 7 open trials with the director's pool and t
   the research analyst spends the open budget only on an ad-hoc pre-registration naming a pre-registered rule
   (`preregister(rule_ref=)`, linked to the run) or on the retired families' one shared exploration trial; the label
   grid spends none.
+
+## Amendment 2026-10-11 (second quant re-review; before the freeze)
+- **H-02 clusters follow `hypotheses.md` exactly** (`discovery.H02_CLUSTERS`): H-03 = `macro_gvz*` + `macro_vrp`, an
+  explicit VRP spread GVZ^2 - HAR-RV^2 built point-in-time inside the opt-in `macro_drivers` (version 3; the default
+  feature set and `f-079deacc61` are unchanged; the macro version moved from `f-f999b359e2` to `f-e7d2dc11e1` in both
+  pre-registrations); H-05 = `round_numbers`, `support_resistance`, `pdh/pdl/pwh/pwl_dist_atr`; H-07 = VIX and S&P
+  stress; H-08 = `sweep_*` + session/Asia/London extreme distances; H-10 = `jumps` only (no news split before the
+  freeze unless an opt-in `jump_news` feature and the calendar wiring land). `realised_vol`, `vol_estimators`,
+  `swings` and `bos_*` go back to their families. Before any look each cluster must have a non-constant, non-NaN
+  column (`check_cluster_columns`, recorded on the row).
+- **Group measure: joint (grouped) permutation importance**, not summed or mean member importance. Summed gain
+  rewards size: a group of many weak or noise columns accumulates split gain. Mean importance per member is
+  size-neutral but deflates a group whose signal is split across near-copies, and dilutes a strong column with weak
+  siblings, which reintroduces the bias the quant review of dab47c7 removed. Permuting all of a group's columns with
+  one shared row permutation measures what the group as a whole contributes to the fitted model: dead members add
+  nothing (size-neutral) and copies are removed together (redundancy-safe). It is computed per subsample on the
+  training fold's rows outside the subsample (never a test row); `group_top_k` stays 3. Cost: one prediction per
+  group per subsample; with one column per group (column mode) the column's own importance is used, which ranks the
+  same. The rows outside a subsample can share label windows with it at week edges; that is the same for every group,
+  so it inflates no group against another.
+- A follow-up slot is covered only by a config whose hash is listed, or that equals the family's default config plus
+  the fixed overrides exactly (no superset).
+- `record_verdict` refuses a discovery row (its own recorded verdict reads it), and for a `screened` row computes the
+  pre-registered decision from the recorded results (H-01: screen, net t >= 1.65, >= 3 positive net years incl.
+  2021/22, long-only; H-04: screen and net mean R > 0; tsmom 4h: net mean R <= 0 retires; else the screen) and refuses
+  a mismatch (`director.preregistered_decisions`; the row records `rule_checked`).
+- A survivor-slot claim may hold only the parent's spec keys plus `from_discovery`, `survivor` and `features`.
+- In an E-5 quarter a manual `research_pass` / `--discover` row records the rule it cites (`rule_ref`: `--rule-ref`,
+  the pre-registration's own, its slot or the queued row); a capped run citing none is refused (`director.cited_rule`).
+
+## Amendment 2026-10-11 (third quant re-review; before the freeze)
+- Screened-row decision rules are keyed on the linked pre-registration's `rule_id` (H-01, H-04, C4H), never on the
+  config's shape. H-01's "continue" also needs >= 3 positive net years incl. 2021/22 on long-only
+  (`rule_only_split` now records long-only years). The tsmom 4h continuity rule allows only "stop" (net mean R <= 0)
+  or "inconclusive" (not retired), never "continue". An unknown screened trial with a passing screen may "continue"
+  only when the verdict cites its linked pre-registration's reading rule exactly.
+- H-10: a jumps-only result is inconclusive for H-10; only the news-split version can retire or continue it.
+- `macro_vrp`'s HAR-RV drops stub days (a UTC day whose bars span < 12 h, e.g. the Sunday reopen), as H-01 and H-16
+  do; `macro_drivers` is version 4 and the macro feature version is `f-ac2be79efe` (macro + `day_type`:
+  `f-7a3cad1466`).
+- The joint permutation group measure averages `permutation_repeats` shuffles and scores on rows at least one week
+  from every subsample week (`purged_rest`).
+
+## Amendment 2026-10-11 (LOW follow-ups to 25c889d)
+- The VRP stub rule reads each bar's declared length (`visible_at - ts_utc`, written by the resampler), not the
+  data's median spacing; a frame without it gets no HAR (fail closed). `macro_drivers` is version 5: macro feature
+  version `f-51ac5ebabb`, macro + `day_type` `f-48c4c0c57e`.
+- The VRP is computed once, on the decision frame: context frames (h1_/h4_/d1_) carry only
+  `pipeline.CONTEXT_FEATURES` (atr, trend_strength, moving_averages, realised_vol), one list for research and the
+  engine, so no `d1_macro_vrp` exists.
+- The joint permutation measure's rows are purged by label exit times (`purged_rest`: training-fold rows whose
+  [ts_utc, ts_exit] overlaps no subsample label), not by whole weeks; fold-internal as before.

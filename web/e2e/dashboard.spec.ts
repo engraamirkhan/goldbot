@@ -292,3 +292,38 @@ test("once the engine reports, Overview shows the live balance, today's loss bud
   await page.getByRole("button", { name: "Approvals" }).click();
   await expect(page.getByText("Loss budget", { exact: true })).toBeVisible();   // safety strip chip
 });
+
+test("entry status says in plain words why an account can't trade, when it resumes and that exits keep running", async ({ page }) => {
+  const dir = info().state_dir;
+  const engine = JSON.parse(readFileSync(join(dir, "engine_icm-demo.json"), "utf8"));
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  // written after sign-in (which may wait for a fresh authenticator code): a report older than the supervisor's
+  // 60 s heartbeat, or stamped in the future, reads as "not reporting"
+  const until = new Date(Date.now() + 90 * 60_000).toISOString();
+  writeFileSync(join(dir, "engine_icm-demo.json"), JSON.stringify({
+    ...engine, ts: Date.now() / 1000, market_closed: true, sessions: { server_tz: "Europe/Athens", source: "static" },
+    server_clock: { status: "mismatch", reason: "server clock reads UTC+3" }, login: 99887766,
+    throttle: { enabled: true, loss_streak: 3, max_entries_per_day_per_agent: 3, agents: {
+      "trend-g0": { timeframe: "1h", loss_streak: 3, cooldown_until: until, blocked: ["throttle_loss_streak"] } } },
+  }));
+  const row = page.getByRole("article", { name: "Entry status icm-demo" });
+  await expect(row.getByText("Blocked", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(row.getByText("No new trades: Broker clock differs from the expected time zone (+2 more)")).toBeVisible();
+  await expect(row.getByText("Needs you")).toBeVisible();
+  await expect(row.getByRole("link", { name: "Runbook: Server clock (US-EU DST gap weeks)" })).toHaveAttribute(
+    "href", /RUNBOOK\.md#server-clock-us-eu-dst-gap-weeks$/);
+  await expect(row.getByText(/^opens .* your time \(in /)).toHaveAttribute("title", / UTC$/);
+  await expect(row.getByText("trend-g0 paused after 3 losses in a row")).toBeVisible();
+  await expect(row.getByText(/^until .* your time \(in 1 h \d+ min\)$/)).toBeVisible();
+  await expect(row.getByText(/^Exits keep running/)).toBeVisible();
+  await expect(row).not.toContainText("99887766");                            // no account identifiers
+  const box = await row.boundingBox();
+  expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);            // fits the phone
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+  const link = await row.getByRole("link").first().boundingBox();
+  expect(link && link.height >= 44).toBe(true);                                // a thumb-sized tap target
+  await page.getByRole("button", { name: "Approvals" }).click();                // the strip agrees with the panel
+  await expect(page.getByRole("status").filter({ hasText: "New entries blocked" })).toContainText("Market closed");
+});

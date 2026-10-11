@@ -11,7 +11,7 @@ dependencies = [
     "polars>=1.0",
     "lightgbm>=4.3",
     "scikit-learn>=1.4",
-    "pydantic>=2.6",
+    "pydantic>=2.12",          # per-call extra= for tolerant persisted reads (ADR 0010)
     "pyyaml>=6.0",
     "structlog>=24.1",
     "fastapi>=0.110",

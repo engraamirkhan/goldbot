@@ -27,11 +27,12 @@ is fixed and a change after seeing data makes it exploratory.
 - **Event floor:** `research.screen_min_events` (1,000) for every intraday rule. The daily override does not apply.
 - **DSR trial count:** `registry.n_trials_effective` + 1 at run time = 20 (Q4 2026) + every Q1 and Q2 trial recorded
   so far + H-02's K_eff (Q1, conservative default: added to every later trial) + H-14's K_eff once it has run.
-- **Feature versions:** `f-079deacc61` (sessions v2, DST-aware) for 15m rules and discovery; `f-f999b359e2` where
-  the macro drivers are used (H-16 only). The opt-in `day_type` family (BACKLOG 30a) is not in the default set, so it
-  leaves `f-079deacc61` and `f-f999b359e2` unchanged. A feature set that includes it has its own version (pinned in
-  `tests/test_day_type_features.py`): **`f-1eada57050`** (default + `day_type` v1) and **`f-93fbe9386d`** (default +
-  macro drivers + `day_type` v1). Each row that uses `day_type` also records its inputs (`day_type`: family version,
+- **Feature versions:** `f-079deacc61` (sessions v2, DST-aware) for 15m rules and discovery; `f-51ac5ebabb` (was `f-ac2be79efe` with `macro_drivers` v4, whose stub rule read the data's bar spacing, `f-e7d2dc11e1` with macro drivers v3 and `f-f999b359e2` before v3 added the VRP spread; v4 drops stub days from its HAR-RV; v5 reads each bar's declared length, amended 2026-10-11) where
+  the macro drivers are used (no Q2 trial since H-16 pins `day_type` alone, below). The opt-in `day_type` family (BACKLOG 30a) is not in the default set, so it
+  leaves `f-079deacc61` and `f-51ac5ebabb` unchanged. A feature set that includes it has its own version (pinned in
+  `tests/test_day_type_features.py`): **`f-1eada57050`** (default + `day_type` v1); the default + macro
+  drivers + `day_type` hash moves with every macro-driver version, so it is worked out at the freeze (no Q2 trial uses
+  it: H-16 pins `day_type` alone). Each row that uses `day_type` also records its inputs (`day_type`: family version,
   GVZ present, calendar present, refit schedule, minimum fit rows). `research_pass --day-type` refuses to run without
   `--us-calendar`, with `--discover` or `--cpcv`, or with `--from-year` after 2010. A run on another version is
   recorded with a `deviation` (`TrialRegistry.record`), per ADR 0006.
@@ -99,8 +100,8 @@ way (13 → 9).
   bars is a stub), 2010-01-04 .. 2025-09-30. Daily inputs are computed from the first bar of 2010
   (`research_pass --day-type` refuses a later `--from-year`). The bars are cut at `research.holdout_from`
   (2025-10-01) before E-4 builds any feature, so no holdout bar is loaded.
-- **First out-of-sample month (frozen rule):** the first calendar month M whose fit at M's refit instant (below) has
-  ≥ 500 usable rows. Every later month to 2025-09 is out of sample. By the calendar this is about **2012-04**: about
+- **First out-of-sample month (frozen rule):** the first calendar month M whose baseline fit at M's refit instant
+  (below) has ≥ 500 usable rows. Every later month to 2025-09 is out of sample. By the calendar this is about **2012-04**: about
   44 days of warm-up (20-day ATR, its one-day lag, 22-day regressors and their one-day lag) plus 500 rows. The exact
   month is counted from the data before the freeze and written here; it is not chosen after seeing any result.
 - **Target:** y_D = ln(W_D ÷ A_D). W_D = high − low of the 15m mid bars from 08:00 London to 16:30 New York on D
@@ -132,7 +133,7 @@ way (13 → 9).
   - **Quant ruling Q-2 (2026-10-11): approved.** The models have 4 and 11 coefficients, 500 days is ample, and a
     monthly refit gives about 3 more out-of-sample years (from 2012 instead of 2015) than the default 1d walk-forward
     (60/12/12 expanding). H-17 uses the same scheme.
-  - **Frozen first out-of-sample month:** the first calendar month whose refit has ≥ 500 prior evaluable rows,
+  - **Frozen first out-of-sample month:** the first calendar month whose baseline fit has ≥ 500 prior evaluable rows,
     counted from the calendar and data gaps only (no target, no outcome) and written here as a month before the
     freeze (expected about 2012-04). No other refit schedule or window is tried under H-16.
 - **Reading rule** (from `hypotheses.md` A2, unchanged): **continue** if, pooled out of sample, Spearman
@@ -142,10 +143,45 @@ way (13 → 9).
   contribution; the London+60 and NY+60 refreshes with the noise ratio (H-21) as diagnostics.
 - **Counting:** one trial (counted for honesty though it tests range, not returns). It produces no trades, so no
   DSR, no event floor, and no opportunity-day report.
-- **Events owed from data before the freeze:** the number of evaluable days (expected ≈ 3,380 out of sample by the
-  calendar: 13.5 years from about 2012-04 × ~250; minus stale-GVZ days and data gaps).
-- **Feature version:** `f-93fbe9386d` (default + macro drivers + `day_type` v1), with `day_type`'s inputs recorded
-  on the row (GVZ and calendar both present).
+- **Events owed from data before the freeze, frozen in the config:** the number of evaluable days (expected ≈ 3,380
+  out of sample by the calendar: 13.5 years from about 2012-04 × ~250; minus stale-GVZ days and data gaps). It is
+  counted from the calendar and data gaps before the freeze and written here and into the pre-registered config as
+  `expected_eval_days`, with the month as `first_oos_month` (both in the config hash). A run with fewer than 90% of it
+  (`h16.MIN_EVAL_SHARE`) is refused before any statistic is computed, and so is a NaN statistic; nothing is recorded
+  either way. **Frozen values: owed (not counted yet; no data was read for this draft).**
+- **Feature version (amended 2026-10-11, quant review of E-4, M1):** H-16 pins what it reads,
+  `feature_version(["day_type"])` (`h16.h16_feature_version()`; `f-52c853166b` for `day_type` v1 today), with the GVZ
+  series (`GVZCLS`) named in the config. It is worked out at the freeze and checked at run time: the pre-registration
+  row carries the version worked out at the freeze, and `run_trial` works it out again and refuses before reading
+  anything when it differs (no read followed by a recorded deviation). `tests/test_day_type_golden.py` ties
+  `day_type`'s outputs to `day_type.VERSION`, so a change to the columns without a version bump fails CI. The combined
+  default + macro + `day_type` hash no longer applies to H-16; `day_type`'s inputs (GVZ and calendar both present) are
+  still recorded on the row.
+- **Code (E-4, built 2026-10-11; quant review: merge after fixes, fixes applied):** `goldbot/research/h16.py`, run as
+  `research_pass.py --h16 --macro macro/ --us-calendar calendar/` (refused with `--discover`, `--cpcv`,
+  `--score-holdout`, `--pooled`, `--day-type`, `--positioning`, `--us-calendar-features`, `--variants`, a
+  `--from-year` after 2010, or without GVZ or the calendar).
+  - H-16 runs once, against its pre-registration. Under the registry lock and before anything is read, the run is
+    refused when any trial of `h16_opportunity_score` exists (whatever its config), when there is not
+    exactly one unused pre-registration of the family, when its config is not
+    `h16.h16_config(first_oos_month, expected_eval_days)` (500 rows), when its `code_hash` (sha1 of `h16.py`'s source,
+    also on the result row) differs from the code's now, when its feature version differs from the one worked out at
+    run time, or when the budget is spent. `gvz_series` in the config is informational: what GVZ means to the inputs
+    is pinned by `tests/test_day_type_golden.py` and `day_type.VERSION`. The frozen month and day count are read from that config.
+  - The 1m bars, the macro rows and the calendar rows are cut at `research.holdout_from` before anything is resampled
+    or built. Each full-score input is taken as known at 06:30 UTC on D (`DECISION_UTC`).
+  - Both models are fitted by `fit_har(regressors=...)` with the same monthly refits and purge. D's forecast uses the
+    latest fit at or before the previous stub-free day's close, as `har_forecast` does, so the baseline is the
+    published `opp_har_range_hat`.
+  - When the rule on the data gives another first month than the frozen one, the run is refused before any forecast
+    is read, and nothing is recorded.
+  - The run records one trial (status `evaluated`, `results.kind` = `range_test`, linked to the pre-registration)
+    holding both rho, the gain, the quintile means and ratio, n, the first OOS month, the dropped-day counts
+    (GVZ-stale, no HAR forecast, no full forecast, and the last by missing input), the feature version and the
+    verdict (continue/fail).
+  - Reported only: the 20-day block-bootstrap interval (1,000 resamples, seed 0) and the drop-one contributions. The
+    rule's boundaries are inclusive, with a 1e-12 tolerance for float representation only. Not built: the London+60
+    / NY+60 refreshes (diagnostics).
 
 ### H-17 Trend-day continuation with a runner (V0 and V1: two trials)
 
@@ -294,7 +330,7 @@ way (13 → 9).
 | Data (new) | **E-1** historical tier-1 schedule 2010-01 .. 2025-09 (scheduled times from BLS, BEA and Fed calendars; no outcomes), loadable as research `ctx["events"]`. The live archive is forward-only and research passes no events today | H-16, H-17, H-14, H-18 |
 | Engineering (new) | **E-2** 15m two-sided discovery candidate spec with the cost gate | H-14 |
 | Engineering (new) | **E-3** `trend_day` and `event_continuation` screening specialists | H-17, H-18 |
-| Engineering (new) | **E-4** an evaluation path for H-16 that records one registry trial and prints the reading rule | H-16 |
+| Engineering (new) | **E-4** an evaluation path for H-16 that records one registry trial and prints the reading rule. **Built 2026-10-11** (`goldbot/research/h16.py`, `research_pass.py --h16 --first-oos-month YYYY-MM`; quant review pending) | H-16 |
 | Engineering (new) | **E-5** protect in-quarter allocations (survivors, Q1 follow-ups) from automated spending of the unreserved remainder | budget integrity |
 
 ## Not in Q2, and why
@@ -315,7 +351,7 @@ way (13 → 9).
 - [ ] Q1 2027 verdicts recorded (or the follow-up reserve kept as written)
 - [x] Quant rulings Q-1, Q-2, Q-3 recorded here (2026-10-10)
 - [ ] Owner ruling O-1 recorded, or H-18 withdrawn
-- [ ] BACKLOG 30a, 31, E-1, E-2, E-3, E-4 merged and tested; E-5 decided
+- [ ] BACKLOG 30a, 31, E-1, E-2, E-3, E-4 merged and tested; E-5 decided (E-4 built 2026-10-11, quant review pending)
 - [ ] Event counts owed above recorded (events only, no labels or outcomes); H-17 withdrawn if < 1,000
 - [ ] `costs-v1` published (or the priors accepted and stated); `macro-v1` present for H-16
 - [ ] `research.reserved_trials_quarter` for Q2 set to the number of queued rows

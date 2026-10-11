@@ -111,6 +111,48 @@ def refresh_sessions(source: Any, now: "pd.Timestamp", current: "SessionTable | 
     return r.collect(now, current)
 
 
+def _set_bridge_verdict(eng: Any, verdict: Any) -> None:
+    prev = eng.bridge_compat
+    if prev is None or prev.status != verdict.status:
+        level = logging.ERROR if verdict.blocks else logging.WARNING if verdict.status != "ok" else logging.INFO
+        log.log(level, "bridge %s: %s%s", verdict.status, verdict.reason,
+                " -- entries refused (bridge_incompatible), exits unaffected" if verdict.blocks else "")
+    eng.set_bridge_compat(verdict)
+
+
+def apply_bridge_compat(eng: Any, new: Any, now: "pd.Timestamp | None" = None) -> None:
+    """Hand the engine the bridge verdict (goldbot/ops/bridge_compat.py, BACKLOG 42): `next_verdict` (an unreachable
+    /health never confirms a bridge, keeps an earlier `incompatible`), then `effective` (an ok over 5 min old is
+    unchecked); a change of status is logged once. The engine's gate reads the flag for entries only
+    (`bridge_incompatible`); exits never do. None (the check did not finish in time) changes nothing."""
+    import pandas as pd
+
+    from goldbot.ops.bridge_compat import effective, next_verdict
+    if new is None:
+        return
+    verdict = effective(next_verdict(eng.bridge_compat, new), now if now is not None else pd.Timestamp.now("UTC"))
+    _set_bridge_verdict(eng, verdict)
+
+
+def expire_bridge_compat(eng: Any, now: "pd.Timestamp") -> None:
+    """Every loop pass: a non-blocking verdict whose last confirmation is over 5 min old becomes `unchecked` (a hung
+    check thread or a long silence never leaves an old ok in force). No I/O."""
+    from goldbot.ops.bridge_compat import effective
+    v = eng.bridge_compat
+    if v is not None and not v.blocks:
+        e = effective(v, now)
+        if e is not v:
+            _set_bridge_verdict(eng, e)
+
+
+def begin_bridge_check(eng: Any, checker: Any, timeout_s: float | None = None) -> None:
+    """Engine start: entries refused (`unchecked`) BEFORE the first check, then one blocking check of at most
+    `timeout_s`; a check that does not finish leaves the engine blocked until the loop collects a verdict."""
+    from goldbot.ops.bridge_compat import CHECK_TIMEOUT_S, unchecked
+    _set_bridge_verdict(eng, unchecked("engine starting"))
+    apply_bridge_compat(eng, checker.run_once(CHECK_TIMEOUT_S + 1.0 if timeout_s is None else timeout_s))
+
+
 def engine_pass(eng: Any, broker: Any, symbol: str) -> bool:
     """One pass of the engine loop: read the latest tick and feed it. Any exception (an AssertionError too) is recorded
     on the engine (`tick_error`: entries blocked until a clean decision bar, rate-limited logging, alerted by health)
@@ -268,6 +310,12 @@ def run_engine(account_id: str) -> None:
     if table is not None:
         eng.set_sessions(table)
     refresher = SessionRefresher(sessions)
+    compat: Any = None                      # BACKLOG 42: the bridge's methods, protocol and zone against this brain's
+    if bridge is not None:
+        from goldbot.ops.bridge_compat import BridgeCompatChecker, check_bridge, repo_commit
+        brain_commit, url, tz = repo_commit(), bridge[0], acc.server_tz
+        compat = BridgeCompatChecker(lambda: check_bridge(url, tz, brain_commit))
+        begin_bridge_check(eng, compat)          # blocked (unchecked) first, then one check before the loop starts
     warm = eng.warm_start(pd.Timestamp.now("UTC"))
     log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f", account_id,
              type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade)
@@ -284,9 +332,21 @@ def run_engine(account_id: str) -> None:
                 eng.set_sessions(table)
         except Exception:
             log.exception("session refresh failed; keeping the last table")
+        if compat is not None:                     # a finished bridge check is applied; the loop never waits for it
+            try:
+                apply_bridge_compat(eng, compat.collect())
+                expire_bridge_compat(eng, pd.Timestamp.now("UTC"))
+            except Exception:                      # fail closed for entries; exits never read the verdict
+                log.exception("bridge compatibility verdict not applied; entries refused until the next check")
+                from goldbot.ops.bridge_compat import unchecked
+                prev = eng.bridge_compat
+                eng.set_bridge_compat(unchecked("verdict could not be applied", since=prev.unchecked_since
+                                                if prev is not None and prev.status == "unchecked" else None))
         if time.time() - last_check > 60:          # promotions by the scheduler take effect without a restart
             last_check = time.time()
             refresher.start(pd.Timestamp.now("UTC"))   # once per server day the read reaches the broker
+            if compat is not None:
+                compat.start()                     # GET /health on its own thread (BACKLOG 42)
             now_m = mtimes()
             if now_m != seen:
                 seen = now_m
@@ -436,8 +496,10 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     if why:                                        # e.g. the terminal's saved login is a live account
         broker.shutdown()
         raise SystemExit(f"refusing to serve {account_id}: {why}")
+    from goldbot.ops.bridge_compat import repo_commit
     serve(GuardedBroker(broker, magic_base=acc.magic_base,
-                        verify=lambda info: accounts.verify_terminal_account(acc, info)), host, int(port), token)
+                        verify=lambda info: accounts.verify_terminal_account(acc, info)), host, int(port), token,
+          commit=repo_commit())           # read once: the code this process runs, reported on /health (BACKLOG 42)
 
 
 def run_api() -> None:

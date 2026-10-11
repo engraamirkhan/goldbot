@@ -95,7 +95,61 @@ def test_health_reports_the_last_deploy(tmp_path):
     assert health.check_deploy(ctx).status == "ok"
     log = tmp_path / "deploys.jsonl"
     for result, status in (("deployed", "ok"), ("rolled_back", "warn"), ("failed", "fail"),
-                           ("rolled_back_manual", "warn"), ("rollback_reverted", "warn")):
+                           ("rolled_back_manual", "warn"), ("rollback_reverted", "warn"),
+                           ("deployed_degraded", "warn")):
         with log.open("a") as f:
             f.write(json.dumps({"result": result, "to": B, "role": "brain", "detail": "x"}) + "\n")
         assert health.check_deploy(ctx).status == status
+
+
+def _engine_state(tmp_path, account: str, compat: dict[str, Any] | None) -> None:
+    (tmp_path / f"engine_{account}.json").write_text(json.dumps({"bridge_compat": compat}))
+
+
+class _GitNotAncestor(_Git):
+    """The brain fast-forwards; the MT5 box's commit is not an ancestor of the offered one."""
+
+    def __call__(self, *args: str) -> str:
+        if args[0] == "merge-base" and args[2] == C:
+            raise subprocess.CalledProcessError(1, "git")
+        return super().__call__(*args)
+
+
+def test_the_offer_says_when_the_mt5_box_runs_an_older_commit(tmp_path):
+    """G6 / BACKLOG 42: the one-click offer updates only the brain; it says when the MT5 box is behind."""
+    _engine_state(tmp_path, "icm-demo", {"status": "ok", "bridge_commit": A})
+    offer = _watch(tmp_path, _Git(A, B)).check()
+    assert offer is not None and len(offer["mt5"]) == 1
+    note = offer["mt5"][0]
+    assert "icm-demo" in note and A[:8] in note and "older" in note and "MT5 box first" in note
+
+
+def test_the_offer_is_silent_when_the_mt5_box_runs_the_offered_commit_and_flags_unknown_ones(tmp_path):
+    _engine_state(tmp_path, "icm-demo", {"status": "ok", "bridge_commit": B})
+    offer = _watch(tmp_path, _Git(A, B)).check()
+    assert offer is not None and offer["mt5"] == []
+    other = tmp_path / "o"
+    other.mkdir()
+    _engine_state(other, "icm-demo", {"status": "incompatible", "bridge_commit": None})
+    _engine_state(other, "paper", None)                                            # no bridge: nothing to say
+    offer = _watch(other, _Git(A, B)).check()
+    assert offer is not None and len(offer["mt5"]) == 1 and "does not report its commit" in offer["mt5"][0]
+    diverged = tmp_path / "d"
+    diverged.mkdir()
+    _engine_state(diverged, "icm-demo", {"status": "ok", "bridge_commit": C})
+    offer = _watch(diverged, _GitNotAncestor(A, B)).check()
+    assert offer is not None and len(offer["mt5"]) == 1 and "not an ancestor" in offer["mt5"][0]
+    junk = tmp_path / "j"
+    junk.mkdir()
+    (junk / "engine_icm-demo.json").write_text("{not json")
+    _engine_state(junk, "x", {"status": "ok", "bridge_commit": "--upload-pack=evil"})
+    seen: list[tuple[str, ...]] = []
+
+    class _Rec(_Git):
+        def __call__(self, *args: str) -> str:
+            seen.append(args)
+            return super().__call__(*args)
+    offer = _watch(junk, _Rec(A, B)).check()
+    assert offer is not None and len(offer["mt5"]) == 1                            # N3: said, not silently dropped
+    assert "unrecognised commit" in offer["mt5"][0] and "upload-pack" not in offer["mt5"][0]   # never echoed
+    assert not any("--upload-pack=evil" in a for call in seen for a in call)     # never passed to the VCS

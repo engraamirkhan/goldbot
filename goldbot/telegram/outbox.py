@@ -22,7 +22,7 @@ from pathlib import Path
 
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, Record
+from goldbot.base import FrozenRecord, Record, load_record_json
 from goldbot.db import Database
 from goldbot.db.bookkeeping import (
     OUTBOX_FILE,
@@ -79,7 +79,7 @@ def merge_outbox_json(path: Path, conn: sqlite3.Connection, pending: set[str] | 
     messages win), a proposal only the DB lists is kept while it is still pending on the bus (`pending`; None keeps
     all), so neither side's send is repeated and an outcome that release already reported is not reported again.
     Each report cursor takes the larger of the two positions (nothing is replayed twice)."""
-    st = OutboxState.model_validate_json(path.read_text())
+    st = load_record_json(OutboxState, path.read_text(), source="telegram_outbox.json")
     keep = set(st.sent) | {pid for pid in outbox_sent(conn) if pending is None or pid in pending}
     for pid in outbox_sent(conn):
         if pid not in keep:

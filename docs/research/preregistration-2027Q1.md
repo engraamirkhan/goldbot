@@ -17,7 +17,7 @@ promotion.
   >= 3 calendar years including one of 2021/2022, DSR >= 0.95 on >= 200 model-filtered trades with the real trial count.
 - Rule-only gates are reported alongside (informational).
 - Features: feature version `f-079deacc61` (sessions v2, DST-aware: `session`, `session_zones`, `market_structure`
-  version 2), `f-f999b359e2` where the macro drivers are added. A result on another feature version is recorded with a
+  version 2), `f-51ac5ebabb` (was `f-ac2be79efe` with `macro_drivers` v4, whose stub rule read the data's bar spacing, `f-e7d2dc11e1` with `macro_drivers` v3, and `f-f999b359e2` before v3 added the VRP spread `macro_vrp`; v4 drops stub days from its HAR-RV; v5 reads each bar's declared length, amended 2026-10-11) where the macro drivers are added. A result on another feature version is recorded with a
   `deviation` against its pre-registration (`TrialRegistry.record`), and a holdout scoring needs a gate pass on the same
   feature version (`passed_gates(feature_version=)`). Any further feature change before a run amends this line first.
 - DSR trial count: 20 (Q4 2026) + Q1 trials run so far + K_eff of H-02. K_eff is the number of units a survivor
@@ -75,6 +75,15 @@ already used by it, so a holdout scoring needs its own row). CPCV re-evaluations
 no budget slot, no reservation. H-02 uses its reserved slot only when its exact discovery config (including the bars
 range) was pre-registered before the run.
 
+**Decision rules keyed on the row (amended 2026-10-11, quant re-review).** The queued rows of H-01, H-04 and the
+tsmom 4h continuity trial are written with `rule_id="H-01"`, `"H-04"` and `"C4H"`
+(`TrialRegistry.preregister(..., rule_id=)`). The evaluator's verdict on a screened trial linked to such a row is
+checked against that coded rule (`director.preregistered_decisions`, from the recorded results): H-01 continues only
+with >= 3 positive net years incl. 2021 or 2022 on both sides together AND on long-only (`rule_only_split`
+`n_long_positive_years`, `long_chop_year_positive`) plus the net t and long-only tests; the 4h continuity trial is
+either retired (net mean R <= 0) or "inconclusive" (not retired) and never continues. Any other screened trial with a
+passing screen may continue only when the verdict cites its linked pre-registration's reading rule exactly.
+
 **Writing the queued rows (2026-10-10, batch review).** Each row above is written with
 `TrialRegistry.preregister(..., queue=True, target_quarter="2027Q1")` before 2027-01-01 (a queued row written once its
 quarter is under way is refused, and a hand-written one is treated as ad hoc). It then holds the 2027Q1 reservation
@@ -101,13 +110,34 @@ stamped before its row's quarter would never use the row up.
 - Config: label = 4h triple barrier, target 3.0 ATR / stop 1.5 ATR / 12 bars (tsmom 4h defaults), candidates = every 4h
   bar (no rule), side from the sign of the 20-day vol-scaled return; features = every registered family (incl.
   trader-toolkit, survey and macro), grouped by **hypothesis cluster** (`--families cluster`, `DiscoveryConfig.clusters
-  = discovery.H02_CLUSTERS`: H-03 `macro_gvz*`, `realised_vol`, `vol_estimators`; H-05 `round_numbers`,
-  `support_resistance`, `swings`; H-07 `macro_vix*`, `macro_spx*`; H-08 `session_zones`, `market_structure`; H-10
-  `jumps`, `calendar_events`; first match wins; every other column in its feature family's group; each cluster <= 39
-  columns, checked before any look; amended 2026-10-11 so the "feature cluster" of the reading rule has a recorded
-  stability); survivors go forward as features, so K_eff = features screened (group stability is reported by summed
-  member importance per subsample, top-k over groups, with `group_top_k: 3` set explicitly in the config, per quant
-  ruling Q-3, 2026-10-10).
+  = discovery.H02_CLUSTERS`, amended 2026-10-11 after the quant re-review to follow `hypotheses.md` exactly):
+  - **H-03** gold VRP: `macro_gvz*` and the explicit spread `macro_vrp` = GVZ^2 - HAR-RV^2 (built point-in-time in the
+    opt-in `macro_drivers`, version 5: equal-weight HAR of daily realised variance over completed, stub-free days
+    before the bar (a day whose bars' declared lengths sum to < 12 h, e.g. the Sunday reopen, is dropped), annualised; feature version
+    `f-51ac5ebabb`);
+  - **H-05** stop-cluster levels: `round_numbers` (distance to the nearest $5 / $10 / $25 / $50 level and its
+    touches; **no $100 level**, so the $100 round-number step listed under H-05 in `hypotheses.md` is not screened
+    here), `support_resistance`, and the prior day/week extremes
+    `pdh/pdl/pwh/pwl_dist_atr` (from `session_zones`);
+  - **H-07** equity-stress haven: `macro_vix*`, `macro_spx*`;
+  - **H-08** liquidity-sweep reversal: `sweep_*` and the session / Asia / London extreme distances
+    (`sess_*`, `prev_sess_high/low`, `asia_*`, `london_*` `_dist_atr`);
+  - **H-10** post-jump behaviour: `jumps` only. **H-10 tests jumps only, not the news / no-news split**: the US tier-1
+    calendar is merged, but the split needs an opt-in `jump_news` feature (changing `jumps` would move the pinned
+    default feature version) and the calendar wired into `--discover`; unless both land before the freeze, H-10 reads
+    jumps alone. **Reading restriction (amended 2026-10-11, quant re-review):** a jumps-only result can neither
+    retire nor continue H-10. H-10's hypothesis is the news / no-news contrast, so a null on jumps alone is recorded
+    as *inconclusive for H-10* and only the news-split version (`jump_news` plus the E-1 calendar in `--discover`, in
+    its own pre-registered trial) can retire or continue it. A jumps-only H-10 cluster still ranks for a survivor
+    slot by the rule above, but its survivor trial reads jumps, not H-10;
+  - first match wins; every other column stays in its feature family's group (`realised_vol` and `vol_estimators` in
+    volatility, `swings` and `bos_*` in structure). Before any look the run checks that every cluster has at least
+    one non-constant, non-NaN column with macro opted in (`discovery.check_cluster_columns`, recorded as
+    `cluster_columns`) and that each cluster has <= 39 columns.
+  Survivors go forward as features, so K_eff = features screened. Group stability uses the size-neutral **joint
+  permutation importance** (all a cluster's columns permuted together on the training fold's rows outside each
+  subsample; ADR 0007 amendment 2026-10-11), top-k over groups with `group_top_k: 3` set explicitly in the config
+  (quant ruling Q-3).
 - Method: stability selection inside each training fold only (50 subsamples x 50%), top-40 by gain; permutation
   importance on an inner split as a tie-break.
 - Reading rule (decided now): a feature cluster **survives** if its selection stability >= 0.6 across folds AND the

@@ -93,7 +93,7 @@ from typing import Any
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.base import FrozenRecord, UtcTimestamp, load_record
 from goldbot.config import RetiredFamily
 from goldbot.research.attribution import T_SIGNIFICANT
 from goldbot.research.population import DSR_PROMOTE, MIN_RANK_TRADES
@@ -294,7 +294,7 @@ class ResearchPlan(FrozenRecord):
     @classmethod
     def load(cls, path: str | Path) -> ResearchPlan | None:
         p = Path(path)
-        return cls.model_validate(json.loads(p.read_text())) if p.exists() else None
+        return load_record(cls, json.loads(p.read_text()), source="research_plan") if p.exists() else None
 
 
 # ---------------------------------------------------------------------------------------------- budget and holdout
@@ -586,6 +586,101 @@ def rule_preregistration(rows: list[dict[str, Any]], family: str, config_hash: s
                 None)
 
 
+def _default_config(family: str) -> dict[str, Any]:
+    """The specialist family's default configuration ({} for an unknown family)."""
+    from goldbot.specialists import SPECIALISTS  # specialists are not imported by the research core otherwise
+    spec = SPECIALISTS.get(family)
+    return dict(spec.default_config) if spec is not None else {}
+
+
+def cited_rule(prereg: dict[str, Any] | None, rule_ref: str | None, *, capped: bool) -> str | None:
+    """The pre-registered rule a manual run (research_pass, discovery) cites, recorded as the row's `rule_ref`: the
+    `--rule-ref` given, else the matched pre-registration's own `rule_ref`, its slot, or the queued row itself. In a
+    quarter under the E-5 cap (research.open_budget_preregistered_only) a run citing nothing is refused (ValueError);
+    elsewhere None is allowed."""
+    if rule_ref:
+        return rule_ref
+    if prereg is not None:
+        if prereg.get("rule_ref"):
+            return str(prereg["rule_ref"])
+        slot = prereg.get("slot_ref")
+        if isinstance(slot, dict):
+            return f"slot #{slot.get('trial')} ({slot.get('ts')})"
+        if prereg.get("queue") is not False:
+            return f"preregistered #{prereg.get('trial')} ({prereg.get('ts')})"
+    if capped:
+        raise ValueError("E-5 cap: this quarter's open budget is spent only on a run citing a pre-registered rule: pass "
+                         "--rule-ref, or pre-register it with preregister(..., rule_ref=) "
+                         "(research.open_budget_preregistered_only)")
+    return None
+
+
+SCREEN_PASS, SCREEN_FAIL = "pass", "fail"
+H01_NET_T, H01_MIN_POSITIVE_YEARS = 1.65, 3
+
+
+def linked_preregistration(rows: list[dict[str, Any]], trial: dict[str, Any]) -> dict[str, Any] | None:
+    """The pre-registration row a trial row is linked to (`preregistration`: timestamp, config hash), or None."""
+    link = trial.get("preregistration")
+    if not isinstance(link, dict) or link.get("ts") is None:
+        return None
+    return next((r for r in rows if r.get("status") == PREREGISTERED and r.get("ts") == link.get("ts")
+                 and link.get("config_hash") in (None, r.get("config_hash"))), None)
+
+
+def preregistered_decisions(row: dict[str, Any], rows: list[dict[str, Any]] | None = None,
+                            cited_rule: str = "") -> tuple[set[str], str]:
+    """The decisions the pre-registered reading rule allows for a `screened` row, from its recorded results, and which
+    rule was applied (preregistration-2027Q1.md). The rule is the `rule_id` of the pre-registration the row is
+    linked to (never guessed from the config's shape):
+      * H-04: continue iff the screen passed (gross t >= 2.0 on >= the floor's events) AND net mean R > 0;
+        inconclusive below the event floor; otherwise stop;
+      * H-01: inconclusive below the floor; stop if the screen failed or net mean R <= 0; continue only if net t >=
+        1.65 AND >= 3 positive net years incl. 2021 or 2022 on both sides together AND on long-only AND long-only net
+        mean R > 0 with t >= 1.65; otherwise inconclusive;
+      * C4H (tsmom 4h continuity): stop (retired) if net mean R <= 0, else only "inconclusive" (not retired: the rule
+        never continues the horizon; H-01 supersedes it);
+      * any other screened row, the screen itself: fail -> stop, below the floor -> inconclusive, pass -> stop or
+        inconclusive, and "continue" only when the row is linked to a pre-registration whose reading rule the verdict
+        cites exactly (`cited_rule`)."""
+    res = row.get("results") or {}
+    scr = res.get("screen") or {}
+    verdict = str(scr.get("verdict") or "")
+    net = _num(scr.get("net_mean_r"))
+    net_t = _num(scr.get("net_t"))
+    pre = linked_preregistration(rows or [], row)
+    rule_id = (pre or {}).get("rule_id")
+    below_floor = verdict not in (SCREEN_PASS, SCREEN_FAIL)
+    if rule_id == "H-04":
+        if below_floor:
+            return {"inconclusive"}, "H-04"
+        return ({"continue"} if verdict == SCREEN_PASS and net is not None and net > 0 else {"stop"}), "H-04"
+    if rule_id == "H-01":
+        if below_floor:
+            return {"inconclusive"}, "H-01"
+        if verdict == SCREEN_FAIL or net is None or net <= 0:
+            return {"stop"}, "H-01"
+        split = res.get("rule_only_split") or {}
+        long = split.get("long") or {}
+        long_r, long_t = _num(long.get("mean_r")), _num(long.get("t_stat"))
+        years_ok = int(split.get("n_positive_years") or 0) >= H01_MIN_POSITIVE_YEARS and bool(
+            split.get("chop_year_positive"))
+        long_years_ok = int(split.get("n_long_positive_years") or 0) >= H01_MIN_POSITIVE_YEARS and bool(
+            split.get("long_chop_year_positive"))
+        long_ok = long_r is not None and long_r > 0 and long_t is not None and long_t >= H01_NET_T
+        if net_t is None or net_t < H01_NET_T or not years_ok or not long_years_ok or not long_ok:
+            return {"inconclusive"}, "H-01"
+        return {"continue"}, "H-01"
+    if rule_id == "C4H":
+        return ({"stop"} if net is None or net <= 0 else {"inconclusive"}), "tsmom 4h continuity"
+    if verdict == SCREEN_FAIL:
+        return {"stop"}, "screen"
+    if below_floor:
+        return {"inconclusive"}, "screen"
+    cites = pre is not None and bool(cited_rule) and cited_rule == pre.get("reading_rule")
+    return ({"continue", "stop", "inconclusive"} if cites else {"stop", "inconclusive"}), "screen"
+
+
 def slot_refusal(rows: list[dict[str, Any]], quarter: str, prereg: dict[str, Any], family: str,
                  config: dict[str, Any], config_hash: str, *, retired: Collection[str] = ()) -> str | None:
     """Why a run of `config` may NOT be covered by the slot its ad-hoc pre-registration claims, or None when it is
@@ -596,7 +691,9 @@ def slot_refusal(rows: list[dict[str, Any]], quarter: str, prereg: dict[str, Any
         `config.spec`: its label and candidates), `from_discovery` = the parent's `row_ref`, the claimed `survivor`
         the k-th of `slot_survivors`, and `features` (less `side`) exactly that survivor's recorded members; a holdout
         also exactly survivor trial k's configuration, which passed its gates;
-      * follow-up: the slot's fixed family, and a config whose hash is allowed or that contains every fixed override."""
+      * survivor: only the parent's spec keys plus `from_discovery`, `survivor` and `features` (no other key);
+      * follow-up: the slot's fixed family, and a config whose hash is listed, or that equals the family's default
+        config plus the fixed overrides exactly (no superset)."""
     led = _Ledger(rows)
     slot = led.slot_named(prereg.get("slot_ref"))
     if slot is None:
@@ -617,9 +714,10 @@ def slot_refusal(rows: list[dict[str, Any]], quarter: str, prereg: dict[str, Any
         if family != fu.get("family"):
             return f"the {what} runs family {fu.get('family')}, not {family}"
         overrides = fu.get("overrides") or {}
-        allowed = config_hash in (fu.get("config_hashes") or []) or (
-            bool(overrides) and all(config.get(key) == val for key, val in overrides.items()))
-        return None if allowed else f"the config is not one of the {what}'s allowed configurations"
+        exact = bool(overrides) and config == {**_default_config(family), **overrides}
+        allowed = config_hash in (fu.get("config_hashes") or []) or exact
+        return None if allowed else (f"the config is not one of the {what}'s allowed configurations (a listed hash, "
+                                     f"or exactly the family's default config plus the fixed overrides)")
     if not refers_to(config.get(FROM_DISCOVERY_KEY), run):
         return (f"the config's from_discovery {config.get(FROM_DISCOVERY_KEY)!r} does not name the parent discovery "
                 f"#{run.get('trial')} (its row_ref: ts and config hash) ({what})")
@@ -628,6 +726,10 @@ def slot_refusal(rows: list[dict[str, Any]], quarter: str, prereg: dict[str, Any
         return f"the {what} runs the parent's family {parent_cfg.get('specialist')}, not {family}"
     raw_spec = parent_cfg.get("spec")
     spec: dict[str, Any] = raw_spec if isinstance(raw_spec, dict) else {}
+    extra = sorted(set(config) - set(spec) - {FROM_DISCOVERY_KEY, SURVIVOR_KEY, "features"})
+    if extra:
+        return (f"the config has keys {extra} outside the parent's spec and the tags (from_discovery, survivor, "
+                f"features): not the derived configuration ({what})")
     diff = sorted(key for key, val in spec.items() if config.get(key) != val)
     if diff:
         return f"the config's spec differs from the parent's label and candidates in {diff} ({what})"
