@@ -118,9 +118,9 @@ class AccountState(Record):
     market_closed: bool = False       # the broker session table (D13) says the market is closed now
     tick_error: bool = False          # a tick raised in the engine; cleared after TICK_ERROR_CLEAR_TICKS clean ticks
     # BACKLOG 19/35: what this account's open positions can still lose down to their stops, account currency
-    # (goldbot/risk/open_risk.py); None = unknown (a position without SL, or no usable conversion), and the positions
-    # on each side, whichever agent (or the owner) opened them
-    open_risk: float | None = 0.0
+    # (goldbot/risk/open_risk.py); None = unknown (not read yet, a position without SL, or no usable conversion; review
+    # LOW-2: unknown until the engine has read the positions), and the positions on each side, whoever opened them
+    open_risk: float | None = None
     open_long: int = 0
     open_short: int = 0
 

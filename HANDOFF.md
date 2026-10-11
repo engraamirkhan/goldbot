@@ -787,6 +787,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   lots, the gate's margin, its stop risk); an ambiguous result (neither a fill nor a definite reject,
   `DEFINITE_REJECT_RETCODES`) or a failed re-read stops auto entries for the rest of that bar close, journalled as
   `auto_paused:unconfirmed_order` / `auto_paused:account_unread`. Two timeframes closing together share it.
+- Open-risk review LOWs (2026-10-11, row R36): LOW-1 a failure computing the open risk sets it unknown and never
+  aborts the account refresh, and a failed account read at the bar close no longer skips `_manage_open` (exits still
+  run; that close's entries are refused `data_quality_error`); LOW-2 `AccountState.open_risk` defaults to unknown
+  (None) until the engine has read the positions; LOW-3 health `open_risk:<account>` warns and tells the owner on
+  Telegram (`NOTIFY_ON_WARN`) while the open risk is unknown and the heat cap, or the projection with an absolute limit,
+  is on; LOW-4 "per account vs combined same-side count" is an owner decision in OWNER_GUIDE section 4.
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on

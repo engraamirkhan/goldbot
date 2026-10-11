@@ -666,7 +666,13 @@ class Engine:
             self._update_ladder(complete)
         except Exception as exc:                 # noqa: BLE001 - reporting only: a bar close never fails on it
             log.warning("milestone ATR not updated: %s", type(exc).__name__)
-        self._refresh_account(last_tick)
+        try:
+            self._refresh_account(last_tick)
+        except Exception:
+            # review LOW-1: an account the broker cannot report must not skip the exits below (time exits, policies);
+            # this close's entries are refused on unknown facts (data_quality_error until the next good refresh)
+            log.exception("account read failed at the bar close: exits still managed, entries refused")
+            self.state.dq_error = True
         self._manage_open(base.dec)
         self.center.sweep_expired()
         regime = self._regime(base.X, close_ts)
@@ -1533,7 +1539,11 @@ class Engine:
             st.open_positions = len(positions)
             st.open_lots = round(sum(p.lots for p in positions), 6)   # every position on the account is exposure
             self._position_ids = {p.position_id for p in positions}
-            self._note_open_risk(positions, tick)
+            try:
+                self._note_open_risk(positions, tick)
+            except Exception:                   # review LOW-1: never aborts the refresh; unknown refuses when on
+                log.exception("open risk not computed; it is unknown until the next refresh")
+                st.open_risk, self._open_risk_rows = None, []
         else:                                   # unknown book: unknown open risk (entries are blocked anyway)
             st.open_risk, self._open_risk_rows, self._position_ids = None, [], None
         st.open_notional = st.open_lots * self._contract_size() * (tick.bid + tick.ask) / 2   # USD, terminal contract

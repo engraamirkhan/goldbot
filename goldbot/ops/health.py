@@ -1089,6 +1089,34 @@ def check_throttle(ctx: HealthContext, account_id: str) -> list[Check]:
     return out
 
 
+def check_open_risk(ctx: HealthContext, account_id: str) -> list[Check]:
+    """BACKLOG 19/35 (review LOW-3): while the heat cap is on, or the open-risk projection is on with an absolute daily
+    limit, the engine's `open_risk` must be known; null means RiskGate refuses every entry (`open_risk_unknown`: a
+    position without SL, a conversion the broker cannot give, or a failed read). One check `open_risk:<account>`: warn
+    and tell the owner (NOTIFY_ON_WARN) while it is unknown, ok with the amount otherwise. Nothing while both rules are
+    off or the engine has not published them."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    if not f.exists():
+        return []
+    try:
+        e = _read_json(f)
+        lim = e.get("limits") or {}
+        heat = bool((lim.get("heat") or {}).get("enabled"))
+        projected = bool(lim.get("project_open_risk")) and lim.get("daily_loss_limit_abs") is not None
+        risk = e.get("open_risk")
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []                                   # check_engine reports the unreadable file
+    if not (heat or projected):
+        return []
+    rules = " and ".join(n for n, on in (("heat cap", heat), ("open-risk projection", projected)) if on)
+    name = f"open_risk:{account_id}"
+    if risk is None:
+        return [Check(name=name, status="warn",
+                      reason=f"{account_id}: open risk unknown (a position without a stop, no conversion, or a failed "
+                             f"read): every entry refused while the {rules} is on; exits unaffected")]
+    return [Check(name=name, status="ok", reason=f"{account_id}: open risk {float(risk):.2f} ({rules} on)")]
+
+
 def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
     """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
     restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
@@ -1185,7 +1213,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             tick_errors = check_tick_errors(ctx, a.account_id)
             checks += [tick_errors] if tick_errors is not None else []
             checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
-            checks += check_throttle(ctx, a.account_id)
+            checks += check_throttle(ctx, a.account_id) + check_open_risk(ctx, a.account_id)
             bridge = check_bridge(ctx, a.account_id)
             checks += [bridge] if bridge is not None else []
             clock = check_server_clock(ctx, a)
@@ -1237,7 +1265,7 @@ class WatchState(Record):
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:",
-                  "throttle:")
+                  "throttle:", "open_risk:")
 
 
 def _alerting(name: str, status: str) -> bool:

@@ -73,6 +73,7 @@ Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decisio
 | Per-agent throttle thresholds (BACKLOG 21, built, off) | Turn on at 3 full losses / 4 bars cooldown / 3 entries a day. The caps are **per decision, per account** (each account counts its own; checked at every entry). After the cooldown the count stays: one more full loss blocks again, until a real shadow win (target or >= 0.25R) of the live model |
 | Open-risk heat cap (BACKLOG 19, built, off) | Turn on at 2% of equity and 2 positions per side. Inert at £1,000 (the combined-notional cap already allows only one 0.01 lot); it matters once two positions fit |
 | Open risk in the daily projection (BACKLOG 35, built, off) | **Yes**, with the £50 limit: two open trades can then never carry the day past it |
+| Same-side cap: per account or across accounts (BACKLOG 19) | **Per account for now** (built). The playbook counts same-side positions of different agents as one bet across the whole book; with one account running the two readings are the same. Decide before a second account runs: a combined count needs the supervisor to publish each account's open risk and side counts |
 
 **How to turn these on.** On the server, add to `config/settings.local.yaml` (not in the repo) and restart the
 engine:

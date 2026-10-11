@@ -97,11 +97,11 @@ def test_the_heat_cap_counts_a_minimum_lot_exception_trade_in_full():
 
 def test_the_same_direction_cap_refuses_a_third_same_side_position_only():
     gate = RiskGate(RiskLimits(heat=ON, max_positions=5))
-    assert gate.check(_usd(side=1), _state(open_long=1)).allowed
-    refused = gate.check(_usd(side=1), _state(open_long=2))
+    assert gate.check(_usd(side=1), _state(open_risk=0.0, open_long=1)).allowed
+    refused = gate.check(_usd(side=1), _state(open_risk=0.0, open_long=2))
     assert not refused.allowed and refused.reasons == ["same_direction_cap"]
-    assert gate.check(_usd(side=-1), _state(open_long=2, open_short=1)).allowed     # the other side is not stacking
-    assert gate.check(_usd(side=-1), _state(open_short=2)).reasons == ["same_direction_cap"]
+    assert gate.check(_usd(side=-1), _state(open_risk=0.0, open_long=2, open_short=1)).allowed   # other side
+    assert gate.check(_usd(side=-1), _state(open_risk=0.0, open_short=2)).reasons == ["same_direction_cap"]
 
 
 def test_unknown_open_risk_refuses_when_the_heat_cap_is_on():
@@ -243,3 +243,90 @@ def test_exits_never_consult_the_heat_cap_or_the_projection(tmp_path):
     eng._refresh_account(later)
     eng._manage_open(pd.DataFrame())
     assert pid not in eng.open and pid not in {p.position_id for p in pb.positions()} and calls == []
+
+
+# ---------------------------------------------------------------------------------------------- review LOW-1..3
+def test_open_risk_defaults_to_unknown_so_a_fresh_state_refuses_when_on(tmp_path):
+    # LOW-2: before the engine has read the positions, the open risk is unknown, not zero
+    fresh = AccountState(equity=10_000.0, balance_closed_hwm=10_000.0, day_start_equity=10_000.0,
+                         week_start_equity=10_000.0, open_positions=0, margin_used=0.0, last_tick_age_s=1.0,
+                         spread_points=25.0)
+    assert fresh.open_risk is None
+    assert RiskGate(RiskLimits(heat=ON)).check(_usd(), fresh).reasons == ["open_risk_unknown"]
+    assert RiskGate(RiskLimits()).check(_usd(), fresh).allowed                    # off: never read
+    eng, pb, _ = _engine(tmp_path)
+    assert eng.state.open_risk is None                                            # before the first read
+    eng._refresh_account(_tick(WED))
+    assert eng.state.open_risk == 0.0                                             # flat book: nothing at risk
+
+
+def test_a_failing_open_risk_computation_never_aborts_the_account_refresh(tmp_path):
+    # LOW-1: the rest of the refresh (exposure, spread, flags) still runs; the open risk is unknown
+    eng, pb, _ = _engine(tmp_path)
+    _open(pb, 1, 2_390.0, "a")
+
+    def boom(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("terminal hiccup")
+
+    eng._open_risk_fx = boom                                   # type: ignore[method-assign]
+    eng._refresh_account(_tick(WED, bid=2_401.0))
+    st = eng.state
+    assert st.open_risk is None and st.open_positions == 1 and st.spread_points == pytest.approx(20.0)
+    eng._write_state()
+    assert _published(tmp_path)["open_risk"] is None
+
+
+def test_a_failed_account_read_at_the_bar_close_still_manages_open_positions_and_blocks_entries(tmp_path):
+    # LOW-1: a broker that cannot report the account at the bar close must not skip exits (time exits, policies)
+    from goldbot.engine import Engine
+    from tests.test_auto_same_close import _run, _two
+
+    class NoAccount(PaperBroker):
+        broken = False
+
+        def account(self) -> Any:
+            if self.broken:
+                raise RuntimeError("account_info failed")
+            return super().account()
+
+        def on_tick(self, tick: Any) -> None:
+            super().on_tick(tick)
+            self.broken = True                                 # from the bar-close tick on
+
+    managed: list[Any] = []
+    real = Engine._manage_open
+
+    def spy(self: Engine, dec: Any) -> None:
+        managed.append(dec)
+        real(self, dec)
+
+    Engine._manage_open = spy                                  # type: ignore[method-assign]
+    try:
+        eng, pb, dec = _run(tmp_path, _two(), RiskLimits(), pb=NoAccount(equity=10_000, adverse_slip_points=0.0))
+    finally:
+        Engine._manage_open = real                             # type: ignore[method-assign]
+    actions = [str(d["action"]) for d in dec if d.get("agent")]
+    assert managed and not pb.positions()
+    assert actions and all(a.startswith("gate:") and "data_quality_error" in a for a in actions), actions
+
+
+def test_health_warns_and_alerts_when_the_open_risk_is_unknown_while_a_rule_is_on(tmp_path):
+    from goldbot.ops import health
+    from tests.test_health import by_name, engine, make_ctx
+    ctx = make_ctx(tmp_path)
+    off: dict[str, Any] = {"heat": {"enabled": False}, "project_open_risk": False, "daily_loss_limit_abs": 50.0}
+    engine(tmp_path, 60, open_risk=None, limits=off)
+    assert health.check_open_risk(ctx, "icm-demo") == []                          # both off: nothing to say
+    heat_on = {**off, "heat": {"enabled": True, "max_open_risk": 0.02, "max_same_direction": 2}}
+    engine(tmp_path, 60, open_risk=12.5, limits=heat_on)
+    assert by_name(health.check_open_risk(ctx, "icm-demo"))["open_risk:icm-demo"].status == "ok"
+    engine(tmp_path, 60, open_risk=None, limits=heat_on)
+    c = by_name(health.check_open_risk(ctx, "icm-demo"))["open_risk:icm-demo"]
+    assert c.status == "warn" and "unknown" in c.reason and health._alerting(c.name, c.status)
+    proj = {**off, "project_open_risk": True}
+    engine(tmp_path, 60, open_risk=None, limits=proj)
+    assert by_name(health.check_open_risk(ctx, "icm-demo"))["open_risk:icm-demo"].status == "warn"
+    engine(tmp_path, 60, open_risk=None, limits={**proj, "daily_loss_limit_abs": None})
+    assert health.check_open_risk(ctx, "icm-demo") == []                          # projection inert without a limit
+    engine(tmp_path, 60, open_risk=None, limits=heat_on)
+    assert "open_risk:icm-demo" in by_name(health.run_checks(ctx).checks)          # wired into the health pass
