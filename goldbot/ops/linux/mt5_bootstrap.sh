@@ -32,12 +32,26 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --install-recommends winehq-st
 DEBIAN_FRONTEND=noninteractive apt-get install -y git curl xvfb x11vnc chrony
 systemctl enable --now chrony
 
-id mt5 >/dev/null 2>&1 || useradd --create-home --shell /bin/bash mt5
-[ -d "$ROOT/.git" ] || git clone "$REPO" "$ROOT"
-mkdir -p "$ROOT/state" "$ROOT/logs" && chown -R mt5:mt5 "$ROOT" && chmod 700 "$ROOT/state"
+# What root installs (systemd units, the root-run deploy script) comes from root's OWN shallow clone in a root-only
+# directory, never from $ROOT: the service user can write that tree and its .git, and it runs code (pip/npm/Wine
+# installs) before the installs below. docs/AGENT_STANDARDS.md "Root-run tooling".
+OPS_SRC=$(mktemp -d /root/goldbot-ops.XXXXXX)
+trap 'rm -rf -- "$OPS_SRC"' EXIT
+git clone -q --depth 1 "$REPO" "$OPS_SRC/src"
+OPS=$OPS_SRC/src/goldbot/ops/linux
 
-install -m 644 "$ROOT"/goldbot/ops/linux/systemd/goldbot-xvfb.service "$ROOT"/goldbot/ops/linux/systemd/goldbot-bridge@.service \
-  "$ROOT"/goldbot/ops/linux/systemd/goldbot-vnc.service /etc/systemd/system/
+id mt5 >/dev/null 2>&1 || useradd --create-home --shell /bin/bash mt5
+# The service user's tree is created by root once and then written only as mt5: on a re-run, root must not follow
+# a symlink mt5 planted there (chmod/chown as root would change the target).
+if [ ! -d "$ROOT/.git" ]; then
+  install -d -m 755 -o mt5 -g mt5 "$ROOT"   # root-ok: creates /opt/goldbot in root-owned /opt, empty so far
+  sudo -u mt5 -H git clone -q "$REPO" "$ROOT"
+fi
+sudo -u mt5 mkdir -p "$ROOT/state" "$ROOT/logs"
+sudo -u mt5 chmod 700 "$ROOT/state"
+
+install -m 644 "$OPS"/systemd/goldbot-xvfb.service "$OPS"/systemd/goldbot-bridge@.service \
+  "$OPS"/systemd/goldbot-vnc.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now goldbot-xvfb
 
@@ -60,12 +74,18 @@ sudo -u mt5 -H bash -lc "
 cat > /usr/local/bin/goldbot-mt5-authorize <<'WRAP'
 #!/usr/bin/env bash
 # sudo goldbot-mt5-authorize '<ssh-ed25519 ... goldbot@brain>'
+# Root only validates: exactly one ssh-ed25519 key line (no options, no second line, printable ASCII). Every write
+# into mt5's home runs AS mt5, so a symlink mt5 plants in ~/.ssh can only reach mt5's own files.
 set -euo pipefail
-key=${1:?public key line from the brain}
-case "$key" in ssh-ed25519\ *) ;; *) echo "expected an ssh-ed25519 public key"; exit 1;; esac
-install -d -m 700 -o mt5 -g mt5 /home/mt5/.ssh
-echo "restrict,port-forwarding,permitopen=\"127.0.0.1:8765\" $key" >> /home/mt5/.ssh/authorized_keys
-chown mt5:mt5 /home/mt5/.ssh/authorized_keys && chmod 600 /home/mt5/.ssh/authorized_keys
+export LC_ALL=C
+key=${1-}
+re='^ssh-ed25519 [A-Za-z0-9+/=]+( [[:print:]]*)?$'
+if [[ "$key" == *$'\n'* || "$key" == *$'\r'* ]] || ! [[ "$key" =~ $re ]]; then
+  echo "refused: expected one ssh-ed25519 public key line (the brain's ~/.ssh/id_ed25519.pub)"
+  exit 1
+fi
+sudo -u mt5 -H sh -c 'umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf "%s\n" "$1" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys' \
+  _ "restrict,port-forwarding,permitopen=\"127.0.0.1:8765\" $key"
 echo "authorised (forwarding to 127.0.0.1:8765 only)"
 WRAP
 chmod 755 /usr/local/bin/goldbot-mt5-authorize
@@ -82,11 +102,12 @@ chmod 755 /usr/local/bin/goldbot-mt5
 systemctl enable goldbot-bridge@icm-demo
 
 # Deploys: only versions the owner approves (Telegram [Deploy] or `sudo goldbot-deploy latest`), never by itself.
-# The script runs as root, so a root-owned copy is installed; the repo copy (writable by the service user) is never run
-# as root. After reviewing a change to it: sudo install -m 755 -o root -g root <repo>/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy
+# The script runs as root, so a root-owned copy is installed from root's own clone ($OPS); the repo copy (writable by
+# the service user) is never run or installed as root. To update it later: RUNBOOK 0.5 "Installing a new
+# goldbot-deploy" (root downloads it from GitHub at the commit; the owner checks its sha256 off-box first).
 mkdir -p /etc/goldbot
 echo mt5 > /etc/goldbot/role
-install -m 755 -o root -g root "$ROOT/goldbot/ops/linux/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
+install -m 755 -o root -g root "$OPS/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
 # the MT5 box is updated by hand only (sudo goldbot-deploy latest): no deploy timer here
 
 echo "MT5 box installed. Next: log in to MT5 once over VNC, then bridge-serve (docs/RUNBOOK.md)."

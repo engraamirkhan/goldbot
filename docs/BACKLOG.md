@@ -54,10 +54,10 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 33 | Opportunity-day evaluation for research trials (£/day distribution, days captured) | Performance review · FIND | S–M | proposed (after 20, 26) |
 | 35 | Open positions' remaining stop risk in the daily £ projection (review MEDIUM-4) | Capital and drawdown management · RUN | S | proposed (after 29; trading-safety review) |
 | 36 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | proposed (after 29; trading-safety review) |
-| 37 | `goldbot-deploy` steps aux.db back on rollback (Linux `Sync-AuxSchema`) | Operational resilience · RUN | S | proposed (SRE, from docs/deploy/2026-10-batch.md G1; HIGH) |
-| 38 | Owner-run manual rollback in `goldbot-deploy` | Operational resilience · RUN | S–M | proposed (SRE, G2; HIGH) |
-| 39 | Validate settings (incl. settings.local.yaml) with the target code before any restart | Operational resilience · RUN | S | proposed (SRE, G3; HIGH) |
-| 40 | `goldbot-deploy`: scheduler-job guard; restart only enabled units | Operational resilience · RUN | S | proposed (SRE, G4) |
+| 37 | `goldbot-deploy` steps aux.db back on rollback (Linux `Sync-AuxSchema`) | Operational resilience · RUN | S | done (SRE, 2026-10-11; `goldbot-deploy.sh` `aux_plan`/`aux_step_back`; security review pending) |
+| 38 | Owner-run manual rollback in `goldbot-deploy` | Operational resilience · RUN | S–M | done (SRE, 2026-10-11; `goldbot-deploy --rollback <sha>`; security review pending) |
+| 39 | Validate settings (incl. settings.local.yaml) with the target code before any restart | Operational resilience · RUN | S | done (SRE, 2026-10-11; `check_settings`, `--drop-unknown-local-keys`; security review pending) |
+| 40 | `goldbot-deploy`: scheduler-job guard; restart only enabled units | Operational resilience · RUN | S | done (SRE, 2026-10-11; `guard_scheduler`, `--interrupt-jobs`; security review pending) |
 | 41 | `goldbot-deploy`: health checks against a baseline after the restart | Operational resilience · RUN | S | proposed (SRE, G5) |
 | 42 | Bridge/brain version and server_tz agreement checked at run time | Operational resilience, execution · RUN | S | proposed (SRE, G6; trading-safety review) |
 
@@ -506,6 +506,17 @@ hypotheses that go through the trial registry in a future quarter's budget.
   `sudo -u <service user>`. Every item needs a security review. Tests: shellcheck at warning level in CI (a
   pre-commit hook for `goldbot/ops/linux/*.sh`; there is none today), plus a pytest that runs the script against a
   temporary repository and state directory with `systemctl` stubbed.
+  - **Done 2026-10-11 (37-40):** `goldbot/ops/linux/goldbot-deploy.sh`, tests in
+    `tests/test_goldbot_deploy_sh.py` (temporary git repository and aux.db, stubbed systemctl/sudo/curl), shellcheck
+    pre-commit hook at warning level. The root-owned copy on each VM must be re-installed after the security review
+    (docs/deploy/2026-10-batch.md 1.4). Deviations from the text below: the settings check validates only
+    `settings.local.yaml` merged over the target's tracked `settings.yaml` (the tracked files passed CI with the target
+    code; `accounts.yaml` is tracked and has no local overlay), and it runs on an extracted copy of the target's code
+    before the checkout, so a refusal changes nothing. A failed manual rollback restores the version that ran before
+    and logs `rollback_reverted`. Security review fixes (same day): root installs the script only from GitHub with
+    an off-box sha256 (RUNBOOK 0.5), the bootstraps install units and the script from root's own clone, an optional
+    root-owned `/etc/goldbot/rollback-floor`, `ran_here` counts only real runs, output to root's terminal is
+    filtered, and `tests/test_root_tooling_rules.py` enforces the root-run tooling rule (docs/AGENT_STANDARDS.md).
   - **37 (HIGH).** In `switch_to`, after the checkout and before any restart:
     - when the target's `goldbot/db/migrations.py` lacks `compat_back_to` and `state/aux.db` is at schema 5, stop
       every `goldbot-*` service, run the step-back as the service user, then restart (same logic as

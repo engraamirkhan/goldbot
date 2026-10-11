@@ -193,7 +193,8 @@ class TelegramBot:  # pragma: no cover - needs network + token
                         await self.app.bot.send_message(uid, text, reply_markup=kb)
             if report:
                 for r in self.deploy.new_results():
-                    icon = {"deployed": "✅", "rolled_back": "↩️", "failed": "🛑", "refused": "⛔"}.get(r.get("result", ""), "ℹ️")
+                    icon = {"deployed": "✅", "rolled_back": "↩️", "rolled_back_manual": "↩️", "rollback_reverted": "⚠️",
+                            "failed": "🛑", "refused": "⛔"}.get(r.get("result", ""), "ℹ️")
                     text = f"{icon} deploy {r.get('result')} on {r.get('role')}: {str(r.get('to', ''))[:8]} — {r.get('detail', '')}"
                     for uid in self.owner_ids:
                         await self.app.bot.send_message(uid, text)
