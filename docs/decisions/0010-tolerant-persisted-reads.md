@@ -50,24 +50,22 @@ nothing covered the record bodies.
   receiver) with its reason. It also fails when a strict model is read tolerantly (`load_record*`, called by any
   qualified name, or `RecordRepo(..., tolerant=<anything but False>)`), and when a tolerant read does not name its
   model class at the call (`cls`, `type(x)`); the one generic case is `RecordRepo._load` (`self.model`).
-- **Temporary exception:** `goldbot/engine/runner.py` (the approvals scan in `_archive_stale_proposals` and
-  `_load_orders`) is not converted yet because another lane is editing it. It is listed in the guard and in HANDOFF
-  as the follow-up.
+- **Engine (follow-up, 2026-10-11):** `goldbot/engine/runner.py` `_load_orders` (SentOrder, OpenTrade,
+  PendingClose) and `_archive_stale_proposals` now read with `load_record*`; the temporary guard exception is gone.
 
 ## Consequences
 - A rollback no longer drops closed trades, hides proposals or stops services because of a newer release's fields.
   `schema_skew()` and the log line show that skew is happening (expected only after a rollback).
 - A field added by the newer release is lost if the older release rewrites that record. S12 makes this safe by
   construction: the field's default applies when the newer release reads the record again.
-- Until the runner follow-up lands, a rollback across a change to `SentOrder`, `OpenTrade` or `PendingClose` makes
-  the older engine refuse to start. That fails closed for entries, but exits are not managed while the engine is
-  down (only the broker-side stop and target act). The runner follow-up should be the next change after the
-  current runner lane merges.
+- A rollback across a field added to `SentOrder`, `OpenTrade` or `PendingClose` no longer stops the older engine
+  from starting (and so from managing exits). A wrong type in the orders file still fails the start loudly.
 - The pydantic floor is now 2.12 (the first release with per-call `extra=`). `uv.lock` is not what the servers
   install from. The brain runs `uv pip install -e '.[live]'` (`goldbot-deploy.sh`, `brain_bootstrap.sh`), which
   resolves `pyproject.toml`, so the next forward deploy upgrades pydantic there; the Windows VPS (`vps_update.ps1`,
   `pip install -e ".[live]"`) does the same. The MT5 box keeps the pydantic its bootstrap installed, because deploys
-  there use `pip install --no-deps`. The bridge does not call `load_record`, so an older pydantic there does not
-  break it.
+  there use `pip install --no-deps`. `mt5_bootstrap.sh` pins `pydantic>=2.12` for new boxes, and an existing box is
+  upgraded once by hand (RUNBOOK 0.5). The bridge does not call `load_record` yet, so an older pydantic there does
+  not break it today.
 - What would change this decision: if a field ever needs to survive an older release's rewrite (for example
   audit data), preserve extras for that one model explicitly instead of relaxing the rule globally.

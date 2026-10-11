@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from goldbot.base import Record
 from goldbot.config import load_settings
 from goldbot.data import crossfeed
+from goldbot.engine.runner import OpenTrade, PendingClose, SentOrder
 from goldbot.engine.shadow import ShadowBook, VersionBook
 from goldbot.execution.costs import (
     BrokerTerms,
@@ -220,7 +221,10 @@ def test_every_persisted_record_model_has_a_compat_case():
     """A new persisted model must add a case above (and a default that is safe when missing, AGENT_STANDARDS S12)."""
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
-               DigestState, OutboxState, crossfeed.ReconcileReport}
+               DigestState, OutboxState, crossfeed.ReconcileReport,
+               # the engine's orders file: tests/test_engine_safety.py::
+               # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
+               SentOrder, OpenTrade, PendingClose}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 
@@ -253,13 +257,6 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/api/app.py", "create_app.news", "Headline"): "not persisted: API response from code-selected columns",
     ("goldbot/api/explain.py", "_plan", "PlanReservation"):
         "API schema model (pydantic default extra='ignore'): tolerant",
-}
-# Temporary: other lanes are editing these files; the follow-up is listed in HANDOFF (ADR 0010).
-TEMPORARY: dict[tuple[str, str, str], str] = {
-    ("goldbot/engine/runner.py", "Engine._archive_stale_proposals", "Proposal"): "ADR 0010 follow-up",
-    ("goldbot/engine/runner.py", "Engine._load_orders", "SentOrder"): "ADR 0010 follow-up",
-    ("goldbot/engine/runner.py", "Engine._load_orders", "OpenTrade"): "ADR 0010 follow-up",
-    ("goldbot/engine/runner.py", "Engine._load_orders", "PendingClose"): "ADR 0010 follow-up",
 }
 # Models that fail closed: never read tolerantly, by load_record or by RecordRepo(..., tolerant=True).
 STRICT_MODELS = {"User", "Invite", "PasswordReset", "Control", "Settings", "BusDecision"}
@@ -344,7 +341,7 @@ def _violations(finds: list[Find]) -> list[str]:
 
 def test_every_persisted_load_uses_load_record_or_is_on_the_strict_allowlist():
     found = {(f.rel, f.where, f.model) for f in _finds() if f.kind == "direct"}
-    allowed = set(STRICT_OR_NOT_PERSISTED) | set(TEMPORARY)
+    allowed = set(STRICT_OR_NOT_PERSISTED)
     assert found - allowed == set(), "read persisted state with goldbot.base.load_record(_json), or add the call to " \
                                      "the strict allowlist with its reason (ADR 0010)"
     assert allowed - found == set(), "stale allowlist entries: remove them"
