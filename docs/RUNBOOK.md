@@ -242,6 +242,10 @@ and the rest still arrives. It never contains account numbers or emails.
   automatic rollback for this: exits keep running, and you decide (`goldbot run health`, then `--rollback` if needed).
   Checks that need the market open look the same before and after when it is closed.
 * The health check `deploy` shows the last result.
+* **goldbot-deploy installs Python packages from `uv.lock`** (`uv sync --frozen`, when `pyproject.toml` or
+  `uv.lock` changes) from the release that brings that change. A box bootstrapped at or after that release already
+  has it. An older box keeps the old root copy (`uv pip install`, unpinned) until you reinstall it with the
+  hash-checked steps below. Do that before its next deploy.
 * **Installing a new goldbot-deploy** (when a release changes `goldbot/ops/linux/goldbot-deploy.sh`, after the
   security reviewer signed it off). Root runs it, so root never takes it from `/opt/goldbot`:
 

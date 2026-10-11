@@ -147,7 +147,14 @@ Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/engraamirkh
 powershell -ExecutionPolicy Bypass -File .\vps_bootstrap.ps1 -BridgeOnly -Ref <SHA>
 ```
 It asks you once to choose the `goldbot-bridge` password; use the one from your password manager. **Expect** about
-25 min. The SSH server is started; the bridge service is not. The script ends `Bridge box installed`. Then **restart Windows** (Start -> Power -> Restart) so the pagefile takes
+25 min. The SSH server is started; the bridge service is not. Near the end you see
+`check: goldbot-bridge runs the bridge's Python`, then `Bridge box installed`.
+
+Possible warning: `SSH is limited to Tailscale addresses ... not yet bound to the Tailscale adapter`. That is fine;
+step 3A binds it.
+
+**Stop if** the script stops with `goldbot-bridge cannot run ...`. The bridge user cannot read Python or the
+folder; report it before going on. Then **restart Windows** (Start -> Power -> Restart) so the pagefile takes
 effect, and reconnect.
 
 **1c. option B, Oracle micro** (Mac: `ssh ubuntu@<mt5-ip>`, `tmux new -s boot`):
@@ -169,14 +176,17 @@ account the service runs as. In PowerShell:
 1. File -> Login to Trade Account: `<mt5-login>`, password, server **ICMarketsSC-Demo**, tick **Save password**.
 2. Check that `XAUUSD` is in Market Watch.
 3. Tools -> Options -> Expert Advisors -> tick **Allow algorithmic trading**.
-4. Then **File -> Exit**. The bridge service starts its own copy. Two copies would fight over the same folder.
+4. Check the account is **hedging**. The terminal's title bar (or Navigator -> the account) says `Hedge`. goldbot
+   refuses a netting account. If it says `Netting`, open a new MT5 demo account in the IC Markets client area with
+   account type **hedging** (server ICMarketsSC-Demo), log in with that one instead, and use its login from here on.
+5. Then **File -> Exit**. The bridge service starts its own copy. Two copies would fight over the same folder.
 
 **B (Oracle micro):**
 1. On mt5: `sudo systemctl start goldbot-vnc`.
 2. Mac, new window: `ssh -L 5900:localhost:5900 ubuntu@<mt5-ip>`.
 3. Finder -> Go -> Connect to Server -> `vnc://localhost:5900`.
 4. If no terminal shows, start it on mt5: `sudo -u mt5 -H env DISPLAY=:99 wine 'C:\MT5\ICMarkets\terminal64.exe' &`
-5. Do the same four steps as A, then exit the terminal.
+5. Do the same steps as A (login, Market Watch, algorithmic trading, **Hedge**), then exit the terminal.
 6. On mt5: `sudo systemctl stop goldbot-vnc`. Close the tunnel window.
 
 **Stop if:** the login fails or the terminal will not open. That option is out for today; carry on with the other
@@ -197,7 +207,9 @@ one.
 4. Windows, PowerShell as Administrator, from `C:\goldbot`:
    `.\goldbot\ops\vps_bridge_authorize.ps1 '<the ssh-ed25519 line from 1a>'`
    **Expect:** `authorised (forwarding to 127.0.0.1:8765 only)`.
-5. brain: `sudo goldbot-tunnel <windows-tailscale-ip>`
+5. Windows, Administrator PowerShell: `Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -InterfaceAlias Tailscale`
+   binds SSH to the Tailscale adapter. Harmless if the install already did it.
+6. brain: `sudo goldbot-tunnel <windows-tailscale-ip>`
 
 **B (Oracle micro)**
 1. mt5: `sudo goldbot-mt5-authorize '<the ssh-ed25519 line from 1a>'`
@@ -249,6 +261,10 @@ Warnings that are normal today:
 * `backups` (set up tomorrow);
 * `server_clock` (only when the market is quiet).
 
+**Stop if** `terminal_account` stays ❌ with "margin mode is netting" (or "unknown"). The account is not a hedging
+account: open a hedging demo, as in step 2 point 4. If it says "unknown", the bridge box runs older code than the
+brain; both must be on `<SHA>`.
+
 **Stop if** `terminal_account` stays ❌ with "another account", "server" or "real". The terminal is logged in to the
 wrong account. Redo step 2. Never work around this check: it is what stops a live account being traded as demo.
 
@@ -291,6 +307,13 @@ Normal for now (warnings):
 * A, in the Administrator PowerShell: `git -c safe.directory=C:/goldbot -C C:\goldbot rev-parse HEAD`
 
 Each must print `<SHA>`.
+
+**Check the bridge user can run its Python (option A).** Administrator PowerShell, asks for the `goldbot-bridge`
+password:
+```powershell
+runas /user:goldbot-bridge "cmd /k C:\goldbot\.venv\Scripts\python.exe -c print(1)"
+```
+The new window must show `1`. Close it.
 
 **Check the bridge box is locked down (option A, 2 min):**
 * Windows, Administrator PowerShell: `icacls C:\goldbot`. It must list no `Authenticated Users` and no
@@ -352,9 +375,10 @@ These are the first real memory figures on these boxes.
 
 ## Part 3: the first-trade check (when the first trade card ever arrives)
 
-**Until the "position ticket fix" is installed, tap Reject on every trade card.** That fix is still in review and is
-not part of this deploy. It covers a known bug: the engine stores the deal number where the position number belongs,
-so its own trade would look like a stranger's ("orphan").
+**Is the "position ticket fix" in your commit?** On the Mac:
+`git -C ~/myproject/goldbot cat-file -e <SHA>:tests/test_mt5_position_ticket.py && echo included`. It covers a known
+bug: the engine stored the deal number where the position number belongs, so its own trade looked like a stranger's
+("orphan"). **Without `included`, tap Reject on every trade card** until an update brings it.
 
 After the fix is installed, check the first approved trade within 5 minutes:
 1. MT5 on your phone (log in to the same demo account): Trade tab -> the position's **ticket** number.
@@ -385,6 +409,16 @@ Do not trade this demo account by hand: goldbot's loss limits count every trade 
 
 **Weekly:** the Sunday 10:00 UTC restore drill passes; no Oracle "idle" email (the VM stops, not deletes, if
 reclaimed: start it again and tell the SRE).
+
+## Updates later: the MT5 box always goes first
+
+From bridge version 4, a newer brain refuses to start against an older bridge, because it cannot see the hedging
+mode. So every update goes:
+1. The bridge box first: option A `.\goldbot\ops\vps_update.ps1 -Ref <SHA> -BridgeOnly` (Administrator
+   PowerShell, in `C:\goldbot`); option B `sudo goldbot-deploy <SHA>` on mt5.
+2. Then the brain: Telegram **Deploy**, or `sudo goldbot-deploy <SHA>`.
+
+After both, `goldbot run preflight | grep bridge_compat` must be ✅.
 
 ## Follow-ups (not in this deploy)
 
