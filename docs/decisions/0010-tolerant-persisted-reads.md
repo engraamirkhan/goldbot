@@ -50,6 +50,10 @@ nothing covered the record bodies.
   receiver) with its reason. It also fails when a strict model is read tolerantly (`load_record*`, called by any
   qualified name, or `RecordRepo(..., tolerant=<anything but False>)`), and when a tolerant read does not name its
   model class at the call (`cls`, `type(x)`); the one generic case is `RecordRepo._load` (`self.model`).
+- **Nothing skipped silently (2026-10-11, review LOWs):** a decision refused for unknown fields is logged once per
+  proposal id and counted in `schema_skew()` (`note_schema_skew(..., refused=True)`). A top-level table in the
+  engine's orders file outside `sent`/`open`/`closing`/`records_lost` is logged and counted at start; it is not read,
+  so a new table carrying client ids or broker orders needs a reviewed rollback story (S12).
 - **Engine (follow-up, 2026-10-11):** `goldbot/engine/runner.py` `_load_orders` (SentOrder, OpenTrade,
   PendingClose) and `_archive_stale_proposals` now read with `load_record*`; the temporary guard exception is gone.
 
