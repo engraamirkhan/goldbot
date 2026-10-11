@@ -628,10 +628,12 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             if reg.holdout_scored(job.family, job.config):
                 raise SystemExit(f"{job.family} {label} was already scored on the holdout; "
                                  "that result is final for this configuration")
-            # the gate pass must be on the feature version this run builds (a version bump is a different model)
+            # the gate pass must be on the feature version this run builds (a version bump is a different model) and
+            # record the cost treatment this run charges (swap charged, cost source stated)
             if not reg.passed_gates(job.family, job.config, feature_version=fv):
                 raise SystemExit(f"{job.family} {label} has no research trial on feature version {fv} that passed "
-                                 "the design's gates; only a passing configuration is scored on the holdout")
+                                 "the design's gates with swap charged and its cost source stated; only a passing "
+                                 "configuration is scored on the holdout")
     # a holdout scoring or a screen is a look at the data too: charged like any trial, and like any trial it spends the
     # pre-registered queue's reservation only when it matches a pending preregistered row (linked to it below)
     try:

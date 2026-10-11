@@ -173,9 +173,28 @@ def test_research_ends_where_the_holdout_starts():
 # ---------------------------------------------------------------------------------------------- P2: budget, holdout
 def _row(reg: TrialRegistry, *, quarter: str | None = None, status: str = "evaluated", config: dict | None = None,
          gates: bool | None = None) -> None:
-    results = {} if gates is None else {"gates": {"passed": gates, "checks": []}}
+    results = {} if gates is None else {"gates": {"passed": gates, "checks": []}, **COSTS}
     reg.record(agent_id="a", family="session_open", config=config or {"x": 1}, feature_version="f", rationale="r",
                results=results, status=status, budget_quarter=quarter)
+
+
+# the cost treatment every research run records (research_pass: results.swap and results.cost_source)
+COSTS = {"swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0, "triple_weekday": 2,
+                  "server_tz": "Europe/Athens", "contract_oz": 100.0}, "cost_source": "PRIORS ONLY: test"}
+
+
+def test_a_gate_pass_without_swap_charged_does_not_count_for_the_swap_charged_configuration(tmp_path):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    cfg = {"band_z": 2.0}
+    reg.record(agent_id="a", family="session_open", config=cfg, feature_version="f", rationale="no swap yet",
+               results={"gates": {"passed": True, "checks": []}, "swap": None, "cost_source": "settings priors"})
+    assert not reg.passed_gates("session_open", cfg)                    # no swap charged: not this configuration's pass
+    reg.record(agent_id="a", family="session_open", config=cfg, feature_version="f", rationale="no cost source",
+               results={"gates": {"passed": True, "checks": []}, "swap": COSTS["swap"]})
+    assert not reg.passed_gates("session_open", cfg)                    # cost source not stated
+    reg.record(agent_id="a", family="session_open", config=cfg, feature_version="f", rationale="swap charged",
+               results={"gates": {"passed": True, "checks": []}, **COSTS})
+    assert reg.passed_gates("session_open", cfg)
 
 
 def test_quarterly_trial_budget_is_enforced_with_a_clear_message(tmp_path):
@@ -316,7 +335,7 @@ def test_tournament_sees_a_passed_trial_that_exists_only_in_the_release_registry
     remote = TrialRegistry(tmp_path / "release.jsonl")
     cfg = dict(SPECIALISTS["session_open"].default_config, asia_range_max_atr_d=1.0)
     remote.record(agent_id="x", family="session_open", config=cfg, feature_version="f", rationale="research.yml",
-                  results={"gates": {"passed": True, "checks": []}})
+                  results={"gates": {"passed": True, "checks": []}, **COSTS})
     now = pd.Timestamp(NOW)
     pop = Population(tmp_path / "pop.json")
     pop.members["strong"] = Member(agent_id="strong", family="session_open", config=cfg, generation=1,

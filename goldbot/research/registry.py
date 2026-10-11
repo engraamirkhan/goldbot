@@ -178,6 +178,14 @@ def quarter_trials(rows: list[dict[str, Any]], quarter: str) -> int:
     return n
 
 
+def _costs_charged(results: dict[str, Any]) -> bool:
+    """The result records the research cost treatment: the swap it charged (`swap`, a SwapSpec dump) and a stated cost
+    source (`cost_source`, e.g. "PRIORS ONLY: ..." or the cost table it used); `passed_gates`."""
+    swap = results.get("swap")
+    source = results.get("cost_source")
+    return isinstance(swap, dict) and "long_usd_per_lot" in swap and isinstance(source, str) and bool(source.strip())
+
+
 class TrialRegistry:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -564,10 +572,17 @@ class TrialRegistry:
         configuration chosen from a feature-discovery trial (config key FROM_DISCOVERY_KEY) must ALSO have passed its
         holdout scoring: its features were picked on the same window the walk-forward scored, which the deflated
         Sharpe corrects only partly (quant review; preregistration-2027Q1.md). `feature_version`: only rows run on
-        that feature version count, for the gates and the holdout pass alike (None: any version)."""
+        that feature version count, for the gates and the holdout pass alike (None: any version).
+
+        Cost treatment (quant review, 2026-10-11): every research run charges swap and states where its costs came
+        from, so a row counts only when its results record the swap it charged (`results.swap`) and its cost source
+        (`results.cost_source`). A pass from before swap was charged is not a pass of the swap-charged configuration.
+        Swap is deliberately not part of `config_hash` (folding it in would move every pinned hash); the swap rates
+        themselves may differ between rows (a measured cost table refines the prior), the treatment may not."""
         h = config_hash(config)
         rows = [r for r in self._rows() if r.get("family") == family and r.get("config_hash") == h
-                and (feature_version is None or r.get("feature_version") == feature_version)]
+                and (feature_version is None or r.get("feature_version") == feature_version)
+                and _costs_charged(r.get("results") or {})]
         gates_ok = any(r.get("status") == "evaluated"
                        and ((r.get("results") or {}).get("gates") or {}).get("passed") is True for r in rows)
         if not gates_ok or not config.get(FROM_DISCOVERY_KEY):

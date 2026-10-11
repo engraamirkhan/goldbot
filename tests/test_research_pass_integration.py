@@ -109,17 +109,24 @@ def test_holdout_needs_passed_gates_is_charged_and_scored_once_and_the_budget_re
                rationale="a passing walk-forward", results={"gates": {"passed": True, "checks": []}})
     with pytest.raises(SystemExit, match="no research trial on feature version"):
         rp.main()                                                        # a pass on another feature version is not one
-    reg.record(agent_id="x", family="session_open", config=config, feature_version=feature_version(DEFAULT_FEATURE_NAMES),
-               rationale="a passing walk-forward", results={"gates": {"passed": True, "checks": []}})
+    fv = feature_version(DEFAULT_FEATURE_NAMES)
+    reg.record(agent_id="x", family="session_open", config=config, feature_version=fv,
+               rationale="a pass from before swap was charged", results={"gates": {"passed": True, "checks": []}})
+    with pytest.raises(SystemExit, match="swap charged"):
+        rp.main()                                                        # a no-swap pass is not this config's pass
+    swap = {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0}
+    reg.record(agent_id="x", family="session_open", config=config, feature_version=fv,
+               rationale="a passing walk-forward", results={"gates": {"passed": True, "checks": []}, "swap": swap,
+                                                             "cost_source": "PRIORS ONLY: test"})
     assert rp.main() == 0
     last = json.loads(registry.read_text().splitlines()[-1])
     assert last["status"] == "holdout" and last["results"]["holdout"]["scored"] is True
-    assert last["budget_quarter"] == quarter_of() and reg.budget_used(quarter_of()) == 3     # charged like any trial
+    assert last["budget_quarter"] == quarter_of() and reg.budget_used(quarter_of()) == 4     # charged like any trial
     assert "gates" not in last["results"] and "holdout_verdict" in last["results"]           # judged by its own rule
     assert "### Held-out year:" in report.read_text() and "**holdout scoring**" in report.read_text()
     with pytest.raises(SystemExit, match="already scored on the holdout"):
         rp.main()
-    for _ in range(17):                                                 # this quarter's budget is now spent
+    for _ in range(16):                                                 # this quarter's budget is now spent
         reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={})
     monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(SystemExit, match="trial budget exceeded"):

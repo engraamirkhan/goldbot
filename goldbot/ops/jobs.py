@@ -284,6 +284,15 @@ def live_swap(ctx: JobContext) -> SwapSpec:
     return spec if spec is not None else prior
 
 
+def live_cost_source(ctx: JobContext) -> str:
+    """Where `live_extra_cost_usd` and `live_swap` come from, in the words research_pass.py records
+    (`costs.research_costs`): the canonical broker's nightly cost table, or PRIORS ONLY before one exists. Recorded on
+    every walk-forward row as `cost_source`, which `TrialRegistry.passed_gates` requires."""
+    from goldbot.execution.costs import research_costs
+    found = canonical_cost_table(ctx.settings, ctx.accounts, ctx.state_dir)
+    return research_costs(ctx.settings, found[0] if found is not None else None)[2]
+
+
 def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int, n_trials: int = 1,
                   holdout: tuple[pd.Timestamp, pd.Timestamp] | None = None) -> ResearchResult | None:
     """Walk-forward on the store. Research trials pass the settings' holdout window (never seen); the Saturday retrain
@@ -298,6 +307,7 @@ def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: 
     # learn against what the broker actually charges: the live cost table's slippage and commission
     res = run_specialist(spec, dec, context=context, n_trials=n_trials, extra_cost_usd=live_extra_cost_usd(ctx),
                          holdout=holdout, swap=live_swap(ctx))
+    res.metrics["cost_source"] = live_cost_source(ctx)        # with the swap in metrics: the row's cost treatment
     if res.n_candidates:
         res.metrics["trades_per_year"] = res.n_candidates / years
     return res

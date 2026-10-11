@@ -127,6 +127,30 @@ def test_live_swap_prefers_the_brokers_cost_table(tmp_path):
                                       server_tz="Europe/Athens")
 
 
+def test_the_analysts_trials_state_their_cost_source_so_a_gate_pass_can_count(tmp_path):
+    """registry.passed_gates counts a row only with its swap and a stated cost source (quant review 2026-10-11): the
+    monthly analyst's and the label grid's rows (jobs._walk_forward) state theirs."""
+    from goldbot.config import load_settings
+    from goldbot.data.store import Store
+    from goldbot.execution.costs import CostTable
+    from goldbot.ops.accounts import Account
+    from goldbot.ops.jobs import JobContext, live_cost_source
+    from goldbot.research.model_registry import ModelRegistry
+    from goldbot.research.population import Population
+    from goldbot.research.registry import TrialRegistry
+    acc = Account(account_id="icm-demo", broker="icm", mode="demo", server="s", login=None, terminal_path="",
+                  server_tz="Europe/Athens", symbol="XAUUSD", magic_base=260100, enabled=True)
+    ctx = JobContext(settings=load_settings(), store=Store(tmp_path / "d"), state_dir=tmp_path,
+                     models=ModelRegistry(tmp_path / "m"), trials=TrialRegistry(tmp_path / "t.jsonl"), accounts=[acc],
+                     population=Population(tmp_path / "p.json"))
+    assert live_cost_source(ctx).startswith("PRIORS ONLY")
+    CostTable(account_id="icm-demo", built_utc=pd.Timestamp("2026-10-05", tz="UTC"), spread={}, slippage={},
+              commission_per_lot_side_usd=3.5, slippage_prior_usd=0.15, swap_long_usd_per_lot=-50.0,
+              swap_short_usd_per_lot=15.0).save(tmp_path / "costs_icm-demo.json")
+    src = live_cost_source(ctx)
+    assert "cost table icm-demo built 2026-10-05" in src and "swap measured" in src
+
+
 def test_research_labels_pay_swap_and_the_gross_screen_does_not():
     from goldbot.features.mtf import TF_LABEL, context_tfs
     from goldbot.research.pipeline import evaluate, prepare
