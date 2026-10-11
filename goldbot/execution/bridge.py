@@ -81,10 +81,14 @@ METHODS: dict[str, tuple[str, bool]] = {
 # oldest peer version this code still interoperates with, in both directions: the brain refuses entries when its
 # API_VERSION is below the bridge's MIN_COMPATIBLE, or the bridge's API_VERSION is below its own MIN_COMPATIBLE, or the
 # bridge lacks a method it calls (goldbot/ops/bridge_compat.py). Exits are never gated by it.
-API_VERSION = 2
+# v3 (ADR 0010): the brain reads responses tolerantly (unknown fields dropped); a v2 brain read them strictly. Same wire
+# bytes, so MIN_COMPATIBLE stays 2; a future bridge that adds a response field sets MIN_COMPATIBLE = 3.
+API_VERSION = 3
 MIN_COMPATIBLE = 2
 _RECORDS: dict[str, type[BaseModel]] = {"SymbolInfo": SymbolInfo, "AccountInfo": AccountInfo, "Tick": Tick, "OrderResult": OrderResult,
             "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent, "TradingSession": TradingSession}
+# Any change to these records' fields goes to the trading-safety reviewer (AGENT_STANDARDS S12): responses are read
+# tolerantly, so a new field must never carry an outcome or a restriction on its own.
 # Records the brain sends as arguments: always decoded strictly, even inside a response (ADR 0010, `_decode`).
 _REQUEST_RECORDS = frozenset({"OrderIntent"})
 MAX_BODY = 1_000_000
