@@ -170,6 +170,11 @@ and the rest still arrives. It never contains account numbers or emails.
 * The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
   release note mentions the bridge.
 * By hand on either VM: `sudo goldbot-deploy latest` (or a specific commit id). Same checks, same rollback.
+  Run it inside `tmux` (`tmux new -s deploy`; after a dropped connection, `tmux attach -t deploy`), or as
+  `sudo systemd-run --wait --pty --unit goldbot-deploy-manual /usr/local/sbin/goldbot-deploy <args>`. The script
+  ignores a hang-up and keeps going either way,
+  but only then do you see its last lines. `/var/lib/goldbot-deploy/deploys.jsonl` (and Telegram) is the record of
+  what happened; the end of the terminal output can be lost.
 * **Going back by hand:** `sudo goldbot-deploy --rollback <older commit id>`. It accepts only an older commit of the
   one that runs, on `main`, that passed CI or ran on this box before (`/var/lib/goldbot-deploy/deploys.jsonl`). Same
   lock, same wait for a pending entry, same restart order and 90 s check. If the rollback is unstable, the version
@@ -192,7 +197,9 @@ and the rest still arrives. It never contains account numbers or emails.
   * Only `enabled` units are restarted, so a stray, disabled engine instance is never started.
 * **Rollback floor.** `/etc/goldbot/rollback-floor` (optional, root-owned, one commit id): `--rollback` refuses any
   commit older than it. Set it after a deploy that must never be undone (for example the auth hardening,
-  docs/deploy/2026-10-batch.md 8.1). Removing it is your decision.
+  docs/deploy/2026-10-batch.md 8.1). Removing it is your decision. The script asks GitHub (compare API) whether the
+  target descends from the floor, and refuses if GitHub says no; when GitHub cannot be reached it relies on the
+  box's own git copy, which the service user can write (accepted: a rollback is always typed by you).
 * The health check `deploy` shows the last result.
 * **Installing a new goldbot-deploy** (when a release changes `goldbot/ops/linux/goldbot-deploy.sh`, after the
   security reviewer signed it off). Root runs it, so root never takes it from `/opt/goldbot`:

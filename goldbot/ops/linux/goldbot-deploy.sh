@@ -34,7 +34,9 @@
 # git (docs/AGENT_STANDARDS.md "Root-run tooling": fetched from GitHub by root and hash-checked off-box).
 #
 # Optional rollback floor: /etc/goldbot/rollback-floor (root-owned, one 40-hex commit id). `--rollback` refuses any
-# target that is not that commit or a descendant of it (for example, never below the auth hardening).
+# target that is not that commit or a descendant of it (for example, never below the auth hardening). The answer of
+# the service user's git is cross-checked with GitHub's compare API (root, curl) whenever GitHub answers; offline,
+# the git answer stands (accepted residual risk: that account could rewrite its .git while the box is offline).
 set -euo pipefail
 ROOT=/opt/goldbot
 REPO_API=https://api.github.com/repos/engraamirkhan/goldbot
@@ -429,12 +431,30 @@ floor_allows() {  # $1 target: no floor, or the floor itself or a descendant of 
   [ -e "$ROLLBACK_FLOOR" ] || [ -L "$ROLLBACK_FLOOR" ] || return 0
   [ -f "$ROLLBACK_FLOOR" ] && [ ! -L "$ROLLBACK_FLOOR" ] || return 1
   local floor; floor=$(head -c 41 "$ROLLBACK_FLOOR" | tr -d '[:space:]')
-  is_sha "$floor" && g merge-base --is-ancestor "$floor" "$1" 2>/dev/null
+  is_sha "$floor" && g merge-base --is-ancestor "$floor" "$1" 2>/dev/null || return 1
+  [ "$(github_descends "$floor" "$1")" != no ]          # GitHub has the last word when it answers
+}
+
+github_descends() {  # $1 floor, $2 target: yes / no / unknown, from GitHub's compare API (root, not the service user's
+  # .git, which that account can rewrite); unknown when offline, so the git answer above stands
+  curl -fsS -m 20 -H "Accept: application/vnd.github+json" "$REPO_API/compare/$1...$2?per_page=1" 2>/dev/null \
+    | head -c 8388608 | python3 -I -c "
+import json, sys
+try:
+    s = json.load(sys.stdin).get('status')
+except Exception:
+    s = None
+print({'ahead': 'yes', 'identical': 'yes', 'behind': 'no', 'diverged': 'no'}.get(s, 'unknown'))" || echo unknown
 }
 
 main() {
   [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
-  exec > >(LC_ALL=C tr -cd '[:print:]\n\t') 2>&1          # no terminal escapes reach root's terminal or journal
+  # A dropped SSH session (SIGHUP) or a dead output filter (SIGPIPE) must never stop a deploy half-way (services
+  # stopped, aux.db stepped back): both are ignored from here on, children inherit that, and when the filter dies
+  # (its terminal is gone) `cat` keeps draining the pipe so no write fails. deploys.jsonl is the authoritative
+  # record; the tail of the terminal output can be lost.
+  trap '' PIPE HUP
+  exec > >(LC_ALL=C tr -cd '[:print:]\n\t'; cat > /dev/null) 2>&1   # no terminal escapes reach root's terminal
   ROLE=$(cat "$ROLE_FILE" 2>/dev/null || echo brain)
   if [ "$ROLE" = mt5 ]; then OWNER=mt5; else OWNER=goldbot; fi
   TARGET=""

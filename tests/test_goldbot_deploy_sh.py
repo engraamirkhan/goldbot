@@ -36,6 +36,7 @@ pytestmark = pytest.mark.skipif(BASH is None or shutil.which("git") is None,
 
 HARNESS = r"""
 set -euo pipefail
+export HARNESS_PID=$$
 source "$SCRIPT"
 ROOT=$T/root; VAR=$T/var; LOG=$VAR/deploys.jsonl; LOCK=$T/lock; ROLE_FILE=$T/role; ROLLBACK_FLOOR=$T/floor
 APPROVED=$ROOT/state/deploy/approved.json; PY_BRAIN=$PYTHON
@@ -54,7 +55,7 @@ sudo() {
   [ -z "${EVIL:-}" ] || printf 'svc\033]0;owned\007\033[2Jout\n' >&2   # service-user output with terminal escapes
   "$@"
 }
-curl() { cat "$T/ci.json"; }
+curl() { case "$*" in *compare/*) cat "$T/compare.json" 2>/dev/null || return 22 ;; *) cat "$T/ci.json" ;; esac; }
 systemctl() { echo "$*" >> "$T/systemctl.log"; "$PYTHON" "$T/systemctl_stub.py" "$@"; }
 main "$@"
 """
@@ -84,6 +85,29 @@ elif cmd == "is-active":
 elif cmd == "show":
     print(0)
 elif cmd in ("stop", "start", "restart"):
+    marker = os.path.join(T, "killed")
+    if cmd == "restart" and os.environ.get("KILL_FILTER") and not os.path.exists(marker):
+        # the owner's SSH session drops mid-deploy: the output filter dies and the script gets SIGHUP
+        open(marker, "w").close()
+        import signal
+        hp = int(os.environ["HARNESS_PID"])
+        ps = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,comm="], capture_output=True, text=True).stdout
+        procs = {}
+        for line in ps.splitlines():
+            parts = line.split(None, 2)
+            if len(parts) == 3:
+                procs[int(parts[0])] = (int(parts[1]), parts[2].strip())
+        def under(pid):
+            while pid in procs and pid > 1:
+                pid = procs[pid][0]
+                if pid == hp:
+                    return True
+            return False
+        for pid, (_, comm) in procs.items():
+            if os.path.basename(comm) == "tr" and under(pid):
+                os.kill(pid, signal.SIGTERM)
+                open(os.path.join(T, "filter_killed"), "w").close()
+        os.kill(hp, signal.SIGHUP)
     st["units"].setdefault(norm(args[1]), {"enabled": False})["active"] = cmd != "stop"
     if cmd != "stop" and norm(args[1]) == "goldbot-supervisor.service":
         open(os.path.join(T, "root", "state", "supervisor.json"), "w").write("{}")   # its heartbeat
@@ -448,3 +472,24 @@ def test_service_user_output_reaches_roots_terminal_without_escapes(tmp_path):
     p = box.run("--rollback", box.c1, env={"EVIL": "1"})
     assert p.returncode == 0, p.stdout + p.stderr
     assert "svc" in p.stdout + p.stderr and "\x1b" not in p.stdout + p.stderr and "\x07" not in p.stdout + p.stderr
+
+
+def test_a_dropped_session_does_not_kill_a_deploy_midway(tmp_path):
+    box = Box(tmp_path, running="c2", aux=5)
+    p = box.run("--rollback", box.c1, env={"KILL_FILTER": "1"})
+    assert (tmp_path / "filter_killed").exists()                         # the filter really died mid-run
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert box.records()[-1]["result"] == "rolled_back_manual" and box.head() == box.c1
+    assert aux_state(box.aux) == (4, 4, 3)
+
+
+def test_github_overrides_the_service_users_git_on_the_floor(tmp_path):
+    """The floor is checked against GitHub's compare API too (root, independent of the service user's .git)."""
+    box = Box(tmp_path, running="c2", aux=5)
+    (tmp_path / "floor").write_text(box.c1 + "\n")
+    (tmp_path / "compare.json").write_text(json.dumps({"status": "behind"}))    # GitHub: target is older
+    p = box.run("--rollback", box.c1)
+    assert p.returncode == 1 and "rollback floor" in box.records()[-1]["detail"]
+    (tmp_path / "compare.json").write_text(json.dumps({"status": "identical"}))
+    p = box.run("--rollback", box.c1)
+    assert p.returncode == 0, p.stdout + p.stderr

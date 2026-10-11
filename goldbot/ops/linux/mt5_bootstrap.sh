@@ -41,8 +41,14 @@ git clone -q --depth 1 "$REPO" "$OPS_SRC/src"
 OPS=$OPS_SRC/src/goldbot/ops/linux
 
 id mt5 >/dev/null 2>&1 || useradd --create-home --shell /bin/bash mt5
-[ -d "$ROOT/.git" ] || git clone "$REPO" "$ROOT"
-mkdir -p "$ROOT/state" "$ROOT/logs" && chown -R mt5:mt5 "$ROOT" && chmod 700 "$ROOT/state"
+# The service user's tree is created by root once and then written only as mt5: on a re-run, root must not follow
+# a symlink mt5 planted there (chmod/chown as root would change the target).
+if [ ! -d "$ROOT/.git" ]; then
+  install -d -m 755 -o mt5 -g mt5 "$ROOT"   # root-ok: creates /opt/goldbot in root-owned /opt, empty so far
+  sudo -u mt5 -H git clone -q "$REPO" "$ROOT"
+fi
+sudo -u mt5 mkdir -p "$ROOT/state" "$ROOT/logs"
+sudo -u mt5 chmod 700 "$ROOT/state"
 
 install -m 644 "$OPS"/systemd/goldbot-xvfb.service "$OPS"/systemd/goldbot-bridge@.service \
   "$OPS"/systemd/goldbot-vnc.service /etc/systemd/system/
@@ -68,12 +74,18 @@ sudo -u mt5 -H bash -lc "
 cat > /usr/local/bin/goldbot-mt5-authorize <<'WRAP'
 #!/usr/bin/env bash
 # sudo goldbot-mt5-authorize '<ssh-ed25519 ... goldbot@brain>'
+# Root only validates: exactly one ssh-ed25519 key line (no options, no second line, printable ASCII). Every write
+# into mt5's home runs AS mt5, so a symlink mt5 plants in ~/.ssh can only reach mt5's own files.
 set -euo pipefail
-key=${1:?public key line from the brain}
-case "$key" in ssh-ed25519\ *) ;; *) echo "expected an ssh-ed25519 public key"; exit 1;; esac
-install -d -m 700 -o mt5 -g mt5 /home/mt5/.ssh
-echo "restrict,port-forwarding,permitopen=\"127.0.0.1:8765\" $key" >> /home/mt5/.ssh/authorized_keys
-chown mt5:mt5 /home/mt5/.ssh/authorized_keys && chmod 600 /home/mt5/.ssh/authorized_keys
+export LC_ALL=C
+key=${1-}
+re='^ssh-ed25519 [A-Za-z0-9+/=]+( [[:print:]]*)?$'
+if [[ "$key" == *$'\n'* || "$key" == *$'\r'* ]] || ! [[ "$key" =~ $re ]]; then
+  echo "refused: expected one ssh-ed25519 public key line (the brain's ~/.ssh/id_ed25519.pub)"
+  exit 1
+fi
+sudo -u mt5 -H sh -c 'umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf "%s\n" "$1" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys' \
+  _ "restrict,port-forwarding,permitopen=\"127.0.0.1:8765\" $key"
 echo "authorised (forwarding to 127.0.0.1:8765 only)"
 WRAP
 chmod 755 /usr/local/bin/goldbot-mt5-authorize

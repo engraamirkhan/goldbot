@@ -39,6 +39,13 @@ file. The product owner accepts work against them; the release manager does not 
   (`git replace`, rewritten objects), so `sudo -u goldbot git show ... | sha256sum` proves nothing.
 - No runbook runs root `chmod`, `chown`, `cp`, `rm`, `mv`, `tee` or `install` on a path under `/opt/goldbot`; use
   `sudo -u <service user>`. Root-run scripts read and write service-user paths only through `sudo -u`.
+- Root-run wrappers write into a service user's home only via `sudo -u <user>` (for example appending to
+  `~/.ssh/authorized_keys`), after validating the input as exactly one line of the expected shape.
+- In `goldbot/ops/linux/*.sh`, a file command (`chmod chown cp mv rm install tee cat`) or redirection on `$ROOT`,
+  `/opt/goldbot`, `/home/mt5` or `/var/lib/goldbot` starts with `sudo -u` (or `as_owner`); the only exception carries
+  `# root-ok: <reason>` on the same line (creating `/opt/goldbot` before the service user owns anything).
+- A manual root script ignores SIGPIPE and SIGHUP (`trap '' PIPE HUP`) before it starts changing services, so a
+  dropped session never leaves services stopped half-way; its durable record is a root-owned log, not the terminal.
 - Enforced by `tests/test_root_tooling_rules.py` (runbooks and `goldbot/ops/linux/*.sh`, comments included); the
   security reviewer signs off every change to a root-run script before its root copy is reinstalled.
 
