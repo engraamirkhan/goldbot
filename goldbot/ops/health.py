@@ -42,6 +42,7 @@ from goldbot.base import FrozenRecord, Record, UtcTimestamp, write_atomic
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
 from goldbot.data.crossfeed import check_reconciliation
+from goldbot.risk.supervisor import engine_fault
 
 Status = Literal["ok", "warn", "fail"]
 _RANK: dict[str, int] = {"ok": 0, "warn": 1, "fail": 2}
@@ -68,6 +69,7 @@ WATCH_STALE_S = 15 * 60           # health_last.json older than this: the Telegr
 HEARTBEAT_EVERY_S = 60            # services write state/heartbeat_<service>.json at most this often
 HEARTBEAT_SILENT_S = 5 * 60       # design S5: "a heartbeat alert fires if any service has been silent for five minutes"
 HEARTBEAT_SERVICES = ("supervisor", "scheduler", "telegram", "news", "api")   # engines: engine_<account>.json
+QUOTE_INVALID_FAIL_S = 60         # an engine whose every quote has been invalid this long in market hours (review MEDIUM-2)
 FAILED_ORDER_WINDOW_H = 24        # failed sends (X6) in this window are listed, each alerted once
 BRIDGE_TIMEOUT_S = 5.0
 BACKUP_WARN_H = 26.0              # daily backup: one missed night warns
@@ -275,9 +277,21 @@ def check_supervisor(ctx: HealthContext) -> Check:
     out = s.get("money_excluded") or []
     note = (f"; {', '.join(out)}: stale, other or no currency, money not summed (exposure still counted; delete the "
             "file if that engine no longer runs)") if out else ""
+    reasons = [str(r) for r in s.get("reasons") or []]
+    # a halt that is a fault, not a cap: FAIL, so the Telegram health pass announces it (trading-safety review MEDIUM-1)
+    if "supervisor_error" in reasons:
+        return Check(name="supervisor", status="fail",
+                     reason=f"HALT supervisor_error: the supervisor's evaluation raised {s.get('error') or 'an error'}; "
+                            "entries are blocked on every account until it evaluates cleanly (supervisor log)")
+    if "engine_state_unreadable" in reasons:
+        files = ", ".join(str(f) for f in s.get("unreadable_engines") or []) or "an engine file"
+        return Check(name="supervisor", status="fail",
+                     reason=f"HALT engine_state_unreadable: {files} cannot be read or holds a non-number; entries are "
+                            "blocked on every account until the engine rewrites it (delete it if that engine no longer runs)")
     if s.get("halt"):
+        label = "combined-cap HALT" if any(r.startswith("combined_") for r in reasons) else "HALT"
         return Check(name="supervisor", status="warn",
-                     reason=f"combined-cap HALT: {', '.join(s.get('reasons') or [])}; heartbeat {_age(age)}{note}")
+                     reason=f"{label}: {', '.join(reasons)}; heartbeat {_age(age)}{note}")
     if out:
         return Check(name="supervisor", status="warn", reason=f"heartbeat {_age(age)}{note}")
     if age > SUPERVISOR_WARN_S:
@@ -296,6 +310,9 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         e = _read_json(f)
     except (ValueError, OSError) as exc:
         return Check(name=name, status="fail", reason=f"engine state unreadable: {exc}")
+    bad = engine_fault(e) if isinstance(e, dict) else "the file"
+    if bad is not None:                      # the supervisor's rule: a null, string, bool, NaN or infinite number
+        return Check(name=name, status="fail", reason=f"engine state unreadable: {bad} is not a finite number")
     parts: list[str] = []
     statuses: list[Status] = []
     age = _epoch(ctx.now) - float(e.get("ts", 0))
@@ -351,6 +368,14 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         statuses.append("warn")
         parts.append(f"broker clock skew {float(skew):+.1f} s vs the wall clock exceeds the {grace:g} s bar-close grace: "
                      f"bars may close before their last ticks ({int(e.get('late_ticks') or 0)} late tick(s) so far)")
+    since = e.get("quote_invalid_since")
+    if since and _market_open_throughout(ctx, QUOTE_INVALID_FAIL_S):
+        invalid_s = (ctx.now - pd.Timestamp(since)).total_seconds()
+        if invalid_s >= QUOTE_INVALID_FAIL_S:
+            statuses.append("fail")
+            parts.append(f"quotes invalid for {_age(invalid_s)} (NaN, crossed or unreadable; > {QUOTE_INVALID_FAIL_S} s): "
+                         "entries blocked; decided closes, the kill switch, time exits and the Friday flatten still run "
+                         "on the host clock, stops rest with the broker")
     if e.get("tick_error"):
         statuses.append("fail")
         parts.append(f"tick error ({e.get('tick_error_detail') or 'unknown'}): the engine logged it and carries on; "
@@ -1172,31 +1197,49 @@ def check_server_clock(ctx: HealthContext, account: AccountRef) -> Check | None:
 
 
 # --------------------------------------------------------------------------------------------- report
+def _guarded(name: str, fn: Callable[[], "Check | list[Check] | None"]) -> list[Check]:
+    """One check; an exception (a type-corrupt state file, a bug) becomes a FAIL named after it instead of aborting the
+    whole report (trading-safety review LOW-3)."""
+    try:
+        out = fn()
+    except Exception as exc:                 # noqa: BLE001 - every check is independent
+        log.exception("health check %s raised", name)
+        return [Check(name=name, status="fail", reason=f"the check raised {type(exc).__name__}: its state file is "
+                                                       "corrupt or the check has a bug (health log)")]
+    return [] if out is None else out if isinstance(out, list) else [out]
+
+
 def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport:
-    """All checks in a fixed order. `static_only`: settings, accounts, secrets and disk (no service needs to run)."""
-    checks = [check_settings(ctx), check_accounts(ctx), check_secrets(ctx), check_disk(ctx)]
+    """All checks in a fixed order. `static_only`: settings, accounts, secrets and disk (no service needs to run).
+    Each check is guarded (`_guarded`): one that raises is a FAIL of its own, never a missing report."""
+    g = _guarded
+    checks = g("settings", lambda: check_settings(ctx)) + g("accounts", lambda: check_accounts(ctx)) + \
+        g("secrets", lambda: check_secrets(ctx)) + g("disk", lambda: check_disk(ctx))
     if not static_only:
-        checks.append(check_supervisor(ctx))
-        checks.append(check_halt(ctx))
-        checks.append(check_phase(ctx))
-        checks += [check_stop_rule(ctx), check_phase_gates(ctx)]
+        checks += g("supervisor", lambda: check_supervisor(ctx)) + g("halt", lambda: check_halt(ctx)) + \
+            g("phase", lambda: check_phase(ctx)) + g("stop_rule", lambda: check_stop_rule(ctx)) + \
+            g("phase_gates", lambda: check_phase_gates(ctx))
         for a in ctx.accounts:
-            checks += [check_engine(ctx, a.account_id), check_risk_state(ctx, a.account_id)]
-            tick_errors = check_tick_errors(ctx, a.account_id)
-            checks += [tick_errors] if tick_errors is not None else []
-            checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
-            checks += check_throttle(ctx, a.account_id)
-            bridge = check_bridge(ctx, a.account_id)
-            checks += [bridge] if bridge is not None else []
-            clock = check_server_clock(ctx, a)
-            checks += [clock] if clock is not None else []
-        checks += [check_heartbeat(ctx, s) for s in HEARTBEAT_SERVICES]
-        checks += check_scheduler(ctx)
-        checks += [check_costs(ctx, a.account_id) for a in ctx.accounts]
-        checks += [check_reconciliation(ctx, a.account_id) for a in ctx.accounts]   # D12 (goldbot/data/crossfeed.py)
+            i = a.account_id
+            checks += g(f"engine:{i}", lambda: check_engine(ctx, i)) + g(f"risk_state:{i}", lambda: check_risk_state(ctx, i))
+            checks += g(f"tick_errors:{i}", lambda: check_tick_errors(ctx, i))
+            checks += g(f"loss_caps:{i}", lambda: check_loss_caps(ctx, i)) + g(f"order_failed:{i}", lambda: check_failed_orders(ctx, i))
+            checks += g(f"throttle:{i}", lambda: check_throttle(ctx, i))
+            checks += g(f"bridge:{i}", lambda: check_bridge(ctx, i))
+            checks += g(f"server_clock:{i}", lambda: check_server_clock(ctx, a))
+        for svc in HEARTBEAT_SERVICES:
+            checks += g(f"heartbeat:{svc}", lambda: check_heartbeat(ctx, svc))
+        checks += g("scheduler", lambda: check_scheduler(ctx))
+        for a in ctx.accounts:
+            checks += g(f"costs:{a.account_id}", lambda: check_costs(ctx, a.account_id))
+        for a in ctx.accounts:
+            checks += g(f"reconciliation:{a.account_id}", lambda: check_reconciliation(ctx, a.account_id))   # D12
         if ctx.settings is not None and ctx.settings.costs.publish_release:
-            checks.append(check_costs_published(ctx))
-        checks += [check_data_quality(ctx), check_drift(ctx), check_model_watch(ctx), check_feature_versions(ctx), check_deploy(ctx), check_backup_age(ctx), check_backup_prune(ctx), check_restore_drill(ctx), check_news(ctx), check_agent_spend(ctx), check_approvals(ctx), check_alert_loop(ctx)]
+            checks += g("costs_published", lambda: check_costs_published(ctx))
+        for fn in (check_data_quality, check_drift, check_model_watch, check_feature_versions, check_deploy,
+                   check_backup_age, check_backup_prune, check_restore_drill, check_news, check_agent_spend,
+                   check_approvals, check_alert_loop):
+            checks += g(fn.__name__.removeprefix("check_"), lambda: fn(ctx))
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
 

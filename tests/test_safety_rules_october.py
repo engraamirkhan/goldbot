@@ -129,8 +129,8 @@ def test_a_trade_that_exactly_fills_the_remaining_budget_is_allowed_and_a_cent_o
 
 
 # ---------------------------------------------------------------------------------------------- currency conversion
-@pytest.mark.parametrize("fx,reason", [(math.nan, "non_finite_state"), (math.inf, "non_finite_state"),
-                                       (-math.inf, "non_finite_state"), (0.0, "fx_conversion_unavailable"),
+@pytest.mark.parametrize("fx,reason", [(math.nan, "invalid_state"), (math.inf, "invalid_state"),
+                                       (-math.inf, "invalid_state"), (0.0, "fx_conversion_unavailable"),
                                        (-0.75, "fx_conversion_unavailable")])
 def test_a_gbp_account_with_a_junk_conversion_refuses_with_nothing_sized(fx, reason):
     d = RiskGate().check(_usd(account_currency="GBP", acct_per_usd=fx), _state())
@@ -149,7 +149,7 @@ def test_a_usd_account_is_one_by_definition_and_a_blank_currency_is_never_assume
 def test_a_usd_account_with_a_nan_broker_conversion_is_refused_not_assumed_one():
     # the engine maps a junk broker figure to None (runner._usd_to_account); a NaN reaching the gate is a bug upstream
     d = RiskGate().check(_usd(account_currency="USD", acct_per_usd=math.nan), _state())
-    assert not d.allowed and d.reasons == ["non_finite_state", "non_finite:acct_per_usd"]
+    assert not d.allowed and d.reasons == ["invalid_state", "invalid:acct_per_usd"]
 
 
 def test_the_conversion_check_never_masks_a_flag_reason():

@@ -373,6 +373,11 @@ class Engine:
         # retried every tick (kill switch, weekend, time exit, hard flat, trail, blackout, engine stop) until done
         self._close_due: dict[int, tuple[str, dict, pd.Timestamp | None]] = {}
         self._kill_pending = False                   # the kill switch has not seen this engine's book flat yet
+        # an invalid feed (a dropped quote or a last_tick read that raised): since when on the host clock (engine state,
+        # health FAILs after QUOTE_INVALID_FAIL_S), and when the state file was last written meanwhile
+        self._quote_invalid_since: pd.Timestamp | None = None
+        self._invalid_state_written: pd.Timestamp | None = None
+        self._dq_repeats: dict[str, int] = {}        # ticks folded into the pending event of each check (LOW-1)
         self._load_orders()
         self._last_state_write: pd.Timestamp | None = None
         self._last_reconcile: pd.Timestamp | None = None
@@ -450,7 +455,9 @@ class Engine:
 
     def _on_tick(self, t: Tick) -> list[dict]:
         if not self._tick_ok(t):
-            return []                   # crossed or out-of-order quote: never enters the bars; entries blocked
+            self.no_quote_pass()        # invalid quote: never enters the bars; entries blocked; priceless exits run
+            return []
+        self._quote_invalid_since = self._invalid_state_written = None
         prev, self._last_tick = self._last_tick, t
         if self._error_awaits_tick:     # date a pending tick error by this tick's stamp (never earlier than it was)
             self._error_tick_ts = t.ts_utc if self._error_tick_ts is None else max(self._error_tick_ts, t.ts_utc)
@@ -468,7 +475,7 @@ class Engine:
             self._guard(lambda: self.broker.on_tick(t))   # type: ignore[attr-defined]  # paper broker fills
         # exits first: nothing that writes files or reads the account may stand between a quote and the stop check
         self._stop_check(t)
-        self._retry_closes(t)              # closes decided earlier that have not succeeded: every tick until done
+        self._retry_closes(t.ts_utc)       # closes decided earlier that have not succeeded: every tick until done
         if self._kill_pending and self.state.stage == Stage.HALTED:
             self._kill_switch(everything=False)   # until this engine's book is flat
         self._scale_out(t)
@@ -501,6 +508,64 @@ class Engine:
         self.last_bar_close = bar_close
         self._flush_closed()               # after every exit of this tick has been sent
         return out
+
+    def _host_now(self) -> pd.Timestamp:
+        """The clock for a pass without a valid quote: the host clock live, else the last valid tick's time (a replay
+        never moves time on an invalid tick)."""
+        if self.cfg.live_clock or self._last_tick is None:
+            return self.clock()
+        return self._last_tick.ts_utc
+
+    def no_quote_pass(self) -> None:
+        """A pass without a usable price (a quote `_tick_ok` dropped, or a `last_tick` read that raised: ops.run
+        `engine_pass`). Trading-safety review MEDIUM-2: everything that needs our price is skipped, but the exits that
+        do not still run: closes already decided are retried, a pending kill-switch flatten is sent (market orders need
+        no price of ours), and time barriers and the Friday flatten are judged on the host clock. The state file keeps
+        being written every state_every_s with `quote_invalid_since`, so health FAILs (alerted) once quotes have been
+        invalid for QUOTE_INVALID_FAIL_S in market hours. Entries stay blocked (the data-quality error or tick error)."""
+        now = self._host_now()
+        if self._quote_invalid_since is None:
+            self._quote_invalid_since = now
+        self._guard(lambda: self._retry_closes(now))
+        if self._kill_pending and self.state.stage == Stage.HALTED:
+            self._guard(lambda: self._kill_switch(everything=False))
+        self._guard(lambda: self._host_clock_exits(now))
+        if self._invalid_state_written is None or \
+                (now - self._invalid_state_written).total_seconds() >= self.cfg.state_every_s:
+            self._invalid_state_written = now
+            self._guard(self._write_state)
+        self._guard(self._flush_closed)
+
+    def _host_clock_exits(self, now: pd.Timestamp) -> None:
+        """Without a price: a trade past its time barrier (max_bars decision bars since it opened) is closed
+        (`time_exit`), and from the Friday weekend cut (server time) every position of this engine is closed
+        (`weekend_close_no_quote`): with no valid quote the losers cannot be told from the winners, and a flat book is
+        the side of the weekend rule that cannot gap through a stop. Once per Friday, like `_weekend_rule`; a refused
+        close is retried every pass (`_retry_closes`)."""
+        sec = tf_seconds(self.cfg.decision_tf)
+        for pid, tr in list(self.open.items()):
+            opened = tr.opened_utc or tr.entry_bar_ts
+            if pid not in self._close_due and opened is not None and \
+                    (now - opened).total_seconds() >= tr.max_bars * sec:
+                self._try_close(pid, "time_exit", now, clock="host")
+        srv = server_wall(now, self.cfg.server_tz)[0]
+        h, m = (int(x) for x in self.cfg.weekend_cut.split(":"))
+        if not (srv.weekday() == 4 and srv.hour * 60 + srv.minute >= h * 60 + m) \
+                or self._weekend_done == srv.date().isoformat():
+            return
+        self.state.weekend = True
+        positions = self._read_positions("the no-quote weekend flatten is retried next pass")
+        if positions is None:
+            return
+        done = True
+        for p in positions:
+            if self._own(p.magic):
+                ok = p.position_id not in self._close_due and \
+                    self._try_close(p.position_id, "weekend_close_no_quote", now).ok
+                done = done and ok
+        if done:
+            self._weekend_done = srv.date().isoformat()
+            self._save_risk_state()
 
     def _due_close(self, t: Tick, bar_open: pd.Timestamp) -> pd.Timestamp | None:
         """Design (D10): "Bar close is detected by clock (close time plus 1.5 s grace), not by tick arrival." The bar
@@ -888,19 +953,26 @@ class Engine:
         intent, prop, agent = entry
         if p.outcome == Outcome.APPROVED:
             tick = self.broker.last_tick(self.cfg.symbol)
-            self._refresh_account(tick)
-            # contract terms and the conversion read again from the terminal (review LOW-5): one it can no longer give
-            # leaves the currency unknown, so the re-check refuses (fail closed); never the proposal-time figure
-            now_px = tick.ask if prop.side > 0 else tick.bid
-            intent = intent.model_copy(update={**self._sizing_terms(intent.side, now_px, intent.stop_atr * intent.atr_usd),
-                                               "price": now_px})
-            gd = self.gate.check(intent, self.state, tick.ts_utc,  # re-check at approval time
-                                 margin_required=broker_margin(self.broker, self.cfg.symbol),
-                                 throttle=self._agent_throttle(agent.agent_id, intent.timeframe or agent.timeframe,
-                                                               tick.ts_utc))
-            lots = gd.lots
-            if gd.allowed:
-                gd, lots = self._within_card(gd, prop, agent)
+            # the quote the order would be priced from must pass the tick price rules (review MEDIUM-3); its time is
+            # not compared here, the approval reads the terminal's latest quote
+            fault = self._quote_fault(tick, order=False)
+            if fault is not None:
+                gd, lots = GateDecision(allowed=False, reasons=[f"bad_quote:{fault[0]}"]), 0.0
+            else:
+                self._refresh_account(tick)
+                # contract terms and the conversion read again from the terminal (review LOW-5): one it can no longer
+                # give leaves the currency unknown, so the re-check refuses (fail closed); never the proposal-time figure
+                now_px = tick.ask if prop.side > 0 else tick.bid
+                intent = intent.model_copy(update={**self._sizing_terms(intent.side, now_px,
+                                                                        intent.stop_atr * intent.atr_usd),
+                                                   "price": now_px})
+                gd = self.gate.check(intent, self.state, tick.ts_utc,  # re-check at approval time
+                                     margin_required=broker_margin(self.broker, self.cfg.symbol),
+                                     throttle=self._agent_throttle(agent.agent_id, intent.timeframe or agent.timeframe,
+                                                                   tick.ts_utc))
+                lots = gd.lots
+                if gd.allowed:
+                    gd, lots = self._within_card(gd, prop, agent)
             if gd.allowed:
                 price = tick.ask if prop.side > 0 else tick.bid
                 self._execute(prop, agent, lots, price - prop.side * gd.stop_distance,
@@ -1129,12 +1201,11 @@ class Engine:
     def _backing_off(self, pid: int, now: pd.Timestamp) -> bool:
         return pid in self._close_backoff and now < self._close_backoff[pid][1]
 
-    def _retry_closes(self, t: Tick) -> None:
+    def _retry_closes(self, now: pd.Timestamp) -> None:
         """Every tick: re-send each close the engine decided that has not succeeded (kill switch, weekend loser, time
         exit, hard flat, trail, blackout, engine stop), unless it is backing off after a market-closed refusal or was
         already tried on this tick. A position the broker no longer lists is left to `_sweep_closed`, which records it
         once its exit deal is seen. An unreadable book skips this tick (the next one retries)."""
-        now = t.ts_utc
         due = [pid for pid, (_, _, last) in self._close_due.items() if last != now and not self._backing_off(pid, now)]
         if not due:
             return
@@ -1638,21 +1709,34 @@ class Engine:
         warns above the grace, and beyond SKEW_BLOCK_S it is a blocking data-quality error (`_dq_blocking`)."""
         return round(float(np.median(self._skew)), 3) if self._skew else None
 
-    def _tick_ok(self, t: Tick) -> bool:
-        """Tick-level checks: a non-finite, crossed or non-positive quote, or a tick older than the previous one, is a
-        data-quality error (recorded; the tick is dropped). A NaN or infinite price is no price to act on, so the whole
-        tick is skipped (exits included) and entries stay blocked; the next valid tick runs the exits."""
+    def _quote_fault(self, t: Tick, *, order: bool = True) -> tuple[str, str] | None:
+        """(check, detail) when a quote breaks the tick rules: a non-finite price, a non-positive bid or a crossed quote,
+        and with `order` a tick older than the previous one; None when it is usable."""
         prev = self._last_tick
         if not (math.isfinite(t.bid) and math.isfinite(t.ask)):
-            ev = DQEvent(ts_utc=t.ts_utc, check="non_finite_quote", severity="error", detail=f"bid {t.bid} ask {t.ask}")
-        elif t.bid <= 0 or t.ask < t.bid:
-            ev = DQEvent(ts_utc=t.ts_utc, check="bid_gt_ask", severity="error", detail=f"bid {t.bid} ask {t.ask}")
-        elif prev is not None and t.ts_utc < prev.ts_utc:
-            ev = DQEvent(ts_utc=t.ts_utc, check="non_monotonic", severity="error",
-                         detail=f"tick at {t.ts_utc} after {prev.ts_utc}")
-        else:
+            return "non_finite_quote", f"bid {t.bid} ask {t.ask}"
+        if t.bid <= 0 or t.ask < t.bid:
+            return "bid_gt_ask", f"bid {t.bid} ask {t.ask}"
+        if order and prev is not None and t.ts_utc < prev.ts_utc:
+            return "non_monotonic", f"tick at {t.ts_utc} after {prev.ts_utc}"
+        return None
+
+    def _tick_ok(self, t: Tick) -> bool:
+        """Tick-level checks (`_quote_fault`): a non-finite, crossed or non-positive quote, or a tick older than the
+        previous one, is a data-quality error (recorded; the tick is dropped and `no_quote_pass` runs the exits that
+        need no price). Repeats of one check fold into its pending event with a count (review LOW-1), so a feed stuck
+        on NaN never grows the list between bar closes."""
+        fault = self._quote_fault(t)
+        if fault is None:
             return True
-        self._dq_pending.append(ev)
+        check, detail = fault
+        i = next((k for k, e in enumerate(self._dq_pending) if e.check == check), None)
+        if i is None:
+            self._dq_repeats[check] = 1
+            self._dq_pending.append(DQEvent(ts_utc=t.ts_utc, check=check, severity="error", detail=detail))
+        else:
+            n = self._dq_repeats[check] = self._dq_repeats.get(check, 1) + 1
+            self._dq_pending[i] = self._dq_pending[i].model_copy(update={"detail": f"{detail} (latest of {n} ticks)"})
         return False
 
     def _check_new_bars(self, done: pd.DataFrame) -> None:
@@ -2487,6 +2571,8 @@ class Engine:
             "lot_terms": self._ladder["lot_terms"], "limits": self._published_limits(),
             "tick_ahead_s": st.tick_ahead_s, "market_closed": st.market_closed, "session_source": self.sessions.source,
             "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail,
+            # host clock; None while quotes are valid (health FAILs after QUOTE_INVALID_FAIL_S of invalid quotes)
+            "quote_invalid_since": self._quote_invalid_since.isoformat() if self._quote_invalid_since is not None else None,
             "tick_errors_total": self.tick_errors_total, "ticks_dropped": self.ticks_dropped,
             "last_tick_error_at": self._last_tick_error_at.isoformat() if self._last_tick_error_at is not None else None,
             "sessions": session_table_cache(self.sessions),

@@ -151,21 +151,27 @@ class GateDecision(Record):
     margin_note: str = ""          # which figure won, or why the broker's could not be used (fallback to 1:20)
 
 
-# every number the entry check and the sizing read (October safety batch, HIGH): a limit written `if x > limit: refuse`
-# lets NaN through, because every comparison with NaN is False. `acct_per_usd` may be None ("unknown": the explicit
-# fx_conversion_unavailable refusal); `open_positions` is an int and cannot be NaN
+# every number the entry check and the sizing read (October safety batch, HIGH; trading-safety review MEDIUM-3): a limit
+# written `if x > limit: refuse` lets NaN through, because every comparison with NaN is False, and a zero or negative
+# price, ATR, stop, contract or volume makes the sizing meaningless. `acct_per_usd` may be None ("unknown": the
+# explicit fx_conversion_unavailable refusal); `open_positions` is an int and cannot be NaN
 _STATE_NUMBERS = ("equity", "balance_closed_hwm", "day_start_equity", "week_start_equity", "margin_used",
                   "last_tick_age_s", "spread_points", "open_lots", "open_notional", "other_lots", "other_notional",
                   "other_equity", "tick_ahead_s")
 _INTENT_NUMBERS = ("p", "target_atr", "stop_atr", "atr_usd", "cost_atr", "multiplier", "price", "contract_oz",
                    "volume_step", "volume_min", "volume_max", "stops_level_points", "acct_per_usd")
+_POSITIVE_STATE = ("equity",)
+_POSITIVE_INTENT = ("price", "atr_usd", "stop_atr", "contract_oz", "volume_step", "volume_min", "volume_max")
 
 
-def non_finite_fields(intent: Intent, st: AccountState) -> list[str]:
-    """The state and intent fields the gate reads that are NaN or infinite (None is left to the explicit handling)."""
-    bad = [f for f in _STATE_NUMBERS if not math.isfinite(getattr(st, f))]
-    return bad + [f for f in _INTENT_NUMBERS
-                  if getattr(intent, f) is not None and not math.isfinite(getattr(intent, f))]
+def invalid_fields(intent: Intent, st: AccountState) -> list[str]:
+    """The state and intent fields the gate reads that are NaN or infinite, or not > 0 where only a positive number
+    means anything (`_POSITIVE_*`). None is left to the explicit handling."""
+    def bad(obj: Any, f: str, positive: tuple[str, ...]) -> bool:
+        v = getattr(obj, f)
+        return v is not None and (not math.isfinite(v) or (f in positive and not v > 0))
+    return [f for f in _STATE_NUMBERS if bad(st, f, _POSITIVE_STATE)] + \
+        [f for f in _INTENT_NUMBERS if bad(intent, f, _POSITIVE_INTENT)]
 
 
 def _family_has_target(intent: Intent) -> bool:
@@ -302,16 +308,15 @@ class RiskGate:
         without it the margin check uses the 1:20 figure alone and says so in `margin_note`. `throttle` is the
         intent's agent's throttle facts (BACKLOG 21), judged at `now_utc` (`throttle_reasons`).
 
-        A non-finite number anywhere in the state or the intent refuses first (`non_finite_state`, then
-        `non_finite:<field>` for each), before the stage machine or any limit reads it: the gate fails closed, never
-        open, on state it cannot compare. Entries only; exits never call the gate."""
-        bad = non_finite_fields(intent, st)
-        if bad:
-            log.warning("entry refused: non-finite state %s", bad)
-            return GateDecision(allowed=False, reasons=["non_finite_state", *(f"non_finite:{f}" for f in bad)])
+        A number outside its domain (NaN, infinite, or not > 0 where it must be: `invalid_fields`) refuses the entry
+        (`invalid_state`, then `invalid:<field>` for each) after the flag reasons and before any limit or the sizing
+        reads it; the stage machine does not run on it (a zero equity read is not a 100% drawdown). The gate fails
+        closed, never open, on state it cannot compare. Entries only; exits never call the gate."""
+        bad = invalid_fields(intent, st)
         L = self.limits
         reasons: list[str] = []
-        self.update_stage(st)
+        if not bad:
+            self.update_stage(st)
         if st.supervisor_halt:
             reasons.append("supervisor_halt")
         if st.owner_halt:
@@ -345,6 +350,9 @@ class RiskGate:
         if st.open_positions >= L.max_positions:
             reasons.append("max_positions")
         reasons += self.throttle_reasons(throttle, now_utc)
+        if bad:
+            log.warning("entry refused: invalid state %s", bad)
+            return GateDecision(allowed=False, reasons=[*reasons, "invalid_state", *(f"invalid:{f}" for f in bad)])
         day_loss = 1 - st.equity / st.day_start_equity if st.day_start_equity else 0.0
         week_loss = 1 - st.equity / st.week_start_equity if st.week_start_equity else 0.0
         if day_loss >= L.daily_cap:

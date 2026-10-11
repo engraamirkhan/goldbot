@@ -50,7 +50,7 @@ def _finite_number(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
-def _engine_fault(e: dict) -> str | None:
+def engine_fault(e: dict) -> str | None:
     """Why an engine file's numbers cannot be used (a null, a string, a bool, NaN or infinity), None when they can.
     October safety batch, MEDIUM: such a file failed open (a NaN equity made every combined cap False) or crashed
     the supervisor (`None + 0`, `float("x")`), so it is treated exactly as an unparsable file."""
@@ -79,7 +79,7 @@ class Supervisor:
         self.unreadable: list[str] = []
 
     def read_engines(self) -> list[dict]:
-        """Engine state files; one that cannot be parsed, or whose numbers are not finite numbers (`_engine_fault`),
+        """Engine state files; one that cannot be parsed, or whose numbers are not finite numbers (`engine_fault`),
         is listed in `self.unreadable` (engines write atomically, so an unreadable file is a real fault and evaluate()
         halts on it, `engine_state_unreadable`, rather than leaving the engine out). Its money and exposure are not
         summed: nothing in it can be trusted, and the halt blocks every entry meanwhile."""
@@ -90,7 +90,7 @@ class Supervisor:
                 d = json.loads(f.read_text())
                 if not isinstance(d, dict):
                     raise ValueError("not an object")
-                bad = _engine_fault(d)
+                bad = engine_fault(d)
                 if bad is not None:
                     raise ValueError(f"{bad} is not a finite number")
                 d["_file"] = f.name                     # named in the mixed-currency halt (health, Telegram)

@@ -1236,7 +1236,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
 - Non-finite state fails closed (October safety batch, 2026-10-11, TRACEABILITY R36 and S7): `RiskGate.check`
-  refuses first with `non_finite_state` plus `non_finite:<field>` when any number it reads (equity, HWM, day/week
+  refuses first with `invalid_state` plus `invalid:<field>` when any number it reads (equity, HWM, day/week
   start, margin, spread, tick ages, exposure, stop/target/ATR/cost, multiplier, price, contract terms,
   `acct_per_usd`) is NaN or infinite; None stays the explicit "unknown" (a USD account with a NaN conversion is
   now refused, not taken as 1). `_tick_ok` drops a quote with a non-finite bid or ask as `non_finite_quote` (entries
@@ -1245,6 +1245,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `supervisor_error` instead of dying when `evaluate` raises. An engine file without `ts` now halts too (engines
   always write it). Dev extras gain pytest-randomly: every run is in random order (seed in the header; reproduce
   with `-p randomly --randomly-seed=<n>`, opt out with `-p no:randomly`).
+  Safety review fixes (same day): the gate's guard is `invalid_fields` (reason `invalid_state` / `invalid:<field>`,
+  after the flag reasons) and also requires price, ATR, stop, contract, volumes and equity > 0; an approval on a
+  quote that breaks the tick price rules is refused (`bad_quote:<check>`). A dropped quote or a raising
+  `last_tick` runs `Engine.no_quote_pass`: decided closes retried, a pending kill-switch flatten, host-clock time
+  barriers, and from the Friday cut every own position closed (`weekend_close_no_quote`: no price to tell losers
+  from winners). The state keeps being written with `quote_invalid_since`; health FAILs after 60 s of invalid
+  quotes in market hours, and FAILs (alerted) on `supervisor_error` and `engine_state_unreadable` halts. Repeated
+  bad quotes are one DQ event with a count; every health check is guarded; the seed is printed after each run
+  (tests/conftest.py).
 - October batch rollout (SRE, 2026-10-11): `docs/deploy/2026-10-batch.md`.
   - The owner's ordered steps for the two Oracle VMs, to be done by Fri 23 Oct: pre-checks (restic plus a local
     copy, preflight, health baseline); engines stopped; MT5 box first, because the new brain needs the bridge's

@@ -1,7 +1,7 @@
 """Non-finite and type-corrupt state fails closed (October safety batch, test engineer's probes).
 
 Every comparison with NaN is False, so a limit written as `if x > limit: refuse` lets a NaN through. The RiskGate
-refuses an entry when any number it reads is not finite (`non_finite_state`), the engine drops a quote with a
+refuses an entry when any number it reads is not finite (`invalid_state`), the engine drops a quote with a
 non-finite price as a data-quality error (entries blocked, the next valid tick still runs the exits), and the
 supervisor treats a non-finite or wrongly typed engine file as unreadable (halt) instead of failing open or crashing.
 """
@@ -54,7 +54,7 @@ def test_the_finite_baseline_is_allowed_so_the_refusals_below_are_caused_by_the_
 def test_a_non_finite_account_state_field_refuses_the_entry_and_names_the_field(field, bad):
     d = RiskGate().check(_gate_intent(), _state(**{field: bad}))
     assert not d.allowed and d.lots == 0.0
-    assert d.reasons[0] == "non_finite_state" and f"non_finite:{field}" in d.reasons
+    assert "invalid_state" in d.reasons and d.reasons[-1] == f"invalid:{field}"   # after any flag (+inf trips some)
 
 
 @pytest.mark.parametrize("bad", BAD, ids=["nan", "inf", "-inf"])
@@ -62,12 +62,12 @@ def test_a_non_finite_account_state_field_refuses_the_entry_and_names_the_field(
 def test_a_non_finite_intent_field_refuses_the_entry_and_names_the_field(field, bad):
     d = RiskGate().check(_gate_intent(**{field: bad}), _state())
     assert not d.allowed and d.lots == 0.0
-    assert d.reasons[0] == "non_finite_state" and f"non_finite:{field}" in d.reasons
+    assert d.reasons[0] == "invalid_state" and f"invalid:{field}" in d.reasons
 
 
 def test_a_nan_equity_is_refused_by_name_not_by_a_crash_in_the_sizing():
     d = RiskGate().check(_gate_intent(), _state(equity=math.nan))
-    assert d.reasons[:2] == ["non_finite_state", "non_finite:equity"]
+    assert d.reasons[:2] == ["invalid_state", "invalid:equity"]
 
 
 def test_an_unknown_conversion_stays_none_and_is_not_a_non_finite_refusal():
@@ -80,7 +80,8 @@ def test_an_unknown_conversion_stays_none_and_is_not_a_non_finite_refusal():
 def test_every_bad_field_is_named_and_the_state_is_left_untouched():
     st = _state(equity=math.nan, spread_points=math.inf)
     d = RiskGate().check(_gate_intent(stop_atr=math.nan), st)
-    assert d.reasons == ["non_finite_state", "non_finite:equity", "non_finite:spread_points", "non_finite:stop_atr"]
+    assert d.reasons == ["spread_too_wide", "invalid_state", "invalid:equity", "invalid:spread_points",
+                         "invalid:stop_atr"]
     assert st.stage.value == "normal"
 
 
