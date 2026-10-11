@@ -536,6 +536,33 @@ def test_the_rules_are_read_from_the_pre_registration_at_its_freeze_commit() -> 
         script.doc_text("docs/research/no-such-file.md", head)
 
 
+def test_a_freeze_commit_that_is_not_an_ancestor_of_head_is_refused(tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """A commit on another branch holds the file too, but its rules were never merged: `git merge-base --is-ancestor
+    <freeze_commit> HEAD` must hold as well as `git show`."""
+    import subprocess
+
+    def git(*a: str) -> str:
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                               "-c", "commit.gpgsign=false", *a], capture_output=True, text=True,
+                              check=True).stdout.strip()
+    git("init", "-q", "-b", "main")
+    (tmp_path / "pre.md").write_text("- Reading rule: frozen\n")
+    git("add", "pre.md")
+    git("commit", "-q", "-m", "freeze")
+    frozen = git("rev-parse", "HEAD")
+    git("checkout", "-q", "-b", "side")
+    (tmp_path / "pre.md").write_text("- Reading rule: never merged\n")
+    git("commit", "-q", "-am", "side")
+    side = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    script = _script()
+    monkeypatch.setattr(script, "ROOT", tmp_path)
+    assert "frozen" in script.doc_text("pre.md", frozen)
+    with pytest.raises(SystemExit, match="not an ancestor of HEAD"):
+        script.doc_text("pre.md", side)
+
+
 def test_the_write_job_runs_only_on_main_with_the_history_to_check_the_freeze_commit() -> None:
     wf = yaml.safe_load((ROOT / ".github/workflows/preregister-quarter.yml").read_text())
     write = wf["jobs"]["write"]

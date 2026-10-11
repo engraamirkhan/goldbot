@@ -41,7 +41,9 @@ from goldbot.research.registry_sync import read_rows  # noqa: E402
 def doc_text(source: str, commit: str | None) -> str:
     """The pre-registration the spec's rules are checked against. With a freeze commit, its text AT that commit
     (`git show <commit>:<source>`), so the rules written are the frozen ones and a commit that does not exist, or does
-    not hold the file, is refused; without one (dry runs before the freeze), the working tree's file."""
+    not hold the file, is refused; and the commit must be an ancestor of HEAD (`git merge-base --is-ancestor`), so a
+    commit on an unmerged branch, whose rules were never reviewed into this history, is refused too (quant review,
+    2026-10-11). Without one (dry runs before the freeze), the working tree's file."""
     p = Path(source)
     if commit is None:
         return (p if p.is_absolute() or p.exists() else ROOT / p).read_text()
@@ -51,6 +53,12 @@ def doc_text(source: str, commit: str | None) -> str:
     if res.returncode != 0:
         raise SystemExit(f"freeze_commit {commit}: cannot read {rel} at that commit ({res.stderr.strip()}); the "
                          f"commit must exist in this checkout (fetch-depth 0) and hold the pre-registration")
+    anc = subprocess.run(["git", "-C", str(ROOT), "merge-base", "--is-ancestor", commit, "HEAD"], capture_output=True,
+                         text=True)
+    if anc.returncode != 0:
+        why = "not an ancestor of HEAD" if anc.returncode == 1 else f"ancestry not checked ({anc.stderr.strip()})"
+        raise SystemExit(f"freeze_commit {commit}: {why}; the freeze commit must be in the history the spec is "
+                         f"written from (merged into this branch), not on another branch")
     return res.stdout
 
 
