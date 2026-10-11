@@ -31,12 +31,25 @@ nothing covered the record bodies.
   default that is safe when missing, so a record that went through an older release reads correctly on the newer one.
 - **Strict allowlist (stays forbid and fails closed):** auth `User`/`Invite`/`PasswordReset` (a newer lock or MFA
   flag must never be ignored, so the login is refused); the bus `Control` (an unknown field could be a halt condition
-  this release cannot honour, so an unreadable file means halted, propose-and-approve); `Settings` (already checked by
-  the deploy script); bridge order requests (an order is never guessed). `RecordRepo` is strict by default; persisted
-  operational state passes `tolerant=True`.
+  this release cannot honour, so an unreadable file means halted, propose-and-approve); the bus `BusDecision` (an
+  owner decision is never applied without a field this release does not know, such as a newer condition or size
+  limit: it is skipped and the proposal expires; amendment after code review, 2026-10-11); `Settings` (already
+  checked by the deploy script); records crossing the bridge (`_decode`: an order request is never guessed).
+  `RecordRepo` is strict by default; persisted operational state passes `tolerant=True`.
+- **Restrictions fail closed on older releases.** Ignoring an unknown field is safe only when the field cannot
+  restrict anything. A new restriction is therefore encoded so that an older release refuses the record, for example
+  a new value of an existing `Literal` (an older release rejects the value), never a new boolean or optional field
+  that an older release would drop and so ignore (S12).
+- **No left-to-right or discriminated unions in tolerant models.** With unknown keys ignored, a `union_mode=
+  "left_to_right"` union can read a newer variant as the first older member that validates, which silently gives a
+  different record. A discriminated union cannot ignore a new tag. Smart-mode unions (the default) pick the member
+  that matches the most fields and are fine. The guard checks the core schema of every model read tolerantly.
 - **Guard.** `tests/test_persistence_compat.py` writes every persisted model with a field this release does not know
   and reads it through its real load path. An AST check fails when a `model_validate`/`model_validate_json` in
-  `goldbot/` neither goes through `load_record` nor is on the allowlist with its reason.
+  `goldbot/` neither goes through `load_record` nor is on the allowlist (keyed by file, enclosing function and
+  receiver) with its reason. It also fails when a strict model is read tolerantly (`load_record*`, called by any
+  qualified name, or `RecordRepo(..., tolerant=<anything but False>)`), and when a tolerant read does not name its
+  model class at the call (`cls`, `type(x)`); the one generic case is `RecordRepo._load` (`self.model`).
 - **Temporary exception:** `goldbot/engine/runner.py` (the approvals scan in `_archive_stale_proposals` and
   `_load_orders`) is not converted yet because another lane is editing it. It is listed in the guard and in HANDOFF
   as the follow-up.
@@ -50,7 +63,11 @@ nothing covered the record bodies.
   the older engine refuse to start. That fails closed for entries, but exits are not managed while the engine is
   down (only the broker-side stop and target act). The runner follow-up should be the next change after the
   current runner lane merges.
-- The pydantic floor is now 2.12 (the first release with per-call `extra=`). The VPS installs from `uv.lock`
-  (2.14), so nothing changes there.
+- The pydantic floor is now 2.12 (the first release with per-call `extra=`). `uv.lock` is not what the servers
+  install from. The brain runs `uv pip install -e '.[live]'` (`goldbot-deploy.sh`, `brain_bootstrap.sh`), which
+  resolves `pyproject.toml`, so the next forward deploy upgrades pydantic there; the Windows VPS (`vps_update.ps1`,
+  `pip install -e ".[live]"`) does the same. The MT5 box keeps the pydantic its bootstrap installed, because deploys
+  there use `pip install --no-deps`. The bridge does not call `load_record`, so an older pydantic there does not
+  break it.
 - What would change this decision: if a field ever needs to survive an older release's rewrite (for example
   audit data), preserve extras for that one model explicitly instead of relaxing the rule globally.

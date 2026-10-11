@@ -920,11 +920,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - Persisted state is read tolerantly, built strictly (2026-10-11, ADR 0010): a rollback used to skip closed trades,
   hide proposals or stop services when a newer release had added a field. `goldbot/base.py` `load_record` /
   `load_record_json` drop unknown keys at every level (WARNING once per source/model/fields, `schema_skew()`). A wrong
-  type, a missing field or bad JSON still fails, and construction stays `forbid`. Applied to gates_phase, bus (not
-  `Control`), automode, shadow, ruin, scheduler, model registry, population, director, costs, health, digest, outbox,
+  type, a missing field or bad JSON still fails, and construction stays `forbid`. Applied to gates_phase, bus proposals
+  (`Control` and `BusDecision` stay strict: an unknown field means halted / the decision is skipped and expires), automode, shadow, ruin, scheduler, model registry, population, director, costs, health, digest, outbox,
   crossfeed and jobs; `RecordRepo(..., tolerant=False)` is the default (auth stays strict).
   The pydantic floor is now 2.12. New rule AGENT_STANDARDS S12: every new persisted field has a default that is safe
-  when missing. Guard: `tests/test_persistence_compat.py` (a compat case per persisted model, plus an AST allowlist).
+  when missing, and a new restriction is encoded so an older release fails closed (a new `Literal` value, never a new
+  boolean). Guard: `tests/test_persistence_compat.py`: a compat case per persisted model; an AST allowlist keyed by
+  file, function and receiver; strict models never read tolerantly (any `*load_record*` call or
+  `RecordRepo(tolerant=...)`); tolerant reads name their class; no left-to-right or discriminated unions in tolerant
+  models.
   **Follow-ups, ranked:**
   1. `goldbot/engine/runner.py` (left out because another lane is editing it): `_load_orders` (~:1752-1759):
      `SentOrder.model_validate(v)`, `OpenTrade.model_validate(v)` and `PendingClose.model_validate(v)` become

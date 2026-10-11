@@ -8,15 +8,19 @@ the owner's halt, Settings, bridge order requests; or not persisted state)."""
 from __future__ import annotations
 
 import ast
+import importlib
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 import pytest
+from pydantic import BaseModel, Field
 
+from goldbot.base import Record
 from goldbot.config import load_settings
 from goldbot.data import crossfeed
 from goldbot.engine.shadow import ShadowBook, VersionBook
@@ -37,7 +41,7 @@ from goldbot.research.population import Member, Population
 from goldbot.research.promotion import PerfStats
 from goldbot.telegram import automode
 from goldbot.telegram.approvals import Outcome, Proposal
-from goldbot.telegram.bus import ApprovalBus, BusDecision
+from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import STATE_FILE as DIGEST_FILE
 from goldbot.telegram.digest import DigestSchedule, DigestState
 from goldbot.telegram.outbox import Outbox, OutboxState
@@ -71,13 +75,12 @@ def case_closed_trade(tmp: Path) -> None:
     assert load_closed_trades(tmp) == ([t], None)
 
 
-def case_bus_proposal_and_decision(tmp: Path) -> None:
+def case_bus_proposal(tmp: Path) -> None:
     bus = ApprovalBus(tmp)
     p = _proposal()
     bus.publish(p)
     _rewrite(bus.pending_dir / "p1.json")
-    d = bus.submit("p1", approve=True, reason_code=None, by="dashboard:o")
-    _rewrite(bus.decisions_dir / "p1.json")
+    d = bus.submit("p1", approve=True, reason_code=None, by="dashboard:o")    # decisions stay strict (allowlist)
     assert bus.pending() == [] and bus.get("p1") == p
     assert bus.decisions_for({"p1"}) == [d] and bus.recent() == [(p, d)]
 
@@ -203,7 +206,7 @@ def case_reconcile(tmp: Path) -> None:
     assert "unreadable" not in crossfeed.check_reconciliation(ctx, "icm-demo").reason
 
 
-CASES = [case_closed_trade, case_bus_proposal_and_decision, case_bus_finished_proposal, case_shadow_book,
+CASES = [case_closed_trade, case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
          case_scheduler, case_health, case_digest, case_outbox, case_reconcile]
 
@@ -215,70 +218,218 @@ def test_the_older_release_reads_a_file_the_newer_release_wrote(tmp_path, case):
 
 def test_every_persisted_record_model_has_a_compat_case():
     """A new persisted model must add a case above (and a default that is safe when missing, AGENT_STANDARDS S12)."""
-    covered = {ClosedTrade, Proposal, BusDecision, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
+    covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport}
-    loaded = {name for _, name in _tolerant_loads() if name.isidentifier() and name[0].isupper()}   # not `cls`
+    loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 
 
 # ------------------------------------------------------------------------------------------------- the AST guard
-# Direct model_validate / model_validate_json calls allowed in goldbot/, keyed by (file, receiver). Everything else
-# must use load_record / load_record_json. Keep each entry's reason; remove an entry when its call goes away.
-STRICT_OR_NOT_PERSISTED: dict[tuple[str, str], str] = {
-    ("goldbot/config.py", "Settings"): "strict: Settings (a misspelt key must fail)",
-    ("goldbot/ops/health.py", "Settings"): "strict: Settings",
-    ("goldbot/ops/preflight.py", "Settings"): "strict: Settings",
-    ("goldbot/ops/setup_wizard.py", "Settings"): "strict: Settings",
-    ("goldbot/api/auth.py", "User"): "strict: credentials (a newer lock or MFA flag must not be ignored)",
-    ("goldbot/telegram/bus.py", "Control"): "strict: the owner's halt; unreadable means halted",
-    ("goldbot/execution/bridge.py", "cls"): "strict: bridge order requests (an order is never guessed)",
-    ("goldbot/db/repo.py", "self.model"): "RecordRepo: strict unless built with tolerant=True",
-    ("goldbot/research/min_lot.py", "Feasibility"): "not persisted: built from a dict in the same function",
-    ("goldbot/data/news.py", "HeadlineScore"): "not persisted: the LLM's answer, validated strictly",
-    ("goldbot/api/app.py", "UserRow"): "not persisted: API response from AuthStore.list_users()",
-    ("goldbot/api/app.py", "DecidedProposal"): "not persisted: API response built from a loaded Proposal",
-    ("goldbot/api/app.py", "CalendarEvent"): "not persisted: API response from code-selected columns",
-    ("goldbot/api/app.py", "Headline"): "not persisted: API response from code-selected columns",
-    ("goldbot/api/explain.py", "PlanReservation"): "API schema model (pydantic default extra='ignore'): tolerant",
+# Direct model_validate / model_validate_json calls allowed in goldbot/, keyed by (file, enclosing function, receiver).
+# Everything else must use load_record / load_record_json. Keep each entry's reason; remove it when its call goes away.
+STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
+    ("goldbot/config.py", "load_settings", "Settings"): "strict: Settings (a misspelt key must fail)",
+    ("goldbot/ops/health.py", "HealthContext.from_runtime", "Settings"): "strict: Settings",
+    ("goldbot/ops/preflight.py", "run_preflight", "Settings"): "strict: Settings",
+    ("goldbot/ops/setup_wizard.py", "merge_local_settings", "Settings"): "strict: Settings",
+    ("goldbot/api/auth.py", "AuthStore.session_user", "User"):
+        "strict: credentials (a newer lock or MFA flag must not be ignored)",
+    ("goldbot/telegram/bus.py", "ApprovalBus.control", "Control"): "strict: the owner's halt; unreadable means halted",
+    ("goldbot/telegram/bus.py", "ApprovalBus.decisions_for", "BusDecision"):
+        "strict: an owner decision is never applied without a field this release does not know; skipped, it expires",
+    ("goldbot/telegram/bus.py", "ApprovalBus.recent", "BusDecision"): "strict: as decisions_for (the decided cards)",
+    ("goldbot/execution/bridge.py", "_decode", "cls"):
+        "strict: records crossing the bridge (order requests are never guessed; responses: HANDOFF follow-up)",
+    ("goldbot/db/repo.py", "RecordRepo._load", "self.model"): "RecordRepo: strict unless built with tolerant=True",
+    ("goldbot/research/min_lot.py", "min_lot_feasibility", "Feasibility"):
+        "not persisted: built from a dict in the same function",
+    ("goldbot/data/news.py", "score_batch", "HeadlineScore"): "not persisted: the LLM's answer, validated strictly",
+    ("goldbot/api/app.py", "create_app.users", "UserRow"): "not persisted: API response from AuthStore.list_users()",
+    ("goldbot/api/app.py", "create_app.recent_proposals", "DecidedProposal"):
+        "not persisted: API response built from a loaded Proposal",
+    ("goldbot/api/app.py", "create_app.calendar", "CalendarEvent"):
+        "not persisted: API response from code-selected columns",
+    ("goldbot/api/app.py", "create_app.news", "Headline"): "not persisted: API response from code-selected columns",
+    ("goldbot/api/explain.py", "_plan", "PlanReservation"):
+        "API schema model (pydantic default extra='ignore'): tolerant",
 }
 # Temporary: other lanes are editing these files; the follow-up is listed in HANDOFF (ADR 0010).
-TEMPORARY: dict[tuple[str, str], str] = {
-    ("goldbot/engine/runner.py", "Proposal"): "ADR 0010 follow-up: approvals pending scan (~:394)",
-    ("goldbot/engine/runner.py", "SentOrder"): "ADR 0010 follow-up: _load_orders",
-    ("goldbot/engine/runner.py", "OpenTrade"): "ADR 0010 follow-up: _load_orders",
-    ("goldbot/engine/runner.py", "PendingClose"): "ADR 0010 follow-up: _load_orders",
+TEMPORARY: dict[tuple[str, str, str], str] = {
+    ("goldbot/engine/runner.py", "Engine._archive_stale_proposals", "Proposal"): "ADR 0010 follow-up",
+    ("goldbot/engine/runner.py", "Engine._load_orders", "SentOrder"): "ADR 0010 follow-up",
+    ("goldbot/engine/runner.py", "Engine._load_orders", "OpenTrade"): "ADR 0010 follow-up",
+    ("goldbot/engine/runner.py", "Engine._load_orders", "PendingClose"): "ADR 0010 follow-up",
 }
+# Models that fail closed: never read tolerantly, by load_record or by RecordRepo(..., tolerant=True).
+STRICT_MODELS = {"User", "Invite", "PasswordReset", "Control", "Settings", "BusDecision"}
+# The only tolerant reads whose model is not a class named at the call: (file, function) -> the argument.
+GENERIC_MODEL_ARGS = {("goldbot/db/repo.py", "RecordRepo._load"): "self.model"}
+TOLERANT_FUNCS = ("load_record", "load_record_json")
 
 
-def _calls() -> list[tuple[str, str, ast.Call]]:
-    out = []
+@dataclass(frozen=True)
+class Find:
+    kind: str           # "direct" (model_validate[_json]) | "tolerant" (load_record[_json]) | "repo" (tolerant RecordRepo)
+    rel: str
+    where: str          # enclosing class/function qualname ("" at module level)
+    model: str          # the receiver or model argument, as source text
+
+    @property
+    def plain_class(self) -> bool:
+        return self.model.isidentifier() and self.model[:1].isupper()
+
+
+class _Scanner(ast.NodeVisitor):
+    def __init__(self, rel: str):
+        self.rel, self.stack, self.found = rel, [], []          # type: ignore[var-annotated]
+
+    def _scope(self, node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        self.stack.append(node.name)
+        self.generic_visit(node)
+        self.stack.pop()
+
+    visit_ClassDef = visit_FunctionDef = visit_AsyncFunctionDef = _scope
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = ast.unparse(node.func)
+        name = func.rsplit(".", 1)[-1]
+        kw = {k.arg: k.value for k in node.keywords if k.arg}
+        model: ast.expr | None = None
+        kind = ""
+        if name in ("model_validate", "model_validate_json") and isinstance(node.func, ast.Attribute):
+            kind, model = "direct", node.func.value
+        elif name in TOLERANT_FUNCS:
+            kind, model = "tolerant", node.args[0] if node.args else kw.get("cls")
+        elif name == "RecordRepo" and "tolerant" in kw:
+            flag = kw["tolerant"]
+            if not (isinstance(flag, ast.Constant) and flag.value is False):      # anything but a literal False
+                kind, model = "repo", node.args[1] if len(node.args) > 1 else kw.get("model")
+        if kind:
+            self.found.append(Find(kind, self.rel, ".".join(self.stack), ast.unparse(model) if model else "?"))
+        self.generic_visit(node)
+
+
+def _scan(rel: str, source: str) -> list[Find]:
+    sc = _Scanner(rel)
+    sc.visit(ast.parse(source))
+    return sc.found
+
+
+def _finds() -> list[Find]:
+    out: list[Find] = []
     for f in sorted((ROOT / "goldbot").rglob("*.py")):
         rel = f.relative_to(ROOT).as_posix()
-        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Call):
-                out.append((rel, ast.unparse(node.func), node))
+        if rel != "goldbot/base.py":                       # the helper itself
+            out += _scan(rel, f.read_text(encoding="utf-8"))
     return out
 
 
-def _direct_validations() -> set[tuple[str, str]]:
-    return {(rel, func.rsplit(".", 1)[0]) for rel, func, _ in _calls()
-            if func.endswith((".model_validate", ".model_validate_json")) and rel != "goldbot/base.py"}
+def _tolerant_finds() -> list[Find]:
+    return [f for f in _finds() if f.kind in ("tolerant", "repo")]
 
 
-def _tolerant_loads() -> set[tuple[str, str]]:
-    return {(rel, ast.unparse(node.args[0])) for rel, func, node in _calls()
-            if func in ("load_record", "load_record_json") and node.args}
+def _violations(finds: list[Find]) -> list[str]:
+    """Tolerant reads of a strict model, or of a model the guard cannot name (not a plain class at the call)."""
+    out = []
+    for f in finds:
+        if f.kind == "direct":
+            continue
+        if f.model in STRICT_MODELS:
+            out.append(f"{f.rel} {f.where}: {f.model} is strict and must not be read tolerantly")
+        elif not f.plain_class and GENERIC_MODEL_ARGS.get((f.rel, f.where)) != f.model:
+            out.append(f"{f.rel} {f.where}: name the model class at the call, not {f.model!r}")
+    return out
 
 
 def test_every_persisted_load_uses_load_record_or_is_on_the_strict_allowlist():
-    found = _direct_validations()
+    found = {(f.rel, f.where, f.model) for f in _finds() if f.kind == "direct"}
     allowed = set(STRICT_OR_NOT_PERSISTED) | set(TEMPORARY)
     assert found - allowed == set(), "read persisted state with goldbot.base.load_record(_json), or add the call to " \
                                      "the strict allowlist with its reason (ADR 0010)"
     assert allowed - found == set(), "stale allowlist entries: remove them"
 
 
-def test_strict_models_are_never_read_tolerantly():
-    names = {name for _, name in _tolerant_loads()}
-    assert names.isdisjoint({"User", "Invite", "PasswordReset", "Control", "Settings"})
+def test_strict_models_are_never_read_tolerantly_and_every_tolerant_read_names_its_class():
+    assert _violations(_finds()) == []
+
+
+@pytest.mark.parametrize("snippet", [
+    'R = RecordRepo("users", User, key="email", columns={}, tolerant=True)',
+    'R = RecordRepo("invites", model=Invite, key="t", columns={}, tolerant=flag)',
+    'x = goldbot.base.load_record(PasswordReset, d, source="s")',
+    'x = base.load_record_json(Control, t, source="s")',
+    'x = load_record(type(y), d, source="s")',
+    'x = load_record(cls, d, source="s")',
+    'R = RecordRepo("t", models[0], key="k", columns={}, tolerant=True)',
+])
+def test_the_guard_flags_a_tolerant_read_of_a_strict_or_unnamed_model(snippet):
+    assert len(_violations(_scan("goldbot/x.py", snippet))) == 1
+
+
+@pytest.mark.parametrize("snippet", [
+    'R = RecordRepo("users", User, key="email", columns={})',
+    'R = RecordRepo("users", User, key="email", columns={}, tolerant=False)',
+    'x = goldbot.base.load_record_json(Proposal, t, source="s")',
+])
+def test_the_guard_passes_a_strict_repo_and_a_named_tolerant_read(snippet):
+    assert _violations(_scan("goldbot/x.py", snippet)) == []
+
+
+def _core_schema_problems(schema: Any, path: str) -> list[str]:
+    out: list[str] = []
+    if isinstance(schema, dict):
+        if schema.get("type") == "tagged-union":
+            out.append(f"{path}: discriminated union")
+        if schema.get("type") == "union" and schema.get("mode") == "left_to_right":
+            out.append(f"{path}: union_mode='left_to_right'")
+        for k, v in schema.items():
+            out += _core_schema_problems(v, path)
+    elif isinstance(schema, list):
+        for v in schema:
+            out += _core_schema_problems(v, path)
+    return out
+
+
+def test_tolerant_models_have_no_left_to_right_or_discriminated_unions():
+    """ADR 0010: with unknown keys ignored, a left-to-right union can take a newer variant as the first older one that
+    validates (silently a different record), and a discriminated union cannot ignore a new tag. Smart-mode unions
+    (the default) are fine: they pick the member that matches the most fields."""
+    finds = [f for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()]
+    modules = {f.rel: importlib.import_module(f.rel.removesuffix(".py").replace("/", ".")) for f in finds}
+    models: dict[str, set[type[BaseModel]]] = {}
+    todo: list[type[BaseModel]] = [BaseModel]
+    while todo:                                       # every model class loaded, by name (a model may be imported
+        for sub in todo.pop().__subclasses__():       # inside a function, as ruin does with VersionBook)
+            if sub.__module__.startswith("goldbot."):
+                models.setdefault(sub.__name__, set()).add(sub)
+            todo.append(sub)
+    problems = []
+    for f in finds:
+        cls = getattr(modules[f.rel], f.model, None)          # the name as the module sees it ...
+        if cls is None:                                         # ... else the one goldbot model of that name
+            assert len(models.get(f.model, ())) == 1, f"{f.model}: not exactly one goldbot model of that name"
+            cls = next(iter(models[f.model]))
+        problems += _core_schema_problems(cls.__pydantic_core_schema__, f"{f.rel} {f.model}")
+    assert problems == []
+
+
+def test_the_union_check_flags_left_to_right_and_discriminated_unions():
+    class A(Record):
+        k: Literal["a"] = "a"
+
+    class B(Record):
+        k: Literal["b"] = "b"
+
+    class L2R(Record):
+        v: A | B = Field(union_mode="left_to_right")
+
+    class Tagged(Record):
+        v: A | B = Field(discriminator="k")
+
+    class Smart(Record):
+        v: A | B
+
+    assert len(_core_schema_problems(L2R.__pydantic_core_schema__, "L2R")) == 1
+    assert len(_core_schema_problems(Tagged.__pydantic_core_schema__, "Tagged")) == 1
+    assert _core_schema_problems(Smart.__pydantic_core_schema__, "Smart") == []
