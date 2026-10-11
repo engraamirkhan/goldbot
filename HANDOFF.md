@@ -953,6 +953,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   them into `docs/research/preregistration-2027Q1.md` (H-04) and `preregistration-2027Q2-draft.md` (H-16/17/18/14).
   H-17, H-18 and H-14 are counted from the written rule ("spec-derived") until `trend_day`, `event_continuation` and
   E-2 are merged; recount with their own code before the Q2 freeze. About 10-20 runner-minutes per run.
+- **Research director October cycle (2026-10-11; docs only).** Q1 2027 readiness list with an owner and a date for
+  each item (`docs/research/preregistration-2027Q1.md`, "Q1 readiness"). Found on 2026-10-11: `research-v1` holds
+  no `preregistered` row or slot; the releases `macro-v1`, `calendar-v1` and `costs-v1` do not exist (`data-macro`
+  and `data-us-calendar` have never run: dispatch both on `main`, target 2026-10-18); no command writes queued rows or
+  slots (BACKLOG 47); H-06 has no implementation (BACKLOG 48, withdrawn by a written rule if not merged and counted by
+  2026-12-04, reservation 9 → 8); R-01/R-03 trial lists disagree with the registry (BACKLOG 49). Q2 draft: the
+  settled rulings are written in (H-17 literal blackout, [−15, +30) on the bar close, H-14 cost prior = Dukascopy bar
+  spread + settings extra cost), and pins P-1..P-10 are owed before the first count-owed-events run. **P-1: the
+  in-review count script counts H-17's non-literal entries; fix before merge.** Session coverage and the
+  conditional H-24 (`hypotheses.md` A4). Owner-method brief: `docs/research/owner-method-study.md`. Scorecard
+  updated.
 - VRP/purge follow-ups (2026-10-11): `macro_drivers` v5 stub rule from declared bar lengths (macro `f-51ac5ebabb`,
   macro + day_type `f-48c4c0c57e`); context frames use one `pipeline.CONTEXT_FEATURES` list (engine too, no behaviour
   change); group-measure rows purged by label exit (`discovery.purged_rest`).

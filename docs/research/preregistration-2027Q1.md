@@ -258,6 +258,16 @@ stamped before its row's quarter would never use the row up.
   trade side (falling real yield / dollar for longs). Macro release required.
 - Reading rule: **continue** only if net mean R exceeds H-01's by >= 0.03 R AND 2022-2024 net is positive (the period
   the yield link broke). Otherwise the macro gate is retired.
+- **Readiness gap and withdrawal rule (research director, 2026-10-11, before any outcome was seen).** H-06 has no
+  implementation: the `tsmom` presets hold only `slow`, and no specialist reads DFII10 or the broad dollar. It has
+  no coded `rule_id` either (`PREREGISTERED_RULE_IDS` = H-01, H-04, C4H), so the evaluator reads the rule above by
+  citing it exactly. Before the freeze: (1) the gate is specified as a frozen preset (the 20-day change of DFII10 and
+  of the broad dollar index on `macro-v1`, `asof_join` on `available_utc`, as known at the signal bar's close; a
+  missing value drops the candidate); (2) its events are counted with no outcome read (signals by side, and the
+  one-at-a-time lower bound as for H-01). **If that lower bound is below the daily event floor in force (ruling A),
+  the H-06 row is not written, `research.reserved_trials_quarter` for 2027Q1 is set to 8, and no trial is spent.**
+  Under any floor H-06 can only be inconclusive on fewer events, so a run would buy no information. If the preset is
+  not merged by 2026-12-04, the same withdrawal applies.
 
 ### H-04 Asia-session drift
 - Config: long at 00:00 UTC, exit 07:00 UTC (flat before London), stop 1.5 ATR(1h), every trading day, Data before
@@ -357,10 +367,67 @@ stamped before its row's quarter would never use the row up.
 - **C. Paid economic-calendar consensus feed** (H-11 needs surprises); otherwise H-11 stays blocked.
 - **D. Other instruments** (large-tick futures where trend still works) are out of scope unless you decide otherwise.
 
+## Q1 readiness: what must exist before 2027-01-01 (research director, 2026-10-11)
+
+Checked on 2026-10-11 against the repo, `config/settings.yaml` and the shared registry (release `research-v1`: 20
+Q4 2026 rows, **no `preregistered` row and no slot yet**). Releases present: `data-v1`, `research-v1`. **`macro-v1`,
+`calendar-v1` and `costs-v1` do not exist yet:** `data-macro` and `data-us-calendar` have never run, and the VPS has
+not published costs. There is also no command or workflow that writes a queued row or a slot into the shared
+registry. `TrialRegistry.preregister` and `reserve_slot` exist only as library calls.
+
+**1. Queued registry rows** (each written with `TrialRegistry.preregister(..., queue=True, target_quarter="2027Q1")`
+and this file's freeze commit in the rationale, stamped by the registry's clock, then synced to `research-v1`)
+
+| Row | Config (exact) | `rule_id` | Feature version | Owner | Date |
+|---|---|---|---|---|---|
+| H-02 | `--discover --families cluster`, `clusters = discovery.H02_CLUSTERS`, `survivor_unit=feature`, `group_top_k: 3`, label 4h TB 3.0/1.5/12, macro on, bars range 2010-01-01 .. 2025-09-30 written into the config | none (read by the discovery verdict) | `f-51ac5ebabb` (default + macro drivers v5) | strategy researcher writes the config; quant reviewer checks it | config 2026-12-11; row 2026-12-18 .. 12-23 |
+| H-01 | `tsmom`, `variants ["slow"]`, agent `tsmom-g0-c12c9afb24` | **`H-01`** | `f-079deacc61` | strategy researcher | row 2026-12-18 .. 12-23 |
+| H-06 | frozen macro-gate preset (above), only if it survives its withdrawal rule | none: evaluator cites the rule | `f-51ac5ebabb` | strategy researcher (spec), implementer (preset), quant reviewer | spec 2026-11-08; preset 2026-12-04; row 2026-12-18 .. 12-23 or withdrawn |
+| H-04 | `asia_drift`, `variants [{}]`, agent `asia_drift-g0-98dc13a518` | **`H-04`** | `f-079deacc61` | strategy researcher | row 2026-12-18 .. 12-23 |
+| tsmom 4h continuity | `tsmom`, `variants [{"timeframe": "4h", "max_bars": 12}]` | **`C4H`** | `f-079deacc61` | strategy researcher | row 2026-12-18 .. 12-23 |
+
+**2. Reserved slot rows.** Four survivor slots on H-02's queued row, written after it:
+`reserve_slot(h02_row, "survivor", k, <derivation rule as amended 2026-10-11>, "2027Q1",
+survivor_pool=["H-03", "H-05", "H-07", "H-08", "H-10"])`, k = 1..4, slot rule `{"min_stability": 0.6, "min_auc":
+0.53, "min_auc_lower_bound": 0.5}`. **No follow-up and no holdout slots for Q1** (decided here). Q1 follow-ups are
+funded from Q2's six-slot follow-up reserve, and any holdout scoring comes from the open budget under the E-5 cap.
+`research.reserved_trials_quarter` = `{"2027Q1": 9}` (5 queued + 4 slots), or **8** if H-06 is withdrawn.
+Owner: strategy researcher (rows), implementer (settings if 8). Date: with the rows, 2026-12-18 .. 12-23.
+
+**3. Owed counts** (events only, no outcome). count-owed-events (in review, commit `9343f2f`) is merged to `main`
+and run there, and its table is pasted here with the run's commit:
+
+| Count | Needs | Owner | Date |
+|---|---|---|---|
+| H-04 entries, entries dropped by the 7-hour sample rule (with dates), days without a decision bar, ATR warm-up, holdout-crossing entry; calendar upper bound 4,087 | `data-v1` | release manager merges; strategy researcher dispatches and pastes | merge 2026-10-25, paste 2026-11-01 |
+| H-01 recount (signals by side, one-at-a-time lower bound) against 2,154 / 154; any difference explained here | `data-v1` | as above | 2026-11-01 |
+| H-06 signals and one-at-a-time lower bound (**not in the script yet**: add with the preset) | `macro-v1`, H-06 preset | implementer adds; strategy researcher pastes | 2026-12-04 |
+| Q2 counts from the same run (H-16, H-17, H-18, H-14) | `calendar-v1`, `macro-v1`; Q2 pins P-1 .. P-10 first | as above | not needed for Q1 |
+
+**4. Freeze checklist, with an owner and a date for each item** (the boxes below are ticked only when done)
+
+| Item | Owner | Date |
+|---|---|---|
+| Ruling A (daily event floor; recommendation 150, retire-only), B (budget 20, keep), C (consensus feed, decline for now), D (other instruments, out of scope), and the conservative K_eff default: recorded here and `research.screen_min_events_daily` committed | owner, via the program director | 2026-11-30 |
+| `macro-v1` published (`data-macro` dispatched on `main`) | data engineer, via the program director | 2026-10-18 |
+| `calendar-v1` published (`data-us-calendar` on `main`; needed by Q2, not by Q1) | data engineer | 2026-10-18 |
+| `costs-v1` published from the VPS, or "priors accepted" written here by the research director | owner and SRE (VPS step, BACKLOG 1); research director records the fallback | 2026-12-11 / fallback 2026-12-14 |
+| A pre-registration writer: a command plus a `workflow_dispatch` job that writes queued rows and slots into the shared registry under its lock and syncs `research-v1` (BACKLOG 47) | implementer; quant and security reviewers | 2026-12-04 |
+| H-06 preset merged and counted, or withdrawn by its rule (BACKLOG 48) | strategy researcher, implementer | 2026-12-04 |
+| H-10: no `jump_news` for Q1 (decided here). H-10 reads jumps only, which is inconclusive for H-10 by its rule, so the feature version stays put | research director | done 2026-10-11 |
+| Feature-version line final (`f-079deacc61`; macro `f-51ac5ebabb`); any later bump amends it first | quant reviewer | 2026-12-11 |
+| Freeze commit of this file; `<freeze commit>` filled in every run-input table | research director | 2026-12-14 |
+| Rows and slots written, `reserved_trials_quarter` matches, `research-v1` synced | strategy researcher | 2026-12-18 .. 12-23 |
+| Registry and this file agree (row count, configs, `rule_id`s, slot rule, reservation) | evaluator (independent) | 2026-12-28 |
+| Nothing from this queue runs before 2027-01-01. Run order from 2027-01-01: H-02, H-01, H-06 (after H-01, which its rule compares against), H-04, C4H | research director | 2027-01-01 |
+
 ## Freeze checklist (by 2027-01-01)
 - [ ] Owner rulings A-D recorded here
 - [ ] `costs-v1` measured table published from the VPS (or the priors accepted and stated)
 - [ ] `macro-v1` release present
-- [ ] `research_pass.py --discover` merged and tested
-- [ ] count-owed-events run on data-v1 and its counts pasted here (H-04 entries and the 7h-rule drops; H-01 recount)
+- [x] `research_pass.py --discover` merged and tested (`scripts/research_pass.py --discover`, `tests/test_discovery.py`; checked 2026-10-11)
+- [ ] count-owed-events merged and run on `main` (data-v1); its counts pasted here (H-04 entries and the 7h-rule drops;
+  H-01 recount)
+- [ ] H-06 preset merged and counted, or H-06 withdrawn and the reservation set to 8
+- [ ] pre-registration writer merged (BACKLOG 47); the 4 survivor slots written on H-02's row
 - [ ] each trial's `preregistered` registry row written with this file's commit id
