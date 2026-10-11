@@ -136,6 +136,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   or the dashboard (any approver); re-arm only on the dashboard by the owner with an authenticator code. Engines in
   production (`halt_checks`) also block entries when the supervisor's heartbeat is missing or stale. Exits are
   never gated.
+- An approved order never exceeds its card (ADR 0009, 2026-10-11): the approval re-check can only reduce the size
+  (`min(gate lots, card lots)`, journalled `approval_size_capped`), and a risk at the sent lots more than 2% above the
+  card's `risk_amount` (the broker's conversion moved) is refused `risk_above_approved`. Proposals carry the
+  account-currency risk, the minimum-lot note fields and the card's money (docs/ux/approval-card.md); restart
+  engine, Telegram and API together with the engine last when deploying a proposal-format change (RUNBOOK).
 - Clone mutations (`population.mutate_agent`): perturbed barriers/thresholds, a different feature subset
   (`feature_seed`: seeded 40 of the eligible features) or a different timeframe for breakout and mean_reversion
   (15m <-> 1h, holding horizon kept).

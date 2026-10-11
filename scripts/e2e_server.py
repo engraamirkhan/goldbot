@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -31,13 +32,19 @@ from goldbot.telegram.bus import ApprovalBus  # noqa: E402
 
 
 def seed_proposals(state: str) -> None:
-    """Two proposals as an engine would publish them to the approval bus."""
+    """Two proposals as an engine would publish them to the approval bus: the long from a current engine (risk in
+    the account currency, sized by the minimum-lot exception), the short from an older one (USD risk only)."""
     bus = ApprovalBus(state)
+    card_money: dict[str, dict[str, Any]] = {
+        "e2e-long": dict(currency="GBP", risk_amount=8.2, risk_fraction=0.0082, min_lot_exception=True,
+                         risk_normal=0.005, risk_cap=0.01),
+        "e2e-short": {}}
     for pid, side, entry in (("e2e-long", 1, 2400.25), ("e2e-short", -1, 2410.50)):
         bus.publish(Proposal(
             proposal_id=pid, account_id="icm-demo", agent_id="session_open-g0-e2e", side=side, lots=0.05,
             entry=entry, stop=entry - side * 4.0, target=entry + side * 6.0, p=0.62, ev_r=0.31, spread_points=22.0,
-            top_features=[("atr_14", 0.4), ("adx_14", -0.2)], risk_usd=20.0, created=time.time(), window_s=3600))
+            top_features=[("atr_14", 0.4), ("adx_14", -0.2)], risk_usd=20.0, created=time.time(), window_s=3600,
+            **card_money[pid]))
 
 
 def seed_store(data_root: str) -> None:

@@ -17,12 +17,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 173 |
+| implemented | 174 |
 | partial | 16 |
 | missing | 3 |
 | deviates | 6 |
 | in review | 6 |
-| **total** | **204** |
+| **total** | **205** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -103,6 +103,7 @@ tests/test_sizing_parity.py::test_sizing_module_matches_the_gate and ::test_stag
 | A10 | "/mode auto ... only offered after at least 100 proposals with no RiskGate breach and no distinguishable difference between approved and rejected outcomes" | implemented | goldbot/telegram/automode.py `auto_mode_eligibility` (decided proposals since the last mode change; breaches = a drawdown stage or kill switch in risk_*.json; R of approved vs rejected from the shadow book's counterfactual outcomes, Welch t-test: eligible only if p >= 0.10 AND the 90% CI of the difference spans 0, with >= 10 outcomes a side), `AutoModeOffer` (one message per mode epoch, never switches), `mode_command` (`/mode auto <TOTP>` needs the owner's authenticator via goldbot/api/auth.py and the evidence; `/mode propose` needs nothing; audited); goldbot/telegram/bus.py `Control.approval_mode`, `set_mode`; goldbot/engine/runner.py `_refresh_account` reads it, the re-arm lock and the 12% kill switch force propose and the kill switch writes propose back | tests/test_automode.py::test_not_eligible_below_100_decided_proposals_and_eligible_at_100; ::test_not_eligible_with_a_riskgate_breach; ::test_not_eligible_when_approved_and_rejected_outcomes_differ; ::test_mode_auto_without_a_valid_totp_is_refused_even_when_eligible; ::test_engine_reads_the_owner_mode_and_the_re_arm_lock_wins; ::test_kill_switch_returns_the_owner_mode_to_propose_and_it_stays_there; ::test_downgrade_to_propose_is_always_allowed_without_totp_or_evidence |
 | A11 | Owner halt fails closed on an unreadable control file | implemented | goldbot/telegram/bus.py:129 | tests/test_cov_telegram.py::test_owner_halt_round_trips_and_fails_closed_on_a_corrupt_file |
 | A12 | Daily owner digest on Telegram (owner request 2026-10-10): status, yesterday, risk, research, decisions; once a day, late send under 6 h, no identifiers | implemented | goldbot/telegram/digest.py `build_digest`, `DigestSchedule`; goldbot/telegram/bot.py `_digest_pass`; config/settings.yaml `telegram.digest_at` | tests/test_digest.py::test_digest_renders_every_section_from_fixture_state; ::test_digest_with_no_state_at_all_still_renders; ::test_digest_never_prints_identifiers; ::test_one_broken_input_never_stops_the_digest; ::test_digest_is_sent_once_a_day; ::test_missed_slot_is_sent_on_start_only_under_six_hours_late |
+| A13 | An approved order never exceeds the card the owner approved (ADR 0009) | implemented | goldbot/engine/runner.py `Engine._within_card` (called from `_on_decision` after the approval re-check): sends `min(gate lots, card lots)`, journals `approval_size_capped`, refuses `risk_above_approved` when the risk at the lots sent exceeds the card's `risk_amount` x `APPROVED_RISK_TOLERANCE` (1.02) | tests/test_approved_card_cap.py::test_equity_rising_before_the_click_never_sends_more_than_the_card, ::test_a_conversion_rise_past_two_percent_refuses_the_approval, ::test_a_card_from_an_older_engine_without_risk_is_still_capped_at_its_lots |
 
 ## Dashboard authentication [Infrastructure: Dashboard]
 

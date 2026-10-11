@@ -864,6 +864,21 @@ Engines now publish their deposit currency and the supervisor halts every accoun
 5. Check `state\supervisor.json`: `"halt": false` and `"currencies": {"icm-demo": "GBP"}`. If it shows
    `mixed_account_currencies`, the health check names the offending file.
 
+### Approval card money rollout (one time: proposals carry the account-currency risk)
+
+From this update the engine writes new fields on every proposal (currency, risk in the account currency, the
+minimum-lot note). Proposal records refuse unknown fields, so an old Telegram or API process cannot read a
+new-format proposal: it would never show it, and the proposal would expire unseen. Restart the three together, with
+the engine last, so no new-format proposal is written while an old reader runs:
+
+1. Stop the engines first (`nssm stop goldbot-engine-icm-demo`, and any other engine), then `goldbot-telegram` and
+   `goldbot-api`. On the Oracle brain: `sudo systemctl stop 'goldbot-engine@*'`, then the telegram and api units.
+2. Deploy (`vps_update.ps1`, below; it already stops engines last and starts them after the other services).
+3. Start `goldbot-api` and `goldbot-telegram`, check both are running, and only then start the engines.
+4. Rolling back: stop the engines first again, so an old engine never runs beside a new reader and the reverse.
+
+`vps_update.ps1` follows this order on its own; the steps matter when you restart services by hand.
+
 ### Server clock (US-EU DST gap weeks)
 
 MT5 stamps every tick, bar and deal in the broker's *server time*; `server_tz` in `config/accounts.yaml` converts it
