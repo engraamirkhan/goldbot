@@ -22,6 +22,8 @@
   python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]
                                                          # minimum equity for the minimum lot per family (G-7)
   python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)
+  python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]
+                                                         # time-weighted % return, R, drawdown, avg per day, milestones
   python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds
 """
 from __future__ import annotations
@@ -110,14 +112,13 @@ def refresh_sessions(source: Any, now: "pd.Timestamp", current: "SessionTable | 
 
 
 def engine_pass(eng: Any, broker: Any, symbol: str) -> bool:
-    """One pass of the engine loop: read the latest tick and feed it. Any exception is logged and recorded on the
-    engine (`tick_error`: entries blocked until enough clean ticks, alerted by health) and the loop carries on, so a
-    bad tick or a terminal fault never crash-loops the engine (the next pass retries the exits). False on an error."""
+    """One pass of the engine loop: read the latest tick and feed it. Any exception (an AssertionError too) is recorded
+    on the engine (`tick_error`: entries blocked until a clean decision bar, rate-limited logging, alerted by health)
+    and the loop carries on, so a bad tick or a terminal fault never crash-loops the engine (the next pass retries the
+    exits). False on an error."""
     try:
         eng.on_tick(broker.last_tick(symbol))
         return True
-    except AssertionError:
-        return False
     except Exception as exc:
         try:
             eng.note_tick_error(exc)
@@ -579,6 +580,9 @@ if __name__ == "__main__":
     elif cmd == "ruin":
         from goldbot.research.ruin import main as ruin_main
         sys.exit(ruin_main(sys.argv[2:]))
+    elif cmd == "monthly-report":
+        from goldbot.ops.monthly_report import main as monthly_main
+        sys.exit(monthly_main(sys.argv[2:]))
     elif cmd == "sizing-feasibility":
         from goldbot.research.min_lot import main as feasibility_main
         sys.exit(feasibility_main(sys.argv[2:]))

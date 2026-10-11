@@ -119,6 +119,7 @@ class HealthContext(Record):
     bridge_probe: Callable[[str], str | None] | None = None   # url -> None when /health answers, else why not
     tick_reader: Callable[[str, str], Any] | None = None      # (account_id, symbol) -> broker Tick (read-only); None: no bridge
     clock: Callable[[], pd.Timestamp] | None = None           # host UTC read after a network probe; None: use `now`
+    last_run: UtcTimestamp | None = None                      # the previous health run (health_last.json), if any
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -140,7 +141,7 @@ class HealthContext(Record):
         return cls(state_dir=Path(state_dir), now=now if now is not None else pd.Timestamp.now("UTC"),
                    settings=settings, settings_error=s_err, accounts=accs, accounts_error=a_err,
                    get_secret=accounts.get_secret, bridge_probe=lambda url: probe_health(url, BRIDGE_TIMEOUT_S),
-                   clock=lambda: pd.Timestamp.now("UTC"),
+                   clock=lambda: pd.Timestamp.now("UTC"), last_run=_last_run(Path(state_dir)),
                    tick_reader=bridge_tick_reader)
 
 
@@ -339,7 +340,7 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     if e.get("tick_error"):
         statuses.append("fail")
         parts.append(f"tick error ({e.get('tick_error_detail') or 'unknown'}): the engine logged it and carries on; "
-                     f"entries blocked until ticks run clean again, exits unaffected (details in the engine log)")
+                     f"entries blocked until a decision bar closes clean, exits unaffected (details in the engine log)")
     lost = e.get("closed_records_lost") or []
     if lost:
         statuses.append("fail")
@@ -356,6 +357,40 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     if isinstance(b, dict) and b:
         parts.append(f"news blackout: {b.get('title', '?')}")
     return Check(name=name, status=_worst(statuses), reason="; ".join(parts))
+
+
+TICK_ERROR_RECENT_S = 15 * 60   # a tick error this recent is reported even after it cleared
+
+
+def _last_run(state_dir: Path) -> pd.Timestamp | None:
+    """When the previous health report was recorded (state/health_last.json), or None."""
+    try:
+        return WatchState.model_validate_json((state_dir / WATCH_FILE).read_text(encoding="utf-8")).ts
+    except (ValueError, OSError):
+        return None
+
+
+def check_tick_errors(ctx: HealthContext, account_id: str) -> Check | None:
+    """Tick errors the engine logged and carried on from (`tick_errors_total`, `last_tick_error_at`): a warning,
+    announced on Telegram, when one happened in the last 15 minutes or since the previous health run, so a burst that
+    cleared between two runs is still seen. None when the engine state has no error on record."""
+    try:
+        e = _read_json(ctx.state_dir / f"engine_{account_id}.json")
+        last = pd.Timestamp(e["last_tick_error_at"]) if e.get("last_tick_error_at") else None
+    except (ValueError, OSError, KeyError, TypeError, AttributeError):
+        return None
+    if last is None:
+        return None
+    last = last.tz_localize("UTC") if last.tzinfo is None else last.tz_convert("UTC")
+    recent = (ctx.now - last).total_seconds() <= TICK_ERROR_RECENT_S
+    new = ctx.last_run is not None and last > ctx.last_run
+    if not (recent or new):
+        return Check(name=f"tick_errors:{account_id}", status="ok",
+                     reason=f"{int(e.get('tick_errors_total') or 0)} tick error(s) since start, last {_age((ctx.now - last).total_seconds())} ago")
+    return Check(name=f"tick_errors:{account_id}", status="warn",
+                 reason=f"tick error ({e.get('tick_error_detail') or 'cleared'}) {_age((ctx.now - last).total_seconds())} ago, "
+                        f"{int(e.get('tick_errors_total') or 0)} since the engine started: the engine carried on, entries "
+                        f"were blocked until a clean decision bar; read the engine log")
 
 
 def _control(ctx: HealthContext) -> dict[str, Any] | None:
@@ -1086,6 +1121,8 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
         checks += [check_stop_rule(ctx), check_phase_gates(ctx)]
         for a in ctx.accounts:
             checks += [check_engine(ctx, a.account_id), check_risk_state(ctx, a.account_id)]
+            tick_errors = check_tick_errors(ctx, a.account_id)
+            checks += [tick_errors] if tick_errors is not None else []
             checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
             bridge = check_bridge(ctx, a.account_id)
             checks += [bridge] if bridge is not None else []
@@ -1126,7 +1163,7 @@ class WatchState(Record):
 
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
-NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune")
+NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:")
 
 
 def _alerting(name: str, status: str) -> bool:
