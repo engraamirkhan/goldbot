@@ -79,7 +79,9 @@ def test_gbp_lots_scale_by_the_conversion_factor():
 @pytest.mark.parametrize("fx", [None, 0.0, -0.75, math.nan, math.inf])
 def test_a_non_usd_account_without_a_usable_conversion_refuses_entries(fx):
     d = RiskGate().check(_intent(account_currency="GBP", acct_per_usd=fx), _state(10_000.0))
-    assert not d.allowed and d.reasons == ["fx_conversion_unavailable"] and d.lots == 0.0
+    # a non-finite figure is refused first, by name (non_finite_state); a None or non-positive one at sizing
+    want = ["fx_conversion_unavailable"] if fx is None or math.isfinite(fx) else ["non_finite_state", "non_finite:acct_per_usd"]
+    assert not d.allowed and d.reasons == want and d.lots == 0.0
 
 
 def test_an_unknown_account_currency_refuses_entries():

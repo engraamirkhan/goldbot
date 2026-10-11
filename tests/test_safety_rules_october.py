@@ -129,19 +129,27 @@ def test_a_trade_that_exactly_fills_the_remaining_budget_is_allowed_and_a_cent_o
 
 
 # ---------------------------------------------------------------------------------------------- currency conversion
-@pytest.mark.parametrize("fx", [math.nan, math.inf, -math.inf, 0.0, -0.75])
-def test_a_gbp_account_with_a_junk_conversion_refuses_with_nothing_sized(fx):
+@pytest.mark.parametrize("fx,reason", [(math.nan, "non_finite_state"), (math.inf, "non_finite_state"),
+                                       (-math.inf, "non_finite_state"), (0.0, "fx_conversion_unavailable"),
+                                       (-0.75, "fx_conversion_unavailable")])
+def test_a_gbp_account_with_a_junk_conversion_refuses_with_nothing_sized(fx, reason):
     d = RiskGate().check(_usd(account_currency="GBP", acct_per_usd=fx), _state())
-    assert not d.allowed and d.reasons == ["fx_conversion_unavailable"] and d.lots == 0.0
+    assert not d.allowed and d.reasons[0] == reason and d.lots == 0.0       # non-finite: refused before any check
 
 
 @pytest.mark.parametrize("cur,fx,allowed", [(" usd ", None, True), ("usd", 1.0, True), ("USD", None, True), ("USD", 1.0099, True),
-                                            ("USD", 1.0101, False), ("USD", math.nan, True), ("", None, False)])
+                                            ("USD", 1.0101, False), ("", None, False)])
 def test_a_usd_account_is_one_by_definition_and_a_blank_currency_is_never_assumed_usd(cur, fx, allowed):
     d = RiskGate().check(_usd(account_currency=cur, acct_per_usd=fx), _state())
     assert d.allowed is allowed
     if not allowed:
         assert d.reasons == ["fx_conversion_unavailable"]
+
+
+def test_a_usd_account_with_a_nan_broker_conversion_is_refused_not_assumed_one():
+    # the engine maps a junk broker figure to None (runner._usd_to_account); a NaN reaching the gate is a bug upstream
+    d = RiskGate().check(_usd(account_currency="USD", acct_per_usd=math.nan), _state())
+    assert not d.allowed and d.reasons == ["non_finite_state", "non_finite:acct_per_usd"]
 
 
 def test_the_conversion_check_never_masks_a_flag_reason():

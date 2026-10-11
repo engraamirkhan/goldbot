@@ -1139,6 +1139,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- Non-finite state fails closed (October safety batch, 2026-10-11, TRACEABILITY R35 and S7): `RiskGate.check`
+  refuses first with `non_finite_state` plus `non_finite:<field>` when any number it reads (equity, HWM, day/week
+  start, margin, spread, tick ages, exposure, stop/target/ATR/cost, multiplier, price, contract terms,
+  `acct_per_usd`) is NaN or infinite; None stays the explicit "unknown" (a USD account with a NaN conversion is
+  now refused, not taken as 1). `_tick_ok` drops a quote with a non-finite bid or ask as `non_finite_quote` (entries
+  blocked; the next valid tick runs the exits). `account_fx("", x)` is None. The supervisor treats a non-finite or
+  wrongly typed engine-file number as `engine_state_unreadable` (halt); `ops.run.supervisor_pass` publishes
+  `supervisor_error` instead of dying when `evaluate` raises. An engine file without `ts` now halts too (engines
+  always write it). Dev extras gain pytest-randomly: every run is in random order (seed in the header; reproduce
+  with `-p randomly --randomly-seed=<n>`, opt out with `-p no:randomly`).
 - October batch rollout (SRE, 2026-10-11): `docs/deploy/2026-10-batch.md`.
   - The owner's ordered steps for the two Oracle VMs, to be done by Fri 23 Oct: pre-checks (restic plus a local
     copy, preflight, health baseline); engines stopped; MT5 box first, because the new brain needs the bridge's

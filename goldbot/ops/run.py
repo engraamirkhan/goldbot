@@ -127,6 +127,25 @@ def engine_pass(eng: Any, broker: Any, symbol: str) -> bool:
         return False
 
 
+def supervisor_pass(sup: Any, hb: Any) -> dict:
+    """One pass of the supervisor loop. An unexpected exception in evaluate() is logged and published as a halt
+    (`supervisor_error`, Supervisor.error_halt) and the loop carries on, so a corrupt state file or a bug never kills
+    run_supervisor (a failing write of that halt leaves the heartbeat to go stale, which engines also halt on)."""
+    try:
+        st: dict = sup.evaluate()
+    except Exception as exc:
+        log.exception("supervisor evaluate failed; publishing a halt")
+        try:
+            st = sup.error_halt(exc)
+        except Exception:
+            log.exception("supervisor halt could not be written; engines halt on the stale heartbeat")
+            st = {"halt": True, "reasons": ["supervisor_error"]}
+    hb.beat()
+    if st["halt"]:
+        log.warning("HALT %s", st["reasons"])
+    return st
+
+
 def run_supervisor() -> None:
     from goldbot.config import load_settings
     from goldbot.ops.health import Heartbeat
@@ -134,10 +153,7 @@ def run_supervisor() -> None:
     sup = Supervisor("state", SupervisorLimits.from_settings(load_settings().risk))
     hb = Heartbeat("state", "supervisor")          # S5: every service writes state/heartbeat_<service>.json
     while True:
-        st = sup.evaluate()
-        hb.beat()
-        if st["halt"]:
-            log.warning("HALT %s", st["reasons"])
+        supervisor_pass(sup, hb)
         time.sleep(5)
 
 

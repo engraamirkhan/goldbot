@@ -1581,10 +1581,13 @@ class Engine:
         return round(float(np.median(self._skew)), 3) if self._skew else None
 
     def _tick_ok(self, t: Tick) -> bool:
-        """Tick-level checks: a crossed or non-positive quote, or a tick older than the previous one, is a
-        data-quality error (recorded; the tick is dropped)."""
+        """Tick-level checks: a non-finite, crossed or non-positive quote, or a tick older than the previous one, is a
+        data-quality error (recorded; the tick is dropped). A NaN or infinite price is no price to act on, so the whole
+        tick is skipped (exits included) and entries stay blocked; the next valid tick runs the exits."""
         prev = self._last_tick
-        if t.bid <= 0 or t.ask < t.bid:
+        if not (math.isfinite(t.bid) and math.isfinite(t.ask)):
+            ev = DQEvent(ts_utc=t.ts_utc, check="non_finite_quote", severity="error", detail=f"bid {t.bid} ask {t.ask}")
+        elif t.bid <= 0 or t.ask < t.bid:
             ev = DQEvent(ts_utc=t.ts_utc, check="bid_gt_ask", severity="error", detail=f"bid {t.bid} ask {t.ask}")
         elif prev is not None and t.ts_utc < prev.ts_utc:
             ev = DQEvent(ts_utc=t.ts_utc, check="non_monotonic", severity="error",

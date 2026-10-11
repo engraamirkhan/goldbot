@@ -73,3 +73,8 @@ Each delivered item is scored; it is accepted only with every row "yes".
   `-n auto`, so parallel lanes do not starve each other (load hit 106 on 12 cores with every agent on `-n auto`).
 - Agents commit on their branch and never push; the integrator merges, runs the gates, routes reviews, and ships.
 - Free lanes are refilled immediately from the ranked backlog (`docs/BACKLOG.md`).
+
+## Test rules
+- Stop and exit tests must prove the broker did not do the work: the broker's stop is far away (or its modify is
+  rejected), the engine's is tight, and the test asserts the position is still open after the broker saw the price and
+  before the engine pass (`tests/test_engine_clock.py::_StopStuck`).

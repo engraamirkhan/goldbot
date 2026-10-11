@@ -61,7 +61,10 @@ def account_fx(account_currency: str, acct_per_usd: float | None) -> float | Non
     """Account currency per USD of XAUUSD P&L, or None when it is not known (the gate then refuses the entry with
     `fx_conversion_unavailable`; it never guesses). A USD account is 1 by definition, and a broker figure that
     disagrees by more than 1% means the symbol or contract is not what the sizing assumes, so it is refused too. Any
-    other currency needs the broker's figure (finite and > 0)."""
+    other currency needs the broker's figure (finite and > 0). A blank currency is never sized: the engine could not
+    read the deposit currency, so no conversion is known (October safety batch, LOW)."""
+    if not account_currency.strip():
+        return None
     fx = float(acct_per_usd) if acct_per_usd is not None and math.isfinite(acct_per_usd) and acct_per_usd > 0 else None
     if account_currency.strip().upper() == "USD":
         return None if fx is not None and abs(fx - 1.0) > USD_FX_TOLERANCE else 1.0
