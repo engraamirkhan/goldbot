@@ -1,0 +1,5 @@
+id: F21
+requirement: 'Survey rank 3, expected move vs cost (targets >= 3x round trip): feature only, the filter is a later trial'
+status: implemented
+code: 'goldbot/features/survey.py `expected_move` (family `volatility`): `em_yz_<4/16/48>_cost`, `em_atr_cost` over 96-bar median spread + 0.37 USD/oz priors'
+test: 'tests/test_survey_features.py::test_expected_move_is_the_scaled_yang_zhang_move_over_the_round_trip_cost; no look-ahead for F17-F21: ::test_no_survey_feature_changes_when_future_bars_are_appended; ::test_survey_features_pass_the_pipeline_lookahead_check'

@@ -1,0 +1,5 @@
+id: R5
+requirement: '"if rounding pushes risk above 1.2x target the trade is skipped"'
+status: implemented
+code: goldbot/risk/gate.py:173-175
+test: tests/test_cov_risk.py::test_min_lot_is_used_only_while_it_keeps_risk_within_one_point_two_times_target

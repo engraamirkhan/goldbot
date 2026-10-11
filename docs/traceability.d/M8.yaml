@@ -1,0 +1,5 @@
+id: M8
+requirement: 'Rule allocator: trend 1.0 if ADX > 25, mean-rev if ADX < 18, breakout if 1h ATR bottom quartile, MR+BO capped at 1.0, session-open 0.75, 0 within 30 min either side of tier-1'
+status: implemented
+code: goldbot/allocator/rules.py:32-44 (defaults 30/30, stricter than the RiskGate's -15/+30; the engine builds it with these defaults)
+test: tests/test_allocator_approvals.py::test_rule_allocator_weights_and_blackout

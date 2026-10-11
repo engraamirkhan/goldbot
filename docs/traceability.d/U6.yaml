@@ -1,0 +1,5 @@
+id: U6
+requirement: '"every login, invite, role change and decision is written to an audit log"'
+status: implemented
+code: goldbot/api/auth.py:120; goldbot/api/app.py decision endpoint
+test: tests/test_api.py::test_bootstrap_invite_roles_and_decisions

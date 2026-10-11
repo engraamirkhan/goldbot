@@ -1,0 +1,5 @@
+id: S2
+requirement: '"writes a HALT flag each engine checks every cycle"'
+status: implemented
+code: goldbot/risk/supervisor.py:72-76; goldbot/engine/runner.py:405-406
+test: tests/test_cov_engine.py::test_production_engines_fail_closed_without_a_supervisor_and_obey_the_owner_halt

@@ -1,0 +1,5 @@
+id: A13
+requirement: An approved order never exceeds the card the owner approved (ADR 0009)
+status: implemented
+code: 'goldbot/engine/runner.py `Engine._within_card` (called from `_on_decision` after the approval re-check): sends `min(gate lots, card lots)`, journals `approval_size_capped`, refuses `risk_above_approved` when the risk at the lots sent exceeds the card''s `risk_amount` x `APPROVED_RISK_TOLERANCE` (1.02)'
+test: tests/test_approved_card_cap.py::test_equity_rising_before_the_click_never_sends_more_than_the_card, ::test_a_conversion_rise_past_two_percent_refuses_the_approval, ::test_a_card_from_an_older_engine_without_risk_is_still_capped_at_its_lots

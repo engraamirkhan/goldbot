@@ -1,0 +1,5 @@
+id: G2
+requirement: 'Fitness "only on out-of-sample shadow and live trades": expectancy, calibration, drawdown, correlation'
+status: implemented
+code: goldbot/research/population.py:142 `score_agent`
+test: tests/test_cov_research.py::test_score_uses_the_lower_80_bound_and_needs_two_trades; ::test_diversity_penalty_and_losing_agents_get_no_capital

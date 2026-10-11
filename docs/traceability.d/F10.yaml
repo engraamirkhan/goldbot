@@ -1,0 +1,5 @@
+id: F10
+requirement: '"a Dukascopy cross-check: a signal that only works on broker-fed bars is ... dropped"'
+status: implemented
+code: research and its screen run on Dukascopy bars only (scripts/research_pass.py); goldbot/data/crossfeed.py `survival_verdict` classes a signal significant on broker bars only (t >= 2.0 there, not on Dukascopy) as `broker_only` and fails it; scripts/crossfeed_check.py exits 1 on anything but `survives`
+test: tests/test_crossfeed.py::test_survival_verdict_bands

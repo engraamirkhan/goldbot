@@ -1,0 +1,5 @@
+id: D22
+requirement: '"Warnings commit with a dq_flag; errors quarantine the batch and alert"'
+status: implemented
+code: 'goldbot/data/quality.py `quarantine` splits error-flagged rows (duplicate stamp, bid > ask; a duplicate keeps its last copy) from the batch; scripts/build_bars.py writes them to the store table `bars_quarantine` and only clean rows to the bar tables; scripts/dukascopy_year.py leaves them out of the published file and writes `*_quarantine.parquet`; the engine already blocks entries on live bar errors and records them in `dq_events`; alert: goldbot/ops/health.py `check_data_quality` warns on error events in the last 24 h. Reading taken: rows, not the whole batch, are held back (a year-long backfill would otherwise be dropped for one bad minute)'
+test: tests/test_quarantine.py::test_error_rows_are_quarantined_and_warnings_stay; ::test_a_clean_batch_passes_whole; ::test_the_store_keeps_quarantined_rows_in_their_own_table; ::test_health_alerts_on_error_events_of_the_last_day_only

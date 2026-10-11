@@ -1,0 +1,5 @@
+id: M18
+requirement: '"positive expectancy in at least three non-overlapping calendar years including the 2021-2022 chop"'
+status: in review
+code: per-year table printed (scripts/research_pass.py), not enforced; P1
+test: untested

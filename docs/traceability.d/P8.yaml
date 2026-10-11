@@ -1,0 +1,6 @@
+id: P8
+requirement: '"Nightly `restic` snapshots of SQLite, trade log and model artefacts ... with a scripted weekly restore test" [Logging, secrets, backups]'
+status: implemented
+code: goldbot/ops/backup.py (online SQLite backup API, manifest, restic via env-only secrets, retention 14/8/12, `restore_drill`); goldbot/ops/jobs.py `backup`, `restore_drill`; goldbot/ops/health.py `check_backup_age` (warn 26 h, fail 72 h), `check_restore_drill`. Target Oracle Object Storage instead of Backblaze B2 (reading taken, docs/proposals/2026-10-state-store.md)
+test: tests/test_backup.py::test_sqlite_snapshot_is_consistent_while_another_process_writes; ::test_backup_runs_restic_with_secrets_in_env_only_and_records_the_result; ::test_restore_drill_detects_a_corrupted_database; ::test_backup_age_thresholds
+order: 5.5

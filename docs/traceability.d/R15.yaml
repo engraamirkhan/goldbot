@@ -1,0 +1,5 @@
+id: R15
+requirement: '"12%: close everything at market immediately, no new entries"'
+status: implemented
+code: goldbot/engine/runner.py:412-427 `_kill_switch`
+test: tests/test_cov_engine.py::test_twelve_percent_drawdown_closes_everything_at_market

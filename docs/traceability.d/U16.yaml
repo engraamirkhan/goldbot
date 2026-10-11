@@ -1,0 +1,5 @@
+id: U16
+requirement: API responses (sessions, recovery codes, enrolment URIs, invite and reset tokens) are never cached
+status: implemented
+code: 'goldbot/api/app.py `no_referrer` middleware (`Cache-Control: no-store` on `/api/`)'
+test: tests/test_api_code_lockout.py::test_auth_responses_are_never_cached

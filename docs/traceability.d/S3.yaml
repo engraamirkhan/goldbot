@@ -1,0 +1,5 @@
+id: S3
+requirement: '"if the supervisor heartbeat is older than 60 seconds they stop entering"'
+status: implemented
+code: goldbot/risk/supervisor.py:81
+test: tests/test_cov_risk.py::test_engines_fail_closed_without_a_fresh_readable_supervisor_heartbeat

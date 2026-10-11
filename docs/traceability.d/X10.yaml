@@ -1,0 +1,5 @@
+id: X10
+requirement: '"IC Markets'' tables are the canonical ones for backtests"'
+status: implemented
+code: config/settings.yaml:17 `canonical_costs`; goldbot/ops/run.py (shadow host); `jobs.canonical_cost_table` feeds retraining (`live_extra_cost_usd`, `live_swap`); `nightly_costs` -> `jobs.publish_costs` (`costs.publish_release`; `run.py publish-costs`) uploads `costs.PublishedCostTable` (costs only, refused while swap is unmeasured or < 50 fills) to release costs-v1 `costs_measured.json` -> research.yml downloads it -> `research_pass.py --cost-table` (report says PRIORS ONLY without it); health `costs:published` warns when missing or > 8 d
+test: tests/test_measured_costs.py::test_the_published_cost_table_holds_costs_only_no_account_identifier_or_equity, ::test_publishing_is_refused_while_a_prior_would_pass_as_a_measurement, ::test_health_warns_when_the_published_table_is_missing_or_older_than_8_days, ::test_publish_costs_out_writes_the_published_json_and_research_uses_it; tests/test_research_pass_integration.py::test_a_measured_cost_table_replaces_the_priors

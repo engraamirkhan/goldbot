@@ -1,0 +1,5 @@
+id: X3
+requirement: '"Magic numbers encode account and specialist (IC 2601xx, Vantage 2602xx)"'
+status: implemented
+code: config/settings.yaml:18, 23; goldbot/engine/runner.py:556
+test: tests/test_risk_ops.py::test_magic_numbers_are_stable_across_processes
