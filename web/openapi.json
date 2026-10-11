@@ -937,6 +937,17 @@
       "title": "Agent Id",
       "type": "string"
      },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
      "decided_by": {
       "anyOf": [
        {
@@ -961,9 +972,40 @@
       "title": "Expires At",
       "type": "string"
      },
+     "loss_left": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Loss Left"
+     },
+     "loss_left_period": {
+      "anyOf": [
+       {
+        "enum": [
+         "today",
+         "this week"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Loss Left Period"
+     },
      "lots": {
       "title": "Lots",
       "type": "number"
+     },
+     "min_lot_exception": {
+      "default": false,
+      "title": "Min Lot Exception",
+      "type": "boolean"
      },
      "p": {
       "title": "P",
@@ -998,6 +1040,61 @@
       },
       "title": "Refusal",
       "type": "array"
+     },
+     "reward_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reward Amount"
+     },
+     "risk_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Amount"
+     },
+     "risk_cap": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Cap"
+     },
+     "risk_fraction": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Fraction"
+     },
+     "risk_normal": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Normal"
      },
      "risk_usd": {
       "anyOf": [
@@ -2338,6 +2435,17 @@
       "title": "Agent Id",
       "type": "string"
      },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
      "entry": {
       "title": "Entry",
       "type": "number"
@@ -2351,9 +2459,40 @@
       "title": "Expires At",
       "type": "string"
      },
+     "loss_left": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Loss Left"
+     },
+     "loss_left_period": {
+      "anyOf": [
+       {
+        "enum": [
+         "today",
+         "this week"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Loss Left Period"
+     },
      "lots": {
       "title": "Lots",
       "type": "number"
+     },
+     "min_lot_exception": {
+      "default": false,
+      "title": "Min Lot Exception",
+      "type": "boolean"
      },
      "p": {
       "title": "P",
@@ -2362,6 +2501,61 @@
      "proposal_id": {
       "title": "Proposal Id",
       "type": "string"
+     },
+     "reward_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reward Amount"
+     },
+     "risk_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Amount"
+     },
+     "risk_cap": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Cap"
+     },
+     "risk_fraction": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Fraction"
+     },
+     "risk_normal": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Normal"
      },
      "risk_usd": {
       "anyOf": [

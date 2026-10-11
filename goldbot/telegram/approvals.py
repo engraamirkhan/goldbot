@@ -11,6 +11,7 @@ Transport-agnostic core (tested without Telegram), plus a thin python-telegram-b
 from __future__ import annotations
 
 import hmac
+import math
 import time
 from enum import Enum
 from typing import TYPE_CHECKING, Callable
@@ -20,10 +21,38 @@ from pydantic import Field
 from goldbot.base import Record
 
 if TYPE_CHECKING:
+    from goldbot.ops.account_view import LossBudget
     from goldbot.telegram.bus import ApprovalBus
 
 REASON_CODES = ("news", "cost", "discretion", "duplicate", "other")
 TOTP_COMMANDS = {"/rearm", "/mode", "/set"}
+
+
+OPEN_ASIDE = "(open trades aside)"   # the budget does not reserve open positions' stop risk
+CURRENCY_SYMBOL = {"GBP": "£", "USD": "$", "EUR": "€"}
+
+
+def cash(x: float, currency: str | None) -> str:
+    """An amount in the account currency as the owner writes it: "£8.20", "$1,234.50"; "8.20 CHF" for a currency
+    without a symbol here; a bare number when the currency is unknown (never a guessed sign)."""
+    sym = CURRENCY_SYMBOL.get((currency or "").upper())
+    return f"{sym}{x:,.2f}" if sym else f"{x:,.2f} {currency}" if currency else f"{x:,.2f}"
+
+
+def ceil_cent(x: float) -> float:
+    """Up to the cent, so a risk is never shown below the RiskGate's figure (8.2012 -> 8.21; 8.21 stays 8.21: the
+    x 100 product is rounded to 6 places first so float noise never adds a cent)."""
+    return math.ceil(round(x * 100, 6)) / 100
+
+
+def floor_cent(x: float) -> float:
+    """Down to the cent: a budget left is never shown larger than it is."""
+    return math.floor(round(x * 100, 6)) / 100
+
+
+def pct(fraction: float) -> str:
+    """0.0082 -> "0.82%", 0.005 -> "0.5%", 0.01 -> "1%" (the dashboard's `pct` in web/src/lib/approval.ts)."""
+    return f"{100 * fraction:.2f}".rstrip("0").rstrip(".") + "%"
 
 
 class Outcome(str, Enum):
@@ -45,7 +74,14 @@ class Proposal(Record):
     ev_r: float
     spread_points: float
     top_features: list[tuple[str, float]]
-    risk_usd: float | None = None        # account currency lost if the stop is hit: lots x stop distance x 100 oz
+    risk_usd: float | None = None        # USD lost if the stop is hit: lots x stop distance x 100 oz (older engines)
+    # the approval card's money (owner request), from the RiskGate's sizing; None/False from older engines
+    currency: str | None = None          # the broker account's currency
+    risk_amount: float | None = None     # account currency lost if the stop is hit (GateDecision.risk_amount)
+    risk_fraction: float | None = None   # risk_amount / equity, as the gate sized it
+    min_lot_exception: bool = False      # sized at the minimum lot above the normal risk, within the cap (BACKLOG 25)
+    risk_normal: float | None = None     # the normal risk per trade (fraction of equity)
+    risk_cap: float | None = None        # the minimum-lot cap that applied (fraction of equity; halved in size-down)
     created: float = Field(default_factory=time.time)
     window_s: int = 90
     outcome: Outcome | None = None
@@ -58,13 +94,53 @@ class Proposal(Record):
     def expired(self) -> bool:
         return self.outcome is None and time.time() > self.created + self.window_s
 
-    def text(self) -> str:
-        """The Telegram message: the same essentials, in the same order, as the dashboard approval card."""
+    @property
+    def money(self) -> tuple[float, str | None] | None:
+        """The stop risk and its currency: the account-currency figure, else an older engine's USD one, else None."""
+        if self.risk_amount is not None:
+            return ceil_cent(self.risk_amount), self.currency
+        return (ceil_cent(self.risk_usd), "USD") if self.risk_usd is not None else None
+
+    @property
+    def reward_amount(self) -> float | None:
+        """Won at the target, same currency as `money`: the stop risk x target distance / stop distance (linear in
+        price; before costs). None without a risk or a stop distance."""
+        m, dist = self.money, abs(self.entry - self.stop)
+        return None if m is None or dist <= 0 else round(m[0] * abs(self.target - self.entry) / dist, 2)
+
+    def money_lines(self, budget: LossBudget | None = None) -> list[str]:
+        """Risk, the minimum-lot note and the loss budget left if this loses (docs/ux/approval-card.md)."""
+        m = self.money
+        if m is None:
+            return ["risk: not reported by this engine version"]
+        amount, ccy = m
+        share = f" ({pct(self.risk_fraction)} of equity)" if self.risk_amount is not None and self.risk_fraction else ""
+        tag = " (USD)" if self.risk_amount is None else ""
+        lines = [f"risk {cash(amount, ccy)}{tag}{share} if the stop is hit, before costs"]
+        if self.min_lot_exception:
+            normal = f" the normal {pct(self.risk_normal)}" if self.risk_normal else " the normal risk"
+            cap = f", within your {pct(self.risk_cap)} cap" if self.risk_cap else ""
+            lines.append(f"smallest trade size: above{normal}{cap}")
+        if budget is None:
+            lines.append("loss budget left today: unknown")
+        elif floor_cent(budget.remaining) > 0:      # open positions' stops are not reserved: said, not implied
+            lines.append(f"{cash(floor_cent(budget.remaining), ccy)} left {budget.period} if this loses {OPEN_ASIDE}")
+        else:
+            lines.append(f"no loss budget left {budget.period} if this loses {OPEN_ASIDE}: new entries stop")
+        return lines
+
+    def text(self, budget: LossBudget | None = None) -> str:
+        """The Telegram message: the same essentials, in the same order, as the dashboard approval card. `budget` is
+        the account's loss budget if this trade loses (account_view.proposal_budget); None reads as unknown."""
         side = "🟢 LONG" if self.side > 0 else "🔵 SHORT"
-        risk = f"  ·  risk ${self.risk_usd:,.0f}" if self.risk_usd is not None else ""
         feats = ", ".join(f"{n} {v:+.2f}" for n, v in self.top_features[:3])
-        return (f"{side} {self.lots:.2f} lots XAUUSD{risk}\n"
-                f"entry {self.entry:.2f}  stop {self.stop:.2f}  target {self.target:.2f}\n"
+        m, reward = self.money, self.reward_amount
+        stop_m = f" (−{cash(m[0], m[1])})" if m is not None else ""
+        target_m = f" (+{cash(reward, m[1])})" if m is not None and reward is not None else ""
+        money = "".join(line + "\n" for line in self.money_lines(budget))
+        return (f"{side} {self.lots:.2f} lots XAUUSD\n"
+                f"{money}"
+                f"entry {self.entry:.2f}  stop {self.stop:.2f}{stop_m}  target {self.target:.2f}{target_m}\n"
                 f"p={self.p:.2f}  EV={self.ev_r:+.2f}R  spread {self.spread_points:.0f}pt\n"
                 f"why: {feats or 'no feature importances'}\n"
                 f"{self.account_id} · {self.agent_id}\n"

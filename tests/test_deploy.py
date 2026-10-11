@@ -94,7 +94,8 @@ def test_health_reports_the_last_deploy(tmp_path):
     ctx = make_ctx(tmp_path)
     assert health.check_deploy(ctx).status == "ok"
     log = tmp_path / "deploys.jsonl"
-    for result, status in (("deployed", "ok"), ("rolled_back", "warn"), ("failed", "fail")):
+    for result, status in (("deployed", "ok"), ("rolled_back", "warn"), ("failed", "fail"),
+                           ("rolled_back_manual", "warn"), ("rollback_reverted", "warn")):
         with log.open("a") as f:
             f.write(json.dumps({"result": result, "to": B, "role": "brain", "detail": "x"}) + "\n")
         assert health.check_deploy(ctx).status == status

@@ -184,7 +184,7 @@ def _fake_walk_forward(ctx: JobContext, spec: Any, end: pd.Timestamp, months: in
 
 
 def test_research_director_job_writes_the_plan_from_the_registry(tmp_path):
-    ctx = _ctx(tmp_path, reserved_trials_quarter=0, retired_families=[])   # the real settings: see the last test
+    ctx = _ctx(tmp_path, reserved_trials_quarter={}, retired_families=[])   # the real settings: see the last test
     ctx.trials.record(agent_id="a", family="trend", config={}, feature_version="f1", rationale="r",
                       results={"oof_auc": 0.6, "all_candidates": {"n": 500}, "model_filtered": {"n": 90, "dsr": 0.8}})
     ctx.trials.record(agent_id="b", family="breakout", config={}, feature_version="f1", rationale="r",
@@ -212,7 +212,7 @@ def test_monthly_research_honours_the_plan_the_quarter_budget_and_the_holdout(tm
     monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
     ENDS.clear()
     ctx = _ctx(tmp_path, trial_budget_per_month=6, label_grid_paused=False,   # the grid is paused by default
-               reserved_trials_quarter=0)
+               reserved_trials_quarter={})
     slot = pd.Timestamp.now("UTC").floor("min")      # the registry stamps rows with the wall clock: same quarter
     grid = {"breakout": 0, "intraday_momentum": 0, "mean_reversion": 5, "session_open": 1, "trend": 2, "tsmom": 0}
     _plan(slot - pd.Timedelta(days=1), grid).save(tmp_path / PLAN_FILE)
@@ -507,7 +507,7 @@ def test_grid_allowance_is_zero_while_the_label_grid_is_paused(tmp_path):
 
 def test_monthly_grid_cannot_spend_the_reserved_queue(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
-    ctx = _ctx(tmp_path, trial_budget_per_month=6, label_grid_paused=False, reserved_trials_quarter=13)
+    ctx = _ctx(tmp_path, trial_budget_per_month=6, label_grid_paused=False, reserved_trials_quarter={quarter_of(): 13})
     slot = pd.Timestamp.now("UTC").floor("min")
     out = monthly_research(ctx, slot)                      # no plan: the flat 6 per family, until 20 - 13 is spent
     assert ctx.trials.n_trials == 7 and [out[f]["trials"] for f in FAMILIES] == [6, 1] + [0] * (len(FAMILIES) - 2)
@@ -522,7 +522,9 @@ def test_settings_and_the_hypotheses_doc_agree_on_the_retired_families():
     doc, problems = hypotheses_retired(text, FAMILIES)
     assert not problems and set(doc) == {"breakout", "intraday_momentum", "mean_reversion", "session_open", "trend"}
     assert {e.family for e in s.retired_families} == set(doc) and "tsmom" not in doc
-    assert s.reserved_trials_quarter == 13                  # docs/research/preregistration-2027Q1.md: 13 planned of 20
+    assert s.reserved_trials_quarter == {"2027Q1": 9}    # preregistration-2027Q1.md: 5 queued + 4 H-02 survivor slots (ADR 0007)
+    assert s.reserved_for("2027Q1") == 9 and s.reserved_for("2026Q4") == 0 == s.reserved_for("2027Q2")
+    assert s.open_budget_preregistered_only == ["2027Q1"]                   # the E-5 cap (R-06: no more fast tsmom)
     assert load_hypotheses("/nonexistent/hypotheses.md") is None and ATTRIBUTION_FILE == REPORT_FILE
 
 
@@ -680,7 +682,7 @@ def test_preregister_cannot_be_backdated_and_needs_the_queue_for_a_target_quarte
 
 def test_runners_refuse_a_config_preregistered_for_a_later_quarter(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
-    ctx = _ctx(tmp_path, trial_budget_quarter=20, reserved_trials_quarter=0, trial_budget_per_month=1,
+    ctx = _ctx(tmp_path, trial_budget_quarter=20, reserved_trials_quarter={}, trial_budget_per_month=1,
                label_grid_paused=False)
     q = quarter_of()
     nxt = quarter_of(registry_mod.quarter_start(q) + pd.Timedelta(days=100))
@@ -698,18 +700,18 @@ def test_runners_refuse_a_config_preregistered_for_a_later_quarter(tmp_path, mon
 
 
 def test_research_director_job_reads_attribution_settings_and_the_reservation(tmp_path):
-    ctx = _ctx(tmp_path)                                   # the real settings: 13 reserved, five retired families
+    ctx = _ctx(tmp_path, reserved_trials_quarter={quarter_of(): 9})   # the real settings, with Q1 2027's 9 reserved now
     now = pd.Timestamp.now("UTC")
     report = _report({"tsmom": (400, 3.0)}, as_of=now - pd.Timedelta(hours=1), start=now - pd.Timedelta(days=20))
     (tmp_path / ATTRIBUTION_FILE).write_text(json.dumps(report))
     out = research_director(ctx, now)
     plan = ResearchPlan.load(tmp_path / PLAN_FILE)
     assert plan is not None and plan.attribution_as_of is not None and plan.hypotheses_sha256 is not None
-    assert plan.quarter_reserved == out["quarter_reserved"] == 13 and plan.hypotheses_drift == []
-    assert plan.total_budget == DEFAULT_QUARTER_BUDGET - 13 == sum(plan.budget.values())
+    assert plan.quarter_reserved == out["quarter_reserved"] == 9 and plan.hypotheses_drift == []
+    assert plan.total_budget == DEFAULT_QUARTER_BUDGET - 9 == sum(plan.budget.values())
     retired = ("breakout", "intraday_momentum", "mean_reversion", "session_open", "trend")
     assert sum(plan.budget[f] for f in retired) == 1       # retired: ONE exploration trial shared by all five
-    assert plan.budget["tsmom"] == 6 and sorted(out["retired"]) == sorted(plan.retired_floor)
+    assert plan.budget["tsmom"] == 10 and sorted(out["retired"]) == sorted(plan.retired_floor)
     assert out["retired_explore"] == plan.retired_explore and plan.retired_explore in retired
     # no promoted model version in this registry: the attribution rows are not out-of-sample evidence
     assert all(s.attribution is not None and s.attribution.n == 0 for s in plan.evidence)
@@ -718,7 +720,7 @@ def test_research_director_job_reads_attribution_settings_and_the_reservation(tm
 def test_monthly_grid_reserves_by_the_slots_quarter_not_the_wall_clock(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
     ctx = _ctx(tmp_path, trial_budget_per_month=1, label_grid_paused=False, trial_budget_quarter=2,
-               reserved_trials_quarter=0)
+               reserved_trials_quarter={})
     slot = pd.Timestamp("2025-09-07 08:00", tz="UTC")
     # two queued pre-registrations of the slot's quarter (2025Q3): the slot's reservation holds both trials
     for i in (1, 2):
@@ -730,7 +732,7 @@ def test_monthly_grid_reserves_by_the_slots_quarter_not_the_wall_clock(tmp_path,
 
 def _analyst_ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> JobContext:
     monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
-    ctx = _ctx(tmp_path, trial_budget_quarter=20, reserved_trials_quarter=13)
+    ctx = _ctx(tmp_path, trial_budget_quarter=20, reserved_trials_quarter={quarter_of(): 13})
     for i in range(7):                                     # 20 - 13 reserved = 7 open trials, all spent
         ctx.trials.record(agent_id="a", family="trend", config={"i": i}, feature_version="f1", rationale="r", results={})
     return ctx
@@ -765,7 +767,7 @@ def test_research_analyst_runs_a_preregistered_trial_from_the_reservation(tmp_pa
 
 def test_research_analyst_refuses_a_retired_family_once_the_shared_exploration_trial_is_used(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
-    ctx = _ctx(tmp_path, trial_budget_quarter=20, reserved_trials_quarter=0)    # open budget is not the limit
+    ctx = _ctx(tmp_path, trial_budget_quarter=20, reserved_trials_quarter={})    # open budget is not the limit
     run = jobs.make_trial_runner(ctx)
     out = run("trend", {}, "research analyst: explore a retired idea")
     assert out.get("trial") == 1                            # the quarter's ONE shared exploration trial
@@ -777,6 +779,36 @@ def test_research_analyst_refuses_a_retired_family_once_the_shared_exploration_t
     # a family the director's plan reinstated is back on the open budget
     monkeypatch.setattr(jobs, "_reinstated", lambda ctx, slot: {"breakout"})
     assert run("breakout", {}, "reinstated by attribution").get("trial") == 3
+
+
+def test_e5_cap_refuses_open_budget_analyst_trials_unless_a_preregistration_names_a_rule(tmp_path, monkeypatch):
+    """E-5 for 2027Q1 (quant re-review): research-plan section 5 rules out further fast-tsmom horizons (R-06), so the
+    open budget is not the director's default tsmom pool. In a capped quarter the analyst runs an open-budget trial
+    only for an ad-hoc pre-registration naming a pre-registered rule (`rule_ref`), plus the retired families' single
+    shared exploration trial."""
+    monkeypatch.setattr(jobs, "_walk_forward", _fake_walk_forward)
+    ctx = _ctx(tmp_path, trial_budget_quarter=20, reserved_trials_quarter={},
+               open_budget_preregistered_only=[quarter_of()])
+    run = jobs.make_trial_runner(ctx)
+    out = run("tsmom", {"max_bars": 7}, "research analyst: another fast horizon")
+    assert "E-5" in out["error"] and ctx.trials.n_trials == 0
+    cfg = {**SPECIALISTS["tsmom"].default_config, "max_bars": 7}
+    ctx.trials.preregister(agent_id="a", family="tsmom", config=cfg, feature_version="f1", rationale="r",
+                           reading_rule="DSR >= 0.95")                     # names no pre-registered rule
+    assert "E-5" in run("tsmom", {"max_bars": 7}, "still unnamed")["error"]
+    pre = ctx.trials.preregister(agent_id="a", family="tsmom", config=cfg, feature_version="f1", rationale="r",
+                                 reading_rule="DSR >= 0.95", rule_ref="preregistration-2027Q1.md#reserve")
+    assert pre["rule_ref"] == "preregistration-2027Q1.md#reserve"
+    done = run("tsmom", {"max_bars": 7}, "the pre-registered follow-up")
+    assert done.get("trial") == 1
+    row = ctx.trials.row(1)
+    assert row is not None and row["preregistration"]["ts"] == pre["ts"]   # linked: one row covers one run
+    assert "E-5" in run("tsmom", {"max_bars": 7}, "again")["error"]
+    assert run("trend", {}, "the shared retired exploration trial").get("trial") == 2
+    assert "retired" in run("breakout", {}, "a second retired idea")["error"]
+    other = _ctx(tmp_path / "q", trial_budget_quarter=20, reserved_trials_quarter={},
+                 open_budget_preregistered_only=["2099Q1"])                # another quarter is not capped
+    assert jobs.make_trial_runner(other)("tsmom", {"max_bars": 7}, "uncapped").get("trial") == 1
 
 
 def test_screening_families_get_no_director_grid_or_analyst_trials(tmp_path):

@@ -110,6 +110,7 @@ from goldbot.research.director import (
     quarter_budget,
     reserved_trials,
     retired_quarter_trials,
+    rule_preregistration,
 )
 from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
 from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
@@ -665,7 +666,8 @@ def research_director(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                       floor=r.director_floor, cap=cap, holdout=holdout_window(r),
                       attribution=load_attribution(ctx.state_dir), hypotheses=load_hypotheses(),
                       retired=r.retired_families, promoted={e.version: e.promoted_utc for e in ctx.models.entries},
-                      reserved_setting=r.reserved_trials_quarter, grid_paused=r.label_grid_paused)
+                      reserved_setting=r.reserved_for(quarter_of(slot.tz_convert("UTC").to_pydatetime())),
+                      grid_paused=r.label_grid_paused)
     plan.save(ctx.state_dir / PLAN_FILE)
     return {"quarter": plan.quarter, "quarter_used": plan.quarter_used, "quarter_reserved": plan.quarter_reserved,
             "budget": plan.budget, "grid_budget": plan.grid_budget, "unallocated": plan.unallocated,
@@ -767,7 +769,7 @@ def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = 
             later = None if prereg is not None else later_preregistration(rows, q_now, family, config_hash(config))
             if later is not None:
                 return {"error": later_refusal(family, later)}
-            reserved = reserved_trials(rows, q_now, r.reserved_trials_quarter).reserved
+            reserved = reserved_trials(rows, q_now, r.reserved_for(q_now)).reserved
             cap = quarter_budget(r) if prereg is not None else max(quarter_budget(r) - reserved, 0)
             try:
                 quarter = ctx.trials.check_budget(1, cap)
@@ -775,20 +777,30 @@ def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = 
                 held = "" if prereg is not None else f" ({reserved} of the quarter held for the pre-registered queue)"
                 return {"error": f"{exc}{held}"}
             retired = {e.family for e in r.retired_families}
-            if prereg is None and family in retired - _reinstated(ctx, end):
+            exploring = prereg is None and family in retired - _reinstated(ctx, end)
+            if exploring:
                 used = retired_quarter_trials(rows, quarter, retired)
                 if used >= RETIRED_EXPLORATION:
                     return {"error": f"{family} is retired (research.retired_families) and not reinstated: the retired "
                                      f"families share {RETIRED_EXPLORATION} exploration trial a quarter and {quarter} "
                                      f"has used it ({used} retired-family trial(s)); pre-register the configuration "
                                      f"to run it from the queue"}
+            link = prereg
+            if prereg is None and r.open_budget_capped(quarter):
+                # E-5 cap (research.open_budget_preregistered_only): the open budget is not a default pool
+                link = rule_preregistration(rows, family, config_hash(config))
+                if link is None and not exploring:
+                    return {"error": f"E-5 cap: {quarter}'s open budget is spent only on an ad-hoc pre-registration "
+                                     f"naming a pre-registered rule (TrialRegistry.preregister(..., rule_ref=)) or on "
+                                     f"the retired families' shared exploration trial; {family} "
+                                     f"{config_hash(config)} has neither (research.open_budget_preregistered_only)"}
             res = _walk_forward(ctx, SPECIALISTS[family](**overrides), end, 12 * 30, n_trials=ctx.trials.n_trials + 1,
                                 holdout=r.holdout_window())
             if res is None:
                 return {"error": "no bars in the store for this family's timeframe"}
             row = ctx.trials.record(agent_id=res.agent_id, family=family, config=config,
                                     feature_version=res.feature_version, results=res.metrics, status="evaluated",
-                                    rationale=rationale, budget_quarter=quarter, preregistration=prereg)
+                                    rationale=rationale, budget_quarter=quarter, preregistration=link)
         keep = ("n_candidates", "n_folds", "threshold", "all_candidates", "model_filtered", "trades_per_year", "rule_only",
                 "gates")
         return {"trial": row["trial"], "registry_total": ctx.trials.n_trials, **{k: res.metrics[k] for k in keep if k in res.metrics}}
@@ -827,6 +839,10 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     if r.label_grid_paused:
         return {"paused": "label-grid loop paused (research.label_grid_paused in config/settings.yaml)",
                 "registry_sync": synced_before}
+    capped = quarter_of(slot.tz_convert("UTC").to_pydatetime())
+    if r.open_budget_capped(capped):      # E-5: grid variants name no pre-registered rule
+        return {"paused": f"label-grid loop off in {capped}: E-5 cap (research.open_budget_preregistered_only)",
+                "registry_sync": synced_before}
     rng = random.Random(f"{slot:%Y-%m}")        # reproducible choice of variants for the month
     plan = current_plan(ctx, slot)
     source = f"research plan of {plan.created_utc:%Y-%m-%d}" if plan else f"flat budget {r.trial_budget_per_month} per family (no fresh research plan)"
@@ -856,7 +872,7 @@ def monthly_research(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                 if later is not None:           # queued for a later quarter: not this quarter's grid variant
                     skipped.append(later_refusal(family, later))
                     continue
-                reserved = reserved_trials(reg_rows, slot_quarter, r.reserved_trials_quarter).reserved
+                reserved = reserved_trials(reg_rows, slot_quarter, r.reserved_for(slot_quarter)).reserved
                 try:
                     quarter = ctx.trials.check_budget(1, max(q_budget - reserved, 0))
                 except TrialBudgetExceeded as exc:

@@ -70,6 +70,7 @@ Batch 1 by 2026-10-31, batch 2 by 2026-12-15 ([queue](ROADMAP.md#5-owner-decisio
 | Trial budget (B) | Keep 20 a quarter |
 | Paid calendar feed (C) | Not for Q1 |
 | Other instruments (D) | Defer until the slow-TSMOM verdict |
+| Per-agent throttle thresholds (BACKLOG 21, built, off) | Turn on at 3 full losses / 4 bars cooldown / 3 entries a day. The caps are **per decision, per account** (each account counts its own; checked at every entry). After the cooldown the count stays: one more full loss blocks again, until a real shadow win (target or >= 0.25R) of the live model |
 
 ## 4a. Share your own trading record (private)
 The research team turns how you trade by hand into hypotheses it can test. Your MT5 report holds your account

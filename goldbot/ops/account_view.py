@@ -30,8 +30,10 @@ the engine's mid-price ATR of its own bars (1d on the feature-day), so it can di
 """
 from __future__ import annotations
 
+import json
 import math
 import time
+from pathlib import Path
 from typing import Any, Callable, Literal
 
 from goldbot.base import FrozenRecord
@@ -116,12 +118,16 @@ def _pct(x: float) -> str:
 
 
 def loss_budget(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[dict[str, Any]], *,
-                now: float | None = None) -> LossBudget | None:
+                now: float | None = None, trade_risk: float | None = None) -> LossBudget | None:
     """The loss budget for this engine's account; None when the engine does not publish its limits or day start.
 
     Each cap is on the loss from its period's start equity (the gate's `1 - equity / start >= cap`), so a profitable
     day adds room: left = max(0, limit - (start - equity)). The binding cap is the one with least left. The combined
-    caps need a fresh supervisor report (heartbeat within SUPERVISOR_MAX_AGE_S) and one currency across accounts."""
+    caps need a fresh supervisor report (heartbeat within SUPERVISOR_MAX_AGE_S) and one currency across accounts.
+
+    With `trade_risk` (a proposal's stop risk, account currency) every cap reserves that amount instead, so the
+    budget reads "left if this trade loses" (the approval card); the absolute limit then reserves the trade, not the
+    smallest trade."""
     limits = engine.get("limits")
     eq, day0 = _num(engine.get("equity")), _pos(engine.get("day_start_equity"))
     if not isinstance(limits, dict) or eq is None or day0 is None:
@@ -133,6 +139,7 @@ def loss_budget(engine: dict[str, Any], supervisor: dict[str, Any], engines: lis
     def add(name: str, label: str, period: Period, limit: float, start: float, current: float,
             reserve: float = 0.0) -> None:
         loss = start - current
+        reserve = trade_risk if trade_risk is not None else reserve
         caps.append(LossCap(name=name, label=label, period=period, limit=limit, used=max(0.0, loss),
                             remaining=max(0.0, limit - loss - reserve)))
 
@@ -147,7 +154,8 @@ def loss_budget(engine: dict[str, Any], supervisor: dict[str, Any], engines: lis
     absolute = _pos(limits.get("daily_loss_limit_abs"))
     if absolute is not None:
         nxt = _pos(limits.get("min_lot_risk_account"))
-        label = "your absolute daily limit" + (" (includes the smallest trade's stop)" if nxt is not None else "")
+        smallest = nxt is not None and trade_risk is None
+        label = "your absolute daily limit" + (" (includes the smallest trade's stop)" if smallest else "")
         add("absolute daily limit", label, "today", absolute, day0, eq, reserve=nxt or 0.0)
     else:
         notes.append("the absolute daily loss limit (ADR 0004) is not enforced by the risk check yet (BACKLOG 29)")
@@ -156,6 +164,33 @@ def loss_budget(engine: dict[str, Any], supervisor: dict[str, Any], engines: lis
     bind = min(caps, key=lambda c: c.remaining)
     return LossBudget(limit=bind.limit, used=bind.used, remaining=bind.remaining, binding=bind.name,
                       binding_label=bind.label, period=bind.period, caps=caps, notes=notes)
+
+
+def proposal_budget(engines: list[dict[str, Any]], supervisor: dict[str, Any], account_id: str,
+                    risk: float | None, *, now: float | None = None) -> LossBudget | None:
+    """The loss budget left on `account_id` if a proposal with stop risk `risk` (account currency) loses: the card's
+    "£11.80 left today if this loses". None when the risk or the account's engine file is unknown (never guessed)."""
+    if risk is None or not math.isfinite(risk) or risk < 0:
+        return None
+    engine = next((e for e in engines if isinstance(e, dict) and e.get("account") == account_id), None)
+    if engine is None:
+        return None
+    return loss_budget(engine, supervisor, engines, now=now, trade_risk=risk)
+
+
+def proposal_budget_from_state(state_dir: str | Path, account_id: str, risk: float | None) -> LossBudget | None:
+    """`proposal_budget` from the state files (engine_*.json, supervisor.json), for the Telegram service. Reporting
+    only: any unreadable file reads as unknown (None), never as a failed proposal message."""
+    d = Path(state_dir)
+    try:                                   # a torn supervisor.json only drops the combined caps, as on the dashboard
+        sup = json.loads((d / "supervisor.json").read_text()) if (d / "supervisor.json").exists() else {}
+    except (OSError, ValueError):
+        sup = {}
+    try:
+        engines = [e for f in sorted(d.glob("engine_*.json")) if isinstance(e := json.loads(f.read_text()), dict)]
+        return proposal_budget(engines, sup if isinstance(sup, dict) else {}, account_id, risk)
+    except Exception:                      # noqa: BLE001
+        return None
 
 
 def _combined(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[dict[str, Any]], now: float,

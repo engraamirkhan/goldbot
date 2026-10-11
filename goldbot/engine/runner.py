@@ -20,7 +20,7 @@ import time
 import zlib
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 import numpy as np
 import pandas as pd
@@ -36,13 +36,14 @@ from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
-from goldbot.engine.shadow import ShadowBook
+from goldbot.engine.shadow import ShadowBook, ShadowTrade
 from goldbot.execution.broker import Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
+from goldbot.labels.excursion import Excursion
 from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.ops import server_clock
 from goldbot.ops.account_view import LADDER_TIMEFRAMES
@@ -50,13 +51,15 @@ from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_close
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, sizing
-from goldbot.risk.gate import REARM_PHRASE, Stage, broker_margin, new_day
+from goldbot.risk.gate import REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
+from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
 from goldbot.specialists.base import Specialist
-from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
+from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal, ceil_cent
 
 log = logging.getLogger("goldbot.engine")
 LOT_TERMS_WARN_S = 600.0     # the account view's symbol-info warning, at most this often
+APPROVED_RISK_TOLERANCE = 1.02   # ADR 0009: the risk sent may exceed the approved card's by 2% (fx moves), no more
 # MT5 trade retcodes that mean the market will not take an order now (10017 TRADE_DISABLED, 10018 MARKET_CLOSED): a
 # close refused with one of these is backed off; any other failure (requote 10004/10021, price changed 10020, a
 # raising call) is retried on the next tick, so an exit is never delayed by a transient refusal
@@ -77,6 +80,9 @@ LATE_BARS_BLOCK = 3
 TICK_ERROR_LOG_S = 60.0
 TICK_ERROR_STATE_S = 10.0
 TICK_LOG_MAX = 20_000        # ticks kept for the store while writes fail (a full disk): the oldest are dropped
+# a position frozen at its broker stop or target (MAE/MFE, BACKLOG 23) that exits later than this was not taken there:
+# the path after the freeze was not seen and the record says approximate
+EXCURSION_FREEZE_TOLERANCE_S = 60.0
 
 
 class Model(Protocol):
@@ -198,6 +204,14 @@ class OpenTrade(Record):
     equity_before: float | None = None
     scaled_lots: float = 0.0          # taken by the scale-out, at scaled_price: folded into the final record
     scaled_price: float | None = None
+    # MAE / MFE so far (BACKLOG 23), from every tick while this engine holds the position (`_track_excursions`);
+    # approx: part of the path was not seen by ticks (carried across a restart, adopted), so the record fills it from
+    # the stored 1m bars and flags it
+    excursion: Excursion | None = None
+    excursion_approx: bool = False
+    # False for an orphan adopted without an order record: its initial stop is the broker's current one (maybe trailed
+    # since entry), so the record leaves R-based excursions empty (prices and times are still recorded)
+    risk_known: bool = True
 
 
 class PendingClose(Record):
@@ -231,13 +245,16 @@ class Engine:
     def __init__(self, cfg: EngineConfig, broker: Broker, agents: list[Specialist], models: dict[str, Model],
                  center: ApprovalCenter | None = None, allocator: RuleAllocator | None = None,
                  limits: RiskLimits | None = None, shadow_models: dict[str, tuple[str, Model]] | None = None,
-                 live_shares: dict[str, float] | None = None):
+                 live_shares: dict[str, float] | None = None, live_versions: dict[str, str] | None = None):
         self.cfg = cfg
         self.broker = broker
         self.agents = {a.agent_id: a for a in agents}
         self.models = models                 # agent_id (or family, for a single-agent setup) -> model
         # population: agent_id -> share of its family's capital; None = every agent trades at the family weight
         self.live_shares = live_shares
+        # agent_id -> its champion's registry version (ops.run sets it with the models): the only shadow version whose
+        # wins may clear the agent's loss-streak throttle (BACKLOG 21, review MEDIUM-3); unknown = none clears it
+        self.live_versions: dict[str, str] = dict(live_versions or {})
         self.center = center or ApprovalCenter({cfg.owner_user_id})
         # design (Regime allocator): weights are 0 for 30 min either side of tier-1 events (RuleAllocator's defaults),
         # deliberately stricter than the RiskGate's -15/+30 entry block (blackout_before_min/after_min); changing the
@@ -309,6 +326,7 @@ class Engine:
         self._error_tick_ts: pd.Timestamp | None = None
         self._error_awaits_tick = False
         self._err_log: dict[str, tuple[float, int]] = {}   # exception type -> (last logged, monotonic; suppressed since)
+        self._excursion_errors: dict[str, int] = {}        # MAE/MFE tracking failures by type (reporting only)
         self._err_state_written = -1e18                # monotonic time of the last state write caused by an error
         self._tick_flush_retry: pd.Timestamp | None = None  # after a failed tick-log write, no retry before this
         self.ticks_dropped = 0                         # tick-log entries dropped while the store could not be written
@@ -335,6 +353,10 @@ class Engine:
                                              severity="warning", detail=rec_err))
         self._recorded: set[int] = {t.position_id for t in trades
                                     if t.account_id == cfg.account_id and t.position_id is not None}
+        # this account's closed trades, kept in step with the record (_record_closed): the throttle's losses and entries
+        self._throttle_closed: list[ClosedTrade] = [t for t in trades if t.account_id == cfg.account_id]
+        self._throttle_lost: list[PendingClose] = []    # records given up this process: provisional losses for the throttle
+        self._shadow_cache: tuple[int, ShadowBook | None] = (-1, None)   # the host's shadow_book.json by mtime
         self._closes: list[PendingClose] = []
         self._records_lost: list[int] = []           # records given up after closed_record_retries failed writes
         self._currency = ""                          # the deposit currency, read once from the broker (BACKLOG 28)
@@ -450,6 +472,7 @@ class Engine:
         if self._kill_pending and self.state.stage == Stage.HALTED:
             self._kill_switch(everything=False)   # until this engine's book is flat
         self._scale_out(t)
+        self._track_excursions(t)          # reporting only, after every exit; never raises
         if not repeat:
             self._guard(lambda: self._log_tick(t))      # a full disk is a tick error, never a skipped exit
         self._refresh_broker_terms(t.ts_utc)
@@ -741,6 +764,19 @@ class Engine:
         return {**terms, "account_currency": currency,
                 "acct_per_usd": self._usd_to_account(side, price, stop_distance, cycle)}
 
+    def _card_money(self, gd: Any, intent: Intent) -> dict[str, Any]:
+        """The approval card's money from an allowed GateDecision (docs/ux/approval-card.md): the stop risk in the
+        account currency and its share of equity, and whether the minimum-lot exception sized it, with the normal risk
+        and the cap that applied (halved in the size-down stage, as the gate applied it). Display only."""
+        exc = "min_lot_exception" in gd.reasons
+        size_down = self.state.stage == Stage.SIZE_DOWN or self.state.combined_size_down
+        # the risk shown is rounded UP to the cent (never below the gate's); the normal risk is the gate's effective
+        # target at this conviction (halved and capped in size-down), so the note never contradicts the cap
+        return {"currency": intent.account_currency or None, "risk_amount": ceil_cent(gd.risk_amount),
+                "risk_fraction": round(gd.risk_fraction, 5), "min_lot_exception": exc,
+                "risk_normal": sizing.effective_risk(self.gate.limits, size_down, intent.multiplier).target,
+                "risk_cap": self.gate.min_lot_cap(size_down) if exc else None}
+
     def _note_min_lot_risk(self, terms: dict[str, Any], stop_distance: float) -> None:
         """The minimum lot's stop risk in the account currency at the latest ATR stop (volume_min x stop x contract x
         fx), published as `limits.min_lot_risk_account`; None when the terms or the conversion are unknown."""
@@ -817,7 +853,8 @@ class Engine:
             self._note_min_lot_risk(terms, ls.stop_atr * float(a.iloc[last]))
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
                             multiplier=mult, price=price, timeframe=tf, family=agent.family, **terms)
-            gd = self.gate.check(intent, self.state, margin_required=broker_margin(self.broker, self.cfg.symbol))
+            gd = self.gate.check(intent, self.state, close_ts, margin_required=broker_margin(self.broker, self.cfg.symbol),
+                                 throttle=self._agent_throttle(agent.agent_id, tf, close_ts))
             if not gd.allowed:
                 decisions.append(self._record(agent, close_ts, p, mult, "gate:" + ",".join(gd.reasons), scored_fv=sfv))
                 continue
@@ -829,7 +866,8 @@ class Engine:
             prop = Proposal(proposal_id=pid, account_id=self.cfg.account_id, agent_id=agent.agent_id, side=side, lots=gd.lots, entry=price, stop=stop, target=target, p=p,
                             ev_r=p * ls.target_atr - (1 - p) * ls.stop_atr - cost_atr, spread_points=self.state.spread_points,
                             top_features=self._top_features(model, feats), window_s=self.cfg.approval_window_s,
-                            risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2))
+                            risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2),
+                            **self._card_money(gd, intent))
             if self.cfg.approval_mode == "auto":
                 self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
                 decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid, scored_fv=sfv))
@@ -856,11 +894,16 @@ class Engine:
             now_px = tick.ask if prop.side > 0 else tick.bid
             intent = intent.model_copy(update={**self._sizing_terms(intent.side, now_px, intent.stop_atr * intent.atr_usd),
                                                "price": now_px})
-            gd = self.gate.check(intent, self.state,  # re-check at approval time
-                                 margin_required=broker_margin(self.broker, self.cfg.symbol))
+            gd = self.gate.check(intent, self.state, tick.ts_utc,  # re-check at approval time
+                                 margin_required=broker_margin(self.broker, self.cfg.symbol),
+                                 throttle=self._agent_throttle(agent.agent_id, intent.timeframe or agent.timeframe,
+                                                               tick.ts_utc))
+            lots = gd.lots
+            if gd.allowed:
+                gd, lots = self._within_card(gd, prop, agent)
             if gd.allowed:
                 price = tick.ask if prop.side > 0 else tick.bid
-                self._execute(prop, agent, gd.lots, price - prop.side * gd.stop_distance,
+                self._execute(prop, agent, lots, price - prop.side * gd.stop_distance,
                               price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price,
                               atr_usd=intent.atr_usd)
             else:
@@ -869,6 +912,20 @@ class Engine:
                 if self.center.bus is not None:
                     self.center.bus.archive(p)          # the dashboard shows "refused at approval", not "approved"
         self._write_state()
+
+    def _within_card(self, gd: GateDecision, prop: Proposal, agent: Specialist) -> tuple[GateDecision, float]:
+        """ADR 0009: the order never exceeds the card the owner approved. The re-check's lots are capped at the card's
+        (equity may have risen during the window); the risk at the lots sent may exceed the card's by at most
+        APPROVED_RISK_TOLERANCE (the broker's conversion moved), else the approval is refused `risk_above_approved`.
+        Only ever reduces: a smaller re-check size is sent as the gate decided it."""
+        lots = min(gd.lots, prop.lots)
+        if lots < gd.lots:
+            self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "approval_size_capped",
+                                   "proposal": prop.proposal_id, "gate_lots": gd.lots, "lots": lots})
+        risk = gd.risk_amount * lots / gd.lots if gd.lots > 0 else gd.risk_amount
+        if prop.risk_amount is not None and risk > prop.risk_amount * APPROVED_RISK_TOLERANCE + 1e-9:
+            return gd.model_copy(update={"allowed": False, "reasons": ["risk_above_approved"]}), lots
+        return gd, lots
 
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float,
                  atr_usd: float | None = None) -> None:
@@ -1284,7 +1341,8 @@ class Engine:
                        entry_bar_ts=p.open_time_utc, max_bars=max_bars, sl=p.sl, tp=p.tp,
                        client_order_id=rec.client_order_id if rec is not None else p.comment or None,
                        open_price=p.open_price, initial_sl=rec.sl if rec is not None else p.sl,
-                       initial_lots=rec.lots if rec is not None else p.lots, opened_utc=p.open_time_utc)
+                       initial_lots=rec.lots if rec is not None else p.lots, opened_utc=p.open_time_utc,
+                       excursion_approx=True, risk_known=rec is not None)
         if agent is not None:
             atr_usd = rec.atr_usd if rec is not None and rec.atr_usd is not None else \
                 self._implied_atr(agent, p.open_price, tr.initial_sl)
@@ -1699,6 +1757,8 @@ class Engine:
         self._orders = {k: SentOrder.model_validate(v) for k, v in d.get("sent", {}).items()}
         self.sent_ids = set(self._orders)
         self.open = {int(k): OpenTrade.model_validate(v) for k, v in d.get("open", {}).items()}
+        for tr in self.open.values():
+            tr.excursion_approx = True            # ticks while the engine was down were not seen (BACKLOG 23)
         self._closes = [PendingClose.model_validate(v) for v in d.get("closing", [])]
         self._records_lost = [int(x) for x in d.get("records_lost", [])]
         try:
@@ -1732,7 +1792,7 @@ class Engine:
                                                             max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp,
                                                             client_order_id=cid, open_price=pos.open_price,
                                                             initial_sl=rec.sl, initial_lots=rec.lots,
-                                                            opened_utc=pos.open_time_utc)
+                                                            opened_utc=pos.open_time_utc, excursion_approx=True)
                 agent = self.agents.get(rec.agent_id)
                 if agent is not None:
                     atr_usd = rec.atr_usd if rec.atr_usd is not None else self._implied_atr(agent, pos.open_price, rec.sl)
@@ -1840,6 +1900,7 @@ class Engine:
                                            "action": "closed_trade_record_lost", "position": c.position_id,
                                            "reason": c.reason, "pending": c.model_dump(mode="json")})
                     self._records_lost.append(c.position_id)
+                    self._throttle_lost.append(c)
                 else:
                     c.next_try = now + pd.Timedelta(seconds=self.cfg.reconcile_every_s)
                     keep.append(c)
@@ -1892,6 +1953,9 @@ class Engine:
             log.exception("deal history unreadable for position %s; recorded from the engine's fills", pid)
             info = None
         known = info or {}
+        # neither the broker's deals nor the engine's own close fill: the price is the quote read now and the time the
+        # moment the engine noticed, neither of them the trade's (MAE/MFE never folds them, BACKLOG 23)
+        synthetic = info is None and px is None
         entry = tr.open_price if tr.open_price is not None else known.get("entry_price") or tr.entry
         if entry is None:
             raise ValueError("entry price unknown")
@@ -1951,10 +2015,94 @@ class Engine:
                           client_order_id=tr.client_order_id, agent_id=tr.agent_id, side=tr.side, lots=lots,
                           entry_utc=tr.opened_utc or tr.entry_bar_ts, entry_price=entry, exit_price=exit_px,
                           exit_reason=reason, r=r, commission=commission, swap=swap, pnl_currency=pnl_currency,
-                          partial_lots=tr.scaled_lots)
+                          partial_lots=tr.scaled_lots,
+                          **self._closed_excursion(pid, tr, entry, tr.opened_utc or tr.entry_bar_ts, exit_utc,
+                                                   None if synthetic else px if px is not None else exit_px,
+                                                   exit_known=not synthetic))
         append_closed_trade(Path(self.cfg.state_dir), rec)
         self._recorded.add(pid)
+        self._throttle_closed.append(rec)
         log.info("closed trade recorded: position %s %s, pnl %.2f", pid, reason, pnl)   # the exit itself is journalled
+
+    # ------------------------------------------------------------------ MAE / MFE (BACKLOG 23, reporting only)
+    def _track_excursions(self, t: Tick) -> None:
+        """Fold this tick into each open position's MAE / MFE (labels/excursion.py): the exit-side price (bid for a long,
+        ask for a short). Runs after the tick's per-tick exits (`_stop_check`, `_retry_closes`, the kill switch, the
+        scale-out); bar-close and reconcile exits on the same tick follow it, and their fill is added by the record.
+        A price at or through the stop or target the broker holds freezes the track (the broker takes the position
+        there; nothing after it is folded, the record adds the actual fill). A price through a stop only the engine
+        holds while its close is being retried (`_close_due`: the position is still open) is folded as it is, never
+        clamped. Reporting only: a failure is logged (once per kind, then counted) and never raised or made a tick
+        error, so it can neither block an exit nor an entry; the position's record is then approximate."""
+        for pid, tr in self.open.items():
+            try:
+                entry = tr.open_price if tr.open_price is not None else tr.entry
+                if entry is None or (tr.opened_utc is not None and t.ts_utc < tr.opened_utc):
+                    continue
+                if tr.excursion is None:
+                    tr.excursion = Excursion.start(entry, tr.opened_utc or t.ts_utc)
+                ex = tr.excursion
+                if ex.frozen_utc is not None:
+                    continue
+                px = t.bid if tr.side > 0 else t.ask
+                at_broker_level = (tr.sl is not None and tr.side * (px - tr.sl) <= 0) or \
+                    (tr.tp is not None and tr.side * (px - tr.tp) >= 0)
+                if at_broker_level and pid not in self._close_due:
+                    ex.frozen_utc = t.ts_utc
+                    continue
+                ex.fold(tr.side, px, t.ts_utc)
+                ex.last_utc = t.ts_utc
+            except Exception as exc:
+                tr.excursion_approx = True
+                kind = type(exc).__name__
+                n = self._excursion_errors.get(kind, 0)
+                self._excursion_errors[kind] = n + 1
+                if n == 0:
+                    log.warning("MAE/MFE tracking failed (%s); reporting only, trading continues", kind, exc_info=exc)
+
+    def _closed_excursion(self, pid: int, tr: OpenTrade, entry: float, entry_utc: pd.Timestamp,
+                          exit_utc: pd.Timestamp, exit_fill: float | None, *, exit_known: bool = True) -> dict[str, Any]:
+        """The ClosedTrade MAE / MFE fields: the tick track plus the exit fill, every extreme at or before `exit_utc`.
+        The record is approximate, and the stored 1m bars wholly inside the trade on the exit side are folded in, when
+        ticks did not see the whole path: `excursion_approx` (a restart, an adopted position), no track at all, the
+        position outlived a freeze at its broker level by more than EXCURSION_FREEZE_TOLERANCE_S, or `exit_known` is
+        False (no deals and no close fill: the bars stop at the last tick folded and no exit price is folded). A track
+        with an extreme after the exit (a manual or broker close seen late) is dropped and rebuilt from the bars up to
+        the exit. R is left empty when the initial stop is not the trade's (`risk_known`). With no usable track and
+        no bar folded (a close confirmed without deals and never tracked, or a dropped track with no covering bar)
+        nothing of the path was observed: the fields stay empty rather than reading 0 R / 0 R (an exit fill alone is
+        not an excursion). Never raises: a failure leaves the fields empty (the trade is still recorded)."""
+        try:
+            track = tr.excursion
+            approx = tr.excursion_approx or track is None or not exit_known
+            bars_end = exit_utc
+            if not exit_known:
+                exit_fill = None
+                bars_end = track.last_utc if track is not None and track.last_utc is not None else entry_utc
+            if track is not None and track.frozen_utc is not None and exit_known and \
+                    (exit_utc - track.frozen_utc).total_seconds() > EXCURSION_FREEZE_TOLERANCE_S:
+                approx = True
+            if track is not None and (track.mae_utc > exit_utc or track.mfe_utc > exit_utc):
+                track, approx = None, True
+            ex = track.model_copy() if track is not None else Excursion.start(entry, entry_utc)
+            fav_col, adv_col = ("bid_high", "bid_low") if tr.side > 0 else ("ask_low", "ask_high")
+            b = self.bars_1m
+            folded = 0
+            if approx and not b.empty and {"ts_utc", fav_col, adv_col} <= set(b.columns):
+                ts = pd.to_datetime(b["ts_utc"], utc=True)
+                inside = b[(ts >= entry_utc) & (ts + pd.Timedelta(minutes=1) <= bars_end)]
+                for at, fav, adv in zip(pd.to_datetime(inside["ts_utc"], utc=True), inside[fav_col], inside[adv_col]):
+                    ex.fold(tr.side, float(adv), at, float(fav), at)
+                    folded += 1
+            if track is None and folded == 0:
+                return {}
+            if exit_fill is not None:
+                ex.fold(tr.side, float(exit_fill), exit_utc)
+            out = ex.summary(tr.side, entry, tr.initial_sl if tr.risk_known else None)
+            return {**out, "excursion_approx": approx}
+        except Exception:
+            log.warning("MAE/MFE not recorded for position %s; the trade is recorded without it", pid, exc_info=True)
+            return {}
 
     def _risk_path(self) -> Path:
         return Path(self.cfg.state_dir, f"risk_{self.cfg.account_id}.json")   # not engine_*: the supervisor globs those
@@ -2219,6 +2367,93 @@ class Engine:
         lost = max(0.0, st.day_start_equity - st.equity) if st.day_start_equity > 0 else 0.0
         return {"daily_loss_limit": round(limit, 2), "daily_loss_remaining": round(max(0.0, limit - lost), 2)}
 
+    def _agent_throttle(self, agent_id: str, timeframe: str, now: pd.Timestamp) -> AgentThrottle | None:
+        """The agent's throttle facts at `now` (BACKLOG 21), derived from durable records only (goldbot/risk/throttle.py):
+        this account's closed-trade record, the open book and the queued closes (one entry per position), and the shadow
+        book while a streak is at the threshold and cooling down. None while the throttle is off, so a disabled throttle
+        reads nothing.
+
+        A close seen but not yet in the record (queued in `_closes`: a broker stop found by the bar-close sweep is
+        written after the decisions, or a write being retried; or given up as lost) counts as a provisional full loss at
+        its close time until the real record replaces it (trading-safety review HIGH-1), so the loss just taken counts at
+        the very next decision and a failing write fails closed. Records lost in an earlier process are not known after
+        a restart (only their ids persist); health already fails on them (`closed_records_lost`).
+
+        `now` is the decision's clock: the bar close in `_decide`, the approval tick in `_on_decision`, the last tick
+        (else the host clock) in the state file. An error refuses this agent only (`throttle_unknown`, review LOW-1)."""
+        cfg = self.gate.limits.throttle
+        if not cfg.enabled:
+            return None
+        try:
+            closed = list(self._throttle_closed)
+            entries: dict[object, pd.Timestamp] = {}
+            for t in closed:
+                if t.agent_id == agent_id and t.entry_utc is not None:
+                    entries[t.position_id if t.position_id is not None else id(t)] = pd.Timestamp(t.entry_utc)
+            unrecorded = [c for c in [*self._closes, *self._throttle_lost]
+                          if c.trade.agent_id == agent_id and c.position_id not in self._recorded]
+            for tr in [*self.open.values(), *(c.trade for c in unrecorded)]:
+                if tr.agent_id == agent_id:
+                    entries[tr.position_id] = pd.Timestamp(tr.opened_utc if tr.opened_utc is not None else tr.entry_bar_ts)
+            mode: Literal["demo", "live"] = "live" if self.cfg.mode == "live" else "demo"
+            closed += [ClosedTrade(account_id=self.cfg.account_id, broker=self.cfg.broker_name, mode=mode, exit_utc=c.at,
+                                   ret=0.0, pnl=0.0, equity_before=1.0, position_id=c.position_id, agent_id=agent_id,
+                                   entry_utc=c.trade.opened_utc, exit_reason="provisional", r=-1.0)   # a full loss
+                       for c in unrecorded]
+            return agent_throttle(agent_id, timeframe, closed=closed, entry_times=entries.values(), now=now,
+                                  shadow_win=lambda: self._shadow_win(agent_id), consult_shadow_at=cfg.loss_streak,
+                                  cooldown=self.gate.throttle_cooldown(timeframe), provisional_losses=len(unrecorded))
+        except Exception:
+            log.exception("throttle facts for %s could not be derived; its entries are refused", agent_id)
+            return AgentThrottle(agent_id=agent_id, timeframe=timeframe, unknown=True)
+
+    def _shadow_win(self, agent_id: str) -> ShadowTrade | None:
+        """The agent's latest qualifying shadow win on its current live model version (`live_versions`; none known, no
+        win): this engine's book when it hosts it, else the host's saved file, re-read only when its mtime changes
+        (review MEDIUM-2). An unreadable book clears nothing (fail closed: the streak refuses until its cooldown)."""
+        version = self.live_versions.get(agent_id)
+        if version is None:
+            return None
+        try:
+            book = self.shadow
+            if book is None:
+                path = Path(self.cfg.state_dir, "shadow_book.json")
+                if not path.exists():
+                    return None
+                mtime = path.stat().st_mtime_ns
+                if self._shadow_cache[0] != mtime or self._shadow_cache[1] is None:
+                    self._shadow_cache = (mtime, ShadowBook(self.cfg.state_dir))
+                book = self._shadow_cache[1]
+            assert book is not None
+            return latest_shadow_win(book, agent_id, version)
+        except Exception as exc:
+            log.warning("throttle: shadow book unreadable (%s); no shadow win counted", type(exc).__name__)
+            return None
+
+    def _throttle_state(self, now: pd.Timestamp) -> dict[str, Any]:
+        """`throttle` in engine_<account>.json and health: the settings, and when on, each agent's facts, when its
+        cooldown ends and the reasons RiskGate would refuse its entry with now (`blocked`). `now` is the last tick's time,
+        else the host clock (before the first tick). A failure publishes `error` (health fails), never stops the write."""
+        cfg = self.gate.limits.throttle
+        out: dict[str, Any] = cfg.model_dump()
+        if not cfg.enabled:
+            return out
+        try:
+            agents: dict[str, Any] = {}
+            for agent in self.agents.values():
+                t = self._agent_throttle(agent.agent_id, agent.timeframe, now)
+                if t is None:
+                    continue
+                until = self.gate.throttle_cooldown_until(t)
+                agents[agent.agent_id] = {**t.model_dump(mode="json", exclude={"agent_id"}),
+                                          "cooldown_until": until.isoformat() if until is not None else None,
+                                          "blocked": self.gate.throttle_reasons(t, now)}
+            out["agents"] = agents
+        except Exception as exc:
+            log.exception("throttle state not published")
+            out["error"] = type(exc).__name__
+        return out
+
     def _write_state(self) -> None:
         st = self.state
         payload = {
@@ -2255,6 +2490,8 @@ class Engine:
             "tick_errors_total": self.tick_errors_total, "ticks_dropped": self.ticks_dropped,
             "last_tick_error_at": self._last_tick_error_at.isoformat() if self._last_tick_error_at is not None else None,
             "sessions": session_table_cache(self.sessions),
+            # BACKLOG 21: per-agent loss-streak and entry-rate throttle (settings; per agent when on), on the tick clock
+            "throttle": self._throttle_state(self._last_tick.ts_utc if self._last_tick is not None else self.clock()),
             "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account

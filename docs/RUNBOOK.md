@@ -132,7 +132,7 @@ sudo -u goldbot nano /opt/goldbot/config/settings.local.yaml
 #   auth: {owner_email: <you>}
 #   telegram: {allowed_user_ids: [<your id>]}
 ```
-then `sudo chmod 600 /opt/goldbot/config/settings.local.yaml`, and the backup keys as in 0.6.
+then `sudo -u goldbot chmod 600 /opt/goldbot/config/settings.local.yaml`, and the backup keys as in 0.6.
 
 Start everything (supervisor first):
 ```bash
@@ -166,12 +166,65 @@ and the rest still arrives. It never contains account numbers or emails.
 * When a new version is merged and has passed CI, Telegram shows *New version ready* with the list of changes and
   **[Deploy] [Skip]**. Deploy restarts the services within a minute (never while an entry waits for your click; open
   positions keep their broker-side stops and the engine reconciles on start), checks every service is still running
-  after 60 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
+  after 90 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
 * The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
   release note mentions the bridge.
 * By hand on either VM: `sudo goldbot-deploy latest` (or a specific commit id). Same checks, same rollback.
-* The health check `deploy` shows the last result. If the deploy script itself changed, review it and run
-  `sudo install -m 755 -o root -g root /opt/goldbot/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy`.
+  Run it inside `tmux` (`tmux new -s deploy`; after a dropped connection, `tmux attach -t deploy`), or as
+  `sudo systemd-run --wait --pty --unit goldbot-deploy-manual /usr/local/sbin/goldbot-deploy <args>`. The script
+  ignores a hang-up and keeps going either way,
+  but only then do you see its last lines. `/var/lib/goldbot-deploy/deploys.jsonl` (and Telegram) is the record of
+  what happened; the end of the terminal output can be lost.
+* **Going back by hand:** `sudo goldbot-deploy --rollback <older commit id>`. It accepts only an older commit of the
+  one that runs, on `main`, that passed CI or ran on this box before (`/var/lib/goldbot-deploy/deploys.jsonl`). Same
+  lock, same wait for a pending entry, same restart order and 90 s check. If the rollback is unstable, the version
+  that ran before is restored. Telegram reports *rolled_back_manual* (or *rollback_reverted*); the `deploy` health
+  check warns until the next deploy. A pending Telegram deploy approval is cancelled by the rollback. Telegram offers
+  the newer version again: tap **Skip** until the fix is merged.
+* Before anything is touched, every deploy and rollback also checks:
+  * **aux.db.** A target from before schema compatibility (no `compat_back_to` in its `goldbot/db/migrations.py`)
+    cannot open aux.db at schema 5. The script stops every service (inputs, supervisor, engines last), steps aux.db
+    back 5 -> 4 as the service user with every row kept, then starts them (supervisor first). Any other version the
+    target does not know is refused, with nothing changed. The next forward deploy re-applies 5.
+  * **settings.local.yaml.** It is validated with the target's own `Settings`. A key the target does not know (for
+    example `risk.min_lot_risk_cap` on code from before the October batch) would stop every service, so the deploy
+    is refused and the message names the keys, never their values. Edit the file, or add
+    `--drop-unknown-local-keys`: unknown keys are moved aside and the original is kept as
+    `config/settings.local.yaml.<UTC time>.bak`. Put them back after the next forward deploy. An invalid value is
+    never dropped.
+  * **Scheduler jobs.** While a job runs, a manual deploy is refused and a Telegram approval waits. The scheduler is
+    stopped first and checked again. `--interrupt-jobs` deploys anyway (that job's slot is not re-run).
+  * Only `enabled` units are restarted, so a stray, disabled engine instance is never started.
+* **Rollback floor.** `/etc/goldbot/rollback-floor` (optional, root-owned, one commit id): `--rollback` refuses any
+  commit older than it. Set it after a deploy that must never be undone (for example the auth hardening,
+  docs/deploy/2026-10-batch.md 8.1). Removing it is your decision. The script asks GitHub (compare API) whether the
+  target descends from the floor, and refuses if GitHub says no; when GitHub cannot be reached it relies on the
+  box's own git copy, which the service user can write (accepted: a rollback is always typed by you).
+* The health check `deploy` shows the last result.
+* **Installing a new goldbot-deploy** (when a release changes `goldbot/ops/linux/goldbot-deploy.sh`, after the
+  security reviewer signed it off). Root runs it, so root never takes it from `/opt/goldbot`:
+
+  1. **On your Mac** (your own clone, not the box): check the commit is on GitHub's `main`, then note the script's hash at the
+     commit you deploy.
+     ```bash
+     git -C <your goldbot clone> fetch -q origin && git -C <your goldbot clone> show <SHA>:goldbot/ops/linux/goldbot-deploy.sh | shasum -a 256
+     git -C <your goldbot clone> merge-base --is-ancestor <SHA> origin/main && echo on-main
+     ```
+     Without `on-main` (or if `git show` says the commit is unknown), stop.
+  2. **On the box**, root downloads that commit's copy from GitHub into a root-only folder, checks it against the
+     hash from step 1, and installs it only if they match (`sha256sum -c` prints `OK`, otherwise nothing is installed):
+     ```bash
+     sudo install -d -m 700 -o root -g root /root/goldbot-deploy-new
+     sudo curl -fsSL -o /root/goldbot-deploy-new/goldbot-deploy https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/linux/goldbot-deploy.sh
+     echo "<HASH FROM STEP 1>  /root/goldbot-deploy-new/goldbot-deploy" | sudo sha256sum -c - \
+       && sudo install -m 755 -o root -g root /root/goldbot-deploy-new/goldbot-deploy /usr/local/sbin/goldbot-deploy
+     sudo rm -rf /root/goldbot-deploy-new
+     ```
+     Never install it from `/opt/goldbot` or from `sudo -u goldbot git show`. The service user can write that tree and
+     its `.git` (`git replace` can swap the file), so a hash computed there proves nothing.
+* **If a deploy says `refused`:** the detail says why and nothing was changed. **If it says `failed`:** the rollback
+  did not recover every service. Run `journalctl -u 'goldbot-*' -n 200` and `goldbot run health`, then start the
+  units by hand (supervisor first). For aux.db errors, see docs/deploy/2026-10-batch.md 5.1.
 
 ### 0.6 Backups and restore (brain)
 The scheduler backs up the brain's state every day at 22:15 UTC with `restic`. The backup is encrypted on the
@@ -774,7 +827,7 @@ nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what
 | `max_positions` | Two positions already open on this account. | Normal. |
 | `daily_cap` / `weekly_cap` | This account lost 2% / 5% measured from its equity when the engine started. | The engine does not yet reset its day/week starting equity at 00:00 UTC (`new_day` in `goldbot/risk/gate.py` is not called), so these clear only when the engine restarts. Review the losses before restarting. |
 | `negative_ev`, `target_below_cost_floor` | After costs the trade has no edge, or the target is below 2.5x the round-trip cost. | Normal filtering; check the cost table if it happens to every candidate. |
-| `min_lot_exceeds_risk`, `margin_level_floor` | Minimum lot would risk too much, or margin level would fall below 300%. | Account too small for the stop; normal on small demos. On the £1,000 demo, 15m needs the minimum-lot exception: `risk: { min_lot_risk_cap: 0.01 }` in `config\settings.local.yaml` (never applies in tiny-live). |
+| `min_lot_exceeds_risk`, `margin_level_floor` | Minimum lot would risk too much, or margin level would fall below 300%. | Account too small for the stop; normal on small demos. On a small demo, 15m needs the minimum-lot exception: `risk: { min_lot_risk_cap: 0.01 }` in `config\settings.local.yaml` (never applies in tiny-live). |
 | `fx_conversion_unavailable` | The account is not in USD and the terminal gave no USD -> account-currency conversion (`order_calc_profit` / tick value), or the terminal's symbol info was unreadable. | Check the terminal is logged in and XAUUSD is in Market Watch; entries resume when it answers. Exits are unaffected. |
 | `daily_loss_limit_abs` | Today's loss plus this trade's full stop risk would exceed min(2% of the day-start equity, the account's `daily_loss_limit_abs` in `config\accounts.yaml`, e.g. £50 on icm-demo). Equal is allowed; the supervisor halts once the combined loss reaches the limit. | Normal; clears at 00:00 UTC. `engine_<account>.json` shows `daily_loss_limit` and `daily_loss_remaining`. |
 | `supervisor_halt` with `mixed_account_currencies` | Running engines report different deposit currencies (e.g. GBP and USD); equities are never summed across currencies. Health names the files. | Stop the engine that should not run (or delete its leftover `engine_<account>.json`), see "Currency rollout" below. |
@@ -863,6 +916,21 @@ Engines now publish their deposit currency and the supervisor halts every accoun
 4. Start the supervisor, then all engines together.
 5. Check `state\supervisor.json`: `"halt": false` and `"currencies": {"icm-demo": "GBP"}`. If it shows
    `mixed_account_currencies`, the health check names the offending file.
+
+### Approval card money rollout (one time: proposals carry the account-currency risk)
+
+From this update the engine writes new fields on every proposal (currency, risk in the account currency, the
+minimum-lot note). Proposal records refuse unknown fields, so an old Telegram or API process cannot read a
+new-format proposal: it would never show it, and the proposal would expire unseen. Restart the three together, with
+the engine last, so no new-format proposal is written while an old reader runs:
+
+1. Stop the engines first (`nssm stop goldbot-engine-icm-demo`, and any other engine), then `goldbot-telegram` and
+   `goldbot-api`. On the Oracle brain: `sudo systemctl stop 'goldbot-engine@*'`, then the telegram and api units.
+2. Deploy (`vps_update.ps1`, below; it already stops engines last and starts them after the other services).
+3. Start `goldbot-api` and `goldbot-telegram`, check both are running, and only then start the engines.
+4. Rolling back: stop the engines first again, so an old engine never runs beside a new reader and the reverse.
+
+`vps_update.ps1` follows this order on its own; the steps matter when you restart services by hand.
 
 ### Server clock (US-EU DST gap weeks)
 

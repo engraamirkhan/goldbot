@@ -63,6 +63,14 @@ risk:
   # `daily_loss_limit_abs` in config/accounts.yaml.
   min_lot_risk_cap: null
   positions_unreadable_alert: 5      # failed broker reads in a row before health fails and Telegram alerts
+  # Per-agent throttle (BACKLOG 21, playbook G-6), counted per agent per account and checked at every entry
+  # decision: after `loss_streak` consecutive full losses (R <= -0.9) RiskGate refuses the agent's entries
+  # (`throttle_loss_streak`) until `cooldown_bars` bars of its timeframe have passed since the last loss, or a real
+  # shadow win (target hit or >= 0.25R) of its live model entered after that loss closes. The count persists past the
+  # cooldown (one more full loss re-blocks) until such a win. Past `max_entries_per_day_per_agent` entries in the risk
+  # day (00:00 UTC) it refuses `throttle_entry_rate`. Entries only: exits are never gated. OFF until the owner sets the
+  # thresholds (these are the playbook's proposal, not decisions).
+  throttle: { enabled: false, loss_streak: 3, cooldown_bars: 4, max_entries_per_day_per_agent: 3 }
 
 costs:
   slippage_prior_usd: 0.15           # per oz, used until 50 real fills exist
@@ -122,10 +130,16 @@ research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
   label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
-  reserved_trials_quarter: 13        # held for the pre-registered queue (docs/research/preregistration-2027Q1.md: 13 planned
-                                     #   of 20): the director, the label grid and the research analyst spend only 20 - used
-                                     #   - reserved. Each trial run against a `preregistered` registry row uses one up (only
-                                     #   such a trial may draw on the reservation); revisit each quarter
+  reserved_trials_quarter:           # held for each quarter's pre-registered queue; a quarter not listed holds none
+    "2027Q1": 9                      #   preregistration-2027Q1.md: 5 queued rows + 4 contingent H-02 survivor slots (ADR
+                                     #   0007). The director, the label grid and the analyst spend only 20 - used -
+                                     #   reserved, reserved = max(this - run - withdrawn - expired slots, pending, 0). A
+                                     #   trial run against a queued row, or using a live slot by its derivation rule, uses
+                                     #   one up; a withdrawn row or a slot whose condition can no longer be met frees one
+  open_budget_preregistered_only:    # E-5 cap: in these quarters the analyst spends the open budget only on an ad-hoc
+    - "2027Q1"                       #   pre-registration naming a pre-registered rule (rule_ref), plus the retired
+                                     #   families' one shared exploration trial; the label grid spends none (research-plan
+                                     #   section 5: no further fast-tsmom horizons, R-06)
   retired_families:                  # mirrors docs/research/hypotheses.md section B (a test checks they agree). The retired
                                      #   families SHARE 1 exploration trial a quarter (best post-retirement evidence, else a
                                      #   rotation) and each is reinstated only by out-of-sample attribution after its

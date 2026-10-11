@@ -42,7 +42,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 18 | Tier-2 event blackout and proximity feature (G-3) | Market and macro preparation · RUN | S | data part in review (2026-10-10: calendar-v1 tiers 1+2, opt-in features); blackout proposed (owner: adopt) |
 | 19 | Open-risk (heat) cap and same-direction stacking (G-4) | Capital and drawdown management · RUN | S | proposed (owner: value) |
 | 20 | Drawdown / risk-of-ruin Monte Carlo report (G-5) | Capital and drawdown management · RUN | S | tool built (results need data) |
-| 21 | Per-agent loss-streak and entry-rate throttle (G-6) | Discipline (system analogue) · RUN | S | proposed (owner: thresholds) |
+| 21 | Per-agent loss-streak and entry-rate throttle (G-6) | Discipline (system analogue) · RUN | S | built, off by default (owner: set thresholds and enable; trading-safety review pending) |
 | 22 | Min-lot sizing-feasibility report (G-7) | Position sizing · RUN | S | tool built (results need data; account size answered: £1,000 GBP) |
 | 23 | MAE/MFE in closed-trade and shadow records (G-9) | Post-trade review · FIND | S | proposed |
 | 24 | DST-aware sessions and deterministic calendars (D-1, D-2) | Idea generation (honesty) · FIND | M | proposed |
@@ -54,10 +54,10 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 33 | Opportunity-day evaluation for research trials (£/day distribution, days captured) | Performance review · FIND | S–M | proposed (after 20, 26) |
 | 35 | Open positions' remaining stop risk in the daily £ projection (review MEDIUM-4) | Capital and drawdown management · RUN | S | proposed (after 29; trading-safety review) |
 | 36 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | proposed (after 29; trading-safety review) |
-| 37 | `goldbot-deploy` steps aux.db back on rollback (Linux `Sync-AuxSchema`) | Operational resilience · RUN | S | proposed (SRE, from docs/deploy/2026-10-batch.md G1; HIGH) |
-| 38 | Owner-run manual rollback in `goldbot-deploy` | Operational resilience · RUN | S–M | proposed (SRE, G2; HIGH) |
-| 39 | Validate settings (incl. settings.local.yaml) with the target code before any restart | Operational resilience · RUN | S | proposed (SRE, G3; HIGH) |
-| 40 | `goldbot-deploy`: scheduler-job guard; restart only enabled units | Operational resilience · RUN | S | proposed (SRE, G4) |
+| 37 | `goldbot-deploy` steps aux.db back on rollback (Linux `Sync-AuxSchema`) | Operational resilience · RUN | S | done (SRE, 2026-10-11; `goldbot-deploy.sh` `aux_plan`/`aux_step_back`; security review pending) |
+| 38 | Owner-run manual rollback in `goldbot-deploy` | Operational resilience · RUN | S–M | done (SRE, 2026-10-11; `goldbot-deploy --rollback <sha>`; security review pending) |
+| 39 | Validate settings (incl. settings.local.yaml) with the target code before any restart | Operational resilience · RUN | S | done (SRE, 2026-10-11; `check_settings`, `--drop-unknown-local-keys`; security review pending) |
+| 40 | `goldbot-deploy`: scheduler-job guard; restart only enabled units | Operational resilience · RUN | S | done (SRE, 2026-10-11; `guard_scheduler`, `--interrupt-jobs`; security review pending) |
 | 41 | `goldbot-deploy`: health checks against a baseline after the restart | Operational resilience · RUN | S | proposed (SRE, G5) |
 | 42 | Bridge/brain version and server_tz agreement checked at run time | Operational resilience, execution · RUN | S | proposed (SRE, G6; trading-safety review) |
 
@@ -276,10 +276,16 @@ execution items need trading-safety review. Feature items need quant review.
   6 and 12 months. Reporting only. Golden test on a fixed seed.
 - **21 (G-6).** After 3 consecutive full stop-outs in a risk day, or more than N entries in a session, an agent
   makes no entries until the next session. Logged and alerted. Never affects exits.
+  **Built 2026-10-11, off by default (TRACEABILITY R35):** `risk.throttle: {enabled: false, loss_streak: 3,
+  cooldown_bars: 4, max_entries_per_day_per_agent: 3}`; the clearing rule is the cooldown (bars of the agent's
+  timeframe) or a winning shadow trade, and the rate is per risk day (00:00 UTC), per agent per account. Owner: set
+  the thresholds and enable (playbook section 7, item 4). Needs trading-safety review.
 - **22 (G-7).** `run.py sizing-feasibility`: per agent, the minimum equity at which the minimum lot stays within
   1.2× target risk at the current ATR and phase risk rate. Written as phase-gate evidence.
 - **23 (G-9).** Maximum adverse and favourable excursion in R on every shadow and closed trade, shown by exit
-  type in attribution.
+  type in attribution. **In review (2026-10-11, TRACEABILITY V6):** price, R and time of each on `ShadowTrade`
+  (bars, label semantics) and `ClosedTrade` (ticks; approximate from stored bars across a restart); median MAE/MFE
+  in R in the monthly report and per exit type in attribution. Needs trading-safety and quant review.
 - **24 (D-1, D-2).** Session windows, zones and cost-table sessions follow London and New York local time.
   Deterministic calendars become PIT features: holidays, COMEX option expiry and first notice, Lunar New Year,
   Indian festivals, month and quarter end. Truncation test. Must land before H-04 and H-14 run.
@@ -402,7 +408,12 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - **Registered (2026-10-10):** the hypotheses are H-16 (range forecast), H-17 (trend-day continuation), H-18
     (post-blackout events), H-19 (stand-aside overlay) and H-20..H-23 (features), in `hypotheses.md` A2. Evidence
     and design: `docs/research/opportunity-days.md`. Proposed for the Q2 2027 pre-registration: 3–4 trials.
-  - **30a. `day_type` feature family, opt-in (quant + data-engineer review).**
+  - **30a. `day_type` feature family, opt-in (quant + data-engineer review).** **Status (2026-10-11): built; the
+    quant and data review said "merge after fixes", and the fixes are applied** (goldbot/features/day_type.py,
+    `research_pass --day-type`, tests/test_day_type_features.py, TRACEABILITY F24).
+    - The HAR column is H-16's session-window model, with the draft's refit, GVZ staleness and tier-1 counting rules.
+    - The tier-1 columns are wired to the merged US calendar (`--us-calendar` fills ctx; `--day-type` requires it).
+    - Pinned versions: `f-1eada57050` (default + day_type) and `f-93fbe9386d` (+ macro).
     - Registered like `positioning`: computed only with an explicit flag (`--day-type`), so the default feature
       set, the frozen Q1 H-02 universe and its K_eff are unchanged (test: the default column list is identical
       before and after).
@@ -499,6 +510,17 @@ hypotheses that go through the trial registry in a future quarter's budget.
   `sudo -u <service user>`. Every item needs a security review. Tests: shellcheck at warning level in CI (a
   pre-commit hook for `goldbot/ops/linux/*.sh`; there is none today), plus a pytest that runs the script against a
   temporary repository and state directory with `systemctl` stubbed.
+  - **Done 2026-10-11 (37-40):** `goldbot/ops/linux/goldbot-deploy.sh`, tests in
+    `tests/test_goldbot_deploy_sh.py` (temporary git repository and aux.db, stubbed systemctl/sudo/curl), shellcheck
+    pre-commit hook at warning level. The root-owned copy on each VM must be re-installed after the security review
+    (docs/deploy/2026-10-batch.md 1.4). Deviations from the text below: the settings check validates only
+    `settings.local.yaml` merged over the target's tracked `settings.yaml` (the tracked files passed CI with the target
+    code; `accounts.yaml` is tracked and has no local overlay), and it runs on an extracted copy of the target's code
+    before the checkout, so a refusal changes nothing. A failed manual rollback restores the version that ran before
+    and logs `rollback_reverted`. Security review fixes (same day): root installs the script only from GitHub with
+    an off-box sha256 (RUNBOOK 0.5), the bootstraps install units and the script from root's own clone, an optional
+    root-owned `/etc/goldbot/rollback-floor`, `ran_here` counts only real runs, output to root's terminal is
+    filtered, and `tests/test_root_tooling_rules.py` enforces the root-run tooling rule (docs/AGENT_STANDARDS.md).
   - **37 (HIGH).** In `switch_to`, after the checkout and before any restart:
     - when the target's `goldbot/db/migrations.py` lacks `compat_back_to` and `state/aux.db` is at schema 5, stop
       every `goldbot-*` service, run the step-back as the service user, then restart (same logic as

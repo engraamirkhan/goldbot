@@ -7,18 +7,19 @@ import { ProposalCard } from "./ProposalCard";
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 const p = (expiresIn = 60, over: Partial<Proposal> = {}): Proposal => ({
   proposal_id: "p1", account_id: "icm-demo", agent_id: "session_open-g0-abc", side: "long", lots: 0.05, entry: 2400.25,
-  stop: 2396.0, target: 2406.5, p: 0.62, ev_r: 0.31, spread_points: 22, risk_usd: 21.25,
+  stop: 2396.0, target: 2406.5, p: 0.62, ev_r: 0.31, spread_points: 22, risk_usd: 21.25, min_lot_exception: false,
   top_features: [["adx14", 31.2], ["atr_14", 0.4], ["rv_20", -0.2], ["extra", 1]],
   expires_at: new Date(NOW + expiresIn * 1000).toISOString(), ...over,
 });
 const decided = (status: DecidedProposal["status"], over: Partial<DecidedProposal> = {}): DecidedProposal => ({ ...p(), status, refusal: [], ...over });
 
 describe("ProposalCard", () => {
-  it("shows direction, size, $ risk, levels, p/EV/spread and top features in plain words", () => {
+  it("shows direction, size, risk, levels, p/EV/spread and top features in plain words", () => {
     render(<ProposalCard p={p()} now={NOW} canDecide blockers={[]} />);
     expect(screen.getByText("LONG")).toBeInTheDocument();
     expect(screen.getByText(/0.05 lots/)).toBeInTheDocument();
-    expect(screen.getByText("$21.25")).toBeInTheDocument();
+    expect(screen.getByText("$21.25")).toBeInTheDocument();          // an older engine: dollars, labelled USD
+    expect(screen.getByText("(USD)")).toBeInTheDocument();
     expect(screen.getByText("2400.25")).toBeInTheDocument();
     expect(screen.getByText("2396.00")).toBeInTheDocument();
     expect(screen.getByText("−4.25")).toBeInTheDocument();          // stop distance in price
@@ -31,9 +32,42 @@ describe("ProposalCard", () => {
     expect(screen.getByRole("timer")).toHaveTextContent("1:00");
   });
 
-  it("says when the engine did not report $ risk", () => {
+  it("says when the engine did not report the risk", () => {
     render(<ProposalCard p={p(60, { risk_usd: null })} now={NOW} canDecide blockers={[]} />);
-    expect(screen.getByTitle(/does not report \$ risk/)).toHaveTextContent("—");
+    expect(screen.getByTitle(/does not report the risk/)).toHaveTextContent("—");
+  });
+
+  const gbp: Partial<Proposal> = {
+    lots: 0.01, currency: "GBP", risk_amount: 8.2, risk_fraction: 0.0082, min_lot_exception: true, risk_normal: 0.005,
+    risk_cap: 0.01, reward_amount: 12.06, loss_left: 11.8, loss_left_period: "today",
+  };
+
+  it("shows risk in the account currency with its share of equity, and stop and target in money", () => {
+    render(<ProposalCard p={p(60, gbp)} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByText("£8.20")).toBeInTheDocument();
+    expect(screen.getByText(/0.82% of equity/)).toBeInTheDocument();
+    expect(screen.getByText(/if the stop is hit, before costs/)).toBeInTheDocument();
+    expect(screen.queryByText("(USD)")).toBeNull();
+    expect(screen.getByText("−£8.20")).toBeInTheDocument();          // lost at the stop
+    expect(screen.getByText("+£12.06")).toBeInTheDocument();         // won at the target
+  });
+
+  it("notes the minimum-lot exception in plain words", () => {
+    render(<ProposalCard p={p(60, gbp)} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByText("Smallest trade size: above the normal 0.5%, within your 1% cap.")).toBeInTheDocument();
+    render(<ProposalCard p={p(60, { ...gbp, proposal_id: "p2", min_lot_exception: false })} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getAllByText(/Smallest trade size/)).toHaveLength(1);
+  });
+
+  it("shows the loss budget left if this loses, spent, or unknown, and none on decided cards", () => {
+    const { rerender } = render(<ProposalCard p={p(60, gbp)} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByText("£11.80 left today if this loses (open trades aside)")).toBeInTheDocument();
+    rerender(<ProposalCard p={p(60, { ...gbp, loss_left: 0 })} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByText("No loss budget left today if this loses (open trades aside): new entries stop")).toBeInTheDocument();
+    rerender(<ProposalCard p={p(60, { ...gbp, loss_left: null, loss_left_period: null })} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByText("Loss budget left today: unknown")).toBeInTheDocument();
+    rerender(<ProposalCard p={{ ...decided("approved"), ...gbp }} now={NOW} canDecide blockers={[]} />);
+    expect(screen.queryByText(/if this loses/)).toBeNull();
   });
 
   it("approves with one tap", async () => {
