@@ -137,11 +137,12 @@ def test_a_broker_that_does_not_show_the_fill_yet_still_refuses_the_second(tmp_p
     assert st.open_positions == 1 and st.open_long == 1 and st.open_lots > 0 and st.margin_used > 0
 
 
-def test_an_ambiguous_order_result_stops_auto_entries_for_the_rest_of_the_close(tmp_path):
-    # LOW-B: the journal says the order was not confirmed, never "executed"
-    pb = AmbiguousPaper(equity=10_000, adverse_slip_points=0.0)
+@pytest.mark.parametrize("retcode", [-1, 10012, 10031, 10037, 10047])   # 10037 and 10047 are not defined MT5 codes
+def test_an_ambiguous_order_result_stops_auto_entries_for_the_rest_of_the_close(tmp_path, retcode):
+    # LOW-B: the journal says the order was not confirmed, never "executed"; an unknown code is never a definite reject
+    pb = AmbiguousPaper(retcode=retcode, equity=10_000, adverse_slip_points=0.0)
     eng, _, dec = _run(tmp_path, _two(), RiskLimits(**BASE), pb=pb)
-    assert _actions(dec) == ["auto_unconfirmed:-1", "auto_paused:unconfirmed_order"], _actions(dec)
+    assert _actions(dec) == [f"auto_unconfirmed:{retcode}", "auto_paused:unconfirmed_order"], _actions(dec)
     assert not pb.positions()
 
 
