@@ -143,6 +143,7 @@ GrantableRole = Literal["approver", "viewer"]     # the owner role belongs to au
 class AuthState(BaseModel):
     needs_setup: bool
     users: int
+    email_link: bool = False      # the owner's "email me a sign-in link" is offered (auth.mail configured)
 
 
 class SetupRequest(ApiRequest):
@@ -255,6 +256,22 @@ class RecoveryLoginRequest(ApiRequest):
 class RecoveryLoginResponse(LoginResponse):
     totp_uri: str                 # the new authenticator: enrol it now, the old one no longer works
     recovery_codes_left: int
+
+
+class EmailLinkRequest(ApiRequest):
+    """Owner only, but the answer is the same generic 200 for every address (nothing can be enumerated)."""
+    email: str = Field("", max_length=320)
+
+
+class EmailLinkResponse(BaseModel):
+    ok: bool = True
+    detail: str = "If this address can use email sign-in, a link is on its way"
+
+
+class EmailLinkRedeemRequest(ApiRequest):
+    """The token from the link's fragment AND a current authenticator code: the link replaces the password only."""
+    token: str = Field("", max_length=256)
+    totp: str = Field("", max_length=16)
 
 
 class RecoveryCodesRequest(ApiRequest):

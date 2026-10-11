@@ -78,6 +78,9 @@ export const api = {
     req<Schemas["Ok"]>("/api/auth/password/forgot", { method: "POST", body: JSON.stringify({ email, totp, new_password, recovery_code }) }),
   recoveryLogin: (email: string, password: string, recovery_code: string) =>
     req<Schemas["RecoveryLoginResponse"]>("/api/auth/recovery/login", { method: "POST", body: JSON.stringify({ email, password, recovery_code }) }),
+  emailLink: (email: string) => req<Schemas["EmailLinkResponse"]>("/api/auth/email-link", { method: "POST", body: JSON.stringify({ email }) }),
+  redeemEmailLink: (token: string, totp: string) =>
+    req<Schemas["LoginResponse"]>("/api/auth/email-link/redeem", { method: "POST", body: JSON.stringify({ token, totp }) }),
   recoveryCodes: (password: string, totp: string) =>
     req<Schemas["RecoveryCodesResponse"]>("/api/auth/recovery/codes", { method: "POST", body: JSON.stringify({ password, totp }) }),
   status: () => req<Status>("/api/status"),

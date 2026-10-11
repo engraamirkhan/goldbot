@@ -73,6 +73,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   clash is caught by the `docs-assemble` pre-commit hook (which CI runs) and fixed by `fix-ids`. Lanes are merged
   with `scripts/docs_assemble.py merge <branch>`, which also absorbs branches that still edit the old rendered
   files. Never edit the rendered files.
+- Email sign-in link: follow-ups to the security review of fe58fae (approved; no timing oracle found).
+  - M1: ADR 0013 records the accepted risk (with mail on, mailbox plus authenticator signs the owner in) and its
+    limits. Every `email_link_login` sends the owner a Telegram notice (`_notify_owner`) and an email
+    (`sign_in_notice_message`), with no token and only a coarse network hint (`auth.coarse_ip`: IPv4 /16, IPv6 /32).
+  - L1: `auth.mail.dashboard_origin` is checked with `urlsplit`: https with a host and no user info, path, query or
+    fragment; http only for exactly localhost, 127.0.0.1 or ::1.
+  - L2: sign-out-everywhere (`revoke_sessions`) and the server's `revoke-sessions` command also delete email links,
+    in the same transaction.
+  - L3: new health check `email_link` warns when the owner's address hit the hourly limit 3 or more times in 24 h
+    (`email_link_health_note`, never names the address). OWNER_GUIDE says what to do when no link arrives.
+  - L4: `web/src/main.tsx` takes link tokens out of the address bar at start, signed in or not.
+  - L5: `SmtpMailer.ready()` is cached for 60 s (`READY_CACHE_S`).
+  - UX: a failed redeem goes straight to "Email me a sign-in link" (the old link is spent).
+  - RUNBOOK: aux.db schema 6 cannot be stepped back to 4. Releases since state-store step 3 open it; older ones are
+    refused by the deploy.
 - First demo deploy (SRE, 2026-10-11): `docs/deploy/first-deploy.md` is the owner's 60-90 min session (case A, fresh
   install). The brain runs on Oracle Ampere A1, now **2 OCPU / 12 GB**, the Always Free total since mid-2026 (it was
   4 / 24). MT5 runs on a bridge box. Day 1 tries both bridge options:
@@ -88,6 +103,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 
   Follow-ups: Cloudflare Tunnel with Access; an outside dead man's switch (alerts come only from the brain); a
   main-loop engine heartbeat (a hung engine shows as stale only after 45 min).
+- Owner-only email sign-in link and clearer sign-in screens (owner request 2026-10-11; TRACEABILITY U20). The login
+  page now titles each flow (Sign in, Reset your password, Email me a sign-in link, Finish signing in, Set a new
+  password), shows **Forgot password?**, **Email me a sign-in link** (only when the server has mail configured) and
+  **Use a recovery code**, and fits a phone (16px inputs, 44px targets). `POST /api/auth/email-link {email}` answers
+  one generic 200 for every address; it mails a link only to `auth.owner_email` (trimmed, case-insensitive) when that
+  account is the enabled owner and mail is configured. Token: `token_urlsafe(32)`, SHA-256 in aux.db `email_links`
+  (migration 6, additive), single use, 15 min; at most 3 requests an hour per address and per IP
+  (`email_link_requests`). `POST /api/auth/email-link/redeem {token, totp}` STILL needs the authenticator code; any
+  redeem of a live link deletes every outstanding link (a wrong code burns it and counts towards the sign-in lockout;
+  unknown tokens count against the IP only). A password change, forgot-password or recovery-code sign-in also
+  deletes outstanding links. Mail: `goldbot/api/mailer.py`, smtplib + STARTTLS, settings `auth.mail` (real values in
+  settings.local.yaml), password in the keyring as `smtp-password`; sent in a background task after the response,
+  failures logged and audited by exception type only. `goldbot run mail-test` checks the setup. Rollback note: aux.db
+  schema 6 is additive, so every release since state-store step 3 opens it; a release from before step 3 is refused
+  by the deploy (no 6 -> 4 step-back yet). Needs security review.
 - Clearing an `engine_startup_refused` halt (2026-10-11, re-verify follow-up of LOW-D). A test now shows that a
   refused engine file, followed by a successful start and one engine state write, gives a supervisor evaluation
   without `engine_startup_refused` (the engine's first write replaces the file). The RUNBOOK's "Engines are running

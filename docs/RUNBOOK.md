@@ -632,7 +632,43 @@ a service is running; if one keeps restarting, read its `.err` file in the logs 
 | Re-arm or auto mode says "too many attempts" (Telegram notice: wrong authenticator codes) | Five wrong codes lock re-arm and auto mode (dashboard and Telegram) for 15 minutes; sign-in, **/halt** and **/mode propose** still work. If it was not you, someone holds a signed-in session: on the server, from the goldbot directory, run `python -m goldbot.ops.run revoke-sessions` (signs every account out; add `--state <dir>` if state is elsewhere: it refuses a directory without aux.db), then change your password. Failed sign-ins also lock re-arm and auto mode for the same 15 minutes. |
 | Someone should lose access | Owner: **Users** -> **Disable** (signs them out at once) or **Sign out everywhere**; **Enable** restores the account. The owner cannot be disabled or demoted. |
 
+| You (the owner) want to sign in without typing the password | Login page -> **Email me a sign-in link** -> your email -> **Send the link**. The page always says "If this address can use email sign-in, a link is on its way", whatever address is typed. Open the link on the device you want to sign in on, then enter the **authenticator code**: the link replaces the password, never the code. It works once, for 15 minutes; asking again or using a link cancels the others. At most 3 requests an hour per address and per network address. The option only appears once mail is set up (below). |
+
 Every one of these is recorded in the audit log (`state\aux.db`, table `audit`; the state-files table in section 3 shows how to read it).
+
+**Email sign-in link: one-time mail setup (owner only, optional)**
+
+The link is sent with plain SMTP and STARTTLS. Gmail is free: it needs 2-Step Verification on the Google account and
+an App Password (Google Account -> Security -> 2-Step Verification -> App passwords; name it `goldbot`; Google shows
+16 letters once).
+
+1. Store the App Password in the server's keyring (never in a file, an env var or the repository). On the brain
+   `goldbot accounts set smtp-password`; on the Windows VPS
+   `.\.venv\Scripts\python.exe -m goldbot.ops.accounts set smtp-password`. Paste it at the hidden prompt.
+2. Add to the server's `config/settings.local.yaml` (not tracked by Git; placeholders shown, use your own values):
+   ```yaml
+   auth:
+     owner_email: you@example.com
+     mail:
+       enabled: true
+       host: smtp.gmail.com
+       port: 587
+       from_address: you@example.com       # the Gmail account the App Password belongs to
+       dashboard_origin: https://dash.example.com   # your tunnel hostname, https only
+   ```
+3. Check it: `goldbot run mail-test` (VPS: `python -m goldbot.ops.run mail-test`) sends a test email to
+   `auth.owner_email` and prints only `sent`, `not sent: <error type>` or what is missing. Then restart the API
+   (`sudo systemctl restart goldbot-api`, VPS: `nssm restart goldbot-api`) so the login page offers the link.
+4. If a link never arrives: the API log says `email sign-in link not sent: <error type>` (never the address or the
+   link), and the audit table has `email_link_send_failed`. `SMTPAuthenticationError` means the App Password is wrong
+   or revoked: store a new one (step 1); no restart is needed. If the audit table has `email_link_rate_limited`
+   instead, the 3-an-hour limit was hit: wait an hour or sign in with the password. The `email_link` health check
+   warns when that happens 3 or more times in 24 h. To turn the feature off, set `enabled: false` and restart the API.
+5. Every sign-in with a link sends you a Telegram notice and an email ("new sign-in with an emailed link": time and a
+   rough network such as `203.0.x.x`, never the link). If it was not you, your mailbox and your authenticator are
+   both exposed: run `python -m goldbot.ops.run revoke-sessions` on the server (signs everyone out and cancels every
+   open link), set `enabled: false`, then change your password and your email password. The accepted risk and its
+   limits are in [ADR 0013](decisions/0013-email-sign-in-link-accepted-risk.md).
 
 ---
 
@@ -1107,5 +1143,11 @@ fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back,
 
   It refuses unless the file is at schema 5. Later versions record which older versions can still open the file,
   so this step is not needed again for changes that only add tables.
+* **aux.db schema 6 (email sign-in links, 2026-10-11) cannot be stepped back to 4.** Schema 6 only adds tables, so
+  every release from state-store step 3 on (commit 596386d, 2026-10-10, schema 5 or later) opens a schema 6 file as
+  it is. A release from before step 3 knows only schema 4. The updater and `goldbot-deploy` refuse to install such a
+  release ("aux.db is at schema 6 ... no step-back is known; nothing changed"), and the one-liner above refuses too.
+  Do not delete schema_version rows by hand to get round it. Roll back to a release from 2026-10-10 or later, or ask
+  a Claude session for a 6 -> 4 step-back.
 * The script stops the scheduler first and checks again that no job started in between; if one did, it was
   interrupted by the stop: the script starts the scheduler again, stops nothing else and refuses the update.
