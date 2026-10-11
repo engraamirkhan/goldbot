@@ -847,7 +847,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   and `accounts.verify_terminal_account` refuse netting, exchange or an unreported mode at start, on every order and in
   preflight, since fills on a netting account join one position per symbol. An older bridge does not report the mode,
   so **update the MT5 bridge before the brain** or the engine refuses to start (open positions keep their broker
-  stops). Tests on a fake terminal whose deal and
+  stops). Bridge protocol v4 (`API_VERSION = 4`, `MIN_COMPATIBLE = 3`; a v3 brain ignores the new field). Tests on a fake terminal whose deal and
   order tickets differ (tests/test_mt5_position_ticket.py, including the engine keying and a sweep + reconcile that
   keep the trade). **Verify on the demo terminal:** after the first demo fill, the engine's `open` position id and the
   `adopt_orphan` count in the decisions journal (expected: the terminal's position ticket, no orphan adopted).
