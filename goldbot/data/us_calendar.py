@@ -41,8 +41,11 @@ history as published. last_ok is kept per event type: a type never downloaded be
 stamps; for a type downloaded before, an event first seen now whose rule stamp has passed was added or moved late and
 is stamped at this download. A future event that disappears adds a `cancelled` row; one that comes back a `scheduled`
 row; a run that would cancel more than MAX_CANCELLATIONS future events of one type is refused for that type (a
-truncated download, not a schedule change). Monthly releases less than MIN_MONTHLY_SPACING apart are quarantined
-(kept out and reported) unless hand-checked (SPACING_EXEMPT). `count_table` checks per-type, per-year counts.
+truncated download, not a schedule change) unless the operator allows it once (`allow_cancellations`, audited).
+Both rows of any pair of monthly releases less than MIN_MONTHLY_SPACING apart are quarantined (kept out and reported)
+unless hand-checked (SPACING_EXEMPT). A GDP advance more than 45 days after its quarter end is flagged unless
+GDP_ADVANCE_OVERRIDES lists the quarter. `count_table` checks per-type, per-year counts. last_ok metadata keyed by
+anything but event types (the first, source-keyed format) is refused.
 
 Every row: event_id (`<event_type>:<ET date>`), event_type, tier (1 | 2), release_id (FRED id, -1 otherwise),
 event_utc, status (scheduled | cancelled), available_utc, ts_utc (= available_utc), vintage (retrieval date), source
@@ -135,8 +138,8 @@ SHUTDOWN_FLOORS: tuple[Shutdown, ...] = (
     Shutdown(pd.Timestamp("2018-12-22"), pd.Timestamp("2019-02-15"), frozenset({"census", "bea"}),
              "reopened 2019-01-25; Commerce only (BLS and DOL were funded)"),
     Shutdown(pd.Timestamp("2025-10-01"), pd.Timestamp("2025-12-05"), _ALL, "reopened 2025-11-12"),
-    Shutdown(pd.Timestamp("2026-01-31"), pd.Timestamp("2026-02-13"), _ALL,
-             "short lapse; BLS revised dates verified, start date and other agencies unverified"),
+    Shutdown(pd.Timestamp("2026-01-31"), pd.Timestamp("2026-02-13"), frozenset({"bls"}),
+             "short lapse; BLS only until other agencies are verified (BLS revised dates verified, start unverified)"),
 )
 
 
@@ -148,8 +151,8 @@ class ManualEvent(NamedTuple):
 
 
 # Hand-checked scheduled-then-cancelled/moved events. Agency cancel times: the shutdown's start for events up to
-# reopening; for later events, the shutdown floor or one minute before the event, whichever is earlier (the exact
-# announcement time is not recorded; later is conservative).
+# reopening (2013, 2025, where the start is verified); otherwise the shutdown floor or one minute before the event,
+# whichever is earlier (the announcement time is not recorded; later is conservative, never after the event).
 MANUAL_EVENTS: tuple[ManualEvent, ...] = (
     ManualEvent("nfp", "2013-10-04", "2013-10-01 00:00", "BLS revised schedule (Calculated Risk copy, 2013-10-17)"),
     ManualEvent("jolts", "2013-10-08", "2013-10-01 00:00", "BLS revised schedule 2013-10-17"),
@@ -172,14 +175,23 @@ MANUAL_EVENTS: tuple[ManualEvent, ...] = (
     ManualEvent("cpi", "2025-12-10", "2025-12-05 00:00", "bls.gov 2025 lapse table (moved to 2025-12-18)"),
     ManualEvent("ppi", "2025-12-11", "2025-12-05 00:00", "bls.gov 2025 lapse table (moved to 2026-01-14)"),
     ManualEvent("pce", "2025-12-19", "2025-12-05 00:00", "bea.gov blog (combined into 2026-01-22)"),
-    ManualEvent("jolts", "2026-02-03", "2026-01-31 00:00", "bls.gov 2026 lapse table (moved to 2026-02-05)"),
-    ManualEvent("nfp", "2026-02-06", "2026-01-31 00:00", "bls.gov 2026 lapse table (moved to 2026-02-11)"),
-    ManualEvent("cpi", "2026-02-11", "2026-01-31 00:00", "bls.gov 2026 lapse table (moved to 2026-02-13)"),
+    ManualEvent("jolts", "2026-02-03", "2026-02-03 09:59", "bls.gov 2026 lapse table (moved to 2026-02-05)"),
+    ManualEvent("nfp", "2026-02-06", "2026-02-06 08:29", "bls.gov 2026 lapse table (moved to 2026-02-11)"),
+    ManualEvent("cpi", "2026-02-11", "2026-02-11 08:29", "bls.gov 2026 lapse table (moved to 2026-02-13)"),
 )
 # Monthly releases closer than MIN_MONTHLY_SPACING that are real (hand-checked).
 SPACING_EXEMPT: frozenset[str] = frozenset({
-    "nfp:2013-11-08",          # 17 days after the delayed September report (2013-10-22)
+    "nfp:2013-10-22", "nfp:2013-11-08",     # the delayed September report and the October one, 17 days apart (2013)
 })
+# The real GDP advance for a quarter end when the first GDP release after it is something else (hand-checked):
+# quarter end -> advance date. A first release more than GDP_ADVANCE_MAX_LAG after a quarter end not listed here is
+# flagged (late_gdp_advances) for review.
+GDP_ADVANCE_MAX_LAG = pd.Timedelta(days=45)
+GDP_ADVANCE_OVERRIDES: dict[str, str] = {
+    "2018-12-31": "2019-02-28",   # NY Fed nowcast 2019-02-15: postponed by the shutdown
+    "2025-09-30": "2025-12-23",   # BEA blog 2025-11-24/12-10: the October advance cancelled, initial estimate Dec 23
+    "2025-12-31": "2026-02-20",   # BEA blog 2026-01-07; 2026-01-22 was the Q3 update and PCE, not the Q4 advance
+}
 # Rule-derived (ISM) dates checked by hand: rule event_id -> actual ET date, or None to drop it.
 RULE_OVERRIDES: dict[str, str | None] = {}
 
@@ -291,16 +303,37 @@ def rule_rows(now: pd.Timestamp, vintage: pd.Timestamp) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def split_gdp(dates: pd.DatetimeIndex) -> tuple[pd.DatetimeIndex, pd.DatetimeIndex]:
-    """(advance, later estimates): the advance is the first GDP release after each quarter end (from the quarter end
-    just before the first date: a quarter whose advance precedes the data is not guessed)."""
+def _gdp_advance_by_quarter(dates: pd.DatetimeIndex) -> dict[pd.Timestamp, pd.Timestamp]:
+    """quarter end -> its advance date: GDP_ADVANCE_OVERRIDES when listed (and in the data), else the first GDP release
+    after the quarter end (from the quarter end just before the first date: earlier quarters are not guessed)."""
     d = pd.DatetimeIndex(dates).tz_localize(None).normalize().unique().sort_values()
     if len(d) == 0:
-        return d, d
-    ends = pd.date_range(d.min() - pd.Timedelta(days=35), d.max(), freq="QE")
-    adv = sorted({d[i] for i in np.searchsorted(d.to_numpy(), ends.to_numpy(), side="right") if i < len(d)})
-    advance = pd.DatetimeIndex(adv)
+        return {}
+    out = {}
+    for qe in pd.date_range(d.min() - pd.Timedelta(days=35), d.max(), freq="QE"):
+        q = pd.Timestamp(qe).normalize()
+        override = GDP_ADVANCE_OVERRIDES.get(f"{q:%Y-%m-%d}")
+        if override is not None and pd.Timestamp(override) in d:
+            out[q] = pd.Timestamp(override)
+            continue
+        i = int(np.searchsorted(d.to_numpy(), q.to_datetime64(), side="right"))
+        if i < len(d):
+            out[q] = d[i]
+    return out
+
+
+def split_gdp(dates: pd.DatetimeIndex) -> tuple[pd.DatetimeIndex, pd.DatetimeIndex]:
+    """(advance, later estimates), with the advance per quarter from _gdp_advance_by_quarter."""
+    d = pd.DatetimeIndex(dates).tz_localize(None).normalize().unique().sort_values()
+    advance = pd.DatetimeIndex(sorted(set(_gdp_advance_by_quarter(d).values())))
     return advance, d[~d.isin(advance)]
+
+
+def late_gdp_advances(dates: pd.DatetimeIndex) -> list[str]:
+    """Quarters whose advance (not hand-checked) comes more than GDP_ADVANCE_MAX_LAG after the quarter end."""
+    return [f"quarter {q:%Y-%m-%d}: first GDP release {a:%Y-%m-%d} is {(a - q).days} days after the quarter end"
+            for q, a in _gdp_advance_by_quarter(dates).items()
+            if a - q > GDP_ADVANCE_MAX_LAG and f"{q:%Y-%m-%d}" not in GDP_ADVANCE_OVERRIDES]
 
 
 def fomc_rows(meetings: pd.DataFrame, vintage: pd.Timestamp) -> pd.DataFrame:
@@ -382,12 +415,16 @@ def types_of(fetched_sources: Sequence[str]) -> list[str]:
 
 # --------------------------------------------------------------------------------------------------- quality
 def quarantine_spacing(fresh: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(kept, quarantined): a downloaded monthly release (MONTHLY_TYPES) less than MIN_MONTHLY_SPACING after the
-    previous one is quarantined (a duplicate or a parse error) unless SPACING_EXEMPT lists it."""
+    """(kept, quarantined): BOTH rows of any pair of downloaded monthly releases (MONTHLY_TYPES) less than
+    MIN_MONTHLY_SPACING apart are quarantined (one is a duplicate, a revision day or a parse error, and which one is
+    not knowable here), except rows SPACING_EXEMPT lists (hand-checked real releases)."""
     f = fresh[(fresh["source"] == "fred") & fresh["event_type"].isin(MONTHLY_TYPES)
               & (fresh["status"] == SCHEDULED)].sort_values(["event_type", "event_utc"])
-    gap = pd.DatetimeIndex(f["event_utc"]).to_series(index=f.index).groupby(f["event_type"].to_numpy()).diff()
-    bad = f.index[(gap < MIN_MONTHLY_SPACING).to_numpy() & ~f["event_id"].isin(SPACING_EXEMPT).to_numpy()]
+    t = pd.DatetimeIndex(f["event_utc"]).to_series(index=f.index)
+    by = f["event_type"].to_numpy()
+    close_prev = (t.groupby(by).diff() < MIN_MONTHLY_SPACING).to_numpy()
+    close_next = (-t.groupby(by).diff(-1) < MIN_MONTHLY_SPACING).to_numpy()
+    bad = f.index[(close_prev | close_next) & ~f["event_id"].isin(SPACING_EXEMPT).to_numpy()]
     return fresh.drop(index=bad), fresh.loc[bad]
 
 
@@ -611,19 +648,29 @@ def _gone(latest: pd.DataFrame, fresh: pd.DataFrame, now: pd.Timestamp, types: s
 
 
 def mass_cancellations(prev: pd.DataFrame | None, fresh: pd.DataFrame, retrieved_utc: pd.Timestamp,
-                       fetched_types: Sequence[str] | None = None, limit: int = MAX_CANCELLATIONS) -> dict[str, int]:
-    """event_type -> number of future events this run would cancel, for the types above `limit`."""
+                       fetched_types: Sequence[str] | None = None, limit: int = MAX_CANCELLATIONS,
+                       allow: Sequence[str] = ()) -> dict[str, int]:
+    """event_type -> number of future events this run would cancel, for the types above `limit` (not in `allow`)."""
     if prev is None or prev.empty:
         return {}
     now = pd.Timestamp(retrieved_utc).tz_convert("UTC")
     types = set(fetched_types) if fetched_types is not None else set(fresh["event_type"])
     n = _gone(_latest(prev), fresh, now, types).groupby("event_type").size()
-    return {str(t): int(k) for t, k in n.items() if k > limit}
+    return {str(t): int(k) for t, k in n.items() if k > limit and str(t) not in set(allow)}
+
+
+def check_last_ok(last_ok: dict[str, Any]) -> None:
+    """last_ok must be keyed by event type. The first format (keyed by source: fred, fed, rule) would be misread as
+    'never downloaded' or worse, so it is refused."""
+    bad = sorted(set(last_ok) - set(EVENT_TYPES))
+    if bad:
+        raise ValueError(f"last_ok keys {bad} are not event types (old source-keyed metadata?); refusing to read it")
 
 
 def merge_calendar(prev: pd.DataFrame | None, fresh: pd.DataFrame, retrieved_utc: pd.Timestamp,
                    last_ok: dict[str, pd.Timestamp] | None = None,
-                   fetched_types: Sequence[str] | None = None) -> pd.DataFrame:
+                   fetched_types: Sequence[str] | None = None,
+                   allow_cancellations: Sequence[str] = ()) -> pd.DataFrame:
     """Add one download to the published calendar without rewriting it. `last_ok`: event_type -> the previous
     successful download of that type (before this run).
 
@@ -633,8 +680,9 @@ def merge_calendar(prev: pd.DataFrame | None, fresh: pd.DataFrame, retrieved_utc
       Hand-checked rows (source manual, SPACING_EXEMPT) keep their stamps.
     * A future event of a type in `fetched_types` (default: the types in `fresh`) whose latest status is scheduled and
       that `fresh` no longer lists gets a `cancelled` row at `retrieved_utc`; a cancelled one listed again gets a
-      `scheduled` row. More than MAX_CANCELLATIONS for one type raises MassCancellation. Past events are never
-      touched."""
+      `scheduled` row. More than MAX_CANCELLATIONS for one type raises MassCancellation unless the type is in
+      `allow_cancellations` (an operator's one-shot, verified override). Past events are never touched."""
+    check_last_ok(last_ok or {})
     now = pd.Timestamp(retrieved_utc)
     now = now.tz_localize("UTC") if now.tzinfo is None else now.tz_convert("UTC")
     fresh = fresh.copy()
@@ -643,7 +691,7 @@ def merge_calendar(prev: pd.DataFrame | None, fresh: pd.DataFrame, retrieved_utc
     if prev is None or prev.empty:
         out = fresh
     else:
-        mass = mass_cancellations(prev, fresh, now, fetched_types)
+        mass = mass_cancellations(prev, fresh, now, fetched_types, allow=allow_cancellations)
         if mass:
             raise MassCancellation(f"refused: this run would cancel {mass} future events (limit {MAX_CANCELLATIONS})")
         prev = prev.copy()
@@ -719,6 +767,7 @@ def read_release(path: str) -> tuple[pd.DataFrame, dict[str, pd.Timestamp]]:
     table = pq.read_table(path)
     raw = (table.schema.metadata or {}).get(META_KEY)
     last_ok = {k: pd.Timestamp(v) for k, v in json.loads(raw).items()} if raw else {}
+    check_last_ok(last_ok)
     return table.to_pandas(), last_ok
 
 

@@ -310,9 +310,9 @@ def test_check_keeps_history_refuses_fewer_rows_or_changed_rows():
 def test_release_file_round_trips_rows_and_last_download_times(tmp_path):
     pub = _cal()
     p = tmp_path / uc.ASSET
-    uc.write_release(pub, str(p), {"fred": NOW})
+    uc.write_release(pub, str(p), {"cpi": NOW})
     back, ok = uc.read_release(str(p))
-    assert len(back) == len(pub) and ok == {"fred": NOW}
+    assert len(back) == len(pub) and ok == {"cpi": NOW}
     loaded = read_us_calendar_files(tmp_path)
     assert len(loaded) == len(pub) and str(loaded["available_utc"].dt.tz) == "UTC"
     assert read_us_calendar_files(tmp_path / "missing").empty
@@ -487,12 +487,12 @@ def test_script_needs_the_key_and_never_mistakes_a_missing_file_for_a_first_run(
 def test_script_never_publishes_a_frame_that_loses_history(tmp_path, monkeypatch, capsys):
     mod = _script()
     prev = tmp_path / "prev.parquet"
-    uc.write_release(_cal(), str(prev), {"fred": NOW})
+    uc.write_release(_cal(), str(prev), {"cpi": NOW})
     monkeypatch.setattr(mod, "fetch_release", _fake_fetch)
     monkeypatch.setattr(mod, "fetch_fomc", _fomc)
     monkeypatch.setenv("FRED_API_KEY", "k")
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    monkeypatch.setattr(mod, "merge_calendar", lambda prev_df, fresh, now, last_ok, fetched_types=None: fresh.head(5))
+    monkeypatch.setattr(mod, "merge_calendar", lambda prev_df, fresh, now, last_ok, **kw: fresh.head(5))
     out = tmp_path / "out.parquet"
     assert mod.main(["--out", str(out), "--existing", str(prev)]) == 2
     assert not out.exists() and "REFUSED" in capsys.readouterr().out
@@ -579,7 +579,7 @@ def test_research_pass_adds_the_calendar_features_only_with_the_flag(enabled, tm
     assert mod.feature_ctx(None, None, None) == (None, None)
     assert mod.load_us_calendar("")[1]["used"] is False
     assert mod.load_us_calendar(str(tmp_path / "none"))[1]["used"] is False
-    uc.write_release(_cal(), str(tmp_path / uc.ASSET), {"fred": NOW})
+    uc.write_release(_cal(), str(tmp_path / uc.ASSET), {"cpi": NOW})
     cal, info = mod.load_us_calendar(str(tmp_path))
     assert info["used"] is True and cal is not None and "cpi" in info["event_types"]
     ctx, names = mod.feature_ctx(None, None, cal)
@@ -748,7 +748,7 @@ def test_count_table_and_monthly_spacing_quarantine():
     d = _fred_dates()
     d["cpi"] = pd.DatetimeIndex([*d["cpi"], pd.Timestamp("2024-02-20")]).sort_values()  # 7 days after Feb 13
     keep, quarantined = uc.quarantine_spacing(uc.calendar_frame(d, NOW, _fomc()))
-    assert list(quarantined["event_id"]) == ["cpi:2024-02-20"]
+    assert list(quarantined["event_id"]) == ["cpi:2024-02-13", "cpi:2024-02-20"]   # both of the close pair
     assert "cpi:2024-02-20" not in set(keep["event_id"])
     assert "nfp:2013-11-08" in uc.SPACING_EXEMPT                            # 17 days after Oct 22, 2013 (shutdown)
     full = pd.DataFrame({"event_id": [f"cpi:2015-{m:02d}-14" for m in range(1, 13)], "event_type": "cpi",
@@ -829,3 +829,86 @@ def test_retail_sales_name_check_is_specific():
     assert rel.name == "Advance Monthly Sales for Retail"
     with pytest.raises(uc.FredError, match="expected a name"):
         uc.fetch_release(rel, "k", session=cast(Any, _Session("Monthly Retail Trade Report", [])), sleep=lambda _: None)
+
+
+# --------------------------------------------------------------------------- re-verification fixes (M-R1, 2026, L-R1-3)
+def test_a_phantom_listed_before_the_real_release_is_quarantined_with_it():
+    """M-R1: both rows of a close pair are held back until one is hand-checked, so a phantom that comes first (e.g. a
+    seasonal-factor revision day) is never kept in place of the real release."""
+    d = _fred_dates()
+    d["cpi"] = pd.DatetimeIndex([*d["cpi"], pd.Timestamp("2024-02-06")]).sort_values()     # phantom 7 days before
+    keep, quarantined = uc.quarantine_spacing(uc.calendar_frame(d, NOW, _fomc()))
+    assert set(quarantined["event_id"]) == {"cpi:2024-02-06", "cpi:2024-02-13"}
+    assert not {"cpi:2024-02-06", "cpi:2024-02-13"} & set(keep["event_id"])
+
+
+def test_a_hand_checked_row_of_a_close_pair_is_kept_and_its_partner_still_held(monkeypatch):
+    d = _fred_dates()
+    d["cpi"] = pd.DatetimeIndex([*d["cpi"], pd.Timestamp("2024-02-06")]).sort_values()
+    monkeypatch.setattr(uc, "SPACING_EXEMPT", uc.SPACING_EXEMPT | {"cpi:2024-02-13"})
+    keep, quarantined = uc.quarantine_spacing(uc.calendar_frame(d, NOW, _fomc()))
+    assert list(quarantined["event_id"]) == ["cpi:2024-02-06"] and "cpi:2024-02-13" in set(keep["event_id"])
+    assert {"nfp:2013-10-22", "nfp:2013-11-08"} <= uc.SPACING_EXEMPT        # both real (2013 shutdown)
+
+
+def test_the_2026_lapse_floor_is_bls_only_and_its_rows_cancel_just_before_the_event():
+    ev = uc.et_to_utc(pd.DatetimeIndex(["2026-02-10"]), time(8, 30))
+    floor = pd.Timestamp("2026-02-13", tz=uc.ET).tz_convert("UTC")
+    assert uc.rule_available_utc(ev, "bls")[0] == ev[0]                     # floor after the event
+    for agency in ("dol", "census", "bea"):
+        assert uc.rule_available_utc(ev, agency)[0] == ev[0] - uc.SCHEDULE_LEAD, agency
+    assert uc.rule_available_utc(uc.et_to_utc(["2026-02-18"], time(8, 30)), "bls")[0] == floor
+    cal = _cal()
+    for eid, at in (("jolts:2026-02-03", "2026-02-03 09:59"), ("nfp:2026-02-06", "2026-02-06 08:29"),
+                    ("cpi:2026-02-11", "2026-02-11 08:29")):
+        c = cal[(cal["event_id"] == eid) & (cal["status"] == "cancelled")]
+        assert c["available_utc"].iloc[0] == pd.Timestamp(at, tz=uc.ET).tz_convert("UTC"), eid
+
+
+def test_allow_cancellations_lets_a_verified_type_through_and_is_audited(tmp_path, monkeypatch):
+    """L-R1: after verifying a real schedule change, a one-shot --allow-cancellations TYPE applies it."""
+    mod = _script()
+    prev = tmp_path / "prev.parquet"
+    pub = _cal(_utc("2024-01-01 06:00"))
+    uc.write_release(pub, str(prev), _ok(_utc("2024-01-01 06:00")))
+
+    def fetch(rel, api_key):
+        d = _fake_fetch(rel, api_key)
+        return d[d < pd.Timestamp("2024-02-01")] if rel.event_type == "jobless_claims" else d
+    monkeypatch.setattr(mod, "fetch_release", fetch)
+    monkeypatch.setattr(mod, "fetch_fomc", _fomc)
+    monkeypatch.setenv("FRED_API_KEY", "k")
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setattr(mod.pd.Timestamp, "now", classmethod(lambda cls, tz=None: _utc("2024-01-08 06:00")))
+    out = tmp_path / "out.parquet"
+    assert mod.main(["--out", str(out), "--existing", str(prev), "--allow-cancellations", "jobless_claims"]) == 0
+    merged, _ = uc.read_release(str(out))
+    assert ((merged["event_type"] == "jobless_claims") & (merged["status"] == "cancelled")).sum() == 48
+    assert "AUDIT" in summary.read_text() and "jobless_claims" in summary.read_text()
+    with pytest.raises(SystemExit):
+        mod.main(["--out", str(out), "--existing", str(prev), "--allow-cancellations", "not_a_type"])
+    assert "--allow-cancellations" in (ROOT / "docs" / "RUNBOOK.md").read_text()
+
+
+def test_late_gdp_advances_are_flagged_and_overrides_win():
+    """L-R2: an advance more than 45 days after the quarter end is flagged unless hand-checked; the override list
+    names the real advance (Q4 2025: 2026-02-20 per BEA, not the 2026-01-22 Q3 update)."""
+    dates = pd.DatetimeIndex(["2025-10-01", "2025-12-23", "2026-01-22", "2026-02-20", "2026-03-13", "2026-04-29"])
+    adv, later = uc.split_gdp(dates)
+    assert pd.Timestamp("2026-02-20") in adv and pd.Timestamp("2026-01-22") in later
+    assert pd.Timestamp("2025-12-23") in adv                                   # Q3 2025 initial estimate (BEA)
+    assert uc.GDP_ADVANCE_OVERRIDES["2025-12-31"] == "2026-02-20"
+    assert uc.late_gdp_advances(dates) == []                                   # both late ones are hand-checked
+    flagged = uc.late_gdp_advances(pd.DatetimeIndex(["2023-12-21", "2024-03-01", "2024-04-25"]))
+    assert flagged == ["quarter 2023-12-31: first GDP release 2024-03-01 is 61 days after the quarter end"]
+
+
+def test_old_source_keyed_last_ok_is_rejected(tmp_path):
+    """L-R3: metadata keyed by source (fred/fed/rule) would be misread as per-type; refuse it."""
+    p = tmp_path / uc.ASSET
+    uc.write_release(_cal(), str(p), {"fred": NOW, "rule": NOW})
+    with pytest.raises(ValueError, match="last_ok"):
+        uc.read_release(str(p))
+    with pytest.raises(ValueError, match="last_ok"):
+        uc.merge_calendar(_cal(), uc.calendar_frame(_fred_dates(), NOW, _fomc()), NOW, {"fred": NOW})

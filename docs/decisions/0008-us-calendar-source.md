@@ -56,7 +56,7 @@ Options:
   - When a shutdown closed an event's agency, events on or after the shutdown's start are raised to a floor:
     - 2013 and 2025: BLS, DOL, Census and BEA;
     - 2018-19: Census and BEA only;
-    - January 2026: all four agencies (conservative; only the BLS dates are verified).
+    - January 2026: BLS only, until other agencies are verified.
   - The Fed and ISM are never closed, so they get no floor.
   - The stamp is never later than the event.
   - The features cap their horizon at the same 7 days.
@@ -65,7 +65,10 @@ Options:
     finding H1). For a type downloaded before, a new event whose rule stamp has passed is stamped at the download that
     first saw it.
   - Future events that disappear get `cancelled` rows.
-  - A run that would cancel more than 2 future events of one type is refused for that type.
+  - A run that would cancel more than 2 future events of one type is refused for that type. After verification
+    the RUNBOOK step adds the dates to `MANUAL_EVENTS`, or an operator applies them once with
+    `--allow-cancellations TYPE`, which is audited in the step summary.
+  - `last_ok` metadata in the old source-keyed format is refused, so it can never be misread.
   - Published rows are never rewritten (`check_keeps_history`).
 - **Hand-checked cancellations** (`MANUAL_EVENTS`, source `manual`). A download only lists what happened, so events
   that were scheduled and then cancelled or moved are added by hand, each with a scheduled row (event - 7 days) and a
@@ -76,13 +79,18 @@ Options:
   - the 2019 GDP advance (New York Fed);
   - the 2025 PCE releases that were folded into later ones (BEA blog).
 
-  Agency events up to reopening are cancelled at the shutdown's start. Later ones are cancelled at the shutdown
-  floor or one minute before the event, whichever is earlier, because the exact announcement times are not recorded.
+  Agency events up to a verified reopening (2013, 2025) are cancelled at the shutdown's start. Later ones, and
+  the 2026 lapse rows (whose start date is unverified), are cancelled at the shutdown floor or one minute before the
+  event, whichever is earlier, because the exact announcement times are not recorded.
 - **Quality guards.**
   - FOMC: any year panel, the year ahead included, or historical page with fewer than 6 scheduled meetings fails the
     source.
-  - Monthly releases less than 20 days apart are quarantined and reported unless listed in `SPACING_EXEMPT`
-    (`nfp:2013-11-08`).
+  - Both rows of any pair of monthly releases less than 20 days apart are quarantined and reported, unless a row
+    is listed in `SPACING_EXEMPT` (`nfp:2013-10-22`, `nfp:2013-11-08`). A phantom listed before the real release is
+    therefore never kept in its place.
+  - A GDP advance more than 45 days after its quarter end is flagged unless `GDP_ADVANCE_OVERRIDES` lists the
+    quarter. The overrides are 2019-02-28 (NY Fed), 2025-12-23 and 2026-02-20 (BEA). For Q4 2025, 2026-01-22 was
+    the Q3 update and PCE, not the Q4 advance.
   - A per-type, per-year count table against the expected counts is written to the step summary:
     - monthly releases: 10-13;
     - claims: 51-53;

@@ -1005,6 +1005,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
       (L2).
     - **Column names.** The tier-2 minute columns now carry `_pit` (L4).
     - **Retail name check.** It is now `Advance Monthly Sales for Retail` (L5).
+  - **Re-verification fixes (2026-10-11):**
+    - **Close pairs.** Both rows of a close monthly pair are quarantined, so a phantom listed first is never kept
+      (M-R1).
+    - **2026 lapse.** The floor is BLS only. Its manual rows are cancelled one minute before each event instead of
+      at the unverified lapse start.
+    - **Recovery path.** `--allow-cancellations TYPE` is a one-shot, audited override, with a RUNBOOK step (L-R1).
+    - **GDP advance.** A late GDP advance is flagged; overrides are 2019-02-28, 2025-12-23 and 2026-02-20, each
+      verified (L-R2).
+    - **Old metadata.** Source-keyed `last_ok` metadata is refused (L-R3).
   - **GATE: no trial may cite `tier1_events` or `tier2_events` until a quant review of the first live run's count
     table (step summary) has signed it off.**
   - **Not yet:**

@@ -11,7 +11,10 @@ so a type that failed before is backfilled with rule stamps when it comes back.
 Guards, each reported in the output and the step summary:
 * monthly releases less than 20 days apart are quarantined (not published) unless hand-checked (SPACING_EXEMPT);
 * a type whose download would cancel more than MAX_CANCELLATIONS future events is refused for this run (its
-  published rows are kept, its last_ok does not move; exit 1);
+  published rows are kept, its last_ok does not move; exit 1). After verifying the change is real (RUNBOOK "US
+  calendar: a type refused for mass cancellations"), a one-shot `--allow-cancellations TYPE` applies it; every use is
+  written to the step summary as an AUDIT line;
+* a GDP advance more than 45 days after its quarter end that is not hand-checked is flagged;
 * a per-type, per-year count table against the expected counts (complete years only; a mismatch is a warning for the
   quant review, not a failure).
 
@@ -37,6 +40,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.data.us_calendar import (  # noqa: E402
     ASSET,
+    EVENT_TYPES,
     ISM,
     RELEASES,
     FedCalendarError,
@@ -47,6 +51,7 @@ from goldbot.data.us_calendar import (  # noqa: E402
     count_table,
     fetch_fomc,
     fetch_release,
+    late_gdp_advances,
     mass_cancellations,
     merge_calendar,
     quarantine_spacing,
@@ -62,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--existing", default="", help="previously published calendar Parquet (kept as is)")
     ap.add_argument("--first-run", action="store_true",
                     help="there is no published file yet (confirmed); allows --existing to be missing")
+    ap.add_argument("--allow-cancellations", action="append", default=[], choices=list(EVENT_TYPES), metavar="TYPE",
+                    help="one-shot, after verification: let this type cancel more than the limit of future events")
     args = ap.parse_args(argv)
     if args.existing and not Path(args.existing).exists() and not args.first_run:
         print(f"REFUSED: {args.existing} does not exist and --first-run was not given; a missing previous file must "
@@ -96,8 +103,15 @@ def main(argv: list[str] | None = None) -> int:
     for _, q in quarantined.iterrows():
         notes.append(f"QUARANTINED (monthly release < 20 days after the previous one; add to SPACING_EXEMPT once "
                      f"hand-checked): {q['event_id']}")
+    if "gdp" in dates:
+        notes += [f"GDP ADVANCE FLAG (check, then add to GDP_ADVANCE_OVERRIDES): {m}" for m in late_gdp_advances(dates["gdp"])]
     fetched = [*types_of([*dates, *(["fomc"] if fomc is not None else [])]), *ISM]
-    mass = mass_cancellations(prev, fresh, now, fetched)
+    allow = list(args.allow_cancellations)
+    if allow:
+        would = mass_cancellations(prev, fresh, now, fetched, limit=0)
+        notes.append(f"AUDIT: --allow-cancellations {', '.join(allow)} by the operator; cancellations applied: "
+                     f"{ {t: would.get(t, 0) for t in allow} }")
+    mass = mass_cancellations(prev, fresh, now, fetched, allow=allow)
     if mass:
         failed = True
         notes.append(f"REFUSED for this run (would cancel more future events than allowed; published rows kept): {mass}")
@@ -105,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         fresh = fresh[~fresh["event_type"].isin(mass) | (fresh["source"] == "manual")]
     for n in notes:
         print(n, flush=True)
-    merged = merge_calendar(prev, fresh, now, prev_ok, fetched_types=fetched)
+    merged = merge_calendar(prev, fresh, now, prev_ok, fetched_types=fetched, allow_cancellations=allow)
     try:
         check_keeps_history(prev, merged)
     except HistoryLoss as exc:
