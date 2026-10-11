@@ -414,6 +414,7 @@ class Engine:
         self._throttle_lost: list[PendingClose] = []    # records given up this process: provisional losses for the throttle
         self._shadow_cache: tuple[int, ShadowBook | None] = (-1, None)   # the host's shadow_book.json by mtime
         self._closes: list[PendingClose] = []
+        self._exit_fills: list[dict] = []            # exit legs waiting for `_flush_closed` (in memory, bounded)
         self._records_lost: list[int] = []           # records given up after closed_record_retries failed writes
         self._currency = ""                          # the deposit currency, read once from the broker (BACKLOG 28)
         # symbol_info and the conversion, read once per decision cycle (bar close); the last contract size seen
@@ -1428,23 +1429,35 @@ class Engine:
         """Finance audit GAP-04: one exit leg in store `exit_fills`, requested vs filled as `fills` keeps entries. The
         requested price is the exit side of the quote the engine decided on (bid for a long) for its own closes and
         the scale-out, and the stop or target level for a broker stop or target fill; slippage is side x (requested -
-        filled). Kept apart from `fills`, which the entry slippage table reads. Never raises: an exit never waits on
-        its log, and a leg without a filled price is not logged."""
+        filled). Kept apart from `fills`, which the entry slippage table reads. Only buffered here, in memory: an exit
+        never waits on a file write (trading-safety review LOW-1); `_flush_exit_fills` writes the buffer after the
+        tick's exits. A leg without a filled price is not logged."""
         if self.store is None or filled is None:
             return
-        try:
-            requested = level if level is not None else \
-                (quote.bid if tr.side > 0 else quote.ask) if quote is not None else np.nan
-            row = pd.DataFrame([{"ts_utc": at, "position_id": pid, "client_order_id": tr.client_order_id,
+        requested = level if level is not None else \
+            (quote.bid if tr.side > 0 else quote.ask) if quote is not None else np.nan
+        self._exit_fills.append({"ts_utc": at, "position_id": pid, "client_order_id": tr.client_order_id,
                                  "agent_id": tr.agent_id, "side": tr.side, "lots": float(lots), "kind": kind,
                                  "requested": float(requested), "filled": float(filled),
                                  "spread": quote.ask - quote.bid if quote is not None else np.nan,
-                                 "retcode": retcode}])
-            row = row.astype({"client_order_id": "string", "agent_id": "string", "kind": "string",
-                              "retcode": "Int64"})              # one schema even when a value is missing
-            self.store.append("exit_fills", row, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+                                 "retcode": retcode})
+
+    def _flush_exit_fills(self) -> None:
+        """Write the buffered exit legs in one append (called from `_flush_closed`, after the tick's exits and the
+        closed-trade records). Never raises: a failed write keeps the legs for the next flush, the newest
+        TICK_LOG_MAX of them (older ones dropped and logged), as the tick log does."""
+        if self.store is None or not self._exit_fills:
+            return
+        try:
+            rows = pd.DataFrame(self._exit_fills).astype({"client_order_id": "string", "agent_id": "string",
+                                                          "kind": "string", "retcode": "Int64"})   # one schema
+            self.store.append("exit_fills", rows, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+            self._exit_fills = []
         except Exception:
-            log.exception("exit fill of position %s (%s) not logged", pid, kind)
+            log.exception("%d exit fills not written; kept for the next flush", len(self._exit_fills))
+            if len(self._exit_fills) > TICK_LOG_MAX:
+                log.error("exit fill buffer full: %d oldest legs dropped", len(self._exit_fills) - TICK_LOG_MAX)
+                self._exit_fills = self._exit_fills[-TICK_LOG_MAX:]
 
     def _backing_off(self, pid: int, now: pd.Timestamp) -> bool:
         return pid in self._close_backoff and now < self._close_backoff[pid][1]
@@ -2271,6 +2284,7 @@ class Engine:
         `closed_record_retries` attempts in all; then it is reported lost (`closed_trade_record_lost` in the journal,
         `closed_records_lost` in the engine state, which fails the engine's health check and alerts the owner)."""
         if not self._closes:
+            self._flush_exit_fills()
             return
         now = self._last_tick.ts_utc if self._last_tick is not None else pd.Timestamp.now("UTC")
         pending, self._closes = self._closes, []
@@ -2301,6 +2315,7 @@ class Engine:
                     c.next_try = now + pd.Timedelta(seconds=self.cfg.reconcile_every_s)
                     keep.append(c)
         self._closes = keep + self._closes
+        self._flush_exit_fills()             # after the records: a broker stop or target leg is added by its record
 
     def _exit_deals(self, pid: int, tr: OpenTrade) -> tuple[dict | None, bool]:
         """(summary of the position's deals, whether the broker's deal history identifies positions at all). Reads the
@@ -2321,7 +2336,10 @@ class Engine:
             return None, True
 
         def total(col: str, rows: pd.DataFrame) -> float | None:
-            return float(rows[col].fillna(0.0).sum()) if col in rows.columns else None
+            """None when the broker does not report the column or reports it as unknown on every deal."""
+            if col not in rows.columns or bool(rows[col].isna().all()):
+                return None
+            return float(pd.to_numeric(rows[col], errors="coerce").fillna(0.0).sum())
         comm = total("commission", d)
         fee = total("fee", d) or 0.0
         swap = total("swap", d)

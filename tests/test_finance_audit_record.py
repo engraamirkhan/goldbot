@@ -34,11 +34,11 @@ def _engine(tmp_path: Path, agent: Any = TREND, pb: PaperBroker | None = None, *
 
 
 def _enter(eng: Engine, pb: PaperBroker, agent: Any = TREND, *, decision: float = 2000.0, requested: float = 2000.0,
-           spread_points: float = 25.0) -> int:
+           spread_points: float = 25.0, proposal_id: str = PID) -> int:
     pb.on_tick(Tick(ts_utc=T0, bid=requested, ask=requested))
     ls = agent.label_spec
     stop, target = requested - ls.stop_atr, requested + ls.target_atr
-    prop = Proposal(proposal_id=PID, account_id="icm-demo", agent_id=agent.agent_id, side=1, lots=0.1, entry=decision,
+    prop = Proposal(proposal_id=proposal_id, account_id="icm-demo", agent_id=agent.agent_id, side=1, lots=0.1, entry=decision,
                     stop=decision - ls.stop_atr, target=decision + ls.target_atr, p=0.6, ev_r=0.1,
                     spread_points=spread_points, top_features=[])
     before = set(eng.open)
@@ -200,9 +200,11 @@ def test_a_failing_exit_fill_write_never_blocks_the_exit(tmp_path, monkeypatch):
 
 
 # ------------------------------------------------------------------------------------- GAP-05 net or gross
-def test_a_trade_with_the_brokers_commission_and_swap_is_marked_net_from_the_broker(tmp_path):
+def test_a_trade_with_the_brokers_commission_and_swap_is_marked_net_from_the_broker(tmp_path, monkeypatch):
     eng, pb = _engine(tmp_path)
     _enter(eng, pb)
+    real = pb.deals_since
+    monkeypatch.setattr(pb, "deals_since", lambda since: real(since).assign(swap=0.0))   # a broker reporting swap
     pb.on_tick(_tick(10, 2001.0))
     eng._kill_switch(everything=True)
     eng._save_orders()
@@ -292,3 +294,97 @@ def test_an_expired_proposal_has_no_decision_time(tmp_path):
     archived = bus.get("p1")
     assert archived is not None and archived.outcome == Outcome.EXPIRED
     assert (archived.decided_ts, archived.decided_channel) == (None, None)
+
+
+# ------------------------------------------------------------------------------------- trading-safety review LOWs
+def _enter_three(eng: Engine, pb: PaperBroker) -> None:
+    for k in range(3):
+        _enter(eng, pb, proposal_id=f"{PID}{k}")
+
+
+def test_the_kill_switch_closes_every_position_before_any_exit_fill_is_written(tmp_path, monkeypatch):
+    """LOW-1: an exit never waits on a file write. The legs are buffered and written after the tick's exits."""
+    eng, pb = _engine(tmp_path)
+    _enter_three(eng, pb)
+    assert eng.store is not None
+    calls: list[str] = []
+    real_close, real_append = pb.close, eng.store.append
+
+    def close(pid: int, lots: float | None = None) -> Any:
+        calls.append("close")
+        return real_close(pid, lots)
+
+    def slow_append(table: str, df: pd.DataFrame, **kw: Any) -> int:
+        calls.append(f"append:{table}")
+        return real_append(table, df, **kw)
+    monkeypatch.setattr(pb, "close", close)
+    monkeypatch.setattr(eng.store, "append", slow_append)
+    pb.on_tick(_tick(10, 2000.2))
+    assert eng._kill_switch(everything=True)
+    assert calls == ["close"] * 3                              # nothing written during the exits
+    eng._save_orders()
+    assert calls[3:] == ["append:exit_fills"]                  # one write for the tick's legs, afterwards
+    assert len(_exit_fills(tmp_path)) == 3
+
+
+def test_a_failing_exit_fill_write_keeps_the_legs_and_writes_them_later(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _enter_three(eng, pb)
+    assert eng.store is not None
+    real_append = eng.store.append
+
+    def disk_full(*_: Any, **__: Any) -> int:
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(eng.store, "append", disk_full)
+    pb.on_tick(_tick(10, 2000.2))
+    assert eng._kill_switch(everything=True)                   # every position closed
+    eng._save_orders()                                         # the write fails: logged, not raised
+    assert not pb.positions() and len(load_closed_trades(tmp_path)[0]) == 3
+    monkeypatch.setattr(eng.store, "append", real_append)
+    eng._save_orders()
+    assert len(_exit_fills(tmp_path)) == 3
+
+
+def test_a_stale_proposal_archived_on_restart_takes_no_decision_time_from_a_late_click(tmp_path):
+    """LOW-2: only an approved or rejected proposal takes the decision time; a stale one (outcome None) does not."""
+    bus = ApprovalBus(tmp_path)
+    p = Proposal(proposal_id="icm-demo-1-x", account_id="icm-demo", agent_id="a", side=1, lots=0.1, entry=2000.0,
+                 stop=1998.0, target=2004.0, p=0.6, ev_r=0.2, spread_points=20.0, top_features=[], created=0.0)
+    bus.publish(p)
+    (bus.decisions_dir / "icm-demo-1-x.json").write_text(
+        json.dumps({"proposal_id": "icm-demo-1-x", "approve": True, "by": "dashboard:owner", "ts": 5.0}))
+    Engine(EngineConfig(account_id="icm-demo", broker_name="icm", mode="demo", state_dir=str(tmp_path),
+                        owner_user_id=111), PaperBroker(), [TREND], {}, center=ApprovalCenter({111}, bus=bus))
+    archived = bus.get("icm-demo-1-x")
+    assert archived is not None and archived.outcome is None
+    assert (archived.decided_ts, archived.decided_channel) == (None, None)
+    assert not (bus.decisions_dir / "icm-demo-1-x.json").exists()
+
+
+def test_an_unreadable_decision_file_is_archived_as_no_decision(tmp_path, monkeypatch):
+    """LOW-3: an OSError reading the decision file never aborts the archive (nor the engine start that calls it)."""
+    bus = ApprovalBus(tmp_path)
+    p = Proposal(proposal_id="p1", account_id="icm-demo", agent_id="a", side=1, lots=0.1, entry=2000.0, stop=1998.0,
+                 target=2004.0, p=0.6, ev_r=0.2, spread_points=20.0, top_features=[])
+    bus.publish(p)
+    bus.submit("p1", approve=True, reason_code=None, by="dashboard:owner")
+
+    def unreadable(_: set[str]) -> list[Any]:
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(bus, "decisions_for", unreadable)
+    bus.archive(p.model_copy(update={"outcome": Outcome.APPROVED}))
+    archived = bus.get("p1")
+    assert archived is not None and archived.decided_ts is None and archived.outcome == Outcome.APPROVED
+    assert not (bus.decisions_dir / "p1.json").exists()
+
+
+def test_paper_deals_leave_swap_unknown_so_paper_trades_are_gross(tmp_path):
+    """LOW-4: the paper broker does not model swap, so its deals say unknown, never 0.0, and the record is gross."""
+    eng, pb = _engine(tmp_path)
+    _enter(eng, pb)
+    pb.on_tick(_tick(10, 2001.0))
+    eng._kill_switch(everything=True)
+    eng._save_orders()
+    assert pb.deals_since(T0 - pd.Timedelta(days=1))["swap"].isna().all()
+    t = _record(tmp_path)
+    assert t.swap is None and (t.money_source, t.pnl_basis) == ("broker", "gross")
