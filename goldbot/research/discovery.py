@@ -677,6 +677,17 @@ def render_discovery(d: DiscoveryResult, meta: dict[str, Any], top: int = 25) ->
 
 
 # ---------------------------------------------------------------------------------------------- the CLI's pass
+def discovery_trial_config(spec: Any, cfg: DiscoveryConfig, group_mode: str, names: list[str], bars_from: str,
+                           bars_to: str, holdout: Window | None) -> dict[str, Any]:
+    """The registry config of one discovery trial (family `discovery_family(spec.family)`), hashed for its budget
+    check and pre-registration. One builder for the run (`discovery_pass`) and for the queued row written before the
+    quarter (`research.preregistration`), so the two hash the same: "a discovery uses its reserved slot only when its
+    exact discovery config (including the bars range) was pre-registered before the run" (preregistration-2027Q1.md)."""
+    return {"specialist": spec.family, "spec": spec.config, "discovery": cfg.model_dump(), "group_mode": group_mode,
+            "features": names, "bars_from": bars_from, "bars_to": bars_to,
+            "holdout": None if holdout is None else [str(holdout[0]), str(holdout[1])]}
+
+
 def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, reserved_setting: int,
                    cfg: DiscoveryConfig, group_mode: str = "column", extra_cost_usd: float = 0.0, swap: Any = None,
                    holdout: Window | None = None, ctx: dict | None = None, rationale: str = "",
@@ -704,9 +715,8 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     check_group_config(cfg)              # before the budget check, the pre-registration and any look
     names = research_feature_names(ctx)
     family = discovery_family(spec.family)
-    config = {"specialist": spec.family, "spec": spec.config, "discovery": cfg.model_dump(), "group_mode": group_mode,
-              "features": names, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
-              "holdout": None if holdout is None else [str(holdout[0]), str(holdout[1])]}
+    config = discovery_trial_config(spec, cfg, group_mode, names, str(b1["ts_utc"].iloc[0]),
+                                    str(b1["ts_utc"].iloc[-1]), holdout)
     quarter, (prereg,) = reg.check_budget_reserved([(family, config)], budget_cap, reserved_setting)
     from goldbot.research.director import cited_rule
     cited = cited_rule(prereg, rule_ref, capped=capped)      # E-5: a capped run cites its pre-registered rule

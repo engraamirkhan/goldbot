@@ -9,17 +9,17 @@ For Aamir. Each step links to its [RUNBOOK](RUNBOOK.md) section.
 - Researches and evolves strategies inside safety rails it cannot loosen.
 - If anything breaks, **Telegram tells you** within about 6 minutes.
 
-## 2. Setup checklist (about 2-3 hours, in order)
+## 2. Setup checklist (about 2-3 hours, in order; the first deploy: [deploy/first-deploy.md](deploy/first-deploy.md))
 "Terminal (vm)": Mac Terminal after `ssh ubuntu@<vm public ip>`. Keep `<values>` private.
 
 | Step | Time | Where | Do | Detail |
 |---|---|---|---|---|
 | [ ] Oracle account | 30 min | browser, Terminal | Sign up, Pay As You Go, $1 budget alert; `ssh-keygen -t ed25519` | [0.1](RUNBOOK.md#01-oracle-account-browser) |
 | [ ] Two VMs: brain, mt5 | 15 min | browser | Compute -> Instances -> Create | [0.2](RUNBOOK.md#02-create-the-two-vms-browser) |
-| [ ] MT5 box bootstrap | 20 min | Terminal (mt5) | `sudo bash /tmp/goldbot/goldbot/ops/linux/mt5_bootstrap.sh` | [0.3](RUNBOOK.md#03-the-mt5-box) |
+| [ ] MT5 box bootstrap | 20 min | Terminal (mt5) | `sudo bash mt5_bootstrap.sh <SHA>` (hash-checked copy, see 0.3) | [0.3](RUNBOOK.md#03-the-mt5-box) |
 | [ ] One-time MT5 login | 15 min | Terminal, Screen Sharing | `sudo systemctl start goldbot-vnc`; Finder -> Connect to Server -> `vnc://localhost:5900`; tick **Save password** | [0.3](RUNBOOK.md#03-the-mt5-box) |
 | [ ] Bridge token | 5 min | Terminal (mt5) | `goldbot-mt5 accounts bridge-serve icm-demo`; `sudo systemctl start goldbot-bridge@icm-demo`. Shown **once** | [0.3](RUNBOOK.md#03-the-mt5-box) |
-| [ ] Brain bootstrap | 25 min | Terminal (brain, mt5) | `sudo bash /tmp/goldbot/goldbot/ops/linux/brain_bootstrap.sh`; mt5: `sudo goldbot-mt5-authorize '<key line>'`; brain: `sudo goldbot-tunnel <mt5 private ip>` | [0.4](RUNBOOK.md#04-the-brain) |
+| [ ] Brain bootstrap | 25 min | Terminal (brain, mt5) | `sudo bash brain_bootstrap.sh <SHA>` (hash-checked copy, see 0.4); mt5: `sudo goldbot-mt5-authorize '<key line>'`; brain: `sudo goldbot-tunnel <mt5 private ip>` | [0.4](RUNBOOK.md#04-the-brain) |
 | [ ] Guided setup | 15 min | Telegram, Terminal (brain) | `goldbot run setup`: asks for each value in turn, says where to get it, hides secrets. Have ready: MT5 demo login + password, the bridge token, a bot token from @BotFather, your id from @userinfobot, your email. Safe to run again | [0.4](RUNBOOK.md#04-the-brain) |
 | [ ] Cloudflare tunnel | 15 min | browser, Terminal (brain) | Route to `http://localhost:8787`; `sudo cloudflared service install <tunnel token>` | [2.7](RUNBOOK.md#27-cloudflare-tunnel-dashboard-from-your-phone-no-vpn) |
 | [ ] Preflight | 2 min | Terminal (brain) | `goldbot run preflight`: every ❌ line prints its fix; repeat until it says **READY** | [0.4](RUNBOOK.md#04-the-brain) |
@@ -29,7 +29,26 @@ For Aamir. Each step links to its [RUNBOOK](RUNBOOK.md) section.
 
 If the wizard cannot be used, the manual commands are in [RUNBOOK 0.4](RUNBOOK.md#04-the-brain) under "By hand".
 
+**Optional: email sign-in link (owner only).** Lets you sign in from an emailed link plus your authenticator code,
+without typing the password. Free with Gmail:
+1. Google Account -> Security: turn on 2-Step Verification, then **App passwords** -> name it `goldbot` -> copy the
+   16 letters (shown once).
+2. Terminal (brain): `goldbot accounts set smtp-password` and paste them at the hidden prompt. They go to the
+   server's keyring only, never a file.
+3. Add the `auth: mail:` block to the server's `config/settings.local.yaml` with your Gmail address and dashboard
+   hostname ([RUNBOOK 2.10](RUNBOOK.md#210-dashboard-first-run-create-the-owner-account), "Email sign-in link").
+   Use `you@example.com`-style placeholders anywhere you write it down outside the server.
+4. `goldbot run mail-test` -> a test email arrives; `sudo systemctl restart goldbot-api`. The login page now shows
+   **Email me a sign-in link**.
+
 ## 3. Daily use
+- **Signing in:** email, password and the authenticator code. **Forgot password?** resets it with your
+  authenticator code and one recovery code. **Email me a sign-in link** (once set up) mails you a link that works
+  once for 15 minutes; it still asks for the authenticator code. Anyone typing another address sees the same message
+  and nothing is sent. [More](RUNBOOK.md#210-dashboard-first-run-create-the-owner-account)
+  No link? Sign in with your password. If it keeps happening, check for `email_link_rate_limited` in the audit
+  trail (the Health tab warns too). Every link sign-in sends you a Telegram message and an email. If one was not
+  you, follow its instructions straight away.
 - **Morning digest:** at 06:45 UTC Telegram sends one message: all good or what needs attention, yesterday's trades, risk, and decisions waiting for you. [More](RUNBOOK.md#05-daily-use)
 - **Approve:** Telegram shows direction, lots, entry, stop, target, probability, spread. Tap **Approve**, or a **Reject** reason. Or the dashboard **Approvals** tab. After 90 s it expires. [More](RUNBOOK.md#approving-or-rejecting-an-entry)
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)

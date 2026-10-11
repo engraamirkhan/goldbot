@@ -17,14 +17,21 @@ describe("invite and reset links", () => {
   it("reads the token from the fragment once and clears it from the URL", async () => {
     history.replaceState(null, "", "/#reset=tok-1");
     const { takeLinkTokens } = await import("./links");
-    expect(takeLinkTokens()).toEqual({ invite: "", reset: "tok-1" });
+    expect(takeLinkTokens()).toEqual({ invite: "", reset: "tok-1", signin: "" });
     expect(location.hash).toBe("");
     expect(takeLinkTokens().reset).toBe("tok-1"); // StrictMode's second render sees the same value
+  });
+
+  it("reads an emailed sign-in token from the fragment once and clears it", async () => {
+    history.replaceState(null, "", "/#signin=s-1");
+    const { takeLinkTokens } = await import("./links");
+    expect(takeLinkTokens().signin).toBe("s-1");
+    expect(location.hash).toBe("");
   });
 
   it("ignores a token in the query string", async () => {
     history.replaceState(null, "", "/?invite=tok-2");
     const { takeLinkTokens } = await import("./links");
-    expect(takeLinkTokens()).toEqual({ invite: "", reset: "" });
+    expect(takeLinkTokens()).toEqual({ invite: "", reset: "", signin: "" });
   });
 });

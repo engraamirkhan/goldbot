@@ -22,6 +22,7 @@
   python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]
                                                          # minimum equity for the minimum lot per family (G-7)
   python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)
+  python -m goldbot.ops.run mail-test                    # one test email to auth.owner_email (email sign-in setup)
   python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]
                                                          # time-weighted % return, R, drawdown, avg per day, milestones
   python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds
@@ -32,7 +33,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, NoReturn
 
 if TYPE_CHECKING:   # service entry points import lazily; these are for annotations only
     import pandas as pd
@@ -221,6 +222,20 @@ def run_supervisor() -> None:
         time.sleep(5)
 
 
+def refuse_start(account_id: str, why: str, info: Any = None, state_dir: str | Path = "state") -> NoReturn:
+    """End an engine start the terminal-account check refused (review LOW-A): `startup_error` goes into
+    engine_<account>.json first, so health names the cause instead of showing a stale engine, then SystemExit. The
+    deposit currency is kept for the supervisor's currency check; no login, server or balance is written. Merged into
+    the previous engine file (review LOW-D: the last-known exposure keeps counting; `write_startup_error`)."""
+    from goldbot.risk.supervisor import write_startup_error
+    currency = str(getattr(info, "currency", "") or "").strip().upper() or None
+    try:
+        write_startup_error(state_dir, account_id, why, dq_checks=["startup_refused"], currency=currency)
+    except OSError:
+        log.exception("startup refusal not written to the engine state")
+    raise SystemExit(why)
+
+
 def run_engine(account_id: str) -> None:
     from pathlib import Path
 
@@ -243,17 +258,19 @@ def run_engine(account_id: str) -> None:
         # service manager restarts it, so restart reconciliation settles any order whose result was lost (row X7)
         from goldbot.execution.bridge import RemoteBroker
         broker: Any = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}")
-        why = accounts.verify_terminal_account(acc, broker.account())
+        info = broker.account()
+        why = accounts.verify_terminal_account(acc, info)
         if why:
-            raise SystemExit(f"refusing to trade {account_id} through the bridge: {why}")
+            refuse_start(account_id, f"refusing to trade {account_id} through the bridge: {why}", info)
     elif sys.platform == "win32":
         from goldbot.execution.mt5_adapter import MT5Broker
         acc = accounts.ensure_login(acc)
         broker = MT5Broker(terminal_path=acc.terminal_path, login=acc.login, password=accounts.account_password(acc),
                            server=acc.server, server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id)
-        why = accounts.verify_terminal_account(acc, broker.account())
+        info = broker.account()
+        why = accounts.verify_terminal_account(acc, info)
         if why:
-            raise SystemExit(f"refusing to trade {account_id}: {why}")
+            refuse_start(account_id, f"refusing to trade {account_id}: {why}", info)
     else:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
@@ -686,6 +703,9 @@ if __name__ == "__main__":
     elif cmd == "revoke-sessions":
         from goldbot.api.auth import revoke_sessions_cli
         sys.exit(revoke_sessions_cli(sys.argv[2:]))
+    elif cmd == "mail-test":
+        from goldbot.api.mailer import main as mail_main
+        sys.exit(mail_main(["test"]))
     elif cmd == "owner-history":
         from goldbot.research.owner_history import main as owner_history_main
         sys.exit(owner_history_main(sys.argv[2:]))

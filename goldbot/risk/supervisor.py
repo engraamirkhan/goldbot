@@ -66,6 +66,34 @@ def engine_fault(e: dict) -> str | None:
     return None
 
 
+# what an engine start that failed keeps from the last engine file (review LOW-D): the account may still hold
+# positions, so the supervisor must keep summing its exposure and money while entries halt
+STARTUP_KEEP = ("open_lots", "open_notional", "equity", "day_start_equity", "week_start_equity", "balance_closed_hwm")
+
+
+def write_startup_error(state_dir: str | Path, account_id: str, why: str, *, dq_checks: list[str],
+                        currency: str | None = None) -> None:
+    """engine_<account>.json for an engine start that failed (a refused terminal account, an unreadable positions read):
+    `startup_error` and `dq_error` MERGED into the previous file, keeping its last-known exposure and equity
+    (`STARTUP_KEEP`, finite numbers only), its currency and its absolute daily limit, so the combined caps still count
+    this account (review LOW-D). The supervisor halts entries on such a file (`engine_startup_refused`). An unreadable
+    or missing previous file gives the error payload alone. No login, server or balance is written."""
+    path = Path(state_dir, f"engine_{account_id}.json")
+    try:
+        prev = json.loads(path.read_text())
+    except (OSError, ValueError):
+        prev = {}
+    prev = prev if isinstance(prev, dict) else {}
+    kept: dict[str, Any] = {k: prev[k] for k in STARTUP_KEEP if _finite_number(prev.get(k))}
+    if _finite_number(prev.get("daily_loss_limit_abs")):
+        kept["daily_loss_limit_abs"] = prev["daily_loss_limit_abs"]
+    cur = (currency or "").strip().upper() or _currency(prev)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(path, json.dumps({**kept, "account": account_id, "ts": time.time(), "dq_error": True,
+                                   "dq_checks": list(dq_checks), "stage": "unknown", "currency": cur,
+                                   "startup_error": why[:300]}), durable=False)
+
+
 def _currency(e: dict) -> str | None:
     """An engine file's deposit currency, upper case; None when it does not say."""
     return str(e.get("currency") or "").strip().upper() or None
@@ -148,6 +176,11 @@ class Supervisor:
             reasons.append("combined_drawdown_halt")
         if self.unreadable:
             reasons.append("engine_state_unreadable")     # fail closed: its equity cannot be counted
+        # an engine whose start failed (review LOW-D): entries halt as for an unreadable file, but its last-known
+        # exposure and money (kept by write_startup_error) are still summed, the strict direction for the caps
+        refused = sorted(str(e.get("_file", "")) for e in engines if e.get("startup_error"))
+        if refused:
+            reasons.append("engine_startup_refused")
         if mixed:
             reasons.append("mixed_account_currencies")    # fail closed: GBP and USD equity are never summed
         stale = [e.get("account") for e in engines if time.time() - e["ts"] > self.limits.heartbeat_max_age_s]
@@ -160,7 +193,8 @@ class Supervisor:
                  "combined_open_notional": sum(x["notional"] for x in exposure.values()), "exposure": exposure,
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
-                 "unreadable_engines": self.unreadable, "currencies": currencies, "currency_files": currency_files,
+                 "unreadable_engines": self.unreadable, "startup_refused_engines": refused,
+                 "currencies": currencies, "currency_files": currency_files,
                  "money_excluded": excluded, "no_fresh_engine": bool(engines) and not fresh, "day_loss_amount": day_loss_amount, "daily_loss_limit_abs": abs_limit,
                  # the dashboard's loss budget (goldbot/ops/account_view.py): the combined caps and their (one-currency) bases
                  "daily_cap": self.limits.daily_cap, "combined_day_start_equity": day0,

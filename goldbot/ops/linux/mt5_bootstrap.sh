@@ -4,7 +4,8 @@
 # Python in the same Wine prefix. The bridge listens on 127.0.0.1 only; the brain reaches it through an SSH tunnel
 # whose key may only forward to that port (`goldbot-mt5-authorize`). No port is opened.
 #
-#   sudo bash mt5_bootstrap.sh
+#   sudo bash mt5_bootstrap.sh <40-hex commit id>     # the commit the owner checked is on GitHub's main (recommended)
+#   sudo bash mt5_bootstrap.sh                        # whatever main is at this moment
 #
 # No credentials here: the owner logs in to MT5 once through VNC (tunnelled over SSH) with "save password", and stores
 # the bridge listen address + token with `goldbot-mt5 accounts bridge-serve icm-demo` (docs/RUNBOOK.md).
@@ -12,12 +13,23 @@ set -euo pipefail
 REPO=https://github.com/engraamirkhan/goldbot.git
 ROOT=/opt/goldbot
 PYVER=3.11.9
+REF=${1:-}
+LOG=/root/goldbot-bootstrap.log
+if [ -n "$REF" ] && ! [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "usage: sudo bash mt5_bootstrap.sh [<40-hex commit id on main>]"; exit 2
+fi
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 [ "$(uname -m)" = x86_64 ] || { echo "MT5 needs an x86_64 VM (E2.1.Micro), not ARM"; exit 1; }
+# A dropped SSH session must not stop the install half-way (docs/AGENT_STANDARDS.md "Root-run tooling"): SIGHUP and
+# SIGPIPE are ignored from here on (children inherit it), and everything is also written to a root-only log. When the
+# terminal is gone, tee keeps writing the log and `cat` drains the pipe, so no write fails.
+trap '' PIPE HUP
+exec > >(tee -a "$LOG" --output-error=warn 2>/dev/null; cat > /dev/null) 2>&1
+echo "== goldbot mt5 bootstrap $(date -u +%FT%TZ) ref=${REF:-main}"
 
-# 1 GB of RAM: a 2 GB swap file keeps Wine + terminal + bridge from being killed
+# 1 GB of RAM: a 4 GB swap file keeps Wine + terminal + bridge from being killed (docs/deploy/free-hosting-options.md)
 if ! swapon --show | grep -q /swapfile; then
-  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
   grep -q /swapfile /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
 fi
 
@@ -37,7 +49,13 @@ systemctl enable --now chrony
 # installs) before the installs below. docs/AGENT_STANDARDS.md "Root-run tooling".
 OPS_SRC=$(mktemp -d /root/goldbot-ops.XXXXXX)
 trap 'rm -rf -- "$OPS_SRC"' EXIT
-git clone -q --depth 1 "$REPO" "$OPS_SRC/src"
+if [ -n "$REF" ]; then             # exactly the commit the owner checked off-box (git verifies the content by its id)
+  git init -q "$OPS_SRC/src" && git -C "$OPS_SRC/src" fetch -q --depth 1 "$REPO" "$REF" \
+    && git -C "$OPS_SRC/src" checkout -q --detach FETCH_HEAD
+  [ "$(git -C "$OPS_SRC/src" rev-parse HEAD)" = "$REF" ] || { echo "fetched commit is not $REF"; exit 1; }
+else
+  git clone -q --depth 1 "$REPO" "$OPS_SRC/src"
+fi
 OPS=$OPS_SRC/src/goldbot/ops/linux
 
 id mt5 >/dev/null 2>&1 || useradd --create-home --shell /bin/bash mt5
@@ -46,6 +64,10 @@ id mt5 >/dev/null 2>&1 || useradd --create-home --shell /bin/bash mt5
 if [ ! -d "$ROOT/.git" ]; then
   install -d -m 755 -o mt5 -g mt5 "$ROOT"   # root-ok: creates /opt/goldbot in root-owned /opt, empty so far
   sudo -u mt5 -H git clone -q "$REPO" "$ROOT"
+  [ -z "$REF" ] || sudo -u mt5 -H git -C "$ROOT" checkout -q --detach "$REF"   # same code as root's copy above
+elif [ -n "$REF" ]; then          # a re-run never moves an installed tree; say so when it is on another commit
+  head=$(sudo -u mt5 -H git -C "$ROOT" rev-parse HEAD 2>/dev/null | tr -cd '0-9a-f' | head -c 40)
+  [ "$head" = "$REF" ] || echo "WARNING: $ROOT is at $head, not $REF: left as it is (update it with sudo goldbot-deploy $REF)"
 fi
 sudo -u mt5 mkdir -p "$ROOT/state" "$ROOT/logs"
 sudo -u mt5 chmod 700 "$ROOT/state"
@@ -70,7 +92,7 @@ sudo -u mt5 -H bash -lc "
   wine python -m pip install --no-deps -e 'Z:$ROOT'
 "
 
-# the brain's tunnel key: port forwarding to the bridge only (no shell, no other ports)
+# the brain's tunnel key: forwarding to the bridge port only; any command runs /bin/false (`ssh -N` opens none)
 cat > /usr/local/bin/goldbot-mt5-authorize <<'WRAP'
 #!/usr/bin/env bash
 # sudo goldbot-mt5-authorize '<ssh-ed25519 ... goldbot@brain>'
@@ -85,7 +107,7 @@ if [[ "$key" == *$'\n'* || "$key" == *$'\r'* ]] || ! [[ "$key" =~ $re ]]; then
   exit 1
 fi
 sudo -u mt5 -H sh -c 'umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf "%s\n" "$1" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys' \
-  _ "restrict,port-forwarding,permitopen=\"127.0.0.1:8765\" $key"
+  _ "restrict,port-forwarding,permitopen=\"127.0.0.1:8765\",command=\"/bin/false\" $key"
 echo "authorised (forwarding to 127.0.0.1:8765 only)"
 WRAP
 chmod 755 /usr/local/bin/goldbot-mt5-authorize

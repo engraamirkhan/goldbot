@@ -22,9 +22,17 @@ main { padding: 16px; max-width: 1200px; margin: 0 auto; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; } th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 500; }
 .muted { color: var(--muted); } .err { color: var(--bad); }
-.login { max-width: 320px; margin: 15vh auto; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
-.login input { width: 100%; padding: 10px; font-size: 18px; letter-spacing: 0.2em; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
-.login button { padding: 10px; border-radius: 6px; border: 0; background: var(--accent); color: white; font-size: 15px; }
+/* sign-in screens: one column that fits a phone, 16px inputs (no iOS zoom on focus), 44px tap targets */
+.login { box-sizing: border-box; width: 100%; max-width: 380px; margin: 8vh auto; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.login h2 { font-size: 20px; margin: 4px 0 0; }
+.login p { margin: 0; line-height: 1.45; }
+.login label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.login input { box-sizing: border-box; width: 100%; min-height: 44px; padding: 10px; font-size: 16px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
+.login input.code { font-size: 18px; letter-spacing: 0.2em; }
+.login button { min-height: 44px; padding: 10px; border-radius: 6px; border: 0; background: var(--accent); color: white; font-size: 15px; }
+.login button:disabled { opacity: 0.6; }
+.login button.link { background: none; color: var(--fg); text-decoration: underline; padding: 8px 4px; align-self: flex-start; }
+.login .alt { display: flex; flex-wrap: wrap; gap: 0 16px; }
 tr.retired { color: var(--muted); }
 
 .who { margin-left: auto; font-size: 13px; } button.link { background: none; border: 0; color: var(--muted); cursor: pointer; }

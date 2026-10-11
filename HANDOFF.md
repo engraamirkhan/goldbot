@@ -73,6 +73,86 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   clash is caught by the `docs-assemble` pre-commit hook (which CI runs) and fixed by `fix-ids`. Lanes are merged
   with `scripts/docs_assemble.py merge <branch>`, which also absorbs branches that still edit the old rendered
   files. Never edit the rendered files.
+- Email sign-in link, security re-verify nits on 1a8bf43. `auth.mail.dashboard_origin` now refuses any
+  whitespace, control character, `\` or `;`, and an empty host. It is stored as the normalised lower-case
+  `scheme://netloc`. `coarse_ip` gives the IPv4 /16 for an IPv4-mapped IPv6 address (`::ffff:203.0.113.45` ->
+  `203.0.x.x`).
+- Email sign-in link: follow-ups to the security review of fe58fae (approved; no timing oracle found).
+  - M1: ADR 0013 records the accepted risk (with mail on, mailbox plus authenticator signs the owner in) and its
+    limits. Every `email_link_login` sends the owner a Telegram notice (`_notify_owner`) and an email
+    (`sign_in_notice_message`), with no token and only a coarse network hint (`auth.coarse_ip`: IPv4 /16, IPv6 /32).
+  - L1: `auth.mail.dashboard_origin` is checked with `urlsplit`: https with a host and no user info, path, query or
+    fragment; http only for exactly localhost, 127.0.0.1 or ::1.
+  - L2: sign-out-everywhere (`revoke_sessions`) and the server's `revoke-sessions` command also delete email links,
+    in the same transaction.
+  - L3: new health check `email_link` warns when the owner's address hit the hourly limit 3 or more times in 24 h
+    (`email_link_health_note`, never names the address). OWNER_GUIDE says what to do when no link arrives.
+  - L4: `web/src/main.tsx` takes link tokens out of the address bar at start, signed in or not.
+  - L5: `SmtpMailer.ready()` is cached for 60 s (`READY_CACHE_S`).
+  - UX: a failed redeem goes straight to "Email me a sign-in link" (the old link is spent).
+  - RUNBOOK: aux.db schema 6 cannot be stepped back to 4. Releases since state-store step 3 open it; older ones are
+    refused by the deploy.
+- First demo deploy (SRE, 2026-10-11): `docs/deploy/first-deploy.md` is the owner's 60-90 min session (case A, fresh
+  install). The brain runs on Oracle Ampere A1, now **2 OCPU / 12 GB**, the Always Free total since mid-2026 (it was
+  4 / 24). MT5 runs on a bridge box. Day 1 tries both bridge options:
+  - A: an Azure B2ats v2 Windows VM, set up with `vps_bootstrap.ps1 -BridgeOnly`. It runs one bridge service as the
+    non-admin user `goldbot-bridge`, with admin-only ACLs, a signed MT5 installer and machine-wide Python. The brain
+    reaches it over Tailscale through its SSH tunnel; the tunnel key has a forced no-op command.
+  - B: an Oracle micro running MT5 under Wine (`mt5_bootstrap.sh`, 4 GB swap).
+
+  Keep whichever bridge is stable for 24 h. Both bootstraps take an owner-checked 40-hex commit, run from a hash-checked
+  download, and keep going if SSH drops. Python packages come from `uv.lock` (`uv sync --frozen`; `goldbot-deploy`
+  too, after its root copy is reinstalled). The MT5 account must be a hedging demo (bridge v4). Paid fallback, the
+  owner's decision: a 2-4 GB Windows VPS with the full install.
+
+  Follow-ups: Cloudflare Tunnel with Access; an outside dead man's switch (alerts come only from the brain); a
+  main-loop engine heartbeat (a hung engine shows as stale only after 45 min).
+- Owner-only email sign-in link and clearer sign-in screens (owner request 2026-10-11; TRACEABILITY U20). The login
+  page now titles each flow (Sign in, Reset your password, Email me a sign-in link, Finish signing in, Set a new
+  password), shows **Forgot password?**, **Email me a sign-in link** (only when the server has mail configured) and
+  **Use a recovery code**, and fits a phone (16px inputs, 44px targets). `POST /api/auth/email-link {email}` answers
+  one generic 200 for every address; it mails a link only to `auth.owner_email` (trimmed, case-insensitive) when that
+  account is the enabled owner and mail is configured. Token: `token_urlsafe(32)`, SHA-256 in aux.db `email_links`
+  (migration 6, additive), single use, 15 min; at most 3 requests an hour per address and per IP
+  (`email_link_requests`). `POST /api/auth/email-link/redeem {token, totp}` STILL needs the authenticator code; any
+  redeem of a live link deletes every outstanding link (a wrong code burns it and counts towards the sign-in lockout;
+  unknown tokens count against the IP only). A password change, forgot-password or recovery-code sign-in also
+  deletes outstanding links. Mail: `goldbot/api/mailer.py`, smtplib + STARTTLS, settings `auth.mail` (real values in
+  settings.local.yaml), password in the keyring as `smtp-password`; sent in a background task after the response,
+  failures logged and audited by exception type only. `goldbot run mail-test` checks the setup. Rollback note: aux.db
+  schema 6 is additive, so every release since state-store step 3 opens it; a release from before step 3 is refused
+  by the deploy (no 6 -> 4 step-back yet). Needs security review.
+- Clearing an `engine_startup_refused` halt (2026-10-11, re-verify follow-up of LOW-D). A test now shows that a
+  refused engine file, followed by a successful start and one engine state write, gives a supervisor evaluation
+  without `engine_startup_refused` (the engine's first write replaces the file). The RUNBOOK's "Engines are running
+  but block every entry" table has the `engine_startup_refused` row: fix the cause and restart that engine, or retire
+  the account (stop and disable its engine, move `state/engine_<account>.json` aside, only with no open position).
+  The dashboard's owner text for the code ends "or retire that account". Tests:
+  tests/test_startup_error_exposure.py.
+- Start refusal named, bridge protocol v4 required (2026-10-11, trading-safety re-verification LOW-A and LOW-B on
+  the open-risk / MT5 branch). When the terminal-account check refuses an engine start (another login or server, demo
+  vs real, or a margin mode that is not hedging), `ops.run.refuse_start` now writes `startup_error` (and the deposit
+  currency, for the supervisor) into engine_<account>.json before the SystemExit, and health `engine:<account>` FAILs
+  with "engine refused to start: <cause>". A margin mode the bridge does not report says "bridge older than protocol
+  v4: deploy the MT5 box first". `bridge.MIN_COMPATIBLE` is 4, so `bridge_compat` and preflight also name a v3
+  bridge (pinned in tests/test_bridge_compat.py). Deploy order, in the RUNBOOK ("Bridge compatibility") and
+  docs/deploy/2026-10-batch.md section 3: the MT5 box first; brain-first only with a flat book. S12 in
+  docs/AGENT_STANDARDS.md records the exception: a new bridge response field may carry a restriction only if an
+  unknown or missing value fails closed on the brain AND the bridge enforces it independently, with a protocol bump
+  (precedent: `AccountInfo.margin_mode`). Tests: tests/test_start_refusal.py.
+- A failed engine start keeps the account's exposure (2026-10-11, trading-safety re-verification LOW-D). A refused
+  start (`ops.run.refuse_start`) and a start whose positions read fails (`Engine._load_orders`) used to replace
+  engine_<account>.json with a small error payload, so the supervisor summed 0 lots for an account that may still hold
+  positions. Both now go through `risk.supervisor.write_startup_error`, which merges `startup_error` and `dq_error`
+  into the previous file and keeps `open_lots`, `open_notional`, `equity`, `day_start_equity`, `week_start_equity`,
+  `balance_closed_hwm` (finite numbers only), the currency and the absolute daily limit. The supervisor halts entries
+  on a file carrying `startup_error` (`engine_startup_refused`, `startup_refused_engines`) while still summing its
+  exposure and money; a normal engine write clears it. Rollback order in the RUNBOOK ("Bridge compatibility") and
+  docs/deploy/2026-10-batch.md section 5: the brain first, then the MT5 box. The dashboard's entry-status texts
+  (goldbot/api/entry_status.py) now word `engine_startup_refused`, `open_risk_unknown` and `same_direction_cap`;
+  the guard test that every gate and supervisor reason has owner text read only `throttle_*` from the `out.append`
+  helpers and now reads them all, which is how the two open-risk codes were found unworded (`heat_cap` left
+  FUTURE). Tests: tests/test_startup_error_exposure.py, tests/test_api_entry_status.py.
 - GitHub `engraamirkhan/goldbot`. PR 36 (2026-10-01..04 work) is merged into `main`; follow-up work goes on branch
   `claude/gifted-goldberg-lcb7pl` restarted from `main` (Claude sessions do not push to `main` directly). CI (`ci.yml`) runs pre-commit, backend lint/mypy/unit/integration, frontend eslint/tsc/vitest, an API
   contract check and Playwright e2e as separate jobs, and opens one issue labelled `ci` with each failed job's output.
@@ -1069,6 +1149,27 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     entry; `trend_day` follows it); P-5 adopted (cost source pinned at the freeze, the same for gates and labels).
   - Recorded in `docs/research/preregistration-2027Q1.md`, `preregistration-2027Q2-draft.md`, `hypotheses.md`,
     `research-plan.md` and `scorecard-2026-10.md`.
+- **Pre-registration writer (BACKLOG 47, 2026-10-11; security approved; quant blockers M1-M5 fixed, re-review
+  pending).** `scripts/preregister_quarter.py --quarter 2027Q1 --from docs/research/preregistration-2027Q1.yaml
+  [--dry-run] [--allow-late REASON]`, and the `preregister-quarter` workflow (workflow_dispatch; dry run by default
+  with a read-only token; the write job runs only on `main`, with full history, and holds
+  `concurrency: research-registry`, shared with research.yml). Both workflows read and save
+  `research-v1/registry.jsonl` only through `scripts/registry_release.sh`: a failed read fails the job, and an upload
+  shorter than the published copy is refused. The YAML is the reviewed extract of the markdown. Each config is
+  rebuilt the way its runner builds it (`resolve_variant`, shared with `research_pass.py`; `discovery_trial_config`,
+  shared with `discovery_pass`; an end-to-end test shows `--discover` links the written H-02-style row) and checked
+  against its pinned hash, agent id and feature version. Each reading rule must be the whole text of a "Reading rule"
+  bullet of the markdown, read at `freeze_commit` (`git show`). `bars_from`/`bars_to` must be the run's own UTC
+  timestamp text. Rows + slots = `reservation` = `research.reserved_trials_quarter` <= 20. Writes through
+  `preregister(queue=True, target_quarter=)` / `reserve_slot` under the lock, idempotent, never a trial; a withdrawn
+  row (or a slot of a withdrawn parent) no longer blocks a spec without it, and no slot is reserved on a withdrawn
+  parent. **Late:** `--allow-late` writes ad-hoc rows only, no slots (rows 6-9 lost; H-02 survivors from the open
+  budget), and is refused unless the settings' 2027Q1 reservation equals the queued rows already standing (normally
+  0), changed in the same change. research.yml gains `discover`, `families`, `discover_config` and `rule_ref` inputs,
+  and a `macro` run now fails if macro-v1 cannot be downloaded. **Not writable yet, by design:** H-02's config is
+  owed by the strategy researcher (2026-12-11; F1: the markdown's H-02 method vs `DiscoveryConfig` defaults is for
+  the research director), H-06's count (or withdrawal) by BACKLOG 48, and `freeze_commit` by the research director
+  (2026-12-14). BACKLOG 50 (F2: holdout cut in `--discover`, data-v1 digests) is due before the freeze.
 - **Owed pre-registration counts (2026-10-11): run count-owed-events and paste the counts before the freeze.**
   `.github/workflows/count-owed-events.yml` (workflow_dispatch only; dispatchable once it is on `main`) downloads
   data-v1, macro-v1 and calendar-v1 (`fetch_data_release.py --download-only`), cuts every input at

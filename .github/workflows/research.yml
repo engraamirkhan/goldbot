@@ -13,16 +13,21 @@ on:
       score_holdout: { description: "score these configurations on the held-out year (once per configuration, final)", type: boolean, default: false }
       skip_screen: { description: "fit the model even if the rule fails the primary-signal screen (recorded as skipped)", type: boolean, default: false }
       pooled:     { description: "15m or 1h: one pooled meta-model over every family on that timeframe (ignores specialist and variants)", default: "" }
-      macro:      { description: "add the point-in-time macro features from release macro-v1 (data-macro workflow); the model's feature version then includes them", type: boolean, default: false }
+      macro:      { description: "add the point-in-time macro features from release macro-v1 (data-macro workflow); the model's feature version then includes them; fails if macro-v1 cannot be downloaded", type: boolean, default: false }
+      discover:   { description: "ONE pre-registered feature-discovery trial on the specialist and its one variant (research_pass.py --discover)", type: boolean, default: false }
+      families:   { description: "with discover: feature grouping (column, feature, family, cluster; empty = column)", default: "" }
+      discover_config: { description: "with discover: JSON overrides of DiscoveryConfig, exactly as pre-registered", default: "{}" }
+      rule_ref:   { description: "the pre-registered rule this run follows (e.g. preregistration-2027Q1.md#reserve); empty = none", default: "" }
 # Least privilege: no scopes by default; walk-forward grants itself what it needs. Inputs reach the shell only via env:.
 permissions: {}
-concurrency:
-  group: research-registry   # one writer at a time for registry.jsonl
-  cancel-in-progress: false
 jobs:
   walk-forward:
+    if: ${{ github.ref == 'refs/heads/main' }}   # writes the shared registry: only reviewed, merged code
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    concurrency:
+      group: research-registry   # one writer at a time for registry.jsonl, shared with preregister-quarter.yml
+      cancel-in-progress: false
     permissions:
       contents: write   # registry upload to release research-v1
       issues: write     # report issue / comment
@@ -40,12 +45,15 @@ jobs:
         run: |
           gh release download data-v1 -p 'xauusd_1m_dukascopy_*.parquet' -D raw
           ls -la raw
-          gh release download research-v1 -p registry.jsonl || echo "no registry yet; starting at trial 1"
+          # the published registry; fails the job if it exists but cannot be read (never an empty start that would
+          # overwrite it on save); empty only when research-v1 or its registry.jsonl does not exist yet
+          scripts/registry_release.sh fetch registry.jsonl
           # the canonical broker's measured costs, published by the VPS after nightly_costs (costs only)
           gh release download costs-v1 -p costs_measured.json -D costs \
             || echo "no measured cost table on release costs-v1; research charges the settings priors (stated in the report)"
           if [ "$WANT_MACRO" = "true" ]; then
-            gh release download macro-v1 -p '*.parquet' -D macro || echo "no macro-v1 release yet; the pass runs without macro features"
+            # must succeed: a macro-on run (e.g. a queued row with macro features) never runs without them
+            gh release download macro-v1 -p '*.parquet' -D macro
           fi
       - name: walk-forward
         env:
@@ -58,9 +66,24 @@ jobs:
           SKIP_SCREEN: ${{ inputs.skip_screen && '--skip-screen' || '' }}
           POOLED: ${{ inputs.pooled }}
           MACRO: ${{ inputs.macro && '--macro macro' || '' }}
+          DISCOVER: ${{ inputs.discover }}
+          FAMILIES: ${{ inputs.families }}
+          DISCOVER_CONFIG: ${{ inputs.discover_config }}
+          RULE_REF: ${{ inputs.rule_ref }}
         run: |
           set -o pipefail
           if [ -n "$POOLED" ]; then TARGET=(--pooled "$POOLED"); else TARGET=(--specialist "$SPECIALIST" --variants "$VARIANTS"); fi
+          # a pre-registered discovery (e.g. H-02) and the rule a run cites. Values go in the equals form only: as a
+          # separate argument a value could itself be an option (--families takes an optional value, so
+          # families=--registry=/tmp/x would move where the trial row is written)
+          case "$FAMILIES" in ""|column|feature|family|cluster) ;; *) echo "::error::bad families"; exit 1;; esac
+          EXTRA=()
+          if [ "$DISCOVER" = "true" ]; then
+            EXTRA+=(--discover --discover-config="$DISCOVER_CONFIG")
+            if [ -n "$FAMILIES" ]; then EXTRA+=(--families="$FAMILIES"); fi
+          fi
+          if [ -n "$RULE_REF" ]; then EXTRA+=(--rule-ref="$RULE_REF"); fi
+          TARGET+=("${EXTRA[@]}")
           # the measured cost table from release costs-v1 (docs/RUNBOOK.md section 4); the settings priors without it
           COSTS=(); if [ -f costs/costs_measured.json ]; then COSTS=(--cost-table costs/costs_measured.json); fi
           # SCORE_HOLDOUT/SKIP_SCREEN/MACRO are constant flags or empty (set by expressions above), so they stay unquoted
@@ -69,13 +92,9 @@ jobs:
             "${TARGET[@]}" --from-year "$FROM_YEAR" --to-year "$TO_YEAR" --rationale "$RATIONALE" \
             "${COSTS[@]}" $SCORE_HOLDOUT $SKIP_SCREEN $MACRO 2>&1 | tee research.log
       - name: save the registry
-        run: |
-          # union with whatever the VPS monthly loop pushed while this ran, so no trial is dropped
-          gh release download research-v1 -p registry.jsonl -O registry.remote.jsonl || touch registry.remote.jsonl
-          python -m goldbot.research.registry_sync merge registry.jsonl registry.remote.jsonl -o registry.jsonl
-          gh release view research-v1 >/dev/null 2>&1 || gh release create research-v1 --title "Research trial registry" \
-            --notes "registry.jsonl: every evaluated trial (feeds the deflated Sharpe). Written by the research workflow." --latest=false
-          gh release upload research-v1 registry.jsonl --clobber
+        # union with whatever the VPS monthly loop or another workflow pushed while this ran, so no trial is dropped;
+        # a failed read or a union shorter than the published copy fails the job instead of uploading
+        run: scripts/registry_release.sh save registry.jsonl
       - name: post the report to an issue
         if: always()
         env:

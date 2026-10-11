@@ -97,6 +97,11 @@ REASONS: dict[str, Reason] = {
                                       "Restart the supervisor service; it rewrites the file.", "act"),
     "engine_state_unreadable": _r("The supervisor can't read an engine's state file",
                                   "Restart the engine that wrote it.", "act"),
+    "engine_startup_refused": _r("An engine refused to start: entries stopped on every account",
+                                 "Health shows the cause on the engine line; fix it and restart that engine, "
+                                 "or retire that account.", "act"),
+    "open_risk_unknown": _r("Open risk can't be measured (a trade without a stop?)",
+                            "Put a stop on every open trade; the Health tab names the account.", "act"),
     "mixed_account_currencies": _r("Engines report different account currencies",
                                    "Stop the engine that should not be running.", "act"),
     "combined_drawdown_halt": _r("All accounts together are 12% below their high: trading stopped",
@@ -158,6 +163,8 @@ REASONS: dict[str, Reason] = {
     "max_positions": _r("Already the maximum number of open trades",
                         f"{NOTHING}: a new entry is possible once one closes.", "wait"),
     "heat_cap": _r("Too much risk already open", f"{NOTHING}: a new entry is possible once open risk falls.", "wait"),
+    "same_direction_cap": _r("Enough trades open on this side already",
+                             f"{NOTHING}: a new entry this way is possible once one closes.", "wait"),
     "combined_exposure_cap": _r("Enough gold already open across accounts",
                                 f"{NOTHING}: a new entry is possible once exposure falls.", "wait"),
     "margin_level_floor": _r("Not enough free margin", f"{NOTHING}: wait for open trades to close.", "wait"),
@@ -177,7 +184,7 @@ REASONS: dict[str, Reason] = {
 _ORDER = {code: i for i, code in enumerate(REASONS)}
 API_ONLY = frozenset({"engine_not_reporting", "status_unknown"})       # raised here, not by the engine
 # worded ahead of the lanes adding them (bridge check, playbook G-items); the engine publishes them in entry_blocks
-FUTURE = frozenset({"bridge_incompatible", "heat_cap"})
+FUTURE = frozenset({"bridge_incompatible"})
 RESETS_DAILY = frozenset({"combined_daily_cap", "combined_daily_loss_abs", "daily_cap", "daily_loss_limit_abs"})
 RESETS_WEEKLY = frozenset({"combined_weekly_cap", "weekly_cap"})
 _SYMBOL = {"GBP": "£", "USD": "$", "EUR": "€"}

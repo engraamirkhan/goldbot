@@ -16,7 +16,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 import pandas as pd
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -24,13 +33,16 @@ from fastapi.staticfiles import StaticFiles
 
 from goldbot.api import entry_status, explain
 from goldbot.api.auth import (
+    EMAIL_LINK_TTL_S,
     RESET_TTL_H,
     SESSION_TTL_H,
     AuthStore,
     User,
+    coarse_ip,
     env_setup_code_hint,
     has_role,
 )
+from goldbot.api.mailer import Mailer, email_link_message, mailer_from_settings, sign_in_notice_message
 from goldbot.api.schema import (
     AcceptRequest,
     AcceptResponse,
@@ -46,6 +58,9 @@ from goldbot.api.schema import (
     DecidedProposal,
     Decision,
     DecisionResult,
+    EmailLinkRedeemRequest,
+    EmailLinkRequest,
+    EmailLinkResponse,
     FeedHealth,
     ForgotPasswordRequest,
     HaltRequest,
@@ -78,6 +93,7 @@ from goldbot.api.schema import (
     UserRef,
     UserRow,
 )
+from goldbot.config import MailSettings
 from goldbot.ops.account_view import LossBudget, loss_budget, margin_level_pct, milestones, proposal_budget
 from goldbot.telegram.approvals import Outcome
 from goldbot.telegram.approvals import Proposal as BusProposal
@@ -195,6 +211,16 @@ def _settings_owner_email() -> str | None:
         return None
 
 
+def _settings_mail() -> MailSettings:
+    """auth.mail from settings; unreadable settings mean mail off (the email sign-in link is then not offered)."""
+    try:
+        from goldbot.config import load_settings
+        return load_settings().auth.mail
+    except Exception as exc:                    # noqa: BLE001 - the API still serves; email sign-in stays off
+        print(f"goldbot api: settings unreadable, auth.mail off: {type(exc).__name__}", flush=True)
+        return MailSettings()
+
+
 LOOPBACK = {"127.0.0.1", "::1"}
 CODES_LOCKED = "too many attempts: re-arm and auto mode are locked for 15 minutes; /halt still works"
 
@@ -213,9 +239,40 @@ def client_ip(request: Request) -> str | None:
 
 def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist",
                data_root: str | Path | None = None, docs_dir: str | Path | None = None,
-               owner_email: str | None = None) -> FastAPI:
-    """owner_email: the dashboard owner; None reads `auth.owner_email` from settings."""
+               owner_email: str | None = None, mail: MailSettings | None = None,
+               mailer: Mailer | None = None) -> FastAPI:
+    """owner_email: the dashboard owner; None reads `auth.owner_email` from settings. mail: None reads `auth.mail`;
+    mailer: None sends through SMTP when mail is enabled (tests pass a fake)."""
     st = State(state_dir, data_root, owner_email if owner_email is not None else _settings_owner_email())
+    mail = mail if mail is not None else _settings_mail()
+    mailer = mailer if mailer is not None else mailer_from_settings(mail)
+
+    def email_link_ready() -> bool:
+        """The owner's email sign-in link is offered: auth.mail enabled and complete, and the SMTP password stored."""
+        return mail.enabled and mailer is not None and mailer.ready()
+
+    def mail_owner(subject: str, text: str, what: str, failed_event: str) -> None:
+        """Runs after the answer has gone, in the thread pool (SMTP has its own timeout). A failure is logged and
+        audited by exception type only: smtplib's errors can carry the address and the message."""
+        to = st.auth.owner_email
+        if mailer is None or to is None:
+            return
+        try:
+            mailer.send(to, subject, text)
+        except Exception as exc:                # noqa: BLE001 - the caller already has its answer
+            log.warning("%s not sent: %s", what, type(exc).__name__)
+            st.auth.audit(failed_event, error=type(exc).__name__)
+
+    def send_email_link(token: str) -> None:
+        if mail.dashboard_origin is not None:
+            subject, text = email_link_message(mail.dashboard_origin, token, EMAIL_LINK_TTL_S // 60)
+            mail_owner(subject, text, "email sign-in link", "email_link_send_failed")
+
+    def send_sign_in_notice(ip: str | None) -> None:
+        """ADR 0013: every sign-in with an emailed link is also mailed to the owner (the Telegram notice is queued
+        by AuthStore.redeem_email_link). No token, only a coarse network hint."""
+        subject, text = sign_in_notice_message(time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()), coarse_ip(ip))
+        mail_owner(subject, text, "sign-in notice", "email_link_notice_failed")
     app = FastAPI(title="goldbot api", version="0.2")
     app.state.st = st
     hint = env_setup_code_hint(st.auth)
@@ -261,7 +318,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     # ------------------------------------------------------------- auth endpoints
     @app.get("/api/auth/state")
     def auth_state() -> AuthState:
-        return AuthState(needs_setup=st.auth.setup_code is not None, users=st.auth.user_count())
+        return AuthState(needs_setup=st.auth.setup_code is not None, users=st.auth.user_count(),
+                         email_link=email_link_ready())
 
     @app.post("/api/auth/setup")
     def setup(body: SetupRequest) -> SetupResponse:
@@ -283,6 +341,29 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         if u is None:                                   # disabled between the check and now
             raise HTTPException(403, "invalid credentials")
         return LoginResponse(token=tok, expires_in=12 * 3600, role=u.role, email=u.email)
+
+    @app.post("/api/auth/email-link")
+    def email_link(body: EmailLinkRequest, request: Request, background: BackgroundTasks) -> EmailLinkResponse:
+        """Owner only, the same generic 200 for every address, configured or not (AuthStore.request_email_link)."""
+        token = st.auth.request_email_link(body.email, ip=client_ip(request), enabled=email_link_ready())
+        if token is not None:
+            background.add_task(send_email_link, token)
+        return EmailLinkResponse()
+
+    @app.post("/api/auth/email-link/redeem")
+    def email_link_redeem(body: EmailLinkRedeemRequest, request: Request, background: BackgroundTasks) -> LoginResponse:
+        """The link's token AND a current authenticator code (the link replaces the password, not the second factor).
+        A success also emails the owner a sign-in notice (ADR 0013)."""
+        ip = client_ip(request)
+        try:
+            tok = st.auth.redeem_email_link(body.token, body.totp, ip=ip)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        u = st.auth.session_user(tok)
+        if u is None:
+            raise HTTPException(403, "invalid credentials")
+        background.add_task(send_sign_in_notice, ip)
+        return LoginResponse(token=tok, expires_in=SESSION_TTL_H * 3600, role=u.role, email=u.email)
 
     @app.post("/api/auth/logout")
     def logout(creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Ok:

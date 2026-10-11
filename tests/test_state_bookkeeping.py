@@ -436,14 +436,17 @@ def test_headline_spend_racing_agent_reservations_is_never_lost(tmp_path):
 
 def test_the_runbook_downgrade_keeps_rows_and_the_next_update_reapplies_version_5(tmp_path):
     import sqlite3
+
+    from goldbot.db.migrations import latest_version
     SpendLedger(tmp_path / "agent_spend.json", 40.0).add(NOW, 2.0)
-    c = sqlite3.connect(tmp_path / "aux.db")                                # the RUNBOOK one-liner
-    c.execute("DELETE FROM schema_version WHERE version = 5")
+    c = sqlite3.connect(tmp_path / "aux.db")
+    c.execute("DELETE FROM schema_version WHERE version > 5")              # as the schema 5 release left it
+    c.execute("DELETE FROM schema_version WHERE version = 5")              # the RUNBOOK one-liner
     c.execute("PRAGMA user_version = 4")
     c.commit()
     c.close()
     assert SpendLedger(tmp_path / "agent_spend.json", 40.0).month_spent(NOW) == 2.0
-    assert _rows(tmp_path, "SELECT MAX(version) FROM schema_version") == [(5,)]
+    assert _rows(tmp_path, "SELECT MAX(version) FROM schema_version") == [(latest_version("aux"),)]
 
 
 # ----------------------------------------------------------------------------------------------- re-verification
@@ -545,12 +548,9 @@ def _downgrade_script() -> str:
 @pytest.mark.parametrize("version, code", [(5, 0), (4, 0), (6, 3)])
 def test_the_updater_steps_aux_db_back_only_from_schema_5(tmp_path, version, code):
     import sqlite3
-    SpendLedger(tmp_path / "agent_spend.json", 40.0).add(NOW, 2.0)          # a schema 5 file with a row
-    with sqlite3.connect(tmp_path / "aux.db") as c:
-        if version == 4:
-            c.execute("DELETE FROM schema_version WHERE version = 5")
-        if version == 6:
-            c.execute("INSERT INTO schema_version (version, name, applied_ns) VALUES (6, 'future', 0)")
+    SpendLedger(tmp_path / "agent_spend.json", 40.0).add(NOW, 2.0)          # a file with a row, at the latest schema
+    with sqlite3.connect(tmp_path / "aux.db") as c:                         # 6 (email links) is newer than 5 -> 4 knows
+        c.execute("DELETE FROM schema_version WHERE version > ?", (version,))
     script = tmp_path / "down.py"
     script.write_text(_downgrade_script())
     out = subprocess.run([sys.executable, str(script), str(tmp_path / "aux.db")], capture_output=True, text=True)

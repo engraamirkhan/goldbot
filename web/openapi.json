@@ -523,6 +523,11 @@
    },
    "AuthState": {
     "properties": {
+     "email_link": {
+      "default": false,
+      "title": "Email Link",
+      "type": "boolean"
+     },
      "needs_setup": {
       "title": "Needs Setup",
       "type": "boolean"
@@ -1250,6 +1255,56 @@
      "outcome"
     ],
     "title": "DecisionResult",
+    "type": "object"
+   },
+   "EmailLinkRedeemRequest": {
+    "additionalProperties": false,
+    "description": "The token from the link's fragment AND a current authenticator code: the link replaces the password only.",
+    "properties": {
+     "token": {
+      "default": "",
+      "maxLength": 256,
+      "title": "Token",
+      "type": "string"
+     },
+     "totp": {
+      "default": "",
+      "maxLength": 16,
+      "title": "Totp",
+      "type": "string"
+     }
+    },
+    "title": "EmailLinkRedeemRequest",
+    "type": "object"
+   },
+   "EmailLinkRequest": {
+    "additionalProperties": false,
+    "description": "Owner only, but the answer is the same generic 200 for every address (nothing can be enumerated).",
+    "properties": {
+     "email": {
+      "default": "",
+      "maxLength": 320,
+      "title": "Email",
+      "type": "string"
+     }
+    },
+    "title": "EmailLinkRequest",
+    "type": "object"
+   },
+   "EmailLinkResponse": {
+    "properties": {
+     "detail": {
+      "default": "If this address can use email sign-in, a link is on its way",
+      "title": "Detail",
+      "type": "string"
+     },
+     "ok": {
+      "default": true,
+      "title": "Ok",
+      "type": "boolean"
+     }
+    },
+    "title": "EmailLinkResponse",
     "type": "object"
    },
    "EntryBlock": {
@@ -4142,6 +4197,84 @@
      }
     },
     "summary": "Accept"
+   }
+  },
+  "/api/auth/email-link": {
+   "post": {
+    "description": "Owner only, the same generic 200 for every address, configured or not (AuthStore.request_email_link).",
+    "operationId": "email_link_api_auth_email_link_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EmailLinkRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/EmailLinkResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Email Link"
+   }
+  },
+  "/api/auth/email-link/redeem": {
+   "post": {
+    "description": "The link's token AND a current authenticator code (the link replaces the password, not the second factor).\nA success also emails the owner a sign-in notice (ADR 0013).",
+    "operationId": "email_link_redeem_api_auth_email_link_redeem_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EmailLinkRedeemRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LoginResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Email Link Redeem"
    }
   },
   "/api/auth/invite": {

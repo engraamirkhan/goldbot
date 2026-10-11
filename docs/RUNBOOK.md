@@ -25,7 +25,7 @@ Everything below is done from your Mac: the Oracle website in a browser, and the
 
 | VM | Oracle shape (Always Free) | What runs there |
 | --- | --- | --- |
-| **brain** | VM.Standard.A1.Flex (ARM), 4 OCPU, 24 GB, Ubuntu 24.04 | engine, supervisor, scheduler (retraining), dashboard API, Telegram, news |
+| **brain** | VM.Standard.A1.Flex (ARM), 2 OCPU, 12 GB (the Always Free total since mid-2026), Ubuntu 24.04 | engine, supervisor, scheduler (retraining), dashboard API, Telegram, news |
 | **mt5** | VM.Standard.E2.1.Micro (x86), 1 GB, Ubuntu 24.04 | MT5 terminal under Wine + the goldbot bridge |
 
 The engine reaches the terminal through the bridge (`goldbot/execution/bridge.py`) on Oracle's private network.
@@ -42,7 +42,7 @@ record decides whether it is reliable enough.
 
 ### 0.2 Create the two VMs (browser)
 Compute -> Instances -> Create, both in the same VCN (the wizard's default network):
-1. **brain**: image Ubuntu 24.04, shape *Ampere* VM.Standard.A1.Flex with 4 OCPU / 24 GB, paste the contents of
+1. **brain**: image Ubuntu 24.04, shape *Ampere* VM.Standard.A1.Flex with 2 OCPU / 12 GB (Oracle halved the free A1 total in 2026; more than that is billed or may be terminated), paste the contents of
    `~/.ssh/id_ed25519.pub` (`cat ~/.ssh/id_ed25519.pub` in Terminal). If it says *out of capacity*, try another
    availability domain or retry later; this is common for free ARM VMs.
 2. **mt5**: image Ubuntu 24.04, shape *AMD* VM.Standard.E2.1.Micro, same SSH key.
@@ -53,16 +53,19 @@ Compute -> Instances -> Create, both in the same VCN (the wizard's default netwo
    127.0.0.1.
 
 ### 0.3 The MT5 box
+Root runs the bootstrap, so it runs only a copy whose hash you checked on your Mac, at a commit on `main`
+(`<SHA>`, `<HASH>`: docs/deploy/first-deploy.md P6 shows how to get both). Run it inside `tmux new -s boot`; it
+ignores a dropped connection and logs to `/root/goldbot-bootstrap.log`.
 ```bash
 ssh ubuntu@<mt5 public ip>
-git clone https://github.com/engraamirkhan/goldbot.git /tmp/goldbot
-sudo bash /tmp/goldbot/goldbot/ops/linux/mt5_bootstrap.sh
+curl -fsSLo mt5_bootstrap.sh https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/linux/mt5_bootstrap.sh
+echo "<HASH>  mt5_bootstrap.sh" | sha256sum -c - && sudo bash mt5_bootstrap.sh <SHA>
 ```
 Log in to your IC Markets demo **once** (MT5 keeps the login; goldbot never sees the password):
 1. On the VM: `sudo systemctl start goldbot-vnc`.
 2. On your Mac, a second Terminal window: `ssh -L 5900:localhost:5900 ubuntu@<mt5 public ip>`.
 3. In Finder: Go -> Connect to Server -> `vnc://localhost:5900` (macOS Screen Sharing; leave the password empty).
-4. In that window start the terminal if it is not open (`sudo -u mt5 env DISPLAY=:99 wine 'C:\MT5\ICMarkets\terminal64.exe' &`
+4. In that window start the terminal if it is not open (`sudo -u mt5 -H env DISPLAY=:99 wine 'C:\MT5\ICMarkets\terminal64.exe' &`
    on the VM), then File -> Login to Trade Account: your login, password, server **ICMarketsSC-Demo**, tick
    **Save password**. Check `XAUUSD` is in Market Watch, and enable Tools -> Options -> Expert Advisors ->
    *Allow algorithmic trading*. Close the terminal.
@@ -73,14 +76,15 @@ Bridge address and token:
 goldbot-mt5 accounts bridge-serve icm-demo     # your MT5 login number, then 127.0.0.1:8765; prints a token ONCE
 sudo systemctl start goldbot-bridge@icm-demo
 ```
-Copy the token straight into the next step; do not save it anywhere else. The bridge refuses to start unless the
+Copy the token straight into `goldbot run setup` on the brain (step 2); do not save it anywhere else. Do this
+step only when the brain is installed and you are about to run setup, so the token is never left in a window. The bridge refuses to start unless the
 terminal is logged in to that login on ICMarketsSC-Demo as a **demo** account.
 
 ### 0.4 The brain
 ```bash
 ssh ubuntu@<brain public ip>
-git clone https://github.com/engraamirkhan/goldbot.git /tmp/goldbot
-sudo bash /tmp/goldbot/goldbot/ops/linux/brain_bootstrap.sh   # ends by printing a "ssh-ed25519 ..." key line
+curl -fsSLo brain_bootstrap.sh https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/linux/brain_bootstrap.sh
+echo "<HASH>  brain_bootstrap.sh" | sha256sum -c - && sudo bash brain_bootstrap.sh <SHA>   # ends with a "ssh-ed25519 ..." line
 ```
 On the MT5 box: `sudo goldbot-mt5-authorize '<that ssh-ed25519 line>'` (the key may only forward to the bridge).
 Back on the brain:
@@ -238,6 +242,10 @@ and the rest still arrives. It never contains account numbers or emails.
   automatic rollback for this: exits keep running, and you decide (`goldbot run health`, then `--rollback` if needed).
   Checks that need the market open look the same before and after when it is closed.
 * The health check `deploy` shows the last result.
+* **goldbot-deploy installs Python packages from `uv.lock`** (`uv sync --frozen`, when `pyproject.toml` or
+  `uv.lock` changes) from the release that brings that change. A box bootstrapped at or after that release already
+  has it. An older box keeps the old root copy (`uv pip install`, unpinned) until you reinstall it with the
+  hash-checked steps below. Do that before its next deploy.
 * **Installing a new goldbot-deploy** (when a release changes `goldbot/ops/linux/goldbot-deploy.sh`, after the
   security reviewer signed it off). Root runs it, so root never takes it from `/opt/goldbot`:
 
@@ -624,7 +632,43 @@ a service is running; if one keeps restarting, read its `.err` file in the logs 
 | Re-arm or auto mode says "too many attempts" (Telegram notice: wrong authenticator codes) | Five wrong codes lock re-arm and auto mode (dashboard and Telegram) for 15 minutes; sign-in, **/halt** and **/mode propose** still work. If it was not you, someone holds a signed-in session: on the server, from the goldbot directory, run `python -m goldbot.ops.run revoke-sessions` (signs every account out; add `--state <dir>` if state is elsewhere: it refuses a directory without aux.db), then change your password. Failed sign-ins also lock re-arm and auto mode for the same 15 minutes. |
 | Someone should lose access | Owner: **Users** -> **Disable** (signs them out at once) or **Sign out everywhere**; **Enable** restores the account. The owner cannot be disabled or demoted. |
 
+| You (the owner) want to sign in without typing the password | Login page -> **Email me a sign-in link** -> your email -> **Send the link**. The page always says "If this address can use email sign-in, a link is on its way", whatever address is typed. Open the link on the device you want to sign in on, then enter the **authenticator code**: the link replaces the password, never the code. It works once, for 15 minutes; asking again or using a link cancels the others. At most 3 requests an hour per address and per network address. The option only appears once mail is set up (below). |
+
 Every one of these is recorded in the audit log (`state\aux.db`, table `audit`; the state-files table in section 3 shows how to read it).
+
+**Email sign-in link: one-time mail setup (owner only, optional)**
+
+The link is sent with plain SMTP and STARTTLS. Gmail is free: it needs 2-Step Verification on the Google account and
+an App Password (Google Account -> Security -> 2-Step Verification -> App passwords; name it `goldbot`; Google shows
+16 letters once).
+
+1. Store the App Password in the server's keyring (never in a file, an env var or the repository). On the brain
+   `goldbot accounts set smtp-password`; on the Windows VPS
+   `.\.venv\Scripts\python.exe -m goldbot.ops.accounts set smtp-password`. Paste it at the hidden prompt.
+2. Add to the server's `config/settings.local.yaml` (not tracked by Git; placeholders shown, use your own values):
+   ```yaml
+   auth:
+     owner_email: you@example.com
+     mail:
+       enabled: true
+       host: smtp.gmail.com
+       port: 587
+       from_address: you@example.com       # the Gmail account the App Password belongs to
+       dashboard_origin: https://dash.example.com   # your tunnel hostname, https only
+   ```
+3. Check it: `goldbot run mail-test` (VPS: `python -m goldbot.ops.run mail-test`) sends a test email to
+   `auth.owner_email` and prints only `sent`, `not sent: <error type>` or what is missing. Then restart the API
+   (`sudo systemctl restart goldbot-api`, VPS: `nssm restart goldbot-api`) so the login page offers the link.
+4. If a link never arrives: the API log says `email sign-in link not sent: <error type>` (never the address or the
+   link), and the audit table has `email_link_send_failed`. `SMTPAuthenticationError` means the App Password is wrong
+   or revoked: store a new one (step 1); no restart is needed. If the audit table has `email_link_rate_limited`
+   instead, the 3-an-hour limit was hit: wait an hour or sign in with the password. The `email_link` health check
+   warns when that happens 3 or more times in 24 h. To turn the feature off, set `enabled: false` and restart the API.
+5. Every sign-in with a link sends you a Telegram notice and an email ("new sign-in with an emailed link": time and a
+   rough network such as `203.0.x.x`, never the link). If it was not you, your mailbox and your authenticator are
+   both exposed: run `python -m goldbot.ops.run revoke-sessions` on the server (signs everyone out and cancels every
+   open link), set `enabled: false`, then change your password and your email password. The accepted risk and its
+   limits are in [ADR 0013](decisions/0013-email-sign-in-link-accepted-risk.md).
 
 ---
 
@@ -869,6 +913,7 @@ nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what
 | `fx_conversion_unavailable` | The account is not in USD and the terminal gave no USD -> account-currency conversion (`order_calc_profit` / tick value), or the terminal's symbol info was unreadable. | Check the terminal is logged in and XAUUSD is in Market Watch; entries resume when it answers. Exits are unaffected. |
 | `daily_loss_limit_abs` | Today's loss plus this trade's full stop risk would exceed min(2% of the day-start equity, the account's `daily_loss_limit_abs` in `config\accounts.yaml`, e.g. £50 on icm-demo). Equal is allowed; the supervisor halts once the combined loss reaches the limit. | Normal; clears at 00:00 UTC. `engine_<account>.json` shows `daily_loss_limit` and `daily_loss_remaining`. |
 | `supervisor_halt` with `mixed_account_currencies` | Running engines report different deposit currencies (e.g. GBP and USD); equities are never summed across currencies. Health names the files. | Stop the engine that should not run (or delete its leftover `engine_<account>.json`), see "Currency rollout" below. |
+| `supervisor_halt` with `engine_startup_refused` | An engine's start failed (a refused terminal account, e.g. a bridge older than protocol v4, or an unreadable positions read): its `engine_<account>.json` carries `startup_error`, and its last-known exposure still counts. The `engine:<account>` health line names the cause. | Fix the cause and restart that engine (its first state write clears the halt), or retire that account: stop its engine (`sudo systemctl disable --now goldbot-engine@<account>`) and move `state/engine_<account>.json` aside (e.g. to `state/retired/`), only once it holds no open position. |
 | `data_quality_error` | Reserved; the engine does not set it today. | - |
 
 ### Telegram is silent
@@ -1045,6 +1090,15 @@ entries refused (`unchecked`) and compares the report with its own at start and 
 | unchecked | the engine is starting, has only ever seen `/health` unreachable, or last confirmed the bridge over 5 min ago (a stuck check) | entries refused (`bridge_incompatible`). When the bridge itself answers, health `bridge_compat:<account>` warns "not confirmed" for the first 2 min, then FAILs (Telegram); an ok over 5 min old FAILs at once. The engine replaces a check thread hung over 15 s on its next 60 s tick and every `/health` read has a hard 5 s deadline, so it heals itself; if the FAIL persists, `sudo systemctl restart goldbot-engine@<account>` |
 | unreachable | `/health` did not answer after the bridge was confirmed ok | no block by itself (no ticks either, so `stale_data` blocks) until the ok is 5 min old; `bridge:<account>` fails; an earlier incompatible is kept |
 
+**Deploy order: the MT5 box first; brain-first only with a flat book.** From protocol v4 (`MIN_COMPATIBLE = 4`) a new
+brain refuses to start against an older bridge: the bridge does not report the account margin mode, which must be
+hedging (`engine:<account>` FAILs with "engine refused to start: ... deploy the MT5 box first"; `bridge_compat`
+names the version). While the engine is down nothing manages open trades beyond their broker stops, so update the
+brain first only when no position is open.
+
+**Rollback order: roll back the brain first, then the MT5 box** (the reverse of a deploy), so no step leaves a newer
+brain next to an older bridge.
+
 Fix (the MT5 box first, always, when a release adds a bridge method):
 1. On the MT5 box: `sudo goldbot-deploy <sha the brain runs>`, then `sudo systemctl restart goldbot-bridge@<account>`.
 2. On the brain: `curl -fsS http://127.0.0.1:8765/health ; echo` shows `api_version`, `min_compatible`, `methods`,
@@ -1089,5 +1143,11 @@ fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back,
 
   It refuses unless the file is at schema 5. Later versions record which older versions can still open the file,
   so this step is not needed again for changes that only add tables.
+* **aux.db schema 6 (email sign-in links, 2026-10-11) cannot be stepped back to 4.** Schema 6 only adds tables, so
+  every release from state-store step 3 on (commit 596386d, 2026-10-10, schema 5 or later) opens a schema 6 file as
+  it is. A release from before step 3 knows only schema 4. The updater and `goldbot-deploy` refuse to install such a
+  release ("aux.db is at schema 6 ... no step-back is known; nothing changed"), and the one-liner above refuses too.
+  Do not delete schema_version rows by hand to get round it. Roll back to a release from 2026-10-10 or later, or ask
+  a Claude session for a 6 -> 4 step-back.
 * The script stops the scheduler first and checks again that no job started in between; if one did, it was
   interrupted by the stop: the script starts the scheduler again, stops nothing else and refuses the update.
