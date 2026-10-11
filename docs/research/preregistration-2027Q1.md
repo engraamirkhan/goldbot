@@ -24,7 +24,7 @@ promotion.
   was picked from: the features screened (about 300) when survivors go forward as individual features (the default,
   `survivor_unit=feature`), the groups screened (about 10) only when whole groups go forward (`survivor_unit=group`).
   The unit is fixed in the pre-registration row before the run.
-- **Conservative default, pending the owner's confirmation:** H-02's K_eff is added to the DSR trial count of EVERY later
+- **Conservative default, confirmed by the owner 2026-10-11 (see Owner rulings):** H-02's K_eff is added to the DSR trial count of EVERY later
   trial, survivor or not (`registry.n_trials_effective`, used by `research_pass.py` for every trial), not only to trials
   of an H-02 survivor. This over-deflates trials unrelated to H-02 (their DSR is biased down, never up); it is kept
   because a per-trial "is this a survivor?" link is easy to get wrong and an error there would bias DSR up.
@@ -97,7 +97,7 @@ stamped before its row's quarter would never use the row up.
 |---|---|---|---|---|
 | 1 | H-13 | Volatility-forecast cost filter, applied as a reporting overlay to every trial below (net R with / without) | none | 0 |
 | 2 | H-02 | Feature discovery (one trial) | tooling `research_pass.py --discover` | 1 |
-| 3 | H-01 | Slow TSMOM | owner ruling A | 1 |
+| 3 | H-01 | Slow TSMOM | owner ruling A (150, retire-only; decided 2026-10-11) | 1 |
 | 4 | H-06 | Macro-conditioned slow TSMOM | H-01 run; macro release | 1 |
 | 5 | H-04 | Asia-session drift | none | 1 |
 | 6-9 | H-03, H-05, H-07, H-08, H-10 | Each only if its features survive H-02 (stability >= 0.6); contingent survivor slots k = 1..4 (amended 2026-10-10) | H-02 | 1 each, at most 4 |
@@ -107,8 +107,16 @@ stamped before its row's quarter would never use the row up.
 ## Trials and reading rules
 
 ### H-02 Feature discovery
-- Config: label = 4h triple barrier, target 3.0 ATR / stop 1.5 ATR / 12 bars (tsmom 4h defaults), candidates = every 4h
-  bar (no rule), side from the sign of the 20-day vol-scaled return; features = every registered family (incl.
+- Config: label = 4h triple barrier, target 3.0 ATR / stop 1.5 ATR / 12 bars. **Candidates (amended 2026-10-11,
+  quant review F1 of the registry writer, before any outcome; the earlier "every 4h bar (no rule), side from the sign
+  of the 20-day vol-scaled return" cannot be executed: `--discover` takes its candidates from the specialist):** the
+  candidates of `tsmom` with the variant `{"timeframe": "4h", "max_bars": 12}` (agent `tsmom-g0-76d7b19171`, config
+  `lb_fast_h 24, lb_mid_h 120, lb_slow_h 480, vol_window_h 96, min_score 0.5, schedule_h 4, target_atr 3.0,
+  stop_atr 1.5, max_bars 12`). A 4h bar is a candidate when |tsmom_score| >= 0.5, where tsmom_score is the mean of
+  the 1-, 5- and 20-day (6, 30 and 120 four-hour bars) vol-scaled returns, with volatility over 24 bars. The side is
+  the sign of that score, not of the 20-day return. Candidates are thinned one position at a time
+  (`labels.one_at_a_time`) on the labels above. This is the same candidate rule as Q4 trial #17 and the 4h
+  continuity trial; H-02's row differs from both by its discovery config. Features = every registered family (incl.
   trader-toolkit, survey and macro), grouped by **hypothesis cluster** (`--families cluster`, `DiscoveryConfig.clusters
   = discovery.H02_CLUSTERS`, amended 2026-10-11 after the quant re-review to follow `hypotheses.md` exactly):
   - **H-03** gold VRP: `macro_gvz*` and the explicit spread `macro_vrp` = GVZ^2 - HAR-RV^2 (built point-in-time in the
@@ -138,8 +146,35 @@ stamped before its row's quarter would never use the row up.
   permutation importance** (all a cluster's columns permuted together on the training fold's rows outside each
   subsample; ADR 0007 amendment 2026-10-11), top-k over groups with `group_top_k: 3` set explicitly in the config
   (quant ruling Q-3).
-- Method: stability selection inside each training fold only (50 subsamples x 50%), top-40 by gain; permutation
-  importance on an inner split as a tie-break.
+- Method (amended 2026-10-11, quant review F1, before any outcome): stability selection inside each training fold
+  only (50 subsamples x 50%). Each subsample selects its **top 39** features by gain (`top_k: 39` = `max_selected:
+  39`, because `side` is the 40th input; the earlier "top-40" is withdrawn). **Permutation confirmation**, not a
+  tie-break: a feature with permutation importance <= 0 on the inner validation split (20%, 3 repeats) is dropped
+  from the fold's selection (`permutation: true`). A feature or cluster is selected in a fold when its frequency is
+  >= 0.6 (`freq_threshold: 0.6`). It is stable when that holds in >= 60% of folds (`stability_threshold: 0.6`, matching
+  the reading and slot rules; the code's default of 0.7 does not apply).
+- **Pinned discovery config.** The full `DiscoveryConfig.model_dump()`, which the registry writer's spec and the
+  queued row carry verbatim (any other value is a different configuration):
+
+  ```yaml
+  clusters: discovery.H02_CLUSTERS   # the full map, written out in the spec: H-03, H-05, H-07, H-08, H-10 as listed above
+  freq_threshold: 0.6
+  group_top_k: 3
+  inner_val_frac: 0.2
+  l1_c: 0.05
+  max_selected: 39
+  method: lgbm
+  n_subsamples: 50
+  permutation: true
+  permutation_repeats: 3
+  seed: 0
+  stability_threshold: 0.6
+  subsample_frac: 0.5
+  survivor_unit: feature
+  top_k: 39
+  ```
+
+  (`l1_c` is unused with `method: lgbm` but is pinned, because it is part of the dump.)
 - Reading rule (decided now): a feature cluster **survives** if its selection stability >= 0.6 across folds AND the
   walk-forward on the selected set has OOF AUC >= 0.53 with the lower 95% bound > 0.50 (cluster = a hypothesis
   cluster above; its selection stability = its group stability; the AUC condition is H-02's recorded reading
@@ -258,6 +293,15 @@ stamped before its row's quarter would never use the row up.
   trade side (falling real yield / dollar for longs). Macro release required.
 - Reading rule: **continue** only if net mean R exceeds H-01's by >= 0.03 R AND 2022-2024 net is positive (the period
   the yield link broke). Otherwise the macro gate is retired.
+- **Reading-rule pins (quant review of H-06, 2026-10-11, before any outcome was seen):**
+  - *G1:* "H-01's net mean R" is H-01's **recorded** rule-only net mean R (every candidate, one position at a time),
+    and H-06 must run on the **same cost source** H-01 ran with (measured `costs-v1` or the priors; a mismatch is a
+    deviation and the comparison is not read).
+  - *G2:* "2022-2024 net is positive" means the pooled mean net R over trades entered 2022-01-01 .. 2024-12-31 UTC
+    is > 0.
+  - *G3:* below the event floor the result is `inconclusive (event floor)`: the macro gate is **not** retired.
+  - *G4:* a block-bootstrap interval of the difference (H-06 minus H-01 net mean R) is reported as a diagnostic,
+    outside the rule.
 - **Readiness gap and withdrawal rule (research director, 2026-10-11, before any outcome was seen).** H-06 has no
   implementation: the `tsmom` presets hold only `slow`, and no specialist reads DFII10 or the broad dollar. It has
   no coded `rule_id` either (`PREREGISTERED_RULE_IDS` = H-01, H-04, C4H), so the evaluator reads the rule above by
@@ -268,6 +312,10 @@ stamped before its row's quarter would never use the row up.
   the H-06 row is not written, `research.reserved_trials_quarter` for 2027Q1 is set to 8, and no trial is spent.**
   Under any floor H-06 can only be inconclusive on fewer events, so a run would buy no information. If the preset is
   not merged by 2026-12-04, the same withdrawal applies.
+  **Planning (2026-10-11, after the owner's ruling A):** the floor applied is the one committed in settings at the
+  freeze (150 today). The quant reviewer estimates H-06's one-at-a-time lower bound at about 80-130, so withdrawal
+  is likely even at 150. **The Q1 reservation is planned at 8** (4 queued + 4 slots). It goes back to 9 only if the
+  owed count comes in at 150 or more.
 - **Implemented (BACKLOG 48, 2026-10-11; no outcome read, nothing tuned; quant review pending).** The tsmom preset
   `slow_macro` = `slow` + `"macro_gate": true`, agent id `tsmom-g0-fed4baec9f` (`slow` stays `tsmom-g0-c12c9afb24`;
   `goldbot/specialists/time_series_momentum.py`, `tests/test_tsmom_macro_gate.py`). The gate keeps an H-01 candidate
@@ -369,17 +417,36 @@ stamped before its row's quarter would never use the row up.
 - Config: `variants=[{"timeframe": "4h", "max_bars": 12}]`, as refused on 2026-10-09.
 - Reading rule: if net mean R <= 0, the 4h tsmom horizon is retired (H-01 supersedes it).
 
-## Needs the owner (before freezing)
-- **A. Event floor for daily-signal families (owner's decision; not yet decided).** The P4 screen needs >= 1,000
-  events; slow TSMOM produces 154-2,154 in 15.75 years (one position at a time; recount after the stub fix, see
-  H-01). **Recommendation (quant review):** floor 150 rule-only events, gross t >= 2.0 unchanged, set in code before
-  the run (`research.screen_min_events_daily: 150`); H-01 can retire, not promote; < 150 = inconclusive. Until you
-  decide, the code keeps 1,000 for every rule (`screen_min_events_daily: null`), under which H-01 can only be
-  inconclusive (fewer events than the floor is inconclusive whatever the sign or t).
-  - `research.screen_min_events_daily` must be committed in settings before the run.
-- **B. Trial budget.** 5 queued + 4 contingent H-02 survivor slots (reservation 9, amended 2026-10-10, ADR 0007) + 11 open fits the default 20; raising it is yours to decide.
-- **C. Paid economic-calendar consensus feed** (H-11 needs surprises); otherwise H-11 stays blocked.
-- **D. Other instruments** (large-tick futures where trend still works) are out of scope unless you decide otherwise.
+## Owner rulings (decided 2026-10-11; source: owner approved the research director's recommendations, 2026-10-11)
+
+The owner's words were "yea listen to research director". Each ruling adopts the recommendation in the research
+director's cycle report of 2026-10-11. None changes a reading rule written above.
+
+- **A. Event floor for daily-signal families: 150 rule-only events, retire-only.** `research.screen_min_events_daily:
+  150` is committed in `config/settings.yaml`; gross t >= 2.0 is unchanged. Below 150 a daily-signal screen is
+  `inconclusive (event floor)` whatever its sign or t. At 150 or more it can fail and retire. It cannot promote:
+  promotion still needs the unchanged design gates (`research/gates.py`: >= 1,500 candidates, >= 60 per complete
+  test fold, DSR on >= 200 model-filtered trades), which 154-2,154 events can never reach. The floor applied to a
+  trial is the one committed at the freeze.
+  - **Code check (2026-10-11, code not changed).** `goldbot/research/screen.py` `screen_verdict` (the verdict line,
+    about l.75) returns `pass` for a daily rule with >= 150 events, a positive gross mean and t >= 2.0. That pass
+    (a) lets `scripts/research_pass.py` go on to the walk-forward model stage in the same trial for a family that is
+    not `screening` (the `min_events_for` call, about l.686, then the model branch), and (b) lets H-01's coded rule
+    read `continue` (`goldbot/research/director.py` `preregistered_decisions`, H-01 branch). "Continue" permits
+    only pre-registering model research, and the model stage fails the gates on so few candidates. So the floor can
+    retire but never promote. A screen with 150-999 events **can** still read "pass". If "retire-only" is meant in
+    that stricter sense, it is a code change for the quant reviewer and the implementer, not made here.
+- **B. Trial budget: 20 a quarter, unchanged.** 4 or 5 queued rows + 4 contingent H-02 survivor slots (ADR 0007),
+  the rest open.
+- **C. Consensus feed: none.** H-11 stays blocked.
+- **D. Other instruments: out of scope.**
+- **K_eff default: confirmed.** H-02's K_eff is added to the DSR trial count of every later trial, survivor or not.
+- **costs-v1:** if the demo terminal runs and `costs-v1` is published by **2026-12-11**, Q1 uses it under the rule
+  above (the measured table if it exists at run time). Otherwise, on **2026-12-14**, the research director writes
+  "priors accepted" here, and Q1 runs on the stated priors (0.37 $/oz beyond the spread; swap long -60 / short 0 USD
+  per lot per night).
+- **Owner's trade history:** a complete export, analysed locally (`python -m goldbot.ops.run owner-history`); only
+  the summary (R, %, counts, K) is shared (`owner-method-study.md`). No Q1 trial depends on it.
 
 ## Q1 readiness: what must exist before 2027-01-01 (research director, 2026-10-11)
 
@@ -394,7 +461,7 @@ and this file's freeze commit in the rationale, stamped by the registry's clock,
 
 | Row | Config (exact) | `rule_id` | Feature version | Owner | Date |
 |---|---|---|---|---|---|
-| H-02 | `--discover --families cluster`, `clusters = discovery.H02_CLUSTERS`, `survivor_unit=feature`, `group_top_k: 3`, label 4h TB 3.0/1.5/12, macro on, bars range 2010-01-01 .. 2025-09-30 written into the config | none (read by the discovery verdict) | `f-51ac5ebabb` (default + macro drivers v5) | strategy researcher writes the config; quant reviewer checks it | config 2026-12-11; row 2026-12-18 .. 12-23 |
+| H-02 | `--discover --families cluster`, `--specialist tsmom --variants '[{"timeframe": "4h", "max_bars": 12}]'`, the pinned `DiscoveryConfig` dump above (top_k 39, permutation confirmation, freq/stability 0.6, group_top_k 3, survivor_unit feature, H02_CLUSTERS), label 4h TB 3.0/1.5/12, macro on, bars range 2010-01-01 .. 2025-09-30 written into the config | none (read by the discovery verdict) | `f-51ac5ebabb` (default + macro drivers v5) | strategy researcher writes the config; quant reviewer checks it | config 2026-12-11; row 2026-12-18 .. 12-23 |
 | H-01 | `tsmom`, `variants ["slow"]`, agent `tsmom-g0-c12c9afb24` | **`H-01`** | `f-079deacc61` | strategy researcher | row 2026-12-18 .. 12-23 |
 | H-06 | frozen macro-gate preset (above), only if it survives its withdrawal rule | none: evaluator cites the rule | `f-51ac5ebabb` | strategy researcher (spec), implementer (preset), quant reviewer | spec 2026-11-08; preset 2026-12-04; row 2026-12-18 .. 12-23 or withdrawn |
 | H-04 | `asia_drift`, `variants [{}]`, agent `asia_drift-g0-98dc13a518` | **`H-04`** | `f-079deacc61` | strategy researcher | row 2026-12-18 .. 12-23 |
@@ -422,7 +489,7 @@ and run there, and its table is pasted here with the run's commit:
 
 | Item | Owner | Date |
 |---|---|---|
-| Ruling A (daily event floor; recommendation 150, retire-only), B (budget 20, keep), C (consensus feed, decline for now), D (other instruments, out of scope), and the conservative K_eff default: recorded here and `research.screen_min_events_daily` committed | owner, via the program director | 2026-11-30 |
+| Ruling A (daily event floor; recommendation 150, retire-only), B (budget 20, keep), C (consensus feed, decline for now), D (other instruments, out of scope), and the conservative K_eff default: recorded here and `research.screen_min_events_daily` committed | owner, via the program director | **done 2026-10-11** (owner approved; floor committed) |
 | `macro-v1` published (`data-macro` dispatched on `main`) | data engineer, via the program director | 2026-10-18 |
 | `calendar-v1` published (`data-us-calendar` on `main`; needed by Q2, not by Q1) | data engineer | 2026-10-18 |
 | `costs-v1` published from the VPS, or "priors accepted" written here by the research director | owner and SRE (VPS step, BACKLOG 1); research director records the fallback | 2026-12-11 / fallback 2026-12-14 |
@@ -436,12 +503,12 @@ and run there, and its table is pasted here with the run's commit:
 | Nothing from this queue runs before 2027-01-01. Run order from 2027-01-01: H-02, H-01, H-06 (after H-01, which its rule compares against), H-04, C4H | research director | 2027-01-01 |
 
 ## Freeze checklist (by 2027-01-01)
-- [ ] Owner rulings A-D recorded here
-- [ ] `costs-v1` measured table published from the VPS (or the priors accepted and stated)
+- [x] Owner rulings A-D, the K_eff default and the costs-v1 rule recorded here (2026-10-11; `screen_min_events_daily: 150` committed)
+- [ ] `costs-v1` published from the VPS by 2026-12-11, or "priors accepted" written here on 2026-12-14 (owner ruling 2026-10-11)
 - [ ] `macro-v1` release present
 - [x] `research_pass.py --discover` merged and tested (`scripts/research_pass.py --discover`, `tests/test_discovery.py`; checked 2026-10-11)
 - [ ] count-owed-events merged and run on `main` (data-v1); its counts pasted here (H-04 entries and the 7h-rule drops;
   H-01 recount)
-- [ ] H-06 preset merged and counted, or H-06 withdrawn and the reservation set to 8
+- [ ] H-06 preset merged and counted, or H-06 withdrawn and the reservation set to 8 (planned: 8 unless the count is >= 150)
 - [ ] pre-registration writer merged (BACKLOG 47); the 4 survivor slots written on H-02's row
 - [ ] each trial's `preregistered` registry row written with this file's commit id
