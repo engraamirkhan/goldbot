@@ -169,9 +169,9 @@ and the rest still arrives. It never contains account numbers or emails.
   after 90 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
 * The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
   release note mentions the bridge.
-  Deploys there never upgrade Python packages (`--no-deps`). An MT5 box set up before ADR 0010 needs pydantic 2.12 or
-  newer before the bridge follow-up in HANDOFF is deployed (today's bridge runs without it). Do it once, by hand,
-  **with the book flat or at the weekend** (restarting the bridge cuts the engine off from the terminal for a moment):
+  Deploys there never upgrade Python packages (`--no-deps`). An MT5 box set up before ADR 0010 should get pydantic
+  2.12 or newer so it matches new boxes (the bridge runs without it: only the brain reads bridge records
+  tolerantly). Do it once, by hand, **with the book flat or at the weekend** (restarting the bridge cuts the engine off from the terminal for a moment):
   1. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install 'pydantic>=2.12'`
   2. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -c "import pydantic; print(pydantic.VERSION)"`
      must print 2.12 or newer.

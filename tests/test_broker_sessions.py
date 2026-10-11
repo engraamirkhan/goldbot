@@ -132,7 +132,7 @@ def test_trading_sessions_is_a_read_only_bridge_method():
     pb = PaperBroker()
     pb.on_tick(Tick(ts_utc=pd.Timestamp("2026-03-26 12:00", tz="UTC"), bid=1.0, ask=1.1))
     assert GuardedBroker(pb, magic_base=260100).trading_sessions("XAUUSD") == pb.trading_sessions("XAUUSD")
-    wire = bridge_mod._decode(bridge_mod._encode(pb.trading_sessions("XAUUSD")))
+    wire = bridge_mod._decode(bridge_mod._encode(pb.trading_sessions("XAUUSD")), response=True)
     assert wire == pb.trading_sessions("XAUUSD") and all(isinstance(s, TradingSession) for s in wire)
 
 

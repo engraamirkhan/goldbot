@@ -34,7 +34,8 @@ nothing covered the record bodies.
   this release cannot honour, so an unreadable file means halted, propose-and-approve); the bus `BusDecision` (an
   owner decision is never applied without a field this release does not know, such as a newer condition or size
   limit: it is skipped and the proposal expires; amendment after code review, 2026-10-11); `Settings` (already
-  checked by the deploy script); records crossing the bridge (`_decode`: an order request is never guessed).
+  checked by the deploy script); order requests crossing the bridge (`_decode`: an order request is never guessed;
+  responses are tolerant, see the bridge follow-up below).
   `RecordRepo` is strict by default; persisted operational state passes `tolerant=True`.
 - **Restrictions fail closed on older releases.** Ignoring an unknown field is safe only when the field cannot
   restrict anything. A new restriction is therefore encoded so that an older release refuses the record, for example
@@ -56,6 +57,14 @@ nothing covered the record bodies.
   so a new table carrying client ids or broker orders needs a reviewed rollback story (S12).
 - **Engine (follow-up, 2026-10-11):** `goldbot/engine/runner.py` `_load_orders` (SentOrder, OpenTrade,
   PendingClose) and `_archive_stale_proposals` now read with `load_record*`; the temporary guard exception is gone.
+- **Bridge (follow-up, 2026-10-11):** the MT5 box is updated by hand and can run a newer release than the brain, so
+  `goldbot/execution/bridge.py` `_decode(..., response=True)` (the brain reading results: Position, Tick,
+  AccountInfo, SymbolInfo, BrokerTerms, TradingSession, OrderResult) uses `load_record` (source `bridge-response`).
+  The bridge server decodes the brain's arguments with `response=False`, and request records (`_REQUEST_RECORDS`:
+  OrderIntent) are strict in either direction, so an order request with an unknown field is refused. The protocol
+  digest is unchanged (it covers method signatures and record field names, not how they are decoded), so
+  `API_VERSION` stays 2. The guard lists `_decode`'s `cls` as a generic tolerant read and checks the response
+  records separately (not strict, no left-to-right or discriminated unions).
 
 ## Consequences
 - A rollback no longer drops closed trades, hides proposals or stops services because of a newer release's fields.
@@ -69,7 +78,7 @@ nothing covered the record bodies.
   resolves `pyproject.toml`, so the next forward deploy upgrades pydantic there; the Windows VPS (`vps_update.ps1`,
   `pip install -e ".[live]"`) does the same. The MT5 box keeps the pydantic its bootstrap installed, because deploys
   there use `pip install --no-deps`. `mt5_bootstrap.sh` pins `pydantic>=2.12` for new boxes, and an existing box is
-  upgraded once by hand (RUNBOOK 0.5). The bridge does not call `load_record` yet, so an older pydantic there does
-  not break it today.
+  upgraded once by hand (RUNBOOK 0.5). Only the brain's side of the bridge calls `load_record`; the bridge server
+  reads strictly, so an older pydantic on the MT5 box does not break it.
 - What would change this decision: if a field ever needs to survive an older release's rewrite (for example
   audit data), preserve extras for that one model explicitly instead of relaxing the rule globally.
