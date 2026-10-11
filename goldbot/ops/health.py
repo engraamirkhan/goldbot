@@ -989,6 +989,26 @@ def check_alert_loop(ctx: HealthContext) -> Check:
     return Check(name="alerts", status="ok", reason=f"last pass {_age(age)} ago")
 
 
+def check_deadman(ctx: HealthContext) -> Check:
+    """The outside dead man's switch (goldbot/ops/deadman.py) is configured: presence and shape of the keyring URL,
+    never its value. Whether pings arrive is judged by the outside service itself (a missed ping is its alert)."""
+    from goldbot.ops.deadman import DEADMAN_KEY, SET_HINT, url_problem
+    try:
+        url = (ctx.get_secret(DEADMAN_KEY) or "").strip()
+    except Exception as exc:                 # noqa: BLE001 - presence check only
+        return Check(name="deadman", status="warn", reason=f"deadman-url unreadable ({type(exc).__name__})")
+    if not url:
+        return Check(name="deadman", status="warn",
+                     reason=f"dead man's switch not set: nobody is told if this server dies. Create a free "
+                            f"Healthchecks.io check, then {SET_HINT} (docs/deploy/first-deploy.md)")
+    problem = url_problem(url)
+    if problem:
+        return Check(name="deadman", status="warn", reason=f"{problem}; store the check's https ping URL with {SET_HINT}")
+    every = ctx.settings.telegram.deadman_every_min if ctx.settings is not None else 2
+    return Check(name="deadman", status="ok",
+                 reason=f"set; the Telegram service pings every {every} min while healthy, <url>/fail on a FAIL")
+
+
 # --------------------------------------------------------------------------------------------- operational alerts
 log = logging.getLogger("goldbot.health")
 
@@ -1540,7 +1560,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += g("costs_published", lambda: check_costs_published(ctx))
         for fn in (check_data_quality, check_drift, check_model_watch, check_feature_versions, check_deploy,
                    check_backup_age, check_backup_prune, check_restore_drill, check_news, check_agent_spend,
-                   check_approvals, check_email_link, check_alert_loop):
+                   check_approvals, check_email_link, check_alert_loop, check_deadman):
             checks += g(fn.__name__.removeprefix("check_"), lambda: fn(ctx))
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 

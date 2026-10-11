@@ -13,6 +13,10 @@ set -euo pipefail
 REPO=https://github.com/engraamirkhan/goldbot.git
 ROOT=/opt/goldbot
 PYVER=3.11.9
+# sha256 of python-$PYVER-amd64.exe. python.org publishes no SHA-256 for 3.11.9 (its release API has md5 only), so
+# it was derived from a download whose md5 matched python.org's (e8dcd502e34932eebcaf1be056d5cbcd) and whose
+# Sigstore bundle verified for pablogsal@python.org (https://accounts.google.com). Bump with PYVER, the same way.
+PY_SHA256=5ee42c4eee1e6b4464bb23722f90b45303f79442df63083f05322f1785f5fdde
 REF=${1:-}
 LOG=/root/goldbot-bootstrap.log
 if [ -n "$REF" ] && ! [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
@@ -84,12 +88,15 @@ sudo -u mt5 -H bash -lc "
   wineboot -i && wine reg add 'HKCU\\Software\\Wine' /v Version /d win10 /f
   cd /tmp
   curl -fsSLo python.exe https://www.python.org/ftp/python/$PYVER/python-$PYVER-amd64.exe
+  echo '$PY_SHA256  python.exe' | sha256sum -c -     # refuse a changed installer before Wine runs it
   wine python.exe /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
   curl -fsSLo mt5setup.exe https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe
   wine mt5setup.exe /auto /path:'C:\\MT5\\ICMarkets'
-  wine python -m pip install --upgrade pip
-  wine python -m pip install MetaTrader5 pandas numpy pyarrow 'pydantic>=2.12,<3' pyyaml requests keyring
-  wine python -m pip install --no-deps -e 'Z:$ROOT'
+  # exact versions and sha256 from uv.lock (scripts/bridge_requirements.py), wheels only, nothing unpinned: no pip
+  # self-upgrade, and goldbot is put on the path with a .pth file instead of an editable build (that would fetch an
+  # unpinned setuptools into the build environment)
+  wine python -m pip install --require-hashes --no-deps --only-binary :all: -r 'Z:$ROOT/goldbot/ops/linux/mt5-bridge-requirements.txt'
+  wine python -c 'import pathlib, sysconfig; pathlib.Path(sysconfig.get_paths()[\"purelib\"], \"goldbot.pth\").write_text(\"Z:$ROOT\\n\")'
 "
 
 # the brain's tunnel key: forwarding to the bridge port only; any command runs /bin/false (`ssh -N` opens none)
