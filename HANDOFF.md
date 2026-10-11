@@ -766,6 +766,32 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Not done: the playbook's "until the next session" variant, a cross-account count, a provisional loss for a record
   lost before a restart (only its id persists; health already fails on `closed_records_lost`), and the dashboard /
   approval card (ui-ux follow-up).
+- Entry windows from the calendar (2026-10-11, BACKLOG 17, 18, playbook G-2, G-3, row R36; **off by default**; needs
+  trading-safety review): `risk.blackout.tier2: {enabled: false, before_min: 5, after_min: 15}` refuses entries
+  `tier2_blackout` around tier-2 USD events in the live Forex Factory archive (the G-3 list is now tier 2 whatever the
+  feed's impact, `TIER2_PATTERNS`, so claims moved from tier 3 to 2; nothing in production read tier 2 before);
+  `risk.reopen: {enabled: false, after_daily_reopen_min: 10, after_monday_open_min: 30}` refuses `reopen_window` after
+  each reopen of the broker session table (weekly window after a 12 h+ closure); `risk.holidays: {enabled: false,
+  file: config/holidays_cme_metals.yaml}` refuses `holiday_thin` on listed server dates (version `cme-metals-v1`,
+  valid 2026-2028; a test re-derives it from the rules). An enabled tier-2 or holiday window without its calendar
+  refuses `calendar_unavailable` (no store, unreadable or empty archive window, missing or expired list); a session
+  table that raises counts as inside the reopen window. Edges inclusive. Disabled windows add nothing in the gate
+  (`RiskGate.window_reasons`) and the engine computes nothing for them. Exits never read these flags. New module
+  goldbot/risk/windows.py; the runner's `_entry_windows` sits beside `_blackout` and shares its calendar read
+  (`_calendar_events`). Owner: adopt (OWNER_GUIDE section 4). Not done: UK/JP/CN holidays and early closes, engine
+  state/dashboard display of the window flags (the decisions journal carries the reasons), the 2029 list.
+  Trading-safety review (merge after fixes, no HIGH) fixes in: engine_<account>.json `windows` (flags, holiday version
+  and valid_through, latest calendar event and fetch, `calendar_unavailable_since` and reason); health
+  `check_entry_windows` (`entry_windows:<account>:calendar` FAIL after 30 min unavailable with the market open,
+  `:calendar_age` WARN on a fetch over 36 h old, `:holiday_list` WARN within 90 days of its end; Telegram); one log
+  line per transition; CI fails a year before the holiday list ends. Tier-2 availability now needs the newest fetch
+  under 7 days old and the archive covering through now + 24 h (to the end of its latest event's Forex Factory week),
+  and a Sunday 18:00 UTC fetch (`calendar_archive_sunday`) archives the new week before the open. Holiday list v2:
+  "US federal holidays as a proxy (not measured)", Columbus and Veterans Day out, the day after Thanksgiving and
+  Easter Monday in, tested against a hand-reviewed set. Any error in the window computation sets
+  calendar_unavailable and the reopen flag; a bar close whose account read raises still manages open trades. ADR 0008
+  and econ_calendar.py document the two tier-2 definitions. New BACKLOG 45 (measure the listed days) and 46 (replay
+  the windows and a `research_pass` filter) come before adoption.
 - Trading-safety review fixes for BACKLOG 28/25/29 (2026-10-10, rows R32-R34, S6): the minimum-lot exception never
   applies in tiny-live (`RiskLimits.from_settings(tiny_live=True)` drops it) and the design's 1.2x minimum-lot
   tolerance is capped at the 1% maximum. The absolute daily limit is **per account** (`daily_loss_limit_abs: 50` on
@@ -938,9 +964,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Engine follow-up done (2026-10-11): `runner.py` `_load_orders` (SentOrder/OpenTrade/PendingClose) and
   `_archive_stale_proposals` read with `load_record*`, so a rollback no longer stops the older engine from starting.
   `mt5_bootstrap.sh` pins `pydantic>=2.12`; an existing MT5 box is upgraded once by hand (RUNBOOK 0.5).
-  **Follow-up:** `goldbot/execution/bridge.py` `_decode` (:126): records coming back from the MT5 box (Position,
-  Tick, BrokerTerms, TradingSession) can be read tolerantly, because the MT5 box is updated by hand and can run a
-  different version from the brain. `OrderIntent` (an order request) stays strict. Needs the MT5 box on pydantic 2.12.
+  Bridge follow-up done (2026-10-11): `goldbot/execution/bridge.py` `_decode(..., response=True)` reads what the
+  MT5 box sends back (Position, Tick, AccountInfo, SymbolInfo, BrokerTerms, TradingSession, OrderResult) with
+  `load_record` (source `bridge-response`), because the box is updated by hand and can run a newer release. The
+  bridge server's arguments (`response=False`) and `OrderIntent` in either direction stay strict: an order request
+  with an unknown field is refused. Protocol digest unchanged, `API_VERSION` stays 2. The MT5 box needs no pydantic
+  upgrade for this (only the brain calls `load_record`); the RUNBOOK 0.5 upgrade stays recommended for parity.
+  Review LOWs (2026-10-11): a refused decision is logged once per proposal and counted (`base.note_schema_skew`), and
+  an unknown top-level table in `orders_<account>.json` is logged and counted at engine start; S12 now requires a
+  reviewed rollback story for a new table that carries client ids or broker orders.
 - H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
   (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
   version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London
@@ -1312,6 +1344,31 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- Non-finite state fails closed (October safety batch, 2026-10-11, TRACEABILITY R37 and S7): `RiskGate.check`
+  refuses first with `invalid_state` plus `invalid:<field>` when any number it reads (equity, HWM, day/week
+  start, margin, spread, tick ages, exposure, stop/target/ATR/cost, multiplier, price, contract terms,
+  `acct_per_usd`) is NaN or infinite; None stays the explicit "unknown" (a USD account with a NaN conversion is
+  now refused, not taken as 1). `_tick_ok` drops a quote with a non-finite bid or ask as `non_finite_quote` (entries
+  blocked; the next valid tick runs the exits). `account_fx("", x)` is None. The supervisor treats a non-finite or
+  wrongly typed engine-file number as `engine_state_unreadable` (halt); `ops.run.supervisor_pass` publishes
+  `supervisor_error` instead of dying when `evaluate` raises. An engine file without `ts` now halts too (engines
+  always write it). Dev extras gain pytest-randomly: every run is in random order (seed in the header; reproduce
+  with `-p randomly --randomly-seed=<n>`, opt out with `-p no:randomly`).
+  Safety review fixes (same day): the gate's guard is `invalid_fields` (reason `invalid_state` / `invalid:<field>`,
+  after the flag reasons) and also requires price, ATR, stop, contract, volumes and equity > 0; an approval on a
+  quote that breaks the tick price rules is refused (`bad_quote:<check>`). A dropped quote or a raising
+  `last_tick` runs `Engine.no_quote_pass`: decided closes retried, a pending kill-switch flatten, host-clock time
+  barriers, and from the Friday cut every own position closed (`weekend_close_no_quote`: no price to tell losers
+  from winners). The state keeps being written with `quote_invalid_since`; health FAILs after 60 s of invalid
+  quotes in market hours, and FAILs (alerted) on `supervisor_error` and `engine_state_unreadable` halts. Repeated
+  bad quotes are one DQ event with a count; every health check is guarded; the seed is printed after each run
+  (tests/conftest.py).
+  Re-verification fixes: the priceless Friday flatten and time barrier never act on a single bad quote. The
+  flatten needs only a dead feed (invalid for `QUOTE_DEAD_S`, 60 s, = health's threshold), whatever happened
+  around the cut; a shorter gap leaves it to `_weekend_rule` on the next valid quote. The time
+  barrier needs a dead feed and counts `bars_held` plus open-market decision bars since `_closed_through`
+  (never wall time over a weekend). A refused close that is not market-closed is re-sent at most once a second
+  (`CLOSE_RETRY_MIN_S`). BACKLOG 44: confirm a zero-equity read before the kill switch (needs an ADR).
 - October batch rollout (SRE, 2026-10-11): `docs/deploy/2026-10-batch.md`.
   - The owner's ordered steps for the two Oracle VMs, to be done by Fri 23 Oct: pre-checks (restic plus a local
     copy, preflight, health baseline); engines stopped; MT5 box first, because the new brain needs the bridge's

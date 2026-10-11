@@ -157,16 +157,57 @@ def engine_pass(eng: Any, broker: Any, symbol: str) -> bool:
     """One pass of the engine loop: read the latest tick and feed it. Any exception (an AssertionError too) is recorded
     on the engine (`tick_error`: entries blocked until a clean decision bar, rate-limited logging, alerted by health)
     and the loop carries on, so a bad tick or a terminal fault never crash-loops the engine (the next pass retries the
-    exits). False on an error."""
+    exits). A `last_tick` read that raises also runs `Engine.no_quote_pass` (closes already decided, a pending
+    kill-switch flatten, host-clock time barriers and the Friday flatten). False on an error."""
     try:
-        eng.on_tick(broker.last_tick(symbol))
+        tick = broker.last_tick(symbol)
+    except Exception as exc:                 # no quote at all: record it, then the exits that need no price
+        _record_tick_error(eng, exc)
+        try:
+            eng.no_quote_pass()
+        except Exception:
+            log.exception("engine no-quote pass failed")
+        return False
+    try:
+        eng.on_tick(tick)
         return True
     except Exception as exc:
-        try:
-            eng.note_tick_error(exc)
-        except Exception:
-            log.exception("engine tick failed and the error could not be recorded")
+        _record_tick_error(eng, exc)
         return False
+
+
+def _record_tick_error(eng: Any, exc: BaseException) -> None:
+    try:
+        eng.note_tick_error(exc)
+    except Exception:
+        log.exception("engine tick failed and the error could not be recorded")
+
+
+SUP_ERR_LOG_S = 300.0                 # a supervisor evaluate error's traceback is logged at most this often per type
+_SUP_ERR_LOGGED: dict[str, float] = {}  # exception type -> monotonic time its traceback was last logged
+
+
+def supervisor_pass(sup: Any, hb: Any) -> dict:
+    """One pass of the supervisor loop. An unexpected exception in evaluate() is logged and published as a halt
+    (`supervisor_error`, Supervisor.error_halt) and the loop carries on, so a corrupt state file or a bug never kills
+    run_supervisor (a failing write of that halt leaves the heartbeat to go stale, which engines also halt on)."""
+    try:
+        st: dict = sup.evaluate()
+    except Exception as exc:
+        kind, mono = type(exc).__name__, time.monotonic()
+        last = _SUP_ERR_LOGGED.get(kind)
+        if last is None or mono - last >= SUP_ERR_LOG_S:     # review LOW-2: one traceback per type per SUP_ERR_LOG_S
+            _SUP_ERR_LOGGED[kind] = mono
+            log.exception("supervisor evaluate failed (%s); publishing a halt (supervisor_error)", kind)
+        try:
+            st = sup.error_halt(exc)
+        except Exception:
+            log.exception("supervisor halt could not be written; engines halt on the stale heartbeat")
+            st = {"halt": True, "reasons": ["supervisor_error"]}
+    hb.beat()
+    if st["halt"]:
+        log.warning("HALT %s", st["reasons"])
+    return st
 
 
 def run_supervisor() -> None:
@@ -176,10 +217,7 @@ def run_supervisor() -> None:
     sup = Supervisor("state", SupervisorLimits.from_settings(load_settings().risk))
     hb = Heartbeat("state", "supervisor")          # S5: every service writes state/heartbeat_<service>.json
     while True:
-        st = sup.evaluate()
-        hb.beat()
-        if st["halt"]:
-            log.warning("HALT %s", st["reasons"])
+        supervisor_pass(sup, hb)
         time.sleep(5)
 
 

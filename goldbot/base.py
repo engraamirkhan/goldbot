@@ -18,7 +18,7 @@ import os
 import tempfile
 import threading
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Any, TypeVar
 
@@ -68,14 +68,28 @@ def _unknown_fields(value: Any, path: str = "") -> list[str]:
     return sorted(set(out))
 
 
-def _note_skew(source: str, cls: type[BaseModel], fields: list[str]) -> None:
-    key: SkewKey = (source, cls.__name__, tuple(fields))
+def note_schema_skew(source: str, model: str, fields: Sequence[str], *, refused: bool = False) -> None:
+    """Record that `source` holds fields of `model` this release does not know: counted in `schema_skew()`, logged
+    once per (source, model, fields). refused: a strict reader (ADR 0010 allowlist) refused the record instead of
+    ignoring the fields. Also for readers outside load_record (a file's top-level tables, a strict refusal)."""
+    key: SkewKey = (source, model, tuple(fields))
     with _skew_lock:
         first = key not in _skew
         _skew[key] += 1
     if first:
-        _log.warning("%s: %s written by a newer release has fields this release ignores: %s",
-                     source, cls.__name__, ", ".join(fields))
+        what = "refused by a strict reader" if refused else "ignored"
+        _log.warning("%s: %s written by a newer release has fields this release does not know (%s): %s",
+                     source, model, what, ", ".join(fields))
+
+
+def unknown_fields_json(cls: type[BaseModel], text: str | bytes) -> list[str]:
+    """The fields of `text` that `cls` does not know, at every nesting level; [] when there are none or when `text`
+    is invalid for another reason (bad JSON, a wrong type, a missing field). For strict readers that refuse a record
+    and must say whether a newer release is the cause."""
+    try:
+        return _unknown_fields(cls.model_validate_json(text, extra="allow"))
+    except ValueError:
+        return []
 
 
 def schema_skew() -> dict[SkewKey, int]:
@@ -96,7 +110,7 @@ def load_record(cls: type[M], data: Any, *, source: str) -> M:
     unknown = _unknown_fields(m)
     if not unknown:
         return m
-    _note_skew(source, cls, unknown)
+    note_schema_skew(source, cls.__name__, unknown)
     return cls.model_validate(data, extra="ignore")
 
 
@@ -106,7 +120,7 @@ def load_record_json(cls: type[M], text: str | bytes, *, source: str) -> M:
     unknown = _unknown_fields(m)
     if not unknown:
         return m
-    _note_skew(source, cls, unknown)
+    note_schema_skew(source, cls.__name__, unknown)
     return cls.model_validate_json(text, extra="ignore")
 
 

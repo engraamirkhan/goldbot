@@ -251,7 +251,7 @@ def test_the_weekend_rule_is_done_only_when_every_loser_closed_and_a_failed_one_
     assert sorted(t.position_id or 0 for t in _records(tmp_path)) == sorted(pids[1:])
     flaky.bad.clear()
     later = Tick(ts_utc=cut.ts_utc + pd.Timedelta(seconds=1), bid=1999.8, ask=1999.8)
-    eng._retry_closes(later)                                               # the next tick re-sends the close
+    eng._retry_closes(later.ts_utc)                                        # the next tick re-sends the close
     eng._server_clock(later.ts_utc, later)                                 # the next refresh finds the rule complete
     assert pids[0] not in eng.open and eng._weekend_done == "2025-03-07"
     assert {t.exit_reason for t in _records(tmp_path)} == {"weekend_close_loser"} and _lines(tmp_path) == 3
@@ -279,7 +279,7 @@ def test_a_refused_close_keeps_the_trade_and_records_it_only_when_a_retry_succee
     eng._save_orders()
     assert pid in eng.open and _records(tmp_path) == []
     flaky.bad.clear()
-    eng._retry_closes(Tick(ts_utc=tick.ts_utc + pd.Timedelta(seconds=1), bid=1999.9, ask=1999.9))
+    eng._retry_closes(tick.ts_utc + pd.Timedelta(seconds=1))
     eng._save_orders()
     (t,) = _records(tmp_path)
     assert pid not in eng.open and t.exit_reason == {"kill_switch": "kill_switch_close", "weekend": "weekend_close_loser",

@@ -12,7 +12,7 @@ import pytest
 from goldbot.data.calendar import BrokerSessions, SessionTable, TradingSession
 from goldbot.data.timeutil import NY_PLUS_7, server_to_utc, server_wall
 from goldbot.engine import Engine, EngineConfig
-from goldbot.execution.broker import OrderIntent, Tick
+from goldbot.execution.broker import OrderIntent, OrderResult, Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.ops import server_clock
 from goldbot.ops.run import SessionRefresher, engine_pass, refresh_sessions
@@ -309,7 +309,17 @@ def test_future_tick_threshold_matches_the_clock_skew_rule(tmp_path):
     assert "tick_from_future" in eng.gate.check(_intent(), eng.state).reasons
 
 
-class _ApprovalBoom(PaperBroker):
+class _StopStuck(PaperBroker):
+    """The broker keeps the stop it was sent with: every modify is rejected (a trail or weekend modify refused), so
+    only the engine's own stop check can close the trade at the engine's tighter stop (stop tests must prove the
+    broker did not do the work, docs/AGENT_STANDARDS.md)."""
+
+    def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult:
+        return OrderResult(ok=False, retcode=10016, order_id=None, position_id=position_id, filled_lots=0.0,
+                           price=None, message="invalid stops")
+
+
+class _ApprovalBoom(_StopStuck):
     """The broker read at approval time fails (bridge hiccup) while the tick feed is fine."""
     boom = False
 
@@ -323,22 +333,26 @@ def test_an_approval_error_never_skips_the_exits_of_that_tick_and_blocks_entries
     pb = _ApprovalBoom(equity=10_000)
     pb.on_tick(_tick(WED))
     eng, _, host = _engine(tmp_path, pb=pb)
-    pid = _open(pb, 1, 2399.0)
+    pid = _open(pb, 1, 2300.0)                                         # the broker's stop is far away
     eng.open[pid] = eng._adopt(next(p for p in pb.positions() if p.position_id == pid))
+    eng.open[pid].sl = 2399.0                                          # the engine's own stop is tight
     agent = SPECIALISTS["session_open"]()
     prop = Proposal(proposal_id="icm-demo-e", account_id="icm-demo", agent_id=agent.agent_id, side=1, lots=0.1,
                     entry=2400.2, stop=2396.2, target=2406.2, p=0.62, ev_r=0.2, spread_points=20, top_features=[])
     eng.pending[prop.proposal_id] = (_intent(), prop, agent)
     prop.outcome = Outcome.APPROVED
 
-    def poll() -> list[Proposal]:            # the owner's click arrives on this tick
-        eng.center.on_decision(prop)
+    def poll() -> list[Proposal]:            # the owner's click arrives on this tick; the approval's broker read fails
+        pb.boom = True
+        try:
+            eng.center.on_decision(prop)
+        finally:
+            pb.boom = False
         return []
     eng.center.poll_bus = poll               # type: ignore[method-assign]
     pb.on_tick(_tick(WED + pd.Timedelta(seconds=1), 2398.0))
-    pb.boom = True
+    assert pid in {p.position_id for p in pb.positions()}              # the broker did not close it
     eng.on_tick(_tick(WED + pd.Timedelta(seconds=1), 2398.0))         # _on_decision raises inside poll_bus
-    pb.boom = False
     assert pid not in {p.position_id for p in pb.positions()}          # the engine stop still closed it
     eng._refresh_account(_tick(WED + pd.Timedelta(seconds=1), 2398.0))
     assert eng.state.tick_error and "tick_error" in eng.gate.check(_intent(), eng.state).reasons
@@ -423,7 +437,7 @@ def test_a_session_table_error_fails_closed_for_entries_only(tmp_path):
 # ---------------------------------------------------------------------------------------------- exits before logging
 def test_a_full_disk_and_a_failing_account_read_on_every_tick_never_stop_the_engine_stop(tmp_path):
     from goldbot.data.store import Store
-    pb = PaperBroker(equity=10_000)
+    pb = _StopStuck(equity=10_000)
     pb.on_tick(_tick(WED))
     eng, _, host = _engine(tmp_path, pb=pb, data_root=str(tmp_path / "data"), tick_flush_s=0)
 
@@ -431,12 +445,14 @@ def test_a_full_disk_and_a_failing_account_read_on_every_tick_never_stop_the_eng
         raise OSError(28, "No space left on device")
     assert isinstance(eng.store, Store)
     eng.store.append = full                                            # type: ignore[method-assign]
-    pid = _open(pb, 1, 2399.0)
+    pid = _open(pb, 1, 2300.0)                                         # the broker's stop is far away
     eng.open[pid] = eng._adopt(next(p for p in pb.positions() if p.position_id == pid))
+    eng.open[pid].sl = 2399.0                                          # the engine's own stop is tight
     eng._roll_risk_period = lambda now: (_ for _ in ()).throw(OSError("account read failed"))  # type: ignore[method-assign]
     for i, px in enumerate((2401.0, 2400.5, 2398.0)):                  # the third quote is through the engine stop
         host[0] = WED + pd.Timedelta(seconds=i + 1)
         pb.on_tick(_tick(host[0], px))
+        assert pid in {p.position_id for p in pb.positions()}          # open before the engine pass: not the broker
         engine_pass(eng, pb, "XAUUSD")                                 # the run loop's pass
     assert pid not in {p.position_id for p in pb.positions()}
     assert eng.state.tick_error and eng.tick_errors_total >= 3
