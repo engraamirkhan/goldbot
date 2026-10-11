@@ -64,7 +64,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   order tickets differ (tests/test_mt5_position_ticket.py, including the engine keying and a sweep + reconcile that
   keep the trade). **Verify on the demo terminal:** after the first demo fill, the engine's `open` position id and the
   `adopt_orphan` count in the decisions journal (expected: the terminal's position ticket, no orphan adopted).
-- Broker ledger: closes finance audit GAP-07 and GAP-08 (row X18, ADR 0014). A new daily scheduler job,
+- Broker ledger: closes finance audit GAP-07 and GAP-08 (row X19, ADR 0014). A new daily scheduler job,
   `broker_ledger` (23:25 UTC), only reads the broker. Per account it stores in aux.db (migration 7, additive) a
   balance, equity, margin and currency snapshot, and the deposits, withdrawals, credit and adjustments taken from the
   MT5 balance deals. It ties the balance out against the deals since the previous snapshot. It also reconciles closed
@@ -101,6 +101,25 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - UX: a failed redeem goes straight to "Email me a sign-in link" (the old link is spent).
   - RUNBOOK: aux.db schema 6 cannot be stepped back to 4. Releases since state-store step 3 open it; older ones are
     refused by the deploy.
+- The record now carries what the monthly finance audit needs (2026-10-11, docs/finance/audit-framework.md gaps
+  GAP-01/02/03/04/05/10/13; TRACEABILITY X18). `ClosedTrade` gains `decision_price`, `decision_spread_points` and
+  `decision_utc` (the signal, from the proposal) next to `requested_price` (the quote the order was priced from: in
+  propose mode the quote at the owner's approval), so side x (requested - decision) is the cost of the 90 s wait;
+  `timeframe`, `family` and `model_version` (the agent's champion registry version); `initial_sl`, `final_sl`,
+  `final_tp`; `money_source` (broker | engine) and `pnl_basis`, "gross" unless commission and swap are both known, so
+  a fallback record is never summed as net. The entry facts travel as `EntryAudit` on the pending order and the open
+  trade, so a restart or a recovered fill keeps them. Exit legs (engine closes, the scale-out, broker stop and target
+  fills against their level) go to a new store table `exit_fills`, kept apart from `fills` so the entry slippage
+  table is unchanged; the legs are buffered in memory and written by `_flush_closed` after the tick's exits, so an
+  exit never waits on a file write (a failed write keeps them for the next flush). The archived proposal keeps
+  `decided_ts` and `decided_channel` ("telegram" | "dashboard", no id), taken by `bus.archive` from the decision file
+  for approved or rejected proposals only (a stale one archived on restart takes none; an unreadable file is "no
+  decision"). The paper broker's deals now say `swap` None (not modelled), so paper records are gross. The journal
+  `order` row now names its proposal (GAP-12). Every new field defaults to unknown (ADR 0010). Not done: the monthly
+  report and digest do not yet read `pnl_basis` (PR-1 must exclude "gross" rows from net), no health count of gross
+  records, no fx on the record (GAP-06), no broker reconciliation (GAP-08). The existing `decided_by` /
+  `decided_via` still keep the Telegram id and dashboard email in approvals/done on the VPS: BACKLOG 52.
+  Tests: tests/test_finance_audit_record.py.
 - First demo deploy (SRE, 2026-10-11): `docs/deploy/first-deploy.md` is the owner's 60-90 min session (case A, fresh
   install). The brain runs on Oracle Ampere A1, now **2 OCPU / 12 GB**, the Always Free total since mid-2026 (it was
   4 / 24). MT5 runs on a bridge box. Day 1 tries both bridge options:
@@ -131,6 +150,28 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   failures logged and audited by exception type only. `goldbot run mail-test` checks the setup. Rollback note: aux.db
   schema 6 is additive, so every release since state-store step 3 opens it; a release from before step 3 is refused
   by the deploy (no 6 -> 4 step-back yet). Needs security review.
+- **Owner history: security and quant review fixes to bd5324e (2026-10-11, M43).** The `no-mt5-report` hook now
+  catches the following, whatever the file is called:
+  - a CSV with a UTF-8 BOM (Excel "CSV UTF-8");
+  - the analyser's private markdown, by its title line, and its JSON summary, by both of its source keys;
+  - a gzip, decompressed up to 20 MB;
+  - a zip, by each member's name and by each member's content within the byte budget. Archives are opened one
+    level deep.
+
+  Refusal messages show only `~/Personal project/trade-history`, never a path. `main` turns both refusals into a
+  plain exit. `.share.md` now states how the USD conversion was found ("implied by N trades" / "assumed 1.0"),
+  never the rate. The module docstring records the rule: nothing that multiplies with USD/oz into an amount (lots,
+  ounces, the rate) may enter `.share.md`.
+- **Owner history: shareable summary, in-repo input refused, hook covers every input format (2026-10-11; owner
+  approved the owner-method study, M43).** `python -m goldbot.ops.run owner-history` now refuses a report inside any
+  git work tree before opening it, and prints only the shareable summary (`render_share`, also written as
+  `owner_history_*.share.md`): win rate, mean R or net USD/oz, holding-time quantiles, session/hour/weekday/side/
+  holding histograms with each slice's verdict against the Bonferroni bar, winning and losing streaks, drawdown %,
+  risk per trade and leverage relative to equity, and K. No account identifier, ticket or account-currency amount;
+  the money figures stay in the private `.md`. The `no-mt5-report` hook now also rejects an English MT5 Positions /
+  Orders / Deals header row in CSV, TSV, HTML or xlsx (any trade count, any stamp format) and the analyser's own
+  outputs. Not built: a separate `scripts/owner_history.py` (the entry point already exists; a second one would
+  drift). Needs quant and security review.
 - Clearing an `engine_startup_refused` halt (2026-10-11, re-verify follow-up of LOW-D). A test now shows that a
   refused engine file, followed by a successful start and one engine state write, gives a supervisor evaluation
   without `engine_startup_refused` (the engine's first write replaces the file). The RUNBOOK's "Engines are running

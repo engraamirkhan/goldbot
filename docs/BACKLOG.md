@@ -66,6 +66,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; settings and `hypotheses.md` B together) |
 | 50 | --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners | Idea generation (integrity) · FIND | M | proposed (quant review F2 of BACKLOG 47, 2026-10-11; due before the 2026-12-11 freeze) |
 | 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | proposed (security re-verify of BACKLOG 47, 2026-10-11) |
+| 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | proposed (trading-safety review of the finance audit record, 2026-10-11) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -696,6 +697,19 @@ hypotheses that go through the trial registry in a future quarter's budget.
   merge again and retry a bounded number of times, failing loudly if it keeps changing. Keep the existing refusal of
   a merge shorter than the published copy. Acceptance: tests with a fake release whose asset changes between the pull
   and the upload, showing both rows survive, and a bounded-retry failure. Security review. Depends on: BACKLOG 47.
+- **52. Approvals keep only the decision channel on disk and in the API (trading-safety review of the finance audit
+  record, 2026-10-11).** Value: an archived proposal in `approvals/done/` still carries the owner's identity:
+  `Proposal.decided_by` (the Telegram user id) and `decided_via` ("telegram:<id>" or "dashboard:<email>"). The
+  finance audit needs only when and through which channel the owner decided, which `decided_ts` and
+  `decided_channel` now record (TRACEABILITY X18). Do: the done files and the API keep only `decided_channel`
+  (with `decided_ts`); drop `decided_by` and `decided_via` from the files written to disk (the in-memory
+  allow-list check is unchanged); if an identity is ever needed, it lives in the auth audit log, not in the
+  approval files. The dashboard's decided cards (`DecidedProposal.decided_by`, goldbot/api/app.py
+  `recent_proposals`, web/src/screens/ProposalCard.tsx) switch to the channel. This is an API contract change:
+  regenerate the OpenAPI export and the web types, and keep reading older done files that still carry the fields
+  (ADR 0010). Acceptance: a test that a decided proposal archived by the bus or the engine has no Telegram id or
+  email anywhere in its file; a test that the decided card shows the channel for a new file and for an older file
+  with `decided_via`; the API contract regenerated; trading-safety and security review.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.
