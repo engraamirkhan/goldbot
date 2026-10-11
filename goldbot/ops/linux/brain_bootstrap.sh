@@ -60,6 +60,9 @@ if [ ! -d "$ROOT/.git" ]; then
   install -d -m 755 -o goldbot -g goldbot "$ROOT"   # root-ok: creates /opt/goldbot in root-owned /opt, empty so far
   sudo -u goldbot -H git clone -q "$REPO" "$ROOT"
   [ -z "$REF" ] || sudo -u goldbot -H git -C "$ROOT" checkout -q --detach "$REF"   # same code as root's copy above
+elif [ -n "$REF" ]; then          # a re-run never moves an installed tree; say so when it is on another commit
+  head=$(sudo -u goldbot -H git -C "$ROOT" rev-parse HEAD 2>/dev/null | tr -cd '0-9a-f' | head -c 40)
+  [ "$head" = "$REF" ] || echo "WARNING: $ROOT is at $head, not $REF: left as it is (update it with sudo goldbot-deploy $REF)"
 fi
 sudo -u goldbot mkdir -p "$ROOT/state" "$ROOT/logs" "$ROOT/models" "$ROOT/data"
 sudo -u goldbot chmod 700 "$ROOT/state"   # the secrets file (no desktop keyring on a server) lives here, owner-only
@@ -67,7 +70,7 @@ sudo -u goldbot chmod 700 "$ROOT/state"   # the secrets file (no desktop keyring
 # Python 3.11 via uv (same minor version as CI)
 sudo -u goldbot -H bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh"
 UV=/var/lib/goldbot/.local/bin/uv
-sudo -u goldbot -H bash -c "cd $ROOT && $UV venv --python 3.11 .venv && $UV pip install --python .venv/bin/python -e '.[live]'"
+sudo -u goldbot -H bash -c "cd $ROOT && $UV sync --frozen --extra live --python 3.11"   # exact versions from uv.lock
 
 # Node 22 for the dashboard build (official tarball, checked against the published SHA-256)
 if ! node --version 2>/dev/null | grep -q "^v$NODE_MAJOR\."; then
@@ -105,7 +108,7 @@ cat > /usr/local/bin/goldbot-tunnel <<'WRAP'
 # sudo goldbot-tunnel <mt5 private ip>   -> starts the SSH tunnel to the MT5 bridge
 set -euo pipefail
 echo "MT5_HOST=${1:?mt5 private ip}" > /etc/goldbot/bridge.env
-systemctl enable --now goldbot-bridge-tunnel
+systemctl enable goldbot-bridge-tunnel && systemctl restart goldbot-bridge-tunnel   # also moves a running tunnel
 WRAP
 chmod 755 /usr/local/bin/goldbot-tunnel
 echo "bridge tunnel key (authorise it on the MT5 box with: sudo goldbot-mt5-authorize '<this line>'):"

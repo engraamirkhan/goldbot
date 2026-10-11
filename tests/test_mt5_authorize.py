@@ -48,7 +48,7 @@ def test_a_valid_key_is_appended_as_mt5_restricted_to_the_bridge_port(tmp_path):
         rc, out, args = _run(tmp_path, key)
         assert rc == 0, out
         assert args is not None and args[:3] == ["-u", "mt5", "-H"]
-        assert args[-1] == f'restrict,port-forwarding,permitopen="127.0.0.1:8765" {key}'
+        assert args[-1] == f'restrict,port-forwarding,permitopen="127.0.0.1:8765",command="/bin/false" {key}'
         assert "~/.ssh/authorized_keys" in args[-3] and "umask 077" in args[-3]
 
 

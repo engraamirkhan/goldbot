@@ -65,6 +65,9 @@ if [ ! -d "$ROOT/.git" ]; then
   install -d -m 755 -o mt5 -g mt5 "$ROOT"   # root-ok: creates /opt/goldbot in root-owned /opt, empty so far
   sudo -u mt5 -H git clone -q "$REPO" "$ROOT"
   [ -z "$REF" ] || sudo -u mt5 -H git -C "$ROOT" checkout -q --detach "$REF"   # same code as root's copy above
+elif [ -n "$REF" ]; then          # a re-run never moves an installed tree; say so when it is on another commit
+  head=$(sudo -u mt5 -H git -C "$ROOT" rev-parse HEAD 2>/dev/null | tr -cd '0-9a-f' | head -c 40)
+  [ "$head" = "$REF" ] || echo "WARNING: $ROOT is at $head, not $REF: left as it is (update it with sudo goldbot-deploy $REF)"
 fi
 sudo -u mt5 mkdir -p "$ROOT/state" "$ROOT/logs"
 sudo -u mt5 chmod 700 "$ROOT/state"
@@ -89,7 +92,7 @@ sudo -u mt5 -H bash -lc "
   wine python -m pip install --no-deps -e 'Z:$ROOT'
 "
 
-# the brain's tunnel key: port forwarding to the bridge only (no shell, no other ports)
+# the brain's tunnel key: forwarding to the bridge port only; any command runs /bin/false (`ssh -N` opens none)
 cat > /usr/local/bin/goldbot-mt5-authorize <<'WRAP'
 #!/usr/bin/env bash
 # sudo goldbot-mt5-authorize '<ssh-ed25519 ... goldbot@brain>'
@@ -104,7 +107,7 @@ if [[ "$key" == *$'\n'* || "$key" == *$'\r'* ]] || ! [[ "$key" =~ $re ]]; then
   exit 1
 fi
 sudo -u mt5 -H sh -c 'umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf "%s\n" "$1" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys' \
-  _ "restrict,port-forwarding,permitopen=\"127.0.0.1:8765\" $key"
+  _ "restrict,port-forwarding,permitopen=\"127.0.0.1:8765\",command=\"/bin/false\" $key"
 echo "authorised (forwarding to 127.0.0.1:8765 only)"
 WRAP
 chmod 755 /usr/local/bin/goldbot-mt5-authorize
