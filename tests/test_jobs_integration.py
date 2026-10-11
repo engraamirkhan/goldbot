@@ -184,7 +184,8 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "gap_watch": "2026-10-02T23:55:00+00:00", "feed_reconcile": "2026-10-02T23:20:00+00:00",
                    "backup": "2026-10-02T22:15:00+00:00", "restore_drill": "2026-10-04T10:00:00+00:00",
                    "attribution": "2026-10-02T23:50:00+00:00",
-                   "cpcv_quarterly": "2026-10-04T14:00:00+00:00"}
+                   "cpcv_quarterly": "2026-10-04T14:00:00+00:00",
+                   "calendar_archive_sunday": "2026-10-04T18:00:00+00:00"}
     # quarterly: after October's run the next is the first Sunday of January
     later = build_scheduler(ctx, clock=lambda: pd.Timestamp("2026-10-05 12:00", tz="UTC"))
     assert later.status()["jobs"]["cpcv_quarterly"]["next_slot"] == "2027-01-03T14:00:00+00:00"

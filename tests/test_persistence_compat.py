@@ -246,6 +246,8 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/execution/bridge.py", "_decode", "cls"):
         "strict: records crossing the bridge (order requests are never guessed; responses: HANDOFF follow-up)",
     ("goldbot/db/repo.py", "RecordRepo._load", "self.model"): "RecordRepo: strict unless built with tolerant=True",
+    ("goldbot/risk/windows.py", "load_holidays", "HolidayList"):
+        "strict: hand-edited config (a misspelt key fails: calendar_unavailable)",
     ("goldbot/research/min_lot.py", "min_lot_feasibility", "Feasibility"):
         "not persisted: built from a dict in the same function",
     ("goldbot/data/news.py", "score_batch", "HeadlineScore"): "not persisted: the LLM's answer, validated strictly",

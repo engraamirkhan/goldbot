@@ -15,7 +15,14 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import Record
-from goldbot.config import RiskSettings, ThrottleSettings, tf_seconds
+from goldbot.config import (
+    HolidaySettings,
+    ReopenSettings,
+    RiskSettings,
+    ThrottleSettings,
+    Tier2Blackout,
+    tf_seconds,
+)
 from goldbot.data.timeutil import floor_tf, risk_day
 from goldbot.risk import sizing
 from goldbot.risk.throttle import AgentThrottle
@@ -67,6 +74,11 @@ class RiskLimits(Record):
     daily_loss_limit_abs: float | None = None
     # BACKLOG 21 (playbook G-6): per-agent loss-streak and entry-rate throttle; off by default (owner: thresholds)
     throttle: ThrottleSettings = Field(default_factory=ThrottleSettings)
+    # BACKLOG 17/18 (playbook G-2, G-3): entry windows around tier-2 events, after reopens and on thin-liquidity days;
+    # off by default (the owner adopts them). The engine raises the AccountState flags; check() refuses only when on
+    tier2: Tier2Blackout = Field(default_factory=Tier2Blackout)
+    reopen: ReopenSettings = Field(default_factory=ReopenSettings)
+    holidays: HolidaySettings = Field(default_factory=HolidaySettings)
 
     @classmethod
     def from_settings(cls, risk: RiskSettings, *, tiny_live: bool) -> RiskLimits:
@@ -79,7 +91,8 @@ class RiskLimits(Record):
                    dd_stage1_clear=risk.drawdown_stage1_clear, max_positions=risk.max_positions_per_account,
                    max_spread_points=risk.max_spread_points, stale_tick_seconds=risk.stale_tick_seconds,
                    min_target_over_cost=risk.min_target_over_cost,
-                   min_lot_risk_cap=None if tiny_live else risk.min_lot_risk_cap, throttle=risk.throttle)
+                   min_lot_risk_cap=None if tiny_live else risk.min_lot_risk_cap, throttle=risk.throttle,
+                   tier2=risk.blackout.tier2, reopen=risk.reopen, holidays=risk.holidays)
 
 
 class AccountState(Record):
@@ -112,6 +125,11 @@ class AccountState(Record):
     clock_mismatch: bool = False      # the server-clock probe measured a > 5 min offset (goldbot/ops/server_clock.py)
     market_closed: bool = False       # the broker session table (D13) says the market is closed now
     tick_error: bool = False          # a tick raised in the engine; cleared after TICK_ERROR_CLEAR_TICKS clean ticks
+    # BACKLOG 17/18 entry windows (goldbot/risk/windows.py), raised by the engine only for windows that are enabled
+    tier2_blackout: bool = False      # inside -before/+after of a tier-2 USD event (risk.blackout.tier2)
+    reopen_window: bool = False       # just after the daily reopen or the weekly open (risk.reopen)
+    holiday_thin: bool = False        # a thin-liquidity server date of the holiday list (risk.holidays)
+    calendar_unavailable: bool = False  # an enabled calendar window has no calendar to judge by (fail closed)
     bridge_incompatible: bool = False  # the MT5 bridge lacks a method, protocol or zone this brain needs (BACKLOG 42)
 
 
@@ -255,6 +273,24 @@ class RiskGate:
             out.append("throttle_entry_rate")
         return out
 
+    def window_reasons(self, st: AccountState) -> list[str]:
+        """BACKLOG 17 (playbook G-2: "no entries on those days. No entries for 15 min after each daily reopen and 30
+        min after the weekly open ... Exits are untouched") and BACKLOG 18 (G-3: "a -5/+15 min entry blackout from
+        config"): `tier2_blackout`, `reopen_window`, `holiday_thin`, and `calendar_unavailable` when an enabled
+        calendar window (tier 2, holidays) has no calendar to judge by. A window that is off adds nothing whatever the
+        flags say, so with all three off every decision is what it was before they existed."""
+        L = self.limits
+        out = []
+        if L.tier2.enabled and st.tier2_blackout:
+            out.append("tier2_blackout")
+        if L.reopen.enabled and st.reopen_window:
+            out.append("reopen_window")
+        if L.holidays.enabled and st.holiday_thin:
+            out.append("holiday_thin")
+        if (L.tier2.enabled or L.holidays.enabled) and st.calendar_unavailable:
+            out.append("calendar_unavailable")
+        return out
+
     def margin_for(self, intent: Intent, lots: float, notional: float,
                    margin_required: MarginFn | None) -> tuple[float, str]:
         """Design (Hard limits): margin is "checked with order_calc_margin and against the FCA retail cap of 1:20".
@@ -298,6 +334,7 @@ class RiskGate:
             reasons.append("data_quality_error")
         if st.in_blackout:
             reasons.append("news_blackout")
+        reasons += self.window_reasons(st)
         if st.in_rollover:
             reasons.append("rollover")
         if st.weekend:

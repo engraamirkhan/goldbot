@@ -254,6 +254,16 @@ execution items need trading-safety review. Feature items need quant review.
   Test: a 4h long whose EV is positive before swap and negative after is refused; shorts are unchanged.
 - **17 (G-2).** Holiday calendar (US, UK, JP, CN, 24 Dec–2 Jan, early closes): no entries on those days. No
   entries for 15 min after each daily reopen and 30 min after the weekly open. Fake-clock tests. Exits are untouched.
+  **Built 2026-10-11, off by default (TRACEABILITY R36):** `risk.reopen: {enabled: false, after_daily_reopen_min: 10,
+  after_monday_open_min: 30}` from the broker session table (DST per the server clock; a reopen after 12 h or more
+  closed takes the weekly window) and `risk.holidays: {enabled: false}` from the versioned list
+  `config/holidays_cme_metals.yaml` (US federal holidays as a proxy, not measured, less Columbus and Veterans Day;
+  Good Friday, Easter Monday, the day after Thanksgiving, 24/26/31 Dec, 1/2 Jan; 2026-2028; by server date = CME
+  trading day; missing or expired = `calendar_unavailable`; measured before adoption, item 45; replay, item 46).
+  Reasons `reopen_window`, `holiday_thin`.
+  Not covered: UK, JP and CN holidays and early closes (the list is US/CME only; a broker-reported short session
+  already blocks as `market_closed`). Owner: adopt and set the minutes (10 vs the playbook's 15). Needs
+  trading-safety review.
 - **18 (G-3).** Tier-2 USD events (PPI, retail sales, ISM, GDP, JOLTS, claims, FOMC minutes, Fed chair) get a
   −5/+15 min entry blackout from config, plus a `min_to_next_tier2` feature. A test per tier.
   *Data part done (2026-10-10; review fixes 2026-10-11; row D27, ADR 0008):* the point-in-time US calendar on
@@ -270,6 +280,11 @@ execution items need trading-safety review. Feature items need quant review.
     - a quant review of the first run's count table, before any trial cites the features;
     - promoting `gdp_advance` to tier 1 is an owner / trading-safety decision;
     - the RiskGate blackout waits for the owner's adopt decision.
+  *Gate part built 2026-10-11, off by default (TRACEABILITY R36):* `risk.blackout.tier2: {enabled: false,
+  before_min: 5, after_min: 15}` on the live Forex Factory calendar (calendar-v1 is not loaded live: the live feed
+  carries tier 2). The G-3 list is tier 2 whatever impact the feed gives it (`TIER2_PATTERNS`; claims was tier 3 as
+  Medium). Reason `tier2_blackout`; enabled with no calendar archived around now = `calendar_unavailable` (fail
+  closed). Owner: adopt. Needs trading-safety review (and quant review of the claims re-tiering).
 - **19 (G-4).** Sum of open risk in R per account and combined ≤ the configured cap. Same-side positions of
   different agents count as one bet. Gate test on each side of the cap.
 - **20 (G-5).** Monthly bootstrap of shadow or backtest R at live risk settings: P(8%), P(12%), P(weekly cap) in
@@ -584,6 +599,21 @@ hypotheses that go through the trial registry in a future quarter's budget.
     so silence always means a fault;
   - the API then prefers `entry_blocks` (already merged when present) and the flag mapping and the `min_lot` fallback
     in `goldbot/api/entry_status.py` go; exits are never gated by any of it.
+- **45. Measure the holiday list before it is adopted (performance analyst; review M3, 2026-10-11).** Value: the
+  holiday window (item 17, `config/holidays_cme_metals.yaml`) is a proxy, not a measurement; blocking entries on a
+  day that trades normally costs signals for nothing. Do: for every listed day in the stored ticks and bars, the
+  median spread, tick count per hour and 15m ATR against matched normal days (same weekday, the two weeks either
+  side, holidays excluded), by session. Report which listed days are thin and which are not, and any unlisted day
+  that is (UK, JP, CN holidays, early closes). Acceptance: a table per day type with the ratio and its interval; the
+  list is changed (new version, hand-reviewed set in the test) only on that evidence. Reporting only; quant review.
+- **46. Replay the entry windows before adopting any (performance analyst, strategy researcher; review M4).**
+  Value: each window (items 17, 18) removes entries; whether the removed ones were worse than the kept ones is
+  unknown. Do: over the shadow book and the backtest candidates, the fraction of entries each window (tier 2,
+  reopen, holiday, alone and together) would have filtered, and R of the filtered vs kept trades, by family and
+  timeframe; add a `research_pass.py --entry-windows` filter option that drops signals inside the enabled windows
+  (point in time: the archive as known at the signal, `available_utc` joins), so trials can be run with and without.
+  No trial budget is spent by the replay itself. Acceptance: the table per window, family and timeframe, attached to
+  the owner's adopt decision (OWNER_GUIDE section 4). Quant review.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.
