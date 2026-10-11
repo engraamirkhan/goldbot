@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, UtcTimestamp
+from goldbot.base import FrozenRecord, UtcTimestamp, load_record
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.labels.triple_barrier import SwapSpec
 
@@ -75,7 +75,7 @@ class BrokerTerms(FrozenRecord):
     @classmethod
     def load(cls, path: str | Path) -> "BrokerTerms | None":
         p = Path(path)
-        return cls.model_validate(json.loads(p.read_text())) if p.exists() else None
+        return load_record(cls, json.loads(p.read_text()), source="broker_terms") if p.exists() else None
 
 
 class CostTable(FrozenRecord):
@@ -146,7 +146,7 @@ class CostTable(FrozenRecord):
         p = Path(path)
         if not p.exists():
             return None
-        return cls.model_validate(json.loads(p.read_text()))
+        return load_record(cls, json.loads(p.read_text()), source="cost_table")
 
 
 def spread_table(ticks: pd.DataFrame, sessions: SessionTable = DEFAULT_SESSIONS) -> dict[str, SpreadStat]:
@@ -324,5 +324,5 @@ def load_research_cost_table(path: str | Path) -> CostTable | None:
         return None
     raw = json.loads(p.read_text())
     if isinstance(raw, dict) and "broker" in raw and "schema_version" in raw:
-        return PublishedCostTable.model_validate(raw).to_cost_table()
-    return CostTable.model_validate(raw)
+        return load_record(PublishedCostTable, raw, source="costs-v1").to_cost_table()
+    return load_record(CostTable, raw, source="cost_table")

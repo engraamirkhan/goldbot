@@ -19,7 +19,7 @@ from typing import Any, Literal
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import Record, UtcTimestamp
+from goldbot.base import Record, UtcTimestamp, load_record
 from goldbot.research.model import MetaLabelModel
 
 Status = Literal["challenger", "champion", "previous", "retired"]
@@ -51,7 +51,7 @@ class ModelRegistry:
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "registry.json"
         raw = json.loads(self.path.read_text()) if self.path.exists() else []
-        self.entries: list[ModelEntry] = [ModelEntry.model_validate(r) for r in raw]
+        self.entries: list[ModelEntry] = [load_record(ModelEntry, r, source="models/registry.json") for r in raw]
 
     # ------------------------------------------------------------------ queries
     def by_agent(self, agent_id: str, status: Status | None = None) -> list[ModelEntry]:

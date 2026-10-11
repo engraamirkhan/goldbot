@@ -4,13 +4,23 @@ Every record that crosses a module boundary (orders, risk inputs, proposals, set
 pydantic model so values are validated on construction and assignment, and serialise with model_dump().
 `arbitrary_types_allowed` lets records carry pandas/numpy values (timestamps, frames, index arrays) checked
 by isinstance; `extra="forbid"` turns a misspelt field into an error instead of a silent default.
+
+Persisted state is read tolerantly, built strictly (docs/decisions/0010-tolerant-persisted-reads.md): code builds
+records with extra="forbid", but a file or row written by a newer release is read with `load_record` /
+`load_record_json`, which drop fields this release does not know (logged once, counted in `schema_skew()`). Only
+unknown keys are tolerated; a wrong type, a missing required field or bad JSON still fails. Credentials, the owner's
+halt (Control), Settings and bridge order requests stay strict (fail closed).
 """
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
+import threading
+from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, TypeVar
 
 import pandas as pd
 from pydantic import BaseModel, BeforeValidator, ConfigDict, PlainSerializer
@@ -31,6 +41,73 @@ class FrozenRecord(BaseModel):
 def _to_utc_timestamp(v: Any) -> pd.Timestamp:
     t = pd.Timestamp(v)
     return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+
+
+M = TypeVar("M", bound=BaseModel)
+SkewKey = tuple[str, str, tuple[str, ...]]          # (source, model, unknown field paths)
+
+_log = logging.getLogger(__name__)
+_skew_lock = threading.Lock()
+_skew: Counter[SkewKey] = Counter()
+
+
+def _unknown_fields(value: Any, path: str = "") -> list[str]:
+    """Dotted paths of the fields a model validated with extra="allow" kept as extras, at every nesting level
+    (`[]` marks a list/tuple/set item, `{}` a mapping value), so the warning names the field, not the file."""
+    out: list[str] = []
+    if isinstance(value, BaseModel):
+        out += [f"{path}{k}" for k in sorted(value.model_extra or {})]
+        for name in type(value).model_fields:
+            out += _unknown_fields(getattr(value, name), f"{path}{name}.")
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            out += _unknown_fields(item, f"{path}[].")
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            out += _unknown_fields(item, f"{path}{{}}.")
+    return sorted(set(out))
+
+
+def _note_skew(source: str, cls: type[BaseModel], fields: list[str]) -> None:
+    key: SkewKey = (source, cls.__name__, tuple(fields))
+    with _skew_lock:
+        first = key not in _skew
+        _skew[key] += 1
+    if first:
+        _log.warning("%s: %s written by a newer release has fields this release ignores: %s",
+                     source, cls.__name__, ", ".join(fields))
+
+
+def schema_skew() -> dict[SkewKey, int]:
+    """How often each (source, model, unknown fields) was read since the process started: a non-empty result means
+    state written by a newer release is being read by this one (expected only after a rollback)."""
+    with _skew_lock:
+        return dict(_skew)
+
+
+def load_record(cls: type[M], data: Any, *, source: str) -> M:
+    """Validate persisted `data` (a dict from JSON) as `cls`, tolerating fields a newer release added.
+
+    ADR 0010: "persisted state is read tolerantly, built strictly". Unknown keys at any nesting level are dropped,
+    logged once per (source, model, fields) and counted in `schema_skew()`; everything else is validated exactly as
+    on construction, so a wrong type or a missing required field still raises. `source` is a stable label (not a
+    per-file path) so the warning is logged once, not once per file."""
+    m = cls.model_validate(data, extra="allow")
+    unknown = _unknown_fields(m)
+    if not unknown:
+        return m
+    _note_skew(source, cls, unknown)
+    return cls.model_validate(data, extra="ignore")
+
+
+def load_record_json(cls: type[M], text: str | bytes, *, source: str) -> M:
+    """`load_record` for JSON text; malformed JSON raises ValueError as model_validate_json does."""
+    m = cls.model_validate_json(text, extra="allow")
+    unknown = _unknown_fields(m)
+    if not unknown:
+        return m
+    _note_skew(source, cls, unknown)
+    return cls.model_validate_json(text, extra="ignore")
 
 
 # A UTC pandas Timestamp that round-trips through JSON (ISO 8601). Use it for every timestamp field that is

@@ -20,6 +20,7 @@ file. The product owner accepts work against them; the release manager does not 
 | S9 | **Docs in the same change.** HANDOFF bullet, TRACEABILITY row + counts, RUNBOOK when the owner's steps change, API contract regenerated after `goldbot/api` changes. | Files in the diff |
 | S10 | **Owner decisions isolated.** Anything only the owner may decide (budget, instruments, going live, spending, deployment to servers, gate thresholds) is listed with options and a recommendation, never decided. | "Needs the owner" list |
 | S11 | **Concise.** Reports within the length the brief sets; tables over prose where they help. | Word count |
+| S12 | **Persisted state survives a rollback** (ADR 0010). Every new field on a persisted record has a default that is safe when missing: an older release drops the field on rewrite, and the newer one must then read the default correctly. Persisted state is read with `goldbot.base.load_record` / `load_record_json` (or `RecordRepo(..., tolerant=True)`); only the strict allowlist (credentials, `Control`, `Settings`, bridge order requests) reads with `forbid`. A new persisted model adds a case to `tests/test_persistence_compat.py`. | Default named per new field; compat case or allowlist entry |
 
 ## Workflow security (anyone editing `.github/workflows/`)
 - Pin every action to a full 40-hex commit SHA with the version as a trailing comment
@@ -78,7 +79,7 @@ Each delivered item is scored; it is accepted only with every row "yes".
 | --- | --- |
 | Every acceptance criterion in the backlog item has a passing test or shown evidence | |
 | Agent's own Definition of done fully met (report shows each item) | |
-| Shared standards S1-S11 met | |
+| Shared standards S1-S12 met | |
 | Required reviewers signed off; HIGH/CRITICAL findings closed and re-verified | |
 | CI green on the PR; merged; main merged back into the branch | |
 | Owner-visible behaviour change described in the PR | |

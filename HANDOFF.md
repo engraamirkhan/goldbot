@@ -917,6 +917,26 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   pre-registered reading rule; H-10 jumps-only cannot retire or continue H-10; `macro_drivers` v4 (stub-free HAR-RV),
   macro version `f-ac2be79efe`, macro + day_type `f-7a3cad1466`; group measure uses `permutation_repeats` and a
   one-week purge.
+- Persisted state is read tolerantly, built strictly (2026-10-11, ADR 0010): a rollback used to skip closed trades,
+  hide proposals or stop services when a newer release had added a field. `goldbot/base.py` `load_record` /
+  `load_record_json` drop unknown keys at every level (WARNING once per source/model/fields, `schema_skew()`). A wrong
+  type, a missing field or bad JSON still fails, and construction stays `forbid`. Applied to gates_phase, bus (not
+  `Control`), automode, shadow, ruin, scheduler, model registry, population, director, costs, health, digest, outbox,
+  crossfeed and jobs; `RecordRepo(..., tolerant=False)` is the default (auth stays strict).
+  The pydantic floor is now 2.12. New rule AGENT_STANDARDS S12: every new persisted field has a default that is safe
+  when missing. Guard: `tests/test_persistence_compat.py` (a compat case per persisted model, plus an AST allowlist).
+  **Follow-ups, ranked:**
+  1. `goldbot/engine/runner.py` (left out because another lane is editing it): `_load_orders` (~:1752-1759):
+     `SentOrder.model_validate(v)`, `OpenTrade.model_validate(v)` and `PendingClose.model_validate(v)` become
+     `load_record(<Model>, v, source="orders_<account>.json")`. Until then, a rollback across a field added to these
+     models stops the older engine's start (no entries, and exits only by broker stop/target). Then
+     `_archive_stale_proposals` (~:394): `Proposal.model_validate_json(f.read_text())` becomes
+     `load_record_json(Proposal, f.read_text(), source="approvals/pending")`. Remove the four `TEMPORARY` entries in
+     `tests/test_persistence_compat.py` in the same change, which goes to the trading-safety reviewer.
+  2. `goldbot/execution/bridge.py` `_decode` (:126): records coming back from the MT5 box (Position, Tick,
+     BrokerTerms, TradingSession) can be read tolerantly, because the MT5 box is updated by hand and can run a
+     different version from the brain. `OrderIntent` (an order request) stays strict. On the MT5 box, pydantic is pinned only by
+     `mt5_bootstrap.sh` (`>=2.6`, deploys use `--no-deps`), so raise that pin with it (root-run script: security review).
 - H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
   (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
   version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London

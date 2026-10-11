@@ -26,7 +26,7 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from goldbot.base import Record, create_exclusive, write_atomic
+from goldbot.base import Record, create_exclusive, load_record_json, write_atomic
 from goldbot.telegram.approvals import REASON_CODES, Proposal
 
 
@@ -78,7 +78,7 @@ class ApprovalBus:
             f = self.decisions_dir / f"{pid}.json"
             if f.exists():
                 try:
-                    out.append(BusDecision.model_validate_json(f.read_text()))
+                    out.append(load_record_json(BusDecision, f.read_text(), source="approvals/decisions"))
                 except ValueError:
                     continue          # half-written by a crashed writer; the window will expire it
         return out
@@ -94,7 +94,7 @@ class ApprovalBus:
         out = []
         for f in sorted(self.pending_dir.glob("*.json")):
             try:
-                p = Proposal.model_validate_json(f.read_text())
+                p = load_record_json(Proposal, f.read_text(), source="approvals/pending")
             except (ValueError, OSError):
                 continue
             if not p.expired and not (self.decisions_dir / f.name).exists():
@@ -105,7 +105,7 @@ class ApprovalBus:
         for d in (self.pending_dir, self.done_dir):
             f = d / f"{proposal_id}.json"
             if f.exists():
-                return Proposal.model_validate_json(f.read_text())
+                return load_record_json(Proposal, f.read_text(), source=f"approvals/{d.name}")
         return None
 
     def submit(self, proposal_id: str, approve: bool, reason_code: str | None, by: str) -> BusDecision:
@@ -115,7 +115,7 @@ class ApprovalBus:
         f = self.pending_dir / f"{proposal_id}.json"
         if not f.exists():
             raise KeyError("unknown or already decided proposal")
-        if Proposal.model_validate_json(f.read_text()).expired:
+        if load_record_json(Proposal, f.read_text(), source="approvals/pending").expired:
             raise KeyError("proposal expired")
         d = BusDecision(proposal_id=proposal_id, approve=approve, reason_code=None if approve else reason_code, by=by,
                         ts=time.time())
@@ -134,15 +134,15 @@ class ApprovalBus:
             try:
                 mtime = f.stat().st_mtime
                 if mtime >= cutoff:
-                    rows.append((mtime, Proposal.model_validate_json(f.read_text()), None))
+                    rows.append((mtime, load_record_json(Proposal, f.read_text(), source="approvals/done"), None))
             except (ValueError, OSError):
                 continue
         for f in self.decisions_dir.glob("*.json"):
             pf = self.pending_dir / f.name
             try:
-                d = BusDecision.model_validate_json(f.read_text())
+                d = load_record_json(BusDecision, f.read_text(), source="approvals/decisions")
                 if d.ts >= cutoff and pf.exists():
-                    rows.append((d.ts, Proposal.model_validate_json(pf.read_text()), d))
+                    rows.append((d.ts, load_record_json(Proposal, pf.read_text(), source="approvals/pending"), d))
             except (ValueError, OSError):
                 continue
         rows.sort(key=lambda r: r[0], reverse=True)
@@ -152,11 +152,13 @@ class ApprovalBus:
         f = self.done_dir / f"{proposal_id}.json"
         if not f.exists():
             return None
-        o = Proposal.model_validate_json(f.read_text()).outcome
+        o = load_record_json(Proposal, f.read_text(), source="approvals/done").outcome
         return o.value if o is not None else None
 
     # ------------------------------------------------------------------ owner halt
     def control(self) -> Control:
+        # strict on purpose (ADR 0010 allowlist): a field this release does not know could be a halt condition it
+        # cannot honour, so an unknown field reads as unreadable, i.e. halted
         try:
             return Control.model_validate_json(self.control_path.read_text()) if self.control_path.exists() else Control()
         except ValueError:

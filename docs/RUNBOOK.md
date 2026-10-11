@@ -201,6 +201,10 @@ and the rest still arrives. It never contains account numbers or emails.
   must confirm that the target descends from the floor. When GitHub cannot confirm (offline, rate limit), the
   rollback is refused with "GitHub can't confirm the floor"; to go ahead anyway, remove the floor deliberately
   (`sudo rm /etc/goldbot/rollback-floor`), roll back, and set it again.
+  **Recommended:** once the release with ADR 0010 ("persisted state is read tolerantly") is deployed and healthy,
+  set the floor to its commit. From that release on, an older version reads files a newer one wrote and ignores
+  fields it does not know. A version from before it rejects them: it can skip closed trades, hide pending
+  proposals, or fail to start the scheduler, shadow book or registry. You decide whether to set the floor.
 * **Health compared with a baseline (brain).** Before the switch the script saves `goldbot run health --out
   logs/health_before_deploy.json` (as goldbot). After the 90 s check it runs it again (`logs/health_after_deploy.json`)
   and compares. If a check got worse (ok -> warn, warn -> fail, or a new warn/fail), the result is

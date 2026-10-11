@@ -57,7 +57,7 @@ import pandas as pd
 from pydantic import Field
 from scipy import stats
 
-from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, write_atomic
+from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, load_record_json, write_atomic
 from goldbot.config import GateSettings, Settings
 from goldbot.ops.accounts import GATES
 from goldbot.research.metrics import max_drawdown
@@ -175,7 +175,7 @@ def load_closed_trades(state_dir: Path) -> tuple[list[ClosedTrade], str | None]:
             if not line.strip():
                 continue
             try:
-                t = ClosedTrade.model_validate_json(line)
+                t = load_record_json(ClosedTrade, line, source="closed_trades")
             except ValueError as exc:
                 bad.append(f"{f.name} line {i}: {str(exc).splitlines()[0][:120]}")
                 continue

@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import Record, UtcTimestamp
+from goldbot.base import Record, UtcTimestamp, load_record
 from goldbot.config import tf_seconds
 from goldbot.labels.excursion import Excursion, bar_prices, exit_bar_extremes
 from goldbot.labels.exit_policy import ExitPolicy, PolicyState, new_state, policy_return, policy_step
@@ -88,7 +88,8 @@ class ShadowBook:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / "shadow_book.json"
         raw = json.loads(self.path.read_text()) if self.path.exists() else {}
-        self.books: dict[str, VersionBook] = {k: VersionBook.model_validate(v) for k, v in raw.items()}
+        self.books: dict[str, VersionBook] = {k: load_record(VersionBook, v, source="shadow_book.json")
+                                                  for k, v in raw.items()}
 
     # ------------------------------------------------------------------ trading
     def track(self, version: str, now: pd.Timestamp) -> None:

@@ -36,7 +36,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from goldbot.base import Record, write_atomic
+from goldbot.base import Record, load_record_json, write_atomic
 from goldbot.config import ROOT, Settings
 
 STATE_FILE = "telegram_digest.json"
@@ -64,7 +64,7 @@ class DigestSchedule:
         hh, mm = digest_at.split(":")
         self.at = pd.Timedelta(hours=int(hh), minutes=int(mm))
         try:
-            self.state = DigestState.model_validate_json(self.path.read_text(encoding="utf-8")) \
+            self.state = load_record_json(DigestState, self.path.read_text(encoding="utf-8"), source=STATE_FILE) \
                 if self.path.exists() else DigestState()
         except (ValueError, OSError):
             self.state = DigestState()      # unreadable: at worst one digest is sent twice, never one missed
