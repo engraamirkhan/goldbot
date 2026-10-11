@@ -787,6 +787,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   lots, the gate's margin, its stop risk); an ambiguous result (neither a fill nor a definite reject,
   `DEFINITE_REJECT_RETCODES`) or a failed re-read stops auto entries for the rest of that bar close, journalled as
   `auto_paused:unconfirmed_order` / `auto_paused:account_unread`. Two timeframes closing together share it.
+  Re-verification LOW-B: an auto entry that did not fill is journalled `auto_rejected:<retcode>` (definite reject,
+  nothing placed) or `auto_unconfirmed:<retcode>`, never `executed:auto`; 10032 (only real accounts) and 10046 (hedge
+  prohibited) joined `DEFINITE_REJECT_RETCODES`.
 - Open-risk review LOWs (2026-10-11, row R36): LOW-1 a failure computing the open risk sets it unknown and never
   aborts the account refresh, and a failed account read at the bar close no longer skips `_manage_open` (exits still
   run; that close's entries are refused `data_quality_error`); LOW-2 `AccountState.open_risk` defaults to unknown

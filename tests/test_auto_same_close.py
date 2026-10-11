@@ -138,16 +138,18 @@ def test_a_broker_that_does_not_show_the_fill_yet_still_refuses_the_second(tmp_p
 
 
 def test_an_ambiguous_order_result_stops_auto_entries_for_the_rest_of_the_close(tmp_path):
+    # LOW-B: the journal says the order was not confirmed, never "executed"
     pb = AmbiguousPaper(equity=10_000, adverse_slip_points=0.0)
     eng, _, dec = _run(tmp_path, _two(), RiskLimits(**BASE), pb=pb)
-    assert _actions(dec) == ["executed:auto", "auto_paused:unconfirmed_order"], _actions(dec)
+    assert _actions(dec) == ["auto_unconfirmed:-1", "auto_paused:unconfirmed_order"], _actions(dec)
     assert not pb.positions()
 
 
-def test_a_definite_reject_does_not_stop_the_next_entry(tmp_path):
-    pb = AmbiguousPaper(retcode=10019, equity=10_000, adverse_slip_points=0.0)     # 10019: no money, nothing placed
+@pytest.mark.parametrize("retcode", [10019, 10032, 10046])   # no money, only real accounts, open-order limit
+def test_a_definite_reject_is_journalled_as_rejected_and_does_not_stop_the_next_entry(tmp_path, retcode):
+    pb = AmbiguousPaper(retcode=retcode, equity=10_000, adverse_slip_points=0.0)     # nothing placed
     eng, _, dec = _run(tmp_path, _two(), RiskLimits(**BASE), pb=pb)
-    assert _actions(dec) == ["executed:auto", "executed:auto"], _actions(dec)
+    assert _actions(dec) == [f"auto_rejected:{retcode}", "executed:auto"], _actions(dec)
     assert len(pb.positions()) == 1
 
 

@@ -67,12 +67,12 @@ APPROVED_RISK_TOLERANCE = 1.02   # ADR 0009: the risk sent may exceed the approv
 MARKET_CLOSED_RETCODES = frozenset({10017, 10018})
 # MT5 trade-server retcodes that mean the order was definitely NOT placed (requote, reject, cancelled, invalid request /
 # volume / price / stops, trade disabled, market closed, no money, prices changed, no quotes, invalid expiration, too
-# many requests, no changes, autotrading off, locked, frozen, invalid filling, limits, position closed, close-only,
-# FIFO); the paper broker's duplicate refusal is 10027. Anything else that is not a fill (-1 send failed, 10008 placed,
+# many requests, no changes, autotrading off, locked, frozen, invalid filling, only real accounts, limits, position
+# closed, close-only, FIFO, hedge prohibited); the paper broker's duplicate refusal is 10027. Anything else that is not a fill (-1 send failed, 10008 placed,
 # 10010 partial, 10011 processing error, 10012 timeout, 10023 order state changed, 10031 no connection, unknown codes)
 # is ambiguous: auto entries stop for the rest of that bar close (trading-safety review HIGH, BACKLOG 19 review)
 DEFINITE_REJECT_RETCODES = frozenset({10004, 10006, 10007, *range(10013, 10023), *range(10024, 10031),
-                                      *range(10033, 10046)})
+                                      *range(10032, 10047)})
 # design (D10): a bar close is detected by clock, close time plus this grace, not by the next bar's first tick
 BAR_CLOSE_GRACE_S = 1.5
 LATE_TICK_WARN_S = 60.0      # at most one late_tick data-quality warning per this many seconds (every one is counted)
@@ -938,7 +938,7 @@ class Engine:
                                                   scored_fv=sfv))
                     continue
                 res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
-                decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid, scored_fv=sfv))
+                decisions.append(self._record(agent, close_ts, p, mult, self._auto_action(res), pid, scored_fv=sfv))
                 self._after_auto_order(res, gd, side, close_ts)
             else:
                 self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
@@ -995,6 +995,16 @@ class Engine:
         if prop.risk_amount is not None and risk > prop.risk_amount * APPROVED_RISK_TOLERANCE + 1e-9:
             return gd.model_copy(update={"allowed": False, "reasons": ["risk_above_approved"]}), lots
         return gd, lots
+
+    @staticmethod
+    def _auto_action(res: OrderResult | None) -> str:
+        """The journal's word for an auto entry (review LOW-B): `executed:auto` only for a fill (or a duplicate, sent
+        before); `auto_rejected:<retcode>` for a definite reject (nothing placed); `auto_unconfirmed:<retcode>` for
+        anything else (`_after_auto_order` then stops auto entries for the rest of the bar close)."""
+        if res is None or (res.ok and res.position_id is not None):
+            return "executed:auto"
+        kind = "auto_rejected" if res.retcode in DEFINITE_REJECT_RETCODES else "auto_unconfirmed"
+        return f"{kind}:{res.retcode}"
 
     def _after_auto_order(self, res: OrderResult | None, gd: GateDecision, side: int, close_ts: pd.Timestamp) -> None:
         """Trading-safety review HIGH (BACKLOG 19 review): every auto entry at one bar close must see the previous
