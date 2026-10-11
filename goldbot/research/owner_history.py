@@ -19,6 +19,11 @@ fixtures only.
 Stops: the report's Positions S/L is the FINAL stop (after any trailing or break-even move). 1R is the initial stop
 from the opening order in the Orders section when present, else the final stop, and only when it sits on the loss
 side of the entry; a stop moved to break-even or into profit is marked `sl_moved` and kept out of the R statistics.
+A position is paired with its opening order by ticket, else by (symbol, side, open time) only when exactly one order
+and one position share that key; an ambiguous key falls back to the final stop rather than mis-pair.
+
+Statistics: a slice "clears" the bar only at Bonferroni 5%/K on Student's t with its own n - 1 degrees of freedom
+(`slice_bar`). Sessions are goldbot's windows on local exchange clocks with each date's DST (goldbot.data.calendar).
 
 Input formats (MT5 desktop: History tab -> right-click -> Report -> HTML or Open XML):
 * HTML trade-history report (usually UTF-16 with a BOM): a header block of `Label:` / value rows (Name, Account
@@ -44,6 +49,7 @@ import re
 import statistics
 import subprocess
 import zipfile
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from datetime import time
 from html.parser import HTMLParser
@@ -54,6 +60,7 @@ from xml.etree import ElementTree
 import numpy as np
 import pandas as pd
 from pydantic import Field
+from scipy.stats import t as student_t
 
 from goldbot.base import FrozenRecord, UtcTimestamp, write_private
 from goldbot.data.calendar import DEFAULT_SESSIONS, LOCAL_SESSIONS, LocalSession
@@ -236,7 +243,8 @@ class Summary(FrozenRecord):
     session_open_base_rate: float   # share expected if entries were uniform over the owner's active hours
     share_near_round_number: float
     slices_examined: int            # K: every slice the report breaks the trades into (seeds pick from these)
-    bonferroni_t: float             # |t| a slice needs for family-wise 5% across K slices
+    bonferroni_t: float             # |t| for family-wise 5% across K slices in the large-slice (normal) limit; a
+    #                                 slice of n trades needs Student's t on n - 1 df (`slice_bar`), always higher
     start_equity: float | None
     start_equity_source: str
     median_leverage: float | None
@@ -245,7 +253,8 @@ class Summary(FrozenRecord):
     longest_losing_streak: int
     max_drawdown: float
     max_drawdown_pct: float | None
-    ruin: list[RuinEstimate]        # [compounding, fixed stakes, zero-edge stress]; empty when equity is unknown
+    ruin: list[RuinEstimate]        # [compounding, fixed stakes, zero-edge compounding, zero-edge fixed stakes];
+    #                                 empty when equity is unknown
     notes: list[str]
 
 
@@ -506,29 +515,40 @@ def _side(text: str) -> Literal["buy", "sell"] | None:
 def _initial_stops(cols: dict[str, int], body: list[list[str]]
                    ) -> tuple[dict[str, float], dict[tuple[str, str, pd.Timestamp], float]]:
     """The S/L each filled opening order was placed with: by order ticket (an MT5 position's ticket is its opening
-    order's) and, as a fallback, by (symbol, side, open time). Orders without a stop are skipped."""
+    order's) and, as a fallback, by (symbol, side, open time). Orders without a stop are not matched. A fallback key
+    shared by two or more filled orders (with or without a stop) is dropped: the position cannot be told apart, so
+    it falls back to its final stop rather than borrow another order's."""
     by_ticket: dict[str, float] = {}
     by_open: dict[tuple[str, str, pd.Timestamp], float] = {}
+    seen: Counter[tuple[str, str, pd.Timestamp]] = Counter()
     for r in body:
         state = _cell(r, cols, "state").strip().lower()
         if state and not state.startswith(("fill", "partial")):
             continue                                      # cancelled / expired / rejected orders opened nothing
         sl, side, t = parse_number(_cell(r, cols, "sl")), _side(_cell(r, cols, "type")), parse_time(
             _cell(r, cols, "time"))
-        if not sl or side is None:
+        if side is None:
+            continue
+        key = (_cell(r, cols, "symbol").strip().upper(), side, t) if t is not None else None
+        if key is not None:
+            seen[key] += 1
+        if not sl:
             continue
         ticket = _cell(r, cols, "order").strip()
         if ticket:
             by_ticket.setdefault(ticket, sl)
-        if t is not None:
-            by_open.setdefault((_cell(r, cols, "symbol").strip().upper(), side, t), sl)
-    return by_ticket, by_open
+        if key is not None:
+            by_open.setdefault(key, sl)
+    return by_ticket, {k: v for k, v in by_open.items() if seen[k] == 1}
 
 
 def _positions_from_table(cols: dict[str, int], body: list[list[str]], server_tz: str,
                           initial: tuple[dict[str, float], dict[tuple[str, str, pd.Timestamp], float]] | None = None
                           ) -> list[Position]:
     by_ticket, by_open = initial or ({}, {})
+    # the (symbol, side, open time) fallback pairs only a position whose key no other position shares
+    keys = Counter((_cell(r, cols, "symbol").strip().upper(), _side(_cell(r, cols, "type")),
+                    parse_time(_cell(r, cols, "open_time"))) for r in body)
     raw = []
     for r in body:
         ot, ct = parse_time(_cell(r, cols, "open_time")), parse_time(_cell(r, cols, "close_time"))
@@ -542,7 +562,7 @@ def _positions_from_table(cols: dict[str, int], body: list[list[str]], server_tz
         symbol = _cell(r, cols, "symbol").strip()
         ticket = _cell(r, cols, "position").strip()          # used for matching only, never stored
         init = by_ticket.get(ticket) if ticket else None
-        if init is None:
+        if init is None and keys[(symbol.upper(), side, ot)] == 1:
             init = by_open.get((symbol.upper(), side, ot))
         raw.append(dict(symbol=symbol, side=side, lots=lots, ot=ot, ct=ct, entry=entry,
                         exit=exit_, sl=sl or None, initial_sl=init, tp=tp or None,
@@ -759,7 +779,8 @@ def bootstrap_ruin(returns: np.ndarray, horizon: int, n_paths: int = 2000, seed:
 
 
 def _ruin(trades: list[Trade], start: float | None, n_paths: int, seed: int) -> tuple[list[RuinEstimate], str]:
-    """Both readings of the owner's sizing (lots scaled with equity; fixed stakes) and a zero-edge stress run."""
+    """Both readings of the owner's sizing (lots scaled with equity; fixed stakes), each also as a zero-edge
+    (demeaned) stress run: the risk the sizing carries if the sample's edge is not real, whichever reading holds."""
     rets = np.array([t.net / t.equity_at_open for t in trades if t.equity_at_open and t.equity_at_open > 0])
     if len(rets) < 5 or not start:
         return [], "risk of ruin not estimated: equity at entry unknown or fewer than 5 trades"
@@ -768,7 +789,8 @@ def _ruin(trades: list[Trade], start: float | None, n_paths: int, seed: int) -> 
     fixed = np.array([t.net for t in trades]) / start
     return [bootstrap_ruin(rets, horizon=horizon, n_paths=n_paths, seed=seed),
             bootstrap_ruin(fixed, horizon=horizon, n_paths=n_paths, seed=seed, compounding=False),
-            bootstrap_ruin(rets, horizon=horizon, n_paths=n_paths, seed=seed, demean=True)], ""
+            bootstrap_ruin(rets, horizon=horizon, n_paths=n_paths, seed=seed, demean=True),
+            bootstrap_ruin(fixed, horizon=horizon, n_paths=n_paths, seed=seed, compounding=False, demean=True)], ""
 
 
 def session_open_flags(idx: pd.DatetimeIndex) -> np.ndarray:
@@ -878,6 +900,7 @@ def analyse(report: Report, *, contract: float = CONTRACT_OZ, targets: Sequence[
     flow_amt = np.array([f.amount for f in flows], dtype=float)
 
     open_idx = pd.DatetimeIndex([p.open_utc for p in pos])
+    # goldbot's session windows on local exchange clocks, each resolved for the entry's own date (DST per date)
     sessions = DEFAULT_SESSIONS.session_label(open_idx)
     open_flags = session_open_flags(open_idx)
     news, news_note = _news_flags(open_idx, events)
@@ -992,7 +1015,14 @@ def _fmt_t(t: float | None) -> str:
     return "t n/a" if t is None else f"t {t:.2f}"
 
 
-def _slice(g: GroupStat, n: int, bonf: float) -> str:
+def slice_bar(n: int, k: int) -> float:
+    """|t| a slice of `n` trades needs for family-wise FAMILY_ALPHA over `k` slices: Bonferroni (two-sided alpha / k)
+    on Student's t with the slice's own n - 1 degrees of freedom. The normal quantile is too lenient for the small
+    slices a discretionary record breaks into (12 trades need about 4.1 at K = 30, not 3.1)."""
+    return float(student_t.ppf(1 - FAMILY_ALPHA / (2 * k), max(1, n - 1)))
+
+
+def _slice(g: GroupStat, n: int, k: int) -> str:
     """A slice in R, percentages and counts only (never money): the seeds may be quoted in the public repo."""
     r = "no trades with a real 1R" if g.mean_r is None else f"mean {g.mean_r:+.2f} R over {g.n_r}"
     if g.t_stat is None:
@@ -1000,16 +1030,18 @@ def _slice(g: GroupStat, n: int, bonf: float) -> str:
     elif g.n < MIN_SLICE_N:
         bar = f"t {g.t_stat:.2f}, too few trades (< {MIN_SLICE_N}) to judge"
     else:
-        bar = f"t {g.t_stat:.2f}, " + ("clears" if abs(g.t_stat) >= bonf else "below") + f" the Bonferroni |t| {bonf:.2f}"
+        need = slice_bar(g.n, k)
+        bar = f"t {g.t_stat:.2f}, " + ("clears" if abs(g.t_stat) >= need else "below") + \
+            f" the Bonferroni |t| {need:.2f} (Student's t, {g.n - 1} df)"
     return f"{g.n}/{n} trades ({g.n / n:.0%}), win {g.win_rate:.0%}, {r}, {bar}"
 
 
-def _flag_slice(trades: list[Trade], flag: Sequence[bool], name: str, bonf: float) -> str:
+def _flag_slice(trades: list[Trade], flag: Sequence[bool], name: str, k: int) -> str:
     nets = np.array([t.net for t in trades])
     rs = np.array([t.r_multiple if t.risk_source in R_SOURCES and t.r_multiple is not None else np.nan
                    for t in trades])
     g = _group(np.where(np.asarray(flag, dtype=bool), name, "other"), nets, [name], rs)
-    return _slice(g[0], len(trades), bonf) if g else "0 trades"
+    return _slice(g[0], len(trades), k) if g else "0 trades"
 
 
 def hypothesis_seeds(s: Summary, trades: list[Trade]) -> list[HypothesisSeed]:
@@ -1017,13 +1049,13 @@ def hypothesis_seeds(s: Summary, trades: list[Trade]) -> list[HypothesisSeed]:
     Each is phrased as a contrast to pre-register ("do entries in X differ from the owner's other entries"), quotes
     R, percentages and counts only, and says whether its t clears the Bonferroni bar over the K slices examined."""
     seeds: list[HypothesisSeed] = []
-    n, bonf = s.n_trades, s.bonferroni_t
+    n, n_slices = s.n_trades, s.slices_examined
     top = max(s.by_session, key=lambda g: (g.mean_r if g.mean_r is not None else -1e9, g.n))
     hour = max(s.by_hour, key=lambda g: (g.mean_r if g.mean_r is not None else -1e9, g.n))
     seeds.append(HypothesisSeed(
         id="OH-01", hypothesis=f"**Owner's session window**: test whether entries in the {top.key} session (around "
         f"{hour.key}:00 UTC) differ from the owner's other entries",
-        rationale=f"{top.key}: {_slice(top, n, bonf)}; hour {hour.key} UTC: {_slice(hour, n, bonf)}",
+        rationale=f"{top.key}: {_slice(top, n, n_slices)}; hour {hour.key} UTC: {_slice(hour, n, n_slices)}",
         horizon="15m-1h", edge_vs_cost="unknown; a session filter on an existing 15m/1h family, judged net of "
         "the 0.2-0.4 R round trip", maps_to="H-04 / H-14"))
     med = s.median_holding_min
@@ -1031,7 +1063,7 @@ def hypothesis_seeds(s: Summary, trades: list[Trade]) -> list[HypothesisSeed]:
     seeds.append(HypothesisSeed(
         id="OH-02", hypothesis=f"**Owner's holding time**: test whether trades held {best_hold.key} differ from the "
         f"owner's other entries (median hold {med:.0f} min, {'a scalping' if med < 30 else 'an intraday'} style)",
-        rationale=f"{best_hold.key}: {_slice(best_hold, n, bonf)}",
+        rationale=f"{best_hold.key}: {_slice(best_hold, n, n_slices)}",
         horizon="15m" if med < 60 else "1h",
         edge_vs_cost="short targets cost 0.3-0.4 R a round trip (hypotheses.md yardstick); needs a high hit rate",
         maps_to="H-14"))
@@ -1040,13 +1072,13 @@ def hypothesis_seeds(s: Summary, trades: list[Trade]) -> list[HypothesisSeed]:
     seeds.append(HypothesisSeed(
         id="OH-03", hypothesis=f"**Direction bias**: the owner is {buy_share:.0%} long; test whether the long entries "
         "differ from the short ones, and from a random-entry long over the same hours (side vs timing)",
-        rationale="; ".join(f"{k}: {_slice(sides[k], n, bonf)}" for k in ("buy", "sell") if k in sides),
+        rationale="; ".join(f"{k}: {_slice(sides[k], n, n_slices)}" for k in ("buy", "sell") if k in sides),
         horizon="15m-1h", edge_vs_cost="long-only intraday pays no swap if flat by rollover", maps_to="H-04"))
     seeds.append(HypothesisSeed(
         id="OH-04", hypothesis=f"**Session-open entries**: test whether entries in the first {OPEN_WINDOW_MIN} min "
         f"after an Asia/London/NY open differ from the owner's other entries ({s.share_near_session_open:.0%} of "
         f"entries vs {s.session_open_base_rate:.0%} expected over the owner's active hours)",
-        rationale=f"{_flag_slice(trades, [t.near_session_open for t in trades], 'open', bonf)}; R-02 "
+        rationale=f"{_flag_slice(trades, [t.near_session_open for t in trades], 'open', n_slices)}; R-02 "
         "(session_open breakout) is retired, so only a different rule conditioned on the owner's filter is new",
         horizon="15m", edge_vs_cost="R-02 showed +0.042 R gross: needs a materially different mechanism",
         maps_to="R-02 / H-14"))
@@ -1054,7 +1086,7 @@ def hypothesis_seeds(s: Summary, trades: list[Trade]) -> list[HypothesisSeed]:
         id="OH-05", hypothesis=f"**Round-number entries**: test whether entries within ${ROUND_BAND:g} of a "
         f"${ROUND_STEP:g} level differ from the owner's other entries ({s.share_near_round_number:.0%} of entries "
         "vs a 20% uniform base rate)",
-        rationale=_flag_slice(trades, [t.near_round for t in trades], "round", bonf),
+        rationale=_flag_slice(trades, [t.near_round for t in trades], "round", n_slices),
         horizon="15m-1h", edge_vs_cost="Osler stop/target clustering; cascades move several ATR if real",
         maps_to="H-05 / H-14"))
     if s.news:
@@ -1062,7 +1094,7 @@ def hypothesis_seeds(s: Summary, trades: list[Trade]) -> list[HypothesisSeed]:
         seeds.append(HypothesisSeed(
             id="OH-06", hypothesis=f"**News-window trading**: test whether entries within {NEWS_WINDOW_MIN} min of "
             "tier-1 US releases differ from the owner's other entries",
-            rationale=f"{_slice(g, n, bonf)}. goldbot's RiskGate blacks these windows out, so any edge here is "
+            rationale=f"{_slice(g, n, n_slices)}. goldbot's RiskGate blacks these windows out, so any edge here is "
             "outside the current design",
             data="D, calendar", horizon="15m", edge_vs_cost="volatility burst several times the spread; slippage "
             "unmeasured", maps_to="H-10 / H-11"))
@@ -1128,7 +1160,7 @@ def render_markdown(r: Result) -> str:
                            _money(dd.std, sign), _money(dd.best, sign), f"{_money(dd.worst, sign)} ({dd.worst_day})"]
                           + [f"{v:.0%}" for v in dd.share_at_least.values()]))
     lines += ["", "## Breakdowns (entry time, UTC)", ""]
-    lines += _groups_md("By session (goldbot DEFAULT_SESSIONS)", s.by_session, sign)
+    lines += _groups_md("By session (local exchange clocks, DST per date)", s.by_session, sign)
     lines += _groups_md("By hour", s.by_hour, sign)
     lines += _groups_md("By weekday", s.by_weekday, sign)
     lines += _groups_md("By side", s.by_side, sign)
@@ -1146,8 +1178,8 @@ def render_markdown(r: Result) -> str:
         lines += [f"{ru0.n_paths} circular-block-bootstrap paths (goldbot.research.ruin, block {ru0.block_length} "
                   f"trades) of {ru0.horizon_trades} trades (about a year at the observed pace), ruin = equity touching "
                   f"{ru0.ruin_level:.0%} of the start. Lots vs equity correlation {opt(s.lots_equity_corr)}: near 1 "
-                  "means the compounding row describes the owner, near 0 the fixed-stake row. The zero-edge row "
-                  "removes the sample's mean: the risk the sizing carries if the edge is not real.", "",
+                  "means the compounding rows describe the owner, near 0 the fixed-stake rows. The zero-edge rows "
+                  "remove the sample's mean: the risk each sizing carries if the edge is not real.", "",
                   _row(["sizing", "P(ruin)", "P(halved)", "median end, log10(x start)"]), _row(["---"] * 4)]
         for ru in s.ruin:
             lines.append(_row([ru.method, f"{ru.p_ruin:.1%}", f"{ru.p_halved:.1%}", f"{ru.median_end_log10:+.2f}"]))
@@ -1162,7 +1194,9 @@ def render_markdown(r: Result) -> str:
               "period, holdout untouched) before it can mean anything. Format as docs/research/hypotheses.md.", "",
               f"K = {s.slices_examined} slices examined (every session, hour, weekday, side, holding and news slice "
               f"above, plus the session-open and round-number flags); the Bonferroni bar for 5% family-wise error is "
-              f"|t| >= {s.bonferroni_t:.2f}, and each rationale says whether its t clears it. A slice below the bar is "
+              f"Student's t at two-sided 5%/K on each slice's own n - 1 degrees of freedom (|t| >= "
+              f"{s.bonferroni_t:.2f} for a very large slice, {slice_bar(30, s.slices_examined):.2f} for 30 trades, "
+              f"higher still for fewer), and each rationale says whether its t clears it. A slice below the bar is "
               "indistinguishable from picking the best of K by chance.", "",
               "Rationales quote R, percentages and counts only. **Do not paste amounts into the repo**: money figures "
               "from this report stay in this private folder.", "",
@@ -1172,8 +1206,11 @@ def render_markdown(r: Result) -> str:
         lines.append(_row([sd.id, sd.hypothesis + (f" (relates to {sd.maps_to})" if sd.maps_to else ""), sd.status,
                            sd.rationale, sd.data, sd.horizon, sd.edge_vs_cost, sd.trial_cost]))
     lines += ["", "## Notes", ""] + [f"- {x}" for x in s.notes or ["none"]] + [
-        "- Daily P&L is shown by the UTC day of each close (goldbot's risk-day) and by the London day; sessions, hours "
-        "and weekdays use the UTC entry time, session opens each date's local clock.",
+        "- Daily P&L is shown by the UTC day of each close (goldbot's risk-day) and by the London day; hours and "
+        "weekdays use the UTC entry time. Sessions are goldbot's windows on local exchange clocks, resolved for each "
+        "entry's own date (Asia from Tokyo 08:00, London from 08:00 Europe/London, New York 08:30-17:00 "
+        "America/New_York), so London and New York move an hour in UTC when their clocks change; session opens use "
+        "the same local clocks.",
         "- Small samples: a group with a |t| under about 2 is noise."]
     return "\n".join(lines) + "\n"
 
@@ -1182,7 +1219,8 @@ def console_summary(r: Result) -> str:
     s = r.summary
     sign = CCY_SIGN.get(s.currency, s.currency + " ")
     shares = ", ".join(f">= {sign}{k}: {v:.0%}" for k, v in s.daily.share_at_least.items())
-    ruin = "n/a" if not s.ruin else " / ".join(f"{ru.p_ruin:.1%}" for ru in s.ruin) + " (compounding / fixed / zero edge)"
+    ruin = "n/a" if not s.ruin else " / ".join(f"{ru.p_ruin:.1%}" for ru in s.ruin) + \
+        " (compounding / fixed / zero edge compounding / zero edge fixed)"
     return (f"{s.n_trades} XAUUSD trades {s.period_start:%Y-%m-%d}..{s.period_end:%Y-%m-%d}: net {_money(s.total_net, sign)}, "
             f"win {s.win_rate:.0%}, PF {'n/a' if s.profit_factor is None else f'{s.profit_factor:.2f}'}, "
             f"expectancy {_money(s.expectancy, sign)}/trade\n"

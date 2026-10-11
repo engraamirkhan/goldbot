@@ -117,6 +117,7 @@ class AccountState(Record):
     clock_mismatch: bool = False      # the server-clock probe measured a > 5 min offset (goldbot/ops/server_clock.py)
     market_closed: bool = False       # the broker session table (D13) says the market is closed now
     tick_error: bool = False          # a tick raised in the engine; cleared after TICK_ERROR_CLEAR_TICKS clean ticks
+    bridge_incompatible: bool = False  # the MT5 bridge lacks a method, protocol or zone this brain needs (BACKLOG 42)
     # BACKLOG 19/35: what this account's open positions can still lose down to their stops, account currency
     # (goldbot/risk/open_risk.py); None = unknown (not read yet, a position without SL, or no usable conversion; review
     # LOW-2: unknown until the engine has read the positions), and the positions on each side, whoever opened them
@@ -339,6 +340,8 @@ class RiskGate:
             reasons.append("market_closed")
         if st.tick_error:
             reasons.append("tick_error")
+        if st.bridge_incompatible:
+            reasons.append("bridge_incompatible")
         if st.data_recovering:
             reasons.append("data_recovering")
         if st.spread_points > L.max_spread_points:

@@ -100,6 +100,9 @@ def test_rule_only_net_split_reports_long_only_short_only_and_positive_net_years
     assert s["positive_years"] == [2019, 2020] and s["n_positive_years"] == 2 and s["chop_year_positive"] is False
     assert s["years"]["2021"]["n"] == 20 and s["years"]["2021"]["mean_r"] == pytest.approx(-0.1)   # long-only 2021 > 0
     assert s["years"]["2023"]["n"] == 5 and 2023 not in s["positive_years"]
+    # long-only years too (H-01 reads >= 3 positive net years incl. 2021/22 on long-only as well; quant re-review)
+    assert s["long_positive_years"] == [2019, 2020, 2021] and s["n_long_positive_years"] == 3
+    assert s["long_chop_year_positive"] is True and s["long_years"]["2023"]["n"] == 5
     text = "\n".join(rule_only_split_lines(s))
     assert "long-only (side == 1)" in text and "short-only (side == -1)" in text and "positive net years" in text
     assert "2019, 2020" in text

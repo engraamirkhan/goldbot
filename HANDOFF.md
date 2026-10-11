@@ -907,25 +907,64 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   is refused (`git_tree_reason`: a `.git` dir or file in the path, this checkout under any case spelling, or
   `git rev-parse` succeeding). The header's account number, name, company and server are never kept (only the
   currency); tickets are used only to match a position to its opening order. A pre-commit hook
-  (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` + digits, also in
-  UTF-16 and inside .xlsx). XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`, default Europe/Athens).
+  (`scripts/check_no_mt5_report.py`) rejects any file that looks like a report (title, `Account:` / `Счёт:` /
+  `Konto:` / `Cuenta:` + digits, also in UTF-16 and inside .xlsx), and a translated one by shape: an HTML table or
+  xlsx sheet or CSV/TSV with >= 5 rows holding an MT5 stamp `YYYY.MM.DD HH:MM` in one of their first 3 visible cells
+  (hidden HTML cells dropped) under a Positions/Deals-like title (en/ru/de/es) or >= 5 such rows of >= 10 cells (the
+  translated words are unconfirmed against a real export; the shape rule does not need them; every tracked file
+  passes). Linear time (html.parser, no backtracking regex); an xlsx is scanned for at most 200 members and 50 MB.
+  Gaps: a translated export with < 5 trades, or xlsx stamps stored as Excel numbers, pass the shape rule. XAUUSD only: server time -> UTC (`server_to_utc`, `--server-tz`,
+  default Europe/Athens).
   1R comes from the opening order's INITIAL stop (Orders section), else the report's S/L, which is the FINAL stop;
+  the (symbol, side, open time) fallback pairs a position with an order only when exactly one of each shares the
+  key (an ambiguous key falls back to the final stop);
   a stop at or beyond the entry is `sl_moved` and, like the no-stop proxy, kept out of the R statistics. The USD rate
   is always implied from the trades (a "USD" account implying != 1 is flagged). Reported: R, win rate, expectancy
   with t, profit factor, return on equity with t, daily P&L by UTC and London day with t and 95% CI and the share of
-  days >= `--targets` (default 30,50), sessions, hour, weekday, side, holding time, tier-1 news (if the store has
+  days >= `--targets` (default 30,50), sessions (goldbot's local-clock windows, DST per date), hour, weekday, side,
+  holding time, tier-1 news (if the store has
   `calendar_events`), entries near session opens on each date's local clock against a base rate from the owner's
   active hours, leverage vs equity, losing streak, drawdown from trading only (deposits/withdrawals excluded; % on a
   flow-adjusted index), and risk of ruin with `goldbot.research.ruin`'s circular block bootstrap for both sizing
-  readings (compounding, fixed stakes) plus a zero-edge (demeaned) stress row; end equity is reported as a capped
+  readings (compounding, fixed stakes), each also as a zero-edge (demeaned) stress row; end equity is a capped
   log10. Ends with hypothesis seeds OH-01..06 in hypotheses.md format, labelled in-sample, not evidence, each phrased
   as "test whether entries in X differ from the owner's other entries", stating K = slices examined and whether its
-  t clears the Bonferroni bar (slices under 10 trades are never said to clear it). Seeds quote R, % and counts only:
+  t clears the Bonferroni bar, Student's t at 5%/K on the slice's own n - 1 df (`slice_bar`; slices under 10
+  trades are never said to clear it). Seeds quote R, % and counts only:
   do not paste amounts into the repo. The MT5 layout was written from the documented report structure, not checked
   against a real file (none may enter the repo): if the owner's export parses to 0 trades, look at `_ALIASES` /
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- VRP/purge follow-ups (2026-10-11): `macro_drivers` v5 stub rule from declared bar lengths (macro `f-51ac5ebabb`,
+  macro + day_type `f-48c4c0c57e`); context frames use one `pipeline.CONTEXT_FEATURES` list (engine too, no behaviour
+  change); group-measure rows purged by label exit (`discovery.purged_rest`).
+- Pre-freeze verdict fixes (2026-10-11, third quant re-review): screened-row decisions keyed on the linked
+  pre-registration's `rule_id` (write the Q1 queued rows with `rule_id="H-01"/"H-04"/"C4H"`); H-01 continue needs
+  long-only positive years too; the 4h continuity trial never continues; unknown passes continue only citing their
+  pre-registered reading rule; H-10 jumps-only cannot retire or continue H-10; `macro_drivers` v4 (stub-free HAR-RV),
+  macro version `f-ac2be79efe`, macro + day_type `f-7a3cad1466`; group measure uses `permutation_repeats` and a
+  one-week purge.
+- Persisted state is read tolerantly, built strictly (2026-10-11, ADR 0010): a rollback used to skip closed trades,
+  hide proposals or stop services when a newer release had added a field. `goldbot/base.py` `load_record` /
+  `load_record_json` drop unknown keys at every level (WARNING once per source/model/fields, `schema_skew()`). A wrong
+  type, a missing field or bad JSON still fails, and construction stays `forbid`. Applied to gates_phase, bus (not
+  `Control`), automode, shadow, ruin, scheduler, model registry, population, director, costs, health, digest, outbox,
+  crossfeed and jobs; `RecordRepo(..., tolerant=False)` is the default (auth stays strict).
+  The pydantic floor is now 2.12. New rule AGENT_STANDARDS S12: every new persisted field has a default that is safe
+  when missing. Guard: `tests/test_persistence_compat.py` (a compat case per persisted model, plus an AST allowlist).
+  **Follow-ups, ranked:**
+  1. `goldbot/engine/runner.py` (left out because another lane is editing it): `_load_orders` (~:1752-1759):
+     `SentOrder.model_validate(v)`, `OpenTrade.model_validate(v)` and `PendingClose.model_validate(v)` become
+     `load_record(<Model>, v, source="orders_<account>.json")`. Until then, a rollback across a field added to these
+     models stops the older engine's start (no entries, and exits only by broker stop/target). Then
+     `_archive_stale_proposals` (~:394): `Proposal.model_validate_json(f.read_text())` becomes
+     `load_record_json(Proposal, f.read_text(), source="approvals/pending")`. Remove the four `TEMPORARY` entries in
+     `tests/test_persistence_compat.py` in the same change, which goes to the trading-safety reviewer.
+  2. `goldbot/execution/bridge.py` `_decode` (:126): records coming back from the MT5 box (Position, Tick,
+     BrokerTerms, TradingSession) can be read tolerantly, because the MT5 box is updated by hand and can run a
+     different version from the brain. `OrderIntent` (an order request) stays strict. On the MT5 box, pydantic is pinned only by
+     `mt5_bootstrap.sh` (`>=2.6`, deploys use `--no-deps`), so raise that pin with it (root-run script: security review).
 - H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
   (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
   version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London
@@ -983,8 +1022,34 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     - The gap anchors on the first bar at or after the 18:00 New York reopen.
     - The noise ratio's session starts on the bar containing the open.
     - `daily_bars` refuses bars out of time order.
-  - Still owed: E-4 (H-16's evaluation path, which cuts the bars at holdout_from before features), and the
-    first-out-of-sample month counted from data before the freeze (about 2012-04; the rule is in the Q2 draft).
+  - Still owed: the first out-of-sample month counted from data before the freeze (about 2012-04; the rule is in
+    the Q2 draft). E-4 is built (next bullet).
+- H-16 evaluation path, E-4 (2026-10-11; quant review: merge after fixes, fixes applied). `goldbot/research/h16.py`
+  plus `research_pass.py --h16 --macro DIR --us-calendar DIR` runs H-16's pre-registered test once and records ONE
+  trial (family `h16_opportunity_score`, status `evaluated`, `results.kind` = `range_test`).
+  - It runs only against its pre-registration. Under the registry lock and before anything is read, the run is refused
+    when any H-16 trial exists (whatever its config), when there is not exactly one unused H-16 pre-registration, when
+    that config is not `h16.h16_config(first_oos_month, expected_eval_days)` with 500 rows, when its `code_hash`
+    (h16.py's source, also on the result row) differs, when its feature version differs from
+    `feature_version(["day_type"])` worked out now (`f-52c853166b` for day_type v1), or when the budget is spent.
+  - The frozen month and the frozen evaluable-day count live in the hashed config; the run reads them from it. A
+    different month from the baseline-fit rule, fewer than 90% of the frozen days (checked before any statistic) or a
+    NaN statistic is refused, and nothing is recorded.
+  - `tests/test_day_type_golden.py` (+ `tests/data/day_type_v1_golden.parquet`) ties day_type's outputs to
+    `day_type.VERSION` (so `gvz_series` in the config is informational): changing them without a bump fails CI (`python tests/test_day_type_golden.py` writes the file
+    for a new version).
+  - `h16_feature_version()` restores the feature registry (day_type stays opt-in for every other caller).
+  - The 1m bars, the macro rows and the calendar rows are cut at `research.holdout_from` before anything is resampled.
+    Every full-score input is as known at 06:30 UTC on D.
+  - HAR (4 coefficients) and full (11 coefficients) both go through `fit_har(regressors=...)` on the monthly refits
+    with the 1-day purge. GVZ-stale days are dropped from both models and counted; days without a full forecast are
+    also counted by missing input.
+  - Reading rule as pre-registered: rho gain >= 0.05 AND top/bottom quintile mean W/A >= 1.5, inclusive.
+  - Reported only: the 20-day block-bootstrap interval and the drop-one contributions. Not built: the London+60 /
+    NY+60 refreshes.
+  - Nothing was run on real data and no real registry was written. **Before the freeze:** count the first OOS month
+    and the evaluable days from data (calendar and gaps only), write both into the Q2 draft, and pre-register with
+    `h16_config(month, days)` and `h16_feature_version()`.
 - Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
   (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
   before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each

@@ -72,7 +72,7 @@ import pandas as pd
 
 from goldbot.agents.roles import ROLES
 from goldbot.agents.runner import AgentRunner
-from goldbot.base import Record, write_atomic
+from goldbot.base import Record, load_record, write_atomic
 from goldbot.config import DecisionTimeframe, Settings
 from goldbot.data.release import store_macro
 from goldbot.data.store import Store
@@ -315,16 +315,21 @@ def backtest_stats(res: ResearchResult) -> PerfStats | None:
 def shadow_stats(ctx: JobContext, entry: ModelEntry) -> PerfStats | None:
     """Shadow record written by the engine's shadow book (state/shadow_<version>.json), if any yet."""
     f = ctx.state_dir / f"shadow_{entry.version}.json"
-    return PerfStats.model_validate(json.loads(f.read_text())) if f.exists() else None
+    return load_record(PerfStats, json.loads(f.read_text()), source="shadow_<version>.json") if f.exists() else None
+
+
+def _backtest_stats(entry: ModelEntry) -> PerfStats | None:
+    """The backtest a model was registered with (models/registry.json), None when it has none."""
+    return load_record(PerfStats, entry.backtest, source="models/registry.json:backtest") if entry.backtest else None
 
 
 def _decide_challengers(ctx: JobContext, agent_id: str, slot: pd.Timestamp) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     champion = ctx.models.champion(agent_id)
     champ_shadow = shadow_stats(ctx, champion) if champion else None
-    champ_turnover = champ_shadow or (PerfStats.model_validate(champion.backtest) if champion and champion.backtest else None)
+    champ_turnover = champ_shadow or (_backtest_stats(champion) if champion else None)
     for ch in ctx.models.by_agent(agent_id, "challenger"):
-        bt = PerfStats.model_validate(ch.backtest) if ch.backtest else None
+        bt = _backtest_stats(ch)
         sh = shadow_stats(ctx, ch)
         if bt is not None and sh is not None:
             d = evaluate_promotion(bt, sh, champ_turnover)
@@ -413,7 +418,7 @@ def model_watch(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         if slot > closes + WATCH_GRACE:
             continue                    # closed, and evaluated by the run after it closed
         is_open = slot < closes
-        bt = PerfStats.model_validate(ch.backtest) if ch.backtest else None
+        bt = _backtest_stats(ch)
         if bt is None or bt.mean_ret is None or bt.std_ret is None:
             out[agent_id] = {"version": ch.version, "watch": "no backtest moments; cannot run CUSUM"}
             continue

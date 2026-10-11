@@ -54,7 +54,7 @@ import numpy as np
 import pandas as pd
 from pydantic import Field, model_validator
 
-from goldbot.base import FrozenRecord
+from goldbot.base import FrozenRecord, load_record
 from goldbot.config import RiskSettings
 from goldbot.data.timeutil import epoch_ns
 from goldbot.risk.sizing import effective_risk
@@ -473,7 +473,7 @@ def r_from_shadow_book(state_dir: Path, *, version: str | None = None, agent_id:
     path = Path(state_dir) / "shadow_book.json"
     if not path.exists():
         return RSample(r=np.empty(0), cost_basis="spread_only")
-    books = {k: VersionBook.model_validate(v) for k, v in json.loads(path.read_text()).items()}
+    books = {k: load_record(VersionBook, v, source="shadow_book.json") for k, v in json.loads(path.read_text()).items()}
     if version is not None:
         if version not in books:
             raise ValueError(f"version {version} is not in the shadow book (has {', '.join(sorted(books))})")

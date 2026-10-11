@@ -27,7 +27,7 @@ from typing import Any, Callable, Literal
 import pandas as pd
 from pydantic import Field, model_validator
 
-from goldbot.base import FrozenRecord, Record, UtcTimestamp
+from goldbot.base import FrozenRecord, Record, UtcTimestamp, load_record, load_record_json
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database
 from goldbot.db.bookkeeping import (
@@ -121,7 +121,8 @@ class Job(Record):
 
 
 def _job_state(raw: dict[str, Any]) -> JobState:
-    return JobState.model_validate({f: x for f, x in raw.items() if f != "next_slot"})
+    # next_slot: a field of the pre-database file this release recomputes, not skew from a newer release
+    return load_record(JobState, {f: x for f, x in raw.items() if f != "next_slot"}, source="scheduler.json")
 
 
 def _file_jobs(path: Path) -> tuple[dict[str, JobState], str]:
@@ -142,7 +143,7 @@ def merge_scheduler_json(path: Path, conn: sqlite3.Connection) -> int:
     """A file a rolled-back release kept writing: per job, the state with the newer last_slot wins, so a slot that
     release already ran (or skipped) is not run again."""
     jobs, _ = _file_jobs(path)
-    have = {k: JobState.model_validate_json(b) for k, b in load_jobs(conn).items()}
+    have = {k: load_record_json(JobState, b, source="aux.db:scheduler_jobs") for k, b in load_jobs(conn).items()}
     def is_newer(k: str, v: JobState) -> bool:
         if k not in have:
             return True
@@ -170,7 +171,8 @@ class Scheduler:
         if self.path.name == SCHEDULER_IMPORT.source:
             dual_read(self.db, SCHEDULER_IMPORT, self.path.parent, merge_scheduler_json)
         with self.db.connection() as conn:
-            self.state: dict[str, JobState] = {k: JobState.model_validate_json(b) for k, b in load_jobs(conn).items()}
+            self.state: dict[str, JobState] = {k: load_record_json(JobState, b, source="aux.db:scheduler_jobs")
+                                               for k, b in load_jobs(conn).items()}
 
     def add(self, name: str, schedule: Schedule, fn: JobFn) -> None:
         if name in self.jobs:
