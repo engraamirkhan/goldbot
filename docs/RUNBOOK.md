@@ -197,9 +197,16 @@ and the rest still arrives. It never contains account numbers or emails.
   * Only `enabled` units are restarted, so a stray, disabled engine instance is never started.
 * **Rollback floor.** `/etc/goldbot/rollback-floor` (optional, root-owned, one commit id): `--rollback` refuses any
   commit older than it. Set it after a deploy that must never be undone (for example the auth hardening,
-  docs/deploy/2026-10-batch.md 8.1). Removing it is your decision. The script asks GitHub (compare API) whether the
-  target descends from the floor, and refuses if GitHub says no; when GitHub cannot be reached it relies on the
-  box's own git copy, which the service user can write (accepted: a rollback is always typed by you).
+  docs/deploy/2026-10-batch.md 8.1). Removing it is your decision. Both the box's git copy and GitHub (compare API)
+  must confirm that the target descends from the floor. When GitHub cannot confirm (offline, rate limit), the
+  rollback is refused with "GitHub can't confirm the floor"; to go ahead anyway, remove the floor deliberately
+  (`sudo rm /etc/goldbot/rollback-floor`), roll back, and set it again.
+* **Health compared with a baseline (brain).** Before the switch the script saves `goldbot run health --out
+  logs/health_before_deploy.json` (as goldbot). After the 90 s check it runs it again (`logs/health_after_deploy.json`)
+  and compares. If a check got worse (ok -> warn, warn -> fail, or a new warn/fail), the result is
+  `deployed_degraded` with the check names, also on Telegram, and the `deploy` health check warns. There is no
+  automatic rollback for this: exits keep running, and you decide (`goldbot run health`, then `--rollback` if needed).
+  Checks that need the market open look the same before and after when it is closed.
 * The health check `deploy` shows the last result.
 * **Installing a new goldbot-deploy** (when a release changes `goldbot/ops/linux/goldbot-deploy.sh`, after the
   security reviewer signed it off). Root runs it, so root never takes it from `/opt/goldbot`:

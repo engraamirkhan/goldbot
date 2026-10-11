@@ -434,6 +434,27 @@ def test_exit_code_ignores_fails_already_in_the_baseline():
     assert health.exit_code(rep("news", "supervisor"), baseline=rep("news")) == 1
 
 
+def test_worsened_names_checks_that_got_worse_than_the_baseline():
+    def rep(**st: str) -> HealthReport:
+        return HealthReport(ts=NOW, status="ok", checks=[Check(name=n, status=s, reason="x")  # type: ignore[arg-type]
+                                                         for n, s in st.items()])
+    before = rep(a="ok", b="warn", c="fail", gone="fail")
+    after = rep(a="fail", b="ok", c="fail", new="warn", other="ok")
+    assert health.worsened(after, before) == ["a", "new"]          # sorted; a check that disappeared is not worse
+    assert health.worsened(before, before) == []
+
+
+def test_cli_baseline_prints_what_got_worse(tmp_path, capsys):
+    healthy_state(tmp_path)
+    ctx = make_ctx(tmp_path)
+    out = tmp_path / "before.json"
+    assert health.main(["--out", str(out)], ctx=ctx) == 0
+    capsys.readouterr()
+    (tmp_path / "supervisor.json").unlink()
+    assert health.main(["--baseline", str(out)], ctx=ctx) == 1
+    assert "worse than the baseline: " in capsys.readouterr().err
+
+
 def test_cli_json_out_and_baseline(tmp_path, capsys):
     healthy_state(tmp_path)
     ctx = make_ctx(tmp_path)
