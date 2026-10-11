@@ -198,6 +198,53 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Orders / Deals header row in CSV, TSV, HTML or xlsx (any trade count, any stamp format) and the analyser's own
   outputs. Not built: a separate `scripts/owner_history.py` (the entry point already exists; a second one would
   drift). Needs quant and security review.
+- **Performance report: quant review fixes (2026-10-11; follow-up to 207c9ef, re-review pending).**
+  `goldbot/ops/perf_report.py` reads the record's finance-audit fields when present: `pnl_basis`, `money_source`,
+  `family`, `timeframe`, `model_version` and `decision_price`.
+  - **Net and gross columns.** Only `pnl_basis` "net" rows go into the net columns, plus legacy rows that record
+    both commission and swap. Gross rows go into the gross column and count as "net not recorded (gross only, N)".
+    Other rows count as "basis not recorded". Readings, money per day, the north star and drawdown use net rows
+    only.
+  - **Shadow table.** It reports `sum_r` (gross), and every reading is marked "(gross)". Matching ignores `taken`,
+    which becomes its own column. The model version comes from the trade's closed record (see the
+    re-verify bullet). Every unmatched proposal says why.
+  - **Calibration row.** It sets the approved signals' shadow R (gross) against their live net R. The closed trade
+    is linked by client order id = proposal id.
+  - **Limits.** They are grouped by the RiskGate's windows: the risk day from 00:00 UTC and the risk week from
+    Sunday 00:00 UTC. The section is labelled "closed-trade, lower bound" and points to a future daily risk summary.
+  - **North star.** It selects trades by their entry's opportunity day, whenever they closed. Open trades entered
+    on an opportunity day show as pending (from `state/orders_<account>.json`). Day types are labelled "(ex post)".
+    The bars come from one source, `--bars-source` (default dukascopy).
+  - **Samples.** A row is sufficient only from 30 trades with a net R. The header gives the group count and a
+    multiple-comparisons caveat. Entry slippage comes from `decision_price`.
+  - Tests: `tests/test_perf_report.py` (37), including the 22:00 boundary, several shadow versions with an untaken
+    candidate, a trade straddling the range end, and the day's own range left out of its ATR.
+- **Performance report: the model version comes from the closed record (2026-10-11; quant re-verify of a4e532f).**
+  The record lane writes `model_version` on the closed-trade record (EntryAudit), linked by client order id =
+  proposal id, not on the proposal.
+  - An approved proposal that became a trade is matched to the shadow version named on its record.
+  - Rejected and expired proposals, and approved ones without a record or a version, match the nearest p. The table
+    labels them "version inferred (nearest p)", with a count per outcome.
+  - The report now reads the typed `ClosedTrade` fields. The raw-JSON reader (`load_closed_trade_rows`) is gone, so
+    `gates_phase.load_closed_trades` is unchanged from main.
+  - Costs split the record's entry price gap into execution slippage, side x (fill - `requested_price`), and
+    approval drift, side x (`requested_price` - `decision_price`), the cost of the owner's wait.
+  - Tests: `tests/test_perf_report.py` (38). The three new tests failed against the previous code.
+- **Performance report for the analysts (2026-10-11; needs quant review).** `python -m goldbot.ops.run perf-report
+  [--state DIR] [--data-root DIR] [--from D] [--to D] [--account ID] [--out DIR] [--json]`, also
+  `scripts/performance_report.py` for a state folder copied to the Mac. It reads the state only (closed trades,
+  approvals/done and pending, shadow_book.json, population.json, engine_ and costs_ files). The optional data root
+  adds the stored bars, fills and journal. It writes `perf_<from>_<to>.md` and `.json` to `--out`, default `reports/`
+  (now gitignored), and refuses an `--out` inside the state folder or the data root. Days are opportunity days
+  (22:00 UTC rollover).
+  - Sections: net and gross R and money by family, agent, timeframe, session, side and day type; owner decisions,
+    with the shadow outcome of the rejected, expired and approved signals; realised against modelled costs;
+    opportunity-day capture against the £50 north star; drawdown against the limits; the journal.
+  - Every row carries its count. Below 30 trades a row says "insufficient sample" and gives no interval or reading.
+  - Missing fields show as "not recorded". The record's finance-audit fields are used when present.
+  - No identifiers reach the output: no position or order ids, broker or server names, proposal ids, or who
+    decided.
+  - Tests: `tests/test_perf_report.py` (22). Row V7.
 - Clearing an `engine_startup_refused` halt (2026-10-11, re-verify follow-up of LOW-D). A test now shows that a
   refused engine file, followed by a successful start and one engine state write, gives a supervisor evaluation
   without `engine_startup_refused` (the engine's first write replaces the file). The RUNBOOK's "Engines are running
