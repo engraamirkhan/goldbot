@@ -1153,6 +1153,34 @@ def check_throttle(ctx: HealthContext, account_id: str) -> list[Check]:
     return out
 
 
+def check_open_risk(ctx: HealthContext, account_id: str) -> list[Check]:
+    """BACKLOG 19/35 (review LOW-3): while the heat cap is on, or the open-risk projection is on with an absolute daily
+    limit, the engine's `open_risk` must be known; null means RiskGate refuses every entry (`open_risk_unknown`: a
+    position without SL, a conversion the broker cannot give, or a failed read). One check `open_risk:<account>`: warn
+    and tell the owner (NOTIFY_ON_WARN) while it is unknown, ok with the amount otherwise. Nothing while both rules are
+    off or the engine has not published them."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    if not f.exists():
+        return []
+    try:
+        e = _read_json(f)
+        lim = e.get("limits") or {}
+        heat = bool((lim.get("heat") or {}).get("enabled"))
+        projected = bool(lim.get("project_open_risk")) and lim.get("daily_loss_limit_abs") is not None
+        risk = e.get("open_risk")
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []                                   # check_engine reports the unreadable file
+    if not (heat or projected):
+        return []
+    rules = " and ".join(n for n, on in (("heat cap", heat), ("open-risk projection", projected)) if on)
+    name = f"open_risk:{account_id}"
+    if risk is None:
+        return [Check(name=name, status="warn",
+                      reason=f"{account_id}: open risk unknown (a position without a stop, no conversion, or a failed "
+                             f"read): every entry refused while the {rules} is on; exits unaffected")]
+    return [Check(name=name, status="ok", reason=f"{account_id}: open risk {float(risk):.2f} ({rules} on)")]
+
+
 WINDOWS_UNAVAILABLE_FAIL = pd.Timedelta(minutes=30)   # calendar_unavailable this long with the market open: FAIL
 WINDOWS_FETCH_WARN = pd.Timedelta(hours=36)            # newest calendar fetch older than this: WARN
 WINDOWS_HOLIDAY_WARN_DAYS = 90                         # holiday list ending within this many days: WARN
@@ -1478,6 +1506,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             checks += g(f"tick_errors:{i}", lambda: check_tick_errors(ctx, i))
             checks += g(f"loss_caps:{i}", lambda: check_loss_caps(ctx, i)) + g(f"order_failed:{i}", lambda: check_failed_orders(ctx, i))
             checks += g(f"throttle:{i}", lambda: check_throttle(ctx, i))
+            checks += g(f"open_risk:{i}", lambda: check_open_risk(ctx, i))
             checks += g(f"entry_windows:{i}", lambda: check_entry_windows(ctx, i))
             checks += g(f"schema_skew:{i}", lambda: check_schema_skew(ctx, i))
             checks += g(f"bridge:{i}", lambda: check_bridge(ctx, i))
@@ -1539,7 +1568,7 @@ class WatchState(Record):
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:",
-                  "throttle:", "entry_windows:", "schema_skew:")
+                  "throttle:", "entry_windows:", "open_risk:", "schema_skew:")
 
 
 def _alerting(name: str, status: str) -> bool:

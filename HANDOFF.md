@@ -5,6 +5,65 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Open-risk heat cap and open-risk daily projection (2026-10-11, BACKLOG 19 playbook G-4 and BACKLOG 35 review
+  MEDIUM-4, row R38; **both off by default**; needs trading-safety review). The engine computes, on every account
+  refresh, each open position's remaining stop risk (max(0, loss from the current close price to its SL) x lots x
+  contract x the broker's conversion, account currency; `goldbot/risk/open_risk.py`) and the positions per side, and
+  publishes `open_risk` (null = unknown), `open_risk_positions`, `open_long`, `open_short`, `limits.heat` and
+  `limits.project_open_risk` in engine_<account>.json. `risk.heat: {enabled: false, max_open_risk: 0.02,
+  max_same_direction: 2}`: RiskGate refuses `heat_cap` when open risk + the new trade's stop risk > 2% of equity and
+  `same_direction_cap` at the third same-side position on the account (any agent, or the owner). `risk.project_open_risk:
+  false`: when true and the account has `daily_loss_limit_abs`, the daily projection adds the open risk. A position
+  without SL, on another symbol, or without a usable conversion makes the open risk unknown: `open_risk_unknown` while
+  either rule is on (fail closed). Exits never consult any of it. Owner: settings.local.yaml `risk: { heat: { enabled:
+  true, ... }, project_open_risk: true }`, restart the engine. Not done: the cross-account sum and count (the
+  supervisor does not publish open risk or side counts yet), health lines and the dashboard budget (ui-ux).
+- Auto entries at one bar close each see the previous fill (2026-10-11, trading-safety review HIGH on BACKLOG 19,
+  pre-existing; row R38). Before, in auto mode every entry decided at one bar close was checked against the account as
+  read before the first one filled, so `max_positions`, the combined cap, the heat cap and the same-direction cap could
+  each be passed within a bar close (propose mode was safe: the approval re-check reads afresh). Now
+  `Engine._after_auto_order` re-reads the account after each auto order (`_refresh_account` on the broker's last
+  tick); a fill the positions read does not show yet is added conservatively (one more position on its side, its
+  lots, the gate's margin, its stop risk); an ambiguous result (neither a fill nor a definite reject,
+  `DEFINITE_REJECT_RETCODES`) or a failed re-read stops auto entries for the rest of that bar close, journalled as
+  `auto_paused:unconfirmed_order` / `auto_paused:account_unread`. Two timeframes closing together share it.
+  Re-verification LOW-B: an auto entry that did not fill is journalled `auto_rejected:<retcode>` (definite reject,
+  nothing placed) or `auto_unconfirmed:<retcode>`, never `executed:auto`; 10032 (only real accounts) and 10046 (hedge
+  prohibited) joined `DEFINITE_REJECT_RETCODES`, now an explicit list of defined codes (review LOW-1: undefined codes such as 10037 or 10047 are ambiguous). LOW-C: a `place_order` that raises (bridge timeout, terminal error)
+  no longer aborts the bar close: auto entries pause for it (`_auto_paused = (close, "order_raised")`), the error is
+  counted through `note_tick_error` (entries blocked until a clean decision bar), the decision is journalled
+  `auto_unconfirmed:<ExceptionType>`, and its pending_orders row stays `sending`, so it is never re-sent and a position
+  that did open is picked up by reconciliation (adopted in this engine's magic range) or by the restart check.
+  Review MEDIUM-2 (of 2c1935f): that `sending` row used to survive the adoption, so a restart recovered the send again
+  and replaced the adopted trade (stop back to the entry stop, bars_held and scaled reset), after which the exit
+  policy could send a stop looser than the broker's. Now (a) `_adopt` marks a matching unfilled row filled with its
+  position and `_reconcile` saves; (b) `_resolve_sent` (shared by `_load_orders` and the in-process path) keeps a trade
+  the open table already holds and only marks its row filled (`reconcile_sent_known`); (c) `_manage_policies` sends a
+  modify only when the new stop is tighter than both the engine's and the broker's (side-aware; a looser engine copy is
+  raised to the broker's); (d) `_resolve_stale_sending` resolves rows still `sending` after `SENDING_RESOLVE_S` (60 s)
+  in `_reconcile`, from the same positions and deals lookup (tests/test_sending_row_recovery.py: raise, adopt, tighten,
+  restart; no looser modify; bars_held and scaled kept; shorts; the control still tightens).
+- Open-risk review LOWs (2026-10-11, row R38): LOW-1 a failure computing the open risk sets it unknown and never
+  aborts the account refresh, and a failed account read at the bar close no longer skips `_manage_open` (exits still
+  run, then the error propagates and no entry is decided on that close: the base branch's review-L3 rule, kept at the
+  merge); LOW-2 `AccountState.open_risk` defaults to unknown
+  (None) until the engine has read the positions; LOW-3 health `open_risk:<account>` warns and tells the owner on
+  Telegram (`NOTIFY_ON_WARN`) while the open risk is unknown and the heat cap, or the projection with an absolute limit,
+  is on; LOW-4 "per account vs combined same-side count" is an owner decision in OWNER_GUIDE section 4.
+- MT5 adapter reports the position ticket, not the deal ticket (2026-10-11, trading-safety re-verification MEDIUM-A):
+  `place_order` returned `position_id=res.deal`, but an MT5 position's ticket is its opening ORDER's, so the engine
+  keyed `self.open` by a number the terminal never lists (a phantom close at the next sweep, the real position adopted
+  as an orphan). `mt5_adapter._position_ticket` now reads the order's deals (`history_deals_get(ticket=res.order)`:
+  MT5's `ticket=` selects by ORDER, review MEDIUM-1) and takes `position_id` from the deal whose ticket is `res.deal`
+  (right on netting accounts too), else falls back to `res.order`; an older order numbered like the fill's deal is
+  never taken. The terminal account must also be **hedging**: `AccountInfo.margin_mode` (MT5 ACCOUNT_MARGIN_MODE_*)
+  and `accounts.verify_terminal_account` refuse netting, exchange or an unreported mode at start, on every order and in
+  preflight, since fills on a netting account join one position per symbol. An older bridge does not report the mode,
+  so **update the MT5 bridge before the brain** or the engine refuses to start (open positions keep their broker
+  stops). Bridge protocol v4 (`API_VERSION = 4`, `MIN_COMPATIBLE = 3`; a v3 brain ignores the new field). Tests on a fake terminal whose deal and
+  order tickets differ (tests/test_mt5_position_ticket.py, including the engine keying and a sweep + reconcile that
+  keep the trade). **Verify on the demo terminal:** after the first demo fill, the engine's `open` position id and the
+  `adopt_orphan` count in the decisions journal (expected: the terminal's position ticket, no orphan adopted).
 - Conflict-free docs (2026-10-11, ADR 0012; speed-up review items 1-2): HANDOFF.md, docs/TRACEABILITY.md and
   docs/BACKLOG.md are now generated by `scripts/docs_assemble.py` from one file per change: `docs/handoff.d/`
   (dated bullets, newest first), `docs/traceability.d/` (one YAML per row; counts computed) and `docs/backlog.d/`

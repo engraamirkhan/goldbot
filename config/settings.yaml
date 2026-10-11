@@ -80,6 +80,18 @@ risk:
   # day (00:00 UTC) it refuses `throttle_entry_rate`. Entries only: exits are never gated. OFF until the owner sets the
   # thresholds (these are the playbook's proposal, not decisions).
   throttle: { enabled: false, loss_streak: 3, cooldown_bars: 4, max_entries_per_day_per_agent: 3 }
+  # Open-risk heat cap (BACKLOG 19, playbook G-4), per account, checked at every entry: RiskGate refuses `heat_cap` when
+  # the open positions' remaining stop risk (each: loss from the current price to its SL x lots x contract x fx, in the
+  # account currency) plus this trade's stop risk exceeds `max_open_risk` x equity, and `same_direction_cap` once
+  # `max_same_direction` positions on the entry's side are open, whichever agent (or the owner) opened them. A position
+  # without SL, or a conversion the broker cannot give, makes the open risk unknown: entries are refused
+  # (`open_risk_unknown`). Entries only: exits are never gated. OFF until the owner sets the values.
+  heat: { enabled: false, max_open_risk: 0.02, max_same_direction: 2 }
+  # BACKLOG 35: when the account has an absolute daily loss limit (`daily_loss_limit_abs` in config/accounts.yaml), the
+  # projection becomes loss so far + open positions' remaining stop risk + this trade's stop risk, so two open trades
+  # cannot carry the day past the limit (refused `daily_loss_limit_abs`; unknown open risk `open_risk_unknown`).
+  # Entries only. OFF until the owner adopts it.
+  project_open_risk: false
   # Reopen window (BACKLOG 17, playbook G-2): entries refused `reopen_window` for after_daily_reopen_min minutes after
   # each daily reopen and after_monday_open_min after the weekly open (or any reopen after a closure of 12 h or more),
   # read from the broker session table (DST follows the server clock). Entries only. OFF until the owner adopts it.

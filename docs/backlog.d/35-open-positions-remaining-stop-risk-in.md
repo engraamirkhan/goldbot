@@ -13,3 +13,7 @@ status: proposed (after 29; trading-safety review)
   position, max(0, loss from the current price to its stop) x lots x contract x fx; a test with one open position
   whose remaining stop risk plus the new trade's exceeds the limit is refused; exits never consult it. Relates to
   19 (heat cap); trading-safety review.
+  **Built 2026-10-11, off by default (TRACEABILITY R38):** `risk.project_open_risk: false`; when true and the
+  account has `daily_loss_limit_abs`, the projection is loss so far + open risk + this trade's risk; unknown open risk
+  refuses (`open_risk_unknown`). The engine publishes `open_risk` and `open_risk_positions` in engine_<account>.json
+  (dashboard budget: ui-ux follow-up). Owner: adopt or not. Needs trading-safety review.

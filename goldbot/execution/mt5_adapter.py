@@ -77,6 +77,24 @@ def _positions_get(**kw: Any) -> Any:
     return got
 
 
+def _position_ticket(res: Any) -> int:
+    """The position a filled market order opened or joined (trading-safety MEDIUM-A). In MT5 a position's ticket is the
+    ticket of the ORDER that opened it, never the deal's. `history_deals_get(ticket=X)` selects the deals of ORDER X
+    (review MEDIUM-1: asking with the deal ticket would return an unrelated older order's deals), so the order's deals
+    are read and the one whose ticket is the fill's (`res.deal`) names the position, which is also right on a netting
+    account where the fill joins an existing position. When that deal cannot be read (None, empty, an error, not
+    synced yet) the order ticket, which is the position's on a hedging account. Verify on the demo terminal."""
+    pid = 0
+    try:
+        for d in mt5.history_deals_get(ticket=res.order) or ():
+            if int(d.ticket) == int(res.deal):
+                pid = int(d.position_id)
+                break
+    except Exception:                                   # the order ticket is still the right answer on hedging
+        pid = 0
+    return pid if pid > 0 else int(res.order)
+
+
 def _send_failed(position_id: int) -> OrderResult:
     """order_send returned None (a terminal error): a refused result the engine retries, never a crash."""
     return OrderResult(ok=False, retcode=-1, order_id=None, position_id=position_id, filled_lots=0.0, price=None,
@@ -205,8 +223,9 @@ class MT5Broker:
     def account(self) -> AccountInfo:
         a = mt5.account_info()
         mode = {0: "demo", 1: "contest", 2: "real"}.get(int(getattr(a, "trade_mode", -1)))   # ACCOUNT_TRADE_MODE_*
+        margin = {0: "netting", 1: "exchange", 2: "hedging"}.get(int(getattr(a, "margin_mode", -1)))  # ACCOUNT_MARGIN_MODE_*
         return AccountInfo(login=a.login, equity=a.equity, balance=a.balance, margin=a.margin, margin_free=a.margin_free, leverage=a.leverage, currency=a.currency, server=a.server,
-                           trade_mode=mode)
+                           trade_mode=mode, margin_mode=margin)
 
     # ------------------------------------------------------------------ data
     def _mt5_time(self, utc: pd.Timestamp) -> datetime:
@@ -317,7 +336,7 @@ class MT5Broker:
                 return OrderResult(ok=False, retcode=getattr(chk, "retcode", -1), order_id=None, position_id=None, filled_lots=0.0, price=None, message=f"order_check: {getattr(chk, 'comment', '')}")
             res = mt5.order_send(req)
             if res is not None and res.retcode == RETCODE_DONE:
-                return OrderResult(ok=True, retcode=res.retcode, order_id=res.order, position_id=res.deal, filled_lots=res.volume, price=res.price, message=res.comment)
+                return OrderResult(ok=True, retcode=res.retcode, order_id=res.order, position_id=_position_ticket(res), filled_lots=res.volume, price=res.price, message=res.comment)
             if res is not None and res.retcode in (RETCODE_REQUOTE, RETCODE_REJECT) and attempt < 2:
                 time.sleep(0.5)
                 tick = mt5.symbol_info_tick(intent.symbol)

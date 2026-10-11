@@ -291,6 +291,12 @@ execution items need trading-safety review. Feature items need quant review.
   closed). Owner: adopt. Needs trading-safety review (and quant review of the claims re-tiering).
 - **19 (G-4).** Sum of open risk in R per account and combined ≤ the configured cap. Same-side positions of
   different agents count as one bet. Gate test on each side of the cap.
+  **Built 2026-10-11, off by default (TRACEABILITY R38):** `risk.heat: {enabled: false, max_open_risk: 0.02,
+  max_same_direction: 2}`, per account: `heat_cap` when the open positions' remaining stop risk (account currency) plus
+  this trade's exceeds `max_open_risk` x equity; `same_direction_cap` past N same-side positions on the account,
+  whichever agent opened them; a position without SL or conversion refuses (`open_risk_unknown`). Not done: the
+  combined (cross-account) sum and count, which needs the supervisor to publish them. Owner: set the values and
+  enable. Needs trading-safety review.
 - **20 (G-5).** Monthly bootstrap of shadow or backtest R at live risk settings: P(8%), P(12%), P(weekly cap) in
   6 and 12 months. Reporting only. Golden test on a fixed seed.
 - **21 (G-6).** After 3 consecutive full stop-outs in a risk day, or more than N entries in a session, an agent
@@ -518,6 +524,10 @@ hypotheses that go through the trial registry in a future quarter's budget.
   position, max(0, loss from the current price to its stop) x lots x contract x fx; a test with one open position
   whose remaining stop risk plus the new trade's exceeds the limit is refused; exits never consult it. Relates to
   19 (heat cap); trading-safety review.
+  **Built 2026-10-11, off by default (TRACEABILITY R38):** `risk.project_open_risk: false`; when true and the
+  account has `daily_loss_limit_abs`, the projection is loss so far + open risk + this trade's risk; unknown open risk
+  refuses (`open_risk_unknown`). The engine publishes `open_risk` and `open_risk_positions` in engine_<account>.json
+  (dashboard budget: ui-ux follow-up). Owner: adopt or not. Needs trading-safety review.
 - **36. Costs in the daily projection (trading-safety review LOW-6).** Value: a full stop-out also pays the
   spread, commission and (overnight) swap, about £0.25 on a 0.01 lot, so the projection understates a full loss by
   ~3% at £1,000 (RUN). Acceptance: the projected risk adds the round-trip cost in account currency from the cost
