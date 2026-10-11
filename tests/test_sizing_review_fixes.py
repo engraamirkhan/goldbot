@@ -265,8 +265,8 @@ def test_an_unconverted_own_fill_pnl_is_recorded_in_usd_with_a_flag_and_kept_out
                                               equity_before=1_000.0, position_id=99))
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"account": "icm-demo", "currency": "GBP"}))
     line = trades_line(tmp_path, T0, T0 + pd.Timedelta(days=1))[0]
-    assert "net +$5.00" in line                                                 # the formatter's symbol; only the £5
-    assert "10.90" not in line and "5.90" not in line and "1 in USD not summed" in line
+    assert "net +£5.00 · -$10.90" in line                       # each currency summed on its own, never together
+    assert "5.90" not in line
 
 
 def test_a_converted_gbp_trade_states_its_currency_is_not_flagged_and_is_summed(tmp_path):
@@ -293,7 +293,7 @@ def test_a_converted_gbp_trade_states_its_currency_is_not_flagged_and_is_summed(
     assert r_understated(legacy, "GBP")                                         # a pre-fix record keeps its flag
     eng._write_state()                                                          # engine file: currency GBP
     line = trades_line(tmp_path, T0, T0 + pd.Timedelta(days=1))[0]
-    assert f"net +${30.0 / 1.33:,.2f}" in line and "not summed" not in line
+    assert f"net +£{30.0 / 1.33:,.2f}" in line and "$" not in line
 
 
 # ---------------------------------------------------------------------------------------------- LOW-2
