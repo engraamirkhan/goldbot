@@ -170,10 +170,13 @@ and the rest still arrives. It never contains account numbers or emails.
 * The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
   release note mentions the bridge.
   Deploys there never upgrade Python packages (`--no-deps`). An MT5 box set up before ADR 0010 needs pydantic 2.12 or
-  newer, which you install once by hand:
-  `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install 'pydantic>=2.12'`, then
-  `sudo systemctl restart 'goldbot-bridge@*'`. Today the bridge does not need it to run; the bridge follow-up in HANDOFF
-  will.
+  newer before the bridge follow-up in HANDOFF is deployed (today's bridge runs without it). Do it once, by hand,
+  **with the book flat or at the weekend** (restarting the bridge cuts the engine off from the terminal for a moment):
+  1. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install 'pydantic>=2.12'`
+  2. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -c "import pydantic; print(pydantic.VERSION)"`
+     must print 2.12 or newer.
+  3. `sudo systemctl restart goldbot-bridge@icm-demo` (one unit per account; repeat for each), then
+     `systemctl is-active goldbot-bridge@icm-demo` must print `active`.
 * By hand on either VM: `sudo goldbot-deploy latest` (or a specific commit id). Same checks, same rollback.
   Run it inside `tmux` (`tmux new -s deploy`; after a dropped connection, `tmux attach -t deploy`), or as
   `sudo systemd-run --wait --pty --unit goldbot-deploy-manual /usr/local/sbin/goldbot-deploy <args>`. The script

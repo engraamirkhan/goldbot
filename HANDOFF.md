@@ -935,7 +935,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `mt5_bootstrap.sh` pins `pydantic>=2.12`; an existing MT5 box is upgraded once by hand (RUNBOOK 0.5).
   **Follow-up:** `goldbot/execution/bridge.py` `_decode` (:126): records coming back from the MT5 box (Position,
   Tick, BrokerTerms, TradingSession) can be read tolerantly, because the MT5 box is updated by hand and can run a
-  different version from the brain. `OrderIntent` (an order request) stays strict. Needs the MT5 box on pydantic 2.12.
+  different version from the brain. `OrderIntent` (an order request) stays strict. Needs the MT5 box on pydantic 2.12
+  (RUNBOOK 0.5: book flat or weekend, version check, `systemctl is-active`).
+  Review LOWs (2026-10-11): a refused decision is logged once per proposal and counted (`base.note_schema_skew`), and
+  an unknown top-level table in `orders_<account>.json` is logged and counted at engine start; S12 now requires a
+  reviewed rollback story for a new table that carries client ids or broker orders.
 - H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
   (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
   version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London

@@ -2,12 +2,14 @@
 order ids, reconciliation of stops, weekend/rollover windows, the combined exposure cap, the supervisor's combined
 size-down, feature-version checks, stale data and the 12% re-arm conditions."""
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from goldbot.base import schema_skew
 from goldbot.engine import Engine, EngineConfig
 from goldbot.execution.broker import OrderIntent, OrderResult, Tick
 from goldbot.execution.paper import PaperBroker
@@ -101,6 +103,20 @@ def test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote(t
     assert again._closes == [] and 999 in {t.position_id for t in load_closed_trades(tmp_path)[0]}   # written on start
     again._execute(_prop("icm-demo-1-a"), agent, 0.1, 2396.0, 2406.0, requested=2400.2)
     assert len(pb.positions()) == 1                                    # never re-sent
+
+
+def test_a_restart_warns_about_an_orders_file_table_this_release_does_not_know(tmp_path, caplog):
+    """ADR 0010: a top-level table a newer release added to the orders file (it could hold client ids or broker
+    orders) is not read by this release, so the start says so instead of dropping it silently."""
+    eng, pb = _engine(tmp_path)
+    eng._execute(_prop("icm-demo-1-a"), SPECIALISTS["session_open"](), 0.1, 2396.0, 2406.0, requested=2400.2)
+    path = tmp_path / "orders_icm-demo.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "brackets": {"x": 1}}))
+    caplog.set_level(logging.WARNING, logger="goldbot.base")
+    again, _ = _engine(tmp_path, pb)
+    assert "icm-demo-1-a" in again.sent_ids
+    assert [r for r in caplog.records if "brackets" in r.getMessage()]
+    assert schema_skew()[("orders_<account>.json", "orders file", ("brackets",))] >= 1
 
 
 def test_a_restart_archives_an_expired_proposal_a_newer_release_wrote(tmp_path):

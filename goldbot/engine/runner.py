@@ -27,7 +27,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
-from goldbot.base import Record, UtcTimestamp, load_record, load_record_json, write_atomic
+from goldbot.base import Record, UtcTimestamp, load_record, load_record_json, note_schema_skew, write_atomic
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_cache
 from goldbot.data.econ_calendar import blackout_window
@@ -1761,6 +1761,8 @@ class Engine:
         d = json.loads(path.read_text())          # unreadable -> fail loudly rather than forget what was sent
         # ADR 0010 (rollback = restart): fields a newer release added are dropped, a wrong type still fails loudly
         src = "orders_<account>.json"
+        if extra := sorted(set(d) - {"sent", "open", "closing", "records_lost"}):
+            note_schema_skew(src, "orders file", extra)      # a newer release's table: not read here (S12)
         self._orders = {k: load_record(SentOrder, v, source=src) for k, v in d.get("sent", {}).items()}
         self.sent_ids = set(self._orders)
         self.open = {int(k): load_record(OpenTrade, v, source=src) for k, v in d.get("open", {}).items()}
