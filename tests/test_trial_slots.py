@@ -21,6 +21,7 @@ from goldbot.research.registry import (
     is_trial,
     quarter_trials,
 )
+from goldbot.specialists import SPECIALISTS
 
 Q = "2027Q1"
 BUDGET = 20
@@ -209,11 +210,11 @@ def test_a_slot_claim_with_the_wrong_rank_or_parent_is_refused(tmp_path, monkeyp
     _pre(reg, "tsmom", by_number, slot_ref=slots["survivor"][0])
     with pytest.raises(TrialBudgetExceeded, match="from_discovery"):
         _check(reg, by_number)
-    not_a_cluster = {**_survivor_cfg(disc, "H-05", v=2), SURVIVOR_KEY: "volatility", "features": MEMBERS["volatility"]}
+    not_a_cluster = {**_survivor_cfg(disc, "H-05"), SURVIVOR_KEY: "volatility", "features": MEMBERS["volatility"]}
     _pre(reg, "tsmom", not_a_cluster, slot_ref=slots["survivor"][1])
     with pytest.raises(TrialBudgetExceeded, match="rank"):
         _check(reg, not_a_cluster)
-    ok1, ok2 = _survivor_cfg(disc, "H-05", v=3), _survivor_cfg(disc, "H-03", v=3)
+    ok1, ok2 = _survivor_cfg(disc, "H-05"), _survivor_cfg(disc, "H-03")
     _pre(reg, "tsmom", ok1, slot_ref=slots["survivor"][0])
     _pre(reg, "tsmom", ok2, slot_ref=slots["survivor"][1])
     _, preregs = reg.check_budget_reserved([("tsmom", ok1), ("tsmom", ok2)], BUDGET, 9, now=FEB, retired=RETIRED)
@@ -344,7 +345,7 @@ def test_a_holdout_slot_is_live_only_after_survivor_k_passed_its_gates(tmp_path,
     assert _check(reg, c1, setting=11, now=feb10) == [h1]
     other = {**c1, "v": 9}                                       # a holdout of another config is not survivor 1's
     _pre(reg, "tsmom", other, slot_ref=hold[0])
-    with pytest.raises(TrialBudgetExceeded, match="survivor trial"):
+    with pytest.raises(TrialBudgetExceeded, match="keys|survivor trial"):
         _check(reg, other, setting=11, now=feb10)
 
 
@@ -379,16 +380,18 @@ def test_a_followup_slot_fixes_its_family_and_configs_before_the_quarter(tmp_pat
     reg.record_verdict(h01_run, "continue", "pre-registered reading rule met (net t 1.9, 4 positive years)")
     rows = reg._rows()
     assert [slot_state(rows, f) for f in (f1, f2)] == ["live", "live"]
+    exact = {**SPECIALISTS["tsmom"].default_config, "preset": "slow", "exit": "c5"}
     for fam, cfg, slot, why in (("asia_drift", allowed, f1, "family"), ("tsmom", {"preset": "fast"}, f1, "allowed"),
-                                ("tsmom", {"preset": "slow", "exit": "c4"}, f2, "allowed")):
+                                ("tsmom", {**exact, "exit": "c4"}, f2, "allowed"),
+                                ("tsmom", {**exact, "target_atr": 9.0}, f2, "allowed"),         # probe 6: a superset
+                                ("tsmom", {"preset": "slow", "exit": "c5", "max_bars": 500}, f2, "allowed")):
         _pre(reg, fam, cfg, slot_ref=slot)
         with pytest.raises(TrialBudgetExceeded, match=why):
             _check(reg, cfg, family=fam)
     p1 = _pre(reg, "tsmom", allowed, slot_ref=f1)
     assert _check(reg, allowed) == [p1]
-    ok2 = {"preset": "slow", "exit": "c5", "max_bars": 124}
-    p2 = _pre(reg, "tsmom", ok2, slot_ref=f2)
-    assert _check(reg, ok2) == [p2]
+    p2 = _pre(reg, "tsmom", exact, slot_ref=f2)                  # default_config + the overrides, exactly
+    assert _check(reg, exact) == [p2]
 
 
 def test_an_evaluator_verdict_is_not_a_trial_is_final_and_a_stop_frees_the_followups(tmp_path, monkeypatch):
@@ -435,3 +438,71 @@ def test_quant_table_13_locks_8_and_9_with_slots_locks_none_when_4_survivors_run
         return BUDGET - used
     assert locked(13, False, tmp_path / "a") == 8
     assert locked(9, True, tmp_path / "b") == 0
+
+
+def test_a_survivor_claim_with_keys_outside_the_spec_and_the_tags_is_refused(tmp_path, monkeypatch):
+    """Probe 5: another bars window or model parameters are not the derived configuration."""
+    reg, queued, slots = _plan(tmp_path, monkeypatch, n_slots=1)
+    disc = _run_queued(reg, queued, ["H-05"])
+    _clock(monkeypatch, 2027, 2, 1)
+    cfg = {**_survivor_cfg(disc, "H-05"), "bars_from": "2018-01-01", "max_depth": 12, "min_score": 0.1}
+    _pre(reg, "tsmom", cfg, slot_ref=slots["survivor"][0])
+    with pytest.raises(TrialBudgetExceeded, match=r"keys \['bars_from', 'max_depth', 'min_score'\]"):
+        _check(reg, cfg)
+
+
+def test_record_verdict_refuses_a_discovery_row(tmp_path, monkeypatch):
+    """Probe 2: a discovery is read by its own recorded verdict; a verdict row could not flip a STOP."""
+    reg, queued, slots = _plan(tmp_path, monkeypatch, n_slots=1)
+    disc = _run_queued(reg, queued, ["H-05"], verdict=_verdict("stop", 0.50, 0.47))
+    _clock(monkeypatch, 2027, 2, 1)
+    with pytest.raises(ValueError, match="discovery"):
+        reg.record_verdict(disc, "continue", "flip attempt")
+    assert slot_state(reg._rows(), slots["survivor"][0]) == "expired"
+
+
+def _screened(reg: TrialRegistry, family: str, config: dict[str, Any], screen: dict[str, Any],
+              split: dict[str, Any] | None = None) -> dict[str, Any]:
+    row = {"trial": reg.n_trials + 1, "ts": f"2027-01-{20 + reg.n_trials % 9:02d}T00:00:00+00:00", "agent_id": "a",
+           "family": family, "config_hash": config_hash(config), "config": config, "feature_version": "f",
+           "status": "screened", "results": {"screen": screen, "rule_only_split": split}}
+    reg._append(row)
+    return row
+
+
+def _scr(verdict: str, n: int, gross_t: float, net_mean_r: float, net_t: float) -> dict[str, Any]:
+    return {"verdict": verdict, "passed": verdict == "pass", "n": n, "gross_t": gross_t, "gross_mean_r": 0.05,
+            "net_mean_r": net_mean_r, "net_t": net_t, "min_events": 150}
+
+
+def _split(long_r: float, long_t: float, n_pos: int, chop: bool) -> dict[str, Any]:
+    return {"long": {"n": 120, "mean_r": long_r, "t_stat": long_t}, "short": {"n": 40},
+            "n_positive_years": n_pos, "chop_year_positive": chop}
+
+
+@pytest.mark.parametrize("family,config,screen,split,decision", [
+    # H-04 (asia_drift): continue iff gross t >= 2.0 on >= the floor's events AND net mean R > 0
+    ("asia_drift", {"stop_atr": 1.5}, _scr("pass", 4000, 2.4, 0.02, 1.0), None, "continue"),
+    ("asia_drift", {"stop_atr": 1.5}, _scr("pass", 4000, 2.4, -0.01, -0.3), None, "stop"),
+    ("asia_drift", {"stop_atr": 1.5}, _scr("fail", 4000, 1.1, 0.02, 0.5), None, "stop"),
+    ("asia_drift", {"stop_atr": 1.5}, _scr("inconclusive (event floor)", 400, 2.5, 0.05, 1.0), None, "inconclusive"),
+    # H-01 (tsmom, signal_tf 1d)
+    ("tsmom", {"signal_tf": "1d"}, _scr("fail", 300, 1.0, 0.05, 1.0), _split(0.1, 2.0, 4, True), "stop"),
+    ("tsmom", {"signal_tf": "1d"}, _scr("inconclusive (event floor)", 120, 2.5, 0.1, 2.0), None, "inconclusive"),
+    ("tsmom", {"signal_tf": "1d"}, _scr("pass", 300, 2.5, -0.02, -0.5), _split(0.1, 2.0, 4, True), "stop"),
+    ("tsmom", {"signal_tf": "1d"}, _scr("pass", 300, 2.5, 0.05, 1.2), _split(0.1, 2.0, 4, True), "inconclusive"),
+    ("tsmom", {"signal_tf": "1d"}, _scr("pass", 300, 2.5, 0.05, 1.9), _split(0.1, 2.0, 2, True), "inconclusive"),
+    ("tsmom", {"signal_tf": "1d"}, _scr("pass", 300, 2.5, 0.05, 1.9), _split(-0.01, 2.0, 4, True), "inconclusive"),
+    ("tsmom", {"signal_tf": "1d"}, _scr("pass", 300, 2.5, 0.05, 1.9), _split(0.1, 1.8, 4, True), "continue"),
+    # tsmom 4h continuity: net mean R <= 0 retires the horizon
+    ("tsmom", {"timeframe": "4h", "max_bars": 12}, _scr("fail", 2000, 0.4, -0.03, -1.0), None, "stop"),
+])
+def test_record_verdict_on_a_screened_row_must_be_the_preregistered_decision(tmp_path, family, config, screen,
+                                                                          split, decision):
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    row = _screened(reg, family, config, screen, split)
+    for other in sorted({"continue", "stop", "inconclusive"} - {decision}):
+        with pytest.raises(ValueError, match="pre-registered decision"):
+            reg.record_verdict(row, other, "a reading that does not follow the rule")
+    v = reg.record_verdict(row, decision, "computed from the recorded results")
+    assert v["decision"] == decision and v["rule_checked"] is True

@@ -898,6 +898,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
+  (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
+  version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London
+  extremes; H-10 jumps only), a before-look check that each cluster has an informative column, and the size-neutral
+  joint permutation group measure (group_top_k 3). Follow-up slots need an exact default+overrides config;
+  `record_verdict` refuses discovery rows and checks screened rows against the pre-registered decision; survivor claims
+  may carry only spec keys + tags; E-5 manual rows record `rule_ref` (`research_pass.py --rule-ref`). Open before the
+  freeze: H-10's news / no-news split (opt-in `jump_news` + calendar into `--discover`) if wanted.
 - Contingent trial slots and withdrawal (2026-10-10, ADR 0007, quant ruling on the Q1 reservation): `reserved_trials_quarter`
   13 -> **9** (5 queued + 4 H-02 survivor slots); 13 would have locked 8 of 20 Q1 trials all quarter. New
   `TrialRegistry.reserve_slot(parent_ref, kind, k, derivation_rule, target_quarter)` (survivor / followup / holdout,

@@ -132,7 +132,7 @@ def test_without_macro_data_the_feature_is_all_nan_with_a_fixed_column_set():
     X = build_features(bars, ["macro_drivers"], {})
     assert list(X.columns.drop("ts_utc")) == ["macro_real_yield_chg20", "macro_real_yield_z252", "macro_dollar_chg20",
                                               "macro_gvz", "macro_gvz_chg20", "macro_vix", "macro_vix_chg5",
-                                              "macro_spx_dd20"]
+                                              "macro_spx_dd20", "macro_vrp"]
     assert X.drop(columns=["ts_utc"]).isna().all().all()
 
 

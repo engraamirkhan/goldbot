@@ -195,7 +195,7 @@ class TrialRegistry:
 
     def record(self, *, agent_id: str, family: str, config: dict, feature_version: str, rationale: str,
                results: dict, status: str = "evaluated", budget_quarter: str | None = None,
-               preregistration: dict[str, Any] | None = None) -> dict:
+               preregistration: dict[str, Any] | None = None, rule_ref: str | None = None) -> dict:
         row: dict[str, Any] = {
             "trial": self.n_trials + 1,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -204,6 +204,8 @@ class TrialRegistry:
         }
         if budget_quarter is not None:
             row["budget_quarter"] = budget_quarter
+        if rule_ref:
+            row["rule_ref"] = rule_ref          # the pre-registered rule a manual run cites (director.cited_rule)
         if preregistration is not None:
             row["preregistration"] = {"ts": preregistration["ts"], "trial": preregistration["trial"],
                                       "config_hash": preregistration["config_hash"]}
@@ -382,9 +384,11 @@ class TrialRegistry:
         "verdict" row naming the trial. Not a trial: no budget, no deflated-Sharpe count. A rule-only parent (H-01,
         H-04, the tsmom 4h continuity trial) writes no reading verdict itself, so its follow-up slots go live only on
         this row's "continue" (`director._Ledger.slot_state`); a discovery's own recorded reading verdict is never
-        replaced by one. The first verdict of a trial is final (ValueError for a second, an unknown trial or decision,
-        or an empty reason)."""
-        from goldbot.research.director import verdict_of
+        replaced by one: a discovery row is refused. For a `screened` row the decision must be the one its
+        pre-registered rule gives on the recorded results (`director.preregistered_decisions`: H-01, H-04, tsmom 4h,
+        else the screen itself); a mismatch is refused and the row records `rule_checked`. The first verdict of a
+        trial is final (ValueError for a second, an unknown trial or decision, or an empty reason)."""
+        from goldbot.research.director import preregistered_decisions, verdict_of
         if decision not in VERDICT_DECISIONS:
             raise ValueError(f"a verdict decision is one of {VERDICT_DECISIONS}, got {decision!r}")
         if not reason.strip():
@@ -393,12 +397,23 @@ class TrialRegistry:
         target = next((r for r in rows if is_trial(r) and refers_to(row_ref(ref), r)), None)
         if target is None:
             raise ValueError(f"no trial row {row_ref(ref)} in {self.path}")
+        if target.get("status") == DISCOVERY:
+            raise ValueError(f"trial #{target.get('trial')} is a discovery: it is read by its own recorded reading "
+                             f"verdict, never by a verdict row")
         if verdict_of(rows, target) is not None:
             raise ValueError(f"trial #{target.get('trial')} already has its verdict: it is final")
+        checked = target.get("status") == "screened"
+        if checked:
+            allowed, which = preregistered_decisions(target)
+            if decision not in allowed:
+                raise ValueError(f"trial #{target.get('trial')}: {decision!r} is not the pre-registered decision; "
+                                 f"the {which} rule gives {sorted(allowed)} on the recorded results")
+            rule = rule or which
         row: dict[str, Any] = {
             "trial": self.n_trials + 1, "ts": self._stamp().isoformat(), "agent_id": agent_id,
             "family": target.get("family"), "config_hash": target.get("config_hash"), "status": VERDICT,
-            "verdict_of": row_ref(target), "decision": decision, "reason": reason, "rule": rule, "results": {},
+            "verdict_of": row_ref(target), "decision": decision, "reason": reason, "rule": rule,
+            "rule_checked": checked, "results": {},
         }
         self._append(row)
         return row
