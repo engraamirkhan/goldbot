@@ -1,0 +1,5 @@
+id: M1
+requirement: 'Specialist table: barriers, timeframes and time limits (trend 2.5/1.25 48 h, mean-rev 1.0/1.5 12 bars, breakout 2.0/1.0 24 h, session-open 1.5/1.0 16 bars)'
+status: implemented
+code: goldbot/specialists/{trend,mean_reversion,breakout,session_open}.py `default_config`
+test: tests/test_trace_data_exec.py::test_specialist_barriers_match_the_modelling_table

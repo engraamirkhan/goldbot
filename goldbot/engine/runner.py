@@ -27,7 +27,15 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
-from goldbot.base import Record, UtcTimestamp, load_record, load_record_json, note_schema_skew, write_atomic
+from goldbot.base import (
+    Record,
+    UtcTimestamp,
+    load_record,
+    load_record_json,
+    note_schema_skew,
+    schema_skew_summary,
+    write_atomic,
+)
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_cache
 from goldbot.data.econ_calendar import blackout_window
@@ -51,11 +59,19 @@ from goldbot.ops.bridge_compat import BridgeCompat
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
-from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, sizing
+from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, open_risk, sizing
 from goldbot.risk.gate import REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
-from goldbot.risk.windows import HolidayList, calendar_gap, load_holidays, reopen_window, server_date
+from goldbot.risk.windows import (
+    HolidayList,
+    calendar_gap,
+    holiday_end,
+    load_holidays,
+    reopen_window,
+    reopen_window_end,
+    server_date,
+)
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal, ceil_cent
 
@@ -66,6 +82,24 @@ APPROVED_RISK_TOLERANCE = 1.02   # ADR 0009: the risk sent may exceed the approv
 # close refused with one of these is backed off; any other failure (requote 10004/10021, price changed 10020, a
 # raising call) is retried on the next tick, so an exit is never delayed by a transient refusal
 MARKET_CLOSED_RETCODES = frozenset({10017, 10018})
+# MT5 trade-server retcodes that mean the order was definitely NOT placed, listed one by one (review LOW-1: only
+# defined codes; 10037 does not exist): 10004 requote, 10006 reject, 10007 cancelled by trader, 10013-10022 invalid
+# request / volume / price / stops, trade disabled, market closed, no money, prices changed, no quotes, invalid
+# expiration, 10024-10030 too many requests, no changes, autotrading off (server, client), locked, frozen, invalid
+# filling, 10032 only real accounts, 10033-10036 order and volume limits, invalid order type, position closed,
+# 10038-10046 close volume, close order exists, position limit, reject cancel, long / short / close only, FIFO, hedge
+# prohibited; the paper broker's duplicate refusal is 10027. Anything else that is not a fill (-1 send failed, 10008
+# placed, 10010 partial, 10011 processing error, 10012 timeout, 10023 order state changed, 10031 no connection, any
+# undefined or future code) is ambiguous: auto entries stop for the rest of that bar close (trading-safety review HIGH)
+DEFINITE_REJECT_RETCODES = frozenset({
+    10004, 10006, 10007,
+    10013, 10014, 10015, 10016, 10017, 10018, 10019, 10020, 10021, 10022,
+    10024, 10025, 10026, 10027, 10028, 10029, 10030,
+    10032, 10033, 10034, 10035, 10036,
+    10038, 10039, 10040, 10041, 10042, 10043, 10044, 10045, 10046,
+})
+# review MEDIUM-2 (d): a pending_orders row still `sending` this long after its send is resolved in-process
+SENDING_RESOLVE_S = 60.0
 # design (D10): a bar close is detected by clock, close time plus this grace, not by the next bar's first tick
 BAR_CLOSE_GRACE_S = 1.5
 LATE_TICK_WARN_S = 60.0      # at most one late_tick data-quality warning per this many seconds (every one is counted)
@@ -300,6 +334,9 @@ class Engine:
         self._unavailable_why: str | None = None
         self._reopen_fault = False
         self._calendar_seen: tuple[pd.Timestamp | None, pd.Timestamp | None] = (None, None)
+        # when each window the gate refuses on ends (tier2_until, reopen_until, holiday), for the owner's displays
+        self._window_ends: dict[str, Any] = {}
+        self._window_end_failing: set[str] = set()     # windows whose end time is failing (logged once per episode)
         # the dashboard's account view (goldbot/ops/account_view.py), published in the state file; reporting only.
         # From the broker: balance, currency and margin (never the login or server), the symbol's lot terms; from the
         # bars: ATR(14) per ladder timeframe, refreshed at bar closes
@@ -383,6 +420,15 @@ class Engine:
         self._contract: float | None = None
         self._contract_tried = False
         self._min_lot_risk: float | None = None      # minimum lot's stop risk, account currency, at the latest stop
+        # BACKLOG 19/35: each open position's remaining stop risk as last computed (published), and the conversion per
+        # side read at most once a minute for it (side -> (minute, account currency per USD or None))
+        self._open_risk_rows: list[dict[str, Any]] = []
+        self._open_fx: dict[int, tuple[pd.Timestamp, float | None]] = {}
+        # position ids in the last successful positions() read, None while unread (the auto-entry fill check)
+        self._position_ids: set[int] | None = None
+        # (bar close, why): auto entries stopped for the rest of that bar close after an ambiguous order or a failed
+        # account re-read (review HIGH); a later bar close trades again on a fresh read
+        self._auto_paused: tuple[pd.Timestamp, str] | None = None
         self._unconfirmed: dict[int, int] = {}
         # position -> (consecutive market-closed refusals, next attempt): closes back off only when the market is closed
         self._close_backoff: dict[int, tuple[int, pd.Timestamp]] = {}
@@ -905,6 +951,43 @@ class Engine:
             return
         self._min_lot_risk = float(vmin) * stop_distance * float(contract) * fx
 
+    def _note_open_risk(self, positions: list[Position], tick: Tick) -> None:
+        """BACKLOG 19/35: the account's open positions by side and what each can still lose down to its stop, account
+        currency (`open_risk.remaining_stop_risk`: current close price to the SL x lots x contract x fx). Every position
+        on the account counts, whichever agent or the owner opened it. One without SL, on another symbol, or with no
+        usable conversion is unknown and makes `open_risk` None, which RiskGate refuses while the heat cap or the
+        projection is on (fail closed). Read on every account refresh; exits never read it."""
+        st = self.state
+        st.open_long = sum(1 for p in positions if p.side > 0)
+        st.open_short = sum(1 for p in positions if p.side < 0)
+        rows: list[dict[str, Any]] = []
+        total: float | None = 0.0
+        for p in positions:
+            risk: float | None = None
+            if p.symbol == self.cfg.symbol:
+                px = tick.bid if p.side > 0 else tick.ask
+                fx = None
+                if p.sl is not None and math.isfinite(p.sl) and p.side * (px - p.sl) > 0:
+                    fx = self._open_risk_fx(p.side, px, p.side * (px - p.sl), tick.ts_utc)
+                risk = open_risk.remaining_stop_risk(side=p.side, lots=p.lots, sl=p.sl, bid=tick.bid, ask=tick.ask,
+                                                     contract=self._contract_size(), fx=fx)
+            rows.append({"position_id": p.position_id, "side": p.side, "lots": p.lots, "sl": p.sl,
+                         "risk": round(risk, 2) if risk is not None else None})
+            total = None if total is None or risk is None else total + risk
+        st.open_risk, self._open_risk_rows = total, rows
+
+    def _open_risk_fx(self, side: int, price: float, distance: float, now: pd.Timestamp) -> float | None:
+        """Account currency per USD for open-risk figures: the broker's conversion (`_usd_to_account`, checked by
+        `sizing.account_fx`, so a USD account is 1 and an unknown currency is None), read at most once a minute per side
+        so the per-tick refresh does not call the terminal every tick. A failed read is retried the next minute."""
+        minute = now.floor("min")
+        hit = self._open_fx.get(side)
+        if hit is not None and hit[0] == minute:
+            return hit[1]
+        fx = sizing.account_fx(self._account_currency(), self._usd_to_account(side, price, distance))
+        self._open_fx[side] = (minute, fx)
+        return fx
+
     def _published_limits(self) -> dict[str, Any]:
         """`limits` in engine_<account>.json, the RiskGate limits the dashboard's account view reads (loss budget,
         ladder): risk per trade and its maximum, multiplier bounds, daily and weekly caps; the account's absolute daily
@@ -917,6 +1000,8 @@ class Engine:
                 "multiplier_bounds": list(lim.multiplier_bounds), "daily_cap": lim.daily_cap,
                 "weekly_cap": lim.weekly_cap, "daily_loss_limit_abs": lim.daily_loss_limit_abs,
                 "min_lot_risk_cap": lim.min_lot_risk_cap,
+                # BACKLOG 19/35: the open-risk heat cap and whether the daily projection counts open risk (both off by default)
+                "heat": lim.heat.model_dump(), "project_open_risk": lim.project_open_risk,
                 "min_lot_risk_account": round(mlr, 2) if mlr is not None and math.isfinite(mlr) else None}
 
     def _decide(self, tf: str, fr: _Frame, agents: list[Specialist], fam_w: dict[str, float], close_ts: pd.Timestamp,
@@ -987,8 +1072,23 @@ class Engine:
                             risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2),
                             **self._card_money(gd, intent))
             if self.cfg.approval_mode == "auto":
-                self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
-                decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid, scored_fv=sfv))
+                if self._auto_paused is not None and self._auto_paused[0] == close_ts:
+                    decisions.append(self._record(agent, close_ts, p, mult, f"auto_paused:{self._auto_paused[1]}",
+                                                  scored_fv=sfv))
+                    continue
+                try:
+                    res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
+                except Exception as exc:
+                    # review LOW-C: the order may or may not be at the broker. Its pending_orders row stays "sending"
+                    # (the restart reconciliation resolves it), entries are blocked (tick_error), no further auto
+                    # entry this bar close; the remaining agents are still journalled and exits carry on
+                    self._auto_paused = (close_ts, "order_raised")
+                    self.note_tick_error(exc)
+                    decisions.append(self._record(agent, close_ts, p, mult, f"auto_unconfirmed:{type(exc).__name__}",
+                                                  pid, scored_fv=sfv))
+                    continue
+                decisions.append(self._record(agent, close_ts, p, mult, self._auto_action(res), pid, scored_fv=sfv))
+                self._after_auto_order(res, gd, side, close_ts)
             else:
                 self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
                 self.center.propose(prop)
@@ -1052,12 +1152,64 @@ class Engine:
             return gd.model_copy(update={"allowed": False, "reasons": ["risk_above_approved"]}), lots
         return gd, lots
 
+    @staticmethod
+    def _auto_action(res: OrderResult | None) -> str:
+        """The journal's word for an auto entry (review LOW-B): `executed:auto` only for a fill (or a duplicate, sent
+        before); `auto_rejected:<retcode>` for a definite reject (nothing placed); `auto_unconfirmed:<retcode>` for
+        anything else (`_after_auto_order` then stops auto entries for the rest of the bar close)."""
+        if res is None or (res.ok and res.position_id is not None):
+            return "executed:auto"
+        kind = "auto_rejected" if res.retcode in DEFINITE_REJECT_RETCODES else "auto_unconfirmed"
+        return f"{kind}:{res.retcode}"
+
+    def _after_auto_order(self, res: OrderResult | None, gd: GateDecision, side: int, close_ts: pd.Timestamp) -> None:
+        """Trading-safety review HIGH (BACKLOG 19 review): every auto entry at one bar close must see the previous
+        one, or `max_positions`, the combined cap, the heat cap and the same-direction cap can each be passed within a
+        bar close. After an order the account is read again (`_refresh_account` on the broker's last tick). A fill the
+        positions read does not show yet is added conservatively: one more position on its side, its lots and notional,
+        the gate's margin, and its stop risk scaled to the filled lots (unknown open risk stays unknown). An ambiguous
+        result (neither a fill nor a definite reject, `DEFINITE_REJECT_RETCODES`) or a failed re-read stops auto entries
+        for the rest of this bar close. `res` None: nothing was sent (a duplicate), nothing changes."""
+        if res is None:
+            return
+        filled = res.ok and res.position_id is not None
+        if not filled and res.retcode in DEFINITE_REJECT_RETCODES:
+            return                                      # nothing placed: the facts are unchanged
+        if not filled:
+            self._auto_paused = (close_ts, "unconfirmed_order")
+            log.warning("auto entry result unconfirmed (retcode %s): auto entries stop for this bar close", res.retcode)
+        try:
+            self._refresh_account(self.broker.last_tick(self.cfg.symbol))
+            seen = self._position_ids is not None and res.position_id in self._position_ids
+        except Exception as exc:                        # fail closed: no further auto entry on unknown facts
+            log.warning("account re-read after an auto entry failed (%s): auto entries stop for this bar close",
+                        type(exc).__name__)
+            self._auto_paused = self._auto_paused or (close_ts, "account_unread")
+            seen = False
+        if not filled or seen:
+            return
+        st, lots = self.state, float(res.filled_lots)
+        st.open_positions += 1
+        st.open_lots = round(st.open_lots + lots, 6)
+        px = self._price or res.price           # USD notional at the mid, as `_refresh_account` publishes it
+        if px:
+            st.open_notional = st.open_lots * self._contract_size() * px
+        if side > 0:
+            st.open_long += 1
+        else:
+            st.open_short += 1
+        st.margin_used += gd.margin_needed
+        if st.open_risk is not None:
+            st.open_risk += gd.risk_amount * lots / gd.lots if gd.lots > 0 else gd.risk_amount
+
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float,
-                 atr_usd: float | None = None) -> None:
+                 atr_usd: float | None = None) -> OrderResult | None:
+        """Sends the order (pending_orders row first) and returns the broker's result; None when the proposal was sent
+        before and nothing is sent now."""
         if prop.proposal_id in self.sent_ids:       # sent before (this process or before a restart): never again
             self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "duplicate_suppressed",
                                    "proposal": prop.proposal_id})
-            return
+            return None
         magic = self._magic(agent.family)
         oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
@@ -1087,6 +1239,7 @@ class Engine:
                                   "agent_id": agent.agent_id, "side": prop.side, "lots": res.filled_lots, "requested": requested,
                                   "filled": res.price, "order_type": "market", "retcode": res.retcode, "commission": np.nan}])
             self.store.append("fills", fill, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+        return res
 
     @staticmethod
     def _attach_policy(tr: OpenTrade, agent: Specialist, *, entry: float, atr_usd: float | None,
@@ -1202,6 +1355,12 @@ class Engine:
                 # the price is through the stop the policy set but the broker's stop is not there (a new level, or a
                 # modify that did not stick): close at market, as the labels exit at that stop
                 self._policy_close(pid, tr, "trail_close")
+                continue
+            if pos.sl is not None and tr.side * (sl - pos.sl) <= 1e-9:
+                # review MEDIUM-2 (c), defence in depth: the broker's stop is already at or beyond this one (a restart
+                # or an adoption left the engine's copy loose): never send a looser stop; the broker's is the floor
+                if tr.sl is None or tr.side * (pos.sl - tr.sl) > 1e-9:
+                    tr.sl = pos.sl
                 continue
             if sl == tr.sl:
                 continue
@@ -1422,12 +1581,14 @@ class Engine:
         if positions is None:                             # the next pass retries; the per-tick stop check still guards
             return
         self._foreign = sorted(p.position_id for p in positions if not self._own(p.magic))
+        changed = self._resolve_stale_sending({p.position_id: p for p in positions})
         for p in positions:
             if not self._own(p.magic):
                 continue
             tr = self.open.get(p.position_id)
             if tr is None:
                 tr = self.open[p.position_id] = self._adopt(p)
+                changed = True
                 self.decisions.append({"ts": time.time(), "action": "adopt_orphan", "position": p.position_id,
                                        "agent": tr.agent_id, "policy": tr.policy is not None})
             if tr.sl is None and p.sl is None:
@@ -1460,6 +1621,8 @@ class Engine:
                 tr.sl = p.sl                  # adopted with a stop: that stop is the floor from now on
         live = {p.position_id for p in positions}
         self._modify_backoff = {k: v for k, v in self._modify_backoff.items() if k in live}
+        if changed:
+            self._save_orders()             # an adoption or a resolved row survives a restart (review MEDIUM-2)
 
     def _adopt(self, p: Position) -> OpenTrade:
         """An open position of this engine's magic range that the open table does not list. When this engine sent it
@@ -1469,6 +1632,10 @@ class Engine:
         and the broker's current stop as its initial stop."""
         rec = next((o for o in self._orders.values() if o.position_id == p.position_id), None) or \
             next((o for o in self._orders.values() if p.comment and p.comment in (o.client_order_id, o.client_order_id[-31:])), None)
+        if rec is not None and rec.status != "filled":
+            # review MEDIUM-2 (a): the row of a send that raised (or a fill found late) now names its position, so a
+            # restart keeps this trade instead of recovering the send again and resetting its stop and state
+            rec.status, rec.position_id = "filled", p.position_id
         agent = self.agents.get(rec.agent_id) if rec is not None else self._agent_for_magic(p.magic)
         agent_id = rec.agent_id if rec is not None else "orphan" if agent is None else agent.agent_id
         max_bars = rec.max_bars if rec is not None else 48 if agent is None else self._base_bars(agent)
@@ -1563,6 +1730,14 @@ class Engine:
         if positions is not None:
             st.open_positions = len(positions)
             st.open_lots = round(sum(p.lots for p in positions), 6)   # every position on the account is exposure
+            self._position_ids = {p.position_id for p in positions}
+            try:
+                self._note_open_risk(positions, tick)
+            except Exception:                   # review LOW-1: never aborts the refresh; unknown refuses when on
+                log.exception("open risk not computed; it is unknown until the next refresh")
+                st.open_risk, self._open_risk_rows = None, []
+        else:                                   # unknown book: unknown open risk (entries are blocked anyway)
+            st.open_risk, self._open_risk_rows, self._position_ids = None, [], None
         st.open_notional = st.open_lots * self._contract_size() * (tick.bid + tick.ask) / 2   # USD, terminal contract
         st.spread_points = (tick.ask - tick.bid) / 0.01
         now = self._now(tick)
@@ -1932,42 +2107,66 @@ class Engine:
                 "startup_error": f"{type(exc).__name__}: {exc}"[:300]}), durable=False)
             raise
         for cid, rec in self._orders.items():
-            if rec.status != "sending":
-                continue
-            pos = next((p for p in positions.values() if p.comment == cid[-31:] or p.comment == cid), None)
-            try:
-                deals = self._read_deals(rec.ts_utc - pd.Timedelta(minutes=5))
-            except Exception:
-                if pos is None:
-                    continue          # unknown yet: stays "sending" (never re-sent) and is looked up at the next start
-                deals = pd.DataFrame()
-            dealt = not deals.empty and (
-                ("client_order_id" in deals.columns and bool((deals["client_order_id"] == cid).any()))
-                or ("comment" in deals.columns and bool(deals["comment"].isin([cid, cid[-31:]]).any())))
-            if pos is not None:
-                rec.status, rec.position_id = "filled", pos.position_id
-                tr = self.open[pos.position_id] = OpenTrade(position_id=pos.position_id, agent_id=rec.agent_id,
-                                                            side=pos.side, lots=pos.lots, entry_bar_ts=pos.open_time_utc,
-                                                            max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp,
-                                                            client_order_id=cid, open_price=pos.open_price,
-                                                            initial_sl=rec.sl, initial_lots=rec.lots,
-                                                            opened_utc=pos.open_time_utc, excursion_approx=True)
-                agent = self.agents.get(rec.agent_id)
-                if agent is not None:
-                    atr_usd = rec.atr_usd if rec.atr_usd is not None else self._implied_atr(agent, pos.open_price, rec.sl)
-                    self._attach_policy(tr, agent, entry=pos.open_price, atr_usd=atr_usd, opened=pos.open_time_utc)
-                self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_adopt_sent",
-                                       "proposal": cid, "position": pos.position_id})
-            else:
-                rec.status = "filled" if dealt else "unfilled"     # filled and already closed, or never filled
-                self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": f"reconcile_sent_{rec.status}",
-                                       "proposal": cid})
-                if dealt:
-                    self._record_closed_while_down(cid, rec, deals)
+            if rec.status == "sending":
+                self._resolve_sent(cid, rec, positions)
         # open trades the broker no longer has were closed while the engine was down: recorded once their exit deal
         # is seen (a trade recorded before the restart is skipped by position id)
         self._sweep_closed(set(positions))
         self._save_orders()
+
+    def _resolve_sent(self, cid: str, rec: SentOrder, positions: dict[int, Position]) -> None:
+        """A `sending` row (a send never confirmed: a crash, or an order call that raised) looked up in the broker's
+        positions and deals by client id / MT5 comment. A position is adopted with the row's agent, entry stop, lots
+        and exit policy, unless the open table already holds it (adopted by reconciliation, or carried over a
+        restart): that trade is kept with its stop, bars held and scale-out state and only the row is marked filled
+        (review MEDIUM-2 b). No position: filled and closed (recorded from its deals) or never filled ("unfilled").
+        An unreadable deal history without a position leaves the row `sending` for the next look. Never re-sent."""
+        pos = next((p for p in positions.values() if p.comment == cid[-31:] or p.comment == cid), None)
+        try:
+            deals = self._read_deals(rec.ts_utc - pd.Timedelta(minutes=5))
+        except Exception:
+            if pos is None:
+                return                # unknown yet: stays "sending" (never re-sent) and is looked up again
+            deals = pd.DataFrame()
+        dealt = not deals.empty and (
+            ("client_order_id" in deals.columns and bool((deals["client_order_id"] == cid).any()))
+            or ("comment" in deals.columns and bool(deals["comment"].isin([cid, cid[-31:]]).any())))
+        if pos is not None:
+            rec.status, rec.position_id = "filled", pos.position_id
+            if pos.position_id in self.open:
+                self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_sent_known",
+                                       "proposal": cid, "position": pos.position_id})
+                return
+            tr = self.open[pos.position_id] = OpenTrade(position_id=pos.position_id, agent_id=rec.agent_id,
+                                                        side=pos.side, lots=pos.lots, entry_bar_ts=pos.open_time_utc,
+                                                        max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp,
+                                                        client_order_id=cid, open_price=pos.open_price,
+                                                        initial_sl=rec.sl, initial_lots=rec.lots,
+                                                        opened_utc=pos.open_time_utc, excursion_approx=True)
+            agent = self.agents.get(rec.agent_id)
+            if agent is not None:
+                atr_usd = rec.atr_usd if rec.atr_usd is not None else self._implied_atr(agent, pos.open_price, rec.sl)
+                self._attach_policy(tr, agent, entry=pos.open_price, atr_usd=atr_usd, opened=pos.open_time_utc)
+            self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_adopt_sent",
+                                   "proposal": cid, "position": pos.position_id})
+        else:
+            rec.status = "filled" if dealt else "unfilled"     # filled and already closed, or never filled
+            self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": f"reconcile_sent_{rec.status}",
+                                   "proposal": cid})
+            if dealt:
+                self._record_closed_while_down(cid, rec, deals)
+
+    def _resolve_stale_sending(self, positions: dict[int, Position]) -> bool:
+        """Review MEDIUM-2 (d): `sending` rows older than SENDING_RESOLVE_S (host clock, as the row was stamped) are
+        resolved in-process as a restart would (`_resolve_sent`), so a send that raised does not wait for a restart.
+        Younger rows may still be in flight and are left alone. Returns whether any row changed."""
+        now = pd.Timestamp.now("UTC")
+        changed = False
+        for cid, rec in list(self._orders.items()):
+            if rec.status == "sending" and (now - pd.Timestamp(rec.ts_utc)).total_seconds() >= SENDING_RESOLVE_S:
+                self._resolve_sent(cid, rec, positions)
+                changed = changed or rec.status != "sending"
+        return changed
 
     # ------------------------------------------------------------------ closed-trade record (phase gates P7, stop rule P6)
     def _record_closed_while_down(self, cid: str, rec: SentOrder, deals: pd.DataFrame) -> None:
@@ -2368,6 +2567,7 @@ class Engine:
         L3). Each fault is logged once when it starts (review M1), and its start is published in the engine state for
         health (`check_entry_windows`). Entries only (RiskGate); no exit path reads these flags."""
         st = self.state
+        self._window_ends = {}
         try:
             tier2, reopen, thin, why, reopen_fault = self._window_flags(tick_ts, now, sessions)
         except Exception as exc:
@@ -2406,13 +2606,19 @@ class Engine:
                 self._calendar_seen = (pd.Timestamp(pd.to_datetime(ev["ts_utc"], utc=True).max()),
                                        pd.Timestamp(pd.to_datetime(ev["received_utc"], utc=True).max())
                                        if "received_utc" in ev.columns else None)
-                tier2 = blackout_window(ev, tick_ts, L.tier2.before_min, L.tier2.after_min, tier=2) is not None
+                hit = blackout_window(ev, tick_ts, L.tier2.before_min, L.tier2.after_min, tier=2)
+                tier2 = hit is not None
+                if hit is not None:
+                    self._window_end("tier2_until",
+                                     lambda: pd.Timestamp(hit["ts_utc"]) + pd.Timedelta(minutes=L.tier2.after_min))
             why = why or calendar_gap(ev, tick_ts)
         if L.reopen.enabled:
             try:
                 reopen = reopen_window(sessions, now, L.reopen)
             except Exception as exc:
                 reopen, reopen_fault = True, f"session table unusable ({type(exc).__name__}: {exc})"
+            if reopen and reopen_fault is None:
+                self._window_end("reopen_until", lambda: reopen_window_end(sessions, now, L.reopen))
         if L.holidays.enabled:
             hl = self._holiday_list()
             day = server_date(sessions, now)
@@ -2422,7 +2628,25 @@ class Engine:
                 why = why or f"holiday list {hl.version} does not cover {day} (valid {hl.valid_from}..{hl.valid_through})"
             else:
                 thin = hl.thin(day) is not None
+                if thin:
+                    self._window_end("holiday", lambda: holiday_end(hl, sessions, now))
         return tier2, reopen, thin, why, reopen_fault
+
+    def _window_end(self, key: str, compute: Callable[[], Any]) -> None:
+        """When a window the gate is refusing on ends, for the state file and the owner's displays only: an error here
+        never changes a flag (it only leaves the time unknown). Logged once per window when failures start and once
+        when it is computed again (as review M1 for calendar_unavailable), never on every tick."""
+        try:
+            self._window_ends[key] = compute()
+        except Exception as exc:
+            if key not in self._window_end_failing:
+                self._window_end_failing.add(key)
+                log.warning("entry windows: %s not computed (%s: %s); shown without a time until it is",
+                            key, type(exc).__name__, exc)
+            return
+        if key in self._window_end_failing:
+            self._window_end_failing.discard(key)
+            log.info("entry windows: %s computed again", key)
 
     def _windows_state(self) -> dict:
         """The entry windows for engine_<account>.json and health (`check_entry_windows`, review M1)."""
@@ -2432,6 +2656,8 @@ class Engine:
 
         def iso(x: pd.Timestamp | None) -> str | None:
             return None if x is None or pd.isna(x) else pd.Timestamp(x).isoformat()
+        ends = self._window_ends
+        holiday = ends.get("holiday")
         return {"enabled": {"tier2": L.tier2.enabled, "reopen": L.reopen.enabled, "holidays": L.holidays.enabled},
                 "tier2_blackout": st.tier2_blackout, "reopen_window": st.reopen_window,
                 "holiday_thin": st.holiday_thin, "calendar_unavailable": st.calendar_unavailable,
@@ -2439,7 +2665,12 @@ class Engine:
                 "calendar_unavailable_reason": self._unavailable_why,
                 "holiday_version": hl.version if hl is not None else None,
                 "holiday_valid_through": hl.valid_through.isoformat() if hl is not None else None,
-                "calendar_latest_ts_utc": iso(latest), "calendar_received_utc": iso(received)}
+                "calendar_latest_ts_utc": iso(latest), "calendar_received_utc": iso(received),
+                # when each window ends (display only): the owner's screens show the running gate's own times
+                "tier2_until": iso(ends.get("tier2_until")) if st.tier2_blackout else None,
+                "reopen_until": iso(ends.get("reopen_until")) if st.reopen_window else None,
+                "holiday_name": holiday[0] if holiday and st.holiday_thin else None,
+                "holiday_until": iso(holiday[1]) if holiday and st.holiday_thin else None}
 
     def _busy(self, agent_id: str) -> bool:
         return any(t.agent_id == agent_id for t in self.open.values()) or \
@@ -2729,6 +2960,9 @@ class Engine:
             "equity": st.equity, "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
             "balance_closed_hwm": st.balance_closed_hwm, "stage": st.stage.value if isinstance(st.stage, Stage) else str(st.stage),
             "open_positions": st.open_positions, "open_lots": st.open_lots, "open_notional": st.open_notional,
+            # BACKLOG 19/35: remaining stop risk (account currency; null = unknown), per position, and positions by side
+            "open_risk": round(st.open_risk, 2) if st.open_risk is not None else None,
+            "open_risk_positions": self._open_risk_rows, "open_long": st.open_long, "open_short": st.open_short,
             "combined_size_down": st.combined_size_down, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
             "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
             "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,
@@ -2759,6 +2993,8 @@ class Engine:
             "throttle": self._throttle_state(self._last_tick.ts_utc if self._last_tick is not None else self.clock()),
             "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
             "bridge_compat": self.bridge_compat.model_dump(mode="json") if self.bridge_compat is not None else None,
+            # ADR 0010: state from a newer release read by this process, bounded (health: check_schema_skew)
+            "schema_skew": schema_skew_summary().model_dump(mode="json"),
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check

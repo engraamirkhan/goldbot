@@ -1,0 +1,5 @@
+id: R30
+requirement: Data-quality error blocks entries ("never opens a position on a flagged bar")
+status: implemented
+code: goldbot/risk/gate.py:132-133; goldbot/engine/runner.py:404, 433, 447
+test: tests/test_risk_ops.py::test_crossed_and_out_of_order_ticks_set_dq_error_until_a_clean_bar; ::test_bar_checks_and_stale_feed_set_dq_error

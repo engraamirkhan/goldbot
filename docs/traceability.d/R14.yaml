@@ -1,0 +1,5 @@
+id: R14
+requirement: '"8%: multiplier ceiling 0.5 and risk per trade halved"; "8% clears when drawdown < 5%"'
+status: implemented
+code: goldbot/risk/gate.py:161-163, 102-112
+test: tests/test_cov_risk.py::test_size_down_stage_halves_risk_and_caps_the_multiplier_at_half; ::test_size_down_clears_only_below_five_percent_drawdown

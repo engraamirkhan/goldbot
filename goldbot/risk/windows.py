@@ -18,7 +18,7 @@ These functions only say whether `now` is inside a window; RiskGate turns the en
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -28,7 +28,7 @@ from pydantic import model_validator
 
 from goldbot.base import FrozenRecord
 from goldbot.config import ROOT, ReopenSettings, load_yaml
-from goldbot.data.calendar import SessionTable
+from goldbot.data.calendar import SessionTable, server_midnight_utc
 from goldbot.data.timeutil import server_wall
 
 FF_TZ = ZoneInfo("America/New_York")          # Forex Factory's weeks: Sunday 00:00 to Sunday 00:00, New York
@@ -141,3 +141,28 @@ def reopen_window(sessions: SessionTable, now: pd.Timestamp, cfg: ReopenSettings
         return False
     r, long_closure = hit
     return pd.Timestamp(now) - r <= (weekly if long_closure else daily)
+
+
+def reopen_window_end(sessions: SessionTable, now: pd.Timestamp, cfg: ReopenSettings) -> pd.Timestamp | None:
+    """When the reopen window holding `now` ends (the same arithmetic as `reopen_window`), None when outside one.
+    For display only: the flag is `reopen_window`."""
+    daily = pd.Timedelta(minutes=cfg.after_daily_reopen_min)
+    weekly = pd.Timedelta(minutes=cfg.after_monday_open_min)
+    hit = last_reopen(sessions, now, max(daily, weekly))
+    if hit is None:
+        return None
+    end = hit[0] + (weekly if hit[1] else daily)
+    return end if end >= pd.Timestamp(now) else None
+
+
+def holiday_end(hl: HolidayList, sessions: SessionTable, now: pd.Timestamp) -> tuple[str, pd.Timestamp] | None:
+    """(today's holiday name, server midnight of the first unlisted server day after it, as UTC), None when today is
+    not listed. A run of listed days is followed for at most two weeks. For display only: the flag is `holiday_thin`."""
+    today = server_date(sessions, now)
+    name = hl.thin(today)
+    if name is None:
+        return None
+    day = today + timedelta(days=1)
+    while hl.thin(day) is not None and day - today < timedelta(days=14):
+        day += timedelta(days=1)
+    return name, server_midnight_utc(day, sessions.server_tz)

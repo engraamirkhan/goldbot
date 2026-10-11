@@ -1,0 +1,5 @@
+id: V4
+requirement: 'Monthly report: chained closed-trade % return (time-weighted; deposits excluded; marked approximate when positions overlapped), net R and R/trade with a 90% interval (flagged as understated on a non-USD account until BACKLOG 28), max drawdown, average per trading day, best days, £50+ days, milestone progress; no per-day target wording'
+status: partial
+code: 'goldbot/ops/monthly_report.py; goldbot/ops/run.py `monthly-report`. Missing (BACKLOG 26): by-timeframe split, opportunity-day capture, days lost to the daily cap, the dashboard card and a scheduled monthly job'
+test: tests/test_monthly_report.py::test_golden_october_with_a_mid_month_deposit_that_is_not_counted_as_return, ::test_the_rendered_report_never_frames_a_day_as_a_target_to_hit, ::test_r_on_a_gbp_account_is_flagged_until_the_engine_publishes_its_currency_factor, ::test_overlapping_positions_mark_the_chained_return_as_approximate, ::test_run_py_dispatches_monthly_report

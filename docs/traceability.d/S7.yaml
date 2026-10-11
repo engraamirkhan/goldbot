@@ -1,0 +1,5 @@
+id: S7
+requirement: A non-finite or wrongly typed engine-file number (`ts`, equity, day/week start, HWM, open lots/notional, `daily_loss_limit_abs`) makes that file `engine_state_unreadable` (halt, nothing in it summed); an exception in `evaluate` publishes a halt (`supervisor_error`) and the loop carries on, its traceback logged at most every 5 min per type; health FAILs (alerted) on both halts, and survives a type-corrupt engine file (October safety batch, MEDIUM; safety review MEDIUM-1, LOW-2/3)
+status: implemented
+code: goldbot/risk/supervisor.py `engine_fault`, `read_engines`, `error_halt`; goldbot/ops/run.py `supervisor_pass`
+test: tests/test_invalid_feed.py::test_a_supervisor_error_halt_fails_health_and_is_alerted; ::test_health_survives_a_type_corrupt_engine_file_and_fails_it; tests/test_non_finite_state.py::test_a_corrupt_engine_file_halts_the_supervisor_by_name_and_never_crashes_it; ::test_an_unexpected_supervisor_error_writes_a_named_halt_and_the_loop_lives_on

@@ -1,0 +1,5 @@
+id: F8
+requirement: 'Leakage CI tests: "A shuffle test (labels shifted by one bar must drive AUC to 0.5)"'
+status: deviates
+code: replaced by a lookahead check on truncated history (goldbot/research/pipeline.py:71); HANDOFF explains the shifted-label AUC reads ~0.7 on non-overlapping trades without leakage
+test: tests/test_specialists.py::test_lookahead_check_passes_the_real_features_and_catches_a_leaky_one

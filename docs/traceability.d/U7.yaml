@@ -1,0 +1,5 @@
+id: U7
+requirement: Re-arm on the dashboard only by the owner with an authenticator code
+status: implemented
+code: goldbot/api/app.py re-arm endpoint; goldbot/engine/runner.py:472
+test: tests/test_risk_ops.py::test_owner_rearm_on_the_bus_clears_the_drawdown_halt

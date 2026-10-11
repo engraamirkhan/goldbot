@@ -1,0 +1,5 @@
+id: M35
+requirement: 'Counterfactual shadow: every candidate''s barrier outcome recorded with its p, threshold and decision (proposal P9), so calibration data is unbiased; trading statistics count taken trades only'
+status: implemented
+code: goldbot/engine/shadow.py (`ShadowTrade.taken/threshold/p_raw`, `outcomes`; one position per agent over every candidate, as research thins before the model filter); goldbot/engine/runner.py `_shadow_step`; older books load as taken and are not outcomes
+test: tests/test_shadow.py::test_every_candidate_is_recorded_with_its_decision_and_only_taken_ones_count_as_trades; ::test_an_older_book_loads_as_taken_and_only_candidates_with_a_threshold_are_outcomes; tests/test_engine.py::test_shadow_book_records_candidates_below_the_threshold_as_not_taken

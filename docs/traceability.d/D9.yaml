@@ -1,0 +1,5 @@
+id: D9
+requirement: '"no placeholder bars are ever written"'
+status: implemented
+code: goldbot/data/resample.py:42
+test: tests/test_data_layer.py::test_ticks_to_1m_and_visibility

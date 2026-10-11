@@ -68,7 +68,22 @@ nothing covered the record bodies.
 
 ## Consequences
 - A rollback no longer drops closed trades, hides proposals or stops services because of a newer release's fields.
-  `schema_skew()` and the log line show that skew is happening (expected only after a rollback).
+  `schema_skew()` and the log line show that skew is happening (expected only after a rollback). The engine
+  publishes a bounded summary (`schema_skew` in engine_<account>.json) and health `schema_skew:<account>` warns the
+  owner, failing when a decision was refused (2026-10-11 follow-up). Every service (supervisor, scheduler with aux.db
+  `scheduler_jobs` -> `JobState`, telegram, news, api) publishes the same block in `heartbeat_<service>.json`
+  (written by `Heartbeat`, so the scheduler's beat thread keeps it fresh during a long job) and health reports
+  `schema_skew:svc:<service>` by the same rules (SRE review follow-ups; `svc:` so a service never clashes with an
+  account of the same name). A block the process could not build is published as `{"error": <type>}` and WARNs.
+- **The refused-click FAIL is bounded in time (SRE review, 2026-10-11).** Options: FAIL until the engine restarts
+  (the counts are per process), or FAIL for a window after the latest refusal. Chosen: `SkewSummary.last_refused_utc`
+  (wall clock at `note_schema_skew(refused=True)`); health FAILs while now - last_refused_utc <= 1 h
+  (`SKEW_REFUSED_FAIL_S`), then WARNs naming the refusal and its time until a restart; a new refusal FAILs and alerts
+  again; a block without the field (an older engine) reads as FAIL. Why: a FAIL that cannot clear without a restart
+  makes `health` exit 1 for days, hides new fails behind a deploy baseline, and teaches the owner to ignore it; one
+  dropped click is an incident of about one approval window, after which the lasting fact (skew still present) is a
+  warning. What would change it: refusals that matter beyond the click itself (e.g. a strict reader on an exit path).
+  The engine writes its state only on ticks and bars, so after a weekend restart the old block stays until the open.
 - A field added by the newer release is lost if the older release rewrites that record. S12 makes this safe by
   construction: the field's default applies when the newer release reads the record again.
 - A rollback across a field added to `SentOrder`, `OpenTrade` or `PendingClose` no longer stops the older engine

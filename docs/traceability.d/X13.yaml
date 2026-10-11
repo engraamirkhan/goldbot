@@ -1,0 +1,5 @@
+id: X13
+requirement: '"only changes when two consecutive runs disagree"; "re-runs weekly from the nightly cost job"'
+status: implemented
+code: goldbot/execution/classifier.py:53; goldbot/ops/jobs.py (Friday)
+test: tests/test_risk_exec_webhook.py::test_classifier_rules_and_persistence; tests/test_jobs_integration.py::test_nightly_costs_from_logged_ticks_and_fills

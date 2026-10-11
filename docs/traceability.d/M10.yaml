@@ -1,0 +1,5 @@
+id: M10
+requirement: Learned allocator "trains only on stacked out-of-fold specialist predictions"
+status: missing
+code: rule table only (design allows it for the first three months)
+test: untested

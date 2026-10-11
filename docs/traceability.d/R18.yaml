@@ -1,0 +1,5 @@
+id: R18
+requirement: '"A 12% kill-switch event always returns the system to propose-and-approve"'
+status: implemented
+code: goldbot/engine/runner.py:420
+test: tests/test_cov_engine.py::test_twelve_percent_drawdown_closes_everything_at_market

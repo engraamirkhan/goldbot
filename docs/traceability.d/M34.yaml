@@ -1,0 +1,5 @@
+id: M34
+requirement: Pooled meta-model per decision timeframe with family and side inputs, same calibration and gates, pooled-vs-local log-loss (proposal P5)
+status: implemented (research only)
+code: goldbot/research/pipeline.py `run_pool`; scripts/research_pass.py `--pooled`; the engine and model registry do not serve a pooled model yet
+test: tests/test_research_pass_integration.py::test_pooled_meta_model_is_one_trial_over_every_family_on_the_timeframe; tests/test_screen_pool.py

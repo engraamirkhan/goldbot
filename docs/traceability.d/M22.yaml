@@ -1,0 +1,5 @@
+id: M22
+requirement: 'Promotion: "shadow Sharpe within 0.5 of backtest and above 0.8", "hit rate within one binomial SE", "drawdown under 1.5x backtest", "turnover within 30% of the champion"'
+status: implemented
+code: goldbot/research/promotion.py:21-24, 54-75
+test: tests/test_cov_research.py::test_gate_boundaries; ::test_sharpe_shortfall_and_turnover_boundaries; tests/test_costs_promotion_registry.py::test_each_gate_blocks_promotion

@@ -1,0 +1,5 @@
+id: M28
+requirement: '"TreeSHAP is stored for every live, shadow and rejected decision"'
+status: missing
+code: decisions are journalled (goldbot/engine/runner.py `flush_journal`) without SHAP
+test: untested

@@ -267,11 +267,16 @@ class TelegramBot:  # pragma: no cover - needs network + token
                 except Exception:
                     pass
         else:
-            c = self.bus.control()
-            text = (f"halted: {'yes, by ' + str(c.by) + (' (' + c.reason + ')' if c.reason else '') if c.halted else 'no'}\n"
-                    f"approval mode: {c.approval_mode or 'propose (default)'}\n"
-                    f"pending proposals: {len(self.bus.pending())}")
+            # the dashboard's Entry status words (goldbot/telegram/entry_text.py), per account; plain text, no parse_mode
+            text = await asyncio.to_thread(self._status_text)
         await update.message.reply_text(text)
+
+    def _status_text(self) -> str:
+        """Any failure (control file, pending list, settings, build) replies with entry_text.FAILED, never nothing."""
+        from goldbot.config import load_settings
+        from goldbot.telegram.entry_text import status_reply
+        return status_reply(self.state_dir, pd.Timestamp.now("UTC"), tz=self.settings.owner_tz, bus=self.bus,
+                            load=load_settings)
 
     # ------------------------------------------------------------ credential prompts in
     def prompt_sync(self, message: str, secret: bool) -> str:

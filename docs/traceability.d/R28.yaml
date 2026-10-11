@@ -1,0 +1,5 @@
+id: R28
+requirement: '"only if expected value after costs is positive: EV = pT - (1-p)S - c"'
+status: implemented
+code: goldbot/risk/gate.py:149-151; goldbot/research/metrics.py:48
+test: tests/test_cov_risk.py::test_zero_expected_value_is_refused

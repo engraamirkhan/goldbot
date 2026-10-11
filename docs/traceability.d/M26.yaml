@@ -1,0 +1,5 @@
+id: M26
+requirement: 'Drift: "Daily PSI per feature ... above 0.1 warns, above 0.25 sizes down to 50%"; "ECE above 0.08 sizes down"'
+status: implemented
+code: 'goldbot/research/drift.py (`reference_bins` stored on every model at fit, `psi`, `assess`); goldbot/research/model.py `MetaLabelModel.feature_ref`; goldbot/ops/jobs.py `drift_watch` (daily 23:40, recent candidates rebuilt as in training) -> state/drift.json `size_factor`; goldbot/engine/runner.py `_drift` scales the allocator weight; config `drift:`. Reading taken: "top-10 SHAP" is top-10 by gain importance until TreeSHAP is stored (M28); ECE on the trailing 100 taken shadow trades, judged from 30'
+test: tests/test_drift.py::test_psi_is_small_for_the_same_distribution_and_large_for_a_shift; ::test_assess_sizes_down_on_feature_drift_or_bad_calibration_and_halts_on_cusum; ::test_every_fitted_model_carries_its_training_reference

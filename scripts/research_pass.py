@@ -95,11 +95,12 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.release import (  # noqa: E402
+    read_bar_files,
     read_macro_files,
     read_positioning_files,
     read_us_calendar_files,
 )
-from goldbot.data.resample import BAR_COLUMNS, mid, resample_bars  # noqa: E402
+from goldbot.data.resample import mid, resample_bars  # noqa: E402
 from goldbot.execution.costs import SwapSpec, load_research_cost_table, research_costs  # noqa: E402
 from goldbot.features import day_type as day_type_features  # noqa: E402
 from goldbot.features import positioning as positioning_features  # noqa: E402
@@ -136,20 +137,11 @@ from goldbot.specialists import SPECIALISTS, Specialist  # noqa: E402
 
 
 def load_bars(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
-    """Concatenate the yearly 1m files; bars with an error-level data-quality flag are dropped."""
-    frames = []
-    for f in sorted(folder.glob("xauusd_1m_dukascopy_*.parquet")):
-        year = int(f.stem.rsplit("_", 1)[1])
-        if from_year <= year <= to_year:
-            frames.append(pd.read_parquet(f))
-    if not frames:
-        raise SystemExit(f"no xauusd_1m_dukascopy_<year>.parquet files for {from_year}-{to_year} in {folder}")
-    b = pd.concat(frames, ignore_index=True)
-    b["ts_utc"] = pd.to_datetime(b["ts_utc"], utc=True)
-    b["visible_at"] = pd.to_datetime(b["visible_at"], utc=True)
-    flags = b["dq_flag"].fillna("").astype(str) if "dq_flag" in b else pd.Series("", index=b.index)
-    b = b[~flags.str.startswith("error")]
-    return b.drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)[BAR_COLUMNS]
+    """Concatenate the yearly 1m files; bars with an error-level data-quality flag are dropped (`read_bar_files`)."""
+    try:
+        return read_bar_files(folder, from_year, to_year)
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc)) from None
 
 
 def load_macro(path: str) -> tuple[pd.DataFrame | None, dict[str, Any]]:
@@ -688,8 +680,9 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         # + every discovery's K_eff (survey 4b), charged to EVERY later trial, survivor or not: the conservative
         # default, recorded as an owner-acknowledged choice in docs/research/preregistration-2027Q1.md
         n_trials = reg.n_trials_effective + 1
-        preps = [prepare(s, b_dec, context, extra_cost_usd=extra_cost, holdout=holdout, score_holdout=args.score_holdout,
-                         frame=frame, swap=swap) for s in job.specs]
+        # ctx: the point-in-time tables a candidate rule reads (H-06's macro gate); the frame is already built
+        preps = [prepare(s, b_dec, context, ctx=feat_ctx, extra_cost_usd=extra_cost, holdout=holdout,
+                         score_holdout=args.score_holdout, frame=frame, swap=swap) for s in job.specs]
         # event floor: research.screen_min_events, or the daily-signal override (owner ruling A), set before the run
         floor = min_events_for(tf if job.pooled else signal_timeframe(job.specs[0]), settings.research)
         scr = None if args.score_holdout else screen(preps if job.pooled else preps[0], floor)

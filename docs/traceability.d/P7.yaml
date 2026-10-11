@@ -1,0 +1,5 @@
+id: P7
+requirement: Roadmap gate thresholds (trade-count and time gates "committed in writing before the first paper trade")
+status: partial
+code: 'goldbot/ops/gates_phase.py `evaluate_gates`, `run.py gates`; thresholds in config/settings.yaml `gates:` (design numbers, plus PROPOSED values awaiting owner sign-off); never records a gate or unlocks live; paper/live trade counts come from the engine''s closed-trade record (P6; one record per position, a repeated account + position counted once; an unreadable line is skipped and reported, the lines after it still count). Missing: owner sign-off'
+test: tests/test_phase_gates.py (a boundary test per threshold); ::test_nothing_here_records_a_gate_unlocks_live_or_touches_risk_state; tests/test_closed_trades.py::test_gates_count_the_paper_trades_the_engine_recorded; ::test_a_repeated_line_is_counted_once; tests/test_closed_trade_review.py::test_a_torn_line_is_skipped_the_rest_still_count_and_the_engine_records_a_dq_warning

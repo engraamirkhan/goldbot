@@ -1,0 +1,5 @@
+id: M13
+requirement: 'Walk-forward windows "15m: train 24, test 3, step 3, purge 2 d, embargo 1 d; 1h: 36/6/6, purge 5 d, embargo 2 d"'
+status: implemented
+code: 'goldbot/research/walkforward.py `WINDOWS`; config/settings.yaml:31-39. Additions (proposals P4/P5): 4h 48/6/6, purge 10 d, embargo 4 d, now also in settings (`walkforward.4h`, `labels` 4h purge/embargo) so the Saturday retrain trains 4h agents; 1d (60/12/12 expanding, purge 20 d, embargo 10 d) stays research-only in `WINDOWS`, since the engine holds ~40 trading days of 1m bars, short of the 120 daily bars a frame needs; session_open trains on an expanding window with 6-month test folds (`Specialist.walkforward`)'
+test: tests/test_trace_data_exec.py::test_walk_forward_windows_match_design_and_settings

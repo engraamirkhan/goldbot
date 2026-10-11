@@ -16,6 +16,7 @@ from pydantic import Field
 
 from goldbot.base import Record
 from goldbot.config import (
+    HeatSettings,
     HolidaySettings,
     ReopenSettings,
     RiskSettings,
@@ -74,6 +75,10 @@ class RiskLimits(Record):
     daily_loss_limit_abs: float | None = None
     # BACKLOG 21 (playbook G-6): per-agent loss-streak and entry-rate throttle; off by default (owner: thresholds)
     throttle: ThrottleSettings = Field(default_factory=ThrottleSettings)
+    # BACKLOG 19 (playbook G-4): open-risk heat cap and same-direction cap; off by default (owner: values)
+    heat: HeatSettings = Field(default_factory=HeatSettings)
+    # BACKLOG 35: the absolute daily projection also counts open positions' remaining stop risk; off by default
+    project_open_risk: bool = False
     # BACKLOG 17/18 (playbook G-2, G-3): entry windows around tier-2 events, after reopens and on thin-liquidity days;
     # off by default (the owner adopts them). The engine raises the AccountState flags; check() refuses only when on
     tier2: Tier2Blackout = Field(default_factory=Tier2Blackout)
@@ -92,6 +97,7 @@ class RiskLimits(Record):
                    max_spread_points=risk.max_spread_points, stale_tick_seconds=risk.stale_tick_seconds,
                    min_target_over_cost=risk.min_target_over_cost,
                    min_lot_risk_cap=None if tiny_live else risk.min_lot_risk_cap, throttle=risk.throttle,
+                   heat=risk.heat, project_open_risk=risk.project_open_risk,
                    tier2=risk.blackout.tier2, reopen=risk.reopen, holidays=risk.holidays)
 
 
@@ -131,6 +137,12 @@ class AccountState(Record):
     holiday_thin: bool = False        # a thin-liquidity server date of the holiday list (risk.holidays)
     calendar_unavailable: bool = False  # an enabled calendar window has no calendar to judge by (fail closed)
     bridge_incompatible: bool = False  # the MT5 bridge lacks a method, protocol or zone this brain needs (BACKLOG 42)
+    # BACKLOG 19/35: what this account's open positions can still lose down to their stops, account currency
+    # (goldbot/risk/open_risk.py); None = unknown (not read yet, a position without SL, or no usable conversion; review
+    # LOW-2: unknown until the engine has read the positions), and the positions on each side, whoever opened them
+    open_risk: float | None = None
+    open_long: int = 0
+    open_short: int = 0
 
 
 class Intent(Record):
@@ -296,6 +308,21 @@ class RiskGate:
             out.append("throttle_entry_rate")
         return out
 
+    def open_risk_reasons(self, intent: Intent, st: AccountState) -> list[str]:
+        """The open-risk checks that need no sizing (BACKLOG 19, 35). `same_direction_cap` once
+        `heat.max_same_direction` positions on the intent's side are open on the account (playbook G-4: "same-side
+        positions of different agents count as one bet"); `open_risk_unknown` when the heat cap, or the projection with
+        an absolute daily limit, needs the open risk and the engine could not compute it, or it is not a finite amount
+        >= 0 (fail closed). Nothing while both are off, so the new facts are never read then."""
+        L = self.limits
+        out = []
+        if L.heat.enabled and (st.open_long if intent.side > 0 else st.open_short) >= L.heat.max_same_direction:
+            out.append("same_direction_cap")
+        needs = L.heat.enabled or (L.project_open_risk and L.daily_loss_limit_abs is not None)
+        if needs and (st.open_risk is None or not math.isfinite(st.open_risk) or st.open_risk < 0):
+            out.append("open_risk_unknown")
+        return out
+
     def window_reasons(self, st: AccountState) -> list[str]:
         """BACKLOG 17 (playbook G-2: "no entries on those days. No entries for 15 min after each daily reopen and 30
         min after the weekly open ... Exits are untouched") and BACKLOG 18 (G-3: "a -5/+15 min entry blackout from
@@ -417,6 +444,7 @@ class RiskGate:
             edge = intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr      # gross, before costs
             if edge <= L.standard_edge_over_cost * intent.cost_atr:            # design: must exceed 1.5x
                 reasons.append("standard_account_edge")
+        reasons += self.open_risk_reasons(intent, st)
         if reasons:
             return GateDecision(allowed=False, reasons=reasons)
 
@@ -464,11 +492,20 @@ class RiskGate:
         # Strict boundary (review LOW-3): refused only when the projection EXCEEDS the limit; exactly equal is allowed
         # (1e-9 absorbs float noise). The supervisor, which sees no trade, halts when the loss so far REACHES it
         risk_amount = lots * sz.risk_per_lot
+        # BACKLOG 35 (review MEDIUM-4): with project_open_risk the projection also adds what the open positions can
+        # still lose down to their stops (unknown open risk was refused above), so two open trades cannot carry the day
+        # past the limit. Off: as before
+        held = (st.open_risk or 0.0) if L.project_open_risk else 0.0
         if L.daily_loss_limit_abs is not None:
             lost = max(0.0, st.day_start_equity - st.equity)
-            if lost + risk_amount > self.daily_loss_limit(st) + 1e-9:
+            if lost + held + risk_amount > self.daily_loss_limit(st) + 1e-9:
                 return GateDecision(allowed=False, reasons=["daily_loss_limit_abs"], stop_distance=stop_distance,
                                     margin_needed=margin_needed, margin_note=margin_note)
+        # BACKLOG 19 (playbook G-4): open risk + this trade's full stop risk (a minimum-lot exception trade counts in
+        # full) within max_open_risk x equity; exactly at the cap is allowed, as for the daily limit
+        if L.heat.enabled and (st.open_risk or 0.0) + risk_amount > L.heat.max_open_risk * st.equity + 1e-9:
+            return GateDecision(allowed=False, reasons=["heat_cap"], stop_distance=stop_distance,
+                                margin_needed=margin_needed, margin_note=margin_note)
         return GateDecision(allowed=True, lots=round(lots, 2), reasons=notes, risk_fraction=realised_risk,
                             stop_distance=stop_distance, margin_needed=margin_needed, margin_note=margin_note,
                             risk_amount=risk_amount)

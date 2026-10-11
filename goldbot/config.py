@@ -123,6 +123,17 @@ class ThrottleSettings(_Section):
     max_entries_per_day_per_agent: int = Field(3, ge=1)
 
 
+class HeatSettings(_Section):
+    """BACKLOG 19 (playbook G-4: "sum of open risk ... <= the configured cap; same-side positions of different agents
+    count as one bet"), per account: an entry is refused when the open positions' remaining stop risk plus its own
+    exceeds `max_open_risk` x equity, or once `max_same_direction` positions on its side are open. Entries only; exits
+    are never gated. Off until the owner sets the values (risk-policy values: playbook section 7)."""
+
+    enabled: bool = False
+    max_open_risk: float = Field(0.02, gt=0, lt=1)
+    max_same_direction: int = Field(2, ge=1)
+
+
 class RiskSettings(_Section):
     risk_per_trade: float = Field(gt=0, le=0.01)
     risk_per_trade_tiny_live: float = Field(gt=0, le=0.01)
@@ -150,6 +161,11 @@ class RiskSettings(_Section):
     positions_unreadable_alert: int = Field(5, ge=1)
     # BACKLOG 21: per-agent loss-streak and entry-rate throttle (goldbot/risk/throttle.py); off by default
     throttle: ThrottleSettings = Field(default_factory=ThrottleSettings)
+    # BACKLOG 19: open-risk heat cap and same-direction cap (goldbot/risk/open_risk.py); off by default
+    heat: HeatSettings = Field(default_factory=HeatSettings)
+    # BACKLOG 35: with an absolute daily loss limit (accounts.yaml), the projection also counts the open positions'
+    # remaining stop risk; off by default
+    project_open_risk: bool = False
     # BACKLOG 17: entry windows after the daily reopen / weekly open and on thin-liquidity days; off by default
     reopen: ReopenSettings = Field(default_factory=ReopenSettings)
     holidays: HolidaySettings = Field(default_factory=HolidaySettings)
@@ -339,6 +355,8 @@ class TelegramSettings(_Section):
     auto_min_outcomes_per_side: int = Field(10, ge=2)   # fewer matched outcomes on a side: no evidence (fail closed)
     # daily owner digest (goldbot/telegram/digest.py): sent once a day at this UTC time ("HH:MM"), before London
     digest_at: str = Field("06:45", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    # the owner's time zone for Telegram /status times (UTC is shown beside each); an unknown zone shows UTC only
+    owner_tz: str = "Europe/London"
 
 
 class AuthSettings(_Section):

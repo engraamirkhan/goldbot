@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
@@ -137,22 +138,8 @@ class State:
         return out
 
     def drift_halt(self) -> list[str] | None:
-        """Reasons for the drift watch's system halt (state/drift.json), None when there is none. Read the way the
-        engines read it: missing restricts nothing, unreadable or invalid halts entries (fail closed)."""
-        f = self.dir / "drift.json"
-        if not f.exists():
-            return None
-        try:
-            d = json.loads(f.read_text())
-        except (ValueError, OSError):
-            return ["drift.json unreadable"]
-        if not isinstance(d, dict):
-            return ["drift.json invalid"]
-        sh = d.get("system_halt")
-        if not sh:
-            return None
-        reasons = sh.get("reasons") if isinstance(sh, dict) else None
-        return [str(r) for r in reasons] if isinstance(reasons, list) and reasons else ["drift system halt"]
+        """Reasons for the drift watch's system halt, None when there is none (entry_status.read_drift_halt)."""
+        return entry_status.read_drift_halt(self.dir)
 
     def supervisor(self) -> dict:
         f = self.dir / "supervisor.json"
@@ -253,6 +240,13 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         """Fault text from the services (job errors): the owner reads it whole; other roles get the exception type
         and no paths (explain.redact)."""
         return text if st.auth.is_owner(u) else explain.redact(text)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        """422 with each error's type, location and message only: FastAPI's default also echoes `input` (the rejected
+        value, e.g. a password under a misspelt key, or the whole body on a `missing` error) and `ctx`."""
+        return JSONResponse(status_code=422, content={
+            "detail": [{"type": e["type"], "loc": list(e["loc"]), "msg": e["msg"]} for e in exc.errors()]})
 
     @app.middleware("http")
     async def no_referrer(request: Request, call_next: Callable[[Request], Any]) -> Response:
@@ -451,22 +445,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return rows
 
     def entry_inputs(is_owner: bool) -> dict[str, Any]:
-        """What every account's entry status shares: the owner's halt, the supervisor's halt as the engines read it,
-        the drift watch's system halt, the RiskGate's and the supervisor's limits from settings (the defaults when
-        unreadable) and whether this viewer may re-arm."""
-        from goldbot.risk.gate import RiskLimits
-        from goldbot.risk.supervisor import Supervisor, SupervisorLimits
-        c = st.bus.control()
-        halt, why = Supervisor.engine_should_halt(st.dir)
-        s = view_settings()
-        try:
-            limits = RiskLimits.from_settings(s.risk, tiny_live=False) if s is not None else RiskLimits()
-            sup_limits = SupervisorLimits.from_settings(s.risk) if s is not None else SupervisorLimits()
-        except Exception:                      # noqa: BLE001 - a bad settings edit: the defaults
-            limits, sup_limits = RiskLimits(), SupervisorLimits()
-        return dict(owner_halt=(c.by or "unknown") if c.halted else None,
-                    supervisor_reasons=[r for r in why.split(",") if r] if halt else None,
-                    drift_reasons=st.drift_halt(), limits=limits, combined_dd=sup_limits.dd_stage2, is_owner=is_owner)
+        """What every account's entry status shares (entry_status.entry_inputs; Telegram /status reads the same)."""
+        return entry_status.entry_inputs(st.dir, view_settings(), is_owner=is_owner)
 
     def account_entry_status(e: dict, budget: LossBudget | None, ladder: Any, inputs: dict[str, Any]) -> Any:
         return entry_status.account_entry_status(e, now=pd.Timestamp.now("UTC"), budget=budget, milestones=ladder,

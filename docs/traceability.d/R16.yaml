@@ -1,0 +1,5 @@
+id: R16
+requirement: '12% reset: "/rearm with TOTP, then 10 trading days of positive paper shadow, then 30 days propose-and-approve"'
+status: implemented
+code: 'owner re-arm with TOTP on the bus: goldbot/engine/runner.py `_poll_rearm`; conditions in `_rearm_conditions` (>= 10 trading days since the halt and a positive sum of closed shadow returns since it, else `rearm_refused` with the reason, also shown by the health check); a successful re-arm sets `propose_only_until` = +30 days, during which `approval_mode` is held at propose; all persisted in state/risk_<account>.json'
+test: tests/test_engine_safety.py::test_rearm_after_the_kill_switch_needs_ten_trading_days_of_positive_shadow_then_thirty_days_propose_only; tests/test_risk_ops.py::test_owner_rearm_on_the_bus_clears_the_drawdown_halt; tests/test_cov_risk.py::test_halt_is_sticky_and_rearm_needs_the_exact_phrase

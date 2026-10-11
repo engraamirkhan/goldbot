@@ -1,0 +1,5 @@
+id: R25
+requirement: 'Stale data "No tick 20 s in session, or last bar > 1 period old: no entries; alert"'
+status: implemented
+code: 'tick age: goldbot/risk/gate.py `check` fed by goldbot/engine/runner.py `_refresh_account` (live clock); a last completed bar older than one decision period (or no bars) sets `stale_bars` -> `stale_data`; alert: goldbot/ops/health.py `check_engine` warns on tick age and stale bars'
+test: tests/test_cov_risk.py::test_each_account_condition_blocks_entries_on_its_own; tests/test_engine_safety.py::test_entries_need_a_last_bar_less_than_one_period_old; tests/test_health.py::test_engine_stale_bars_and_a_refused_rearm_are_reported

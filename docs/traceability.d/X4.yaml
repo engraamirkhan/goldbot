@@ -1,0 +1,5 @@
+id: X4
+requirement: 'Paper broker: "entries at the touch plus half the last minute''s spread standard deviation, stop fills with 20 points adverse slippage, real commission"'
+status: implemented
+code: goldbot/execution/paper.py
+test: tests/test_cov_execution.py::test_entries_fill_worse_than_the_touch_by_half_the_spread_deviation; ::test_short_stop_fills_with_adverse_slippage_and_target_fills_at_the_level

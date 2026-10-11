@@ -14,8 +14,12 @@ is fixed and a change after seeing data makes it exploratory.
 - **Data:** Dukascopy 1m XAUUSD 2010-01 .. 2025-09 (release `data-v1`); `macro-v1` (first releases, `asof_join` on
   `available_utc`) only where stated; the historical tier-1 schedule **E-1** (below) where stated. The holdout is
   never loaded; every label that has not exited before 2025-10-01 is dropped (`pipeline.prepare`).
-- **Costs:** the measured `costs-v1` table if published at run time, otherwise the settings priors:
-  `extra_cost_usd = 0.37 $/oz` round trip beyond the spread (2 × slippage 0.15 + 2 × commission 3.5 USD per lot side
+- **Costs (pin P-5, adopted 2026-10-11 after the quant review):** the cost source is **pinned at the freeze** in
+  every config: a named `costs-v1` version if one exists at the freeze, otherwise the settings priors. It is never
+  switched between the freeze and the run, and gates (H-14's cost gate) and labels use the same pinned source. If
+  `costs-v1` exists at the freeze, it is pinned and every owed count that depends on costs is recounted with it
+  before the freeze. Otherwise the priors are pinned and any later `costs-v1` result is a reported sensitivity only.
+  Priors: `extra_cost_usd = 0.37 $/oz` round trip beyond the spread (2 × slippage 0.15 + 2 × commission 3.5 USD per lot side
   / 100 oz, `execution.costs.settings_extra_cost_usd`), with the spread paid in the labels (ask in, bid out). The
   report states which. **Swap:** every Q2 trading rule is flat by 16:30 New York, before the 17:00 New York
   rollover, so `swap_nights` is 0 by construction; each specialist carries a test that no trade is held through the
@@ -45,6 +49,19 @@ is fixed and a change after seeing data makes it exploratory.
   HAR-score band low / mid / high, cuts at the 33rd and 80th percentiles of the current fit's in-sample fitted
   values, and the effect of skipping the low band) on every trade-producing trial.
 
+## Owner rulings that bind this draft (decided 2026-10-11; source: owner approved the research director's recommendations, 2026-10-11)
+
+- Trial budget 20 a quarter, unchanged; the plan below fits it.
+- No consensus feed: H-11 stays out of Q2.
+- No other instruments.
+- The conservative K_eff default is confirmed: H-02's (Q1) and H-14's K_eff are added to every later trial's DSR
+  count.
+- The daily-signal floor (150, retire-only) applies to no Q2 rule: every Q2 rule is intraday and keeps
+  `research.screen_min_events` (1,000).
+- `costs-v1`: published by 2026-12-11 if the demo terminal runs, otherwise "priors accepted" for Q1 on 2026-12-14.
+  Q2 pins its own cost source at its freeze (P-5).
+- Still open: O-1 (H-18's event floor). It was not among the recommendations the owner approved.
+
 ## Order and budget (20 trials)
 
 | # | ID | Trial | Trials | Depends on | Why it earns the slot |
@@ -66,8 +83,13 @@ depends on, and before it runs:
 1. H-01 **continue**: pre-registered model research on slow TSMOM that meets the unchanged design gates (1).
 2. H-01 **continue**: exit variant C-5 (breakeven or wider trail) for the slow-TSMOM survivor (1).
 3. H-04 **continue**: model research with a time-exit meta-label (1).
-4. H-02 survivors that Q1's rows 6–9 could not fund (≤ 2).
-5. A holdout scoring (`--score-holdout`) of any Q1 gate passer (1; a holdout scoring is a charged trial).
+4. H-04 **continue**: H-24, the West-hours leg (short 08:30–16:00 New York, stop 1.5 ATR(1h), rule-only screen, read
+   by H-04's rule: gross t ≥ 2.0 on ≥ 1,000 events AND net mean R > 0) (1; added 2026-10-11 by the session-coverage
+   review, `hypotheses.md` A4 G-2, before any H-04 outcome exists).
+5. H-02 survivors that Q1's rows 6–9 could not fund (≤ 2).
+6. A holdout scoring (`--score-holdout`) of any Q1 gate passer (1; a holdout scoring is a charged trial).
+The list is in priority order and stops at six live items; anything past the sixth waits for the free reserve, which
+funds it only by a written note from the research director before its pre-registration.
 If every Q1 hypothesis fails or is inconclusive, the six slots join the free reserve by a written note from the
 research director after the last Q1 verdict.
 
@@ -149,6 +171,11 @@ way (13 → 9).
   `expected_eval_days`, with the month as `first_oos_month` (both in the config hash). A run with fewer than 90% of it
   (`h16.MIN_EVAL_SHARE`) is refused before any statistic is computed, and so is a NaN statistic; nothing is recorded
   either way. **Frozen values: owed (not counted yet; no data was read for this draft).**
+  **Run count-owed-events and paste the counts before the freeze** (Actions -> count-owed-events;
+  `scripts/count_owed_events.py` counts `first_oos_month` and `expected_eval_days` with `h16.first_oos_month` and the
+  `evaluate_h16` evaluation-set masks on placebo prices: it reads the 15m bar timestamps, the GVZ dates and the
+  calendar rows, never a real price or the target). Paste both values, the drop counts and the run's commit here and
+  into the pre-registered config.
 - **Feature version (amended 2026-10-11, quant review of E-4, M1):** H-16 pins what it reads,
   `feature_version(["day_type"])` (`h16.h16_feature_version()`; `f-52c853166b` for `day_type` v1 today), with the GVZ
   series (`GVZCLS`) named in the config. It is worked out at the freeze and checked at run time: the pre-registration
@@ -197,8 +224,19 @@ way (13 → 9).
 - **Noise boundary:** for a bar closing at London local time τ, B = mean over the previous 14 trading days of
   |close at τ − O| on those days (days without that bar are skipped; fewer than 14 available → no entry).
 - **Entry:** the first 15m bar of D whose close falls in [09:00 London, 10:30 New York] (each in its own DST-aware
-  clock) with |close − O_D| > 1.0 × B; side = sign(close − O_D); entry at that close. At most one trade a day. No
-  entry when the bar is within a tier-1 blackout (−15 / +30 min, E-1), or when the session calendar is closed.
+  clock) with |close − O_D| > 1.0 × B; side = sign(close − O_D); entry at that close. At most one trade a day.
+  **First breach only, literal (pin P-2, adopted 2026-10-11 after the quant review):** the candidate is the day's
+  first breaching bar inside the window with B defined. If its close falls in a closed session, if ATR(14) is not
+  defined there, or if it is in a tier-1 blackout (below), the day has **no entry**: no later bar is taken. The E-3
+  `trend_day` specialist follows the same rule. **Blackout, literal rule (program decision 2026-10-11 after the quant
+  review, before any count or outcome):** the candidate is the day's *first* breaching bar only; if that bar's close
+  lies inside a tier-1 blackout, **[−15, +30) min around the scheduled release, on the bar close** (E-1), the day has
+  **no entry**: no later breaching bar of that day is taken. (The allocator zeroes every weight over [−30, +30] min
+  around a tier-1 event, `allocator/rules.py`; that is a live sizing rule, not part of this trial's event definition.)
+  count-owed-events reports the literal count (`high_events_strict`, the trial count) and, for transparency only, the
+  count that would take the next breaching bar outside the blackout (`high_events_next_bar`). The blackout is built
+  from the tier-1 rows of E-1 as known at that bar (status `scheduled`, `available_utc` before the bar). The closed-session
+  and ATR cases follow the same literal rule (P-2, above). The low half (shadow) uses the identical rule.
 - **Stop:** 1.5 × Wilder ATR(14) of the 15m mid bars at the entry bar's close, frozen; R = that distance.
 - **V0 (fixed):** target 3.0 ATR; otherwise flat at the first bar close at or after 16:30 New York.
 - **V1 (scale-and-run):** 50% off at 2.0 ATR; chandelier trail 2.5 ATR from the best price, armed at 1.5 ATR (ATR
@@ -229,6 +267,10 @@ way (13 → 9).
   Calendar upper bound ≈ 1,690 (half of ≈ 3,380 days); the OD estimate is 1,000–1,500.
   **If the count is below 1,000, both H-17 rows are withdrawn before the freeze (no trial spent) and their slots go
   to the free reserve;** the median cut is not moved to raise the count.
+  **Run count-owed-events and paste the counts before the freeze** (literal-rule high-half events `high_events_strict` = the trial count, low-half
+  events, per year). Until `trend_day` (E-3) is merged the workflow counts from this written rule (labelled
+  "spec-derived"); the count that decides the withdrawal is the one recounted with `trend_day`'s own code, and a
+  difference from the spec-derived count is explained here.
 - **Feature version:** `f-1eada57050` (default + `day_type` v1). Only `opp_har_range_hat` and `opp_har_cut50` are
   read: the "HAR column only" condition. The calendar enters through `ctx["us_calendar"]` for the blackout and
   day_type's tier-1 columns, which are not read. The `tier1_events`/`tier2_events` families stay off
@@ -243,10 +285,20 @@ way (13 → 9).
 ### H-14 15m scalping discovery (one trial)
 
 - **Spec (E-2):** a 15m two-sided discovery candidate set, run as `research_pass.py --discover` on that spec.
-  - Candidates: every 15m bar close from 08:00 London to 16:00 New York (DST-aware), outside the tier-1 blackout
-    (−15 / +30 min, E-1) and the first 15 min after the daily reopen, and only where the H-13 cost gate holds: the
-    3.0 ATR target ≥ 3 × the round-trip cost in USD (spread from `costs-v1` for the session, else the prior, plus
-    0.37 $/oz), i.e. ATR(15m) ≥ the round trip.
+  - Candidates: every 15m bar close from 08:00 London to 16:00 New York (DST-aware, both ends included), outside the
+    tier-1 blackout (**[−15, +30) min around the scheduled release, on the bar close**, E-1; the allocator's live
+    [−30, +30] min zero-weight window is a sizing rule, not part of the candidate set) and the first 15 min after the
+    daily reopen, and only where the H-13 cost gate holds: the 3.0 ATR target ≥ 3 × the round-trip cost in USD, i.e.
+    ATR(15m) ≥ the round trip (the daily-reopen exclusion lies outside this window in practice; kept for clarity).
+  - **Cost source for the gate (P-5, adopted 2026-10-11; replaces the earlier "costs-v1 never read by the gate"):**
+    the gate and the labels use the cost source pinned at the freeze ("Fixed for every trial"). If `costs-v1` exists
+    at the freeze, its named version is pinned and the H-14 count is recounted with it. Otherwise the prior is pinned:
+    round trip = the candidate 15m bar's own Dukascopy mean spread (`spread_mean`, USD/oz) + the settings extra cost
+    (`execution.costs.settings_extra_cost_usd`, 0.37 $/oz today; written into the config and so into its hash), and
+    `costs-v1` is a reported sensitivity only. Nothing switches between the count, the freeze and the run. **The run applies the extra cost frozen in the
+    config** (0.37 $/oz today), whatever `settings.yaml` says at the run. A different settings value is only
+    reported (count-owed-events records the check); it never changes the gate or the labels (quant review,
+    2026-10-11).
   - Both sides are labelled for every candidate (two rows, `side` the 40th input), so the label depends on no primary
     (survey 4b). Both rows of a bar always fall in the same fold and are purged together.
   - Label: triple barrier, target 3.0 / stop 1.5 × Wilder ATR(14) of 15m mid bars at the candidate close, time
@@ -258,7 +310,10 @@ way (13 → 9).
 - **Discovery config** (aligned with H-02's frozen row; any other difference is listed at the freeze):
   `{"n_subsamples": 50, "subsample_frac": 0.5, "survivor_unit": "group", "group_top_k": 3, "method": "lgbm",
   "freq_threshold": 0.6, "stability_threshold": 0.7, "permutation": true, "seed": 0}` (`group_top_k` explicit, as
-  every group-unit config must be: the code refuses one without it). Walk-forward: the 15m window (train 24 / test 3 /
+  every group-unit config must be: the code refuses one without it). **Differences from H-02's pinned config (Q1,
+  amended 2026-10-11, quant review F1):** stability_threshold 0.7 here vs 0.6 there (P-7), and `top_k` is unpinned
+  here, so the code default of 10 would apply, vs 39 there. At the Q2 freeze the full `DiscoveryConfig.model_dump()`
+  is written here, as for H-02, with `top_k` chosen before any count. Walk-forward: the 15m window (train 24 / test 3 /
   step 3 months, purge 2 days, embargo 1 day).
 - **Survivor unit = group (quant ruling Q-3).** At 15m the question is which mechanism (sweep, level, session flow,
   jump) carries information, not which column, and K_eff = groups screened (about 10–15) instead of features (about
@@ -289,6 +344,9 @@ way (13 → 9).
   (calendar upper bound ≈ 4,000 days × ~52 bars over 13 hours; the cost gate is expected to remove a larger share
   of 2012–2019, when cost in R was 2–3×
   higher, SoA A7), and the number per year.
+  **Run count-owed-events and paste the counts before the freeze** (candidate bars, labelled rows = 2x, blackout and
+  cost-gate drops, per year). Spec-derived until E-2 is merged (the spread is the bar's Dukascopy mean spread, not a
+  `costs-v1` session spread); recount with E-2's own candidate code before the freeze.
 - **Feature version:** `f-079deacc61`.
 
 ### H-18 Post-blackout event continuation (one trial, conditional)
@@ -298,7 +356,9 @@ way (13 → 9).
   time each had (FOMC was 12:30 / 14:15 ET before 2013, 14:00 ET after). One trade a day at most: the first event of
   the day; later same-day events are skipped and counted.
 - **Entry:** P0 = open of the 15m bar starting at the scheduled time; the entry bar is the 15m bar closing at release
-  + 30 min (the end of the gate's blackout). M = entry close − P0. Enter if |M| > 1.0 × ATR_pre, where ATR_pre is the
+  + 30 min (the end of the gate's blackout, **[−15, +30) min around the scheduled release, on the bar close**, so the
+  bar closing at +30 is the first allowed; the allocator's live [−30, +30] min zero-weight window is a sizing rule,
+  not part of this event definition). M = entry close − P0. Enter if |M| > 1.0 × ATR_pre, where ATR_pre is the
   Wilder ATR(14) of 15m mid bars at the close of the bar before the release bar; side = sign(M).
 - **Stop:** 1.5 × ATR(14) at the entry bar's close (the system's stop rule; it includes the release bars).
 - **Exit:** V1 as H-17, flat at 16:30 New York.
@@ -310,8 +370,36 @@ way (13 → 9).
   the floor's events. Otherwise inconclusive.
 - **Events owed from data before the freeze:** events with the entry bar present, and how many pass |M| > 1.0 ATR
   (events only: the sign and size of M at +30 min are inputs, not outcomes; nothing after the entry close is read).
+  **Run count-owed-events and paste the counts before the freeze** (spec-derived until `event_continuation` is
+  merged; recount with its own code before the freeze).
 - **Distinct from:** H-11 (needs a consensus surprise), R-08 pre-FOMC drift (before the release).
 - **Feature version:** `f-079deacc61`.
+
+## Settled decisions and pins owed before any count is seen (research director, 2026-10-11)
+
+Settled by the quant review and written into the rules above: (1) H-17's blackout reading is literal: if the day's
+first breach falls in a blackout, the day is skipped; (2) the blackout is [release − 15 min, release + 30 min) on the
+bar close; (3) H-14's cost prior is the Dukascopy bar spread plus the settings extra cost. The draft was checked
+against all three: H-17's entry and H-14's candidates now state them; H-18 already enters at the bar closing at
+release + 30 min, which is outside its own release's half-open window.
+
+Still ambiguous. Each must be pinned here **before** count-owed-events is first run on `main`, so that no rule is
+chosen after a count has been seen. Counts are events only, never outcomes, but the floor-based withdrawals (H-17
+< 1,000, H-18's floor) make them decision inputs. Owner of every pin: strategy researcher drafts it, quant reviewer
+rules, research director records it here. Date: **2026-10-25**.
+
+| Pin | Question | Recommendation |
+|---|---|---|
+| P-1 (**resolved 2026-10-11**: the literal count `high_events_strict` is in `count_owed_events.py`) | The count script in review (`scripts/count_owed_events.py`, commit `9343f2f`, not on this branch) takes H-17's entry as the first breach *outside* the blackout. That is the non-literal reading. It reports `*_first_breach_in_blackout` beside it but not the literal count | Fix before merge: `high_events` / `low_events` = days whose first eligible breach is outside the blackout (literal). Keep the non-literal figure only as a labelled diagnostic. The withdrawal test reads the literal count |
+| P-2 (**adopted 2026-10-11**, written into H-17's entry; applied in count-owed-events on 2026-10-11) | H-17: what if the first breach bar is in a closed session or has no ATR(14) yet? The script folds both into "eligible" and moves on to the next breach | Literal, the same as the blackout: the first breach bar (B defined, inside the window) is the only candidate. If it cannot be traded, the day is skipped |
+| P-3 | Which tier-1 rows black out? The live gate blacks out `[CPI, NFP, FOMC, PCE]` (`config/settings.yaml` `risk.blackout.events`). E-1 also carries the FOMC press conference as a tier-1 row, and the script blacks out every tier-1 row | Research blacks out exactly what the live gate blacks out, so labels, shadow and live agree. Engineering confirms whether the live gate's `FOMC` covers the press conference, and the research set is pinned to match |
+| P-4 | H-18: on FOMC days with a press conference (statement + 30 min), the entry bar's close (statement + 30) falls inside the press conference's window [+15, +60). Two tier-1 releases can also share a day | Gate parity: H-18 never enters inside any tier-1 blackout. If P-3 pins the press conference as blacked out, the FOMC event is the statement-plus-press-conference cluster: entry at the bar closing at the end of the union of their windows (press conference + 30 min), with M still measured from P0 at the statement. Counted and reported by type |
+| P-5 (**adopted 2026-10-11**, written into "Fixed for every trial" and H-14) | Cost source between the freeze and the run. "Fixed for every trial" uses `costs-v1` if it is published by run time; the H-14 gate now never reads it | Pin the cost source **at the freeze** for every Q2 config (priors, or a named `costs-v1` version) and never switch it before the run. H-14's labels charge the same costs as its gate (bar spread in the ask/bid labels + the frozen extra cost). Any `costs-v1` result is a reported sensitivity only |
+| P-6 | H-14: "net mean R > 0 on ≥ 1,000 events". Events, or candidates? | Trades taken by the pre-set rule (top-tercile p, one position at a time, both sides), not candidate rows |
+| P-7 | H-14 survives at stability 0.7. Q1's H-02 slot rule uses 0.6 | Keep 0.7 (stricter at 15m, where costs bind). List it as a stated difference from H-02 at the freeze, as the draft promises |
+| P-8 | Day mapping: the London date of the bar close vs the `day_type` day (22:00 UTC rollover) whose baseline forecast labels the day high or low | The `day_type` day D that contains 08:00 London on London date D. Its forecast is the one emitted at the previous stub-free day's close (`har_forecast`). H-17's whole window (08:00 London .. 16:30 New York) lies inside D in both DST regimes |
+| P-9 | Does H-17's noise boundary B include days whose bar at τ fell in a blackout? | Yes. B measures noise, not trades: it uses every one of the previous 14 days that has a bar at τ |
+| P-10 | Year and day attribution | Positive years by entry time in UTC (as H-01). H-18's "first event of the day" by New York date |
 
 ## Dependencies
 
@@ -329,7 +417,7 @@ way (13 → 9).
 | Engineering | BACKLOG 33 (opportunity-day report), on 20 and 26 | reports only |
 | Data (new) | **E-1** historical tier-1 schedule 2010-01 .. 2025-09 (scheduled times from BLS, BEA and Fed calendars; no outcomes), loadable as research `ctx["events"]`. The live archive is forward-only and research passes no events today | H-16, H-17, H-14, H-18 |
 | Engineering (new) | **E-2** 15m two-sided discovery candidate spec with the cost gate | H-14 |
-| Engineering (new) | **E-3** `trend_day` and `event_continuation` screening specialists | H-17, H-18 |
+| Engineering (new) | **E-3** `trend_day` and `event_continuation` screening specialists. `trend_day` implements H-17's literal blackout rule: only the day's first breaching bar is a candidate, and if its close is inside the tier-1 blackout [−15, +30) min (on the bar close) the day has no entry | H-17, H-18 |
 | Engineering (new) | **E-4** an evaluation path for H-16 that records one registry trial and prints the reading rule. **Built 2026-10-11** (`goldbot/research/h16.py`, `research_pass.py --h16 --first-oos-month YYYY-MM`; quant review pending) | H-16 |
 | Engineering (new) | **E-5** protect in-quarter allocations (survivors, Q1 follow-ups) from automated spending of the unreserved remainder | budget integrity |
 
@@ -352,7 +440,11 @@ way (13 → 9).
 - [x] Quant rulings Q-1, Q-2, Q-3 recorded here (2026-10-10)
 - [ ] Owner ruling O-1 recorded, or H-18 withdrawn
 - [ ] BACKLOG 30a, 31, E-1, E-2, E-3, E-4 merged and tested; E-5 decided (E-4 built 2026-10-11, quant review pending)
-- [ ] Event counts owed above recorded (events only, no labels or outcomes); H-17 withdrawn if < 1,000
+- [ ] Pins P-1 .. P-10 above recorded **before** the first count-owed-events run on `main` (target 2026-10-25)
+- [ ] `calendar-v1` and `macro-v1` releases published (absent on 2026-10-11: `data-us-calendar` and `data-macro`
+  have never run), otherwise the H-16/H-17/H-18/H-14 counts come back "not counted"
+- [ ] Event counts owed above recorded (events only, no labels or outcomes): run count-owed-events and paste the
+  counts before the freeze, recounted with E-2/E-3's own code once merged; H-17 withdrawn if < 1,000
 - [ ] `costs-v1` published (or the priors accepted and stated); `macro-v1` present for H-16
 - [ ] `research.reserved_trials_quarter` for Q2 set to the number of queued rows
 - [ ] Each queued row written with `queue=True, target_quarter="2027Q2"` and this file's freeze commit

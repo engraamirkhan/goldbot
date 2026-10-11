@@ -1,0 +1,5 @@
+id: U8
+requirement: Owner account recovery cannot be done with the authenticator alone (security review)
+status: implemented
+code: goldbot/api/auth.py `forgot_password` (owner needs a recovery code, spent) and `_notify_owner` (Telegram notice on every forgot-password)
+test: tests/test_auth_security.py::test_owner_forgot_password_with_only_the_authenticator_is_refused; ::test_owner_forgot_password_needs_a_recovery_code_and_spends_it; ::test_every_successful_forgot_password_queues_a_telegram_notice_for_the_owner

@@ -1,0 +1,5 @@
+id: R9
+requirement: Daily loss cap "2% of own equity per account", no new entries
+status: implemented
+code: goldbot/risk/gate.py:143-145; config/settings.yaml:50
+test: tests/test_cov_risk.py::test_each_account_condition_blocks_entries_on_its_own; tests/test_trace_risk.py::test_design_numbers_in_settings_and_code_defaults

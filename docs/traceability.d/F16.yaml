@@ -1,0 +1,5 @@
+id: F16
+requirement: Trader toolkit, order blocks (last opposite candle before a structure-breaking displacement, body > k x ATR)
+status: implemented
+code: 'goldbot/features/trader.py `order_blocks` (family `smc`): nearest active bullish/bearish block distance (negative inside), age and count; invalidated by a close through the block; k = 1.0, search 5 bars'
+test: 'tests/test_trader_features.py::test_order_block_is_the_last_opposite_candle_before_a_structure_breaking_displacement; ::test_no_order_block_without_a_break_of_structure; no look-ahead for F13-F16: ::test_no_trader_feature_changes_when_future_bars_are_appended; ::test_trader_features_pass_the_pipeline_lookahead_check'

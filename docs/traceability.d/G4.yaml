@@ -1,0 +1,5 @@
+id: G4
+requirement: Retirement "lower 80% confidence bound on expectancy is below zero after 100 trades, or bottom quarter of its generation for two consecutive months"; retired kept in shadow six months
+status: implemented
+code: goldbot/research/population.py:42-47
+test: tests/test_population.py::test_retirement_by_confidence_bound_and_the_six_month_shadow_tail; ::test_two_bottom_quartile_months_retire_an_agent

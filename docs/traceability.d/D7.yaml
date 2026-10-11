@@ -1,0 +1,5 @@
+id: D7
+requirement: '"bars that would straddle the daily break are not formed"'
+status: partial
+code: 1m bars inside the break are dropped (goldbot/data/resample.py:42); a 4h bar spanning the break is still formed from both sides
+test: untested

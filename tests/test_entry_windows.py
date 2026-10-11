@@ -432,6 +432,56 @@ def test_engine_publishes_the_windows_block_and_logs_once_per_transition(tmp_pat
     assert len([r for r in caplog.records if "calendar_unavailable" in r.getMessage()]) == 2
 
 
+def test_the_windows_block_says_when_each_window_ends(tmp_path):
+    """Review (trading safety, LOW): the engine publishes when its own windows end, so the owner's displays show the
+    running gate's times, not ones re-derived from settings that may have changed since it started."""
+    def block(eng: Engine) -> dict:
+        eng._write_state()
+        return json.loads((Path(eng.cfg.state_dir) / "engine_icm-demo.json").read_text())["windows"]
+    eng, pb = _engine(tmp_path / "t2", RiskLimits(tier2=Tier2Blackout(enabled=True)), _feed("-05:00", "2026-01-15"))
+    _at(eng, pb, pd.Timestamp("2026-01-15 13:30", tz="UTC"))                # PPI (tier 2) at 13:30 UTC, +15 min
+    w = block(eng)
+    assert pd.Timestamp(w["tier2_until"]) == pd.Timestamp("2026-01-15 13:45", tz="UTC")
+    assert w["reopen_until"] is None and w["holiday_name"] is None and w["holiday_until"] is None
+    eng, pb = _engine(tmp_path / "ro", RiskLimits(reopen=ReopenSettings(enabled=True), holidays=HolidaySettings(enabled=True)))
+    _at(eng, pb, DAILY["winter"] + 3 * M)
+    w = block(eng)
+    assert pd.Timestamp(w["reopen_until"]) == DAILY["winter"] + 10 * M and w["tier2_until"] is None
+    _at(eng, pb, pd.Timestamp("2026-11-26 15:00", tz="UTC"))                # Thanksgiving; the 27th is listed too
+    w = block(eng)
+    assert w["holiday_name"] == "Thanksgiving Day"
+    assert pd.Timestamp(w["holiday_until"]) == pd.Timestamp("2026-11-27 22:00", tz="UTC")   # Sat 00:00 Athens
+    assert w["reopen_until"] is None
+    _at(eng, pb, pd.Timestamp("2026-11-25 15:00", tz="UTC"))
+    assert block(eng)["holiday_name"] is None and block(eng)["holiday_until"] is None
+
+
+def test_a_failing_window_end_logs_once_when_it_starts_and_once_when_it_clears(tmp_path, monkeypatch, caplog):
+    """Re-review LOW: a display-only end time that keeps failing is logged once per window when it starts and once
+    when it clears (as review M1 for calendar_unavailable), never on every tick; the flag is unaffected."""
+    import goldbot.engine.runner as runner_mod
+    eng, pb = _engine(tmp_path, RiskLimits(reopen=ReopenSettings(enabled=True)))
+    real = runner_mod.reopen_window_end
+
+    def boom(*_a, **_k):
+        raise RuntimeError("table glitch")
+    monkeypatch.setattr(runner_mod, "reopen_window_end", boom)
+    caplog.set_level(logging.INFO, logger="goldbot.engine")
+    r = DAILY["winter"]
+    for k in range(100):
+        assert _at(eng, pb, r + S * (k + 1)).reopen_window            # the flag never depends on the end time
+    warns = [x for x in caplog.records if "reopen_until" in x.getMessage() and x.levelno == logging.WARNING]
+    assert len(warns) == 1
+    monkeypatch.setattr(runner_mod, "reopen_window_end", real)
+    for k in range(3):
+        _at(eng, pb, r + 2 * M + S * k)
+    infos = [x for x in caplog.records if "reopen_until" in x.getMessage() and x.levelno == logging.INFO]
+    assert len(infos) == 1
+    eng._write_state()
+    w = json.loads((tmp_path / "engine_icm-demo.json").read_text())["windows"]
+    assert pd.Timestamp(w["reopen_until"]) == r + 10 * M
+
+
 def test_a_raising_window_computation_fails_closed_and_logs_once(tmp_path, monkeypatch, caplog):
     import goldbot.engine.runner as runner_mod
     eng, pb = _engine(tmp_path, ON, _feed("-05:00", "2026-01-15"))
@@ -513,3 +563,39 @@ def test_health_entry_windows_warns_on_a_stale_fetch_and_a_holiday_list_near_its
         "entry_windows:icm-demo:holiday_list"] == "ok"
     _health_state(tmp_path, enabled={"tier2": False, "reopen": False, "holidays": False})
     assert health.check_entry_windows(ctx, "icm-demo") == []
+
+
+@pytest.mark.parametrize("edit", [
+    lambda t: t.replace("valid_through:", "valid_thru:"),                          # the key itself misspelt
+    lambda t: t.replace("valid_through: 2028-12-31", "valid_through: 2028-12-31\nvalid_thru: 2029-12-31"),
+], ids=["renamed", "extension-under-a-misspelt-key"])
+def test_a_holiday_list_with_a_misspelt_key_fails_closed_and_exits_still_run(tmp_path, edit):
+    """A hand edit that misspells `valid_through` (here `valid_thru:`) must not pass silently: HolidayList forbids
+    unknown keys, so with the holiday window on the engine sets `calendar_unavailable`, RiskGate refuses entries with
+    that reason, and a stop is still taken (entries only; exits are never gated). The second case keeps the real key
+    and adds the misspelt one (an intended extension): only extra="forbid" catches it."""
+    text = edit((ROOT / "config" / "holidays_cme_metals.yaml").read_text())
+    assert "\nvalid_thru:" in text
+    bad = tmp_path / "holidays_misspelt.yaml"
+    bad.write_text(text)
+    eng, pb = _engine(tmp_path, RiskLimits(holidays=HolidaySettings(enabled=True, file=str(bad))), data=False)
+    t0 = pd.Timestamp("2026-11-24 15:00", tz="UTC")                   # an ordinary Tuesday, listed in no version
+    pb.on_tick(Tick(ts_utc=t0, bid=2000.0, ask=2000.0))
+    agent = eng.agents[next(iter(eng.agents))]
+    ls = agent.label_spec
+    prop = Proposal(proposal_id=f"icm-demo-{int(t0.timestamp())}-x", account_id="icm-demo", agent_id=agent.agent_id,
+                    side=1, lots=0.1, entry=2000.0, stop=2000.0 - ls.stop_atr, target=2000.0 + ls.target_atr, p=0.6,
+                    ev_r=0.1, spread_points=0.0, top_features=[])
+    eng._execute(prop, agent, 0.1, 2000.0 - ls.stop_atr, 2000.0 + ls.target_atr, requested=2000.0, atr_usd=1.0)
+    (pid,) = eng.open
+    st = _at(eng, pb, t0 + M, px=2000.0)
+    assert st.calendar_unavailable and not st.holiday_thin
+    assert "unusable" in (eng._unavailable_why or "")
+    assert "calendar_unavailable" in eng.gate.check(_intent(), st).reasons
+    pos = pb._positions[pid]
+    pb._positions[pid] = pos.model_copy(update={"sl": None})   # stop lost at the broker: the engine's own check acts
+    hit = Tick(ts_utc=t0 + 2 * M, bid=2000.0 - 2 * ls.stop_atr, ask=2000.0 - 2 * ls.stop_atr)
+    pb.on_tick(hit)
+    eng.on_tick(hit)
+    assert not pb.positions()
+    assert any(d["action"] == "engine_stop_close" for d in eng.decisions)
