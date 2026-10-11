@@ -98,6 +98,8 @@ DEFINITE_REJECT_RETCODES = frozenset({
     10032, 10033, 10034, 10035, 10036,
     10038, 10039, 10040, 10041, 10042, 10043, 10044, 10045, 10046,
 })
+# review MEDIUM-2 (d): a pending_orders row still `sending` this long after its send is resolved in-process
+SENDING_RESOLVE_S = 60.0
 # design (D10): a bar close is detected by clock, close time plus this grace, not by the next bar's first tick
 BAR_CLOSE_GRACE_S = 1.5
 LATE_TICK_WARN_S = 60.0      # at most one late_tick data-quality warning per this many seconds (every one is counted)
@@ -1354,6 +1356,12 @@ class Engine:
                 # modify that did not stick): close at market, as the labels exit at that stop
                 self._policy_close(pid, tr, "trail_close")
                 continue
+            if pos.sl is not None and tr.side * (sl - pos.sl) <= 1e-9:
+                # review MEDIUM-2 (c), defence in depth: the broker's stop is already at or beyond this one (a restart
+                # or an adoption left the engine's copy loose): never send a looser stop; the broker's is the floor
+                if tr.sl is None or tr.side * (pos.sl - tr.sl) > 1e-9:
+                    tr.sl = pos.sl
+                continue
             if sl == tr.sl:
                 continue
             tr.sl = sl                                    # reconciliation re-sends it if the modify did not stick
@@ -1573,12 +1581,14 @@ class Engine:
         if positions is None:                             # the next pass retries; the per-tick stop check still guards
             return
         self._foreign = sorted(p.position_id for p in positions if not self._own(p.magic))
+        changed = self._resolve_stale_sending({p.position_id: p for p in positions})
         for p in positions:
             if not self._own(p.magic):
                 continue
             tr = self.open.get(p.position_id)
             if tr is None:
                 tr = self.open[p.position_id] = self._adopt(p)
+                changed = True
                 self.decisions.append({"ts": time.time(), "action": "adopt_orphan", "position": p.position_id,
                                        "agent": tr.agent_id, "policy": tr.policy is not None})
             if tr.sl is None and p.sl is None:
@@ -1611,6 +1621,8 @@ class Engine:
                 tr.sl = p.sl                  # adopted with a stop: that stop is the floor from now on
         live = {p.position_id for p in positions}
         self._modify_backoff = {k: v for k, v in self._modify_backoff.items() if k in live}
+        if changed:
+            self._save_orders()             # an adoption or a resolved row survives a restart (review MEDIUM-2)
 
     def _adopt(self, p: Position) -> OpenTrade:
         """An open position of this engine's magic range that the open table does not list. When this engine sent it
@@ -1620,6 +1632,10 @@ class Engine:
         and the broker's current stop as its initial stop."""
         rec = next((o for o in self._orders.values() if o.position_id == p.position_id), None) or \
             next((o for o in self._orders.values() if p.comment and p.comment in (o.client_order_id, o.client_order_id[-31:])), None)
+        if rec is not None and rec.status != "filled":
+            # review MEDIUM-2 (a): the row of a send that raised (or a fill found late) now names its position, so a
+            # restart keeps this trade instead of recovering the send again and resetting its stop and state
+            rec.status, rec.position_id = "filled", p.position_id
         agent = self.agents.get(rec.agent_id) if rec is not None else self._agent_for_magic(p.magic)
         agent_id = rec.agent_id if rec is not None else "orphan" if agent is None else agent.agent_id
         max_bars = rec.max_bars if rec is not None else 48 if agent is None else self._base_bars(agent)
@@ -2091,42 +2107,66 @@ class Engine:
                 "startup_error": f"{type(exc).__name__}: {exc}"[:300]}), durable=False)
             raise
         for cid, rec in self._orders.items():
-            if rec.status != "sending":
-                continue
-            pos = next((p for p in positions.values() if p.comment == cid[-31:] or p.comment == cid), None)
-            try:
-                deals = self._read_deals(rec.ts_utc - pd.Timedelta(minutes=5))
-            except Exception:
-                if pos is None:
-                    continue          # unknown yet: stays "sending" (never re-sent) and is looked up at the next start
-                deals = pd.DataFrame()
-            dealt = not deals.empty and (
-                ("client_order_id" in deals.columns and bool((deals["client_order_id"] == cid).any()))
-                or ("comment" in deals.columns and bool(deals["comment"].isin([cid, cid[-31:]]).any())))
-            if pos is not None:
-                rec.status, rec.position_id = "filled", pos.position_id
-                tr = self.open[pos.position_id] = OpenTrade(position_id=pos.position_id, agent_id=rec.agent_id,
-                                                            side=pos.side, lots=pos.lots, entry_bar_ts=pos.open_time_utc,
-                                                            max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp,
-                                                            client_order_id=cid, open_price=pos.open_price,
-                                                            initial_sl=rec.sl, initial_lots=rec.lots,
-                                                            opened_utc=pos.open_time_utc, excursion_approx=True)
-                agent = self.agents.get(rec.agent_id)
-                if agent is not None:
-                    atr_usd = rec.atr_usd if rec.atr_usd is not None else self._implied_atr(agent, pos.open_price, rec.sl)
-                    self._attach_policy(tr, agent, entry=pos.open_price, atr_usd=atr_usd, opened=pos.open_time_utc)
-                self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_adopt_sent",
-                                       "proposal": cid, "position": pos.position_id})
-            else:
-                rec.status = "filled" if dealt else "unfilled"     # filled and already closed, or never filled
-                self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": f"reconcile_sent_{rec.status}",
-                                       "proposal": cid})
-                if dealt:
-                    self._record_closed_while_down(cid, rec, deals)
+            if rec.status == "sending":
+                self._resolve_sent(cid, rec, positions)
         # open trades the broker no longer has were closed while the engine was down: recorded once their exit deal
         # is seen (a trade recorded before the restart is skipped by position id)
         self._sweep_closed(set(positions))
         self._save_orders()
+
+    def _resolve_sent(self, cid: str, rec: SentOrder, positions: dict[int, Position]) -> None:
+        """A `sending` row (a send never confirmed: a crash, or an order call that raised) looked up in the broker's
+        positions and deals by client id / MT5 comment. A position is adopted with the row's agent, entry stop, lots
+        and exit policy, unless the open table already holds it (adopted by reconciliation, or carried over a
+        restart): that trade is kept with its stop, bars held and scale-out state and only the row is marked filled
+        (review MEDIUM-2 b). No position: filled and closed (recorded from its deals) or never filled ("unfilled").
+        An unreadable deal history without a position leaves the row `sending` for the next look. Never re-sent."""
+        pos = next((p for p in positions.values() if p.comment == cid[-31:] or p.comment == cid), None)
+        try:
+            deals = self._read_deals(rec.ts_utc - pd.Timedelta(minutes=5))
+        except Exception:
+            if pos is None:
+                return                # unknown yet: stays "sending" (never re-sent) and is looked up again
+            deals = pd.DataFrame()
+        dealt = not deals.empty and (
+            ("client_order_id" in deals.columns and bool((deals["client_order_id"] == cid).any()))
+            or ("comment" in deals.columns and bool(deals["comment"].isin([cid, cid[-31:]]).any())))
+        if pos is not None:
+            rec.status, rec.position_id = "filled", pos.position_id
+            if pos.position_id in self.open:
+                self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_sent_known",
+                                       "proposal": cid, "position": pos.position_id})
+                return
+            tr = self.open[pos.position_id] = OpenTrade(position_id=pos.position_id, agent_id=rec.agent_id,
+                                                        side=pos.side, lots=pos.lots, entry_bar_ts=pos.open_time_utc,
+                                                        max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp,
+                                                        client_order_id=cid, open_price=pos.open_price,
+                                                        initial_sl=rec.sl, initial_lots=rec.lots,
+                                                        opened_utc=pos.open_time_utc, excursion_approx=True)
+            agent = self.agents.get(rec.agent_id)
+            if agent is not None:
+                atr_usd = rec.atr_usd if rec.atr_usd is not None else self._implied_atr(agent, pos.open_price, rec.sl)
+                self._attach_policy(tr, agent, entry=pos.open_price, atr_usd=atr_usd, opened=pos.open_time_utc)
+            self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_adopt_sent",
+                                   "proposal": cid, "position": pos.position_id})
+        else:
+            rec.status = "filled" if dealt else "unfilled"     # filled and already closed, or never filled
+            self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": f"reconcile_sent_{rec.status}",
+                                   "proposal": cid})
+            if dealt:
+                self._record_closed_while_down(cid, rec, deals)
+
+    def _resolve_stale_sending(self, positions: dict[int, Position]) -> bool:
+        """Review MEDIUM-2 (d): `sending` rows older than SENDING_RESOLVE_S (host clock, as the row was stamped) are
+        resolved in-process as a restart would (`_resolve_sent`), so a send that raised does not wait for a restart.
+        Younger rows may still be in flight and are left alone. Returns whether any row changed."""
+        now = pd.Timestamp.now("UTC")
+        changed = False
+        for cid, rec in list(self._orders.items()):
+            if rec.status == "sending" and (now - pd.Timestamp(rec.ts_utc)).total_seconds() >= SENDING_RESOLVE_S:
+                self._resolve_sent(cid, rec, positions)
+                changed = changed or rec.status != "sending"
+        return changed
 
     # ------------------------------------------------------------------ closed-trade record (phase gates P7, stop rule P6)
     def _record_closed_while_down(self, cid: str, rec: SentOrder, deals: pd.DataFrame) -> None:

@@ -821,6 +821,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   counted through `note_tick_error` (entries blocked until a clean decision bar), the decision is journalled
   `auto_unconfirmed:<ExceptionType>`, and its pending_orders row stays `sending`, so it is never re-sent and a position
   that did open is picked up by reconciliation (adopted in this engine's magic range) or by the restart check.
+  Review MEDIUM-2 (of 2c1935f): that `sending` row used to survive the adoption, so a restart recovered the send again
+  and replaced the adopted trade (stop back to the entry stop, bars_held and scaled reset), after which the exit
+  policy could send a stop looser than the broker's. Now (a) `_adopt` marks a matching unfilled row filled with its
+  position and `_reconcile` saves; (b) `_resolve_sent` (shared by `_load_orders` and the in-process path) keeps a trade
+  the open table already holds and only marks its row filled (`reconcile_sent_known`); (c) `_manage_policies` sends a
+  modify only when the new stop is tighter than both the engine's and the broker's (side-aware; a looser engine copy is
+  raised to the broker's); (d) `_resolve_stale_sending` resolves rows still `sending` after `SENDING_RESOLVE_S` (60 s)
+  in `_reconcile`, from the same positions and deals lookup (tests/test_sending_row_recovery.py: raise, adopt, tighten,
+  restart; no looser modify; bars_held and scaled kept; shorts; the control still tightens).
 - Open-risk review LOWs (2026-10-11, row R38): LOW-1 a failure computing the open risk sets it unknown and never
   aborts the account refresh, and a failed account read at the bar close no longer skips `_manage_open` (exits still
   run, then the error propagates and no entry is decided on that close: the base branch's review-L3 rule, kept at the
