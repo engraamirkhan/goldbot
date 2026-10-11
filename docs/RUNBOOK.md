@@ -830,10 +830,12 @@ when that loop has stopped).
 
 ### Currency rollout (one time: the update that brings currency-correct sizing, BACKLOG 28/25/29)
 
+On the two Oracle VMs follow the ordered rollout in [docs/deploy/2026-10-batch.md](deploy/2026-10-batch.md) instead (MT5 box first, aux.db rollback, minimum-lot setting, gap-week clock check).
+
 Engines now publish their deposit currency and the supervisor halts every account when running engines disagree
 (`mixed_account_currencies`). Do this update with every engine stopped, not engine by engine:
 
-1. Stop all engines (`nssm stop goldbot-engine-icm-demo`, and any other engine service), then the supervisor.
+1. Stop all engines (`nssm stop goldbot-engine-icm` and `nssm stop goldbot-engine-vantage` on Windows; `sudo systemctl stop goldbot-engine@icm-demo` on the Oracle brain), then the supervisor.
 2. Delete `state\engine_<account>.json` of every account that will not run (with this release `vantage-demo` is
    `enabled: false` in `config\accounts.yaml`). A file older than 60 s does not trigger the currency halt, and if
    its currency differs (or is missing) its money is not summed, but its open lots still count as exposure and the

@@ -1046,6 +1046,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   that does not answer /health through the tunnel. Those warnings are in `NOTIFY_ON_WARN`, so the existing Telegram
   health pass announces them once per incident; other warnings stay silent as before. Follow-up for the bot.py
   owner: HEALTH_EVERY_S 300 -> 60 so a silent service is announced within 6 min (acceptance S5).
+- October batch rollout (SRE, 2026-10-11): `docs/deploy/2026-10-batch.md`.
+  - The owner's ordered steps for the two Oracle VMs, to be done by Fri 23 Oct: pre-checks (restic plus a local
+    copy, preflight, health baseline); engines stopped; MT5 box first, because the new brain needs the bridge's
+    `loss_per_lot`; then the brain; then the checks on `supervisor.json` and `aux.db`; the minimum-lot setting in
+    settings.local.yaml only after the deploy; the first-hour health lines; the 26-30 Oct clock measurement, with
+    the NY+7 switch brain first under `/halt`; the rollback plan.
+  - Found: `goldbot-deploy`'s automatic rollback from this batch ends in `failed`, because aux.db stays at schema 5
+    and the old dashboard refuses it. A rollback with `risk.min_lot_risk_cap` set stops every service, because the
+    old Settings forbid the key. A manual rollback to an older commit is refused.
+  - BACKLOG 37-42 (37-39 HIGH). Use the manual sequence, not Telegram's Deploy button, for this batch.
 - FYI for the OWNER (no decision needed, 2026-10-10): `research.reserved_trials_quarter: 13` holds the 13 trials
   of the Q1 2027 pre-registration (`docs/research/preregistration-2027Q1.md`) before the research director and the
   label grid can spend any; the budget itself (20) is unchanged. Revisit the number with each quarter's
