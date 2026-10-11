@@ -248,14 +248,20 @@ execution items need trading-safety review. Feature items need quant review.
   entries for 15 min after each daily reopen and 30 min after the weekly open. Fake-clock tests. Exits are untouched.
 - **18 (G-3).** Tier-2 USD events (PPI, retail sales, ISM, GDP, JOLTS, claims, FOMC minutes, Fed chair) get a
   −5/+15 min entry blackout from config, plus a `min_to_next_tier2` feature. A test per tier.
-  *Data part done (2026-10-10, row D27, ADR 0007):* the point-in-time US calendar on release `calendar-v1`, 2010
-  onwards, now covering tier 1 too (finding E-1, for H-16/H-17/H-18). Tier 1 is CPI, NFP and PCE from FRED, plus
-  the FOMC statement and press conference from the Fed's calendars. Tier 2 is PPI, retail sales, GDP, JOLTS and
-  claims from FRED, FOMC minutes, and ISM by rule. Fed speakers are not covered. Code: `goldbot/data/us_calendar.py`,
-  `scripts/us_calendar_data.py`, `data-us-calendar.yml`. The opt-in features are `tier1_events` and `tier2_events`
-  (`min_to_next_tier2`, `min_since_last_tier2`, `tier2_count_today`, and the tier-1 equivalents), loaded with
-  `research_pass.py --us-calendar`. Open: the owner adds the `FRED_API_KEY` secret and runs the workflow. The RiskGate
-  blackout waits for the owner's adopt decision.
+  *Data part done (2026-10-10; review fixes 2026-10-11; row D27, ADR 0008):* the point-in-time US calendar on
+  release `calendar-v1`, 2010 onwards, tiers 1 and 2 (finding E-1, for H-16/H-17/H-18).
+  - Tier 1: CPI, NFP and PCE from FRED; FOMC statement and press conference from the Fed's calendars.
+  - Tier 2: PPI, retail sales, `gdp_advance` and the later `gdp` estimates, JOLTS and claims from FRED; FOMC minutes;
+    ISM by rule.
+  - Hand-checked cancellations; per-agency shutdown floors; per-type backfill; mass-cancellation, spacing and count
+    guards.
+  - Opt-in features `tier1_events` and `tier2_events` (`min_to_next_tier2_pit`, `min_since_last_tier2_pit`,
+    `tier2_count_today`, and the tier-1 equivalents), loaded with `research_pass.py --us-calendar`.
+  - Open:
+    - the owner adds the `FRED_API_KEY` secret and runs the workflow;
+    - a quant review of the first run's count table, before any trial cites the features;
+    - promoting `gdp_advance` to tier 1 is an owner / trading-safety decision;
+    - the RiskGate blackout waits for the owner's adopt decision.
 - **19 (G-4).** Sum of open risk in R per account and combined ≤ the configured cap. Same-side positions of
   different agents count as one bet. Gate test on each side of the cap.
 - **20 (G-5).** Monthly bootstrap of shadow or backtest R at live risk settings: P(8%), P(12%), P(weekly cap) in

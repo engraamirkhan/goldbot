@@ -938,7 +938,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   workflow has never run (Actions -> data-positioning -> Run workflow); `research.yml` has no positioning input; the
   cleaner opt-in home is `goldbot/research/pipeline.py` OPT_IN_FEATURES (outside this lane).
 - US calendar, tiers 1 and 2, point in time (2026-10-10, BACKLOG 18 data part, playbook G-3, research finding E-1,
-  row D27, ADR 0007):
+  row D27, ADR 0008; review fixes 2026-10-11):
   - **Pipeline.** `goldbot/data/us_calendar.py` + `scripts/us_calendar_data.py` +
     `.github/workflows/data-us-calendar.yml` (Sundays 06:17 UTC) publish `us_calendar.parquet` on release
     `calendar-v1`, 2010 onwards.
@@ -969,7 +969,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - **No actual/consensus columns**: there is no free, licence-compatible source.
   - **Opt-in features** in `goldbot/features/us_calendar.py`. `enable()` returns `tier1_events` and `tier2_events`:
     - tier 1: `min_to_next_tier1_pit`, `min_since_last_tier1_pit`, `tier1_count_today`;
-    - tier 2: `min_to_next_tier2`, `min_since_last_tier2`, `tier2_count_today`;
+    - tier 2: `min_to_next_tier2_pit`, `min_since_last_tier2_pit`, `tier2_count_today`;
     - minutes are capped at 7 days, and counts are per New York day;
     - they are joined through `known_timeline` + `asof_join` on available_utc;
     - they are not in DEFAULT_FEATURE_NAMES, so feature_version is unchanged.
@@ -978,6 +978,35 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - **Verified offline** (Fed pages fetched from the Mac sandbox): the parsers read 2010, 2011, 2015, 2017, 2019,
     2020 and 2021-2027 correctly. That is 8 scheduled meetings a year, 7 in 2020 (March 17-18 was cancelled), with
     unscheduled meetings and notation votes skipped.
+  - **Review fixes (2026-10-11):**
+    - **Backfill.** last_ok is kept per event type. A type that failed on an earlier run is backfilled with rule
+      stamps when it comes back (H1).
+    - **FOMC meeting count.** A Fed year panel or page with fewer than 6 meetings fails the source.
+    - **Mass cancellation.** A run that would cancel more than 2 future events of a type is refused for that type
+      (M1).
+    - **Hand-checked cancellations** (`MANUAL_EVENTS`) (M2):
+      - the March 2020 FOMC;
+      - the BLS dates in the 2013, 2025 and 2026 lapses, verified on the bls.gov lapse tables (2013 via the copy on
+        Calculated Risk);
+      - the 2019 GDP advance;
+      - the 2025 PCE releases.
+      The original 2013 and 2018-19 Census and BEA dates are not in the table because they could not be verified.
+    - **Spacing quarantine.** Monthly releases less than 20 days apart are kept out unless they are in
+      `SPACING_EXEMPT`.
+    - **Count table.** A per-type, per-year count table goes in the step summary (M3).
+    - **Press-conference links.** The check ignores case and the Fed's `fomcpressconf` spelling. Expected press
+      conferences: 3 in 2011, 5 in 2012 and 4 in 2013-18, all counted on the Fed's pages, so the review's
+      "4 a year for 2011-2018" holds only for 2013-18 (M4).
+    - **Per-agency floors.** 2018-19 covers Census and BEA only; a January 2026 lapse floor was added (M5).
+    - **GDP split.** `gdp_advance` is split out and stays tier 2. **Promoting it to tier 1 is an owner /
+      trading-safety decision.**
+    - **Minutes date.** It is tied to the Minutes block, with a 14-28 day gap check (L1).
+    - **ISM.** The research line counts the rule rows; `--us-calendar-exclude-rule` and `RULE_OVERRIDES` are added
+      (L2).
+    - **Column names.** The tier-2 minute columns now carry `_pit` (L4).
+    - **Retail name check.** It is now `Advance Monthly Sales for Retail` (L5).
+  - **GATE: no trial may cite `tier1_events` or `tier2_events` until a quant review of the first live run's count
+    table (step summary) has signed it off.**
   - **Not yet:**
     - The owner must add the repo secret `FRED_API_KEY` (a free key from fred.stlouisfed.org) and run the workflow.
     - The FRED ids and the release-date history were not checked live, because there is no key in the sandbox. The

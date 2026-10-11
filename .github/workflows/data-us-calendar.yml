@@ -5,12 +5,14 @@ name: data-us-calendar
 # publishes one Parquet, us_calendar.parquet, on the rolling release tag `calendar-v1` (Claude sandboxes cannot reach
 # FRED or federalreserve.gov; runners can). Every row carries tier, event_utc (DST-correct from New York time), status,
 # source and a conservative available_utc (goldbot/data/us_calendar.py; sources and licence in
-# docs/decisions/0007-us-calendar-source.md). Needs the repo secret FRED_API_KEY (free key from
+# docs/decisions/0008-us-calendar-source.md). Needs the repo secret FRED_API_KEY (free key from
 # fred.stlouisfed.org; the owner adds it in Settings -> Secrets; the script never prints it). The previously published
 # file is kept as is; only new events, late stamps and cancellations are added. Only a release or asset that is
 # confirmed missing counts as a first run; any other error fetching the previous file fails the run, and the script
 # refuses (exit 2, no output) a frame that would drop published rows, so --clobber never replaces history. Research
 # (scripts/research_pass.py --us-calendar) and scripts/fetch_data_release.py --us-calendar load it.
+# The step summary carries a per-type, per-year count table, quarantined releases and refused types; no trial
+# cites the calendar features until a quant review of the first run's table.
 # Cost: about 1-2 runner-minutes a week (16 small FRED API calls, 13 Fed pages); the asset is well under 1 MB.
 on:
   workflow_dispatch:

@@ -43,7 +43,8 @@ macro (the feature version includes them). Not available with --discover.
 US calendar (opt-in): `--us-calendar DIR` (the release calendar-v1, from the data-us-calendar workflow) adds the
 point-in-time tier-1 and tier-2 event columns (goldbot/features/us_calendar.py: minutes to the next and since the last
 event of each tier, capped at 7 days, and the tier's event count on the New York day), under the same rules as
-positioning. Not available with --discover or --cpcv.
+positioning. Not available with --discover or --cpcv. The report line says how many rows are rule-derived (ISM);
+`--us-calendar-exclude-rule` leaves them out.
 
 Combinatorial purged CV (M16, goldbot/research/cpcv.py): `--cpcv <trial#> [<trial#> ...]` re-evaluates registered
 walk-forward trials on 6 time groups of the research window (15 purged splits, 5 backtest paths) and, for several
@@ -163,17 +164,22 @@ def _positioning_line(info: dict[str, Any] | None) -> str:
     return f"- positioning features: {info['detail']}" if info else "- positioning features: off"
 
 
-def load_us_calendar(path: str) -> tuple[pd.DataFrame | None, dict[str, Any]]:
-    """The US calendar release for ctx["us_calendar"], or None with the reason (recorded in the trial and reported)."""
+def load_us_calendar(path: str, exclude_rule: bool = False) -> tuple[pd.DataFrame | None, dict[str, Any]]:
+    """The US calendar release for ctx["us_calendar"], or None with the reason (recorded in the trial and reported).
+    The detail says how many rows are rule-derived (ISM, source `rule`); `exclude_rule` leaves them out."""
     if not path:
         return None, {"used": False, "detail": "off (no --us-calendar)"}
     df = read_us_calendar_files(Path(path))
     if df.empty:
         return None, {"used": False, "detail": f"off: no calendar release at {path} (run the data-us-calendar "
                                                 f"workflow; `gh release download calendar-v1 -D {path}`)"}
+    n_rule = int((df["source"] == "rule").sum())
+    if exclude_rule:
+        df = df[df["source"] != "rule"].reset_index(drop=True)
     ev = pd.DatetimeIndex(df["event_utc"])
-    return df, {"used": True, "event_types": sorted(df["event_type"].unique()),
-                "detail": f"on: {df['event_type'].nunique()} event types, events {ev.min():%Y-%m-%d} .. "
+    rule = "rule rows excluded" if exclude_rule else f"{n_rule:,} rule-derived (ISM) rows"
+    return df, {"used": True, "event_types": sorted(df["event_type"].unique()), "rule_rows_excluded": exclude_rule,
+                "detail": f"on: {df['event_type'].nunique()} event types ({rule}), events {ev.min():%Y-%m-%d} .. "
                           f"{ev.max():%Y-%m-%d}, joined as of available_utc"}
 
 
@@ -447,6 +453,8 @@ def main() -> int:
                     help="with --cpcv: allow trials that failed the gates; output is diagnostic, not evidence (ADR 0003)")
     ap.add_argument("--positioning", default="",
                     help="folder or Parquet of the positioning-v1 release: adds the opt-in COT/GLD features")
+    ap.add_argument("--us-calendar-exclude-rule", action="store_true",
+                    help="with --us-calendar: leave out the rule-derived (ISM) rows")
     ap.add_argument("--us-calendar", default="",
                     help="folder or Parquet of the calendar-v1 release: adds the opt-in tier-1/tier-2 event features")
     _discovery_args(ap)
@@ -472,7 +480,7 @@ def main() -> int:
     print(_positioning_line(positioning_info)[2:], flush=True)
     if args.discover and positioning is not None:
         raise SystemExit("--positioning is not wired into --discover yet; run it without --discover")
-    us_calendar, us_calendar_info = load_us_calendar(args.us_calendar)
+    us_calendar, us_calendar_info = load_us_calendar(args.us_calendar, args.us_calendar_exclude_rule)
     print(_us_calendar_line(us_calendar_info)[2:], flush=True)
     if (args.discover or args.cpcv) and us_calendar is not None:
         raise SystemExit("--us-calendar is not wired into --discover or --cpcv yet; run it without them")

@@ -4,6 +4,7 @@ shutdown floors), history-keeping merges and the opt-in proximity features (as-o
 look-ahead)."""
 import importlib.util
 import re
+from datetime import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -44,7 +45,9 @@ def _fred_dates() -> dict[str, pd.DatetimeIndex]:
             "cpi": pd.DatetimeIndex(["2024-01-11", "2024-02-13", "2024-03-12", "2024-04-10", "2024-05-15", "2024-06-12",
                                      "2024-07-11"]),
             "nfp": pd.DatetimeIndex(["2024-01-05", "2024-02-02", "2024-03-08", "2024-04-05", "2024-05-03", "2024-06-07",
-                                     "2024-07-05"])}
+                                     "2024-07-05"]),
+            "gdp": pd.DatetimeIndex(["2023-12-21", "2024-01-25", "2024-02-28", "2024-03-28", "2024-04-25", "2024-05-30",
+                                     "2024-06-27", "2024-07-25"])}
 
 
 def _fomc() -> pd.DataFrame:
@@ -62,8 +65,12 @@ def _move(d: pd.DatetimeIndex, old: str, new: str) -> pd.DatetimeIndex:
 
 
 def _cal(now: pd.Timestamp = NOW) -> pd.DataFrame:
-    return uc.merge_calendar(None, uc.calendar_frame(_fred_dates(), now, _fomc()), now,
-                             {"fred": now, "rule": now, "fed": now})
+    return uc.merge_calendar(None, uc.calendar_frame(_fred_dates(), now, _fomc()), now, {})
+
+
+def _ok(t: pd.Timestamp) -> dict[str, pd.Timestamp]:
+    """Every event type downloaded successfully at `t` (last_ok is kept per event type)."""
+    return {e: t for e in uc.EVENT_TYPES}
 
 
 # --------------------------------------------------------------------------- timing
@@ -82,8 +89,9 @@ def test_release_times_follow_new_york_dst_on_both_sides_of_each_switch():
 def test_tiers_keep_the_existing_labels():
     cal = _cal()
     tiers = cal.groupby("event_type")["tier"].first().to_dict()
-    assert {t for t, v in tiers.items() if v == 1} == {"cpi", "nfp", "fomc_statement", "fomc_press_conference"}
+    assert {t for t, v in tiers.items() if v == 1} == {"cpi", "nfp", "pce", "fomc_statement", "fomc_press_conference"}
     assert uc.TIERS["pce"] == 1 and uc.TIERS["gdp"] == 2 and uc.TIERS["fomc_minutes"] == 2
+    assert uc.TIERS["gdp_advance"] == 2           # promotion to tier 1 is an owner / trading-safety decision
     # settings risk.blackout.events and econ_calendar's tier-1 patterns name the same four families
     from goldbot.data.econ_calendar import TIER1_PATTERNS
     assert set(TIER1_PATTERNS) == {"CPI", "NFP", "FOMC", "PCE"}
@@ -123,7 +131,8 @@ CURRENT_HTML = """
 <div class="row fomc-meeting" ">
  <div class="fomc-meeting__month col-xs-5"><strong>January</strong></div>
  <div class="fomc-meeting__date col-xs-4">28-29</div>
- <a href="/monetarypolicy/fomcpresconf20250129.htm">Press Conference</a><br> (Released February 19, 2025)
+ <a href="/monetarypolicy/fomcpresconf20250129.htm">Press Conference</a>
+ <strong>Minutes:</strong><br> (Released February 19, 2025)
 </div>
 <div class="fomc-meeting--shaded row fomc-meeting" ">
  <div class="fomc-meeting--shaded fomc-meeting__month col-xs-5"><strong>Apr/May</strong></div>
@@ -175,6 +184,17 @@ def test_parse_the_fed_historical_pages_keeps_only_scheduled_meetings():
     assert m["minutes_day"].iloc[0] == pd.Timestamp("2010-02-17") and m["minutes_day"].iloc[1] == pd.Timestamp("2019-05-22")
 
 
+def _current_page(counts: dict[int, int]) -> str:
+    """A synthetic fomccalendars.htm with `n` scheduled meetings in each year's panel."""
+    months = ["January", "March", "April", "June", "July", "September", "October", "December"]
+    out = []
+    for y, n in counts.items():
+        out.append(f'<div class="panel"><div class="panel-heading"><h4><a id="{y}">{y} FOMC Meetings</a></h4></div>')
+        out += [f'<div class="row fomc-meeting" "><div class="fomc-meeting__month"><strong>{months[i]}</strong></div>'
+                f'<div class="fomc-meeting__date">{10 + i}-{11 + i}</div></div>' for i in range(n)]
+    return "\n".join(out)
+
+
 class _Pages:
     def __init__(self, pages: dict[str, str]):
         self.pages = pages
@@ -189,10 +209,14 @@ def test_fetch_fomc_reads_every_year_before_the_current_page_and_fails_on_a_chan
     year = "".join(f'<h5>{mo} {d} Meeting - {{y}}</h5>' for mo, d in
                    (("January", 27), ("March", 16), ("April", 28), ("June", 23), ("August", 10), ("September", 21),
                     ("November", 3), ("December", 14)))
-    pages = {uc.FED_CALENDAR_URL: CURRENT_HTML.replace("2025 FOMC", "2012 FOMC").replace("2026 FOMC", "2013 FOMC")}
+    pages = {uc.FED_CALENDAR_URL: _current_page({2012: 8, 2013: 8})}
     pages |= {uc.FED_HISTORICAL_URL.format(year=y): year.format(y=y) for y in (2010, 2011)}
     m = uc.fetch_fomc(session=cast(Any, _Pages(pages)), sleep=lambda _: None)
-    assert pd.DatetimeIndex(m["day"]).year.min() == 2010 and len(m) == 8 + 8 + 3
+    assert pd.DatetimeIndex(m["day"]).year.min() == 2010 and len(m) == 4 * 8
+    short = dict(pages)
+    short[uc.FED_CALENDAR_URL] = _current_page({2012: 8, 2013: 3})            # a partial parse of the next year
+    with pytest.raises(uc.FedCalendarError, match="2013: 3"):
+        uc.fetch_fomc(session=cast(Any, _Pages(short)), sleep=lambda _: None)
     pages[uc.FED_HISTORICAL_URL.format(year=2011)] = "<html>redesigned</html>"
     with pytest.raises(uc.FedCalendarError, match="2011"):
         uc.fetch_fomc(session=cast(Any, _Pages(pages)), sleep=lambda _: None)
@@ -220,7 +244,7 @@ def test_coverage_starts_in_2010_and_ism_rows_run_ahead_of_the_run():
 # --------------------------------------------------------------------------- availability
 def test_schedule_is_known_a_week_ahead_and_never_after_the_event():
     ev = pd.DatetimeIndex([_utc("2024-01-12 13:30")])
-    assert uc.rule_available_utc(ev)[0] == _utc("2024-01-05 13:30")
+    assert uc.rule_available_utc(ev, "bls")[0] == _utc("2024-01-05 13:30")
     cal = _cal()
     assert (pd.DatetimeIndex(cal["available_utc"]) <= pd.DatetimeIndex(cal["event_utc"])).all()
     assert (cal["ts_utc"] == cal["available_utc"]).all()
@@ -228,13 +252,13 @@ def test_schedule_is_known_a_week_ahead_and_never_after_the_event():
 
 def test_shutdown_reschedules_are_not_known_before_the_floor():
     ev = uc.et_to_utc(pd.DatetimeIndex(["2025-10-16", "2025-12-10", "2026-01-15", "2025-09-25"]), uc.RELEASES[0].at_et)
-    av = uc.rule_available_utc(ev)
+    av = uc.rule_available_utc(ev, "bls")
     assert av[0] == ev[0]                                                   # during the shutdown: known when it happens
     assert av[1] == pd.Timestamp("2025-12-05", tz=uc.ET).tz_convert("UTC")   # floor beats event - 7 days
     assert av[2] == ev[2] - uc.SCHEDULE_LEAD                                # past floor + lead: the plain rule
     assert av[3] == ev[3] - uc.SCHEDULE_LEAD                                # before the shutdown began: unaffected
     ev13 = uc.et_to_utc(pd.DatetimeIndex(["2013-10-30"]), uc.RELEASES[0].at_et)
-    assert uc.rule_available_utc(ev13)[0] == ev13[0]
+    assert uc.rule_available_utc(ev13, "bls")[0] == ev13[0]
 
 
 # --------------------------------------------------------------------------- merging
@@ -243,7 +267,7 @@ def test_late_new_events_are_stamped_at_first_sight_and_vanished_ones_cancelled(
     t2 = NOW + pd.Timedelta(days=7)
     d = _fred_dates()
     d["ppi"] = _move(d["ppi"], "2024-06-13", "2024-06-14")   # rescheduled
-    out = uc.merge_calendar(pub, uc.calendar_frame(d, t2, _fomc()), t2, {"fred": NOW, "rule": NOW, "fed": NOW})
+    out = uc.merge_calendar(pub, uc.calendar_frame(d, t2, _fomc()), t2, _ok(NOW))
     uc.check_keeps_history(pub, out)
     moved = out[out["event_id"] == "ppi:2024-06-14"]
     assert len(moved) == 1 and moved["available_utc"].iloc[0] == t2        # rule stamp (Jun 7) < previous download
@@ -254,7 +278,7 @@ def test_late_new_events_are_stamped_at_first_sight_and_vanished_ones_cancelled(
     t3 = t2 + pd.Timedelta(days=1)
     d2 = _fred_dates()
     d2["ppi"] = _move(d2["ppi"], "2024-01-12", "2024-06-14")
-    out2 = uc.merge_calendar(out, uc.calendar_frame(d2, t3, _fomc()), t3, {"fred": t2, "rule": t2, "fed": t2})
+    out2 = uc.merge_calendar(out, uc.calendar_frame(d2, t3, _fomc()), t3, _ok(t2))
     back = out2[out2["event_id"] == "ppi:2024-06-13"].sort_values("available_utc")
     assert list(back["status"]) == ["scheduled", "cancelled", "scheduled"]
     assert (out2["event_id"] == "ppi:2024-01-12").sum() == 1 and len(out2) == len(out) + 1
@@ -265,9 +289,9 @@ def test_a_type_that_failed_to_download_is_not_cancelled():
     t2 = NOW + pd.Timedelta(days=7)
     d = _fred_dates()
     del d["ppi"]
-    out = uc.merge_calendar(pub, uc.calendar_frame(d, t2, _fomc()), t2, {"fred": NOW, "rule": NOW, "fed": NOW},
+    out = uc.merge_calendar(pub, uc.calendar_frame(d, t2, _fomc()), t2, _ok(NOW),
                             fetched_types=["jobless_claims", "cpi", "nfp", *uc.FOMC_TYPES, *uc.ISM])
-    assert (out["status"] == "cancelled").sum() == 0 and len(out) == len(pub)
+    assert ((out["status"] == "cancelled") & (out["source"] != "manual")).sum() == 0 and len(out) == len(pub)
 
 
 def test_check_keeps_history_refuses_fewer_rows_or_changed_rows():
@@ -347,12 +371,12 @@ def test_proximity_minutes_match_their_definition(enabled):
     X = build_features(bars, enabled, {"us_calendar": cal})
     t = _utc("2024-02-16 13:00")                    # PPI 08:30 ET = 13:30 UTC (winter)
     row = (bars["ts_utc"] == t).to_numpy()
-    assert X.loc[row, "min_to_next_tier2"].item() == 30.0
-    assert X.loc[row, "min_since_last_tier2"].item() == pytest.approx((t - _utc("2024-02-15 13:30")) / pd.Timedelta(minutes=1))
+    assert X.loc[row, "min_to_next_tier2_pit"].item() == 30.0
+    assert X.loc[row, "min_since_last_tier2_pit"].item() == pytest.approx((t - _utc("2024-02-15 13:30")) / pd.Timedelta(minutes=1))
     at = (bars["ts_utc"] == _utc("2024-02-16 13:30")).to_numpy()
-    assert X.loc[at, "min_since_last_tier2"].item() == 0.0
-    assert (X[["min_to_next_tier2", "min_since_last_tier2"]] <= fc.HORIZON_MIN).all().all()
-    assert (X[["min_to_next_tier2", "min_since_last_tier2"]] >= 0).all().all()
+    assert X.loc[at, "min_since_last_tier2_pit"].item() == 0.0
+    assert (X[["min_to_next_tier2_pit", "min_since_last_tier2_pit"]] <= fc.HORIZON_MIN).all().all()
+    assert (X[["min_to_next_tier2_pit", "min_since_last_tier2_pit"]] >= 0).all().all()
 
 
 def test_before_the_calendar_or_without_it_the_columns_are_nan_and_fixed(enabled):
@@ -368,8 +392,8 @@ def test_far_from_any_event_the_horizon_cap_applies(enabled):
     cal = cal[cal["event_type"].isin(["ppi"])]
     bars = _bars("2024-01-20", "2024-01-21", "1h")
     X = build_features(bars, enabled, {"us_calendar": cal})
-    assert (X["min_to_next_tier2"] == fc.HORIZON_MIN).all()                 # Feb 16 PPI not yet known (7-day lead)
-    assert (X["min_since_last_tier2"] == fc.HORIZON_MIN).all()               # Jan 12 PPI more than 7 days ago
+    assert (X["min_to_next_tier2_pit"] == fc.HORIZON_MIN).all()                 # Feb 16 PPI not yet known (7-day lead)
+    assert (X["min_since_last_tier2_pit"] == fc.HORIZON_MIN).all()               # Jan 12 PPI more than 7 days ago
 
 
 def test_a_seeded_late_event_is_never_seen_before_its_available_utc(enabled):
@@ -379,19 +403,19 @@ def test_a_seeded_late_event_is_never_seen_before_its_available_utc(enabled):
     t2 = _utc("2024-06-10 06:00")
     d = _fred_dates()
     d["ppi"] = _move(d["ppi"], "2024-06-13", "2024-06-12")
-    out = uc.merge_calendar(pub, uc.calendar_frame(d, t2, _fomc()), t2, {"fred": NOW, "rule": NOW, "fed": NOW})
+    out = uc.merge_calendar(pub, uc.calendar_frame(d, t2, _fomc()), t2, _ok(NOW))
     only_ppi = out[out["event_type"] == "ppi"]
     bars = _bars("2024-06-08", "2024-06-14")
     X = build_features(bars, enabled, {"us_calendar": only_ppi})
     ts = bars["ts_utc"]
     before = (ts < t2).to_numpy()
     expect_old = (_utc("2024-06-13 12:30") - ts).dt.total_seconds().to_numpy() / 60
-    assert np.allclose(X.loc[before, "min_to_next_tier2"], expect_old[before])          # still the old date
+    assert np.allclose(X.loc[before, "min_to_next_tier2_pit"], expect_old[before])          # still the old date
     after = ((ts >= t2) & (ts < _utc("2024-06-12 12:30"))).to_numpy()
     expect_new = (_utc("2024-06-12 12:30") - ts).dt.total_seconds().to_numpy() / 60
-    assert np.allclose(X.loc[after, "min_to_next_tier2"], expect_new[after])
+    assert np.allclose(X.loc[after, "min_to_next_tier2_pit"], expect_new[after])
     later = (ts > _utc("2024-06-12 12:30")).to_numpy()
-    assert (X.loc[later, "min_to_next_tier2"] == fc.HORIZON_MIN).all()                # the cancelled date is gone
+    assert (X.loc[later, "min_to_next_tier2_pit"] == fc.HORIZON_MIN).all()                # the cancelled date is gone
 
 
 def test_features_on_a_truncated_calendar_match_the_full_one_before_the_cut(enabled):
@@ -399,7 +423,7 @@ def test_features_on_a_truncated_calendar_match_the_full_one_before_the_cut(enab
     t2 = _utc("2024-06-10 06:00")
     d = _fred_dates()
     d["ppi"] = _move(d["ppi"], "2024-06-13", "2024-06-12")
-    cal = uc.merge_calendar(pub, uc.calendar_frame(d, t2, _fomc()), t2, {"fred": NOW, "rule": NOW, "fed": NOW})
+    cal = uc.merge_calendar(pub, uc.calendar_frame(d, t2, _fomc()), t2, _ok(NOW))
     bars = _bars("2024-01-01", "2024-08-01", "1h")
     full = build_features(bars, enabled, {"us_calendar": cal})
     for cut in (_utc("2024-03-14 12:00"), _utc("2024-06-10 07:00"), _utc("2024-06-11 00:00")):
@@ -454,7 +478,7 @@ def test_script_needs_the_key_and_never_mistakes_a_missing_file_for_a_first_run(
     assert not out.exists() and "REFUSED" in capsys.readouterr().out
     assert mod.main(["--out", str(out), "--existing", str(missing), "--first-run"]) == 0
     first, ok = uc.read_release(str(out))
-    assert set(ok) == {"fred", "rule", "fed"} and set(uc.EVENT_TYPES) == set(first["event_type"])
+    assert set(ok) == set(uc.EVENT_TYPES) and set(uc.EVENT_TYPES) == set(first["event_type"])
     assert mod.main(["--out", str(tmp_path / "again.parquet"), "--existing", str(out)]) == 0      # idempotent rerun
     again, _ = uc.read_release(str(tmp_path / "again.parquet"))
     uc.check_keeps_history(first, again)
@@ -478,7 +502,7 @@ def test_script_reports_a_failed_release_and_keeps_its_rows(tmp_path, monkeypatc
     mod = _script()
     prev = tmp_path / "prev.parquet"
     pub = _cal()
-    uc.write_release(pub, str(prev), {"fred": NOW, "rule": NOW, "fed": NOW})
+    uc.write_release(pub, str(prev), _ok(NOW))
 
     def fetch(rel, api_key):
         if rel.event_type == "ppi":
@@ -491,7 +515,7 @@ def test_script_reports_a_failed_release_and_keeps_its_rows(tmp_path, monkeypatc
     out = tmp_path / "out.parquet"
     assert mod.main(["--out", str(out), "--existing", str(prev)]) == 1
     merged, _ = uc.read_release(str(out))
-    assert ((merged["event_type"] == "ppi") & (merged["status"] == "cancelled")).sum() == 0
+    assert ((merged["event_type"] == "ppi") & (merged["status"] == "cancelled") & (merged["source"] != "manual")).sum() == 0
     uc.check_keeps_history(pub, merged)
 
 
@@ -531,7 +555,7 @@ def test_a_seeded_late_tier1_event_is_never_seen_before_its_available_utc(enable
     t2 = _utc("2024-06-26 06:00")
     d = _fred_dates()
     d["cpi"] = _move(d["cpi"], "2024-07-11", "2024-06-27")
-    out = uc.merge_calendar(pub, uc.calendar_frame(d, t2, _fomc()), t2, {"fred": NOW, "rule": NOW, "fed": NOW})
+    out = uc.merge_calendar(pub, uc.calendar_frame(d, t2, _fomc()), t2, _ok(NOW))
     assert out.loc[out["event_id"] == "cpi:2024-06-27", "available_utc"].iloc[0] == t2
     bars = _bars("2024-06-26", "2024-06-28")
     X = build_features(bars, enabled, {"us_calendar": out})
@@ -572,3 +596,236 @@ def test_research_pass_calendar_frame_passes_the_lookahead_check(enabled):
                          "1h").reset_index(drop=True)
     out = lookahead_check(bars, None, feature_names=enabled, ctx={"us_calendar": _cal()})
     assert out["lookahead_columns"] == [] and out["columns_checked"] == len(fc.COLUMNS)
+
+
+# --------------------------------------------------------------------------- review fixes (H1, M1-M5, GDP, L1-L5)
+def test_a_type_that_failed_on_the_first_run_is_backfilled_with_rule_stamps(tmp_path, monkeypatch):
+    """H1: CPI fails on the first run and comes back on the second: its history keeps event - 7 days, it is not
+    stamped at the second download (it was never downloaded before, so nothing was missing from an earlier run)."""
+    mod = _script()
+    calls = {"n": 0}
+
+    def fetch(rel, api_key):
+        if rel.event_type == "cpi" and calls["n"] == 0:
+            raise uc.FredError("HTTP 503")
+        return _fake_fetch(rel, api_key)
+    monkeypatch.setattr(mod, "fetch_release", fetch)
+    monkeypatch.setattr(mod, "fetch_fomc", _fomc)
+    monkeypatch.setenv("FRED_API_KEY", "k")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    first, second = tmp_path / "1.parquet", tmp_path / "2.parquet"
+    assert mod.main(["--out", str(first), "--existing", str(tmp_path / "none"), "--first-run"]) == 1
+    one, ok1 = uc.read_release(str(first))
+    assert "cpi" not in ok1 and "ppi" in ok1
+    assert set(one.loc[one["event_type"] == "cpi", "source"]) <= {"manual"}            # only the hand-checked rows
+    calls["n"] = 1
+    assert mod.main(["--out", str(second), "--existing", str(first)]) == 0
+    two, ok2 = uc.read_release(str(second))
+    cpi = two[(two["event_type"] == "cpi") & (two["source"] == "fred")]
+    assert len(cpi) == 7 and "cpi" in ok2
+    lead = pd.DatetimeIndex(cpi["event_utc"]) - pd.DatetimeIndex(cpi["available_utc"])
+    assert (lead == uc.SCHEDULE_LEAD).all()
+    uc.check_keeps_history(one, two)
+
+
+def test_last_ok_is_per_event_type_in_the_merge():
+    pub = _cal()
+    t2 = NOW + pd.Timedelta(days=7)
+    d = _fred_dates()
+    d["ppi"] = _move(d["ppi"], "2024-06-13", "2024-06-14")
+    d["cpi"] = _move(d["cpi"], "2024-06-12", "2024-06-11")
+    ok = {e: NOW for e in uc.EVENT_TYPES if e != "cpi"}                    # cpi never downloaded: a backfill
+    out = uc.merge_calendar(pub, uc.calendar_frame(d, t2, _fomc()), t2, ok)
+    assert out.loc[out["event_id"] == "ppi:2024-06-14", "available_utc"].iloc[0] == t2
+    cpi = out.loc[out["event_id"] == "cpi:2024-06-11"]
+    assert cpi["available_utc"].iloc[0] == cpi["event_utc"].iloc[0] - uc.SCHEDULE_LEAD
+
+
+def test_a_run_that_would_cancel_many_future_events_of_a_type_is_refused():
+    """M1: a truncated download (a partial parse) must not cancel the future schedule."""
+    pub = _cal(_utc("2024-01-01 06:00"))
+    t2 = _utc("2024-01-08 06:00")
+    d = _fred_dates()
+    d["jobless_claims"] = d["jobless_claims"][d["jobless_claims"] < pd.Timestamp("2024-02-01")]
+    fresh = uc.calendar_frame(d, t2, _fomc())
+    assert uc.mass_cancellations(pub, fresh, t2) == {"jobless_claims": 48}
+    with pytest.raises(uc.MassCancellation, match="jobless_claims"):
+        uc.merge_calendar(pub, fresh, t2, _ok(t2))
+    d2 = _fred_dates()
+    d2["ppi"] = _move(_move(d2["ppi"], "2024-05-14", "2024-05-15"), "2024-06-13", "2024-06-14")
+    assert uc.mass_cancellations(pub, uc.calendar_frame(d2, t2, _fomc()), t2) == {}      # two moves are fine
+
+
+def test_script_refuses_a_type_that_would_mass_cancel_and_keeps_its_rows(tmp_path, monkeypatch):
+    mod = _script()
+    prev = tmp_path / "prev.parquet"
+    pub = _cal(_utc("2024-01-01 06:00"))
+    uc.write_release(pub, str(prev), _ok(_utc("2024-01-01 06:00")))
+
+    def fetch(rel, api_key):
+        d = _fake_fetch(rel, api_key)
+        return d[d < pd.Timestamp("2024-02-01")] if rel.event_type == "jobless_claims" else d
+    monkeypatch.setattr(mod, "fetch_release", fetch)
+    monkeypatch.setattr(mod, "fetch_fomc", _fomc)
+    monkeypatch.setenv("FRED_API_KEY", "k")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(mod.pd.Timestamp, "now", classmethod(lambda cls, tz=None: _utc("2024-01-08 06:00")))
+    out = tmp_path / "out.parquet"
+    assert mod.main(["--out", str(out), "--existing", str(prev)]) == 1
+    merged, ok = uc.read_release(str(out))
+    assert ((merged["event_type"] == "jobless_claims") & (merged["status"] == "cancelled")).sum() == 0
+    assert ok["jobless_claims"] == _utc("2024-01-01 06:00")                # not counted as a successful download
+    uc.check_keeps_history(pub, merged)
+
+
+def test_hand_checked_cancellations_are_in_the_calendar():
+    """M2: scheduled-then-cancelled events that the downloads cannot show (they list what happened)."""
+    cal = _cal()
+    fomc = cal[cal["event_id"] == "fomc_statement:2020-03-18"].sort_values("available_utc")
+    assert list(fomc["status"]) == ["scheduled", "cancelled"]
+    ev = pd.Timestamp("2020-03-18 14:00", tz=uc.ET).tz_convert("UTC")
+    assert fomc["available_utc"].iloc[0] == ev - uc.SCHEDULE_LEAD
+    assert fomc["available_utc"].iloc[1] == pd.Timestamp("2020-03-15 17:00", tz=uc.ET).tz_convert("UTC")
+    assert (cal["event_id"] == "fomc_press_conference:2020-03-18").sum() == 2
+    nfp13 = cal[cal["event_id"] == "nfp:2013-10-04"].sort_values("available_utc")
+    assert list(nfp13["status"]) == ["scheduled", "cancelled"]
+    assert nfp13["available_utc"].iloc[1] == pd.Timestamp("2013-10-01", tz=uc.ET).tz_convert("UTC")
+    for eid in ("cpi:2013-10-16", "ppi:2013-10-11", "jolts:2013-10-08", "gdp_advance:2019-01-30",
+                "nfp:2025-10-03", "ppi:2025-10-16", "cpi:2025-11-13", "nfp:2025-11-07", "nfp:2026-02-06"):
+        rows = cal[cal["event_id"] == eid].sort_values("available_utc")
+        assert list(rows["status"]) == ["scheduled", "cancelled"], eid
+        assert rows["available_utc"].iloc[0] < rows["available_utc"].iloc[1] <= rows["event_utc"].iloc[0], eid
+    assert set(cal.loc[cal["source"] == "manual", "event_type"]) <= set(uc.EVENT_TYPES)
+
+
+def test_a_cancelled_meeting_shows_until_its_cancellation_and_never_as_a_past_event(enabled):
+    cal = _cal()
+    bars = _bars("2020-03-12", "2020-03-20")
+    X = build_features(bars, enabled, {"us_calendar": cal})
+    ts = bars["ts_utc"]
+    cancel = pd.Timestamp("2020-03-15 17:00", tz=uc.ET).tz_convert("UTC")
+    ev = pd.Timestamp("2020-03-18 14:00", tz=uc.ET).tz_convert("UTC")
+    before = ((ts >= ev - uc.SCHEDULE_LEAD) & (ts < cancel)).to_numpy()
+    to_ev = (ev - ts).dt.total_seconds().to_numpy() / 60
+    assert np.allclose(X.loc[before, "min_to_next_tier1_pit"], to_ev[before])
+    after = (ts >= cancel).to_numpy()
+    assert (X.loc[after, "min_to_next_tier1_pit"] == fc.HORIZON_MIN).all()
+    on_day = ((ts >= _utc("2020-03-18 04:00")) & (ts < _utc("2020-03-19 04:00"))).to_numpy()
+    assert (X.loc[on_day, "tier1_count_today"] == 0).all()
+    assert (X.loc[on_day & (ts > ev).to_numpy(), "min_since_last_tier1_pit"] == fc.HORIZON_MIN).all()
+
+
+def test_shutdown_floors_are_per_agency():
+    """M5: 2018-19 closed Commerce (Census, BEA) only; BLS and the private ISM kept their schedule."""
+    ev = uc.et_to_utc(pd.DatetimeIndex(["2019-01-16"]), time(8, 30))
+    floor = pd.Timestamp("2019-02-15", tz=uc.ET).tz_convert("UTC")
+    assert uc.rule_available_utc(ev, "census")[0] == ev[0]                  # floor is after the event
+    assert uc.rule_available_utc(ev, "bea")[0] == ev[0]
+    assert uc.rule_available_utc(ev, "bls")[0] == ev[0] - uc.SCHEDULE_LEAD
+    ev2 = uc.et_to_utc(pd.DatetimeIndex(["2019-02-20"]), time(8, 30))
+    assert uc.rule_available_utc(ev2, "census")[0] == floor
+    for agency in ("bls", "dol", "census", "bea"):                          # 2013 and 2025 closed everything
+        assert uc.rule_available_utc(uc.et_to_utc(pd.DatetimeIndex(["2025-11-20"]), time(8, 30)), agency)[0] > \
+            uc.et_to_utc(pd.DatetimeIndex(["2025-11-20"]), time(8, 30))[0] - uc.SCHEDULE_LEAD
+    ism = uc.rule_rows(_utc("2025-12-31"), NOW)
+    ism = ism[ism["event_id"] == "ism_manufacturing:2025-11-03"]
+    assert (ism["event_utc"] - ism["available_utc"]).iloc[0] == uc.SCHEDULE_LEAD
+    assert uc.AGENCY["fomc_statement"] == "fed" and uc.AGENCY["retail_sales"] == "census"
+
+
+def test_gdp_advance_is_the_first_gdp_release_after_each_quarter():
+    cal = _cal()
+    adv = set(cal.loc[(cal["event_type"] == "gdp_advance") & (cal["source"] == "fred"), "event_id"])
+    assert adv == {"gdp_advance:2024-01-25", "gdp_advance:2024-04-25", "gdp_advance:2024-07-25"}
+    later = set(cal.loc[cal["event_type"] == "gdp", "event_id"])
+    assert "gdp:2024-02-28" in later and not {e.replace("gdp_advance", "gdp") for e in adv} & later
+    assert "gdp:2023-12-21" in later
+
+
+def test_count_table_and_monthly_spacing_quarantine():
+    """M3: per-type, per-year counts against the expected ranges; monthly releases < 20 days apart are quarantined
+    (kept out and reported) unless they are on the hand-checked exemption list."""
+    d = _fred_dates()
+    d["cpi"] = pd.DatetimeIndex([*d["cpi"], pd.Timestamp("2024-02-20")]).sort_values()  # 7 days after Feb 13
+    keep, quarantined = uc.quarantine_spacing(uc.calendar_frame(d, NOW, _fomc()))
+    assert list(quarantined["event_id"]) == ["cpi:2024-02-20"]
+    assert "cpi:2024-02-20" not in set(keep["event_id"])
+    assert "nfp:2013-11-08" in uc.SPACING_EXEMPT                            # 17 days after Oct 22, 2013 (shutdown)
+    full = pd.DataFrame({"event_id": [f"cpi:2015-{m:02d}-14" for m in range(1, 13)], "event_type": "cpi",
+                         "status": "scheduled", "event_utc": uc.et_to_utc([f"2015-{m:02d}-14" for m in range(1, 13)],
+                                                                          time(8, 30))})
+    t = uc.count_table(full)
+    assert t.loc[(t["event_type"] == "cpi") & (t["year"] == 2015), "ok"].item()
+    t = uc.count_table(full.iloc[:5])
+    assert not t.loc[(t["event_type"] == "cpi") & (t["year"] == 2015), "ok"].item()
+    assert uc.expected_count("jobless_claims", 2015) == (51, 53)
+    assert uc.expected_count("fomc_press_conference", 2011) == (3, 3)       # verified on the Fed's 2011 page
+    assert uc.expected_count("fomc_press_conference", 2012) == (5, 5)       # verified on the Fed's 2012 page
+    assert uc.expected_count("fomc_press_conference", 2015) == (4, 4)
+    assert uc.expected_count("fomc_press_conference", 2020) == (7, 8)
+
+
+def test_script_writes_the_count_table_to_the_step_summary(tmp_path, monkeypatch):
+    mod = _script()
+    monkeypatch.setattr(mod, "fetch_release", _fake_fetch)
+    monkeypatch.setattr(mod, "fetch_fomc", _fomc)
+    monkeypatch.setenv("FRED_API_KEY", "k")
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    assert mod.main(["--out", str(tmp_path / "o.parquet"), "--existing", str(tmp_path / "n"), "--first-run"]) == 0
+    text = summary.read_text()
+    assert "| event_type | year | n | expected | ok |" in text and "| cpi | 2024 |" in text
+
+
+def test_press_conference_links_are_found_whatever_the_case_or_spelling():
+    """M4: the Fed's links vary (fomcpresconf, FOMCpresconf, fomcpressconf in January 2026)."""
+    for link in ("fomcpresconf20250129", "FOMCpresconf20250129", "fomcpressconf20260128"):
+        html = CURRENT_HTML.replace("fomcpresconf20250129", link)
+        assert uc.parse_fomc_current(html)["press"].iloc[0], link
+
+
+def test_minutes_date_comes_from_the_minutes_block_and_a_plausible_gap():
+    """L1: a "Released" date elsewhere in the block (a statement, a transcript) is not the minutes date, and a gap
+    outside 14-28 days falls back to statement + 21 days."""
+    block = '<strong>Minutes:</strong><br> (Released February 19, 2025)'
+    html = CURRENT_HTML.replace(block, '<a>Transcript</a> (Released March 01, 2025) ' + block)
+    assert uc.parse_fomc_current(html)["minutes_day"].iloc[0] == pd.Timestamp("2025-02-19")
+    no_minutes = CURRENT_HTML.replace(block, '<a>Transcript</a> (Released March 01, 2025)')
+    assert pd.isna(uc.parse_fomc_current(no_minutes)["minutes_day"].iloc[0])
+    meetings = pd.DataFrame({"day": pd.DatetimeIndex(["2024-01-31", "2024-03-20"]), "press": True,
+                             "minutes_day": pd.DatetimeIndex(["2024-06-01", "2024-04-10"])})
+    ids = set(uc.fomc_rows(meetings, NOW)["event_id"])
+    assert "fomc_minutes:2024-02-21" in ids and "fomc_minutes:2024-06-01" not in ids and "fomc_minutes:2024-04-10" in ids
+
+
+def test_rule_rows_can_be_overridden_or_excluded(tmp_path, monkeypatch):
+    """L2: ISM is rule-derived; a hand-checked override moves or drops a date, and research can leave rule rows out
+    (the report line says how many rows are rule-derived)."""
+    monkeypatch.setitem(uc.RULE_OVERRIDES, "ism_services:2024-01-04", "2024-01-05")
+    monkeypatch.setitem(uc.RULE_OVERRIDES, "ism_manufacturing:2024-01-02", None)
+    rows = uc.rule_rows(NOW, NOW)
+    ids = set(rows["event_id"])
+    assert "ism_services:2024-01-05" in ids and "ism_services:2024-01-04" not in ids
+    assert "ism_manufacturing:2024-01-02" not in ids
+    spec = importlib.util.spec_from_file_location("research_pass", ROOT / "scripts" / "research_pass.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    uc.write_release(_cal(), str(tmp_path / uc.ASSET), {})
+    cal, info = mod.load_us_calendar(str(tmp_path))
+    assert cal is not None and "rule-derived" in info["detail"] and (cal["source"] == "rule").any()
+    cal2, info2 = mod.load_us_calendar(str(tmp_path), exclude_rule=True)
+    assert cal2 is not None and not (cal2["source"] == "rule").any() and "rule rows excluded" in info2["detail"]
+
+
+def test_tier2_columns_carry_the_pit_suffix():
+    """L4: no tier-2 column can clash with a live-feed calendar column."""
+    assert fc.TIER2_COLUMNS == ("min_to_next_tier2_pit", "min_since_last_tier2_pit", "tier2_count_today")
+
+
+def test_retail_sales_name_check_is_specific():
+    """L5: "Retail" alone would match other retail releases."""
+    rel = next(r for r in uc.RELEASES if r.event_type == "retail_sales")
+    assert rel.name == "Advance Monthly Sales for Retail"
+    with pytest.raises(uc.FredError, match="expected a name"):
+        uc.fetch_release(rel, "k", session=cast(Any, _Session("Monthly Retail Trade Report", [])), sleep=lambda _: None)

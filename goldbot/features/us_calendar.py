@@ -7,8 +7,8 @@ cancellation only from the download that saw it.
 
 Features and columns (minutes are floats):
 * `tier1_events`: `min_to_next_tier1_pit`, `min_since_last_tier1_pit`, `tier1_count_today` (CPI, NFP, PCE, FOMC
-  statement and press conference). The `_pit` suffix keeps them apart from the live-feed `calendar_events` columns;
-* `tier2_events` (BACKLOG 18): `min_to_next_tier2`, `min_since_last_tier2`, `tier2_count_today`.
+  statement and press conference). The `_pit` suffix keeps the minute columns apart from live-feed columns;
+* `tier2_events` (BACKLOG 18): `min_to_next_tier2_pit`, `min_since_last_tier2_pit`, `tier2_count_today`.
 Minutes are capped at HORIZON_MIN (the calendar's SCHEDULE_LEAD, 7 days): history only knows a schedule that far
 ahead, so live data, which knows months ahead, is capped the same way. `*_count_today` counts the tier's events on the
 bar's New York calendar day known at the bar. All columns are NaN before the calendar's first row and without
@@ -32,7 +32,7 @@ from goldbot.features.registry import FEATURES, FeatureCtx, feature
 TIER1, TIER2 = "tier1_events", "tier2_events"
 NAMES = (TIER1, TIER2)
 TIER1_COLUMNS = ("min_to_next_tier1_pit", "min_since_last_tier1_pit", "tier1_count_today")
-TIER2_COLUMNS = ("min_to_next_tier2", "min_since_last_tier2", "tier2_count_today")
+TIER2_COLUMNS = ("min_to_next_tier2_pit", "min_since_last_tier2_pit", "tier2_count_today")
 COLUMNS = (*TIER1_COLUMNS, *TIER2_COLUMNS)
 VERSION = "1"
 HORIZON_MIN = SCHEDULE_LEAD / pd.Timedelta(minutes=1)
