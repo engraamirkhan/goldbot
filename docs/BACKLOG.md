@@ -27,7 +27,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | done (PR #62) |
 | 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | done (PR #60) |
 | 4 | FRED macro data pipeline | Market and macro preparation · FIND | M | done (PR #61) |
-| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (draft; readiness list with owners and dates in `preregistration-2027Q1.md` 2026-10-11; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, 48, `macro-v1`) |
+| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (draft; owner rulings A-D, K_eff and costs-v1 recorded 2026-10-11, daily floor 150 committed; reservation planned at 8 unless H-06 counts >= 150; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, 48, `macro-v1`) |
 | 6 | Live exit policies and blackout early close | Trade management, exit · FIND + RUN | M | in review (safety fixes) |
 | 7 | Ops alerts: heartbeats, FAILED_EXEC, weekly cap | Operational resilience · RUN | S–M | done (PR #62) |
 | 8 | Stop rule and gate thresholds in code | Capital and drawdown management · RUN | S | done (owner sign-off and engine trade record open) |
@@ -662,12 +662,14 @@ These are never decided by the product owner or by agents.
 - **Automatic deployment to the trading servers (CD).** CI runs on every change. Deploying to the Oracle VMs
   automatically (on merge or tag, with health check and rollback) waits for your approval. Until then, deploys stay
   manual via `vps_update` / the Linux equivalents.
-- **Event floor for daily-bar families.** P4 requires 1,000 events, and tsmom 1d has 454. Either keep the floor (slow
-  tsmom runs on 4h bars with a 1d condition, item 5), or set a lower floor for daily families.
-- **Large-tick instruments.** Research (Kurth et al.) suggests large-tick contracts keep trend where gold CFDs do
-  not. Adding instruments (silver or others) is your call.
-- **Trial budget.** `trial_budget_quarter` is 20, spent for Q4. Research does not recommend raising it. Item 11 adds
-  toolkit trials that compete with item 5 for Q1's 20.
+- ~~**Event floor for daily-bar families.**~~ **Decided 2026-10-11** (owner approved the research director's
+  recommendations): 150 rule-only events, retire-only (`research.screen_min_events_daily: 150`;
+  `docs/research/preregistration-2027Q1.md` "Owner rulings").
+- ~~**Large-tick instruments.**~~ **Decided 2026-10-11:** out of scope (gold only).
+- ~~**Trial budget.**~~ **Decided 2026-10-11:** 20 a quarter, unchanged. Also decided that day: no consensus feed
+  (H-11 blocked); the conservative K_eff default confirmed; `costs-v1` published by 2026-12-11 if the demo
+  terminal runs, otherwise "priors accepted" on 2026-12-14; the owner's trade history exported in full, analysed
+  locally, summary only.
 - **Going live.** Demo until the paper → tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
   and the typed phrase. Item 8 computes whether the gate is met. It never flips it.
 - **Research evidence across feature versions (ADR 0006, item 34).** For now the tournament accepts a gate pass

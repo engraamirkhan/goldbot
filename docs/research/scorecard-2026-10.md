@@ -135,6 +135,23 @@ KPIs unchanged: no trades, no shadow book, no performance-analyst report, so eve
   trades probably fall inside it). At most two seeds a quarter become trials.
 - **Multiple-testing ledger:** unchanged (20). H-24 adds one trial only if it runs.
 
+## Owner rulings recorded (2026-10-11; source: owner approved the research director's recommendations, 2026-10-11)
+
+- **Ruling A:** daily-signal event floor 150, retire-only (`research.screen_min_events_daily: 150`). H-01 can now
+  retire slow TSMOM at 150+ events; it cannot promote it, because the gates need >= 1,500 candidates. Code check: a
+  daily screen at >= 150 events can still read `pass`, and that permits model research only (Q1 pre-registration,
+  "Owner rulings").
+- **Budget 20** unchanged; **no consensus feed** (H-11 blocked); **no other instruments**; the **conservative K_eff
+  default** confirmed.
+- **costs-v1:** published by 2026-12-11 if the demo terminal runs, otherwise "priors accepted" on 2026-12-14.
+- **Owner's trade history:** complete export, run locally, summary only.
+- **H-06:** reading-rule pins G1-G4 recorded. Withdrawal is likely even at 150 (quant estimate of the lower bound:
+  about 80-130), so the Q1 reservation is planned at 8.
+- **Q2 draft:** P-1 resolved; P-2 (literal first breach) and P-5 (cost source pinned at the freeze, the same for
+  gates and labels) adopted.
+- Open owner items now: the H-18 event floor (O-1), the deposit plan, the Raw-spread account, the projected
+  percentage caps and the material feature version. KPIs, budget and ledger unchanged.
+
 ## Not verified / left out
 
 - "What moved" is read from the git history and HANDOFF on base `1bcfe1c`, not from CI or the dashboard.
