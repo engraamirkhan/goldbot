@@ -520,10 +520,10 @@ class ResearchPlanView(BaseModel):
 
 class PlanReservation(BaseModel):
     """Trials of the quarter held for the pre-registered queue (research/director.py Reservation)."""
-    setting: int                            # research.reserved_trials_quarter
-    run: int                                # trials already run against the quarter's preregistered rows
-    pending: int                            # preregistered rows not yet run
-    reserved: int                           # max(setting - run, pending)
+    setting: int                            # research.reserved_trials_quarter for the plan's quarter (keyed by quarter)
+    run: int                                # queued rows of the quarter a trial ran, and slots a trial used
+    pending: int                            # queued rows not yet run, and slots still held or live
+    reserved: int                           # max(setting - run - withdrawn - expired slots, pending, 0)
 
 
 class RetiredFamilyView(BaseModel):

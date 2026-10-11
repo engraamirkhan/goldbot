@@ -63,6 +63,14 @@ risk:
   # `daily_loss_limit_abs` in config/accounts.yaml.
   min_lot_risk_cap: null
   positions_unreadable_alert: 5      # failed broker reads in a row before health fails and Telegram alerts
+  # Per-agent throttle (BACKLOG 21, playbook G-6), counted per agent per account and checked at every entry
+  # decision: after `loss_streak` consecutive full losses (R <= -0.9) RiskGate refuses the agent's entries
+  # (`throttle_loss_streak`) until `cooldown_bars` bars of its timeframe have passed since the last loss, or a real
+  # shadow win (target hit or >= 0.25R) of its live model entered after that loss closes. The count persists past the
+  # cooldown (one more full loss re-blocks) until such a win. Past `max_entries_per_day_per_agent` entries in the risk
+  # day (00:00 UTC) it refuses `throttle_entry_rate`. Entries only: exits are never gated. OFF until the owner sets the
+  # thresholds (these are the playbook's proposal, not decisions).
+  throttle: { enabled: false, loss_streak: 3, cooldown_bars: 4, max_entries_per_day_per_agent: 3 }
 
 costs:
   slippage_prior_usd: 0.15           # per oz, used until 50 real fills exist

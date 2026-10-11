@@ -105,6 +105,7 @@ from goldbot.features import us_calendar as us_calendar_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.features.registry import feature_version  # noqa: E402
 from goldbot.research import h16  # noqa: E402
+from goldbot.research.director import cited_rule  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
     POOLED_FEATURES,
@@ -551,6 +552,9 @@ def main() -> int:
     ap.add_argument("--from-year", type=int, default=2010)
     ap.add_argument("--to-year", type=int, default=2100)
     ap.add_argument("--rationale", default="baseline walk-forward on Dukascopy 1m bars")
+    ap.add_argument("--rule-ref", default=None,
+                    help="the pre-registered rule this run follows (e.g. preregistration-2027Q1.md#reserve); required "
+                         "in a quarter under the E-5 cap unless the run matches a queued, slot or rule_ref row")
     ap.add_argument("--variants", default="[{}]", help="JSON list of config overrides; each is one recorded trial")
     ap.add_argument("--extra-cost-usd", type=float, default=None,
                     help="round-trip slippage + commission per oz beyond the spread (default: settings prior + commission)")
@@ -662,6 +666,11 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                                                      retired={e.family for e in settings.research.retired_families})
     except TrialBudgetExceeded as exc:
         raise SystemExit(str(exc)) from None
+    # E-5 cap: a manual row cites its pre-registered rule (recorded as rule_ref; refused when a capped run cites none)
+    try:
+        rule_refs = [cited_rule(p, args.rule_ref, capped=settings.research.open_budget_capped(quarter)) for p in preregs]
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
     years_span = (b1["ts_utc"].iloc[-1] - b1["ts_utc"].iloc[0]).days / 365.25
     zero_volume = float((b1["tick_count"].astype(float) <= 0).mean())
     print(f"1m bars: {len(b1):,} ({b1['ts_utc'].iloc[0]:%Y-%m-%d} -> {b1['ts_utc'].iloc[-1]:%Y-%m-%d}), "
@@ -669,7 +678,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     frames: dict[str, tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, Any], tuple[pd.DataFrame, pd.DataFrame]]] = {}
     sections, rows = [], []
     title = jobs[0].family
-    for job, prereg in zip(jobs, preregs, strict=True):
+    for job, prereg, rule_ref in zip(jobs, preregs, rule_refs, strict=True):
         tf = job.timeframe
         if tf not in frames:                       # bars, context, decision frame and lookahead check once per timeframe
             b_dec = resample_bars(b1, tf)
@@ -712,7 +721,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                                        "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
             row = reg.record(agent_id=agent_id, family=job.family, config=job.config, feature_version=version,
                              rationale=rationale, results=metrics, status="screened", budget_quarter=quarter,
-                             preregistration=prereg)
+                             preregistration=prereg, rule_ref=rule_ref)
             print(f"{json.dumps(job.overrides) or 'defaults'}: screen {scr['verdict']} ({n} events) [{time.time() - t0:.0f}s]", flush=True)
             text = render_screen_failed(scr, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0, "n": n,
                                                     "swap": swap.model_dump(), "cost_source": cost_source,
@@ -730,7 +739,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             metrics = {**res.metrics, "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
             row = reg.record(agent_id=res.agent_id, family=job.family, config=job.config, feature_version=res.feature_version,
                              rationale=rationale, results=metrics, status="holdout" if args.score_holdout else "evaluated",
-                             budget_quarter=quarter, preregistration=prereg)
+                             budget_quarter=quarter, preregistration=prereg, rule_ref=rule_ref)
             res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped, "cost_source": cost_source,
                            "macro": macro_info, "positioning": positioning_info, "us_calendar": us_calendar_info,
                            "day_type": dt_info,
@@ -774,7 +783,8 @@ def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.D
                                    group_mode=args.families,
                                    extra_cost_usd=extra_cost, swap=swap, holdout=holdout,
                                    ctx={"macro": macro} if macro is not None else None, rationale=args.rationale,
-                                   cost_source=cost_source)
+                                   cost_source=cost_source, rule_ref=args.rule_ref,
+                                   capped=settings.research.open_budget_capped(quarter_of()))
     except (TrialBudgetExceeded, ValueError) as exc:
         raise SystemExit(str(exc)) from None
     Path(args.report).write_text(text)

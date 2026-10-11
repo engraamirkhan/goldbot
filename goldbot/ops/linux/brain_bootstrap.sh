@@ -18,11 +18,23 @@ apt-get update -y
 DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates chrony build-essential xz-utils restic
 systemctl enable --now chrony
 
+# What root installs (systemd units, the root-run deploy script) comes from root's OWN shallow clone in a root-only
+# directory, never from $ROOT: the service user can write that tree and its .git, and it runs code (pip/npm/Wine
+# installs) before the installs below. docs/AGENT_STANDARDS.md "Root-run tooling".
+OPS_SRC=$(mktemp -d /root/goldbot-ops.XXXXXX)
+trap 'rm -rf -- "$OPS_SRC"' EXIT
+git clone -q --depth 1 "$REPO" "$OPS_SRC/src"
+OPS=$OPS_SRC/src/goldbot/ops/linux
+
 id goldbot >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/goldbot --shell /usr/sbin/nologin goldbot
-[ -d "$ROOT/.git" ] || git clone "$REPO" "$ROOT"
-mkdir -p "$ROOT/state" "$ROOT/logs" "$ROOT/models" "$ROOT/data"
-chown -R goldbot:goldbot "$ROOT"
-chmod 700 "$ROOT/state"            # the secrets file (no desktop keyring on a server) lives here, owner-only
+# The service user's tree is created by root once and then written only as goldbot: on a re-run, root must not
+# follow a symlink goldbot planted there (chmod/chown as root would change the target).
+if [ ! -d "$ROOT/.git" ]; then
+  install -d -m 755 -o goldbot -g goldbot "$ROOT"   # root-ok: creates /opt/goldbot in root-owned /opt, empty so far
+  sudo -u goldbot -H git clone -q "$REPO" "$ROOT"
+fi
+sudo -u goldbot mkdir -p "$ROOT/state" "$ROOT/logs" "$ROOT/models" "$ROOT/data"
+sudo -u goldbot chmod 700 "$ROOT/state"   # the secrets file (no desktop keyring on a server) lives here, owner-only
 
 # Python 3.11 via uv (same minor version as CI)
 sudo -u goldbot -H bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh"
@@ -34,9 +46,9 @@ if ! node --version 2>/dev/null | grep -q "^v$NODE_MAJOR\."; then
   ARCH=$(uname -m); case "$ARCH" in aarch64) NARCH=arm64;; x86_64) NARCH=x64;; *) echo "unsupported $ARCH"; exit 1;; esac
   VER=$(curl -fsSL https://nodejs.org/dist/index.json | python3 -c "import json,sys; print(next(r['version'] for r in json.load(sys.stdin) if r['version'].startswith('v$NODE_MAJOR.')))")
   TGZ="node-$VER-linux-$NARCH.tar.xz"
-  curl -fsSLo "/tmp/$TGZ" "https://nodejs.org/dist/$VER/$TGZ"
-  curl -fsSL "https://nodejs.org/dist/$VER/SHASUMS256.txt" | grep " $TGZ\$" | (cd /tmp && sha256sum -c -)
-  tar -xJf "/tmp/$TGZ" -C /usr/local --strip-components=1
+  curl -fsSLo "$OPS_SRC/$TGZ" "https://nodejs.org/dist/$VER/$TGZ"           # root-only directory, not /tmp
+  curl -fsSL "https://nodejs.org/dist/$VER/SHASUMS256.txt" | grep " $TGZ\$" | (cd "$OPS_SRC" && sha256sum -c -)
+  tar -xJf "$OPS_SRC/$TGZ" -C /usr/local --strip-components=1
 fi
 sudo -u goldbot -H bash -c "cd $ROOT/web && npm ci && npm run build"
 
@@ -51,7 +63,7 @@ cd /opt/goldbot && exec sudo -u goldbot -H env PYTHON_KEYRING_BACKEND=keyring.ba
 WRAP
 chmod 755 /usr/local/bin/goldbot
 
-for u in supervisor engine@ api scheduler telegram news bridge-tunnel; do install -m 644 "$ROOT/goldbot/ops/linux/systemd/goldbot-$u.service" /etc/systemd/system/; done
+for u in supervisor engine@ api scheduler telegram news bridge-tunnel; do install -m 644 "$OPS/systemd/goldbot-$u.service" /etc/systemd/system/; done
 systemctl daemon-reload
 for s in goldbot-supervisor goldbot-engine@icm-demo goldbot-api goldbot-scheduler goldbot-telegram goldbot-news; do
   systemctl enable "$s"
@@ -69,22 +81,32 @@ systemctl enable --now goldbot-bridge-tunnel
 WRAP
 chmod 755 /usr/local/bin/goldbot-tunnel
 echo "bridge tunnel key (authorise it on the MT5 box with: sudo goldbot-mt5-authorize '<this line>'):"
-cat /var/lib/goldbot/.ssh/id_ed25519.pub
+sudo -u goldbot cat /var/lib/goldbot/.ssh/id_ed25519.pub
 
 # Deploys: only versions the owner approves (Telegram [Deploy] or `sudo goldbot-deploy latest`), never by itself.
-# The script runs as root, so a root-owned copy is installed; the repo copy (writable by the service user) is never run
-# as root. After reviewing a change to it: sudo install -m 755 -o root -g root <repo>/goldbot/ops/linux/goldbot-deploy.sh /usr/local/sbin/goldbot-deploy
+# The script runs as root, so a root-owned copy is installed from root's own clone ($OPS); the repo copy (writable by
+# the service user) is never run or installed as root. To update it later: RUNBOOK 0.5 "Installing a new
+# goldbot-deploy" (root downloads it from GitHub at the commit; the owner checks its sha256 off-box first).
 mkdir -p /etc/goldbot
 echo brain > /etc/goldbot/role
-install -m 755 -o root -g root "$ROOT/goldbot/ops/linux/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
-install -m 644 "$ROOT/goldbot/ops/linux/systemd/goldbot-deploy.service" "$ROOT/goldbot/ops/linux/systemd/goldbot-deploy.timer" /etc/systemd/system/
+install -m 755 -o root -g root "$OPS/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
+install -m 644 "$OPS/systemd/goldbot-deploy.service" "$OPS/systemd/goldbot-deploy.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable goldbot-deploy.timer
 
-# Cloudflare Tunnel client for the dashboard (the tunnel token is entered by the owner, see the runbook)
+# Cloudflare Tunnel client for the dashboard (the tunnel token is entered by the owner, see the runbook). Pinned
+# version and SHA-256 (GitHub release asset digests); downloaded into the root-only directory and checked before dpkg.
+CLOUDFLARED_VERSION=2026.10.0
 if ! command -v cloudflared >/dev/null; then
   ARCH=$(dpkg --print-architecture)
-  curl -fsSLo /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH.deb"
-  dpkg -i /tmp/cloudflared.deb
+  case "$ARCH" in
+    arm64) CF_SHA=7e0d76de3858b6396bd234ae26182bee222133398667d2647b90381d00c00e98 ;;
+    amd64) CF_SHA=9721287c28f78cb623e77c7b95a63feea87e909054d75666a0ec9eff20e5d548 ;;
+    *) echo "unsupported $ARCH for cloudflared"; exit 1 ;;
+  esac
+  curl -fsSLo "$OPS_SRC/cloudflared.deb" \
+    "https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-linux-$ARCH.deb"
+  echo "$CF_SHA  $OPS_SRC/cloudflared.deb" | sha256sum -c -
+  dpkg -i "$OPS_SRC/cloudflared.deb"
 fi
 echo "brain installed. Next: docs/RUNBOOK.md 'Free hosting on Oracle Cloud' (store secrets, then start services)."

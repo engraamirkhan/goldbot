@@ -754,7 +754,8 @@ def check_feature_versions(ctx: HealthContext) -> Check:
 
 def check_deploy(ctx: HealthContext) -> Check:
     """The last deploy attempt (state/deploys.jsonl, written by goldbot-deploy): a rollback warns, a failed rollback
-    fails; a deploy is only ever started by the owner (Telegram [Deploy] or `sudo goldbot-deploy`)."""
+    fails; a deploy is only ever started by the owner (Telegram [Deploy] or `sudo goldbot-deploy`). An owner's
+    rollback (`goldbot-deploy --rollback`) warns too: an older version runs on purpose until the next deploy."""
     f = ctx.state_dir / "deploys.jsonl"
     if not f.exists():
         return Check(name="deploy", status="ok", reason="no deploy recorded yet")
@@ -763,7 +764,8 @@ def check_deploy(ctx: HealthContext) -> Check:
     except (ValueError, OSError, IndexError) as exc:
         return Check(name="deploy", status="warn", reason=f"deploys.jsonl unreadable: {exc}")
     msg = f"{last.get('result')} {str(last.get('to', ''))[:8]} on {last.get('role')} at {last.get('ts')}: {last.get('detail', '')}"
-    status = {"failed": "fail", "rolled_back": "warn", "refused": "warn"}.get(str(last.get("result")), "ok")
+    status = {"failed": "fail", "rolled_back": "warn", "refused": "warn", "rolled_back_manual": "warn",
+              "rollback_reverted": "warn", "deployed_degraded": "warn"}.get(str(last.get("result")), "ok")
     return Check(name="deploy", status=cast(Status, status), reason=msg)
 
 
@@ -1051,6 +1053,42 @@ def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timest
         return []
 
 
+def check_throttle(ctx: HealthContext, account_id: str) -> list[Check]:
+    """BACKLOG 21 (playbook G-6: "Logged and alerted"): while the per-agent throttle is on, one check per agent
+    (`throttle:<account>:<agent>`, so each newly throttled agent alerts on its own, review MEDIUM-1). It warns (and
+    tells the owner, NOTIFY_ON_WARN) while RiskGate refuses the agent's entries for a loss streak or the daily entry
+    rate, and is ok otherwise. It FAILs when the block cannot lift by itself or the facts are unknown: a loss-streak
+    block without a cooldown end (unknown timeframe), `throttle_unknown`, or a throttle state the engine could not
+    publish (`throttle:<account>`). Nothing while the throttle is off or the engine has not published it."""
+    f = ctx.state_dir / f"engine_{account_id}.json"
+    if not f.exists():
+        return []
+    try:
+        th = _read_json(f).get("throttle") or {}
+        if not th.get("enabled"):
+            return []
+        error = th.get("error")
+        agents = {str(k): dict(v) for k, v in (th.get("agents") or {}).items()}
+    except (ValueError, OSError, AttributeError, TypeError):
+        return []                                   # check_engine reports the unreadable file
+    if error:
+        return [Check(name=f"throttle:{account_id}", status="fail",
+                      reason=f"{account_id}: throttle state not published ({error}); entries are judged per decision")]
+    out = []
+    for a, v in sorted(agents.items()):
+        name, blocked = f"throttle:{account_id}:{a}", [str(r) for r in v.get("blocked") or []]
+        facts = (f"streak {v.get('loss_streak')}, {v.get('entries_today')} entries today, cooldown until "
+                 f"{v.get('cooldown_until') or 'n/a'}")
+        if not blocked:
+            out.append(Check(name=name, status="ok", reason=f"{account_id} {a}: not throttled ({facts})"))
+            continue
+        stuck = "throttle_unknown" in blocked or ("throttle_loss_streak" in blocked and not v.get("cooldown_until"))
+        out.append(Check(name=name, status="fail" if stuck else "warn",
+                         reason=f"{account_id} {a}: entries throttled: {','.join(blocked)} ({facts})"
+                                + ("; the block cannot lift by itself" if stuck else "") + "; exits unaffected"))
+    return out
+
+
 def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
     """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
     restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
@@ -1147,6 +1185,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
             tick_errors = check_tick_errors(ctx, a.account_id)
             checks += [tick_errors] if tick_errors is not None else []
             checks += check_loss_caps(ctx, a.account_id) + check_failed_orders(ctx, a.account_id)
+            checks += check_throttle(ctx, a.account_id)
             bridge = check_bridge(ctx, a.account_id)
             checks += [bridge] if bridge is not None else []
             clock = check_server_clock(ctx, a)
@@ -1175,6 +1214,17 @@ def exit_code(report: HealthReport, baseline: HealthReport | None = None) -> int
     return 1 if fails else 0
 
 
+_RANK = {"ok": 0, "warn": 1, "fail": 2}
+
+
+def worsened(report: HealthReport, baseline: HealthReport) -> list[str]:
+    """Checks whose status is worse than in the baseline (ok < warn < fail; a check new since the baseline counts
+    from ok; one that disappeared is not worse), sorted. goldbot-deploy embeds the same rule (WORSE_PY) so it also
+    works against a release that predates this function."""
+    before = {c.name: _RANK[c.status] for c in baseline.checks}
+    return sorted(c.name for c in report.checks if _RANK[c.status] > before.get(c.name, 0))
+
+
 # --------------------------------------------------------------------------------------------- alerts
 WATCH_FILE = "health_last.json"
 MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
@@ -1186,7 +1236,8 @@ class WatchState(Record):
 
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
-NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:")
+NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:",
+                  "throttle:")
 
 
 def _alerting(name: str, status: str) -> bool:
@@ -1277,4 +1328,6 @@ def main(argv: list[str], ctx: HealthContext | None = None) -> int:
     baseline = _load_report(args.baseline) if args.baseline else None
     if args.baseline and baseline is not None and baseline.failing():
         print(f"baseline already failing (ignored for the exit code): {', '.join(sorted(baseline.failing()))}", file=sys.stderr)
+    if baseline is not None and (worse := worsened(report, baseline)):
+        print(f"worse than the baseline: {', '.join(worse)}", file=sys.stderr)
     return exit_code(report, baseline)
