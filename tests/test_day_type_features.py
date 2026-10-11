@@ -21,10 +21,10 @@ from goldbot.features.survey import yang_zhang
 
 ROOT = Path(__file__).resolve().parents[1]
 FROZEN_DEFAULT_VERSION = "f-079deacc61"      # sessions v2: the Q1 2027 H-02 universe (preregistration-2027Q1.md)
-FROZEN_MACRO_VERSION = "f-e7d2dc11e1"        # default + macro drivers
+FROZEN_MACRO_VERSION = "f-ac2be79efe"        # default + macro drivers
 # day_type moves the version: the combined hashes are pinned here and in the Q2 draft (review M5)
 DEFAULT_DAY_TYPE_VERSION = "f-1eada57050"
-MACRO_DAY_TYPE_VERSION = "f-c8ec630957"
+MACRO_DAY_TYPE_VERSION = "f-7a3cad1466"
 
 
 def _utc(s: str) -> pd.Timestamp:

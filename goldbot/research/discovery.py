@@ -11,7 +11,8 @@ Choosing which features a model uses is a look at the data, so it happens inside
   LightGBM (or an L1-logistic regression) fitted on each, and a record of which features land in the top `top_k` by
   importance. A feature's frequency in the fold is the share of subsamples that put it in the top k; a group's is the
   share of subsamples in which its JOINT PERMUTATION importance (`group_permutation_importance`: the log-loss increase
-  on the fold's training rows outside the subsample when all its members are permuted together) ranks in the top
+  on the fold's training rows at least a week from the subsample when all its members are permuted together,
+  averaged over `permutation_repeats` shuffles) ranks in the top
   `group_top_k` groups: size-neutral (dead members add nothing, so a large group gains nothing by size) and
   redundancy-safe (near-copies are permuted together, so splitting one signal does not deflate its group); ADR 0007
   amendment 2026-10-11. With one column per group the column's own importance is used (the same ranking).
@@ -248,22 +249,33 @@ def _fit_model(Z: pd.DataFrame, y: np.ndarray, w: np.ndarray, cols: list[str], c
     return coef.reindex(cols).fillna(0.0).to_numpy(dtype=float), predict
 
 
+def purged_rest(week: np.ndarray, picked: np.ndarray, purge_weeks: int = 1) -> np.ndarray:
+    """Row indices whose week is more than `purge_weeks` from every subsample week (`picked`): the rows the group
+    measure is scored on, so no label spanning a week edge links them to the subsample's training rows."""
+    near = np.unique(np.concatenate([picked + d for d in range(-purge_weeks, purge_weeks + 1)]))
+    return np.flatnonzero(~np.isin(week, near))
+
+
 def group_permutation_importance(predict: Predict, Z: pd.DataFrame, y: np.ndarray, members: list[list[int]],
-                                 rng: np.random.Generator) -> np.ndarray:
+                                 rng: np.random.Generator, repeats: int = 1) -> np.ndarray:
     """Per group: the log-loss increase on `Z` when every member column is permuted with ONE shared row permutation
     (joint permutation importance). Size-neutral: dead members change nothing, so padding a group does not raise it;
     redundancy-safe: near-copies are permuted together, so splitting one signal across copies does not lower it (ADR
-    0007 amendment, 2026-10-11). 0 for a group with no member."""
+    0007 amendment, 2026-10-11). Averaged over `repeats` shuffles drawn in turn from `rng` (cfg.permutation_repeats).
+    0 for a group with no member."""
     yv = y.astype(float)
     base = _log_loss(yv, predict(Z))
     out = np.zeros(len(members))
     for j, cols in enumerate(members):
         if not cols:
             continue
-        perm = rng.permutation(len(Z))
-        Zp = Z.copy()
-        Zp.iloc[:, cols] = Z.iloc[perm, cols].to_numpy()
-        out[j] = _log_loss(yv, predict(Zp)) - base
+        inc = []
+        for _ in range(max(int(repeats), 1)):
+            perm = rng.permutation(len(Z))
+            Zp = Z.copy()
+            Zp.iloc[:, cols] = Z.iloc[perm, cols].to_numpy()
+            inc.append(_log_loss(yv, predict(Zp)) - base)
+        out[j] = float(np.mean(inc))
     return out
 
 
@@ -344,7 +356,8 @@ def select_in_fold(feats: pd.DataFrame, labels: pd.DataFrame, fold: Fold, pool: 
     members = [[zpos[c] for c in pool if groups[c] == g] for g in gkeys]
     fitted = 0
     for s in range(cfg.n_subsamples):
-        rows = np.flatnonzero(np.isin(week, rng.choice(weeks, size=n_pick, replace=False)))
+        picked = rng.choice(weeks, size=n_pick, replace=False)
+        rows = np.flatnonzero(np.isin(week, picked))
         if len(np.unique(y[rows])) < 2:
             continue
         seed = cfg.seed * 1000 + fold.k * 100 + s
@@ -355,9 +368,10 @@ def select_in_fold(feats: pd.DataFrame, labels: pd.DataFrame, fold: Fold, pool: 
         if singletons:          # one column per group: the column's own importance is its group's (size-neutral)
             gimp: np.ndarray = np.bincount(gidx, weights=imp, minlength=len(gkeys)).astype(float)
         else:                   # joint permutation importance on the training fold's rows outside the subsample
-            rest = np.setdiff1d(np.arange(len(y)), rows)
+            rest = purged_rest(week, picked, purge_weeks=1)     # a week's purge from every subsample week
             gimp = (group_permutation_importance(predict, Z_all.iloc[rest], y[rest], members,
-                                                 np.random.default_rng([cfg.seed, fold.k, s]))
+                                                 np.random.default_rng([cfg.seed, fold.k, s]),
+                                                 repeats=cfg.permutation_repeats)
                     if len(rest) and len(np.unique(y[rest])) == 2 else np.zeros(len(gkeys)))
         for j in np.argsort(-gimp, kind="stable")[:gk]:
             if gimp[j] > 0:

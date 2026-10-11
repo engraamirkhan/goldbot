@@ -525,3 +525,24 @@ def test_select_in_fold_ranks_groups_by_the_joint_permutation_measure():
     groups = {c: ("sig" if c == "info" else "pad") for c in POOL}
     sel = select_in_fold(feats, labels, folds[0], POOL, CFG.model_copy(update={"group_top_k": 1}), groups)
     assert sel.group_frequency["sig"] >= 0.9 and sel.group_frequency.get("pad", 0.0) <= 0.1
+
+
+def test_the_group_measure_rows_are_purged_one_week_from_the_subsample_and_averaged_over_repeats():
+    """Quant re-review LOW: the rows the joint permutation is scored on sit at least one week from every subsample
+    week (labels can span a week edge), and the measure averages `permutation_repeats` shuffles."""
+    from goldbot.research.discovery import group_permutation_importance, purged_rest
+    week = np.array([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6])
+    rest = purged_rest(week, picked=np.array([2]), purge_weeks=1)
+    assert sorted(set(week[rest])) == [0, 4, 5, 6]             # weeks 1 and 3 border the subsample week 2
+    assert purged_rest(week, picked=np.array([0, 6]), purge_weeks=1).tolist() == [4, 5, 6, 7, 8, 9]
+    rng = np.random.default_rng(0)
+    a = rng.normal(size=600)
+    y = (rng.random(600) < 1 / (1 + np.exp(-2 * a))).astype(int)
+    Z = pd.DataFrame({"a": a, "b": rng.normal(size=600)})
+
+    def predict(X: pd.DataFrame) -> np.ndarray:
+        return 1 / (1 + np.exp(-2 * X["a"].to_numpy()))
+    g = np.random.default_rng(0)                                # three shuffles drawn in turn from one stream
+    one = [group_permutation_importance(predict, Z, y, [[0]], g)[0] for _ in range(3)]
+    three = group_permutation_importance(predict, Z, y, [[0]], np.random.default_rng(0), repeats=3)[0]
+    assert np.isclose(three, np.mean(one))

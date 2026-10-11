@@ -898,6 +898,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- Pre-freeze verdict fixes (2026-10-11, third quant re-review): screened-row decisions keyed on the linked
+  pre-registration's `rule_id` (write the Q1 queued rows with `rule_id="H-01"/"H-04"/"C4H"`); H-01 continue needs
+  long-only positive years too; the 4h continuity trial never continues; unknown passes continue only citing their
+  pre-registered reading rule; H-10 jumps-only cannot retire or continue H-10; `macro_drivers` v4 (stub-free HAR-RV),
+  macro version `f-ac2be79efe`, macro + day_type `f-7a3cad1466`; group measure uses `permutation_repeats` and a
+  one-week purge.
 - H-02 freeze fixes (2026-10-11, second quant re-review, ADR 0007 amendment): clusters follow hypotheses.md
   (`discovery.H02_CLUSTERS`: H-03 GVZ + new `macro_vrp` = GVZ^2 - HAR-RV^2 in opt-in `macro_drivers` v3, macro feature
   version now `f-e7d2dc11e1`; H-05 rounds/S-R/prior day-week extremes; H-07 VIX/S&P; H-08 sweeps + session/Asia/London

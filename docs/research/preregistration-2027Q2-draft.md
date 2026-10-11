@@ -27,11 +27,11 @@ is fixed and a change after seeing data makes it exploratory.
 - **Event floor:** `research.screen_min_events` (1,000) for every intraday rule. The daily override does not apply.
 - **DSR trial count:** `registry.n_trials_effective` + 1 at run time = 20 (Q4 2026) + every Q1 and Q2 trial recorded
   so far + H-02's K_eff (Q1, conservative default: added to every later trial) + H-14's K_eff once it has run.
-- **Feature versions:** `f-079deacc61` (sessions v2, DST-aware) for 15m rules and discovery; `f-e7d2dc11e1` (was `f-f999b359e2` before macro drivers v3 added the VRP spread, amended 2026-10-11) where
+- **Feature versions:** `f-079deacc61` (sessions v2, DST-aware) for 15m rules and discovery; `f-ac2be79efe` (was `f-e7d2dc11e1` with macro drivers v3 and `f-f999b359e2` before v3 added the VRP spread; v4 drops stub days from its HAR-RV, amended 2026-10-11) where
   the macro drivers are used (H-16 only). The opt-in `day_type` family (BACKLOG 30a) is not in the default set, so it
-  leaves `f-079deacc61` and `f-e7d2dc11e1` unchanged. A feature set that includes it has its own version (pinned in
-  `tests/test_day_type_features.py`): **`f-1eada57050`** (default + `day_type` v1) and **`f-c8ec630957`** (default +
-  macro drivers v3 + `day_type` v1; was `f-93fbe9386d` before macro v3). Each row that uses `day_type` also records its inputs (`day_type`: family version,
+  leaves `f-079deacc61` and `f-ac2be79efe` unchanged. A feature set that includes it has its own version (pinned in
+  `tests/test_day_type_features.py`): **`f-1eada57050`** (default + `day_type` v1) and **`f-7a3cad1466`** (default +
+  macro drivers v4 + `day_type` v1; was `f-93fbe9386d` before macro v3). Each row that uses `day_type` also records its inputs (`day_type`: family version,
   GVZ present, calendar present, refit schedule, minimum fit rows). `research_pass --day-type` refuses to run without
   `--us-calendar`, with `--discover` or `--cpcv`, or with `--from-year` after 2010. A run on another version is
   recorded with a `deviation` (`TrialRegistry.record`), per ADR 0006.
@@ -144,7 +144,7 @@ way (13 → 9).
   DSR, no event floor, and no opportunity-day report.
 - **Events owed from data before the freeze:** the number of evaluable days (expected ≈ 3,380 out of sample by the
   calendar: 13.5 years from about 2012-04 × ~250; minus stale-GVZ days and data gaps).
-- **Feature version:** `f-c8ec630957` (default + macro drivers v3 + `day_type` v1), with `day_type`'s inputs recorded
+- **Feature version:** `f-7a3cad1466` (default + macro drivers v4 + `day_type` v1), with `day_type`'s inputs recorded
   on the row (GVZ and calendar both present).
 
 ### H-17 Trend-day continuation with a runner (V0 and V1: two trials)
