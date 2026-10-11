@@ -68,6 +68,7 @@ H17_NOISE_DAYS, H17_BREACH_K = 14, 1.0
 H18_TYPES = ("nfp", "cpi", "pce", "fomc_statement")
 H18_K = 1.0
 H14_FROM_LONDON, H14_TO_NY = 8 * 60, 16 * 60               # candidate bar close in [08:00 London, 16:00 New York]
+FROZEN_EXTRA_COST_USD = 0.37                               # Q1/Q2 pre-registrations: round trip beyond the spread
 EXPECTED = {"H-04 calendar upper bound": 4087, "H-16 first OOS month": "2012-04", "H-16 eval days": 3380,
             "H-17 upper bound": 1690, "H-17 floor": 1000, "H-01 signals": 2154, "H-01 lower bound": 154}
 
@@ -260,8 +261,10 @@ def count_h17(b1: pd.DataFrame, cal: pd.DataFrame | None, first_month: str | Non
               min_rows: int = dt.MIN_FIT_ROWS) -> tuple[dict[str, Any], pd.DataFrame]:
     """High days (baseline forecast for D >= the fit's median of fitted values, as known at the bar) with a qualifying
     breach: the first 15m bar closing in [09:00 London, 10:30 New York] with |close - O_D| > 1.0 x B, B the mean of
-    |close at the same London time - O| over the previous 14 days that had that bar; not in a tier-1 blackout, market
-    open, ATR(14) known; from H-16's first OOS month. Low days the same (shadow half)."""
+    |close at the same London time - O| over the previous 14 days that had that bar (market open, ATR(14) known), from
+    H-16's first OOS month. Literal rule (program decision): when that first breaching bar's close is inside a tier-1
+    blackout [-15, +30) min the day has no entry (`*_events_strict`, the trial count); the next breaching bar outside
+    the blackout (`*_events_next_bar`) is reported for transparency only. Low days the same (shadow half)."""
     source = "spec-derived (trend_day, E-3, not merged): preregistration-2027Q2-draft.md H-17"
     if cal is None or len(cal) == 0:
         return _not_counted("calendar-v1 missing (the tier-1 blackout is part of the rule)", source), pd.DataFrame()
@@ -303,22 +306,31 @@ def count_h17(b1: pd.DataFrame, cal: pd.DataFrame | None, first_month: str | Non
     tradable = DEFAULT_SESSIONS.is_open(close_ts) & np.isfinite(a) & (a > 0)
     start = np.datetime64(pd.Period(first_month, "M").start_time.date(), "D")
     in_oos = lc_date >= start
-    out: dict[str, Any] = {"status": "counted", "source": source, "first_oos_month": first_month}
-    events = {}
+    out: dict[str, Any] = {"status": "counted", "source": source, "first_oos_month": first_month,
+                           "rule": "literal: the day's first breaching bar; no entry that day if its close is in a "
+                                   "tier-1 blackout [-15, +30) min (program decision after the quant review)"}
+    times: list[np.ndarray] = []
+    halves: list[str] = []
+    rules: list[str] = []
     for half, day_ok in (("high", high), ("low", low)):
         eligible = breach & day_ok & tradable & in_oos
         first_breach = first_per_group(lc_date, eligible)
-        entries = first_per_group(lc_date, eligible & ~blackout)
+        strict = first_breach[~blackout[first_breach]]              # literal rule: blacked-out first breach = no entry
+        next_bar = first_per_group(lc_date, eligible & ~blackout)   # old reading, reported for transparency only
         out[f"{half}_days"] = int(len(np.unique(lc_date[day_ok & window & in_oos])))
-        out[f"{half}_events"] = len(entries)
+        out[f"{half}_breach_days"] = len(first_breach)
         out[f"{half}_first_breach_in_blackout"] = int(blackout[first_breach].sum())
-        out[f"{half}_per_year"] = per_year(close_ts[entries])
-        events[half] = close_ts[entries]
-    out["trial_events"] = out["high_events"]
-    out["below_floor"] = out["high_events"] < EXPECTED["H-17 floor"]
-    frame = pd.DataFrame({"decision_utc": np.concatenate([events["high"], events["low"]]),
-                          "half": ["high"] * len(events["high"]) + ["low"] * len(events["low"])})
-    frame["decision_utc"] = pd.to_datetime(frame["decision_utc"], utc=True)
+        out[f"{half}_events_strict"] = len(strict)
+        out[f"{half}_events_next_bar"] = len(next_bar)
+        out[f"{half}_per_year"] = per_year(close_ts[strict])
+        for rule, pos in (("strict", strict), ("next_bar", next_bar)):
+            times.append(t_ns[pos])
+            halves += [half] * len(pos)
+            rules += [rule] * len(pos)
+    out["trial_events"] = out["high_events_strict"]
+    out["below_floor"] = out["high_events_strict"] < EXPECTED["H-17 floor"]
+    frame = pd.DataFrame({"decision_utc": pd.to_datetime(np.concatenate(times), unit="ns", utc=True),
+                          "half": halves, "rule": rules})
     return out, frame
 
 
@@ -379,9 +391,11 @@ def count_h18(b1: pd.DataFrame, cal: pd.DataFrame | None) -> tuple[dict[str, Any
 def count_h14(b1: pd.DataFrame, cal: pd.DataFrame | None, extra_cost_usd: float) -> tuple[dict[str, Any], pd.DataFrame]:
     """15m candidate bars closing in [08:00 London, 16:00 New York] (same local date), market open, outside the tier-1
     blackout, with ATR(14) known and the H-13 cost gate ATR(15m) >= round trip (the bar's own mean spread + the frozen
-    extra cost). Two labelled rows per bar (both sides)."""
-    source = ("spec-derived (E-2 not merged): preregistration-2027Q2-draft.md H-14; spread = the candidate bar's "
-              "Dukascopy mean spread (no costs-v1 session spread read)")
+    extra cost). Blackout [-15, +30) min on the bar close. Two labelled rows per bar (both sides)."""
+    source = ("spec-derived (E-2 not merged): preregistration-2027Q2-draft.md H-14; cost prior = the candidate bar's "
+              "Dukascopy spread_mean (data-v1) + settings extra cost (no costs-v1 session spread read)")
+    check = ("ok: 0.37 $/oz as frozen" if abs(float(extra_cost_usd) - FROZEN_EXTRA_COST_USD) < 1e-9 else
+             f"DEVIATION: settings extra cost {float(extra_cost_usd):.4f} $/oz, frozen {FROZEN_EXTRA_COST_USD} $/oz")
     if cal is None or len(cal) == 0:
         return _not_counted("calendar-v1 missing (the tier-1 blackout is part of the rule)", source), pd.DataFrame()
     bars = resample_bars(b1, "15m").reset_index(drop=True)
@@ -400,7 +414,7 @@ def count_h14(b1: pd.DataFrame, cal: pd.DataFrame | None, extra_cost_usd: float)
     gate = known & (a >= spread + extra_cost_usd)
     cand = window & ~blackout & gate
     out: dict[str, Any] = {"status": "counted", "source": source, "extra_cost_usd": round(float(extra_cost_usd), 4),
-           "window_bars": int(window.sum()), "dropped_blackout": int((window & blackout).sum()),
+           "extra_cost_check": check, "window_bars": int(window.sum()), "dropped_blackout": int((window & blackout).sum()),
            "dropped_atr_unknown": int((window & ~blackout & ~known).sum()),
            "dropped_cost_gate": int((window & ~blackout & known & ~gate).sum()),
            "candidate_bars": int(cand.sum()), "labelled_rows": int(2 * cand.sum()),
@@ -443,14 +457,17 @@ def markdown(result: dict[str, Any]) -> str:
         ("Q2 H-16", "`expected_eval_days`", get("H-16", "expected_eval_days"), c["H-16"].get("reason", "")),
         ("Q2 H-16", "dropped: GVZ-stale / no HAR / no full forecast",
          f"{get('H-16', 'dropped_gvz_stale')} / {get('H-16', 'dropped_no_har')} / {get('H-16', 'dropped_no_full')}", ""),
-        ("Q2 H-17", "high-day events (trial count; floor 1,000)", get("H-17", "high_events"),
+        ("Q2 H-17", "high-day events, literal rule (trial count; floor 1,000)", get("H-17", "high_events_strict"),
          c["H-17"].get("source", c["H-17"].get("reason", ""))),
-        ("Q2 H-17", "low-half (shadow) events", get("H-17", "low_events"), ""),
+        ("Q2 H-17", "low-half (shadow) events, literal rule", get("H-17", "low_events_strict"), ""),
+        ("Q2 H-17", "high / low taking the next bar after a blacked-out first breach (transparency only)",
+         f"{get('H-17', 'high_events_next_bar')} / {get('H-17', 'low_events_next_bar')}", ""),
         ("Q2 H-18", "events with the entry bar present", get("H-18", "with_entry_bar"),
          c["H-18"].get("source", c["H-18"].get("reason", ""))),
         ("Q2 H-18", "of which pass abs(M) > 1.0 ATR_pre", get("H-18", "pass_move_filter"), ""),
         ("Q2 H-14", "candidate bars after blackout and cost gate (rows = 2x)", get("H-14", "candidate_bars"),
          c["H-14"].get("source", c["H-14"].get("reason", ""))),
+        ("Q2 H-14", "cost prior: bar spread_mean + settings extra cost", get("H-14", "extra_cost_check"), ""),
     ]
     lines = ["## Pre-registration event counts (no labels, returns or outcomes read)", "",
              f"- commit `{meta['git_sha']}`; bars {meta['bars_from']} .. {meta['bars_to']} (cut before holdout "

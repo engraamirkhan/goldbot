@@ -159,7 +159,7 @@ demo this year. Both lanes are kept: Q1 already funds the slow lane; Q2 funds th
 | Engineering | BACKLOG 33 (opportunity-day evaluation of trials) | the £/day and capture metrics in Q2 reports (reported, not in any rule) |
 | Data (new) | **E-1: historical tier-1 release schedule 2010-01 .. 2025-09** (scheduled times only, from the BLS, BEA and Fed published calendars). Today the calendar archive is forward-only (`goldbot/data/econ_calendar.py`, weekly feed archived since deployment) and research passes no events (`calendar_events` is opt-in, `goldbot/research/pipeline.py:27`), so tier-1 inputs would be NaN on 2010–2025 | H-16's event inputs, H-18 entirely |
 | Engineering (new) | E-2: a 15m two-sided discovery candidate spec (screening specialist) with the H-13 cost gate as the candidate filter | H-14 |
-| Engineering (new) | E-3: screening specialists `trend_day` (H-17) and `event_continuation` (H-18), rule-only like `asia_drift` | H-17, H-18 |
+| Engineering (new) | E-3: screening specialists `trend_day` (H-17) and `event_continuation` (H-18), rule-only like `asia_drift`. `trend_day` implements H-17's literal blackout rule: only the day's first breaching bar is a candidate, and if its close is inside the tier-1 blackout [−15, +30) min (on the bar close) the day has no entry | H-17, H-18 |
 | Quant ruling | H-17's overlap with retired R-02/R-05; H-16's evaluation scheme; H-14's survivor unit | Q2 freeze |
 | Owner ruling | H-18 event floor; ruling A (daily floor, still open for Q1); Raw account; deposit plan | see section 9 |
 

@@ -19,7 +19,7 @@ import pytest
 from goldbot.data import release
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.macro import fred_frame
-from goldbot.data.resample import BAR_COLUMNS, resample_bars
+from goldbot.data.resample import BAR_COLUMNS, mid, resample_bars
 from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.research import h16
 
@@ -53,7 +53,8 @@ def _bars_1m(start: str = START, end: str = END, seed: int = 3) -> pd.DataFrame:
     op = np.concatenate(([1900.0], mid[:-1]))
     wig = np.abs(vol * rng.standard_normal(len(ts)))
     hi, lo = np.maximum(op, mid) * (1 + wig), np.minimum(op, mid) * (1 - wig)
-    sp = np.where((ts.hour >= 7) & (ts.hour < 17), 0.2, 0.5)
+    # spreads near the 15m ATR (a slow lognormal walk around $3-4) so the H-14 cost gate binds on some bars
+    sp = 3.0 * np.exp(np.clip(np.cumsum(0.004 * rng.standard_normal(len(ts))), -1.0, 1.0))
     b = pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=1)})
     for side, sign in (("bid", -1), ("ask", 1)):
         for k, v in (("open", op), ("high", hi), ("low", lo), ("close", mid)):
@@ -160,25 +161,89 @@ def test_h16_count_receives_timestamps_only():
 
 
 # --------------------------------------------------------------------------- guard: nothing after the decision bar
-@pytest.mark.parametrize("name", ["H-04", "H-17", "H-18", "H-14", "H-01"])
+H17_MONTH = "2023-06"            # the first fit with 30 rows is at May's end
+
+
+def _events(name: str, bars: pd.DataFrame, cal: pd.DataFrame | None) -> pd.DataFrame:
+    if name == "H-04":
+        return co.count_h04(bars)[1]
+    if name == "H-01":
+        return co.count_h01(bars)[1]
+    if name == "H-17":
+        return co.count_h17(bars, cal, H17_MONTH, min_rows=MIN_ROWS)[1]
+    if name == "H-18":
+        return co.count_h18(bars, cal)[1]
+    return co.count_h14(bars, cal, EXTRA)[1]
+
+
+@pytest.mark.parametrize("name", ["H-04", "H-17", "H-18", "H-14"])
 def test_events_before_an_instant_do_not_depend_on_any_price_after_it(b1: pd.DataFrame, name: str):
     cal = co.cut_inputs(b1, None, _calendar(), HOLDOUT)[2]
-
-    def events(bars: pd.DataFrame) -> pd.DataFrame:
-        if name == "H-04":
-            return co.count_h04(bars)[1]
-        if name == "H-01":
-            return co.count_h01(bars)[1]
-        if name == "H-17":
-            return co.count_h17(bars, cal, "2023-04", min_rows=MIN_ROWS)[1]
-        if name == "H-18":
-            return co.count_h18(bars, cal)[1]
-        return co.count_h14(bars, cal, EXTRA)[1]
-
-    base, moved = events(b1), events(_perturbed(b1, CUT))
-    if name != "H-01":                      # 120 daily closes need more history than the fixture has
-        assert len(_before(base, CUT)) > 0, f"{name}: no events before the cut; the test would prove nothing"
+    base, moved = _events(name, b1, cal), _events(name, _perturbed(b1, CUT), cal)
+    assert len(_before(base, CUT)) > 0, f"{name}: no events before the cut; the test would prove nothing"
     pd.testing.assert_frame_equal(_before(base, CUT), _before(moved, CUT))
+
+
+def _sample(events: pd.DataFrame, k: int = 6) -> pd.DataFrame:
+    """k events spread evenly over the whole window (first, last and between)."""
+    pos = np.unique(np.linspace(0, len(events) - 1, min(k, len(events))).astype(int))
+    return events.iloc[pos].reset_index(drop=True)
+
+
+def _emitted(events: pd.DataFrame, row: pd.Series) -> bool:
+    """`row` (every column: time, side/half/rule) is among `events`."""
+    if events.empty:
+        return False
+    hit = np.ones(len(events), dtype=bool)
+    for c, v in row.items():
+        col = events[c]
+        hit &= np.asarray(utc_index(col) == v) if c == "decision_utc" else np.asarray(col == v)
+    return bool(hit.any())
+
+
+# H-04 and H-01 read later bar TIMESTAMPS by design (the 7h sample rule, the barrier end and the one-at-a-time bound),
+# never later prices: their bars after the decision are perturbed, not dropped. H-14, H-17 and H-18 read nothing at all
+# after the decision close: their later bars are both perturbed and dropped.
+@pytest.mark.parametrize("name,drop", [("H-04", False), ("H-01", False), ("H-17", False), ("H-17", True),
+                                       ("H-18", False), ("H-18", True), ("H-14", False), ("H-14", True)])
+def test_each_sampled_event_survives_truncation_strictly_after_its_own_decision_close(b1: pd.DataFrame, name: str,
+                                                                                     drop: bool):
+    """Per-event truncation: a short look-ahead (shift(-2), shift(-4)) changes the event at its own decision bar, which
+    a single far cut cannot see."""
+    cal = co.cut_inputs(b1, None, _calendar(), HOLDOUT)[2]
+    base = _events(name, b1, cal)
+    assert len(base) > 0, f"{name}: no events; the test would prove nothing"
+    ts = utc_index(b1["ts_utc"])
+    for _, row in _sample(base).iterrows():
+        at = pd.Timestamp(row["decision_utc"])                  # the decision bar's close
+        bars = b1[np.asarray(ts < at)].reset_index(drop=True) if drop else _perturbed(b1, at)
+        assert _emitted(_events(name, bars, cal), row), f"{name}: event at {at} changed after truncating at its close"
+
+
+def test_h14_cost_gate_binds_on_the_synthetic_spreads(b1: pd.DataFrame):
+    cal = co.cut_inputs(b1, None, _calendar(), HOLDOUT)[2]
+    out, _ = co.count_h14(b1, cal, EXTRA)
+    assert out["dropped_cost_gate"] > 0.1 * out["window_bars"] and out["candidate_bars"] > 0.1 * out["window_bars"]
+
+
+def test_h14_names_its_cost_prior_and_checks_the_frozen_extra_cost(b1: pd.DataFrame):
+    cal = co.cut_inputs(b1, None, _calendar(), HOLDOUT)[2]
+    ok, _ = co.count_h14(b1, cal, 0.37)
+    off, _ = co.count_h14(b1, cal, 0.5)
+    assert "spread_mean" in ok["source"] and ok["extra_cost_check"] == "ok: 0.37 $/oz as frozen"
+    assert off["extra_cost_check"].startswith("DEVIATION")
+    from goldbot.config import load_settings
+    assert abs(co.settings_extra_cost_usd(load_settings()) - co.FROZEN_EXTRA_COST_USD) < 1e-9   # what main() passes
+
+
+def test_h16_count_matches_evaluate_h16_on_real_prices(b1: pd.DataFrame):
+    """The placebo count equals evaluate_h16 on the real (synthetic) mid bars, as research_pass --h16 builds them."""
+    _, macro, cal = co.cut_inputs(b1, _macro(), _calendar(), HOLDOUT)
+    bars = mid(resample_bars(b1, "15m"))
+    out, _ = co.count_h16(utc_index(bars["ts_utc"]), macro, cal, min_rows=MIN_ROWS)
+    res, _ = h16.evaluate_h16(bars, macro, cal, holdout_from=HOLDOUT, min_rows=MIN_ROWS, feature_version="test",
+                              n_boot=0)
+    assert (out["first_oos_month"], out["expected_eval_days"]) == (res.first_oos_month, res.n)
 
 
 def test_h16_count_is_the_evaluation_set_evaluate_h16_uses(b1: pd.DataFrame):
@@ -279,13 +344,35 @@ def test_h14_cost_gate_and_blackout_are_applied(b1: pd.DataFrame):
 
 def test_h17_high_and_low_halves_are_disjoint_days_from_the_first_oos_month(b1: pd.DataFrame):
     cal = co.cut_inputs(b1, None, _calendar(), HOLDOUT)[2]
-    out, ev = co.count_h17(b1, cal, "2023-06", min_rows=MIN_ROWS)   # the first fit with 30 rows is at May's end
-    assert out["high_events"] > 0 and out["low_events"] > 0 and out["trial_events"] == out["high_events"]
-    days = utc_index(ev["decision_utc"]).tz_convert("Europe/London").normalize()
+    out, ev = co.count_h17(b1, cal, H17_MONTH, min_rows=MIN_ROWS)
+    assert out["high_events_strict"] > 0 and out["low_events_strict"] > 0
+    assert out["trial_events"] == out["high_events_strict"]
+    strict = ev[ev["rule"] == "strict"]
+    days = utc_index(strict["decision_utc"]).tz_convert("Europe/London").normalize()
     assert not days.duplicated().any()                           # at most one trade a day, and a day is high or low
     assert days.min() >= pd.Timestamp("2023-06-01", tz="Europe/London")
     later, _ = co.count_h17(b1, cal, "2023-07", min_rows=MIN_ROWS)
-    assert later["high_events"] < out["high_events"]
+    assert later["high_events_strict"] < out["high_events_strict"]
+
+
+def test_h17_literal_rule_a_day_whose_first_breach_is_blacked_out_has_no_entry(b1: pd.DataFrame):
+    """Program decision (quant review): the entry is the day's FIRST breaching bar; when that bar's close is inside a
+    tier-1 blackout [-15, +30) the day has no entry (strict). The old reading (the next breaching bar outside the
+    blackout) is reported as `*_events_next_bar` for transparency only."""
+    rows = []
+    for d in pd.bdate_range("2023-05-01", "2023-08-14"):        # a tier-1 release at 09:00 London every weekday
+        ev = pd.Timestamp(f"{d:%Y-%m-%d} 09:00", tz="Europe/London").tz_convert("UTC")
+        rows.append({"event_id": f"x:{d:%Y-%m-%d}", "event_type": "cpi", "tier": 1, "event_utc": ev,
+                     "status": "scheduled", "available_utc": ev - pd.Timedelta(days=7), "source": "fred"})
+    cal = pd.DataFrame(rows)
+    out, ev = co.count_h17(b1, cal, H17_MONTH, min_rows=MIN_ROWS)
+    for half in ("high", "low"):
+        assert out[f"{half}_first_breach_in_blackout"] > 0
+        assert out[f"{half}_events_strict"] == out[f"{half}_breach_days"] - out[f"{half}_first_breach_in_blackout"]
+        assert out[f"{half}_events_next_bar"] > out[f"{half}_events_strict"]
+    strict = utc_index(ev.loc[ev["rule"] == "strict", "decision_utc"])
+    lo, hi = co.blackout_intervals(cal)
+    assert not co.in_intervals(epoch_ns(strict.sort_values()), lo, hi).any()
 
 
 # --------------------------------------------------------------------------- the whole run
