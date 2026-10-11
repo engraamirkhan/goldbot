@@ -10,7 +10,10 @@ automatic. This spec covers the dashboard's Approvals tab (`web/src/screens/Appr
 |---|---|
 | Pending proposals | `GET /api/proposals`, polled every 2 s and refreshed on `proposal`/`decision` WebSocket events |
 | Decided in the last 10 min | `GET /api/proposals/recent` (`DecidedProposal.status`: submitted, approved, rejected, expired, refused) |
-| $ risk | `Proposal.risk_usd`: lots × stop distance × 100 oz, set by the engine from the RiskGate sizing. Null from older engines |
+| Risk | `Proposal.risk_amount` in `Proposal.currency` (the broker account's): the RiskGate's `GateDecision.risk_amount`, lost if the stop is hit; `risk_fraction` = risk / equity, as the gate sized it. Older engines: only `risk_usd` (USD), shown labelled "(USD)" without a share |
+| Minimum-lot exception | `min_lot_exception`, `risk_normal` (risk per trade), `risk_cap` (the cap that applied, halved in size-down) |
+| Stop and target in money | stop: −risk; target: `reward_amount` = risk × target distance / stop distance (before costs) |
+| Loss budget if this loses | `loss_left`, `loss_left_period`: `account_view.proposal_budget`, every loss cap less this trade's risk, least left wins; computed live on each poll, pending cards only. Null when the engine file or the account-currency risk is missing |
 | Owner, supervisor and drift halts, news blackout | `GET /api/status`: `halted`, `supervisor_halt`, `drift_halt` (+ reasons), `blackout` |
 | Drawdown stage, account class, mode | `GET /api/accounts` |
 | Refused at approval | `Proposal.gate_refusal`, written by the engine when the RiskGate re-check at approval refuses the order |
@@ -30,10 +33,14 @@ Phone (360 px, 16 px gutters, single column):
 └────────────────────────────────────────────┘
 ┃ [▲ LONG] 0.05 lots XAUUSD            1:12  ┃   direction badge, size, countdown (tabular digits)
 ┃ ███████████████████████░░░░░░░░░░░░░░░░░░  ┃   progress bar, 90 s window
-┃ RISK $21.25 if the stop is hit             ┃
+┃ RISK £8.20 (0.82% of equity) if the stop is hit ┃   account currency; share of equity as the gate sized it
+┃ ┌ Smallest trade size: above the normal  ┐ ┃   blue info note, only with the minimum-lot exception
+┃ └ 0.5%, within your 1% cap.              ┘ ┃
+┃ LOSS BUDGET £11.80 left today if this loses┃   live; amber when nothing is left; muted "unknown"
 ┃ Entry      Stop        Target              ┃
 ┃ 2400.25    2396.00     2406.50             ┃
 ┃            −4.25       +6.25               ┃   distance from entry in price
+┃            −£8.20      +£12.30             ┃   the same in the account currency
 ┃ Win prob.  Expected    Spread now          ┃
 ┃ p 0.62     +0.31 R     22 pt               ┃
 ┃ WHY  • Volatility (ATR 14) 0.40            ┃
@@ -63,6 +70,11 @@ follow under "Decided in the last 10 minutes", with no buttons.
 | Rejected | with reason | Neutral note: "Rejected · Cost" |
 | Refused at approval | approved, RiskGate refused | Red note: "Refused at approval. The RiskGate blocked the order (owner halt); nothing was sent." |
 | Expired | clock reached 0, or engine archived it | Neutral note: "Expired. Nobody approved within 90 s; no order." No buttons, no timer |
+| Minimum lot | sized by the minimum-lot exception | Blue note: "Smallest trade size: above the normal 0.5%, within your 1% cap." Information, not a warning: the gate allowed it within the owner's cap |
+| Budget left | pending, engine reporting | "LOSS BUDGET £11.80 left today if this loses" ("this week" when the weekly cap binds) |
+| Budget spent | the trade's stop would use the rest | Amber: "No loss budget left today if this loses: new entries stop" |
+| Budget unknown | no engine file, or an older engine (USD risk only) | Muted: "Loss budget left today: unknown" |
+| Older engine | only `risk_usd` | "RISK $20.00 (USD) if the stop is hit", no share of equity, no budget |
 | Blocked | a halt or blackout is active | Amber note above the buttons: "New entries are blocked (…): the RiskGate will refuse this at approval." Approve stays available; the gate decides |
 
 Every decided note ends with the channel ("via Telegram", "via dashboard (email)") when known.
@@ -80,7 +92,10 @@ supervisor halt, drift halt, news blackout or news shock, drawdown halt, account
 - Red only for what stops trading: owner, supervisor, drift and drawdown halts, an active blackout, an unknown
   account class on demo/live, and a refusal at approval. Size-down is amber. Short is blue, not red.
 - State is never colour alone: chips carry words (off/ON/normal/halted), the timer carries digits, notes carry text.
-- Every number has its unit: $, pt, R, lots, price. Times are local; UTC is in the hover title.
+- Every number has its unit: the account currency (£, $, €, else the ISO code), %, pt, R, lots, price. Times are
+  local; UTC is in the hover title. Risk is never shown in dollars unlabelled: a USD figure from an older engine says
+  "(USD)".
+- The share is "of equity" (what the RiskGate sizes on), not "of balance": with a position open they differ.
 
 ## Accessibility
 
@@ -97,12 +112,22 @@ supervisor halt, drift halt, news blackout or news shock, drawdown halt, account
 The message carries the card's essentials in the card's order:
 
 ```
-🟢 LONG 0.05 lots XAUUSD  ·  risk $21
-entry 2400.25  stop 2396.00  target 2406.50
+🟢 LONG 0.01 lots XAUUSD
+risk £8.20 (0.82% of equity) if the stop is hit
+smallest trade size: above the normal 0.5%, within your 1% cap
+£11.80 left today if this loses
+entry 2400.25  stop 2396.25 (−£8.20)  target 2406.25 (+£12.30)
 p=0.62  EV=+0.31R  spread 22pt
 why: atr_14 +0.40, adx_14 -0.20
 icm-demo · session_open-g0-abc
 ⏱ approve within 90s or it expires · exits are automatic
 ```
 
-Buttons stay as they are: Approve, then the five reason codes.
+The min-lot line appears only with the exception. The budget line is computed when the message is sent (the
+Telegram service reads engine_<account>.json and supervisor.json via `account_view.proposal_budget_from_state`);
+"loss budget left today: unknown" when it cannot be read. An older engine's line reads "risk $20.00 (USD) if the
+stop is hit"; with no risk at all, "risk: not reported by this engine version". Buttons stay as they are: Approve,
+then the five reason codes.
+
+Live updates: the budget line is one line on desktop and at 360 px except the spent wording, which can wrap once; it
+changes only when the budget crosses zero, so polling does not shift the card.

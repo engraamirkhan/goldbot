@@ -8,7 +8,7 @@ import { Approvals } from "./Approvals";
 
 const proposal = (over: Partial<Proposal> = {}): Proposal => ({
   proposal_id: "p1", account_id: "icm-demo", agent_id: "session_open-g0-abc", side: "long", lots: 0.05,
-  entry: 2400.25, stop: 2396.0, target: 2406.5, p: 0.62, ev_r: 0.31, spread_points: 22, risk_usd: 21.25,
+  entry: 2400.25, stop: 2396.0, target: 2406.5, p: 0.62, ev_r: 0.31, spread_points: 22, risk_usd: 21.25, min_lot_exception: false,
   top_features: [["atr_14", 0.4], ["adx_14", -0.2]], expires_at: new Date(Date.now() + 60_000).toISOString(), ...over,
 });
 const status: Status = { mode: "propose", halted: false, pending: 1, supervisor: {}, supervisor_halt: false, supervisor_reasons: [],

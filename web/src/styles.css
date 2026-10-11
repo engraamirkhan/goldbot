@@ -112,6 +112,11 @@ td a { color: inherit; }
 .metrics dd { font-size: 15px; }
 .why ul { margin: 4px 0 0; padding-left: 18px; } .why li { margin: 2px 0; overflow-wrap: anywhere; }
 .warn-note { background: var(--warn-tint); color: var(--warn-fg); border-radius: 6px; padding: 8px 10px; font-size: 14px; }
+/* the minimum-lot note informs (the gate allowed it within the owner's cap): blue, never red */
+.info-note { background: var(--info-tint); color: var(--info-fg); border-radius: 6px; padding: 8px 10px; font-size: 14px; }
+.budget { font-size: 14px; font-variant-numeric: tabular-nums; }
+.budget.idle span:last-child { color: var(--muted); }
+.budget.warn span:last-child { color: var(--warn-fg); font-weight: 600; }
 .outcome { border-radius: 6px; padding: 8px 10px; font-size: 14px; }
 .outcome.ok { background: var(--ok-tint); color: var(--ok-fg); }
 .outcome.bad { background: var(--bad-tint); color: var(--bad-fg); }

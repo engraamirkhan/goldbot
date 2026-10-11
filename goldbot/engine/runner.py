@@ -741,6 +741,17 @@ class Engine:
         return {**terms, "account_currency": currency,
                 "acct_per_usd": self._usd_to_account(side, price, stop_distance, cycle)}
 
+    def _card_money(self, gd: Any, intent: Intent) -> dict[str, Any]:
+        """The approval card's money from an allowed GateDecision (docs/ux/approval-card.md): the stop risk in the
+        account currency and its share of equity, and whether the minimum-lot exception sized it, with the normal risk
+        and the cap that applied (halved in the size-down stage, as the gate applied it). Display only."""
+        exc = "min_lot_exception" in gd.reasons
+        size_down = self.state.stage == Stage.SIZE_DOWN or self.state.combined_size_down
+        return {"currency": intent.account_currency or None, "risk_amount": round(gd.risk_amount, 2),
+                "risk_fraction": round(gd.risk_fraction, 5), "min_lot_exception": exc,
+                "risk_normal": self.gate.limits.risk_per_trade,
+                "risk_cap": self.gate.min_lot_cap(size_down) if exc else None}
+
     def _note_min_lot_risk(self, terms: dict[str, Any], stop_distance: float) -> None:
         """The minimum lot's stop risk in the account currency at the latest ATR stop (volume_min x stop x contract x
         fx), published as `limits.min_lot_risk_account`; None when the terms or the conversion are unknown."""
@@ -829,7 +840,8 @@ class Engine:
             prop = Proposal(proposal_id=pid, account_id=self.cfg.account_id, agent_id=agent.agent_id, side=side, lots=gd.lots, entry=price, stop=stop, target=target, p=p,
                             ev_r=p * ls.target_atr - (1 - p) * ls.stop_atr - cost_atr, spread_points=self.state.spread_points,
                             top_features=self._top_features(model, feats), window_s=self.cfg.approval_window_s,
-                            risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2))
+                            risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2),
+                            **self._card_money(gd, intent))
             if self.cfg.approval_mode == "auto":
                 self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
                 decisions.append(self._record(agent, close_ts, p, mult, "executed:auto", pid, scored_fv=sfv))

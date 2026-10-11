@@ -183,3 +183,32 @@ def test_an_exception_entry_reaches_the_decisions_journal_with_its_realised_risk
                for d in executed)
     orders = [d for d in eng.decisions if d.get("action") == "order"]
     assert orders and all(o["lots"] == 0.01 for o in orders)
+
+
+@pytest.mark.integration
+def test_a_proposal_carries_the_account_currency_risk_and_the_exception_for_the_card(tmp_path):
+    import pandas as pd
+
+    from goldbot.data.synthetic import synthetic_ticks
+    from goldbot.engine import ConstantModel, Engine, EngineConfig
+    from goldbot.execution.broker import Tick
+    from goldbot.execution.paper import PaperBroker
+    from goldbot.specialists import SPECIALISTS
+    from goldbot.telegram.approvals import ApprovalCenter
+
+    ticks = synthetic_ticks("2025-03-03", "2025-03-06", ticks_per_minute=1, seed=5)
+    spec = SPECIALISTS["session_open"](min_body_pct=0.0, asia_range_max_atr_d=99.0)
+    center = ApprovalCenter({111})
+    eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", approval_mode="propose", state_dir=str(tmp_path),
+                              owner_user_id=111), PaperBroker(equity=10_000), [spec],
+                 {"session_open": ConstantModel(p=0.65)}, center,
+                 limits=RiskLimits(risk_per_trade=0.0001, min_lot_risk_cap=0.01))
+    for ts, bid, ask in zip(ticks["ts_utc"], ticks["bid"].to_numpy(float), ticks["ask"].to_numpy(float)):
+        eng.on_tick(Tick(ts_utc=pd.Timestamp(ts), bid=float(bid), ask=float(ask)))
+    props = list(center.pending.values()) + center.log
+    assert props
+    for p in props:
+        assert p.currency == "USD" and p.min_lot_exception and p.risk_normal == 0.0001 and p.risk_cap == 0.01
+        assert p.risk_amount is not None and p.risk_amount > 0 and p.risk_fraction is not None
+        assert p.risk_fraction == pytest.approx(p.risk_amount / 10_000, rel=0.05)      # of equity, as the gate sizes
+        assert p.risk_amount == pytest.approx(p.risk_usd, abs=0.01)                    # a USD account: fx is 1

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import type { ReasonCode } from "../lib/api";
 import {
-  type AnyProposal, type CardState, EXPIRING_S, REASONS, WINDOW_S, cardState, countdown, isDecided, localTime, money,
-  plain, reasonLabel, signed, via,
+  type AnyProposal, type CardState, EXPIRING_S, REASONS, WINDOW_S, budgetLine, cardMoney, cardState, countdown, isDecided,
+  localTime, pct, plain, reasonLabel, signed, via,
 } from "../lib/approval";
 import { featureValue, plainFeature } from "../lib/features";
 import { secondsLeft } from "../lib/useNow";
@@ -29,6 +29,8 @@ export function ProposalCard({ p, now, canDecide, blockers, busy = false, error,
   const long = p.side === "long";
   const exp = localTime(p.expires_at);
   const title = `${long ? "Long" : "Short"} ${p.lots.toFixed(2)} lots XAUUSD`;
+  const money = cardMoney(p);
+  const budget = budgetLine(p);
   return (
     <article className={`card ${p.side} ${state}`} aria-label={`${title}, ${STATE_NAME[state]}`}>
       <header className="card-head">
@@ -48,15 +50,32 @@ export function ProposalCard({ p, now, canDecide, blockers, busy = false, error,
 
       <p className="risk">
         <span className="k">Risk</span>{" "}
-        {p.risk_usd != null
-          ? <strong>{money(p.risk_usd)}</strong>
-          : <strong title="This engine version does not report $ risk">—</strong>}
+        {money
+          ? <strong>{money.risk}</strong>
+          : <strong title="This engine version does not report the risk">—</strong>}
+        {money?.usd && <span className="muted"> (USD)</span>}
+        {money && !money.usd && p.risk_fraction != null && <span> ({pct(p.risk_fraction)} of equity)</span>}
         <span className="muted"> if the stop is hit</span>
       </p>
+      {p.min_lot_exception && (
+        <p className="info-note">
+          {`Smallest trade size: above the normal ${p.risk_normal != null ? pct(p.risk_normal) : "risk"}`}
+          {p.risk_cap != null ? `, within your ${pct(p.risk_cap)} cap` : ""}.
+        </p>
+      )}
+      {open && (
+        <p className={`budget ${budget.tone}`}><span className="k">Loss budget</span> <span>{budget.text}</span></p>
+      )}
       <dl className="levels">
         <div><dt>Entry</dt><dd>{p.entry.toFixed(2)}</dd></div>
-        <div><dt>Stop</dt><dd>{p.stop.toFixed(2)}<small>{signed(p.stop - p.entry)}</small></dd></div>
-        <div><dt>Target</dt><dd>{p.target.toFixed(2)}<small>{signed(p.target - p.entry)}</small></dd></div>
+        <div>
+          <dt>Stop</dt>
+          <dd>{p.stop.toFixed(2)}<small>{signed(p.stop - p.entry)}</small>{money && <small>−{money.risk}</small>}</dd>
+        </div>
+        <div>
+          <dt>Target</dt>
+          <dd>{p.target.toFixed(2)}<small>{signed(p.target - p.entry)}</small>{money?.reward && <small>+{money.reward}</small>}</dd>
+        </div>
       </dl>
       <dl className="metrics">
         <div><dt>Win prob.</dt><dd>p {p.p.toFixed(2)}</dd></div>

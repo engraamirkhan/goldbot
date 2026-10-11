@@ -46,7 +46,18 @@ class Proposal(BaseModel):
     top_features: list[tuple[str, float]]
     expires_at: datetime
     tradingview_url: str | None = None
-    risk_usd: float | None = None           # account currency lost at the stop (lots x stop distance x 100 oz)
+    risk_usd: float | None = None           # USD lost at the stop (lots x stop distance x 100 oz); older engines
+    # the card's money (docs/ux/approval-card.md), in `currency`, the broker account's; null from older engines
+    currency: str | None = None
+    risk_amount: float | None = None        # lost if the stop is hit (the RiskGate's sizing)
+    risk_fraction: float | None = None      # risk_amount / equity, as the gate sized it
+    min_lot_exception: bool = False         # the smallest trade size, above the normal risk, within the cap
+    risk_normal: float | None = None        # the normal risk per trade, fraction of equity
+    risk_cap: float | None = None           # the minimum-lot cap that applied, fraction of equity
+    reward_amount: float | None = None      # won at the target (risk x target / stop distance, before costs);
+    #                                         in `currency`, or USD with only risk_usd
+    loss_left: float | None = None          # the account's loss budget left if this trade loses, now (pending only)
+    loss_left_period: Literal["today", "this week"] | None = None
 
 
 class DecidedProposal(Proposal):
