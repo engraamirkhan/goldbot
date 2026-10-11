@@ -88,6 +88,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 
   Follow-ups: Cloudflare Tunnel with Access; an outside dead man's switch (alerts come only from the brain); a
   main-loop engine heartbeat (a hung engine shows as stale only after 45 min).
+- Clearing an `engine_startup_refused` halt (2026-10-11, re-verify follow-up of LOW-D). A test now shows that a
+  refused engine file, followed by a successful start and one engine state write, gives a supervisor evaluation
+  without `engine_startup_refused` (the engine's first write replaces the file). The RUNBOOK's "Engines are running
+  but block every entry" table has the `engine_startup_refused` row: fix the cause and restart that engine, or retire
+  the account (stop and disable its engine, move `state/engine_<account>.json` aside, only with no open position).
+  The dashboard's owner text for the code ends "or retire that account". Tests:
+  tests/test_startup_error_exposure.py.
 - Start refusal named, bridge protocol v4 required (2026-10-11, trading-safety re-verification LOW-A and LOW-B on
   the open-risk / MT5 branch). When the terminal-account check refuses an engine start (another login or server, demo
   vs real, or a margin mode that is not hedging), `ops.run.refuse_start` now writes `startup_error` (and the deposit
