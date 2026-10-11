@@ -61,7 +61,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 41 | `goldbot-deploy`: health checks against a baseline after the restart | Operational resilience · RUN | S | done (SRE, 2026-10-11; `health_out`/`health_worse`, result `deployed_degraded`, no automatic rollback) |
 | 42 | Bridge/brain version and server_tz agreement checked at run time | Operational resilience, execution · RUN | S | proposed (SRE, G6; trading-safety review) |
 | 47 | Pre-registration writer for the shared registry (queued rows, slots, sync to `research-v1`) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; needed by 2026-12-04 for the Q1 freeze) |
-| 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | proposed (research director 2026-10-11; by 2026-12-04, else H-06 is withdrawn by its rule) |
+| 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | in review (built 2026-10-11: tsmom preset `slow_macro`, agent `tsmom-g0-fed4baec9f`, and `count_h06` in count-owed-events; quant review of the readings (a)-(e) in `preregistration-2027Q1.md` H-06; count pasted once `macro-v1` exists; by 2026-12-04, else H-06 is withdrawn by its rule) |
 | 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; settings and `hypotheses.md` B together) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle

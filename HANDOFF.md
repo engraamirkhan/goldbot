@@ -942,6 +942,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- **H-06 preset and its owed-event count (BACKLOG 48, 2026-10-11; quant review needed).** tsmom preset `slow_macro`
+  = H-01's `slow` + `macro_gate` (agent `tsmom-g0-fed4baec9f`; `slow` and the default ids unchanged): an H-01 candidate
+  is kept only when the 20-observation changes of DFII10 and DTWEXBGS (`macro_drivers`' columns, `asof_join` on
+  `available_utc` at the entry bar's close) are both < 0 for a long or both > 0 for a short; NaN or zero drops it.
+  `candidates_in_context` takes `ctx` (`research.pipeline.prepare` and `research_pass.py` pass the feature ctx), and
+  the preset refuses to run without `ctx["macro"]`. count-owed-events gains `count_h06` (signals by side, lower bound,
+  H-01 signals removed as no-value / disagreeing, `below_floor` against the daily floor in force). Five readings of
+  the written rule are listed for the quant reviewer in `preregistration-2027Q1.md` H-06. **Risk: with
+  `screen_min_events_daily` still null the floor in force is 1,000, and H-01's lower bound is 154, so H-06 is
+  withdrawn by its own rule unless ruling A is recorded before the 2026-12-04 paste.** An H-06 run-input table
+  (`variants ["slow_macro"]`, `macro true`) is still to be written by the strategy researcher. Tests:
+  `tests/test_tsmom_macro_gate.py`, `tests/test_count_owed_events.py` (H-06 rows).
 - **Owed pre-registration counts (2026-10-11): run count-owed-events and paste the counts before the freeze.**
   `.github/workflows/count-owed-events.yml` (workflow_dispatch only; dispatchable once it is on `main`) downloads
   data-v1, macro-v1 and calendar-v1 (`fetch_data_release.py --download-only`), cuts every input at
