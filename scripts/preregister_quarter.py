@@ -15,6 +15,7 @@ before and after by the `preregister-quarter` workflow (goldbot.research.registr
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,12 +35,23 @@ from goldbot.research.preregistration import (  # noqa: E402
     write_quarter,
 )
 from goldbot.research.registry import TrialRegistry  # noqa: E402
+from goldbot.research.registry_sync import read_rows  # noqa: E402
 
 
-def _source(path: str) -> Path:
-    """The pre-registration a spec quotes: as given, else relative to the repo root."""
-    p = Path(path)
-    return p if p.is_absolute() or p.exists() else ROOT / p
+def doc_text(source: str, commit: str | None) -> str:
+    """The pre-registration the spec's rules are checked against. With a freeze commit, its text AT that commit
+    (`git show <commit>:<source>`), so the rules written are the frozen ones and a commit that does not exist, or does
+    not hold the file, is refused; without one (dry runs before the freeze), the working tree's file."""
+    p = Path(source)
+    if commit is None:
+        return (p if p.is_absolute() or p.exists() else ROOT / p).read_text()
+    rel = p.resolve().relative_to(ROOT) if p.is_absolute() else p
+    res = subprocess.run(["git", "-C", str(ROOT), "show", f"{commit}:{rel.as_posix()}"], capture_output=True,
+                         text=True)
+    if res.returncode != 0:
+        raise SystemExit(f"freeze_commit {commit}: cannot read {rel} at that commit ({res.stderr.strip()}); the "
+                         f"commit must exist in this checkout (fetch-depth 0) and hold the pre-registration")
+    return res.stdout
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,13 +70,14 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"{spec_path}: {exc}") from None
     research = load_settings().research
     try:
-        plan = plan_quarter(qs, research=research, doc_text=_source(qs.source).read_text(), quarter=args.quarter)
+        plan = plan_quarter(qs, research=research, doc_text=doc_text(qs.source, qs.freeze_commit),
+                            quarter=args.quarter)
     except (OSError, SpecError) as exc:
         raise SystemExit(f"{spec_path}: {exc}") from None
-    reg = TrialRegistry(args.registry)
-    if args.dry_run:
-        print(render_plan(plan, reg._rows()))
+    if args.dry_run:                          # reads only: a missing registry stays missing
+        print(render_plan(plan, read_rows(args.registry)))
         return 0
+    reg = TrialRegistry(args.registry)
     try:
         actions = write_quarter(reg, plan, allow_late=args.allow_late)
     except SpecError as exc:

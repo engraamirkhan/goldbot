@@ -1,6 +1,8 @@
 # Machine-readable extract of docs/research/preregistration-2027Q1.md ("Q1 readiness", tables 1 and 2), read by
-# scripts/preregister_quarter.py (BACKLOG 47). The markdown file is the source of truth: every reading rule and the
-# slot derivation rule below must appear in it word for word (whitespace aside), every config is rebuilt the way its
+# scripts/preregister_quarter.py (BACKLOG 47). The markdown file is the source of truth: every reading rule below is
+# the whole text of one of its "Reading rule" bullets (after the words "Reading rule", to the end of the bullet), the
+# slot derivation rule appears in it word for word (whitespace aside), and with `freeze_commit` set both are read from
+# the markdown AT that commit (`git show`); every config is rebuilt the way its
 # runner builds it (research_pass.py / --discover) and checked against the pinned config_hash, agent_id and
 # feature_version, and the rows + slots must equal `reservation` and research.reserved_trials_quarter. Nothing is
 # written while a row is `pending` or `freeze_commit` is empty; `--dry-run` prints the rows at any time.
@@ -25,7 +27,7 @@ rows:
     feature_version: f-51ac5ebabb
     rationale: "H-02 feature discovery (preregistration-2027Q1.md, commit {commit})"
     reading_rule: >-
-      a feature cluster **survives** if its selection stability >= 0.6 across folds AND the
+      (decided now): a feature cluster **survives** if its selection stability >= 0.6 across folds AND the
       walk-forward on the selected set has OOF AUC >= 0.53 with the lower 95% bound > 0.50 (cluster = a hypothesis
       cluster above; its selection stability = its group stability; the AUC condition is H-02's recorded reading
       verdict "continue"). Survivors earn their own
@@ -43,7 +45,8 @@ rows:
     rule_id: H-01
     rationale: "H-01 slow TSMOM (preregistration-2027Q1.md, commit {commit})"
     reading_rule: >-
-      **continue** if the P4 screen passes (gross mean R > 0, t >= 2.0, on the event
+      (outcomes below written 2026-10-10, before any H-01 outcome was seen; net tests on rule-only net R over
+      every candidate, see *Net tests*): **continue** if the P4 screen passes (gross mean R > 0, t >= 2.0, on the event
       floor ruled in A) AND net mean R > 0 with t >= 1.65 AND positive net years >= 3 incl. 2021 or 2022, on both sides
       together and on long-only (swap bias above). **Stop slow trend in gold** if net mean R <= 0 on both sides together
       (the literature's best case then does not survive our costs), or if the screen fails on at least the floor's events.
@@ -56,7 +59,9 @@ rows:
 
   - id: H-06
     specialist: tsmom
-    variant: null            # pending: the frozen macro-gate preset (BACKLOG 48)
+    variant: slow_macro      # the frozen macro-gate preset (BACKLOG 48, in review)
+    agent_id: tsmom-g0-fed4baec9f
+    config_hash: 5650ad206bda
     macro: true
     feature_version: f-51ac5ebabb
     rationale: "H-06 macro-conditioned slow TSMOM (preregistration-2027Q1.md, commit {commit})"
@@ -64,8 +69,9 @@ rows:
       **continue** only if net mean R exceeds H-01's by >= 0.03 R AND 2022-2024 net is positive (the period
       the yield link broke). Otherwise the macro gate is retired.
     pending: >-
-      no implementation yet (BACKLOG 48, due 2026-12-04); withdrawn by its rule if not merged and counted by then:
-      set `withdrawn:` to the reason and `reservation` to 8
+      the preset is in review and its owed-event count waits for macro-v1 (BACKLOG 48, due 2026-12-04); withdrawn by
+      its rule if not merged and counted by then, or if its lower bound is below the daily floor: set `withdrawn:` to
+      the reason, `reservation` to 8 and research.reserved_trials_quarter 2027Q1 to 8
 
   - id: H-04
     specialist: asia_drift
@@ -76,7 +82,10 @@ rows:
     rule_id: H-04
     rationale: "H-04 Asia-session drift (preregistration-2027Q1.md, commit {commit})"
     reading_rule: >-
-      **continue** if gross t >= 2.0 on >= 1,000 events AND net mean R > 0.
+      **continue** if gross t >= 2.0 on >= 1,000 events AND net mean R > 0. Expected thin: <= 0.03% per
+      session against a round trip of about 0.025-0.03% (the frozen 0.37 $/oz plus the spread at ~$2,000-2,500; corrected
+      2026-10-11 from "~0.01%" after the quant review, before any outcome was seen; the rule itself is unchanged), so a
+      pass needs the measured cost table and the net test is likely to bind.
 
   - id: C4H
     specialist: tsmom

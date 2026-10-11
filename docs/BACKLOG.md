@@ -64,6 +64,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 47 | Pre-registration writer for the shared registry (queued rows, slots, sync to `research-v1`) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; needed by 2026-12-04 for the Q1 freeze) |
 | 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | in review (built 2026-10-11: tsmom preset `slow_macro`, agent `tsmom-g0-fed4baec9f`, and `count_h06` in count-owed-events; quant review of the readings (a)-(e) in `preregistration-2027Q1.md` H-06; count pasted once `macro-v1` exists; by 2026-12-04, else H-06 is withdrawn by its rule) |
 | 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; settings and `hypotheses.md` B together) |
+| 50 | --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners | Idea generation (integrity) · FIND | M | proposed (quant review F2 of BACKLOG 47, 2026-10-11; due before the 2026-12-11 freeze) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -671,6 +672,19 @@ hypotheses that go through the trial registry in a future quarter's budget.
   unaffected, but the governance mirror and the registry disagree. Do: correct both lists in one change (the director's
   `retired_drift` check fails if only one moves). Acceptance: `tests/test_director.py` green; lists equal the
   registry's trial numbers. Depends on: none.
+- **50. --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners (quant review
+  F2 of BACKLOG 47, 2026-10-11).** Value: H-02's queued row hashes the exact first and last 1m bar the run loads
+  (`bars_from`/`bars_to`), so the hash depends on how far data-v1 reaches on the day of the run, and a refresh between
+  the write and the run makes the run miss its row. Reviewer's wording: "`--discover` cuts b1 at holdout_from. Record
+  data-v1 parquet sha256 digests in the plan, and have runners verify them for every queued row. A hash mismatch with
+  a pending queued row refuses instead of silently falling back." Do: cut b1 at `research.holdout_from` in
+  `--discover` before the config is built (so `bars_to` no longer moves with data-v1); record the data-v1 parquet
+  sha256 digests in each queued row's `plan` (`scripts/preregister_quarter.py`); in `research_pass.py` (and
+  `--discover`), verify the digests of every queued row the run could match, and when a pending queued row of the same
+  family exists but the config hash differs, refuse with the difference instead of falling back to the open budget.
+  Acceptance: tests that a data-v1 refresh after the write is refused with the digest named; that a config-hash
+  mismatch against a pending queued row refuses (no fallback); that `--discover`'s `bars_to` is before
+  `holdout_from` whatever the data reaches. Quant review. Depends on: BACKLOG 47.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.

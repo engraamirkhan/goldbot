@@ -92,6 +92,12 @@ date, or the next quarter within 14 days of its start (from 2026-12-18 for 2027Q
 registry's clock (it cannot be backdated). **H-01 and H-02 must not run before 2027-01-01:** every runner (research
 analyst, `research_pass.py`, `--discover`, the label grid) refuses a config queued for a later quarter, and a trial
 stamped before its row's quarter would never use the row up.
+**If the rows are not written before 2027-01-01 (quant review M1, 2026-10-11):** `scripts/preregister_quarter.py
+--allow-late "<reason>"` writes them only as ad-hoc pre-registrations naming their rule (`queue=False`, `rule_ref`),
+which hold no reservation, and writes no slot (a slot exists only before its quarter). So rows 6-9 are lost: any H-02
+survivor trial would then come from the open budget, under the E-5 cap, like any other ad-hoc run. The writer refuses
+a late write unless `research.reserved_trials_quarter` for 2027Q1 equals the queued rows and slots already standing in
+the registry (normally 0), and that settings change ships in the same change as the late write.
 
 | # | ID | Trial | Depends on | Trials |
 |---|---|---|---|---|

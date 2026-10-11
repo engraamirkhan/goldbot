@@ -79,6 +79,25 @@ class SpecRow(FrozenRecord):
                              f"got {v!r}")
         return v
 
+    @field_validator("bars_from", "bars_to")
+    @classmethod
+    def _run_timestamp_text(cls, v: str | None, info: Any) -> str | None:
+        """`discovery_pass` writes `str(b1["ts_utc"].iloc[0])` (a UTC Timestamp) into the hashed config, so the spec
+        must hold exactly that text: any other spelling of the same instant would never match the run (quant M4)."""
+        if v is None:
+            return v
+        import pandas as pd
+        try:
+            ts = pd.Timestamp(v)
+        except ValueError as exc:
+            raise ValueError(f"{info.field_name} {v!r} is not a timestamp: {exc}") from None
+        if ts.tzinfo is None or ts.utcoffset() != pd.Timedelta(0):
+            raise ValueError(f"{info.field_name} {v!r} must be UTC, as the run's ts_utc is (e.g. "
+                             f"'2025-09-30 20:59:00+00:00')")
+        if str(ts) != v:
+            raise ValueError(f"{info.field_name} {v!r} must be written as the run writes it: {str(ts)!r}")
+        return v
+
     @field_validator("rationale")
     @classmethod
     def _names_the_commit(cls, v: str) -> str:
@@ -191,6 +210,7 @@ class QuarterPlan(FrozenRecord):
     source: str
     freeze_commit: str | None
     reservation: int
+    setting: int                                       # research.reserved_for(quarter) when planned
     budget: int
     rows: list[PlannedRow]
     slots: list[PlannedSlot]
@@ -200,11 +220,21 @@ class QuarterPlan(FrozenRecord):
         return [r for r in self.rows if r.withdrawn is None]
 
     @property
-    def blockers(self) -> list[str]:
-        """Why the plan cannot be written yet (empty: writable)."""
+    def open_items(self) -> list[str]:
+        """What the spec still owes (a pending row, the freeze commit): no write of any kind until settled."""
         out = [f"{r.id} pending: {r.pending}" for r in self.active_rows if r.pending]
         if self.freeze_commit is None:
             out.append("freeze_commit is empty (the pre-registration's freeze commit fills {commit})")
+        return out
+
+    @property
+    def blockers(self) -> list[str]:
+        """Why the queue cannot be written before its quarter (empty: writable): the open items, and a reservation
+        in the settings that differs from the spec's (a late write checks the settings its own way, `write_quarter`)."""
+        out = self.open_items
+        if self.setting != self.reservation:
+            out.append(f"research.reserved_trials_quarter holds {self.setting} for {self.quarter}, the spec "
+                       f"{self.reservation}: change config/settings.yaml in the same reviewed change")
         return out
 
     @property
@@ -221,6 +251,30 @@ class WriteAction(FrozenRecord):
 # ---------------------------------------------------------------------------------------------- planning
 def _norm(text: str) -> str:
     return " ".join(text.split())
+
+
+_BULLET = re.compile(r"^(\s*)- (.*)$")
+_READING = re.compile(r"^Reading rule\b\s*:?\s*")
+
+
+def reading_rules(doc_text: str) -> set[str]:
+    """Every "Reading rule" bullet of the pre-registration, whitespace-normalised: the bullet's text after the words
+    "Reading rule" (and a colon straight after them) to the end of the bullet, so a bracketed qualifier is part of
+    the rule ("Reading rule (..., see *Net tests*): **continue** ..."). A bullet ends at a blank line, a heading, or
+    the next line not indented deeper than its dash (quant review M3: a spec's rule is a whole bullet, never a part)."""
+    out: set[str] = set()
+    lines = doc_text.splitlines()
+    for i, line in enumerate(lines):
+        m = _BULLET.match(line)
+        if not m or not _READING.match(m.group(2)):
+            continue
+        indent, parts = len(m.group(1)), [_READING.sub("", m.group(2), count=1)]
+        for nxt in lines[i + 1:]:
+            if not nxt.strip() or len(nxt) - len(nxt.lstrip()) <= indent or nxt.lstrip().startswith("#"):
+                break
+            parts.append(nxt.strip())
+        out.add(_norm(" ".join(parts)))
+    return out
 
 
 def resolve_variant(family: str, variant: str | dict[str, Any]) -> dict[str, Any]:
@@ -275,12 +329,13 @@ def _discovery_config(row: SpecRow, spec: Any, research: Any) -> tuple[dict[str,
     return config, plan
 
 
-def _plan_row(row: SpecRow, qs: QuarterSpec, research: Any, doc: str) -> PlannedRow:
+def _plan_row(row: SpecRow, qs: QuarterSpec, research: Any, rules: set[str]) -> PlannedRow:
     from goldbot.features.registry import feature_version
     from goldbot.research.discovery import discovery_family
     from goldbot.specialists import SPECIALISTS
-    if _norm(row.reading_rule) not in doc:
-        raise SpecError(f"{row.id}: the reading rule is not {qs.source}'s own text word for word")
+    if _norm(row.reading_rule) not in rules:
+        raise SpecError(f"{row.id}: the reading rule is not the whole text of one of {qs.source}'s \"Reading rule\" "
+                        f"bullets word for word (everything after \"Reading rule\" to the end of the bullet)")
     want_fv = feature_version(_feature_names(row.macro))
     if row.feature_version != want_fv:
         raise SpecError(f"{row.id}: feature version {row.feature_version} is not the run's ({want_fv}, macro "
@@ -322,8 +377,8 @@ def plan_quarter(qs: QuarterSpec, *, research: Any, doc_text: str, quarter: str)
     would not accept. `research`: the settings' research section (trial budget, reservation, holdout)."""
     if qs.quarter != quarter:
         raise SpecError(f"the spec is for quarter {qs.quarter}, not {quarter}")
-    doc = _norm(doc_text)
-    rows = [_plan_row(r, qs, research, doc) for r in qs.rows]
+    doc, rules = _norm(doc_text), reading_rules(doc_text)
+    rows = [_plan_row(r, qs, research, rules) for r in qs.rows]
     by_id = {r.id: r for r in qs.rows}
     slots: list[PlannedSlot] = []
     for s in qs.slots:
@@ -346,16 +401,12 @@ def plan_quarter(qs: QuarterSpec, *, research: Any, doc_text: str, quarter: str)
     if n != qs.reservation:
         raise SpecError(f"rows + slots = {n} (withdrawn rows left out), but the spec's reservation is "
                         f"{qs.reservation}")
-    setting = research.reserved_for(quarter)
-    if setting != qs.reservation:
-        raise SpecError(f"research.reserved_trials_quarter holds {setting} for {quarter}, the spec {qs.reservation}: "
-                        f"change config/settings.yaml in the same reviewed change")
     budget = int(research.trial_budget_quarter)
     if n > budget:
         raise SpecError(f"{n} queued rows and slots exceed the {quarter} trial budget of {budget} "
                         f"(research.trial_budget_quarter, an owner decision)")
     return QuarterPlan(quarter=quarter, source=qs.source, freeze_commit=qs.freeze_commit, reservation=qs.reservation,
-                       budget=budget, rows=rows, slots=slots)
+                       setting=research.reserved_for(quarter), budget=budget, rows=rows, slots=slots)
 
 
 # ---------------------------------------------------------------------------------------------- writing
@@ -376,18 +427,30 @@ def _existing_slot(rows: list[dict[str, Any]], parent: dict[str, Any], s: Planne
                  and refers_to(r["slot"].get("parent"), parent)), None)
 
 
+def _slot_parent_withdrawn(rows: list[dict[str, Any]], slot_row: dict[str, Any]) -> bool:
+    from goldbot.research.director import is_withdrawn
+    parent = next((r for r in rows if not r.get("slot") and refers_to(slot_row["slot"].get("parent"), r)), None)
+    return parent is not None and is_withdrawn(rows, parent)
+
+
+def _live_queued(rows: list[dict[str, Any]], quarter: str) -> list[dict[str, Any]]:
+    """The quarter's queued rows and slots still standing: not withdrawn, and a slot's parent not withdrawn."""
+    from goldbot.research.director import is_queued, is_withdrawn, prereg_quarter
+    return [r for r in rows if is_queued(r) and prereg_quarter(r) == quarter and not is_withdrawn(rows, r)
+            and not (isinstance(r.get("slot"), dict) and _slot_parent_withdrawn(rows, r))]
+
+
 def _strays(rows: list[dict[str, Any]], plan: QuarterPlan) -> list[dict[str, Any]]:
-    """Queued rows of the quarter the plan does not name (another writer's, or a stale spec's)."""
-    from goldbot.research.director import is_queued, prereg_quarter
+    """Standing queued rows of the quarter the plan does not name (another writer's, or a stale spec's). A withdrawn
+    row, and a slot whose parent is withdrawn, no longer stand (quant M2: dropping a withdrawn row from the spec must
+    not block the next run)."""
     known = {(r.family, r.config_hash) for r in plan.rows}
     parents = [r for r in rows if r.get("status") == PREREGISTERED and not r.get("slot")
                and any((r.get("family"), r.get("config_hash")) == (p.family, p.config_hash)
                        for p in plan.rows if any(s.parent == p.id for s in plan.slots))]
     ks = {(s.kind, s.k) for s in plan.slots}
     out = []
-    for r in rows:
-        if not is_queued(r) or prereg_quarter(r) != plan.quarter:
-            continue
+    for r in _live_queued(rows, plan.quarter):
         slot = r.get("slot")
         if isinstance(slot, dict):
             if (slot.get("kind"), slot.get("k")) in ks and any(refers_to(slot.get("parent"), p) for p in parents):
@@ -401,19 +464,25 @@ def _strays(rows: list[dict[str, Any]], plan: QuarterPlan) -> list[dict[str, Any
 def write_quarter(reg: TrialRegistry, plan: QuarterPlan, *, allow_late: str | None = None) -> list[WriteAction]:
     """Write the plan's rows, then its slots, through the registry's own write path, under its lock. Idempotent: a
     row or slot the registry already holds for the quarter (withdrawn included) is left alone ("present"). Refuses
-    (SpecError) a plan with blockers or a registry holding a queued row of the quarter the plan does not name, and
-    (LateWrite) any write on or after the quarter's start unless `allow_late` states why: the rows are then ad-hoc
-    pre-registrations naming their rule (`queue=False`, `rule_ref`), which hold no reservation, and the slots are
-    skipped. Writes no trial and no outcome."""
+    (SpecError), before writing anything: a plan with open items or, before the quarter, a settings reservation that
+    differs from the spec's; a registry holding a standing queued row of the quarter the plan does not name; and a
+    slot still to be written on a parent the registry holds as withdrawn. Refuses (LateWrite) any write on or after
+    the quarter's start unless `allow_late` states why, and then only when `research.reserved_trials_quarter` equals
+    the queued rows and slots already standing in the registry (normally 0; quant M1: a late write adds none, so a
+    reservation left in the settings would hold trials no run can use): the rows are then ad-hoc pre-registrations
+    naming their rule (`queue=False`, `rule_ref`), which hold no reservation, and the slots are skipped (rows 6-9 of
+    the Q1 plan are lost; H-02 survivors come from the open budget). Writes no trial and no outcome."""
     from goldbot.research.director import is_withdrawn
-    if not plan.writable:
-        raise SpecError("the spec is not writable yet: " + "; ".join(plan.blockers))
+    if plan.open_items:
+        raise SpecError("the spec is not writable yet: " + "; ".join(plan.open_items))
     late = registry_mod._utcnow() >= quarter_start(plan.quarter)
     if late and allow_late is None:
         raise LateWrite(f"{plan.quarter} started on {quarter_start(plan.quarter).date()}: a queued row or slot must "
                         f"be written before its quarter; pass --allow-late with a reason to write ad-hoc rows")
     if late and not str(allow_late).strip():
         raise LateWrite("--allow-late states its reason")
+    if not late and not plan.writable:
+        raise SpecError("the spec is not writable yet: " + "; ".join(plan.blockers))
     out: list[WriteAction] = []
     with reg.locked():
         rows = reg._rows()
@@ -422,13 +491,28 @@ def write_quarter(reg: TrialRegistry, plan: QuarterPlan, *, allow_late: str | No
             raise SpecError(f"the registry holds queued {plan.quarter} rows not in the spec: "
                             + ", ".join(f"#{r.get('trial')} {r.get('family')} {r.get('config_hash')}" for r in strays)
                             + "; withdraw them (TrialRegistry.withdraw) or add them to the spec")
+        if late:
+            standing = len(_live_queued(rows, plan.quarter))
+            if plan.setting != standing:
+                raise LateWrite(
+                    f"research.reserved_trials_quarter holds {plan.setting} for {plan.quarter}, but a late write adds "
+                    f"no queued row or slot and {standing} stand in the registry: set it to {standing} in the same "
+                    f"change, or the reservation holds trials no run can use (the survivor slots are lost; H-02 "
+                    f"survivors would come from the open budget)")
+        found = {p.id: _existing_row(rows, p, plan.quarter) for p in plan.active_rows}
+        if not late:
+            for s in plan.slots:
+                parent = found.get(s.parent)
+                if parent is not None and is_withdrawn(rows, parent) and _existing_slot(rows, parent, s) is None:
+                    raise SpecError(f"{s.parent} is withdrawn in the registry (#{parent.get('trial')}): no slot is "
+                                    f"reserved on it; drop it and its slots from the spec")
         written: dict[str, dict[str, Any]] = {}
         for p in plan.active_rows:
-            found = _existing_row(rows, p, plan.quarter)
-            if found is not None:
-                written[p.id] = found
-                state = "withdrawn" if is_withdrawn(rows, found) else "pending"
-                out.append(WriteAction(id=p.id, action="present", detail=f"#{found.get('trial')} {state}"))
+            prior = found[p.id]
+            if prior is not None:
+                written[p.id] = prior
+                state = "withdrawn" if is_withdrawn(rows, prior) else "pending"
+                out.append(WriteAction(id=p.id, action="present", detail=f"#{prior.get('trial')} {state}"))
                 continue
             kw: dict[str, Any] = {"queue": True, "target_quarter": plan.quarter}
             plan_extra: dict[str, Any] = {}
@@ -447,9 +531,9 @@ def write_quarter(reg: TrialRegistry, plan: QuarterPlan, *, allow_late: str | No
                 continue
             parent = written[s.parent]
             rows = reg._rows()
-            found = _existing_slot(rows, parent, s)
-            if found is not None:
-                out.append(WriteAction(id=s.id, action="present", detail=f"slot {s.k} {found.get('ts')}"))
+            prior_slot = _existing_slot(rows, parent, s)
+            if prior_slot is not None:
+                out.append(WriteAction(id=s.id, action="present", detail=f"slot {s.k} {prior_slot.get('ts')}"))
                 continue
             row = reg.reserve_slot(row_ref(parent), s.kind, s.k, s.derivation_rule, plan.quarter,
                                    rationale=f"contingent {s.kind} slot {s.k} of {s.parent} ({plan.source}, commit "

@@ -13,7 +13,11 @@ on:
       score_holdout: { description: "score these configurations on the held-out year (once per configuration, final)", type: boolean, default: false }
       skip_screen: { description: "fit the model even if the rule fails the primary-signal screen (recorded as skipped)", type: boolean, default: false }
       pooled:     { description: "15m or 1h: one pooled meta-model over every family on that timeframe (ignores specialist and variants)", default: "" }
-      macro:      { description: "add the point-in-time macro features from release macro-v1 (data-macro workflow); the model's feature version then includes them", type: boolean, default: false }
+      macro:      { description: "add the point-in-time macro features from release macro-v1 (data-macro workflow); the model's feature version then includes them; fails if macro-v1 cannot be downloaded", type: boolean, default: false }
+      discover:   { description: "ONE pre-registered feature-discovery trial on the specialist and its one variant (research_pass.py --discover)", type: boolean, default: false }
+      families:   { description: "with discover: feature grouping (column, feature, family, cluster; empty = column)", default: "" }
+      discover_config: { description: "with discover: JSON overrides of DiscoveryConfig, exactly as pre-registered", default: "{}" }
+      rule_ref:   { description: "the pre-registered rule this run follows (e.g. preregistration-2027Q1.md#reserve); empty = none", default: "" }
 # Least privilege: no scopes by default; walk-forward grants itself what it needs. Inputs reach the shell only via env:.
 permissions: {}
 jobs:
@@ -47,7 +51,8 @@ jobs:
           gh release download costs-v1 -p costs_measured.json -D costs \
             || echo "no measured cost table on release costs-v1; research charges the settings priors (stated in the report)"
           if [ "$WANT_MACRO" = "true" ]; then
-            gh release download macro-v1 -p '*.parquet' -D macro || echo "no macro-v1 release yet; the pass runs without macro features"
+            # must succeed: a macro-on run (e.g. a queued row with macro features) never runs without them
+            gh release download macro-v1 -p '*.parquet' -D macro
           fi
       - name: walk-forward
         env:
@@ -60,9 +65,21 @@ jobs:
           SKIP_SCREEN: ${{ inputs.skip_screen && '--skip-screen' || '' }}
           POOLED: ${{ inputs.pooled }}
           MACRO: ${{ inputs.macro && '--macro macro' || '' }}
+          DISCOVER: ${{ inputs.discover }}
+          FAMILIES: ${{ inputs.families }}
+          DISCOVER_CONFIG: ${{ inputs.discover_config }}
+          RULE_REF: ${{ inputs.rule_ref }}
         run: |
           set -o pipefail
           if [ -n "$POOLED" ]; then TARGET=(--pooled "$POOLED"); else TARGET=(--specialist "$SPECIALIST" --variants "$VARIANTS"); fi
+          # a pre-registered discovery (e.g. H-02) and the rule a run cites; values reach the CLI as single arguments
+          EXTRA=()
+          if [ "$DISCOVER" = "true" ]; then
+            EXTRA+=(--discover --discover-config "$DISCOVER_CONFIG")
+            if [ -n "$FAMILIES" ]; then EXTRA+=(--families "$FAMILIES"); fi
+          fi
+          if [ -n "$RULE_REF" ]; then EXTRA+=(--rule-ref "$RULE_REF"); fi
+          TARGET+=("${EXTRA[@]}")
           # the measured cost table from release costs-v1 (docs/RUNBOOK.md section 4); the settings priors without it
           COSTS=(); if [ -f costs/costs_measured.json ]; then COSTS=(--cost-table costs/costs_measured.json); fi
           # SCORE_HOLDOUT/SKIP_SCREEN/MACRO are constant flags or empty (set by expressions above), so they stay unquoted
