@@ -115,8 +115,12 @@ def _db(tmp_path: Path) -> Database:
     return Database.open(tmp_path, "aux")
 
 
-def _run(tmp_path: Path, broker: FakeBroker, now: pd.Timestamp = DAY2) -> ledger.LedgerReport:
-    return ledger.run_ledger(_db(tmp_path), broker, ACC, tmp_path, now, SETTINGS)
+def _run(tmp_path: Path, broker: FakeBroker, now: pd.Timestamp = DAY2, *, read_at: pd.Timestamp | None = None,
+         sleeps: list[float] | None = None) -> ledger.LedgerReport:
+    """One run at slot `now`, the broker read at `read_at` (default: the slot); recheck waits recorded, not slept."""
+    at = now if read_at is None else read_at
+    return ledger.run_ledger(_db(tmp_path), broker, ACC, tmp_path, now, SETTINGS, clock=lambda: at,
+                             sleep=(sleeps if sleeps is not None else []).append)
 
 
 def _baseline(tmp_path: Path, balance: float = 1000.0) -> None:
@@ -346,3 +350,80 @@ def test_show_prints_the_latest_report_snapshots_and_balance_deals(tmp_path, cap
     out = json.loads(capsys.readouterr().out)
     assert out["report"]["status"] == "ok" and len(out["snapshots"]) == 2
     assert [d["amount"] for d in out["balance_deals"]] == [500.0]
+
+
+# ------------------------------------------------------------------------------------------------ review fixes
+def test_forty_idle_days_and_a_late_deposit_tie_out_without_a_new_baseline(tmp_path):
+    """SRE/trading-safety MEDIUM: with no deals the cursor drifted back an hour a run until a 31-day baseline lost the
+    deposit. The cursor never trails the read by more than a day."""
+    deals: list[dict[str, Any]] = []
+    broker = FakeBroker(1000.0, deals)
+    for day in range(40):
+        slot = DAY1 + pd.Timedelta(days=day)
+        if day == 38:
+            deals.append(_deal(70, (slot - pd.Timedelta(hours=3)).isoformat(), 2, profit=300.0))
+            broker.balance = 1300.0
+        rep = _run(tmp_path, broker, slot)
+        if day:
+            assert rep.tie_out is not None and "baseline" not in rep.note and rep.status == "ok", (day, rep.note)
+    booked = ledger.balance_deals(_db(tmp_path), ACC_ID)
+    assert [(d.amount, d.baseline) for d in booked] == [(300.0, False)]
+
+
+def test_a_baseline_day_books_its_balance_deals_flagged_as_baseline(tmp_path):
+    _run(tmp_path, FakeBroker(1500.0, [_deal(9, "2026-10-06 20:00", 2, profit=500.0)]), DAY1)
+    assert [(d.amount, d.baseline) for d in ledger.balance_deals(_db(tmp_path), ACC_ID)] == [(500.0, True)]
+
+
+def test_the_snapshot_is_stamped_with_the_read_time_and_keyed_by_the_slot_day(tmp_path):
+    late = DAY1 + pd.Timedelta(hours=3)                                # the slot's job ran after midnight
+    _run(tmp_path, FakeBroker(1000.0, []), DAY1, read_at=late)
+    _run(tmp_path, FakeBroker(1000.0, []), DAY1, read_at=late + pd.Timedelta(minutes=5))   # a re-run of that slot
+    snaps = ledger.snapshots(_db(tmp_path), ACC_ID)
+    assert [s.ts_utc for s in snaps] == [late + pd.Timedelta(minutes=5)]
+    assert ledger.latest_report(tmp_path, ACC_ID).ts_utc == late + pd.Timedelta(minutes=5)   # type: ignore[union-attr]
+
+
+def test_an_unexplained_balance_is_read_again_before_it_fails(tmp_path):
+    _baseline(tmp_path)
+
+    class Settling(FakeBroker):
+        """The balance is updated before its deal shows in the history (seen on the first read only)."""
+        def deals_since(self, since_utc: pd.Timestamp) -> pd.DataFrame:
+            if self.deal_reads >= 2 and not any(d["ticket"] == 80 for d in self.deals):
+                self.deals.append(_deal(80, "2026-10-07 23:00", 2, profit=25.0))
+            return super().deals_since(since_utc)
+    sleeps: list[float] = []
+    rep = _run(tmp_path, Settling(1025.0, []), sleeps=sleeps)
+    assert rep.status == "ok" and sleeps == [ledger.RECHECK_S]
+    sleeps.clear()
+    assert _run(tmp_path, FakeBroker(1099.0, []), sleeps=sleeps).status == "fail" and sleeps == [ledger.RECHECK_S]
+
+
+def test_a_missing_ledger_table_is_no_report_but_any_other_database_error_warns(tmp_path):
+    with sqlite3.connect(tmp_path / "aux.db") as c:                    # an aux.db from before migration 7
+        c.execute("CREATE TABLE other (x INTEGER)")
+    assert ledger.latest_report(tmp_path, ACC_ID) is None and ledger.ledger_status(_health(tmp_path), ACC_ID) is None
+    (tmp_path / "aux.db").write_bytes(b"not a database" * 100)
+    assert ledger.ledger_status(_health(tmp_path), ACC_ID) == ("warn", "ledger report unreadable: DatabaseError")
+
+
+def test_show_opens_aux_db_read_only(tmp_path, capsys, monkeypatch):
+    _run(tmp_path, FakeBroker(1000.0, []), DAY1)
+
+    def no_writer(*a: Any, **k: Any) -> Any:
+        raise AssertionError("show must not open aux.db for writing")
+    monkeypatch.setattr(ledger, "Database", no_writer)
+    assert ledger.main(["show", ACC_ID, "--state", str(tmp_path), "--days", "3650"]) == 0
+    assert len(json.loads(capsys.readouterr().out)["snapshots"]) == 1
+
+
+def test_balance_operations_after_a_cancelled_deal_are_tagged_and_warn(tmp_path):
+    """MT5 turns a cancelled deal's type into BUY_CANCELED/SELL_CANCELED (13/14) with zero profit and books the P&L
+    reversal as a separate balance operation: that operation is not a deposit or withdrawal of the owner's."""
+    _baseline(tmp_path)
+    deals = [_deal(90, "2026-10-07 10:00", 13, entry=0, pid=5, volume=0.1, price=2400.0, magic=MAGIC),
+             _deal(91, "2026-10-07 12:00", 2, profit=-40.0)]
+    rep = _run(tmp_path, FakeBroker(960.0, deals))
+    assert rep.status == "warn" and "cancelled" in rep.note
+    assert [(d.kind, d.follows_cancel) for d in ledger.balance_deals(_db(tmp_path), ACC_ID)] == [("withdrawal", True)]

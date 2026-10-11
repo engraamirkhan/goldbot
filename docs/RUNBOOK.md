@@ -998,11 +998,20 @@ the broker's) and the broker ledger (`broker_ledger`). The ledger part:
   swap, fees, deposits and withdrawals). Something changed your balance that the deal history does not show. Compare
   with the broker's statement before the next trade.
 
-The health reason gives counts only. To see the amounts, on the brain run
-`python -m goldbot.ops.ledger show <account>`: the latest report, the daily snapshots and the deposits and
-withdrawals of the last 31 days. The output contains your balances, so keep it off GitHub. The first run is a
-baseline with nothing to tie out against. Nothing here trades: the job only reads the account, the positions and the
-deal history.
+The health reason gives counts only. To see the amounts, run this on the brain:
+
+```bash
+sudo -u goldbot /opt/goldbot/.venv/bin/python -m goldbot.ops.ledger show <account> --state /opt/goldbot/state
+```
+
+It prints the latest report, the daily snapshots and the deposits and withdrawals of the last 31 days (`--days N` for
+more). It opens `aux.db` read-only, so it is safe to run while the services are up. The output contains your
+balances, so keep it off GitHub.
+
+The first run is a baseline with nothing to tie out against. Its deposits are listed with `"baseline": true` because
+they are already in the opening balance. A balance operation marked `"follows_cancel": true` may be the broker
+reversing a cancelled deal, not a deposit or withdrawal of yours; check the broker's statement. Nothing here trades:
+the job only reads the account, the positions and the deal history.
 
 ### Currency rollout (one time: the update that brings currency-correct sizing, BACKLOG 28/25/29)
 
