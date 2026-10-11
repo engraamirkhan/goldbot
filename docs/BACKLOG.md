@@ -27,7 +27,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | done (PR #62) |
 | 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | done (PR #60) |
 | 4 | FRED macro data pipeline | Market and macro preparation · FIND | M | done (PR #61) |
-| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (draft; owner rulings A-D, K_eff and costs-v1 recorded 2026-10-11, daily floor 150 committed; reservation planned at 8 unless H-06 counts >= 150; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, 48, `macro-v1`) |
+| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (draft; owner rulings recorded 2026-10-11; research director decision (c), H-01 kept as a retire test only if its recount is >= 150, H-06 withdrawn below 150; reservation 8, or 7; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, `macro-v1`) |
 | 6 | Live exit policies and blackout early close | Trade management, exit · FIND + RUN | M | in review (safety fixes) |
 | 7 | Ops alerts: heartbeats, FAILED_EXEC, weekly cap | Operational resilience · RUN | S–M | done (PR #62) |
 | 8 | Stop rule and gate thresholds in code | Capital and drawdown management · RUN | S | done (owner sign-off and engine trade record open) |
@@ -64,8 +64,9 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 47 | Pre-registration writer for the shared registry (queued rows, slots, sync to `research-v1`) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; needed by 2026-12-04 for the Q1 freeze) |
 | 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | in review (built 2026-10-11: tsmom preset `slow_macro`, agent `tsmom-g0-fed4baec9f`, and `count_h06` in count-owed-events; quant review of the readings (a)-(e) in `preregistration-2027Q1.md` H-06; count pasted once `macro-v1` exists; by 2026-12-04, else H-06 is withdrawn by its rule) |
 | 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; settings and `hypotheses.md` B together) |
-| 50 | --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners | Idea generation (integrity) · FIND | M | proposed (quant review F2 of BACKLOG 47, 2026-10-11; due before the 2026-12-11 freeze) |
+| 50 | --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners | Idea generation (integrity) · FIND | M | implemented 2026-10-11 (TRACEABILITY M43; quant review pending) |
 | 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | proposed (security re-verify of BACKLOG 47, 2026-10-11) |
+| 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | proposed (trading-safety review of the finance audit record, 2026-10-11) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -696,6 +697,19 @@ hypotheses that go through the trial registry in a future quarter's budget.
   merge again and retry a bounded number of times, failing loudly if it keeps changing. Keep the existing refusal of
   a merge shorter than the published copy. Acceptance: tests with a fake release whose asset changes between the pull
   and the upload, showing both rows survive, and a bounded-retry failure. Security review. Depends on: BACKLOG 47.
+- **52. Approvals keep only the decision channel on disk and in the API (trading-safety review of the finance audit
+  record, 2026-10-11).** Value: an archived proposal in `approvals/done/` still carries the owner's identity:
+  `Proposal.decided_by` (the Telegram user id) and `decided_via` ("telegram:<id>" or "dashboard:<email>"). The
+  finance audit needs only when and through which channel the owner decided, which `decided_ts` and
+  `decided_channel` now record (TRACEABILITY X18). Do: the done files and the API keep only `decided_channel`
+  (with `decided_ts`); drop `decided_by` and `decided_via` from the files written to disk (the in-memory
+  allow-list check is unchanged); if an identity is ever needed, it lives in the auth audit log, not in the
+  approval files. The dashboard's decided cards (`DecidedProposal.decided_by`, goldbot/api/app.py
+  `recent_proposals`, web/src/screens/ProposalCard.tsx) switch to the channel. This is an API contract change:
+  regenerate the OpenAPI export and the web types, and keep reading older done files that still carry the fields
+  (ADR 0010). Acceptance: a test that a decided proposal archived by the bus or the engine has no Telegram id or
+  email anywhere in its file; a test that the decided card shows the channel for a new file and for an older file
+  with `decided_via`; the API contract regenerated; trading-safety and security review.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.

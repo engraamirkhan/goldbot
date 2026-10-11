@@ -89,9 +89,12 @@ def _complete_spec(**over: Any) -> dict[str, Any]:
     return spec
 
 
-def _plan(spec: dict[str, Any], reserved: int = 4, budget: int = 20) -> Any:
+DIGESTS = {f"xauusd_1m_dukascopy_{y}.parquet": f"{y:064x}" for y in range(2010, 2026)}   # BACKLOG 50 pins
+
+
+def _plan(spec: dict[str, Any], reserved: int = 4, budget: int = 20, digests: dict[str, str] | None = None) -> Any:
     return plan_quarter(QuarterSpec.model_validate(spec), research=_research(reserved, budget), doc_text=DOC_TEXT,
-                        quarter=Q)
+                        quarter=Q, data_digests=DIGESTS if digests is None else digests)
 
 
 # ---------------------------------------------------------------------------------------------- the doc's spec
@@ -298,9 +301,12 @@ def test_the_script_refuses_a_late_write_and_takes_allow_late_with_a_reason(
     settings = load_settings().model_copy(update={"research": _research(0)})
     monkeypatch.setattr(script, "load_settings", lambda: settings)
     monkeypatch.setattr(script, "doc_text", lambda source, commit: DOC_TEXT)
+    bars = tmp_path / "raw"
+    bars.mkdir()
+    (bars / "xauusd_1m_dukascopy_2010.parquet").write_bytes(b"bars")
     with pytest.raises(SystemExit, match="started"):
-        script.main(["--quarter", Q, "--from", str(spec), "--registry", str(reg_path)])
-    assert script.main(["--quarter", Q, "--from", str(spec), "--registry", str(reg_path),
+        script.main(["--quarter", Q, "--from", str(spec), "--registry", str(reg_path), "--bars", str(bars)])
+    assert script.main(["--quarter", Q, "--from", str(spec), "--registry", str(reg_path), "--bars", str(bars),
                         "--allow-late", "freeze slipped"]) == 0
     assert len(TrialRegistry(reg_path)._rows()) == 2
 
@@ -488,8 +494,13 @@ def test_a_written_discovery_row_is_the_one_research_pass_discover_links(tmp_pat
     from goldbot.research import director
     from goldbot.research.discovery import H02_CLUSTERS
     _clock(monkeypatch, BEFORE)
+    from goldbot.data.release import bar_file_digests
     reg = TrialRegistry(tmp_path / "registry.jsonl")
-    write_quarter(reg, _plan(_complete_spec(reservation=4), reserved=4))
+    bars = tmp_path / "raw"
+    bars.mkdir()
+    for y in range(2010, 2027):
+        (bars / f"xauusd_1m_dukascopy_{y}.parquet").write_bytes(f"bars of {y}".encode())
+    write_quarter(reg, _plan(_complete_spec(reservation=4), reserved=4, digests=bar_file_digests(bars, to_year=2025)))
     written = reg._rows()[0]
     rp = importlib.util.spec_from_file_location("research_pass_m5", ROOT / "scripts/research_pass.py")
     assert rp is not None and rp.loader is not None
@@ -501,6 +512,7 @@ def test_a_written_discovery_row_is_the_one_research_pass_discover_links(tmp_pat
                           json.dumps({"survivor_unit": "feature", "group_top_k": 3, "clusters": H02_CLUSTERS})])
     args.specialist, args.pooled, args.score_holdout = "tsmom", "", False
     args.rationale, args.rule_ref, args.report = "H-02", None, str(tmp_path / "r.md")
+    args.bars, args.from_year, args.to_year = str(bars), 2010, 2100
     variants = research_pass.parse_variants("tsmom", '[{"timeframe": "4h", "max_bars": 12}]')
     b1 = pd.DataFrame({"ts_utc": pd.to_datetime(["2010-01-03 23:00:00", "2017-06-01 00:00:00",
                                                  "2025-09-30 20:59:00"], utc=True)})
@@ -534,6 +546,61 @@ def test_the_rules_are_read_from_the_pre_registration_at_its_freeze_commit() -> 
         script.doc_text("docs/research/preregistration-2027Q1.md", "0" * 40)
     with pytest.raises(SystemExit, match="freeze_commit"):
         script.doc_text("docs/research/no-such-file.md", head)
+
+
+def test_the_spec_carries_h02s_full_pinned_discovery_config_with_the_cluster_map_written_out() -> None:
+    """preregistration-2027Q1.md "Pinned discovery config": the full DiscoveryConfig.model_dump(), which the spec and
+    the queued row carry verbatim, clusters written out as the full map. Naming the map or writing it out builds the
+    same config and hash, and the spec still plans (the other rows' pinned hashes unchanged)."""
+    from goldbot.research.discovery import H02_CLUSTERS, DiscoveryConfig
+    from goldbot.research.preregistration import SpecRow, _discovery_config
+    block = DOC.read_text().split("**Pinned discovery config.**", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
+    pinned = yaml.safe_load(block)
+    assert pinned["clusters"] == "discovery.H02_CLUSTERS"
+    want = {**pinned, "clusters": H02_CLUSTERS}
+    spec = yaml.safe_load(SPEC.read_text())
+    h02 = next(r for r in spec["rows"] if r["id"] == "H-02")
+    assert h02["discovery"] == want                                     # verbatim, the map written out
+    assert DiscoveryConfig(**h02["discovery"]).model_dump() == want      # the whole dump: no default left implicit
+    research = load_settings().research
+    plan = plan_quarter(QuarterSpec.model_validate(spec), research=research, doc_text=DOC.read_text(), quarter=Q)
+    assert {r.id: r.config_hash for r in plan.rows if r.config_hash} == {
+        "H-01": "561030150146", "H-06": "5650ad206bda", "H-04": "3d33124f210c", "C4H": "184bddf12019"}
+    # with the doc's variant and bars range the full map and the named map hash the same
+    tsmom = SPECIALISTS["tsmom"](timeframe="4h", max_bars=12)
+    base = {**h02, "variant": {"timeframe": "4h", "max_bars": 12}, "pending": None,
+            "bars_from": "2010-01-03 23:00:00+00:00", "bars_to": "2025-09-30 23:59:00+00:00"}
+    full, _ = _discovery_config(SpecRow.model_validate(base), tsmom, research)
+    named, _ = _discovery_config(SpecRow.model_validate({**base, "discovery": {**want, "clusters": "H02_CLUSTERS"}}),
+                                 tsmom, research)
+    assert config_hash(full) == config_hash(named) and full["discovery"] == want
+
+
+def test_a_freeze_commit_that_is_not_an_ancestor_of_head_is_refused(tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """A commit on another branch holds the file too, but its rules were never merged: `git merge-base --is-ancestor
+    <freeze_commit> HEAD` must hold as well as `git show`."""
+    import subprocess
+
+    def git(*a: str) -> str:
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                               "-c", "commit.gpgsign=false", *a], capture_output=True, text=True,
+                              check=True).stdout.strip()
+    git("init", "-q", "-b", "main")
+    (tmp_path / "pre.md").write_text("- Reading rule: frozen\n")
+    git("add", "pre.md")
+    git("commit", "-q", "-m", "freeze")
+    frozen = git("rev-parse", "HEAD")
+    git("checkout", "-q", "-b", "side")
+    (tmp_path / "pre.md").write_text("- Reading rule: never merged\n")
+    git("commit", "-q", "-am", "side")
+    side = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    script = _script()
+    monkeypatch.setattr(script, "ROOT", tmp_path)
+    assert "frozen" in script.doc_text("pre.md", frozen)
+    with pytest.raises(SystemExit, match="not an ancestor of HEAD"):
+        script.doc_text("pre.md", side)
 
 
 def test_the_write_job_runs_only_on_main_with_the_history_to_check_the_freeze_commit() -> None:

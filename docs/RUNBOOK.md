@@ -132,6 +132,7 @@ goldbot accounts bridge-use icm-demo           # http://127.0.0.1:8765, the toke
 goldbot accounts set telegram-bot-token        # from @BotFather (section 2.8)
 goldbot accounts set anthropic-api-key         # optional: staff agents and headline scoring
 goldbot accounts set github-token              # optional: bar sync and the shared trial registry
+goldbot accounts set deadman-url              # the Healthchecks.io ping URL ("Outside alert" in section 6)
 sudo -u goldbot nano /opt/goldbot/config/settings.local.yaml
 #   auth: {owner_email: <you>}
 #   telegram: {allowed_user_ids: [<your id>]}
@@ -173,13 +174,17 @@ and the rest still arrives. It never contains account numbers or emails.
   after 90 s, and **rolls back by itself** if not. Telegram then says *deployed* or *rolled back* with the reason.
 * The MT5 box (terminal + bridge, rarely changed) is updated by hand only: `sudo goldbot-deploy latest` on it when a
   release note mentions the bridge.
-  Deploys there never upgrade Python packages (`--no-deps`). An MT5 box set up before ADR 0010 should get pydantic
-  2.12 or newer so it matches new boxes (the bridge runs without it: only the brain reads bridge records
-  tolerantly). Do it once, by hand, **with the book flat or at the weekend** (restarting the bridge cuts the engine off from the terminal for a moment):
+  Its Windows-Python packages come only from `goldbot/ops/linux/mt5-bridge-requirements.txt`: exact versions and
+  sha256 hashes rendered from `uv.lock` (`python scripts/bridge_requirements.py write`; CI fails when it is stale),
+  wheels only. A deploy reinstalls them when `uv.lock` or that file changed. An MT5 box set up before this file
+  existed (unpinned packages, maybe pydantic older than 2.12) should be brought onto it once, by hand, **with the book
+  flat or at the weekend** (restarting the bridge cuts the engine off from the terminal for a moment):
   1. `sudo systemctl stop goldbot-bridge@icm-demo` (one unit per account; stop each). Wine cannot replace a
      pydantic_core file the running bridge has loaded, so a running bridge can leave a half-installed package.
-  2. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install 'pydantic>=2.12,<3'`
-  3. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -c "import pydantic, pydantic_core; from pydantic import BaseModel; print(pydantic.VERSION, pydantic_core.__version__)"`
+  2. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install --require-hashes --no-deps --only-binary :all: -r Z:/opt/goldbot/goldbot/ops/linux/mt5-bridge-requirements.txt`
+     (a hash mismatch stops it with nothing changed: do not work around it, report it, it means a download was not
+     what uv.lock recorded)
+  3. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -c "import pydantic, pydantic_core, MetaTrader5, goldbot.execution.bridge; print(pydantic.VERSION)"`
      must print 2.12 or newer and no error.
   4. `sudo systemctl start goldbot-bridge@icm-demo` (each account). Wait about 20 s, then
      `systemctl is-active goldbot-bridge@icm-demo` must print `active` and `systemctl show -p NRestarts
@@ -425,6 +430,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `monthly_research` | First Sunday of the month 08:00 | Bounded label-grid research; summary in `state\research_<YYYY-MM>.md`. |
 | `backup` | Daily 22:15 | Brain only: encrypted `restic` backup of the databases, state files, trial registry, models and the brain's own Parquet to Oracle Object Storage, append only (old snapshots are thinned monthly from your Mac to 14 daily, 8 weekly and 12 monthly); result in `state/backup_last.json` (section 0.6). |
 | `restore_drill` | Sunday 10:00 | Restores the latest backup to a temporary folder and verifies checksums, database integrity, row counts and model checksums; result in `state/restore_drill_last.json`. |
+| `broker_ledger` | Daily 23:25 | Read-only: each account's balance, equity, margin and currency, the deposits and withdrawals in the broker's deal history, the balance tied out against the day's deals, and every goldbot position compared with the broker by position id. Stored in `aux.db`; health check `reconcile:<account>` (section 6, "Broker reconciliation"). |
 
 The staff-agent jobs and headline scoring only run when the `anthropic-api-key` secret is stored; otherwise the
 job records "skipped" and headlines are collected unscored. Their total spend is capped by
@@ -979,9 +985,128 @@ is lost: the type's published rows are kept and its `last_ok` does not move.
 phase gates, each engine's state, stage and data quality, risk state, scheduler jobs, cost tables, news feeds,
 agent spend, stuck approvals, backup age, the restore drill and each account's measured server clock offset) as ok / warn / fail with a one-line reason, and exits 1 on any fail. `--json`,
 `--out FILE`, `--baseline FILE` (fail only on new fails) and `--static` (no running services needed) exist for the
-update script. The Telegram service runs the same checks every 5 minutes and messages you when a check turns fail
+update script. The Telegram service runs the same checks every minute and messages you when a check turns fail
 and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service running; the `alerts` check shows
-when that loop has stopped).
+when that loop has stopped). When the whole brain is down, the outside dead man's switch tells you instead ("Outside
+alert" below; the `deadman` check says whether it is set).
+
+### Outside alert (dead man's switch)
+
+Telegram alerts come from the brain itself, so a dead brain cannot report itself. A free check on Healthchecks.io
+covers that: the Telegram service's health pass (every minute) pings it every `telegram.deadman_every_min` (2)
+minutes while health has no FAIL, and pings `<url>/fail` (body: the failing check names, nothing else) on a FAIL or
+when a Telegram alert could not be sent. Healthchecks.io emails you, or messages you on Telegram through its own bot,
+when the pings stop or a fail ping arrives. It does not depend on this server. Code: `goldbot/ops/deadman.py`,
+ADR 0014.
+
+**Set up (once, 5 min; docs/deploy/first-deploy.md P7 and step 8b):**
+1. healthchecks.io -> sign up (free Hobbyist plan) -> **Add Check**: name `goldbot brain`, Schedule **Simple**, Period
+   **2 minutes**, Grace **3 minutes** (so a dead brain is reported within about 6 minutes). If you change
+   `telegram.deadman_every_min`, change the Period to match.
+2. Integrations: email is on by default; add **Telegram** (Healthchecks.io's own bot) if you want it on your phone too.
+   Delete nothing else; the default integrations are enough.
+3. Copy the check's **ping URL** (`https://hc-ping.com/<uuid>`). It is a secret: anyone with it can mark the check up.
+   Keep it in your password manager only. brain: `goldbot accounts set deadman-url` and paste it at the hidden prompt.
+   Never put it in config, a shell command line, the repository or an issue.
+4. Within 2 minutes the check turns **up** on healthchecks.io, and `goldbot run health` shows `deadman` ok.
+
+**Health `deadman` WARN:** "not set" -> step 3; "not an https:// URL" / "has no host" -> store the URL again, exactly
+as copied. The WARN is not sent to Telegram (it shows in `/status` and the digest).
+
+**Healthchecks.io says DOWN** (no ping within period + grace). Check in this order:
+1. Can you reach the brain at all (`ssh brain`)? No: the host is down or unreachable. Oracle console -> the instance
+   -> start or reboot it. Open positions keep their broker-side stop and target meanwhile; exits need the engine and
+   the bridge, so restoring the brain is the priority.
+2. `systemctl is-active goldbot-telegram`; not active -> `journalctl -u goldbot-telegram -n 50`, fix, then
+   `sudo systemctl restart goldbot-telegram`. The pings come from this service, so a crashed Telegram service is
+   reported here. That is intended: it is also your alert path.
+3. Active, but no pings: `journalctl -u goldbot-telegram | grep "dead man"`. "ping failed: HTTP 404" -> the check was
+   deleted or the URL is wrong (store it again). "URLError" or "TimeoutError" -> outbound HTTPS from the brain is
+   blocked (Oracle security list or egress) or healthchecks.io is down. The log never prints the URL.
+4. "health pass" exceptions in the same log: the checks themselves crash. No ping is sent then, by design.
+
+**Healthchecks.io says DOWN after a fail ping:** health has a FAIL, or a Telegram alert failed to send. The ping's
+body (Healthchecks.io -> the check -> Events) names the failing checks; run `goldbot run health` for the reasons. If
+the body says `telegram_alert_undelivered`, Telegram rejected the alert: check the bot token and `allowed_user_ids`
+("Telegram is silent" above). The check turns up again by itself at the first healthy pass.
+
+**Rehearse** (after any change to the brain's alerting, and once a quarter): `sudo systemctl stop goldbot-telegram`;
+expect the DOWN email within about 6 minutes; `sudo systemctl start goldbot-telegram`; expect UP within 2 minutes.
+
+### Engine loop stuck, and the watchdogs (brain and MT5 box)
+
+**What protects you.** Each engine's loop writes `state/heartbeat_engine-<account>.json` on every pass, at most
+every 15 s, with or without ticks. It also pings the systemd watchdog. If the loop stops for 300 s, systemd ends the
+engine with SIGABRT, which writes every thread's Python stack to the journal, and starts it again. The start
+reconciles orders and positions with the broker, as after any restart. Stops stay with the broker the whole time,
+and no exit waits on any of this. The start itself (bridge connect, warm start, model load) may take up to 15
+minutes; a start that hangs longer is ended and started again.
+
+**`engine_loop:<account>` FAIL** ("engine loop silent for ..."; alerted on Telegram after 150 s of silence, market
+open or not):
+1. `sudo journalctl -u goldbot-engine@<account> -n 300`. "Watchdog timeout" followed by a Python stack means systemd
+   killed a stuck loop. Keep that stack: it is the root cause, and it goes into a postmortem in `docs/incidents/`.
+2. Wait 5 minutes. After a watchdog restart the check goes WARN ("engine starting") and then ok. It needs no action.
+3. If it is still failing, `systemctl status goldbot-engine@<account>`:
+   - restarting every few seconds: the start fails. The `engine:<account>` line or `startup_error` in
+     `state/engine_<account>.json` names the cause, which is often the bridge (`bridge:<account>`, see below);
+   - "activating" for many minutes: a slow start. At 15 minutes systemd ends it and the check FAILs "still starting";
+   - active but silent: `sudo systemctl restart goldbot-engine@<account>`. Restarting is safe (reconciliation on start).
+4. **"engine start silent" or "still starting after ..."**: the same steps. A start never blocks exits, because
+   positions it has not yet reconciled keep their stops at the broker.
+
+**Bridge restarted by its watchdog (MT5 box).** The bridge runs under Wine, which cannot ping systemd, so
+`goldbot-bridge-watchdog@<account>.timer` probes `GET /health` on 127.0.0.1:8765 every 2 minutes instead. After 3
+failed probes 20 s apart it restarts `goldbot-bridge@<account>`. It skips the first 5 minutes after a start and any
+unit restarted while it probed. When the brain shows `bridge:<account>` FAIL, or the engine restarts because of a
+lost bridge reply:
+1. On the MT5 box, `sudo journalctl -u goldbot-bridge-watchdog@<account> -n 50` shows whether it restarted the bridge
+   ("did not answer GET /health 3 times; restarting it"), and `sudo journalctl -u goldbot-bridge@<account> -n 200`
+   shows the bridge's own log.
+2. If it keeps restarting, open the terminal over VNC (0.3). Check that it is logged in, that algo trading is
+   enabled, and that no dialog is open.
+3. `systemctl list-timers 'goldbot-bridge-watchdog@*'` shows that the timer is running. To pause it for maintenance,
+   run `sudo systemctl stop goldbot-bridge-watchdog@<account>.timer`, and `start` it again afterwards.
+
+**Installing on a box set up before the watchdogs.** `goldbot-deploy` does not reinstall units:
+- Brain: install `goldbot-engine@.service` from root's own clone at the deployed commit (as in 0.4), then run
+  `sudo systemctl daemon-reload` and restart the engines.
+- MT5 box: install the two `goldbot-bridge-watchdog@` units and the `/usr/local/sbin/goldbot-bridge-watchdog` script
+  the same way, then run `sudo systemctl enable --now goldbot-bridge-watchdog@icm-demo.timer`.
+- Then set the rollback floor (`/etc/goldbot/rollback-floor`, 0.5) to the watchdog commit. A new brain gets it from
+  the bootstrap, which writes the bootstrap commit there when no floor exists. Why it matters: under `Type=notify`,
+  an older release never reports ready. It still starts and trades for up to 15 min, until `TimeoutStartSec`. Then
+  systemd stops it with SIGTERM and starts it again, over and over. Every cycle restarts the engine in the middle of
+  whatever it was doing, and `systemctl restart` (and so a deploy) waits up to 15 min and then fails.
+
+### Broker reconciliation (`reconcile:<account>`)
+
+One check per account, the worse of two daily reports: the feed check (`feed_reconcile`, the engine's 1m bars against
+the broker's) and the broker ledger (`broker_ledger`). The ledger part:
+
+* **warn**: a position differs between goldbot and the broker. `missing` means the broker has it (open, or closed by
+  its deals) and goldbot has no record; `extra` means goldbot has a record the broker knows nothing of; `mismatch`
+  names the field (side, lots, entry or exit price, P&L, P&L currency). Also warns on broker adjustment deals (a
+  charge, correction, bonus or interest), on an unreadable orders or closed-trade file, and when the last report is
+  more than 48 hours old.
+* **fail**: the balance moved by more than the tolerance beyond what the day's deals explain (trade P&L, commission,
+  swap, fees, deposits and withdrawals). Something changed your balance that the deal history does not show. Compare
+  with the broker's statement before the next trade.
+
+The health reason gives counts only. To see the amounts, run this on the brain:
+
+```bash
+sudo -u goldbot /opt/goldbot/.venv/bin/python -m goldbot.ops.ledger show <account> --state /opt/goldbot/state
+```
+
+It prints the latest report, the daily snapshots and the deposits and withdrawals of the last 31 days (`--days N` for
+more). It opens `aux.db` read-only, so it is safe to run while the services are up. The output contains your
+balances, so keep it off GitHub.
+
+The first run is a baseline with nothing to tie out against. Its deposits are listed with `"baseline": true` because
+they are already in the opening balance. A balance operation marked `"follows_cancel": true` may be the broker
+reversing a cancelled deal, not a deposit or withdrawal of yours; check the broker's statement. Nothing here trades:
+the job only reads the account, the positions and the deal history.
 
 ### Currency rollout (one time: the update that brings currency-correct sizing, BACKLOG 28/25/29)
 

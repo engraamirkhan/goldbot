@@ -19,7 +19,12 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P1/P2):
   are spent only by a run matching a pending `preregistered` row (family and config hash), which it is linked to;
   any other run (ad-hoc variant, screen, holdout scoring) must fit in budget - used - reserved
   (TrialRegistry.check_budget_reserved). The holdout window (research.holdout_from/to) is excluded unless
-  `--score-holdout`, which scores a configuration on it exactly once.
+  `--score-holdout`, which scores a configuration on it exactly once;
+* BACKLOG 50: before any look, the data-v1 sha256 digests a pending queued row of the run's family and agent pins in
+  its plan are verified against the research-window files in --bars (a refresh or re-pull since the row was written
+  is refused, naming the file and both digests), and a run with a pending queued row of its family and agent but
+  another config hash is refused instead of falling back to the open budget. `--discover` cuts the 1m bars at
+  research.holdout_from before anything is built, as `--h16` does.
 
 Primary-signal screen (P4, goldbot/research/screen.py): before any model, the rule's own gross expectancy over the
 research window must be positive with t >= 2 on >= 1,000 events. A configuration that fails is recorded with status
@@ -95,6 +100,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.release import (  # noqa: E402
+    bar_digest_refusal,
     read_bar_files,
     read_macro_files,
     read_positioning_files,
@@ -108,7 +114,7 @@ from goldbot.features import us_calendar as us_calendar_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.features.registry import feature_version  # noqa: E402
 from goldbot.research import h16  # noqa: E402
-from goldbot.research.director import cited_rule  # noqa: E402
+from goldbot.research.director import cited_rule, queued_rows_for  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
     POOLED_FEATURES,
@@ -126,10 +132,10 @@ from goldbot.research.pipeline import (  # noqa: E402
 from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, quarter_of  # noqa: E402
 from goldbot.research.screen import (  # noqa: E402
     is_inconclusive,
-    min_events_for,
     rule_only_split,
     rule_only_split_lines,
     screen,
+    screen_floors,
     screen_lines,
     signal_timeframe,
 )
@@ -286,6 +292,27 @@ def _h16(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, setting
     print(json.dumps({"trial": row["trial"], "agent_id": h16.AGENT_ID, "status": row["status"],
                       "verdict": res.verdict}), flush=True)
     return 0
+
+
+def queued_digest_refusal(rows: list[dict[str, Any]], quarter: str, targets: list[tuple[str, str | None]],
+                          bars: str, from_year: int, to_year: int, holdout_from: Any) -> str | None:
+    """Why this run may not go on, or None: a pending queued row of `quarter` that the run could match (each target's
+    family and agent, None: the family alone; `director.queued_rows_for`) pins data-v1 sha256 digests (BACKLOG 50) and
+    the research-window files the run reads from `bars` (years `from_year`..min(`to_year`, holdout year)) are not
+    exactly those (a refresh or re-pull after the write, another --from-year). Checked before any look."""
+    last = min(int(to_year), holdout_from.year) if holdout_from is not None else int(to_year)
+    for family, agent in targets:
+        for row in queued_rows_for(rows, quarter, family, agent):
+            pinned = (row.get("plan") or {}).get("data_digests")
+            if not pinned:
+                continue
+            why = bar_digest_refusal(pinned, Path(bars), int(from_year), last)
+            if why:
+                spec_id = (row.get("plan") or {}).get("spec_id")
+                return (f"{family}: the pending queued row #{row.get('trial')}{f' ({spec_id})' if spec_id else ''} "
+                        f"pins data-v1 sha256 digests that the bars in {bars} do not match: {why}. The run would not "
+                        f"be the pre-registered one; restore the pinned files, or withdraw the row first")
+    return None
 
 
 def feature_ctx(macro: pd.DataFrame | None, positioning: pd.DataFrame | None,
@@ -628,17 +655,29 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             if reg.holdout_scored(job.family, job.config):
                 raise SystemExit(f"{job.family} {label} was already scored on the holdout; "
                                  "that result is final for this configuration")
-            # the gate pass must be on the feature version this run builds (a version bump is a different model)
+            # the gate pass must be on the feature version this run builds (a version bump is a different model) and
+            # record the cost treatment this run charges (swap charged, cost source stated)
             if not reg.passed_gates(job.family, job.config, feature_version=fv):
                 raise SystemExit(f"{job.family} {label} has no research trial on feature version {fv} that passed "
-                                 "the design's gates; only a passing configuration is scored on the holdout")
+                                 "the design's gates with swap charged and its cost source stated; only a passing "
+                                 "configuration is scored on the holdout")
+    # BACKLOG 50: the data-v1 digests a queued row of these jobs pins are verified before any look; a pooled job's
+    # agent is not known before its members are prepared, so it is matched on its family alone
+    agents = [None if j.pooled else j.specs[0].agent_id for j in jobs]
+    refusal = queued_digest_refusal(reg._rows(), quarter_of(), [(j.family, a) for j, a in zip(jobs, agents)],
+                                    args.bars, args.from_year, args.to_year, settings.research.holdout_from)
+    if refusal:
+        raise SystemExit(refusal)
     # a holdout scoring or a screen is a look at the data too: charged like any trial, and like any trial it spends the
-    # pre-registered queue's reservation only when it matches a pending preregistered row (linked to it below)
+    # pre-registered queue's reservation only when it matches a pending preregistered row (linked to it below); a job
+    # whose family and agent have a pending queued row with another config hash is refused, never charged to the open
+    # budget (QueuedConfigMismatch)
     try:
         quarter, preregs = reg.check_budget_reserved([(j.family, j.config) for j in jobs],
                                                      settings.research.trial_budget_quarter,
                                                      settings.research.reserved_for(quarter_of()),
-                                                     retired={e.family for e in settings.research.retired_families})
+                                                     retired={e.family for e in settings.research.retired_families},
+                                                     agents=agents)
     except TrialBudgetExceeded as exc:
         raise SystemExit(str(exc)) from None
     # E-5 cap: a manual row cites its pre-registered rule (recorded as rule_ref; refused when a capped run cites none)
@@ -671,9 +710,10 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         # ctx: the point-in-time tables a candidate rule reads (H-06's macro gate); the frame is already built
         preps = [prepare(s, b_dec, context, ctx=feat_ctx, extra_cost_usd=extra_cost, holdout=holdout,
                          score_holdout=args.score_holdout, frame=frame, swap=swap) for s in job.specs]
-        # event floor: research.screen_min_events, or the daily-signal override (owner ruling A), set before the run
-        floor = min_events_for(tf if job.pooled else signal_timeframe(job.specs[0]), settings.research)
-        scr = None if args.score_holdout else screen(preps if job.pooled else preps[0], floor)
+        # event floors: research.screen_min_events, or the daily-signal override (owner ruling A), set before the run;
+        # the daily override is retire-only, so a pass still needs research.screen_min_events
+        floors = screen_floors(tf if job.pooled else signal_timeframe(job.specs[0]), settings.research)
+        scr = None if args.score_holdout else screen(preps if job.pooled else preps[0], *floors)
         # a family under its pre-registered rule-only screen (Specialist.screening, e.g. asia_drift) never reaches the
         # model stage, pass or fail, with or without --skip-screen: the screen row records the look (quant review M2)
         screen_only = scr is not None and not job.pooled and job.specs[0].screening
@@ -748,12 +788,19 @@ def _discovery_args(ap: argparse.ArgumentParser) -> None:
 def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.DataFrame, reg: TrialRegistry,
               settings: Any, extra_cost: float, swap: SwapSpec, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
               cost_source: str, macro: pd.DataFrame | None) -> int:
-    from goldbot.research.discovery import DiscoveryConfig, discovery_pass
+    from goldbot.research.discovery import DiscoveryConfig, discovery_family, discovery_pass
     if args.pooled or args.score_holdout or len(variants) != 1:
         raise SystemExit("--discover runs one specialist configuration (one --variants entry), no --pooled or --score-holdout")
+    spec = SPECIALISTS[args.specialist](**variants[0])
+    # BACKLOG 50: the data-v1 digests a queued discovery row of this specialist configuration pins, before any look;
+    # discovery_pass then cuts the bars at research.holdout_from and refuses a config-hash mismatch against that row
+    refusal = queued_digest_refusal(reg._rows(), quarter_of(), [(discovery_family(spec.family), spec.agent_id)],
+                                    args.bars, args.from_year, args.to_year, settings.research.holdout_from)
+    if refusal:
+        raise SystemExit(refusal)
     try:
         cfg = DiscoveryConfig(**json.loads(args.discover_config))
-        row, text = discovery_pass(SPECIALISTS[args.specialist](**variants[0]), b1, reg,
+        row, text = discovery_pass(spec, b1, reg,
                                    budget_cap=settings.research.trial_budget_quarter,
                                    reserved_setting=settings.research.reserved_for(quarter_of()), cfg=cfg,
                                    group_mode=args.families,
@@ -845,9 +892,11 @@ def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[s
         lines += ["Screen passed; rule-only screen: no model was fitted. The family is under its pre-registered screen "
                   "(`Specialist.screening`); model research on it needs its own pre-registration."]
     elif is_inconclusive(scr):
-        lines += [f"Screen inconclusive (event floor): {scr['n']:,} events, fewer than the "
-                  f"{scr['min_events']:,} the floor needs. No model was fitted. This recorded, charged trial cannot "
-                  "retire the hypothesis; it is not evidence for promotion either."]
+        pass_n = int(scr.get("pass_min_events") or scr["min_events"])
+        short = (f"fewer than the {pass_n:,} a pass needs (the {scr['min_events']:,}-event floor is retire-only)"
+                 if scr["n"] >= scr["min_events"] else f"fewer than the {scr['min_events']:,} the floor needs")
+        lines += [f"Screen inconclusive (event floor): {scr['n']:,} events, {short}. No model was fitted. This "
+                  "recorded, charged trial cannot retire the hypothesis; it is not evidence for promotion either."]
     else:
         lines += ["Screen failed: no model was fitted. The rule is retired from model research (it may still serve as a "
                   "feature); `--skip-screen` fits a model anyway and is recorded as such."]

@@ -251,7 +251,7 @@ def test_engine_approval_window_defaults_to_the_settings_value():
 
 
 def test_production_engine_reads_the_approval_window_from_settings():
-    assert "approval_window_s=settings.risk.approval_window_seconds" in inspect.getsource(run.run_engine)
+    assert "approval_window_s=settings.risk.approval_window_seconds" in inspect.getsource(run._run_engine)
 
 
 @pytest.mark.integration

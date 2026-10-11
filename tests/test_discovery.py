@@ -302,15 +302,19 @@ def test_a_discovery_survivor_needs_a_passed_holdout_before_it_counts_as_passed(
     reg = TrialRegistry(tmp_path / "r.jsonl")
     cfg = {"x": 1, FROM_DISCOVERY_KEY: True}
     h = config_hash(cfg)
-    rows = [{"status": "evaluated", "family": "tsmom", "config_hash": h, "results": {"gates": {"passed": True}}}]
+    costs = {"swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0}, "cost_source": "PRIORS ONLY: test"}
+    rows = [{"status": "evaluated", "family": "tsmom", "config_hash": h, "results": {"gates": {"passed": True}, **costs}}]
     reg._rows = lambda: rows                                                          # type: ignore[method-assign]
     assert not reg.passed_gates("tsmom", cfg)                                         # gates alone are not enough
-    rows.append({"status": "holdout", "family": "tsmom", "config_hash": h, "results": {"holdout_verdict": {"passed": False}}})
+    rows.append({"status": "holdout", "family": "tsmom", "config_hash": h,
+                 "results": {"holdout_verdict": {"passed": False}, **costs}})
     assert not reg.passed_gates("tsmom", cfg)
-    rows.append({"status": "holdout", "family": "tsmom", "config_hash": h, "results": {"holdout_verdict": {"passed": True}}})
+    rows.append({"status": "holdout", "family": "tsmom", "config_hash": h,
+                 "results": {"holdout_verdict": {"passed": True}, **costs}})
     assert reg.passed_gates("tsmom", cfg)
     plain = {"x": 1}
-    rows.append({"status": "evaluated", "family": "tsmom", "config_hash": config_hash(plain), "results": {"gates": {"passed": True}}})
+    rows.append({"status": "evaluated", "family": "tsmom", "config_hash": config_hash(plain),
+                 "results": {"gates": {"passed": True}, **costs}})
     assert reg.passed_gates("tsmom", plain)                                           # ordinary trials unchanged
 
 

@@ -320,7 +320,8 @@ the registry (normally 0), and that settings change ships in the same change as 
   not merged by 2026-12-04, the same withdrawal applies.
   **Planning (2026-10-11, after the owner's ruling A):** the floor applied is the one committed in settings at the
   freeze (150 today). The quant reviewer estimates H-06's one-at-a-time lower bound at about 80-130, so withdrawal
-  is likely even at 150. **The Q1 reservation is planned at 8** (4 queued + 4 slots). It goes back to 9 only if the
+  is likely even at 150. **The Q1 reservation is planned at 8** (4 queued + 4 slots; 7 if H-01 is also withdrawn
+  under the research director's decision of 2026-10-11 below). It goes back to 9 only if the
   owed count comes in at 150 or more.
 - **Implemented (BACKLOG 48, 2026-10-11; no outcome read, nothing tuned; quant review pending).** The tsmom preset
   `slow_macro` = `slow` + `"macro_gate": true`, agent id `tsmom-g0-fed4baec9f` (`slow` stays `tsmom-g0-c12c9afb24`;
@@ -442,6 +443,12 @@ director's cycle report of 2026-10-11. None changes a reading rule written above
     only pre-registering model research, and the model stage fails the gates on so few candidates. So the floor can
     retire but never promote. A screen with 150-999 events **can** still read "pass". If "retire-only" is meant in
     that stricter sense, it is a code change for the quant reviewer and the implementer, not made here.
+  - **Strict reading (owner, 2026-10-11; code changed 2026-10-11, before any outcome was seen).** The owner ruled
+    the floor retire-only in the strict sense: `screen_verdict` now takes a retire floor and a pass floor
+    (`screen.screen_floors`: the daily override is the retire floor, `research.screen_min_events` the pass floor). A
+    daily rule with 150-999 events reads `fail` when it misses the sign or the t, and `inconclusive (event floor)`
+    otherwise; it never reads `pass`, so it never reaches the model stage and H-01's coded rule reads it
+    `inconclusive`. No reading rule above changes.
 - **B. Trial budget: 20 a quarter, unchanged.** 4 or 5 queued rows + 4 contingent H-02 survivor slots (ADR 0007),
   the rest open.
 - **C. Consensus feed: none.** H-11 stays blocked.
@@ -453,6 +460,53 @@ director's cycle report of 2026-10-11. None changes a reading rule written above
   per lot per night).
 - **Owner's trade history:** a complete export, analysed locally (`python -m goldbot.ops.run owner-history`); only
   the summary (R, %, counts, K) is shared (`owner-method-study.md`). No Q1 trial depends on it.
+
+## Research director decision: daily-signal rows under the strict floor (2026-10-11, before any outcome)
+
+**Question.** Under the strict retire-only floor (150 events retire; a pass needs 1,000), a daily-signal row whose
+one-at-a-time count is below 1,000 can never read "pass". H-01's lower bound is 154 (recount owed). H-06's is
+expected at about 80-130 (quant estimate). Each row costs 1 of the quarter's 20 trials, and its best possible outcome
+is "inconclusive". Options: (a) keep both; (b) withdraw every row whose lower bound is below the pass floor; (c) keep
+H-01 only, as the family's retire test. The owner delegated this decision to the research director.
+
+**Decision: (c) keep H-01 as a retire-only test; H-06 is withdrawn unless its count reaches the retire floor.**
+Concretely:
+- **H-01 stays queued, conditionally.** It is written only if the count-owed-events recount of its one-at-a-time
+  lower bound is >= 150 (the retire floor committed at the freeze). Below that it is withdrawn like H-06, because it
+  could then not even retire.
+- **H-06 is withdrawn** if its lower bound is < 150. This is the rule already written above, which the quant
+  estimate makes the expected outcome. If it is withdrawn, the reservation is 8.
+- **If both are withdrawn**, the reservation is 7 (H-02, H-04, C4H + 4 slots).
+
+**Why (c), not (a) or (b):**
+- *H-06 has no decision value.* Below 150 its only possible outcome is "inconclusive (event floor)", and "inconclusive"
+  neither retires nor continues. Even above 150 it can only retire the macro gate, and that is a variant of a family
+  whose base rule has not been read. Spending a trial on it would buy no information and would add 1 to every later
+  trial's DSR count.
+- *H-01 can still change a decision.* Slow TSMOM is the best-supported hypothesis on the list (MOP 2012, Hurst et al.
+  2017). A "stop" (net mean R <= 0 on both sides, or a failed screen on >= 150 events) would end the slow-trend lane:
+  no model research, no H-01 follow-up slot in Q2, H-06 and H-03 deprioritised. It would also record that the
+  literature's best case does not survive our costs. Either outcome returns a point estimate of net R after real costs.
+  That estimate is the one number the owner's "other instruments" question needs if it is ever reopened.
+- *(b) would leave the family untested at no saving that matters.* In Q1, 11 trials are open under the E-5 cap. They can
+  be spent only on `rule_ref` pre-registrations or the shared retired-family exploration trial, so one trial for
+  H-01 displaces nothing planned. The cost is +1 in every later trial's DSR count. It is accepted for the one row
+  that can retire a family.
+
+**Known weakness, stated before any outcome (not a rule change).** At 154-400 events the screen has low power. A real
+gross edge of +0.05-0.10 R would give t of only about 0.6-1.5, so a true edge would very likely also read "fail" and
+be retired. A "stop" from H-01 is therefore weak evidence of absence. It is recorded as **"retired at low power"**.
+Like every retired family, it can be reinstated by out-of-sample evidence (`research/director.py` reinstatement
+path) or by a later trial on more events, for example a multi-instrument or longer-history test, if the owner ever
+reopens ruling D. A "stop" does not stop the 1d/4h shadow book from logging slow-TSMOM signals for attribution,
+which costs no trial. This weakness is why (c) keeps H-01 only as a retire test: it is not expected to find an edge.
+
+**Owner confirmation:** not required. The decision was delegated, stays inside the 20-trial budget, spends fewer
+trials than the plan, and touches no rail. It is reported to the owner as an FYI, with the low-power caveat.
+
+**Count labels.** `scripts/count_owed_events.py` reports the floor against which H-01's and H-06's lower bounds are
+compared. It is being relabelled from `daily_floor` to **`retire_floor`** (another lane). The withdrawal tests above
+read that `retire_floor`, equal to `research.screen_min_events_daily` at the freeze (150).
 
 ## Q1 readiness: what must exist before 2027-01-01 (research director, 2026-10-11)
 

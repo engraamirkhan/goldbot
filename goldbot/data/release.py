@@ -6,6 +6,7 @@ workflow publishes on release `positioning-v1` into the `positioning` table. `up
 canonical broker's measured cost table on release `costs-v1` (goldbot/ops/jobs.py `publish_costs`)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -111,13 +112,50 @@ def download_release(tag: str, raw_dir: Path, *, token: str | None = None,
             if years is None or years[0] <= asset_year(a["name"]) <= years[1]]
 
 
+BAR_FILE_GLOB = "xauusd_1m_dukascopy_*.parquet"
+
+
+def bar_file_digests(folder: Path, from_year: int | None = None, to_year: int | None = None) -> dict[str, str]:
+    """{file name: sha256} of the yearly 1m files (release data-v1) in `folder` for `from_year`..`to_year` (None: no
+    bound). A queued pre-registration pins the research window's digests (years up to research.holdout_from's) in its
+    plan, and the runners verify them before any look (BACKLOG 50; `bar_digest_refusal`)."""
+    out: dict[str, str] = {}
+    for f in sorted(Path(folder).glob(BAR_FILE_GLOB)):
+        year = asset_year(f.name)
+        if (from_year is None or year >= from_year) and (to_year is None or year <= to_year):
+            h = hashlib.sha256()
+            with open(f, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            out[f.name] = h.hexdigest()
+    return out
+
+
+def bar_digest_refusal(pinned: dict[str, str], folder: Path, from_year: int, to_year: int) -> str | None:
+    """Why the yearly files a run reads from `folder` (`from_year`..`to_year`, the research window) are not exactly the
+    `pinned` ones, naming each file and both digests; None when they are. A file pinned but not read (another
+    --from-year), read but not pinned, missing, or with another digest (a re-pull) is refused."""
+    now = bar_file_digests(folder, from_year, to_year)
+    out = []
+    for name in sorted(set(pinned) | set(now)):
+        if name not in now:
+            where = "missing from the folder" if not (Path(folder) / name).exists() else \
+                f"not read by this run (years {from_year}-{to_year})"
+            out.append(f"{name}: pinned sha256 {pinned[name]}, {where}")
+        elif name not in pinned:
+            out.append(f"{name}: sha256 {now[name]} read by this run but not pinned")
+        elif now[name] != pinned[name]:
+            out.append(f"{name}: pinned sha256 {pinned[name]}, now {now[name]}")
+    return "; ".join(out) or None
+
+
 def read_bar_files(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
     """The yearly 1m files (xauusd_1m_dukascopy_<year>.parquet, release data-v1) for `from_year`..`to_year` as one
     frame in time order (BAR_COLUMNS, timestamps UTC), de-duplicated on ts_utc; bars with an error-level data-quality
     flag are dropped (quarantined at ingest, never used). FileNotFoundError when no file matches. The one bar loader
     research shares (scripts/research_pass.py, scripts/count_owed_events.py)."""
     frames = []
-    for f in sorted(Path(folder).glob("xauusd_1m_dukascopy_*.parquet")):
+    for f in sorted(Path(folder).glob(BAR_FILE_GLOB)):
         year = int(f.stem.rsplit("_", 1)[1])
         if from_year <= year <= to_year:
             frames.append(pd.read_parquet(f))

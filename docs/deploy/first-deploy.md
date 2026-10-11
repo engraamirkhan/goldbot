@@ -119,8 +119,16 @@ Write down `<SHA>` and the three `<HASH>` values. They are public.
 
 **Stop if:** any check fails. You are on the wrong commit; ask for the right one.
 
-Have ready: `<mt5-login>` and the MT5 demo password (typed only into the MT5 terminal), the bot token, your Telegram id, your email, an authenticator
-app on your phone.
+**P7. Outside alert (browser, 5 min).** Alerts come from the brain itself, so a dead brain is silent. A free
+check on Healthchecks.io fixes that (it emails you when the brain stops pinging it):
+1. healthchecks.io -> sign up (free plan) -> **Add Check**: name `goldbot brain`, Schedule **Simple**, Period
+   **2 minutes**, Grace **3 minutes**.
+2. Integrations: email is on already. Optional: add **Telegram** there (Healthchecks.io's own bot, not yours).
+3. Copy the check's **ping URL** (`https://hc-ping.com/...`) into your password manager. It is a secret: never paste
+   it into a chat, a command line, an issue or the repository. You store it on the brain in step 8b.
+
+Have ready: `<mt5-login>` and the MT5 demo password (typed only into the MT5 terminal), the bot token, your Telegram id, your email, the
+Healthchecks.io ping URL (password manager), an authenticator app on your phone.
 
 ---
 
@@ -163,6 +171,12 @@ curl -fsSLo mt5_bootstrap.sh https://raw.githubusercontent.com/engraamirkhan/gol
 echo "<HASH-mt5>  mt5_bootstrap.sh" | sha256sum -c - && sudo bash mt5_bootstrap.sh <SHA>
 ```
 **Expect** 30-45 min, ending `MT5 box installed`.
+
+**1d. No core files (brain, and the MT5 box for option B).** A watchdog kill must not write the engine's memory,
+which holds tokens, to disk. Run `cat /proc/sys/kernel/core_pattern`. **Expect** `|/bin/false`. The bootstrap log
+shows the earlier value on its `core_pattern was:` line. On the brain, also run `cat /etc/goldbot/rollback-floor`.
+**Expect** `<SHA>`. **Stop if** core_pattern names apport or systemd-coredump. Run
+`sudo sysctl -p /etc/sysctl.d/60-goldbot-no-core.conf` and check again before any secret goes in.
 
 **Stop and roll back:** nothing is running yet. If an install fails, read the end of `/root/goldbot-bootstrap.log`
 (Windows: `C:\ProgramData\goldbot-bootstrap.log`), then delete the VM and recreate it. A fresh VM is faster than
@@ -296,11 +310,44 @@ print(Store(s.data_root).append('calendar_events', df, source='forexfactory'), '
 * health shows no FAIL lines, apart from the ones listed below;
 * Telegram sends a message with a dashboard setup code.
 
+**6W. Engine watchdog acceptance (brain, 8 min).** Systemd restarts an engine whose loop sticks. Prove it once, now,
+while the demo account holds no goldbot position:
+```bash
+systemctl show -p ActiveState,WatchdogUSec,StatusText goldbot-engine@icm-demo
+goldbot run health | grep engine_loop
+```
+**Expect:** `ActiveState=active`, `WatchdogUSec=5min` and `StatusText=engine loop running`, then an
+`OK` line for `engine_loop:icm-demo` ("loop turning").
+
+Drill: freeze the loop and watch systemd restart it.
+```bash
+sudo kill -STOP "$(systemctl show -p MainPID --value goldbot-engine@icm-demo)"; date -u
+journalctl -u goldbot-engine@icm-demo -f --no-pager      # Ctrl-C once the engine says "started" again
+```
+**Expect**, within about 6 min of the `date` line:
+* Telegram: `FAIL engine_loop:icm-demo: engine loop silent ...`, may appear after 3-5 min (the health pass runs every 5 min, so it can be missed: the journal lines and `goldbot run health` are the pass criteria);
+* journal: `Watchdog timeout`, a Python stack (`Fatal Python error: Aborted`), then the restart;
+* `engine icm-demo started (RemoteBroker)` (the start reconciled with the broker), and no ERROR line after it;
+* `goldbot run health`: `engine_loop:icm-demo` ok again, and Telegram says `recovered: engine_loop:icm-demo`.
+
+**Stop if** nothing restarts after 8 min. Run `sudo kill -CONT <pid>` and report it.
+
+**Fallback, if there is no time for the drill:** deploy with the watchdog off. The loop heartbeat and the
+`engine_loop` health alert stay on.
+```bash
+sudo mkdir -p /etc/systemd/system/goldbot-engine@.service.d
+printf '[Service]\nWatchdogSec=0\n' | sudo tee /etc/systemd/system/goldbot-engine@.service.d/no-watchdog.conf
+sudo systemctl daemon-reload && sudo systemctl restart goldbot-engine@icm-demo
+```
+A stuck loop is then alerted but not restarted: restart it by hand (RUNBOOK "Engine loop stuck, and the watchdogs").
+Run the drill at the next quiet moment, then delete `no-watchdog.conf`, run `daemon-reload` and restart the engine.
+
 Normal for now (warnings):
 * `backup_age`, `restore_drill`;
 * "no measured swap";
 * `secrets`: optional keys missing (Anthropic key, GitHub token: add later with `goldbot run setup`);
 * `alerts` (in the first minute);
+* `deadman` (until step 8b);
 * no proposals.
 
 **Check both boxes run the same code:**
@@ -364,6 +411,20 @@ brain: `sudo systemctl stop goldbot-news`. Wait.
 **Stop if** no message arrives in 8 minutes. Alerts are not working. Check `journalctl -u goldbot-telegram -n 50`
 and leave goldbot stopped until alerts work.
 
+### 8b. Outside alert (7 min)
+
+brain: `goldbot accounts set deadman-url`, then paste the ping URL from P7 at the hidden prompt.
+
+**Expect within 2 minutes:** the check shows **up** on healthchecks.io, and `goldbot run health | grep deadman` says
+ok.
+
+Rehearse it: `sudo systemctl stop goldbot-telegram`. **Expect within 6 minutes:** an email (and a Telegram message, if
+you added it in P7) from Healthchecks.io saying `goldbot brain` is **down**. Then `sudo systemctl start
+goldbot-telegram`. **Expect** an **up** notice within about 2 minutes.
+
+**Stop if** the check never turns up: `journalctl -u goldbot-telegram | grep "dead man"` says why (RUNBOOK section 6
+"Outside alert"). goldbot may keep running on demo, but fix it before going live.
+
 ### 9. Write down (2 min, in your own notes, not the repository)
 
 * The time each step finished.
@@ -399,6 +460,7 @@ Do not trade this demo account by hand: goldbot's loss limits count every trade 
 | When (UTC) | Look at | Good looks like |
 | --- | --- | --- |
 | through the day | Telegram | no FAIL alert; if one comes, it names the check, and `goldbot run health` says why |
+| through the day | healthchecks.io | `goldbot brain` stays up; a DOWN email: RUNBOOK section 6 "Outside alert" |
 | 06:10 next day | `goldbot run health` -> `scheduler` | `calendar_archive` ran (the news blackout needs it) |
 | 06:45 next day | Telegram digest | arrives, status ✅, or ⚠️ only for backups/swap |
 | +24 h | `systemctl show -p NRestarts goldbot-engine@icm-demo goldbot-bridge-tunnel` | 0, or a few during setup; not growing |
@@ -427,7 +489,5 @@ After both, `goldbot run preflight | grep bridge_compat` must be ✅.
 1. Position ticket fix, open-risk heat cap, API request validation: separate review lanes.
 2. Cloudflare Tunnel plus Access for the dashboard from your phone (needs a domain on Cloudflare).
 3. Tailscale for option B too, replacing the Oracle-private link (one link design for both options).
-4. An outside "dead man's switch". Today alerts come from the brain's own Telegram service, so a dead brain is
-   silent. The 06:45 digest not arriving is your signal until then.
-5. A main-loop heartbeat for the engine. Today a hung engine counts as stale only after 45 min of open market (a
+4. A main-loop heartbeat for the engine. Today a hung engine counts as stale only after 45 min of open market (a
    crashed one restarts within 10 s).

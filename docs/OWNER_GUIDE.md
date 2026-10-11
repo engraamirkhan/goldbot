@@ -138,18 +138,26 @@ per position whether or not these are on.
 The research team turns how you trade by hand into hypotheses it can test. Your MT5 report holds your account
 number and name, so it **never goes into the repo or GitHub**: it stays in a private folder on your Mac.
 
-1. In the MT5 desktop terminal open the **History** tab (Toolbox, `Ctrl+T`), right-click and pick the period
-   (**All History** or the last 3-6 months).
-2. Right-click again -> **Report** -> **HTML** (or **Open XML (MS Office Excel 2007)** for `.xlsx`).
-3. Save it in `~/Personal project/trade-history/` (create the folder; it is outside the repo).
+1. In the MT5 desktop terminal open the **History** tab (Toolbox, `Ctrl+T`), right-click and pick **All History**.
+   Export everything, including losing months and any blown or reset account: a curated record cannot be corrected
+   later.
+2. Right-click again -> **Report** -> **HTML** (or **Open XML (MS Office Excel 2007)** for `.xlsx`). A CSV of
+   positions or deals with MT5's column names also works.
+3. Save it in `~/Personal project/trade-history/` (create the folder; it is outside the repo). The tool refuses a
+   report saved anywhere inside a git folder.
 4. Run `python -m goldbot.ops.run owner-history` from the repo (add `--server-tz <zone>` if your broker is not on
    Athens time, `--start-balance 50` if the report has no deposit row). It reads the newest report in that folder and
-   writes `owner_history_*.md`, `.json` and `.trades.csv` next to it; the console prints a short summary.
+   writes four files next to it, readable only by you: `owner_history_*.md` (the full private report, with amounts),
+   `.json`, `.trades.csv` and `.share.md`.
+5. The console shows the same text as `.share.md`: win rate, mean R (or USD per ounce when you used no stop),
+   holding times, session / hour / weekday / long-short tables, streaks, drawdown %, risk per trade as % of equity,
+   and K, the number of slices examined. It holds no account number, name, ticket or amount in your currency. **Share
+   only that file** with the research director (via the program director).
 
-Only the account currency is read from the report header. The "hypothesis seeds" at the end are patterns in your own
-past trades, not proof of an edge: the research director pre-registers any that are worth a trial. The tool refuses to
-write into any git folder, and a commit check rejects a report file. **Do not paste amounts into the repo** (or
-GitHub issues): share the seeds, which use R, percentages and counts only.
+Only the account currency is read from the report header. The "hypothesis seeds" at the end of the private report are
+patterns in your own past trades, not proof of an edge: the research director pre-registers any that are worth a
+trial. The tool refuses to read from or write into any git folder, and a commit check rejects the report and the
+tool's own outputs. **Do not paste amounts into the repo** (or GitHub issues).
 
 ## 5. What is honest to expect
 **No strategy is profitable yet.** Dates are earliest-possible.

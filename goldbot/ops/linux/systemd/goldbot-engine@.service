@@ -6,6 +6,18 @@ After=network-online.target goldbot-supervisor.service
 Wants=network-online.target
 
 [Service]
+# The loop proves it turns (goldbot/ops/watchdog.py): READY=1 just before the loop, then WATCHDOG=1 from the loop
+# thread every few seconds, ticks or none. A loop stuck for WatchdogSec gets SIGABRT (Python prints every thread's
+# stack to the journal), then the ordinary restart below (restart reconciliation, row X7). Generous on purpose: a
+# bar close or a model reload inside the loop takes seconds; health FAILs (and alerts) after 150 s already.
+Type=notify
+NotifyAccess=main
+WatchdogSec=300
+# the start (bridge connect, session read, bridge check, warm start, model load) is fed by a thread for at most
+# 15 min (watchdog.STARTUP_MAX_S); a start that hangs longer is ended here and restarted
+TimeoutStartSec=900
+# no core files on the 1 GB brain: the traceback in the journal is what the postmortem needs
+LimitCORE=0
 User=goldbot
 WorkingDirectory=/opt/goldbot
 Environment=PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring

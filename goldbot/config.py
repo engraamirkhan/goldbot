@@ -218,6 +218,9 @@ class SchedulerSettings(_Section):
     cpcv_quarterly: ScheduleSettings = ScheduleSettings(kind="monthly", at="14:00", weekday=6, months=[1, 4, 7, 10],
                                                         max_late_hours=30)
     attribution: ScheduleSettings = ScheduleSettings(kind="daily", at="23:50", max_late_hours=20)
+    # broker ledger (goldbot/ops/ledger.py, finance audit GAP-07/GAP-08): balance snapshot, deposits and withdrawals,
+    # positions and balance reconciled with the broker. Every day: the deal history still changes on weekends
+    broker_ledger: ScheduleSettings = ScheduleSettings(kind="daily", at="23:25", max_late_hours=20)
     # review M2 (BACKLOG 18): a second calendar fetch on Sunday afternoon, so the new Forex Factory week is archived
     # before the weekly open (an enabled tier-2 window refuses entries until the archive covers the next 24 h)
     calendar_archive_sunday: ScheduleSettings = ScheduleSettings(kind="weekly", at="18:00", weekday=6, max_late_hours=3)
@@ -259,6 +262,19 @@ class AttributionSettings(_Section):
     trade_rows: int = Field(300, ge=0, le=5000)           # most recent per-trade cost rows kept in the JSON
 
 
+class LedgerSettings(_Section):
+    """Broker ledger (goldbot/ops/ledger.py; finance audit GAP-07, GAP-08, checks RC-8 and RC-9). Read-only: it never
+    places, changes or closes an order. RC-9: "Opening balance + net closed P&L + deposits - withdrawals = closing
+    balance"; a daily difference beyond `balance_tolerance` + `balance_tolerance_per_deal` x deals FAILs the health
+    check reconcile:<account>, a trade that differs from the broker's deals WARNs."""
+    balance_tolerance: float = Field(0.05, ge=0)          # account currency, per day: rounding, not money
+    balance_tolerance_per_deal: float = Field(0.01, ge=0) # plus this per deal in the day (audit RC-9: 0.01 per trade)
+    price_tolerance: float = Field(0.01, ge=0)            # $/oz (one XAUUSD point): record vs broker entry/exit price
+    pnl_tolerance: float = Field(0.01, ge=0)              # account currency per trade (audit RC-9: 0.01 per trade)
+    close_grace_minutes: int = Field(15, ge=0, le=1440)   # a broker close this recent may not be recorded yet
+    max_age_hours: float = Field(48.0, gt=0)              # health warns when the last ledger report is older
+
+
 class RetiredFamily(_Section):
     """A specialist family the strategy researcher retired (docs/research/hypotheses.md section B mirrors this list;
     tests/test_director.py checks they agree). Governance lives here, not in the markdown: editing the doc never
@@ -285,7 +301,8 @@ class ResearchSettings(_Section):
     holdout_to: date | None = date(2026, 9, 30)            # inclusive
     # primary-signal screen event floor (research.screen, P4); changing it is an owner decision, set before the run
     screen_min_events: int = Field(1000, ge=1)
-    screen_min_events_daily: int | None = Field(None, ge=1)   # rules whose signal is on daily bars; None: the floor above
+    # rules whose signal is on daily bars: retire-only (a pass still needs screen_min_events); None: the floor above
+    screen_min_events_daily: int | None = Field(None, ge=1)
     director_floor: int = Field(2, ge=0, le=200)        # research director: exploration trials per family per month
     label_grid_step: float = Field(0.25, gt=0, lt=1)
     cost_window_days: int = Field(30, ge=1)
@@ -358,6 +375,9 @@ class TelegramSettings(_Section):
     digest_at: str = Field("06:45", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     # the owner's time zone for Telegram /status times (UTC is shown beside each); an unknown zone shows UTC only
     owner_tz: str = "Europe/London"
+    # outside dead man's switch (goldbot/ops/deadman.py, ADR 0014): healthy pings at most this often; the check's
+    # period on Healthchecks.io must match (grace 3 min), so a dead brain is reported within ~6 min
+    deadman_every_min: int = Field(2, ge=1, le=60)
 
 
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
@@ -482,6 +502,7 @@ class Settings(_Section):
     gaps: GapSettings = Field(default_factory=GapSettings)
     backup: BackupSettings = Field(default_factory=BackupSettings)
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)
+    ledger: LedgerSettings = Field(default_factory=LedgerSettings)
 
     @model_validator(mode="after")
     def _walkforward_has_purge_and_embargo(self) -> Settings:

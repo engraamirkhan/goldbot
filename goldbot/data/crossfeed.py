@@ -49,7 +49,7 @@ from goldbot.data.resample import BAR_COLUMNS, ticks_to_1m
 from goldbot.data.store import Store
 
 if TYPE_CHECKING:
-    from goldbot.ops.health import Check, HealthContext
+    from goldbot.ops.health import Check, HealthContext, Status
 
 # ------------------------------------------------------------------------------------------- D12 reconciliation
 POINT_DEFAULT = 0.01              # XAUUSD point on both brokers when the terminal's symbol_info is unavailable
@@ -199,25 +199,37 @@ def reconcile_account(store: Store, broker: Any, account_id: str, symbol: str, n
     return rep
 
 
-def check_reconciliation(ctx: "HealthContext", account_id: str) -> "Check":
-    """Health check over state/reconcile_<account>.json (the daily feed_reconcile job)."""
-    from goldbot.ops.health import Check
-    name = f"reconcile:{account_id}"
+def _feed_status(ctx: "HealthContext", account_id: str) -> "tuple[Status, str]":
+    """The D12 half of reconcile:<account>, over state/reconcile_<account>.json (the daily feed_reconcile job)."""
     f = reconcile_file(ctx.state_dir, account_id)
     if not f.exists():
-        return Check(name=name, status="ok", reason="no reconciliation yet (feed_reconcile has not run)")
+        return "ok", "no reconciliation yet (feed_reconcile has not run)"
     try:
         r = load_record_json(ReconcileReport, f.read_text(), source="reconcile_<account>.json")
     except (ValueError, OSError) as exc:
-        return Check(name=name, status="warn", reason=f"reconcile file unreadable: {exc}")
+        return "warn", f"reconcile file unreadable: {exc}"
     age_h = (ctx.now - r.ts_utc).total_seconds() / 3600
     msg = (f"{r.divergence:.2%} of {r.broker_minutes} broker minutes diverge (close {r.close_mismatch}, missing engine "
            f"{r.missing_engine}, missing broker {r.missing_broker}); {r.spikes_unconfirmed} unconfirmed spikes")
     msg += f"; {r.note}" if r.note else ""
     if age_h > RECONCILE_MAX_AGE_HOURS:
-        return Check(name=name, status="warn", reason=f"last reconciliation {age_h:.0f} h ago: {msg}")
-    status = {"error": "fail", "warning": "warn"}.get(r.severity, "ok")
-    return Check(name=name, status=status, reason=msg)  # type: ignore[arg-type]
+        return "warn", f"last reconciliation {age_h:.0f} h ago: {msg}"
+    status: Status = "fail" if r.severity == "error" else "warn" if r.severity == "warning" else "ok"
+    return status, msg
+
+
+def check_reconciliation(ctx: "HealthContext", account_id: str) -> "Check":
+    """reconcile:<account>: the system against its broker, one check per account and the worse of two reports. The
+    feed (D12, state/reconcile_<account>.json: warning warn, error fail) and the broker ledger (goldbot/ops/ledger.py,
+    aux.db: any trade difference warns, a balance change its deals do not explain fails; GAP-07/GAP-08)."""
+    from goldbot.ops.health import Check, _worst
+    from goldbot.ops.ledger import ledger_status
+    feed_status, feed_msg = _feed_status(ctx, account_id)
+    ledger = ledger_status(ctx, account_id)
+    if ledger is None:
+        return Check(name=f"reconcile:{account_id}", status=feed_status, reason=feed_msg)
+    return Check(name=f"reconcile:{account_id}", status=_worst([feed_status, ledger[0]]),
+                 reason=f"feed: {feed_msg} | ledger: {ledger[1]}")
 
 
 # ------------------------------------------------------------------------------------------- D23/F10 survival

@@ -20,6 +20,7 @@ TABLES = {
     "ticks", "bars_1m", "bars_15m", "bars_1h", "bars_4h", "bars_1d", "bars_1w",
     "macro", "calendar_events", "news", "tv_signals", "tv_ideas", "features", "labels",
     "trades", "decisions", "dq_events", "cost_tables", "fills",
+    "exit_fills",                              # every exit leg against the price it was asked at (finance GAP-04)
     "bars_quarantine",                         # 1m rows with an error-severity dq_flag, kept out of the bar tables
     "bars_1m_broker",                          # the broker's own M1 as its terminal reports it (D12/D23), never blended
     "positioning",                             # COT and GLD holdings (release positioning-v1), point in time
@@ -31,6 +32,7 @@ KEY_COLUMNS = {
     "macro": ["series", "value_date", "vintage"],
     "positioning": ["series", "value_date", "vintage"],
     "fills": ["ts_utc", "client_order_id"],
+    "exit_fills": ["ts_utc", "position_id", "kind"],
     "calendar_events": ["event_id"],          # a re-fetched event replaces the earlier copy (forecast revisions)
     "news": ["item_id"],                       # headlines often share a published minute; ts_utc is not a key
 }

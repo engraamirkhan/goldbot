@@ -26,6 +26,8 @@
   python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]
                                                          # time-weighted % return, R, drawdown, avg per day, milestones
   python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds
+  python -m goldbot.ops.run perf-report [--state DIR] [--data-root DIR] [--from D] [--to D] [--out DIR] [--json]
+                                                         # performance report (markdown + JSON) for the analysts; read only
 """
 from __future__ import annotations
 
@@ -43,6 +45,7 @@ if TYPE_CHECKING:   # service entry points import lazily; these are for annotati
     from goldbot.data.calendar import SessionTable
     from goldbot.data.store import Store
     from goldbot.ops.accounts import Account
+    from goldbot.ops.watchdog import LoopWatch
     from goldbot.risk import RiskLimits
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -236,7 +239,29 @@ def refuse_start(account_id: str, why: str, info: Any = None, state_dir: str | P
     raise SystemExit(why)
 
 
+def start_loop_watch(account_id: str, state_dir: str | Path = "state") -> "LoopWatch":
+    """The engine's LoopWatch, started: Python tracebacks of every thread go to stderr (the journal) on the
+    watchdog's SIGABRT, and phase "starting" beats feed the watchdog until `ready()` (a long reconcile or model load
+    never trips it)."""
+    import faulthandler
+
+    from goldbot.ops.watchdog import LoopWatch
+    if sys.stderr is not None:
+        faulthandler.enable()                      # SIGABRT from WatchdogSec: where the loop was stuck, in the log
+    watch = LoopWatch(state_dir, account_id)
+    watch.starting()
+    return watch
+
+
 def run_engine(account_id: str) -> None:
+    watch = start_loop_watch(account_id)       # loop heartbeat + systemd watchdog (goldbot/ops/watchdog.py)
+    try:
+        _run_engine(account_id, watch)
+    finally:                                   # a refused or failed start: no beats from a process on its way out
+        watch.stop()
+
+
+def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     from pathlib import Path
 
     import pandas as pd
@@ -341,7 +366,9 @@ def run_engine(account_id: str) -> None:
 
     seen = mtimes()
     last_check = time.time()
+    watch.ready()                                  # READY=1: from here only this loop feeds the watchdog
     while True:
+        watch.tick()                               # every pass, ticks or none: a stuck loop stops beating
         engine_pass(eng, broker, acc.symbol)
         try:                                       # D13: a finished background read is applied; the loop never waits
             table = refresher.collect(pd.Timestamp.now("UTC"), eng.sessions)
@@ -557,9 +584,10 @@ def _agent_runner(settings: Settings, store: Store,
 
 
 def _job_broker(acc: Any) -> Any:
-    """A read-only Broker for the scheduler's feed_reconcile (D12): the account's bridge when one is configured, else
-    on Windows the terminal's own saved login (attach without logging in, as the bridge does); None elsewhere. Only
-    get_bars and symbol_info are called on it."""
+    """A read-only Broker for the scheduler's feed_reconcile (D12) and broker_ledger (GAP-07/08): the account's bridge
+    when one is configured, else on Windows the terminal's own saved login (attach without logging in, as the bridge
+    does); None elsewhere. Only read-only methods are called on it: get_bars, symbol_info, account, positions and
+    deals_since (all retry-safe bridge methods; never an order)."""
     from goldbot.ops import accounts
     bridge = accounts.bridge_endpoint(acc.account_id)
     if bridge is not None:
@@ -596,7 +624,7 @@ def run_scheduler() -> None:
                      sync_bars=lambda store: sync_release(store, token=gh_token),   # bars (data-v1) + macro (macro-v1)
                      sync_trials=(lambda path: sync_registry(path, gh_token)) if gh_token else None,
                      population=Population(Path("state") / "population.json"),
-                     broker_for=_job_broker)       # feed_reconcile: engine bars vs the broker's own M1 (D12)
+                     broker_for=_job_broker)       # feed_reconcile (D12) and broker_ledger (GAP-07/08), read-only
     if settings.costs.publish_release:          # measured costs for research.yml (release costs-v1)
         if gh_token:
             ctx.upload_costs = costs_uploader(gh_token)
@@ -718,6 +746,9 @@ if __name__ == "__main__":
     elif cmd == "monthly-report":
         from goldbot.ops.monthly_report import main as monthly_main
         sys.exit(monthly_main(sys.argv[2:]))
+    elif cmd == "perf-report":
+        from goldbot.ops.perf_report import main as perf_main
+        sys.exit(perf_main(sys.argv[2:]))
     elif cmd == "sizing-feasibility":
         from goldbot.research.min_lot import main as feasibility_main
         sys.exit(feasibility_main(sys.argv[2:]))

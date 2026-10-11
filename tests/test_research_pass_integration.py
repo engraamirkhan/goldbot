@@ -109,17 +109,24 @@ def test_holdout_needs_passed_gates_is_charged_and_scored_once_and_the_budget_re
                rationale="a passing walk-forward", results={"gates": {"passed": True, "checks": []}})
     with pytest.raises(SystemExit, match="no research trial on feature version"):
         rp.main()                                                        # a pass on another feature version is not one
-    reg.record(agent_id="x", family="session_open", config=config, feature_version=feature_version(DEFAULT_FEATURE_NAMES),
-               rationale="a passing walk-forward", results={"gates": {"passed": True, "checks": []}})
+    fv = feature_version(DEFAULT_FEATURE_NAMES)
+    reg.record(agent_id="x", family="session_open", config=config, feature_version=fv,
+               rationale="a pass from before swap was charged", results={"gates": {"passed": True, "checks": []}})
+    with pytest.raises(SystemExit, match="swap charged"):
+        rp.main()                                                        # a no-swap pass is not this config's pass
+    swap = {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0}
+    reg.record(agent_id="x", family="session_open", config=config, feature_version=fv,
+               rationale="a passing walk-forward", results={"gates": {"passed": True, "checks": []}, "swap": swap,
+                                                             "cost_source": "PRIORS ONLY: test"})
     assert rp.main() == 0
     last = json.loads(registry.read_text().splitlines()[-1])
     assert last["status"] == "holdout" and last["results"]["holdout"]["scored"] is True
-    assert last["budget_quarter"] == quarter_of() and reg.budget_used(quarter_of()) == 3     # charged like any trial
+    assert last["budget_quarter"] == quarter_of() and reg.budget_used(quarter_of()) == 4     # charged like any trial
     assert "gates" not in last["results"] and "holdout_verdict" in last["results"]           # judged by its own rule
     assert "### Held-out year:" in report.read_text() and "**holdout scoring**" in report.read_text()
     with pytest.raises(SystemExit, match="already scored on the holdout"):
         rp.main()
-    for _ in range(17):                                                 # this quarter's budget is now spent
+    for _ in range(16):                                                 # this quarter's budget is now spent
         reg.record(agent_id="x", family="trend", config={}, feature_version="f", rationale="r", results={})
     monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(SystemExit, match="trial budget exceeded"):
@@ -215,12 +222,33 @@ def _lenient_screen(monkeypatch, expect_floor: int) -> None:
     real = screen_mod.screen_verdict
     monkeypatch.setattr(screen_mod, "MIN_T", -1e9)
 
-    def lenient(rule, min_events=screen_mod.MIN_EVENTS):
+    def lenient(rule, min_events=screen_mod.MIN_EVENTS, pass_min_events=None):
         assert min_events == expect_floor                 # the settings floor reaches the screen
         out = real({**rule, "gross": {**rule["gross"], "mean_r": abs(rule["gross"].get("mean_r", 0.0)) + 1e-9}},
-                   min_events)
+                   min_events, pass_min_events)
         return {**out, "rule_only": rule}
     monkeypatch.setattr(screen_mod, "screen_verdict", lenient)
+
+
+def test_a_daily_rule_over_the_retire_only_floor_but_under_the_general_floor_is_screened_never_modelled(
+        release_dir, tmp_path, monkeypatch):
+    """Owner ruling A, strict: the daily floor lets a screen fail and retire, never pass; a good edge on fewer events
+    than research.screen_min_events reads inconclusive and no model is fitted."""
+    registry, report = tmp_path / "registry.jsonl", tmp_path / "report.md"
+    _research_settings(monkeypatch, screen_min_events=100_000, screen_min_events_daily=1)
+    _lenient_screen(monkeypatch, expect_floor=1)
+
+    def no_model(*a, **k):
+        raise AssertionError("a retire-only floor must not open the model stage")
+    monkeypatch.setattr(rp, "evaluate", no_model)
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--bars", str(release_dir), "--registry", str(registry),
+                                      "--report", str(report), "--specialist", "tsmom", "--variants", '["slow"]'])
+    assert rp.main() == 0
+    row = _rows(registry)[0]
+    scr = row["results"]["screen"]
+    assert row["status"] == "screened" and scr["verdict"] == "inconclusive (event floor)" and scr["passed"] is False
+    assert scr["min_events"] == 1 and scr["pass_min_events"] == 100_000 and scr["n"] >= 1
+    assert "retire-only" in report.read_text()
 
 
 def test_a_screen_short_only_of_the_daily_signal_floor_is_an_inconclusive_recorded_trial(release_dir, tmp_path,

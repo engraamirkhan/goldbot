@@ -52,7 +52,7 @@ import numpy as np
 import pandas as pd
 
 from goldbot.base import FrozenRecord, Record
-from goldbot.data.timeutil import epoch_ns
+from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.features import FEATURES
 from goldbot.features.registry import _CONTEXT_PREFIX, side_align
 from goldbot.labels import uniqueness_weights
@@ -700,7 +700,12 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     config hash) has a pending queued `preregistered` row may use the trials reserved for the pre-registered queue
     (`reserved_setting` = research.reserved_trials_quarter) and is linked to that row; any other discovery must fit in
     budget - used - reserved and writes its own pre-registration just before it runs (`queue=False`: not part of the
-    queue, so it neither holds nor uses the reservation)."""
+    queue, so it neither holds nor uses the reservation), unless a pending queued row of the same family and agent has
+    another config hash: then it is refused, never charged to the open budget (`QueuedConfigMismatch`, BACKLOG 50).
+
+    Holdout cut (BACKLOG 50, quant review F2 of BACKLOG 47: "`--discover` cuts b1 at holdout_from"): with a holdout
+    window, the 1m bars are cut at its start before the config is built or anything is resampled, as `--h16` does, so
+    the hashed `bars_to` is the last bar before the holdout whatever data-v1 reaches on the day of the run."""
     from goldbot.data.resample import resample_bars
     from goldbot.features.mtf import TF_LABEL, context_tfs
     from goldbot.features.registry import feature_version
@@ -713,11 +718,16 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     from goldbot.research.registry import DISCOVERY
 
     check_group_config(cfg)              # before the budget check, the pre-registration and any look
+    if holdout is not None:
+        b1 = b1.loc[np.asarray(utc_index(b1["ts_utc"]) < pd.Timestamp(holdout[0]))].reset_index(drop=True)
+        if b1.empty:
+            raise ValueError(f"no 1m bars before the holdout start {holdout[0]}: nothing to discover on")
     names = research_feature_names(ctx)
     family = discovery_family(spec.family)
     config = discovery_trial_config(spec, cfg, group_mode, names, str(b1["ts_utc"].iloc[0]),
                                     str(b1["ts_utc"].iloc[-1]), holdout)
-    quarter, (prereg,) = reg.check_budget_reserved([(family, config)], budget_cap, reserved_setting)
+    quarter, (prereg,) = reg.check_budget_reserved([(family, config)], budget_cap, reserved_setting,
+                                                   agents=[spec.agent_id])
     from goldbot.research.director import cited_rule
     cited = cited_rule(prereg, rule_ref, capped=capped)      # E-5: a capped run cites its pre-registered rule
     if prereg is None:

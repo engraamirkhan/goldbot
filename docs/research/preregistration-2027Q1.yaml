@@ -2,7 +2,7 @@
 # scripts/preregister_quarter.py (BACKLOG 47). The markdown file is the source of truth: every reading rule below is
 # the whole text of one of its "Reading rule" bullets (after the words "Reading rule", to the end of the bullet), the
 # slot derivation rule appears in it word for word (whitespace aside), and with `freeze_commit` set both are read from
-# the markdown AT that commit (`git show`); every config is rebuilt the way its
+# the markdown AT that commit (`git show`; the commit must be an ancestor of HEAD); every config is rebuilt the way its
 # runner builds it (research_pass.py / --discover) and checked against the pinned config_hash, agent_id and
 # feature_version, and the rows + slots must equal `reservation` and research.reserved_trials_quarter. Nothing is
 # written while a row is `pending` or `freeze_commit` is empty; `--dry-run` prints the rows at any time.
@@ -16,10 +16,28 @@ rows:
     kind: discovery
     specialist: tsmom
     variant: null            # pending: the label/candidate spec of H-02 (written by the strategy researcher)
-    discovery:
-      survivor_unit: feature
+    discovery:               # the full DiscoveryConfig.model_dump() of the doc's "Pinned discovery config", verbatim
+      clusters:              # discovery.H02_CLUSTERS written out (first match wins, in this order)
+        H-03: [macro_gvz*, macro_vrp]
+        H-05: [round_numbers, support_resistance, pdh_dist_atr, pdl_dist_atr, pwh_dist_atr, pwl_dist_atr]
+        H-07: [macro_vix*, macro_spx*]
+        H-08: [sweep_*, sess_high_dist_atr, sess_low_dist_atr, prev_sess_high_dist_atr, prev_sess_low_dist_atr,
+               asia_high_dist_atr, asia_low_dist_atr, london_high_dist_atr, london_low_dist_atr]
+        H-10: [jumps]
+      freq_threshold: 0.6
       group_top_k: 3
-      clusters: H02_CLUSTERS # discovery.H02_CLUSTERS, by name
+      inner_val_frac: 0.2
+      l1_c: 0.05
+      max_selected: 39
+      method: lgbm
+      n_subsamples: 50
+      permutation: true
+      permutation_repeats: 3
+      seed: 0
+      stability_threshold: 0.6
+      subsample_frac: 0.5
+      survivor_unit: feature
+      top_k: 39
     group_mode: cluster
     macro: true
     bars_from: null          # pending: the exact first and last 1m bar the run loads (its config holds both)
@@ -33,8 +51,8 @@ rows:
       verdict "continue"). Survivors earn their own
       trial (rows 6-9); if no cluster survives, rows 6-9 are cancelled and their budget returns to reserve.
     pending: >-
-      the H-02 config (tsmom label/candidate variant, the DiscoveryConfig beyond survivor_unit/group_top_k/clusters,
-      and bars_from/bars_to) is written by the strategy researcher and checked by the quant reviewer (due 2026-12-11)
+      the H-02 config (tsmom label/candidate variant and bars_from/bars_to; the DiscoveryConfig above is the doc's
+      pinned dump) is written by the strategy researcher and checked by the quant reviewer (due 2026-12-11)
 
   - id: H-01
     specialist: tsmom

@@ -24,8 +24,9 @@ risk per trade was 20–50% of equity has no research content. It carries a ruin
 
 - **How:** MT5 desktop, History tab, period "All history", right-click, Report, then Open XML (xlsx) or HTML. CSV of
   deals or positions also works.
-- **Where:** `~/Personal project/trade-history/`, outside every git work tree. The analyser refuses to write inside
-  any work tree. Its outputs (`owner_history_*.md`, `.json`, `.trades.csv`) go next to the export with mode 0600.
+- **Where:** `~/Personal project/trade-history/`, outside every git work tree. The analyser refuses to read a report
+  from, or write inside, any work tree. Its outputs (`owner_history_*.md`, `.json`, `.trades.csv`, `.share.md`) go
+  next to the export with mode 0600. The console prints only `.share.md`, the aggregates-only summary to share.
 - **Never in the repo:** the report holds the account number, name and broker, and the repo is public. The
   pre-commit hook `no-mt5-report` (`scripts/check_no_mt5_report.py`) rejects MT5 reports by name, by title and
   account label, and by shape. `.gitignore` ignores `*.mt5report.*`. Not in issues, PR text or chat either. The

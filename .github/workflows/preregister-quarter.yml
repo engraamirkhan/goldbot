@@ -5,7 +5,9 @@ name: preregister-quarter
 # Dry run (the default): prints the rows, read-only token, nothing uploaded. Write: unions the release copy before and
 # after (goldbot.research.registry_sync, as research.yml does) and uploads registry.jsonl. Idempotent: re-running adds
 # nothing. Refused on or after the quarter's first day unless allow_late gives a reason. A pre-registration is not a
-# trial: no budget is spent and no outcome is written. Cost: about 2 runner-minutes per manual run; no schedule.
+# trial: no budget is spent and no outcome is written. Both jobs download the data-v1 yearly bars (read-only), whose
+# research-window sha256 digests every queued row pins and the runners verify (BACKLOG 50). Cost: about 3
+# runner-minutes per manual run; no schedule.
 on:
   workflow_dispatch:
     inputs:
@@ -38,8 +40,9 @@ jobs:
         run: |
           set -euo pipefail
           scripts/registry_release.sh fetch registry.jsonl
+          gh release download data-v1 -p 'xauusd_1m_dukascopy_*.parquet' -D raw   # the digests every row pins
           python scripts/preregister_quarter.py --quarter "$QUARTER" --from "$SPEC" --registry registry.jsonl \
-            --dry-run | tee -a "$GITHUB_STEP_SUMMARY"
+            --bars raw --dry-run | tee -a "$GITHUB_STEP_SUMMARY"
 
   write:
     if: ${{ !inputs.dry_run && github.ref == 'refs/heads/main' }}   # only reviewed, merged specs reach the registry
@@ -66,8 +69,9 @@ jobs:
         run: |
           set -euo pipefail
           scripts/registry_release.sh fetch registry.jsonl
+          gh release download data-v1 -p 'xauusd_1m_dukascopy_*.parquet' -D raw   # the digests every row pins
           LATE=(); if [ -n "$ALLOW_LATE" ]; then LATE=(--allow-late "$ALLOW_LATE"); fi
           python scripts/preregister_quarter.py --quarter "$QUARTER" --from "$SPEC" --registry registry.jsonl \
-            "${LATE[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+            --bars raw "${LATE[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: save the registry
         run: scripts/registry_release.sh save registry.jsonl   # union with the published copy, then upload

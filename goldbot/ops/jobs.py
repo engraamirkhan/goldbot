@@ -53,6 +53,11 @@
 * feed_reconcile    daily (D12): per account, the engine's tick-built 1m bars against the broker's own M1 for the last
                     day; divergence and unconfirmed spikes -> dq_events, broker M1 -> bars_1m_broker, report ->
                     state/reconcile_<account>.json (health check reconcile:<account>). Skipped without a broker.
+* broker_ledger     daily (finance audit GAP-07/GAP-08, RC-8/RC-9): per account, read-only, a balance snapshot (balance,
+                    equity, margin, currency) and the deposits, withdrawals and adjustments in the broker's deal history,
+                    the balance tied out against the deals, and goldbot's closed records and open trades reconciled
+                    with the broker by position id -> aux.db (ops/ledger.py; health check reconcile:<account>).
+                    Skipped without a broker.
 * cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
                     of every trial that passed the gates, PBO against its family's other trials, attached to the
                     trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
@@ -155,7 +160,7 @@ class JobContext(Record):
     agent_runner: AgentRunner | None = None                      # None when no Anthropic API key is in the keyring
     fetch_calendar: Callable[[], str] | None = None              # Forex Factory weekly JSON (network, VPS only)
     upload_costs: Callable[[bytes], str] | None = None           # published cost table -> release costs-v1 (VPS only)
-    broker_for: Callable[[Account], Any] | None = None           # read-only Broker per account (feed_reconcile), or None
+    broker_for: Callable[[Account], Any] | None = None           # read-only Broker per account (feed_reconcile, broker_ledger)
     get_secret: Callable[[str], str | None] | None = None        # backup credentials (default: goldbot.ops.accounts)
 
 
@@ -284,6 +289,15 @@ def live_swap(ctx: JobContext) -> SwapSpec:
     return spec if spec is not None else prior
 
 
+def live_cost_source(ctx: JobContext) -> str:
+    """Where `live_extra_cost_usd` and `live_swap` come from, in the words research_pass.py records
+    (`costs.research_costs`): the canonical broker's nightly cost table, or PRIORS ONLY before one exists. Recorded on
+    every walk-forward row as `cost_source`, which `TrialRegistry.passed_gates` requires."""
+    from goldbot.execution.costs import research_costs
+    found = canonical_cost_table(ctx.settings, ctx.accounts, ctx.state_dir)
+    return research_costs(ctx.settings, found[0] if found is not None else None)[2]
+
+
 def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: int, n_trials: int = 1,
                   holdout: tuple[pd.Timestamp, pd.Timestamp] | None = None) -> ResearchResult | None:
     """Walk-forward on the store. Research trials pass the settings' holdout window (never seen); the Saturday retrain
@@ -298,6 +312,7 @@ def _walk_forward(ctx: JobContext, spec: Specialist, end: pd.Timestamp, months: 
     # learn against what the broker actually charges: the live cost table's slippage and commission
     res = run_specialist(spec, dec, context=context, n_trials=n_trials, extra_cost_usd=live_extra_cost_usd(ctx),
                          holdout=holdout, swap=live_swap(ctx))
+    res.metrics["cost_source"] = live_cost_source(ctx)        # with the swap in metrics: the row's cost treatment
     if res.n_candidates:
         res.metrics["trades_per_year"] = res.n_candidates / years
     return res
@@ -1102,6 +1117,37 @@ def feed_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- broker ledger (GAP-07/08)
+def broker_ledger(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily, per enabled account (goldbot/ops/ledger.py): RC-9 "Opening balance + net closed P&L + deposits -
+    withdrawals = closing balance" and RC-8 "Every engine position ... in the broker's deals has exactly one closed
+    record or is still open". Read-only on the broker; snapshot, balance deals and report -> aux.db. The output holds
+    counts only: amounts stay in aux.db."""
+    from goldbot.db import Database
+    from goldbot.ops.ledger import run_ledger
+    if ctx.broker_for is None:
+        return {"skipped": "no broker connection configured for the scheduler"}
+    db = Database.open(ctx.state_dir, "aux")
+    out: dict[str, Any] = {}
+    failed: list[str] = []
+    for acc in ctx.accounts:
+        broker = None
+        try:                                  # one unreachable terminal does not stop the other account's ledger
+            broker = ctx.broker_for(acc)
+            if broker is None:
+                out[acc.account_id] = {"skipped": "no read-only broker connection for this account"}
+                continue
+            out[acc.account_id] = run_ledger(db, broker, acc, ctx.state_dir, slot, ctx.settings.ledger).summary()
+        except Exception as exc:
+            failed.append(f"{acc.account_id}: {type(exc).__name__}: {exc}")
+        finally:
+            if broker is not None and hasattr(broker, "shutdown"):
+                broker.shutdown()
+    if failed:                                # the scheduler records the failure (health: scheduler check)
+        raise RuntimeError("broker_ledger failed for " + "; ".join(failed) + f" (done: {sorted(out)})")
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- backups (state store step 2)
 def _backup_args(ctx: JobContext) -> tuple[Any, Callable[[str], str | None]]:
     from goldbot.ops import backup as backup_mod
@@ -1148,6 +1194,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "drift_watch": drift_watch,
     "gap_watch": gap_watch,
     "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
+    "broker_ledger": broker_ledger,               # GAP-07/08: balance snapshot, positions and balance vs the broker
     "backup": backup,                             # encrypted off-host backup (ops/backup.py)
     "restore_drill": restore_drill,               # weekly restore + verification of the latest backup
     "cpcv_quarterly": cpcv_quarterly,             # M16 combinatorial purged CV + PBO of gate-passing trials

@@ -1,4 +1,7 @@
 """Primary-signal screen (P4), pooled meta-model inputs and frames (P5), and the expanding walk-forward window."""
+from types import SimpleNamespace
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -28,6 +31,7 @@ from goldbot.research.screen import (
     rule_only_split,
     rule_only_split_lines,
     screen,
+    screen_floors,
     screen_lines,
     screen_verdict,
     signal_timeframe,
@@ -76,6 +80,48 @@ def test_gross_t_of_1_5_on_300_events_with_a_floor_of_1000_is_inconclusive_not_f
     v = screen_verdict(_rule(300, 0.04, 1.5), 1000)
     assert v["verdict"] == INCONCLUSIVE and v["passed"] is False
     assert [c["name"] for c in v["checks"] if not c["passed"]] == ["events", "gross_t"]     # both still shown
+
+
+def test_the_daily_floor_is_retire_only_so_a_daily_rule_between_it_and_the_general_floor_never_passes():
+    """Owner ruling A (preregistration-2027Q1.md): "150 rule-only events, retire-only" in the strict sense. At or above
+    the daily floor a screen can fail and retire; it passes only on the general floor (screen_min_events)."""
+    retire, pass_floor = 150, 1000
+    for n in (150, 151, 500, 999):
+        good = screen_verdict(_rule(n, 0.08, 3.5), retire, pass_floor)
+        assert good["verdict"] == INCONCLUSIVE and good["passed"] is False, n            # never "pass"
+        assert screen_verdict(_rule(n, -0.05, 3.0), retire, pass_floor)["verdict"] == "fail", n   # can retire
+        assert screen_verdict(_rule(n, 0.05, 1.0), retire, pass_floor)["verdict"] == "fail", n
+    assert screen_verdict(_rule(149, -0.05, 3.0), retire, pass_floor)["verdict"] == INCONCLUSIVE   # below: never retires
+    top = screen_verdict(_rule(pass_floor, 0.05, MIN_T), retire, pass_floor)
+    assert top["verdict"] == "pass" and top["passed"] is True
+    v = screen_verdict(_rule(500, 0.08, 3.5), retire, pass_floor)
+    assert v["min_events"] == 150 and v["pass_min_events"] == 1000
+    assert "retire" in v["rule"] and "1,000" in v["rule"]
+    text = "\n".join(screen_lines(v))
+    assert "**INCONCLUSIVE (event floor)**" in text and "1,000" in text and "cannot retire" in text
+
+
+def test_the_screens_floors_for_a_daily_rule_are_the_daily_retire_floor_and_the_general_pass_floor():
+    ruled = ResearchSettings(screen_min_events_daily=150)
+    assert screen_floors("1d", ruled) == (150, 1000) and screen_floors("4h", ruled) == (1000, 1000)
+    assert screen_floors("1d", ResearchSettings()) == (1000, 1000)
+
+
+def test_a_daily_screen_with_500_strong_events_reads_inconclusive_under_h01_never_continue():
+    from goldbot.research.director import preregistered_decisions
+    v = screen(_prep_with_events(500, 0.08), *screen_floors("1d", ResearchSettings(screen_min_events_daily=150)))
+    assert v["verdict"] == INCONCLUSIVE and not v["passed"] and v["gross_t"] >= MIN_T
+    row = {"status": "screened", "results": {"screen": v}, "preregistration": {"ts": "t0", "config_hash": "h"}}
+    pre = {"status": "preregistered", "ts": "t0", "config_hash": "h", "rule_id": "H-01"}
+    assert preregistered_decisions(row, [pre]) == ({"inconclusive"}, "H-01")         # never "continue" below 1,000
+
+
+def _prep_with_events(n: int, mean_r: float) -> Any:
+    """A stand-in `Prepared` with `n` rule-only events of gross R ~ mean_r (risk 1%), net R lower by 0.1."""
+    r = mean_r + np.random.default_rng(3).normal(0, 0.3, n)
+    ts = pd.date_range("2012-01-02", periods=n, freq="7D", tz="UTC")
+    gross = pd.DataFrame({"ts_utc": ts, "side": 1, "ret": r / 100, "risk": 0.01})
+    return SimpleNamespace(gross=gross, labels=gross.assign(ret=(r - 0.1) / 100), spec=SimpleNamespace(family="tsmom"))
 
 
 def _net_labels(rows: list[tuple[str, int, float]]) -> pd.DataFrame:
