@@ -152,6 +152,20 @@ KPIs unchanged: no trades, no shadow book, no performance-analyst report, so eve
 - Open owner items now: the H-18 event floor (O-1), the deposit plan, the Raw-spread account, the projected
   percentage caps and the material feature version. KPIs, budget and ledger unchanged.
 
+## Research director decision: daily-signal rows under the strict floor (2026-10-11)
+
+Under the strict retire-only floor (150 retires, 1,000 passes), H-01 (lower bound 154) and H-06 (about 80-130) can
+never read "pass". **Decision (c):** keep H-01 as the slow-trend family's retire test, written only if its recount is
+>= 150. Withdraw H-06 if it is below 150, which is the expected case. Q1 reservation: 8, or 7 if H-01 is withdrawn too.
+Reasons:
+- H-06 can only be inconclusive.
+- H-01 can end a lane and measures net R after costs for the best-supported hypothesis, for one trial that displaces
+  nothing (Q1's open budget is capped by E-5).
+- Stated before any outcome: H-01's screen has low power at 154-400 events, so a "stop" is recorded as "retired at low
+  power", reinstatable by out-of-sample evidence.
+No owner confirmation is needed (delegated, within budget, no rail touched). Full reasoning: `preregistration-2027Q1.md`,
+"Research director decision". Ledger: unchanged until a trial runs.
+
 ## Not verified / left out
 
 - "What moved" is read from the git history and HANDOFF on base `1bcfe1c`, not from CI or the dashboard.
