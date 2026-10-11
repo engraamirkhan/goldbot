@@ -407,3 +407,62 @@ def test_shadow_excursions_equal_the_labels_under_an_exit_policy(tmp_path, agent
         assert t.mae_utc == w["mae_utc"] and t.mfe_utc == w["mfe_utc"], i
         checked += 1
     assert checked > 5
+
+
+# ---------------------------------------------------------------------------------------------- freeze tolerance, empty
+def _frozen_then_closed(tmp_path: Path, monkeypatch: Any, after_s: float) -> ClosedTrade:
+    """Freeze at the broker stop while the position stays open (the paper broker is told not to fill), then close it
+    `after_s` seconds later; a stored 1m bar wholly inside the trade reached 1997.0 after the freeze."""
+    eng, pb = _engine(tmp_path, TREND)
+    pid = _enter(eng, pb, TREND)
+    monkeypatch.setattr(pb, "_check_exits", lambda tick: None)       # the broker does not take the stop
+    eng.on_tick(_q(1, 1998.75, 1998.75))                             # at the 1998.75 broker stop: frozen
+    ex = eng.open[pid].excursion
+    assert ex is not None and ex.frozen_utc == _at(1) and pid in eng.open
+    eng.bars_1m = pd.DataFrame({"ts_utc": [_at(1)], "bid_high": [1999.0], "bid_low": [1997.0],
+                                "ask_high": [1999.0], "ask_low": [1997.0]})
+    pb.on_tick(Tick(ts_utc=_at(1) + pd.Timedelta(seconds=after_s), bid=1998.5, ask=1998.5))
+    eng._kill_switch(everything=True)
+    eng._save_orders()
+    (t,) = _records(tmp_path)
+    assert t.exit_utc == _at(1) + pd.Timedelta(seconds=after_s)
+    return t
+
+
+def test_a_position_that_outlives_its_freeze_by_more_than_the_tolerance_is_approximate_with_the_bars(tmp_path,
+                                                                                                     monkeypatch):
+    t = _frozen_then_closed(tmp_path, monkeypatch, runner.EXCURSION_FREEZE_TOLERANCE_S + 1)
+    assert t.excursion_approx is True and t.mae_price == pytest.approx(1997.0) and t.mae_utc == _at(1)
+
+
+def test_an_exit_within_the_freeze_tolerance_stays_exact(tmp_path, monkeypatch):
+    t = _frozen_then_closed(tmp_path, monkeypatch, runner.EXCURSION_FREEZE_TOLERANCE_S - 1)
+    assert t.excursion_approx is False and t.mae_price == pytest.approx(1998.5)     # the fill, no bars read
+
+
+def test_a_close_with_nothing_observed_leaves_the_excursion_empty_instead_of_zero_r(tmp_path, monkeypatch):
+    """No tick track and no exit the engine can stand on (no deals, no close fill): nothing was observed, so the
+    fields stay empty rather than reading 0 R / 0 R."""
+    eng, pb = _engine(tmp_path, TREND)
+    pid = _enter(eng, pb, TREND)
+    pb.on_tick(_q(2, 2001.0, 2001.0))
+    pb.close(pid)
+    monkeypatch.setattr(pb, "deals_since", lambda since: pd.DataFrame())
+    for _ in range(10):
+        _settle(eng)
+    (t,) = _records(tmp_path)
+    assert (t.mae_price, t.mae_r, t.mae_utc, t.mfe_price, t.mfe_r, t.mfe_utc, t.excursion_approx) == (None,) * 7
+
+
+def test_a_dropped_track_with_no_covering_bars_leaves_the_excursion_empty(tmp_path):
+    """A close seen late drops the track (it holds a price after the exit); with no 1m bar wholly inside the trade
+    nothing of the path is left (an exit fill alone is not an excursion), so the fields stay empty, not 0 R / 0 R."""
+    eng, pb = _engine(tmp_path, TREND)
+    pid = _enter(eng, pb, TREND)
+    eng.on_tick(Tick(ts_utc=T0 + pd.Timedelta(seconds=20), bid=2000.5, ask=2000.5))
+    pb.on_tick(Tick(ts_utc=T0 + pd.Timedelta(seconds=40), bid=1999.6, ask=1999.6))
+    pb.close(pid)                                                    # closed in the terminal
+    eng.on_tick(Tick(ts_utc=T0 + pd.Timedelta(seconds=50), bid=2002.0, ask=2002.0))
+    _settle(eng)
+    (t,) = _records(tmp_path)
+    assert t.exit_reason is not None and t.mae_price is None and t.mfe_r is None and t.excursion_approx is None

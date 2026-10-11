@@ -2052,8 +2052,10 @@ class Engine:
         position outlived a freeze at its broker level by more than EXCURSION_FREEZE_TOLERANCE_S, or `exit_known` is
         False (no deals and no close fill: the bars stop at the last tick folded and no exit price is folded). A track
         with an extreme after the exit (a manual or broker close seen late) is dropped and rebuilt from the bars up to
-        the exit. R is left empty when the initial stop is not the trade's (`risk_known`). Never raises: a failure
-        leaves the fields empty (the trade is still recorded)."""
+        the exit. R is left empty when the initial stop is not the trade's (`risk_known`). With no usable track and
+        no bar folded (a close confirmed without deals and never tracked, or a dropped track with no covering bar)
+        nothing of the path was observed: the fields stay empty rather than reading 0 R / 0 R (an exit fill alone is
+        not an excursion). Never raises: a failure leaves the fields empty (the trade is still recorded)."""
         try:
             track = tr.excursion
             approx = tr.excursion_approx or track is None or not exit_known
@@ -2069,11 +2071,15 @@ class Engine:
             ex = track.model_copy() if track is not None else Excursion.start(entry, entry_utc)
             fav_col, adv_col = ("bid_high", "bid_low") if tr.side > 0 else ("ask_low", "ask_high")
             b = self.bars_1m
+            folded = 0
             if approx and not b.empty and {"ts_utc", fav_col, adv_col} <= set(b.columns):
                 ts = pd.to_datetime(b["ts_utc"], utc=True)
                 inside = b[(ts >= entry_utc) & (ts + pd.Timedelta(minutes=1) <= bars_end)]
                 for at, fav, adv in zip(pd.to_datetime(inside["ts_utc"], utc=True), inside[fav_col], inside[adv_col]):
                     ex.fold(tr.side, float(adv), at, float(fav), at)
+                    folded += 1
+            if track is None and folded == 0:
+                return {}
             if exit_fill is not None:
                 ex.fold(tr.side, float(exit_fill), exit_utc)
             out = ex.summary(tr.side, entry, tr.initial_sl if tr.risk_known else None)
