@@ -149,6 +149,11 @@ way (13 → 9).
   `expected_eval_days`, with the month as `first_oos_month` (both in the config hash). A run with fewer than 90% of it
   (`h16.MIN_EVAL_SHARE`) is refused before any statistic is computed, and so is a NaN statistic; nothing is recorded
   either way. **Frozen values: owed (not counted yet; no data was read for this draft).**
+  **Run count-owed-events and paste the counts before the freeze** (Actions -> count-owed-events;
+  `scripts/count_owed_events.py` counts `first_oos_month` and `expected_eval_days` with `h16.first_oos_month` and the
+  `evaluate_h16` evaluation-set masks on placebo prices: it reads the 15m bar timestamps, the GVZ dates and the
+  calendar rows, never a real price or the target). Paste both values, the drop counts and the run's commit here and
+  into the pre-registered config.
 - **Feature version (amended 2026-10-11, quant review of E-4, M1):** H-16 pins what it reads,
   `feature_version(["day_type"])` (`h16.h16_feature_version()`; `f-52c853166b` for `day_type` v1 today), with the GVZ
   series (`GVZCLS`) named in the config. It is worked out at the freeze and checked at run time: the pre-registration
@@ -229,6 +234,10 @@ way (13 → 9).
   Calendar upper bound ≈ 1,690 (half of ≈ 3,380 days); the OD estimate is 1,000–1,500.
   **If the count is below 1,000, both H-17 rows are withdrawn before the freeze (no trial spent) and their slots go
   to the free reserve;** the median cut is not moved to raise the count.
+  **Run count-owed-events and paste the counts before the freeze** (high-half events = the trial count, low-half
+  events, per year). Until `trend_day` (E-3) is merged the workflow counts from this written rule (labelled
+  "spec-derived"); the count that decides the withdrawal is the one recounted with `trend_day`'s own code, and a
+  difference from the spec-derived count is explained here.
 - **Feature version:** `f-1eada57050` (default + `day_type` v1). Only `opp_har_range_hat` and `opp_har_cut50` are
   read: the "HAR column only" condition. The calendar enters through `ctx["us_calendar"]` for the blackout and
   day_type's tier-1 columns, which are not read. The `tier1_events`/`tier2_events` families stay off
@@ -289,6 +298,9 @@ way (13 → 9).
   (calendar upper bound ≈ 4,000 days × ~52 bars over 13 hours; the cost gate is expected to remove a larger share
   of 2012–2019, when cost in R was 2–3×
   higher, SoA A7), and the number per year.
+  **Run count-owed-events and paste the counts before the freeze** (candidate bars, labelled rows = 2x, blackout and
+  cost-gate drops, per year). Spec-derived until E-2 is merged (the spread is the bar's Dukascopy mean spread, not a
+  `costs-v1` session spread); recount with E-2's own candidate code before the freeze.
 - **Feature version:** `f-079deacc61`.
 
 ### H-18 Post-blackout event continuation (one trial, conditional)
@@ -310,6 +322,8 @@ way (13 → 9).
   the floor's events. Otherwise inconclusive.
 - **Events owed from data before the freeze:** events with the entry bar present, and how many pass |M| > 1.0 ATR
   (events only: the sign and size of M at +30 min are inputs, not outcomes; nothing after the entry close is read).
+  **Run count-owed-events and paste the counts before the freeze** (spec-derived until `event_continuation` is
+  merged; recount with its own code before the freeze).
 - **Distinct from:** H-11 (needs a consensus surprise), R-08 pre-FOMC drift (before the release).
 - **Feature version:** `f-079deacc61`.
 
@@ -352,7 +366,8 @@ way (13 → 9).
 - [x] Quant rulings Q-1, Q-2, Q-3 recorded here (2026-10-10)
 - [ ] Owner ruling O-1 recorded, or H-18 withdrawn
 - [ ] BACKLOG 30a, 31, E-1, E-2, E-3, E-4 merged and tested; E-5 decided (E-4 built 2026-10-11, quant review pending)
-- [ ] Event counts owed above recorded (events only, no labels or outcomes); H-17 withdrawn if < 1,000
+- [ ] Event counts owed above recorded (events only, no labels or outcomes): run count-owed-events and paste the
+  counts before the freeze, recounted with E-2/E-3's own code once merged; H-17 withdrawn if < 1,000
 - [ ] `costs-v1` published (or the priors accepted and stated); `macro-v1` present for H-16
 - [ ] `research.reserved_trials_quarter` for Q2 set to the number of queued rows
 - [ ] Each queued row written with `queue=True, target_quarter="2027Q2"` and this file's freeze commit
