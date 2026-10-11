@@ -959,10 +959,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Engine follow-up done (2026-10-11): `runner.py` `_load_orders` (SentOrder/OpenTrade/PendingClose) and
   `_archive_stale_proposals` read with `load_record*`, so a rollback no longer stops the older engine from starting.
   `mt5_bootstrap.sh` pins `pydantic>=2.12`; an existing MT5 box is upgraded once by hand (RUNBOOK 0.5).
-  **Follow-up:** `goldbot/execution/bridge.py` `_decode` (:126): records coming back from the MT5 box (Position,
-  Tick, BrokerTerms, TradingSession) can be read tolerantly, because the MT5 box is updated by hand and can run a
-  different version from the brain. `OrderIntent` (an order request) stays strict. Needs the MT5 box on pydantic 2.12
-  (RUNBOOK 0.5: book flat or weekend, version check, `systemctl is-active`).
+  Bridge follow-up done (2026-10-11): `goldbot/execution/bridge.py` `_decode(..., response=True)` reads what the
+  MT5 box sends back (Position, Tick, AccountInfo, SymbolInfo, BrokerTerms, TradingSession, OrderResult) with
+  `load_record` (source `bridge-response`), because the box is updated by hand and can run a newer release. The
+  bridge server's arguments (`response=False`) and `OrderIntent` in either direction stay strict: an order request
+  with an unknown field is refused. Protocol digest unchanged, `API_VERSION` stays 2. The MT5 box needs no pydantic
+  upgrade for this (only the brain calls `load_record`); the RUNBOOK 0.5 upgrade stays recommended for parity.
   Review LOWs (2026-10-11): a refused decision is logged once per proposal and counted (`base.note_schema_skew`), and
   an unknown top-level table in `orders_<account>.json` is logged and counted at engine start; S12 now requires a
   reviewed rollback story for a new table that carries client ids or broker orders.
