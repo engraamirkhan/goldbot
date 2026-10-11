@@ -240,57 +240,9 @@ def test_full_score_inputs_are_known_at_0630_utc_on_the_day(planted):
 
 
 # --------------------------------------------------------------------------- one trial in the registry
-def _run(reg: TrialRegistry, bars: pd.DataFrame, **kw):
-    kw.setdefault("cap", 20)
-    kw.setdefault("reserved", 0)
-    return h16.run_trial(reg, bars, _macro(), _calendar(), holdout_from=HOLDOUT, retired=set(),
-                         frozen_first_oos_month=kw.pop("frozen", None), rationale="E-4 synthetic",
-                         feature_version=h16.PINNED_FEATURE_VERSION, min_rows=MIN_ROWS, n_boot=N_BOOT, **kw)
-
-
-def test_the_run_writes_exactly_one_trial_row_with_the_reading_and_counts(planted, tmp_path):
-    reg = TrialRegistry(tmp_path / "registry.jsonl")
-    row, res = _run(reg, planted)
-    rows = [json.loads(x) for x in reg.path.read_text().splitlines() if x.strip()]
-    assert len(rows) == 1 and is_trial(rows[0]) and reg.n_trials == 1
-    r = rows[0]
-    assert r["family"] == h16.FAMILY and r["status"] == "evaluated" and r["feature_version"] == "f-93fbe9386d"
-    assert r["config"] == h16.h16_config(MIN_ROWS) and r["config_hash"] == row["config_hash"]
-    out = r["results"]
-    for k in ("rho_full", "rho_har", "rho_gain", "quintile_ratio", "n", "first_oos_month", "dropped_gvz_stale",
-              "dropped_no_har", "dropped_no_full", "verdict", "feature_version"):
-        assert k in out
-    assert out["verdict"] == res.verdict == "continue" and out["n"] == res.n
-
-
-def test_the_trial_is_linked_to_its_queued_preregistration_and_charged_once(planted, tmp_path, queued_prereg):
-    reg = TrialRegistry(tmp_path / "registry.jsonl")
-    pre = queued_prereg(reg, agent_id=h16.AGENT_ID, family=h16.FAMILY, config=h16.h16_config(MIN_ROWS),
-                        feature_version=h16.PINNED_FEATURE_VERSION, rationale="H-16", reading_rule=h16.READING_RULE)
-    row, _ = _run(reg, planted, reserved=1)
-    assert row["preregistration"]["ts"] == pre["ts"] and "deviation" not in row["preregistration"]
-    assert reg.n_trials == 1
-
-
-def test_an_ad_hoc_preregistration_is_linked_when_no_queued_row_exists(planted, tmp_path):
-    reg = TrialRegistry(tmp_path / "registry.jsonl")
-    pre = reg.preregister(agent_id=h16.AGENT_ID, family=h16.FAMILY, config=h16.h16_config(MIN_ROWS),
-                          feature_version=h16.PINNED_FEATURE_VERSION, rationale="H-16", reading_rule=h16.READING_RULE)
-    row, _ = _run(reg, planted)
-    assert row["preregistration"]["ts"] == pre["ts"] and reg.n_trials == 1
-
-
-def test_a_refusal_before_the_reading_writes_no_row(planted, tmp_path):
-    reg = TrialRegistry(tmp_path / "registry.jsonl")
-    with pytest.raises(TrialBudgetExceeded):
-        _run(reg, planted, cap=0)
-    with pytest.raises(ValueError, match="frozen first out-of-sample month"):
-        _run(reg, planted, frozen="2010-01")
-    assert reg.path.read_text() == ""
-
-
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def restore_features():
+    """h16_feature_version registers the opt-in day_type feature: restore the registry after every test."""
     feats, signed = dict(feat_registry.FEATURES), dict(feat_registry.SIGNED)
     yield
     feat_registry.FEATURES.clear()
@@ -299,8 +251,170 @@ def restore_features():
     feat_registry.SIGNED.update(signed)
 
 
-def test_h16_runs_on_the_pinned_combined_feature_version(restore_features):
-    assert h16.h16_feature_version() == h16.PINNED_FEATURE_VERSION == "f-93fbe9386d"
+@pytest.fixture(scope="module")
+def frozen(planted) -> tuple[str, int]:
+    """(first OOS month, evaluable days) as counted before the freeze on the synthetic bars."""
+    res, _ = _evaluate(planted)
+    return res.first_oos_month, res.n
+
+
+def _config(frozen: tuple[str, int], **over) -> dict:
+    month, n = frozen
+    return h16.h16_config(over.pop("month", month), over.pop("expected", n), min_rows=MIN_ROWS)
+
+
+def _prereg(reg: TrialRegistry, config: dict, fv: str | None = None) -> dict:
+    return reg.preregister(agent_id=h16.AGENT_ID, family=h16.FAMILY, config=config,
+                           feature_version=fv or h16.h16_feature_version(), rationale="H-16",
+                           reading_rule=h16.READING_RULE)
+
+
+def _run(reg: TrialRegistry, bars: pd.DataFrame, **kw):
+    kw.setdefault("cap", 20)
+    kw.setdefault("reserved", 0)
+    return h16.run_trial(reg, bars, _macro(), _calendar(), holdout_from=HOLDOUT, retired=set(),
+                         rationale="E-4 synthetic", min_rows=MIN_ROWS, n_boot=N_BOOT, **kw)
+
+
+def _trials(reg: TrialRegistry) -> list[dict]:
+    return [r for r in (json.loads(x) for x in reg.path.read_text().splitlines() if x.strip()) if is_trial(r)]
+
+
+def test_the_frozen_month_and_day_count_are_part_of_the_preregistered_hash(frozen):
+    from goldbot.research.registry import config_hash
+    base = _config(frozen)
+    assert base["first_oos_month"] == frozen[0] and base["expected_eval_days"] == frozen[1]
+    assert base["gvz_series"] == "GVZCLS" and base["feature_names"] == ["day_type"]
+    assert config_hash(base) != config_hash(_config(frozen, month="2012-05"))
+    assert config_hash(base) != config_hash(_config(frozen, expected=frozen[1] + 1))
+
+
+def test_the_run_writes_exactly_one_trial_row_with_the_reading_and_counts(planted, tmp_path, frozen):
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    pre = _prereg(reg, _config(frozen))
+    row, res = _run(reg, planted)
+    trials = _trials(reg)
+    assert len(trials) == 1 and reg.n_trials == 1
+    r = trials[0]
+    assert r["family"] == h16.FAMILY and r["status"] == "evaluated"
+    assert r["feature_version"] == h16.h16_feature_version() == pre["feature_version"]
+    assert r["config"] == _config(frozen) and r["config_hash"] == pre["config_hash"]
+    assert r["preregistration"]["ts"] == pre["ts"] and "deviation" not in r["preregistration"]
+    out = r["results"]
+    assert out["kind"] == "range_test"
+    for k in ("rho_full", "rho_har", "rho_gain", "quintile_ratio", "n", "first_oos_month", "dropped_gvz_stale",
+              "dropped_no_har", "dropped_no_full", "dropped_no_full_by_reason", "verdict", "feature_version"):
+        assert k in out
+    assert out["verdict"] == res.verdict == "continue" and out["n"] == res.n == frozen[1]
+    assert out["first_oos_month"] == frozen[0]
+
+
+def test_the_trial_is_linked_to_its_queued_preregistration_and_charged_once(planted, tmp_path, queued_prereg,
+                                                                              frozen):
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    pre = queued_prereg(reg, agent_id=h16.AGENT_ID, family=h16.FAMILY, config=_config(frozen),
+                        feature_version=h16.h16_feature_version(), rationale="H-16", reading_rule=h16.READING_RULE)
+    row, _ = _run(reg, planted, reserved=1)
+    assert row["preregistration"]["ts"] == pre["ts"] and reg.n_trials == 1
+
+
+def test_the_run_is_refused_without_an_unused_preregistration(planted, tmp_path):
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    with pytest.raises(ValueError, match="no unused pre-registration"):
+        _run(reg, planted)
+    assert reg.path.read_text() == ""
+
+
+def test_a_second_run_of_the_same_configuration_is_refused_even_with_a_fresh_preregistration(planted, tmp_path,
+                                                                                              frozen):
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    _prereg(reg, _config(frozen))
+    _run(reg, planted)
+    _prereg(reg, _config(frozen))
+    with pytest.raises(ValueError, match="already run"):
+        _run(reg, planted)
+    assert len(_trials(reg)) == 1
+
+
+def test_the_run_is_refused_before_reading_when_the_feature_version_differs_from_the_preregistration(
+        planted, tmp_path, frozen, monkeypatch):
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    _prereg(reg, _config(frozen), fv="f-0000000000")
+    read = []
+    monkeypatch.setattr(h16, "evaluation_inputs", lambda *a, **k: read.append(1))
+    with pytest.raises(ValueError, match="feature version"):
+        _run(reg, planted)
+    assert not read and _trials(reg) == []
+
+
+def test_a_config_that_is_not_h16s_rule_is_refused(planted, tmp_path, frozen):
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    _prereg(reg, {**_config(frozen), "full": ["x1_t"]})
+    with pytest.raises(ValueError, match="not H-16's configuration"):
+        _run(reg, planted)
+    assert _trials(reg) == []
+
+
+def test_the_month_is_read_from_the_preregistered_config_and_a_mismatch_writes_no_row(planted, tmp_path, frozen):
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    _prereg(reg, _config(frozen, month="2010-01"))
+    with pytest.raises(ValueError, match="frozen first out-of-sample month"):
+        _run(reg, planted)
+    assert _trials(reg) == []
+
+
+def test_too_few_evaluation_days_against_the_frozen_count_is_refused_before_any_statistic(
+        planted, tmp_path, frozen, monkeypatch):
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    need = int(np.ceil(frozen[1] / h16.MIN_EVAL_SHARE)) + 1           # n is just under 90% of this
+    _prereg(reg, _config(frozen, expected=need))
+    stats: list[int] = []
+    real = h16.spearman
+
+    def spy(a, b):
+        stats.append(1)
+        return real(a, b)
+    monkeypatch.setattr(h16, "spearman", spy)
+    with pytest.raises(ValueError, match="evaluation days"):
+        _run(reg, planted)
+    assert not stats and _trials(reg) == []
+    monkeypatch.setattr(h16, "spearman", real)
+    ok = int(np.floor(frozen[1] / h16.MIN_EVAL_SHARE))               # n is exactly at (or above) 90%
+    assert h16.evaluate_h16(planted, _macro(), _calendar(), holdout_from=HOLDOUT, min_rows=MIN_ROWS, n_boot=0,
+                            expected_eval_days=ok)[0].n == frozen[1]
+
+
+def test_a_nan_statistic_is_refused_and_writes_no_row(planted, tmp_path, frozen, monkeypatch):
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    _prereg(reg, _config(frozen))
+    monkeypatch.setattr(h16, "spearman", lambda a, b: float("nan"))
+    with pytest.raises(ValueError, match="NaN"):
+        _run(reg, planted)
+    assert _trials(reg) == []
+
+
+def test_a_budget_refusal_writes_no_row(planted, tmp_path, frozen):
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    _prereg(reg, _config(frozen))
+    with pytest.raises(TrialBudgetExceeded):
+        _run(reg, planted, cap=0)
+    assert _trials(reg) == []
+
+
+def test_days_without_a_full_forecast_are_counted_by_the_missing_input(planted):
+    late = _calendar()
+    late = late[pd.DatetimeIndex(late["event_utc"]) >= _utc("2019-01-01")]
+    res, _ = h16.evaluate_h16(planted, _macro(), late, holdout_from=HOLDOUT, min_rows=MIN_ROWS, n_boot=0)
+    why = res.dropped_no_full_by_reason
+    assert res.dropped_no_full > 0 and why["tier1_count"] > 0
+    assert set(why) == {*h16.EXTRA_REGRESSORS, "no_fit"}
+    assert sum(why.values()) >= res.dropped_no_full
+
+
+def test_h16_pins_what_it_reads_the_day_type_family_version():
+    from goldbot.features.registry import feature_version
+    assert not hasattr(h16, "PINNED_FEATURE_VERSION")
+    assert h16.h16_feature_version() == feature_version(["day_type"])
 
 
 # --------------------------------------------------------------------------- research_pass --h16
@@ -314,8 +428,7 @@ def _script():
 
 def _args(**over) -> argparse.Namespace:
     base = dict(h16=True, discover=False, cpcv=None, from_year=2010, score_holdout=False, pooled="", day_type=False,
-                positioning="", us_calendar_features=False, variants="[{}]", skip_screen=False,
-                first_oos_month="2012-04")
+                positioning="", us_calendar_features=False, variants="[{}]", skip_screen=False)
     return argparse.Namespace(**{**base, **over})
 
 
@@ -327,7 +440,6 @@ def _args(**over) -> argparse.Namespace:
     ({"from_year": 2011}, True, True, "--from-year"),
     ({"score_holdout": True}, True, True, "--score-holdout"),
     ({"pooled": "15m"}, True, True, "--pooled"),
-    ({"first_oos_month": None}, True, True, "--first-oos-month"),
 ])
 def test_research_pass_h16_refuses_discover_cpcv_and_runs_without_calendar_or_macro(over, cal, macro, why):
     mod = _script()
@@ -338,7 +450,7 @@ def test_research_pass_h16_refuses_discover_cpcv_and_runs_without_calendar_or_ma
     assert "GVZ" in (mod.h16_refusal(_args(), no_gvz, _calendar()) or "")
 
 
-def test_research_pass_h16_runs_one_trial_on_the_settings_holdout_with_500_rows(monkeypatch, tmp_path, restore_features):
+def test_research_pass_h16_runs_one_trial_on_the_settings_holdout_with_500_rows(monkeypatch, tmp_path):
     from goldbot.config import load_settings
     mod = _script()
     got: dict = {}
@@ -357,8 +469,8 @@ def test_research_pass_h16_runs_one_trial_on_the_settings_holdout_with_500_rows(
     args = _args(registry=str(tmp_path / "r.jsonl"), report=str(tmp_path / "h16.md"), rationale="E-4")
     settings = load_settings()
     assert mod._h16(args, b1, TrialRegistry(args.registry), settings, _macro(), _calendar(), {}, {}) == 0
-    assert got["min_rows"] == dt.MIN_FIT_ROWS and got["frozen_first_oos_month"] == "2012-04"
+    assert got["min_rows"] == dt.MIN_FIT_ROWS
+    assert "feature_version" not in got and "frozen_first_oos_month" not in got     # both from the pre-registration
     assert got["holdout_from"] == settings.research.holdout_from
-    assert got["feature_version"] == "f-93fbe9386d"
     assert pd.DatetimeIndex(got["bars"]["ts_utc"]).max() < _utc(str(settings.research.holdout_from))
     assert "CONTINUE" in Path(args.report).read_text()

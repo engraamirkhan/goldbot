@@ -56,12 +56,14 @@ are never silently NaN), --from-year 2010 or earlier (the daily inputs warm up f
 refused with --discover or --cpcv. Its inputs (GVZ present, calendar present, refit schedule, min fit rows) and family
 version are recorded on the trial row (`day_type`).
 
-H-16 (E-4, goldbot/research/h16.py): `--h16 --first-oos-month YYYY-MM` runs H-16's pre-registered range test (the
-opportunity score against the HAR-only forecast) and records it as ONE trial (family h16_opportunity_score). The 1m bars
-are cut at research.holdout_from before anything is resampled or built; it needs --us-calendar and --macro with GVZ,
---from-year 2010 or earlier and the frozen first out-of-sample month (refused, nothing recorded, when the rule on the
-data gives another month); it is refused with --discover, --cpcv, --score-holdout, --pooled, --day-type (it builds
-day_type itself), --positioning, --us-calendar-features or --variants.
+H-16 (E-4, goldbot/research/h16.py): `--h16` runs H-16's pre-registered range test (the opportunity score against the
+HAR-only forecast) once and records it as ONE trial (family h16_opportunity_score). It runs only against the one unused
+H-16 pre-registration, reading the frozen first out-of-sample month and evaluable-day count from its config, and is
+refused, with nothing recorded, when H-16 already ran, when the pre-registered feature version is not day_type's
+version now, or when the rule on the data gives another month. The 1m bars are cut at research.holdout_from before
+anything is resampled or built; it needs --us-calendar, --macro with GVZ and --from-year 2010 or earlier, and is refused
+with --discover, --cpcv, --score-holdout, --pooled, --day-type (it builds day_type itself), --positioning,
+--us-calendar-features or --variants.
 
 Combinatorial purged CV (M16, goldbot/research/cpcv.py): `--cpcv <trial#> [<trial#> ...]` re-evaluates registered
 walk-forward trials on 6 time groups of the research window (15 purged splits, 5 backtest paths) and, for several
@@ -75,7 +77,7 @@ passed the gates (docs/decisions/0003-cpcv-and-pbo-can-only-veto.md), so a trial
       [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table costs_measured.json] [--macro macro/] [--positioning positioning/]
       [--us-calendar calendar/ [--us-calendar-features]] [--day-type]
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report cpcv.md --cpcv 12 [13 14] [--diagnostic]
-  python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report h16.md --h16 --first-oos-month 2012-04 \
+  python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report h16.md --h16 \
       --macro macro/ --us-calendar calendar/
 """
 from __future__ import annotations
@@ -264,9 +266,6 @@ def h16_refusal(args: argparse.Namespace, macro: pd.DataFrame | None, us_calenda
     if int(args.from_year) > DAY_TYPE_MAX_FROM_YEAR:
         return (f"--h16 needs --from-year {DAY_TYPE_MAX_FROM_YEAR} or earlier: the daily inputs warm up from the first "
                 "bar, so a later start moves the first out-of-sample month")
-    if not getattr(args, "first_oos_month", None):
-        return ("--h16 needs --first-oos-month YYYY-MM, the month frozen in preregistration-2027Q2-draft.md (H-16); "
-                "a different month from the rule is refused before anything is read")
     return None
 
 
@@ -279,7 +278,6 @@ def _h16(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, setting
         raise SystemExit("--h16: no research.holdout_from configured; H-16 is cut at the holdout before any feature")
     b1 = h16.cut_before_holdout(b1, holdout_from)
     bars = mid(resample_bars(b1, h16.TIMEFRAME))
-    fv = h16.h16_feature_version()
     info = {"macro": macro_info, "us_calendar": us_calendar_info,
             "day_type": day_type_info(True, macro, us_calendar)}
     try:
@@ -287,8 +285,7 @@ def _h16(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, setting
                                  cap=settings.research.trial_budget_quarter,
                                  reserved=settings.research.reserved_for(quarter_of()),
                                  retired={e.family for e in settings.research.retired_families},
-                                 frozen_first_oos_month=args.first_oos_month, rationale=args.rationale,
-                                 feature_version=fv, min_rows=day_type_features.MIN_FIT_ROWS, input_info=info)
+                                 rationale=args.rationale, min_rows=day_type_features.MIN_FIT_ROWS, input_info=info)
     except (TrialBudgetExceeded, ValueError) as exc:
         raise SystemExit(str(exc)) from None
     text = "\n".join(h16.report_lines(res, int(row["trial"])))
@@ -583,9 +580,7 @@ def main() -> int:
     ap.add_argument("--day-type", action="store_true",
                     help="adds the opt-in day_type opportunity features (BACKLOG 30a; needs --us-calendar)")
     ap.add_argument("--h16", action="store_true",
-                    help="H-16's pre-registered range test, one trial (E-4; needs --macro, --us-calendar, --first-oos-month)")
-    ap.add_argument("--first-oos-month", default=None, metavar="YYYY-MM",
-                    help="with --h16: the frozen first out-of-sample month (refused if the rule gives another)")
+                    help="H-16's pre-registered range test, one trial (E-4; needs its pre-registration, --macro, --us-calendar)")
     _discovery_args(ap)
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
