@@ -40,6 +40,12 @@ point-in-time COT and GLD columns (goldbot/features/positioning.py: managed-mone
 4-week change, GLD tonnes 5/20-day % change) to the candidate frame and the leakage check, under the same rules as
 macro (the feature version includes them). Not available with --discover.
 
+Opportunity-day features (opt-in, BACKLOG 30a): `--day-type` adds the `day_type` family (goldbot/features/day_type.py:
+HAR range forecast with a monthly expanding refit, GVZ over realised volatility (with --macro), prior-day range,
+NR4/NR7, inside day, reopen gap, the DST-aware noise ratio, and the tier-1 columns, NaN until the point-in-time US
+calendar is passed as ctx["us_calendar"]) to the candidate frame and the leakage check. Its family version is recorded
+on the trial row (`day_type`). Not available with --discover.
+
 Combinatorial purged CV (M16, goldbot/research/cpcv.py): `--cpcv <trial#> [<trial#> ...]` re-evaluates registered
 walk-forward trials on 6 time groups of the research window (15 purged splits, 5 backtest paths) and, for several
 trials, the probability of backtest overfitting across them. It is not a trial: no budget slot, no registry row; the
@@ -50,6 +56,7 @@ passed the gates (docs/decisions/0003-cpcv-and-pbo-can-only-veto.md), so a trial
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report report.md \
       [--specialist session_open | --pooled 15m] [--from-year 2010] [--to-year 2026] [--rationale "..."] \
       [--variants '[{}]'] [--skip-screen] [--score-holdout] [--cost-table costs_measured.json] [--macro macro/] [--positioning positioning/]
+      [--day-type]
   python scripts/research_pass.py --bars raw/ --registry registry.jsonl --report cpcv.md --cpcv 12 [13 14] [--diagnostic]
 """
 from __future__ import annotations
@@ -69,6 +76,7 @@ from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.release import read_macro_files, read_positioning_files  # noqa: E402
 from goldbot.data.resample import BAR_COLUMNS, resample_bars  # noqa: E402
 from goldbot.execution.costs import SwapSpec, load_research_cost_table, research_costs  # noqa: E402
+from goldbot.features import day_type as day_type_features  # noqa: E402
 from goldbot.features import positioning as positioning_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.features.registry import feature_version  # noqa: E402
@@ -152,13 +160,30 @@ def _positioning_line(info: dict[str, Any] | None) -> str:
     return f"- positioning features: {info['detail']}" if info else "- positioning features: off"
 
 
-def feature_ctx(macro: pd.DataFrame | None, positioning: pd.DataFrame | None) -> tuple[dict | None, list[str] | None]:
+def day_type_info(on: bool) -> dict[str, Any]:
+    """What the trial row records about the opt-in day_type family (its own version, outside the default hash)."""
+    if not on:
+        return {"used": False, "detail": "off (no --day-type)"}
+    return {"used": True, "family": day_type_features.FAMILY, "version": day_type_features.VERSION,
+            "detail": f"on: family {day_type_features.FAMILY} v{day_type_features.VERSION} "
+                      f"({len(day_type_features.COLUMNS)} columns, HAR refit monthly, expanding)"}
+
+
+def _day_type_line(info: dict[str, Any] | None) -> str:
+    return f"- day_type features: {info['detail']}" if info else "- day_type features: off"
+
+
+def feature_ctx(macro: pd.DataFrame | None, positioning: pd.DataFrame | None, *,
+                day_type: bool = False) -> tuple[dict | None, list[str] | None]:
     """ctx for the features and the explicit feature list: None (the pipeline's default, with macro when passed)
-    unless positioning is on, which registers and appends the opt-in positioning feature."""
+    unless positioning or day_type is on, which registers and appends the opt-in features."""
     ctx = {k: v for k, v in (("macro", macro), ("positioning", positioning)) if v is not None}
-    if positioning is None:
+    if positioning is None and not day_type:
         return ctx or None, None
-    return ctx, [*research_feature_names(ctx), positioning_features.enable()]
+    extra = [positioning_features.enable()] if positioning is not None else []
+    if day_type:
+        extra.append(day_type_features.enable())
+    return ctx, [*research_feature_names(ctx), *extra]
 
 
 def per_year(oof: pd.DataFrame, threshold: float | None) -> pd.DataFrame:
@@ -201,6 +226,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              f"- cost source: {m.get('cost_source', 'settings priors')}",
              _macro_line(m.get("macro")),
              _positioning_line(m.get("positioning")),
+             _day_type_line(m.get("day_type")),
              _holdout_line(m.get("holdout")),
              f"- 1m bars with zero tick volume: {meta.get('zero_volume', float('nan')):.1%}"
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
@@ -412,6 +438,8 @@ def main() -> int:
                     help="with --cpcv: allow trials that failed the gates; output is diagnostic, not evidence (ADR 0003)")
     ap.add_argument("--positioning", default="",
                     help="folder or Parquet of the positioning-v1 release: adds the opt-in COT/GLD features")
+    ap.add_argument("--day-type", action="store_true",
+                    help="adds the opt-in day_type opportunity features (BACKLOG 30a)")
     _discovery_args(ap)
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
@@ -435,6 +463,8 @@ def main() -> int:
     print(_positioning_line(positioning_info)[2:], flush=True)
     if args.discover and positioning is not None:
         raise SystemExit("--positioning is not wired into --discover yet; run it without --discover")
+    if args.discover and args.day_type:
+        raise SystemExit("--day-type is not wired into --discover yet; run it without --discover")
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
         if args.cpcv:
@@ -450,7 +480,9 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
          b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any, *, swap: SwapSpec, cost_source: str,
          macro: pd.DataFrame | None = None, macro_info: dict[str, Any] | None = None,
          positioning: pd.DataFrame | None = None, positioning_info: dict[str, Any] | None = None) -> int:
-    feat_ctx, feat_names = feature_ctx(macro, positioning)
+    day_type = bool(getattr(args, "day_type", False))
+    feat_ctx, feat_names = feature_ctx(macro, positioning, day_type=day_type)
+    dt_info = day_type_info(day_type)
     if args.score_holdout:
         if holdout is None:
             raise SystemExit("--score-holdout: no holdout window configured (research.holdout_from/holdout_to)")
@@ -513,7 +545,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         split = None if args.score_holdout else rule_only_split(pd.concat([p.labels for p in preps], ignore_index=True))
         common = {"lookahead": leak, "bars_from": str(b1["ts_utc"].iloc[0]), "bars_to": str(b1["ts_utc"].iloc[-1]),
                   "screen": scr, "screen_skipped": skipped, "cost_source": cost_source, "macro": macro_info,
-                  "positioning": positioning_info, "rule_only_split": split}
+                  "positioning": positioning_info, "day_type": dt_info, "rule_only_split": split}
         rationale = args.rationale + (f" | overrides {json.dumps(job.overrides, sort_keys=True)}" if job.overrides else "")
         if scr is not None and (screen_only or (not scr["passed"] and not args.skip_screen)):
             n = int(sum(len(p.labels) for p in preps))
@@ -541,7 +573,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                              rationale=rationale, results=metrics, status="holdout" if args.score_holdout else "evaluated",
                              budget_quarter=quarter, preregistration=prereg)
             res.metrics = {**res.metrics, "screen": scr, "screen_skipped": skipped, "cost_source": cost_source,
-                           "macro": macro_info, "positioning": positioning_info, "rule_only_split": split}
+                           "macro": macro_info, "positioning": positioning_info, "day_type": dt_info,
+                           "rule_only_split": split}
             years = per_year(res.oof, res.metrics.get("threshold"))
             text = render_report(res, years, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0})
         if job.overrides:

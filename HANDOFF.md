@@ -799,6 +799,28 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- Opportunity-day features, BACKLOG 30a (2026-10-11; needs **quant-reviewer and data-engineer review** before any
+  run uses them). `goldbot/features/day_type.py` is the opt-in `day_type` family (version 1). Importing it registers
+  nothing. `enable()` registers it, and `research_pass --day-type` is the only caller, so `DEFAULT_FEATURE_NAMES`,
+  `f-079deacc61` (the Q1 H-02 universe) and `f-f999b359e2` (with macro) are unchanged; a test pins both. Each trial
+  row records `day_type: {family, version}`.
+  - Day: 22:00 UTC rollover, inside the daily break in both DST regimes. A day spanning under 12 h is a stub and is
+    dropped from the daily inputs. A daily value is visible at D 22:00 UTC and is joined with `asof_join`.
+  - Columns: `opp_har_range_hat`, `opp_gvz_rv`, `opp_prev_range_atr`, `opp_nr4`, `opp_nr7`, `opp_inside_day`,
+    `opp_gap_atr`, `opp_noise_ratio`, `opp_tier1_today`, `opp_min_to_first_tier1`. Definitions are in the module
+    docstring.
+  - HAR fitting follows the H-16 ruling (Q-2). OLS is refitted at each month's first rollover on every row whose
+    target closed at least 1 day earlier (expanding, at least 500 rows). A forecast uses the fit in force at its
+    emission close. The fold-fit hook is `har_forecast(refit_at=...)`, or ctx `day_type_refit_at` /
+    `day_type_min_fit_rows` in the feature.
+  - Reading taken for review: a forecast emitted on a Friday whose month ends on the weekend uses the previous month's
+    fit for Monday. H-16's E-4 evaluation path can reuse `fit_har` with its own W_D target.
+  - **Wiring step for the tier-1 columns** (after the BACKLOG 18 data branch, commit 514d338, merges). Merge that
+    branch's `feature_ctx` change with this one so that `--us-calendar` puts the calendar-v1 rows in
+    `ctx["us_calendar"]` whenever `--day-type` is on too. `day_type.tier1_columns` reads that key: columns event_id,
+    tier, event_utc, status, available_utc. It needs no import, but the merge has to keep both parameters. Then add
+    one test that runs `read_us_calendar_files` output through `tier1_columns`. Until that merge the two columns are
+    NaN. The calendar's `known_timeline` could replace the local latest-row-per-event logic; it gives the same states.
 - Engine tick robustness follow-ups (2026-10-10, b55f5d1/d39716f reviews): in `Engine._on_tick` the exits
   (`_stop_check`, `_retry_closes`, the kill switch, `_scale_out`) now run right after `_tick_ok` and the paper fill,
   before the tick log and the risk-period read; `_log_tick`, `_roll_risk_period` and the paper `on_tick` are each
