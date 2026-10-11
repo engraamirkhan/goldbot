@@ -2,6 +2,7 @@
 // tested directly). Spec: docs/ux/approval-card.md.
 import type { AccountSummary, DecidedProposal, Proposal, ReasonCode, Status } from "./api";
 import { type Tone, cash } from "./account";
+import { entryBlockers } from "./entry";
 import { secondsLeft } from "./useNow";
 
 export const WINDOW_S = 90;      // the engine's approval window (goldbot.telegram.approvals.Proposal.window_s)
@@ -91,8 +92,13 @@ export function via(by: string | null | undefined): string {
   return ch === "telegram" ? "Telegram" : ch === "dashboard" && who ? `dashboard (${who})` : by;
 }
 
-/** Why the RiskGate would refuse a new entry on this account right now, in plain words (empty: entries allowed). */
-export function blockers(status: Status | undefined, accounts: AccountSummary[] | undefined, accountId?: string): string[] {
+/** Why the RiskGate would refuse a new entry on this account (and for this strategy) right now, in plain words (empty:
+ *  entries allowed). The API's entry status words it (goldbot/api/entry_status.py); the checks below are only for a
+ *  server that does not send it yet, and go once every deployed API does. */
+export function blockers(status: Status | undefined, accounts: AccountSummary[] | undefined, accountId?: string,
+                         agentId?: string): string[] {
+  const fromApi = entryBlockers(accounts, accountId, agentId);
+  if (fromApi) return fromApi;
   const out: string[] = [];
   if (status?.halted) out.push("owner halt");
   if (status?.supervisor_halt) out.push("supervisor halt");

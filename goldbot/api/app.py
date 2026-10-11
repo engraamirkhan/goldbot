@@ -15,12 +15,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
-from goldbot.api import explain
+from goldbot.api import entry_status, explain
 from goldbot.api.auth import (
     RESET_TTL_H,
     SESSION_TTL_H,
@@ -409,7 +410,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return Me(email=u.email, role=u.role)
 
     @app.get("/api/accounts", response_model=list[AccountSummary])
-    def accounts(_: User = Depends(auth)) -> list[AccountSummary]:
+    def accounts(u: User = Depends(auth)) -> list[AccountSummary]:
         rows = []
         engines = st.engines()
         try:                                   # a torn or missing supervisor.json only drops the combined caps
@@ -426,12 +427,15 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                 log.exception("account view %s failed", getattr(fn, "__name__", fn))
                 return None
 
+        status_inputs = view(entry_inputs, st.auth.is_owner(u))
         for e in engines:
             def num(k: str, e: dict = e) -> float:
                 v = e.get(k)
                 return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
             eq, d0, w0, hwm = num("equity"), num("day_start_equity") or 1, num("week_start_equity") or 1, num("balance_closed_hwm") or 1
             bal, ccy = e.get("balance"), e.get("currency")
+            budget = view(loss_budget, e, sup, engines)
+            ladder = view(milestones, e)
             rows.append(AccountSummary(account_id=e["account"], broker=e.get("broker", ""), mode=e.get("mode", "paper"), equity=eq,
                                        day_pnl_pct=eq / d0 - 1, week_pnl_pct=eq / w0 - 1, drawdown_pct=1 - eq / hwm,
                                        stage=e.get("stage", "normal"), open_positions=e.get("open_positions", 0),
@@ -440,8 +444,33 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                        currency=ccy if isinstance(ccy, str) else None,
                                        margin_level_pct=view(margin_level_pct, e),
                                        day_pnl=eq - num("day_start_equity") if num("day_start_equity") else None,
-                                       loss_budget=view(loss_budget, e, sup, engines), milestones=view(milestones, e)))
+                                       loss_budget=budget, milestones=ladder,
+                                       entry_status=(None if status_inputs is None else
+                                                     view(account_entry_status, e, budget, ladder, status_inputs))
+                                       or entry_status.unknown_status()))
         return rows
+
+    def entry_inputs(is_owner: bool) -> dict[str, Any]:
+        """What every account's entry status shares: the owner's halt, the supervisor's halt as the engines read it,
+        the drift watch's system halt, the RiskGate's and the supervisor's limits from settings (the defaults when
+        unreadable) and whether this viewer may re-arm."""
+        from goldbot.risk.gate import RiskLimits
+        from goldbot.risk.supervisor import Supervisor, SupervisorLimits
+        c = st.bus.control()
+        halt, why = Supervisor.engine_should_halt(st.dir)
+        s = view_settings()
+        try:
+            limits = RiskLimits.from_settings(s.risk, tiny_live=False) if s is not None else RiskLimits()
+            sup_limits = SupervisorLimits.from_settings(s.risk) if s is not None else SupervisorLimits()
+        except Exception:                      # noqa: BLE001 - a bad settings edit: the defaults
+            limits, sup_limits = RiskLimits(), SupervisorLimits()
+        return dict(owner_halt=(c.by or "unknown") if c.halted else None,
+                    supervisor_reasons=[r for r in why.split(",") if r] if halt else None,
+                    drift_reasons=st.drift_halt(), limits=limits, combined_dd=sup_limits.dd_stage2, is_owner=is_owner)
+
+    def account_entry_status(e: dict, budget: LossBudget | None, ladder: Any, inputs: dict[str, Any]) -> Any:
+        return entry_status.account_entry_status(e, now=pd.Timestamp.now("UTC"), budget=budget, milestones=ladder,
+                                                 **inputs)
 
     def card(p: BusProposal, budget: LossBudget | None = None) -> dict[str, Any]:
         return dict(proposal_id=p.proposal_id, account_id=p.account_id, agent_id=p.agent_id,
