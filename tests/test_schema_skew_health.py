@@ -3,6 +3,7 @@ the log. The engine publishes a bounded `schema_skew` summary in engine_<account
 `schema_skew:<account>` warns while any skew is present (naming the sources) and fails when a strict reader refused a
 record, i.e. an owner's click was dropped (bus.decisions_for)."""
 import json
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -201,3 +202,111 @@ def test_health_reads_a_skew_block_a_newer_engine_wrote(tmp_path):
     _publish(tmp_path, block)
     c = health.check_schema_skew(_ctx(tmp_path), "icm-demo")
     assert c is not None and c.status == "fail" and "approvals/decisions:p1" in c.reason
+
+
+# ------------------------------------------------------------------ supervisor and scheduler (SRE review follow-up)
+# They read state tolerantly too (aux.db scheduler_jobs -> JobState; the supervisor's files): a newer job-control field
+# ignored after a rollback must reach the owner, not only their logs. Each publishes the same bounded block in its
+# heartbeat_<service>.json (the Heartbeat writer, which the scheduler beats from a thread even during a long job).
+def _hb_skew(tmp_path: Path, service: str) -> dict:
+    return json.loads(health.heartbeat_path(tmp_path, service).read_text())["schema_skew"]
+
+
+def test_the_supervisor_heartbeat_publishes_the_schema_skew_block(tmp_path, fresh_skew):
+    from goldbot.ops import run as ops_run
+    from goldbot.risk.supervisor import Supervisor
+    sup, hb = Supervisor(tmp_path), health.Heartbeat(tmp_path, "supervisor")
+    note_schema_skew("supervisor.json", "SupervisorState", ["new_cap"])
+    ops_run.supervisor_pass(sup, hb)                                      # what run_supervisor loops on
+    sk = _hb_skew(tmp_path, "supervisor")
+    assert sk["count"] == 1 and sk["refused"] is False
+    assert sk["entries"] == [{"source": "supervisor.json", "model": "SupervisorState", "fields": ["new_cap"],
+                              "count": 1, "refused": False}]
+    assert "schema_skew" not in json.loads((tmp_path / "supervisor.json").read_text())   # engines' file unchanged
+
+
+def test_the_scheduler_heartbeat_publishes_a_newer_job_state_field_it_ignored(tmp_path, fresh_skew):
+    from goldbot.db.bookkeeping import save_jobs
+    from goldbot.ops.scheduler import Scheduler
+    first = Scheduler(tmp_path / "scheduler.json")
+    with first.db.write() as conn:                                        # a newer release's job-control field
+        save_jobs(conn, {"retrain": json.dumps({"runs": 1, "paused_until": "2026-10-12T00:00:00Z"})})
+    Scheduler(tmp_path / "scheduler.json")                                # the older release restarts and reads it
+    health.start_heartbeat(tmp_path, "scheduler", every_s=3600)           # as run_scheduler does
+    f = health.heartbeat_path(tmp_path, "scheduler")
+    deadline = time.monotonic() + 5
+    while not f.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    sk = _hb_skew(tmp_path, "scheduler")
+    assert sk["count"] == 1
+    assert sk["entries"][0] == {"source": "aux.db:scheduler_jobs", "model": "JobState", "fields": ["paused_until"],
+                                "count": 1, "refused": False}
+
+
+def test_a_heartbeat_is_written_even_if_the_skew_summary_raises(tmp_path, monkeypatch):
+    def boom() -> None:
+        raise RuntimeError("bug")
+    monkeypatch.setattr(health, "schema_skew_summary", boom)
+    assert health.Heartbeat(tmp_path, "supervisor").beat()
+    saved = json.loads(health.heartbeat_path(tmp_path, "supervisor").read_text())
+    assert "ts" in saved and "schema_skew" not in saved                   # liveness first; the check then skips
+
+
+def _publish_hb(tmp_path: Path, service: str, skew: object | None) -> None:
+    doc: dict = {"service": service, "ts": NOW.timestamp()}
+    if skew is not None:
+        doc["schema_skew"] = skew
+    health.heartbeat_path(tmp_path, service).write_text(json.dumps(doc))
+
+
+@pytest.mark.parametrize("service", ["supervisor", "scheduler"])
+def test_health_checks_the_skew_block_of_each_service(tmp_path, service):
+    src = health.heartbeat_path(tmp_path, service)
+    name = f"schema_skew:{service}"
+    _publish_hb(tmp_path, service, _summary())
+    c = health.check_schema_skew(_ctx(tmp_path), service, src)
+    assert c is not None and (c.name, c.status) == (name, "ok")
+    _publish_hb(tmp_path, service, _summary(("aux.db:scheduler_jobs", "JobState", ["paused_until"], 3, False)))
+    c = health.check_schema_skew(_ctx(tmp_path), service, src)
+    assert c is not None and c.status == "warn" and "aux.db:scheduler_jobs" in c.reason and "rollback" in c.reason
+    assert c.name == name and c.name.startswith(health.NOTIFY_ON_WARN)
+    _publish_hb(tmp_path, service, _summary(("some_strict_file", "Strict", ["x"], 1, True),
+                                            refused_at=NOW - pd.Timedelta(minutes=59)))
+    c = health.check_schema_skew(_ctx(tmp_path), service, src)
+    assert c is not None and c.status == "fail" and "some_strict_file" in c.reason
+    assert "click" not in c.reason                                         # not an approval: no click was dropped
+    _publish_hb(tmp_path, service, _summary(("some_strict_file", "Strict", ["x"], 1, True),
+                                            refused_at=NOW - pd.Timedelta(minutes=61)))
+    c = health.check_schema_skew(_ctx(tmp_path), service, src)
+    assert c is not None and c.status == "warn" and "2026-01-15 14:59" in c.reason
+    _publish_hb(tmp_path, service, {"count": "lots"})
+    c = health.check_schema_skew(_ctx(tmp_path), service, src)
+    assert c is not None and c.status == "warn" and "unreadable" in c.reason
+
+
+def test_an_older_heartbeat_without_the_block_is_skipped(tmp_path):
+    for service in ("supervisor", "scheduler"):
+        src = health.heartbeat_path(tmp_path, service)
+        assert health.check_schema_skew(_ctx(tmp_path), service, src) is None      # no heartbeat yet
+        _publish_hb(tmp_path, service, None)
+        assert health.check_schema_skew(_ctx(tmp_path), service, src) is None      # an older release's heartbeat
+    names = {c.name for c in health.run_checks(_ctx(tmp_path)).checks}
+    assert not names & {"schema_skew:supervisor", "schema_skew:scheduler"}
+
+
+def test_run_checks_includes_the_service_skew_checks_and_alerts_on_a_warn(tmp_path):
+    _publish_hb(tmp_path, "supervisor", _summary())
+    _publish_hb(tmp_path, "scheduler", _summary(("aux.db:scheduler_jobs", "JobState", ["paused_until"], 1, False)))
+    report = health.run_checks(_ctx(tmp_path))
+    got = {c.name: c.status for c in report.checks}
+    assert (got["schema_skew:supervisor"], got["schema_skew:scheduler"]) == ("ok", "warn")
+    text = health.HealthWatch(tmp_path).poll(report)
+    assert text is not None and "WARN schema_skew:scheduler" in text
+
+
+def test_a_service_skew_check_that_raises_is_a_fail_of_its_own(tmp_path, monkeypatch):
+    def boom(*_a: object, **_k: object) -> None:
+        raise TypeError("corrupt")
+    monkeypatch.setattr(health, "check_schema_skew", boom)
+    got = {c.name: c.status for c in health.run_checks(_ctx(tmp_path)).checks}
+    assert got["schema_skew:supervisor"] == "fail" and got["schema_skew:scheduler"] == "fail"
