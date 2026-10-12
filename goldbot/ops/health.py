@@ -587,7 +587,9 @@ def check_stop_rule(ctx: HealthContext) -> Check:
         return _skipped("stop_rule", "settings do not load")
     trades, err = gp.load_closed_trades(ctx.state_dir)
     _, when, perr = gp.phase_record(ctx.state_dir)
-    s = gp.evaluate_stop_rule(trades, when.get("backtest_to_paper"), ctx.settings.risk.weekly_cap, ctx.settings.gates, ctx.now)
+    from goldbot.ops.cost_imputation import CostImputer
+    s = gp.evaluate_stop_rule(trades, when.get("backtest_to_paper"), ctx.settings.risk.weekly_cap, ctx.settings.gates,
+                              ctx.now, imputer=CostImputer.from_state(ctx.state_dir, ctx.settings))
     if s.breached:
         return Check(name="stop_rule", status="fail",
                      reason=("STOP RULE BREACHED: the design says the project stops; send /halt to stop entries. Nothing "

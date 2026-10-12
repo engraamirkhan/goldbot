@@ -6,7 +6,10 @@ configured loss limits trip by bad luck alone within N weeks, how deep do drawdo
 
 Inputs
 * R per trade, in order, with its cost basis stated in the report:
-  - closed paper/live trades (`ClosedTrade.r`, state/closed_trades*.jsonl): **net** of every cost;
+  - closed paper/live trades (`ClosedTrade.r`, state/closed_trades*.jsonl): **net** of every cost. A trade whose
+    return is not net (commission or swap unknown) is kept, never dropped, and charged its conservative imputed cost
+    in R (ops/cost_imputation.py: cost per oz / initial risk per oz); the sample is then "net+imputed (N)", or
+    "unknown" when a gross row's charge cannot be computed (no entry price, time or initial risk);
   - the shadow book (state/shadow_book.json), ONE version's taken closed trades (default: the agent's champion in the
     model registry; champion and challengers are pooled only with `pool=True`). R = ret x entry / |entry - stop|, so a
     scale-out policy's blended return is counted. Shadow R pays the spread only (no slippage, commission or swap) and
@@ -60,22 +63,25 @@ from goldbot.data.timeutil import epoch_ns
 from goldbot.risk.sizing import effective_risk
 
 if TYPE_CHECKING:
+    from goldbot.ops.cost_imputation import CostImputer
     from goldbot.ops.gates_phase import ClosedTrade
 
 _EPS = 1e-9          # ruin level reached up to float noise (the gate's own limits are compared exactly, as it does)
 _CHUNK = 2000        # paths simulated at once (memory: chunk x trades floats)
 _SMALL_SAMPLE = 100  # below this many trades the report recommends a demeaned or haircut run
 
-CostBasis = Literal["net", "spread_only", "unknown", "parametric"]
+CostBasis = Literal["net", "net+imputed", "spread_only", "unknown", "parametric"]
 _COST_NOTE = {
     "net": "cost basis: closed paper/live trades, net of every cost (spread, slippage, commission, swap)",
+    "net+imputed": "cost basis: closed paper/live trades, net; the gross ones (commission or swap unknown) are charged a "
+                   "conservative imputed commission and swap in R, never dropped",
     "spread_only": "cost basis: shadow R pays the spread only (no slippage, commission or swap) and a gap through the "
                    "stop fills at the stop: optimistic; consider --r-haircut",
     "unknown": "cost basis: unknown (trades file): check whether its R is gross or net before reading the result",
     "parametric": "cost basis: as given (parametric win rate and R)",
 }
 Draw = Callable[[int, np.random.Generator], np.ndarray]    # (paths, rng) -> R matrix (paths x trades)
-_COST_LABEL = {"net": "net", "spread_only": "spread only", "unknown": "unknown", "parametric": "as given"}
+_COST_LABEL = {"net": "net", "net+imputed": "net+imputed", "spread_only": "spread only", "unknown": "unknown", "parametric": "as given"}
 
 
 class RuinLimits(FrozenRecord):
@@ -119,6 +125,7 @@ class RSample(FrozenRecord):
     exit_utc: pd.DatetimeIndex | None = None
     cost_basis: CostBasis
     versions: list[str] = Field(default_factory=list)
+    n_imputed: int = 0                 # rows charged an imputed cost (cost basis "net+imputed")
 
 
 class RuinConfig(FrozenRecord):
@@ -174,6 +181,7 @@ class RuinReport(FrozenRecord):
     source: Literal["bootstrap", "parametric"]
     cost_basis: CostBasis
     versions: list[str]                             # shadow-book versions the R came from (empty: other sources)
+    n_imputed: int = 0                              # closed trades charged an imputed cost ("net+imputed (N)")
     n_source_trades: int | None
     source_mean_r: float
     source_sd_r: float
@@ -346,7 +354,7 @@ def _levels(lim: RuinLimits) -> dict[str, float]:
 # ------------------------------------------------------------------------------------------------ simulation
 def simulate(cfg: RuinConfig, *, r: np.ndarray | None = None, parametric: ParametricR | None = None,
              cost_basis: CostBasis | None = None, versions: Sequence[str] = (),
-             exit_utc: pd.DatetimeIndex | None = None) -> RuinReport:
+             exit_utc: pd.DatetimeIndex | None = None, n_imputed: int = 0) -> RuinReport:
     """Run the Monte Carlo on an ordered R sample (block bootstrap) or a parametric distribution."""
     if (r is None) == (parametric is None):
         raise ValueError("give exactly one of r and parametric")
@@ -429,6 +437,7 @@ def simulate(cfg: RuinConfig, *, r: np.ndarray | None = None, parametric: Parame
             p_by_weeks={h: round(float(np.mean(fk <= h + _EPS)), 6) for h in horizons},
             median_weeks_to_first=round(float(np.median(tripped)), 4) if len(tripped) else None))
     return RuinReport(source="bootstrap" if r is not None else "parametric", cost_basis=basis, versions=list(versions),
+                      n_imputed=n_imputed,
                       n_source_trades=len(sample) if r is not None else None,
                       source_mean_r=round(mean_r, 6), source_sd_r=round(sd_r, 6), simulated_mean_r=round(sim_mean, 6),
                       observed_trades_per_week=round(observed, 6) if observed is not None else None,
@@ -440,17 +449,24 @@ def simulate(cfg: RuinConfig, *, r: np.ndarray | None = None, parametric: Parame
 
 
 # ------------------------------------------------------------------------------------------------ R sources
-def r_from_closed_trades(trades: Sequence[ClosedTrade], *, agent_id: str | None = None,
+def r_from_closed_trades(trades: Sequence[ClosedTrade], *, costs: CostImputer, agent_id: str | None = None,
                          mode: str | None = None) -> RSample:
-    """R of closed paper/live trades (gates_phase.ClosedTrade, net of costs) in exit order; trades without `r` are
-    skipped."""
+    """R of closed paper/live trades (gates_phase.ClosedTrade) in exit order; trades without `r` are skipped. A gross
+    row is kept and charged its imputed cost in R (quant review 2026-10-12: "Apply the cost charge in R terms (cost /
+    initial risk) to gross rows, and label the sample's cost_basis honestly"): "net", "net+imputed" with the count, or
+    "unknown" when a gross row's charge could not be computed (it is kept at its recorded R)."""
     rows = [t for t in trades if t.r is not None and (agent_id is None or t.agent_id == agent_id)
             and (mode is None or t.mode == mode)]
     if not rows:
         return RSample(r=np.empty(0), cost_basis="net")
     ts = pd.DatetimeIndex([t.exit_utc for t in rows])
     order = np.argsort(epoch_ns(ts), kind="stable")
-    return RSample(r=np.array([rows[i].r for i in order], dtype=float), exit_utc=ts[order], cost_basis="net")
+    charges = [costs.charge(rows[i]) for i in order]
+    r = [float(rows[i].r or 0.0) - (c.r or 0.0) for i, c in zip(order, charges)]
+    n_imputed = sum(c.imputed for c in charges)
+    unpriced = any(c.imputed and (not c.priced or c.r is None) for c in charges)
+    basis: CostBasis = "unknown" if unpriced else "net+imputed" if n_imputed else "net"
+    return RSample(r=np.array(r, dtype=float), exit_utc=ts[order], cost_basis=basis, n_imputed=n_imputed)
 
 
 def _champion_versions(models_dir: Path | None, agent_id: str | None) -> list[str]:
@@ -516,7 +532,8 @@ def format_report(rep: RuinReport) -> str:
            else "parametric")
     if rep.versions:
         src += f" from shadow version(s) {', '.join(rep.versions)}"
-    lines = [f"Drawdown Monte Carlo: {src}, cost basis {_COST_LABEL[rep.cost_basis]}, mean R {rep.source_mean_r:+.3f} "
+    basis = _COST_LABEL[rep.cost_basis] + (f" ({rep.n_imputed})" if rep.cost_basis == "net+imputed" else "")
+    lines = [f"Drawdown Monte Carlo: {src}, cost basis {basis}, mean R {rep.source_mean_r:+.3f} "
              f"(sd {rep.source_sd_r:.3f}, simulated {rep.simulated_mean_r:+.3f}), risk {rep.risk_normal:.2%}/trade "
              f"({rep.risk_size_down:.3%} in stage 1), {c.trades_per_week:g} trades/week"
              + (f" (observed {rep.observed_trades_per_week:.2f})" if rep.observed_trades_per_week is not None else "")
@@ -587,11 +604,13 @@ def main(argv: list[str] | None = None) -> int:
     par: ParametricR | None = None
     try:
         if args.closed_trades is not None:
+            from goldbot.ops.cost_imputation import CostImputer
             from goldbot.ops.gates_phase import load_closed_trades
             trades, err = load_closed_trades(args.closed_trades)
             if err:
                 print(f"warning: {err}", file=sys.stderr)
-            sample = r_from_closed_trades(trades, agent_id=args.agent)
+            sample = r_from_closed_trades(trades, agent_id=args.agent,
+                                          costs=CostImputer.from_state(args.closed_trades, settings))
         elif args.shadow is not None:
             models = args.models_dir if args.models_dir is not None else Path(settings.research.models_dir)
             sample = r_from_shadow_book(args.shadow, version=args.version, agent_id=args.agent,
@@ -612,7 +631,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if sample is not None:
         rep = simulate(cfg, r=sample.r, cost_basis=sample.cost_basis, versions=sample.versions,
-                       exit_utc=sample.exit_utc)
+                       exit_utc=sample.exit_utc, n_imputed=sample.n_imputed)
     else:
         rep = simulate(cfg, parametric=par)
     print(format_report(rep))

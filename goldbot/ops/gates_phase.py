@@ -23,7 +23,11 @@ first paper trade". Interpretations the code makes are stated where they are mad
 * "within X% of" means no more than X% below the reference (better than the reference always passes) and needs a
   positive reference; "brokers within 15%" compares the two brokers' live expectancy to the larger of the two.
 * Expectancy and drawdown are on the per-trade net return `ret`, the unit the backtest reports (research/metrics.py),
-  so paper, live and backtest compare like for like.
+  so paper, live and backtest compare like for like. A trade whose `ret` is not net (commission or swap unknown, or a
+  price return) is kept, never dropped ("their causes can be outcome-linked, so dropping them is selection bias"), and
+  charged a conservative imputed cost (ops/cost_imputation.py); every such item shows the gross count and the total
+  charged, and a gross row that cannot be priced fails the item closed. The same charge applies to the stop rule's
+  bound. `gates.max_gross_share` (owner decision, off by default) can also fail the paper and live gates on the share.
 * "lower 90% confidence bound" is the one-sided 90% bound, mean - t(0.90, n-1) * sd / sqrt(n).
 * A stop-rule "incident" is one closed trade whose net loss exceeds `risk.weekly_cap` of its account's equity before
   it; it counts at any time, paper or live.
@@ -60,6 +64,7 @@ from scipy import stats
 from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, load_record_json, write_atomic
 from goldbot.config import GateSettings, Settings
 from goldbot.ops.accounts import GATES
+from goldbot.ops.cost_imputation import CostImputer, ImputationSummary
 from goldbot.research.metrics import max_drawdown
 from goldbot.research.registry import costs_recorded, gate_pass_counts
 
@@ -144,6 +149,11 @@ class ClosedTrade(FrozenRecord):
     # both commission and swap are known and inside pnl; otherwise "gross" (never summed as net)
     money_source: Literal["broker", "engine"] | None = None
     pnl_basis: Literal["net", "gross"] | None = None
+    # what `ret` was computed from (quant review 2026-10-12, finding B): "pnl" = pnl / notional in the account currency,
+    # so it carries exactly the costs `pnl` carries (pnl_basis says whether that is net); "price" = the gross price
+    # return side * (exit - entry) / entry, which carries no commission or swap whatever pnl_basis says (the broker's
+    # deals on a non-USD account with no conversion). None on records from before the field (read by pnl_basis alone)
+    ret_basis: Literal["pnl", "price"] | None = None
 
 
 class EntryAudit(FrozenRecord):
@@ -361,8 +371,13 @@ def _cost_tables(state_dir: Path) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------------------------- statistics
-def mean_ret(trades: list[ClosedTrade]) -> float | None:
-    return float(np.mean([t.ret for t in trades])) if trades else None
+def mean_ret(rets: list[float]) -> float | None:
+    return float(np.mean(rets)) if rets else None
+
+
+def _charged(note: ImputationSummary) -> str:
+    """The evidence suffix: how many rows were gross and what they were charged (empty when all are net)."""
+    return "" if not note.n_gross else f"; {note.text()}"
 
 
 def lower_bound(rets: list[float], confidence: float) -> float | None:
@@ -390,14 +405,17 @@ def _fmt(v: float | None, spec: str = ".5f") -> str:
 
 # ---------------------------------------------------------------------------------------------- stop rule (P6)
 def evaluate_stop_rule(trades: list[ClosedTrade], paper_start: pd.Timestamp | None, weekly_cap: float,
-                       cfg: GateSettings, now: pd.Timestamp) -> StopRuleStatus:
+                       cfg: GateSettings, now: pd.Timestamp, *, imputer: CostImputer) -> StopRuleStatus:
     """P6. Pooled paper + live trades since the paper phase began (the backtest_to_paper record; the first trade when
     it is not recorded). Breached when (elapsed >= stop_after_months AND pooled > stop_min_pooled_trades AND the
-    one-sided lower bound < 0) OR any single trade lost more than `weekly_cap` of its equity before it."""
+    one-sided lower bound < 0) OR any single trade lost more than `weekly_cap` of its equity before it. Gross rows stay
+    pooled and the bound is on their return less the imputed cost (quant review: "Keep gross rows in, but apply the
+    same cost charge"). The incident check reads the recorded `pnl` as it is (money, not return)."""
     start = paper_start if paper_start is not None else (min(t.exit_utc for t in trades) if trades else None)
     pooled = [t for t in trades if start is None or t.exit_utc >= start]
     months = _months(start, now) if start is not None else 0.0
-    lb = lower_bound([t.ret for t in pooled], cfg.stop_confidence)
+    rets, note = imputer.net_rets(pooled)
+    lb = lower_bound(rets, cfg.stop_confidence)
     reasons: list[str] = []
     if months >= cfg.stop_after_months and len(pooled) > cfg.stop_min_pooled_trades and lb is not None and lb < 0:
         reasons.append(f"after {months:.1f} months and {len(pooled)} pooled trades the lower {cfg.stop_confidence:.0%} "
@@ -414,7 +432,8 @@ def evaluate_stop_rule(trades: list[ClosedTrade], paper_start: pd.Timestamp | No
                        f"UTC exceeds the weekly cap {weekly_cap:.1%}{more}")
     detail = (f"{len(pooled)} pooled trades (needs > {cfg.stop_min_pooled_trades}), {months:.1f} of "
               f"{cfg.stop_after_months} months, lower {cfg.stop_confidence:.0%} bound {_fmt(lb)}, "
-              f"worst single loss {_fmt(worst[0] if worst else None, '.2%')} (weekly cap {weekly_cap:.1%})")
+              f"worst single loss {_fmt(worst[0] if worst else None, '.2%')} (weekly cap {weekly_cap:.1%})"
+              + _charged(note))
     return StopRuleStatus(breached=bool(reasons), reasons=reasons, pooled_trades=len(pooled), months=round(months, 2),
                           lower_bound=lb, worst_loss_frac=worst[0] if worst else None, detail=detail)
 
@@ -444,6 +463,17 @@ def _incident_item(stop: StopRuleStatus, weekly_cap: float) -> GateItem:
                     need=f"no single loss > weekly cap {weekly_cap:.1%} (stop rule)")
 
 
+def _gross_share_item(name: str, note: ImputationSummary, limit: float | None) -> GateItem:
+    """`gates.max_gross_share` (owner decision, recommended 5%): the share of the phase's trades whose return is not
+    net. With the setting off it is shown for context and decides nothing."""
+    share = note.n_gross / note.n if note.n else 0.0
+    evidence = f"{note.n_gross} of {note.n} trades gross ({share:.1%}), each charged an imputed cost"
+    if limit is None:
+        return GateItem(name=name, met=True, required=False, evidence=evidence,
+                        need="context only (gates.max_gross_share is off)")
+    return GateItem(name=name, met=share <= limit, evidence=evidence, need=f"<= {limit:.0%} of trades gross")
+
+
 def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trials_path: Path | None = None) -> GateReport:
     """Every gate's items against the evidence; never writes anything (see `write_report`)."""
     state_dir = Path(state_dir)
@@ -470,7 +500,8 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     paper_start, live_start = when.get("backtest_to_paper"), when.get("paper_to_tiny_live")
     paper = [t for t in trades if t.mode == "demo" and (paper_start is None or t.exit_utc >= paper_start)]
     live = [t for t in trades if t.mode == "live" and (live_start is None or t.exit_utc >= live_start)]
-    stop = evaluate_stop_rule(trades, paper_start, cap, cfg, now)
+    imputer = CostImputer.from_state(state_dir, settings)
+    stop = evaluate_stop_rule(trades, paper_start, cap, cfg, now, imputer=imputer)
     gates: list[GateStatus] = []
 
     # 0 foundation -> backtest: the leakage audit
@@ -513,7 +544,8 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     gates.append(_status(1, passed, items))
 
     # 2 paper -> tiny live
-    p_mean = mean_ret(paper)
+    p_rets, p_note = imputer.net_rets(paper)
+    p_mean = mean_ret(p_rets)
     p_days = (now - paper_start).total_seconds() / 86400 if paper_start is not None else 0.0
     slip = _fill_slippage(state_dir)
     items = _previous(2, passed) + [
@@ -523,8 +555,9 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
                  need=f">= {cfg.paper_min_trades}"),
         GateItem(name="paper_days", met=p_days >= cfg.paper_min_days, evidence=f"{p_days:.0f} days since backtest_to_paper",
                  need=f">= {cfg.paper_min_days} days"),
-        GateItem(name="paper_expectancy", met=within(p_mean, bt_mean, cfg.paper_expectancy_within),
-                 evidence=f"paper {_fmt(p_mean)} vs backtest {_fmt(bt_mean)} per trade ({reference})",
+        GateItem(name="paper_expectancy",
+                 met=not p_note.n_unpriced and within(p_mean, bt_mean, cfg.paper_expectancy_within),
+                 evidence=f"paper {_fmt(p_mean)} vs backtest {_fmt(bt_mean)} per trade ({reference}){_charged(p_note)}",
                  need=f"no more than {cfg.paper_expectancy_within:.0%} below a positive backtest expectancy"),
         GateItem(name="fills", met=slip is not None and slip[0] <= (1 + cfg.paper_fills_within) * slip[1],
                  evidence=(f"measured slippage ${slip[0]:.3f}/oz on {slip[2]} fills vs modelled ${slip[1]:.3f}"
@@ -532,16 +565,20 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
                  need=f"within {cfg.paper_fills_within:.0%} of the modelled slippage"),
         _evidence_item(ev, "chaos_drill", "passed", lambda e: e.get("passed") is True),
         _incident_item(stop, cap),
+        _gross_share_item("paper_gross_share", p_note, cfg.max_gross_share),
         _shadow_item(state_dir),
     ]
     gates.append(_status(2, passed, items))
 
     # 3 tiny live -> full size
-    l_mean = mean_ret(live)
+    live = sorted(live, key=lambda t: t.exit_utc)
+    l_rets, l_note = imputer.net_rets(live)
+    l_mean = mean_ret(l_rets)
     l_days = (now - live_start).total_seconds() / 86400 if live_start is not None else 0.0
-    l_dd = max_drawdown(np.asarray([t.ret for t in sorted(live, key=lambda t: t.exit_utc)])) if live else None
+    l_dd = max_drawdown(np.asarray(l_rets)) if live else None
     by_broker = {b: [t for t in live if t.broker == b] for b in sorted({t.broker for t in live})}
-    means = {b: mean_ret(ts) for b, ts in by_broker.items()}
+    means = {b: mean_ret(imputer.net_rets(ts)[0]) for b, ts in by_broker.items()}
+    l_ok = not l_note.n_unpriced                 # a gross row that cannot be charged fails these items closed
     enough = [b for b, ts in by_broker.items() if len(ts) >= cfg.broker_min_trades]
     if len(enough) >= 2:
         vals = [float(means[b] or 0.0) for b in enough]
@@ -554,16 +591,21 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
                  need=f">= {cfg.live_min_trades}"),
         GateItem(name="live_days", met=l_days >= cfg.live_min_days, evidence=f"{l_days:.0f} days since paper_to_tiny_live",
                  need=f">= {cfg.live_min_days} days"),
-        GateItem(name="live_expectancy", met=within(l_mean, p_mean, cfg.live_expectancy_within),
-                 evidence=f"live {_fmt(l_mean)} vs paper {_fmt(p_mean)} per trade",
+        GateItem(name="live_expectancy",
+                 met=l_ok and not p_note.n_unpriced and within(l_mean, p_mean, cfg.live_expectancy_within),
+                 evidence=f"live {_fmt(l_mean)} vs paper {_fmt(p_mean)} per trade{_charged(l_note)}",
                  need=f"no more than {cfg.live_expectancy_within:.0%} below a positive paper expectancy"),
-        GateItem(name="live_drawdown", met=l_dd is not None and bt_dd is not None and l_dd < cfg.live_dd_mult * bt_dd,
-                 evidence=f"live max drawdown {_fmt(l_dd, '.4f')} vs backtest {_fmt(bt_dd, '.4f')} ({reference})",
+        GateItem(name="live_drawdown",
+                 met=l_ok and l_dd is not None and bt_dd is not None and l_dd < cfg.live_dd_mult * bt_dd,
+                 evidence=f"live max drawdown {_fmt(l_dd, '.4f')} vs backtest {_fmt(bt_dd, '.4f')} ({reference})"
+                 + _charged(l_note),
                  need=f"under {cfg.live_dd_mult}x backtest"),
-        GateItem(name="brokers_agree", met=brokers_ok,
-                 evidence=", ".join(f"{b} {len(ts)} trades {_fmt(means[b])}" for b, ts in by_broker.items()) or "no live trades",
+        GateItem(name="brokers_agree", met=l_ok and brokers_ok,
+                 evidence=(", ".join(f"{b} {len(ts)} trades {_fmt(means[b])}" for b, ts in by_broker.items())
+                           or "no live trades") + _charged(l_note),
                  need=f"two brokers with >= {cfg.broker_min_trades} trades each, expectancy within {cfg.brokers_within:.0%}"),
         _incident_item(stop, cap),
+        _gross_share_item("live_gross_share", l_note, cfg.max_gross_share),
     ]
     gates.append(_status(3, passed, items))
     return GateReport(ts=now, phase=int(st.get("phase", 0) or 0), gates_passed=passed, gates=gates, stop_rule=stop,

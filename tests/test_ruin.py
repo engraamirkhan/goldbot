@@ -188,15 +188,43 @@ def test_every_report_states_its_assumptions():
     assert "(halted at 12%; see rules-off run)" in format_report(rep)
 
 
-def test_r_from_closed_trades_keeps_order_skips_trades_without_r_and_is_net():
+def _ct(day: int, r: float | None, **kw: Any) -> Any:
     from goldbot.ops.gates_phase import ClosedTrade
+    net: dict[str, Any] = dict(commission=0.7, swap=0.0, pnl_basis="net")
+    return ClosedTrade(account_id="a", broker="icm", mode="demo", exit_utc=pd.Timestamp(f"2026-10-0{day} 12:00", tz="UTC"),
+                       ret=0.0, pnl=0.0, equity_before=1000, r=r, **(kw or net))
 
-    def ct(day: int, r: float | None) -> ClosedTrade:
-        return ClosedTrade(account_id="a", broker="icm", mode="demo", exit_utc=pd.Timestamp(f"2026-10-0{day}", tz="UTC"),
-                           ret=0.0, pnl=0.0, equity_before=1000, r=r)
-    s = r_from_closed_trades([ct(3, -1.0), ct(1, 2.0), ct(2, None)])
-    assert s.r.tolist() == [2.0, -1.0] and s.cost_basis == "net"
+
+def _priors() -> Any:
+    from goldbot.config import load_settings
+    from goldbot.ops.cost_imputation import CostImputer
+    return CostImputer.from_settings(load_settings())
+
+
+def test_r_from_closed_trades_keeps_order_skips_trades_without_r_and_is_net():
+    s = r_from_closed_trades([_ct(3, -1.0), _ct(1, 2.0), _ct(2, None)], costs=_priors())
+    assert s.r.tolist() == [2.0, -1.0] and s.cost_basis == "net" and s.n_imputed == 0
     assert s.exit_utc is not None and len(s.exit_utc) == 2
+
+
+def test_gross_closed_trades_are_kept_and_charged_their_imputed_cost_in_r():
+    """Quant review: a gross row pays commission (and paid swap) over its initial risk per oz, and the sample says so."""
+    gross = dict(pnl_basis="gross", side=1, entry_price=2_000.0, initial_sl=1_990.0,
+                 entry_utc=pd.Timestamp("2026-10-02 10:00", tz="UTC"))
+    s = r_from_closed_trades([_ct(1, 2.0), _ct(2, -1.0, **gross)], costs=_priors())
+    charge = 2 * 3.5 / 100 / 10.0                                   # icm commission both sides, intraday, 10 $/oz risk
+    assert s.r.tolist() == pytest.approx([2.0, -1.0 - charge])
+    assert s.cost_basis == "net+imputed" and s.n_imputed == 1
+    rep = simulate(RuinConfig(limits=_live(), trades_per_week=5, weeks=4, n_paths=10, horizons_weeks=(4,)),
+                   r=s.r, cost_basis=s.cost_basis, n_imputed=s.n_imputed)
+    assert "cost basis net+imputed (1)" in format_report(rep)
+    assert any("imputed" in n for n in rep.notes)
+
+
+def test_a_gross_row_whose_risk_is_unknown_makes_the_cost_basis_unknown():
+    gross = dict(pnl_basis="gross", side=1, entry_price=2_000.0, entry_utc=pd.Timestamp("2026-10-02 10:00", tz="UTC"))
+    s = r_from_closed_trades([_ct(1, 2.0), _ct(2, -1.0, **gross)], costs=_priors())
+    assert s.r.tolist() == [2.0, -1.0] and s.cost_basis == "unknown"
 
 
 def _shadow(version: str, closes: list[dict[str, Any]]) -> dict[str, Any]:
@@ -265,7 +293,8 @@ def test_observed_trade_rate_is_reported_and_a_mismatch_warned(tmp_path: Path):
     from goldbot.ops.gates_phase import ClosedTrade
     days = pd.date_range("2026-01-05", periods=40, freq="7D", tz="UTC")     # 1 trade a week for 39 weeks
     lines = [ClosedTrade(account_id="a", broker="icm", mode="demo", exit_utc=d, ret=0.0, pnl=0.0, equity_before=1000,
-                         r=1.0 if i % 2 else -1.0, position_id=i).model_dump_json() for i, d in enumerate(days)]
+                         r=1.0 if i % 2 else -1.0, position_id=i, commission=0.7, swap=0.0,
+                         pnl_basis="net").model_dump_json() for i, d in enumerate(days)]
     (tmp_path / "closed_trades_a.jsonl").write_text("\n".join(lines) + "\n")
     out = tmp_path / "r.json"
     assert main(["--closed-trades", str(tmp_path), "--trades-per-week", "5", "--weeks", "4", "--horizons", "4",

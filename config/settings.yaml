@@ -267,6 +267,10 @@ gates:                               # design: Roadmap gates and stop rule (gold
   stop_after_months: 18              # stop rule: "after 18 months of paper plus live"
   stop_min_pooled_trades: 500        #   "the pooled trade count exceeds 500"
   stop_confidence: 0.90              #   "the lower 90% confidence bound on expectancy is still below zero" (one-sided)
+  # OWNER DECISION, off until set (recommended 0.05). Every gross trade (commission or swap unknown) already pays a
+  # conservative imputed cost in the expectancy, drawdown and stop-rule figures; this also fails the paper and live
+  # gates while more than this share of their trades is gross. null = the share is shown for context only.
+  max_gross_share: null
 
 gaps:                                # bounded spawning (goldbot/ops/gap_watch.py, TRADER_LIFECYCLE section 3)
   founders_per_month: 2              # zero-capital SHADOW founders a month (into 4 reserved slots inside the 24 shadow cap)

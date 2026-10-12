@@ -76,6 +76,18 @@ def case_closed_trade(tmp: Path) -> None:
     assert load_closed_trades(tmp) == ([t], None)
 
 
+def case_closed_trade_from_before_ret_basis(tmp: Path) -> None:
+    """A record written before `ret_basis` existed (or rewritten by an older release) reads it as None: unknown, never
+    "pnl" (the cost imputation then charges it by its pnl_basis, as a legacy row)."""
+    t = ClosedTrade(account_id="icm-demo", broker="icmarkets", mode="demo", exit_utc=T0, ret=0.001, pnl=10.0,
+                    equity_before=10_000.0, ret_basis="price")
+    row = json.loads(t.model_dump_json())
+    del row["ret_basis"]
+    (tmp / "closed_trades_icm-demo.jsonl").write_text(json.dumps(row) + "\n")
+    (back,), err = load_closed_trades(tmp)
+    assert err is None and back.ret_basis is None
+
+
 def case_bus_proposal(tmp: Path) -> None:
     bus = ApprovalBus(tmp)
     p = _proposal()
@@ -230,7 +242,7 @@ def case_ledger(tmp: Path) -> None:
     assert ledger.latest_report(tmp, "icm-demo") == rep
 
 
-CASES = [case_closed_trade, case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
+CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
          case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger]
 
