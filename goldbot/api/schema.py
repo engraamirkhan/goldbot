@@ -306,7 +306,7 @@ class RearmRequest(ApiRequest):
 class Status(BaseModel):
     mode: str
     halted: bool
-    halted_by: str | None = None
+    halted_by: str | None = None           # the channel that halted ("dashboard" | "telegram"), never who (A15)
     halt_reason: str | None = None
     pending: int
     supervisor: dict[str, Any]

@@ -247,7 +247,9 @@ class TelegramBot:  # pragma: no cover - needs network + token
             return
         try:
             approve = parts[0] == "ok"
-            self.bus.submit(parts[1], approve, None if approve else parts[2], by=f"telegram:{uid}")
+            reason = None if approve else parts[2]
+            self.bus.submit(parts[1], approve, reason, by="telegram")     # the channel only on disk (A15)
+            self._audit("decision", uid, proposal=parts[1], action="approve" if approve else "reject", reason=reason)
             await q.answer("sent to the engine")
             await q.edit_message_text(q.message.text + "\n\n→ " + ("approve" if approve else f"reject ({parts[2]})")
                                       + ": the engine re-checks risk and acts")
@@ -262,7 +264,8 @@ class TelegramBot:  # pragma: no cover - needs network + token
         parts = update.message.text.split(maxsplit=1)
         cmd, arg = parts[0].split("@")[0], (parts[1] if len(parts) > 1 else None)
         if cmd == "/halt":
-            self.bus.set_halt(True, by=f"telegram:{uid}", reason=arg)
+            self.bus.set_halt(True, by="telegram", reason=arg)             # the channel only on disk (A15)
+            self._audit("halt", uid, reason=arg)
             text = "HALTED: no new entries on any engine. Open positions keep their stops and exits. Re-arm on the dashboard."
         elif cmd == "/rearm":
             text = "Re-arming needs your authenticator code: use the dashboard (Overview → Re-arm)."
@@ -280,6 +283,14 @@ class TelegramBot:  # pragma: no cover - needs network + token
             # the dashboard's Entry status words (goldbot/telegram/entry_text.py), per account; plain text, no parse_mode
             text = await asyncio.to_thread(self._status_text)
         await update.message.reply_text(text)
+
+    def _audit(self, event: str, uid: int, **kw: object) -> None:
+        """Who acted, in the VPS audit log the dashboard and /mode write (automode.audit_to: state/aux.db), never in
+        approvals/ or control.json (A15). After the action: a failed write is logged and never undoes or hides it."""
+        try:
+            automode.audit_to(self.state_dir)(event, by=f"telegram:{uid}", telegram_id=uid, **kw)
+        except Exception as exc:                # noqa: BLE001 - the decision or halt already stands
+            log.warning("audit of %s failed: %s", event, type(exc).__name__)
 
     def _status_text(self) -> str:
         """Any failure (control file, pending list, settings, build) replies with entry_text.FAILED, never nothing."""

@@ -66,7 +66,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; settings and `hypotheses.md` B together) |
 | 50 | --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners | Idea generation (integrity) · FIND | M | implemented 2026-10-11 (TRACEABILITY M43; quant review pending) |
 | 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | proposed (security re-verify of BACKLOG 47, 2026-10-11) |
-| 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | implemented (security and trading-safety review pending; A14) |
+| 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | implemented (security and trading-safety review pending; A14, follow-ups A15) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later

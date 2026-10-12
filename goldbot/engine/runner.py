@@ -467,6 +467,13 @@ class Engine:
                 continue
             if p.expired and p.proposal_id not in self.pending:
                 bus.archive(p)
+        # A15: decision files left behind (no pending file, or a day old) go, so an old click's channel or, from a
+        # release before it, the decider's identity does not linger on disk. Never stops the start.
+        try:
+            if n := bus.sweep_decisions():
+                log.info("swept %d leftover decision files", n)
+        except Exception as exc:            # noqa: BLE001 - housekeeping: a start never fails on it
+            log.warning("decision sweep failed: %s: %s", type(exc).__name__, exc)
 
     # ------------------------------------------------------------------ ticks and bars
     def on_tick(self, t: Tick) -> list[dict]:

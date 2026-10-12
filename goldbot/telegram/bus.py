@@ -17,7 +17,10 @@ until the owner first sets it (the engine then uses its configured mode), and on
 after the evidence check and a TOTP (goldbot/telegram/automode.py). An engine's 12% kill switch writes it back to
 `propose`. The re-arm lock and the kill switch still force propose-and-approve inside the engine whatever it says.
 Writers here are authenticated before they call the bus (API role check, Telegram allow-list); the files are only
-reachable on the VPS.
+reachable on the VPS. Who decided, halted or re-armed is not kept here (A15, the follow-up to BACKLOG 52): a decision
+file and the halt and re-arm in control.json record only the channel ("dashboard" | "telegram"); the identity goes to
+the audit log (state/aux.db), written by the dashboard and the Telegram service. An engine start sweeps decision files
+left behind (`sweep_decisions`).
 """
 from __future__ import annotations
 
@@ -41,13 +44,13 @@ class BusDecision(Record):
     proposal_id: str
     approve: bool
     reason_code: str | None = None
-    by: str                         # "dashboard:<email>" | "telegram:<user id>"
+    by: str                         # "dashboard" | "telegram": the channel only (A15); older files: "<channel>:<id>"
     ts: float
 
 
 class Control(Record):
     halted: bool = False
-    by: str | None = None
+    by: str | None = None           # the channel that halted or re-armed (A15); older files: "<channel>:<id>"
     ts: float = 0.0
     reason: str | None = None
     rearm_id: str | None = None     # new on every owner re-arm; engines clear a drawdown halt once per id
@@ -59,6 +62,7 @@ class Control(Record):
     mode_reason: str | None = None
 
 
+DECISION_MAX_AGE_S = 86_400.0      # a decision file this old is long past any proposal's window: swept at engine start
 ApprovalMode = Literal["propose", "auto"]
 _MODE_FIELDS = ("approval_mode", "mode_by", "mode_ts", "mode_reason")
 
@@ -135,7 +139,9 @@ class ApprovalBus:
         return None
 
     def submit(self, proposal_id: str, approve: bool, reason_code: str | None, by: str) -> BusDecision:
-        """Record a decision; raises KeyError (unknown, expired or already decided) or ValueError (reason code)."""
+        """Record a decision; raises KeyError (unknown, expired or already decided) or ValueError (reason code). `by`
+        is the channel; an identity after ":" is dropped, so the file never carries it (A15: "the decision file keeps
+        only the channel; the identity is in the audit log")."""
         if not approve and reason_code not in REASON_CODES:
             raise ValueError(f"rejection needs a reason code from {REASON_CODES}")
         f = self.pending_dir / f"{proposal_id}.json"
@@ -143,12 +149,27 @@ class ApprovalBus:
             raise KeyError("unknown or already decided proposal")
         if load_record_json(Proposal, f.read_text(), source="approvals/pending").expired:
             raise KeyError("proposal expired")
-        d = BusDecision(proposal_id=proposal_id, approve=approve, reason_code=None if approve else reason_code, by=by,
-                        ts=time.time())
+        d = BusDecision(proposal_id=proposal_id, approve=approve, reason_code=None if approve else reason_code,
+                        by=decision_channel(by), ts=time.time())     # never the id or email on disk (A15)
         # first decision wins, and it is written whole before it becomes visible (no empty decision after a crash)
         if not create_exclusive(self.decisions_dir / f"{proposal_id}.json", d.model_dump_json()):
             raise KeyError("already decided")
         return d
+
+    def sweep_decisions(self, max_age_s: float = DECISION_MAX_AGE_S) -> int:
+        """Delete decision files left behind: those with no pending file (the proposal was archived, e.g. by a process
+        that stopped between the two unlinks in `archive`) and those older than `max_age_s` by file time (long past
+        any window; the engine archives the proposal itself). Read by name and age only, so a torn or newer file goes
+        too. Called at engine start (A15); returns how many were deleted. A file that cannot be removed is skipped."""
+        cutoff, n = time.time() - max_age_s, 0
+        for f in self.decisions_dir.glob("*.json"):
+            try:
+                if not (self.pending_dir / f.name).exists() or f.stat().st_mtime < cutoff:
+                    f.unlink(missing_ok=True)
+                    n += 1
+            except OSError:
+                continue
+        return n
 
     def recent(self, max_age_s: float = 600.0, limit: int = 20) -> list[tuple[Proposal, BusDecision | None]]:
         """Proposals decided in the last `max_age_s`, newest first, for the dashboard's decided cards: those the engine
@@ -192,17 +213,20 @@ class ApprovalBus:
             return Control(halted=True, reason="unreadable control.json", approval_mode="propose")
 
     def set_halt(self, halted: bool, by: str, reason: str | None = None) -> Control:
+        """`by` is the channel; an identity after ":" is dropped (A15: the identity is in the audit log)."""
         prev = self.control()
-        c = Control(halted=halted, by=by, ts=time.time(), reason=reason, rearm_id=prev.rearm_id, rearm_by=prev.rearm_by,
+        c = Control(halted=halted, by=decision_channel(by), ts=time.time(), reason=reason, rearm_id=prev.rearm_id, rearm_by=prev.rearm_by,
                     rearm_ts=prev.rearm_ts, **{k: getattr(prev, k) for k in _MODE_FIELDS})
         _write_atomic(self.control_path, c.model_dump_json())
         return c
 
     def owner_rearm(self, by: str) -> Control:
         """The owner's re-arm, called only after the owner role and a TOTP code were verified: clears the owner halt
-        and issues a new rearm id, which the engines answer by clearing their drawdown halt."""
+        and issues a new rearm id, which the engines answer by clearing their drawdown halt. `by` is kept as its
+        channel only, as for a halt (A15)."""
         now = time.time()
         prev = self.control()
+        by = decision_channel(by)
         c = Control(halted=False, by=by, ts=now, rearm_id=uuid.uuid4().hex, rearm_by=by, rearm_ts=now,
                     **{k: getattr(prev, k) for k in _MODE_FIELDS})
         _write_atomic(self.control_path, c.model_dump_json())

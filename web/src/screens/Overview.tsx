@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, hasRole, type Status } from "../lib/api";
+import { viaChannel } from "../lib/approval";
 import { AutoModeCard } from "./AutoMode";
 import { BalanceCard, BalanceCardSkeleton } from "./BalanceCard";
 import { EntryStatusPanel } from "./EntryStatus";
@@ -54,7 +55,7 @@ function HaltControl({ status }: { status: Status }) {
   if (status.halted) {
     return (
       <div className="halt bad">
-        <p>Entries halted{status.halted_by ? ` by ${status.halted_by}` : ""}{status.halt_reason ? `: ${status.halt_reason}` : ""}.</p>
+        <p>Entries halted{status.halted_by ? ` via ${viaChannel(status.halted_by)}` : ""}{status.halt_reason ? `: ${status.halt_reason}` : ""}.</p>
         {hasRole("owner") ? (
           <form onSubmit={(e) => { e.preventDefault(); rearm.mutate(); }}>
             <input aria-label="Authenticator code" inputMode="numeric" placeholder="authenticator code" value={code} onChange={(e) => setCode(e.target.value)} />

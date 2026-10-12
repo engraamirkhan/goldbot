@@ -4,7 +4,7 @@ rank: 45
 title: Approvals keep only the decision channel on disk and in the API
 stage: Execution and risk (approvals) · SECURE
 size: S
-status: implemented (security and trading-safety review pending; A14)
+status: implemented (security and trading-safety review pending; A14, follow-ups A15)
 ---
 - **52. Approvals keep only the decision channel on disk and in the API (trading-safety review of the finance audit
   record, 2026-10-11).** Value: an archived proposal in `approvals/done/` still carries the owner's identity:
