@@ -13,3 +13,6 @@ number: 44
     the broker's stops are resting;
   - tests: a single zero-equity read never closes a position; two consecutive real 12% reads close everything as
     today.
+  - **Done 2026-10-11:** ADR 0016; `RiskSettings.equity_check_tolerance`, `AccountState.equity_unconfirmed`,
+    runner `_equity_unconfirmed` (re-read on the next tick), gate reason `equity_unconfirmed`; tests in
+    `tests/test_equity_confirmation.py` (TRACEABILITY R39). Awaiting trading-safety review.

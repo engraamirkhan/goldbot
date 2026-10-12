@@ -167,6 +167,9 @@ class RiskSettings(_Section):
     # BACKLOG 35: with an absolute daily loss limit (accounts.yaml), the projection also counts the open positions'
     # remaining stop risk; off by default
     project_open_risk: bool = False
+    # BACKLOG 44 (ADR 0016): a 12% drawdown read trips the kill switch at once when |equity - (balance + open P&L)| is
+    # within this fraction of the high-water mark, else only when the next account read is also at 12%
+    equity_check_tolerance: float = Field(0.02, gt=0, lt=0.12)
     # BACKLOG 17: entry windows after the daily reopen / weekly open and on thin-liquidity days; off by default
     reopen: ReopenSettings = Field(default_factory=ReopenSettings)
     holidays: HolidaySettings = Field(default_factory=HolidaySettings)

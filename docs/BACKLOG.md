@@ -628,6 +628,9 @@ hypotheses that go through the trial registry in a future quarter's budget.
     the broker's stops are resting;
   - tests: a single zero-equity read never closes a position; two consecutive real 12% reads close everything as
     today.
+  - **Done 2026-10-11:** ADR 0016; `RiskSettings.equity_check_tolerance`, `AccountState.equity_unconfirmed`,
+    runner `_equity_unconfirmed` (re-read on the next tick), gate reason `equity_unconfirmed`; tests in
+    `tests/test_equity_confirmation.py` (TRACEABILITY R39). Awaiting trading-safety review.
 - **45. Measure the holiday list before it is adopted (performance analyst; review M3, 2026-10-11).** Value: the
   holiday window (item 17, `config/holidays_cme_metals.yaml`) is a proxy, not a measurement; blocking entries on a
   day that trades normally costs signals for nothing. Do: for every listed day in the stored ticks and bars, the

@@ -45,7 +45,7 @@ from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resamp
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
-from goldbot.execution.broker import Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
+from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
@@ -439,6 +439,7 @@ class Engine:
         # retried every tick (kill switch, weekend, time exit, hard flat, trail, blackout, engine stop) until done
         self._close_due: dict[int, tuple[str, dict, pd.Timestamp | None]] = {}
         self._kill_pending = False                   # the kill switch has not seen this engine's book flat yet
+        self._stage2_read = False                    # the last account read was at 12% drawdown (ADR 0016)
         # an invalid feed (a dropped quote or a last_tick read that raised): since when on the host clock (engine state,
         # health FAILs after QUOTE_INVALID_FAIL_S), and when the state file was last written meanwhile
         self._quote_invalid_since: pd.Timestamp | None = None
@@ -566,7 +567,8 @@ class Engine:
                     and self._error_tick_ts < bar_open:
                 self.state.tick_error, self._tick_error_detail = False, None   # a whole clean decision bar closed
                 self._write_state()
-        elif self._last_state_write is None or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:
+        elif self.state.equity_unconfirmed or self._last_state_write is None \
+                or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:   # ADR 0016 re-read
             self._rebuild_bars()            # completed minutes join the bars between closes, so their age is current
             self._refresh_account(t)
             self._write_state()
@@ -1845,6 +1847,7 @@ class Engine:
         owner_mode = self.center.bus.control().approval_mode if self.center.bus is not None else None
         if owner_mode is not None:
             self.cfg.approval_mode = owner_mode  # the owner's /mode (A10); the kill switch and re-arm lock win below
+        st.equity_unconfirmed = self._equity_unconfirmed(acc, positions)
         stage = st.stage
         if self.gate.update_stage(st) != stage:
             if st.stage == Stage.HALTED:
@@ -1854,6 +1857,29 @@ class Engine:
             self._kill_switch(everything=stage != Stage.HALTED)
         if self._propose_only_until is not None and now < self._propose_only_until:
             self.cfg.approval_mode = "propose"  # 30 days propose-and-approve after a re-arm
+
+    def _equity_unconfirmed(self, acc: AccountInfo, positions: list[Position] | None) -> bool:
+        """BACKLOG 44 (ADR 0016): "one disagreeing read never trips the kill switch; two agreeing reads always do".
+        An account read at 12% drawdown or more is confirmed, and the stage machine runs on it, when the balance plus
+        this symbol's open P&L agrees with the equity within `equity_check_tolerance` of the high-water mark (a genuine
+        crash: no delay), or when the previous account read was at 12% too. Otherwise (a zero or collapsed equity, an
+        unreadable book) it is unconfirmed: entries are refused, no stage moves, and the account is read again on the
+        next tick (`on_tick`), so a genuine crash is closed at most one tick later. Exits are never
+        gated: stops rest at the broker and every exit keeps running meanwhile."""
+        st, L = self.state, self.gate.limits
+        hwm = st.balance_closed_hwm
+        zone = st.stage != Stage.HALTED and hwm > 0 and 1 - acc.equity / hwm >= L.dd_stage2
+        prev, self._stage2_read = self._stage2_read, zone
+        if not zone or prev:
+            return False
+        if positions is not None and acc.equity > 0 and acc.balance > 0 and \
+                abs(acc.equity - acc.balance - sum(p.profit for p in positions)) <= L.equity_check_tolerance * hwm:
+            return False
+        log.warning("equity %.2f is a 12%% drawdown that balance %.2f plus open P&L does not confirm; entries refused, "
+                    "re-read next tick", acc.equity, acc.balance)
+        self.decisions.append({"ts": time.time(), "action": "equity_unconfirmed", "equity": acc.equity,
+                               "balance": acc.balance})
+        return True
 
     def set_sessions(self, table: SessionTable) -> None:
         """The broker session table (D13), refreshed by the run loop outside the tick path (goldbot/ops/run.py
