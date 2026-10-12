@@ -19,8 +19,9 @@ its services the same way. A (block, pos) pair is taken once; a block has one sc
   BLOCK_TAIL             data quality ... dead man's switch
 
 A check is called through `goldbot.ops.health` when that module exports its name (`resolve`): health is the public
-surface callers and tests import and patch, exactly as when run_checks was written out by hand there. A new check need
-not be re-exported; it is then called directly.
+surface callers and tests import and patch, exactly as when run_checks was written out by hand there. Every registered
+check must be re-exported from goldbot/ops/health.py (tests/test_health_registry.py enforces it), which also catches two
+checks sharing a function name.
 """
 from __future__ import annotations
 

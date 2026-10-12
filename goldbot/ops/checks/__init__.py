@@ -11,8 +11,8 @@
 
 Adding a check: write it in its area module with `@register_check(scope, block=..., pos=...)` (registry.py explains
 the order) and put a threshold it alone uses next to it; the shared table in _base.py is for thresholds several checks
-quote. Nothing else needs editing: run_checks picks the check up from the registry. Re-export it from
-goldbot/ops/health.py only when callers import it from there.
+quote. run_checks picks the check up from the registry. Also re-export it from goldbot/ops/health.py (import and
+`__all__`; tests/test_health_registry.py enforces it), and import any new area module here or its checks never register.
 """
 from goldbot.ops.checks import (  # noqa: F401 - registers the checks
     auth,
