@@ -262,10 +262,11 @@ def test_an_unconverted_own_fill_pnl_is_recorded_in_usd_with_a_flag_and_kept_out
     from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade
     append_closed_trade(tmp_path, ClosedTrade(account_id="icm-demo", broker="icm", mode="demo",
                                               exit_utc=T0 + pd.Timedelta(minutes=40), ret=0.001, pnl=5.0,
-                                              equity_before=1_000.0, position_id=99))
+                                              equity_before=1_000.0, position_id=99, pnl_basis="net"))
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"account": "icm-demo", "currency": "GBP"}))
     line = trades_line(tmp_path, T0, T0 + pd.Timedelta(days=1))[0]
-    assert "net +£5.00 · -$10.90" in line                       # each currency summed on its own, never together
+    # the engine's own fills carry no commission or swap: that row is gross only (GAP-05), never in the net
+    assert "net +£5.00 · " in line and "1 trade gross only (costs not recorded): -$10.90" in line
     assert "5.90" not in line
 
 
@@ -293,7 +294,8 @@ def test_a_converted_gbp_trade_states_its_currency_is_not_flagged_and_is_summed(
     assert r_understated(legacy, "GBP")                                         # a pre-fix record keeps its flag
     eng._write_state()                                                          # engine file: currency GBP
     line = trades_line(tmp_path, T0, T0 + pd.Timedelta(days=1))[0]
-    assert f"net +£{30.0 / 1.33:,.2f}" in line and "$" not in line
+    # summed in pounds, as gross: the paper fill records no commission or swap (GAP-05), so it is never labelled net
+    assert f"1 trade gross only (costs not recorded): +£{30.0 / 1.33:,.2f}" in line and "$" not in line
 
 
 # ---------------------------------------------------------------------------------------------- LOW-2

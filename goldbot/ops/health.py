@@ -94,6 +94,11 @@ BACKUP_FAIL_H = 72.0              # three missed nights fail
 DRILL_WARN_DAYS = 8.0             # weekly restore drill
 PRUNE_WARN_DAYS = 45.0            # monthly retention from the owner's Mac (scripts/backup_retention.sh), two weeks' slack
 BACKUP_REPO_WARN_BYTES = 15e9     # of the 20 GB Oracle Object Storage free tier
+# finance audit GAP-05: closed trades whose P&L is not net (costs not recorded) are left out of every net figure; above
+# one in five over a month the net totals rest on too thin a part of the trading to be read as the month's result.
+# A data-quality warning only, never a fail: nothing trades differently because of it
+PNL_BASIS_WINDOW_DAYS = 30
+PNL_BASIS_GROSS_WARN_PCT = 20.0
 
 REQUIRED_SECRETS = ("telegram-bot-token",)   # the webhook secret is optional: only the webhook service needs it
 OPTIONAL_SECRETS = ("anthropic-api-key", "github-token", "tradingview-webhook-secret")   # features switch off without them
@@ -708,6 +713,33 @@ def check_costs(ctx: HealthContext, account_id: str) -> Check:
         # research and retraining then charge the settings' swap prior (see state/broker_terms_<account>.json)
         return Check(name=name, status="warn", reason=msg + "; no measured swap from the terminal: swap prior in use")
     return Check(name=name, status="ok", reason=msg)
+
+
+def check_pnl_basis(ctx: HealthContext, account_id: str) -> Check:
+    """Share of this account's closed trades over the last PNL_BASIS_WINDOW_DAYS (by exit) that are not net
+    (gates_phase.pnl_basis: "gross", or a legacy row without both commission and swap). The reports leave those out
+    of every net figure ("nothing gross is labelled net"), so WARN when more than PNL_BASIS_GROSS_WARN_PCT of them are;
+    never FAIL, even on an unreadable record: it is a reporting-quality signal, not a trading fault."""
+    from goldbot.ops.gates_phase import load_closed_trades, pnl_basis
+    name = f"pnl_basis:{account_id}"
+    try:
+        trades, err = load_closed_trades(ctx.state_dir)
+    except (OSError, ValueError) as exc:
+        return Check(name=name, status="warn", reason=f"closed-trade record unreadable: {type(exc).__name__}")
+    since = ctx.now - pd.Timedelta(days=PNL_BASIS_WINDOW_DAYS)
+    rows = [t for t in trades if t.account_id == account_id and since <= t.exit_utc <= ctx.now]
+    note = f"; {err}" if err else ""
+    if not rows:
+        return Check(name=name, status="warn" if err else "ok",
+                     reason=f"no closed trades in the last {PNL_BASIS_WINDOW_DAYS} d{note}"[:400])
+    gross = sum(pnl_basis(t) != "net" for t in rows)
+    pct = 100.0 * gross / len(rows)
+    msg = (f"{gross} of {len(rows)} closed trades in the last {PNL_BASIS_WINDOW_DAYS} d ({pct:.0f}%) are gross only "
+           f"(costs not recorded)")
+    if pct > PNL_BASIS_GROSS_WARN_PCT:
+        return Check(name=name, status="warn", reason=(f"{msg}, > {PNL_BASIS_GROSS_WARN_PCT:.0f}%: the net totals leave "
+                                                       f"them out (check the broker's deal history){note}")[:400])
+    return Check(name=name, status="warn" if err else "ok", reason=(msg + note)[:400])
 
 
 def check_costs_published(ctx: HealthContext) -> Check:
@@ -1596,6 +1628,7 @@ def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport
         checks += g("scheduler", lambda: check_scheduler(ctx))
         for a in ctx.accounts:
             checks += g(f"costs:{a.account_id}", lambda: check_costs(ctx, a.account_id))
+            checks += g(f"pnl_basis:{a.account_id}", lambda: check_pnl_basis(ctx, a.account_id))
         for a in ctx.accounts:
             checks += g(f"reconciliation:{a.account_id}", lambda: check_reconciliation(ctx, a.account_id))   # D12
         if ctx.settings is not None and ctx.settings.costs.publish_release:

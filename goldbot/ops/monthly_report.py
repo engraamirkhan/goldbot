@@ -1,7 +1,17 @@
 """Monthly north-star report (BACKLOG 26, backend; ADR 0004 section 6), from the closed-trade record
-(state/closed_trades_*.jsonl, net of every cost) and the engines' live state for the milestone ladder.
+(state/closed_trades_*.jsonl) and the engines' live state for the milestone ladder.
 
     python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]
+
+Day convention: a day is the UTC calendar day, 00:00-24:00 UTC, the risk day on which the loss caps reset (settings
+`risk_day_anchor`) and the digest's "yesterday"; a trade belongs to the day and the month of its exit. The performance
+report (perf_report.py) uses the opportunity day (22:00 UTC roll) instead, so a close between 22:00 and 24:00 UTC sits
+on different days in the two reports; the report states its boundary (`MonthlyReport.day_boundary`).
+
+P&L basis (finance audit GAP-05, as perf_report.py): every money, R, return, drawdown and day figure uses net rows
+only, a row with `pnl_basis` "net" or a legacy row (no `pnl_basis`) that records both commission and swap
+(gates_phase.pnl_basis). Every other row is counted in the trades and shown apart as "N trades gross only (costs not
+recorded)" with its gross money and R, left out of every net figure: nothing gross is labelled net.
 
 Per account, for one calendar month (UTC; default the current one):
 * % return as a chained closed-trade return (time-weighted; deposits excluded): the product of
@@ -42,11 +52,12 @@ import pandas as pd
 
 from goldbot.base import FrozenRecord
 from goldbot.ops.account_view import Milestones, milestones
-from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades
+from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades, pnl_basis
 
 NORTH_STAR_DAY_GBP = 50.0         # ADR 0004 section 6: days at £50+ are counted, never aimed at
 BEST_DAYS = 3
 R_NOTE = "R understated on non-USD accounts until BACKLOG 28"
+DAY_BOUNDARY = "UTC 00:00-24:00 (the risk day on which the loss caps reset)"
 SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€"}
 
 
@@ -60,7 +71,8 @@ class DayPnl(FrozenRecord):
 class AccountMonth(FrozenRecord):
     account_id: str
     currency: str | None = None    # from the engine's state; None when no engine reports it
-    trades: int
+    trades: int                    # every closed trade, whatever its P&L basis
+    net_trades: int = 0            # net rows (gates_phase.pnl_basis): the only rows in the money, R, return and days
     twr_pct: float
     pnl: float
     net_r: float | None = None
@@ -87,11 +99,18 @@ class AccountMonth(FrozenRecord):
     approx_mae_r_median: float | None = None   # the same over the approximate records only (excursion_approx)
     approx_mfe_r_median: float | None = None
     excursion_approx: int = 0          # approximate records with an MAE / MFE in R
+    # rows that are not net (pnl_basis "gross", or a legacy row without both commission and swap): counted in the
+    # trades, shown apart with their gross money (account-currency rows only) and R, never in a net figure
+    gross_only: int = 0
+    gross_pnl: float | None = None
+    gross_r: float | None = None
+    gross_note: str | None = None      # "N trades gross only (costs not recorded)"
 
 
 class MonthlyReport(FrozenRecord):
     month: str                     # YYYY-MM
     as_of_utc: str
+    day_boundary: str = DAY_BOUNDARY   # what a "day" is in this report (module docstring: day convention)
     accounts: list[AccountMonth]
     errors: list[str] = []
 
@@ -146,9 +165,11 @@ def account_month(account: str, trades: list[ClosedTrade], start: pd.Timestamp, 
     def same(t: ClosedTrade) -> bool:
         return t.pnl_currency is None or t.pnl_currency.upper() == acct
 
-    money_rows = [t for t in trades if same(t)]
+    net = [t for t in trades if pnl_basis(t) == "net"]
+    gross = [t for t in trades if pnl_basis(t) != "net"]
+    money_rows = [t for t in net if same(t)]
     left: dict[str, int] = {}
-    for t in trades:
+    for t in net:
         if not same(t):
             left[str(t.pnl_currency).upper()] = left.get(str(t.pnl_currency).upper(), 0) + 1
     pnl_note = ", ".join(f"{n} in {c} not summed" for c, n in sorted(left.items())) or None
@@ -157,7 +178,7 @@ def account_month(account: str, trades: list[ClosedTrade], start: pd.Timestamp, 
         idx *= 1 + t.pnl / t.equity_before
         peak = max(peak, idx)
         dd = max(dd, 1 - idx / peak)
-    rs = [t.r for t in trades if t.r is not None]
+    rs = [t.r for t in net if t.r is not None]
     days: dict[str, list[ClosedTrade]] = {}
     for t in money_rows:
         days.setdefault(f"{t.exit_utc:%Y-%m-%d}", []).append(t)
@@ -168,7 +189,9 @@ def account_month(account: str, trades: list[ClosedTrade], start: pd.Timestamp, 
     n_days = _weekdays(start, end)
     pnl = sum(t.pnl for t in money_rows)
     eq = engine.get("equity")
-    flagged = sum(r_understated(t, ccy) for t in trades)
+    flagged = sum(r_understated(t, ccy) for t in net)
+    gross_money = [t.pnl for t in gross if same(t)]
+    gross_rs = [t.r for t in gross if t.r is not None]
     overlapped = any(b.entry_utc is not None and b.entry_utc < a.exit_utc for a, b in zip(trades, trades[1:]))
     exc = [t for t in trades if t.mae_r is not None and t.mfe_r is not None]
     exact = [t for t in exc if not t.excursion_approx]
@@ -177,7 +200,7 @@ def account_month(account: str, trades: list[ClosedTrade], start: pd.Timestamp, 
     def med(rows: list[ClosedTrade], field: str) -> float | None:
         return float(np.median([getattr(t, field) for t in rows])) if rows else None
     return AccountMonth(
-        account_id=account, currency=ccy, trades=len(trades), twr_pct=100 * (idx - 1), pnl=pnl,
+        account_id=account, currency=ccy, trades=len(trades), net_trades=len(net), twr_pct=100 * (idx - 1), pnl=pnl,
         net_r=sum(rs) if rs else None, r_per_trade=float(np.mean(rs)) if rs else None, r_trades=len(rs),
         r_ci90=_ci90(rs), max_drawdown_pct=100 * dd, trading_days=n_days, avg_per_day=pnl / n_days if n_days else 0.0,
         best_days=best,
@@ -187,7 +210,13 @@ def account_month(account: str, trades: list[ClosedTrade], start: pd.Timestamp, 
         r_flagged=flagged, overlapped=overlapped, pnl_excluded=sum(left.values()), pnl_note=pnl_note,
         mae_r_median=med(exact, "mae_r"), mfe_r_median=med(exact, "mfe_r"), excursion_trades=len(exact),
         approx_mae_r_median=med(approx_exc, "mae_r"), approx_mfe_r_median=med(approx_exc, "mfe_r"),
-        excursion_approx=len(approx_exc))
+        excursion_approx=len(approx_exc), gross_only=len(gross),
+        gross_pnl=sum(gross_money) if gross_money else None, gross_r=sum(gross_rs) if gross_rs else None,
+        gross_note=f"{_trades(len(gross))} gross only (costs not recorded)" if gross else None)
+
+
+def _trades(n: int, kind: str = "") -> str:
+    return f"{n} {kind}trade{'s' if n != 1 else ''}"
 
 
 def build_monthly_report(state_dir: str | Path, *, month: str | None = None,
@@ -228,7 +257,8 @@ def _ladder_line(m: Milestones | None, ccy: str | None) -> str:
 
 def format_report(rep: MonthlyReport) -> str:
     name = pd.Timestamp(f"{rep.month}-01").strftime("%B %Y")
-    lines = [f"goldbot monthly report · {name} (UTC) · as of {rep.as_of_utc[:16].replace('T', ' ')} UTC"]
+    lines = [f"goldbot monthly report · {name} (UTC) · as of {rep.as_of_utc[:16].replace('T', ' ')} UTC",
+             f"Net of commission and swap; days run {rep.day_boundary}"]
     if not rep.accounts:
         lines.append("No closed trades this month.")
     for a in rep.accounts:
@@ -237,8 +267,8 @@ def format_report(rep: MonthlyReport) -> str:
         lines.append(f"{a.account_id} ({c or 'currency not reported'})")
         approx = " · approximate: positions overlapped" if a.overlapped else ""
         lines.append(f"  Return {a.twr_pct:+.2f}% (chained closed-trade return, time-weighted; deposits excluded"
-                     f"{approx}) · net {money(a.pnl, c)}{f' ({a.pnl_note})' if a.pnl_note else ''} over {a.trades} "
-                     f"trade{'s' if a.trades != 1 else ''}")
+                     f"{approx}) · net {money(a.pnl, c)}{f' ({a.pnl_note})' if a.pnl_note else ''} over "
+                     f"{_trades(a.net_trades, 'net ')} of {a.trades}")
         if a.net_r is not None:
             ci = f", 90% t-interval (approx.) {a.r_ci90[0]:+.2f} to {a.r_ci90[1]:+.2f}" if a.r_ci90 else ""
             note = f" ({a.r_note})" if a.r_note else ""
@@ -261,6 +291,11 @@ def format_report(rep: MonthlyReport) -> str:
         lines.append(f"  Best days: {best}")
         if a.days_50_plus is not None:
             lines.append(f"  Days at £50 or more: {a.days_50_plus}")
+        if a.gross_note:
+            figs = ([money(a.gross_pnl, c)] if a.gross_pnl is not None else []) + \
+                ([f"{a.gross_r:+.2f}R"] if a.gross_r is not None else [])
+            lines.append(f"  {a.gross_note}: {' · '.join(figs) + ' gross, ' if figs else ''}"
+                         "left out of every figure above")
         lines.append("  " + _ladder_line(a.milestones, c))
     for e in rep.errors:
         lines.append(f"⚠️ {e}")
@@ -277,9 +312,11 @@ def month_to_date_line(state_dir: str | Path, now: pd.Timestamp) -> list[str]:
     for a in rep.accounts:
         who = f"{a.account_id} " if len(rep.accounts) > 1 else ""
         r = f" · {a.net_r:+.2f}R" + (f" ({a.r_note})" if a.r_note else "") if a.net_r is not None else ""
-        parts.append(f"{who}{a.twr_pct:+.2f}% time-weighted · {a.trades} trade{'s' if a.trades != 1 else ''}{r} · "
+        n = _trades(a.net_trades, "net ") if a.gross_only else _trades(a.trades)
+        parts.append(f"{who}{a.twr_pct:+.2f}% time-weighted · {n}{r} · "
                      f"avg {money(a.avg_per_day, a.currency)}/trading day"
-                     + (f" ({a.pnl_note})" if a.pnl_note else ""))
+                     + (f" ({a.pnl_note})" if a.pnl_note else "")
+                     + (f" ({a.gross_note}, not summed)" if a.gross_note else ""))
     return [f"• {name} so far: " + " | ".join(parts)]
 
 
