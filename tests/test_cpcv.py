@@ -181,8 +181,7 @@ def test_cpcv_can_only_veto_a_passed_config():
     assert v["fragile"] and v["reasons"] == ["60% of paths with negative mean R"]
     # the verdict has no "pass" value: nothing it says can turn a failed trial into a passed one
     assert set(cpcv.verdict(good, None)) == {"fragile", "reasons", "rule"}
-    assert cpcv.gates_passed({"results": {"gates": {"passed": True}}})
-    assert not cpcv.gates_passed({"results": {"gates": {"passed": False}}}) and not cpcv.gates_passed({})
+    # which passes count is registry.gate_pass_counts (tests/test_gate_pass_counts.py), shared by every reader
 
 
 def test_the_selection_set_is_every_registered_trial_of_the_family_on_the_timeframe_screened_ones_included():

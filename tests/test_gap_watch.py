@@ -66,9 +66,14 @@ def _dq(days: list[int], severity: str = "error") -> pd.DataFrame:
     return pd.DataFrame({"ts_utc": ts, "check": ["bid_gt_ask"] * len(ts), "severity": [severity] * len(ts)})
 
 
+# the research cost treatment a row records (results.swap, results.cost_source): only then does its gate pass count
+COSTS: dict = {"swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0}, "cost_source": "PRIORS ONLY: test"}
+
+
 def _passed_trial(family: str, n: int, **overrides) -> dict:
     cfg = {**SPECIALISTS[family].default_config, **overrides}
-    return {"trial": n, "family": family, "config": cfg, "status": "evaluated", "results": {"gates": {"passed": True}}}
+    return {"trial": n, "family": family, "config": cfg, "status": "evaluated",
+            "results": {"gates": {"passed": True}, **COSTS}}
 
 
 def _vol_series() -> pd.Series:

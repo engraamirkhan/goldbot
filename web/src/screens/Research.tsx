@@ -27,6 +27,10 @@ function Gates({ t }: { t: TrialRow }) {
   if (t.gates_passed == null) return <span className="muted">—</span>;
   const failed = failedGates(t);
   const title = t.gates.map((g) => `${g.passed ? "pass" : "FAIL"} ${g.name}: ${g.detail}`).join("\n");
+  // a pass recorded before swap was charged does not count (registry.gate_pass_counts); say why instead of "failed"
+  if (t.pre_swap) {
+    return <span className="state warn" title={`Recorded a pass with no swap charged or cost source recorded, so it does not count; re-run with costs.\n${title}`}>pre-swap: not counted</span>;
+  }
   return t.gates_passed
     ? <span className="state ok" title={title}>passed</span>
     : <span className="state warn" title={title}>failed{failed.length ? `: ${failed.join(", ")}` : ""}</span>;

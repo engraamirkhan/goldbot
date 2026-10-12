@@ -519,7 +519,9 @@ class TrialRow(BaseModel):
     net_r: float | None
     net_t: float | None
     n: int | None
-    gates_passed: bool | None               # null when the trial recorded no gate verdict
+    gates_passed: bool | None               # null when the trial recorded no gate verdict; a pass counts only
+                                            # with its cost treatment recorded (registry.gate_pass_counts)
+    pre_swap: bool = False                  # recorded a pass but no swap/cost source: shown, not counted
     gates: list[GateCheck]
     rationale: str
 

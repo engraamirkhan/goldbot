@@ -9,7 +9,10 @@ Owed counts (docs/research/preregistration-2027Q1.md, docs/research/preregistrat
   trade held to its 124-bar time barrier.
 * H-06 macro-gated slow TSMOM (Q1): the same, through the preset `slow_macro`'s own `candidates_in_context` with
   ctx["macro"] (DFII10 and broad-dollar 20-day changes as known at the signal bar's close), the H-01 signals the gate
-  removes (no macro value / disagreeing) and whether the lower bound is below the daily floor in force (withdrawal).
+  removes (no macro value / disagreeing) and whether the lower bound is below the retire floor in force
+  (research.screen_min_events_daily, 150: the withdrawal rule). The retire floor only retires: a pass still needs
+  research.screen_min_events (1,000) events. Compat: owed_counts.json written before 2026-10-11 names the same values
+  `daily_floor` / `below_floor`; they are now `retire_floor` / `below_retire_floor`.
 * H-16 (Q2): the frozen first out-of-sample month (`h16.first_oos_month`) and `expected_eval_days`, the evaluation set
   of `h16.evaluate_h16` (finite target, not GVZ-stale, both forecasts present), counted on PLACEBO prices: the function
   receives the real 15m bar timestamps only and builds seeded random-walk prices on them, so whether a day is
@@ -223,12 +226,13 @@ H06_SERIES = {"real_yield_10y": "DFII10", "broad_dollar": "DTWEXBGS"}       # ma
 
 
 def count_h06(b1: pd.DataFrame, macro: pd.DataFrame | None,
-              daily_floor: int | None = None) -> tuple[dict[str, Any], pd.DataFrame]:
+              retire_floor: int | None = None) -> tuple[dict[str, Any], pd.DataFrame]:
     """H-06 signals by side (preset `slow_macro`: H-01's candidates kept when the 20-day DFII10 and broad-dollar
     changes, as known at the signal bar's close, agree with the side) and the one-at-a-time lower bound, through the
     preset's own `candidates_in_context` with ctx["macro"] (macro rows already cut at the holdout). The H-01 signals
-    the gate removes are split into no macro value and disagreeing. `below_floor` compares the lower bound with the
-    daily event floor in force, the pre-registration's withdrawal rule."""
+    the gate removes are split into no macro value and disagreeing. `below_retire_floor` compares the lower bound with
+    the retire floor in force (research.screen_min_events_daily), the pre-registration's withdrawal rule; the retire
+    floor never makes a pass (owner ruling A, strict: a pass needs research.screen_min_events)."""
     cls = SPECIALISTS["tsmom"]
     source = (f"repo code path: tsmom preset slow_macro ({cls(**cls.presets['slow_macro']).agent_id}) "
               ".candidates_in_context(ctx={'macro': macro-v1})")
@@ -249,8 +253,8 @@ def count_h06(b1: pd.DataFrame, macro: pd.DataFrame | None,
         "signals": len(r["idx"]), "long": int((side == 1).sum()), "short": int((side == -1).sum()),
         "one_at_a_time_lower_bound": r["lower"], "h01_signals": len(h01["idx"]),
         "dropped_macro_missing": missing, "dropped_disagree": len(h01["idx"]) - len(r["idx"]) - missing,
-        "daily_floor": daily_floor,
-        "below_floor": None if daily_floor is None else bool(r["lower"] < daily_floor),
+        "retire_floor": retire_floor,
+        "below_retire_floor": None if retire_floor is None else bool(r["lower"] < retire_floor),
         "per_year": per_year(ts)}
     return summary, pd.DataFrame({"decision_utc": ts, "side": side})
 
@@ -487,6 +491,10 @@ def _git_sha() -> str:
         return "unknown"
 
 
+def _n(v: Any) -> str:
+    return f"{v:,}" if isinstance(v, int) and not isinstance(v, bool) else "n/a"
+
+
 def markdown(result: dict[str, Any]) -> str:
     meta, c = result["meta"], result["counts"]
 
@@ -505,9 +513,9 @@ def markdown(result: dict[str, Any]) -> str:
         ("Q1 H-01", "one-at-a-time lower bound (124-bar hold)", get("H-01", "one_at_a_time_lower_bound"), ""),
         ("Q1 H-06", "macro-gated slow TSMOM signals (long / short)", f"{get('H-06', 'signals')} "
          f"({get('H-06', 'long')} / {get('H-06', 'short')})", c["H-06"].get("source", c["H-06"].get("reason", ""))),
-        ("Q1 H-06", "one-at-a-time lower bound / daily floor in force / below floor (withdrawal rule)",
-         f"{get('H-06', 'one_at_a_time_lower_bound')} / {get('H-06', 'daily_floor')} / {get('H-06', 'below_floor')}",
-         ""),
+        ("Q1 H-06", "one-at-a-time lower bound / retire floor in force / below the retire floor (withdrawal rule)",
+         f"{get('H-06', 'one_at_a_time_lower_bound')} / {get('H-06', 'retire_floor')} / "
+         f"{get('H-06', 'below_retire_floor')}", ""),
         ("Q1 H-06", "H-01 signals removed by the gate: no macro value / disagreeing",
          f"{get('H-06', 'dropped_macro_missing')} / {get('H-06', 'dropped_disagree')}", ""),
         ("Q2 H-16", "frozen first OOS month (`first_oos_month`)", get("H-16", "first_oos_month"),
@@ -531,6 +539,9 @@ def markdown(result: dict[str, Any]) -> str:
              f"- commit `{meta['git_sha']}`; bars {meta['bars_from']} .. {meta['bars_to']} (cut before holdout "
              f"{meta['holdout_from']}); macro: {meta['macro']}; calendar: {meta['us_calendar']}",
              "- spec-derived rows (H-17, H-18, H-14) must be recounted with the specialist's own code before the freeze",
+             f"- {_n(meta.get('retire_floor'))} is the retire floor (research.screen_min_events_daily): below it a daily "
+             f"rule is withdrawn or retired, never passed; a pass needs research.screen_min_events "
+             f"({_n(meta.get('pass_floor'))}) events",
              "", "| Pre-registration | Count owed | Value | Source |", "|---|---|---|---|"]
     lines += [f"| {a} | {b} | {v} | {s} |" for a, b, v, s in rows]
     lines += ["", "### Per year", "", "| Count | " + " | ".join(str(y) for y in range(2010, 2026)) + " |",
@@ -548,22 +559,25 @@ def markdown(result: dict[str, Any]) -> str:
 
 
 def run(b1: pd.DataFrame, macro: pd.DataFrame | None, cal: pd.DataFrame | None, *, holdout_from: Any,
-        extra_cost_usd: float, min_rows: int = dt.MIN_FIT_ROWS, daily_floor: int | None = None) -> dict[str, Any]:
-    """Every owed count on inputs cut at the holdout (module docstring). `daily_floor`: the event floor in force for
-    daily-signal rules (H-06's withdrawal rule compares its lower bound with it)."""
+        extra_cost_usd: float, min_rows: int = dt.MIN_FIT_ROWS, retire_floor: int | None = None,
+        pass_floor: int | None = None) -> dict[str, Any]:
+    """Every owed count on inputs cut at the holdout (module docstring). `retire_floor`: the retire-only event floor
+    in force for daily-signal rules (research.screen_min_events_daily; H-06's withdrawal rule compares its lower bound
+    with it); `pass_floor`: the events a pass needs (research.screen_min_events). Both are stated in the report."""
     b1, macro, cal = cut_inputs(b1, macro, cal, holdout_from)
     if len(b1) == 0:
         raise SystemExit("no bars before the holdout")
     ts15 = utc_index(resample_bars(b1, "15m")["ts_utc"])
     h16_out, _ = count_h16(ts15, macro, cal, min_rows=min_rows)
     counts = {"H-04": count_h04(b1)[0], "H-01": count_h01(b1)[0],
-              "H-06": count_h06(b1, macro, daily_floor)[0], "H-16": h16_out,
+              "H-06": count_h06(b1, macro, retire_floor)[0], "H-16": h16_out,
               "H-17": count_h17(b1, cal, h16_out.get("first_oos_month"), min_rows=min_rows)[0],
               "H-18": count_h18(b1, cal)[0], "H-14": count_h14(b1, cal, extra_cost_usd)[0]}
     ts = utc_index(b1["ts_utc"])
     meta = {"git_sha": _git_sha(), "generated_utc": pd.Timestamp.now("UTC").isoformat(),
             "bars_from": f"{ts[0]:%Y-%m-%d %H:%M}", "bars_to": f"{ts[-1]:%Y-%m-%d %H:%M}", "n_bars_1m": len(b1),
             "holdout_from": str(holdout_from), "min_fit_rows": int(min_rows),
+            "retire_floor": retire_floor, "pass_floor": pass_floor,
             "macro": "absent" if macro is None or len(macro) == 0 else f"{len(macro):,} rows",
             "us_calendar": "absent" if cal is None or len(cal) == 0 else f"{len(cal):,} rows",
             "expected_from_docs": EXPECTED,
@@ -590,11 +604,12 @@ def main() -> int:
         raise SystemExit(str(exc)) from None
     macro = read_macro_files(Path(args.macro))
     cal = read_us_calendar_files(Path(args.us_calendar))
-    research = settings.research          # the daily-signal floor in force (null: the default floor), as the screen
-    daily_floor = (research.screen_min_events_daily if research.screen_min_events_daily is not None
-                   else research.screen_min_events)
+    research = settings.research          # the daily-signal retire floor in force (null: the pass floor), as the screen
+    retire_floor = (research.screen_min_events_daily if research.screen_min_events_daily is not None
+                    else research.screen_min_events)
     result = run(b1, macro if len(macro) else None, cal if len(cal) else None, holdout_from=holdout_from,
-                 extra_cost_usd=settings_extra_cost_usd(settings), daily_floor=int(daily_floor))
+                 extra_cost_usd=settings_extra_cost_usd(settings), retire_floor=int(retire_floor),
+                 pass_floor=int(research.screen_min_events))
     Path(args.out_json).write_text(json.dumps(result, indent=2, default=str))
     text = markdown(result)
     Path(args.out_md).write_text(text)
