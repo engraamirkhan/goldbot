@@ -67,6 +67,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 50 | --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners | Idea generation (integrity) · FIND | M | implemented 2026-10-11 (TRACEABILITY M43; quant review pending) |
 | 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | proposed (security re-verify of BACKLOG 47, 2026-10-11) |
 | 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | proposed (trading-safety review of the finance audit record, 2026-10-11) |
+| 53 | The phase gates compare paper and live with the deployed model's own trial | Roadmap gates (P7) · VERIFY | M | proposed (review of 978c667, 2026-10-12) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -710,6 +711,22 @@ hypotheses that go through the trial registry in a future quarter's budget.
   (ADR 0010). Acceptance: a test that a decided proposal archived by the bus or the engine has no Telegram id or
   email anywhere in its file; a test that the decided card shows the channel for a new file and for an older file
   with `decided_via`; the API contract regenerated; trading-safety and security review.
+- **53. The phase gates compare paper and live with the deployed model's own trial (review of 978c667,
+  2026-10-12).** Value: `gates_phase.evaluate_gates` takes its backtest reference for `paper_expectancy`
+  (paper -> tiny live) and `live_drawdown` (tiny live -> full size) from `best_backtest_trial`, the registry's
+  highest-DSR evaluated row with costs recorded. Since M46 the evidence names that trial and refuses it unless it
+  passed the research gates with costs recorded (`registry.gate_pass_counts`). But it is still the best trial in
+  the registry, not the trial of the model actually trading: a later, better trial of another family or
+  configuration would replace the reference without anyone choosing it. Also, the DSR shown on gate 1 is the one
+  stored with that trial, so it was deflated by the trial count at the time the trial ran, not by today's count
+  ("registry now holds N trials" sits beside it but did not deflate it). Do: record the trial number (row_ref)
+  of the trial a model was promoted from in the model registry. The gates then take paper's and live's
+  reference from the deployed champion's own trial, and show "no deployed model" when there is none. Gate 1
+  either re-deflates the shown DSR with the current trial count or labels it "DSR at N trials (when run)".
+  Acceptance: a test that a newer, better trial of another configuration does not change the paper or live
+  reference; a test that the reference is the champion's promotion trial and that its gate pass is required; a
+  test that gate 1 shows which trial count the DSR was deflated by; trading-safety and quant review (phase-gate
+  inputs).
 
 ## Needs the owner
 These are never decided by the product owner or by agents.

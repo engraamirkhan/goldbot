@@ -3816,6 +3816,11 @@
       ],
       "title": "Net T"
      },
+     "pre_swap": {
+      "default": false,
+      "title": "Pre Swap",
+      "type": "boolean"
+     },
      "rationale": {
       "title": "Rationale",
       "type": "string"

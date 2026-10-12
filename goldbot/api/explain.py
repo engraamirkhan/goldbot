@@ -56,6 +56,7 @@ from goldbot.api.schema import (
     VetoTestView,
 )
 from goldbot.config import DriftSettings, Settings, TelegramSettings
+from goldbot.research.registry import costs_recorded
 
 log = logging.getLogger(__name__)
 
@@ -369,6 +370,11 @@ def _trial(r: dict[str, Any], timeframes: dict[str, str]) -> TrialRow:
     elif isinstance(hv, dict):
         passed = bool(hv.get("passed"))
         gates = [GateCheck(name="holdout", passed=passed, detail=str(hv.get("rule", "")))]
+    # a recorded pass counts only with the research cost treatment (registry.gate_pass_counts): a pass from before swap
+    # was charged is shown as not passed and marked pre-swap, so the view never claims a pass the registry won't count
+    pre_swap = passed is True and not costs_recorded(res)
+    if passed is True:
+        passed = costs_recorded(res)
     family = str(r.get("family", ""))
     cfg = _d(r.get("config"))
     n = gross.get("n", net.get("n"))
@@ -377,7 +383,7 @@ def _trial(r: dict[str, Any], timeframes: dict[str, str]) -> TrialRow:
                     status=str(r.get("status", "")), agent_id=str(r.get("agent_id", "")),
                     gross_r=_f(gross.get("mean_r")), gross_t=_f(gross.get("t_stat")), net_r=_f(net.get("mean_r")),
                     net_t=_f(net.get("t_stat")), n=int(n) if isinstance(n, (int, float)) else None,
-                    gates_passed=passed, gates=gates, rationale=str(r.get("rationale", "")))
+                    gates_passed=passed, pre_swap=pre_swap, gates=gates, rationale=str(r.get("rationale", "")))
 
 
 def _retired(p: dict[str, Any]) -> list[RetiredFamilyView]:

@@ -98,6 +98,22 @@ def item(rep: GateReport, gate: str, name: str) -> bool:
     return next(i for i in g.items if i.name == name).met
 
 
+def evidence(rep: GateReport, gate: str, name: str) -> str:
+    g = next(x for x in rep.gates if x.gate == gate)
+    return next(i for i in g.items if i.name == name).evidence
+
+
+def trial_row(trial: int, *, dsr: float, mean_ret: float, passed: bool, failed_check: str | None = None) -> dict:
+    """A swap-charged walk-forward row whose own items (DSR, trades, positive years) are all fine; `passed` is its
+    recorded research-gate verdict, `failed_check` the check that failed it."""
+    checks = [{"name": "positive_years", "passed": True, "detail": "positive years [2019, 2021, 2024]"}]
+    if failed_check:
+        checks.append({"name": failed_check, "passed": False, "detail": f"{failed_check} below the design's minimum"})
+    return {"trial": trial, "family": "session_open", "status": "evaluated",
+            "results": {"model_filtered": {"n": 600, "dsr": dsr, "mean_ret": mean_ret, "max_dd": 0.05},
+                        "gates": {"passed": passed, "checks": checks}, **COSTS}}
+
+
 def gate_met(rep: GateReport, gate: str) -> bool:
     return next(x for x in rep.gates if x.gate == gate).met
 
@@ -203,6 +219,37 @@ def test_paper_expectancy_within_half_of_backtest(tmp_path):
     assert item(report(state, trials), "paper_to_tiny_live", "paper_expectancy")
     write_trial(trials, mean_ret=-0.001)                                # a losing backtest is no reference
     assert not item(report(state, trials), "paper_to_tiny_live", "paper_expectancy")
+
+
+@pytest.mark.parametrize("failed_check", ["candidates_per_fold", "complete_folds"])
+def test_a_swap_charged_trial_that_failed_its_candidate_or_fold_checks_leaves_gate_1_unmet(tmp_path, failed_check):
+    """Review of 978c667: DSR, trades and positive years can all be met by a trial that failed the research gates
+    (too few candidates per fold, incomplete folds); gate 1 requires the trial's own gate pass (gate_pass_counts)."""
+    state, trials = full_state(tmp_path)
+    assert item(report(state, trials), "backtest_to_paper", "research_gates")
+    trials.write_text(json.dumps(trial_row(7, dsr=0.97, mean_ret=0.002, passed=False, failed_check=failed_check)) + "\n")
+    rep = report(state, trials)
+    assert item(rep, "backtest_to_paper", "dsr") and item(rep, "backtest_to_paper", "positive_years")
+    assert item(rep, "backtest_to_paper", "backtest_trades")
+    assert not item(rep, "backtest_to_paper", "research_gates") and not gate_met(rep, "backtest_to_paper")
+    assert failed_check in evidence(rep, "backtest_to_paper", "research_gates")
+
+
+def test_paper_expectancy_names_its_comparator_and_never_switches_to_a_trial_that_failed_the_gates(tmp_path):
+    """Review of 978c667: the comparator is the best backtest trial; a later swap-charged trial with a higher DSR that
+    failed the gates (and whose mean happens to match paper) must not silently become the reference and pass."""
+    state, trials = full_state(tmp_path)
+    rep = report(state, trials)
+    assert item(rep, "paper_to_tiny_live", "paper_expectancy")
+    assert "trial #7" in evidence(rep, "paper_to_tiny_live", "paper_expectancy")
+    rows = [trial_row(7, dsr=0.97, mean_ret=0.002, passed=True),
+            trial_row(9, dsr=0.99, mean_ret=0.001, passed=False, failed_check="candidates_per_fold")]
+    trials.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    rep = report(state, trials)
+    text = evidence(rep, "paper_to_tiny_live", "paper_expectancy")
+    assert not item(rep, "paper_to_tiny_live", "paper_expectancy") and "trial #9" in text
+    assert "did not pass the research gates" in text
+    assert not item(rep, "tiny_live_to_full_size", "live_drawdown")      # the same comparator, the same refusal
 
 
 def test_fills_within_thirty_percent_of_the_modelled_slippage(tmp_path):

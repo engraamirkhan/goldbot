@@ -77,7 +77,9 @@ def seed_research(state: Path, docs: Path) -> None:
          "rationale": "H-01 slow TSMOM", "results": {"rule_only": {"gross": {"n": 900, "mean_r": 0.061, "t_stat": 2.63},
                                                                    "net": {"n": 900, "mean_r": -0.079, "t_stat": -2.1}}, "gates": gates}},
         {"trial": 3, "ts": now.isoformat(), "agent_id": "tsmom-x", "family": "tsmom", "config": {}, "status": "holdout",
-         "rationale": "holdout", "results": {"holdout_verdict": {"passed": True, "rule": "mean R > 0 and t >= 2"}}},
+         "rationale": "holdout", "results": {"holdout_verdict": {"passed": True, "rule": "mean R > 0 and t >= 2"},
+                                             "swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0},
+                                             "cost_source": "PRIORS ONLY: test"}},
     ]
     (state / "research_registry.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
     (state / "research_plan.json").write_text(json.dumps({
@@ -160,11 +162,27 @@ def test_research_view_from_fixture_state(client):
     assert (t2["family"], t2["timeframe"], t2["gross_r"], t2["net_t"], t2["n"]) == ("tsmom", "1h", 0.061, -2.1, 900)
     assert t2["gates_passed"] is False and [g["name"] for g in t2["gates"]] == ["dsr", "events"]
     assert r["trials"][0]["gates"] == [{"name": "holdout", "passed": True, "detail": "mean R > 0 and t >= 2"}]
+    assert r["trials"][0]["gates_passed"] is True and r["trials"][0]["pre_swap"] is False
     assert r["plan"]["stale"] is True and r["plan"]["focus"][0]["family"] == "tsmom"
     assert r["plan"]["evidence"][0]["flags"] == ["few_filtered_trades"]
     tables = r["hypotheses"]["tables"]
     assert [t["title"] for t in tables] == ["A. Ranked portfolio", "B. Retired"]
     assert tables[0]["rows"] == [["1", "H-01", "Slow TSMOM: 1d signal"], ["2", "H-02", ""]]
+
+
+def test_a_recorded_gate_pass_without_its_cost_treatment_is_shown_as_pre_swap_not_passed(client):
+    """Review of 978c667: the research view reads gate passes as registry.gate_pass_counts does, and marks a recorded
+    pass from before swap was charged as pre-swap so the owner sees why it does not count."""
+    c, h, state, docs = client
+    seed_research(state, docs)
+    rows = [json.loads(x) for x in (state / "research_registry.jsonl").read_text().splitlines() if x.startswith("{")]
+    rows[1]["results"]["gates"] = {"passed": True, "checks": [{"name": "dsr", "passed": True, "detail": "0.97"}]}
+    rows[2]["results"] = {"holdout_verdict": {"passed": True, "rule": "mean R > 0 and t >= 2"}}      # no swap recorded
+    (state / "research_registry.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    t3, t2, t1 = c.get("/api/research", headers=h["viewer"]).json()["trials"]
+    assert (t2["gates_passed"], t2["pre_swap"]) == (False, True)
+    assert (t3["gates_passed"], t3["pre_swap"]) == (False, True)
+    assert (t1["gates_passed"], t1["pre_swap"]) == (False, False)          # a recorded fail is a fail, not pre-swap
 
 
 def test_corrupt_plan_is_reported_not_raised(client):
