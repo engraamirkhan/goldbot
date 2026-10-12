@@ -1,4 +1,5 @@
-- Gross closed trades are charged a conservative imputed cost (quant review 2026-10-12, findings A-D; TRACEABILITY X20).
+- Gross closed trades are charged a conservative imputed cost (quant review 2026-10-12, findings A-D; TRACEABILITY X20;
+  ADR 0017).
   - goldbot/ops/cost_imputation.py is the one shared helper. It charges only the costs a row's return lacks: the
     commission from the cost table (else the settings value), plus paid swap for every rollover held through, with the
     triple day counted (a swap credit is never counted). Gross rows are kept, never dropped.

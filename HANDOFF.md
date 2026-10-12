@@ -5,7 +5,8 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
-- Gross closed trades are charged a conservative imputed cost (quant review 2026-10-12, findings A-D; TRACEABILITY X20).
+- Gross closed trades are charged a conservative imputed cost (quant review 2026-10-12, findings A-D; TRACEABILITY X20;
+  ADR 0017).
   - goldbot/ops/cost_imputation.py is the one shared helper. It charges only the costs a row's return lacks: the
     commission from the cost table (else the settings value), plus paid swap for every rollover held through, with the
     triple day counted (a swap credit is never counted). Gross rows are kept, never dropped.
@@ -19,6 +20,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     back to the price return while pnl_basis said "net"). The new `ClosedTrade.ret_basis` ("pnl" or "price"; None on
     older records) marks a return that came from prices. This needs trading-safety review (record field) and quant
     review (gate inputs).
+- Health checks split into modules with a registry (2026-10-12, speed-up review item 7; no behaviour change).
+  goldbot/ops/health.py had grown to about 1,770 lines and was the place every lane appended a check, so merges kept
+  colliding there. The checks now live in goldbot/ops/checks/, one module per area (engine, bridge, feeds, risk,
+  services, auth, operations), and shared thresholds and helpers are in `_base.py`. Each check registers itself with
+  `@register_check(scope, block=, pos=)`. `run_checks` walks the registry in an explicit (block, position) order, so
+  the report order does not depend on import order (goldbot/ops/checks/registry.py explains the blocks).
+  goldbot/ops/health.py keeps the context, report, heartbeats, alerts and CLI, and re-exports every check, threshold
+  and helper it had. Checks are called through it, so patching `health.check_x` still works. To add a check, edit
+  only its area module. Tests: tests/test_health_registry.py compares names, statuses, reasons and order against a
+  golden file captured from the old hand-written `run_checks`.
 - Open-risk heat cap and open-risk daily projection (2026-10-11, BACKLOG 19 playbook G-4 and BACKLOG 35 review
   MEDIUM-4, row R38; **both off by default**; needs trading-safety review). The engine computes, on every account
   refresh, each open position's remaining stop risk (max(0, loss from the current close price to its SL) x lots x
@@ -152,6 +163,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   restart reconciles with the broker as usual. On the MT5 box, `goldbot-bridge-watchdog@.timer` restarts a bridge
   that stops answering `GET /health`. Hosts set up earlier need the units reinstalled, then the rollback floor set
   to this commit: RUNBOOK "Engine loop stuck, and the watchdogs". Tests: tests/test_engine_watchdog.py.
+- Equity confirmation before the 12% kill switch (BACKLOG 44, ADR 0016, TRACEABILITY R39; revised after the
+  trading-safety review of d2f2999; needs trading-safety re-review). A 12% equity read trips at once when the balance
+  plus the profit and swap of every position on the account agrees within 2% of the high-water mark
+  (`risk.equity_check_tolerance`). Otherwise it starts a sticky pending state: entries are refused
+  `equity_unconfirmed`, no stage moves, the account is re-read on the next tick, and any later 12% read trips. Pending
+  clears only after 60 s of reads below 10% (`risk.equity_recovery_s`) and survives a restart. One bad read (0 or
+  collapsed) no longer closes every position at market. Exits are never gated; broker stops keep resting meanwhile.
+  Bridge protocol v5 (`account_positions`, `Position.swap`): deploy the MT5 box first, then the brain (entries pause
+  until both run v5). Follow-up: BACKLOG 53 (confirm high-water-mark rises).
 - The record now carries what the monthly finance audit needs (2026-10-11, docs/finance/audit-framework.md gaps
   GAP-01/02/03/04/05/10/13; TRACEABILITY X18). `ClosedTrade` gains `decision_price`, `decision_spread_points` and
   `decision_utc` (the signal, from the proposal) next to `requested_price` (the quote the order was priced from: in

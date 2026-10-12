@@ -374,14 +374,21 @@ class MT5Broker:
         return OrderResult(ok=res.retcode == RETCODE_DONE, retcode=res.retcode, order_id=res.order, position_id=position_id, filled_lots=res.volume, price=res.price, message=res.comment)
 
     def positions(self, magic_prefix: int | None = None) -> list[Position]:
-        out = []
-        for p in _positions_get(symbol=self.symbol):
-            if magic_prefix is not None and not str(p.magic).startswith(str(magic_prefix)):
-                continue
-            ts = server_to_utc(pd.Series(pd.to_datetime([p.time_msc], unit="ms")), self.server_tz)[0]
-            out.append(Position(position_id=p.ticket, symbol=p.symbol, side=1 if p.type == mt5.POSITION_TYPE_BUY else -1, lots=p.volume, open_price=p.price_open,
-                                sl=p.sl or None, tp=p.tp or None, magic=p.magic, comment=p.comment, open_time_utc=ts, profit=p.profit))
-        return out
+        return [self._position(p) for p in _positions_get(symbol=self.symbol)
+                if magic_prefix is None or str(p.magic).startswith(str(magic_prefix))]
+
+    def account_positions(self) -> list[Position]:
+        """Every position on the account, any symbol (positions_get without a filter): the equity cross-check
+        (ADR 0016) compares the equity with the balance plus all of their profit and swap. Read-only."""
+        return [self._position(p) for p in _positions_get()]
+
+    def _position(self, p: Any) -> Position:
+        ts = server_to_utc(pd.Series(pd.to_datetime([p.time_msc], unit="ms")), self.server_tz)[0]
+        swap = getattr(p, "swap", None)
+        return Position(position_id=p.ticket, symbol=p.symbol, side=1 if p.type == mt5.POSITION_TYPE_BUY else -1,
+                        lots=p.volume, open_price=p.price_open, sl=p.sl or None, tp=p.tp or None, magic=p.magic,
+                        comment=p.comment, open_time_utc=ts, profit=p.profit,
+                        swap=None if swap is None else float(swap))
 
     def deals_since(self, since_utc: pd.Timestamp) -> pd.DataFrame:
         until = pd.Timestamp.now(tz="UTC") + pd.Timedelta(days=1)

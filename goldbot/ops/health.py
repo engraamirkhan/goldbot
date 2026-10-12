@@ -24,18 +24,22 @@ nothing by itself. `phase_gates` shows whether the next roadmap gate is met (P7)
 `HealthWatch` is the alert half: fed a report, it returns the Telegram text for checks that turned fail (and the ones
 that recovered) since the last report, and persists the last statuses in state/health_last.json so a restart of the
 Telegram service neither repeats nor drops an alert.
+
+The checks themselves live in goldbot/ops/checks/, one module per area, each registered with `register_check`;
+`run_checks` runs the registry in its fixed order (goldbot/ops/checks/registry.py). This module keeps the context,
+the report, heartbeats, alerts and the CLI, and re-exports every check, threshold and helper it always exposed.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import logging
 import shutil
 import sys
 import threading
 import time
+from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Literal, cast
+from typing import Any, Callable
 
 import pandas as pd
 from pydantic import Field
@@ -43,71 +47,275 @@ from pydantic import Field
 from goldbot.base import (
     FrozenRecord,
     Record,
-    SkewSummary,
     UtcTimestamp,
-    load_record,
     load_record_json,
     schema_skew_summary,
     write_atomic,
 )
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
-from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_from_cache
+from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.crossfeed import check_reconciliation
-from goldbot.ops.watchdog import loop_heartbeat_path
-from goldbot.risk.supervisor import engine_fault
+from goldbot.ops.checks._base import (
+    _RANK,
+    BACKUP_FAIL_H,
+    BACKUP_REPO_WARN_BYTES,
+    BACKUP_WARN_H,
+    BRIDGE_TIMEOUT_S,
+    COSTS_FAIL_DAYS,
+    COSTS_PUBLISHED_WARN_DAYS,
+    COSTS_WARN_DAYS,
+    DISK_FAIL_FREE_GB,
+    DISK_FAIL_FREE_PCT,
+    DISK_WARN_FREE_GB,
+    DISK_WARN_FREE_PCT,
+    DQ_WINDOW_HOURS,
+    DRILL_WARN_DAYS,
+    ENGINE_FAIL_S,
+    ENGINE_WARN_S,
+    FAILED_ORDER_WINDOW_H,
+    HEARTBEAT_EVERY_S,
+    HEARTBEAT_SERVICES,
+    HEARTBEAT_SILENT_S,
+    JOB_OVERDUE_GRACE_S,
+    JOB_RUNNING_FAIL_H,
+    LOOP_FAIL_S,
+    LOOP_STARTING_FAIL_S,
+    LOOP_WARN_S,
+    NEWS_STALE_POLLS,
+    OPTIONAL_SECRETS,
+    PRUNE_WARN_DAYS,
+    QUOTE_INVALID_FAIL_S,
+    REARM_APPLY_S,
+    REQUIRED_SECRETS,
+    SCHEDULER_HEARTBEAT_FAIL_S,
+    SPEND_WARN_FRACTION,
+    STUCK_APPROVAL_GRACE_S,
+    SUPERVISOR_FAIL_S,
+    SUPERVISOR_WARN_S,
+    WATCH_FILE,
+    WATCH_STALE_S,
+    AccountRef,
+    Check,
+    Status,
+    WatchState,
+    _age,
+    _epoch,
+    _market_open_throughout,
+    _read_json,
+    _skipped,
+    _worst,
+    heartbeat_path,
+    log,
+)
+from goldbot.ops.checks.auth import check_email_link, check_secrets
+from goldbot.ops.checks.bridge import (
+    _age_s,
+    _engine_bridge_unconfirmed,
+    _engine_sessions,
+    check_bridge,
+    check_bridge_compat,
+    check_server_clock,
+)
+from goldbot.ops.checks.engine import (
+    TICK_ERROR_RECENT_S,
+    _failed_order_retcodes,
+    check_engine,
+    check_engine_loop,
+    check_failed_orders,
+    check_tick_errors,
+)
+from goldbot.ops.checks.feeds import (
+    PNL_BASIS_GROSS_WARN_PCT,
+    PNL_BASIS_WINDOW_DAYS,
+    check_costs,
+    check_costs_published,
+    check_data_quality,
+    check_drift,
+    check_feature_versions,
+    check_model_watch,
+    check_news,
+    check_pnl_basis,
+)
+from goldbot.ops.checks.operations import (
+    check_accounts,
+    check_agent_spend,
+    check_backup_age,
+    check_backup_prune,
+    check_deploy,
+    check_disk,
+    check_restore_drill,
+    check_settings,
+)
+from goldbot.ops.checks.registry import blocks as check_blocks
+from goldbot.ops.checks.registry import resolve
+from goldbot.ops.checks.risk import (
+    WINDOWS_FETCH_WARN,
+    WINDOWS_HOLIDAY_WARN_DAYS,
+    WINDOWS_UNAVAILABLE_FAIL,
+    _control,
+    check_entry_windows,
+    check_halt,
+    check_loss_caps,
+    check_open_risk,
+    check_phase,
+    check_phase_gates,
+    check_risk_state,
+    check_stop_rule,
+    check_supervisor,
+    check_throttle,
+)
+from goldbot.ops.checks.services import (
+    SKEW_CLICK_SOURCE,
+    SKEW_REASON_CHARS,
+    SKEW_REASON_SOURCES,
+    SKEW_REFUSED_FAIL_S,
+    SKEW_SERVICES,
+    _running,
+    _skew_sources,
+    check_alert_loop,
+    check_approvals,
+    check_deadman,
+    check_heartbeat,
+    check_scheduler,
+    check_schema_skew,
+    check_service_schema_skew,
+)
 
-Status = Literal["ok", "warn", "fail"]
-_RANK: dict[str, int] = {"ok": 0, "warn": 1, "fail": 2}
-
-# ---- thresholds (seconds unless named otherwise); the reasons quote them so an alert explains itself
-SUPERVISOR_WARN_S = 20
-SUPERVISOR_FAIL_S = 60            # engines block entries when the supervisor heartbeat is older than this
-ENGINE_WARN_S = 20 * 60           # engines write their state at every 15m bar close
-ENGINE_FAIL_S = 45 * 60
-# the engine loop's own heartbeat (goldbot/ops/watchdog.py LoopWatch, rewritten every 15 s whatever the feed does): a
-# hung loop shows within minutes, not after ENGINE_FAIL_S; the systemd watchdog restarts it at WatchdogSec=300 s
-LOOP_WARN_S = 60
-LOOP_FAIL_S = 150
-LOOP_STARTING_FAIL_S = 15 * 60    # a start longer than this (watchdog.STARTUP_MAX_S, the unit's TimeoutStartSec) fails
-SCHEDULER_HEARTBEAT_FAIL_S = 5 * 60   # run_forever saves every 30 s while idle
-JOB_OVERDUE_GRACE_S = 15 * 60
-JOB_RUNNING_FAIL_H = 12.0         # a job "running" this long means the scheduler died mid-job
-COSTS_WARN_DAYS = 4.0             # nightly on weekdays: Friday -> Monday is 3 days
-COSTS_FAIL_DAYS = 8.0
-COSTS_PUBLISHED_WARN_DAYS = 8.0   # the release costs-v1 copy research.yml reads (costs.publish_release only)
-DQ_WINDOW_HOURS = 24              # data-quality error events within this window raise a warning
-NEWS_STALE_POLLS = 3              # feed health older than this many poll intervals: the news service is down
-SPEND_WARN_FRACTION = 0.8
-STUCK_APPROVAL_GRACE_S = 120
-DISK_FAIL_FREE_GB, DISK_FAIL_FREE_PCT = 2.0, 5.0
-DISK_WARN_FREE_GB, DISK_WARN_FREE_PCT = 5.0, 10.0
-REARM_APPLY_S = 10 * 60           # an engine applies a re-arm on its next tick
-WATCH_STALE_S = 15 * 60           # health_last.json older than this: the Telegram alert loop is not running
-HEARTBEAT_EVERY_S = 60            # services write state/heartbeat_<service>.json at most this often
-HEARTBEAT_SILENT_S = 5 * 60       # design S5: "a heartbeat alert fires if any service has been silent for five minutes"
-HEARTBEAT_SERVICES = ("supervisor", "scheduler", "telegram", "news", "api")   # engines: engine_<account>.json
-QUOTE_INVALID_FAIL_S = 60         # an engine whose every quote has been invalid this long in market hours (review MEDIUM-2)
-FAILED_ORDER_WINDOW_H = 24        # failed sends (X6) in this window are listed, each alerted once
-BRIDGE_TIMEOUT_S = 5.0
-BACKUP_WARN_H = 26.0              # daily backup: one missed night warns
-BACKUP_FAIL_H = 72.0              # three missed nights fail
-DRILL_WARN_DAYS = 8.0             # weekly restore drill
-PRUNE_WARN_DAYS = 45.0            # monthly retention from the owner's Mac (scripts/backup_retention.sh), two weeks' slack
-BACKUP_REPO_WARN_BYTES = 15e9     # of the 20 GB Oracle Object Storage free tier
-# finance audit GAP-05: closed trades whose P&L is not net (costs not recorded) are left out of every net figure; above
-# one in five over a month the net totals rest on too thin a part of the trading to be read as the month's result.
-# A data-quality warning only, never a fail: nothing trades differently because of it
-PNL_BASIS_WINDOW_DAYS = 30
-PNL_BASIS_GROSS_WARN_PCT = 20.0
-
-REQUIRED_SECRETS = ("telegram-bot-token",)   # the webhook secret is optional: only the webhook service needs it
-OPTIONAL_SECRETS = ("anthropic-api-key", "github-token", "tradingview-webhook-secret")   # features switch off without them
-
-
-class Check(FrozenRecord):
-    name: str
-    status: Status
-    reason: str
+# the public surface: every name this module exposed before the checks moved to goldbot/ops/checks/ (callers and
+# tests import and patch them here)
+__all__ = [
+    "AccountRef",
+    "BACKUP_FAIL_H",
+    "BACKUP_REPO_WARN_BYTES",
+    "BACKUP_WARN_H",
+    "BRIDGE_TIMEOUT_S",
+    "COSTS_FAIL_DAYS",
+    "COSTS_PUBLISHED_WARN_DAYS",
+    "COSTS_WARN_DAYS",
+    "Check",
+    "DISK_FAIL_FREE_GB",
+    "DISK_FAIL_FREE_PCT",
+    "DISK_WARN_FREE_GB",
+    "DISK_WARN_FREE_PCT",
+    "DQ_WINDOW_HOURS",
+    "DRILL_WARN_DAYS",
+    "ENGINE_FAIL_S",
+    "ENGINE_WARN_S",
+    "FAILED_ORDER_WINDOW_H",
+    "HEARTBEAT_EVERY_S",
+    "HEARTBEAT_SERVICES",
+    "HEARTBEAT_SILENT_S",
+    "HealthContext",
+    "HealthReport",
+    "HealthWatch",
+    "Heartbeat",
+    "JOB_OVERDUE_GRACE_S",
+    "JOB_RUNNING_FAIL_H",
+    "LOOP_FAIL_S",
+    "LOOP_STARTING_FAIL_S",
+    "LOOP_WARN_S",
+    "MAX_ALERT",
+    "NEWS_STALE_POLLS",
+    "NOTIFY_ON_WARN",
+    "OPTIONAL_SECRETS",
+    "PNL_BASIS_GROSS_WARN_PCT",
+    "PNL_BASIS_WINDOW_DAYS",
+    "PRUNE_WARN_DAYS",
+    "QUOTE_INVALID_FAIL_S",
+    "REARM_APPLY_S",
+    "REQUIRED_SECRETS",
+    "SCHEDULER_HEARTBEAT_FAIL_S",
+    "SKEW_CLICK_SOURCE",
+    "SKEW_REASON_CHARS",
+    "SKEW_REASON_SOURCES",
+    "SKEW_REFUSED_FAIL_S",
+    "SKEW_SERVICES",
+    "SPEND_WARN_FRACTION",
+    "STUCK_APPROVAL_GRACE_S",
+    "SUPERVISOR_FAIL_S",
+    "SUPERVISOR_WARN_S",
+    "Status",
+    "TICK_ERROR_RECENT_S",
+    "WATCH_FILE",
+    "WATCH_STALE_S",
+    "WINDOWS_FETCH_WARN",
+    "WINDOWS_HOLIDAY_WARN_DAYS",
+    "WINDOWS_UNAVAILABLE_FAIL",
+    "WatchState",
+    "_RANK",
+    "_age",
+    "_age_s",
+    "_alerting",
+    "_control",
+    "_engine_bridge_unconfirmed",
+    "_engine_sessions",
+    "_epoch",
+    "_failed_order_retcodes",
+    "_guarded",
+    "_last_run",
+    "_load_report",
+    "_market_open_throughout",
+    "_note_skew_build_failure",
+    "_read_json",
+    "_running",
+    "_skew_build_failures",
+    "_skew_sources",
+    "_skipped",
+    "_worst",
+    "alert_text",
+    "bridge_tick_reader",
+    "check_accounts",
+    "check_agent_spend",
+    "check_alert_loop",
+    "check_approvals",
+    "check_backup_age",
+    "check_backup_prune",
+    "check_bridge",
+    "check_bridge_compat",
+    "check_costs",
+    "check_costs_published",
+    "check_data_quality",
+    "check_deadman",
+    "check_deploy",
+    "check_disk",
+    "check_drift",
+    "check_email_link",
+    "check_engine",
+    "check_engine_loop",
+    "check_entry_windows",
+    "check_failed_orders",
+    "check_feature_versions",
+    "check_halt",
+    "check_heartbeat",
+    "check_loss_caps",
+    "check_model_watch",
+    "check_news",
+    "check_open_risk",
+    "check_phase",
+    "check_phase_gates",
+    "check_pnl_basis",
+    "check_reconciliation",
+    "check_restore_drill",
+    "check_risk_state",
+    "check_scheduler",
+    "check_schema_skew",
+    "check_secrets",
+    "check_server_clock",
+    "check_service_schema_skew",
+    "check_settings",
+    "check_stop_rule",
+    "check_supervisor",
+    "check_throttle",
+    "check_tick_errors",
+    "exit_code",
+    "heartbeat_path",
+    "log",
+    "main",
+    "render",
+    "run_checks",
+    "start_heartbeat",
+    "worsened",
+]
 
 
 class HealthReport(FrozenRecord):
@@ -120,14 +328,6 @@ class HealthReport(FrozenRecord):
 
     def counts(self) -> dict[str, int]:
         return {s: sum(c.status == s for c in self.checks) for s in ("ok", "warn", "fail")}
-
-
-class AccountRef(FrozenRecord):
-    """The part of an account the checks need (keeps tests free of accounts.yaml)."""
-
-    account_id: str
-    server_tz: str | None = None      # for the server-clock check; None skips it
-    symbol: str = "XAUUSD"
 
 
 class HealthContext(Record):
@@ -183,913 +383,12 @@ def bridge_tick_reader(account_id: str, symbol: str) -> Any:
     return RemoteBroker(ep[0], ep[1], name=f"health-clock-{account_id}", timeout_s=BRIDGE_TIMEOUT_S).last_tick(symbol)
 
 
-# --------------------------------------------------------------------------------------------- helpers
-def _worst(statuses: list[Status]) -> Status:
-    return max(statuses, key=lambda s: _RANK[s]) if statuses else "ok"
-
-
-def _age(seconds: float) -> str:
-    s = max(seconds, 0.0)
-    if s < 120:
-        return f"{s:.0f} s"
-    if s < 7200:
-        return f"{s / 60:.0f} min"
-    if s < 172800:
-        return f"{s / 3600:.1f} h"
-    return f"{s / 86400:.1f} d"
-
-
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _epoch(now: pd.Timestamp) -> float:
-    return now.timestamp()
-
-
-def _market_open_throughout(ctx: HealthContext, seconds: float) -> bool:
-    """True when the gold market was open at `now` and `seconds` ago (no weekend or daily break to explain silence).
-    Checking both ends is enough for the windows used here (minutes; the daily break is an hour)."""
-    idx = pd.DatetimeIndex([ctx.now, ctx.now - pd.Timedelta(seconds=seconds)])
-    return bool(ctx.sessions.is_open(idx).all())
-
-
-def _skipped(name: str, why: str) -> Check:
-    return Check(name=name, status="warn", reason=f"skipped: {why}")
-
-
-# --------------------------------------------------------------------------------------------- static checks
-def check_settings(ctx: HealthContext) -> Check:
-    if ctx.settings is None:
-        return Check(name="settings", status="fail", reason=f"config/settings.yaml does not load: {ctx.settings_error}"[:300])
-    tg = "" if ctx.settings.telegram.allowed_user_ids else "; telegram.allowed_user_ids is empty (no approvals, no alerts)"
-    return Check(name="settings", status="warn" if tg else "ok", reason=f"loaded{tg}")
-
-
-def check_accounts(ctx: HealthContext) -> Check:
-    if ctx.accounts_error is not None:
-        return Check(name="accounts", status="fail", reason=f"config/accounts.yaml does not load: {ctx.accounts_error}"[:300])
-    if not ctx.accounts:
-        return Check(name="accounts", status="warn", reason="no enabled accounts: no engine will trade")
-    return Check(name="accounts", status="ok", reason="enabled: " + ", ".join(a.account_id for a in ctx.accounts))
-
-
-def check_secrets(ctx: HealthContext) -> Check:
-    """Presence only. Values are never returned, compared or logged."""
-    def present(key: str) -> bool:
-        try:
-            return bool(ctx.get_secret(key))
-        except Exception:
-            return False
-    required = list(REQUIRED_SECRETS)
-    missing = [k for k in required if not present(k)]
-    for a in ctx.accounts:     # a terminal on this machine needs its password; a bridged one needs the bridge token
-        pw, bridge = f"mt5-{a.account_id}", f"mt5-bridge-token-{a.account_id}"
-        url = f"mt5-bridge-url-{a.account_id}"
-        required.append(pw)
-        bridged = present(bridge) and present(url)      # exactly when the engine uses the bridge (bridge_endpoint)
-        if not (present(pw) or bridged):
-            missing.append(f"{pw} (or {url} + {bridge} when the terminal runs behind the bridge)")
-    optional = [k for k in OPTIONAL_SECRETS if not present(k)]
-    hint = " (python -m goldbot.ops.accounts set <key>)"
-    if missing:
-        extra = f"; optional missing: {', '.join(optional)}" if optional else ""
-        return Check(name="secrets", status="fail", reason=f"missing in keyring: {', '.join(missing)}{extra}{hint}")
-    if optional:
-        return Check(name="secrets", status="warn", reason=f"optional missing: {', '.join(optional)}{hint}")
-    return Check(name="secrets", status="ok", reason=f"{len(required) + len(OPTIONAL_SECRETS)} keys present")
-
-
-def check_disk(ctx: HealthContext) -> Check:
-    root = Path(ctx.settings.data_root) if ctx.settings is not None else Path(".")
-    probe = root
-    while not probe.exists() and probe != probe.parent:      # data_root not created yet: measure its volume
-        probe = probe.parent
-    try:
-        total, _used, free = ctx.disk_usage(str(probe))
-    except OSError as exc:
-        return Check(name="disk", status="fail", reason=f"cannot stat {root}: {exc}")
-    gb, pct = free / 1e9, 100.0 * free / total if total else 0.0
-    msg = f"{gb:.1f} GB free ({pct:.0f}%) on the volume of {root}"
-    if gb < DISK_FAIL_FREE_GB or pct < DISK_FAIL_FREE_PCT:
-        return Check(name="disk", status="fail", reason=msg)
-    if gb < DISK_WARN_FREE_GB or pct < DISK_WARN_FREE_PCT:
-        return Check(name="disk", status="warn", reason=msg)
-    return Check(name="disk", status="ok", reason=msg)
-
-
-# --------------------------------------------------------------------------------------------- service checks
-def check_supervisor(ctx: HealthContext) -> Check:
-    f = ctx.state_dir / "supervisor.json"
-    if not f.exists():
-        return Check(name="supervisor", status="fail", reason="no supervisor.json: supervisor not running, engines block entries")
-    try:
-        s = _read_json(f)
-    except (ValueError, OSError) as exc:
-        return Check(name="supervisor", status="fail", reason=f"supervisor.json unreadable: {exc}")
-    age = _epoch(ctx.now) - float(s.get("ts", 0))
-    if age > SUPERVISOR_FAIL_S:
-        return Check(name="supervisor", status="fail",
-                     reason=f"heartbeat {_age(age)} old (> {SUPERVISOR_FAIL_S} s): engines block entries")
-    if "mixed_account_currencies" in (s.get("reasons") or []):
-        # BACKLOG 28: equities in different currencies are never summed, so every engine's entries are halted; name
-        # the files so the owner can stop the wrong engine or delete a leftover file (RUNBOOK: currency rollout)
-        cur, files = s.get("currencies") or {}, s.get("currency_files") or {}
-        named = ", ".join(f"{files.get(a) or f'engine_{a}.json'} ({c or 'no currency'})" for a, c in sorted(cur.items()))
-        return Check(name="supervisor", status="fail",
-                     reason=f"HALT mixed_account_currencies: {named}. Entries are blocked on every account until only "
-                            "one currency runs (stop the other engine or delete its leftover engine_*.json)")
-    # stale engine files in another (or no) currency: their money is not summed, their open exposure is (BACKLOG 28)
-    out = s.get("money_excluded") or []
-    note = (f"; {', '.join(out)}: stale, other or no currency, money not summed (exposure still counted; delete the "
-            "file if that engine no longer runs)") if out else ""
-    reasons = [str(r) for r in s.get("reasons") or []]
-    # a halt that is a fault, not a cap: FAIL, so the Telegram health pass announces it (trading-safety review MEDIUM-1)
-    if "supervisor_error" in reasons:
-        return Check(name="supervisor", status="fail",
-                     reason=f"HALT supervisor_error: the supervisor's evaluation raised {s.get('error') or 'an error'}; "
-                            "entries are blocked on every account until it evaluates cleanly (supervisor log)")
-    if "engine_state_unreadable" in reasons:
-        files = ", ".join(str(f) for f in s.get("unreadable_engines") or []) or "an engine file"
-        return Check(name="supervisor", status="fail",
-                     reason=f"HALT engine_state_unreadable: {files} cannot be read or holds a non-number; entries are "
-                            "blocked on every account until the engine rewrites it (delete it if that engine no longer runs)")
-    if s.get("halt"):
-        label = "combined-cap HALT" if any(r.startswith("combined_") for r in reasons) else "HALT"
-        return Check(name="supervisor", status="warn",
-                     reason=f"{label}: {', '.join(reasons)}; heartbeat {_age(age)}{note}")
-    if out:
-        return Check(name="supervisor", status="warn", reason=f"heartbeat {_age(age)}{note}")
-    if age > SUPERVISOR_WARN_S:
-        return Check(name="supervisor", status="warn", reason=f"heartbeat {_age(age)} old")
-    note = ", size-down" if s.get("size_down") else ""
-    return Check(name="supervisor", status="ok", reason=f"heartbeat {_age(age)}{note}")
-
-
-def check_engine(ctx: HealthContext, account_id: str) -> Check:
-    name = f"engine:{account_id}"
-    f = ctx.state_dir / f"engine_{account_id}.json"
-    market = _market_open_throughout(ctx, ENGINE_FAIL_S)
-    if not f.exists():
-        return Check(name=name, status="fail" if market else "warn", reason=f"no engine_{account_id}.json (engine never ran)")
-    try:
-        e = _read_json(f)
-    except (ValueError, OSError) as exc:
-        return Check(name=name, status="fail", reason=f"engine state unreadable: {exc}")
-    bad = engine_fault(e) if isinstance(e, dict) else "the file"
-    if bad is not None:                      # the supervisor's rule: a null, string, bool, NaN or infinite number
-        return Check(name=name, status="fail", reason=f"engine state unreadable: {bad} is not a finite number")
-    parts: list[str] = []
-    statuses: list[Status] = []
-    age = _epoch(ctx.now) - float(e.get("ts", 0))
-    if not market:
-        parts.append(f"market closed, state {_age(age)} old")
-    elif age > ENGINE_FAIL_S:
-        statuses.append("fail")
-        parts.append(f"state {_age(age)} old (> {ENGINE_FAIL_S // 60} min while the market is open)")
-    elif age > ENGINE_WARN_S:
-        statuses.append("warn")
-        parts.append(f"state {_age(age)} old")
-    else:
-        parts.append(f"state {_age(age)} old")
-    if e.get("startup_error"):              # the engine refused to start (review LOW-A): name the cause
-        statuses.append("fail")
-        parts.append(f"engine refused to start: {e['startup_error']}")
-    stage = str(e.get("stage", "unknown"))
-    if stage == "halted":
-        statuses.append("fail")
-        parts.append("stage HALTED (drawdown stage 2): no entries until re-armed")
-        if e.get("rearm_refused"):
-            parts.append(f"last re-arm refused: {e['rearm_refused']}")
-    elif stage == "size_down":
-        statuses.append("warn")
-        parts.append("stage size_down")
-    else:
-        parts.append(f"stage {stage}")
-    stale_tick = ctx.settings.risk.stale_tick_seconds if ctx.settings is not None else 20
-    tick_age = float(e.get("last_tick_age_s") or 0.0)
-    if market and tick_age > stale_tick:
-        statuses.append("warn")
-        parts.append(f"last tick {_age(tick_age)} old (> {stale_tick} s)")
-    if market and e.get("stale_bars"):
-        statuses.append("warn")
-        parts.append("last bar older than one decision period: entries blocked")
-    # broker reads failing (MT5 positions_get / history_deals_get returning None): a warning from the first failure,
-    # a FAIL (alerted on Telegram) after risk.positions_unreadable_alert in a row
-    unreadable = int(e.get("positions_unreadable") or 0)
-    alert_after = ctx.settings.risk.positions_unreadable_alert if ctx.settings is not None else 5
-    if unreadable:
-        statuses.append("fail" if unreadable >= alert_after else "warn")
-        parts.append(f"broker positions/deals unreadable {unreadable} time(s) in a row (terminal fault?): entries "
-                     f"blocked, exits retried every tick, closes not confirmed until it reads again")
-    other_dq = [c for c in e.get("dq_checks") or [] if c != "positions_unreadable"]
-    if e.get("dq_error") and (other_dq or not unreadable):
-        statuses.append("fail")
-        checks = ", ".join(other_dq) or "stale feed"
-        parts.append(f"data-quality error ({checks}): entries blocked")
-    for w in e.get("dq_warnings") or []:
-        statuses.append("warn")
-        parts.append(f"data-quality warning: {w}")
-    # design (D10): bars close by clock at close + grace; a broker clock off the wall clock by more than the grace
-    # closes bars before their last ticks (dropped from the live bars as late ticks). A warning only: no entry block
-    skew, grace = e.get("clock_skew_s"), float(e.get("bar_close_grace_s") or 1.5)
-    if market and skew is not None and abs(float(skew)) > grace:
-        statuses.append("warn")
-        parts.append(f"broker clock skew {float(skew):+.1f} s vs the wall clock exceeds the {grace:g} s bar-close grace: "
-                     f"bars may close before their last ticks ({int(e.get('late_ticks') or 0)} late tick(s) so far)")
-    since = e.get("quote_invalid_since")
-    if since and _market_open_throughout(ctx, QUOTE_INVALID_FAIL_S):
-        invalid_s = (ctx.now - pd.Timestamp(since)).total_seconds()
-        if invalid_s >= QUOTE_INVALID_FAIL_S:
-            statuses.append("fail")
-            parts.append(f"quotes invalid for {_age(invalid_s)} (NaN, crossed or unreadable; > {QUOTE_INVALID_FAIL_S} s): "
-                         "entries blocked; decided closes, the kill switch, time exits and the Friday flatten still run "
-                         "on the host clock, stops rest with the broker")
-    if e.get("tick_error"):
-        statuses.append("fail")
-        parts.append(f"tick error ({e.get('tick_error_detail') or 'unknown'}): the engine logged it and carries on; "
-                     f"entries blocked until a decision bar closes clean, exits unaffected (details in the engine log)")
-    lost = e.get("closed_records_lost") or []
-    if lost:
-        statuses.append("fail")
-        parts.append(f"closed-trade record LOST for position(s) {', '.join(str(x) for x in lost)} after repeated write "
-                     f"failures: the phase gates and stop rule undercount (details in the engine log)")
-    cls = str(e.get("account_class") or "unknown")
-    if e.get("mode", "paper") != "paper":
-        if cls == "unknown":
-            statuses.append("warn")
-            parts.append("account class unknown: entries blocked until the Friday classifier reads raw or standard")
-        elif cls == "standard":
-            parts.append("account class standard: 15m families off except session_open, edge must exceed 1.5x cost")
-    b = e.get("blackout")
-    if isinstance(b, dict) and b:
-        parts.append(f"news blackout: {b.get('title', '?')}")
-    return Check(name=name, status=_worst(statuses), reason="; ".join(parts))
-
-
-TICK_ERROR_RECENT_S = 15 * 60   # a tick error this recent is reported even after it cleared
-
-
 def _last_run(state_dir: Path) -> pd.Timestamp | None:
     """When the previous health report was recorded (state/health_last.json), or None."""
     try:
         return load_record_json(WatchState, (state_dir / WATCH_FILE).read_text(encoding="utf-8"), source=WATCH_FILE).ts
     except (ValueError, OSError):
         return None
-
-
-def check_engine_loop(ctx: HealthContext, account_id: str) -> Check:
-    """The engine loop turns (state/heartbeat_engine-<account>.json, `goldbot.ops.watchdog.LoopWatch`). Judged
-    whatever the market: the loop runs and beats with no ticks at all (weekend, daily break, dead feed), so a stale
-    beat is a stuck loop or a dead process, and a stuck loop also stops the exits this engine manages. WARN when the
-    file is missing (an engine that never ran, or a release older than the loop heartbeat)."""
-    name = f"engine_loop:{account_id}"
-    f = loop_heartbeat_path(ctx.state_dir, account_id)
-    if not f.exists():
-        return Check(name=name, status="warn",
-                     reason=f"no loop heartbeat: engine {account_id} never ran (or runs a release that predates it)")
-    try:
-        hb = _read_json(f)
-        ts, started = float(hb["ts"]), float(hb.get("started") or hb["ts"])
-        phase = str(hb.get("phase", "loop"))
-    except (ValueError, OSError, KeyError, TypeError) as exc:
-        return Check(name=name, status="fail", reason=f"loop heartbeat unreadable: {exc}")
-    now = _epoch(ctx.now)
-    age = now - ts
-    if age > LOOP_FAIL_S:
-        what = "start" if phase == "starting" else "loop"
-        return Check(name=name, status="fail",
-                     reason=f"engine {what} silent for {_age(age)} (> {LOOP_FAIL_S} s): stuck or not running; exits "
-                            f"this engine manages are not running (stops rest with the broker), the systemd watchdog "
-                            f"restarts a stuck loop after 300 s")
-    if phase == "starting":
-        up = now - started
-        if up > LOOP_STARTING_FAIL_S:
-            return Check(name=name, status="fail",
-                         reason=f"engine still starting after {_age(up)} (> {LOOP_STARTING_FAIL_S // 60} min)")
-        return Check(name=name, status="warn", reason=f"engine starting for {_age(up)} (reconcile, warm start)")
-    if age > LOOP_WARN_S:
-        return Check(name=name, status="warn", reason=f"last loop pass {_age(age)} ago (> {LOOP_WARN_S} s)")
-    return Check(name=name, status="ok", reason=f"loop turning, last pass {_age(age)} ago")
-
-
-def check_tick_errors(ctx: HealthContext, account_id: str) -> Check | None:
-    """Tick errors the engine logged and carried on from (`tick_errors_total`, `last_tick_error_at`): a warning,
-    announced on Telegram, when one happened in the last 15 minutes or since the previous health run, so a burst that
-    cleared between two runs is still seen. None when the engine state has no error on record."""
-    try:
-        e = _read_json(ctx.state_dir / f"engine_{account_id}.json")
-        last = pd.Timestamp(e["last_tick_error_at"]) if e.get("last_tick_error_at") else None
-    except (ValueError, OSError, KeyError, TypeError, AttributeError):
-        return None
-    if last is None:
-        return None
-    last = last.tz_localize("UTC") if last.tzinfo is None else last.tz_convert("UTC")
-    recent = (ctx.now - last).total_seconds() <= TICK_ERROR_RECENT_S
-    new = ctx.last_run is not None and last > ctx.last_run
-    if not (recent or new):
-        return Check(name=f"tick_errors:{account_id}", status="ok",
-                     reason=f"{int(e.get('tick_errors_total') or 0)} tick error(s) since start, last {_age((ctx.now - last).total_seconds())} ago")
-    return Check(name=f"tick_errors:{account_id}", status="warn",
-                 reason=f"tick error ({e.get('tick_error_detail') or 'cleared'}) {_age((ctx.now - last).total_seconds())} ago, "
-                        f"{int(e.get('tick_errors_total') or 0)} since the engine started: the engine carried on, entries "
-                        f"were blocked until a clean decision bar; read the engine log")
-
-
-def _control(ctx: HealthContext) -> dict[str, Any] | None:
-    """control.json as a dict ({} when absent); None when unreadable."""
-    f = ctx.state_dir / "control.json"
-    if not f.exists():
-        return {}
-    try:
-        c = _read_json(f)
-        return c if isinstance(c, dict) else None
-    except (ValueError, OSError):
-        return None
-
-
-def check_halt(ctx: HealthContext) -> Check:
-    c = _control(ctx)
-    if c is None:
-        return Check(name="owner_halt", status="fail", reason="control.json unreadable: engines treat it as halted")
-    rearm = ""
-    if c.get("rearm_id"):
-        at = pd.Timestamp(float(c.get("rearm_ts") or 0), unit="s", tz="UTC")
-        rearm = f"; last owner re-arm by {c.get('rearm_by')} at {at:%Y-%m-%d %H:%M} UTC"
-    if c.get("halted"):
-        since = pd.Timestamp(float(c.get("ts") or 0), unit="s", tz="UTC")
-        why = f" ({c['reason']})" if c.get("reason") else ""
-        return Check(name="owner_halt", status="warn",
-                     reason=f"HALTED by {c.get('by')}{why} since {since:%Y-%m-%d %H:%M} UTC; re-arm on the dashboard{rearm}")
-    return Check(name="owner_halt", status="ok", reason="armed" + rearm)
-
-
-def check_risk_state(ctx: HealthContext, account_id: str) -> Check:
-    """state/risk_<account>.json: the engine's persisted risk periods, drawdown stage and the last re-arm it applied.
-    It is read even while the engine is down, so a persisted drawdown halt is visible before a restart."""
-    name = f"risk:{account_id}"
-    f = ctx.state_dir / f"risk_{account_id}.json"
-    if not f.exists():
-        return Check(name=name, status="warn", reason=f"no risk_{account_id}.json yet (engine never ran)")
-    try:
-        r = _read_json(f)
-        if not isinstance(r, dict):
-            raise ValueError("not an object")
-    except (ValueError, OSError) as exc:
-        return Check(name=name, status="fail", reason=f"risk state unreadable (the engine refuses to start): {exc}")
-    parts: list[str] = []
-    statuses: list[Status] = []
-    stage = str(r.get("stage", "normal"))
-    if stage == "halted":
-        statuses.append("fail")
-        parts.append("drawdown HALT persisted: owner re-arm on the dashboard needed")
-    else:
-        parts.append(f"stage {stage}")
-    last = r.get("last_reset")
-    if last:
-        days = (ctx.now - pd.Timestamp(last)).total_seconds() / 86400
-        if days > COSTS_WARN_DAYS and _market_open_throughout(ctx, ENGINE_FAIL_S):
-            statuses.append("warn")
-            parts.append(f"loss-cap day last rolled {days:.1f} d ago")
-    c = _control(ctx) or {}
-    rid = c.get("rearm_id")
-    if rid and r.get("rearm_seen") != rid and _epoch(ctx.now) - float(c.get("rearm_ts") or 0) > REARM_APPLY_S:
-        statuses.append("warn")
-        parts.append("the last owner re-arm has not been applied by this engine (engine down?)")
-    return Check(name=name, status=_worst(statuses), reason="; ".join(parts))
-
-
-def check_phase(ctx: HealthContext) -> Check:
-    """state/phase_state.json (written by `run.py record-gate`): live accounts unlock only after paper_to_tiny_live."""
-    from goldbot.ops.accounts import GATES
-    f = ctx.state_dir / "phase_state.json"
-    if not f.exists():
-        return Check(name="phase", status="ok", reason="phase 0, no gate recorded (demo only)")
-    try:
-        st = _read_json(f)
-        passed = list(st.get("gates_passed", []))
-        phase = int(st.get("phase", 0))
-    except (ValueError, OSError, AttributeError, TypeError) as exc:
-        return Check(name="phase", status="fail", reason=f"phase_state.json unreadable: {exc}")
-    if passed != list(GATES[:len(passed)]):
-        return Check(name="phase", status="fail",
-                     reason=f"gates out of order or unknown: {passed} (record with `python -m goldbot.ops.run record-gate`)")
-    return Check(name="phase", status="ok", reason=f"phase {phase}, gates passed: {', '.join(passed) or 'none'}")
-
-
-def check_stop_rule(ctx: HealthContext) -> Check:
-    """P6, the design's stop rule (goldbot/ops/gates_phase.py): FAIL when, after 18 months of paper plus live, more than
-    500 pooled trades still have a lower 90% bound on expectancy below zero, or when any single trade lost more than the
-    weekly cap. The FAIL is the whole action: the alert loop tells the owner once, and the health CLI exits 1. It does
-    not halt, close or resize anything (the RiskGate's own caps are unchanged); stopping is the owner's /halt."""
-    from goldbot.ops import gates_phase as gp
-    if ctx.settings is None:
-        return _skipped("stop_rule", "settings do not load")
-    trades, err = gp.load_closed_trades(ctx.state_dir)
-    _, when, perr = gp.phase_record(ctx.state_dir)
-    from goldbot.ops.cost_imputation import CostImputer
-    s = gp.evaluate_stop_rule(trades, when.get("backtest_to_paper"), ctx.settings.risk.weekly_cap, ctx.settings.gates,
-                              ctx.now, imputer=CostImputer.from_state(ctx.state_dir, ctx.settings))
-    if s.breached:
-        return Check(name="stop_rule", status="fail",
-                     reason=("STOP RULE BREACHED: the design says the project stops; send /halt to stop entries. Nothing "
-                             "was halted automatically (RiskGate caps still apply). " + "; ".join(s.reasons))[:600])
-    problems = "; ".join(e for e in (err, perr) if e)
-    if problems:
-        return Check(name="stop_rule", status="warn", reason=f"record partly unreadable ({problems}); {s.detail}"[:400])
-    return Check(name="stop_rule", status="ok", reason=s.detail)
-
-
-def check_phase_gates(ctx: HealthContext) -> Check:
-    """P7: the next unrecorded roadmap gate, met or not, from the evidence (`run.py gates` prints the detail).
-    Informational: a gate is recorded only by `run.py record-gate`, and live needs unlock-live plus the typed phrase."""
-    from goldbot.ops import gates_phase as gp
-    if ctx.settings is None:
-        return _skipped("phase_gates", "settings do not load")
-    try:
-        rep = gp.evaluate_gates(ctx.state_dir, ctx.settings, ctx.now)
-    except Exception as exc:                 # evidence files are best effort here; the gate report shows the detail
-        return Check(name="phase_gates", status="warn", reason=f"gate evaluation failed: {type(exc).__name__}: {exc}"[:300])
-    nxt = next((g for g in rep.gates if not g.recorded), None)
-    if nxt is None:
-        return Check(name="phase_gates", status="ok", reason="every roadmap gate recorded")
-    req = [i for i in nxt.items if i.required]
-    missing = [i.name for i in req if not i.met]
-    if nxt.met:
-        return Check(name="phase_gates", status="ok",
-                     reason=f"next gate {nxt.gate}: MET on the evidence; the owner records it with run.py record-gate")
-    return Check(name="phase_gates", status="ok",
-                 reason=f"next gate {nxt.gate}: not met ({len(req) - len(missing)}/{len(req)} items; missing {', '.join(missing)})"[:400])
-
-
-def _running(job: dict[str, Any]) -> pd.Timestamp | None:
-    started, finished = job.get("last_started"), job.get("last_finished")
-    if not started:
-        return None
-    s = pd.Timestamp(started)
-    if finished is None or s > pd.Timestamp(finished):
-        return s
-    return None
-
-
-def check_scheduler(ctx: HealthContext) -> list[Check]:
-    """One heartbeat check plus one check per configured job. Reads the heartbeat row in aux.db (state store step 3),
-    which a failed scheduler.json export cannot leave stale; the file only when aux.db has no heartbeat yet."""
-    from goldbot.db.bookkeeping import scheduler_status
-    f = ctx.state_dir / "scheduler.json"
-    db_doc = scheduler_status(ctx.state_dir)
-    if db_doc is None and not f.exists():
-        return [Check(name="scheduler", status="fail", reason="no scheduler.json: scheduler never started")]
-    try:
-        raw = db_doc if db_doc is not None else _read_json(f)
-        hb = pd.Timestamp(raw["ts"])
-        jobs: dict[str, dict[str, Any]] = raw.get("jobs", {})
-    except (ValueError, OSError, KeyError) as exc:
-        return [Check(name="scheduler", status="fail", reason=f"scheduler.json unreadable: {exc}")]
-    running = {n: s for n, j in jobs.items() if (s := _running(j)) is not None}
-    hb_age = (ctx.now - hb).total_seconds()
-    if hb_age <= SCHEDULER_HEARTBEAT_FAIL_S:
-        out = [Check(name="scheduler", status="ok", reason=f"heartbeat {_age(hb_age)}")]
-    elif running:      # a job blocks the loop (a retrain takes hours); the job check judges how long
-        out = [Check(name="scheduler", status="ok", reason=f"busy with {', '.join(sorted(running))}; heartbeat {_age(hb_age)}")]
-    else:
-        out = [Check(name="scheduler", status="fail", reason=f"heartbeat {_age(hb_age)} old: scheduler not running")]
-    expected = list(type(ctx.settings.scheduler).model_fields) if ctx.settings is not None else []
-    for name in sorted(set(expected) | set(jobs)):
-        cname = f"job:{name}"
-        j = jobs.get(name)
-        if j is None:
-            out.append(Check(name=cname, status="warn", reason="configured but not registered yet (scheduler not restarted?)"))
-            continue
-        statuses: list[Status] = []
-        parts: list[str] = []
-        if name in running:
-            ran_h = (ctx.now - running[name]).total_seconds() / 3600
-            if ran_h > JOB_RUNNING_FAIL_H:
-                statuses.append("fail")
-                parts.append(f"started {ran_h:.1f} h ago and never finished (scheduler died mid-job?)")
-            else:
-                parts.append(f"running for {ran_h:.1f} h")
-        if j.get("last_ok") is False:
-            statuses.append("fail")
-            err = str(j.get("last_error") or "").strip().splitlines()
-            parts.append(f"last run failed ({j.get('failures', 0)} failures): {err[0][:160] if err else '?'}")
-        nxt = j.get("next_slot")
-        if nxt and name not in running:
-            late = (ctx.now - pd.Timestamp(nxt)).total_seconds()
-            if late > JOB_OVERDUE_GRACE_S:
-                statuses.append("fail")
-                parts.append(f"overdue: slot {pd.Timestamp(nxt):%Y-%m-%d %H:%M} passed {_age(late)} ago")
-        skipped = j.get("last_skipped")
-        if skipped and j.get("last_slot") and pd.Timestamp(skipped) >= pd.Timestamp(j["last_slot"]) \
-                and (j.get("last_started") is None or pd.Timestamp(skipped) > pd.Timestamp(j["last_started"])):
-            statuses.append("warn")
-            parts.append(f"slot {pd.Timestamp(j['last_slot']):%Y-%m-%d %H:%M} skipped (missed by more than max_late)")
-        if not parts:
-            last = j.get("last_finished")
-            parts.append(f"ok, last ran {pd.Timestamp(last):%Y-%m-%d %H:%M}" if last else "waiting for its first slot")
-            if nxt:
-                parts.append(f"next {pd.Timestamp(nxt):%Y-%m-%d %H:%M}")
-        out.append(Check(name=cname, status=_worst(statuses), reason="; ".join(parts)))
-    return out
-
-
-def check_costs(ctx: HealthContext, account_id: str) -> Check:
-    name = f"costs:{account_id}"
-    f = ctx.state_dir / f"costs_{account_id}.json"
-    if not f.exists():
-        return Check(name=name, status="warn", reason="no cost table yet (nightly_costs has not run): engine uses priors")
-    try:
-        raw = _read_json(f)
-        built = pd.Timestamp(raw["built_utc"])
-        built = built.tz_localize("UTC") if built.tzinfo is None else built
-    except (ValueError, OSError, KeyError) as exc:
-        return Check(name=name, status="fail", reason=f"cost table unreadable: {exc}")
-    days = (ctx.now - built).total_seconds() / 86400
-    msg = f"built {days:.1f} d ago"
-    if days > COSTS_FAIL_DAYS:
-        return Check(name=name, status="fail", reason=msg + f" (> {COSTS_FAIL_DAYS:.0f} d)")
-    if days > COSTS_WARN_DAYS:
-        return Check(name=name, status="warn", reason=msg)
-    if raw.get("swap_long_usd_per_lot") is None or raw.get("swap_short_usd_per_lot") is None:
-        # research and retraining then charge the settings' swap prior (see state/broker_terms_<account>.json)
-        return Check(name=name, status="warn", reason=msg + "; no measured swap from the terminal: swap prior in use")
-    return Check(name=name, status="ok", reason=msg)
-
-
-def check_pnl_basis(ctx: HealthContext, account_id: str) -> Check:
-    """Share of this account's closed trades over the last PNL_BASIS_WINDOW_DAYS (by exit) that are not net
-    (gates_phase.pnl_basis: "gross", or a legacy row without both commission and swap). The reports leave those out
-    of every net figure ("nothing gross is labelled net"), so WARN when more than PNL_BASIS_GROSS_WARN_PCT of them are;
-    never FAIL, even on an unreadable record: it is a reporting-quality signal, not a trading fault."""
-    from goldbot.ops.gates_phase import load_closed_trades, pnl_basis
-    name = f"pnl_basis:{account_id}"
-    try:
-        trades, err = load_closed_trades(ctx.state_dir)
-    except (OSError, ValueError) as exc:
-        return Check(name=name, status="warn", reason=f"closed-trade record unreadable: {type(exc).__name__}")
-    since = ctx.now - pd.Timedelta(days=PNL_BASIS_WINDOW_DAYS)
-    rows = [t for t in trades if t.account_id == account_id and since <= t.exit_utc <= ctx.now]
-    note = f"; {err}" if err else ""
-    if not rows:
-        return Check(name=name, status="warn" if err else "ok",
-                     reason=f"no closed trades in the last {PNL_BASIS_WINDOW_DAYS} d{note}"[:400])
-    gross = sum(pnl_basis(t) != "net" for t in rows)
-    pct = 100.0 * gross / len(rows)
-    msg = (f"{gross} of {len(rows)} closed trades in the last {PNL_BASIS_WINDOW_DAYS} d ({pct:.0f}%) are gross only "
-           f"(costs not recorded)")
-    if pct > PNL_BASIS_GROSS_WARN_PCT:
-        return Check(name=name, status="warn", reason=(f"{msg}, > {PNL_BASIS_GROSS_WARN_PCT:.0f}%: the net totals leave "
-                                                       f"them out (check the broker's deal history){note}")[:400])
-    return Check(name=name, status="warn" if err else "ok", reason=(msg + note)[:400])
-
-
-def check_costs_published(ctx: HealthContext) -> Check:
-    """With `costs.publish_release` on, research.yml charges the table on release costs-v1: warn when it was never
-    published or is older than COSTS_PUBLISHED_WARN_DAYS (research is then on stale costs or the priors)."""
-    name = "costs:published"
-    f = ctx.state_dir / "costs_published.json"     # goldbot.ops.jobs.COSTS_PUBLISHED_FILE
-    try:
-        raw = _read_json(f) if f.exists() else {}
-    except (ValueError, OSError) as exc:
-        return Check(name=name, status="warn", reason=f"publish record unreadable: {exc}")
-    last = f"; last attempt: {raw['last_result']}" if raw.get("last_result") else ""
-    if not raw.get("published_utc"):
-        return Check(name=name, status="warn",
-                     reason="cost table never published to release costs-v1: research charges the priors" + last)
-    published = pd.Timestamp(raw["published_utc"])
-    published = published.tz_localize("UTC") if published.tzinfo is None else published
-    days = (ctx.now - published).total_seconds() / 86400
-    msg = f"published {days:.1f} d ago"
-    if days > COSTS_PUBLISHED_WARN_DAYS:
-        return Check(name=name, status="warn", reason=msg + f" (> {COSTS_PUBLISHED_WARN_DAYS:.0f} d): research uses a "
-                                                            "stale table" + last)
-    return Check(name=name, status="ok", reason=msg)
-
-
-def check_data_quality(ctx: HealthContext) -> Check:
-    """Design (Data quality): errors quarantine the batch and alert. Error-severity events (duplicate stamps, bid >
-    ask, out-of-order bars) recorded by the loaders or the engines in the last DQ_WINDOW_HOURS warn here; their rows
-    are in `bars_quarantine`, not in the bar tables, and an engine blocks entries while its feed is in error."""
-    if ctx.settings is None:
-        return Check(name="data_quality", status="warn", reason="settings unreadable: data root unknown")
-    root = Path(ctx.settings.data_root)
-    if not (root / "dq_events").exists():
-        return Check(name="data_quality", status="ok", reason="no data-quality events recorded")
-    from goldbot.data.store import Store
-    try:
-        ev = Store(root).read("dq_events", start=ctx.now - pd.Timedelta(hours=DQ_WINDOW_HOURS), end=ctx.now)
-    except (ValueError, OSError) as exc:
-        return Check(name="data_quality", status="warn", reason=f"dq_events unreadable: {exc}")
-    errs = ev[ev["severity"] == "error"] if not ev.empty and "severity" in ev.columns else ev.iloc[0:0]
-    if errs.empty:
-        return Check(name="data_quality", status="ok", reason=f"no error events in {DQ_WINDOW_HOURS} h ({len(ev)} warnings)")
-    kinds = ", ".join(f"{k} x{n}" for k, n in errs["check"].value_counts().items())
-    return Check(name="data_quality", status="warn",
-                 reason=f"{len(errs)} error events in {DQ_WINDOW_HOURS} h ({kinds}): rows quarantined, see bars_quarantine")
-
-
-def check_drift(ctx: HealthContext) -> Check:
-    """state/drift.json (daily drift_watch): system halt fails, agent halts and size-downs warn, a stale file warns."""
-    f = ctx.state_dir / "drift.json"
-    if not f.exists():
-        return Check(name="drift", status="ok", reason="no drift report yet (no champion, or drift_watch not run)")
-    try:
-        d = _read_json(f)
-    except (ValueError, OSError) as exc:
-        return Check(name="drift", status="fail", reason=f"drift.json unreadable (entries halted): {exc}")
-    if d.get("system_halt"):
-        why = "; ".join(d["system_halt"].get("reasons") or [])
-        return Check(name="drift", status="fail",
-                     reason=f"SYSTEM HALT pending review ({why}): python -m goldbot.ops.run drift-review")
-    parts, status = [], "ok"
-    if d.get("halted"):
-        status = "warn"
-        parts.append(f"halted agents: {', '.join(sorted(d['halted']))}")
-    if d.get("size_factor"):
-        status = "warn"
-        parts.append(f"sized down: {', '.join(sorted(d['size_factor']))}")
-    age_h = (ctx.now - pd.Timestamp(d.get("ts"))).total_seconds() / 3600 if d.get("ts") else float("inf")
-    if age_h > 72:
-        status = "warn"
-        parts.append(f"report {age_h:.0f} h old")
-    return Check(name="drift", status=cast(Status, status), reason="; ".join(parts) or "no drift")
-
-
-def check_model_watch(ctx: HealthContext) -> Check:
-    """state/model_watch.json (daily model_watch): a new champion whose watch has too few trades for any CUSUM alarm
-    at the 5% rate (`cannot_alarm`) warns, so a silent "no alarm" is never mistaken for a healthy watch."""
-    f = ctx.state_dir / "model_watch.json"          # goldbot.ops.jobs.MODEL_WATCH_FILE
-    if not f.exists():
-        return Check(name="model_watch", status="ok", reason="no champion watch report yet")
-    try:
-        agents = (_read_json(f) or {}).get("agents") or {}
-    except (ValueError, OSError, AttributeError) as exc:
-        return Check(name="model_watch", status="warn", reason=f"model_watch.json unreadable: {exc}"[:300])
-    blind = sorted(a for a, v in agents.items() if isinstance(v, dict) and v.get("action") == "cannot_alarm")
-    if blind:
-        return Check(name="model_watch", status="warn",
-                     reason=f"champion watch cannot alarm (too few trades) for {', '.join(blind)}: relies on "
-                            "drift_watch and the drawdown halt")
-    return Check(name="model_watch", status="ok", reason=f"{len(agents)} champion(s) watched")
-
-
-def check_feature_versions(ctx: HealthContext) -> Check:
-    """Active models per feature version: champions, challengers and previous champions (the model_watch rollback
-    target, which may become champion again). Each version is current (the default set, or the default set plus the
-    macro drivers), legacy (rebuilt by goldbot/features/legacy.py) or cannot be rebuilt (never scored: warns).
-    goldbot/features/legacy.py can be deleted once no legacy count remains. The registry file is read, never created."""
-    if ctx.settings is None:
-        return _skipped("feature_versions", "settings unreadable")
-    f = Path(ctx.settings.research.models_dir) / "registry.json"
-    if not f.exists():
-        return Check(name="feature_versions", status="ok", reason="no model registry yet")
-    try:
-        rows = [r for r in (_read_json(f) or []) if r.get("status") in ("champion", "challenger", "previous")]
-    except (ValueError, OSError, AttributeError) as exc:
-        return Check(name="feature_versions", status="warn", reason=f"model registry unreadable: {exc}"[:300])
-    from goldbot.features.registry import feature_version, versions_for
-    from goldbot.research.pipeline import DEFAULT_FEATURE_NAMES, MACRO_FEATURE_NAMES
-    sets = [list(DEFAULT_FEATURE_NAMES), [*DEFAULT_FEATURE_NAMES, *MACRO_FEATURE_NAMES]]
-    current = {feature_version(names) for names in sets}
-    counts: dict[str, int] = {}
-    for r in rows:
-        counts[str(r.get("feature_version") or "")] = counts.get(str(r.get("feature_version") or ""), 0) + 1
-    parts, status = [], "ok"
-    for fv, n in sorted(counts.items()):
-        if fv in current:
-            kind = "current"
-        elif fv == "":
-            kind = "unversioned"
-        elif any(versions_for(names, fv) is not None for names in sets):
-            kind = "legacy"
-        else:
-            kind, status = "cannot be rebuilt: not scored", "warn"
-        parts.append(f"{fv or '-'} ({kind}) {n}")
-    return Check(name="feature_versions", status=cast(Status, status),
-                 reason="active models by feature version: " + ("; ".join(parts) or "none"))
-
-
-def check_deploy(ctx: HealthContext) -> Check:
-    """The last deploy attempt (state/deploys.jsonl, written by goldbot-deploy): a rollback warns, a failed rollback
-    fails; a deploy is only ever started by the owner (Telegram [Deploy] or `sudo goldbot-deploy`). An owner's
-    rollback (`goldbot-deploy --rollback`) warns too: an older version runs on purpose until the next deploy."""
-    f = ctx.state_dir / "deploys.jsonl"
-    if not f.exists():
-        return Check(name="deploy", status="ok", reason="no deploy recorded yet")
-    try:
-        last = json.loads(f.read_text().splitlines()[-1])
-    except (ValueError, OSError, IndexError) as exc:
-        return Check(name="deploy", status="warn", reason=f"deploys.jsonl unreadable: {exc}")
-    msg = f"{last.get('result')} {str(last.get('to', ''))[:8]} on {last.get('role')} at {last.get('ts')}: {last.get('detail', '')}"
-    status = {"failed": "fail", "rolled_back": "warn", "refused": "warn", "rolled_back_manual": "warn",
-              "rollback_reverted": "warn", "deployed_degraded": "warn"}.get(str(last.get("result")), "ok")
-    return Check(name="deploy", status=cast(Status, status), reason=msg)
-
-
-def check_backup_age(ctx: HealthContext) -> Check:
-    """Age of the last successful encrypted off-host backup (state/backup_last.json, goldbot/ops/backup.py). Error
-    texts in the record are masked by the backup module before they are written."""
-    name = "backup_age"
-    f = ctx.state_dir / "backup_last.json"
-    if not f.exists():
-        return Check(name=name, status="warn", reason="no backup recorded yet (RUNBOOK 'Backups': restic keys, "
-                                                      "then `goldbot run backup --init`)")
-    try:
-        rec = _read_json(f)
-        last_ok = pd.Timestamp(rec["last_ok_ts"]) if rec.get("last_ok_ts") else None
-        attempt = pd.Timestamp(rec["ts"])
-    except (ValueError, OSError, KeyError, TypeError) as exc:
-        return Check(name=name, status="warn", reason=f"backup_last.json unreadable: {exc}"[:300])
-    failed = "" if rec.get("ok") else f"; last attempt {attempt:%Y-%m-%d %H:%M} failed: {str(rec.get('error'))[:200]}"
-    if last_ok is None:
-        return Check(name=name, status="warn", reason="no successful backup yet" + failed)
-    age_h = (ctx.now - last_ok).total_seconds() / 3600
-    msg = f"last good backup {_age(age_h * 3600)} ago" + failed
-    repo = rec.get("repo_bytes")
-    if age_h > BACKUP_FAIL_H:
-        return Check(name=name, status="fail", reason=msg + f" (> {BACKUP_FAIL_H:.0f} h)")
-    if age_h > BACKUP_WARN_H:
-        return Check(name=name, status="warn", reason=msg + f" (> {BACKUP_WARN_H:.0f} h)")
-    if failed:
-        return Check(name=name, status="warn", reason=msg)
-    if isinstance(repo, (int, float)) and repo > BACKUP_REPO_WARN_BYTES:
-        return Check(name=name, status="warn", reason=msg + f"; repository {repo / 1e9:.1f} GB of the 20 GB free tier")
-    if rec.get("model_problems"):
-        return Check(name=name, status="warn", reason=msg + "; " + "; ".join(rec["model_problems"])[:200])
-    return Check(name=name, status="ok", reason=msg)
-
-
-def check_backup_prune(ctx: HealthContext) -> Check:
-    """Retention runs only from the owner's Mac (the brain's key appends): the newest retention marker, as the brain's
-    last backup read it (state/backup_last.json `last_prune_ts`), warns after 45 days. With no marker yet it warns
-    only once the first good backup is 45 days old."""
-    name = "backup_prune"
-    f = ctx.state_dir / "backup_last.json"
-    if not f.exists():
-        return Check(name=name, status="ok", reason="no backup yet")
-    try:
-        rec = _read_json(f)
-        pruned = pd.Timestamp(rec["last_prune_ts"]) if rec.get("last_prune_ts") else None
-        first = pd.Timestamp(rec["first_ok_ts"]) if rec.get("first_ok_ts") else None
-    except (ValueError, OSError, KeyError, TypeError) as exc:
-        return Check(name=name, status="warn", reason=f"backup_last.json unreadable: {exc}"[:300])
-    how = "run scripts/backup_retention.sh on your Mac (RUNBOOK 0.6)"
-    if pruned is None:
-        if first is not None and (ctx.now - first).total_seconds() / 86400 > PRUNE_WARN_DAYS:
-            return Check(name=name, status="warn", reason=f"no retention run recorded in {PRUNE_WARN_DAYS:.0f} days of "
-                                                          f"backups: {how}")
-        return Check(name=name, status="ok", reason=f"no retention run yet (monthly; {how})")
-    age_d = (ctx.now - pruned).total_seconds() / 86400
-    msg = f"last retention run {_age(age_d * 86400)} ago"
-    if age_d > PRUNE_WARN_DAYS:
-        return Check(name=name, status="warn", reason=msg + f" (> {PRUNE_WARN_DAYS:.0f} d): {how}")
-    return Check(name=name, status="ok", reason=msg)
-
-
-def check_restore_drill(ctx: HealthContext) -> Check:
-    """The weekly restore drill (state/restore_drill_last.json): a failed drill fails, a stale one warns."""
-    name = "restore_drill"
-    f = ctx.state_dir / "restore_drill_last.json"
-    if not f.exists():
-        return Check(name=name, status="warn", reason="no restore drill yet (weekly, Sunday 10:00 UTC; "
-                                                      "`goldbot run restore-drill` runs one now)")
-    try:
-        rec = _read_json(f)
-        ts = pd.Timestamp(rec["ts"])
-    except (ValueError, OSError, KeyError, TypeError) as exc:
-        return Check(name=name, status="warn", reason=f"restore_drill_last.json unreadable: {exc}"[:300])
-    if not rec.get("ok"):
-        why = rec.get("error") or "; ".join(rec.get("problems") or [])
-        return Check(name=name, status="fail", reason=f"drill at {ts:%Y-%m-%d %H:%M} failed: {str(why)[:300]}")
-    age_d = (ctx.now - ts).total_seconds() / 86400
-    msg = f"last drill {_age(age_d * 86400)} ago verified {rec.get('files', 0)} files"
-    if age_d > DRILL_WARN_DAYS:
-        return Check(name=name, status="warn", reason=msg + f" (> {DRILL_WARN_DAYS:.0f} d)")
-    return Check(name=name, status="ok", reason=msg)
-
-
-def check_news(ctx: HealthContext) -> Check:
-    if ctx.settings is not None and not ctx.settings.news.feeds:
-        return Check(name="news", status="ok", reason="no feeds configured")
-    f = ctx.state_dir / "news_feeds.json"
-    if not f.exists():
-        return Check(name="news", status="warn", reason="no news_feeds.json yet: news service not started")
-    try:
-        feeds: dict[str, dict[str, Any]] = _read_json(f)
-    except (ValueError, OSError) as exc:
-        return Check(name="news", status="fail", reason=f"news_feeds.json unreadable: {exc}")
-    if not feeds:
-        return Check(name="news", status="warn", reason="news_feeds.json lists no feeds")
-    poll = ctx.settings.news.poll_seconds if ctx.settings is not None else 300
-    last = max(pd.Timestamp(h["ts"]) for h in feeds.values() if h.get("ts")) if any(h.get("ts") for h in feeds.values()) else None
-    age = (ctx.now - last).total_seconds() if last is not None else float("inf")
-    bad = sorted(n for n, h in feeds.items() if not h.get("ok"))
-    if age > NEWS_STALE_POLLS * poll:
-        return Check(name="news", status="fail", reason=f"last poll {_age(age)} ago (> {NEWS_STALE_POLLS} polls): news service down")
-    if len(bad) == len(feeds):
-        return Check(name="news", status="fail", reason=f"all {len(feeds)} feeds failing: no shock blackout possible")
-    if bad:
-        errs = "; ".join(f"{n}: {str(feeds[n].get('error', '?'))[:80]}" for n in bad)
-        return Check(name="news", status="warn", reason=f"{len(bad)}/{len(feeds)} feeds failing ({errs})")
-    return Check(name="news", status="ok", reason=f"{len(feeds)} feeds ok, last poll {_age(age)} ago")
-
-
-def check_agent_spend(ctx: HealthContext) -> Check:
-    cap = ctx.settings.agents.monthly_cap_usd if ctx.settings is not None else None
-    if cap is None:
-        return _skipped("agent_spend", "settings did not load")
-    if cap <= 0:
-        return Check(name="agent_spend", status="ok", reason="monthly cap is 0: staff agents and headline scoring off")
-    f = ctx.state_dir / "agent_spend.json"
-    try:
-        spent = float(_read_json(f).get(f"{ctx.now:%Y-%m}", 0.0)) if f.exists() else 0.0
-    except (ValueError, OSError, AttributeError) as exc:
-        return Check(name="agent_spend", status="fail", reason=f"agent_spend.json unreadable: {exc}")
-    frac = spent / cap
-    msg = f"{ctx.now:%Y-%m}: ${spent:.2f} of ${cap:.2f} ({100 * frac:.0f}%)"
-    if frac >= 1.0:
-        return Check(name="agent_spend", status="fail", reason=msg + ": cap reached, agents and headline scoring stopped")
-    if frac >= SPEND_WARN_FRACTION:
-        return Check(name="agent_spend", status="warn", reason=msg)
-    return Check(name="agent_spend", status="ok", reason=msg)
-
-
-def check_approvals(ctx: HealthContext) -> Check:
-    """Pending proposals past their window that no engine archived. Warn, not fail: the bus refuses decisions on them
-    (nothing can be entered from them) and a dead engine already fails its own check; they mostly mean an engine
-    restarted with a proposal open."""
-    d = ctx.state_dir / "approvals" / "pending"
-    now = _epoch(ctx.now)
-    stuck: list[tuple[float, str]] = []
-    for f in sorted(d.glob("*.json")) if d.exists() else []:
-        try:
-            p = _read_json(f)
-            over = now - float(p["created"]) - float(p.get("window_s", 90))
-        except (ValueError, OSError, KeyError, TypeError):
-            stuck.append((float("inf"), f.stem))
-            continue
-        if over > STUCK_APPROVAL_GRACE_S and p.get("outcome") is None:
-            stuck.append((over, f.stem))
-    if not stuck:
-        return Check(name="approvals", status="ok", reason="no proposal stuck past its window")
-    oldest = max(stuck)
-    return Check(name="approvals", status="warn",
-                 reason=f"{len(stuck)} pending proposal(s) past their window, oldest {oldest[1]} "
-                        f"({_age(oldest[0]) if oldest[0] != float('inf') else 'unreadable'}); the engine never archived them")
-
-
-def check_email_link(ctx: HealthContext) -> Check:
-    """The owner's email sign-in link hitting its hourly limit again and again (goldbot/api/auth.py
-    `email_link_health_note`): warn, never fail, since password sign-in still works. Never names the address."""
-    from goldbot.api.auth import email_link_health_note
-    owner = ctx.settings.auth.owner_email if ctx.settings is not None else None
-    note = email_link_health_note(ctx.state_dir, owner, _epoch(ctx.now))
-    if note:
-        return Check(name="email_link", status="warn", reason=note)
-    return Check(name="email_link", status="ok", reason="no repeated sign-in link rate limiting")
-
-
-def check_alert_loop(ctx: HealthContext) -> Check:
-    f = ctx.state_dir / WATCH_FILE
-    if not f.exists():
-        return Check(name="alerts", status="warn", reason="health alerts never ran (Telegram service not started)")
-    try:
-        ts = load_record_json(WatchState, f.read_text(encoding="utf-8"), source=WATCH_FILE).ts
-    except (ValueError, OSError) as exc:
-        return Check(name="alerts", status="warn", reason=f"health_last.json unreadable: {exc}")
-    age = (ctx.now - ts).total_seconds() if ts is not None else float("inf")
-    if age > WATCH_STALE_S:
-        return Check(name="alerts", status="warn", reason=f"last health alert pass {_age(age)} ago: Telegram service down?")
-    return Check(name="alerts", status="ok", reason=f"last pass {_age(age)} ago")
-
-
-def check_deadman(ctx: HealthContext) -> Check:
-    """The outside dead man's switch (goldbot/ops/deadman.py) is configured: presence and shape of the keyring URL,
-    never its value. Whether pings arrive is judged by the outside service itself (a missed ping is its alert)."""
-    from goldbot.ops.deadman import DEADMAN_KEY, SET_HINT, url_problem
-    try:
-        url = (ctx.get_secret(DEADMAN_KEY) or "").strip()
-    except Exception as exc:                 # noqa: BLE001 - presence check only
-        return Check(name="deadman", status="warn", reason=f"deadman-url unreadable ({type(exc).__name__})")
-    if not url:
-        return Check(name="deadman", status="warn",
-                     reason=f"dead man's switch not set: nobody is told if this server dies. Create a free "
-                            f"Healthchecks.io check, then {SET_HINT} (docs/deploy/first-deploy.md)")
-    problem = url_problem(url)
-    if problem:
-        return Check(name="deadman", status="warn", reason=f"{problem}; store the check's https ping URL with {SET_HINT}")
-    every = ctx.settings.telegram.deadman_every_min if ctx.settings is not None else 2
-    return Check(name="deadman", status="ok",
-                 reason=f"set; the Telegram service pings every {every} min while healthy, <url>/fail on a FAIL")
-
-
-# --------------------------------------------------------------------------------------------- operational alerts
-log = logging.getLogger("goldbot.health")
-
-
-def heartbeat_path(state_dir: str | Path, service: str) -> Path:
-    return Path(state_dir) / f"heartbeat_{service}.json"      # not engine_*: the supervisor globs those
 
 
 _skew_build_failures = 0           # schema_skew summary builds that raised in this process (SRE review)
@@ -1153,439 +452,6 @@ def start_heartbeat(state_dir: str | Path, service: str, every_s: float = HEARTB
     return t
 
 
-def check_heartbeat(ctx: HealthContext, service: str) -> Check:
-    """S5: a service silent for HEARTBEAT_SILENT_S fails (the alert); one that never wrote a heartbeat warns."""
-    name = f"heartbeat:{service}"
-    f = heartbeat_path(ctx.state_dir, service)
-    if not f.exists():
-        return Check(name=name, status="warn", reason=f"no heartbeat_{service}.json: service never started (or predates heartbeats)")
-    try:
-        age = _epoch(ctx.now) - float(_read_json(f)["ts"])
-    except (ValueError, OSError, KeyError, TypeError) as exc:
-        return Check(name=name, status="fail", reason=f"heartbeat unreadable: {exc}")
-    if age > HEARTBEAT_SILENT_S:
-        return Check(name=name, status="fail",
-                     reason=f"{service} silent for {_age(age)} (> {HEARTBEAT_SILENT_S // 60} min): service down?")
-    return Check(name=name, status="ok", reason=f"heartbeat {_age(age)}")
-
-
-def check_loss_caps(ctx: HealthContext, account_id: str) -> list[Check]:
-    """R11: the per-account daily and weekly loss caps from the engine's state (equity against the day/week-start
-    equity, the RiskGate's own arithmetic). A tripped cap warns and is announced (NOTIFY_ON_WARN): the gate already
-    blocks entries, this only tells the owner. Weekly stays tripped until the risk week rolls, so it is told once a week."""
-    f = ctx.state_dir / f"engine_{account_id}.json"
-    if ctx.settings is None or not f.exists():
-        return []
-    try:
-        e = _read_json(f)
-        eq = float(e.get("equity") or 0.0)
-        starts = {"daily": float(e.get("day_start_equity") or 0.0), "weekly": float(e.get("week_start_equity") or 0.0)}
-        # BACKLOG 29: the engine's effective daily loss limit (min of the % cap and the absolute) and what is left
-        limit, left = e.get("daily_loss_limit"), e.get("daily_loss_remaining")
-        allowance = (float(limit), float(left)) if limit is not None and left is not None else None
-    except (ValueError, OSError, AttributeError, TypeError):
-        return []                                   # check_engine reports the unreadable file
-    caps = {"daily": ctx.settings.risk.daily_cap, "weekly": ctx.settings.risk.weekly_cap}
-    out = []
-    for period in ("daily", "weekly"):
-        start = starts[period]
-        loss = 1 - eq / start if start > 0 else 0.0
-        msg = f"{account_id}: {period} loss {100 * loss:.2f}% of {'day' if period == 'daily' else 'week'}-start equity {start:,.2f}"
-        if period == "daily" and allowance is not None:
-            msg += f", daily loss limit {allowance[0]:,.2f} ({allowance[1]:,.2f} left)"
-            if allowance[1] <= 0 and loss < caps[period]:
-                out.append(Check(name=f"{period}_cap:{account_id}", status="warn",
-                                 reason=f"DAILY LOSS LIMIT reached: {msg}: no new entries until the day rolls"))
-                continue
-        if loss >= caps[period]:
-            out.append(Check(name=f"{period}_cap:{account_id}", status="warn",
-                             reason=f"{period.upper()} LOSS CAP hit: {msg} (cap {100 * caps[period]:.1f}%): no new entries until it rolls"))
-        else:
-            out.append(Check(name=f"{period}_cap:{account_id}", status="ok", reason=f"{msg} (cap {100 * caps[period]:.1f}%)"))
-    return out
-
-
-def _failed_order_retcodes(ctx: HealthContext, account_id: str, since: pd.Timestamp) -> list[tuple[pd.Timestamp, str, Any]]:
-    """(ts, agent, retcode) of failed `order` rows in the engine's decisions journal; [] when it cannot be read."""
-    if ctx.settings is None:
-        return []
-    from goldbot.data.store import Store
-    try:
-        d = Store(ctx.settings.data_root).read("decisions", source=account_id, symbol=ctx.settings.symbol, start=since, end=ctx.now)
-        if d.empty:
-            return []
-        d = d[d["action"] == "order"]
-        out = []
-        for _, row in d.iterrows():
-            detail = json.loads(row["detail"]) if isinstance(row["detail"], str) else {}
-            if detail.get("ok") is False:
-                out.append((pd.Timestamp(row["ts_utc"]), str(row["agent_id"]), detail.get("retcode")))
-        return out
-    except Exception:     # the journal is best effort here: the orders file alone raises the alert
-        log.exception("decisions journal")
-        return []
-
-
-def check_throttle(ctx: HealthContext, account_id: str) -> list[Check]:
-    """BACKLOG 21 (playbook G-6: "Logged and alerted"): while the per-agent throttle is on, one check per agent
-    (`throttle:<account>:<agent>`, so each newly throttled agent alerts on its own, review MEDIUM-1). It warns (and
-    tells the owner, NOTIFY_ON_WARN) while RiskGate refuses the agent's entries for a loss streak or the daily entry
-    rate, and is ok otherwise. It FAILs when the block cannot lift by itself or the facts are unknown: a loss-streak
-    block without a cooldown end (unknown timeframe), `throttle_unknown`, or a throttle state the engine could not
-    publish (`throttle:<account>`). Nothing while the throttle is off or the engine has not published it."""
-    f = ctx.state_dir / f"engine_{account_id}.json"
-    if not f.exists():
-        return []
-    try:
-        th = _read_json(f).get("throttle") or {}
-        if not th.get("enabled"):
-            return []
-        error = th.get("error")
-        agents = {str(k): dict(v) for k, v in (th.get("agents") or {}).items()}
-    except (ValueError, OSError, AttributeError, TypeError):
-        return []                                   # check_engine reports the unreadable file
-    if error:
-        return [Check(name=f"throttle:{account_id}", status="fail",
-                      reason=f"{account_id}: throttle state not published ({error}); entries are judged per decision")]
-    out = []
-    for a, v in sorted(agents.items()):
-        name, blocked = f"throttle:{account_id}:{a}", [str(r) for r in v.get("blocked") or []]
-        facts = (f"streak {v.get('loss_streak')}, {v.get('entries_today')} entries today, cooldown until "
-                 f"{v.get('cooldown_until') or 'n/a'}")
-        if not blocked:
-            out.append(Check(name=name, status="ok", reason=f"{account_id} {a}: not throttled ({facts})"))
-            continue
-        stuck = "throttle_unknown" in blocked or ("throttle_loss_streak" in blocked and not v.get("cooldown_until"))
-        out.append(Check(name=name, status="fail" if stuck else "warn",
-                         reason=f"{account_id} {a}: entries throttled: {','.join(blocked)} ({facts})"
-                                + ("; the block cannot lift by itself" if stuck else "") + "; exits unaffected"))
-    return out
-
-
-def check_open_risk(ctx: HealthContext, account_id: str) -> list[Check]:
-    """BACKLOG 19/35 (review LOW-3): while the heat cap is on, or the open-risk projection is on with an absolute daily
-    limit, the engine's `open_risk` must be known; null means RiskGate refuses every entry (`open_risk_unknown`: a
-    position without SL, a conversion the broker cannot give, or a failed read). One check `open_risk:<account>`: warn
-    and tell the owner (NOTIFY_ON_WARN) while it is unknown, ok with the amount otherwise. Nothing while both rules are
-    off or the engine has not published them."""
-    f = ctx.state_dir / f"engine_{account_id}.json"
-    if not f.exists():
-        return []
-    try:
-        e = _read_json(f)
-        lim = e.get("limits") or {}
-        heat = bool((lim.get("heat") or {}).get("enabled"))
-        projected = bool(lim.get("project_open_risk")) and lim.get("daily_loss_limit_abs") is not None
-        risk = e.get("open_risk")
-    except (ValueError, OSError, AttributeError, TypeError):
-        return []                                   # check_engine reports the unreadable file
-    if not (heat or projected):
-        return []
-    rules = " and ".join(n for n, on in (("heat cap", heat), ("open-risk projection", projected)) if on)
-    name = f"open_risk:{account_id}"
-    if risk is None:
-        return [Check(name=name, status="warn",
-                      reason=f"{account_id}: open risk unknown (a position without a stop, no conversion, or a failed "
-                             f"read): every entry refused while the {rules} is on; exits unaffected")]
-    return [Check(name=name, status="ok", reason=f"{account_id}: open risk {float(risk):.2f} ({rules} on)")]
-
-
-WINDOWS_UNAVAILABLE_FAIL = pd.Timedelta(minutes=30)   # calendar_unavailable this long with the market open: FAIL
-WINDOWS_FETCH_WARN = pd.Timedelta(hours=36)            # newest calendar fetch older than this: WARN
-WINDOWS_HOLIDAY_WARN_DAYS = 90                         # holiday list ending within this many days: WARN
-
-
-def check_entry_windows(ctx: HealthContext, account_id: str) -> list[Check]:
-    """BACKLOG 17/18 entry windows fail closed (`calendar_unavailable` refuses every entry), so the owner must hear
-    when that happens (review M1), from the engine's `windows` block. Checks, only for enabled windows:
-    `entry_windows:<account>:calendar` FAILs once the calendar has been unavailable over 30 min with the market open
-    (ok while the market is closed or for shorter spells, which the Sunday fetch and the 5-minute re-read clear);
-    `entry_windows:<account>:calendar_age` (tier 2) warns when the newest Forex Factory fetch is over 36 h old;
-    `entry_windows:<account>:holiday_list` warns when the holiday list ends within 90 days. Warnings reach Telegram
-    (NOTIFY_ON_WARN). Nothing while every window is off or the engine has not published the block."""
-    f = ctx.state_dir / f"engine_{account_id}.json"
-    if not f.exists():
-        return []
-    try:
-        w = _read_json(f).get("windows") or {}
-        on = {k: bool(v) for k, v in (w.get("enabled") or {}).items()}
-    except (ValueError, OSError, AttributeError, TypeError):
-        return []                                   # check_engine reports the unreadable file
-    if not any(on.values()):
-        return []
-    out = []
-    pre = f"entry_windows:{account_id}"
-    if on.get("tier2") or on.get("holidays"):
-        since = pd.Timestamp(w["calendar_unavailable_since"]) if w.get("calendar_unavailable_since") else None
-        if not w.get("calendar_unavailable") or since is None:
-            out.append(Check(name=f"{pre}:calendar", status="ok", reason=f"{account_id}: calendar known"))
-        else:
-            lasted = ctx.now - since
-            open_ = _market_open_throughout(ctx, WINDOWS_UNAVAILABLE_FAIL.total_seconds())
-            bad = lasted > WINDOWS_UNAVAILABLE_FAIL and open_
-            why = w.get("calendar_unavailable_reason") or "unknown"
-            out.append(Check(name=f"{pre}:calendar", status="fail" if bad else "ok",
-                             reason=f"{account_id}: calendar_unavailable since {since:%Y-%m-%d %H:%M} UTC ({why}): "
-                                    "entries refused, exits unaffected"
-                                    + ("" if bad else " (market closed or under 30 min)")))
-    if on.get("tier2"):
-        rec = pd.Timestamp(w["calendar_received_utc"]) if w.get("calendar_received_utc") else None
-        if rec is None or ctx.now - rec > WINDOWS_FETCH_WARN:
-            out.append(Check(name=f"{pre}:calendar_age", status="warn",
-                             reason=f"{account_id}: newest calendar fetch {rec or 'never'} is over 36 h old; check the "
-                                    "calendar_archive job"))
-        else:
-            out.append(Check(name=f"{pre}:calendar_age", status="ok",
-                             reason=f"{account_id}: calendar fetched {rec:%Y-%m-%d %H:%M} UTC"))
-    if on.get("holidays") and w.get("holiday_valid_through"):
-        end = pd.Timestamp(w["holiday_valid_through"]).date()
-        left = (end - ctx.now.date()).days
-        near = left <= WINDOWS_HOLIDAY_WARN_DAYS
-        out.append(Check(name=f"{pre}:holiday_list", status="warn" if near else "ok",
-                         reason=f"{account_id}: holiday list {w.get('holiday_version')} valid through {end} ({left} d)"
-                                + ("; extend config/holidays_cme_metals.yaml or every entry is refused after it"
-                                   if near else "")))
-    return out
-
-
-SKEW_SERVICES = HEARTBEAT_SERVICES   # schema_skew:svc:<service> from heartbeat_<service>.json (engines: per account)
-SKEW_CLICK_SOURCE = "approvals/decisions:"   # the approval bus's strict reader (bus.decisions_for)
-SKEW_REFUSED_FAIL_S = 3600         # a refused record (a dropped click) FAILs this long after the refusal, then WARNs
-SKEW_REASON_SOURCES = 5            # sources named in the reason (refused first); the rest as "+N more"
-SKEW_REASON_CHARS = 400            # length of the named-sources part of the reason
-
-
-def _skew_sources(s: SkewSummary) -> str:
-    """At most SKEW_REASON_SOURCES sources (refused first, as published) in about SKEW_REASON_CHARS characters, then
-    "+N more (health --json)" for the distinct sources not named."""
-    shown = s.entries[:SKEW_REASON_SOURCES]
-    text = ", ".join(f"{e.source} ({e.model}: {','.join(e.fields)})" + (" [refused]" if e.refused else "")
-                     for e in shown)
-    if len(text) > SKEW_REASON_CHARS:
-        text = text[:SKEW_REASON_CHARS - 3].rstrip() + "..."
-    left = s.count - len(shown)
-    return text + (f" +{left} more (health --json)" if left > 0 else "")
-
-
-def check_schema_skew(ctx: HealthContext, label: str, source: Path | None = None, *,
-                      name: str | None = None) -> Check | None:
-    """ADR 0010: "persisted state is read tolerantly, built strictly", and state written by a newer release (expected
-    only after a rollback) must reach the owner, not only the log. From a process's bounded `schema_skew` block:
-    `schema_skew:<label>` (or `name`) WARNs (NOTIFY_ON_WARN) while that process has read any such state, naming the sources, and
-    FAILs for SKEW_REFUSED_FAIL_S after a strict reader refused a record (for the approval bus: an owner's
-    approve/reject click dropped, the proposal expires); after that it WARNs naming the refusal and its time, and a
-    new refusal FAILs (and alerts) again. A block without `last_refused_utc` (an older release) reads as a fresh
-    refusal. `source`: the file holding the block, by default the engine's engine_<label>.json (label = account);
-    every service publishes it in heartbeat_<service>.json (`Heartbeat`; check_service_schema_skew). A block that
-    the process could not build ({"error": <type>}) WARNs as unreadable. The counts live in the
-    process: they clear when it restarts and next writes the file (the engine on a tick or a bar, a heartbeat within
-    HEARTBEAT_EVERY_S). None while the block is not published (no file, an older release, an unreadable file: the
-    engine and heartbeat checks report those)."""
-    f = source if source is not None else ctx.state_dir / f"engine_{label}.json"
-    stable = f.name if source is not None else "engine_<account>.json"
-    if not f.exists():
-        return None
-    try:
-        raw = _read_json(f).get("schema_skew")
-    except (ValueError, OSError, AttributeError, TypeError):
-        return None
-    if raw is None:
-        return None
-    name = name or f"schema_skew:{label}"
-    if isinstance(raw, dict) and "error" in raw and "count" not in raw:
-        return Check(name=name, status="warn", reason=f"{label}: schema_skew block unreadable: the process could not "
-                                                      f"build it ({str(raw['error'])[:80]}; see its log)")
-    try:
-        s = load_record(SkewSummary, raw, source=f"{stable}:schema_skew")
-    except ValueError as exc:
-        return Check(name=name, status="warn", reason=f"{label}: schema_skew block unreadable ({type(exc).__name__})")
-    if not s.count:
-        return Check(name=name, status="ok", reason=f"{label}: no state from a newer release read")
-    srcs = _skew_sources(s)
-    if s.refused:
-        at = s.last_refused_utc
-        fresh = at is None or (ctx.now - at).total_seconds() <= SKEW_REFUSED_FAIL_S
-        when = f"at {at:%Y-%m-%d %H:%M} UTC" if at is not None else "(time unknown)"
-        click = any(e.refused and e.source.startswith(SKEW_CLICK_SOURCE) for e in s.entries)
-        if fresh:
-            what = ("so an owner's click was dropped and the proposal expires" if click
-                    else "so that record was not acted on")
-            return Check(name=name, status="fail",
-                         reason=f"{label}: a strict reader refused state from a newer release {when}, {what}; "
-                                f"roll forward: {srcs}")
-        what = "an owner's click was refused" if click else "a record from a newer release was refused"
-        tail = ", the proposal expired" if click else ""
-        return Check(name=name, status="warn",
-                     reason=f"{label}: {what} {when} (over {SKEW_REFUSED_FAIL_S // 60} min ago{tail}) and state "
-                            f"from a newer release is read; roll forward: {srcs}")
-    return Check(name=name, status="warn",
-                 reason=f"{label}: state written by a newer release is read with its new fields ignored "
-                        f"({s.count} source(s), {s.reads} read(s)), expected only after a rollback: {srcs}")
-
-
-def check_service_schema_skew(ctx: HealthContext, service: str) -> Check | None:
-    """`schema_skew:svc:<service>` from heartbeat_<service>.json; the `svc:` part keeps it apart from an account of
-    the same name (`schema_skew:<account>`) and still matches NOTIFY_ON_WARN."""
-    return check_schema_skew(ctx, service, heartbeat_path(ctx.state_dir, service), name=f"schema_skew:svc:{service}")
-
-
-def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
-    """X6: an order the engine sent that failed after the adapter's retries (pending_orders row `rejected`) or that a
-    restart found never filled (`unfilled`), in the last FAILED_ORDER_WINDOW_H. One check per order so each failure is
-    announced once (NOTIFY_ON_WARN), with account, side, lots and the retcode from the decisions journal."""
-    f = ctx.state_dir / f"orders_{account_id}.json"
-    if not f.exists():
-        return []
-    try:
-        sent = _read_json(f).get("sent", {})
-        rows = [(cid, r) for cid, r in sent.items() if r.get("status") in ("rejected", "unfilled")]
-    except (ValueError, OSError, AttributeError) as exc:
-        return [Check(name=f"orders:{account_id}", status="fail", reason=f"orders_{account_id}.json unreadable (the engine refuses to start): {exc}")]
-    since = ctx.now - pd.Timedelta(hours=FAILED_ORDER_WINDOW_H)
-    recent = [(cid, r, pd.Timestamp(r["ts_utc"])) for cid, r in rows if r.get("ts_utc") and pd.Timestamp(r["ts_utc"]) >= since]
-    if not recent:
-        return []
-    journal = _failed_order_retcodes(ctx, account_id, since)
-    out = []
-    for cid, r, ts in sorted(recent, key=lambda x: x[2]):
-        rc = next((code for jts, agent, code in journal
-                   if agent == r.get("agent_id") and abs((jts - ts).total_seconds()) <= 120), None)
-        side = "BUY" if int(r.get("side", 0)) > 0 else "SELL"
-        what = "FAILED_EXEC" if r["status"] == "rejected" else "never filled (found on restart)"
-        out.append(Check(name=f"order_failed:{account_id}:{cid}", status="warn",
-                         reason=f"{what} at {ts:%Y-%m-%d %H:%M} UTC: account {account_id}, {side} {float(r.get('lots', 0)):g} lots, "
-                                f"agent {r.get('agent_id')}, retcode {rc if rc is not None else '?'}"))
-    return out
-
-
-def check_bridge(ctx: HealthContext, account_id: str) -> Check | None:
-    """The MT5 bridge answers GET /health through the SSH tunnel (only when a bridge URL is in the keyring and a probe
-    is configured). A bridge down means no ticks, no orders and no position management for that account."""
-    try:
-        url = ctx.get_secret(f"mt5-bridge-url-{account_id}")
-    except Exception:
-        url = None
-    if not url or ctx.bridge_probe is None:
-        return None
-    name = f"bridge:{account_id}"
-    why = ctx.bridge_probe(url)          # the URL is never quoted in a reason (it names the tunnel endpoint)
-    if why is not None:
-        return Check(name=name, status="fail", reason=f"bridge does not answer /health through the tunnel: {why[:160]}")
-    return Check(name=name, status="ok", reason="bridge answers /health")
-
-
-def check_bridge_compat(ctx: HealthContext, account: AccountRef) -> Check | None:
-    """BACKLOG 42 (gap G6): the bridge's /health against this checkout (goldbot/ops/bridge_compat.py). FAIL when a
-    method this brain calls is missing, the protocol is older, the zone differs or the bridge does not report them: the
-    engine refuses entries (`bridge_incompatible`) until the MT5 box runs a compatible commit; exits are unaffected.
-    A different commit alone is a warning (doc-only commits differ). /health unreachable is a warning here
-    (`bridge:<account>` fails for it) unless the engine's last verdict still blocks. Omitted without a bridge URL or
-    an info reader."""
-    try:
-        url = ctx.get_secret(f"mt5-bridge-url-{account.account_id}")
-    except Exception:
-        url = None
-    if not url or ctx.bridge_info is None or account.server_tz is None:
-        return None
-    from goldbot.ops.bridge_compat import BridgeInfo, assess
-    name = f"bridge_compat:{account.account_id}"
-    try:
-        info = ctx.bridge_info(url)
-    except Exception as exc:              # the type only: a message can name the tunnel endpoint
-        info = BridgeInfo(reachable=False, problem=f"/health unreadable ({type(exc).__name__})")
-    v = assess(info, account.server_tz, ctx.commit)
-    if v.blocks:
-        return Check(name=name, status="fail", reason=f"{v.reason}: the engine refuses entries (bridge_incompatible), "
-                     "exits unaffected; deploy the brain's commit to the MT5 box (RUNBOOK: bridge compatibility)")
-    try:
-        engine = _read_json(ctx.state_dir / f"engine_{account.account_id}.json").get("bridge_compat") or {}
-    except (ValueError, OSError, AttributeError):
-        engine = {}
-    if not isinstance(engine, dict):
-        engine = {}
-    if v.status == "unreachable":
-        if engine.get("status") == "incompatible":
-            return Check(name=name, status="fail", reason=f"{v.reason}; the engine's last verdict still refuses "
-                         f"entries: {str(engine.get('reason', ''))[:200]}")
-        return Check(name=name, status="warn", reason=v.reason)
-    stale = _engine_bridge_unconfirmed(ctx, engine)
-    if stale is not None:                 # the bridge answers, but the engine's own check has not confirmed it
-        why, past_grace = stale
-        return Check(name=name, status="fail" if past_grace else "warn", reason=f"{v.reason}; {why}")
-    return Check(name=name, status="warn" if v.commit_differs else "ok", reason=v.reason)
-
-
-def _age_s(now: pd.Timestamp, raw: Any) -> float:
-    """Seconds since an ISO stamp from a state file; infinity when missing or unreadable (assume the worst)."""
-    try:
-        at = pd.Timestamp(raw) if isinstance(raw, str) else None
-        if at is None or pd.isna(at):
-            return float("inf")
-        return (now - (at if at.tzinfo is not None else at.tz_localize("UTC"))).total_seconds()
-    except (TypeError, ValueError):
-        return float("inf")
-
-
-def _engine_bridge_unconfirmed(ctx: HealthContext, engine: dict[str, Any]) -> tuple[str, bool] | None:
-    """Why the engine's published bridge verdict leaves entries refused although this probe passed, and whether it is
-    past the grace period (FAIL, alerted) rather than inside it (warn): `unchecked` for over UNCHECKED_GRACE_S, or an ok
-    whose `checked_at` is over MAX_VERDICT_AGE_S old (its check thread may be stuck). A missing stamp counts as past
-    grace. No verdict published, or an incompatible one (failed above when the probe agrees): None. Not done through
-    NOTIFY_ON_WARN: a commit mismatch on the same check must stay quiet."""
-    from goldbot.ops.bridge_compat import MAX_VERDICT_AGE_S, UNCHECKED_GRACE_S
-    status = engine.get("status")
-    if status is None or status == "incompatible":
-        return None
-    if status == "unchecked":
-        age = _age_s(ctx.now, engine.get("unchecked_since"))
-        span = "since an unknown time" if age == float("inf") else f"for {age / 60:.1f} min"
-        return (f"the engine has not confirmed the bridge {span} ({str(engine.get('reason', ''))[:120]}): entries "
-                "refused (bridge_incompatible); it retries every 60 s and replaces a hung check, restart the engine "
-                "if this persists", age > UNCHECKED_GRACE_S)
-    age = _age_s(ctx.now, engine.get("checked_at"))
-    if age > MAX_VERDICT_AGE_S:
-        return (f"the engine has not confirmed the bridge for over {MAX_VERDICT_AGE_S / 60:g} min (its check may be "
-                "stuck): entries refused as unchecked", True)
-    return None
-
-
-def _engine_sessions(ctx: HealthContext, account_id: str) -> SessionTable:
-    """The broker session table the engine last wrote to engine_<account>.json (D13), else `ctx.sessions`."""
-    try:
-        cached = _read_json(ctx.state_dir / f"engine_{account_id}.json").get("sessions")
-    except (ValueError, OSError, AttributeError):
-        cached = None
-    table = session_table_from_cache(cached) if cached else None
-    return table if table is not None else ctx.sessions
-
-
-def check_server_clock(ctx: HealthContext, account: AccountRef) -> Check | None:
-    """The broker's real UTC offset against the configured server_tz (goldbot/ops/server_clock.py). Fails on a
-    mismatch over 5 min while the market is open: an entry must not open on a clock that is an hour off (session
-    table, rollover gate, Friday cut, tick and bar stamps); exits are never gated by it. Omitted without a tick reader,
-    a server_tz or a bridge for the account. The engine runs the same assessment on every refresh (entry gate
-    `server_clock_mismatch`); this check measures it independently of the engine. "Now" is read AFTER the tick
-    (`ctx.clock`), and the market-open test uses the engine's cached broker session table when it has one."""
-    if ctx.tick_reader is None or account.server_tz is None:
-        return None
-    from goldbot.ops import server_clock
-    name = f"server_clock:{account.account_id}"
-    try:
-        tick = ctx.tick_reader(account.account_id, account.symbol)
-    except Exception as exc:              # the type only: a bridge error message can name the tunnel endpoint
-        return Check(name=name, status="warn", reason=f"not measured: latest tick unreadable ({type(exc).__name__})")
-    if tick is None:
-        return None
-    now = ctx.clock() if ctx.clock is not None else ctx.now
-    try:
-        p = server_clock.assess(account.account_id, account.server_tz, tick.ts_utc, now,
-                                _engine_sessions(ctx, account.account_id))
-    except Exception as exc:
-        return Check(name=name, status="warn", reason=f"not measured: probe failed ({type(exc).__name__})")
-    status: Status = "fail" if p.status == "mismatch" else "ok"     # market closed: not measurable, no alert noise
-    return Check(name=name, status=status, reason=p.reason)
-
-
 # --------------------------------------------------------------------------------------------- report
 def _guarded(name: str, fn: Callable[[], "Check | list[Check] | None"]) -> list[Check]:
     """One check; an exception (a type-corrupt state file, a bug) becomes a FAIL named after it instead of aborting the
@@ -1600,45 +466,25 @@ def _guarded(name: str, fn: Callable[[], "Check | list[Check] | None"]) -> list[
 
 
 def run_checks(ctx: HealthContext, *, static_only: bool = False) -> HealthReport:
-    """All checks in a fixed order. `static_only`: settings, accounts, secrets and disk (no service needs to run).
-    Each check is guarded (`_guarded`): one that raises is a FAIL of its own, never a missing report."""
+    """All checks in a fixed order: the registry's (goldbot/ops/checks/registry.py). `static_only`: settings, accounts,
+    secrets and disk (no service needs to run). Each check is guarded (`_guarded`): one that raises is a FAIL of its
+    own, never a missing report."""
     g = _guarded
-    checks = g("settings", lambda: check_settings(ctx)) + g("accounts", lambda: check_accounts(ctx)) + \
-        g("secrets", lambda: check_secrets(ctx)) + g("disk", lambda: check_disk(ctx))
-    if not static_only:
-        checks += g("supervisor", lambda: check_supervisor(ctx)) + g("halt", lambda: check_halt(ctx)) + \
-            g("phase", lambda: check_phase(ctx)) + g("stop_rule", lambda: check_stop_rule(ctx)) + \
-            g("phase_gates", lambda: check_phase_gates(ctx))
-        for a in ctx.accounts:
-            i = a.account_id
-            checks += g(f"engine:{i}", lambda: check_engine(ctx, i)) + g(f"risk_state:{i}", lambda: check_risk_state(ctx, i))
-            checks += g(f"engine_loop:{i}", lambda: check_engine_loop(ctx, i))
-            checks += g(f"tick_errors:{i}", lambda: check_tick_errors(ctx, i))
-            checks += g(f"loss_caps:{i}", lambda: check_loss_caps(ctx, i)) + g(f"order_failed:{i}", lambda: check_failed_orders(ctx, i))
-            checks += g(f"throttle:{i}", lambda: check_throttle(ctx, i))
-            checks += g(f"open_risk:{i}", lambda: check_open_risk(ctx, i))
-            checks += g(f"entry_windows:{i}", lambda: check_entry_windows(ctx, i))
-            checks += g(f"schema_skew:{i}", lambda: check_schema_skew(ctx, i))
-            checks += g(f"bridge:{i}", lambda: check_bridge(ctx, i))
-            checks += g(f"bridge_compat:{i}", lambda: check_bridge_compat(ctx, a))
-            checks += g(f"server_clock:{i}", lambda: check_server_clock(ctx, a))
-        # every other process reads state tolerantly too (SRE review): telegram (the decider), supervisor, scheduler...
-        for svc in SKEW_SERVICES:
-            checks += g(f"schema_skew:svc:{svc}", lambda: check_service_schema_skew(ctx, svc))
-        for svc in HEARTBEAT_SERVICES:
-            checks += g(f"heartbeat:{svc}", lambda: check_heartbeat(ctx, svc))
-        checks += g("scheduler", lambda: check_scheduler(ctx))
-        for a in ctx.accounts:
-            checks += g(f"costs:{a.account_id}", lambda: check_costs(ctx, a.account_id))
-            checks += g(f"pnl_basis:{a.account_id}", lambda: check_pnl_basis(ctx, a.account_id))
-        for a in ctx.accounts:
-            checks += g(f"reconciliation:{a.account_id}", lambda: check_reconciliation(ctx, a.account_id))   # D12
-        if ctx.settings is not None and ctx.settings.costs.publish_release:
-            checks += g("costs_published", lambda: check_costs_published(ctx))
-        for fn in (check_data_quality, check_drift, check_model_watch, check_feature_versions, check_deploy,
-                   check_backup_age, check_backup_prune, check_restore_drill, check_news, check_agent_spend,
-                   check_approvals, check_email_link, check_alert_loop, check_deadman):
-            checks += g(fn.__name__.removeprefix("check_"), lambda: fn(ctx))
+    checks: list[Check] = []
+    for scope, specs in check_blocks(static_only=static_only):
+        specs = [s for s in specs if s.when is None or s.when(ctx)]
+        if scope == "account":
+            for a in ctx.accounts:
+                for s in specs:
+                    checks += g(f"{s.guard}:{a.account_id}",
+                                partial(resolve(s.fn), ctx, a if s.pass_account else a.account_id))
+        elif scope == "service":
+            for svc in specs[0].services if specs else ():
+                for s in specs:
+                    checks += g(f"{s.guard}:{svc}", partial(resolve(s.fn), ctx, svc))
+        else:
+            for s in specs:
+                checks += g(s.guard, partial(resolve(s.fn), ctx))
     return HealthReport(ts=ctx.now, status=_worst([c.status for c in checks]), checks=checks)
 
 
@@ -1656,9 +502,6 @@ def exit_code(report: HealthReport, baseline: HealthReport | None = None) -> int
     return 1 if fails else 0
 
 
-_RANK = {"ok": 0, "warn": 1, "fail": 2}
-
-
 def worsened(report: HealthReport, baseline: HealthReport) -> list[str]:
     """Checks whose status is worse than in the baseline (ok < warn < fail; a check new since the baseline counts
     from ok; one that disappeared is not worse), sorted. goldbot-deploy embeds the same rule (WORSE_PY) so it also
@@ -1668,13 +511,7 @@ def worsened(report: HealthReport, baseline: HealthReport) -> list[str]:
 
 
 # --------------------------------------------------------------------------------------------- alerts
-WATCH_FILE = "health_last.json"
 MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
-
-
-class WatchState(Record):
-    ts: UtcTimestamp | None = None
-    statuses: dict[str, Status] = Field(default_factory=dict)
 
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
