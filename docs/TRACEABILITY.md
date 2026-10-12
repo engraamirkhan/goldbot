@@ -18,12 +18,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 187 |
+| implemented | 188 |
 | partial | 16 |
 | missing | 3 |
 | deviates | 6 |
 | in review | 10 |
-| **total** | **222** |
+| **total** | **223** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -110,6 +110,7 @@ tests/test_sizing_parity.py::test_sizing_module_matches_the_gate and ::test_stag
 | A11 | Owner halt fails closed on an unreadable control file | implemented | goldbot/telegram/bus.py:129 | tests/test_cov_telegram.py::test_owner_halt_round_trips_and_fails_closed_on_a_corrupt_file |
 | A12 | Daily owner digest on Telegram (owner request 2026-10-10): status, yesterday, risk, research, decisions; once a day, late send under 6 h, no identifiers | implemented | goldbot/telegram/digest.py `build_digest`, `DigestSchedule`; goldbot/telegram/bot.py `_digest_pass`; config/settings.yaml `telegram.digest_at` | tests/test_digest.py::test_digest_renders_every_section_from_fixture_state; ::test_digest_with_no_state_at_all_still_renders; ::test_digest_never_prints_identifiers; ::test_one_broken_input_never_stops_the_digest; ::test_digest_is_sent_once_a_day; ::test_missed_slot_is_sent_on_start_only_under_six_hours_late |
 | A13 | An approved order never exceeds the card the owner approved (ADR 0009) | implemented | goldbot/engine/runner.py `Engine._within_card` (called from `_on_decision` after the approval re-check): sends `min(gate lots, card lots)`, journals `approval_size_capped`, refuses `risk_above_approved` when the risk at the lots sent exceeds the card's `risk_amount` x `APPROVED_RISK_TOLERANCE` (1.02) | tests/test_approved_card_cap.py::test_equity_rising_before_the_click_never_sends_more_than_the_card, ::test_a_conversion_rise_past_two_percent_refuses_the_approval, ::test_a_card_from_an_older_engine_without_risk_is_still_capped_at_its_lots |
+| A14 | Approvals keep only the decision channel on disk and in the API (BACKLOG 52): an archived proposal in `approvals/done/` and the dashboard's decided cards carry `decided_channel` ("telegram" or "dashboard") and `decided_ts`, never the owner's Telegram id or email (`decided_by` / `decided_via` are no longer written); identity, when needed, is in the auth audit log. Older done files that still carry the fields load (ADR 0010, not counted as schema skew) and are shown by channel only | implemented (security and trading-safety review pending) | goldbot/telegram/approvals.py `Proposal._drop_decider_identity`, `ApprovalCenter.poll_bus`, `ApprovalCenter.decide`; goldbot/api/schema.py `DecidedProposal.decided_channel`, `decided_ts`; goldbot/api/app.py `recent_proposals`; web/src/lib/approval.ts `viaChannel`; web/src/screens/ProposalCard.tsx `Outcome` | tests/test_decision_identity_off_disk.py::test_a_dashboard_decision_archived_through_the_bus_has_no_email_in_its_done_file; ::test_a_telegram_decision_made_in_process_has_no_telegram_id_in_its_done_file; ::test_a_proposal_archived_by_the_engine_from_a_telegram_click_has_no_telegram_id_in_its_done_file; ::test_an_older_done_file_with_the_identity_fields_loads_as_its_channel_without_schema_skew; ::test_an_older_done_file_keeps_its_recorded_channel_over_the_legacy_identity; ::test_a_proposal_given_the_legacy_identity_fields_in_code_does_not_keep_them; ::test_the_decided_cards_show_the_channel_and_never_an_id_or_email; web/src/screens/ProposalCard.test.tsx "names only the decision channel, never who decided, and says nothing when the channel is unknown"; web/src/lib/approval.test.ts "formats money and the decision channel" |
 
 ## Dashboard authentication [Infrastructure: Dashboard]
 
