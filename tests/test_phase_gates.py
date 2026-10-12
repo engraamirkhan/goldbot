@@ -552,6 +552,16 @@ def test_the_gross_share_item_decides_the_gate_when_the_owner_sets_a_limit(tmp_p
     assert f"{n_gross} of 150" in it.evidence
 
 
+def test_the_incident_check_adds_the_imputed_cost_to_a_gross_loss():
+    """Review (optional item): a gross loss exactly at the weekly cap breaches once its imputed cost is added (the USD
+    charge read as account currency: conservative on a GBP or EUR deposit)."""
+    net = trade(-0.01, pnl=-CAP * 10_000.0, days_ago=1)
+    gross = trade(-0.01, pnl=-CAP * 10_000.0, days_ago=1, gross_held_days=0.1)
+    assert not evaluate_stop_rule([net], None, CAP, CFG, NOW).breached
+    s = evaluate_stop_rule([gross], None, CAP, CFG, NOW)
+    assert s.breached and "exceeds the weekly cap" in s.reasons[0]
+
+
 def test_the_stop_rule_charges_gross_rows_and_keeps_them_pooled():
     """A positive gross mean whose bound is above zero; each row held over Wednesday's triple swap pays enough that the
     charged bound falls below zero: the rule breaches on the charged figure, with every row still pooled."""

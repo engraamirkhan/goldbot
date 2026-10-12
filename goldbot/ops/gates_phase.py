@@ -410,7 +410,9 @@ def evaluate_stop_rule(trades: list[ClosedTrade], paper_start: pd.Timestamp | No
     it is not recorded). Breached when (elapsed >= stop_after_months AND pooled > stop_min_pooled_trades AND the
     one-sided lower bound < 0) OR any single trade lost more than `weekly_cap` of its equity before it. Gross rows stay
     pooled and the bound is on their return less the imputed cost (quant review: "Keep gross rows in, but apply the
-    same cost charge"). The incident check reads the recorded `pnl` as it is (money, not return)."""
+    same cost charge"). The incident check adds a gross row's imputed cost to its loss: the charge is in USD and is
+    subtracted from `pnl` as if it were account currency (more than its value on a GBP or EUR deposit: conservative
+    for the stop rule)."""
     start = paper_start if paper_start is not None else (min(t.exit_utc for t in trades) if trades else None)
     pooled = [t for t in trades if start is None or t.exit_utc >= start]
     months = _months(start, now) if start is not None else 0.0
@@ -422,7 +424,7 @@ def evaluate_stop_rule(trades: list[ClosedTrade], paper_start: pd.Timestamp | No
                        f"bound on expectancy is {lb:.5f} (< 0)")
     # a USD-flagged P&L (pnl_currency) is kept here as recorded, never dropped: on a GBP or EUR deposit it overstates
     # the loss fraction (conservative for the stop rule); it is kept out of money sums elsewhere
-    losses = [(-t.pnl / t.equity_before, t) for t in trades]
+    losses = [(-(t.pnl - (imputer.charge(t).usd or 0.0)) / t.equity_before, t) for t in trades]
     worst = max(losses, key=lambda x: x[0]) if losses else None
     over = [x for x in losses if x[0] > weekly_cap]
     if over and worst is not None:

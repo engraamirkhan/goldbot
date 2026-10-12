@@ -11,5 +11,8 @@
     row's initial risk is missing.
   - Engine record: a USD account without the broker's conversion now records ret = pnl / notional (it used to fall
     back to the price return while pnl_basis said "net"). The new `ClosedTrade.ret_basis` ("pnl" or "price"; None on
-    older records) marks a return that came from prices. This needs trading-safety review (record field) and quant
+    older records) marks a return that came from prices. Review R1: an older or rolled-back record with no
+    `ret_basis`, broker money, an initial stop and no R is charged as a price return too.
+  - The stop rule's incident check adds the imputed cost to a gross loss. A row with no side pays the larger swap, and
+    a row with no entry price is priced from its exit price. This needs trading-safety review (record field) and quant
     review (gate inputs).

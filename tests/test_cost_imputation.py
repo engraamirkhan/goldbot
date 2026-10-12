@@ -104,6 +104,35 @@ def test_a_row_that_cannot_be_priced_is_kept_counted_and_charged_nothing():
     assert "could not be priced" in s.text()
 
 
+def test_an_older_broker_row_with_a_stop_and_no_r_is_read_as_a_price_return():
+    """Review R1: before `ret_basis` (or under a rolled-back release) the broker-deals path with no conversion wrote the
+    price return with pnl_basis "net", r None and the initial stop set. It pays commission and swap."""
+    imp = CostImputer.from_settings(SETTINGS)
+    old = dict(money_source="broker", commission=0.6, swap=-5.0, pnl_basis="net", r=None)
+    c = imp.charge(ct(**old))
+    assert c.imputed and c.usd_per_oz == pytest.approx(2 * SETTINGS.costs.commission_per_lot_side_usd["icm"] / 100)
+    # the same row with an R (the converted path), or marked "pnl", or without a stop is net as recorded
+    assert not imp.charge(ct(**{**old, "r": -1.0})).imputed
+    assert not imp.charge(ct(**old, ret_basis="pnl")).imputed
+    assert not imp.charge(ct(**{**old, "initial_sl": None})).imputed
+    assert not imp.charge(ct(**{**old, "money_source": "engine"})).imputed
+
+
+def test_an_unknown_side_pays_the_larger_of_the_long_and_short_swap():
+    imp = CostImputer.from_settings(SETTINGS)
+    imp.fallback["icm"] = imp.fallback["icm"].model_copy(update={
+        "commission_per_lot_side_usd": 0.0,
+        "swap": SwapSpec(long_usd_per_lot=-10.0, short_usd_per_lot=-40.0, server_tz="Europe/Athens")})
+    c = imp.charge(ct(side=None, pnl_basis="gross", exit_utc=TUE + pd.Timedelta(days=1)))
+    assert c.usd_per_oz == pytest.approx(40.0 / 100)
+
+
+def test_a_row_without_an_entry_price_is_priced_from_its_exit_price():
+    c = CostImputer.from_settings(SETTINGS).charge(ct(pnl_basis="gross", entry_price=None, exit_price=2_500.0,
+                                                      initial_sl=None))
+    assert c.priced and c.ret == pytest.approx(c.usd_per_oz / 2_500.0)
+
+
 def test_r_falls_back_to_the_ratio_of_r_to_ret_when_the_initial_stop_is_unknown():
     c = CostImputer.from_settings(SETTINGS).charge(ct(pnl_basis="gross", initial_sl=None, r=2.0, ret=0.01))
     assert c.r == pytest.approx(c.ret * 200.0)

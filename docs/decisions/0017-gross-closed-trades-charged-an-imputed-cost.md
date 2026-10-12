@@ -20,10 +20,14 @@ There are two ways to deal with gross rows:
   - Commission, both sides: from the account's nightly cost table (measured, else the settings value), else the
     settings commission for the broker (an unknown broker pays the largest configured one).
   - Paid swap for every rollover held through, from `rollover_nights` with the triple day counted, at the table's
-    measured rates or the settings prior. A swap credit is never counted, and a row with no side pays the long rate.
-  - The charge is in USD per oz, so it is cost / entry in return units and cost / initial risk in R. Neither needs
-    the lot size or an FX rate.
-- A gross row whose charge cannot be computed (no entry price, or no entry time while swap is unknown) is counted:
+    measured rates or the settings prior. A swap credit is never counted, and a row with no side pays the larger paid
+    rate of long and short.
+  - The charge is in USD per oz, so it is cost / entry in return units (the exit price when the entry is missing)
+    and cost / initial risk in R. Neither needs the lot size or an FX rate.
+- A record written before `ret_basis` existed, or by a rolled-back release, can carry a price return while it says
+  pnl_basis "net" (review R1). Such a row has no `ret_basis`, its money is from the broker, its initial stop is known
+  and its R is empty, and it is charged as a price return.
+- A gross row whose charge cannot be computed (no price, or no entry time while swap is unknown) is counted:
   - The paper and live gate items it feeds fail closed.
   - The ruin sample is labelled "unknown".
   - The stop rule only reports it, because a breach detector cannot fail in the safe direction without data.
@@ -42,8 +46,10 @@ There are two ways to deal with gross rows:
 - Gate evidence moves pessimistically while paper trades are gross. This is intended: the evidence goes into the
   owner's sign-off.
 - Health's stop-rule detail now appends the gross summary whenever gross rows exist; the golden fixture was updated.
-- The stop rule's single-loss incident check still reads the recorded `pnl` (money). Charging it would need an FX
-  rate, and the imputed amount is small compared with the 5% weekly cap.
+- The stop rule's single-loss incident check adds a gross row's imputed USD to its loss as if it were account
+  currency. That overstates it on a GBP or EUR deposit, which is conservative for a breach detector.
+- A row with no entry time and unknown swap is still unpriced. Charging swap for the agent's maximum hold would need
+  the agent's exit policy, and the engine always records an entry time, so this only affects old records.
 - Other readers of `ret` (perf_report, monthly_report, digest) are unchanged. They can adopt the same helper.
 - Rollback (S12): an older release ignores `ret_basis` and reads a `"price"` row by its `pnl_basis`, which is exactly
   today's behaviour. The field restricts nothing and is never on the order or exit path.

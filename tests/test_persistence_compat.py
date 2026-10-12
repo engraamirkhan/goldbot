@@ -88,6 +88,22 @@ def case_closed_trade_from_before_ret_basis(tmp: Path) -> None:
     assert err is None and back.ret_basis is None
 
 
+def case_closed_trade_price_return_without_ret_basis(tmp: Path) -> None:
+    """Review R1: the record the broker-deals path with no conversion wrote before `ret_basis` (and still writes under
+    a rolled-back release): a price return labelled pnl_basis "net", r None, the initial stop known. Read back, it is
+    charged commission and swap as a price return, never taken as net."""
+    from goldbot.ops.cost_imputation import CostImputer
+    row = {"account_id": "icm-demo", "broker": "icm", "mode": "demo", "exit_utc": "2026-10-06T12:00:00Z",
+           "ret": -0.0026, "pnl": -8.9, "equity_before": 1_000.0, "position_id": 7, "side": 1, "lots": 0.01,
+           "entry_utc": "2026-10-06T10:00:00Z", "entry_price": 4_150.0, "initial_sl": 4_139.1, "r": None,
+           "commission": 0.05, "swap": 0.0, "money_source": "broker", "pnl_basis": "net"}
+    (tmp / "closed_trades_icm-demo.jsonl").write_text(json.dumps(row) + "\n")
+    (back,), err = load_closed_trades(tmp)
+    assert err is None and back.ret_basis is None
+    c = CostImputer.from_settings(load_settings()).charge(back)
+    assert c.imputed and c.priced and c.ret > 0
+
+
 def case_bus_proposal(tmp: Path) -> None:
     bus = ApprovalBus(tmp)
     p = _proposal()
@@ -242,7 +258,8 @@ def case_ledger(tmp: Path) -> None:
     assert ledger.latest_report(tmp, "icm-demo") == rep
 
 
-CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
+CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed_trade_price_return_without_ret_basis,
+         case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
          case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger]
 
