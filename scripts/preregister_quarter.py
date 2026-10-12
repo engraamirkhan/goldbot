@@ -4,8 +4,9 @@
       --registry registry.jsonl --bars raw/ [--dry-run] [--allow-late REASON]
 
 `--bars` is the folder of the data-v1 yearly 1m files: the sha256 digests of the research window's files (years up to
-research.holdout_from's) are pinned in every row's plan and verified by the runners before any look (BACKLOG 50); a
-write without them is refused. `--from` is the reviewed YAML extract of the pre-registration (a `.md` path is read as
+research.holdout_from's) are pinned per row, from the year of the row's bars_from (every file for a specialist row),
+with the pinned years in `plan.data_years`, and verified by the runners before any look (BACKLOG 50); a write without
+them is refused. `--from` is the reviewed YAML extract of the pre-registration (a `.md` path is read as
 the `.yaml` beside it). Every row is checked against the pre-registration's text, the registry's rules, the quarter's
 trial budget and the reservation in config/settings.yaml before anything is written
 (goldbot/research/preregistration.py). `--dry-run` prints the rows and writes nothing. A write is idempotent, goes

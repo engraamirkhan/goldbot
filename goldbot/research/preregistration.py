@@ -17,7 +17,9 @@ started unless `allow_late` states a reason, in which case the rows are written 
 their rule (`queue=False`, `rule_ref`) that hold no reservation, and no slot is written (a slot exists only before its
 quarter). A pre-registration is not a trial (`registry.is_trial`): nothing here spends budget or writes an outcome.
 Every row's plan pins the data-v1 yearly files' sha256 digests of the research window (`plan_quarter(data_digests=)`),
-which the runners verify before any look (BACKLOG 50); a plan without them is not writable.
+from the year of the row's `bars_from` (a discovery row) or every file (a specialist row) up to the holdout's year, and
+records the pinned years (`plan.data_years`); the runners verify them before any look, and every file a run reads must
+be pinned and every pinned file read (BACKLOG 50); a plan without them is not writable.
 """
 from __future__ import annotations
 
@@ -27,6 +29,7 @@ from typing import Any, Literal
 from pydantic import Field, field_validator, model_validator
 
 from goldbot.base import FrozenRecord
+from goldbot.data.release import asset_year
 from goldbot.research import registry as registry_mod
 from goldbot.research.registry import (
     PREREGISTERED,
@@ -378,21 +381,40 @@ def _plan_row(row: SpecRow, qs: QuarterSpec, research: Any, rules: set[str]) -> 
                       withdrawn=row.withdrawn)
 
 
+def _row_data_pins(row: SpecRow, digests: dict[str, str]) -> dict[str, Any]:
+    """The data-v1 pins of one row's plan: the digests of the files from the year of its `bars_from` (a discovery row;
+    every file for a row without one), and the pinned years `[first, last]`. A run reads `--from-year`..holdout year
+    and the runners refuse a file read but not pinned or pinned but not read, so the row's pins are exactly what its
+    run reads (quant review, 2026-10-11: pinning every file up to the holdout refused a later `bars_from`)."""
+    first = None
+    if row.bars_from is not None:
+        import pandas as pd
+        first = pd.Timestamp(row.bars_from).year
+    mine = {name: h for name, h in digests.items() if first is None or asset_year(name) >= first}
+    if not mine:
+        raise SpecError(f"{row.id}: no data-v1 file pinned for bars_from {row.bars_from} (the --bars files end before "
+                        f"{first})")
+    years = sorted(asset_year(name) for name in mine)
+    return {"data_digests": mine, "data_years": [years[0], years[-1]]}
+
+
 def plan_quarter(qs: QuarterSpec, *, research: Any, doc_text: str, quarter: str,
                  data_digests: dict[str, str] | None = None) -> QuarterPlan:
     """Validate `qs` against the pre-registration (`doc_text`), the registry's rules and the quarter's budget, and
     return the rows and slots as they will be written. SpecError for anything the registry, the doc or the budget
     would not accept. `research`: the settings' research section (trial budget, reservation, holdout).
 
-    `data_digests` (`release.bar_file_digests` of the data-v1 yearly files up to research.holdout_from's year): put in
-    every row's `plan` so the runners verify them before any look (BACKLOG 50: "Record data-v1 parquet sha256 digests
-    in the plan, and have runners verify them for every queued row"); without them the plan is not writable."""
+    `data_digests` (`release.bar_file_digests` of the data-v1 yearly files up to research.holdout_from's year): each
+    row's `plan` gets those from the year of its bars_from with the pinned years (`_row_data_pins`), so the runners
+    verify them before any look (BACKLOG 50: "Record data-v1 parquet sha256 digests in the plan, and have runners
+    verify them for every queued row"); without them the plan is not writable."""
     if qs.quarter != quarter:
         raise SpecError(f"the spec is for quarter {qs.quarter}, not {quarter}")
     doc, rules = _norm(doc_text), reading_rules(doc_text)
     rows = [_plan_row(r, qs, research, rules) for r in qs.rows]
     if data_digests:
-        rows = [r.model_copy(update={"plan": {**r.plan, "data_digests": dict(data_digests)}}) for r in rows]
+        rows = [r.model_copy(update={"plan": {**r.plan, **_row_data_pins(s, data_digests)}})
+                for r, s in zip(rows, qs.rows, strict=True)]
     by_id = {r.id: r for r in qs.rows}
     slots: list[PlannedSlot] = []
     for s in qs.slots:
@@ -566,8 +588,8 @@ def render_plan(plan: QuarterPlan, rows: list[dict[str, Any]] | None = None) -> 
              f"reservation {plan.reservation} = {len(plan.active_rows)} queued rows + {len(plan.slots)} contingent slots;"
              f" trial budget {plan.budget}; a pre-registration is not a trial (no budget spent, no outcome)"]
     digests = plan.data_digests or {}
-    lines += [f"data-v1 digests: {len(digests)} files pinned in every row's plan (research window; runners verify "
-              f"them before any look)" if digests else "data-v1 digests: none (pass --bars)"]
+    lines += [f"data-v1 digests: {len(digests)} research-window files; each row pins those from the year of its "
+              f"bars_from (runners verify them before any look)" if digests else "data-v1 digests: none (pass --bars)"]
     lines += [f"- {name} sha256 {h}" for name, h in sorted(digests.items())] + [""]
     parents: dict[str, dict[str, Any] | None] = {}
     for p in plan.rows:
@@ -579,6 +601,7 @@ def render_plan(plan: QuarterPlan, rows: list[dict[str, Any]] | None = None) -> 
                   f"- family {p.family}, agent {p.agent_id or '-'}, config_hash {p.config_hash or '-'}, "
                   f"feature version {p.feature_version}, rule_id {p.rule_id or '-'}",
                   f"- rationale: {p.rationale}",
+                  f"- data-v1 years pinned: {'-'.join(map(str, p.plan['data_years'])) if p.plan.get('data_years') else '-'}",
                   f"- config: {json.dumps(p.config, sort_keys=True) if p.config is not None else '-'}",
                   f"- reading rule: {_norm(p.reading_rule)}", ""]
     for s in plan.slots:

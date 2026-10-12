@@ -34,6 +34,8 @@ QUEUED: list[tuple[str, dict[str, Any]]] = [("discovery_tsmom", {"specialist": "
           ("tsmom", {"h": "H-06"}), ("asia_drift", {"h": "H-04"}), ("tsmom", {"h": "C4H"})]
 RULE = ("the k-th H-02 hypothesis cluster (H-03/05/07/08/10) by group stability among clusters with stability >= 0.6, "
         "only if H-02 reads continue (OOF AUC >= 0.53, lower bound > 0.50); its members + side, H-02's label")
+# the cost treatment a research row records (results.swap, results.cost_source): only then does its gate pass count
+COSTS: dict[str, Any] = {"swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0}, "cost_source": "PRIORS ONLY: t"}
 RETIRED = ("breakout", "intraday_momentum", "mean_reversion", "session_open", "trend")
 
 
@@ -335,8 +337,8 @@ def test_a_holdout_slot_is_live_only_after_survivor_k_passed_its_gates(tmp_path,
         _check(reg, c1)
     reg.withdraw(h1, "written too early")
     p1, p2 = _pre(reg, "tsmom", c1, slot_ref=slots["survivor"][0]), _pre(reg, "tsmom", c2, slot_ref=slots["survivor"][1])
-    _run(reg, p1, "2027-02-02T00:00:00+00:00", results={"gates": {"passed": True}})
-    _run(reg, p2, "2027-02-03T00:00:00+00:00", results={"gates": {"passed": False}})
+    _run(reg, p1, "2027-02-02T00:00:00+00:00", results={"gates": {"passed": True}, **COSTS})
+    _run(reg, p2, "2027-02-03T00:00:00+00:00", results={"gates": {"passed": False}, **COSTS})
     rows = reg._rows()
     assert [slot_state(rows, s) for s in hold] == ["live", "expired"]
     _clock(monkeypatch, 2027, 2, 10)
@@ -347,6 +349,23 @@ def test_a_holdout_slot_is_live_only_after_survivor_k_passed_its_gates(tmp_path,
     _pre(reg, "tsmom", other, slot_ref=hold[0])
     with pytest.raises(TrialBudgetExceeded, match="keys|survivor trial"):
         _check(reg, other, setting=11, now=feb10)
+
+
+def test_a_holdout_slot_does_not_go_live_on_a_survivor_gate_pass_recorded_without_its_cost_treatment(
+        tmp_path, monkeypatch):
+    """Quant review 2026-10-11: a pass without results.swap and results.cost_source is not a pass
+    (registry.gate_pass_counts), so it neither makes the holdout slot live nor covers a holdout scoring."""
+    reg, queued, slots = _plan(tmp_path, monkeypatch, n_slots=1, kinds=("survivor", "holdout"))
+    disc = _run_queued(reg, queued, ["H-05"])
+    _clock(monkeypatch, 2027, 2, 1)
+    c1 = _survivor_cfg(disc, "H-05")
+    p1 = _pre(reg, "tsmom", c1, slot_ref=slots["survivor"][0])
+    _run(reg, p1, "2027-02-02T00:00:00+00:00", results={"gates": {"passed": True}})          # pre-swap
+    assert slot_state(reg._rows(), slots["holdout"][0]) == "expired"
+    _clock(monkeypatch, 2027, 2, 10)
+    _pre(reg, "tsmom", c1, slot_ref=slots["holdout"][0])
+    with pytest.raises(TrialBudgetExceeded, match="not live|survivor trial"):
+        _check(reg, c1, setting=11, now=datetime(2027, 2, 10, tzinfo=timezone.utc))
 
 
 def test_a_holdout_slot_expires_when_its_survivor_slot_was_used_without_an_evaluated_trial(tmp_path, monkeypatch):
