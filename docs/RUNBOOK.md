@@ -1221,6 +1221,12 @@ hedging (`engine:<account>` FAILs with "engine refused to start: ... deploy the 
 names the version). While the engine is down nothing manages open trades beyond their broker stops, so update the
 brain first only when no position is open.
 
+From protocol v5 (`MIN_COMPATIBLE = 5`, ADR 0016: the bridge method `account_positions` and `Position.swap`, used by
+the equity cross-check before the 12% kill switch) the two versions start next to each other but refuse entries
+(`bridge_incompatible`) until both run v5: a new brain lacks `account_positions` on an old bridge, and an old brain is
+below the new bridge's `MIN_COMPATIBLE`. Exits, closes and the kill switch keep running either way. Deploy the MT5
+box first and the brain straight after, so the entry pause lasts only the brain's deploy.
+
 **Rollback order: roll back the brain first, then the MT5 box** (the reverse of a deploy), so no step leaves a newer
 brain next to an older bridge.
 

@@ -145,6 +145,10 @@ class PaperBroker:
             ps = [p for p in ps if str(p.magic).startswith(str(magic_prefix))]
         return ps
 
+    def account_positions(self) -> list[Position]:
+        """Every position on the account: one symbol here, so the same as `positions()` (no swap: None)."""
+        return self.positions()
+
     def deals_since(self, since_utc: pd.Timestamp) -> pd.DataFrame:
         d = pd.DataFrame(self._deals)
         return d[d["ts_utc"] >= since_utc] if not d.empty else d

@@ -15,4 +15,8 @@ number: 44
     today.
   - **Done 2026-10-11:** ADR 0016; `RiskSettings.equity_check_tolerance`, `AccountState.equity_unconfirmed`,
     runner `_equity_unconfirmed` (re-read on the next tick), gate reason `equity_unconfirmed`; tests in
-    `tests/test_equity_confirmation.py` (TRACEABILITY R39). Awaiting trading-safety review.
+    `tests/test_equity_confirmation.py` (TRACEABILITY R39).
+  - **Review fixes 2026-10-12 (trading-safety review of d2f2999):** HIGH-1 pending is sticky until 60 s below 10%
+    (`risk.equity_recovery_s`); MEDIUM-2 the cross-check counts swap and every symbol (`account_positions`, bridge
+    protocol v5); LOW-4 pending persisted in the risk state; LOW-3 declined with a test (ADR 0016). Follow-up: 53.
+    Awaiting trading-safety re-review.

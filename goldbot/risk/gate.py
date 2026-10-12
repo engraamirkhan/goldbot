@@ -82,6 +82,8 @@ class RiskLimits(Record):
     # BACKLOG 44 (ADR 0016): a 12% equity read trips the kill switch at once only when the balance plus the open P&L
     # agrees with it within this fraction of the high-water mark; otherwise the next account read must confirm it
     equity_check_tolerance: float = 0.02
+    # ...and a pending 12% read clears only after every read stayed below dd_stage2 - tolerance this long (seconds)
+    equity_recovery_s: float = 60.0
     # BACKLOG 17/18 (playbook G-2, G-3): entry windows around tier-2 events, after reopens and on thin-liquidity days;
     # off by default (the owner adopts them). The engine raises the AccountState flags; check() refuses only when on
     tier2: Tier2Blackout = Field(default_factory=Tier2Blackout)
@@ -101,7 +103,7 @@ class RiskLimits(Record):
                    min_target_over_cost=risk.min_target_over_cost,
                    min_lot_risk_cap=None if tiny_live else risk.min_lot_risk_cap, throttle=risk.throttle,
                    heat=risk.heat, project_open_risk=risk.project_open_risk,
-                   equity_check_tolerance=risk.equity_check_tolerance,
+                   equity_check_tolerance=risk.equity_check_tolerance, equity_recovery_s=risk.equity_recovery_s,
                    tier2=risk.blackout.tier2, reopen=risk.reopen, holidays=risk.holidays)
 
 
@@ -147,9 +149,9 @@ class AccountState(Record):
     open_risk: float | None = None
     open_long: int = 0
     open_short: int = 0
-    # BACKLOG 44 (ADR 0016): this equity read is in the 12% zone but neither the balance plus the open P&L nor the
-    # previous read confirms it (the engine sets it; it holds for one account read). The stage machine does not run on
-    # it and entries are refused `equity_unconfirmed`; exits are never gated
+    # BACKLOG 44 (ADR 0016): a 12% equity read is pending confirmation (the engine sets it until the next 12% read
+    # confirms it or the reads stay below 12% minus the tolerance for equity_recovery_s). The stage machine does not
+    # run and entries are refused `equity_unconfirmed`; exits are never gated
     equity_unconfirmed: bool = False
 
 

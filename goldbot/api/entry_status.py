@@ -158,9 +158,9 @@ REASONS: dict[str, Reason] = {
                      "Usually clears at the next clean bar; if it repeats, restart the engine.", "wait"),
     "data_quality_error": _r("Market data failed a quality check",
                              "Usually clears by itself; check the Feeds tab if it lasts.", "wait"),
-    "equity_unconfirmed": _r("The broker's equity reading looks wrong: checking it again",
-                             f"{NOTHING}: it is re-read on the next price; a real 12% loss stops trading then.",
-                             "wait"),
+    "equity_unconfirmed": _r("The broker's equity reading looked wrong: checking it again",
+                             f"{NOTHING}: entries resume after a minute of normal readings; a second 12% reading "
+                             "stops trading.", "wait"),
     "data_recovering": _r("Prices just recovered: waiting a minute to be sure", f"{NOTHING}.", "wait"),
     "spread_too_wide": _r("Spread too wide right now", f"{NOTHING}: it narrows by itself (news or rollover).", "wait"),
     "max_positions": _r("Already the maximum number of open trades",

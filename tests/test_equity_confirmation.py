@@ -66,38 +66,94 @@ def _intent() -> Intent:
 
 
 # ---------------------------------------------------------------------------------------------- one bad read
+def _read(eng: Engine, s: float) -> None:
+    """One account read, `s` seconds after T0 on the tick clock (the price stays 2400.0)."""
+    eng._refresh_account(_tick(T0 + pd.Timedelta(seconds=s)))
+
+
 @pytest.mark.parametrize("equity", [0.0, 50.0, 8_700.0])
 def test_a_single_zero_or_collapsed_equity_read_never_closes_a_position(tmp_path, monkeypatch, equity):
     eng, pb = _engine(tmp_path)
     pid = _open(pb, "a", lots=0.1)
     _script(monkeypatch, pb, equity)                                  # balance 10,000 + open P&L says ~10,000
-    eng._refresh_account(pb.last_tick("XAUUSD"))
+    _read(eng, 1)
     assert not _halted(eng) and not eng._kill_pending
     assert [p.position_id for p in pb.positions()] == [pid]
     assert eng.state.equity_unconfirmed
-    eng._refresh_account(pb.last_tick("XAUUSD"))                      # the next read is the broker's real one
-    assert eng.state.stage == Stage.NORMAL and not eng.state.equity_unconfirmed
-    assert [p.position_id for p in pb.positions()] == [pid]
+    _read(eng, 2)                                                     # the next read is the broker's real one
+    assert eng.state.stage == Stage.NORMAL and [p.position_id for p in pb.positions()] == [pid]
 
 
 def test_an_unconfirmed_equity_read_refuses_entries_and_does_not_move_the_stage(tmp_path, monkeypatch):
     eng, pb = _engine(tmp_path)
     _open(pb, "a", lots=0.1)
     _script(monkeypatch, pb, 50.0)
-    eng._refresh_account(pb.last_tick("XAUUSD"))
+    _read(eng, 1)
     assert eng.state.stage == Stage.NORMAL                            # not even size-down on one bad read
     d = eng.gate.check(_intent(), eng.state)
     assert not d.allowed and "equity_unconfirmed" in d.reasons
     assert eng.state.stage == Stage.NORMAL                            # the gate's own stage run respects it too
 
 
-def test_a_disagreeing_read_between_two_stage_two_reads_resets_the_confirmation(tmp_path, monkeypatch):
+# ---------------------------------------------------------------------------------------------- sticky pending
+def test_zone_then_normal_then_zone_trips_the_kill_switch(tmp_path, monkeypatch):
+    """Review HIGH-1: alternating readings must not hold the kill switch off. A pending 12% read stays pending
+    through normal reads until the recovery is sustained, so the next 12% read confirms it."""
+    eng, pb = _engine(tmp_path)
+    _open(pb, "a", lots=0.1)
+    _script(monkeypatch, pb, 0.0, None, 0.0)
+    _read(eng, 1)
+    _read(eng, 11)
+    assert not _halted(eng) and eng.state.equity_unconfirmed          # entries stay refused while pending
+    _read(eng, 21)
+    assert _halted(eng) and pb.positions() == []
+
+
+def test_alternating_readings_cannot_hold_the_kill_switch_off(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _open(pb, "a", lots=0.1)
+    _script(monkeypatch, pb, *[0.0, None] * 10)
+    reads = 0
+    while not _halted(eng) and reads < 20:
+        _read(eng, 1 + 10 * reads)
+        reads += 1
+    assert _halted(eng) and reads == 3 and pb.positions() == []
+
+
+def test_zone_then_sustained_recovery_below_the_hysteresis_then_zone_needs_fresh_confirmation(tmp_path, monkeypatch):
     eng, pb = _engine(tmp_path)
     pid = _open(pb, "a", lots=0.1)
-    _script(monkeypatch, pb, 0.0, None, 0.0)
-    for _ in range(3):
-        eng._refresh_account(pb.last_tick("XAUUSD"))
-    assert not _halted(eng) and [p.position_id for p in pb.positions()] == [pid]
+    _script(monkeypatch, pb, 0.0, *[None] * 9, 0.0)
+    _read(eng, 0)                                                     # pending
+    for s in range(1, 82, 10):                                        # clean reads from 1 s to 81 s: 80 s >= 60 s
+        _read(eng, s)
+    assert not eng.state.equity_unconfirmed                           # recovered: entries allowed again
+    _read(eng, 90)                                                    # a new glitch: one read, unconfirmed again
+    assert not _halted(eng) and eng.state.equity_unconfirmed and [p.position_id for p in pb.positions()] == [pid]
+
+
+def test_a_reading_inside_the_hysteresis_band_restarts_the_recovery_clock(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _open(pb, "a", lots=0.1)
+    band = 10_000 * (1 - 0.11)                                        # 11%: below 12%, above 12% - 2%
+    _script(monkeypatch, pb, 0.0, None, None, None, band, None, None, None, None, 0.0)
+    for s in (0, 10, 30, 50, 55, 60, 80, 100, 114, 115):              # 40 s clean, band at 55 s, then 54 s clean
+        _read(eng, s)
+    assert _halted(eng) and pb.positions() == []
+
+
+def test_a_pending_twelve_percent_read_survives_a_restart(tmp_path, monkeypatch):
+    """Review LOW-4: a crash loop between the two reads must not defeat confirmation."""
+    eng, pb = _engine(tmp_path)
+    _open(pb, "a", lots=0.1)
+    _script(monkeypatch, pb, 0.0)
+    _read(eng, 1)
+    again = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), owner_user_id=111,
+                                halt_checks=False), pb, [], {}, ApprovalCenter({111}))
+    assert again._account_currency() == "USD"
+    _script(monkeypatch, pb, 0.0)
+    again._refresh_account(_tick(T0 + pd.Timedelta(seconds=30)))
+    assert _halted(again) and pb.positions() == []
 
 
 # ---------------------------------------------------------------------------------------------- confirmed reads
@@ -133,20 +189,20 @@ def test_a_crash_read_that_balance_plus_open_pnl_corroborates_trips_on_the_first
     assert _halted(eng) and pb.positions() == []
 
 
-def test_an_unreadable_book_cannot_corroborate_so_the_second_read_confirms(tmp_path, monkeypatch):
+def test_an_unreadable_account_book_cannot_corroborate_so_the_second_read_confirms(tmp_path, monkeypatch):
     eng, pb = _engine(tmp_path)
     _open(pb, "a")
     _open(pb, "b", lots=0.5)
     pb.on_tick(_tick(T0 + pd.Timedelta(seconds=1), 2392.0))
-    real_positions = pb.positions
+    real_positions = pb.account_positions
 
     def broken() -> Any:
         raise RuntimeError("positions_get failed")
 
-    monkeypatch.setattr(pb, "positions", broken)
+    monkeypatch.setattr(pb, "account_positions", broken)
     eng._refresh_account(pb.last_tick("XAUUSD"))
     assert not _halted(eng) and eng.state.equity_unconfirmed
-    monkeypatch.setattr(pb, "positions", real_positions)
+    monkeypatch.setattr(pb, "account_positions", real_positions)
     eng._refresh_account(pb.last_tick("XAUUSD"))
     assert _halted(eng) and pb.positions() == []
 
@@ -182,3 +238,100 @@ def test_the_equity_cross_check_tolerance_comes_from_settings():
     s = load_settings()
     assert s.risk.equity_check_tolerance == pytest.approx(0.02)
     assert RiskLimits.from_settings(s.risk, tiny_live=False).equity_check_tolerance == pytest.approx(0.02)
+
+
+# ---------------------------------------------------------------------------------------------- review MEDIUM-2
+def _crash(pb: PaperBroker) -> float:
+    _open(pb, "a")
+    _open(pb, "b", lots=0.5)
+    pb.on_tick(_tick(T0 + pd.Timedelta(seconds=1), 2392.0))
+    return pb.account().equity
+
+
+def test_swap_on_the_open_positions_corroborates_a_crash_read_on_the_first_read(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    real = _crash(pb)
+    _script(monkeypatch, pb, real - 300.0)                            # the terminal's equity includes -$300 swap
+    book = [p.model_copy(update={"swap": -150.0}) for p in pb.positions()]
+    monkeypatch.setattr(pb, "account_positions", lambda: book)
+    eng._refresh_account(pb.last_tick("XAUUSD"))
+    assert _halted(eng) and pb.positions() == []
+
+
+def test_a_position_on_another_symbol_corroborates_a_crash_read_on_the_first_read(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    real = _crash(pb)
+    _script(monkeypatch, pb, real - 300.0)
+    other = pb.positions()[0].model_copy(update={"position_id": 999, "symbol": "EURUSD", "profit": -300.0})
+    monkeypatch.setattr(pb, "account_positions", lambda: [*PaperBroker.positions(pb), other])
+    eng._refresh_account(pb.last_tick("XAUUSD"))
+    assert _halted(eng)
+
+
+def test_an_unconfirmed_read_at_a_bar_close_is_read_again_on_the_next_tick(tmp_path, monkeypatch):
+    """Review LOW-3: the bar-close branch does not re-read in the same tick (milliseconds later the terminal returns
+    the same glitch); the next tick, which is never another bar close, takes the re-read branch."""
+    eng, pb = _engine(tmp_path)
+    t = T0.floor("15min") + pd.Timedelta(minutes=1)
+    eng.on_tick(_tick(t, 2400.0))
+    _open(pb, "a", lots=0.1)
+    reads: list[pd.Timestamp] = []
+    real_refresh = eng._refresh_account
+
+    def counting(tick: Tick) -> None:
+        reads.append(tick.ts_utc)
+        real_refresh(tick)
+
+    def bar_close(close: pd.Timestamp, tick: Tick) -> list:
+        eng._refresh_account(tick)
+        return []
+
+    monkeypatch.setattr(eng, "_refresh_account", counting)
+    monkeypatch.setattr(eng, "on_bar_close", bar_close)
+    _script(monkeypatch, pb, 0.0)
+    close = t.floor("15min") + pd.Timedelta(minutes=15, seconds=1)
+    eng.on_tick(_tick(close, 2400.0))                                 # a bar close: the read is unconfirmed
+    assert eng.state.equity_unconfirmed and reads == [close]
+    eng.on_tick(_tick(close + pd.Timedelta(seconds=1), 2400.0))       # inside state_every_s: re-read anyway
+    assert reads == [close, close + pd.Timedelta(seconds=1)]
+
+
+def test_the_mt5_adapter_reads_swap_and_every_symbol_for_the_account_book(monkeypatch):
+    from collections import namedtuple
+    from types import SimpleNamespace
+
+    from goldbot.execution import mt5_adapter
+
+    P = namedtuple("P", "ticket symbol type volume price_open sl tp magic comment time_msc profit swap")
+    book = [P(1, "XAUUSD", 0, 0.1, 2400.0, 2390.0, 2420.0, 260150, "", 1_741_168_800_000, -12.0, -3.5),
+            P(2, "EURUSD", 1, 0.2, 1.08, 0.0, 0.0, 7, "", 1_741_168_800_000, 4.0, -0.5)]
+    calls: list[dict] = []
+
+    def positions_get(**kw: Any) -> list:
+        calls.append(kw)
+        return [p for p in book if "symbol" not in kw or p.symbol == kw["symbol"]]
+
+    fake = SimpleNamespace(positions_get=positions_get, POSITION_TYPE_BUY=0, last_error=lambda: (1, "e"))
+    monkeypatch.setattr(mt5_adapter, "mt5", fake)
+    b = object.__new__(mt5_adapter.MT5Broker)
+    b.symbol, b.server_tz = "XAUUSD", "Europe/Athens"
+    assert [(p.symbol, p.swap) for p in b.positions()] == [("XAUUSD", -3.5)]
+    assert [(p.symbol, p.profit, p.swap) for p in b.account_positions()] == [("XAUUSD", -12.0, -3.5),
+                                                                           ("EURUSD", 4.0, -0.5)]
+    assert calls[-1] == {}                                            # no symbol filter
+
+
+def test_a_position_without_swap_reads_as_none_so_an_older_bridge_still_decodes():
+    from goldbot.base import load_record
+    from goldbot.execution.broker import Position
+
+    old = {"position_id": 1, "symbol": "XAUUSD", "side": 1, "lots": 0.1, "open_price": 2400.0, "sl": 2390.0,
+           "tp": None, "magic": 1, "comment": "", "open_time_utc": T0, "profit": 0.0}
+    assert load_record(Position, old, source="test").swap is None
+
+
+def test_paper_positions_carry_no_swap_and_its_account_book_is_its_positions(tmp_path):
+    _, pb = _engine(tmp_path)
+    _open(pb, "a", lots=0.1)
+    assert [p.swap for p in pb.account_positions()] == [None]
+    assert pb.account_positions() == pb.positions()
