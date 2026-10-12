@@ -96,7 +96,7 @@ def test_enable_auto_needs_a_fresh_owner_code_and_the_evidence_and_is_audited(ap
     r = c.post("/api/automode", json={"mode": "auto", "totp": totp_code(secret)}, headers=owner)
     assert r.status_code == 200 and r.json()["message"].startswith("Mode: AUTO")
     ctl = ApprovalBus(state).control()
-    assert ctl.approval_mode == "auto" and ctl.mode_by == "dashboard:o@x.io"
+    assert ctl.approval_mode == "auto" and ctl.mode_by == "dashboard"         # the channel only (A15)
     assert r.json()["view"]["owner_mode"] == "auto" and r.json()["view"]["can_enable"] is False
     events = [(e["event"], e.get("reason"), e.get("to")) for e in _audit(app)]
     # wrong and replayed codes also count towards the owner's lockout (mode_failed); a non-numeric one is never checked

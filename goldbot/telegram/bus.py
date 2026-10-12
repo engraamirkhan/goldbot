@@ -234,7 +234,9 @@ class ApprovalBus:
 
     def set_mode(self, mode: ApprovalMode, by: str, reason: str | None = None) -> Control:
         """The owner's approval mode. Callers check authority first: `auto` only after the evidence check and a TOTP
-        (goldbot/telegram/automode.py); `propose` lowers authority and needs neither. The halt and re-arm are kept."""
+        (goldbot/telegram/automode.py); `propose` lowers authority and needs neither. The halt and re-arm are kept.
+        `by` is kept as its channel (A15), except an engine's kill switch, which keeps "engine:<account>"."""
+        by = by if by.startswith("engine:") else decision_channel(by)
         c = self.control().model_copy(update={"approval_mode": mode, "mode_by": by, "mode_ts": time.time(),
                                               "mode_reason": reason})
         _write_atomic(self.control_path, c.model_dump_json())

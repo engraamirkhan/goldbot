@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, hasRole, type AutoModeView, type ModeChangeResult } from "../lib/api";
+import { viaChannel } from "../lib/approval";
 import { localTime, num, utcTitle } from "../lib/explain";
 
 // Auto-mode card (design: Operating mode, row A10). Auto mode is only offered, never taken: the card shows the same
@@ -8,11 +9,11 @@ import { localTime, num, utcTitle } from "../lib/explain";
 // back to propose needs nothing. The engines still force propose under the 30-day re-arm lock and the 12% kill switch.
 
 const MODE_WORDS = { auto: "Auto", propose: "Propose-and-approve" } as const;
-// mode_by: the owner sees "dashboard:<email>" / "telegram:<uid>"; other roles get only the channel from the server
+// mode_by: the channel ("telegram" | "dashboard") for every role, never who (A15); "engine:<account>" for a kill switch
 const setBy = (by: string | null) => {
   if (!by) return "";
-  const i = by.indexOf(":");
-  return i < 0 ? ` on ${by}` : ` by ${by.slice(i + 1)} on ${by.slice(0, i)}`;
+  if (by.startsWith("engine:")) return ` by the ${by.slice("engine:".length)} engine`;
+  return ` via ${viaChannel(by.split(":")[0])}`;
 };
 const r2 =(x: number | null | undefined) => (x == null ? "n/a" : `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(2)}R`);
 

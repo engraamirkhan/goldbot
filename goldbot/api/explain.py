@@ -552,6 +552,11 @@ def _engine_modes(state: Path) -> dict[str, str]:
     return out
 
 
+def _mode_by(by: str | None) -> str | None:
+    """"telegram:<id>" -> "telegram", "dashboard:<email>" -> "dashboard"; "engine:<account>" is kept."""
+    return by if by is None or by.startswith("engine:") else by.split(":", 1)[0]
+
+
 def automode_view(state: Path, settings: Settings | None, is_owner: bool) -> AutoModeView:
     """The auto-mode card: the owner's mode, what each engine runs, and the exact evidence check `/mode auto` runs
     (telegram/automode.py auto_mode_eligibility_from_state), so the card and Telegram never disagree. Read-only."""
@@ -568,8 +573,9 @@ def automode_view(state: Path, settings: Settings | None, is_owner: bool) -> Aut
                                  breaches=[], test=automode.VetoTest(n_approved=0, n_rejected=0, alpha=tg.auto_alpha))
     t = e.test
     return AutoModeView(
-        # who switched ("dashboard:<email>", "telegram:<uid>") is the owner's to see; other roles get the channel
-        owner_mode=c.approval_mode, mode_by=c.mode_by if is_owner or c.mode_by is None else c.mode_by.split(":", 1)[0],
+        # the channel that switched, for every role (A15): a control.json from before it names who, cut here; an
+        # engine's kill switch keeps "engine:<account>"
+        owner_mode=c.approval_mode, mode_by=_mode_by(c.mode_by),
         mode_since=datetime.fromtimestamp(c.mode_ts, tz=timezone.utc) if c.mode_ts else None, mode_reason=c.mode_reason,
         engine_modes=_engine_modes(state), eligible=e.eligible, reasons=list(e.reasons), decided=e.decided,
         approved=e.approved, rejected=e.rejected, min_proposals=tg.auto_min_proposals,

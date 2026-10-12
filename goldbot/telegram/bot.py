@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import time
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -50,6 +52,44 @@ def outcome_text(outcome: str) -> str:
     return OUTCOME_TEXT.get(outcome, outcome)
 
 
+class OffLoopAudit:
+    """Who acted on Telegram (decision, halt, deploy tap), in the VPS audit log the dashboard and /mode write
+    (automode.audit_to: state/aux.db), never in approvals/, control.json or approved.json (A15). Review M1: aux.db can
+    be locked for seconds, so `write` runs on a worker thread and returns at once; callers write after answering the
+    owner. One audit store, opened on the first write in the worker thread, never on the event loop. A failed write is
+    logged and never undoes or hides the action, which already stands."""
+
+    def __init__(self, state_dir: str, opener: Callable[[str], Callable[..., None]] | None = None):
+        self.state_dir = state_dir
+        self._opener = opener
+        self._audit: Callable[..., None] | None = None
+        self._lock = threading.Lock()
+        self._tasks: set[asyncio.Task[None]] = set()       # held until done: an unreferenced task can be collected
+
+    def write_now(self, event: str, **kw: Any) -> None:
+        """Blocking: call it only off the event loop (a worker thread)."""
+        try:
+            with self._lock:
+                if self._audit is None:
+                    self._audit = (self._opener or automode.audit_to)(self.state_dir)
+                audit = self._audit
+            audit(event, **kw)
+        except Exception as exc:                # noqa: BLE001 - the action already stands
+            log.warning("audit of %s failed: %s", event, type(exc).__name__)
+
+    def write(self, event: str, uid: int, **kw: Any) -> None:
+        """From a handler on the event loop: the row is written on a worker thread; this returns at once."""
+        task = asyncio.get_running_loop().create_task(
+            asyncio.to_thread(self.write_now, event, by=f"telegram:{uid}", telegram_id=uid, **kw))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def drain(self) -> None:
+        """Wait for the rows still being written (tests; a clean shutdown)."""
+        while self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+
+
 class TelegramBot:  # pragma: no cover - needs network + token
     """The Telegram service (`python -m goldbot.ops.run telegram`): sends the engines' proposals from the approval
     bus with Approve/Reject buttons, writes the owner's decisions back to the bus, edits each message with the outcome,
@@ -69,6 +109,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
         self.owner_ids = owner_ids
         self.poll_s = poll_s
         self.state_dir = state_dir
+        self.audit = OffLoopAudit(state_dir)        # who acted, off the event loop (A15, review M1)
         self.health = HealthWatch(state_dir)
         self.settings = settings or TelegramSettings()
         self.deadman = DeadMan(accounts.get_secret, self.settings.deadman_every_min)   # outside switch, ADR 0014
@@ -239,8 +280,10 @@ class TelegramBot:  # pragma: no cover - needs network + token
             return
         parts = q.data.split(":")
         if parts[0] in ("dep", "skp") and self.deploy is not None:
-            ok = self.deploy.approve(parts[1], by=uid) if parts[0] == "dep" else self.deploy.skip(parts[1])
+            ok = self.deploy.approve(parts[1]) if parts[0] == "dep" else self.deploy.skip(parts[1])
             await q.answer("ok" if ok else "no longer on offer", show_alert=not ok)
+            if ok and parts[0] == "dep":
+                self.audit.write("deploy_approve", uid, sha=parts[1])      # who tapped: the audit log only (A15)
             if ok:
                 await q.edit_message_text(q.message.text + ("\n\n→ deploying within a minute; you will get the result"
                                                             if parts[0] == "dep" else "\n\n→ skipped"))
@@ -249,8 +292,9 @@ class TelegramBot:  # pragma: no cover - needs network + token
             approve = parts[0] == "ok"
             reason = None if approve else parts[2]
             self.bus.submit(parts[1], approve, reason, by="telegram")     # the channel only on disk (A15)
-            self._audit("decision", uid, proposal=parts[1], action="approve" if approve else "reject", reason=reason)
-            await q.answer("sent to the engine")
+            await q.answer("sent to the engine")                         # first: Telegram drops a late answer
+            self.audit.write("decision", uid, proposal=parts[1], action="approve" if approve else "reject",
+                             reason=reason)
             await q.edit_message_text(q.message.text + "\n\n→ " + ("approve" if approve else f"reject ({parts[2]})")
                                       + ": the engine re-checks risk and acts")
         except (KeyError, ValueError) as exc:
@@ -265,7 +309,6 @@ class TelegramBot:  # pragma: no cover - needs network + token
         cmd, arg = parts[0].split("@")[0], (parts[1] if len(parts) > 1 else None)
         if cmd == "/halt":
             self.bus.set_halt(True, by="telegram", reason=arg)             # the channel only on disk (A15)
-            self._audit("halt", uid, reason=arg)
             text = "HALTED: no new entries on any engine. Open positions keep their stops and exits. Re-arm on the dashboard."
         elif cmd == "/rearm":
             text = "Re-arming needs your authenticator code: use the dashboard (Overview → Re-arm)."
@@ -273,7 +316,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
             text = await asyncio.to_thread(
                 automode.mode_command, self.bus, arg, f"telegram:{uid}",
                 totp_ok=lambda code: automode.owner_totp_ok(self.state_dir, code),
-                eligibility=self._eligibility, audit=automode.audit_to(self.state_dir))
+                eligibility=self._eligibility, audit=self.audit.write_now)     # in the worker thread
             if arg and len(arg.split()) > 1:
                 try:
                     await update.message.delete()      # keep the authenticator code out of the chat history
@@ -282,15 +325,11 @@ class TelegramBot:  # pragma: no cover - needs network + token
         else:
             # the dashboard's Entry status words (goldbot/telegram/entry_text.py), per account; plain text, no parse_mode
             text = await asyncio.to_thread(self._status_text)
-        await update.message.reply_text(text)
-
-    def _audit(self, event: str, uid: int, **kw: object) -> None:
-        """Who acted, in the VPS audit log the dashboard and /mode write (automode.audit_to: state/aux.db), never in
-        approvals/ or control.json (A15). After the action: a failed write is logged and never undoes or hides it."""
         try:
-            automode.audit_to(self.state_dir)(event, by=f"telegram:{uid}", telegram_id=uid, **kw)
-        except Exception as exc:                # noqa: BLE001 - the decision or halt already stands
-            log.warning("audit of %s failed: %s", event, type(exc).__name__)
+            await update.message.reply_text(text)
+        finally:                                    # after the reply, and even when it fails: the halt stands
+            if cmd == "/halt":
+                self.audit.write("halt", uid, reason=arg)    # who halted: the audit log only (A15)
 
     def _status_text(self) -> str:
         """Any failure (control file, pending list, settings, build) replies with entry_text.FAILED, never nothing."""

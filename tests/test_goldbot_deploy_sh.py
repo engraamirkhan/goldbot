@@ -568,3 +568,20 @@ def test_the_embedded_comparison_agrees_with_the_health_module(tmp_path):
     expect = health.worsened(health.HealthReport.model_validate_json(after.read_text()),
                              health.HealthReport.model_validate_json(before.read_text()))
     assert out == ",".join(expect) == "a,new"
+
+
+def test_the_root_reads_the_sha_only_approval_file_the_bot_writes(tmp_path):
+    """A15: approved.json holds only {"sha": ...} (who tapped is in the audit log); read_approval needs nothing else."""
+    import getpass
+
+    from goldbot.ops.deploy import DeployWatch
+    sha = "b" * 40
+    w = DeployWatch(tmp_path, tmp_path)
+    w.dir.mkdir(parents=True)
+    (w.dir / "pending.json").write_text(json.dumps({"sha": sha}))
+    assert w.approve(sha)
+    assert BASH is not None
+    script = (f'source "{SCRIPT}"; APPROVED="{w.dir / "approved.json"}"; OWNER="{getpass.getuser()}"\n'
+              'read_approval\n')
+    out = subprocess.run([BASH, "-c", script], capture_output=True, text=True, timeout=60)
+    assert out.stdout.strip() == sha, out.stderr

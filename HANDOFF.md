@@ -15,21 +15,25 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   and helper it had. Checks are called through it, so patching `health.check_x` still works. To add a check, edit
   only its area module. Tests: tests/test_health_registry.py compares names, statuses, reasons and order against a
   golden file captured from the old hand-written `run_checks`.
-- Who decided or halted is kept only in the audit log (security follow-up to BACKLOG 52, TRACEABILITY A15;
-  2026-10-12).
-  - The decision file (`approvals/decisions/<id>.json`) and the halt and re-arm in `control.json` now record only
-    the channel ("dashboard" or "telegram"). Both writers pass the channel, and the bus drops anything after ":"
-    as well. This closes the "still on disk" note in the A14 bullet.
-  - `/api/status` `halted_by`, the entry status and the halt health check report the channel to every role. An
-    older control.json's "telegram:<id>" or "dashboard:<email>" is cut to the channel. The dashboard says "Entries
-    halted via the dashboard" or "via Telegram". The API schema is unchanged, so the contract was not regenerated.
-  - The Telegram service now writes a `decision` row (Telegram id, proposal, approve/reject, reason, time) and a
-    `halt` row to the VPS audit log (state/aux.db, the table the dashboard and /mode write). The row is written
-    after the action, so a failed audit write is logged and never undoes or hides the click. No API route serves
-    the audit log.
+- Who decided, halted, switched mode or approved a deploy is kept only in the audit log (security follow-up to
+  BACKLOG 52, TRACEABILITY A15; 2026-10-12).
+  - The decision file (`approvals/decisions/<id>.json`), and the halt, re-arm and mode in `control.json`, now record
+    only the channel ("dashboard" or "telegram"). Both writers pass the channel, and the bus also drops anything
+    after ":". An engine's kill switch still records "engine:<account>". This closes the "still on disk" note in
+    the A14 bullet.
+  - `/api/status` `halted_by`, the entry status, the halt health check and the auto-mode card's `mode_by` report
+    the channel to every role, the owner included. An older control.json's "telegram:<id>" or "dashboard:<email>"
+    is cut to the channel. The dashboard says "via the dashboard" or "via Telegram". The API schema is unchanged.
+    The health golden was regenerated on purpose ("HALTED by owner" -> "HALTED via owner").
+  - `state/deploy/approved.json` now holds only `{"sha": ...}`. The root deploy script reads only the sha, and a
+    test checks that it still does.
+  - The Telegram service writes `decision`, `halt` and `deploy_approve` rows, each with the Telegram id, to the VPS
+    audit log (state/aux.db, the table the dashboard and /mode write). Review M1: each row is written on a worker
+    thread after the owner has been answered, through one audit store opened off the event loop. A locked aux.db
+    therefore never delays the answer or the proposal pump, and a failed write is logged without undoing anything.
+    No API route serves the audit log.
   - Each engine start deletes decision files that have no pending file or are more than a day old.
-  - Not changed: `mode_by` in control.json still names who switched mode (the owner sees it, other roles get the
-    channel), and `state/deploy/approved.json` still records the Telegram id of a deploy tap.
+  - Follow-up: BACKLOG 55 (`test_lockout_survives_a_restart` flaked once under load).
   - Needs security and trading-safety review.
 - Open-risk heat cap and open-risk daily projection (2026-10-11, BACKLOG 19 playbook G-4 and BACKLOG 35 review
   MEDIUM-4, row R38; **both off by default**; needs trading-safety review). The engine computes, on every account

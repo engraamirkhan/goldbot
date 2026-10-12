@@ -178,7 +178,7 @@ def test_mode_auto_with_totp_and_evidence_writes_control_and_is_audited(tmp_path
     bus.set_halt(True, by="telegram:111", reason="lunch")
     assert _mode(bus, "auto 123456", True, audit).startswith("Mode: AUTO")
     c = bus.control()
-    assert c.approval_mode == "auto" and c.mode_by == "telegram:111" and c.mode_ts > 0 and c.halted   # halt kept
+    assert c.approval_mode == "auto" and c.mode_by == "telegram" and c.mode_ts > 0 and c.halted   # halt kept
     assert audit[-1][0] == "mode" and audit[-1][1]["to"] == "auto" and audit[-1][1]["decided"] == 100
     bus.set_halt(False, by="x")
     assert bus.control().approval_mode == "auto"                # halts and re-arms keep the mode

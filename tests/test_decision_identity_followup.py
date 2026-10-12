@@ -175,25 +175,47 @@ def test_no_api_route_serves_the_audit_log(app_client):
 
 
 # ------------------------------------------------------------------------------------- the Telegram service
-def _bot(state):
-    from goldbot.telegram.bot import TelegramBot
+def _bot(state, opener=None):
+    from goldbot.telegram.bot import OffLoopAudit, TelegramBot
     bot = TelegramBot.__new__(TelegramBot)                    # no network: only the handlers' state
     bot.bus, bot.owner_ids, bot.state_dir, bot.deploy = ApprovalBus(state), {TELEGRAM_ID}, str(state), None
+    bot.audit = OffLoopAudit(str(state), opener=opener)
     return bot
+
+
+def _query(data: str, log: list[str]) -> types.SimpleNamespace:
+    async def answer(text: str = "", show_alert: bool = False) -> None:
+        log.append(text)
+
+    async def edit_message_text(text: str) -> None:
+        log.append(text)
+    return types.SimpleNamespace(from_user=types.SimpleNamespace(id=TELEGRAM_ID), data=data, answer=answer,
+                                 edit_message_text=edit_message_text, message=types.SimpleNamespace(text="card"))
 
 
 def _click(bot, data: str) -> list[str]:
     answers: list[str] = []
 
-    async def answer(text: str = "", show_alert: bool = False) -> None:
-        answers.append(text)
-
-    async def edit_message_text(text: str) -> None:
-        answers.append(text)
-    q = types.SimpleNamespace(from_user=types.SimpleNamespace(id=TELEGRAM_ID), data=data, answer=answer,
-                              edit_message_text=edit_message_text, message=types.SimpleNamespace(text="card"))
-    asyncio.run(bot._on_button(types.SimpleNamespace(callback_query=q), None))
+    async def go() -> None:
+        await bot._on_button(types.SimpleNamespace(callback_query=_query(data, answers)), None)
+        await bot.audit.drain()
+    asyncio.run(go())
     return answers
+
+
+def _command(bot, text: str) -> list[str]:
+    replies: list[str] = []
+
+    async def reply_text(t: str) -> None:
+        replies.append(t)
+
+    async def go() -> None:
+        msg = types.SimpleNamespace(text=text, reply_text=reply_text)
+        await bot._on_command(types.SimpleNamespace(effective_user=types.SimpleNamespace(id=TELEGRAM_ID), message=msg),
+                              None)
+        await bot.audit.drain()
+    asyncio.run(go())
+    return replies
 
 
 def _events(state, event: str) -> list[dict]:
@@ -234,26 +256,88 @@ def test_a_failing_audit_write_never_undoes_or_hides_a_telegram_decision_or_halt
     bot.bus.publish(_prop("p1"))
     assert _click(bot, "ok:p1")[0] == "sent to the engine"
     assert (bot.bus.decisions_dir / "p1.json").exists()
-    replies: list[str] = []
-
-    async def reply_text(text: str) -> None:
-        replies.append(text)
-    msg = types.SimpleNamespace(text="/halt", reply_text=reply_text)
-    asyncio.run(bot._on_command(types.SimpleNamespace(effective_user=types.SimpleNamespace(id=TELEGRAM_ID),
-                                                      message=msg), None))
-    assert replies[0].startswith("HALTED") and bot.bus.control().halted
+    assert _command(bot, "/halt")[0].startswith("HALTED") and bot.bus.control().halted
 
 
 def test_a_telegram_halt_is_audited_with_the_telegram_id_and_control_json_keeps_only_the_channel(tmp_path):
     bot = _bot(tmp_path)
-    replies: list[str] = []
-
-    async def reply_text(text: str) -> None:
-        replies.append(text)
-    msg = types.SimpleNamespace(text="/halt fomc", reply_text=reply_text)
-    asyncio.run(bot._on_command(types.SimpleNamespace(effective_user=types.SimpleNamespace(id=TELEGRAM_ID),
-                                                      message=msg), None))
-    assert replies[0].startswith("HALTED") and bot.bus.control().halted
+    assert _command(bot, "/halt fomc")[0].startswith("HALTED") and bot.bus.control().halted
     _assert_no_identity(bot.bus.control_path.read_text())
     (row,) = _events(tmp_path, "halt")
     assert (row["by"], row["telegram_id"], row["reason"]) == (f"telegram:{TELEGRAM_ID}", TELEGRAM_ID, "fomc")
+
+
+def test_a_slow_audit_write_runs_after_the_answer_and_never_blocks_the_event_loop(tmp_path):
+    """Review M1: aux.db can be locked for seconds; the click is answered first and the loop (proposal pump) runs."""
+    order: list[str] = []
+    opened: list[int] = []
+
+    def opener(_state):
+        opened.append(1)
+
+        def audit(event, **_kw):
+            order.append("audit start")
+            time.sleep(0.5)                                          # a busy aux.db lock
+            order.append(f"audit {event}")
+        return audit
+    bot = _bot(tmp_path, opener=opener)
+    bot.bus.publish(_prop("p1"))
+    bot.bus.publish(_prop("p2"))
+    ticks: list[float] = []
+
+    async def pump() -> None:                                        # stands in for the proposal pump
+        while True:
+            ticks.append(time.monotonic())
+            await asyncio.sleep(0.01)
+
+    async def go() -> float:
+        task = asyncio.create_task(pump())
+        t0 = time.monotonic()
+        await bot._on_button(types.SimpleNamespace(callback_query=_query("ok:p1", order)), None)
+        await bot._on_button(types.SimpleNamespace(callback_query=_query("ok:p2", order)), None)
+        handled = time.monotonic() - t0
+        mid = len(ticks)
+        await bot.audit.drain()
+        assert len(ticks) - mid >= 20                                # the loop kept running during ~1 s of audit
+        task.cancel()
+        return handled
+    handled = asyncio.run(go())
+    assert handled < 0.3                                             # neither click waited for the audit
+    assert order.index("sent to the engine") < order.index("audit start")
+    assert order.count("audit decision") == 2 and opened == [1]       # one audit store, opened once
+
+
+def test_a_telegram_deploy_tap_is_audited_and_the_approval_file_holds_only_the_sha(tmp_path):
+    from goldbot.ops.deploy import DeployWatch
+    sha = "a" * 40
+    bot = _bot(tmp_path)
+    bot.deploy = DeployWatch(str(tmp_path), tmp_path)
+    bot.deploy.dir.mkdir(parents=True)
+    (bot.deploy.dir / "pending.json").write_text(json.dumps({"sha": sha}))
+    assert _click(bot, f"dep:{sha}")[0] == "ok"
+    assert json.loads((bot.deploy.dir / "approved.json").read_text()) == {"sha": sha}
+    (row,) = _events(tmp_path, "deploy_approve")
+    assert (row["by"], row["telegram_id"], row["sha"]) == (f"telegram:{TELEGRAM_ID}", TELEGRAM_ID, sha)
+
+
+# ------------------------------------------------------------------------------------- the approval mode (review L1)
+@pytest.mark.parametrize(("by", "stored"), [(f"telegram:{TELEGRAM_ID}", "telegram"), (f"dashboard:{EMAIL}", "dashboard"),
+                                            ("engine:icm-demo", "engine:icm-demo")])
+def test_set_mode_keeps_only_the_channel_for_a_person_and_the_account_for_the_kill_switch(tmp_path, by, stored):
+    bus = ApprovalBus(tmp_path)
+    bus.set_mode("propose", by=by)
+    _assert_no_identity(bus.control_path.read_text())
+    assert bus.control().mode_by == stored
+
+
+@pytest.mark.integration
+def test_the_mode_card_names_only_the_channel_to_every_role_even_the_owner(app_client):
+    app, c, state = app_client
+    owner, _ = _owner_secret(c, app)
+    viewer = _viewer(c, owner)
+    (state / "control.json").write_text(json.dumps({"approval_mode": "propose", "mode_by": f"telegram:{TELEGRAM_ID}",
+                                                    "mode_ts": time.time()}))   # written before A15
+    for who in (owner, viewer):
+        r = c.get("/api/automode", headers=who)
+        assert r.json()["mode_by"] == "telegram"
+        _assert_no_identity(r.text)
