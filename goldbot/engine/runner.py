@@ -45,7 +45,7 @@ from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resamp
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
-from goldbot.execution.broker import Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
+from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
@@ -393,6 +393,11 @@ class Engine:
         self._halted_at: pd.Timestamp | None = None  # when the 12% kill switch tripped (re-arm conditions count from it)
         self._propose_only_until: pd.Timestamp | None = None   # after a re-arm: no auto entries before this
         self._rearm_refused: str | None = None       # why the last owner re-arm was refused (engine state, dashboard)
+        # ADR 0016: an unconfirmed 12% read waiting for confirmation (persisted), the start of the current run of reads
+        # below 12% minus the tolerance (in memory: a restart restarts the recovery clock), and a re-read due next tick
+        self._stage2_pending_since: pd.Timestamp | None = None
+        self._stage2_clean_since: pd.Timestamp | None = None
+        self._reread_account = False
         self._load_risk_state()
         # closed-trade record (state/closed_trades.jsonl, read by the phase gates and the stop rule): positions already
         # recorded (key: this account + position id, so a restart never records one twice), closes waiting to be
@@ -566,7 +571,8 @@ class Engine:
                     and self._error_tick_ts < bar_open:
                 self.state.tick_error, self._tick_error_detail = False, None   # a whole clean decision bar closed
                 self._write_state()
-        elif self._last_state_write is None or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:
+        elif self._reread_account or self._last_state_write is None \
+                or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:   # ADR 0016 re-read
             self._rebuild_bars()            # completed minutes join the bars between closes, so their age is current
             self._refresh_account(t)
             self._write_state()
@@ -1845,6 +1851,7 @@ class Engine:
         owner_mode = self.center.bus.control().approval_mode if self.center.bus is not None else None
         if owner_mode is not None:
             self.cfg.approval_mode = owner_mode  # the owner's /mode (A10); the kill switch and re-arm lock win below
+        st.equity_unconfirmed = self._equity_unconfirmed(acc, now)
         stage = st.stage
         if self.gate.update_stage(st) != stage:
             if st.stage == Stage.HALTED:
@@ -1854,6 +1861,70 @@ class Engine:
             self._kill_switch(everything=stage != Stage.HALTED)
         if self._propose_only_until is not None and now < self._propose_only_until:
             self.cfg.approval_mode = "propose"  # 30 days propose-and-approve after a re-arm
+
+    def _equity_unconfirmed(self, acc: AccountInfo, now: pd.Timestamp) -> bool:
+        """BACKLOG 44 (ADR 0016): "one disagreeing read never trips the kill switch; two agreeing reads always do".
+        An account read at 12% drawdown or more is confirmed, and the stage machine runs on it, when the balance plus
+        the open P&L and swap of every position on the account agrees with the equity within `equity_check_tolerance`
+        of the high-water mark (a genuine crash: no delay), or when an earlier 12% read is still pending. Otherwise (a
+        zero or collapsed equity, an unreadable book) it is pending: the account is read again on the next tick
+        (`on_tick`).
+        Pending is sticky (review HIGH-1): it clears only after every read has stayed below 12% minus the tolerance
+        for `equity_recovery_s`; until then entries are refused, no stage moves, and the next 12% read trips, so
+        alternating readings cannot hold the kill switch off. It is persisted, so a restart does not forget it.
+        Exits are never gated: stops rest at the broker and every exit keeps running meanwhile."""
+        st, L = self.state, self.gate.limits
+        hwm = st.balance_closed_hwm
+        if st.stage == Stage.HALTED or hwm <= 0:
+            return False
+        dd = 1 - acc.equity / hwm
+        if dd >= L.dd_stage2:
+            self._reread_account = False
+            if self._stage2_pending_since is not None or self._equity_corroborated(acc, hwm):
+                self._set_stage2_pending(None)
+                return False                     # confirmed: the stage machine trips the kill switch
+            self._stage2_clean_since, self._reread_account = None, True
+            self._set_stage2_pending(now)
+            log.warning("equity %.2f is a 12%% drawdown that balance %.2f plus open P&L does not confirm; entries "
+                        "refused, re-read next tick", acc.equity, acc.balance)
+            self.decisions.append({"ts": time.time(), "action": "equity_unconfirmed", "equity": acc.equity,
+                                   "balance": acc.balance})
+            return True
+        self._reread_account = False
+        if self._stage2_pending_since is None:
+            return False
+        if not dd < L.dd_stage2 - L.equity_check_tolerance:      # inside the band (or NaN): the recovery restarts
+            self._stage2_clean_since = None
+            return True
+        self._stage2_clean_since = self._stage2_clean_since or now
+        if (now - self._stage2_clean_since).total_seconds() < L.equity_recovery_s:
+            return True
+        self._set_stage2_pending(None)
+        self.decisions.append({"ts": time.time(), "action": "equity_recovered", "equity": acc.equity})
+        return False
+
+    def _equity_corroborated(self, acc: AccountInfo, hwm: float) -> bool:
+        """The equity agrees with the balance plus the open P&L and swap of every position on the account (all symbols;
+        a position without swap, e.g. from an older bridge, counts none) within `equity_check_tolerance` x hwm. An
+        unreadable book, or a zero or negative equity or balance, never corroborates."""
+        if not (acc.equity > 0 and acc.balance > 0):
+            return False
+        try:
+            book = self.broker.account_positions()
+        except Exception as exc:                 # an older bridge without the method, or a failed read
+            log.warning("account positions unreadable (%s); the equity is confirmed by a second read",
+                        type(exc).__name__)
+            return False
+        floating = sum(p.profit + (p.swap or 0.0) for p in book)
+        return abs(acc.equity - acc.balance - floating) <= self.gate.limits.equity_check_tolerance * hwm
+
+    def _set_stage2_pending(self, since: pd.Timestamp | None) -> None:
+        """Set or clear the pending 12% read; a change is saved at once with the risk state (review LOW-4)."""
+        if since is None:
+            self._stage2_clean_since = None
+        if (since is None) != (self._stage2_pending_since is None):
+            self._stage2_pending_since = since
+            self._save_risk_state()
 
     def set_sessions(self, table: SessionTable) -> None:
         """The broker session table (D13), refreshed by the run loop outside the tick path (goldbot/ops/run.py
@@ -2545,7 +2616,9 @@ class Engine:
                    "rearm_seen": self._rearm_seen, "weekend_done": self._weekend_done,
                    "halted_at": self._halted_at.isoformat() if self._halted_at is not None else None,
                    "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
-                   "rearm_refused": self._rearm_refused}
+                   "rearm_refused": self._rearm_refused,
+                   "stage2_pending_since": None if self._stage2_pending_since is None
+                   else self._stage2_pending_since.isoformat()}
         write_atomic(self._risk_path(), json.dumps(payload))       # durable: halts and stages survive a power cut
 
     def _load_risk_state(self) -> None:
@@ -2566,6 +2639,9 @@ class Engine:
         self._halted_at = pd.Timestamp(d["halted_at"]) if d.get("halted_at") else None
         self._propose_only_until = pd.Timestamp(d["propose_only_until"]) if d.get("propose_only_until") else None
         self._rearm_refused = d.get("rearm_refused")
+        # ADR 0016: absent (an older file) = nothing pending; an older release drops it and trips on one read instead
+        pending = d.get("stage2_pending_since")
+        self._stage2_pending_since = pd.Timestamp(pending) if pending else None
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the

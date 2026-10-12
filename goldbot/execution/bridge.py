@@ -66,6 +66,7 @@ METHODS: dict[str, tuple[str, bool]] = {
     "copy_ticks": ("frame", True),
     "last_tick": ("Tick", True),
     "positions": ("list[Position]", True),
+    "account_positions": ("list[Position]", True),   # read-only, every symbol: the equity cross-check (ADR 0016)
     "deals_since": ("frame", True),
     "broker_terms": ("BrokerTerms", True),
     "margin_required": ("float", True),      # read-only (order_calc_margin): retry-safe, nothing reaches the market
@@ -86,8 +87,11 @@ METHODS: dict[str, tuple[str, bool]] = {
 # v4: AccountInfo.margin_mode (hedging | netting | exchange). A v4 brain on a v3 bridge reads None and refuses to start
 # (accounts.verify_terminal_account: a hedging account is required), so the MT5 box is deployed first. MIN_COMPATIBLE
 # = 4 (review LOW-A): bridge-compat and preflight then name a v3 bridge as the cause instead of a generic refusal.
-API_VERSION = 4
-MIN_COMPATIBLE = 4
+# v5 (ADR 0016): `account_positions` (every symbol) and Position.swap, read by the equity cross-check only. A v5
+# brain calls a method a v4 bridge lacks, so MIN_COMPATIBLE = 5 names the v4 bridge (entries refused
+# bridge_incompatible, exits unaffected): deploy the MT5 box first. A v4 brain drops the unknown swap field.
+API_VERSION = 5
+MIN_COMPATIBLE = 5
 _RECORDS: dict[str, type[BaseModel]] = {"SymbolInfo": SymbolInfo, "AccountInfo": AccountInfo, "Tick": Tick, "OrderResult": OrderResult,
             "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent, "TradingSession": TradingSession}
 # Any change to these records' fields goes to the trading-safety reviewer (AGENT_STANDARDS S12): responses are read
@@ -410,6 +414,9 @@ class RemoteBroker:
 
     def positions(self, magic_prefix: int | None = None) -> list[Position]:
         return self._call("positions", magic_prefix)
+
+    def account_positions(self) -> list[Position]:
+        return self._call("account_positions")
 
     def deals_since(self, since_utc: pd.Timestamp) -> pd.DataFrame:
         return self._call("deals_since", since_utc)

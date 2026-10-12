@@ -68,6 +68,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | proposed (security re-verify of BACKLOG 47, 2026-10-11) |
 | 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | implemented (security and trading-safety review pending; A14) |
 | 53 | The phase gates compare paper and live with the deployed model's own trial | Roadmap gates (P7) · VERIFY | M | proposed (review of 978c667, 2026-10-12) |
+| 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | proposed (trading-safety review of BACKLOG 44, 2026-10-12; needs trading-safety review) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -629,6 +630,13 @@ hypotheses that go through the trial registry in a future quarter's budget.
     the broker's stops are resting;
   - tests: a single zero-equity read never closes a position; two consecutive real 12% reads close everything as
     today.
+  - **Done 2026-10-11:** ADR 0016; `RiskSettings.equity_check_tolerance`, `AccountState.equity_unconfirmed`,
+    runner `_equity_unconfirmed` (re-read on the next tick), gate reason `equity_unconfirmed`; tests in
+    `tests/test_equity_confirmation.py` (TRACEABILITY R39).
+  - **Review fixes 2026-10-12 (trading-safety review of d2f2999):** HIGH-1 pending is sticky until 60 s below 10%
+    (`risk.equity_recovery_s`); MEDIUM-2 the cross-check counts swap and every symbol (`account_positions`, bridge
+    protocol v5); LOW-4 pending persisted in the risk state; LOW-3 declined with a test (ADR 0016). Follow-up: 53.
+    Awaiting trading-safety re-review.
 - **45. Measure the holiday list before it is adopted (performance analyst; review M3, 2026-10-11).** Value: the
   holiday window (item 17, `config/holidays_cme_metals.yaml`) is a proxy, not a measurement; blocking entries on a
   day that trades normally costs signals for nothing. Do: for every listed day in the stored ticks and bars, the
@@ -727,6 +735,22 @@ hypotheses that go through the trial registry in a future quarter's budget.
   reference; a test that the reference is the champion's promotion trial and that its gate pass is required; a
   test that gate 1 shows which trial count the DSR was deflated by; trading-safety and quant review (phase-gate
   inputs).
+- **54. Confirm increases in balance_closed_hwm (trading-safety review of BACKLOG 44, 2026-10-12).** Value: the
+  drawdown stages measure equity against `balance_closed_hwm`, which `_refresh_account` raises on every read
+  (`max(hwm, balance)`) and saves. One inflated balance read (a glitch, a half-filled account struct) raises the
+  high-water mark for good. Every later real read then looks like a drawdown: size-down at 8% and, with ADR 0016's
+  two reads, a phantom 12% kill switch that closes everything at market and needs a 40-day re-arm. ADR 0016 confirms
+  a collapsed equity read but trusts any balance read that raises the mark. Acceptance:
+  - a rise in `balance_closed_hwm` is applied only once confirmed: by the deal history (closed deals and balance
+    operations since the last mark account for the rise within a tolerance), or by a second balance read that agrees;
+    one disagreeing read never raises it, two agreeing reads always do;
+  - a deposit (a balance operation in the deal history) is handled explicitly and the choice recorded in ADR 0016 or a
+    new ADR (raise the mark, or not);
+  - the mark is never lowered by this rule (only `/rearm` resets it), and a refused rise is logged and recorded as a
+    decision;
+  - tests: a single inflated balance read leaves the mark unchanged and causes no size-down or halt on the next real
+    reads; two agreeing reads, or a read the deal history explains, raise it as today; a restart between the two reads
+    does not apply an unconfirmed rise.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.
