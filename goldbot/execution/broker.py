@@ -83,6 +83,9 @@ class Position(Record):
     comment: str
     open_time_utc: pd.Timestamp
     profit: float
+    # MT5 TradePosition.swap, account currency (profit excludes it); None = not reported (paper, a v4 bridge). Only the
+    # equity cross-check reads it (ADR 0016); it never carries an outcome or a restriction (AGENT_STANDARDS S12)
+    swap: float | None = None
 
 
 class AccountInfo(Record):
@@ -124,4 +127,5 @@ class Broker(Protocol):
     def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult: ...
     def close(self, position_id: int, lots: float | None = None) -> OrderResult: ...
     def positions(self, magic_prefix: int | None = None) -> list[Position]: ...
+    def account_positions(self) -> list[Position]: ...   # every symbol: the equity cross-check only (ADR 0016)
     def deals_since(self, since_utc: pd.Timestamp) -> pd.DataFrame: ...

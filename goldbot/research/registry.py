@@ -185,12 +185,23 @@ def quarter_trials(rows: list[dict[str, Any]], quarter: str) -> int:
     return n
 
 
-def _costs_charged(results: dict[str, Any]) -> bool:
+def costs_recorded(results: dict[str, Any]) -> bool:
     """The result records the research cost treatment: the swap it charged (`swap`, a SwapSpec dump) and a stated cost
-    source (`cost_source`, e.g. "PRIORS ONLY: ..." or the cost table it used); `passed_gates`."""
+    source (`cost_source`, e.g. "PRIORS ONLY: ..." or the cost table it used)."""
     swap = results.get("swap")
     source = results.get("cost_source")
     return isinstance(swap, dict) and "long_usd_per_lot" in swap and isinstance(source, str) and bool(source.strip())
+
+
+def gate_pass_counts(row: dict[str, Any]) -> bool:
+    """The row's recorded gate pass counts: `results.gates.passed` is True AND the row records the research cost
+    treatment (`costs_recorded`). The one predicate every reader of results.gates.passed uses (passed_gates, the phase
+    gate's backtest evidence, gap watch, CPCV, the director's slots). Quant review, 2026-10-11: "A pass from before
+    swap was charged is not a pass of the swap-charged configuration." Status is the caller's to check."""
+    results = row.get("results")
+    if not isinstance(results, dict):
+        return False
+    return (results.get("gates") or {}).get("passed") is True and costs_recorded(results)
 
 
 class TrialRegistry:
@@ -599,9 +610,8 @@ class TrialRegistry:
         h = config_hash(config)
         rows = [r for r in self._rows() if r.get("family") == family and r.get("config_hash") == h
                 and (feature_version is None or r.get("feature_version") == feature_version)
-                and _costs_charged(r.get("results") or {})]
-        gates_ok = any(r.get("status") == "evaluated"
-                       and ((r.get("results") or {}).get("gates") or {}).get("passed") is True for r in rows)
+                and costs_recorded(r.get("results") or {})]
+        gates_ok = any(r.get("status") == "evaluated" and gate_pass_counts(r) for r in rows)
         if not gates_ok or not config.get(FROM_DISCOVERY_KEY):
             return gates_ok
         return any(r.get("status") == "holdout"

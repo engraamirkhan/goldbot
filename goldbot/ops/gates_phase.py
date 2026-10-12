@@ -61,6 +61,7 @@ from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, load_record_json
 from goldbot.config import GateSettings, Settings
 from goldbot.ops.accounts import GATES
 from goldbot.research.metrics import max_drawdown
+from goldbot.research.registry import costs_recorded, gate_pass_counts
 
 CLOSED_TRADES_FILE = "closed_trades.jsonl"
 EVIDENCE_FILE = "gate_evidence.json"
@@ -226,6 +227,17 @@ def load_closed_trades(state_dir: Path) -> tuple[list[ClosedTrade], str | None]:
     return out, None
 
 
+def pnl_basis(t: ClosedTrade) -> Literal["net", "gross"] | None:
+    """"net" | "gross" from the record's `pnl_basis`; a legacy row without it is net only when it records both
+    commission and swap (the broker's deals, net of every cost); anything else is not recorded (perf_report, quant
+    review of 207c9ef item 1). Every report sums only "net" rows as net: "nothing gross is labelled net"."""
+    if t.pnl_basis is not None:
+        return t.pnl_basis
+    if t.commission is not None and t.swap is not None:
+        return "net"
+    return None
+
+
 def closed_trade_file(state_dir: Path, account_id: str) -> Path:
     """One record file per account: two engines never append to the same file (on Windows an O_APPEND write is a
     seek plus a write, not atomic, so concurrent closes could overwrite each other; trading-safety review)."""
@@ -324,11 +336,15 @@ def _trial_rows(path: Path) -> list[dict[str, Any]]:
 
 
 def best_backtest_trial(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The evaluated walk-forward trial (never a holdout scoring) with the highest model-filtered DSR."""
+    """The evaluated walk-forward trial (never a holdout scoring) with the highest model-filtered DSR, among rows that
+    record the research cost treatment (`registry.costs_recorded`: the swap charged and the cost source stated). Quant
+    review, 2026-10-11: "A pass from before swap was charged is not a pass of the swap-charged configuration", so a
+    pre-swap row is not backtest evidence for the backtest -> paper gate, whatever its DSR."""
     def dsr(r: dict[str, Any]) -> float:
         v = ((r.get("results") or {}).get("model_filtered") or {}).get("dsr")
         return float(v) if v is not None else -1.0
-    cands = [r for r in rows if r.get("status") == "evaluated" and (r.get("results") or {}).get("model_filtered")]
+    cands = [r for r in rows if r.get("status") == "evaluated" and (r.get("results") or {}).get("model_filtered")
+             and costs_recorded(r.get("results") or {})]
     return max(cands, key=dsr) if cands else None
 
 
@@ -444,8 +460,12 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     rows = _trial_rows(trials_path if trials_path is not None else _registry_path(state_dir, settings))
     best = best_backtest_trial(rows)
     mf = ((best or {}).get("results") or {}).get("model_filtered") or {}
-    bt_mean = float(mf["mean_ret"]) if mf.get("mean_ret") is not None else None
-    bt_dd = float(mf["max_dd"]) if mf.get("max_dd") is not None else None
+    # the backtest reference for paper expectancy and live drawdown is the best trial only when it passed the research
+    # gates with its costs recorded (gate_pass_counts): a trial that failed them is no reference, so the comparator can
+    # never silently switch to an unrelated trial and pass (review of 978c667)
+    best_ok = best is not None and gate_pass_counts(best)
+    bt_mean = float(mf["mean_ret"]) if best_ok and mf.get("mean_ret") is not None else None
+    bt_dd = float(mf["max_dd"]) if best_ok and mf.get("max_dd") is not None else None
 
     paper_start, live_start = when.get("backtest_to_paper"), when.get("paper_to_tiny_live")
     paper = [t for t in trades if t.mode == "demo" and (paper_start is None or t.exit_utc >= paper_start)]
@@ -471,7 +491,14 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     years = gchecks.get("positive_years") or {}
     spread_tables = [c for c in _cost_tables(state_dir) if int(c.get("n_ticks") or 0) > 0 and c.get("spread")]
     trial = f"trial #{best.get('trial')} ({best.get('family')})" if best else "no evaluated trial"
+    failed_checks = [str(n) for n, c in gchecks.items() if not c.get("passed")]
+    research_ev = (f"{trial} passed the research gates" if best_ok else
+                   f"{trial} did not pass the research gates"
+                   + (f" (failed: {', '.join(failed_checks)})" if failed_checks else "") if best else trial)
+    reference = f"{trial}" + ("" if best_ok or best is None else ", which did not pass the research gates: no reference")
     items = _previous(1, passed) + [
+        GateItem(name="research_gates", met=best_ok, evidence=research_ev,
+                 need="the trial passed the design's research gates with swap charged and its cost source stated"),
         GateItem(name="dsr", met=dsr is not None and float(dsr) >= cfg.backtest_min_dsr,
                  evidence=f"{_fmt(float(dsr) if dsr is not None else None, '.3f')} at {trial}; registry now holds {len(rows)} trials",
                  need=f">= {cfg.backtest_min_dsr} on the true trial count"),
@@ -497,7 +524,7 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
         GateItem(name="paper_days", met=p_days >= cfg.paper_min_days, evidence=f"{p_days:.0f} days since backtest_to_paper",
                  need=f">= {cfg.paper_min_days} days"),
         GateItem(name="paper_expectancy", met=within(p_mean, bt_mean, cfg.paper_expectancy_within),
-                 evidence=f"paper {_fmt(p_mean)} vs backtest {_fmt(bt_mean)} per trade",
+                 evidence=f"paper {_fmt(p_mean)} vs backtest {_fmt(bt_mean)} per trade ({reference})",
                  need=f"no more than {cfg.paper_expectancy_within:.0%} below a positive backtest expectancy"),
         GateItem(name="fills", met=slip is not None and slip[0] <= (1 + cfg.paper_fills_within) * slip[1],
                  evidence=(f"measured slippage ${slip[0]:.3f}/oz on {slip[2]} fills vs modelled ${slip[1]:.3f}"
@@ -531,7 +558,7 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
                  evidence=f"live {_fmt(l_mean)} vs paper {_fmt(p_mean)} per trade",
                  need=f"no more than {cfg.live_expectancy_within:.0%} below a positive paper expectancy"),
         GateItem(name="live_drawdown", met=l_dd is not None and bt_dd is not None and l_dd < cfg.live_dd_mult * bt_dd,
-                 evidence=f"live max drawdown {_fmt(l_dd, '.4f')} vs backtest {_fmt(bt_dd, '.4f')}",
+                 evidence=f"live max drawdown {_fmt(l_dd, '.4f')} vs backtest {_fmt(bt_dd, '.4f')} ({reference})",
                  need=f"under {cfg.live_dd_mult}x backtest"),
         GateItem(name="brokers_agree", met=brokers_ok,
                  evidence=", ".join(f"{b} {len(ts)} trades {_fmt(means[b])}" for b, ts in by_broker.items()) or "no live trades",

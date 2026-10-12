@@ -1,7 +1,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 import pytest
@@ -754,3 +754,55 @@ def test_a_bridged_terminal_needs_the_bridge_token_not_the_mt5_password(tmp_path
     ctx = make_ctx(tmp_path, secrets={"telegram-bot-token"})
     c = health.check_secrets(ctx)
     assert c.status == "fail" and "mt5-icm-demo" in c.reason and "bridge" in c.reason
+
+
+# ---------------------------------------------------------------------------------------------- pnl_basis
+def _closed_rows(tmp_path: Path, bases: list[Literal["net", "gross"] | None], days_ago: float = 1.0, start_pid: int = 0) -> None:
+    from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade
+    for i, b in enumerate(bases):
+        append_closed_trade(tmp_path, ClosedTrade(
+            account_id="icm-demo", broker="icm", mode="demo", exit_utc=NOW - pd.Timedelta(days=days_ago), ret=0.0,
+            pnl=1.0, equity_before=1000.0, position_id=start_pid + i, pnl_basis=b))
+
+
+def test_pnl_basis_is_ok_with_no_closed_trades_in_the_window(tmp_path):
+    c = health.check_pnl_basis(make_ctx(tmp_path), "icm-demo")
+    assert (c.name, c.status) == ("pnl_basis:icm-demo", "ok") and "no closed trades" in c.reason
+
+
+def test_pnl_basis_is_ok_at_the_threshold_of_one_gross_trade_in_five(tmp_path):
+    _closed_rows(tmp_path, ["net", "net", "net", "net", "gross"])                # 20%: not more than 20%
+    c = health.check_pnl_basis(make_ctx(tmp_path), "icm-demo")
+    assert c.status == "ok" and "1 of 5" in c.reason
+
+
+def test_pnl_basis_warns_when_more_than_a_fifth_of_last_30_days_trades_are_not_net(tmp_path):
+    _closed_rows(tmp_path, ["net", "net", "gross", None])                        # a legacy row without costs counts too
+    c = health.check_pnl_basis(make_ctx(tmp_path), "icm-demo")
+    assert c.status == "warn"
+    assert c.reason.startswith("2 of 4 closed trades in the last 30 d (50%) are gross only (costs not recorded)")
+    assert "> 20%" in c.reason
+
+
+def test_pnl_basis_ignores_trades_older_than_30_days_and_other_accounts(tmp_path):
+    _closed_rows(tmp_path, ["gross", "gross", "gross"], days_ago=31)
+    _closed_rows(tmp_path, ["net"], start_pid=10)
+    from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade
+    append_closed_trade(tmp_path, ClosedTrade(account_id="other", broker="icm", mode="demo", exit_utc=NOW, ret=0.0,
+                                              pnl=1.0, equity_before=1000.0, position_id=99, pnl_basis="gross"))
+    assert health.check_pnl_basis(make_ctx(tmp_path), "icm-demo").status == "ok"
+
+
+def test_pnl_basis_never_fails_even_when_every_trade_is_gross_or_the_record_is_unreadable(tmp_path):
+    _closed_rows(tmp_path, ["gross"] * 6)
+    assert health.check_pnl_basis(make_ctx(tmp_path), "icm-demo").status == "warn"
+    from goldbot.ops.gates_phase import closed_trade_file
+    with closed_trade_file(tmp_path, "icm-demo").open("a") as fh:
+        fh.write("{torn\n")
+    c = health.check_pnl_basis(make_ctx(tmp_path), "icm-demo")
+    assert c.status == "warn" and "unreadable" in c.reason
+
+
+def test_pnl_basis_runs_for_every_account_in_the_full_report(tmp_path):
+    names = {c.name: c for c in health.run_checks(make_ctx(tmp_path)).checks}
+    assert names["pnl_basis:icm-demo"].status == "ok"

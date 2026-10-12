@@ -5,6 +5,16 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Health checks split into modules with a registry (2026-10-12, speed-up review item 7; no behaviour change).
+  goldbot/ops/health.py had grown to about 1,770 lines and was the place every lane appended a check, so merges kept
+  colliding there. The checks now live in goldbot/ops/checks/, one module per area (engine, bridge, feeds, risk,
+  services, auth, operations), and shared thresholds and helpers are in `_base.py`. Each check registers itself with
+  `@register_check(scope, block=, pos=)`. `run_checks` walks the registry in an explicit (block, position) order, so
+  the report order does not depend on import order (goldbot/ops/checks/registry.py explains the blocks).
+  goldbot/ops/health.py keeps the context, report, heartbeats, alerts and CLI, and re-exports every check, threshold
+  and helper it had. Checks are called through it, so patching `health.check_x` still works. To add a check, edit
+  only its area module. Tests: tests/test_health_registry.py compares names, statuses, reasons and order against a
+  golden file captured from the old hand-written `run_checks`.
 - Who decided or halted is kept only in the audit log (security follow-up to BACKLOG 52, TRACEABILITY A15;
   2026-10-12).
   - The decision file (`approvals/decisions/<id>.json`) and the halt and re-arm in `control.json` now record only
@@ -154,6 +164,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   restart reconciles with the broker as usual. On the MT5 box, `goldbot-bridge-watchdog@.timer` restarts a bridge
   that stops answering `GET /health`. Hosts set up earlier need the units reinstalled, then the rollback floor set
   to this commit: RUNBOOK "Engine loop stuck, and the watchdogs". Tests: tests/test_engine_watchdog.py.
+- Equity confirmation before the 12% kill switch (BACKLOG 44, ADR 0016, TRACEABILITY R39; revised after the
+  trading-safety review of d2f2999; needs trading-safety re-review). A 12% equity read trips at once when the balance
+  plus the profit and swap of every position on the account agrees within 2% of the high-water mark
+  (`risk.equity_check_tolerance`). Otherwise it starts a sticky pending state: entries are refused
+  `equity_unconfirmed`, no stage moves, the account is re-read on the next tick, and any later 12% read trips. Pending
+  clears only after 60 s of reads below 10% (`risk.equity_recovery_s`) and survives a restart. One bad read (0 or
+  collapsed) no longer closes every position at market. Exits are never gated; broker stops keep resting meanwhile.
+  Bridge protocol v5 (`account_positions`, `Position.swap`): deploy the MT5 box first, then the brain (entries pause
+  until both run v5). Follow-up: BACKLOG 53 (confirm high-water-mark rises).
 - The record now carries what the monthly finance audit needs (2026-10-11, docs/finance/audit-framework.md gaps
   GAP-01/02/03/04/05/10/13; TRACEABILITY X18). `ClosedTrade` gains `decision_price`, `decision_spread_points` and
   `decision_utc` (the signal, from the proposal) next to `requested_price` (the quote the order was priced from: in
@@ -188,6 +207,37 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 
   Follow-ups: Cloudflare Tunnel with Access; an outside dead man's switch (alerts come only from the brain); a
   main-loop engine heartbeat (a hung engine shows as stale only after 45 min).
+- **Monthly report and daily digest: net means net (2026-10-11; finance audit GAP-05, quant review pending).**
+  Before this, `goldbot/ops/monthly_report.py` and `goldbot/telegram/digest.py` added every closed trade's P&L into
+  "net", including rows whose commission and swap were never recorded. They now use the same rule as
+  `perf_report.py`. The rule lives in one place, `gates_phase.pnl_basis`; `perf_report` imports it from there.
+  - **Net figures use net rows only.** A net row has `pnl_basis` "net", or is a legacy row that records both
+    commission and swap. This covers money, R, the chained return, drawdown, best days, £50+ days, the average per
+    trading day and the digest's won/lost count.
+  - **Every other row is shown apart and summed as gross.** That is `pnl_basis` "gross", or a legacy row without both
+    costs. The wording is "N trades gross only (costs not recorded)", with the gross money and R. The monthly report
+    adds "left out of every figure above", the month-so-far line adds "not summed", and a day with only gross rows
+    says "net not recorded". No gross figure carries the word net.
+  - **Change the owner will see.** Trades from the engine's own fills, where no broker deals were read, have
+    `money_source` "engine" and no costs. They now show as gross only and leave the net totals. So do legacy records
+    from before the closed-trade record carried commission and swap. Net totals can therefore drop compared with
+    yesterday's digest.
+  - **Day convention, stated in the report.** A day is the UTC calendar day, 00:00-24:00. That is the risk day on
+    which the loss caps reset (`risk_day_anchor`) and the digest's "yesterday" (`MonthlyReport.day_boundary`, the
+    report's second line). `perf_report` uses the opportunity day, which rolls at 22:00 UTC, so a close between 22:00
+    and 24:00 UTC falls on different days in the two reports. We kept the UTC day so that the monthly £50 days line up
+    with the daily loss cap and the digest.
+  - **New health check `pnl_basis:<account>`.** It WARNs when more than 20% of the account's closed trades over the
+    last 30 days (by exit) are not net (`PNL_BASIS_GROSS_WARN_PCT`, `PNL_BASIS_WINDOW_DAYS`). It never FAILs, even
+    on an unreadable record, and it does not notify on WARN. Why 20%: past one trade in five, the net totals cover
+    too little of the month's trading to be read as its result. The usual cause is an unreadable broker deal history
+    (check the bridge).
+  - **Not changed (flagged for the quant reviewer).** `gates_phase` (the phase gates and the stop rule's loss
+    series), `research/ruin.py` and `ops/ledger.py` still read every row's `pnl` without regard to its basis. The
+    phase gate is out of bounds for this change.
+  - Tests: tests/test_monthly_report.py (6 new), tests/test_digest.py (2 new), tests/test_health.py (6 new). Net
+    fixtures in tests/test_currency_followups.py, tests/test_excursion.py and tests/test_sizing_review_fixes.py now say
+    `pnl_basis="net"`. Two sizing-review assertions on engine-fill trades now expect those trades as gross only.
 - Owner-only email sign-in link and clearer sign-in screens (owner request 2026-10-11; TRACEABILITY U20). The login
   page now titles each flow (Sign in, Reset your password, Email me a sign-in link, Finish signing in, Set a new
   password), shows **Forgot password?**, **Email me a sign-in link** (only when the server has mail configured) and
@@ -1281,6 +1331,31 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - No owner confirmation needed.
   - `count_owed_events`' `daily_floor` is being renamed `retire_floor` in another lane; the withdrawal tests read it.
   - Reasoning in `docs/research/preregistration-2027Q1.md` ("Research director decision") and the October scorecard.
+- **Quant review follow-ups to the Q1 fixes (2026-10-11; M46; quant review and trading-safety review pending).**
+  **One gate-pass predicate:** `registry.gate_pass_counts(row)` (gates passed AND `results.swap` and
+  `results.cost_source` recorded) replaces every hand-rolled read of `results.gates.passed`: `passed_gates`, gap
+  watch's research-ready founders, the quarterly CPCV job, `research_pass.py --cpcv` (a pre-swap pass is refused as
+  failed) and the director's survivor/holdout slots. **Phase gate input:** `gates_phase.best_backtest_trial` (the
+  backtest -> paper evidence: DSR, trade count, positive years) now ignores rows without the cost treatment whatever
+  their DSR; with only pre-swap rows the gate shows "no evaluated trial" until a swap-charged walk-forward is run.
+  Gate 1 also requires the new item `research_gates` (that trial's own `gate_pass_counts`; the evidence names any
+  failed checks), and `paper_expectancy` / `live_drawdown` name their comparator trial and have no backtest
+  reference (not met) unless it passed the gates (review of 978c667). Tying the comparator to the deployed model's
+  own trial is BACKLOG 53. The research view shows a recorded pass without its cost treatment as
+  `pre-swap: not counted` (`TrialRow.pre_swap`; `gates_passed` is false for it; API contract regenerated).
+  **Holdout rows without cost recording are filtered and cannot be re-scored:** a survivor's holdout pass recorded
+  before swap was charged no longer counts for `passed_gates`, and `holdout_scored` still refuses a second scoring of
+  that configuration (the holdout is spent), so such a configuration cannot be promoted through a discovery holdout;
+  it needs a new pre-registered configuration. **Data pins per row:** `preregister_quarter.py --bars` now pins each
+  queued row's data-v1 files from the year of its `bars_from` (every research-window file for a row without one) and
+  records `plan.data_years`; the runners still refuse any file read but not pinned or pinned but not read, so H-02
+  runs with `--from-year` = its `bars_from` year (the refusal names the row's pinned years). No Q1 row has been
+  written yet (checked 2026-10-12: research-v1's registry.jsonl has 20 rows, none for 2027Q1, none preregistered;
+  the spec still has `freeze_commit: null` and H-02/H-06 pending, so the writer refuses). **Any queued row written
+  before per-row pinning must be withdrawn (`TrialRegistry.withdraw`) and rewritten before the quarter starts**:
+  its plan pins every file from data-v1's first year and has no `data_years`. **Owed counts:** H-06's
+  `daily_floor` / `below_floor` are now `retire_floor` / `below_retire_floor` (compat: older owed_counts.json use the
+  old names), and the report states that 150 is the retire floor and a pass needs `screen_min_events` (1,000).
 - H-02 method text made executable (2026-10-11, quant review F1 of the registry writer, before any outcome).
   `docs/research/preregistration-2027Q1.md` H-02 now says:
   - the candidates are tsmom's, variant `{"timeframe": "4h", "max_bars": 12}`: |mean of the 1/5/20-day vol-scaled

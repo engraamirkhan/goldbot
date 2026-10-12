@@ -57,7 +57,7 @@ def test_a_fresh_engine_clears_the_flag(tmp_path):
 def _trade(pnl: float, pnl_currency: str | None, pid: int, account: str = "icm-demo", r: float | None = 0.5,
            at: pd.Timestamp = T0) -> ClosedTrade:
     return ClosedTrade(account_id=account, broker="icm", mode="demo", exit_utc=at, ret=0.001, pnl=pnl,
-                       equity_before=1_000.0, position_id=pid, r=r, pnl_currency=pnl_currency)
+                       equity_before=1_000.0, position_id=pid, r=r, pnl_currency=pnl_currency, pnl_basis="net")
 
 
 def _state(d: Path, currencies: dict[str, str | None]) -> None:

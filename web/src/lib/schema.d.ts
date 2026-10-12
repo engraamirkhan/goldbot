@@ -2026,6 +2026,11 @@ export interface components {
             net_r: number | null;
             /** Net T */
             net_t: number | null;
+            /**
+             * Pre Swap
+             * @default false
+             */
+            pre_swap: boolean;
             /** Rationale */
             rationale: string;
             /** Status */

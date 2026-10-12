@@ -129,7 +129,12 @@ from goldbot.research.pipeline import (  # noqa: E402
     research_feature_names,
     run_pool,
 )
-from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, quarter_of  # noqa: E402
+from goldbot.research.registry import (  # noqa: E402
+    TrialBudgetExceeded,
+    TrialRegistry,
+    gate_pass_counts,
+    quarter_of,
+)
 from goldbot.research.screen import (  # noqa: E402
     is_inconclusive,
     rule_only_split,
@@ -299,7 +304,8 @@ def queued_digest_refusal(rows: list[dict[str, Any]], quarter: str, targets: lis
     """Why this run may not go on, or None: a pending queued row of `quarter` that the run could match (each target's
     family and agent, None: the family alone; `director.queued_rows_for`) pins data-v1 sha256 digests (BACKLOG 50) and
     the research-window files the run reads from `bars` (years `from_year`..min(`to_year`, holdout year)) are not
-    exactly those (a refresh or re-pull after the write, another --from-year). Checked before any look."""
+    exactly those (a refresh or re-pull after the write, another --from-year). A row pins the files from the year of
+    its bars_from (`plan.data_years`), so its run reads from that year. Checked before any look."""
     last = min(int(to_year), holdout_from.year) if holdout_from is not None else int(to_year)
     for family, agent in targets:
         for row in queued_rows_for(rows, quarter, family, agent):
@@ -309,9 +315,11 @@ def queued_digest_refusal(rows: list[dict[str, Any]], quarter: str, targets: lis
             why = bar_digest_refusal(pinned, Path(bars), int(from_year), last)
             if why:
                 spec_id = (row.get("plan") or {}).get("spec_id")
+                years = (row.get("plan") or {}).get("data_years")
+                span = f"; the row pins years {years[0]}-{years[1]} (--from-year {years[0]})" if years else ""
                 return (f"{family}: the pending queued row #{row.get('trial')}{f' ({spec_id})' if spec_id else ''} "
-                        f"pins data-v1 sha256 digests that the bars in {bars} do not match: {why}. The run would not "
-                        f"be the pre-registered one; restore the pinned files, or withdraw the row first")
+                        f"pins data-v1 sha256 digests that the bars in {bars} do not match: {why}{span}. The run would "
+                        f"not be the pre-registered one; restore the pinned files, or withdraw the row first")
     return None
 
 
@@ -833,7 +841,7 @@ def _cpcv(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, extra_
         if why:
             raise SystemExit(f"--cpcv: {why}")
         rows.append(row)
-    failed = [int(r["trial"]) for r in rows if not cpcv.gates_passed(r)]
+    failed = [int(r["trial"]) for r in rows if not gate_pass_counts(r)]     # a pre-swap pass is not a pass
     if failed and not getattr(args, "diagnostic", False):
         raise SystemExit(f"--cpcv: trial(s) {', '.join(map(str, failed))} failed the gates. CPCV and PBO can only veto a "
                          "config that passed them, never rescue one (docs/decisions/0003-cpcv-and-pbo-can-only-veto.md); "

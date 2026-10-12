@@ -23,9 +23,9 @@ const FULL: ResearchView = {
   trials_total: 2,
   trials: [
     { trial: 2, ts: "2026-10-05T00:00:00Z", family: "tsmom", timeframe: "1h", status: "evaluated", agent_id: "tsmom-x", gross_r: 0.061,
-      gross_t: 2.63, net_r: -0.079, net_t: -2.1, n: 900, gates_passed: false, gates, rationale: "H-01 slow TSMOM" },
+      gross_t: 2.63, net_r: -0.079, net_t: -2.1, n: 900, gates_passed: false, pre_swap: false, gates, rationale: "H-01 slow TSMOM" },
     { trial: 1, ts: "2026-10-01T00:00:00Z", family: "tsmom", timeframe: "1h", status: "holdout", agent_id: "tsmom-x", gross_r: null,
-      gross_t: null, net_r: null, net_t: null, n: null, gates_passed: true,
+      gross_t: null, net_r: null, net_t: null, n: null, gates_passed: true, pre_swap: false,
       gates: [{ name: "holdout", passed: true, detail: "mean R > 0" }], rationale: "holdout" },
   ],
   plan: { created_utc: "2026-09-01T00:00:00Z", stale: true, quarter: "2026Q4", quarter_budget: 20, quarter_used: 2, total_budget: 18,
@@ -65,6 +65,18 @@ describe("Research", () => {
     expect(rows[1]).toHaveTextContent("−0.079 (t -2.10)");
     expect(within(rows[1]).getByText("failed: dsr")).toHaveAttribute("title", expect.stringContaining("FAIL dsr: deflated Sharpe n/a"));
     expect(within(rows[2]).getByText("passed")).toBeInTheDocument();
+    expect(within(rows[1]).queryByText(/pre-swap/)).toBeNull();
+  });
+
+  it("marks a recorded gate pass from before swap was charged as pre-swap, not passed", async () => {
+    const preSwap = { ...FULL.trials[1], pre_swap: true, gates_passed: false };
+    vi.spyOn(apiModule.api, "research").mockResolvedValue({ ...FULL, trials: [preSwap] });
+    renderResearch();
+    const marker = await screen.findByText("pre-swap: not counted");
+    expect(marker).toHaveClass("state", "warn");
+    expect(marker).toHaveAttribute("title", expect.stringContaining("no swap charged or cost source recorded"));
+    expect(screen.queryByText("passed")).toBeNull();
+    expect(screen.queryByText(/^failed/)).toBeNull();
 
     expect(screen.getByText(/more than 21 days old/)).toBeInTheDocument();
     expect(screen.getByText("gross t 2.63")).toBeInTheDocument();

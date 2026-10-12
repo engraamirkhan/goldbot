@@ -1,0 +1,730 @@
+{
+ "healthy": [
+  [
+   "settings",
+   "ok",
+   "loaded"
+  ],
+  [
+   "accounts",
+   "ok",
+   "enabled: icm-demo"
+  ],
+  [
+   "secrets",
+   "ok",
+   "5 keys present"
+  ],
+  [
+   "disk",
+   "ok",
+   "50.0 GB free (50%) on the volume of data"
+  ],
+  [
+   "supervisor",
+   "ok",
+   "heartbeat 2 s"
+  ],
+  [
+   "owner_halt",
+   "ok",
+   "armed"
+  ],
+  [
+   "phase",
+   "ok",
+   "phase 0, no gate recorded (demo only)"
+  ],
+  [
+   "stop_rule",
+   "ok",
+   "0 pooled trades (needs > 500), 0.0 of 18.0 months, lower 90% bound n/a, worst single loss n/a (weekly cap 5.0%)"
+  ],
+  [
+   "phase_gates",
+   "ok",
+   "next gate foundation_to_backtest: not met (0/3 items; missing shuffle_auc, asof_violations, feed_mismatch_share)"
+  ],
+  [
+   "engine:icm-demo",
+   "ok",
+   "state 60 s old; stage normal"
+  ],
+  [
+   "risk:icm-demo",
+   "ok",
+   "stage normal"
+  ],
+  [
+   "engine_loop:icm-demo",
+   "ok",
+   "loop turning, last pass 5 s ago"
+  ],
+  [
+   "daily_cap:icm-demo",
+   "ok",
+   "icm-demo: daily loss 0.00% of day-start equity 0.00 (cap 2.0%)"
+  ],
+  [
+   "weekly_cap:icm-demo",
+   "ok",
+   "icm-demo: weekly loss 0.00% of week-start equity 0.00 (cap 5.0%)"
+  ],
+  [
+   "heartbeat:supervisor",
+   "ok",
+   "heartbeat 30 s"
+  ],
+  [
+   "heartbeat:scheduler",
+   "ok",
+   "heartbeat 30 s"
+  ],
+  [
+   "heartbeat:telegram",
+   "ok",
+   "heartbeat 30 s"
+  ],
+  [
+   "heartbeat:news",
+   "ok",
+   "heartbeat 30 s"
+  ],
+  [
+   "heartbeat:api",
+   "ok",
+   "heartbeat 30 s"
+  ],
+  [
+   "scheduler",
+   "ok",
+   "heartbeat 0 s"
+  ],
+  [
+   "job:agents_daily",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:agents_presession",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:agents_weekly",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:attribution",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:backup",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:broker_ledger",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:calendar_archive",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:calendar_archive_sunday",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:cpcv_quarterly",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:drift_watch",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:feed_reconcile",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:gap_watch",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:model_watch",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:monthly_research",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:nightly_costs",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:recalibrate",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:research_director",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:restore_drill",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:saturday_retrain",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:tournament",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "costs:icm-demo",
+   "ok",
+   "built 0.6 d ago"
+  ],
+  [
+   "pnl_basis:icm-demo",
+   "ok",
+   "no closed trades in the last 30 d"
+  ],
+  [
+   "reconcile:icm-demo",
+   "ok",
+   "no reconciliation yet (feed_reconcile has not run)"
+  ],
+  [
+   "data_quality",
+   "ok",
+   "no data-quality events recorded"
+  ],
+  [
+   "drift",
+   "ok",
+   "no drift report yet (no champion, or drift_watch not run)"
+  ],
+  [
+   "model_watch",
+   "ok",
+   "no champion watch report yet"
+  ],
+  [
+   "feature_versions",
+   "ok",
+   "no model registry yet"
+  ],
+  [
+   "deploy",
+   "ok",
+   "no deploy recorded yet"
+  ],
+  [
+   "backup_age",
+   "ok",
+   "last good backup 16.0 h ago"
+  ],
+  [
+   "backup_prune",
+   "ok",
+   "no retention run yet (monthly; run scripts/backup_retention.sh on your Mac (RUNBOOK 0.6))"
+  ],
+  [
+   "restore_drill",
+   "ok",
+   "last drill 3.0 d ago verified 9 files"
+  ],
+  [
+   "news",
+   "ok",
+   "1 feeds ok, last poll 0 s ago"
+  ],
+  [
+   "agent_spend",
+   "ok",
+   "2026-10: $0.00 of $40.00 (0%)"
+  ],
+  [
+   "approvals",
+   "ok",
+   "no proposal stuck past its window"
+  ],
+  [
+   "email_link",
+   "ok",
+   "no repeated sign-in link rate limiting"
+  ],
+  [
+   "alerts",
+   "ok",
+   "last pass 0 s ago"
+  ],
+  [
+   "deadman",
+   "ok",
+   "set; the Telegram service pings every 2 min while healthy, <url>/fail on a FAIL"
+  ]
+ ],
+ "healthy_static": [
+  [
+   "settings",
+   "ok",
+   "loaded"
+  ],
+  [
+   "accounts",
+   "ok",
+   "enabled: icm-demo"
+  ],
+  [
+   "secrets",
+   "ok",
+   "5 keys present"
+  ],
+  [
+   "disk",
+   "ok",
+   "50.0 GB free (50%) on the volume of data"
+  ]
+ ],
+ "busy": [
+  [
+   "settings",
+   "ok",
+   "loaded"
+  ],
+  [
+   "accounts",
+   "ok",
+   "enabled: icm-demo, icm-b"
+  ],
+  [
+   "secrets",
+   "warn",
+   "optional missing: anthropic-api-key, github-token, tradingview-webhook-secret (python -m goldbot.ops.accounts set <key>)"
+  ],
+  [
+   "disk",
+   "ok",
+   "50.0 GB free (50%) on the volume of <tmp>/data"
+  ],
+  [
+   "supervisor",
+   "ok",
+   "heartbeat 2 s"
+  ],
+  [
+   "owner_halt",
+   "warn",
+   "HALTED via owner (testing) since 2026-10-07 13:50 UTC; re-arm on the dashboard"
+  ],
+  [
+   "phase",
+   "ok",
+   "phase 0, no gate recorded (demo only)"
+  ],
+  [
+   "stop_rule",
+   "ok",
+   "6 pooled trades (needs > 500), 0.0 of 18.0 months, lower 90% bound 0.00000, worst single loss -0.10% (weekly cap 5.0%)"
+  ],
+  [
+   "phase_gates",
+   "ok",
+   "next gate foundation_to_backtest: not met (0/3 items; missing shuffle_auc, asof_violations, feed_mismatch_share)"
+  ],
+  [
+   "engine:icm-demo",
+   "ok",
+   "state 60 s old; stage normal"
+  ],
+  [
+   "risk:icm-demo",
+   "ok",
+   "stage normal"
+  ],
+  [
+   "engine_loop:icm-demo",
+   "ok",
+   "loop turning, last pass 5 s ago"
+  ],
+  [
+   "tick_errors:icm-demo",
+   "warn",
+   "tick error (cleared) 5 min ago, 2 since the engine started: the engine carried on, entries were blocked until a clean decision bar; read the engine log"
+  ],
+  [
+   "daily_cap:icm-demo",
+   "warn",
+   "DAILY LOSS CAP hit: icm-demo: daily loss 10.00% of day-start equity 10,000.00 (cap 2.0%): no new entries until it rolls"
+  ],
+  [
+   "weekly_cap:icm-demo",
+   "warn",
+   "WEEKLY LOSS CAP hit: icm-demo: weekly loss 10.00% of week-start equity 10,000.00 (cap 5.0%): no new entries until it rolls"
+  ],
+  [
+   "order_failed:icm-demo:p-bad",
+   "warn",
+   "FAILED_EXEC at 2026-10-07 13:00 UTC: account icm-demo, BUY 0.2 lots, agent trend-0, retcode ?"
+  ],
+  [
+   "throttle:icm-demo:mr-1",
+   "ok",
+   "icm-demo mr-1: not throttled (streak 0, 0 entries today, cooldown until n/a)"
+  ],
+  [
+   "throttle:icm-demo:trend-0",
+   "fail",
+   "icm-demo trend-0: entries throttled: throttle_loss_streak (streak 3, 1 entries today, cooldown until n/a); the block cannot lift by itself; exits unaffected"
+  ],
+  [
+   "open_risk:icm-demo",
+   "warn",
+   "icm-demo: open risk unknown (a position without a stop, no conversion, or a failed read): every entry refused while the heat cap is on; exits unaffected"
+  ],
+  [
+   "entry_windows:icm-demo:calendar",
+   "fail",
+   "icm-demo: calendar_unavailable since 2026-10-07 12:00 UTC (no store): entries refused, exits unaffected"
+  ],
+  [
+   "entry_windows:icm-demo:calendar_age",
+   "warn",
+   "icm-demo: newest calendar fetch never is over 36 h old; check the calendar_archive job"
+  ],
+  [
+   "entry_windows:icm-demo:holiday_list",
+   "warn",
+   "icm-demo: holiday list cme-metals-v2 valid through 2026-11-30 (54 d); extend config/holidays_cme_metals.yaml or every entry is refused after it"
+  ],
+  [
+   "schema_skew:icm-demo",
+   "warn",
+   "icm-demo: schema_skew block unreadable (ValidationError)"
+  ],
+  [
+   "bridge:icm-demo",
+   "ok",
+   "bridge answers /health"
+  ],
+  [
+   "bridge_compat:icm-demo",
+   "warn",
+   "/health unreadable (RuntimeError): compatibility not checked (no ticks either: the stale-data rule blocks entries)"
+  ],
+  [
+   "server_clock:icm-demo",
+   "ok",
+   "server clock UTC+3 matches Europe/Athens (tick 2 s old)"
+  ],
+  [
+   "engine:icm-b",
+   "fail",
+   "engine state unreadable: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+  ],
+  [
+   "risk_state:icm-b",
+   "fail",
+   "the check raised DateParseError: its state file is corrupt or the check has a bug (health log)"
+  ],
+  [
+   "engine_loop:icm-b",
+   "warn",
+   "engine starting for 2 min (reconcile, warm start)"
+  ],
+  [
+   "server_clock:icm-b",
+   "warn",
+   "not measured: latest tick unreadable (ValueError)"
+  ],
+  [
+   "schema_skew:svc:telegram",
+   "warn",
+   "telegram: schema_skew block unreadable: the process could not build it (RuntimeError; see its log)"
+  ],
+  [
+   "schema_skew:svc:api",
+   "warn",
+   "api: schema_skew block unreadable (ValidationError)"
+  ],
+  [
+   "heartbeat:supervisor",
+   "ok",
+   "heartbeat 30 s"
+  ],
+  [
+   "heartbeat:scheduler",
+   "ok",
+   "heartbeat 30 s"
+  ],
+  [
+   "heartbeat:telegram",
+   "ok",
+   "heartbeat 30 s"
+  ],
+  [
+   "heartbeat:news",
+   "fail",
+   "news silent for 15 min (> 5 min): service down?"
+  ],
+  [
+   "heartbeat:api",
+   "ok",
+   "heartbeat 30 s"
+  ],
+  [
+   "scheduler",
+   "ok",
+   "heartbeat 0 s"
+  ],
+  [
+   "job:agents_daily",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:agents_presession",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:agents_weekly",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:attribution",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:backup",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:broker_ledger",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:calendar_archive",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:calendar_archive_sunday",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:cpcv_quarterly",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:drift_watch",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:feed_reconcile",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:gap_watch",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:model_watch",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:monthly_research",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:nightly_costs",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:recalibrate",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:research_director",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:restore_drill",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:saturday_retrain",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:tournament",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "costs:icm-demo",
+   "ok",
+   "built 0.6 d ago"
+  ],
+  [
+   "pnl_basis:icm-demo",
+   "warn",
+   "2 of 4 closed trades in the last 30 d (50%) are gross only (costs not recorded), > 20%: the net totals leave them out (check the broker's deal history)"
+  ],
+  [
+   "costs:icm-b",
+   "warn",
+   "built 5.0 d ago"
+  ],
+  [
+   "pnl_basis:icm-b",
+   "ok",
+   "0 of 2 closed trades in the last 30 d (0%) are gross only (costs not recorded)"
+  ],
+  [
+   "reconcile:icm-demo",
+   "ok",
+   "no reconciliation yet (feed_reconcile has not run)"
+  ],
+  [
+   "reconcile:icm-b",
+   "ok",
+   "no reconciliation yet (feed_reconcile has not run)"
+  ],
+  [
+   "costs:published",
+   "warn",
+   "cost table never published to release costs-v1: research charges the priors"
+  ],
+  [
+   "data_quality",
+   "ok",
+   "no data-quality events recorded"
+  ],
+  [
+   "drift",
+   "warn",
+   "halted agents: trend-0"
+  ],
+  [
+   "model_watch",
+   "ok",
+   "no champion watch report yet"
+  ],
+  [
+   "feature_versions",
+   "ok",
+   "no model registry yet"
+  ],
+  [
+   "deploy",
+   "warn",
+   "rolled_back abcdef12 on brain at 2026-10-07T10:00:00Z: health worse"
+  ],
+  [
+   "backup_age",
+   "ok",
+   "last good backup 16.0 h ago"
+  ],
+  [
+   "backup_prune",
+   "ok",
+   "no retention run yet (monthly; run scripts/backup_retention.sh on your Mac (RUNBOOK 0.6))"
+  ],
+  [
+   "restore_drill",
+   "ok",
+   "last drill 3.0 d ago verified 9 files"
+  ],
+  [
+   "news",
+   "ok",
+   "1 feeds ok, last poll 0 s ago"
+  ],
+  [
+   "agent_spend",
+   "ok",
+   "2026-10: $9.50 of $40.00 (24%)"
+  ],
+  [
+   "approvals",
+   "warn",
+   "1 pending proposal(s) past their window, oldest p1 (14 min); the engine never archived them"
+  ],
+  [
+   "email_link",
+   "ok",
+   "no repeated sign-in link rate limiting"
+  ],
+  [
+   "alerts",
+   "ok",
+   "last pass 0 s ago"
+  ],
+  [
+   "deadman",
+   "ok",
+   "set; the Telegram service pings every 2 min while healthy, <url>/fail on a FAIL"
+  ]
+ ],
+ "busy_static": [
+  [
+   "settings",
+   "ok",
+   "loaded"
+  ],
+  [
+   "accounts",
+   "ok",
+   "enabled: icm-demo, icm-b"
+  ],
+  [
+   "secrets",
+   "warn",
+   "optional missing: anthropic-api-key, github-token, tradingview-webhook-secret (python -m goldbot.ops.accounts set <key>)"
+  ],
+  [
+   "disk",
+   "ok",
+   "50.0 GB free (50%) on the volume of <tmp>/data"
+  ]
+ ]
+}

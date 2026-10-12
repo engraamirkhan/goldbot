@@ -92,6 +92,13 @@ risk:
   # cannot carry the day past the limit (refused `daily_loss_limit_abs`; unknown open risk `open_risk_unknown`).
   # Entries only. OFF until the owner adopts it.
   project_open_risk: false
+  # Equity confirmation before the 12% kill switch (BACKLOG 44, ADR 0016): a read at 12% drawdown closes everything at
+  # once when the balance plus the open P&L agrees with the equity within this fraction of the high-water mark (2% =
+  # £20 on £1,000: room for swap, which the open P&L does not carry). A read that disagrees (a zero or collapsed equity
+  # from the terminal) refuses entries and is re-read on the next tick. It stays pending until every read has been
+  # below 12% minus the tolerance (10%) for equity_recovery_s seconds; any 12% read while pending trips.
+  equity_check_tolerance: 0.02
+  equity_recovery_s: 60
   # Reopen window (BACKLOG 17, playbook G-2): entries refused `reopen_window` for after_daily_reopen_min minutes after
   # each daily reopen and after_monday_open_min after the weekly open (or any reopen after a closure of 12 h or more),
   # read from the broker session table (DST follows the server clock). Entries only. OFF until the owner adopts it.
