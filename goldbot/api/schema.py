@@ -99,11 +99,14 @@ class DecidedProposal(Proposal):
 
     submitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;
     approved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);
-    rejected: with its reason code; expired: nobody decided within the window."""
+    rejected: with its reason code; expired: nobody decided within the window. `decided_channel` ("telegram" |
+    "dashboard") and `decided_ts` say how and when it was decided, never who (BACKLOG 52: identity is kept in the
+    auth audit log only)."""
     status: Literal["submitted", "approved", "rejected", "expired", "refused"]
     reason_code: Literal["news", "cost", "discretion", "duplicate", "other"] | None = None
     refusal: list[str] = []
-    decided_by: str | None = None
+    decided_channel: str | None = None
+    decided_ts: float | None = None         # epoch s, the decision's own clock; None for expired and older files
 
 
 class Decision(ApiRequest):

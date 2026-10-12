@@ -2,7 +2,7 @@
 
   engine.py      engine and loop: engine state, loop heartbeat, tick errors, failed orders
   bridge.py      MT5 bridge: /health, compatibility, broker server clock
-  feeds.py       feeds and data: costs, data quality, drift, model watch, feature versions, news, reconciliation
+  feeds.py       feeds and data: costs, P&L basis, data quality, drift, model watch, feature versions, news, reconciliation
   risk.py        risk and limits: supervisor, owner halt, risk state, phase and gates, loss caps, throttle, open
                  risk, entry windows
   services.py    services and heartbeats: scheduler and jobs, heartbeats, schema skew, approvals, alerts, dead man

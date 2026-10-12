@@ -13,7 +13,7 @@ its services the same way. A (block, pos) pair is taken once; a block has one sc
   BLOCK_SERVICE_SKEW     per service in SKEW_SERVICES: schema_skew:svc
   BLOCK_HEARTBEATS       per service in HEARTBEAT_SERVICES: heartbeat
   BLOCK_SCHEDULER        scheduler and its jobs
-  BLOCK_COSTS            per account: cost table
+  BLOCK_COSTS            per account: cost table, P&L basis
   BLOCK_RECONCILIATION   per account: feed reconciliation (D12)
   BLOCK_COSTS_PUBLISHED  the published cost table (only with costs.publish_release)
   BLOCK_TAIL             data quality ... dead man's switch

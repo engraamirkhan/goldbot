@@ -35,12 +35,15 @@ ROADMAP = """# Roadmap
 def _proposal(pid: str, created: pd.Timestamp, outcome: Outcome | None = None, **kw: Any) -> Proposal:
     return Proposal(proposal_id=pid, account_id=ACCOUNT, agent_id="trend-g1-abc", side=1, lots=0.1, entry=2400,
                     stop=2396, target=2406, p=0.6, ev_r=0.3, spread_points=20, top_features=[("a", 0.1)],
-                    created=created.timestamp(), outcome=outcome, decided_via=f"dashboard:{EMAIL}", **kw)
+                    created=created.timestamp(), outcome=outcome, decided_channel="dashboard", **kw)
 
 
-def _trade(exit_utc: pd.Timestamp, pnl: float, r: float | None, pid: int) -> ClosedTrade:
-    return ClosedTrade(account_id=ACCOUNT, broker="icm", mode="demo", exit_utc=exit_utc, ret=0.001, pnl=pnl,
-                       equity_before=10_000, position_id=pid, r=r)
+def _trade(exit_utc: pd.Timestamp, pnl: float, r: float | None, pid: int, **kw: Any) -> ClosedTrade:
+    """A net row by default (pnl_basis "net"); `kw` overrides any field."""
+    fields: dict[str, Any] = dict(account_id=ACCOUNT, broker="icm", mode="demo", exit_utc=exit_utc, ret=0.001, pnl=pnl,
+                                  equity_before=10_000, position_id=pid, r=r, pnl_basis="net")
+    fields.update(kw)
+    return ClosedTrade(**fields)
 
 
 def _full_state(sd: Path) -> Path:
@@ -242,3 +245,28 @@ def test_digest_shows_next_quarters_queue_in_the_quarter_before(tmp_path: Path) 
     text = build_digest(tmp_path, NOW, settings=load_settings(), roadmap=tmp_path / "nope.md", registry_path=reg)
     assert "Research: no pre-registered trial waiting · budget 2026Q4: 0 of 20 trials used, 0 reserved for " \
            "pre-registered, 20 open · next quarter: 2 queued" in text
+
+
+# ---------------------------------------------------------------------------------------------- P&L basis (finance audit)
+def _closed_day(sd: Path, *trades: ClosedTrade) -> list[str]:
+    from goldbot.telegram.digest import trades_line
+    with closed_trade_file(sd, ACCOUNT).open("w") as fh:
+        for t in trades:
+            fh.write(t.model_dump_json() + "\n")
+    (sd / f"engine_{ACCOUNT}.json").write_text(json.dumps({"account": ACCOUNT, "currency": "GBP"}))
+    return trades_line(sd, YDAY.normalize(), YDAY.normalize() + pd.Timedelta(days=1))
+
+
+def test_yesterdays_net_sums_net_rows_only_and_names_the_gross_only_trades_apart(tmp_path: Path) -> None:
+    [line] = _closed_day(tmp_path, _trade(YDAY, 20.0, 1.0, 1),
+                         _trade(YDAY, 9.0, 0.5, 2, pnl_basis=None, commission=1.0, swap=0.0),   # legacy, both costs
+                         _trade(YDAY, 50.0, 2.5, 3, pnl_basis="gross", money_source="engine"),
+                         _trade(YDAY, -4.0, -0.2, 4, pnl_basis=None))                          # legacy, no costs
+    assert line.startswith("• Closed 4 trades: net +£29.00 · +1.50R (2 won, 0 lost)")
+    assert line.endswith("· 2 trades gross only (costs not recorded): +£46.00 · +2.30R gross")
+    assert "75.00" not in line and "+4.00R" not in line
+
+
+def test_a_day_of_gross_only_trades_says_net_is_not_recorded(tmp_path: Path) -> None:
+    [line] = _closed_day(tmp_path, _trade(YDAY, 50.0, 2.5, 1, pnl_basis="gross"))
+    assert line == "• Closed 1 trade: net not recorded · 1 trade gross only (costs not recorded): +£50.00 · +2.50R gross"

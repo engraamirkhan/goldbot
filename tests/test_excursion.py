@@ -241,7 +241,7 @@ def test_records_written_before_the_change_load_with_empty_excursions(tmp_path):
 def _closed(pid: int, mae_r: float | None, mfe_r: float | None, approx: bool | None = False) -> ClosedTrade:
     return ClosedTrade(account_id="icm-demo", broker="icm", mode="demo",
                        exit_utc=pd.Timestamp("2026-10-05 15:00", tz="UTC"), ret=0.0, pnl=1.0, equity_before=1000.0,
-                       r=0.1, position_id=pid, mae_r=mae_r, mfe_r=mfe_r,
+                       r=0.1, position_id=pid, mae_r=mae_r, mfe_r=mfe_r, pnl_basis="net",
                        excursion_approx=approx if mae_r is not None else None)
 
 

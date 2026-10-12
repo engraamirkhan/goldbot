@@ -65,7 +65,7 @@ def test_only_allow_listed_users_decide_and_only_once():
         c.decide("icm-1-a", STRANGER, True)
     assert "icm-1-a" in c.pending and not seen
     p = c.decide("icm-1-a", BACKUP, True, reason_code="news")
-    assert p.outcome == Outcome.APPROVED and p.decided_by == BACKUP and p.reason_code is None
+    assert p.outcome == Outcome.APPROVED and p.decided_channel == "telegram" and p.reason_code is None
     assert seen == [p] and not c.pending
     with pytest.raises(KeyError):
         c.decide("icm-1-a", OWNER, False, "other")                  # already decided
@@ -198,7 +198,7 @@ def test_engine_side_poll_applies_bus_decisions_and_archives_them(tmp_path):
     bus.submit("b", False, "duplicate", "telegram:222")
     (bus.decisions_dir / "c.json").write_text('{"proposal_id": "c", "appr')       # torn: ignored, not crashed
     done = {p.proposal_id: p for p in c.poll_bus()}
-    assert done["a"].outcome == Outcome.APPROVED and done["a"].decided_via == "dashboard:owner@x"
+    assert done["a"].outcome == Outcome.APPROVED and done["a"].decided_channel == "dashboard"
     assert done["b"].outcome == Outcome.REJECTED and done["b"].reason_code == "duplicate"
     assert list(c.pending) == ["c"] and len(seen) == 2
     assert bus.outcome("a") == "APPROVED" and bus.outcome("b") == "REJECTED"
@@ -218,7 +218,7 @@ def test_a_decision_file_written_after_the_window_counts_as_expired(tmp_path):
     (bus.decisions_dir / "late.json").write_text(
         BusDecision(proposal_id="late", approve=True, by="dashboard:x", ts=time.time()).model_dump_json())
     [done] = c.poll_bus()
-    assert done is p and done.outcome == Outcome.EXPIRED and done.decided_via is None
+    assert done is p and done.outcome == Outcome.EXPIRED and done.decided_channel is None
 
 
 def test_owner_halt_round_trips_and_fails_closed_on_a_corrupt_file(tmp_path):

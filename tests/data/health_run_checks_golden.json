@@ -206,6 +206,11 @@
    "built 0.6 d ago"
   ],
   [
+   "pnl_basis:icm-demo",
+   "ok",
+   "no closed trades in the last 30 d"
+  ],
+  [
    "reconcile:icm-demo",
    "ok",
    "no reconciliation yet (feed_reconcile has not run)"
@@ -342,7 +347,7 @@
   [
    "stop_rule",
    "ok",
-   "0 pooled trades (needs > 500), 0.0 of 18.0 months, lower 90% bound n/a, worst single loss n/a (weekly cap 5.0%)"
+   "6 pooled trades (needs > 500), 0.0 of 18.0 months, lower 90% bound 0.00000, worst single loss -0.10% (weekly cap 5.0%)"
   ],
   [
    "phase_gates",
@@ -600,9 +605,19 @@
    "built 0.6 d ago"
   ],
   [
+   "pnl_basis:icm-demo",
+   "warn",
+   "2 of 4 closed trades in the last 30 d (50%) are gross only (costs not recorded), > 20%: the net totals leave them out (check the broker's deal history)"
+  ],
+  [
    "costs:icm-b",
    "warn",
    "built 5.0 d ago"
+  ],
+  [
+   "pnl_basis:icm-b",
+   "ok",
+   "0 of 2 closed trades in the last 30 d (0%) are gross only (costs not recorded)"
   ],
   [
    "reconcile:icm-demo",

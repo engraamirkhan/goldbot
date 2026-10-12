@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 import pytest
@@ -70,6 +70,14 @@ def _busy_state(tmp_path: Path) -> None:
     write(tmp_path / "agent_spend.json", {f"{NOW:%Y-%m}": 9.5})
     write(tmp_path / "approvals" / "pending" / "p1.json", {"created": ago(900), "window_s": 90})
     write(tmp_path / "control.json", {"halted": True, "by": "owner", "reason": "testing", "ts": ago(600)})
+    # closed trades: half of icm-demo's are not net (pnl_basis warns); icm-b's are all net
+    from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade
+    rows: list[tuple[str, Literal["net", "gross"] | None]] = [
+        ("icm-demo", "net"), ("icm-demo", "net"), ("icm-demo", "gross"), ("icm-demo", None), (B, "net"), (B, "net")]
+    for i, (acc, basis) in enumerate(rows):
+        append_closed_trade(tmp_path, ClosedTrade(account_id=acc, broker="icm", mode="demo",
+                                                  exit_utc=NOW - pd.Timedelta(days=1), ret=0.0, pnl=1.0,
+                                                  equity_before=1000.0, position_id=i, pnl_basis=basis))
 
 
 def _busy_ctx(tmp_path: Path) -> health.HealthContext:
@@ -126,12 +134,12 @@ def test_the_golden_fixture_reaches_every_block_and_every_status(tmp_path):
     assert {s for _, s, _ in busy} == {"ok", "warn", "fail"}
     for prefix in ("engine:", "risk:", "engine_loop:", "tick_errors:", "daily_cap:", "order_failed:", "throttle:",
                    "open_risk:", "entry_windows:", "schema_skew:icm-demo", "bridge:", "bridge_compat:",
-                   "server_clock:", "schema_skew:svc:", "heartbeat:", "scheduler", "job:", "costs:icm-demo",
+                   "server_clock:", "schema_skew:svc:", "heartbeat:", "scheduler", "job:", "costs:icm-demo", "pnl_basis:",
                    "costs:published", "drift", "deploy", "approvals", "agent_spend", "deadman", "risk_state:icm-b"):
         assert any(n.startswith(prefix) for n in names), prefix
     # account-major inside the per-account block, then the separate costs loop
     assert names.index("engine:icm-b") > names.index("server_clock:icm-demo")
-    assert names.index("costs:icm-b") == names.index("costs:icm-demo") + 1
+    assert names.index("costs:icm-b") == names.index("pnl_basis:icm-demo") + 1 == names.index("costs:icm-demo") + 2
 
 
 @pytest.mark.parametrize("static_only", [False, True])

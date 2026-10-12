@@ -125,6 +125,8 @@ from goldbot.ops.checks.engine import (
     check_tick_errors,
 )
 from goldbot.ops.checks.feeds import (
+    PNL_BASIS_GROSS_WARN_PCT,
+    PNL_BASIS_WINDOW_DAYS,
     check_costs,
     check_costs_published,
     check_data_quality,
@@ -132,6 +134,7 @@ from goldbot.ops.checks.feeds import (
     check_feature_versions,
     check_model_watch,
     check_news,
+    check_pnl_basis,
 )
 from goldbot.ops.checks.operations import (
     check_accounts,
@@ -215,6 +218,8 @@ __all__ = [
     "NEWS_STALE_POLLS",
     "NOTIFY_ON_WARN",
     "OPTIONAL_SECRETS",
+    "PNL_BASIS_GROSS_WARN_PCT",
+    "PNL_BASIS_WINDOW_DAYS",
     "PRUNE_WARN_DAYS",
     "QUOTE_INVALID_FAIL_S",
     "REARM_APPLY_S",
@@ -288,6 +293,7 @@ __all__ = [
     "check_open_risk",
     "check_phase",
     "check_phase_gates",
+    "check_pnl_basis",
     "check_reconciliation",
     "check_restore_drill",
     "check_risk_state",

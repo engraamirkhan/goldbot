@@ -178,11 +178,12 @@ def _proposal(state: Path, close: str, outcome: Outcome | None, *, side: int = 1
     p = Proposal(proposal_id=f"{ACC}-{int(ts.timestamp())}-0a1b2c3d4e", account_id=ACC, agent_id=agent, side=side,
                  lots=0.01, entry=2000.0, stop=1990.0, target=2025.0, p=0.6, ev_r=0.2, spread_points=20.0,
                  top_features=[("x", 0.1)], currency="GBP", risk_amount=8.0, created=ts.timestamp() + 2,
-                 outcome=outcome, reason_code=reason, decided_by=TELEGRAM_ID if outcome else None,
-                 decided_via=f"dashboard:{EMAIL}" if outcome else None, gate_refusal=gate_refusal)
+                 outcome=outcome, reason_code=reason, gate_refusal=gate_refusal)
     d = state / "approvals" / folder
     d.mkdir(parents=True, exist_ok=True)
-    (d / f"{p.proposal_id}.json").write_text(p.model_dump_json())
+    # written as a release before BACKLOG 52 did: the decider's identity is in the file, and must never reach a report
+    legacy = {"decided_by": TELEGRAM_ID, "decided_via": f"dashboard:{EMAIL}"} if outcome else {}
+    (d / f"{p.proposal_id}.json").write_text(json.dumps({**json.loads(p.model_dump_json()), **legacy}))
     return p
 
 

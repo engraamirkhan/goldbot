@@ -226,6 +226,17 @@ def load_closed_trades(state_dir: Path) -> tuple[list[ClosedTrade], str | None]:
     return out, None
 
 
+def pnl_basis(t: ClosedTrade) -> Literal["net", "gross"] | None:
+    """"net" | "gross" from the record's `pnl_basis`; a legacy row without it is net only when it records both
+    commission and swap (the broker's deals, net of every cost); anything else is not recorded (perf_report, quant
+    review of 207c9ef item 1). Every report sums only "net" rows as net: "nothing gross is labelled net"."""
+    if t.pnl_basis is not None:
+        return t.pnl_basis
+    if t.commission is not None and t.swap is not None:
+        return "net"
+    return None
+
+
 def closed_trade_file(state_dir: Path, account_id: str) -> Path:
     """One record file per account: two engines never append to the same file (on Windows an O_APPEND write is a
     seek plus a write, not atomic, so concurrent closes could overwrite each other; trading-safety review)."""

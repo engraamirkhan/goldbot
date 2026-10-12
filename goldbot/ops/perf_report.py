@@ -79,7 +79,7 @@ from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.timeutil import floor_tf, risk_day
 from goldbot.engine.shadow import ShadowTrade, VersionBook
 from goldbot.execution.costs import SESSIONS, CostTable
-from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades
+from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades, pnl_basis
 from goldbot.telegram.approvals import Outcome, Proposal
 
 MIN_TRADES = 30                  # below this no interval and no reading, only the counts (design rule above)
@@ -384,16 +384,6 @@ def _dims(t: ClosedTrade, population: dict[str, dict[str, Any]], day_types: dict
     side = {1: "long", -1: "short"}.get(t.side or 0)
     return {"family": family or NOT_RECORDED, "agent": t.agent_id or NOT_RECORDED, "timeframe": tf or NOT_RECORDED,
             "session": session or NOT_RECORDED, "side": side or NOT_RECORDED, "day_type": day_type or NOT_RECORDED}
-
-
-def pnl_basis(t: ClosedTrade) -> str | None:
-    """"net" | "gross" from the record's `pnl_basis`; a legacy row without it is net only when it records both
-    commission and swap (the broker's deals, net of every cost); anything else is not recorded (quant review, item 1)."""
-    if t.pnl_basis is not None:
-        return t.pnl_basis
-    if t.commission is not None and t.swap is not None:
-        return "net"
-    return None
 
 
 def _row(t: ClosedTrade, ccy: str | None, population: dict[str, dict[str, Any]],

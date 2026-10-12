@@ -1,5 +1,5 @@
 - Health checks split into modules with a registry (2026-10-12, speed-up review item 7; no behaviour change).
-  goldbot/ops/health.py had grown to 1,741 lines and was the place every lane appended a check, so merges kept
+  goldbot/ops/health.py had grown to about 1,770 lines and was the place every lane appended a check, so merges kept
   colliding there. The checks now live in goldbot/ops/checks/, one module per area (engine, bridge, feeds, risk,
   services, auth, operations), and shared thresholds and helpers are in `_base.py`. Each check registers itself with
   `@register_check(scope, block=, pos=)`. `run_checks` walks the registry in an explicit (block, position) order, so

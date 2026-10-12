@@ -107,8 +107,8 @@ describe("ProposalCard", () => {
   });
 
   it.each([
-    ["submitted", {}, /Approval sent\. The engine re-checks risk/],
-    ["approved", { decided_by: "telegram:111" }, /Approved, order sent\..*via Telegram/],
+    ["submitted", { decided_channel: "dashboard" }, /Approval sent\. The engine re-checks risk.*via the dashboard/],
+    ["approved", { decided_channel: "telegram" }, /Approved, order sent\..*via Telegram/],
     ["rejected", { reason_code: "cost" as const }, /Rejected · Cost/],
     ["refused", { refusal: ["owner_halt", "drift_halt"] }, /Refused at approval\. The RiskGate blocked the order \(owner halt, drift halt\); nothing was sent/],
     ["expired", {}, /Expired\./],
@@ -116,6 +116,13 @@ describe("ProposalCard", () => {
     render(<ProposalCard p={decided(status as DecidedProposal["status"], over)} now={NOW} canDecide blockers={[]} />);
     expect(screen.getByRole("status")).toHaveTextContent(copy);
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("names only the decision channel, never who decided, and says nothing when the channel is unknown", () => {
+    const { rerender } = render(<ProposalCard p={decided("rejected", { reason_code: "news", decided_channel: "dashboard" })} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Rejected · News · via the dashboard$/);
+    rerender(<ProposalCard p={decided("approved", { decided_channel: null })} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByRole("status")).not.toHaveTextContent("via");
   });
 
   it("warns that the RiskGate will refuse while entries are blocked", () => {

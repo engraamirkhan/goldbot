@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -14,9 +15,15 @@ from goldbot.ops.monthly_report import build_monthly_report, format_report, main
 NOW = pd.Timestamp("2026-11-01 06:00", tz="UTC")
 
 
-def _trade(day: str, pnl: float, equity_before: float, r: float | None, account: str = "icm-demo", pid: int = 0) -> ClosedTrade:
-    return ClosedTrade(account_id=account, broker="icm", mode="demo", exit_utc=pd.Timestamp(f"{day} 15:00", tz="UTC"),
-                       ret=0.0, pnl=pnl, equity_before=equity_before, r=r, position_id=pid)
+def _trade(day: str, pnl: float, equity_before: float, r: float | None, account: str = "icm-demo", pid: int = 0,
+           **kw: Any) -> ClosedTrade:
+    """A net row by default (pnl_basis "net": commission and swap inside pnl); `kw` overrides any field."""
+    fields: dict[str, Any] = dict(account_id=account, broker="icm", mode="demo",
+                                  exit_utc=pd.Timestamp(f"{day} 15:00", tz="UTC"),
+                                  ret=0.0, pnl=pnl, equity_before=equity_before, r=r, position_id=pid,
+                                  pnl_basis="net")
+    fields.update(kw)
+    return ClosedTrade(**fields)
 
 
 def _seed(state: Path, currency: str | None = "GBP", engine: dict | None = None) -> None:
@@ -157,7 +164,7 @@ def test_overlapping_positions_mark_the_chained_return_as_approximate(tmp_path):
         append_closed_trade(tmp_path, ClosedTrade(
             account_id="icm-demo", broker="icm", mode="demo", exit_utc=pd.Timestamp(exit_, tz="UTC"),
             entry_utc=pd.Timestamp(entry, tz="UTC"), ret=0.0, pnl=10.0, equity_before=1000.0 + 10 * i, r=1.0,
-            position_id=i + 1))
+            position_id=i + 1, pnl_basis="net"))
     rep = build_monthly_report(tmp_path, month="2026-10", now=NOW)
     assert rep.accounts[0].overlapped is True
     assert "approximate: positions overlapped" in format_report(rep)
@@ -195,3 +202,72 @@ def test_labels_name_the_interval_and_drawdown_honestly(tmp_path):
     _seed(tmp_path)
     text = format_report(build_monthly_report(tmp_path, month="2026-10", now=NOW))
     assert "90% t-interval (approx.)" in text and "Max drawdown on closed trades this month" in text
+
+
+# ---------------------------------------------------------------------------------------------- P&L basis (finance audit)
+def _seed_mixed_basis(state: Path) -> None:
+    """Two net rows, a legacy row that records commission and swap (net), a gross row and a legacy row without costs."""
+    rows = [
+        _trade("2026-10-01", 20.0, 1000.0, 2.0, pid=1),
+        _trade("2026-10-02", -10.0, 1020.0, -1.0, pid=2),
+        _trade("2026-10-05", 30.0, 1010.0, 3.0, pid=3, pnl_basis=None, commission=1.4, swap=-0.3),   # legacy, net
+        _trade("2026-10-06", 70.0, 1040.0, 7.0, pid=4, pnl_basis="gross", money_source="engine"),     # costs unknown
+        _trade("2026-10-07", 5.0, 1110.0, 0.5, pid=5, pnl_basis=None),                                # legacy, no costs
+    ]
+    for t in rows:
+        append_closed_trade(state, t)
+    (state / "engine_icm-demo.json").write_text(json.dumps({"account": "icm-demo", "currency": "GBP", "equity": 1115.0}))
+
+
+def test_net_totals_sum_only_net_rows_and_legacy_rows_with_both_costs(tmp_path):
+    _seed_mixed_basis(tmp_path)
+    [a] = build_monthly_report(tmp_path, month="2026-10", now=NOW).accounts
+    assert a.trades == 5 and a.net_trades == 3
+    assert a.pnl == pytest.approx(40.0)                                     # 20 - 10 + 30: never the 70 or the 5
+    assert a.net_r == pytest.approx(4.0) and a.r_trades == 3
+    assert a.twr_pct == pytest.approx(100 * (1.02 * (1 - 10 / 1020) * (1 + 30 / 1010) - 1))
+    assert [d.day for d in a.best_days] == ["2026-10-05", "2026-10-01", "2026-10-02"]   # the gross £70 day is no best day
+    assert a.days_50_plus == 0                                              # a gross £70 is not a net £50 day
+    assert a.avg_per_day == pytest.approx(40.0 / a.trading_days)
+
+
+def test_gross_only_rows_are_counted_and_summed_apart_from_the_net(tmp_path):
+    _seed_mixed_basis(tmp_path)
+    [a] = build_monthly_report(tmp_path, month="2026-10", now=NOW).accounts
+    assert a.gross_only == 2 and a.gross_pnl == pytest.approx(75.0) and a.gross_r == pytest.approx(7.5)
+    assert a.gross_note == "2 trades gross only (costs not recorded)"
+
+
+def test_the_report_never_labels_a_gross_figure_net(tmp_path):
+    _seed_mixed_basis(tmp_path)
+    text = format_report(build_monthly_report(tmp_path, month="2026-10", now=NOW))
+    [line] = [x for x in text.splitlines() if "gross only" in x]
+    assert "2 trades gross only (costs not recorded): +£75.00 · +7.50R gross, left out of every figure above" in line
+    assert "net" not in line.lower()
+    assert "net +£40.00 over 3 net trades of 5" in text
+    [mtd] = month_to_date_line(tmp_path, pd.Timestamp("2026-10-10 06:45", tz="UTC"))
+    assert "3 net trades" in mtd and "(2 trades gross only (costs not recorded), not summed)" in mtd
+    assert "+4.00R" in mtd and "+11.50R" not in mtd
+
+
+def test_a_month_of_net_rows_shows_no_gross_line(tmp_path):
+    _seed(tmp_path)
+    rep = build_monthly_report(tmp_path, month="2026-10", now=NOW)
+    assert rep.accounts[0].gross_only == 0 and rep.accounts[0].gross_note is None
+    assert "gross only" not in format_report(rep) and "gross only" not in month_to_date_line(tmp_path, NOW - pd.Timedelta(days=1))[0]
+
+
+# ---------------------------------------------------------------------------------------------- day convention
+def test_the_report_states_its_day_boundary_the_utc_risk_day(tmp_path):
+    rep = build_monthly_report(tmp_path, month="2026-10", now=NOW)
+    assert rep.day_boundary == "UTC 00:00-24:00 (the risk day on which the loss caps reset)"
+    assert "days run UTC 00:00-24:00 (the risk day on which the loss caps reset)" in format_report(rep)
+
+
+def test_a_close_at_23_30_utc_belongs_to_that_utc_day_not_the_next_opportunity_day(tmp_path):
+    append_closed_trade(tmp_path, _trade("2026-10-01", 20.0, 1000.0, 2.0, pid=1,
+                                         exit_utc=pd.Timestamp("2026-10-01 23:30", tz="UTC")))
+    append_closed_trade(tmp_path, _trade("2026-10-31", 9.0, 1020.0, 1.0, pid=2,
+                                         exit_utc=pd.Timestamp("2026-10-31 23:30", tz="UTC")))
+    [a] = build_monthly_report(tmp_path, month="2026-10", now=NOW).accounts
+    assert sorted(d.day for d in a.best_days) == ["2026-10-01", "2026-10-31"] and a.trades == 2
