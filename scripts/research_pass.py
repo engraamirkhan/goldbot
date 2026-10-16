@@ -305,16 +305,20 @@ def queued_digest_refusal(rows: list[dict[str, Any]], quarter: str, targets: lis
     family and agent, None: the family alone; `director.queued_rows_for`) pins data-v1 sha256 digests (BACKLOG 50) and
     the research-window files the run reads from `bars` (years `from_year`..min(`to_year`, holdout year)) are not
     exactly those (a refresh or re-pull after the write, another --from-year). A row pins the files from the year of
-    its bars_from (`plan.data_years`), so its run reads from that year. Checked before any look."""
+    its bars_from (`plan.data_years`), so its run reads from that year. Checked before any look. A matching row that
+    pins no digests is refused too (quant review 2026-10-16: fail closed): the run could not show it reads the
+    pre-registered data."""
     last = min(int(to_year), holdout_from.year) if holdout_from is not None else int(to_year)
     for family, agent in targets:
         for row in queued_rows_for(rows, quarter, family, agent):
             pinned = (row.get("plan") or {}).get("data_digests")
+            spec_id = (row.get("plan") or {}).get("spec_id")
             if not pinned:
-                continue
+                return (f"{family}: the pending queued row #{row.get('trial')}{f' ({spec_id})' if spec_id else ''} "
+                        f"pins no data-v1 digests (plan.data_digests), so this run cannot show it reads the "
+                        f"pre-registered data; withdraw the row and re-write it with the preregister-quarter workflow")
             why = bar_digest_refusal(pinned, Path(bars), int(from_year), last)
             if why:
-                spec_id = (row.get("plan") or {}).get("spec_id")
                 years = (row.get("plan") or {}).get("data_years")
                 span = f"; the row pins years {years[0]}-{years[1]} (--from-year {years[0]})" if years else ""
                 return (f"{family}: the pending queued row #{row.get('trial')}{f' ({spec_id})' if spec_id else ''} "
@@ -815,6 +819,7 @@ def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.D
                                    extra_cost_usd=extra_cost, swap=swap, holdout=holdout,
                                    ctx={"macro": macro} if macro is not None else None, rationale=args.rationale,
                                    cost_source=cost_source, rule_ref=args.rule_ref,
+                                   holdout_from=settings.research.holdout_from,
                                    capped=settings.research.open_budget_capped(quarter_of()))
     except (TrialBudgetExceeded, ValueError) as exc:
         raise SystemExit(str(exc)) from None
