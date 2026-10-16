@@ -90,6 +90,8 @@ reason without words. Examples:
 | Code | Text | Next step | Kind |
 |---|---|---|---|
 | `market_closed` | Market closed · opens {time} | Nothing to do: it reopens by itself. | wait |
+| `rollover` | Daily rollover around broker midnight · until {time} (server midnight + the engine's 5 min, on the server zone in `sessions`) | Nothing to do: entries resume in a few minutes. | wait |
+| `weekend` | Weekend: no new trades from Friday evening · opens {time} (the first open minute after the weekend close, on the published session table; from the Friday 21:30 server cut, while the market is still open) | Nothing to do: entries resume when the market reopens. | wait |
 | `server_clock_mismatch` | Broker clock differs from the expected time zone | See the Runbook: Server clock. … | act |
 | `throttle_loss_streak` | Trend (trend-g0) paused after 3 losses in a row · until {time} | Nothing to do: it resumes after its cooldown or a winning shadow trade. | wait (strategy only) |
 | a strategy's last refused trade (`entry_refusals`) | Trend (trend-g0): last entry refused, not enough free margin · since {time} (words per code: `REFUSAL_TEXT`; a per-trade `daily_loss_limit_abs` reads "this trade could lose more than is left of today's loss limit", never "limit reached") | the code's own next step | the code's kind (strategy only); cleared when the gate next allows that strategy or at 00:00 UTC |

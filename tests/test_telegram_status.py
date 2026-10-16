@@ -44,6 +44,16 @@ def test_a_closed_market_is_paused_with_the_reopen_time_in_the_owners_zone_and_u
     assert "Nothing to do" not in t           # a wait whose fix is "nothing to do" is one line: the time says it
 
 
+def test_rollover_and_the_weekend_cut_say_their_times_in_the_owners_zone_and_utc():
+    """BACKLOG 65 (b): the same times as the dashboard, from the same API blocks."""
+    roll = pd.Timestamp("2026-10-14 20:57", tz="UTC")              # 23:57 Athens: clears 00:05 Athens = 22:05 BST
+    t = text(status(engine(entry_blocks=["rollover"], ts=roll.timestamp()), now=roll), now=roll)
+    assert "Daily rollover around broker midnight · until 22:05 BST (21:05 UTC, in 8 min)" in t
+    fri = pd.Timestamp("2026-10-16 19:00", tz="UTC")               # Friday 22:00 Athens, after the 21:30 cut
+    t = text(status(engine(entry_blocks=["weekend"], ts=fri.timestamp()), now=fri), now=fri)
+    assert "Weekend: no new trades from Friday evening · opens Sun 23:02 BST (22:02 UTC, in 2 d 3 h)" in t
+
+
 def test_a_throttled_agent_is_partly_open_and_names_the_strategy_and_its_cooldown():
     th: dict[str, Any] = {"enabled": True, "loss_streak": 3, "agents": {
         "trend-g0": {"loss_streak": 3, "cooldown_until": "2026-10-14T14:30:00+00:00", "blocked": ["throttle_loss_streak"]},
