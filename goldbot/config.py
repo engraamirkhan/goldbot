@@ -350,6 +350,16 @@ class ResearchSettings(_Section):
             raise ValueError(f"open_budget_preregistered_only lists quarters like 2027Q1, got {bad}")
         return v
 
+    @model_validator(mode="after")
+    def _holdout_window_complete(self) -> ResearchSettings:
+        """Quant review 2026-10-16 N2: `holdout_from` without `holdout_to` is no holdout window, so research would read
+        the held-out year as ordinary history ("research never sees this window unless scoring it"). Refused at load
+        time rather than first inside a discovery run (research/discovery.py fails closed there too)."""
+        if self.holdout_from is not None and self.holdout_to is None:
+            raise ValueError(f"research.holdout_from is {self.holdout_from} but research.holdout_to is not set: set the "
+                             "holdout window's end or clear holdout_from")
+        return self
+
     def reserved_for(self, quarter: str) -> int:
         """Trials of `quarter` held for its pre-registered queue (0 for a quarter not listed)."""
         return int(self.reserved_trials_quarter.get(quarter, 0))
