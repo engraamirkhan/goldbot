@@ -60,11 +60,13 @@ class BrokerTerms(FrozenRecord):
     notes: list[str] = Field(default_factory=list)
 
     def swap_spec(self, server_tz: str, default_triple_weekday: int = 2) -> SwapSpec | None:
-        if self.swap_long_usd_per_lot is None or self.swap_short_usd_per_lot is None:
+        """None when either rate is unmeasured or not a finite number (the cost table then keeps no swap and readers
+        charge the prior; SwapSpec refuses a non-finite rate, so one bad reading never fails the nightly job)."""
+        long, short = self.swap_long_usd_per_lot, self.swap_short_usd_per_lot
+        if long is None or short is None or not (np.isfinite(long) and np.isfinite(short)):
             return None
         triple = default_triple_weekday if self.swap_triple_weekday is None else self.swap_triple_weekday
-        return SwapSpec(long_usd_per_lot=self.swap_long_usd_per_lot, short_usd_per_lot=self.swap_short_usd_per_lot,
-                        triple_weekday=triple, server_tz=server_tz)
+        return SwapSpec(long_usd_per_lot=long, short_usd_per_lot=short, triple_weekday=triple, server_tz=server_tz)
 
     def save(self, path: str | Path) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -88,9 +90,10 @@ class CostTable(FrozenRecord):
     n_ticks: int = 0
     n_fills: int = 0
     notes: list[str] = Field(default_factory=list)
-    # the broker's swap per lot (100 oz) per night, broker sign (negative = paid); None until the terminal reports it
-    swap_long_usd_per_lot: float | None = None
-    swap_short_usd_per_lot: float | None = None
+    # the broker's swap per lot (100 oz) per night, broker sign (negative = paid); None until the terminal reports it.
+    # Finite only (BACKLOG 36 review MEDIUM): a NaN table fails to load, and every reader falls back to the prior
+    swap_long_usd_per_lot: float | None = Field(None, allow_inf_nan=False)
+    swap_short_usd_per_lot: float | None = Field(None, allow_inf_nan=False)
     swap_triple_weekday: int | None = Field(None, ge=0, le=4)
     commission_measured: bool = False          # commission from the terminal's deals (else the settings value)
     commission_lots: float = 0.0               # lots of closed positions the measured commission rests on

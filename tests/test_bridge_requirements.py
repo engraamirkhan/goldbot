@@ -34,7 +34,8 @@ def test_every_root_is_pinned_with_a_hash_and_versions_match_the_lock():
     pins = _pins(text)
     assert set(br.BRIDGE_ROOTS) <= set(pins)
     # every requirement line carries at least one sha256 (pip --require-hashes refuses the file otherwise)
-    blocks = re.split(r"\n(?=[a-z0-9-]+==)", text.split("\n", 3)[3])
+    body = "\n".join(x for x in text.splitlines() if not x.startswith("#"))     # the header, however long
+    blocks = re.split(r"\n(?=[a-z0-9-]+==)", body)
     assert all(re.search(r"--hash=sha256:[0-9a-f]{64}", b) for b in blocks)
     import tomllib
     lock = tomllib.loads(br.LOCK.read_text(encoding="utf-8"))
@@ -134,3 +135,12 @@ def test_every_pip_install_in_the_linux_scripts_is_hash_checked_and_binary_only(
     deploy = (LINUX / "goldbot-deploy.sh").read_text(encoding="utf-8")
     assert "BRIDGE_REQS=goldbot/ops/linux/mt5-bridge-requirements.txt" in deploy
     assert 'grep -qE "^(uv.lock|$BRIDGE_REQS)\\$"' in deploy
+
+
+def test_the_header_names_the_absolute_interpreter_not_a_bare_wine_python():
+    """Incident 2026-10-16: a bare `wine python` ran the installer saved in the working directory."""
+    header = [x for x in br.HEADER.splitlines() if x.startswith("#")]
+    assert header == br.HEADER.rstrip("\n").splitlines()
+    assert not any(re.search(r"\bwine\s+python\s+-m", x) for x in header)
+    assert any("wine $WINPY -m pip install --require-hashes" in x for x in header)
+    assert not any(x.endswith("\\") for x in header), "a trailing backslash would read as a continuation"

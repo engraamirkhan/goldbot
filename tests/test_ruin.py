@@ -201,10 +201,35 @@ def _priors() -> Any:
     return CostImputer.from_settings(load_settings())
 
 
-def test_r_from_closed_trades_keeps_order_skips_trades_without_r_and_is_net():
-    s = r_from_closed_trades([_ct(3, -1.0), _ct(1, 2.0), _ct(2, None)], costs=_priors())
-    assert s.r.tolist() == [2.0, -1.0] and s.cost_basis == "net" and s.n_imputed == 0
+def test_r_from_closed_trades_keeps_order_and_is_net():
+    s = r_from_closed_trades([_ct(3, -1.0), _ct(1, 2.0)], costs=_priors())
+    assert s.r.tolist() == [2.0, -1.0] and s.cost_basis == "net" and s.n_imputed == 0 and s.n_excluded == 0
     assert s.exit_utc is not None and len(s.exit_utc) == 2
+
+
+def test_a_price_return_row_without_r_is_priced_from_its_stop_and_charged_not_dropped():
+    """Quant review 2026-10-16: "do not drop gross rows". A row without R (a price return without the fx conversion, an
+    adopted orphan) is priced from its initial stop, side x (exit - entry) / |entry - initial stop|, and charged the
+    imputed commission and swap in R; only a row that cannot be priced that way stays out, counted, and makes the
+    cost basis "unknown"."""
+    price = dict(ret_basis="price", money_source="broker", side=-1, entry_price=2_000.0, exit_price=2_015.0,
+                 initial_sl=2_010.0, entry_utc=pd.Timestamp("2026-10-02 10:00", tz="UTC"))
+    s = r_from_closed_trades([_ct(1, 2.0), _ct(2, None, **price)], costs=_priors())
+    charge = 2 * 3.5 / 100 / 10.0                                   # icm commission both sides, intraday, 10 $/oz risk
+    assert s.r.tolist() == pytest.approx([2.0, -1.5 - charge])     # a short stopped through: -15 / 10 = -1.5R
+    assert s.cost_basis == "net+imputed" and s.n_imputed == 1 and s.n_excluded == 0
+    # a net row whose R is missing is priced from its stop as well, and pays the full imputed charge (its R is gross)
+    net_no_r = dict(commission=0.7, swap=0.0, pnl_basis="net", side=1, entry_price=2_000.0, exit_price=2_020.0,
+                    initial_sl=1_990.0, entry_utc=pd.Timestamp("2026-10-03 10:00", tz="UTC"))
+    s = r_from_closed_trades([_ct(1, 2.0), _ct(3, None, **net_no_r)], costs=_priors())
+    assert s.r.tolist() == pytest.approx([2.0, 2.0 - charge]) and s.n_imputed == 1
+    # no stop: it cannot be priced, so it is kept out, counted, and the sample says its cost basis is unknown
+    orphan = {k: v for k, v in price.items() if k != "initial_sl"}
+    s = r_from_closed_trades([_ct(1, 2.0), _ct(2, None, **orphan)], costs=_priors())
+    assert s.r.tolist() == [2.0] and s.n_excluded == 1 and s.cost_basis == "unknown"
+    rep = simulate(RuinConfig(limits=_live(), trades_per_week=5, weeks=4, n_paths=10, horizons_weeks=(4,)),
+                   r=np.array([2.0, -1.0, 0.5]), cost_basis=s.cost_basis, n_excluded=s.n_excluded)
+    assert rep.n_excluded == 1 and "1 closed trade(s) without R" in format_report(rep)
 
 
 def test_gross_closed_trades_are_kept_and_charged_their_imputed_cost_in_r():

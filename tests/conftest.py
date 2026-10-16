@@ -29,6 +29,18 @@ def real_totp_clock(monkeypatch):
 
 
 @pytest.fixture
+def lockout_clock(monkeypatch):
+    """The sign-in lockout's clock (goldbot/api/auth.py counts `auth_failures` by `time.time_ns`), pinned to one
+    instant and moved only by the test (`clock[0] += ns`). A lockout test then proves the count, never how fast the
+    machine ran: on the wall clock, a paused VM or a starved worker that lets 15 minutes pass mid-test prunes the
+    failures and the sign-in goes through (BACKLOG 55)."""
+    import goldbot.api.auth as auth
+    clock = [auth.time.time_ns()]
+    monkeypatch.setattr(auth.time, "time_ns", lambda: clock[0])
+    return clock
+
+
+@pytest.fixture
 def queued_prereg(monkeypatch: pytest.MonkeyPatch) -> Callable[..., dict[str, Any]]:
     """`queued_prereg(registry, **preregister_kwargs)`: write a row of the pre-registered queue of the current quarter.
     A queued row must be written before its target quarter starts and `preregister` stamps the registry's own clock

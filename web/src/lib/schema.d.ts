@@ -994,6 +994,8 @@ export interface components {
              * Format: date-time
              */
             expires_at: string;
+            /** Loss Cant Check */
+            loss_cant_check?: ("paused" | "not_summed" | "mixed_currencies" | "mixed_currencies_paused") | null;
             /** Loss Left */
             loss_left?: number | null;
             /** Loss Left Period */
@@ -1445,6 +1447,18 @@ export interface components {
             period: "today" | "this week";
             /** Remaining */
             remaining: number;
+            /** Unknown */
+            unknown?: string | null;
+            /**
+             * Unknown Mixed
+             * @default false
+             */
+            unknown_mixed: boolean;
+            /**
+             * Unknown Paused
+             * @default false
+             */
+            unknown_paused: boolean;
             /** Used */
             used: number;
         };
@@ -1613,6 +1627,8 @@ export interface components {
              * Format: date-time
              */
             expires_at: string;
+            /** Loss Cant Check */
+            loss_cant_check?: ("paused" | "not_summed" | "mixed_currencies" | "mixed_currencies_paused") | null;
             /** Loss Left */
             loss_left?: number | null;
             /** Loss Left Period */

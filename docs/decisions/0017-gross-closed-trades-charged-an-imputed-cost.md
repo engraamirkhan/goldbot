@@ -1,6 +1,6 @@
 # 0017: Gross closed trades are kept and charged a conservative imputed cost
 
-Status: proposed (implementer, 2026-10-12; quant review findings A-D; needs quant and trading-safety review)
+Status: accepted (quant review 2026-10-16, finding 6; proposed by the implementer 2026-10-12 on quant review findings A-D)
 
 ## Context
 A closed record is "net" only when commission and swap are both known and inside `pnl` (`ClosedTrade.pnl_basis`,
@@ -53,6 +53,13 @@ There are two ways to deal with gross rows:
 - Other readers of `ret` (perf_report, monthly_report, digest) are unchanged. They can adopt the same helper.
 - Rollback (S12): an older release ignores `ret_basis` and reads a `"price"` row by its `pnl_basis`, which is exactly
   today's behaviour. The field restricts nothing and is never on the order or exit path.
+- Known inaccuracies (quant review 2026-10-16, finding 6, LOW; accepted, no code change):
+  - The charge uses the account's cost table as of tonight for every past trade (`CostImputer.from_state`,
+    `goldbot/ops/cost_imputation.py`), not the commission and swap terms in force when the trade was made. The bias
+    can go either way and is small.
+  - The stop rule's single-loss incident check (`evaluate_stop_rule`, `goldbot/ops/gates_phase.py`) subtracts the
+    imputed USD from `pnl` again on broker-sourced price-return rows, whose `pnl` already includes commission. That
+    counts commission twice, a few cents per 0.01 lot, in the conservative direction.
 - What would change this decision: a broker that reports swap per deal on the demo terminal (then rows become net at
   the source), or evidence that the prior overcharges enough to block a gate that measured costs would pass. Then
   measure first; the charge is not loosened.

@@ -86,3 +86,66 @@ def test_an_engine_file_from_before_the_account_view_still_renders_with_nulls(tm
     assert row["balance"] is None and row["currency"] is None and row["margin_level_pct"] is None
     assert row["loss_budget"] is None and row["milestones"] is None
     assert row["day_pnl"] == pytest.approx(-10.0)
+
+
+SUPERVISOR = {"daily_cap": 0.015, "combined_day_start_equity": 1000.0, "weekly_cap": 0.04,
+              "combined_week_start_equity": 1000.0, "combined_equity": 990.0}
+PAUSED = "so the combined loss cap can't be checked. New entries are paused; exits always run."
+
+
+@pytest.mark.parametrize("supervisor, why, code", [
+    (None, "The safety supervisor's report is missing or unreadable", "no_supervisor_heartbeat"),
+    ({**SUPERVISOR, "ts": "junk"}, "The safety supervisor's report is missing or unreadable",
+     "supervisor_state_unreadable"),
+    (SUPERVISOR, "The safety supervisor hasn't reported for over a minute", "supervisor_heartbeat_stale"),   # no ts
+    ({**SUPERVISOR, "ts": time.time() - 600}, "The safety supervisor hasn't reported for over a minute",
+     "supervisor_heartbeat_stale"),
+    ({**SUPERVISOR, "ts": time.time() + 3600}, "The safety supervisor's report is dated ahead", "supervisor_heartbeat_future"),
+])
+def test_a_rejected_supervisor_report_shows_the_budget_as_unknown_never_the_roomier_account_cap(tmp_path, supervisor,
+                                                                                                why, code):
+    """Found by the release manager 2026-10-16: with the supervisor's report rejected the card showed only the
+    account's 2% cap (£20 here), roomier than the combined 1.5% (£15) the supervisor enforces. The budget now reads
+    unknown with the reason; the entry status names the same supervisor block."""
+    row = _get(tmp_path, ENGINE, supervisor)
+    b = row["loss_budget"]
+    assert b["unknown"] is not None and b["unknown"].startswith(why) and PAUSED in b["unknown"], b
+    assert b["unknown_paused"] is True
+    assert code in [x["code"] for x in row["entry_status"]["blocks"]]
+
+
+def test_a_fresh_supervisor_report_leaves_the_budget_known(tmp_path):
+    row = _get(tmp_path, ENGINE, {**SUPERVISOR, "ts": time.time()})
+    assert row["loss_budget"]["unknown"] is None and row["loss_budget"]["unknown_paused"] is False
+    assert row["loss_budget"]["binding"] == "combined 1.5% daily cap"
+
+
+USD_ENGINE = {**ENGINE, "account": "vantage-demo", "broker": "vantage", "currency": "USD", "equity": 10_000.0,
+              "balance": 10_000.0, "day_start_equity": 10_000.0, "week_start_equity": 10_000.0,
+              "balance_closed_hwm": 10_000.0}
+
+
+@pytest.mark.parametrize("halted", [False, True])
+def test_a_gbp_and_a_usd_engine_show_the_budget_as_cant_check_never_the_account_cap(tmp_path, halted):
+    """BACKLOG 61: the combined caps are left out with mixed currencies, so every account's budget reads "can't
+    check" (amber; red while the supervisor halts on `mixed_account_currencies`) with no amount; the account caps stay
+    in `caps` for the entry status's spent-cap blocks."""
+    now = time.time()
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps({**ENGINE, "ts": now}))
+    (tmp_path / "engine_vantage-demo.json").write_text(json.dumps({**USD_ENGINE, "ts": now}))
+    sup: dict[str, object] = {**SUPERVISOR, "ts": now, "combined_day_start_equity": 11_000.0, "combined_week_start_equity": 11_000.0,
+           "combined_equity": 10_990.0}
+    if halted:
+        sup.update(halt=True, reasons=["mixed_account_currencies"])
+    (tmp_path / "supervisor.json").write_text(json.dumps(sup))
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
+    c = TestClient(app)
+    rows = {r["account_id"]: r for r in c.get("/api/accounts", headers=_owner(c, app)).json()}
+    assert set(rows) == {"icm-demo", "vantage-demo"}
+    for row in rows.values():
+        b = row["loss_budget"]
+        assert b["unknown"].startswith("The accounts report different currencies (GBP, USD)"), b
+        assert (b["unknown_paused"], b["unknown_mixed"]) == (halted, True)
+        assert [x["name"] for x in b["caps"]] == ["account 2.0% daily cap", "account 5.0% weekly cap"]
+        codes = [x["code"] for x in row["entry_status"]["blocks"]]
+        assert ("mixed_account_currencies" in codes) is halted, codes

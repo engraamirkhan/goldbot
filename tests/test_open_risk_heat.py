@@ -118,7 +118,9 @@ def test_the_projection_counts_two_open_trades_remaining_stop_risk():
     on = RiskGate(RiskLimits(project_open_risk=True, **lim))
     refused = on.check(_usd(), _state(5_000.0, **st))
     assert not refused.allowed and refused.reasons == ["daily_loss_limit_abs"]                 # 40 + 15 = 55 > 50
-    assert on.check(_usd(), _state(5_000.0, **{**st, "open_risk": 35.0})).allowed            # 35 + 15 = 50: allowed
+    # 34.85 + 15 + the round trip 0.01 ATR x $5 x 0.03 lot x 100 = 0.15 (BACKLOG 36) = 50: allowed
+    assert on.check(_usd(), _state(5_000.0, **{**st, "open_risk": 34.85})).allowed
+    assert on.check(_usd(), _state(5_000.0, **{**st, "open_risk": 35.0})).reasons == ["daily_loss_limit_abs"]
     assert on.check(_usd(), _state(5_000.0, 5_010.0, **{**st, "open_risk": 26.0})).reasons == \
         ["daily_loss_limit_abs"]                                                 # 10 lost + 26 + 15 = 51 > 50
 

@@ -66,10 +66,23 @@ Log in to your IC Markets demo **once** (MT5 keeps the login; goldbot never sees
 2. On your Mac, a second Terminal window: `ssh -L 5900:localhost:5900 ubuntu@<mt5 public ip>`.
 3. In Finder: Go -> Connect to Server -> `vnc://localhost:5900` (macOS Screen Sharing; leave the password empty).
 4. In that window start the terminal if it is not open (`sudo -u mt5 -H env DISPLAY=:99 wine 'C:\MT5\ICMarkets\terminal64.exe' &`
-   on the VM), then File -> Login to Trade Account: your login, password, server **ICMarketsSC-Demo**, tick
-   **Save password**. Check `XAUUSD` is in Market Watch, and enable Tools -> Options -> Expert Advisors ->
-   *Allow algorithmic trading*. Close the terminal.
+   on the VM). The bootstrap installs MetaQuotes' generic terminal, which has **no IC Markets servers** (ADR 0020),
+   so do not use File -> Login to Trade Account first. Instead: File -> Open an Account -> type `ICMarkets` in the
+   search box -> pick **Raw Trading Ltd** (the company behind the ICMarketsSC servers) -> Next -> **Connect with an
+   existing trade account** -> your login, password, server **ICMarketsSC-Demo**, tick **Save password** -> Finish.
+   This downloads the server list into `Config/servers.dat`; later logins can use File -> Login as usual.
+   Check `XAUUSD` is in Market Watch, and enable Tools -> Options -> Expert Advisors -> *Allow algorithmic trading*.
+   Close the terminal.
+
+   *Symptom when the server list is missing:* File -> Login with ICMarketsSC-Demo does nothing at all: no line in
+   the Journal, no network connection, the corner keeps showing "No connection". Fix: the Open an Account flow above.
 5. `sudo systemctl stop goldbot-vnc`, close the tunnel window.
+
+The bridge attaches to that running terminal through the MT5 Python API with
+`initialize(path=r"C:\MT5\ICMarkets\terminal64.exe", timeout=60000)` (`terminal_path` in `config/accounts.yaml`,
+`MT5_INIT_TIMEOUT_MS` in `goldbot/execution/mt5_adapter.py`). Without `path=` it fails with IPC timeout `-10005`.
+If a hand test from the Windows Python on the box shows `-10005`, check the path is given and the terminal runs
+under the same user (`mt5`) and `DISPLAY=:99`.
 
 Bridge address and token:
 ```bash
@@ -183,10 +196,11 @@ and the rest still arrives. It never contains account numbers or emails.
   flat or at the weekend** (restarting the bridge cuts the engine off from the terminal for a moment):
   1. `sudo systemctl stop goldbot-bridge@icm-demo` (one unit per account; stop each). Wine cannot replace a
      pydantic_core file the running bridge has loaded, so a running bridge can leave a half-installed package.
-  2. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install --require-hashes --no-deps --only-binary :all: -r Z:/opt/goldbot/goldbot/ops/linux/mt5-bridge-requirements.txt`
-     (a hash mismatch stops it with nothing changed: do not work around it, report it, it means a download was not
+  2. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine /home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe -m pip install --require-hashes --no-deps --only-binary :all: -r Z:/opt/goldbot/goldbot/ops/linux/mt5-bridge-requirements.txt`
+     (the Windows Python by its full path, never a bare `wine python`, which runs any `python.exe` in the current
+     directory first; a hash mismatch stops it with nothing changed: do not work around it, report it, it means a download was not
      what uv.lock recorded)
-  3. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -c "import pydantic, pydantic_core, MetaTrader5, goldbot.execution.bridge; print(pydantic.VERSION)"`
+  3. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine /home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe -c "import pydantic, pydantic_core, MetaTrader5, goldbot.execution.bridge; print(pydantic.VERSION)"`
      must print 2.12 or newer and no error.
   4. `sudo systemctl start goldbot-bridge@icm-demo` (each account). Wait about 20 s, then
      `systemctl is-active goldbot-bridge@icm-demo` must print `active` and `systemctl show -p NRestarts
@@ -218,6 +232,43 @@ and the rest still arrives. It never contains account numbers or emails.
   slot if that field matters. A heartbeat from a release before this check carries no block and is skipped. "block unreadable: the
   process could not build it" means the summary itself failed in that service (a bug, traceback once in its log):
   the skew of that process is unknown until it is fixed; file an issue and restart the service.
+* **After a rollback below `04f6266`, once you have rolled forward again: remove the decider identities.** A
+  release older than `04f6266` (BACKLOG 52) writes who decided into every proposal it archives in
+  `approvals/done/*.json`: `decided_by` (a Telegram user id) and `decided_via` (`telegram:<id>` or
+  `dashboard:<email>`). It also writes them into `control.json`. The newer release drops those fields when it reads
+  a file and keeps only the channel. It rewrites `control.json` on its next halt, re-arm or mode change, but it never
+  rewrites a done file, so the identities stay on disk. List the affected files with
+  `sudo -u goldbot grep -rlE '"decided_(by|via)"' --include='*.json' /opt/goldbot/state/approvals/done`. If any are
+  listed, scrub them in place with the block below. It is safe while the services run. It removes only the two
+  fields and keeps the channel, the outcome, `decided_ts` and the file's modification time, which the dashboard's
+  recent list and the daily digest read. Run the `grep` again: no output means you are done. **Do not delete done
+  files to get rid of the identities.** They are more than history: the auto-mode evidence (decided proposals and
+  their outcomes), the daily digest and the performance report all count them. The audit log (the audit table in
+  `aux.db`) holds dashboard decisions with the user's email in every release. It holds Telegram decisions only
+  from `3817db7`. So a Telegram decision made while the older release ran has no audit row, and after the scrub it
+  is recorded only as "via Telegram". That is acceptable because only the allow-listed owner ids can decide on
+  Telegram.
+
+  ```bash
+  sudo -u goldbot /opt/goldbot/.venv/bin/python - <<'PY'
+  import json, os
+  from pathlib import Path
+  from goldbot.base import load_record_json, write_atomic
+  from goldbot.telegram.approvals import Proposal
+  for f in sorted(Path("/opt/goldbot/state/approvals/done").glob("*.json")):
+      text = f.read_text()
+      d = json.loads(text)
+      if not {"decided_by", "decided_via"} & d.keys():
+          continue
+      st = f.stat()
+      d["decided_channel"] = load_record_json(Proposal, text, source="approvals/done").decided_channel
+      d.pop("decided_by", None)
+      d.pop("decided_via", None)
+      write_atomic(f, json.dumps(d))
+      os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns))
+      print("scrubbed", f.name)
+  PY
+  ```
 * Before anything is touched, every deploy and rollback also checks:
   * **aux.db.** A target from before schema compatibility (no `compat_back_to` in its `goldbot/db/migrations.py`)
     cannot open aux.db at schema 5. The script stops every service (inputs, supervisor, engines last), steps aux.db

@@ -97,15 +97,23 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
     assert c.get("/api/status", headers=owner).json()["pending"] == 0
 
 
-def test_lockout_after_five_failures(tmp_path):
+def test_lockout_after_five_failures(tmp_path, lockout_clock):
+    import goldbot.api.auth as auth_mod
     app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
     st = app.state.st
-    c.post("/api/auth/setup", json={"setup_code": st.auth.setup_code, "email": "o@x.io", "password": "a long password here"})
+    uri = c.post("/api/auth/setup", json={"setup_code": st.auth.setup_code, "email": "o@x.io", "password": "a long password here"}).json()["totp_uri"]
     for _ in range(5):
         c.post("/api/auth/login", json={"email": "o@x.io", "password": "nope nope nope", "totp": "000000"})
     r = c.post("/api/auth/login", json={"email": "o@x.io", "password": "a long password here", "totp": "000000"})
     assert r.status_code == 403 and "too many" in r.json()["detail"]
+    lockout_clock[0] += (auth_mod.LOCKOUT_WINDOW_S - 1) * 10**9                # 1 s before the window ends: locked
+    good = {"email": "o@x.io", "password": "a long password here"}
+    r = c.post("/api/auth/login", json=good | {"totp": totp_code(_secret_from_uri(uri))})
+    assert r.status_code == 403 and "too many" in r.json()["detail"]
+    lockout_clock[0] += 2 * 10**9                                               # 1 s after: the failures are pruned
+    r = c.post("/api/auth/login", json=good | {"totp": totp_code(_secret_from_uri(uri))})
+    assert r.status_code == 200 and r.json()["token"]
 
 
 def test_jobs_endpoint_reports_the_scheduler_state(tmp_path):

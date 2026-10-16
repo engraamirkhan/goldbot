@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from goldbot.ops.account_view import LossBudget, Milestones
+from goldbot.ops.account_view import CantCheck, LossBudget, Milestones
 
 
 class ApiRequest(BaseModel):
@@ -92,6 +92,11 @@ class Proposal(BaseModel):
     #                                         in `currency`, or USD with only risk_usd
     loss_left: float | None = None          # the account's loss budget left if this trade loses, now (pending only)
     loss_left_period: Literal["today", "this week"] | None = None
+    # the budget can't be checked (account_view LossBudget.unknown; loss_left is then None): "paused" when new entries
+    # are paused on the supervisor's report (red), "not_summed" when the supervisor hasn't added up the accounts (amber);
+    # "mixed_currencies" (amber) / "mixed_currencies_paused" (red) when the accounts report different currencies
+    # (BACKLOG 61: pounds are never added to dollars)
+    loss_cant_check: CantCheck | None = None
 
 
 class DecidedProposal(Proposal):

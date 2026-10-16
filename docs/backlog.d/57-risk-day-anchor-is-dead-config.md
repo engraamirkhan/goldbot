@@ -1,10 +1,9 @@
 ---
 number: 57
-rank: 4
 title: 'risk_day_anchor is read by no code: pin it or make it real'
 stage: Execution and risk (loss caps) · PROTECT
 size: S
-status: 'done (built 2026-10-16 in bd76c47 + RUNBOOK 8a268cf: Settings refuses any other anchor at load; trading-safety APPROVED 2026-10-16) · accountable: implementer · due 2026-10-19'
+status: 'done 2026-10-16 (bd76c47 + RUNBOOK 8a268cf, merged at f7d48db with trading-safety APPROVED; ships to main in PR #79) · accountable: implementer'
 ---
 - **57. risk_day_anchor is read by no code: pin it or make it real.** Value: `config/settings.yaml` says
   `risk_day_anchor: { tz: UTC, time: "00:00" }  # loss caps reset`, and `Settings.risk_day_anchor` loads it, but no
@@ -26,3 +25,9 @@ status: 'done (built 2026-10-16 in bd76c47 + RUNBOOK 8a268cf: Settings refuses a
     either would stop loading its settings after the deploy. Put the validator's exact error text and the fix
     (delete the key) into `docs/RUNBOOK.md` in the same change.
   Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-19; trading-safety review. The server `settings.local.yaml` check (last bullet) is done by sre on the boxes before the validator ships. Acceptance as above.
+  **Acceptance scorecard 2026-10-16 (product owner, AGENT_STANDARDS 7 checks):** (1) criteria: yes, `tests/test_config.py` (the shipped yaml loads; an edited anchor in
+  settings.local fails naming the fixed day; any other anchor is rejected) passes (re-run 2026-10-16); the RUNBOOK
+  carries the error text and the fix. The check of each server's `settings.local.yaml` is **not on record** (sre,
+  before PR #79 deploys to the boxes). (2) DoD: yes. (3) S1-S12: yes. (4) trading-safety APPROVED. (5) CI/merged:
+  **no, in PR #79 (open)**. (6) PR text: yes (#79 "Day anchors pinned", "Settings"). (7) role and date: yes (due
+  2026-10-19, met). Accepted, conditional on #79 merging and the sre server check.

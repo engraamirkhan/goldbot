@@ -291,17 +291,18 @@ def test_api_and_static_responses_send_no_referrer(tmp_path):
 
 
 # ----------------------------------------------------------------------------- 7. lockout
-def test_lockout_survives_a_restart(team):
+def test_lockout_survives_a_restart(lockout_clock, team):
     s, sec, _ = team
     for _ in range(5):
         with pytest.raises(PermissionError, match="invalid credentials"):
             s.login("a@x.io", "wrong password!!", "000000")
+    lockout_clock[0] += (auth_mod.LOCKOUT_WINDOW_S - 1) * 10**9                # restart 1 s before the window ends
     again = AuthStore(s.dir, owner_email=OWNER)                                # a new process
     with pytest.raises(PermissionError, match="too many"):
         again.login("a@x.io", "approver password 123", totp_code(sec["a@x.io"]))
 
 
-def test_one_ip_is_limited_across_many_emails(team):
+def test_one_ip_is_limited_across_many_emails(lockout_clock, team):
     s, sec, _ = team
     for i in range(auth_mod.IP_LOCKOUT_FAILURES):
         with pytest.raises(PermissionError, match="invalid credentials"):
@@ -309,6 +310,11 @@ def test_one_ip_is_limited_across_many_emails(team):
     with pytest.raises(PermissionError, match="too many"):
         s.forgot_password("v@x.io", totp_code(sec["v@x.io"]), "a fresh viewer password", ip="203.0.113.7")
     s.login("v@x.io", "viewer password 123", totp_code(sec["v@x.io"]), ip="198.51.100.9")   # another IP is fine
+    lockout_clock[0] += (auth_mod.LOCKOUT_WINDOW_S - 1) * 10**9                # 1 s before the window ends: locked
+    with pytest.raises(PermissionError, match="too many"):
+        s.login("v@x.io", "viewer password 123", totp_code(sec["v@x.io"]), ip="203.0.113.7")
+    lockout_clock[0] += 2 * 10**9                                               # 1 s after: the IP is free again
+    s.login("v@x.io", "viewer password 123", totp_code(sec["v@x.io"]), ip="203.0.113.7")
 
 
 def test_failure_rows_are_pruned_to_the_lockout_window(team, monkeypatch):

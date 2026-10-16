@@ -1000,6 +1000,23 @@
       "title": "Expires At",
       "type": "string"
      },
+     "loss_cant_check": {
+      "anyOf": [
+       {
+        "enum": [
+         "paused",
+         "not_summed",
+         "mixed_currencies",
+         "mixed_currencies_paused"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Loss Cant Check"
+     },
      "loss_left": {
       "anyOf": [
        {
@@ -2231,6 +2248,27 @@
       "title": "Remaining",
       "type": "number"
      },
+     "unknown": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Unknown"
+     },
+     "unknown_mixed": {
+      "default": false,
+      "title": "Unknown Mixed",
+      "type": "boolean"
+     },
+     "unknown_paused": {
+      "default": false,
+      "title": "Unknown Paused",
+      "type": "boolean"
+     },
      "used": {
       "title": "Used",
       "type": "number"
@@ -2716,6 +2754,23 @@
       "format": "date-time",
       "title": "Expires At",
       "type": "string"
+     },
+     "loss_cant_check": {
+      "anyOf": [
+       {
+        "enum": [
+         "paused",
+         "not_summed",
+         "mixed_currencies",
+         "mixed_currencies_paused"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Loss Cant Check"
      },
      "loss_left": {
       "anyOf": [

@@ -113,21 +113,79 @@ def test_todays_gains_add_room_before_the_cap_and_an_exhausted_budget_has_none_l
     assert b is not None and b.remaining == 0.0 and b.used == pytest.approx(25.0)
 
 
-def test_mixed_currencies_leave_the_combined_caps_out_with_a_note_instead_of_adding_pounds_to_dollars():
+MIXED = "The accounts report different currencies (GBP, USD), so the combined loss cap can't be checked. "
+AMBER_TAIL = "Each account's own loss limit still applies; exits always run."  # ui-ux-designer 2026-10-16
+
+
+def test_mixed_currencies_mean_the_budget_cant_be_checked_in_amber_never_the_roomier_account_cap():
+    """BACKLOG 61 (UX review 2026-10-16): with a GBP and a USD account the combined caps are left out (pounds are never
+    added to dollars), so the account's own 2% cap alone would be the roomier figure. The budget can't be checked:
+    amber while the supervisor does not halt on it; the account caps stay listed for the entry status's blocks."""
     other = _engine(account="vantage-demo", currency="USD", equity=10_000.0, day_start_equity=10_000.0)
     b = _budget(_engine(), _sup(combined_day_start_equity=11_000.0, combined_equity=10_990.0), [_engine(), other])
     assert b is not None
+    assert (b.unknown, b.unknown_paused, b.unknown_mixed) == (MIXED + AMBER_TAIL, False, True)
+    assert b.cant_check_reason == "the accounts report different currencies"
     assert [c.name for c in b.caps] == ["account 2.0% daily cap", "account 5.0% weekly cap"]
-    assert any("mixed currencies" in n for n in b.notes)
+    assert (b.binding, b.remaining) == ("account 2.0% daily cap", pytest.approx(10.0))   # entry status: unchanged
 
 
-def test_a_stale_or_missing_supervisor_report_keeps_the_account_caps_with_a_note():
-    b = _budget(_engine(), _sup(ts=NOW - 600))
-    assert b is not None and b.binding == "account 2.0% daily cap" and b.limit == pytest.approx(20.0)
-    assert any("stale" in n for n in b.notes)
-    b = _budget(_engine(), {})
-    assert b is not None and b.binding == "account 2.0% daily cap"
-    assert any("supervisor" in n for n in b.notes)
+def test_mixed_currencies_read_red_when_the_supervisor_halts_entries_on_them():
+    """`mixed_account_currencies` halts every account's entries (supervisor.py): the same "can't check", in red."""
+    other = _engine(account="vantage-demo", currency="USD")
+    halt = _sup(halt=True, reasons=["mixed_account_currencies"])
+    b = _budget(_engine(), halt, [_engine(), other])
+    assert b is not None
+    assert (b.unknown, b.unknown_paused, b.unknown_mixed) == (MIXED + "New entries are paused; exits always run.",
+                                                              True, True)
+    assert b.cant_check_reason == "the accounts report different currencies; new entries paused"
+    assert [c.name for c in b.caps] == ["account 2.0% daily cap", "account 5.0% weekly cap"]
+
+
+def test_a_supervisor_halting_on_mixed_currencies_is_believed_even_when_this_view_sees_one_currency():
+    """Its combined figures then add pounds to dollars: never shown, whatever engine files the dashboard can read."""
+    halt = _sup(halt=True, reasons=["mixed_account_currencies"], currencies={"icm-demo": "GBP", "vantage-demo": "USD"})
+    b = _budget(_engine(), halt)
+    assert b is not None and b.unknown == MIXED + "New entries are paused; exits always run." and b.unknown_paused
+    assert not any(c.name.startswith("combined") for c in b.caps)
+
+
+def test_an_account_that_does_not_report_its_currency_next_to_others_reads_as_mixed():
+    b = _budget(_engine(), _sup(), [_engine(), _engine(account="vantage-demo", currency=None)])
+    assert b is not None and b.unknown_mixed and b.unknown is not None
+    assert b.unknown.startswith("The accounts report different currencies (GBP, one not reported)")
+
+
+PAUSED = "New entries are paused; exits always run."
+CANT_CHECK = "so the combined loss cap can't be checked. " + PAUSED
+STALE = "The safety supervisor hasn't reported for over a minute, " + CANT_CHECK
+MISSING = "The safety supervisor's report is missing or unreadable, " + CANT_CHECK
+FUTURE = "The safety supervisor's report is dated ahead of this server's clock (check the server time), " + CANT_CHECK
+
+
+def test_a_rejected_or_capless_supervisor_report_means_the_budget_cant_be_checked_with_the_reason():
+    """The account's 2% (20) alone is roomier than the combined 1.5% (15) the supervisor enforces (release manager,
+    2026-10-16): the budget can't be checked, red when entries are paused on the same report, amber when not; the
+    account caps stay listed for the entry status's spent-cap blocks. The reason matches `engine_should_halt`: no
+    `ts` is stale, a `ts` that is not a number is unreadable."""
+    no_ts = {k: v for k, v in _sup().items() if k != "ts"}
+    for sup, why in [(_sup(ts=NOW - 600), STALE), (no_ts, STALE), ({}, MISSING), (_sup(ts=None), MISSING),
+                     (_sup(ts="junk"), MISSING), (_sup(ts=NOW + 600), FUTURE)]:
+        b = _budget(_engine(), sup)
+        assert b is not None and (b.unknown, b.unknown_paused) == (why, True), sup
+        assert b.cant_check_reason == "supervisor not reporting; new entries paused"
+        assert [c.name for c in b.caps] == ["account 2.0% daily cap", "account 5.0% weekly cap"]
+    halted = {"ts": NOW - 5, "halt": True, "reasons": ["supervisor_error"]}         # Supervisor.error_halt
+    b = _budget(_engine(), halted)
+    assert b is not None and b.unknown_paused
+    assert b.unknown == "The safety supervisor has halted and isn't reporting the combined loss cap. " + PAUSED
+    b = _budget(_engine(), _sup(combined_day_start_equity=0.0, halt=False))           # no engine summed yet
+    assert b is not None and not b.unknown_paused
+    assert b.unknown == ("The safety supervisor hasn't added up the accounts yet, so the combined loss cap isn't "
+                         "shown. Exits always run.")
+    assert b.cant_check_reason == "the supervisor hasn't added up the accounts yet"
+    b = _budget(_engine(), _sup())
+    assert b is not None and (b.unknown, b.unknown_paused, b.cant_check_reason) == (None, False, None)
 
 
 def test_an_engine_file_without_limits_or_day_start_gives_no_budget_rather_than_a_guess():

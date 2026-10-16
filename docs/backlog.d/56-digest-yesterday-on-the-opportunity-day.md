@@ -1,10 +1,9 @@
 ---
 number: 56
-rank: 15
 title: Digest Yesterday line on the opportunity day
 stage: Performance review · RUN
 size: S
-status: 'done (2026-10-16: 147c68c + review fixes cc61ed1, TRACEABILITY V10; code-reviewer APPROVED, ui-ux-designer wording applied) · accountable: implementer · due 2026-10-19'
+status: 'done 2026-10-16 (147c68c + review fixes cc61ed1, merged at ba1c520; code-reviewer APPROVED, ui-ux wording applied; TRACEABILITY V10; ships to main in PR #79) · accountable: implementer'
 ---
 - **56. Digest "Yesterday" line on the opportunity day.** Value: the digest's "Yesterday" proposals and trades
   lines still run 00:00-24:00 UTC (`goldbot/telegram/digest.py` `build_digest`). Its month line and the monthly and
@@ -17,3 +16,9 @@ status: 'done (2026-10-16: 147c68c + review fixes cc61ed1, TRACEABILITY V10; cod
   - the risk lines (loss-cap use) stay on the risk day, 00:00 UTC; no limit changes;
   - reviews: code, ui-ux (Telegram wording).
   Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-19. Acceptance as above.
+  **Acceptance scorecard 2026-10-16 (product owner, AGENT_STANDARDS 7 checks):** (1) criteria: yes, with one approved wording change: the header reads "<day> trading day
+  (ended 22:00 UTC, 23:00 UK)" instead of "Yesterday (to 22:00 UTC)" (ui-ux-designer's wording, cc61ed1). The
+  21:59/22:00, Monday and US DST-week tests are in `tests/test_digest.py` and pass (re-run 2026-10-16); the risk lines
+  stay on the 00:00 UTC risk day. (2) DoD: yes. (3) S1-S12: yes. (4) code APPROVED, ui-ux applied. (5) CI/merged:
+  **no, in PR #79 (open)**. (6) PR text: yes (#79 Digest). (7) role and date: yes (due 2026-10-19, met). Accepted,
+  conditional on #79 merging.

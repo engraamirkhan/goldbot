@@ -551,8 +551,10 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                     p=p.p, ev_r=p.ev_r, spread_points=p.spread_points, top_features=p.top_features, risk_usd=p.risk_usd,
                     currency=p.currency, risk_amount=p.risk_amount, risk_fraction=p.risk_fraction,
                     min_lot_exception=p.min_lot_exception, risk_normal=p.risk_normal, risk_cap=p.risk_cap,
-                    reward_amount=p.reward_amount, loss_left=budget.remaining if budget else None,
-                    loss_left_period=budget.period if budget else None,
+                    reward_amount=p.reward_amount,
+                    loss_left=budget.remaining if budget and budget.unknown is None else None,
+                    loss_left_period=budget.period if budget and budget.unknown is None else None,
+                    loss_cant_check=budget.cant_check if budget else None,
                     expires_at=datetime.fromtimestamp(p.created + p.window_s, tz=timezone.utc))
 
     @app.get("/api/proposals", response_model=list[Proposal])

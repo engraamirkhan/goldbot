@@ -120,8 +120,9 @@ def test_the_minimum_lot_exception_is_still_bound_by_the_absolute_limit_and_leav
 def test_a_trade_that_exactly_fills_the_remaining_budget_is_allowed_and_a_cent_over_is_refused():
     base: dict[str, Any] = dict(risk_per_trade=0.004, multiplier_bounds=(1.0, 1.0))
     st = _state(9_990.0, 10_000.0)                                                # 10 lost so far
-    ra = RiskGate(RiskLimits(**base)).check(_usd(4.0, 1.0), st).risk_amount        # the trade's stop risk, limit off
-    assert ra > 0
+    off = RiskGate(RiskLimits(**base)).check(_usd(4.0, 1.0), st)                  # limit off
+    ra = off.risk_amount + off.cost_amount     # the trade's stop risk and round-trip cost (BACKLOG 36)
+    assert off.risk_amount > 0 and off.cost_amount > 0
     ok = RiskGate(RiskLimits(daily_loss_limit_abs=10.0 + ra, **base)).check(_usd(4.0, 1.0), _state(9_990.0, 10_000.0))
     assert ok.allowed                                                             # projection == limit: allowed
     over = RiskGate(RiskLimits(daily_loss_limit_abs=10.0 + ra - 0.01, **base)).check(_usd(4.0, 1.0), _state(9_990.0, 10_000.0))

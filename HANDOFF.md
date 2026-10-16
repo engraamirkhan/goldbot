@@ -5,6 +5,17 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- The approval window no longer trusts the wall clock alone (2026-10-16, BACKLOG 60; needs trading-safety review).
+  `Proposal.expired` was `time.time() > created + window_s`, so a backward clock step stretched the owner's 90 s
+  window and a pending file stamped in the future (a restored backup, a bad write) stayed approvable. Now
+  `window_over` (goldbot/telegram/approvals.py) uses the heartbeat rule of BACKLOG 58: a `created` more than
+  `CLOCK_AHEAD_TOLERANCE_S` (5 s) ahead, or not a finite number, counts as expired. The bus, the outbox, the dashboard
+  list and the digest all use it. The digest counts such a pending proposal as EXPIRED_UNAPPROVED. The engine's
+  `ApprovalCenter` also keeps a monotonic deadline per proposal it raised, set at `propose` to now + `window_s`. A
+  click after that deadline counts as EXPIRED_UNAPPROVED whatever the wall clock says. The deadline is in memory only,
+  with no new persisted field. After a restart the engine holds no proposal, so one left on disk is never executed,
+  and it expires by the wall-clock rule with the guard. One stamped days ahead is archived at engine start. Tests:
+  tests/test_approval_window_clock.py.
 - Sign-in end-to-end tests (2026-10-16). web/e2e/auth.spec.ts runs on its own e2e server (Playwright project
   `auth`, port E2E_PORT+1, independent of the dashboard story) and covers: login (wrong password or code refused
   with the same words, sign out), forgot-password (an unknown account answered like a wrong code; nothing mailed), the
@@ -19,6 +30,24 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   builds it; `--host` accepts only 127.0.0.1 or ::1), and the server removes its temp state dir on SIGTERM. The auth
   story runs without retries (a retry would reuse spent first-run setup and the owner's hourly link count). Tests:
   tests/test_e2e_mailer.py.
+- **BACKLOG 52 security re-review, both LOW findings fixed (implementer).** `automode.audit_to` now opens the
+  audit store with `auth.owner_email` from settings, as `owner_totp_ok` and the dashboard do. Before this, the
+  Telegram service logged a false "auth.owner_email is not set" warning on its first audit write once dashboard
+  users existed. A value that really is unset or mismatched still warns. The docstring now says the audit lives in
+  aux.db. `docs/RUNBOOK.md` has a new rollback step for after any rollback below `04f6266`, once you have rolled
+  forward: `grep` approvals/done for `decided_by`/`decided_via`, then run a scrub block that removes only those two
+  fields and keeps the channel, the outcome, `decided_ts` and the file's modification time. A test runs the block
+  exactly as printed. The step says not to delete done files: the auto-mode evidence, the digest and the
+  performance report count them. Telegram decisions have an audit row only from `3817db7`.
+- **Backup and restore-drill errors keep the fix and the RUNBOOK pointer (2026-10-16; health text only; SRE
+  review).** The scheduler job check cut a failed job's first error line at 160 characters, so a restic-not-configured
+  message lost its trailing "RUNBOOK 'Backups'". The backup and drill job errors now start with
+  `RUNBOOK 0.6 'Backups and restore':`. Restic not set up reads "RUNBOOK 0.6 'Backups and restore': backups not set up
+  on the brain; run goldbot accounts set <key> for: <keys>": no exception class name, no backticks, at most 200
+  characters, the most the `backup_age` check shows. The job check shows 300 characters (`JOB_ERROR_CHARS`). Test:
+  `test_unconfigured_restic_health_reasons_name_the_fix_command_and_the_runbook` runs both jobs through the real
+  scheduler with no keys and checks `job:backup`, `job:restore_drill`, `backup_age` and `restore_drill`. The
+  scheduler still prefixes the job check's line with `BackupError:`.
 - **Engine state keeps moving while the market is closed (2026-10-16; BACKLOG 59; trading-safety and SRE review
   pending).** The engine wrote `engine_<acct>.json` on tick time only. With the market closed the tick stamp is
   frozen, so the file stopped, and health failed `bridge_compat:<acct>` once its `checked_at` was 5 min old: a
@@ -154,6 +183,36 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     printed the action's attribute dict; now "8%%", with a test that `--help` renders.
   - Tests: tests/test_digest.py 10 new (12 cases), 1 updated; tests/test_report_days.py 2 new (5 cases);
     tests/test_min_lot.py 1 new. RUNBOOK 0.5 "Morning digest" updated.
+- Gates on the frozen next-PR candidate tree 626b56b (nobody editing; macOS, own venv, `GATES_WORKERS=4`, Node 22.22.3). All green. Raw output of `scripts/gates.sh --web` plus e2e:
+
+  | Gate | Result |
+  |---|---|
+  | unit (`pytest -m "not integration"`) | PASS, 5194 passed in 159.33s |
+  | integration (`pytest -m integration`) | PASS, 80 passed, 1 skipped, 1 warning in 382.26s |
+  | dry_run | PASS, lookahead check: 0 of 240 columns use future data [] |
+  | ruff | PASS, All checks passed! |
+  | mypy | PASS, Success: no issues found in 354 source files |
+  | pre-commit (`--all-files`) | PASS |
+  | web (npm ci, lint, typecheck, vitest, build) | PASS, Tests 129 passed (129) |
+  | e2e (`npm --prefix web run test:e2e`) | PASS, 19 passed (7.2m) |
+
+  Total wall time of gates.sh: 384 s. E2E needed `PW_CHROMIUM_PATH` set to the cached chromium_headless_shell-1208 (Playwright wanted build 1248, not installed); the first attempt without it failed on browser launch only. The `CancelledError` traceback at e2e server shutdown is the websocket sleep being cancelled at teardown, not a test failure.
+- **Gates on the frozen release candidate 3db12c8 (claude/gifted-goldberg-lcb7pl tip), 2026-10-16, all PASS.**
+  `GATES_WORKERS=4 scripts/gates.sh --web` (372 s total) plus e2e, on a tree nobody edited:
+
+  | Gate | Result |
+  |---|---|
+  | dry_run | PASS: lookahead check: 0 of 240 columns use future data [] |
+  | integration | PASS: 80 passed, 1 skipped in 370.03s (0:06:10) |
+  | mypy | PASS: Success: no issues found in 357 source files |
+  | pre_commit | PASS |
+  | ruff | PASS: All checks passed! |
+  | unit | PASS: 5235 passed in 192.88s (0:03:12) |
+  | web (lint, typecheck, unit, build) | PASS: Tests 131 passed (131) |
+  | e2e (`npm --prefix web run test:e2e`) | PASS: 19 passed (7.3m); chromium_headless_shell-1208, `PYTHON` set to the worktree venv |
+
+  Notes: e2e needs `PYTHON=<venv>/bin/python` (playwright.config.ts defaults to bare `python`, which resolved to a pyenv 3.10 without duckdb on the first try).
+  dashboard.spec.ts takes 5.7 m (Playwright flagged it slow). The e2e server logs a CancelledError on shutdown (graceful-shutdown timeout on the /ws sleep, goldbot/api/app.py:795); it does not fail the run.
 - Heartbeats stamped in the future fail closed (2026-10-16, BACKLOG 58). Before this, a `ts` ahead of the reader's
   clock, or a NaN, made `now - ts > limit` False, so a dead supervisor whose last write carried a fast clock (or came
   from a restored backup) never halted the engines. The shared rule is `goldbot.data.timeutil.heartbeat_problem`:
@@ -187,6 +246,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - core.db is opened once per engine, with a 500 ms write busy timeout;
   - the paper broker declares its balance reads exact, so one read raises the mark there.
   The ADR is renumbered 0018 (0017 is CostImputer).
+- The kill switch's close-everything choice is now state (2026-10-16, trading-safety finding F1 MEDIUM; re-review
+  APPROVED 6cf86e3, with two follow-ups fixed in the next commit). Before, `everything` was true only on the tripping
+  read, and the owner-mode write (`ApprovalBus.set_mode`) ran before the flatten: in auto mode a full disk raised out
+  of it and closed nothing, and a positions() read failing on that read did the same; every later run closed only this
+  engine's magic range, so a manual or other-magic position stayed open. Now `Engine._kill_everything`
+  (goldbot/engine/runner.py) is set before any I/O on the trip, saved with the risk state (`kill_everything` in
+  `risk_<account>.json`; absent = false), used by every retry (tick, no-quote pass, halted refresh) and after a restart
+  (`_kill_pending` starts true), and cleared only once a run has closed every XAUUSD position on the account (all
+  magics; `MT5Broker.positions()` reads the engine's symbol only, so other symbols are untouched, an owner decision).
+  The mode write moved after the flatten into `_reset_owner_mode`: it never raises, a failure is a tick error and is
+  retried on the next kill-switch run, and a halted engine retries it after a restart (re-review LOW, A10); the
+  in-memory `approval_mode = "propose"` already blocks auto entries. No stop widened, no size added, no new order path.
+  ADR 0016 carries the correction. Tests: tests/test_kill_switch_everything.py (7).
 - Lane test loop (2026-10-16): lanes iterate on affected tests only with `scripts/lane_test.sh` (pytest-testmon):
   `seed` copies the integrator's `.testmondata` for the lane's base commit from `~/tmp/testmon/<sha>/` (`cp -c`;
   without one the first `iter` runs the full suite), `iter` runs `pytest --testmon -n ${GATES_WORKERS:-2} -q` (never
@@ -195,6 +267,86 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   DB for that sha. Rule: lanes iterate with `scripts/lane_test.sh iter`; the full suite (`scripts/gates.sh`) runs once
   before handing back; the integration branch and release run the full gates. Selection is iteration only and
   misses non-Python inputs (config, data files) that testmon does not track, which is why the full gates stay.
+- `test_lockout_survives_a_restart` no longer depends on the wall clock (2026-10-16, BACKLOG 55). Root cause: the
+  lockout counts `auth_failures` rows by `time.time_ns` and prunes rows older than 15 minutes on every attempt, so a
+  run where the wall clock moved 15 minutes between the first failure and the restarted sign-in (a paused VM, a
+  starved worker) pruned the five failures, and the sign-in went through ("DID NOT RAISE"). A lock held on aux.db
+  past `busy_timeout` was ruled out: it raises `database is locked` and never lets a sign-in through. The test now
+  takes the `lockout_clock` fixture (tests/conftest.py: `time.time_ns` pinned, moved only by the test) and restarts
+  the store 1 s before the window ends. That makes it stronger: it now fails when the window is halved as well as
+  when the failure write is disabled. Evidence: with the lockout clock running 10,000 times faster than real time
+  (a scratch pytest plugin), the old test failed 20 of 20 and the new one passed 200 of 200; it also passed 200 of
+  200 under CPU stress (load average up to 256). Production code is unchanged: `_reserve` checks and counts in one
+  BEGIN IMMEDIATE transaction, and no race was found.
+  - Follow-up for the test-engineer: the other lockout tests (tests/test_api.py `test_lockout_after_five_failures`,
+    `test_one_ip_is_limited_across_many_emails`, tests/test_api_code_lockout.py) still use the wall clock and can
+    fail the same way. They can switch to `lockout_clock`.
+- **Loss budget reads "can't check" when the supervisor's report is missing or rejected (release manager finding,
+  2026-10-16; display only; trading-safety and UX review).** With supervisor.json missing, torn, stale (no `ts`
+  counts as stale, as in `engine_should_halt`), dated ahead or without its caps, `account_view._combined` dropped the
+  combined 1.5%/4% caps. The Overview card and the safety-strip chip then showed the engine's 2% daily cap, the
+  roomier figure. Now:
+  - `LossBudget.unknown` carries the owner's reason (for example "The safety supervisor hasn't reported for over a
+    minute, so the combined loss cap can't be checked. New entries are paused; exits always run.").
+  - `LossBudget.unknown_paused` says whether the engines pause new entries on the same report. When they do, the
+    card ("Loss budget: can't check", the reason, no amount) and the chip ("can't check") are red. They are amber
+    when the supervisor hasn't added up the accounts yet.
+  - The approval cards read "loss budget left today: can't check (supervisor not reporting; new entries paused)" on
+    Telegram, and the same in red on the web. `/api/proposals` gains `loss_cant_check` ("paused" / "not_summed"),
+    with `loss_left` null.
+  - A cap rebuilt from settings was rejected: one account's equity misses the other accounts' losses.
+  - Entry blocks are unchanged: the account caps stay in `caps`, and the engines already halt on the report.
+  - Mixed currencies still show the account cap (BACKLOG 61).
+
+  Tests: `test_a_rejected_supervisor_report_shows_the_budget_as_unknown_never_the_roomier_account_cap` (API, five
+  cases), `test_api_proposal_says_the_budget_cant_be_checked_without_an_amount`,
+  `test_a_rejected_or_capless_supervisor_report_means_the_budget_cant_be_checked_with_the_reason`, and the
+  BalanceCard, SafetyStrip and approval-line component tests.
+- **Mixed-currency accounts: the loss budget reads "can't check", not the account's own cap (BACKLOG 61, UX review
+  2026-10-16; display only; ui-ux-designer 2026-10-16: amber text changed, red and approval text approved;
+  trading-safety and code review of 4c3d087 pending).** When the accounts reported different currencies,
+  `account_view._combined` left out the combined 1.5%/4% caps with a note. The Overview card, the safety-strip chip
+  and the approval cards then showed the account's 2% cap, which is the roomier figure. Now:
+  - `LossBudget.unknown` carries the owner's reason, for example "The accounts report different currencies (GBP,
+    USD), so the combined loss cap can't be checked. Each account's own loss limit still applies; exits always
+    run." A new field, `LossBudget.unknown_mixed`,
+    names the cause.
+  - The budget is amber by default. It is red ("New entries are paused; exits always run.") only while the supervisor
+    halts on `mixed_account_currencies`. A leftover engine file in another currency that is over 60 s old does not
+    halt the supervisor, so it shows amber.
+  - If the supervisor reports `mixed_account_currencies`, the budget reads "can't check" even when the dashboard sees
+    only one currency, because the supervisor's combined figures then add pounds to dollars. An account that does not
+    report its currency counts as mixed.
+  - `/api/proposals` `loss_cant_check` gains `mixed_currencies` (amber) and `mixed_currencies_paused` (red), with
+    `loss_left` null. Telegram and the web approval cards read "can't check (the accounts report different
+    currencies[; new entries paused])".
+  - Entry blocks are unchanged: the account caps stay in `caps`, and the supervisor's halt is still listed. Nothing
+    on the order or exit path changed.
+  - Until BACKLOG 28's currency lane converts the amounts, this is the end state.
+
+  Tests: `test_mixed_currencies_mean_the_budget_cant_be_checked_in_amber_never_the_roomier_account_cap`,
+  `test_mixed_currencies_read_red_when_the_supervisor_halts_entries_on_them`,
+  `test_a_supervisor_halting_on_mixed_currencies_is_believed_even_when_this_view_sees_one_currency`,
+  `test_a_gbp_and_a_usd_engine_show_the_budget_as_cant_check_never_the_account_cap` (API, amber and red),
+  `test_api_proposal_with_a_gbp_and_a_usd_engine_says_cant_check_without_an_amount`, and the BalanceCard,
+  SafetyStrip and approval-line tests.
+- **MT5 bootstrap reproduces the hand-fixed box (sre; postmortem `docs/incidents/2026-10-16-mt5-debugger-found-under-wine.md`, first entry in the new `docs/incidents/`).**
+  `goldbot/ops/linux/mt5_bootstrap.sh` now installs `winehq-devel` (wine-stable 11.0 trips MT5's "A debugger has
+  been found", WineHQ bug 58043, fixed in 11.6), runs `wineboot` with `WINEDLLOVERRIDES=mscoree=` (no Mono dialog),
+  saves the installer as `python-installer.exe`, treats mt5setup's exit code as meaningless and instead fails unless
+  `C:\MT5\ICMarkets\terminal64.exe` exists. The Windows Python is called by one absolute path, `WINPY`
+  (`/home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe`), in the bootstrap,
+  `goldbot-bridge@.service`, the `goldbot-mt5` wrapper, `goldbot-deploy` and the RUNBOOK: a bare `wine python` runs a
+  `python.exe` from the current directory first (`/opt/goldbot`, writable by mt5). The bootstrap refuses a `WINPY`
+  that does not match `PYVER`; `tests/test_bootstrap_sh.py` checks every copy. **Wine is not pinned: that is the
+  owner's decision, ADR 0019 (proposed, sre recommends holding the installed version).**
+  **The box already set up by hand** keeps its old `goldbot-bridge@.service` (bare `wine python`) and the old
+  `goldbot-deploy` until updated. With the book flat or at the weekend, from root's own clone at the merged commit
+  (as RUNBOOK 0.5 "Installing a new goldbot-deploy", hash checked on the Mac): install `goldbot-bridge@.service` into
+  `/etc/systemd/system/` and `goldbot-deploy.sh` as `/usr/local/sbin/goldbot-deploy`, rewrite `/usr/local/bin/goldbot-mt5`
+  from the bootstrap's heredoc, `sudo systemctl daemon-reload && sudo systemctl restart goldbot-bridge@icm-demo`, then
+  check `systemctl is-active goldbot-bridge@icm-demo` and `test -f` on the `WINPY` path as mt5. Not run on any host yet:
+  the bootstrap change is checked by shellcheck and static tests only.
 - **One north-star day for the owner's reports (2026-10-16; TRACEABILITY V9, BACKLOG 57; quant and trading-safety
   review pending).** Before this, the monthly report used the UTC calendar day. The performance report used the
   opportunity day, which rolls at 22:00 UTC. Each had its own day-bucketing and weekday-count code, so a close between
@@ -269,6 +421,94 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   pins the usage text, every side-effect-free `--help`, which function each command reaches and with which arguments,
   the systemd, PowerShell and deploy invocations, and the import closure. tests/test_ops_run_registry.py pins the
   registry order, the re-exports and the call-through rule.
+- Round-trip costs in the daily £ projection (2026-10-16, BACKLOG 36, trading-safety review LOW-6). Accounts with
+  an absolute daily loss limit (icm-demo, £50) now refuse an entry when loss so far (+ open risk) + stop risk + round
+  trip > the limit. Before, the round trip was left out. The round trip has two parts, both x lots x contract x fx in
+  the account currency:
+  - spread, slippage and commission: `cost_atr` x ATR, the engine's `_cost_atr` (the nightly cost table, else
+    `cost_atr: 0.10`);
+  - the paid swap, when a broker rollover falls before 00:00 UTC.
+
+  The swap reuses ADR 0017's rule. `cost_imputation.account_swap` takes the table's measured rates, else the settings
+  prior. `paid_swap_per_oz` counts the triple day and never counts a credit. The closed-trade charge now calls the same
+  two helpers. The projection can only grow: a negative cost or a credit counts as 0, and a NaN swap refuses
+  (`invalid:swap_usd_per_oz`). The approval re-check prices the swap again at the click. No other check reads the
+  cost, and exits are untouched. Worked example at £5,000 GBP (fx 0.75, ATR $10, 0.01 lot): stop £7.50, round trip
+  £0.30, one night of the -$60 prior £0.45 (£1.35 on Wednesday). With £42 lost, the projection was £49.50 (allowed)
+  and is now £50.25 (refused). New `GateDecision.cost_amount` and `Intent.swap_usd_per_oz` (in-memory only, nothing
+  persisted). Tests: tests/test_projection_costs.py; three older boundary pins moved by exactly the cost.
+
+  Trading-safety review fixes (one MEDIUM, four LOW):
+  - A NaN swap rate no longer reads as "pays nothing". `SwapSpec` and the cost table's swap fields are finite-only,
+    so a NaN table fails to load and the prior is charged. A NaN broker reading becomes "no swap" in the nightly job.
+    If a non-finite rate still reaches the engine, `_swap_usd_per_oz` returns NaN and the gate refuses.
+  - A swap that cannot be priced at the click refuses the approval (`swap_unavailable`).
+  - The spread is counted twice on purpose: `cost_atr` includes it, and so does the stop risk measured from the fill.
+    This is conservative and recorded in the gate comment and R42.
+  - Quant, code and trading-safety reviews done.
+- Quant review 2026-10-16 fixes (e501d56, 1589755, 4ed8270; quant-reviewer re-review owed, gate 1 is on the
+  promotion path).
+  - HIGH: gate 1 (`backtest_to_paper`) and gap watch read `registry.promotion_refusal` / `promotion_pass_counts`:
+    `gate_pass_counts`, plus the latest evaluated rerun of the config decides, plus a `from_discovery` config needs
+    its passed holdout scoring (the rule `passed_gates` already applied). A discovery-derived pass without its
+    holdout no longer meets gate 1 or becomes the paper/live backtest reference.
+  - MEDIUM: `metrics.summarize` stores `dsr_inputs` (`DsrInputs`: sr, n, skew, kurtosis, var_sr_trials). Gate 1
+    recomputes the DSR on the registry's current `n_trials_effective`; a row without stored inputs fails the `dsr`
+    item closed ("no stored DSR inputs ... re-run the trial"). Every registry row written before this commit is in
+    that state, so gate 1 stays unmet until the best trial is re-run.
+  - MEDIUM: `passed_gates` no longer takes best-of-N over reruns: only the latest evaluated row (same family, config
+    hash, feature version, costs recorded) decides. Gap watch now founds from the latest rerun's trial id.
+  - MEDIUM: the ruin Monte Carlo prices a closed trade without R from its stop, side x (exit - entry) / |entry -
+    initial stop|, and charges it as a price return. A row that cannot be priced is left out, counted
+    (`n_excluded`, in the report notes) and makes the cost basis "unknown".
+  - LOW: `research_pass` refuses a matching pending queued row that pins no `data_digests`; `--discover` refuses to
+    run when `research.holdout_from` is set but `holdout_window()` is None.
+  - Tests: tests/test_phase_gates.py (gate_1_* tests), tests/test_research_discipline.py
+    ::test_a_later_failing_rerun_of_the_same_config_revokes_an_earlier_pass, tests/test_gate_pass_counts.py,
+    tests/test_ruin.py::test_a_price_return_row_without_r_is_priced_from_its_stop_and_charged_not_dropped,
+    tests/test_discover_holdout_and_digests.py (fail-closed tests), tests/test_persistence_compat.py (DsrInputs).
+- Trial registry push re-checks the release asset just before the swap (2026-10-16, BACKLOG 51). The VPS monthly loop
+  pushes `research-v1/registry.jsonl` outside the workflows' `concurrency: research-registry`, so a workflow save
+  that landed between the loop's pull and its push was overwritten, and the other way round too. Both writers now run
+  one implementation: `goldbot.research.registry_sync`, over HTTP on the VPS and through `gh` in the workflows.
+  `scripts/registry_release.sh fetch | save | recover` is a thin wrapper over it. Each save is a compare-and-swap:
+  - Note the asset's stamp (id, updated_at, size, digest) at the pull.
+  - Upload the merged rows as `registry.jsonl.pending-*`.
+  - Re-read the stamp, then delete the pulled asset by its id.
+  - Rename the pending asset, then re-read: published means our id is the lowest-id `registry.jsonl`, with the
+    deleted id filtered out. The rename's status code is not relied on. A re-read that still lists the deleted id,
+    or does not list our upload, is stale and is read again after a wait; our upload is never dropped on one.
+
+  Downloads are by asset id (`gh api -H 'Accept: application/octet-stream' .../releases/assets/<id>`), and every
+  `gh` call times out after 120 s. `recover` prints what each copy adds (row count and trial keys) before it
+  publishes.
+
+  Another writer is detected by a changed stamp, a 404 on the delete, or another copy being published at the rename.
+  The pending upload is then dropped, and the writer waits a jittered 0.5-1.5 s per attempt, pulls, merges and
+  retries, at most 3 times. After that it fails loudly. On the VPS, `registry_sync` records `failed: ...` and the
+  loop carries on; in a workflow the job fails. The local file keeps every union it saw, so a lost race drops no
+  row. The keyed union counts each trial once in the deflated Sharpe.
+
+  Once the old asset is deleted, the pending upload is never deleted unless another copy is published. If the rename
+  keeps failing, the upload stays and the save fails with "run `scripts/registry_release.sh recover`". `recover`
+  unions every `registry.jsonl` and `registry.jsonl.pending-*` on the release and publishes the result the same way.
+  Reads never start from an empty registry when the release exists, in two cases:
+  - a pending upload with no published copy (a writer mid-swap, or stranded);
+  - a release with no `registry.jsonl` at all, unless `--bootstrap` is passed.
+
+  The refusal of a union shorter than the published copy is kept, and the VPS applies it too. `--clobber` is no
+  longer used. GitHub has no conditional upload, so the re-check alone is not atomic with the delete; the delete by
+  id and the post-rename re-read are what keep that window safe. A writer outside this protocol (a manual
+  `gh release upload --clobber`) is still not protected against.
+
+  Rollback: a pre-51 VPS release reads a pending-only release as an empty registry and its push deletes and
+  re-uploads `registry.jsonl` directly. Do not roll the VPS back while a pending asset is stranded; run `recover`
+  first.
+
+  Tests: tests/test_registry_push_race.py and tests/test_registry_release.py. They cover another writer landing
+  after the upload, before the delete and during the rename; a rename that fails, or answers 200 without renaming;
+  two protocol writers interleaved, including the first-ever push; a failed re-check; recover; bootstrap; and the
+  bounded-retry failure.
 - **Q1 readiness corrected and the owed counts run (research director, 2026-10-16).** `macro-v1` has been published
   since 2026-10-13 (scheduled `data-macro` run 38394945106); the docs that said it did not exist are corrected.
   count-owed-events was dispatched on `main` (run 38931951849, success, commit `eafc6ce`). It needs no `calendar-v1`:
@@ -284,6 +524,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     schedule fails on 2026-10-18 without it.
   - Not dispatched: the first `preregister-quarter` dry run (read-only); this session's permission policy refused it.
     New date 2026-10-20 (research-director).
+- **Research job check on the coverage triage (research director, 2026-10-16; nothing dispatched, no outcome
+  read).** The Q1 readiness list (`docs/research/preregistration-2027Q1.md`) now carries the data gaps G1-G5 as
+  item 5, each with one accountable role and a date (G1/G2 repair 11-06, G3 recount 11-13, G4 files final 12-14,
+  G5 Saturday-retry cap 10-27). **H-01 is AT RISK:** its lower bound of 152 against the retire floor of 150 was
+  counted on data-v1 with 21 research-window weekdays missing (9 of H-04's 10 sample-rule drops are those gap days).
+  The planned 11-01 script recount and the 11-13 recount on repaired data are merged into **one count-owed-events
+  run on `main` after G1 closes, by 11-13**; < 150 withdraws H-01 by its rule and the 2027Q1 reservation goes 8 -> 7.
+  The evaluator adds a G3 check row by 11-14. W1-5 (H-13 cost filter, strategy-researcher) was not started and is
+  scheduled to start Mon 10-19 (due 10-30). The performance analyst starts BACKLOG 45 (holiday measurement) now: it
+  is not blocked; draft 10-23, final 10-30.
+  - Next (data-engineer, Tue 10-27 / Fri 11-06): `check_coverage.py` and the no-shrink merge, then the refetches (G1,
+    G2, G5). No `full_refresh` until then.
+  - Next (research-director, by Fri 11-13): dispatch the merged recount once G1 is verified; paste it under H-01/H-04.
 - **Retired-family trial lists match the registry (BACKLOG 49, 2026-10-16; docs and settings mirror only; quant
   review).** `research.retired_families` and `hypotheses.md` B listed R-01 `mean_reversion` as `[3]` and R-03 `trend`
   as `[2]`. `research-v1`'s registry (20 rows) holds #3, #5, #10, #12 and #2, #4, #9, #14. Both lists are now the
@@ -1632,6 +1885,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the first unblocker and no new builder lane starts before it; trading-safety is over its review queue limit, so a
   second trading-safety reviewer lane starts first. M2 moves from 11-14 – 12-12 to 10-30. The owner decision queue
   (OD-1 to OD-14, with deadlines) is asked once on #34.
+- **BACKLOG 59 SRE re-verify: APPROVE (sre, 2026-10-16, 6287d10 + 412fd0d, merged at a13c8a3).** Evidence:
+  `tests/test_weekend_reopen_alerting.py` (700c116) runs the engine, the bridge and the minute-by-minute health
+  poll with `alert_text` on the production zone (Europe/Athens; the table opens 22:02 UTC Sun 18 Oct). No page
+  through the close, the weekend or a first quote up to 5 min after the open; a bridge that dies on Saturday pages
+  `bridge:` within 2 min and the engine's verdict goes `unchecked` (it is not refreshed by the heartbeat); a dead
+  engine pages; an open market with no quote pages `bridge_compat:` at the 5-min verdict age and recovers. The
+  supervisor's 60 s freshness rule only gains (weekend files now read fresh; no new halt reason). Two notes, neither
+  blocking: (1) pre-existing, an engine STARTED in an open session before its first quote pages `engine:` "stale
+  feed" once and recovers; start the engine on Sunday while the market is still closed (about 21:50 UTC) or only
+  after the terminal shows a fresh XAUUSD quote. (2) LOW: the frozen-feed page reads "engine has not confirmed the
+  bridge (its check may be stuck)", not "no quotes in an open market"; a clearer reason is a follow-up.
+- **MT5 login on a generic-installer terminal (sre, 2026-10-16).** Postmortem
+  `docs/incidents/2026-10-16-mt5-login-generic-installer.md`; ADR 0020 keeps MetaQuotes' installer and RUNBOOK 0.3
+  logs in through File -> Open an Account -> Raw Trading Ltd; `mt5.initialize` gets `timeout=60000` beside `path=`
+  (`MT5_INIT_TIMEOUT_MS`); the bridge requirements header no longer shows a bare `wine python`.
 - **H-06 preset and its owed-event count (BACKLOG 48, 2026-10-11; quant review needed).** tsmom preset `slow_macro`
   = H-01's `slow` + `macro_gate` (agent `tsmom-g0-fed4baec9f`; `slow` and the default ids unchanged): an H-01 candidate
   is kept only when the 20-observation changes of DFII10 and DTWEXBGS (`macro_drivers`' columns, `asof_join` on

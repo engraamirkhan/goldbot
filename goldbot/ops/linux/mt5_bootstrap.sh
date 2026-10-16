@@ -17,11 +17,18 @@ PYVER=3.11.9
 # it was derived from a download whose md5 matched python.org's (e8dcd502e34932eebcaf1be056d5cbcd) and whose
 # Sigstore bundle verified for pablogsal@python.org (https://accounts.google.com). Bump with PYVER, the same way.
 PY_SHA256=5ee42c4eee1e6b4464bb23722f90b45303f79442df63083f05322f1785f5fdde
+# The Windows Python, always called by this absolute path (bootstrap, goldbot-bridge@.service, goldbot-mt5,
+# goldbot-deploy): Windows looks in the current directory before PATH, so a bare `wine python` runs any python.exe
+# in the working directory (/tmp next to the installer, or the service user's /opt/goldbot) instead. A Unix path
+# (Wine accepts one) keeps backslashes out of systemd and shell quoting. Bump the PythonXY part with PYVER; the check
+# below and tests/test_bootstrap_sh.py refuse a mismatch.
+WINPY=/home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe
 REF=${1:-}
 LOG=/root/goldbot-bootstrap.log
 if [ -n "$REF" ] && ! [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
   echo "usage: sudo bash mt5_bootstrap.sh [<40-hex commit id on main>]"; exit 2
 fi
+[[ "$WINPY" == */Python"$(echo "$PYVER" | cut -d. -f1,2 | tr -d .)"/python.exe ]] || { echo "WINPY does not match PYVER $PYVER"; exit 1; }
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 [ "$(uname -m)" = x86_64 ] || { echo "MT5 needs an x86_64 VM (E2.1.Micro), not ARM"; exit 1; }
 # A dropped SSH session must not stop the install half-way (docs/AGENT_STANDARDS.md "Root-run tooling"): SIGHUP and
@@ -55,7 +62,13 @@ curl -fsSLo /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-buil
 curl -fsSLo "/etc/apt/sources.list.d/winehq-$VERSION_CODENAME.sources" \
   "https://dl.winehq.org/wine-builds/ubuntu/dists/$VERSION_CODENAME/winehq-$VERSION_CODENAME.sources"
 apt-get update -y
-DEBIAN_FRONTEND=noninteractive apt-get install -y --install-recommends winehq-stable
+# winehq-devel, not -stable: Wine 10.3 to 11.5 (so wine-stable 11.0) make the current MT5 build's protection report
+# "A debugger has been found running in your system" (WineHQ bug 58043, fixed in 11.6). MetaQuotes' mt5linux.sh
+# uses winehq-staging. Installing it replaces winehq-stable (both provide /usr/bin/wine).
+# NOT PINNED, deliberately: whether to pin a Wine version (and which) is an OWNER DECISION, open in
+# docs/decisions/0019-wine-version-for-the-mt5-box.md (proposed). Until the owner decides, every run (and every
+# `apt-get upgrade`) takes the newest winehq-devel; docs/incidents/2026-10-16-mt5-debugger-found-under-wine.md.
+DEBIAN_FRONTEND=noninteractive apt-get install -y --install-recommends winehq-devel
 DEBIAN_FRONTEND=noninteractive apt-get install -y git curl xvfb x11vnc chrony
 systemctl enable --now chrony
 
@@ -96,21 +109,32 @@ systemctl daemon-reload
 systemctl enable --now goldbot-xvfb
 
 # Wine prefix (Windows 10), Windows Python, MT5 terminal at C:\MT5\ICMarkets (the path config/accounts.yaml expects)
+# The installed interpreter is called by $WINPY (top of file): a bare `python` in /tmp would run the installer saved
+# there (its Modify Setup dialog blocks the script), which is why the installer is also not named python.exe.
 sudo -u mt5 -H bash -lc "
   set -euo pipefail
   export DISPLAY=:99 WINEDEBUG=-all WINEARCH=win64
-  wineboot -i && wine reg add 'HKCU\\Software\\Wine' /v Version /d win10 /f
+  # mscoree off for this one call: no Wine Mono download dialog to block an unattended run (MT5 and Python need no .NET)
+  WINEDLLOVERRIDES=mscoree= wineboot -i && wine reg add 'HKCU\\Software\\Wine' /v Version /d win10 /f
   cd /tmp
-  curl -fsSLo python.exe https://www.python.org/ftp/python/$PYVER/python-$PYVER-amd64.exe
-  echo '$PY_SHA256  python.exe' | sha256sum -c -     # refuse a changed installer before Wine runs it
-  wine python.exe /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
+  curl -fsSLo python-installer.exe https://www.python.org/ftp/python/$PYVER/python-$PYVER-amd64.exe
+  echo '$PY_SHA256  python-installer.exe' | sha256sum -c -     # refuse a changed installer before Wine runs it
+  wine python-installer.exe /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
+  rm -f python-installer.exe
+  # The MetaQuotes generic installer, kept on purpose (docs/decisions/0020-mt5-installer-generic-plus-company-search.md):
+  # it ships NO IC Markets servers, so File > Login to ICMarketsSC-Demo silently never connects until the owner adds
+  # the company once with File > Open an Account > ICMarkets > Raw Trading Ltd (RUNBOOK 0.3)
   curl -fsSLo mt5setup.exe https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe
-  wine mt5setup.exe /auto /path:'C:\\MT5\\ICMarkets'
+  # mt5setup exits 1 even after a complete /auto install, so success is the installed terminal, not the exit code
+  wine mt5setup.exe /auto /path:'C:\\MT5\\ICMarkets' || true
+  rm -f mt5setup.exe
+  test -f ~/.wine/drive_c/MT5/ICMarkets/terminal64.exe || { echo 'MT5 terminal not installed at C:\\MT5\\ICMarkets'; exit 1; }
+  cd ~
   # exact versions and sha256 from uv.lock (scripts/bridge_requirements.py), wheels only, nothing unpinned: no pip
   # self-upgrade, and goldbot is put on the path with a .pth file instead of an editable build (that would fetch an
   # unpinned setuptools into the build environment)
-  wine python -m pip install --require-hashes --no-deps --only-binary :all: -r 'Z:$ROOT/goldbot/ops/linux/mt5-bridge-requirements.txt'
-  wine python -c 'import pathlib, sysconfig; pathlib.Path(sysconfig.get_paths()[\"purelib\"], \"goldbot.pth\").write_text(\"Z:$ROOT\\n\")'
+  wine '$WINPY' -m pip install --require-hashes --no-deps --only-binary :all: -r 'Z:$ROOT/goldbot/ops/linux/mt5-bridge-requirements.txt'
+  wine '$WINPY' -c 'import pathlib, sysconfig; pathlib.Path(sysconfig.get_paths()[\"purelib\"], \"goldbot.pth\").write_text(\"Z:$ROOT\\n\")'
 "
 
 # the brain's tunnel key: forwarding to the bridge port only; any command runs /bin/false (`ssh -N` opens none)
@@ -138,8 +162,9 @@ cat > /usr/local/bin/goldbot-mt5 <<'WRAP'
 # e.g. goldbot-mt5 accounts bridge-serve icm-demo
 set -euo pipefail
 mod=$1; shift
+# the interpreter by absolute path ($WINPY in mt5_bootstrap.sh): a bare `python` would run a python.exe in /opt/goldbot
 cd /opt/goldbot && exec sudo -u mt5 -H env DISPLAY=:99 WINEDEBUG=-all PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring \
-  wine python -m "goldbot.ops.$mod" "$@"
+  wine /home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe -m "goldbot.ops.$mod" "$@"
 WRAP
 chmod 755 /usr/local/bin/goldbot-mt5
 systemctl enable goldbot-bridge@icm-demo
@@ -154,4 +179,6 @@ echo mt5 > /etc/goldbot/role
 install -m 755 -o root -g root "$OPS/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
 # the MT5 box is updated by hand only (sudo goldbot-deploy latest): no deploy timer here
 
-echo "MT5 box installed. Next: log in to MT5 once over VNC, then bridge-serve (docs/RUNBOOK.md)."
+echo "MT5 box installed. Next: log in to MT5 once over VNC, then bridge-serve (docs/RUNBOOK.md 0.3)."
+echo "The terminal has no IC Markets servers yet: log in through File > Open an Account > ICMarkets > Raw Trading Ltd,"
+echo "not File > Login (that never connects until the company is added)."

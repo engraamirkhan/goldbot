@@ -93,7 +93,7 @@ def _stop_at_link(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 
 def _discover(rp: ModuleType, tmp_path: Path, reg: TrialRegistry, bars: Path, b1: pd.DataFrame,
-              discovery: dict[str, Any] | None = None, from_year: int = 2010) -> None:
+              discovery: dict[str, Any] | None = None, from_year: int = 2010, holdout: Any = "settings") -> None:
     ap = argparse.ArgumentParser()
     rp._discovery_args(ap)
     cfg = discovery or {"survivor_unit": "feature", "group_top_k": 3, "clusters": H02_CLUSTERS}
@@ -103,7 +103,8 @@ def _discover(rp: ModuleType, tmp_path: Path, reg: TrialRegistry, bars: Path, b1
     args.bars, args.from_year, args.to_year = str(bars), from_year, 2100
     variants = rp.parse_variants("tsmom", '[{"timeframe": "4h", "max_bars": 12}]')
     settings = load_settings()
-    rp._discover(args, variants, b1, reg, settings, 0.37, None, settings.research.holdout_window(), "priors",
+    window = settings.research.holdout_window() if holdout == "settings" else holdout
+    rp._discover(args, variants, b1, reg, settings, 0.37, None, window, "priors",
                  pd.DataFrame({"present": [1.0]}))
 
 
@@ -307,3 +308,35 @@ def test_the_mismatch_refusal_keys_on_the_family_and_agent_of_the_pending_row(tm
     _, (p,) = reg.check_budget_reserved([(FAMILY_D, d["config"])], 20, 4, now=IN_QUARTER, retired=set(),
                                         agents=[d["agent_id"]])
     assert p is not None and p["ts"] == d["ts"]
+
+
+# ---------------------------------------------------------------------------------------------- fail closed (M45)
+def test_a_queued_row_without_digests_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Quant review 2026-10-16 (LOW): a pending queued row the run could match but that pins no data-v1 digests is
+    refused, not waved through: the run cannot show it reads the pre-registered data."""
+    bars = _release(tmp_path / "raw")
+    reg = _written(tmp_path, monkeypatch, bars)
+    rows = reg._rows()
+    for r in rows:
+        (r.get("plan") or {}).pop("data_digests", None)
+    rp = _research_pass(monkeypatch)
+    why = rp.queued_digest_refusal(rows, Q, [(FAMILY_D, rows[0]["agent_id"])], str(bars), 2010, 2100, HOLDOUT_FROM)
+    assert why is not None and "pins no data-v1 digests" in why and f"#{rows[0]['trial']}" in why
+    assert rp.queued_digest_refusal(reg._rows(), Q, [(FAMILY_D, rows[0]["agent_id"])], str(bars), 2010, 2100,
+                                    HOLDOUT_FROM) is None                    # the written rows pin them: no refusal
+
+
+def test_discover_is_refused_when_holdout_from_is_set_but_the_holdout_window_is_not(tmp_path: Path,
+                                                                                  monkeypatch: pytest.MonkeyPatch):
+    """Quant review 2026-10-16 (LOW): research.holdout_from without holdout_to makes holdout_window() None, which used to
+    skip the holdout cut silently; the discovery would then look at the held-out bars."""
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    b1 = _b1_past_the_holdout()
+    with pytest.raises(ValueError, match="holdout_from"):
+        discovery_pass(SPECIALISTS["tsmom"](timeframe="4h", max_bars=12), b1, reg, budget_cap=20, reserved_setting=0,
+                       cfg=DiscoveryConfig(group_top_k=3), holdout=None, holdout_from=HOLDOUT_FROM)
+    assert reg.path.read_text() == ""
+    rp = _research_pass(monkeypatch)
+    with pytest.raises(SystemExit, match="holdout_from"):
+        _discover(rp, tmp_path, reg, _release(tmp_path / "raw"), b1, holdout=None)
+    assert reg.path.read_text() == ""

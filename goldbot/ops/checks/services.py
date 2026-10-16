@@ -39,6 +39,10 @@ from goldbot.ops.checks.registry import (
     resolve,
 )
 
+# The first line of a failed job's error shown in health and alerts: long enough for a fix command and its RUNBOOK
+# pointer (160 cut "RUNBOOK 'Backups'" off a restic-not-configured message, found 2026-10-16).
+JOB_ERROR_CHARS = 300
+
 if TYPE_CHECKING:
     from goldbot.ops.health import HealthContext
 
@@ -99,7 +103,7 @@ def check_scheduler(ctx: HealthContext) -> list[Check]:
         if j.get("last_ok") is False:
             statuses.append("fail")
             err = str(j.get("last_error") or "").strip().splitlines()
-            parts.append(f"last run failed ({j.get('failures', 0)} failures): {err[0][:160] if err else '?'}")
+            parts.append(f"last run failed ({j.get('failures', 0)} failures): {err[0][:JOB_ERROR_CHARS] if err else '?'}")
         nxt = j.get("next_slot")
         if nxt and name not in running:
             late = (ctx.now - pd.Timestamp(nxt)).total_seconds()

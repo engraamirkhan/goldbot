@@ -53,9 +53,11 @@ from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
 from goldbot.labels.excursion import Excursion
 from goldbot.labels.exit_policy import ExitPolicy
+from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops import server_clock
 from goldbot.ops.account_view import LADDER_TIMEFRAMES
 from goldbot.ops.bridge_compat import BridgeCompat
+from goldbot.ops.cost_imputation import account_swap, paid_swap_per_oz
 from goldbot.ops.gates_phase import ClosedTrade, EntryAudit, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
@@ -212,6 +214,18 @@ class EngineConfig(Record):
     # time) and written to state/broker_terms_<account>.json for the nightly cost job; commission from this many days
     broker_terms_every_s: int = 6 * 3600
     commission_window_days: int = 90
+    # BACKLOG 36: the swap the daily projection charges for a rollover before the risk day ends until the cost table
+    # measures the broker's own (`cost_imputation.account_swap`); production passes `settings_swap(settings)`, the
+    # default is the shipped prior. Read on the engine's server clock (`server_tz`), whatever zone it names
+    swap_prior: SwapSpec = Field(default_factory=lambda: _shipped_swap_prior())
+
+
+def _shipped_swap_prior() -> SwapSpec:
+    """The settings defaults (`costs.swap_*`): what an engine built without settings charges until a table measures."""
+    from goldbot.config import CostSettings
+    f = CostSettings.model_fields
+    return SwapSpec(long_usd_per_lot=f["swap_long_usd_per_lot"].default, short_usd_per_lot=f["swap_short_usd_per_lot"].default,
+                    triple_weekday=f["swap_triple_weekday"].default)
 
 
 class _Frame(Record):
@@ -452,7 +466,11 @@ class Engine:
         # closes the engine decided that have not succeeded yet: position -> (action, journal extras, last attempt);
         # retried every tick (kill switch, weekend, time exit, hard flat, trail, blackout, engine stop) until done
         self._close_due: dict[int, tuple[str, dict, pd.Timestamp | None]] = {}
-        self._kill_pending = False                   # the kill switch has not seen this engine's book flat yet
+        # the kill switch has not seen its book flat yet; a saved close-everything (`_load_risk_state`) retries at once
+        self._kill_pending = self._kill_everything
+        # the owner's mode still to be set back to propose (A10): a halted engine owes it after a restart, since a failed
+        # write is not saved (re-review LOW); the write is a no-op unless the bus says auto
+        self._mode_reset_due = self._kill_everything or self.state.stage == Stage.HALTED
         # an invalid feed (a dropped quote or a last_tick read that raised): since when on the host clock (engine state,
         # health FAILs after QUOTE_INVALID_FAIL_S), and when the state file was last written meanwhile
         self._quote_invalid_since: pd.Timestamp | None = None
@@ -565,7 +583,7 @@ class Engine:
         self._stop_check(t)
         self._retry_closes(t.ts_utc)       # closes decided earlier that have not succeeded: every tick until done
         if self._kill_pending and self.state.stage == Stage.HALTED:
-            self._kill_switch(everything=False)   # until this engine's book is flat
+            self._kill_switch(everything=False)   # until its book is flat (the whole account while _kill_everything)
         self._scale_out(t)
         self._track_excursions(t)          # reporting only, after every exit; never raises
         if not repeat:
@@ -1125,7 +1143,8 @@ class Engine:
             terms = self._sizing_terms(side, price, ls.stop_atr * float(a.iloc[last]), cycle=close_ts)
             self._note_min_lot_risk(terms, ls.stop_atr * float(a.iloc[last]))
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
-                            multiplier=mult, price=price, timeframe=tf, family=agent.family, **terms)
+                            multiplier=mult, price=price, timeframe=tf, family=agent.family,
+                            swap_usd_per_oz=self._swap_usd_per_oz(side, close_ts), **terms)
             gd = self.gate.check(intent, self.state, close_ts, margin_required=broker_margin(self.broker, self.cfg.symbol),
                                  throttle=self._agent_throttle(agent.agent_id, tf, close_ts))
             if not gd.allowed:
@@ -1179,16 +1198,26 @@ class Engine:
             # the quote the order would be priced from must pass the tick price rules (review MEDIUM-3); its time is
             # not compared here, the approval reads the terminal's latest quote
             fault = self._quote_fault(tick, order=False)
+            swap: float | None = None
+            if fault is None:
+                try:      # BACKLOG 36 review: a swap that cannot be priced refuses the approval (fail closed)
+                    swap = self._swap_usd_per_oz(intent.side, tick.ts_utc)
+                except Exception as exc:
+                    log.warning("swap not priced at approval (%s: %s): refused", type(exc).__name__, exc)
             if fault is not None:
                 gd, lots = GateDecision(allowed=False, reasons=[f"bad_quote:{fault[0]}"]), 0.0
+            elif swap is None:
+                gd, lots = GateDecision(allowed=False, reasons=["swap_unavailable"]), 0.0
             else:
                 self._refresh_account(tick)
                 # contract terms and the conversion read again from the terminal (review LOW-5): one it can no longer
                 # give leaves the currency unknown, so the re-check refuses (fail closed); never the proposal-time figure
                 now_px = tick.ask if prop.side > 0 else tick.bid
+                # BACKLOG 36: the swap is priced again at the click: a window across 00:00 UTC starts a new risk day
                 intent = intent.model_copy(update={**self._sizing_terms(intent.side, now_px,
                                                                         intent.stop_atr * intent.atr_usd),
-                                                   "price": now_px})
+                                                   "price": now_px,
+                                                   "swap_usd_per_oz": swap})
                 gd = self.gate.check(intent, self.state, tick.ts_utc,  # re-check at approval time
                                      margin_required=broker_margin(self.broker, self.cfg.symbol),
                                      throttle=self._agent_throttle(agent.agent_id, intent.timeframe or agent.timeframe,
@@ -1915,6 +1944,7 @@ class Engine:
         if self.gate.update_stage(st) != stage:
             if st.stage == Stage.HALTED:
                 self._halted_at = now
+                self._kill_everything = True   # F1: decided before any I/O and saved just below, never one read's argument
             # survives a restart at once; a failed save never raises, so it cannot skip or narrow the flatten below
             self._save_risk_state_now("the stage change")
         if st.stage == Stage.HALTED:
@@ -2071,31 +2101,59 @@ class Engine:
 
     def _kill_switch(self, *, everything: bool) -> bool:
         """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
-        approve. On the trip every position on the account is closed; while halted, any of this engine's positions
-        (its magic range) that is still open, e.g. after a failed close, is closed again on each refresh. The trip also
-        sets the owner's mode back to propose, so auto mode is offered again only on new evidence (A10).
+        approve. The trip closes every XAUUSD position on the account (all magics; the broker's positions() reads the
+        engine's symbol only, so other symbols are untouched). That choice is state, not this call's argument
+        (trading-safety F1): `_kill_everything` is set before any I/O, saved with the risk state, used by every retry
+        and after a restart, and cleared only once a run has closed every such position (seen flat). After
+        that, while halted, any of this engine's positions (its magic range) still open is closed again on each refresh.
+        The trip also sets the owner's mode back to propose, so auto mode is offered again only on new evidence (A10);
+        that write comes after the flatten and never raises (`_reset_owner_mode`).
         Each close is tried on its own (one raising or refused close never stops the others) and a failed one is
-        re-sent every tick (`_retry_closes`); until a positions() read shows this engine's magic range flat the switch
-        runs again on every tick (`_kill_pending`). Returns whether the range was seen flat."""
-        self.cfg.approval_mode = "propose"
-        if everything and self.center.bus is not None and self.center.bus.control().approval_mode == "auto":
-            self.center.bus.set_mode("propose", by=f"engine:{self.cfg.account_id}", reason="12% kill switch")
-            self.decisions.append({"ts": time.time(), "action": "mode_propose", "reason": "kill_switch"})
+        re-sent every tick (`_retry_closes`); until a run sees its scope flat the switch runs again on every tick
+        (`_kill_pending`). Returns whether the scope was seen flat."""
+        self.cfg.approval_mode = "propose"     # in memory, before any I/O: auto entries are blocked from here on
+        if everything:
+            self._kill_everything = self._mode_reset_due = True
+        whole = self._kill_everything
         self._kill_pending = True
-        positions = self._read_positions("the kill switch runs again next tick")
-        if positions is None:
-            return False
-        flat, left = True, len(positions)
-        for p in positions:
-            if not (everything or self._own(p.magic)):
-                continue
-            # a close already due is re-sent by _retry_closes (with its market-closed backoff), not twice per tick
-            ok = p.position_id not in self._close_due and self._try_close(p.position_id, "kill_switch_close", None).ok
-            left -= ok
-            flat = flat and (ok or not self._own(p.magic))
-        self._kill_pending = not flat
-        self.state.open_positions = left
-        return flat
+        try:
+            positions = self._read_positions("the kill switch runs again next tick")
+            if positions is None:
+                return False
+            flat, left = True, len(positions)
+            for p in positions:
+                if not (whole or self._own(p.magic)):
+                    continue
+                # a close already due is re-sent by _retry_closes (with its market-closed backoff), not twice per tick
+                ok = p.position_id not in self._close_due and \
+                    self._try_close(p.position_id, "kill_switch_close", None).ok
+                left -= ok
+                flat = flat and ok
+            self._kill_pending = not flat
+            self.state.open_positions = left
+            if whole and flat:
+                self._kill_everything = False      # the whole account seen flat: later refreshes close our book only
+                self._save_risk_state_now("the kill switch's whole-account flatten")
+            return flat
+        finally:
+            self._reset_owner_mode()
+
+    def _reset_owner_mode(self) -> None:
+        """The kill switch's write of the owner's mode back to propose (A10), after the flatten and never raising
+        (trading-safety F1): a failed write (a full disk) is a tick error and is retried on the next kill-switch run;
+        the in-memory `approval_mode = "propose"` already blocks auto entries, so nothing waits on this write."""
+        bus = self.center.bus
+        if not self._mode_reset_due or bus is None:
+            return
+        try:
+            if bus.control().approval_mode == "auto":
+                bus.set_mode("propose", by=f"engine:{self.cfg.account_id}", reason="12% kill switch")
+                self.decisions.append({"ts": time.time(), "action": "mode_propose", "reason": "kill_switch"})
+            self._mode_reset_due = False
+        except Exception as exc:
+            log.error("approval mode not set back to propose after the kill switch (%s); auto entries stay blocked "
+                      "in memory, retried on the next kill-switch run", type(exc).__name__)
+            self.note_tick_error(exc)
 
     def _server_clock(self, now: pd.Timestamp, tick: Tick) -> None:
         """Rollover (+-rollover_min of 00:00 server: no entries) and weekend (Friday weekend_cut server until the week
@@ -2743,7 +2801,7 @@ class Engine:
                    "rearm_seen": self._rearm_seen, "weekend_done": self._weekend_done,
                    "halted_at": self._halted_at.isoformat() if self._halted_at is not None else None,
                    "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
-                   "rearm_refused": self._rearm_refused,
+                   "rearm_refused": self._rearm_refused, "kill_everything": self._kill_everything,
                    "stage2_pending_since": None if self._stage2_pending_since is None
                    else self._stage2_pending_since.isoformat()}
         write_atomic(self._risk_path(), json.dumps(payload))       # durable: halts and stages survive a power cut
@@ -2763,6 +2821,7 @@ class Engine:
 
     def _load_risk_state(self) -> None:
         path = self._risk_path()
+        self._kill_everything = False
         if not path.exists():
             # first start: an earlier re-arm on the bus is not a re-arm of this engine
             self._rearm_seen = self.center.bus.control().rearm_id if self.center.bus is not None else None
@@ -2782,6 +2841,9 @@ class Engine:
         # ADR 0016: absent (an older file) = nothing pending; an older release drops it and trips on one read instead
         pending = d.get("stage2_pending_since")
         self._stage2_pending_since = pd.Timestamp(pending) if pending else None
+        # F1: a trip whose whole-account flatten had not been seen flat goes on closing the whole account; absent (an
+        # older file) = this engine's book only, as that release did
+        self._kill_everything = bool(d.get("kill_everything", False))
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the
@@ -3095,10 +3157,8 @@ class Engine:
         except Exception:
             log.exception("broker terms not refreshed for %s; the last reading stays", self.cfg.account_id)
 
-    def _cost_atr(self, atr_usd: float, ts: pd.Timestamp, ex_spread: bool = False) -> float:
-        """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one.
-        ex_spread: slippage and commission only, for the probability threshold and size multiplier (the model's p is
-        trained on labels that already pay the spread); the fallback stays the full configured cost (conservative)."""
+    def _cost_table(self) -> CostTable | None:
+        """state/costs_<account>.json from the nightly cost job (cached by mtime); None when missing or unreadable."""
         path = Path(self.cfg.state_dir, f"costs_{self.cfg.account_id}.json")
         mtime = path.stat().st_mtime if path.exists() else -1.0
         if mtime != self._cost_cache[0]:
@@ -3106,7 +3166,24 @@ class Engine:
                 self._cost_cache = (mtime, CostTable.load(path))
             except (ValueError, OSError):
                 self._cost_cache = (mtime, None)   # a bad file must not stop trading decisions; fall back
-        table = self._cost_cache[1]
+        return self._cost_cache[1]
+
+    def _swap_usd_per_oz(self, side: int, now: pd.Timestamp) -> float:
+        """BACKLOG 36: the paid swap per oz (USD) an entry at `now` would be charged at a broker rollover before the risk
+        day ends (00:00 UTC), for the RiskGate's daily projection: ADR 0017's rule (`paid_swap_per_oz`, the triple day
+        counted, a credit never) at the cost table's measured rates, else `swap_prior`, on this engine's server clock.
+        A rollover after the risk day ends lands on the next day's loss so far. Entries only."""
+        swap = account_swap(self._cost_table(), self.cfg.swap_prior.model_copy(update={"server_tz": self.cfg.server_tz}))
+        if not (math.isfinite(swap.long_usd_per_lot) and math.isfinite(swap.short_usd_per_lot)):
+            return math.nan        # defence in depth (SwapSpec is finite-only): the gate refuses invalid:swap_usd_per_oz
+        now = pd.Timestamp(now).tz_convert("UTC")
+        return paid_swap_per_oz(swap, side, now, now.normalize() + pd.Timedelta(days=1))
+
+    def _cost_atr(self, atr_usd: float, ts: pd.Timestamp, ex_spread: bool = False) -> float:
+        """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one.
+        ex_spread: slippage and commission only, for the probability threshold and size multiplier (the model's p is
+        trained on labels that already pay the spread); the fallback stays the full configured cost (conservative)."""
+        table = self._cost_table()
         if table is None:
             return self.cfg.cost_atr
         session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([ts]))[0])

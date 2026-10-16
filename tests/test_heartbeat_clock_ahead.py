@@ -210,11 +210,10 @@ def test_the_combined_caps_are_not_shown_from_a_supervisor_report_stamped_in_the
     now = 1_760_000_000.0
     sup = {"combined_equity": 9_900.0, "combined_day_start_equity": 10_000.0, "daily_cap": 0.015, "ts": now + 600}
     shown: list[Any] = []
-    notes: list[str] = []
     eng = {"currency": "GBP"}
-    _combined(eng, sup, [eng], now, lambda *a, **k: shown.append(a), notes)
-    assert not shown and any("stale or stamped ahead" in n for n in notes)
-    _combined(eng, dict(sup, ts=now + 2), [eng], now, lambda *a, **k: shown.append(a), notes)
+    unknown, paused, mixed = _combined(eng, sup, [eng], now, lambda *a, **k: shown.append(a))
+    assert not shown and paused and not mixed and unknown is not None and "dated ahead of this server's clock" in unknown
+    assert _combined(eng, dict(sup, ts=now + 2), [eng], now, lambda *a, **k: shown.append(a)) == (None, False, False)
     assert shown
 
 

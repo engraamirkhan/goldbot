@@ -8,7 +8,7 @@ const base = (over: Partial<AccountSummary> = {}): AccountSummary => ({
   account_id: "icm-demo", broker: "icm", mode: "demo", equity: 990, day_pnl_pct: -0.01, week_pnl_pct: -0.01,
   drawdown_pct: 0.01, stage: "normal", open_positions: 1, account_class: "raw",
   balance: 1000, currency: "GBP", margin_level_pct: 641, day_pnl: -10,
-  loss_budget: { limit: 15, used: 10, remaining: 5, binding: "combined 1.5% daily cap", period: "today", notes: [],
+  loss_budget: { limit: 15, used: 10, remaining: 5, binding: "combined 1.5% daily cap", period: "today", notes: [], unknown_paused: false, unknown_mixed: false,
                  binding_label: "all accounts together (1.5% of today's start)",
                  caps: [{ name: "account 2.0% daily cap", label: "this account (2.0% of today's start)", period: "today",
                           limit: 20, used: 10, remaining: 10 },
@@ -46,7 +46,7 @@ describe("BalanceCard", () => {
   });
 
   it("says entries stop when the budget is spent, in red", () => {
-    render(<BalanceCard a={base({ loss_budget: { limit: 15, used: 16, remaining: 0, binding: "combined 1.5% daily cap", binding_label: "all accounts together (1.5% of today's start)", period: "today", notes: [], caps: [] } })} />);
+    render(<BalanceCard a={base({ loss_budget: { limit: 15, used: 16, remaining: 0, binding: "combined 1.5% daily cap", binding_label: "all accounts together (1.5% of today's start)", period: "today", notes: [], caps: [], unknown_paused: false, unknown_mixed: false } })} />);
     expect(screen.getByText("£0.00 left").closest(".budget")).toHaveClass("bad");
     expect(screen.getByText(/New entries are stopped while today's loss is at the limit/)).toBeInTheDocument();
   });
@@ -80,9 +80,44 @@ describe("BalanceCard", () => {
     render(<BalanceCard a={base({
       milestones: { rule, tradeable: [], next_timeframe: "15m", next_equity: 1366, progress: 0.72, pending: null, rungs: [] },
       loss_budget: { limit: 40, used: 38, remaining: 0, binding: "combined 4.0% weekly cap", period: "this week", notes: [],
-                     binding_label: "all accounts together this week (4.0% of the week's start)", caps: [] } })} />);
+                     binding_label: "all accounts together this week (4.0% of the week's start)", caps: [], unknown_paused: false, unknown_mixed: false } })} />);
     expect(screen.getByText("Your balance is not yet big enough for the smallest trade on any timeframe.")).toBeInTheDocument();
     expect(screen.getByText(/stopped while this week's loss is at the limit/)).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "Weekly loss budget used" })).toBeInTheDocument();
+  });
+
+  const cantCheck = (unknown: string, paused: boolean) => base({
+    loss_budget: { limit: 20, used: 10, remaining: 10, binding: "account 2.0% daily cap", period: "today", notes: [],
+                   binding_label: "this account (2.0% of today's start)", caps: [], unknown, unknown_paused: paused, unknown_mixed: false } });
+
+  it("says it can't check the budget, in red with the reason and no roomier amount, while entries are paused", () => {
+    const why = "The safety supervisor hasn't reported for over a minute, so the combined loss cap can't be checked. New entries are paused; exits always run.";
+    render(<BalanceCard a={cantCheck(why, true)} />);
+    const budget = screen.getByText("Loss budget: can't check").closest(".budget");
+    expect(budget).toHaveClass("bad");
+    expect(budget).toHaveTextContent(why);
+    expect(budget).not.toHaveTextContent("£10.00 left");
+    expect(budget).not.toHaveTextContent("£20.00");
+    expect(screen.queryByRole("meter")).toBeNull();
+  });
+
+  it("says it can't check the budget in amber when the supervisor hasn't added up the accounts yet", () => {
+    const why = "The safety supervisor hasn't added up the accounts yet, so the combined loss cap isn't shown. Exits always run.";
+    render(<BalanceCard a={cantCheck(why, false)} />);
+    const budget = screen.getByText("Loss budget: can't check").closest(".budget");
+    expect(budget).toHaveClass("warn");
+    expect(budget).toHaveTextContent(why);
+    expect(budget).not.toHaveTextContent("£10.00 left");
+  });
+
+  it("says it can't check the budget in amber, with no amount, when the accounts report different currencies", () => {
+    const why = "The accounts report different currencies (GBP, USD), so the combined loss cap can't be checked. Each account's own loss limit still applies; exits always run.";
+    render(<BalanceCard a={base({ loss_budget: { ...cantCheck(why, false).loss_budget!, unknown_mixed: true } })} />);
+    const budget = screen.getByText("Loss budget: can't check").closest(".budget");
+    expect(budget).toHaveClass("warn");
+    expect(budget).toHaveTextContent(why);
+    expect(budget).not.toHaveTextContent("£10.00 left");
+    expect(budget).not.toHaveTextContent("£20.00");
+    expect(screen.queryByRole("meter")).toBeNull();
   });
 });

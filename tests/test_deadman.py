@@ -281,9 +281,9 @@ def test_mt5_bootstrap_checks_the_python_installer_before_running_it():
     text = (Path(__file__).resolve().parents[1] / "goldbot/ops/linux/mt5_bootstrap.sh").read_text(encoding="utf-8")
     m = re.search(r"^PY_SHA256=([0-9a-f]{64})\b", text, re.M)
     assert m, "PY_SHA256 must be a 64-hex pin"
-    check, run = text.index("sha256sum -c"), text.index("wine python.exe")
+    check, run = text.index("sha256sum -c"), text.index("wine python-installer.exe")
     assert check < run
-    assert "python.exe\" | sha256sum -c" in text or "python.exe' | sha256sum -c" in text or 'python.exe" | sha256sum -c' in text
+    assert "python-installer.exe' | sha256sum -c" in text
 
 
 def test_a_broken_keyring_does_not_stop_the_pass():

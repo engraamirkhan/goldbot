@@ -75,8 +75,10 @@ def test_the_effective_limit_is_the_smaller_of_the_percentage_and_the_absolute()
 
 
 def test_the_boundary_is_inclusive():
-    # 40 lost + exactly 10 risk = 50: allowed; a gain today counts as no loss
-    assert _gate().check(_usd(5.0, 0.4), _state(5_000.0, 5_040.0)).allowed       # 0.2% = 10 -> 0.02 x 5 x 100 = 10
+    # 39.90 lost + exactly 10 risk + the 0.10 round trip (0.01 ATR x $5 x 0.02 lot x 100; BACKLOG 36) = 50: allowed;
+    # 40 lost is now 50.10, refused; a gain today counts as no loss
+    assert _gate().check(_usd(5.0, 0.4), _state(5_000.0, 5_039.90)).allowed      # 0.2% = 10 -> 0.02 x 5 x 100 = 10
+    assert _gate().check(_usd(5.0, 0.4), _state(5_000.0, 5_040.0)).reasons == ["daily_loss_limit_abs"]
     assert _gate().check(_usd(5.0, 0.6), _state(5_100.0, 5_000.0)).allowed       # up 100 today, 15.3 risk
 
 
