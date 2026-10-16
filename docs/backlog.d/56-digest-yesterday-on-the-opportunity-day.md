@@ -4,7 +4,7 @@ rank: 48
 title: Digest Yesterday line on the opportunity day
 stage: Performance review · RUN
 size: S
-status: proposed (quant review Q1 of the north-star day lane, 2026-10-16)
+status: implemented 2026-10-16 (TRACEABILITY V10; code and ui-ux review pending)
 ---
 - **56. Digest "Yesterday" line on the opportunity day.** Value: the digest's "Yesterday" proposals and trades
   lines still run 00:00-24:00 UTC (`goldbot/telegram/digest.py` `build_digest`). Its month line and the monthly and

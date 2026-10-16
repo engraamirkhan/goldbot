@@ -2,13 +2,14 @@
 London) with signal, not noise. Read on a phone, so it stays under about 15 lines:
 
 * status   all good / attention needed, from the health report, failing and warning checks named;
-* yesterday (the previous UTC day)  proposals made, approved, rejected, expired; trades closed with net P&L ($) and R
-           from net rows only, gross-only trades (costs not recorded) shown apart and never labelled net
+* yesterday (the opportunity day before the digest's, D-2 22:00 to D-1 22:00 UTC; goldbot/ops/report_days.py, the
+           day the month line and the monthly report use, so a close is never on one day there and another here)
+           proposals made, approved, rejected, expired; trades closed with net P&L ($) and R from net rows only, gross-only trades (costs not recorded) shown apart and never labelled net
            (state/closed_trades_*.jsonl via goldbot.ops.gates_phase.load_closed_trades); the month so far (time-weighted
            %, trades, R, average per trading day; goldbot.ops.monthly_report), once it has a closed trade; open
            positions now;
-* risk     worst drawdown stage and drawdown from peak, daily and weekly loss-cap use, any halt (owner, drift,
-           supervisor, drawdown);
+* risk     worst drawdown stage and drawdown from peak, daily and weekly loss-cap use (the engine's figures, on the
+           risk day that resets at 00:00 UTC, not the opportunity day), any halt (owner, drift, supervisor, drawdown);
 * research the next pre-registered trial or the quarter's trial budget, and the attribution headline (best and worst
            non-noise cell of state/attribution.json) when it exists;
 * decisions waiting for the owner, with counts: pending approvals, the owner decision queue in docs/ROADMAP.md, a
@@ -39,6 +40,8 @@ import pandas as pd
 
 from goldbot.base import Record, load_record_json, write_atomic
 from goldbot.config import ROOT, Settings
+from goldbot.data.timeutil import ROLLOVER_UTC_H
+from goldbot.ops.report_days import day_before, day_bounds
 from goldbot.telegram.entry_text import digest_line as entry_digest_line
 
 STATE_FILE = "telegram_digest.json"
@@ -226,7 +229,8 @@ def trades_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp) -> list
 
 
 def month_line(state_dir: Path, yesterday: pd.Timestamp) -> list[str]:
-    """The month so far up to yesterday (goldbot/ops/monthly_report.py): nothing before its first closed trade."""
+    """The month so far up to the opportunity day holding `yesterday` (goldbot/ops/monthly_report.py): nothing before
+    its first closed trade."""
     from goldbot.ops.monthly_report import month_to_date_line
     return month_to_date_line(state_dir, yesterday)
 
@@ -396,17 +400,18 @@ def owner_decisions(roadmap: Path) -> int:
 def build_digest(state_dir: str | Path, now: pd.Timestamp, *, report: Any = None, settings: Settings | None = None,
                  roadmap: Path = DEFAULT_ROADMAP, registry_path: Path | None = None) -> str:
     """The digest text for `now` (UTC). `report` is a goldbot.ops.health.HealthReport (None: unknown); yesterday is the
-    previous UTC calendar day."""
+    opportunity day before the one holding `now` (report_days.day_before), [D-2 22:00, D-1 22:00) UTC for a digest
+    on day D, and the month line counts up to the same day."""
     sd = Path(state_dir)
     now = _utc(now)
-    day1 = now.normalize()
-    day0 = day1 - pd.Timedelta(days=1)
+    yesterday = day_before(now)
+    day0, day1 = day_bounds(yesterday)
     lines = [f"☀️ goldbot daily · {now:%a %d %b %Y} · {now:%H:%M} UTC"]
     lines += _section(lambda: status_line(report), "Health")
-    lines.append(f"Yesterday ({day0:%a %d %b}, 00:00-24:00 UTC)")
+    lines.append(f"Yesterday (to {ROLLOVER_UTC_H:02d}:00 UTC) · {pd.Timestamp(yesterday):%a %d %b}")
     lines += _section(lambda: proposals_line(sd, day0, day1, now), "Proposals")
     lines += _section(lambda: trades_line(sd, day0, day1), "Trades closed")
-    lines += _section(lambda: month_line(sd, now - pd.Timedelta(days=1)), "Month so far")
+    lines += _section(lambda: month_line(sd, day0), "Month so far")
     lines += _section(lambda: open_line(sd), "Open now")
     lines += _section(lambda: risk_lines(sd, settings), "Risk")
     lines += _section(lambda: entry_digest_line(sd, now, settings), "Entries")    # the /status words, accounts not OPEN

@@ -101,7 +101,7 @@ def test_digest_renders_every_section_from_fixture_state(tmp_path: Path) -> None
     text = _full_digest(tmp_path)
     assert text.splitlines()[0] == "☀️ goldbot daily · Sat 10 Oct 2026 · 06:45 UTC"
     assert "⚠️ Attention: fail engine · warn backup_age, daily_cap" in text
-    assert "Yesterday (Fri 09 Oct, 00:00-24:00 UTC)" in text
+    assert "Yesterday (to 22:00 UTC) · Fri 09 Oct" in text
     assert "Proposals 4: ✅ 2 approved (1 refused by the risk check) · ❌ 1 rejected · ⌛ 1 expired" in text
     assert "Closed 2 trades: net +$80.25 · +1.00R (1 won, 1 lost)" in text
     assert "Open now: 1 position (0.10 lots)" in text
@@ -270,3 +270,95 @@ def test_yesterdays_net_sums_net_rows_only_and_names_the_gross_only_trades_apart
 def test_a_day_of_gross_only_trades_says_net_is_not_recorded(tmp_path: Path) -> None:
     [line] = _closed_day(tmp_path, _trade(YDAY, 50.0, 2.5, 1, pnl_basis="gross"))
     assert line == "• Closed 1 trade: net not recorded · 1 trade gross only (costs not recorded): +£50.00 · +2.50R gross"
+
+
+# ---------------------------------------------------------------------------------------------- the opportunity day (56)
+# "Yesterday" is the opportunity day before the digest's (goldbot/ops/report_days.py): [D-2 22:00, D-1 22:00) UTC for
+# a digest built on opportunity day D, the same day the month line counts. The risk line stays on the 00:00 UTC risk day.
+def _utc(s: str) -> pd.Timestamp:
+    return pd.Timestamp(s, tz="UTC")
+
+
+def _ny(s: str) -> pd.Timestamp:
+    return pd.Timestamp(s, tz="America/New_York").tz_convert("UTC")
+
+
+def _digest_with(sd: Path, now: pd.Timestamp, *exits: pd.Timestamp) -> dict[str, str]:
+    """The digest at `now` over one net trade per exit, the i-th winning $10*i and 0.1R*i (so each set of trades sums
+    differently); its header, trades, month and risk lines by name."""
+    with closed_trade_file(sd, ACCOUNT).open("w") as fh:
+        for i, x in enumerate(exits, 1):
+            fh.write(_trade(x, 10.0 * i, round(0.1 * i, 1), i).model_dump_json() + "\n")
+    (sd / f"engine_{ACCOUNT}.json").write_text(json.dumps({
+        "account": ACCOUNT, "stage": "normal", "equity": 9_900, "balance_closed_hwm": 10_000,
+        "day_start_equity": 10_000, "week_start_equity": 10_000, "currency": "USD"}))
+    lines = build_digest(sd, now, settings=load_settings(), roadmap=sd / "none.md").splitlines()
+
+    def one(prefix: str) -> str:
+        return next((x for x in lines if x.startswith(prefix)), "")
+    return {"header": one("Yesterday"), "trades": one("• Closed") or one("• Trades closed"),
+            "month": next((x for x in lines if " so far: " in x), ""), "risk": one("Risk:")}
+
+
+def test_yesterday_header_names_the_opportunity_day_and_its_22_utc_end(tmp_path: Path) -> None:
+    got = _digest_with(tmp_path, _utc("2026-10-16 06:45"))
+    assert got["header"] == "Yesterday (to 22:00 UTC) · Thu 15 Oct"
+
+
+def test_a_close_at_2159_is_yesterdays_and_one_at_2200_is_todays(tmp_path: Path) -> None:
+    # Fri 16 Oct digest: yesterday is [Wed 14 Oct 22:00, Thu 15 Oct 22:00) UTC
+    got = _digest_with(tmp_path, _utc("2026-10-16 06:45"),
+                       _utc("2026-10-14 21:59"),       # Wednesday's day: not yesterday
+                       _utc("2026-10-14 22:00"),       # first instant of Thursday's day
+                       _utc("2026-10-15 21:59"),       # last minute of Thursday's day
+                       _utc("2026-10-15 22:00"))       # Friday's day: today, not yesterday
+    assert got["trades"] == "• Closed 2 trades: net +$50.00 · +0.50R (2 won, 0 lost)"      # the 2nd and 3rd
+
+
+def test_a_digest_built_at_2159_and_at_2200_reports_different_yesterdays(tmp_path: Path) -> None:
+    exits = (_utc("2026-10-14 12:00"), _utc("2026-10-15 12:00"), _utc("2026-10-15 13:00"))
+    early = _digest_with(tmp_path, _utc("2026-10-15 21:59"), *exits)
+    late = _digest_with(tmp_path, _utc("2026-10-15 22:00"), *exits)
+    assert early["header"] == "Yesterday (to 22:00 UTC) · Wed 14 Oct" and early["trades"].startswith("• Closed 1 trade:")
+    assert late["header"] == "Yesterday (to 22:00 UTC) · Thu 15 Oct" and late["trades"].startswith("• Closed 2 trades:")
+    assert early["risk"] == late["risk"] != ""        # the loss-cap line does not move with the 22:00 roll
+
+
+def test_yesterday_and_the_month_so_far_count_the_same_closes(tmp_path: Path) -> None:
+    # Fri 2 Oct digest: October's only complete opportunity day is Thu 1 Oct, [Wed 30 Sep 22:00, Thu 1 Oct 22:00)
+    got = _digest_with(tmp_path, _utc("2026-10-02 06:45"),
+                       _utc("2026-09-30 21:00"),       # September's last day: in neither line
+                       _utc("2026-09-30 23:00"),       # 1 Oct's day: in both (the UTC calendar day put it in September)
+                       _utc("2026-10-01 23:00"))       # 2 Oct's day: in neither (the UTC calendar day put it yesterday)
+    assert got["trades"] == "• Closed 1 trade: net +$20.00 · +0.20R (1 won, 0 lost)"      # the 2nd
+    assert got["month"].startswith("• October so far: ") and " · 1 trade · +0.20R" in got["month"]
+
+
+def test_the_risk_line_stays_on_the_risk_day_engine_figures(tmp_path: Path) -> None:
+    got = _digest_with(tmp_path, _utc("2026-10-16 06:45"))
+    # day loss is read from the engine's day_start_equity, which the gate resets at 00:00 UTC (timeutil.risk_day)
+    assert "day loss 1.0% of 2.0% cap · week 1.0% of 5.0% cap" in got["risk"]
+
+
+@pytest.mark.parametrize(("friday", "sunday", "label"), [
+    ("2026-10-16", "2026-10-18", "summer"),     # US summer time: close 17:00 EDT = 21:00 UTC, reopen 22:00 UTC
+    ("2026-10-30", "2026-11-01", "US DST ends"),  # gap week: close 21:00 UTC; reopen 18:00 EST = 23:00 UTC Sun 1 Nov
+    ("2026-11-06", "2026-11-08", "winter"),     # close 17:00 EST = 22:00 UTC, reopen 23:00 UTC
+])
+def test_weekend_digests_put_friday_on_saturday_and_the_sunday_reopen_on_tuesday(tmp_path: Path, friday: str,
+                                                                                 sunday: str, label: str) -> None:
+    """Friday's opportunity day ends at 22:00 UTC, at or after the Friday close in both US regimes, so Saturday's
+    digest reports it. Sunday's opportunity day [Sat 22:00, Sun 22:00) holds no session in either regime (the reopen,
+    22:00 or 23:00 UTC, opens Monday's day), so the Monday digest's yesterday is empty and the reopen's closes are
+    Tuesday's. Nothing is reported twice or dropped."""
+    fri, sun = pd.Timestamp(friday), pd.Timestamp(sunday)
+    last_fri = _ny(f"{friday} 16:59")                      # the last minute before the Friday close
+    reopen = _ny(f"{sunday} 18:05")                        # five minutes after the Sunday reopen
+    mon_noon = _utc(f"{sun + pd.Timedelta(days=1):%Y-%m-%d} 12:00")
+    exits = (last_fri, reopen, mon_noon)
+    sat = _digest_with(tmp_path, _utc(f"{fri + pd.Timedelta(days=1):%Y-%m-%d} 06:45"), *exits)
+    mon = _digest_with(tmp_path, _utc(f"{sun + pd.Timedelta(days=1):%Y-%m-%d} 06:45"), *exits)
+    tue = _digest_with(tmp_path, _utc(f"{sun + pd.Timedelta(days=2):%Y-%m-%d} 06:45"), *exits)
+    assert sat["header"] == f"Yesterday (to 22:00 UTC) · {fri:%a %d %b}" and sat["trades"].startswith("• Closed 1 trade:")
+    assert mon["header"] == f"Yesterday (to 22:00 UTC) · {sun:%a %d %b}" and mon["trades"] == "• Trades closed: none"
+    assert tue["trades"].startswith("• Closed 2 trades:")  # the reopen's close and Monday's

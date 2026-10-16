@@ -1,5 +1,6 @@
 """The day of the owner's north-star reports (ADR 0004 section 6: "£50 or more on the days the market offers it"), in
-one place for the monthly report (monthly_report.py) and the performance report (perf_report.py).
+one place for the monthly report (monthly_report.py), the performance report (perf_report.py) and the daily digest's
+"Yesterday" lines (goldbot/telegram/digest.py).
 
 A report day is the opportunity day, D-1 22:00 to D 22:00 UTC (`timeutil.opportunity_day`, the same day the opt-in
 `day_type` features and the ex-post opportunity-day classifier use). 22:00 UTC falls inside gold's 17:00-18:00 New York
@@ -55,3 +56,16 @@ def day_buckets(items: Iterable[T], at: Callable[[T], pd.Timestamp]) -> dict[str
     for x in items:
         out.setdefault(report_day(at(x)), []).append(x)
     return out
+
+
+def day_bounds(day: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """The UTC instants [D-1 22:00, D 22:00) of opportunity day `day` (YYYY-MM-DD): exactly the instants `report_day`
+    puts on it."""
+    d = pd.Timestamp(day, tz="UTC")
+    return d - pd.Timedelta(hours=24 - ROLLOVER_UTC_H), d + pd.Timedelta(hours=ROLLOVER_UTC_H)
+
+
+def day_before(ts: pd.Timestamp) -> str:
+    """The opportunity day before the one holding `ts`, as YYYY-MM-DD (the digest's "Yesterday"): from 22:00 UTC
+    the day just ended, before it the day before that."""
+    return report_day(ts - pd.Timedelta(days=1))

@@ -6,9 +6,9 @@
 Day convention (report_days.py, shared with perf_report.py): a day is the opportunity day, D-1 22:00 to D 22:00 UTC,
 so the Sunday reopen counts on Monday; a trade belongs to the day of its exit, and the month is that day's month (a
 close at 23:30 UTC on the month's last day is the next month's). The month is its calendar days as opportunity days.
-This is not the risk day on which the loss caps reset (00:00 UTC, timeutil.risk_day), nor the digest's "yesterday"
-(00:00-24:00 UTC): a close between 22:00 and 24:00 UTC is on the next day here. The report states its boundary
-(`MonthlyReport.day_boundary`).
+This is not the risk day on which the loss caps reset (00:00 UTC, timeutil.risk_day): a close between 22:00 and
+24:00 UTC is on the next day here. The digest's "Yesterday" lines use this same day (report_days.day_before). The
+report states its boundary (`MonthlyReport.day_boundary`).
 
 P&L basis (finance audit GAP-05, as perf_report.py): every money, R, return, drawdown and day figure uses net rows
 only, a row with `pnl_basis` "net" or a legacy row (no `pnl_basis`) that records both commission and swap

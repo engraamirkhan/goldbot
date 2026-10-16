@@ -71,7 +71,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | proposed (trading-safety review of BACKLOG 44, 2026-10-12; needs trading-safety review) |
 | 55 | test_lockout_survives_a_restart: make it reliable under load | Platform (CI) · SECURE | S | proposed (ci follow-up, A15 lane, 2026-10-12) |
 | 57 | risk_day_anchor is read by no code: pin it or make it real | Execution and risk (loss caps) · PROTECT | S | proposed (found in the north-star day lane, 2026-10-16; needs trading-safety review) |
-| 56 | Digest Yesterday line on the opportunity day | Performance review · RUN | S | proposed (quant review Q1 of the north-star day lane, 2026-10-16) |
+| 56 | Digest Yesterday line on the opportunity day | Performance review · RUN | S | implemented 2026-10-16 (TRACEABILITY V10; code and ui-ux review pending) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
