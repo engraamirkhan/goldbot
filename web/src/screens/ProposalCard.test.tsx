@@ -9,7 +9,7 @@ const p = (expiresIn = 60, over: Partial<Proposal> = {}): Proposal => ({
   proposal_id: "p1", account_id: "icm-demo", agent_id: "session_open-g0-abc", side: "long", lots: 0.05, entry: 2400.25,
   stop: 2396.0, target: 2406.5, p: 0.62, ev_r: 0.31, spread_points: 22, risk_usd: 21.25, min_lot_exception: false,
   top_features: [["adx14", 31.2], ["atr_14", 0.4], ["rv_20", -0.2], ["extra", 1]],
-  expires_at: new Date(NOW + expiresIn * 1000).toISOString(), ...over,
+  expires_at: new Date(NOW + expiresIn * 1000).toISOString(), created: NOW / 1000, ...over,
 });
 const decided = (status: DecidedProposal["status"], over: Partial<DecidedProposal> = {}): DecidedProposal => ({ ...p(), status, refusal: [], ...over });
 

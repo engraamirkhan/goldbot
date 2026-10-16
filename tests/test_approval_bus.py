@@ -17,6 +17,7 @@ from goldbot.specialists import SPECIALISTS
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.outbox import MAX_MESSAGE, Outbox
+from tests.cards import submit_shown
 
 
 def _p(pid: str, window_s: int = 90, created: float | None = None) -> Proposal:
@@ -33,12 +34,12 @@ def test_engine_proposal_is_decided_from_another_process(tmp_path):
     dashboard = ApprovalBus(tmp_path)                     # a separate process sees what the engine published
     assert [p.proposal_id for p in dashboard.pending()] == ["a", "b"]
     with pytest.raises(ValueError):
-        dashboard.submit("a", False, None, by="dashboard:x")          # a rejection needs a reason code
-    dashboard.submit("a", True, None, by="telegram:42")
+        submit_shown(dashboard, "a", False, None, by="dashboard:x")          # a rejection needs a reason code
+    submit_shown(dashboard, "a", True, None, by="telegram:42")
     with pytest.raises(KeyError):
-        dashboard.submit("a", False, "cost", by="dashboard:x")        # first decision wins
+        submit_shown(dashboard, "a", False, "cost", by="dashboard:x")        # first decision wins
     with pytest.raises(KeyError):
-        dashboard.submit("zzz", True, None, by="dashboard:x")
+        submit_shown(dashboard, "zzz", True, None, by="dashboard:x")
     assert [p.proposal_id for p in dashboard.pending()] == ["b"]   # decided ones leave the list at once
     assert engine.poll_bus()[0].proposal_id == "a"
     assert decided[0].outcome == Outcome.APPROVED and decided[0].decided_channel == "telegram"
@@ -53,7 +54,7 @@ def test_expiry_wins_over_a_late_decision(tmp_path):
     bus = ApprovalBus(tmp_path)
     assert bus.pending() == []
     with pytest.raises(KeyError):
-        bus.submit("old", True, None, by="dashboard:x")
+        submit_shown(bus, "old", True, None, by="dashboard:x")
     assert [p.outcome for p in engine.sweep_expired()] == [Outcome.EXPIRED]
     assert bus.outcome("old") == "EXPIRED_UNAPPROVED"
 
@@ -105,7 +106,7 @@ def test_outbox_sends_each_proposal_once_and_reports_outcomes(tmp_path):
     ob.mark_sent("b", [(42, 2)])
     restarted = Outbox(tmp_path)                                   # progress survives a restart
     assert restarted.unsent_proposals() == [] and restarted.finished() == []
-    ApprovalBus(tmp_path).submit("a", False, "news", by="dashboard:o@x.io")
+    submit_shown(ApprovalBus(tmp_path), "a", False, "news", by="dashboard:o@x.io")
     engine.poll_bus()
     assert restarted.finished() == [("a", "REJECTED", [(42, 1)])]
     (tmp_path / "approvals" / "pending" / "b.json").unlink()      # engine restarted before b was decided
@@ -163,7 +164,7 @@ def test_pending_lists_a_proposal_written_by_a_newer_release(tmp_path):
     (bus.pending_dir / "p-new.json").write_text(json.dumps(row))
     assert [q.proposal_id for q in bus.pending()] == ["p-new"]
     assert bus.get("p-new") == p
-    assert bus.submit("p-new", approve=True, reason_code=None, by="dashboard:o").approve
+    assert submit_shown(bus, "p-new", approve=True, reason_code=None, by="dashboard:o").approve
 
 
 def test_a_control_file_with_an_unknown_field_fails_closed_to_halted(tmp_path):
@@ -181,7 +182,7 @@ def test_a_decision_with_an_unknown_field_is_skipped_and_the_proposal_expires(tm
     engine = ApprovalCenter({1}, bus=ApprovalBus(tmp_path))
     engine.propose(_p("a"))
     bus = ApprovalBus(tmp_path)
-    bus.submit("a", True, None, by="dashboard:o")
+    submit_shown(bus, "a", True, None, by="dashboard:o")
     f = bus.decisions_dir / "a.json"
     f.write_text(json.dumps({**json.loads(f.read_text()), "max_lots": 0.01}))
     assert bus.decisions_for({"a"}) == [] and bus.recent() == []
@@ -198,7 +199,7 @@ def test_a_refused_decision_is_logged_once_per_proposal_and_counted(tmp_path, ca
     bus = ApprovalBus(tmp_path)
     for pid in ("skew-a", "skew-b"):
         bus.publish(_p(pid))
-        bus.submit(pid, True, None, by="dashboard:o")
+        submit_shown(bus, pid, True, None, by="dashboard:o")
         f = bus.decisions_dir / f"{pid}.json"
         f.write_text(json.dumps({**json.loads(f.read_text()), "max_lots": 0.01}))
     for _ in range(3):

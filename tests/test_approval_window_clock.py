@@ -26,6 +26,7 @@ from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal, window
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import proposals_line
 from goldbot.telegram.outbox import Outbox
+from tests.cards import submit_shown
 from tests.test_approval_bus import _p
 
 TWO_DAYS = 2 * 86_400.0
@@ -81,7 +82,7 @@ def test_a_bad_or_future_pending_file_is_never_listed_or_approvable(tmp_path, cr
     _raw_pending(bus, "x", created=time.time() + TWO_DAYS if created == "two_days_ahead" else created)
     assert bus.pending() == []
     with pytest.raises((KeyError, ValueError)):
-        bus.submit("x", True, None, by="dashboard:o")
+        submit_shown(bus, "x", True, None, by="dashboard:o")
     assert not (bus.decisions_dir / "x.json").exists()
 
 
@@ -112,7 +113,7 @@ def test_a_backward_wall_clock_step_does_not_stretch_the_window(tmp_path):
     engine = ApprovalCenter({1}, bus=ApprovalBus(tmp_path), on_decision=decided.append, monotonic=mono)
     engine.propose(_p("a"))
     mono.t += 91
-    ApprovalBus(tmp_path).submit("a", True, None, by="dashboard:o")       # the wall clock says still open
+    submit_shown(ApprovalBus(tmp_path), "a", True, None, by="dashboard:o")       # the wall clock says still open
     assert [p.outcome for p in engine.poll_bus()] == [Outcome.EXPIRED]
     assert decided[0].outcome == Outcome.EXPIRED and decided[0].decided_channel is None
     assert ApprovalBus(tmp_path).outcome("a") == "EXPIRED_UNAPPROVED"
@@ -134,7 +135,7 @@ def test_a_normal_approval_within_the_window_still_goes_through(tmp_path):
     engine.propose(_p("a"))
     engine.propose(_p("b"))
     mono.t += 89
-    ApprovalBus(tmp_path).submit("a", True, None, by="dashboard:o")
+    submit_shown(ApprovalBus(tmp_path), "a", True, None, by="dashboard:o")
     assert [p.outcome for p in engine.poll_bus()] == [Outcome.APPROVED]
     assert engine.decide("b", 1, approve=True).outcome == Outcome.APPROVED
     assert engine.sweep_expired() == []
@@ -154,7 +155,7 @@ def test_the_engine_never_executes_an_approval_after_its_monotonic_deadline(tmp_
                                          atr_usd=4.0, cost_atr=0.1, multiplier=1.0, price=2400.0), p, spec)
     center.propose(p)
     mono.t += 120
-    ApprovalBus(tmp_path).submit(p.proposal_id, True, None, by="telegram:o")
+    submit_shown(ApprovalBus(tmp_path), p.proposal_id, True, None, by="telegram:o")
     center.poll_bus()
     assert sent == [] and eng.pending == {}
     assert center.bus is not None and center.bus.outcome(p.proposal_id) == "EXPIRED_UNAPPROVED"
@@ -182,7 +183,7 @@ def test_after_a_restart_an_on_disk_proposal_is_never_executed_and_falls_back_to
         assert (bus.done_dir / f"{pid}.json").exists() and bus.outcome(pid) is None   # decided by nobody
     assert [p.proposal_id for p in bus.pending()] == ["icm-demo-2-x", "other-acct-x"]
     with pytest.raises(KeyError):
-        bus.submit("icm-demo-fresh", True, None, by="dashboard:o")
+        submit_shown(bus, "icm-demo-fresh", True, None, by="dashboard:o")
     assert center.poll_bus() == [] and sent == []
 
 
@@ -194,7 +195,7 @@ def test_a_click_made_before_a_restart_is_never_applied_to_the_same_proposal_rai
     below), the old click is gone."""
     bus = ApprovalBus(tmp_path)
     ApprovalCenter({1}, bus=bus).propose(_p("icm-demo-X"))
-    bus.submit("icm-demo-X", True, None, by="dashboard:o")                # clicked; the engine dies before polling
+    submit_shown(bus, "icm-demo-X", True, None, by="dashboard:o")                # clicked; the engine dies before polling
     spec = SPECIALISTS["session_open"]()
     center = ApprovalCenter({1}, bus=ApprovalBus(tmp_path))
     Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path)),
@@ -218,13 +219,13 @@ def test_a_decision_bound_to_an_earlier_card_with_the_same_id_is_discarded_and_t
     either clock says, and the owner is told; the card now shown stays decidable."""
     bus = ApprovalBus(tmp_path)
     bus.publish(_p("icm-demo-X", created=time.time() - 30))               # the earlier card
-    bus.submit("icm-demo-X", True, None, by="telegram")
+    submit_shown(bus, "icm-demo-X", True, None, by="telegram")
     center = ApprovalCenter({1}, bus=bus)
     center.propose(_p("icm-demo-X", created=time.time() - 60))           # raised again, even stamped earlier
     assert center.poll_bus() == [] and "icm-demo-X" in center.pending
     assert not (bus.decisions_dir / "icm-demo-X.json").exists()
     assert "icm-demo-X" in _notices(tmp_path)[-1] and "not applied" in _notices(tmp_path)[-1]
-    bus.submit("icm-demo-X", False, "news", by="telegram")                # the owner's click on the card shown
+    submit_shown(bus, "icm-demo-X", False, "news", by="telegram")                # the owner's click on the card shown
     assert [p.outcome for p in center.poll_bus()] == [Outcome.REJECTED]
 
 
@@ -232,20 +233,19 @@ def test_submit_binds_the_decision_to_the_card_it_read(tmp_path):
     bus = ApprovalBus(tmp_path)
     p = _p("icm-demo-X", created=time.time() - 3)
     bus.publish(p)
-    assert bus.submit("icm-demo-X", True, None, by="dashboard").card_created == p.created
+    assert submit_shown(bus, "icm-demo-X", True, None, by="dashboard").card_created == p.created
 
 
-@pytest.mark.parametrize(("offset", "applied"), [(-1.0, False), (0.0, True), (1.0, True)])
-def test_an_unbound_decision_from_an_older_release_is_applied_only_if_not_stamped_before_its_proposal(tmp_path, offset,
-                                                                                                       applied):
-    """A decision file with no `card_created` (written by a release before the binding) falls back to the stamps,
-    with no tolerance: both come from the one VPS clock (re-verify finding 2)."""
+@pytest.mark.parametrize("offset", [-1.0, 0.0, 1.0])
+def test_an_unbound_decision_from_an_older_release_is_never_applied_whatever_its_stamp(tmp_path, offset):
+    """A decision file with no `card_created` (written by a release before the binding) is refused, fail closed
+    (BACKLOG 63 replaced BACKLOG 60's fallback to the decision's own time stamp)."""
     bus = ApprovalBus(tmp_path)
     center = ApprovalCenter({1}, bus=bus)
     p = center.propose(_p("icm-demo-X"))
     (bus.decisions_dir / "icm-demo-X.json").write_text(json.dumps(
         {"proposal_id": "icm-demo-X", "approve": True, "by": "dashboard", "ts": p.created + offset}))
-    assert [q.outcome for q in center.poll_bus()] == ([Outcome.APPROVED] if applied else [])
+    assert center.poll_bus() == [] and "icm-demo-X" in center.pending
 
 
 @pytest.mark.integration
@@ -287,4 +287,4 @@ def test_a_restart_inside_the_window_never_raises_the_same_proposal_again_and_th
     assert [d["action"] for d in again if d.get("proposal") == pid] == ["restart_archived"]
     assert not (bus.pending_dir / f"{pid}.json").exists() and ob.unsent_proposals() == []
     with pytest.raises(KeyError):
-        bus.submit(pid, True, None, by="telegram")                         # a tap on the old card
+        submit_shown(bus, pid, True, None, by="telegram")                         # a tap on the old card

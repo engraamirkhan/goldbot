@@ -39,7 +39,14 @@ from goldbot.base import (
     unknown_fields_json,
     write_atomic,
 )
-from goldbot.telegram.approvals import REASON_CODES, Outcome, Proposal, decision_channel
+from goldbot.telegram.approvals import (
+    INVALID_PROPOSAL_ID,
+    REASON_CODES,
+    Outcome,
+    Proposal,
+    decision_channel,
+    valid_proposal_id,
+)
 
 log = logging.getLogger(__name__)
 
@@ -50,8 +57,9 @@ class BusDecision(Record):
     reason_code: str | None = None
     by: str                         # "dashboard" | "telegram": the channel only (A15); older files: "<channel>:<id>"
     ts: float
-    # the decided card's `created`, copied from the pending file `submit` read: the engine applies the decision only to
-    # that card, never to a proposal raised again under the same id (F60 re-verify). None: an older release's file
+    # the `created` of the card the owner decided on, sent by the Telegram button or the dashboard request (BACKLOG 63):
+    # the engine applies the decision only to that card, never to a proposal raised again under the same id. None (a
+    # file from a release before BACKLOG 60) is refused by the engine, never applied (fail closed)
     card_created: float | None = None
 
 
@@ -150,16 +158,28 @@ class ApprovalBus:
         return out
 
     def get(self, proposal_id: str) -> Proposal | None:
+        """None for an unknown id and for one `valid_proposal_id` refuses (never a path outside approvals/)."""
+        if not valid_proposal_id(proposal_id):
+            return None
         for d in (self.pending_dir, self.done_dir):
             f = d / f"{proposal_id}.json"
             if f.exists():
                 return load_record_json(Proposal, f.read_text(), source=f"approvals/{d.name}")
         return None
 
-    def submit(self, proposal_id: str, approve: bool, reason_code: str | None, by: str) -> BusDecision:
-        """Record a decision; raises KeyError (unknown, expired or already decided) or ValueError (reason code). `by`
-        is the channel; an identity after ":" is dropped, so the file never carries it (A15: "the decision file keeps
-        only the channel; the identity is in the audit log")."""
+    def submit(self, proposal_id: str, approve: bool, reason_code: str | None, by: str, *,
+               card_created: float | None) -> BusDecision:
+        """Record a decision; raises KeyError (unknown, expired, already decided, or `card_mismatch`) or ValueError
+        (reason code, `card_missing`, an id `valid_proposal_id` refuses). `by` is the channel; an identity after ":"
+        is dropped, so the file never carries it (A15: "the decision file keeps only the channel; the identity is in
+        the audit log"). `card_created` is the
+        `created` of the card the owner decided on (BACKLOG 63: "a tap is bound to the exact card the owner saw"):
+        None is refused (an old card or client, fail closed), and one that differs from the pending proposal's is
+        refused here and again by the engine, which may hold a proposal re-raised after this check."""
+        if not valid_proposal_id(proposal_id):          # a file name under approvals/: never "..", "/" or empty
+            raise ValueError(INVALID_PROPOSAL_ID)
+        if card_created is None:
+            raise ValueError("card_missing: this card is out of date; decide on the current card")
         if not approve and reason_code not in REASON_CODES:
             raise ValueError(f"rejection needs a reason code from {REASON_CODES}")
         f = self.pending_dir / f"{proposal_id}.json"
@@ -168,9 +188,12 @@ class ApprovalBus:
         card = load_record_json(Proposal, f.read_text(), source="approvals/pending")
         if card.expired:
             raise KeyError("proposal expired")
+        if card_created != card.created:
+            log.warning("decision on %s refused (card_mismatch): made on another card with the same id", proposal_id)
+            raise KeyError("card_mismatch: this card was replaced; decide on the current card")
         d = BusDecision(proposal_id=proposal_id, approve=approve, reason_code=None if approve else reason_code,
                         by=decision_channel(by), ts=time.time(),     # never the id or email on disk (A15)
-                        card_created=card.created)
+                        card_created=card_created)
         # first decision wins, and it is written whole before it becomes visible (no empty decision after a crash)
         if not create_exclusive(self.decisions_dir / f"{proposal_id}.json", d.model_dump_json()):
             raise KeyError("already decided")
@@ -180,7 +203,9 @@ class ApprovalBus:
         """Delete one decision file the engine refused to apply (a click on an earlier card with the same id, F60-1),
         so the card shown is listed and decidable again. Safe against a new click: `submit` creates the file
         exclusively, so none can land while the refused one is still there. An OSError leaves it (the window expires
-        the proposal)."""
+        the proposal). An id `valid_proposal_id` refuses is ignored (never a path outside approvals/)."""
+        if not valid_proposal_id(proposal_id):
+            return
         try:
             (self.decisions_dir / f"{proposal_id}.json").unlink(missing_ok=True)
         except OSError:

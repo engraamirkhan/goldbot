@@ -1,0 +1,5 @@
+id: A16
+requirement: 'BACKLOG 63: "a tap is bound to the exact card the owner saw": the Telegram buttons and the dashboard decision carry the card''s `created`; a decision on another card (`card_mismatch`) or without it (`card_missing`) is refused, fail closed; every callback fits Telegram''s 64 bytes'
+status: implemented
+code: goldbot/telegram/approvals.py:86-138 (callback data), :293 `poll_bus`; goldbot/telegram/bus.py:160 `submit`; goldbot/telegram/bot.py `send_proposal`, `_on_button`; goldbot/api/schema.py `Decision.created`, `Proposal.created`; goldbot/ops/accounts.py:47 `ACCOUNT_ID_MAX_BYTES`
+test: tests/test_card_bound_approvals.py::test_a_tap_on_the_pre_restart_card_for_a_re_raised_proposal_is_refused; tests/test_card_bound_approvals.py::test_a_tap_on_the_current_card_approves; tests/test_card_bound_approvals.py::test_every_callback_data_string_fits_telegrams_64_byte_limit_for_the_longest_proposal_id; tests/test_card_bound_approvals.py::test_the_dashboard_decision_request_without_created_is_refused; tests/test_card_bound_approvals.py::test_the_engine_refuses_and_logs_card_mismatch_for_a_decision_bound_to_another_card

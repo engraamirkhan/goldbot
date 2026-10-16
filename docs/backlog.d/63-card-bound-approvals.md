@@ -4,7 +4,7 @@ rank: 10
 title: 'Card-bound approvals: a tap is bound to the exact card the owner saw'
 stage: Approvals (owner confirms entries, 90 s) · PROTECT · RUN
 size: S
-status: 'ready (decided 2026-10-16; starts after 60''s fix lane merges, same files) · accountable: implementer, then trading-safety-reviewer · due 2026-10-23'
+status: 'built 2026-10-16 (implementer; TRACEABILITY A16), awaiting trading-safety-reviewer APPROVE · accountable: implementer, then trading-safety-reviewer · due 2026-10-23'
 ---
 - **63. Card-bound approvals: a tap is bound to the exact card the owner saw.** Decided 2026-10-16 by program
   director + product owner (owner delegated). Value (RUN, protect): the residual of BACKLOG 60's trading-safety

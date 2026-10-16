@@ -12,6 +12,7 @@ from goldbot.data.store import Store
 from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
+from tests.cards import shown, submit_shown
 
 pytestmark = pytest.mark.integration
 
@@ -59,13 +60,13 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
 
     # viewer reads but cannot decide or administer
     assert c.get("/api/proposals", headers=viewer).status_code == 200
-    assert c.post("/api/decisions", json={"proposal_id": "p1", "action": "approve"}, headers=viewer).status_code == 403
+    assert c.post("/api/decisions", json={"proposal_id": "p1", "action": "approve", "created": shown(bus, "p1")}, headers=viewer).status_code == 403
     assert c.get("/api/users", headers=viewer).status_code == 403
     # approver decides; rejection needs a reason code
-    assert c.post("/api/decisions", json={"proposal_id": "p1", "action": "reject"}, headers=approver).status_code == 400
-    assert c.post("/api/decisions", json={"proposal_id": "p1", "action": "reject", "reason_code": "cost"}, headers=approver).json()["outcome"] == "SUBMITTED"
-    assert c.post("/api/decisions", json={"proposal_id": "p2", "action": "approve"}, headers=approver).json()["outcome"] == "SUBMITTED"
-    assert c.post("/api/decisions", json={"proposal_id": "p2", "action": "approve"}, headers=owner).status_code == 400  # first wins
+    assert c.post("/api/decisions", json={"proposal_id": "p1", "action": "reject", "created": shown(bus, "p1")}, headers=approver).status_code == 400
+    assert c.post("/api/decisions", json={"proposal_id": "p1", "action": "reject", "reason_code": "cost", "created": shown(bus, "p1")}, headers=approver).json()["outcome"] == "SUBMITTED"
+    assert c.post("/api/decisions", json={"proposal_id": "p2", "action": "approve", "created": shown(bus, "p2")}, headers=approver).json()["outcome"] == "SUBMITTED"
+    assert c.post("/api/decisions", json={"proposal_id": "p2", "action": "approve", "created": shown(bus, "p2")}, headers=owner).status_code == 400  # first wins
     assert c.get("/api/proposals", headers=viewer).json() == []
     # the engine picks the decisions up on its next tick and archives them with the outcome
     engine = ApprovalCenter({111}, bus=ApprovalBus(tmp_path))
@@ -278,8 +279,8 @@ def test_recent_proposals_say_what_happened_to_each_card(tmp_path):
     bus = ApprovalBus(tmp_path)
     for pid in ("sub", "rej-pending"):
         bus.publish(_prop(pid))
-    bus.submit("sub", True, None, by="dashboard:o@x.io")                       # the engine has not applied it yet
-    bus.submit("rej-pending", False, "news", by="telegram:111")
+    submit_shown(bus, "sub", True, None, by="dashboard:o@x.io")                       # the engine has not applied it yet
+    submit_shown(bus, "rej-pending", False, "news", by="telegram:111")
     bus.archive(_prop("ok", outcome=Outcome.APPROVED, decided_channel="dashboard"))
     bus.archive(_prop("refused", outcome=Outcome.APPROVED, gate_refusal=["owner_halt"], decided_channel="telegram"))
     bus.archive(_prop("rej", side=-1, outcome=Outcome.REJECTED, reason_code="cost"))

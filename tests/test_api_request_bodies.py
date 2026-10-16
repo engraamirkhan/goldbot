@@ -29,7 +29,7 @@ VALID_BODIES: dict[str, dict[str, Any]] = {
     "/api/users/disable": {"email": "v@x.io"},
     "/api/users/enable": {"email": "v@x.io"},
     "/api/users/revoke-sessions": {"email": "v@x.io"},
-    "/api/decisions": {"proposal_id": "p1", "action": "reject", "reason_code": "other"},
+    "/api/decisions": {"proposal_id": "p1", "action": "reject", "reason_code": "other", "created": 0.0},
     "/api/halt": {"reason": "test"},
     "/api/rearm": {"totp": "000000"},
     "/api/automode": {"mode": "propose", "totp": ""},
