@@ -11,6 +11,7 @@ import pytest
 
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade
 from goldbot.ops.monthly_report import build_monthly_report, format_report, main, month_to_date_line
+from goldbot.ops.report_days import DAY_BOUNDARY
 
 NOW = pd.Timestamp("2026-11-01 06:00", tz="UTC")
 
@@ -258,16 +259,41 @@ def test_a_month_of_net_rows_shows_no_gross_line(tmp_path):
 
 
 # ---------------------------------------------------------------------------------------------- day convention
-def test_the_report_states_its_day_boundary_the_utc_risk_day(tmp_path):
+def test_the_report_states_its_day_boundary_the_opportunity_day(tmp_path):
     rep = build_monthly_report(tmp_path, month="2026-10", now=NOW)
-    assert rep.day_boundary == "UTC 00:00-24:00 (the risk day on which the loss caps reset)"
-    assert "days run UTC 00:00-24:00 (the risk day on which the loss caps reset)" in format_report(rep)
+    assert rep.day_boundary == DAY_BOUNDARY and "22:00" in rep.day_boundary
+    assert f"days run {DAY_BOUNDARY}" in format_report(rep)
 
 
-def test_a_close_at_23_30_utc_belongs_to_that_utc_day_not_the_next_opportunity_day(tmp_path):
-    append_closed_trade(tmp_path, _trade("2026-10-01", 20.0, 1000.0, 2.0, pid=1,
-                                         exit_utc=pd.Timestamp("2026-10-01 23:30", tz="UTC")))
-    append_closed_trade(tmp_path, _trade("2026-10-31", 9.0, 1020.0, 1.0, pid=2,
-                                         exit_utc=pd.Timestamp("2026-10-31 23:30", tz="UTC")))
+def test_a_close_at_23_30_utc_belongs_to_the_next_opportunity_day_and_its_month(tmp_path):
+    """Day D runs D-1 22:00 to D 22:00 UTC (as perf_report): 30 Sep 22:30 is 1 October's, 1 Oct 23:30 is 2 October's,
+    and 31 Oct 23:30 is 1 November's, so it leaves October's report."""
+    for pid, ts in enumerate(["2026-09-30 22:30", "2026-10-01 23:30", "2026-10-31 23:30"], 1):
+        append_closed_trade(tmp_path, _trade("2026-10-01", 10.0 * pid, 1000.0, 1.0, pid=pid,
+                                             exit_utc=pd.Timestamp(ts, tz="UTC")))
     [a] = build_monthly_report(tmp_path, month="2026-10", now=NOW).accounts
-    assert sorted(d.day for d in a.best_days) == ["2026-10-01", "2026-10-31"] and a.trades == 2
+    assert sorted(d.day for d in a.best_days) == ["2026-10-01", "2026-10-02"] and a.trades == 2
+    [n] = build_monthly_report(tmp_path, month="2026-11", now=pd.Timestamp("2026-11-02 06:00", tz="UTC")).accounts
+    assert [d.day for d in n.best_days] == ["2026-11-01"] and n.trades == 1
+
+
+def test_the_default_month_and_the_last_day_follow_the_opportunity_day_of_now(tmp_path):
+    """At 31 Oct 23:00 UTC the opportunity day is 1 November: the default month is November."""
+    append_closed_trade(tmp_path, _trade("2026-10-01", 10.0, 1000.0, 1.0, pid=1,
+                                         exit_utc=pd.Timestamp("2026-10-31 22:30", tz="UTC")))
+    rep = build_monthly_report(tmp_path, now=pd.Timestamp("2026-10-31 23:00", tz="UTC"))
+    assert rep.month == "2026-11" and [a.trades for a in rep.accounts] == [1]
+    [a] = rep.accounts
+    assert a.trading_days == 0 and a.avg_per_day == 0.0          # 1 Nov is a Sunday: no weekday elapsed yet
+
+
+def test_the_digest_month_line_stops_at_yesterdays_22_utc_roll(tmp_path):
+    """The digest passes `now - 1 day`: the month so far runs through that opportunity day, so a close after its
+    22:00 UTC roll waits for the next digest."""
+    _seed(tmp_path)
+    append_closed_trade(tmp_path, _trade("2026-10-09", 5.0, 2049.397, 0.5, pid=9,
+                                         exit_utc=pd.Timestamp("2026-10-09 22:30", tz="UTC")))
+    [line] = month_to_date_line(tmp_path, pd.Timestamp("2026-10-09 06:45", tz="UTC"))
+    assert "4 trades" in line
+    [line] = month_to_date_line(tmp_path, pd.Timestamp("2026-10-10 06:45", tz="UTC"))
+    assert "5 trades" in line

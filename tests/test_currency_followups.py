@@ -92,7 +92,7 @@ def test_the_digest_says_when_the_currency_is_not_reported(tmp_path):
 def test_the_monthly_report_leaves_other_currency_rows_out_of_the_money(tmp_path):
     rows = [_trade(5.00, "GBP", 1), _trade(-10.90, "USD", 2, r=-1.0, at=T0 + pd.Timedelta(hours=1)),
             _trade(2.00, None, 3, at=T0 + pd.Timedelta(hours=2))]
-    start, end = pd.Timestamp("2026-10-01", tz="UTC"), pd.Timestamp("2026-10-08", tz="UTC")
+    start, end = "2026-10-01", "2026-10-07"           # opportunity days, inclusive
     m = account_month("icm-demo", rows, start, end, {"currency": "GBP", "equity": 1_000.0})
     assert m.pnl == pytest.approx(7.00) and m.trades == 3
     assert m.pnl_note == "1 in USD not summed" and m.pnl_excluded == 1
@@ -109,6 +109,6 @@ def test_the_monthly_report_leaves_other_currency_rows_out_of_the_money(tmp_path
 
 
 def test_a_month_in_one_currency_has_no_note(tmp_path):
-    start, end = pd.Timestamp("2026-10-01", tz="UTC"), pd.Timestamp("2026-10-08", tz="UTC")
+    start, end = "2026-10-01", "2026-10-07"           # opportunity days, inclusive
     m = account_month("icm-demo", [_trade(5.00, "GBP", 1)], start, end, {"currency": "GBP"})
     assert m.pnl_note is None and m.pnl_excluded == 0 and m.pnl == pytest.approx(5.0)

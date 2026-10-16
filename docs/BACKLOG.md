@@ -69,6 +69,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | implemented (security and trading-safety review pending; A14) |
 | 53 | The phase gates compare paper and live with the deployed model's own trial | Roadmap gates (P7) · VERIFY | M | proposed (review of 978c667, 2026-10-12) |
 | 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | proposed (trading-safety review of BACKLOG 44, 2026-10-12; needs trading-safety review) |
+| 55 | risk_day_anchor is read by no code: pin it or make it real | Execution and risk (loss caps) · PROTECT | S | proposed (found in the north-star day lane, 2026-10-16; needs trading-safety review) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -751,6 +752,21 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - tests: a single inflated balance read leaves the mark unchanged and causes no size-down or halt on the next real
     reads; two agreeing reads, or a read the deal history explains, raise it as today; a restart between the two reads
     does not apply an unconfirmed rise.
+- **55. risk_day_anchor is read by no code: pin it or make it real.** Value: `config/settings.yaml` says
+  `risk_day_anchor: { tz: UTC, time: "00:00" }  # loss caps reset`, and `Settings.risk_day_anchor` loads it, but no
+  code reads it. The 00:00 UTC risk day is decided separately in five places: `timeutil.risk_day` (gate `new_day`,
+  `throttle.entries_on_day`, perf_report's drawdown), the runner's UTC `.date()` shortcut in `_roll_risk_period`,
+  `entry_status._next_day`, `gate._risk_week`, and the supervisor through the engines' `day_start_equity`. An owner
+  who sets it in `settings.local.yaml` believes the caps' reset has moved; it has not (HANDOFF 2026-10-16, "Finding:
+  risk_day_anchor"). Acceptance:
+  - a Settings validator refuses any `risk_day_anchor` other than UTC 00:00 at load, naming the fixed risk day; the
+    same for `feature_day_anchor` other than America/New_York 13:30, or the setting is wired to `resample`;
+  - a test proves an edited anchor fails to load, and the shipped yaml loads;
+  - no change to when any cap resets (a test pins `new_day` at 00:00 UTC); rollback-safe (an older release ignores
+    the key);
+  - moving the risk day itself (for example to the 22:00 UTC roll) is a separate owner decision. It needs one
+    shared risk-day function for all five places, a migration for the persisted reset time, and a trading-safety
+    review.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.
