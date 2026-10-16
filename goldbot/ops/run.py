@@ -28,6 +28,9 @@
   python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds
   python -m goldbot.ops.run perf-report [--state DIR] [--data-root DIR] [--from D] [--to D] [--out DIR] [--json]
                                                          # performance report (markdown + JSON) for the analysts; read only
+  python -m goldbot.ops.run bridge-smoke <account_id> [--state DIR]
+                                                         # demo only: one minimum-lot round trip after one owner click
+                                                         # (engine stopped, supervisor running; RUNBOOK "bridge smoke")
 """
 # The services live in goldbot/ops/services/ and the commands in goldbot/ops/commands/ (registry.py), one module each,
 # so lanes stop colliding on this file. This module stays the public surface: it re-exports every name it always had,

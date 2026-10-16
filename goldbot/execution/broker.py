@@ -10,6 +10,11 @@ from pydantic import Field
 from goldbot.base import Record
 from goldbot.data.calendar import TradingSession
 
+# ADR 0021: the bridge smoke's order (goldbot/ops/smoke.py) carries magic_base + this. No specialist family hashes to it
+# (tests/test_magic.py); GuardedBroker refuses it unless the terminal reports a demo account (F4), and the broker ledger
+# lists such positions apart from the RC-8 reconciliation (goldbot/ops/ledger.py)
+SMOKE_MAGIC_OFFSET = 99
+
 
 class Tick(Record):
     ts_utc: pd.Timestamp

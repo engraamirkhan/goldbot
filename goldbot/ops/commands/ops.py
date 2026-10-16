@@ -1,5 +1,6 @@
 """Operations commands that hand over to their own module's main: backups and the restore drill, setup, preflight,
-health and the reports. The handlers are the old dispatcher's branches, verbatim (backup receives its own name)."""
+health, the reports and the bridge smoke. The handlers are the old dispatcher's branches, verbatim (backup receives
+its own name); bridge-smoke (BACKLOG 1) is new."""
 from __future__ import annotations
 
 import sys
@@ -41,3 +42,10 @@ def _monthly_report(cmd: str, args: list[str]) -> None:
 def _perf_report(cmd: str, args: list[str]) -> None:
     from goldbot.ops.perf_report import main as perf_main
     sys.exit(perf_main(args))
+
+
+@register_command("bridge-smoke", pos=250)
+def _bridge_smoke(cmd: str, args: list[str]) -> None:
+    """BACKLOG 1 (ADR 0021): one minimum-lot round trip on a demo terminal, after one owner click."""
+    from goldbot.ops.smoke import main as smoke_main
+    sys.exit(smoke_main(args))
