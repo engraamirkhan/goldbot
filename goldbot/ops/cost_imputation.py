@@ -24,7 +24,9 @@ cost per oz / entry price (the exit price when the entry is not recorded) and in
 stop|; neither needs the lot size or a currency conversion. A row the charge cannot be computed for (no price at all,
 or no entry time while swap is unknown) is "unpriced": it is kept, charged nothing, and counted, so a reader can fail
 closed on it (the phase gates do).
-Reporting only: nothing here changes a record, a setting, a limit or an order.
+Reporting only: nothing here changes a record, a setting, a limit or an order. `account_swap` and `paid_swap_per_oz`
+are also what the engine charges the RiskGate's daily projection for a rollover before the risk day ends (BACKLOG 36),
+so the projection and the closed-trade charge share one swap rule.
 """
 from __future__ import annotations
 
@@ -80,6 +82,26 @@ class ImputationSummary(FrozenRecord):
         return out
 
 
+def account_swap(table: CostTable | None, prior: SwapSpec) -> SwapSpec:
+    """The swap an account pays: its cost table's measured rates (on the prior's server clock, the prior's triple day
+    when the table names none), else the prior. One rule for the closed-trade charge and the engine's projection
+    (BACKLOG 36)."""
+    measured = table.swap_spec(prior.server_tz, prior.triple_weekday) if table is not None else None
+    return measured or prior
+
+
+def paid_swap_per_oz(swap: SwapSpec, side: int | None, entry_utc: pd.Timestamp, exit_utc: pd.Timestamp) -> float:
+    """Paid swap per oz (USD, >= 0) for a position open from `entry_utc` to `exit_utc`: `rollover_nights` (the triple
+    day counted) times the paid rate for its side. A credit is never counted; an unknown side pays the larger paid rate
+    of long and short. Used for gross closed trades (ADR 0017) and, ex ante up to the end of the risk day, for the
+    RiskGate's daily projection (BACKLOG 36)."""
+    nights = int(rollover_nights(pd.DatetimeIndex([entry_utc]), pd.DatetimeIndex([exit_utc]),
+                                 swap.server_tz, swap.triple_weekday)[0])
+    rates = {1: [swap.long_usd_per_lot], -1: [swap.short_usd_per_lot]}.get(
+        side or 0, [swap.long_usd_per_lot, swap.short_usd_per_lot])
+    return nights * max(0.0, *(-x for x in rates)) / swap.contract_oz
+
+
 def _account_of(path: Path) -> str:
     return path.stem[len("costs_"):]
 
@@ -118,8 +140,7 @@ class CostImputer:
             except (ValueError, OSError):
                 continue
             account = table.account_id or _account_of(f)
-            prior = base.default.swap
-            swap = table.swap_spec(prior.server_tz, prior.triple_weekday) or prior
+            swap = account_swap(table, base.default.swap)
             terms[account] = AccountCostTerms(commission_per_lot_side_usd=max(table.commission_per_lot_side_usd, 0.0),
                                               swap=swap, source=f"cost table {account}")
         return cls(terms, base.fallback, base.default)
@@ -154,11 +175,7 @@ class CostImputer:
         terms = self.terms_for(t)
         per_oz = 2 * terms.commission_per_lot_side_usd / CONTRACT_OZ if need_comm else 0.0
         if need_swap and t.entry_utc is not None:
-            nights = int(rollover_nights(pd.DatetimeIndex([t.entry_utc]), pd.DatetimeIndex([t.exit_utc]),
-                                         terms.swap.server_tz, terms.swap.triple_weekday)[0])
-            rates = {1: [terms.swap.long_usd_per_lot], -1: [terms.swap.short_usd_per_lot]}.get(
-                t.side or 0, [terms.swap.long_usd_per_lot, terms.swap.short_usd_per_lot])   # unknown side: the larger
-            per_oz += nights * max(0.0, *(-x for x in rates)) / terms.swap.contract_oz
+            per_oz += paid_swap_per_oz(terms.swap, t.side, t.entry_utc, t.exit_utc)
         if t.entry_price is not None and t.initial_sl is not None and abs(t.entry_price - t.initial_sl) > 0:
             r: float | None = per_oz / abs(t.entry_price - t.initial_sl)
         elif t.r is not None and t.ret and not from_price:

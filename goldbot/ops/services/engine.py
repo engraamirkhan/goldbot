@@ -202,6 +202,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
 
     from goldbot.config import load_settings
     from goldbot.engine import Engine, EngineConfig
+    from goldbot.execution.costs import settings_swap
     from goldbot.ops import accounts
     from goldbot.research.model_registry import ModelRegistry
     from goldbot.research.population import Population
@@ -271,7 +272,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               blackout_after_min=settings.risk.blackout.after_min,
                               shock_blackout_min=settings.news.shock_blackout_min,
                               shock_min_relevance=settings.news.shock_min_relevance, live_clock=True,
-                              approval_window_s=settings.risk.approval_window_seconds), broker, agents,
+                              approval_window_s=settings.risk.approval_window_seconds,
+                              swap_prior=settings_swap(settings)), broker, agents,
                  champions(), center, limits=limits, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares, live_versions=live_versions())
     from goldbot.data.calendar import BrokerSessions, SessionTable

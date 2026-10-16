@@ -33,8 +33,10 @@ class BarrierSpec(FrozenRecord):
 
 class SwapSpec(FrozenRecord):
     """Overnight financing per side in USD per lot (contract_oz ounces) per night, broker sign (negative = paid)."""
-    long_usd_per_lot: float
-    short_usd_per_lot: float
+    # finite only (trading-safety review of BACKLOG 36, MEDIUM): a NaN rate would read as "pays nothing" in every
+    # max(0, -rate), so it is refused at construction and the caller keeps its prior
+    long_usd_per_lot: float = Field(allow_inf_nan=False)
+    short_usd_per_lot: float = Field(allow_inf_nan=False)
     triple_weekday: int = Field(2, ge=0, le=4)   # 0 = Monday; the rollover after this server day is charged 3 nights
     server_tz: str = "Europe/Athens"             # the broker's server clock (IANA or NY+7): its midnight is the rollover
     contract_oz: float = Field(100.0, gt=0)

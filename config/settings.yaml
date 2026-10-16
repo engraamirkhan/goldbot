@@ -122,7 +122,8 @@ costs:
   # Swap, USD per lot (100 oz) per night, negative = paid. Prior; replace with the broker cost table. Long -60 is the
   # 2024-25 retail level at ~5% USD rates (~9-11% a year at $2,000-2,500 gold), so it overcharges the low-rate
   # 2010-2021 years (conservative). Short 0: the positive short swap of 2023-25 was negative before the 2022 hikes,
-  # so no credit is assumed. Triple swap on Wednesday's rollover (0 = Monday).
+  # so no credit is assumed. Triple swap on Wednesday's rollover (0 = Monday). The engine also charges it to the
+  # RiskGate's absolute daily projection for a rollover before 00:00 UTC, until the cost table measures (BACKLOG 36).
   swap_long_usd_per_lot: -60.0
   swap_short_usd_per_lot: 0.0
   swap_triple_weekday: 2
