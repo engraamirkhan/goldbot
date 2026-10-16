@@ -5,6 +5,10 @@ Research tabs. The first-run setup
 code is written to --info so the browser test can create the owner account the way a person would.
 
   python scripts/e2e_server.py --port 8790 --info web/e2e/.server.json
+
+--fake-mailer (the auth tests, web/e2e/auth.spec.ts) turns on the owner's email sign-in link with the e2e-only
+CaptureMailer (goldbot/api/e2e_mailer.py): mail lands in a JSONL outbox in the throwaway state dir (path in --info). It
+is refused unless GOLDBOT_E2E_FAKE_MAILER=1 and --host is 127.0.0.1 or ::1; the same host is what uvicorn binds.
 """
 from __future__ import annotations
 
@@ -23,6 +27,8 @@ import pandas as pd  # noqa: E402
 import uvicorn  # noqa: E402
 
 from goldbot.api.app import create_app  # noqa: E402
+from goldbot.api.e2e_mailer import CaptureMailer  # noqa: E402
+from goldbot.config import MailSettings  # noqa: E402
 from goldbot.data.econ_calendar import COLUMNS as CALENDAR_COLUMNS  # noqa: E402
 from goldbot.data.news import COLUMNS as NEWS_COLUMNS  # noqa: E402
 from goldbot.data.store import Store  # noqa: E402
@@ -152,17 +158,29 @@ def seed_automode(state: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8790)
+    ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--info", default=str(ROOT / "web" / "e2e" / ".server.json"))
+    ap.add_argument("--fake-mailer", action="store_true", help="capture mail to an outbox (e2e only, see docstring)")
     args = ap.parse_args()
     state = tempfile.mkdtemp(prefix="goldbot-e2e-")
     seed_proposals(state)
     seed_store(str(Path(state) / "data"))
     seed_health_research(state)
     seed_automode(state)
-    app =create_app(state, web_dist=ROOT / "web" / "dist", data_root=Path(state) / "data", owner_email="owner@example.com")
+    mail, mailer, outbox = None, None, None
+    if args.fake_mailer:
+        # refused (E2EMailerRefused) unless the flag is set and args.host, the address uvicorn binds below, is loopback
+        mailer = CaptureMailer(Path(state) / "e2e_outbox.jsonl", bind_host=args.host)
+        outbox = str(mailer.outbox)
+        url_host = f"[{args.host}]" if ":" in args.host else args.host
+        mail = MailSettings(enabled=True, from_address="goldbot-e2e@example.com",
+                            dashboard_origin=f"http://{url_host}:{args.port}")
+    app = create_app(state, web_dist=ROOT / "web" / "dist", data_root=Path(state) / "data", owner_email="owner@example.com",
+                     mail=mail, mailer=mailer)
     Path(args.info).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.info).write_text(json.dumps({"setup_code": app.state.st.auth.setup_code, "state_dir": state}))
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+    Path(args.info).write_text(json.dumps({"setup_code": app.state.st.auth.setup_code, "state_dir": state,
+                                           "outbox": outbox}))
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":
