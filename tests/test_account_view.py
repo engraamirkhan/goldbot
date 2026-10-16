@@ -156,6 +156,34 @@ def test_an_account_that_does_not_report_its_currency_next_to_others_reads_as_mi
     assert b.unknown.startswith("The accounts report different currencies (GBP, one not reported)")
 
 
+def test_a_stale_engine_file_in_another_currency_no_longer_holds_the_budget_at_cant_check():
+    """BACKLOG 61 L1 (BACKLOG 65 a): the currency check counts only running engines, the supervisor's own rule
+    (supervisor.py `evaluate`: "a file left by an engine that no longer runs must not halt the book"), so a removed USD
+    engine's leftover file does not keep a single-currency account amber. A running one still does."""
+    gone = _engine(account="vantage-demo", currency="USD", ts=NOW - 600)
+    b = _budget(_engine(), _sup(), [_engine(), gone])
+    assert b is not None and (b.unknown, b.unknown_mixed) == (None, False)
+    assert any(c.name == "combined 1.5% daily cap" for c in b.caps)
+    running = _engine(account="vantage-demo", currency="USD", ts=NOW - 5)
+    b = _budget(_engine(), _sup(), [_engine(), running])
+    assert b is not None and b.unknown_mixed and not b.unknown_paused
+    no_ts = _engine(account="vantage-demo", currency="USD")          # an unstamped file is never assumed gone
+    b = _budget(_engine(), _sup(), [_engine(), no_ts])
+    assert b is not None and b.unknown_mixed
+
+
+def test_mixed_currencies_during_a_supervisor_halt_for_another_reason_read_red_not_amber():
+    """BACKLOG 61 L2 (BACKLOG 65 a): any supervisor halt pauses every account's new entries
+    (`Supervisor.engine_should_halt`), so mixed currencies seen during a combined-cap halt are "paused" (red)."""
+    other = _engine(account="vantage-demo", currency="USD", ts=NOW - 5)
+    halt = _sup(halt=True, reasons=["combined_daily_cap"])
+    b = _budget(_engine(), halt, [_engine(), other])
+    assert b is not None
+    assert (b.unknown, b.unknown_paused, b.unknown_mixed) == (MIXED + "New entries are paused; exits always run.",
+                                                              True, True)
+    assert b.cant_check == "mixed_currencies_paused"
+
+
 PAUSED = "New entries are paused; exits always run."
 CANT_CHECK = "so the combined loss cap can't be checked. " + PAUSED
 STALE = "The safety supervisor hasn't reported for over a minute, " + CANT_CHECK
