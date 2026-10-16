@@ -157,6 +157,12 @@ Wave 3 (shares `runner.py` with W2-1): A2, D10, M9, M3 15m leg. Parked until an 
 
 ## 6. Owner decision queue
 
+**Decision forum** (owner delegation 2026-10-16): routine decisions are made by the program-director and the
+product-owner, with the `cto` on technical matters and the `cfo` on anything with a money effect, recorded in
+`docs/decisions/` or `docs/finance/`. Only owner-only matters come to this queue (spending, paid plans, sizing and
+risk limits, instruments, going live, server deployment, gate thresholds, credentials); the CFO prepares the numbers
+for each money item, the CTO the evidence for each technical one.
+
 Asked once, batched, on #34 on 2026-10-16. Each item has a recommendation and a deadline; the finance ids are in
 `docs/finance/recommendations-2026-10.md`.
 

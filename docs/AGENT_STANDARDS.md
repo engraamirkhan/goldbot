@@ -61,6 +61,19 @@ monthly scorecard. The `finance-auditor` owns the money picture and the independ
 monthly audit of profitability, rule compliance, costs and learning, with ranked recommendations to the
 research-director and program-director. All four report to the owner.
 
+Two executives sit above the principals (owner, 2026-10-16). The `cto` owns technical strategy and the platform
+roadmap: architecture direction (the architect reports to it), build-vs-buy, technical debt and its budget, the
+engineering quality bar (gates, CI, test strategy), reliability and security posture with the sre and
+security-reviewer, technical risks and ADRs, and capacity and tooling; it arbitrates technical disagreements between
+principals and edits only `docs/decisions/`, `docs/ROADMAP.md` and `docs/process/` (code goes to the implementer).
+The `cfo` owns the money strategy: capital allocation and the growth plan within ADR 0004, the operating budget,
+break-even and ROI of every recurring cost and of research spend, the recommended risk appetite, UK tax and
+reporting readiness as owner flags, and the monthly finance review; the finance-auditor reports to it. **Decision
+forum** (owner delegation 2026-10-16): routine decisions are made by the program-director and the product-owner,
+with the CTO on technical matters and the CFO on anything with a money effect; owner-only matters are escalated
+with a recommendation. Anything that spends money, changes a paid plan, changes sizing or a risk limit, or relates
+to going live stays owner-only; the CFO prepares the numbers and never loosens a RiskGate limit.
+
 ## Review routing (who must sign off)
 
 | Change touches | Required reviewers before release |
@@ -72,6 +85,8 @@ research-director and program-director. All four report to the owner.
 | any screen or Telegram message | ui-ux-designer |
 | goldbot/ops/linux, systemd, deploy, backups, health/alerts | sre |
 | goldbot/data, data workflows, release loaders, feature inputs | data-engineer |
+| architecture or platform changes (module boundaries, protocols, persisted state, deploy topology, CI and gates), any new dependency or service | cto |
+| anything that changes costs, position sizing or paid services | cfo (owner decides spend, paid plans, sizing and limits) |
 
 A HIGH or CRITICAL finding blocks release until fixed and re-verified by the same reviewer. Reviews follow the
 one-pass rule under "Accountability and cadence"; a requested review starts within 4 h.
@@ -126,7 +141,7 @@ does when something it owns is late. Each check is short and ends in an action (
 | When | Who | What |
 | --- | --- | --- |
 | Every 4 h while work runs | program-director | Light check: stalled or idle lanes (refill per the adaptive lane policy); any lane past 2 review rounds; Definition-of-done gaps in finished work; items late or due within 48 h, each chased; owner steps due today, chased. |
-| Daily | an independent reviewer (fresh agent, read-only on code) | Full review: grades all 18 roles over the last 24 h from git, PRs, #34 and the docs; writes `docs/process/scorecards/<YYYY-MM-DD>.md`; proposes edits to the role file of any role graded C or below. |
+| Daily | an independent reviewer (fresh agent, read-only on code) | Full review: grades all 20 roles (18 principals plus the cto and cfo) over the last 24 h from git, PRs, #34 and the docs; writes `docs/process/scorecards/<YYYY-MM-DD>.md`; proposes edits to the role file of any role graded C or below. |
 | Weekly | program-director | Roll-up `docs/process/scorecards/<YYYY>-W<NN>.md` and a short summary on #34: per role, items owned, delivered, late and blocked, grade, and the fix for each C or below. |
 
 Scorecards are one file per day or week (no shared file, so no merge conflicts; ADR 0012's reason). In-session
