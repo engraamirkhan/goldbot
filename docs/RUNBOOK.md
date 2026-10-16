@@ -342,7 +342,8 @@ brain and sent to **Oracle Object Storage** (free tier, 20 GB). It never goes to
 
 Bars from releases and secrets are left out. Every Sunday at 10:00 UTC a restore drill restores the latest backup to
 a temporary folder and checks it. Health shows `backup_age` (warn after 26 h, fail after 72 h; Telegram tells you
-at the first warning), `restore_drill` (fail when the drill fails) and `backup_prune` (warn when the monthly
+at the first warning; it also warns when a backup took 10 min or more, because restic cancels a backup near 20 min
+under the brain's no-delete key, ADR 0002), `restore_drill` (fail when the drill fails) and `backup_prune` (warn when the monthly
 retention run from your Mac is older than 45 days).
 
 **Why two keys.** The brain only adds backups; it never deletes old ones (no `restic forget` or `prune` on the
@@ -358,12 +359,18 @@ its key cannot wipe the backup history, and the bucket keeps every overwritten o
 2. On the bucket page: *Edit* next to **Object Versioning** -> *Enable*. Then *Lifecycle Policy Rules -> Create
    rule*: name `expire-old-versions`, target **Previous object versions**, action **Delete**, after **30 days**
    (more is fine; never less), enabled. Deleted or overwritten backup files stay recoverable for those 30 days.
+   Lifecycle rules only run when Object Storage itself may act on the bucket. Add this service policy once (in
+   *Identity -> Policies*, in the root compartment):
+   `Allow service objectstorage-<region> to manage object-family in tenancy where target.bucket.name='goldbot-backup'`.
+   Use your region identifier, for example `objectstorage-eu-frankfurt-1`.
 3. Two users, two groups, two keys (*Identity -> Domains -> Default -> Users / Groups*):
    * **Brain writer** (user and group `goldbot-backup-writer`): add and read objects, no delete. Policy:
      `Allow group goldbot-backup-writer to read buckets in tenancy where target.bucket.name='goldbot-backup'` and
      `Allow group goldbot-backup-writer to manage objects in tenancy where all {target.bucket.name='goldbot-backup', request.permission!='OBJECT_DELETE'}`.
-     restic also removes its own lock files; with no delete right those removals fail, which goldbot logs as a
-     warning only (your Mac's monthly run clears the leftover locks). The no-delete condition is **mandatory**: in
+     restic also tries to remove its own lock files. With no delete right those removals fail, so every backup
+     leaves a lock behind (restic prints `error in cleanup handler: ... 403`, and the backup still succeeds). The
+     brain's read-only commands (restore, drill, `check`) therefore run with `--no-lock` and are never blocked by
+     those locks. Your Mac's monthly run clears them (ADR 0002 update 2026-10-16). The no-delete condition is **mandatory**: in
      Oracle the same delete right also removes old versions, so versioning alone does not protect backups from a
      compromised server. If the first `goldbot run backup` below fails on a permission error, stop and ask; the
      fix is an append-only backup target (restic rest-server), never dropping the condition.
@@ -373,6 +380,29 @@ its key cannot wipe the backup history, and the bucket keeps every overwritten o
    Copy each **secret** (shown only once) and **access key**. The brain gets only the writer key.
 4. In your password manager, generate a long random **restic password** and save it there *first*. Without it no
    backup can ever be restored, and the brain is the only other place that holds it.
+
+**What was set up on 16 Oct 2026 (by the program director, with the OCI CLI from the Mac).** These are the same
+objects as steps 1-3, created on the command line. No identifiers are recorded here: the namespace, OCIDs and email
+addresses stay in the Oracle console.
+* The bucket `goldbot-backup` (Standard tier, private), with Object Versioning enabled.
+* A lifecycle rule that deletes **previous object versions** after 30 days, and the `objectstorage-<region>`
+  service policy that lets that rule run (step 2).
+* Two identity-domain users, `goldbot-backup-writer` and `goldbot-backup-retention`. Identity-domain users must
+  have an email address, so each got a plus-addressed form of the owner's email. Nothing is sent to them, and they
+  have no console password.
+* Two groups of the same names, one user in each.
+* One policy, `goldbot-backup-access`, holding the step 3 statements: the writer group may read the bucket and
+  manage its objects with the condition `request.permission!='OBJECT_DELETE'`; the retention group may manage
+  objects.
+* A customer secret key for the **writer** only, stored on the brain as `restic-s3-access-key` /
+  `restic-s3-secret-key`. The **retention key is not created yet**. Make it when you set up the monthly retention
+  on your Mac (below): on the `goldbot-backup-retention` user, *Customer secret keys -> Generate secret key*, then
+  put the two values straight into your Mac's Keychain.
+
+*A new policy takes several minutes to apply.* Until it has, the writer key gets `403 Forbidden`. On 16 Oct the
+first `goldbot run backup --init` failed with a 403 on a HEAD request for an object that did not exist yet (restic
+checking that no repository is there). Wait 5-10 minutes and run it again. Do not loosen the policy: the same
+command succeeded unchanged once the policy had propagated.
 
 **On the brain**: `goldbot run setup` (step 8) asks for the namespace, region, bucket, password and the writer key,
 and stores the four `restic-*` keys; then run the last four commands below. By hand instead (each command asks for
@@ -426,6 +456,14 @@ scripts/backup_retention.sh --dry-run   # lists what would be forgotten (14 dail
 scripts/backup_retention.sh             # forgets, prunes, and uploads a marker the brain reads at its next backup
 ```
 The script refuses to run on a goldbot server. After the brain's next backup, `backup_prune` shows OK.
+Do not run it between 22:00 and 23:30 UTC (the nightly backup) or on Sunday between 09:45 and 11:00 UTC (the drill).
+Its prune deletes data the brain may be reading at that moment. The brain's backup then fails, or the drill fails
+loudly, but nothing is lost. If that happens, run the brain's job again afterwards. The script's first step,
+`restic unlock`, clears the locks the brain's key could not remove (every lock older than 30 minutes).
+
+**If the drill or a restore says `repository is already locked`:** the brain is running a goldbot version from
+before 16 Oct 2026, whose drill took a lock. Deploy the current version; leftover locks need no action. Do not run
+`restic unlock --remove-all` on the brain, and never give the brain's key the delete right.
 
 ---
 

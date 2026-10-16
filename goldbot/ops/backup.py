@@ -23,6 +23,9 @@ out the history through restic. Retention runs monthly from the owner's Mac with
 (scripts/backup_retention.sh), which uploads a small marker snapshot (host and tag `goldbot-retention`) after each
 prune; the brain reads the newest marker's time on each backup and health warns when it is older than 45 days. The
 bucket keeps previous object versions for 30 days (RUNBOOK 0.6), so even a deleting key cannot remove history at once.
+Because the brain's key cannot delete, restic cannot remove its own lock files either: every read-only command runs
+with `--no-lock` and a host-local lock keeps a backup and a drill apart (ADR 0002 update of 2026-10-16; incident
+docs/incidents/2026-10-16-restic-lock-no-delete-key.md).
 
 Staging and restore directories are created 0700 under umask 077 (re-applied when they already exist): the staged
 copies hold the order and auth databases in clear text. JSONL files are copied up to their last newline, so a line
@@ -41,6 +44,7 @@ state/restore_drill_last.json. Health reads both (`backup_age`, `restore_drill`)
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -52,7 +56,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import pandas as pd
 from pydantic import Field
@@ -74,6 +78,14 @@ MANIFEST = "MANIFEST.json"
 TAG = "goldbot"
 RETENTION_HOST = RETENTION_TAG = "goldbot-retention"   # marker snapshot the Mac's retention run uploads after a prune
 PRIVATE_UMASK = 0o077
+# The brain's key has no delete right (ADR 0002), so restic cannot remove the lock file a command creates: every
+# lock it takes stays in the repository until the Mac's retention run (`restic unlock`). Read-only commands therefore
+# run with restic's global `--no-lock` (restic >= 0.12, both Ubuntu releases the brain runs; `check` honours it too)
+# and take no lock at all; only `backup` (a shared lock, which other shared locks never block) and `init` remain.
+# What restic's exclusive lock used to guard (no `check` while a backup writes) is the host-local HOST_LOCK below.
+READ_ONLY_COMMANDS = frozenset({"snapshots", "stats", "restore", "check", "ls", "cat", "dump", "find", "diff"})
+HOST_LOCK = ".backup.lock"                       # fcntl lock in work_dir: one backup or drill at a time on this host
+HOST_LOCK_WAIT_S = 1800.0                        # a drill started during the nightly backup waits for it this long
 RELEASE_SOURCES = ("dukascopy", "fred")          # re-downloadable from releases data-v1 / macro-v1
 DERIVED_TABLES = ("features", "labels")          # recomputed from bars
 _STATE_EXCLUDE = (re.compile(r".*\.db(-wal|-shm|-journal)?$"), re.compile(r"^\.secrets\.json$"),
@@ -161,9 +173,12 @@ class Restic:
         return text
 
     def run(self, args: list[str], *, timeout_s: float | None = None) -> str:
+        """Run `restic <args>`; a read-only subcommand (READ_ONLY_COMMANDS) gets `--no-lock`, so it never leaves a
+        lock the no-delete key cannot remove and never waits on one."""
         log.info("restic %s", args[0])               # the subcommand only: arguments carry paths, never secrets
+        argv = ["--no-lock", *args] if args[0] in READ_ONLY_COMMANDS else list(args)
         try:
-            p = self.runner([self.binary, *args], env=self.env, capture_output=True, text=True,
+            p = self.runner([self.binary, *argv], env=self.env, capture_output=True, text=True,
                             timeout=timeout_s or self.timeout_s, check=False)
         except FileNotFoundError as exc:
             raise BackupError(f"{self.binary} is not installed (brain_bootstrap.sh installs it with apt)") from exc
@@ -478,6 +493,33 @@ class _PrivateUmask:
         os.umask(self.old)
 
 
+@contextlib.contextmanager
+def host_lock(work_dir: Path, wait_s: float = HOST_LOCK_WAIT_S, poll_s: float = 5.0) -> Iterator[None]:
+    """One backup or restore drill at a time on this host: an fcntl lock on work_dir/HOST_LOCK, released by the
+    kernel when the process ends (no stale lock after a crash). The read-only restic commands run with `--no-lock`,
+    so this lock is what keeps a drill's `check` from reading a snapshot a backup is still writing. Waits up to
+    `wait_s`, then raises BackupError. The scheduler runs jobs one after another; this covers a run started by hand."""
+    import fcntl  # the brain is Linux; imported here so Windows can import the module
+
+    private_dir(work_dir)
+    with open(work_dir / HOST_LOCK, "a") as fh:
+        deadline = time.monotonic() + wait_s
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise BackupError(f"another backup or restore drill is running on this host (waited "
+                                      f"{wait_s:.0f} s for {work_dir / HOST_LOCK}); run it again when that ends"
+                                      ) from None
+                time.sleep(poll_s)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 # ------------------------------------------------------------------------------------------------ backup
 def init_repository(restic: Restic) -> str:
     """Create the encrypted repository once (`restic init`); refuses (restic error) when one already exists."""
@@ -505,10 +547,8 @@ def run_backup(paths: BackupPaths, restic: Restic) -> BackupRecord:
     _empty_dir(stage)
     try:
         manifest = build_snapshot(paths, stage)
-        try:
-            restic.run(["unlock"])                  # stale locks only (a crashed earlier run); live locks stay
-        except BackupError as exc:                  # a key without delete rights cannot remove locks: not fatal
-            log.warning("restic unlock failed (key without delete rights?): %s", exc)
+        # no `restic unlock`: the brain's key cannot delete locks (ADR 0002). `backup` takes a shared lock, which the
+        # shared locks earlier backups left never block; the Mac's retention run clears them (backup_retention.sh).
         out = restic.run(["backup", "--json", "--host", restic.host, "--tag", TAG, str(stage.resolve())])
         snap = None
         for line in out.splitlines()[::-1]:
@@ -545,9 +585,10 @@ def _job_error(exc: Exception) -> str:
 
 
 def backup_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, host: str,
-               runner: Runner = subprocess.run, timeout_s: float = 3600) -> dict[str, Any]:
+               runner: Runner = subprocess.run, timeout_s: float = 3600,
+               wait_s: float = HOST_LOCK_WAIT_S) -> dict[str, Any]:
     """The scheduler job: one backup, recorded in state/backup_last.json whatever happens; raises on failure so the
-    scheduler records it too (health: backup_age, scheduler job check)."""
+    scheduler records it too (health: backup_age, scheduler job check). Never runs beside a drill (host_lock)."""
     path = paths.state_dir / LAST_FILE
     prev_ok = _previous_ok(path)
     first_ok = _previous_ok(path, "first_ok_ts") or prev_ok
@@ -556,7 +597,7 @@ def backup_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, h
     restic: Restic | None = None
     try:
         restic = Restic.from_secrets(get_secret, host=host, runner=runner, timeout_s=timeout_s)
-        with _PrivateUmask():
+        with _PrivateUmask(), host_lock(paths.work_dir, wait_s):
             rec = run_backup(paths, restic)
         rec.last_ok_ts = rec.ts
         rec.first_ok_ts = first_ok or rec.ts
@@ -619,16 +660,18 @@ def restore_drill(paths: BackupPaths, restic: Restic, *, check_subset: str = "5%
 
 
 def drill_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, host: str, check_subset: str = "5%",
-              runner: Runner = subprocess.run, timeout_s: float = 3600) -> dict[str, Any]:
+              runner: Runner = subprocess.run, timeout_s: float = 3600,
+              wait_s: float = HOST_LOCK_WAIT_S) -> dict[str, Any]:
     """The weekly scheduler job: restore the latest snapshot to a temp dir and verify it; recorded in
-    state/restore_drill_last.json; raises when the drill fails (health: restore_drill)."""
+    state/restore_drill_last.json; raises when the drill fails (health: restore_drill). Every restic call is read-only
+    with `--no-lock` (the no-delete key, ADR 0002); host_lock keeps a backup from writing meanwhile."""
     path = paths.state_dir / DRILL_FILE
     prev_ok = _previous_ok(path)
     t0 = time.monotonic()
     restic: Restic | None = None
     try:
         restic = Restic.from_secrets(get_secret, host=host, runner=runner, timeout_s=timeout_s)
-        with _PrivateUmask():
+        with _PrivateUmask(), host_lock(paths.work_dir, wait_s):
             rec = restore_drill(paths, restic, check_subset=check_subset)
     except Exception as exc:
         msg = _job_error(exc)
@@ -693,6 +736,6 @@ def main(argv: list[str], *, get_secret: Callable[[str], str | None] | None = No
     return 1
 
 
-__all__ = ["BackupError", "ResticNotConfigured", "Retention", "BackupPaths", "Restic", "retention_args", "last_prune", "private_dir",
+__all__ = ["BackupError", "ResticNotConfigured", "Retention", "BackupPaths", "Restic", "retention_args", "host_lock", "last_prune", "private_dir",
            "snapshot_sqlite", "build_snapshot", "verify_restore", "verify_models", "run_backup", "backup_job",
            "restore", "restore_drill", "drill_job", "BackupRecord", "DrillRecord", "main"]
