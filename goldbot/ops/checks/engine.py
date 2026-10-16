@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from goldbot.data.timeutil import heartbeat_problem
 from goldbot.ops.checks._base import (
     ENGINE_FAIL_S,
     ENGINE_WARN_S,
     FAILED_ORDER_WINDOW_H,
+    HEALTH_CLOCK_AHEAD_S,
     LOOP_FAIL_S,
     LOOP_STARTING_FAIL_S,
     LOOP_WARN_S,
@@ -48,7 +50,11 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     parts: list[str] = []
     statuses: list[Status] = []
     age = _epoch(ctx.now) - float(e.get("ts", 0))
-    if not market:
+    if age < -HEALTH_CLOCK_AHEAD_S:          # whatever the market: a future stamp proves nothing (found 2026-10-16)
+        statuses.append("fail")
+        parts.append(f"state stamped {_age(-age)} ahead of this server's clock (clock fault or bad write): it cannot "
+                     "show the engine runs, and the supervisor halts entries on every account (engine_heartbeat_future)")
+    elif not market:
         parts.append(f"market closed, state {_age(age)} old")
     elif age > ENGINE_FAIL_S:
         statuses.append("fail")
@@ -154,6 +160,13 @@ def check_engine_loop(ctx: HealthContext, account_id: str) -> Check:
     except (ValueError, OSError, KeyError, TypeError) as exc:
         return Check(name=name, status="fail", reason=f"loop heartbeat unreadable: {exc}")
     now = _epoch(ctx.now)
+    problem = heartbeat_problem(ts, now, LOOP_FAIL_S, ahead_s=HEALTH_CLOCK_AHEAD_S)
+    if problem == "invalid":                 # float() read NaN or infinity, which compared as fresh
+        return Check(name=name, status="fail", reason=f"loop heartbeat unreadable: ts {ts!r} is not a finite number")
+    if problem == "future":
+        return Check(name=name, status="fail",
+                     reason=f"loop heartbeat stamped {_age(ts - now)} ahead of this server's clock (clock fault or bad "
+                            "write): it cannot show the loop turns; check the host clock and restart the engine")
     age = now - ts
     if age > LOOP_FAIL_S:
         what = "start" if phase == "starting" else "loop"

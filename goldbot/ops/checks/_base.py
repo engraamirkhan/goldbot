@@ -24,6 +24,10 @@ _RANK: dict[str, int] = {"ok": 0, "warn": 1, "fail": 2}
 # ---- thresholds (seconds unless named otherwise); the reasons quote them so an alert explains itself
 SUPERVISOR_WARN_S = 20
 SUPERVISOR_FAIL_S = 60            # engines block entries when the supervisor heartbeat is older than this
+# a liveness stamp further ahead of the pass's `now` than this is a clock fault, never a fresh report (found
+# 2026-10-16): wider than the engines' own CLOCK_AHEAD_TOLERANCE_S because `now` is taken once at the start of a
+# pass that can run for many seconds (bridge and broker checks) while the services keep writing
+HEALTH_CLOCK_AHEAD_S = 60
 ENGINE_WARN_S = 20 * 60           # engines write their state at every 15m bar close
 ENGINE_FAIL_S = 45 * 60
 # the engine loop's own heartbeat (goldbot/ops/watchdog.py LoopWatch, rewritten every 15 s whatever the feed does): a

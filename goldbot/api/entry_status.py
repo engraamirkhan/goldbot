@@ -93,6 +93,13 @@ REASONS: dict[str, Reason] = {
                           "Check the supervisor service and the Health tab.", "act"),
     "no_supervisor_heartbeat": _r("Safety supervisor is not running", "Start the supervisor service.", "act"),
     "supervisor_heartbeat_stale": _r("Safety supervisor stopped reporting", "Restart the supervisor service.", "act"),
+    "supervisor_heartbeat_future": _r("Safety supervisor's report is stamped ahead of this server's clock",
+                                      "Check the server clock (time sync), then restart the supervisor service.",
+                                      "act"),
+    "engine_heartbeat_future": _r("An engine's report is stamped ahead of the server clock: entries stopped on "
+                                  "every account",
+                                  "Check the server clock (time sync), then restart the engine the Health tab names.",
+                                  "act"),
     "supervisor_state_unreadable": _r("Safety supervisor's state can't be read",
                                       "Restart the supervisor service; it rewrites the file.", "act"),
     "engine_state_unreadable": _r("The supervisor can't read an engine's state file",

@@ -5,9 +5,11 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from goldbot.data.timeutil import heartbeat_problem
 from goldbot.ops.checks._base import (
     COSTS_WARN_DAYS,
     ENGINE_FAIL_S,
+    HEALTH_CLOCK_AHEAD_S,
     REARM_APPLY_S,
     SUPERVISOR_FAIL_S,
     SUPERVISOR_WARN_S,
@@ -35,7 +37,18 @@ def check_supervisor(ctx: HealthContext) -> Check:
         s = _read_json(f)
     except (ValueError, OSError) as exc:
         return Check(name="supervisor", status="fail", reason=f"supervisor.json unreadable: {exc}")
-    age = _epoch(ctx.now) - float(s.get("ts", 0))
+    if not isinstance(s, dict):
+        return Check(name="supervisor", status="fail", reason="supervisor.json unreadable: not an object; engines block entries")
+    now = _epoch(ctx.now)
+    problem = heartbeat_problem(s.get("ts", 0), now, SUPERVISOR_FAIL_S, ahead_s=HEALTH_CLOCK_AHEAD_S)
+    if problem == "invalid":
+        return Check(name="supervisor", status="fail",
+                     reason=f"supervisor.json heartbeat is not a number ({s.get('ts')!r}): engines block entries")
+    if problem == "future":
+        return Check(name="supervisor", status="fail",
+                     reason=f"heartbeat stamped {_age(float(s['ts']) - now)} ahead of this server's clock (clock fault, "
+                            "bad write or restored backup): engines block entries until the supervisor rewrites it")
+    age = now - float(s.get("ts", 0))
     if age > SUPERVISOR_FAIL_S:
         return Check(name="supervisor", status="fail",
                      reason=f"heartbeat {_age(age)} old (> {SUPERVISOR_FAIL_S} s): engines block entries")
@@ -62,6 +75,12 @@ def check_supervisor(ctx: HealthContext) -> Check:
         return Check(name="supervisor", status="fail",
                      reason=f"HALT engine_state_unreadable: {files} cannot be read or holds a non-number; entries are "
                             "blocked on every account until the engine rewrites it (delete it if that engine no longer runs)")
+    if "engine_heartbeat_future" in reasons:
+        files = ", ".join(str(f) for f in s.get("future_engines") or []) or "an engine file"
+        return Check(name="supervisor", status="fail",
+                     reason=f"HALT engine_heartbeat_future: {files} is stamped ahead of the server clock (clock fault or "
+                            "bad write); entries are blocked on every account until that engine rewrites it with a sane "
+                            "clock (move the file aside if that engine no longer runs)")
     if s.get("halt"):
         label = "combined-cap HALT" if any(r.startswith("combined_") for r in reasons) else "HALT"
         return Check(name="supervisor", status="warn",

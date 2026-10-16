@@ -37,6 +37,7 @@ from pydantic import Field
 
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.config import ROOT
+from goldbot.data.timeutil import CLOCK_AHEAD_TOLERANCE_S
 from goldbot.execution.bridge import API_VERSION, METHODS, MIN_COMPATIBLE
 
 log = logging.getLogger("goldbot.bridge_compat")
@@ -274,12 +275,15 @@ def next_verdict(prev: BridgeCompat | None, new: BridgeCompat) -> BridgeCompat:
 
 def effective(v: BridgeCompat, now: pd.Timestamp, max_age_s: float = MAX_VERDICT_AGE_S) -> BridgeCompat:
     """`v`, or `unchecked` when it does not block and the bridge was last confirmed over `max_age_s` ago (or never):
-    a hung check thread or a long silence must not leave an old `ok` in force."""
+    a hung check thread or a long silence must not leave an old `ok` in force. A `checked_at` ahead of `now` (a
+    clock step, a restored state file) is unchecked too: its age would be negative for ever (found 2026-10-16)."""
     if v.blocks:
         return v
     if v.checked_at is None:
         return unchecked("never confirmed", now=now)
     age = (now - v.checked_at).total_seconds()
+    if age < -CLOCK_AHEAD_TOLERANCE_S:
+        return unchecked(f"last confirmation stamped {-age / 60:.0f} min ahead of this clock", v.checked_at, now=now)
     if age > max_age_s:
         return unchecked(f"last confirmed {age / 60:.0f} min ago (over {max_age_s / 60:g} min)", v.checked_at, now=now)
     return v

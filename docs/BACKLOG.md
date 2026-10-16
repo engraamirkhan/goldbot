@@ -69,6 +69,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | implemented (security and trading-safety review pending; A14) |
 | 53 | The phase gates compare paper and live with the deployed model's own trial | Roadmap gates (P7) · VERIFY | M | proposed (review of 978c667, 2026-10-12) |
 | 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | proposed (trading-safety review of BACKLOG 44, 2026-10-12; needs trading-safety review) |
+| 58 | Fail closed on heartbeats stamped in the future | Execution and risk (supervisor) · PROTECT | S | done 2026-10-16 (needs trading-safety and SRE review) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -751,6 +752,22 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - tests: a single inflated balance read leaves the mark unchanged and causes no size-down or halt on the next real
     reads; two agreeing reads, or a read the deal history explains, raise it as today; a restart between the two reads
     does not apply an unconfirmed rise.
+- **58. Fail closed on heartbeats stamped in the future (found 2026-10-16).** Value: every liveness check had the
+  shape `now - ts > limit`. A `ts` in the future (a clock step, a bad write, a state backup restored from a box whose
+  clock ran fast) made the age negative, and a NaN made every comparison False, so the heartbeat read as fresh for
+  ever. A dead supervisor would then never halt the engines. Two tests in tests/test_telegram_status.py relied on
+  this until 14 Oct. Acceptance:
+  - `Supervisor.engine_should_halt` halts with `supervisor_heartbeat_future` when `supervisor.json` is stamped more
+    than `CLOCK_AHEAD_TOLERANCE_S` (5 s) ahead, and with `supervisor_state_unreadable` when `ts` is not a finite
+    number or the file is not an object; a skew of 1-2 s does not halt;
+  - the supervisor halts every entry (`engine_heartbeat_future`, file named in `future_engines`) on an engine file
+    stamped more than 5 s ahead;
+  - both reasons have plain-language text on the dashboard and Telegram (entry_status `REASONS`) and a RUNBOOK row;
+  - health fails `supervisor`, `engine:<account>`, `engine_loop:<account>`, `heartbeat:<service>` and `scheduler`
+    (warns `alerts`) on a stamp more than `HEALTH_CLOCK_AHEAD_S` (60 s) ahead, and on a NaN or non-numeric stamp;
+  - the Feeds page shows such a supervisor heartbeat as not reporting, the dashboard does not show combined caps from
+    it, and a bridge verdict confirmed in the future counts as `unchecked`;
+  - tests/test_heartbeat_clock_ahead.py covers each: beyond tolerance fails, within tolerance does not, NaN/str fails.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.
