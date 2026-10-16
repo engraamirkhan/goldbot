@@ -19,6 +19,7 @@ __pycache__/
 web/node_modules/
 web/dist/
 web/e2e/.server.json
+web/e2e/.server-auth.json
 web/test-results/
 web/playwright-report/
 web/coverage/

@@ -67,3 +67,62 @@ def test_duplicate_keys_are_rejected(tmp_path):
     dup.write_text(text + "\nagents:\n  monthly_cap_usd: 1.0\n")
     with pytest.raises(yaml.constructor.ConstructorError, match="duplicate key 'agents'"):
         load_settings(dup)
+
+
+# BACKLOG 57: the day anchors are pinned, not wired. The loss caps reset at 00:00 UTC (timeutil.risk_day) and the
+# daily bars close at 13:30 New York (timeutil.feature_day) whatever settings.yaml says, so any other value is refused
+# at load instead of letting the owner believe the reset or the daily bar has moved.
+_RISK_ANCHOR_ERROR = ("risk_day_anchor is fixed at UTC 00:00 (got Europe/London 22:00): the loss caps reset at "
+                      "00:00 UTC in code (timeutil.risk_day) and this setting cannot move that. Delete "
+                      "risk_day_anchor from config/settings.local.yaml.")
+_FEATURE_ANCHOR_ERROR = ("feature_day_anchor is fixed at America/New_York 13:30 (got UTC 00:00): daily bars and "
+                         "features close at 13:30 New York in code (timeutil.feature_day) and this setting cannot "
+                         "move that. Delete feature_day_anchor from config/settings.local.yaml.")
+
+
+def test_the_shipped_settings_load_with_the_fixed_day_anchors():
+    s = load_settings()
+    assert (s.risk_day_anchor.tz, s.risk_day_anchor.time) == ("UTC", "00:00")
+    assert (s.feature_day_anchor.tz, s.feature_day_anchor.time) == ("America/New_York", "13:30")
+
+
+@pytest.mark.parametrize("key,anchor,error", [
+    ("risk_day_anchor", {"tz": "Europe/London", "time": "22:00"}, _RISK_ANCHOR_ERROR),
+    ("feature_day_anchor", {"tz": "UTC", "time": "00:00"}, _FEATURE_ANCHOR_ERROR),
+], ids=["risk_day_anchor", "feature_day_anchor"])
+def test_an_edited_day_anchor_in_settings_local_fails_to_load_naming_the_fixed_day(tmp_path, key, anchor, error):
+    (tmp_path / "settings.yaml").write_text(DEFAULT_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "settings.local.yaml").write_text(yaml.safe_dump({key: anchor}), encoding="utf-8")
+    with pytest.raises(ValidationError) as exc:
+        load_settings(tmp_path / "settings.yaml")
+    assert error in str(exc.value)
+
+
+@pytest.mark.parametrize("key,anchor", [
+    ("risk_day_anchor", {"tz": "UTC", "time": "22:00"}),               # time moved
+    ("risk_day_anchor", {"tz": "Europe/London", "time": "00:00"}),     # zone moved
+    ("risk_day_anchor", {"tz": "Etc/UTC", "time": "00:00"}),           # same instant, other spelling: still refused
+    ("feature_day_anchor", {"tz": "America/New_York", "time": "17:00"}),
+    ("feature_day_anchor", {"tz": "America/Chicago", "time": "13:30"}),
+])
+def test_any_day_anchor_other_than_the_fixed_one_is_rejected(key, anchor):
+    raw = _raw()
+    raw[key] = anchor
+    with pytest.raises(ValidationError, match=f"{key} is fixed at"):
+        Settings.model_validate(raw)
+
+
+def test_the_risk_day_and_so_the_loss_cap_reset_is_pinned_at_00_utc():
+    """No change to when any cap resets: `new_day` resets the day-start equity at 00:00 UTC, not a moment before."""
+    import pandas as pd
+
+    from goldbot.risk.gate import AccountState, new_day
+
+    st = AccountState(equity=1000.0, balance_closed_hwm=1000.0, day_start_equity=1000.0, week_start_equity=1000.0,
+                      open_positions=0, margin_used=0.0, last_tick_age_s=0.0, spread_points=0.0)
+    last = pd.Timestamp("2026-10-05 00:05", tz="UTC")
+    st.equity = 990.0
+    assert new_day(st, pd.Timestamp("2026-10-05 23:59:59.999", tz="UTC"), last) is False
+    assert st.day_start_equity == 1000.0
+    assert new_day(st, pd.Timestamp("2026-10-06 00:00", tz="UTC"), last) is True
+    assert st.day_start_equity == 990.0

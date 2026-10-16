@@ -1,10 +1,9 @@
 ---
 number: 25
-rank: 2
 title: Minimum-lot exception in RiskGate (ADR 0004)
 stage: Position sizing · RUN
 size: S
-status: '**in review** (built 2026-10-10, off by default; trading-safety review; owner enables on the demo server)'
+status: 'done (PR #71, main 423d2b1; d70ef33); card line in PR #73 (b97f9f9)'
 ---
 - **25. Minimum-lot exception (needs trading-safety review).** Value: lets tiny-live trade one minimum lot at small
   equity without loosening any limit (Position sizing · RUN). Acceptance:
@@ -33,3 +32,4 @@ status: '**in review** (built 2026-10-10, off by default; trading-safety review;
   Status (2026-10-10): built (TRACEABILITY R33; tests/test_min_lot_exception.py), `null` in settings.yaml because
   settings have no per-account section; the owner sets `risk: { min_lot_risk_cap: 0.01 }` in the demo server's
   settings.local.yaml. Open: the approval card's risk line does not show the exception (ui-ux).
+  Sweep 2026-10-16 (product owner): Done (PR #71, main 423d2b1; d70ef33); card line in PR #73 (b97f9f9). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.

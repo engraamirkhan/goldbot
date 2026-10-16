@@ -5,6 +5,20 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Sign-in end-to-end tests (2026-10-16). web/e2e/auth.spec.ts runs on its own e2e server (Playwright project
+  `auth`, port E2E_PORT+1, independent of the dashboard story) and covers: login (wrong password or code refused
+  with the same words, sign out), forgot-password (an unknown account answered like a wrong code; nothing mailed), the
+  owner's password reset link (new password and authenticator, single use, token leaves the address bar), the owner's
+  email sign-in link (mail captured, link plus authenticator code signs in once, the sign-in notice carries no token
+  and only a coarse network), the neutral answer for unknown and non-owner addresses (UI and byte-identical API
+  answers, no mail), and the sign-in screens on a 360 px phone (no sideways scroll, 44 px targets). Mail is captured
+  by goldbot/api/e2e_mailer.py `CaptureMailer`, which is refused unless the server is bound to exactly 127.0.0.1 or
+  ::1, `GOLDBOT_E2E_FAKE_MAILER=1` is set and the outbox's directory is a `goldbot-e2e-*` mkdtemp dir (this user's,
+  mode 0700) in a system temp dir that contains neither the repo nor /var/lib/goldbot; the outbox is opened with
+  O_NOFOLLOW and created 0600. No setting or deployed module selects it (only `scripts/e2e_server.py --fake-mailer`
+  builds it; `--host` accepts only 127.0.0.1 or ::1), and the server removes its temp state dir on SIGTERM. The auth
+  story runs without retries (a retry would reuse spent first-run setup and the owner's hourly link count). Tests:
+  tests/test_e2e_mailer.py.
 - **Engine state keeps moving while the market is closed (2026-10-16; BACKLOG 59; trading-safety and SRE review
   pending).** The engine wrote `engine_<acct>.json` on tick time only. With the market closed the tick stamp is
   frozen, so the file stopped, and health failed `bridge_compat:<acct>` once its `checked_at` was 5 min old: a
@@ -27,6 +41,39 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     correct until the owner sets the keys. The reason reads "restic not configured, missing in the secret store:
     <keys> (goldbot accounts set <key>;" because the job check cuts the error at 160 characters, so "RUNBOOK
     'Backups')" is lost when all four keys are missing. `backup_age` and `restore_drill` warn and name the RUNBOOK.
+- **Day anchors pinned (2026-10-16; BACKLOG 57, TRACEABILITY R40; trading-safety review pending).** No code reads
+  `risk_day_anchor` or `feature_day_anchor`; the loss caps reset at 00:00 UTC (`timeutil.risk_day` and the four other
+  places listed under "Finding: risk_day_anchor" below) and daily bars close at 13:30 New York (`timeutil.feature_day`).
+  The settings are now pinned, not wired: `Settings._day_anchor_is_the_fixed_day` (goldbot/config.py) refuses any
+  `risk_day_anchor` other than UTC 00:00 and any `feature_day_anchor` other than America/New_York 13:30 at load, with
+  an error that names the fixed day and says to delete the key from `config/settings.local.yaml` (exact text in
+  docs/RUNBOOK.md, "Settings refuse to load: a day anchor"). The comparison is exact, so `Etc/UTC` is refused too.
+  - **Not changed.** When any cap resets: `tests/test_config.py::test_the_risk_day_and_so_the_loss_cap_reset_is_pinned_at_00_utc`
+    pins `new_day` (no reset at 23:59:59.999 UTC, a reset at 00:00). The shipped yaml loads unchanged. Rollback-safe:
+    an older release accepts any anchor and ignores it, as before.
+  - **Deploy precondition (servers).** A server whose `config/settings.local.yaml` sets either key would stop loading
+    its settings after this deploy. No server exists yet, so the precondition holds trivially for the first deploy.
+    Any server set up later, before it takes a release with this change, must be checked:
+    `grep -nE 'risk_day_anchor|feature_day_anchor' config/settings.local.yaml` must print nothing.
+  - **Still an owner decision.** Moving the risk day itself (for example to the 22:00 UTC roll) needs one shared
+    risk-day function for all five places, a migration for the persisted reset time and a trading-safety review.
+- Heartbeats stamped in the future fail closed (2026-10-16, BACKLOG 58). Before this, a `ts` ahead of the reader's
+  clock, or a NaN, made `now - ts > limit` False, so a dead supervisor whose last write carried a fast clock (or came
+  from a restored backup) never halted the engines. The shared rule is `goldbot.data.timeutil.heartbeat_problem`:
+  a stamp that is not a finite number is `invalid`, one more than a tolerance ahead is `future`, one older than the
+  limit is `stale`. Engines halt on `supervisor_heartbeat_future` (more than 5 s ahead, `CLOCK_AHEAD_TOLERANCE_S`)
+  or `supervisor_state_unreadable` (a non-numeric or NaN `ts`, or a file that is not an object). The supervisor halts
+  every entry on an engine file more than 5 s ahead (`engine_heartbeat_future`, files in `future_engines`; that
+  file's currency and money still count). Health fails the supervisor, engine, engine loop, service heartbeat and
+  scheduler lines (warns the alert loop) on a stamp more than the same 5 s ahead (`HEALTH_CLOCK_AHEAD_S`), measured
+  against max(the pass's `now`, the wall clock) (`checks._base._ahead_s`, SRE review): a pass takes its `now` once
+  and can run for minutes while the bridge times out, and a service that beat meanwhile is not a clock fault. The
+  later clock can only clear a future flag, never raise one. The Feeds page shows such a supervisor heartbeat as not reporting, the
+  dashboard hides combined caps read from it, and a bridge verdict confirmed in the future counts as `unchecked`.
+  Left alone on purpose: report-age checks (drift, restore drill, ledger, crossfeed, costs, risk-day roll, re-arm,
+  stuck approvals, job overdue), where a future stamp only hides a "report old" warning and the scheduler heartbeat
+  still catches a dead producer; the bridge's order age (already refuses either way and on NaN); the tick checks
+  (`tick_from_future`); in-process timers (watchdog, dead man's switch, runner timers).
 - **One north-star day for the owner's reports (2026-10-16; TRACEABILITY V9, BACKLOG 57; quant and trading-safety
   review pending).** Before this, the monthly report used the UTC calendar day. The performance report used the
   opportunity day, which rolls at 22:00 UTC. Each had its own day-bucketing and weekday-count code, so a close between
@@ -89,6 +136,38 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     - A regression test pins today's behaviour: `new_day` does not reset at 22:30 UTC and does at 00:00.
   - Tests: tests/test_report_days.py (new, 17 cases). tests/test_monthly_report.py: 2 replaced, 3 new.
     tests/test_currency_followups.py: `account_month` now takes its first and last opportunity days as YYYY-MM-DD.
+- Service entry points split into modules with a command registry (2026-10-16, speed-up review item 7; no behaviour
+  change). goldbot/ops/run.py was the file every lane edited to add an entry point (19 hand-resolved merges). The
+  services now live in goldbot/ops/services/, one module each (engine, supervisor, bridge, api, webhook, scheduler,
+  telegram, news). The commands live in goldbot/ops/commands/, one module per area, and each registers its handler
+  with `@register_command(name, pos=)`. Positions are explicit and keep the old dispatcher's order, so the order does
+  not depend on import order. run.py keeps the usage text and a small `main` that looks the command up, and it
+  re-exports every name it had. Moved code calls other moved names through goldbot.ops.run (`resolve` / `patched` in
+  services/_base.py), so `patch("goldbot.ops.run.x")` still takes effect. Importing run.py still loads no third-party
+  package, which matters for the Wine bridge. Tests: tests/test_ops_run_cli_golden.py was captured before the split. It
+  pins the usage text, every side-effect-free `--help`, which function each command reaches and with which arguments,
+  the systemd, PowerShell and deploy invocations, and the import closure. tests/test_ops_run_registry.py pins the
+  registry order, the re-exports and the call-through rule.
+- **Q1 readiness corrected and the owed counts run (research director, 2026-10-16).** `macro-v1` has been published
+  since 2026-10-13 (scheduled `data-macro` run 38394945106); the docs that said it did not exist are corrected.
+  count-owed-events was dispatched on `main` (run 38931951849, success, commit `eafc6ce`). It needs no `calendar-v1`:
+  the calendar rows come back "not counted". Q1 counts: H-04 4,025 entries (10 dropped by the 7h rule); H-01 2,154
+  signals, lower bound 152 (>= 150, stays queued); **H-06 lower bound 107 < 150, withdrawn by its pre-registered
+  rule**, so the 2027Q1 reservation becomes 8. The readiness list and the freeze checklist in
+  `docs/research/preregistration-2027Q1.md` now give each item one accountable role, a date and a status.
+  - Next (implementer, 2026-10-23): H-06 `withdrawn:` and `reservation: 8` in `preregistration-2027Q1.yaml` with
+    `research.reserved_trials_quarter` 2027Q1 = 8 in `config/settings.yaml`, in one change; quant-reviewer checks.
+  - Next (strategy-researcher, 2026-11-01): explain H-01's 152 vs 154 and H-04's upper bound 4,088 vs 4,087.
+  - Blocked on the owner (chaser: program-director, by 2026-10-18): the `FRED_API_KEY` repo secret is not set, so
+    `data-us-calendar` has never run and `calendar-v1` does not exist. Q2 needs it; Q1 does not. The Sunday 06:17 UTC
+    schedule fails on 2026-10-18 without it.
+  - Not dispatched: the first `preregister-quarter` dry run (read-only); this session's permission policy refused it.
+    New date 2026-10-20 (research-director).
+- **Retired-family trial lists match the registry (BACKLOG 49, 2026-10-16; docs and settings mirror only; quant
+  review).** `research.retired_families` and `hypotheses.md` B listed R-01 `mean_reversion` as `[3]` and R-03 `trend`
+  as `[2]`. `research-v1`'s registry (20 rows) holds #3, #5, #10, #12 and #2, #4, #9, #14. Both lists are now the
+  registry's. The registry and the DSR count (20) are unchanged. `RetiredFamily.trials` feeds only the `retired_drift`
+  check, so no allocation moves. Open gap: nothing compares these lists with the registry rows themselves.
 - Gross closed trades are charged a conservative imputed cost (quant review 2026-10-12, findings A-D; TRACEABILITY X20;
   ADR 0017).
   - goldbot/ops/cost_imputation.py is the one shared helper. It charges only the costs a row's return lacks: the
@@ -1410,6 +1489,26 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- **H-06 run-input table written; its count says withdraw (BACKLOG 48, 2026-10-16; quant review).** The H-06
+  section of `preregistration-2027Q1.md` now has the run inputs in the H-01/H-04 format: `tsmom`, 2010-2026,
+  `variants ["slow_macro"]`, `macro true`, agent `tsmom-g0-fed4baec9f`, hash `5650ad206bda`, `f-51ac5ebabb`,
+  data-v1 + macro-v1. The writer's dry run accepts the spec row. count-owed-events (run 38931951849, `main` @
+  `eafc6ce`) gives H-06 1,105 signals (711 long / 394 short) and a one-at-a-time lower bound of **107, below the 150
+  floor**. **Withdrawn by its rule (2026-10-16, quant reviewer approved):** the spec's H-06 row carries
+  `withdrawn:` (107 < 150, run 38931951849), `reservation` 8 and `research.reserved_trials_quarter` 2027Q1 = 8 in one
+  change; the writer's dry run accepts it (4 queued + 4 slots) and writes nothing (`freeze_commit` still empty). No
+  trial is spent. The same run gives H-01's lower bound as 152, not the doc's 154 (provisional: identical signals,
+  lower-bound arithmetic, the 154 was an unscripted count). `count_owed_events.py`'s lower-bound loop was one bar
+  stricter than `one_at_a_time` and is fixed (`test_tsmom_lower_bound_equals_one_at_a_time_on_time_only_rows`).
+  **Next (strategy researcher):** re-dispatch count-owed-events after this merges and paste the fixed H-01 (and
+  H-06) lower bounds into `preregistration-2027Q1.md` by 2026-11-01.
+- **Roadmap re-planned from Fri 2026-10-16 (program director; docs only).** `docs/ROADMAP.md` now dates Wave 1 from
+  tonight's Claude-run demo deploy, the engine start at the Sun 10-18 22:02 UTC reopen (BACKLOG 59 first, with a
+  written fallback) and the DST-gap week of 26-30 Oct (broker clock check, W1-9). Every lane and milestone names one
+  accountable role and a date. The WIP limit is breached (reviewed work off `main` since 10-12), so the batch PR is
+  the first unblocker and no new builder lane starts before it; trading-safety is over its review queue limit, so a
+  second trading-safety reviewer lane starts first. M2 moves from 11-14 – 12-12 to 10-30. The owner decision queue
+  (OD-1 to OD-14, with deadlines) is asked once on #34.
 - **H-06 preset and its owed-event count (BACKLOG 48, 2026-10-11; quant review needed).** tsmom preset `slow_macro`
   = H-01's `slow` + `macro_gate` (agent `tsmom-g0-fed4baec9f`; `slow` and the default ids unchanged): an H-01 candidate
   is kept only when the 20-observation changes of DFII10 and DTWEXBGS (`macro_drivers`' columns, `asof_join` on

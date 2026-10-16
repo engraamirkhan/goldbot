@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -94,12 +95,23 @@ from goldbot.api.schema import (
     UserRow,
 )
 from goldbot.config import MailSettings
+from goldbot.data.timeutil import heartbeat_problem
 from goldbot.ops.account_view import LossBudget, loss_budget, margin_level_pct, milestones, proposal_budget
 from goldbot.telegram.approvals import Outcome, decision_channel
 from goldbot.telegram.approvals import Proposal as BusProposal
 from goldbot.telegram.bus import ApprovalBus
 
 log = logging.getLogger("goldbot.api")
+
+
+def supervisor_heartbeat_age_s(sup: dict[str, Any], now: float) -> float:
+    """The Feeds page's supervisor heartbeat age: 1e9 (not reporting, the page marks it bad) when missing, not a
+    finite number or stamped more than a few seconds in the future, which would otherwise show as fresh for ever
+    (found 2026-10-16); a small skew reads as 0 s."""
+    ts: Any = sup.get("ts")
+    if heartbeat_problem(ts, now, math.inf) is not None:
+        return 1e9
+    return max(0.0, now - float(ts))
 
 if TYPE_CHECKING:
     from goldbot.agents.tools import ReadOnlyTools
@@ -634,7 +646,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.get("/api/feeds", response_model=list[FeedHealth])
     def feeds(_: User = Depends(auth)) -> list[FeedHealth]:
         sup = st.supervisor()
-        age = time.time() - sup.get("ts", 0) if sup else 1e9
+        age = supervisor_heartbeat_age_s(sup or {}, time.time())
         return [FeedHealth(account_id=e["account"], last_tick_age_s=e.get("last_tick_age_s", 1e9), spread_points=e.get("spread_points", 0),
                            terminal_connected=e.get("terminal_connected", False), webhook_p99_latency_s=e.get("webhook_p99_latency_s"),
                            supervisor_heartbeat_age_s=age) for e in st.engines()]

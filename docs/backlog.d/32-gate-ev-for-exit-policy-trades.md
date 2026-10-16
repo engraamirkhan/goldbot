@@ -1,10 +1,9 @@
 ---
 number: 32
-rank: 32
 title: Gate EV for exit-policy trades uses the measured mean winner (G-12)
 stage: Capital management · RUN
 size: S
-status: proposed (trading-safety review)
+status: 'parked: needs 31'
 ---
 - **32. Gate EV for exit-policy trades (G-12; trading-safety review).** Value: the gate's EV
   `p × target_atr − (1 − p) × stop_atr − cost` (`gate.py:242`) assumes every win reaches the target, but under a
@@ -16,3 +15,4 @@ status: proposed (trading-safety review)
     negative.
   - The change never allows a trade today's gate refuses (property test over a grid).
   - Depends on: 31.
+  Sweep 2026-10-16 (product owner): Parked: needs 31.

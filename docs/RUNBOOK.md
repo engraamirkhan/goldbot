@@ -226,7 +226,8 @@ and the rest still arrives. It never contains account numbers or emails.
     is refused and the message names the keys, never their values. Edit the file, or add
     `--drop-unknown-local-keys`: unknown keys are moved aside and the original is kept as
     `config/settings.local.yaml.<UTC time>.bak`. Put them back after the next forward deploy. An invalid value is
-    never dropped.
+    never dropped. A `risk_day_anchor` or `feature_day_anchor` other than the fixed day is invalid:
+    see "Settings refuse to load: a day anchor" in section 6.
   * **Scheduler jobs.** While a job runs, a manual deploy is refused and a Telegram approval waits. The scheduler is
     stopped first and checked again. `--interrupt-jobs` deploys anyway (that job's slot is not re-run).
   * Only `enabled` units are restarted, so a stray, disabled engine instance is never started.
@@ -913,14 +914,40 @@ nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what
 | `market_closed` | The broker's session table (read once per server day; static hours if the read fails) says the market is closed, e.g. a holiday early close. | Wait for the reopen; `session_source` in `engine_<account>.json` says whether the broker's own hours are used. |
 | `spread_too_wide` | Spread above 45 points ($0.45). | Usually rollover or news; wait. |
 | `max_positions` | Two positions already open on this account. | Normal. |
-| `daily_cap` / `weekly_cap` | This account lost 2% / 5% measured from its equity when the engine started. | The engine does not yet reset its day/week starting equity at 00:00 UTC (`new_day` in `goldbot/risk/gate.py` is not called), so these clear only when the engine restarts. Review the losses before restarting. |
+| `daily_cap` / `weekly_cap` | This account lost 2% / 5% from its equity at the start of the risk day (00:00 UTC) / risk week (Sunday 00:00 UTC). | It clears by itself at the next boundary (`new_day`, goldbot/risk/gate.py:534); a restart does not clear it. Review the losses. |
 | `negative_ev`, `target_below_cost_floor` | After costs the trade has no edge, or the target is below 2.5x the round-trip cost. | Normal filtering; check the cost table if it happens to every candidate. |
 | `min_lot_exceeds_risk`, `margin_level_floor` | Minimum lot would risk too much, or margin level would fall below 300%. | Account too small for the stop; normal on small demos. On a small demo, 15m needs the minimum-lot exception: `risk: { min_lot_risk_cap: 0.01 }` in `config\settings.local.yaml` (never applies in tiny-live). |
 | `fx_conversion_unavailable` | The account is not in USD and the terminal gave no USD -> account-currency conversion (`order_calc_profit` / tick value), or the terminal's symbol info was unreadable. | Check the terminal is logged in and XAUUSD is in Market Watch; entries resume when it answers. Exits are unaffected. |
 | `daily_loss_limit_abs` | Today's loss plus this trade's full stop risk would exceed min(2% of the day-start equity, the account's `daily_loss_limit_abs` in `config\accounts.yaml`, e.g. £50 on icm-demo). Equal is allowed; the supervisor halts once the combined loss reaches the limit. | Normal; clears at 00:00 UTC. `engine_<account>.json` shows `daily_loss_limit` and `daily_loss_remaining`. |
 | `supervisor_halt` with `mixed_account_currencies` | Running engines report different deposit currencies (e.g. GBP and USD); equities are never summed across currencies. Health names the files. | Stop the engine that should not run (or delete its leftover `engine_<account>.json`), see "Currency rollout" below. |
 | `supervisor_halt` with `engine_startup_refused` | An engine's start failed (a refused terminal account, e.g. a bridge older than protocol v4, or an unreadable positions read): its `engine_<account>.json` carries `startup_error`, and its last-known exposure still counts. The `engine:<account>` health line names the cause. | Fix the cause and restart that engine (its first state write clears the halt), or retire that account: stop its engine (`sudo systemctl disable --now goldbot-engine@<account>`) and move `state/engine_<account>.json` aside (e.g. to `state/retired/`), only once it holds no open position. |
+| `supervisor_heartbeat_future` | `supervisor.json` is stamped more than 5 s ahead of this server's clock (a clock step, a bad write, or a state backup restored from a box whose clock ran fast). It can no longer prove the supervisor is alive, so entries stop; a `ts` that is not a number reads as `supervisor_state_unreadable`. Health fails the `supervisor` line with how far ahead. | Check the host clock (`chronyc tracking` on the brain; preflight's `time_sync` line), then restart the supervisor service: its next write clears it. |
+| `supervisor_halt` with `engine_heartbeat_future` | An `engine_<account>.json` is stamped more than 5 s ahead of the supervisor's clock: entries stop on every account. Health names the file on the `supervisor` line and fails that `engine:<account>` line. | Check the host clock, then restart that engine (its next state write clears the halt), or move a leftover file aside if that engine no longer runs. |
 | `data_quality_error` | Reserved; the engine does not set it today. | - |
+
+### Settings refuse to load: a day anchor
+
+A deploy is refused with "settings.local.yaml does not validate with the target code (keys: risk_day_anchor)" (or
+`feature_day_anchor`), and `--drop-unknown-local-keys` does not fix it (the key is known, its value is invalid). A
+service started on such a file fails at start; its log shows one of:
+
+```
+risk_day_anchor
+  Value error, risk_day_anchor is fixed at UTC 00:00 (got <tz> <time>): the loss caps reset at 00:00 UTC in code (timeutil.risk_day) and this setting cannot move that. Delete risk_day_anchor from config/settings.local.yaml.
+```
+
+```
+feature_day_anchor
+  Value error, feature_day_anchor is fixed at America/New_York 13:30 (got <tz> <time>): daily bars and features close at 13:30 New York in code (timeutil.feature_day) and this setting cannot move that. Delete feature_day_anchor from config/settings.local.yaml.
+```
+
+`<tz> <time>` is the value the server set. These two days are fixed in code (BACKLOG 57): a different value never
+moved the loss-cap reset or the daily bar, it only looked as if it did, so it is now refused. **Fix:** on whichever host refused
+(the brain, or the mt5 host, which runs the same check under ROLE=mt5 with ROOT=/opt/goldbot), delete the named key
+(the `risk_day_anchor:` or `feature_day_anchor:` line, and its indented `tz:`/`time:` lines, if any) from
+`config/settings.local.yaml` (`sudo -u goldbot nano /opt/goldbot/config/settings.local.yaml`), then re-run the deploy
+(or, if a service failed at start, restart it). Do not edit `config/settings.yaml`. Moving the risk day (for example to the 22:00 UTC roll) is a code change with a
+trading-safety review, not a setting.
 
 ### Telegram is silent
 

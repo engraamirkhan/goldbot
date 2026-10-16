@@ -1,5 +1,6 @@
 ---
 number: 34
+status: 'parked: waits on the owner''s ADR 0006 ruling (Needs the owner)'
 ---
 - **34. Material feature version (ADR 0006; needs the owner's sign-off).** Value: a feature correction voids research
   evidence and forces legacy rebuilds only for the models that read the corrected columns. Acceptance:
@@ -10,3 +11,4 @@ number: 34
     model's.
   - Tests: a bump of a feature no model reads leaves the material version unchanged; a bump of a read column
     changes it.
+  Sweep 2026-10-16 (product owner): Parked: waits on the owner's ADR 0006 ruling (Needs the owner).

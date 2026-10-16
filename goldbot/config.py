@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -42,6 +42,14 @@ class _Section(BaseModel):
 class DayAnchor(_Section):
     tz: str
     time: str = Field(pattern=r"^\d{2}:\d{2}$")
+
+
+# The only values Settings accepts for each day anchor (BACKLOG 57): (tz, time, what the code does at that time).
+_FIXED_DAY_ANCHORS: dict[str, tuple[str, str, str]] = {
+    "risk_day_anchor": ("UTC", "00:00", "the loss caps reset at 00:00 UTC in code (timeutil.risk_day)"),
+    "feature_day_anchor": ("America/New_York", "13:30",
+                           "daily bars and features close at 13:30 New York in code (timeutil.feature_day)"),
+}
 
 
 class Timeframes(_Section):
@@ -512,6 +520,20 @@ class Settings(_Section):
     backup: BackupSettings = Field(default_factory=BackupSettings)
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)
     ledger: LedgerSettings = Field(default_factory=LedgerSettings)
+
+    @field_validator("feature_day_anchor", "risk_day_anchor")
+    @classmethod
+    def _day_anchor_is_the_fixed_day(cls, v: DayAnchor, info: ValidationInfo) -> DayAnchor:
+        """Pinned, not wired (BACKLOG 57): no code reads these two settings. The loss caps reset at 00:00 UTC
+        (`timeutil.risk_day`: gate `new_day`, throttle, the runner, entry_status, the supervisor) and daily bars and
+        features close at 13:30 New York (`timeutil.feature_day`, `resample`'s defaults), whatever the yaml says. Any
+        other value is refused at load, so an owner never believes the caps' reset or the daily bar has moved. Moving
+        either day is a separate owner decision that needs one shared day function and a trading-safety review."""
+        tz, time, what = _FIXED_DAY_ANCHORS[info.field_name or ""]
+        if (v.tz, v.time) != (tz, time):
+            raise ValueError(f"{info.field_name} is fixed at {tz} {time} (got {v.tz} {v.time}): {what} and this "
+                             f"setting cannot move that. Delete {info.field_name} from config/settings.local.yaml.")
+        return v
 
     @model_validator(mode="after")
     def _walkforward_has_purge_and_embargo(self) -> Settings:

@@ -1,10 +1,9 @@
 ---
 number: 11
-rank: 14
 title: Trader-toolkit evaluation as primary signals
 stage: Idea generation, confluence · FIND
 size: S–M
-status: ready (via H-02 in Q1)
+status: 'parked: runs as H-02 inside the Q1 queue (5); no separate work'
 ---
 
 ### 11. Trader-toolkit evaluation as primary signals
@@ -18,3 +17,5 @@ Acceptance:
 
 Depends on: 10, 2. Note: research C3 says 15m/1h trend variants are a known null. The level and structure tools are
 not covered by that null, which is why they get a test.
+
+Sweep 2026-10-16 (product owner): Parked: runs as H-02 inside the Q1 queue (5); no separate work.

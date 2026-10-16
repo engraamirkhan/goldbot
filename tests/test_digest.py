@@ -166,6 +166,13 @@ def test_owner_decisions_counts_only_the_queue_section(tmp_path: Path) -> None:
     assert owner_decisions(tmp_path / "r.md") == 3
 
 
+def test_owner_decisions_counts_both_row_id_styles(tmp_path: Path) -> None:
+    rm = tmp_path / "ROADMAP.md"
+    rm.write_text("## 6. Owner decision queue\n| # | Decision |\n| --- | --- |\n| OD-1 | a |\n| D2 | b |\n"
+                  "| ODD | not a row |\n## 7. Next\n| OD-9 | outside the section |\n", encoding="utf-8")
+    assert owner_decisions(rm) == 2
+
+
 def test_owner_decisions_reads_the_real_roadmap() -> None:
     from goldbot.telegram.digest import DEFAULT_ROADMAP
     assert owner_decisions(DEFAULT_ROADMAP) >= 1

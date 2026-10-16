@@ -1,0 +1,365 @@
+{
+ "dispatch": {
+  "api": {
+   "args": {},
+   "target": "goldbot.ops.run:run_api"
+  },
+  "backup": {
+   "args": {
+    "argv": [
+     "backup",
+     "--init"
+    ],
+    "get_secret": null,
+    "runner": "<subprocess.run>",
+    "settings": null,
+    "state_dir": "state"
+   },
+   "target": "goldbot.ops.backup:main"
+  },
+  "bridge": {
+   "args": {
+    "account_id": "icm-demo"
+   },
+   "target": "goldbot.ops.run:run_bridge"
+  },
+  "bridge-no-account": {
+   "error": "IndexError"
+  },
+  "drift-review": {
+   "args": {
+    "argv": [
+     "--clear",
+     "checked it"
+    ],
+    "state_dir": "state"
+   },
+   "target": "goldbot.ops.run:drift_review_cli"
+  },
+  "engine": {
+   "args": {
+    "account_id": "icm-demo"
+   },
+   "target": "goldbot.ops.run:run_engine"
+  },
+  "engine-no-account": {
+   "error": "IndexError"
+  },
+  "gate-evidence": {
+   "args": {
+    "argv": [
+     "leakage_audit",
+     "--passed",
+     "yes"
+    ],
+    "state_dir": "state"
+   },
+   "target": "goldbot.ops.gates_phase:evidence_main"
+  },
+  "gates": {
+   "args": {
+    "argv": [
+     "--json"
+    ],
+    "now": null,
+    "settings": null,
+    "state_dir": "state"
+   },
+   "target": "goldbot.ops.gates_phase:main"
+  },
+  "health": {
+   "args": {
+    "argv": [
+     "--static"
+    ],
+    "ctx": null
+   },
+   "target": "goldbot.ops.health:main"
+  },
+  "help": {
+   "exit": 1,
+   "printed_usage": true
+  },
+  "mail-test": {
+   "args": {
+    "argv": [
+     "test"
+    ]
+   },
+   "target": "goldbot.api.mailer:main"
+  },
+  "monthly-report": {
+   "args": {
+    "argv": [
+     "--json"
+    ]
+   },
+   "target": "goldbot.ops.monthly_report:main"
+  },
+  "news": {
+   "args": {},
+   "target": "goldbot.ops.run:run_news"
+  },
+  "no-command": {
+   "exit": 1,
+   "printed_usage": true
+  },
+  "owner-history": {
+   "args": {
+    "argv": [
+     "h.html"
+    ]
+   },
+   "target": "goldbot.research.owner_history:main"
+  },
+  "perf-report": {
+   "args": {
+    "argv": [
+     "--json"
+    ]
+   },
+   "target": "goldbot.ops.perf_report:main"
+  },
+  "preflight": {
+   "args": {
+    "argv": [
+     "--account",
+     "icm-demo"
+    ],
+    "ctx": null
+   },
+   "target": "goldbot.ops.preflight:main"
+  },
+  "publish-costs": {
+   "args": {
+    "accounts": null,
+    "argv": [
+     "--out",
+     "c.json"
+    ],
+    "state_dir": "state",
+    "upload": null
+   },
+   "target": "goldbot.ops.run:publish_costs_cli"
+  },
+  "record-gate": {
+   "args": {
+    "argv": [
+     "paper_to_tiny_live",
+     "--evidence",
+     "e.txt"
+    ]
+   },
+   "target": "goldbot.ops.run:record_gate_cli"
+  },
+  "restore": {
+   "args": {
+    "argv": [
+     "restore",
+     "--latest",
+     "--to",
+     "d"
+    ],
+    "get_secret": null,
+    "runner": "<subprocess.run>",
+    "settings": null,
+    "state_dir": "state"
+   },
+   "target": "goldbot.ops.backup:main"
+  },
+  "restore-drill": {
+   "args": {
+    "argv": [
+     "restore-drill"
+    ],
+    "get_secret": null,
+    "runner": "<subprocess.run>",
+    "settings": null,
+    "state_dir": "state"
+   },
+   "target": "goldbot.ops.backup:main"
+  },
+  "revoke-sessions": {
+   "args": {
+    "argv": [
+     "--state",
+     "s"
+    ]
+   },
+   "target": "goldbot.api.auth:revoke_sessions_cli"
+  },
+  "ruin": {
+   "args": {
+    "argv": [
+     "--trades-per-week",
+     "5"
+    ]
+   },
+   "target": "goldbot.research.ruin:main"
+  },
+  "scheduler": {
+   "args": {},
+   "target": "goldbot.ops.run:run_scheduler"
+  },
+  "setup": {
+   "args": {
+    "argv": [
+     "--account",
+     "icm-demo"
+    ],
+    "ask": null,
+    "ask_secret": null,
+    "out": null
+   },
+   "target": "goldbot.ops.setup_wizard:main"
+  },
+  "sizing-feasibility": {
+   "args": {
+    "argv": [
+     "--tiny-live"
+    ]
+   },
+   "target": "goldbot.research.min_lot:main"
+  },
+  "supervisor": {
+   "args": {},
+   "target": "goldbot.ops.run:run_supervisor"
+  },
+  "telegram": {
+   "args": {},
+   "target": "goldbot.ops.run:run_telegram"
+  },
+  "unknown": {
+   "exit": 1,
+   "printed_usage": true
+  },
+  "webhook": {
+   "args": {},
+   "target": "goldbot.ops.run:run_webhook"
+  }
+ },
+ "entry_points": {
+  "goldbot/ops/linux/goldbot-deploy.sh": [
+   "health --out"
+  ],
+  "goldbot/ops/linux/systemd/goldbot-api.service": [
+   "api"
+  ],
+  "goldbot/ops/linux/systemd/goldbot-bridge@.service": [
+   "bridge %i"
+  ],
+  "goldbot/ops/linux/systemd/goldbot-engine@.service": [
+   "engine %i"
+  ],
+  "goldbot/ops/linux/systemd/goldbot-news.service": [
+   "news"
+  ],
+  "goldbot/ops/linux/systemd/goldbot-scheduler.service": [
+   "scheduler"
+  ],
+  "goldbot/ops/linux/systemd/goldbot-supervisor.service": [
+   "supervisor"
+  ],
+  "goldbot/ops/linux/systemd/goldbot-telegram.service": [
+   "telegram"
+  ],
+  "goldbot/ops/vps_bootstrap.ps1": [
+   "bridge $Account",
+   "supervisor",
+   "engine icm-demo",
+   "engine vantage-demo",
+   "api",
+   "webhook",
+   "scheduler",
+   "telegram",
+   "news",
+   "health Later updates: .\\goldbot\\ops\\vps_update.ps1 -Ref origin/main (keeps this service list"
+  ],
+  "goldbot/ops/vps_update.ps1": [
+   "health --static --baseline",
+   "health --out",
+   "health --out",
+   "health --baseline",
+   "health"
+  ],
+  "scripts/performance_report.py": [
+   "perf-report"
+  ]
+ },
+ "help": {
+  "drift-review": {
+   "rc": 0,
+   "stdout": "{\n  \"ts\": null,\n  \"system_halt\": null,\n  \"halted\": null,\n  \"size_factor\": null,\n  \"errors\": null\n}\n"
+  },
+  "gate-evidence": {
+   "rc": 0,
+   "stdout": "usage: python -m goldbot.ops.run gate-evidence [-h] [--value VALUE] [--passed {yes,no}]\n                                               [--detail DETAIL]\n                                               name\n\npositional arguments:\n  name               one of: shuffle_auc, asof_violations, feed_mismatch_share, chaos_drill\n\noptions:\n  -h, --help         show this help message and exit\n  --value VALUE\n  --passed {yes,no}\n  --detail DETAIL\n"
+  },
+  "gates": {
+   "rc": 0,
+   "stdout": "usage: python -m goldbot.ops.run gates [-h] [--json] [--no-write]\n\noptions:\n  -h, --help  show this help message and exit\n  --json\n  --no-write\n"
+  },
+  "health": {
+   "rc": 0,
+   "stdout": "usage: python -m goldbot.ops.run health [-h] [--json] [--static] [--out OUT] [--baseline BASELINE]\n                                        [--state-dir STATE_DIR]\n\noptions:\n  -h, --help            show this help message and exit\n  --json                print the report as JSON\n  --static              only checks that need no running service\n  --out OUT             also write the JSON report to this file (UTF-8)\n  --baseline BASELINE   a previous --out report: exit 1 only for fails not failing there\n  --state-dir STATE_DIR\n"
+  },
+  "monthly-report": {
+   "rc": 0,
+   "stdout": "usage: goldbot.ops.run monthly-report [-h] [--state STATE] [--month MONTH] [--json]\n\nMonthly north-star report (BACKLOG 26, backend; ADR 0004 section 6), from the closed-trade record\n\noptions:\n  -h, --help     show this help message and exit\n  --state STATE  state directory (closed_trades_*.jsonl, engine_*.json)\n  --month MONTH  YYYY-MM (its opportunity days); default the month of today's opportunity day\n  --json         print the report as JSON\n"
+  },
+  "owner-history": {
+   "rc": 0,
+   "stdout": "usage: python -m goldbot.ops.run owner-history [-h] [--server-tz SERVER_TZ] [--contract CONTRACT]\n                                               [--targets TARGETS] [--start-balance START_BALANCE]\n                                               [--out OUT] [--no-news]\n                                               [path]\n\nAnalyse the owner's MT5 trade history privately (research seeds).\n\npositional arguments:\n  path                  report file, or a folder (newest report in it); default\n                        /Users/aamirkhan/Personal project/trade-history\n\noptions:\n  -h, --help            show this help message and exit\n  --server-tz SERVER_TZ\n                        broker server time zone (IC Markets: Europe/Athens)\n  --contract CONTRACT   ounces per lot\n  --targets TARGETS     daily targets in account currency, comma separated\n  --start-balance START_BALANCE\n                        starting equity if the report has no deposit\n  --out OUT             output folder (default: the report's folder; never the repo)\n  --no-news             skip the economic-calendar lookup\n"
+  },
+  "perf-report": {
+   "rc": 0,
+   "stdout": "usage: goldbot.ops.run perf-report [-h] [--state STATE] [--data-root DATA_ROOT]\n                                   [--bars-source BARS_SOURCE] [--from START] [--to END]\n                                   [--account ACCOUNT] [--out OUT] [--json]\n\nPerformance report for the performance-analyst and finance-auditor agents (north-star: ADR 0004\nsection 6;\n\noptions:\n  -h, --help            show this help message and exit\n  --state STATE         state folder (read only; a copy works)\n  --data-root DATA_ROOT\n                        Parquet store for bars, fills and the journal (read only; optional)\n  --bars-source BARS_SOURCE\n                        bars_1m source for the day types (default dukascopy)\n  --from START          first opportunity day YYYY-MM-DD (default: the month's first)\n  --to END              last opportunity day YYYY-MM-DD (default: today)\n  --account ACCOUNT     one account only\n  --out OUT             folder for the markdown and JSON (not inside the state folder)\n  --json                print the JSON instead of the markdown\n"
+  },
+  "preflight": {
+   "rc": 0,
+   "stdout": "usage: goldbot run preflight [-h] [--account ACCOUNT]\n\nRead-only checklist before starting services.\n\noptions:\n  -h, --help         show this help message and exit\n  --account ACCOUNT  the MT5 account this server trades (default icm-demo)\n"
+  },
+  "publish-costs": {
+   "rc": 0,
+   "stdout": "usage: python -m goldbot.ops.run publish-costs [-h] [--out OUT]\n\noptions:\n  -h, --help  show this help message and exit\n  --out OUT   write the published JSON here instead of uploading it\n"
+  },
+  "record-gate": {
+   "rc": 0,
+   "stdout": "usage: python -m goldbot.ops.run record-gate [-h] --evidence EVIDENCE gate\n\npositional arguments:\n  gate                 one of: foundation_to_backtest, backtest_to_paper, paper_to_tiny_live,\n                       tiny_live_to_full_size\n\noptions:\n  -h, --help           show this help message and exit\n  --evidence EVIDENCE  path to the evidence file (hashed) or a short text\n"
+  },
+  "restore": {
+   "rc": 0,
+   "stdout": "usage: python -m goldbot.ops.run restore [-h] (--latest | --snapshot SNAPSHOT) --to TO\n\noptions:\n  -h, --help           show this help message and exit\n  --latest\n  --snapshot SNAPSHOT\n  --to TO              an empty directory\n"
+  },
+  "revoke-sessions": {
+   "rc": 0,
+   "stdout": "usage: python -m goldbot.ops.run revoke-sessions [-h] [--state STATE]\n\nSign every dashboard account out (all sessions and email sign-in links).\n\noptions:\n  -h, --help     show this help message and exit\n  --state STATE  the state directory holding aux.db (default: state)\n"
+  },
+  "ruin": {
+   "rc": 0,
+   "stdout": "usage: run.py ruin [-h]\n                   [--closed-trades CLOSED_TRADES | --shadow SHADOW | --r-file R_FILE | --win-rate WIN_RATE]\n                   [--avg-win AVG_WIN] [--avg-loss AVG_LOSS] [--agent AGENT] [--version VERSION]\n                   [--pool-versions] [--models-dir MODELS_DIR] --trades-per-week TRADES_PER_WEEK\n                   [--weeks WEEKS] [--horizons [HORIZONS ...]] [--paths PATHS] [--block BLOCK]\n                   [--seed SEED] [--risk RISK] [--tiny-live] [--multiplier MULTIPLIER]\n                   [--r-haircut R_HAIRCUT] [--demean] [--no-rules] [--ruin-level RUIN_LEVEL]\n                   [--settings SETTINGS] [--out OUT]\n\nDrawdown and risk-of-ruin Monte Carlo (G-5).\n\noptions:\n  -h, --help            show this help message and exit\n  --closed-trades CLOSED_TRADES\n                        state dir with closed_trades*.jsonl (paper/live R, net)\n  --shadow SHADOW       state dir with shadow_book.json (one version's taken closed trades)\n  --r-file R_FILE       backtest trades, CSV or Parquet with a column r\n  --win-rate WIN_RATE   parametric (with --avg-win and --avg-loss)\n  --avg-win AVG_WIN     average win in R (parametric)\n  --avg-loss AVG_LOSS   average loss in R, positive (parametric)\n  --agent AGENT         only this agent's trades (closed-trade and shadow sources)\n  --version VERSION     shadow-book version (default: the agent's champion)\n  --pool-versions       pool every shadow-book version (champion and challengers)\n  --models-dir MODELS_DIR\n                        model registry folder (default: settings)\n  --trades-per-week TRADES_PER_WEEK\n  --weeks WEEKS\n  --horizons [HORIZONS ...]\n                        weeks to report P(trip) within (default 26 52)\n  --paths PATHS\n  --block BLOCK         bootstrap block length in trades\n  --seed SEED\n  --risk RISK           risk per trade (default: settings risk.risk_per_trade)\n  --tiny-live           use risk.risk_per_trade_tiny_live\n  --multiplier MULTIPLIER\n                        model multiplier (clamped like the gate)\n  --r-haircut R_HAIRCUT\n                        subtract this R from every trade\n  --demean              remove the source's mean R (zero-edge stress run)\n  --no-rules            measure the limits without enforcing them\n  --ruin-level RUIN_LEVEL\n  --settings SETTINGS\n  --out OUT             write the report as JSON\n"
+  },
+  "setup": {
+   "rc": 0,
+   "stdout": "usage: goldbot run setup [-h] [--account ACCOUNT]\n\nGuided setup of secrets and server settings.\n\noptions:\n  -h, --help         show this help message and exit\n  --account ACCOUNT  the MT5 account this server trades (default icm-demo)\n"
+  },
+  "sizing-feasibility": {
+   "rc": 0,
+   "stdout": "usage: run.py sizing-feasibility [-h] [--price PRICE] [--stop-distance STOP_DISTANCE] [--atr ATR]\n                                 [--stop-atr STOP_ATR] [--risk RISK] [--tiny-live]\n                                 [--multiplier MULTIPLIER] [--size-down] [--equity EQUITY]\n                                 [--contract CONTRACT] [--min-lot MIN_LOT] [--lot-step LOT_STEP]\n                                 [--stops-level-points STOPS_LEVEL_POINTS]\n                                 [--spread-points SPREAD_POINTS] [--data-root DATA_ROOT]\n                                 [--timeframes [TIMEFRAMES ...]] [--settings SETTINGS] [--out OUT]\n\nMinimum equity at which the minimum lot fits the risk per trade (G-7).\n\noptions:\n  -h, --help            show this help message and exit\n  --price PRICE         price; without it, price and ATR come from the store's bars\n  --stop-distance STOP_DISTANCE\n                        stop distance in $/oz\n  --atr ATR             ATR in $/oz (with --stop-atr)\n  --stop-atr STOP_ATR   stop in ATRs (with --atr; from the store: override every family's own)\n  --risk RISK           risk per trade (default: settings risk.risk_per_trade)\n  --tiny-live           use risk.risk_per_trade_tiny_live\n  --multiplier MULTIPLIER\n                        model multiplier (clamped like the gate)\n  --size-down           the 8{'option_strings': ['--size-down'], 'dest': 'size_down', 'nargs': 0,\n                        'const': True, 'default': False, 'type': None, 'choices': None,\n                        'required': False, 'help': 'the 8% stage: risk halved, multiplier capped\n                        at 0.5', 'metavar': None, 'container': <argparse._ArgumentGroup object at\n                        0x10f8f3f10>, 'prog': 'run.py sizing-feasibility'}tage: risk halved,\n                        multiplier capped at 0.5\n  --equity EQUITY       also report lots and real risk at this equity\n  --contract CONTRACT\n  --min-lot MIN_LOT\n  --lot-step LOT_STEP\n  --stops-level-points STOPS_LEVEL_POINTS\n                        broker stops level (stop floor)\n  --spread-points SPREAD_POINTS\n                        spread for the stop floor (default: the last bar's mean spread in store\n                        mode, else 0)\n  --data-root DATA_ROOT\n                        store root (default: settings data_root)\n  --timeframes [TIMEFRAMES ...]\n                        only these decision timeframes (store mode)\n  --settings SETTINGS\n  --out OUT             write the rows as JSON\n"
+  }
+ },
+ "usage": {
+  "help": {
+   "rc": 1,
+   "stdout": "Service entry points used by NSSM on the VPS and by hand in development.\n\n  python -m goldbot.ops.run supervisor\n  python -m goldbot.ops.run engine <account_id>\n  python -m goldbot.ops.run api\n  python -m goldbot.ops.run webhook\n  python -m goldbot.ops.run scheduler\n  python -m goldbot.ops.run telegram\n  python -m goldbot.ops.run news\n  python -m goldbot.ops.run record-gate <gate_name> --evidence <path or text>   # appends to state/phase_state.json\n  python -m goldbot.ops.run gates [--json] [--no-write]   # each roadmap gate met / not met + the stop rule (records nothing)\n  python -m goldbot.ops.run gate-evidence <name> (--value X | --passed yes|no) [--detail TEXT]   # leakage audit, chaos drill\n  python -m goldbot.ops.run health [--json] [--static] [--out FILE] [--baseline FILE]   (exit 1 on a fail)\n  python -m goldbot.ops.run publish-costs [--out FILE]   # canonical broker's measured costs -> release costs-v1\n  python -m goldbot.ops.run backup [--init]              # encrypted restic backup now (--init: create the repository once)\n  python -m goldbot.ops.run restore --latest --to DIR    # restore the latest backup into an empty DIR and verify it\n  python -m goldbot.ops.run restore-drill                # the weekly restore drill, now\n  python -m goldbot.ops.run setup [--account ID]         # guided setup of secrets and server settings (re-runnable)\n  python -m goldbot.ops.run preflight [--account ID]     # read-only checklist before starting services (exit 1 on a blocker)\n  python -m goldbot.ops.run ruin --trades-per-week N (--closed-trades state | --shadow state | --r-file F | --win-rate ..)\n                                                         # drawdown / risk-of-ruin Monte Carlo at the live limits (G-5)\n  python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]\n                                                         # minimum equity for the minimum lot per family (G-7)\n  python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)\n  python -m goldbot.ops.run mail-test                    # one test email to auth.owner_email (email sign-in setup)\n  python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]\n                                                         # time-weighted % return, R, drawdown, avg per day, milestones\n  python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds\n  python -m goldbot.ops.run perf-report [--state DIR] [--data-root DIR] [--from D] [--to D] [--out DIR] [--json]\n                                                         # performance report (markdown + JSON) for the analysts; read only\n\n"
+  },
+  "no-command": {
+   "rc": 1,
+   "stdout": "Service entry points used by NSSM on the VPS and by hand in development.\n\n  python -m goldbot.ops.run supervisor\n  python -m goldbot.ops.run engine <account_id>\n  python -m goldbot.ops.run api\n  python -m goldbot.ops.run webhook\n  python -m goldbot.ops.run scheduler\n  python -m goldbot.ops.run telegram\n  python -m goldbot.ops.run news\n  python -m goldbot.ops.run record-gate <gate_name> --evidence <path or text>   # appends to state/phase_state.json\n  python -m goldbot.ops.run gates [--json] [--no-write]   # each roadmap gate met / not met + the stop rule (records nothing)\n  python -m goldbot.ops.run gate-evidence <name> (--value X | --passed yes|no) [--detail TEXT]   # leakage audit, chaos drill\n  python -m goldbot.ops.run health [--json] [--static] [--out FILE] [--baseline FILE]   (exit 1 on a fail)\n  python -m goldbot.ops.run publish-costs [--out FILE]   # canonical broker's measured costs -> release costs-v1\n  python -m goldbot.ops.run backup [--init]              # encrypted restic backup now (--init: create the repository once)\n  python -m goldbot.ops.run restore --latest --to DIR    # restore the latest backup into an empty DIR and verify it\n  python -m goldbot.ops.run restore-drill                # the weekly restore drill, now\n  python -m goldbot.ops.run setup [--account ID]         # guided setup of secrets and server settings (re-runnable)\n  python -m goldbot.ops.run preflight [--account ID]     # read-only checklist before starting services (exit 1 on a blocker)\n  python -m goldbot.ops.run ruin --trades-per-week N (--closed-trades state | --shadow state | --r-file F | --win-rate ..)\n                                                         # drawdown / risk-of-ruin Monte Carlo at the live limits (G-5)\n  python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]\n                                                         # minimum equity for the minimum lot per family (G-7)\n  python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)\n  python -m goldbot.ops.run mail-test                    # one test email to auth.owner_email (email sign-in setup)\n  python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]\n                                                         # time-weighted % return, R, drawdown, avg per day, milestones\n  python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds\n  python -m goldbot.ops.run perf-report [--state DIR] [--data-root DIR] [--from D] [--to D] [--out DIR] [--json]\n                                                         # performance report (markdown + JSON) for the analysts; read only\n\n"
+  },
+  "unknown": {
+   "rc": 1,
+   "stdout": "Service entry points used by NSSM on the VPS and by hand in development.\n\n  python -m goldbot.ops.run supervisor\n  python -m goldbot.ops.run engine <account_id>\n  python -m goldbot.ops.run api\n  python -m goldbot.ops.run webhook\n  python -m goldbot.ops.run scheduler\n  python -m goldbot.ops.run telegram\n  python -m goldbot.ops.run news\n  python -m goldbot.ops.run record-gate <gate_name> --evidence <path or text>   # appends to state/phase_state.json\n  python -m goldbot.ops.run gates [--json] [--no-write]   # each roadmap gate met / not met + the stop rule (records nothing)\n  python -m goldbot.ops.run gate-evidence <name> (--value X | --passed yes|no) [--detail TEXT]   # leakage audit, chaos drill\n  python -m goldbot.ops.run health [--json] [--static] [--out FILE] [--baseline FILE]   (exit 1 on a fail)\n  python -m goldbot.ops.run publish-costs [--out FILE]   # canonical broker's measured costs -> release costs-v1\n  python -m goldbot.ops.run backup [--init]              # encrypted restic backup now (--init: create the repository once)\n  python -m goldbot.ops.run restore --latest --to DIR    # restore the latest backup into an empty DIR and verify it\n  python -m goldbot.ops.run restore-drill                # the weekly restore drill, now\n  python -m goldbot.ops.run setup [--account ID]         # guided setup of secrets and server settings (re-runnable)\n  python -m goldbot.ops.run preflight [--account ID]     # read-only checklist before starting services (exit 1 on a blocker)\n  python -m goldbot.ops.run ruin --trades-per-week N (--closed-trades state | --shadow state | --r-file F | --win-rate ..)\n                                                         # drawdown / risk-of-ruin Monte Carlo at the live limits (G-5)\n  python -m goldbot.ops.run sizing-feasibility [--equity E] [--tiny-live] [--price P --stop-distance D]\n                                                         # minimum equity for the minimum lot per family (G-7)\n  python -m goldbot.ops.run revoke-sessions [--state DIR]  # sign every dashboard account out (a stolen session)\n  python -m goldbot.ops.run mail-test                    # one test email to auth.owner_email (email sign-in setup)\n  python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]\n                                                         # time-weighted % return, R, drawdown, avg per day, milestones\n  python -m goldbot.ops.run owner-history [PATH]         # the owner's MT5 history -> private report + research seeds\n  python -m goldbot.ops.run perf-report [--state DIR] [--data-root DIR] [--from D] [--to D] [--out DIR] [--json]\n                                                         # performance report (markdown + JSON) for the analysts; read only\n\n"
+  }
+ }
+}

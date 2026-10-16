@@ -1,10 +1,10 @@
 ---
 number: 54
-rank: 46
+rank: 3
 title: Confirm increases in balance_closed_hwm
 stage: Execution and risk (drawdown stages) · PROTECT
 size: S
-status: proposed (trading-safety review of BACKLOG 44, 2026-10-12; needs trading-safety review)
+status: 'ready · accountable: implementer · due 2026-10-23'
 ---
 - **54. Confirm increases in balance_closed_hwm (trading-safety review of BACKLOG 44, 2026-10-12).** Value: the
   drawdown stages measure equity against `balance_closed_hwm`, which `_refresh_account` raises on every read
@@ -22,3 +22,4 @@ status: proposed (trading-safety review of BACKLOG 44, 2026-10-12; needs trading
   - tests: a single inflated balance read leaves the mark unchanged and causes no size-down or halt on the next real
     reads; two agreeing reads, or a read the deal history explains, raise it as today; a restart between the two reads
     does not apply an unconfirmed rise.
+  Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-23; trading-safety review. Start once `lane/market-closed-state-cadence` (43) merges, because both edit `goldbot/engine/runner.py`. Acceptance as above.

@@ -1,10 +1,10 @@
 ---
 number: 57
-rank: 47
+rank: 4
 title: 'risk_day_anchor is read by no code: pin it or make it real'
 stage: Execution and risk (loss caps) · PROTECT
 size: S
-status: proposed (found in the north-star day lane, 2026-10-16; needs trading-safety review)
+status: 'done (built 2026-10-16 in bd76c47 + RUNBOOK 8a268cf: Settings refuses any other anchor at load; trading-safety APPROVED 2026-10-16) · accountable: implementer · due 2026-10-19'
 ---
 - **57. risk_day_anchor is read by no code: pin it or make it real.** Value: `config/settings.yaml` says
   `risk_day_anchor: { tz: UTC, time: "00:00" }  # loss caps reset`, and `Settings.risk_day_anchor` loads it, but no
@@ -25,3 +25,4 @@ status: proposed (found in the north-star day lane, 2026-10-16; needs trading-sa
     server's `config/settings.local.yaml` for `risk_day_anchor` and `feature_day_anchor`, because a server that sets
     either would stop loading its settings after the deploy. Put the validator's exact error text and the fix
     (delete the key) into `docs/RUNBOOK.md` in the same change.
+  Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-19; trading-safety review. The server `settings.local.yaml` check (last bullet) is done by sre on the boxes before the validator ships. Acceptance as above.

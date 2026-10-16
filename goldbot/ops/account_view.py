@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from goldbot.base import FrozenRecord
+from goldbot.data.timeutil import heartbeat_problem
 from goldbot.risk.sizing import MIN_LOT_TOLERANCE, effective_risk, stop_distance
 
 LADDER_TIMEFRAMES = ("15m", "1h", "4h", "1d")   # ADR 0004 section 4: M1 15m, M2 1h, M3 4h, M4 1d
@@ -203,8 +204,8 @@ def _combined(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[
     if sup_eq is None or sup_day is None or sup_d0 is None:
         notes.append("combined caps: the supervisor is not reporting them yet")
         return
-    if ts is None or now - ts > SUPERVISOR_MAX_AGE_S:
-        notes.append("combined caps not shown: the supervisor's last report is stale")
+    if heartbeat_problem(ts, now, SUPERVISOR_MAX_AGE_S) is not None:      # stale, or stamped in the future
+        notes.append("combined caps not shown: the supervisor's last report is stale or stamped ahead")
         return
     ccys = {e.get("currency") for e in engines} | {engine.get("currency")}
     if len(ccys) != 1 or None in ccys:

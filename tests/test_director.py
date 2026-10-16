@@ -522,8 +522,8 @@ def test_settings_and_the_hypotheses_doc_agree_on_the_retired_families():
     doc, problems = hypotheses_retired(text, FAMILIES)
     assert not problems and set(doc) == {"breakout", "intraday_momentum", "mean_reversion", "session_open", "trend"}
     assert {e.family for e in s.retired_families} == set(doc) and "tsmom" not in doc
-    assert s.reserved_trials_quarter == {"2027Q1": 9}    # preregistration-2027Q1.md: 5 queued + 4 H-02 survivor slots (ADR 0007)
-    assert s.reserved_for("2027Q1") == 9 and s.reserved_for("2026Q4") == 0 == s.reserved_for("2027Q2")
+    assert s.reserved_trials_quarter == {"2027Q1": 8}    # preregistration-2027Q1.md: 4 queued + 4 H-02 survivor slots (ADR 0007)
+    assert s.reserved_for("2027Q1") == 8 and s.reserved_for("2026Q4") == 0 == s.reserved_for("2027Q2")
     assert s.open_budget_preregistered_only == ["2027Q1"]                   # the E-5 cap (R-06: no more fast tsmom)
     assert load_hypotheses("/nonexistent/hypotheses.md") is None and ATTRIBUTION_FILE == REPORT_FILE
 
@@ -700,7 +700,7 @@ def test_runners_refuse_a_config_preregistered_for_a_later_quarter(tmp_path, mon
 
 
 def test_research_director_job_reads_attribution_settings_and_the_reservation(tmp_path):
-    ctx = _ctx(tmp_path, reserved_trials_quarter={quarter_of(): 9})   # the real settings, with Q1 2027's 9 reserved now
+    ctx = _ctx(tmp_path, reserved_trials_quarter={quarter_of(): 9})   # a 9-trial reservation in the current quarter
     now = pd.Timestamp.now("UTC")
     report = _report({"tsmom": (400, 3.0)}, as_of=now - pd.Timedelta(hours=1), start=now - pd.Timedelta(days=20))
     (tmp_path / ATTRIBUTION_FILE).write_text(json.dumps(report))

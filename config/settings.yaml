@@ -3,6 +3,8 @@ symbol: XAUUSD
 data_root: data            # Parquet root; DuckDB views sit over it
 
 # The three "days" (see design: Data architecture / Time and calendar)
+# The two anchors below are fixed, not settings (BACKLOG 57): no code reads them, and Settings refuses any other value
+# at load. Moving either day needs code (one shared day function) and a trading-safety review.
 feature_day_anchor: { tz: America/New_York, time: "13:30" }   # COMEX settlement -> daily bars & features
 risk_day_anchor:    { tz: UTC,              time: "00:00" }   # loss caps reset
 # swap-day (the broker's server-midnight rollover) follows each broker's server_tz; the swap rates and triple day in
@@ -170,9 +172,10 @@ research:
   label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
   reserved_trials_quarter:           # held for each quarter's pre-registered queue; a quarter not listed holds none
-    "2027Q1": 9                      #   preregistration-2027Q1.md: 5 queued rows + 4 contingent H-02 survivor slots (ADR
-                                     #   0007). The director, the label grid and the analyst spend only 20 - used -
-                                     #   reserved, reserved = max(this - run - withdrawn - expired slots, pending, 0). A
+    "2027Q1": 8                      #   preregistration-2027Q1.md: 4 queued rows + 4 contingent H-02 survivor slots (ADR
+                                     #   0007; H-06 withdrawn by its rule 2026-10-16, run 38931951849). The director,
+                                     #   the label grid and the analyst spend only 20 - used - reserved,
+                                     #   reserved = max(this - run - withdrawn - expired slots, pending, 0). A
                                      #   trial run against a queued row, or using a live slot by its derivation rule, uses
                                      #   one up; a withdrawn row or a slot whose condition can no longer be met frees one
   open_budget_preregistered_only:    # E-5 cap: in these quarters the analyst spends the open budget only on an ad-hoc
@@ -183,11 +186,11 @@ research:
                                      #   families SHARE 1 exploration trial a quarter (best post-retirement evidence, else a
                                      #   rotation) and each is reinstated only by out-of-sample attribution after its
                                      #   retirement date (research/director.py)
-    - { family: mean_reversion, hypothesis_id: R-01, retired: 2026-10-10, trials: [3],
+    - { family: mean_reversion, hypothesis_id: R-01, retired: 2026-10-10, trials: [3, 5, 10, 12],
         reason: "no gross edge; no cost-surviving evidence for short-horizon reversion in gold" }
     - { family: session_open, hypothesis_id: R-02, retired: 2026-10-10, trials: [1, 7, 11, 13],
         reason: "gross +0.042 R, t 1.31 on 1,498 events, fails P4; about 90 events a year" }
-    - { family: trend, hypothesis_id: R-03, retired: 2026-10-10, trials: [2],
+    - { family: trend, hypothesis_id: R-03, retired: 2026-10-10, trials: [2, 4, 9, 14],
         reason: "no gross edge; small-tick contracts lost short-term trend after 2009" }
     - { family: breakout, hypothesis_id: R-04, retired: 2026-10-10, trials: [6, 8, 15],
         reason: "gross +0.015 R, t 0.38; same reason as trend" }

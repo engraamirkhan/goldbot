@@ -141,6 +141,7 @@ def test_the_risk_day_still_resets_the_day_start_equity_at_00_utc_not_at_the_22_
 
 def test_the_configured_risk_day_anchor_is_the_hard_coded_risk_day():
     """`risk_day_anchor` is read by no code (docs/handoff.d, the risk-day anchor finding): the loss caps reset at
-    timeutil.risk_day, 00:00 UTC. Until a lane makes the setting real, the shipped value must say what the code does."""
+    timeutil.risk_day, 00:00 UTC. The setting is pinned (BACKLOG 57, Settings refuses any other value at load), so the
+    shipped value must say what the code does."""
     a = load_settings().risk_day_anchor
     assert (a.tz, a.time) == ("UTC", "00:00")

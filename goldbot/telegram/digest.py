@@ -46,7 +46,7 @@ LATE_LIMIT = pd.Timedelta(hours=6)
 MAX_NAMES = 5                       # check names listed per status before "+N more"
 ATTRIBUTION_SKIP = ("agent", "decision")   # agent ids are per-version detail; "not taken" is not a trading cell
 DEFAULT_ROADMAP = ROOT / "docs" / "ROADMAP.md"
-_DECISION_ROW = re.compile(r"^\|\s*D\d+\s*\|")
+_DECISION_ROW = re.compile(r"^\|\s*(?:OD-|D)\d+\s*\|")   # "| D3 |" or, since the 2026-10-16 re-plan, "| OD-3 |"
 _STAGE_RANK = {"normal": 0, "size_down": 1, "halted": 2}
 
 
@@ -381,7 +381,7 @@ def decisions_line(state_dir: Path, roadmap: Path) -> list[str]:
 
 
 def owner_decisions(roadmap: Path) -> int:
-    """Rows of docs/ROADMAP.md's '## 5. Owner decision queue' table (lines starting '| D<n> |')."""
+    """Rows of docs/ROADMAP.md's '## 5. Owner decision queue' table (lines starting '| OD-<n> |' or '| D<n> |')."""
     lines = roadmap.read_text(encoding="utf-8").splitlines()
     n, inside = 0, False
     for line in lines:

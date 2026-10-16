@@ -1,10 +1,9 @@
 ---
 number: 8
-rank: 11
 title: Stop rule and gate thresholds in code
 stage: Capital and drawdown management · RUN
 size: S
-status: done (owner sign-off and engine trade record open)
+status: 'done (PR #63, main 5f7da74); owner sign-off of the values open (Needs the owner)'
 ---
 
 ### 8. Stop rule and gate thresholds in code
@@ -27,3 +26,5 @@ recommends /halt; it does not set the system halt (the RiskGate's caps are uncha
 pass (every 60 s) evaluates it, so no scheduler job was added. Open: owner sign-off of the PROPOSED values; the
 engine appending `ClosedTrade` rows to `state/closed_trades.jsonl` (engine owner); the dashboard card (api/web
 owners; the report JSON is ready to serve).
+
+Sweep 2026-10-16 (product owner): Done (PR #63, main 5f7da74); owner sign-off of the values open (Needs the owner). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.

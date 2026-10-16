@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -14,6 +15,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord, Record, UtcTimestamp
+from goldbot.data.timeutil import CLOCK_AHEAD_TOLERANCE_S
 
 if TYPE_CHECKING:
     from goldbot.ops.health import HealthContext
@@ -24,6 +26,11 @@ _RANK: dict[str, int] = {"ok": 0, "warn": 1, "fail": 2}
 # ---- thresholds (seconds unless named otherwise); the reasons quote them so an alert explains itself
 SUPERVISOR_WARN_S = 20
 SUPERVISOR_FAIL_S = 60            # engines block entries when the supervisor heartbeat is older than this
+# a liveness stamp more than this ahead of the pass's latest clock is a clock fault, never a fresh report (found
+# 2026-10-16): the engines' own tolerance, so health and the halt agree. "Ahead" is measured against
+# max(ctx.now, the wall clock) (`_ahead_s`): `now` is taken once at the start of a pass that can run for minutes
+# (a bridge timing out costs about 20 s an account), and a service that wrote during the pass is not a clock fault
+HEALTH_CLOCK_AHEAD_S = CLOCK_AHEAD_TOLERANCE_S
 ENGINE_WARN_S = 20 * 60           # engines write their state at every 15m bar close
 ENGINE_FAIL_S = 45 * 60
 # the engine loop's own heartbeat (goldbot/ops/watchdog.py LoopWatch, rewritten every 15 s whatever the feed does): a
@@ -97,6 +104,14 @@ def _read_json(path: Path) -> Any:
 
 def _epoch(now: pd.Timestamp) -> float:
     return now.timestamp()
+
+
+def _ahead_s(ts: float, ctx: HealthContext) -> float:
+    """Seconds the stamp `ts` (epoch) is ahead of the latest clock this pass knows, max(ctx.now, the wall clock now),
+    for the future-stamp checks only (SRE review MEDIUM, 2026-10-16): a stamp written while a slow pass ran is not
+    ahead. Taking the later clock can only clear a future flag, never raise one, and a test's fixed past `ctx.now`
+    keeps its stale and fresh verdicts (they still use ctx.now)."""
+    return ts - max(_epoch(ctx.now), time.time())
 
 
 def _market_open_throughout(ctx: HealthContext, seconds: float) -> bool:

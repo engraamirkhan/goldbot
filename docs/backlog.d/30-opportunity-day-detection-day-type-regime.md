@@ -1,10 +1,9 @@
 ---
 number: 30
-rank: 30
 title: 'Opportunity-day detection: day-type / regime classifier (ADR 0004 north star)'
 stage: Market preparation, selectivity · FIND
 size: M
-status: proposed (hypothesis via the trial registry; no trials spent)
+status: '30a done (PR #73, main d28a482; 71e9092); 30b and the trials parked: Q2 2027 budget, enable only after H-16'
 ---
 - **30. Opportunity-day detection (hypothesis; quant review).** Value: the north star depends on trading more on
   days the market offers moves and standing aside otherwise (FIND). Acceptance:
@@ -52,3 +51,4 @@ status: proposed (hypothesis via the trial registry; no trials spent)
       - the £1,000 min-lot interplay test in item 25.
     - `day_score` and the factor are in the decisions log and on the approval card's risk line (ui-ux review).
     - **Enable only after H-16 passes** its pre-registered reading rule (evaluator verdict on #34).
+  Sweep 2026-10-16 (product owner): 30a done (PR #73, main d28a482; 71e9092); 30b and the trials parked: Q2 2027 budget, enable only after H-16.

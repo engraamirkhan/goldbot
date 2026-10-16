@@ -1,10 +1,9 @@
 ---
 number: 19
-rank: 22
 title: Open-risk (heat) cap and same-direction stacking (G-4)
 stage: Capital and drawdown management · RUN
 size: S
-status: 'proposed (owner: value)'
+status: 'built, off by default (PR #75, main a52b389; fefb759); parked: owner sets the values; cross-account sum later'
 ---
 - **19 (G-4).** Sum of open risk in R per account and combined ≤ the configured cap. Same-side positions of
   different agents count as one bet. Gate test on each side of the cap.
@@ -14,3 +13,4 @@ status: 'proposed (owner: value)'
   whichever agent opened them; a position without SL or conversion refuses (`open_risk_unknown`). Not done: the
   combined (cross-account) sum and count, which needs the supervisor to publish them. Owner: set the values and
   enable. Needs trading-safety review.
+  Sweep 2026-10-16 (product owner): Built, off by default (PR #75, main a52b389; fefb759); parked: owner sets the values; cross-account sum later.

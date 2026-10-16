@@ -300,7 +300,8 @@ def test_the_loop_feeds_the_watchdog_on_every_pass_before_the_tick_read():
     import inspect
     src = inspect.getsource(run_mod._run_engine)
     loop = src[src.index("watch.ready()"):]
-    assert loop.index("while True:") < loop.index("watch.tick()") < loop.index("engine_pass(")
+    # `resolve(engine_pass)(...)`: the loop calls engine_pass through goldbot.ops.run (the patch point) since the split
+    assert loop.index("while True:") < loop.index("watch.tick()") < loop.index("resolve(engine_pass)(")
 
 
 def test_the_bridge_watchdog_is_installed_from_roots_clone_and_enabled():
