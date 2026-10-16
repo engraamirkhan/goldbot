@@ -1308,6 +1308,10 @@ the equity cross-check before the 12% kill switch) the two versions start next t
 below the new bridge's `MIN_COMPATIBLE`. Exits, closes and the kill switch keep running either way. Deploy the MT5
 box first and the brain straight after, so the entry pause lasts only the brain's deploy.
 
+BACKLOG 66 (bridge notional ceiling, protocol unchanged at v5): deploy the MT5 box first (the ceiling guards any
+brain), then the brain; until the brain is updated, a refusal ("bridge_notional_ceiling: ...", retcode 10006) shows
+only in the bridge log on the MT5 box, with no Telegram notice and no "refused by the bridge" card.
+
 **Rollback order: roll back the brain first, then the MT5 box** (the reverse of a deploy), so no step leaves a newer
 brain next to an older bridge.
 

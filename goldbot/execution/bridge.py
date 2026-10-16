@@ -19,7 +19,11 @@ open positions keep their broker-side stop and target (sent with every order).
 Defence in depth on the terminal's side: requests time out after `SOCKET_TIMEOUT_S` (one stalled connection cannot
 hold the single-threaded server); an order call older than `ORDER_MAX_AGE_S` when it reaches the terminal is refused
 (the engine has already given up on it, and its price is stale); `GuardedBroker` refuses orders outside the account's
-magic range or above `MAX_ORDER_LOTS`, and stop/target changes on positions that are not goldbot's (closes stay allowed: the kill switch closes everything). The bridge listens on
+magic range or above `MAX_ORDER_LOTS`, and stop/target changes on positions that are not goldbot's (closes stay allowed: the kill switch closes everything). It also refuses
+an order that would take this terminal's gross notional on the symbol above `MAX_NOTIONAL_EQUITY_MULT` (6x) its own
+equity, the design's 30% at 1:20 (BACKLOG 66), read entirely on this box and failing closed; that refusal is a definite
+reject (retcode 10006, message "bridge_notional_ceiling: ..."), never a raise, and the order's age is checked again
+just before the send. The bridge listens on
 127.0.0.1 only and the engine reaches it through an SSH tunnel (goldbot/ops/linux), so the token never crosses the
 network in clear text. On start both ends check the terminal is logged in to the registry's account (login, server,
 demo vs real): `accounts.verify_terminal_account`.
@@ -33,6 +37,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import time
 from datetime import date
 from datetime import time as dtime
@@ -55,6 +60,7 @@ from goldbot.execution.broker import (
     tick_key,
 )
 from goldbot.execution.costs import BrokerTerms
+from goldbot.risk.sizing import account_fx
 
 log = logging.getLogger("goldbot.bridge")
 
@@ -102,6 +108,13 @@ MAX_BODY = 1_000_000
 SOCKET_TIMEOUT_S = 5            # a connection that sends nothing for this long is dropped
 ORDER_MAX_AGE_S = 10.0          # an order call older than this when the terminal gets to it is refused
 MAX_ORDER_LOTS = 3.0            # the design's combined exposure cap; no single order may exceed it
+# BACKLOG 66 (DESIGN.md:112, "combined exposure capped at 3 lots or 30% of combined equity notional"): 30% x the 1:20
+# leverage cap = 6x equity, the gate's `max_combined_notional_frac * leverage_cap` (a test pins the two equal). The
+# bridge enforces it on this terminal's own readings, so a brain sizing wrongly on a 1:5000 demo terminal is refused.
+MAX_NOTIONAL_EQUITY_MULT = 6.0
+CEILING_REFUSAL = "bridge_notional_ceiling"     # the message prefix of every ceiling refusal (the engine alerts on it)
+STALE_REFUSAL = "bridge_stale_order"            # an order that aged past ORDER_MAX_AGE_S during the ceiling's reads
+REFUSED_RETCODE = 10006         # MT5 "request rejected": a definite reject (runner.DEFINITE_REJECT_RETCODES)
 
 
 class BridgeUnavailable(ConnectionError):
@@ -226,6 +239,8 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None) -> type[
                     self._reply(409, {"error": f"{method} is {age:.1f} s old; refused (stale)"})
                     return
                 args = [_decode(a, response=False) for a in req.get("args", [])]
+                if method == "place_order" and isinstance(broker, GuardedBroker):
+                    broker.order_sent_at = time.time() - age      # its age is checked again just before the send
                 result = getattr(broker, method)(*args)
             except Exception as exc:                                  # the terminal's error goes back to the caller
                 log.exception("bridge call failed")
@@ -244,14 +259,57 @@ def serve(broker: Any, host: str, port: int, token: str,
     httpd.serve_forever()
 
 
+class _Unreadable(Exception):
+    """A figure the notional ceiling needs could not be read, or is not finite and > 0 (fail closed)."""
+
+
+def _read(field: str, fn: Callable[[], Any]) -> Any:
+    try:
+        return fn()
+    except _Unreadable:
+        raise
+    except Exception as exc:                            # noqa: BLE001 - any terminal failure refuses the order
+        raise _Unreadable(f"{field} ({type(exc).__name__})") from exc
+
+
+def _positive(field: str, v: Any) -> float:
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        raise _Unreadable(field) from None
+    if not math.isfinite(x) or x <= 0:
+        raise _Unreadable(field)
+    return x
+
+
+def _refusal(message: str) -> OrderResult:
+    return OrderResult(ok=False, retcode=REFUSED_RETCODE, order_id=None, position_id=None, filled_lots=0.0, price=None,
+                       message=message)
+
+
 class GuardedBroker:
     """The terminal-side broker behind the bridge, refusing what goldbot never sends: orders outside this account's
     magic range (magic_base .. magic_base + 99) or above MAX_ORDER_LOTS, and stop/target changes on positions outside
     that range. Closes are allowed for any position: closing only reduces risk, and the 12% kill switch closes
-    everything on the account (design: Drawdown kill switch)."""
+    everything on the account (design: Drawdown kill switch).
+
+    BACKLOG 66, the notional ceiling (DESIGN.md:112: "combined exposure capped at 3 lots or 30% of combined equity
+    notional", 30% x 1:20 = 6x equity): an order is refused when (every open lot on its symbol + its lots) x contract x
+    price x fx > MAX_NOTIONAL_EQUITY_MULT x equity, strict as the gate. Every figure is this terminal's own (only the
+    lots, side and symbol come from the brain): equity and currency (`account()`, read once per order, always), the
+    contract size, the quote the order fills at (ask for a buy, bid for a sell, as MT5Broker.place_order), the
+    conversion (`loss_per_lot` per USD, through `sizing.account_fx`), and `account_positions()` on the symbol, any
+    magic, both sides (gross). Any read that raises, is missing, non-finite or <= 0 refuses (`unreadable:<field>`).
+    A refusal is a definite reject, never a raise: OrderResult retcode 10006 with the message
+    "bridge_notional_ceiling: ...", so the engine records `rejected` and alerts the owner. Order of the checks: magic
+    -> 3.0 lots -> account (verified) -> ceiling -> the order's age again (`order_sent_at`) -> send. `close` and
+    `modify` are never sized."""
 
     def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None) -> None:
         self._b, self.magic_base, self._verify = broker, magic_base, verify
+        # when the brain sent the order being served (the bridge handler sets it; one request at a time): the age is
+        # checked again just before the send, after the ceiling's reads. None: not served over the bridge
+        self.order_sent_at: float | None = None
 
     def _ours(self, magic: int) -> bool:
         return self.magic_base <= int(magic) < self.magic_base + 100
@@ -261,14 +319,55 @@ class GuardedBroker:
             raise PermissionError(f"position {position_id} is not one of this account's goldbot positions")
 
     def place_order(self, intent: OrderIntent) -> OrderResult:
+        sent_at, self.order_sent_at = self.order_sent_at, None
         if not self._ours(intent.magic):
             raise PermissionError(f"magic {intent.magic} outside {self.magic_base}..{self.magic_base + 99}")
         if not 0 < intent.lots <= MAX_ORDER_LOTS:
             raise PermissionError(f"{intent.lots} lots outside (0, {MAX_ORDER_LOTS}]")
-        why = self._verify(self._b.account()) if self._verify is not None else None
+        try:
+            info = _read("account", self._b.account)
+        except _Unreadable as u:
+            return self._refuse(intent, f"unreadable:{u}")
+        why = self._verify(info) if self._verify is not None else None
         if why:                                        # the terminal was switched to another account after start
             raise PermissionError(f"terminal account changed: {why}")
+        if (refused := self._notional_refusal(intent, info)) is not None:
+            return self._refuse(intent, refused)
+        if sent_at is not None and (age := time.time() - sent_at) >= ORDER_MAX_AGE_S:
+            log.warning("order %s refused: %.1f s old after the ceiling's reads", intent.client_order_id, age)
+            return _refusal(f"{STALE_REFUSAL}: {age:.1f} s old before the send (max {ORDER_MAX_AGE_S:g} s)")
         return self._b.place_order(intent)
+
+    def _refuse(self, intent: OrderIntent, why: str) -> OrderResult:
+        log.warning("order %s refused by the notional ceiling: %s", intent.client_order_id, why)
+        return _refusal(f"{CEILING_REFUSAL}: {why}")
+
+    def _notional_refusal(self, intent: OrderIntent, info: AccountInfo) -> str | None:
+        """Why the order would take this terminal's notional on its symbol above MAX_NOTIONAL_EQUITY_MULT x equity, or
+        None. Fail closed: a figure that cannot be read or is not finite and > 0 is the reason (`unreadable:<field>`)."""
+        sym = intent.symbol
+        try:
+            equity = _positive("equity", getattr(info, "equity", None))
+            currency = getattr(info, "currency", "")
+            contract = _positive("contract", _read("contract", lambda: self._b.symbol_info(sym)).contract_size)
+            tick = _read("price", lambda: self._b.last_tick(sym))
+            px = _positive("price", tick.ask if intent.side > 0 else tick.bid)
+            per_lot = _positive("fx", _read("fx", lambda: self._b.loss_per_lot(sym, intent.side, px, 1.0)))
+            fx = account_fx(currency if isinstance(currency, str) else "", per_lot / contract)
+            if fx is None:                             # blank currency, or a USD figure more than 1% off 1.0
+                raise _Unreadable("fx")
+            positions = _read("positions", self._b.account_positions)
+            open_lots = _read("positions", lambda: sum(_positive("positions", p.lots) for p in positions
+                                                       if p.symbol == sym))
+        except _Unreadable as u:
+            return f"unreadable:{u}"
+        except Exception as exc:                        # noqa: BLE001 - a malformed record: never a 500, never a send
+            return f"unreadable:ceiling ({type(exc).__name__})"
+        notional = (open_lots + intent.lots) * contract * px * fx
+        if notional > MAX_NOTIONAL_EQUITY_MULT * equity:
+            return (f"notional {notional:.2f} {currency} > {MAX_NOTIONAL_EQUITY_MULT:g} x equity {equity:.2f} "
+                    f"({open_lots:g} lots open + {intent.lots:g} on {sym})")
+        return None
 
     def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult:
         self._own_position(position_id)

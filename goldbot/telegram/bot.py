@@ -13,6 +13,7 @@ from typing import Any, Callable
 import pandas as pd
 
 from goldbot.config import ROOT, TelegramSettings
+from goldbot.execution.bridge import CEILING_REFUSAL
 from goldbot.ops import accounts
 from goldbot.ops.account_view import proposal_budget_from_state
 from goldbot.ops.deadman import DeadMan
@@ -49,6 +50,8 @@ OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED
 
 
 def outcome_text(outcome: str) -> str:
+    if outcome == f"GATE_REFUSED: {CEILING_REFUSAL}":       # BACKLOG 66: the bridge's notional ceiling, after the gate
+        return "🛑 NOT PLACED: approved, but refused by the bridge (exposure above 6x equity, or unreadable)"
     if outcome.startswith("GATE_REFUSED"):
         return "🛑 NOT PLACED: approved, but the risk check refused it at approval (" + outcome.partition(": ")[2] + ")"
     return OUTCOME_TEXT.get(outcome, outcome)

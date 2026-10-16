@@ -141,6 +141,14 @@ function Outcome({ p, state }: { p: AnyProposal; state: CardState }) {
     case "rejected":
       return <p className="outcome muted-box" role="status"><strong>Rejected</strong> · {reasonLabel(d?.reason_code)}{tail}</p>;
     case "refused":
+      if (d?.refusal?.includes("bridge_notional_ceiling")) {
+        // BACKLOG 66: the RiskGate allowed it; the MT5 bridge's own ceiling (6× this terminal's equity) refused it
+        return (
+          <p className="outcome bad" role="status">
+            <strong>Refused by the bridge.</strong> The terminal's exposure ceiling (6× equity) refused the order; nothing was sent.{tail}
+          </p>
+        );
+      }
       return (
         <p className="outcome bad" role="status">
           <strong>Refused at approval.</strong> The RiskGate blocked the order ({(d?.refusal ?? []).map(plain).join(", ") || "no reason given"}); nothing was sent.{tail}

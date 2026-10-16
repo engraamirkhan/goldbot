@@ -434,3 +434,101 @@ def test_rearm_after_the_kill_switch_needs_ten_trading_days_of_positive_shadow_t
     eng = start()
     eng._refresh_account(_tick(pd.Timestamp("2025-04-17 09:00", tz="UTC"), 2387.0))
     assert eng.cfg.approval_mode == "auto"                                    # the lock has run out; mode as configured
+
+
+# ---------------------------------------------------------------------------------------------- BACKLOG 66
+CEILING_MSG = "bridge_notional_ceiling: notional 7500.00 USD > 6 x equity 1000.00 (0 lots open + 0.03 on XAUUSD)"
+
+
+class _BridgeRefuses(PaperBroker):
+    """The bridge's notional ceiling refuses the first `refusals` orders (a definite reject, 10006); `message` is what
+    it says. Later orders fill as on paper. `calls` counts every order that reached the broker."""
+
+    def __init__(self, refusals: int = 1, message: str = CEILING_MSG, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.refusals, self.message, self.calls = refusals, message, 0
+
+    def place_order(self, intent: OrderIntent) -> OrderResult:
+        self.calls += 1
+        if self.calls <= self.refusals:
+            return OrderResult(ok=False, retcode=10006, order_id=None, position_id=None, filled_lots=0.0, price=None,
+                               message=self.message)
+        return super().place_order(intent)
+
+
+def _notices(tmp_path: Path) -> list[str]:
+    f = tmp_path / "agent_runs.jsonl"
+    return [json.loads(x)["detail"] for x in f.read_text().splitlines()] if f.exists() else []
+
+
+def test_a_bridge_ceiling_refusal_reaches_the_journal_with_its_message(tmp_path):
+    pb = _BridgeRefuses(equity=10_000)
+    pb.on_tick(_tick(T0))
+    eng, _ = _engine(tmp_path, pb)
+    res = eng._execute(_prop("icm-demo-66-a"), SPECIALISTS["session_open"](), 0.03, 2396.0, 2406.0, requested=2400.2)
+    assert res is not None and res.retcode == 10006 and not pb.positions()
+    [order] = [d for d in eng.decisions if d.get("action") == "order"]
+    assert order["retcode"] == 10006 and order["ok"] is False and order["message"] == CEILING_MSG
+    assert eng._orders["icm-demo-66-a"].status == "rejected"
+
+
+def test_a_bridge_ceiling_refusal_alerts_and_pauses_auto(tmp_path):
+    from goldbot.risk import RiskLimits
+    from tests.test_auto_same_close import BASE, _actions, _run, _two
+    pb = _BridgeRefuses(equity=10_000, adverse_slip_points=0.0)
+    eng, _, dec = _run(tmp_path, _two(), RiskLimits(**BASE), pb=pb,
+                       center=ApprovalCenter({111}, bus=ApprovalBus(tmp_path)))
+    # the refused entry is journalled as a definite reject, and no further auto entry is sent at this bar close
+    assert _actions(dec) == ["auto_rejected:10006", "auto_paused:bridge_refused"], _actions(dec)
+    assert pb.calls == 1 and not pb.positions()
+    assert eng._auto_paused is not None and eng._auto_paused[1] == "bridge_refused"
+    [notice] = _notices(tmp_path)                                   # relayed to the owner on Telegram
+    assert "refused by the bridge" in notice and "bridge_notional_ceiling" in notice and "No order was placed" in notice
+
+
+def test_a_real_broker_reject_with_the_same_retcode_neither_alerts_nor_pauses_auto(tmp_path):
+    from goldbot.risk import RiskLimits
+    from tests.test_auto_same_close import BASE, _actions, _run, _two
+    pb = _BridgeRefuses(message="Request rejected", equity=10_000, adverse_slip_points=0.0)
+    eng, _, dec = _run(tmp_path, _two(), RiskLimits(**BASE), pb=pb,
+                       center=ApprovalCenter({111}, bus=ApprovalBus(tmp_path)))
+    assert _actions(dec) == ["auto_rejected:10006", "executed:auto"], _actions(dec)
+    assert _notices(tmp_path) == []
+
+
+def test_a_bridge_ceiling_refusal_at_approval_shows_refused_by_the_bridge(tmp_path):
+    from goldbot.telegram.bot import outcome_text
+    from goldbot.telegram.outbox import Outbox
+    from tests.test_approved_card_cap import _approve, _card
+    from tests.test_engine_clock import WED, _intent
+    from tests.test_engine_clock import _engine as _clock_engine
+    from tests.test_engine_clock import _tick as _clock_tick
+    pb = _BridgeRefuses(equity=10_000)
+    pb.on_tick(_clock_tick(WED))
+    eng, _, _ = _clock_engine(tmp_path, pb=pb)
+    bus = eng.center.bus = ApprovalBus(tmp_path)
+    eng._refresh_account(_clock_tick(WED))
+    prop = _card(eng, _intent().model_copy(update=eng._sizing_terms(1, 2400.2, 4.0)))
+    bus.publish(prop)
+    outbox = Outbox(tmp_path, bus)
+    outbox.mark_sent(prop.proposal_id, [(1, 2)])
+    _approve(eng, prop)
+    assert pb.calls == 1 and not pb.positions()
+    archived = bus.get(prop.proposal_id)
+    assert archived is not None and archived.gate_refusal == ["bridge_notional_ceiling"]
+    [(pid, outcome, _)] = outbox.finished()
+    assert pid == prop.proposal_id and "refused by the bridge" in outcome_text(outcome)
+    assert any("refused by the bridge" in n for n in _notices(tmp_path))
+    assert any(d.get("action") == "bridge_refused" for d in eng.decisions)
+
+
+def test_a_bridge_refused_id_is_never_re_sent_after_a_restart(tmp_path):
+    pb = _BridgeRefuses(equity=10_000)
+    pb.on_tick(_tick(T0))
+    eng, _ = _engine(tmp_path, pb)
+    agent = SPECIALISTS["session_open"]()
+    eng._execute(_prop("icm-demo-66-b"), agent, 0.03, 2396.0, 2406.0, requested=2400.2)
+    again, _ = _engine(tmp_path, pb)                                   # restart against the same terminal
+    assert "icm-demo-66-b" in again.sent_ids and again._orders["icm-demo-66-b"].status == "rejected"
+    assert again._execute(_prop("icm-demo-66-b"), agent, 0.03, 2396.0, 2406.0, requested=2400.2) is None
+    assert pb.calls == 1 and not pb.positions()                        # the refused id never reaches the bridge again
