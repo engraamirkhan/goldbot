@@ -53,7 +53,11 @@ M3 positive verdict -> gates -> holdout once -> shadow -> M4 -> 6 months of pape
 - **CI minutes.** 2,000 free minutes a month; October's ran out on 2026-10-06. The self-hosted runner (`CI_RUNNER`)
   on the brain VM must be live before January (Wave 2).
 - **Data.** `macro-v1` was published on 10-13; `calendar-v1` waits on the FRED_API_KEY secret (owner, chased today).
-  Coverage issues #2–#32 need triage before the freeze.
+  Coverage issues #2–#32 were triaged on 10-16: data-v1 lost 21 research-window weekdays and 42 holdout weekdays
+  in the 10-06 full refresh. Five freeze gaps G1–G5 (data-engineer; G3 research-director) are on the Q1 readiness
+  list (`docs/research/preregistration-2027Q1.md`, item 5). H-01 is at risk (152 vs the floor of 150 on gapped
+  data); its recount and the G3 recount are one count-owed-events run after G1 closes (11-06), by 11-13, checked by
+  the evaluator by 11-14.
 
 ## 3. Waves
 
@@ -97,8 +101,8 @@ is its role file's "Definition of done" plus S1–S12.
 | W1-2 | Nightly backups and the weekly restore drill | sre | Sun 10-18 | code done (`ops/backup.py`); verified by the 22:15 run and the Sunday drill | — | W1-0 | security |
 | W1-3 | Chaos-drill harness (gate 2 criterion) | sre | Fri 10-30 | not started; starts when R-OCI frees | new `scripts/chaos_drill.py`, its test | batch PR open | trading-safety |
 | W1-4 | Reconciliation on the running demo (D12, ledger) and session state from `session_deals` (D13) | data-engineer | read Tue 10-20; D13 Fri 10-30 | re-scoped: D12 and the broker ledger are built; D13 is partial | `data/calendar.py` | engine running; R-59 merged | trading-safety |
-| W1-5 | H-13 cost-filter overlay; freeze prep with registry rows and a budget-guard test (BACKLOG 5) | strategy-researcher | Fri 10-30 | not started; starts when R-H06 frees (same research inputs) | new `research/costfilter.py`, `research_plan.json` (not H-01/H-06), budget tests | R-H06 merged | quant |
-| W1-6 | Coverage triage (#2–#32); `macro-v1` docs corrected | data-engineer | triage Tue 10-20; script Tue 10-27 | triage can start NOW (read-only); script after the batch PR | new `scripts/check_coverage.py`, `data-macro.yml` | — | security (workflow) |
+| W1-5 | H-13 cost-filter overlay; freeze prep with registry rows and a budget-guard test (BACKLOG 5) | strategy-researcher | Fri 10-30 | not started (checked 10-16); **starts Mon 10-19** (research-director, 10-16 job check; R-H06's withdrawal work is done) | new `research/costfilter.py`, `research_plan.json` (not H-01/H-06), budget tests | R-H06 merged | quant |
+| W1-6 | Coverage triage (#2–#32); `macro-v1` docs corrected | data-engineer | triage Tue 10-20; script Tue 10-27; repair (G1, G2) Fri 11-06 | triage done 10-16 (gaps G1–G5 on the Q1 readiness list); script after the batch PR | new `scripts/check_coverage.py`, `data-macro.yml` | — | security (workflow) |
 | W1-7 | Attribution director hook and dashboard (BACKLOG 12) | performance-analyst | Fri 10-30 | in review since 10-10; resumes once trades exist | `research/attribution.py`, `director.py` hook | engine running | quant |
 | W1-8 | Research callers pass settings to walk-forward (M15); CUSUM done (M25) | implementer | Fri 10-30 | not started; lowest Wave 1 priority | `research/walkforward.py` callers | batch PR open | quant |
 | W1-9 | DST-gap-week broker clock check | sre | Fri 10-30, plus Mon 11-02 | dated; needs the engine running | none (preflight runs, report on #34) | engine start | trading-safety |

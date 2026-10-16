@@ -4,7 +4,7 @@ rank: 12
 title: Q1 2027 pre-registered trial queue
 stage: Idea generation · FIND
 size: S
-status: 'in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, count-owed-events to be re-dispatched after merge (H-01 count pasted by 2026-11-01); `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14'
+status: 'in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, H-01 AT RISK (152 vs 150 on data-v1 with 21 weekdays missing, coverage triage 2026-10-16); the 2026-11-01 script recount and the G3 recount on repaired data merged into one count-owed-events run after G1 closes, by 2026-11-13, evaluator G3 check by 2026-11-14; `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14'
 ---
 
 ### 5. Q1 2027 pre-registered trial queue
@@ -22,3 +22,4 @@ Acceptance:
 Depends on: 2 (costs), 4 (variant 3). The daily-family event floor is an owner decision (below).
 
 Sweep 2026-10-16 (product owner): accountable `research-director`, due 2026-12-14 (freeze commit). The writer it needed (47) is merged (#76). `macro-v1` was published on 2026-10-13. Acceptance as above, plus the dry run of `scripts/preregister_quarter.py` on the final spec reviewed by the quant reviewer.
+Job check 2026-10-16 (research director): data gaps G1-G5 from the coverage triage are on the Q1 readiness list (item 5). H-01 is at risk; one merged recount on repaired data (by 2026-11-13) decides whether it stays queued (>= 150) or is withdrawn by its rule (reservation 8 -> 7). W1-5 (H-13 cost filter, this item's budget-guard test) starts Mon 2026-10-19.
