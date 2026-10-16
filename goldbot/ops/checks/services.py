@@ -1,13 +1,16 @@
 """Services and heartbeats health checks: scheduler and jobs, service heartbeats, schema skew, approvals, the alert loop, the dead man's switch."""
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from goldbot.base import SkewSummary, load_record, load_record_json
+from goldbot.data.timeutil import heartbeat_problem
 from goldbot.ops.checks._base import (
+    HEALTH_CLOCK_AHEAD_S,
     HEARTBEAT_SERVICES,
     HEARTBEAT_SILENT_S,
     JOB_OVERDUE_GRACE_S,
@@ -20,6 +23,7 @@ from goldbot.ops.checks._base import (
     Status,
     WatchState,
     _age,
+    _ahead_s,
     _epoch,
     _read_json,
     _worst,
@@ -66,7 +70,11 @@ def check_scheduler(ctx: HealthContext) -> list[Check]:
         return [Check(name="scheduler", status="fail", reason=f"scheduler.json unreadable: {exc}")]
     running = {n: s for n, j in jobs.items() if (s := _running(j)) is not None}
     hb_age = (ctx.now - hb).total_seconds()
-    if hb_age <= SCHEDULER_HEARTBEAT_FAIL_S:
+    if (ahead := _ahead_s(hb.timestamp(), ctx)) > HEALTH_CLOCK_AHEAD_S:   # even while busy (found 2026-10-16)
+        out = [Check(name="scheduler", status="fail",
+                     reason=f"heartbeat stamped {_age(ahead)} ahead of this server's clock (clock fault or bad "
+                            "write): it cannot show the scheduler runs; check the host clock and restart the scheduler")]
+    elif hb_age <= SCHEDULER_HEARTBEAT_FAIL_S:
         out = [Check(name="scheduler", status="ok", reason=f"heartbeat {_age(hb_age)}")]
     elif running:      # a job blocks the loop (a retrain takes hours); the job check judges how long
         out = [Check(name="scheduler", status="ok", reason=f"busy with {', '.join(sorted(running))}; heartbeat {_age(hb_age)}")]
@@ -147,6 +155,10 @@ def check_alert_loop(ctx: HealthContext) -> Check:
     except (ValueError, OSError) as exc:
         return Check(name="alerts", status="warn", reason=f"health_last.json unreadable: {exc}")
     age = (ctx.now - ts).total_seconds() if ts is not None else float("inf")
+    if ts is not None and (ahead := _ahead_s(ts.timestamp(), ctx)) > HEALTH_CLOCK_AHEAD_S:
+        return Check(name="alerts", status="warn",
+                     reason=f"last health alert pass stamped {_age(ahead)} ahead of this server's clock (clock fault or "
+                            "bad write): it cannot show the Telegram alert loop runs")
     if age > WATCH_STALE_S:
         return Check(name="alerts", status="warn", reason=f"last health alert pass {_age(age)} ago: Telegram service down?")
     return Check(name="alerts", status="ok", reason=f"last pass {_age(age)} ago")
@@ -181,9 +193,17 @@ def check_heartbeat(ctx: HealthContext, service: str) -> Check:
     if not f.exists():
         return Check(name=name, status="warn", reason=f"no heartbeat_{service}.json: service never started (or predates heartbeats)")
     try:
-        age = _epoch(ctx.now) - float(_read_json(f)["ts"])
+        ts = float(_read_json(f)["ts"])
     except (ValueError, OSError, KeyError, TypeError) as exc:
         return Check(name=name, status="fail", reason=f"heartbeat unreadable: {exc}")
+    now = _epoch(ctx.now)
+    if heartbeat_problem(ts, now, math.inf, ahead_s=math.inf) == "invalid":   # float() read NaN or infinity
+        return Check(name=name, status="fail", reason=f"heartbeat unreadable: ts {ts!r} is not a finite number")
+    if (ahead := _ahead_s(ts, ctx)) > HEALTH_CLOCK_AHEAD_S:
+        return Check(name=name, status="fail",
+                     reason=f"{service} heartbeat stamped {_age(ahead)} ahead of this server's clock (clock fault or "
+                            f"bad write): it cannot show {service} runs; check the host clock and restart it")
+    age = now - ts
     if age > HEARTBEAT_SILENT_S:
         return Check(name=name, status="fail",
                      reason=f"{service} silent for {_age(age)} (> {HEARTBEAT_SILENT_S // 60} min): service down?")
