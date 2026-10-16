@@ -174,9 +174,10 @@ def _plain(v: Any) -> Any:
     return f"<{v.__module__}.{v.__qualname__}>" if callable(v) else v
 
 
-def _dispatch(argv: list[str]) -> dict[str, Any]:
-    """Run goldbot.ops.run as __main__ with `argv` and stop at the first call into an entry function."""
-    targets = _entry_functions()
+def _dispatch(argv: list[str], stop: bool = True) -> dict[str, Any]:
+    """Run goldbot.ops.run as __main__ with `argv` and stop at the first call into an entry function (`stop=False`: no
+    trace, run to the end; the caller has replaced the entry functions)."""
+    targets = _entry_functions() if stop else {}
     hit: dict[str, Any] = {}
 
     def trace(frame: FrameType, event: str, arg: Any) -> None:
@@ -193,7 +194,8 @@ def _dispatch(argv: list[str]) -> dict[str, Any]:
     try:
         with warnings.catch_warnings(), redirect_stdout(out):
             warnings.simplefilter("ignore", RuntimeWarning)       # "found in sys.modules": run as __main__ on purpose
-            sys.settrace(trace)
+            if stop:
+                sys.settrace(trace)
             try:
                 runpy.run_module("goldbot.ops.run", run_name="__main__")
                 hit["returned"] = True
@@ -214,6 +216,69 @@ def _dispatch(argv: list[str]) -> dict[str, Any]:
 
 def test_every_command_reaches_the_same_function_with_the_same_arguments():
     _check("dispatch", {name: _dispatch(argv) for name, argv in DISPATCH.items()})
+
+
+# One-shot commands: the process exit code is the entry function's return value (`sys.exit(fn(...))`). Operators and
+# scripts act on it: vps_update.ps1 rolls back on `health`'s exit code, preflight blocks a start, gates/record-gate
+# refuse. Each maps to the entry function the golden dispatch names (module, attribute).
+ONE_SHOT: dict[str, tuple[str, str]] = {
+    "drift-review": ("goldbot.ops.run", "drift_review_cli"),
+    "record-gate": ("goldbot.ops.run", "record_gate_cli"),
+    "gates": ("goldbot.ops.gates_phase", "main"),
+    "gate-evidence": ("goldbot.ops.gates_phase", "evidence_main"),
+    "publish-costs": ("goldbot.ops.run", "publish_costs_cli"),
+    "backup": ("goldbot.ops.backup", "main"),
+    "restore": ("goldbot.ops.backup", "main"),
+    "restore-drill": ("goldbot.ops.backup", "main"),
+    "setup": ("goldbot.ops.setup_wizard", "main"),
+    "preflight": ("goldbot.ops.preflight", "main"),
+    "revoke-sessions": ("goldbot.api.auth", "revoke_sessions_cli"),
+    "mail-test": ("goldbot.api.mailer", "main"),
+    "owner-history": ("goldbot.research.owner_history", "main"),
+    "health": ("goldbot.ops.health", "main"),
+    "ruin": ("goldbot.research.ruin", "main"),
+    "monthly-report": ("goldbot.ops.monthly_report", "main"),
+    "perf-report": ("goldbot.ops.perf_report", "main"),
+    "sizing-feasibility": ("goldbot.research.min_lot", "main"),
+}
+# Services are exempt from the exit-code rule: each loops forever (supervisor, engine, scheduler, telegram, news) or
+# serves until stopped (api and webhook under uvicorn, bridge under serve), and the dispatcher never passed a return
+# value to sys.exit for them; their exit code is the process's own (0 on return, non-zero on a refusal's SystemExit or
+# an uncaught error). Pinned the other way round: a value a service returns is NOT turned into an exit code.
+SERVICES: dict[str, str] = {s: f"run_{s}" for s in
+                            ("supervisor", "engine", "bridge", "api", "webhook", "scheduler", "telegram", "news")}
+
+
+def _returns_3(calls: list[Any]) -> Callable[..., int]:
+    """A stand-in entry function: records its call and returns 3 (no real command returns it)."""
+    def fake(*args: Any, **kwargs: Any) -> int:
+        calls.append(args)
+        return 3
+    return fake
+
+
+def test_every_command_is_classed_as_one_shot_or_service():
+    known = {argv[0] for argv in DISPATCH.values() if argv and not argv[0].startswith("-")} - {"no-such-command"}
+    assert set(ONE_SHOT) | set(SERVICES) == known and not set(ONE_SHOT) & set(SERVICES)
+
+
+@pytest.mark.parametrize("cmd", sorted(ONE_SHOT))
+def test_a_one_shot_command_exits_with_its_entry_function_s_return_value(monkeypatch, cmd):
+    import importlib
+    module, attr = ONE_SHOT[cmd]
+    calls: list[Any] = []
+    monkeypatch.setattr(importlib.import_module(module), attr, _returns_3(calls))
+    got = _dispatch(DISPATCH[cmd], stop=False)
+    assert got == {"exit": 3, "printed_usage": False} and len(calls) == 1, got
+
+
+@pytest.mark.parametrize("cmd", sorted(SERVICES))
+def test_a_service_s_return_value_is_not_the_exit_code(monkeypatch, cmd):
+    import goldbot.ops.run as run_mod
+    calls: list[Any] = []
+    monkeypatch.setattr(run_mod, SERVICES[cmd], _returns_3(calls))
+    got = _dispatch(DISPATCH[cmd], stop=False)
+    assert got == {"returned": True} and len(calls) == 1, got
 
 
 def _entry_points() -> dict[str, list[str]]:
