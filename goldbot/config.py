@@ -482,6 +482,10 @@ class GateSettings(_Section):
     stop_after_months: float = Field(18, gt=0)
     stop_min_pooled_trades: int = Field(500, ge=1)
     stop_confidence: float = Field(0.90, gt=0.5, lt=1)
+    # OWNER DECISION (recommended 0.05): the most of the paper / live trades whose return is not net (commission or swap
+    # unknown, charged an imputed cost: ops/cost_imputation.py) before the paper and live gates are not met. None = off:
+    # the share is shown for context only
+    max_gross_share: float | None = Field(None, gt=0, le=1)
 
 
 class Settings(_Section):

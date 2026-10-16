@@ -347,7 +347,7 @@
   [
    "stop_rule",
    "ok",
-   "6 pooled trades (needs > 500), 0.0 of 18.0 months, lower 90% bound 0.00000, worst single loss -0.10% (weekly cap 5.0%)"
+   "6 pooled trades (needs > 500), 0.0 of 18.0 months, lower 90% bound 0.00000, worst single loss -0.10% (weekly cap 5.0%); 6 gross row(s) charged an imputed cost of 0.00000 in return (~$0.00); 6 could not be priced (no price or entry time)"
   ],
   [
    "phase_gates",

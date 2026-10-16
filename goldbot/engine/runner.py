@@ -2435,8 +2435,10 @@ class Engine:
         durably to state/closed_trades.jsonl. Money from the broker's deals when it reports them (net P&L with
         commission and swap); otherwise from the engine's own fills at the contract size (commission and swap None).
         Finance audit: `money_source` says which, and `pnl_basis` is "gross" unless commission and swap are both known
-        (GAP-05); the stops (GAP-03) and the entry facts (`OpenTrade.audit`: GAP-01/02/13) go on the record, and a
-        broker stop or target fill is logged against its level in `exit_fills` (GAP-04)."""
+        (GAP-05), and `ret_basis` is "price" when ret could not be taken from that P&L (a non-USD account with no
+        conversion: quant review 2026-10-12, finding B); the stops (GAP-03) and the entry facts (`OpenTrade.audit`:
+        GAP-01/02/13) go on the record, and a broker stop or target fill is logged against its level in `exit_fills`
+        (GAP-04)."""
         if pid in self._recorded:
             return
         try:
@@ -2466,7 +2468,8 @@ class Engine:
         # the engine's was converted, "USD" for the unconverted own-fills fallback; None is left to legacy records
         # (the monthly report flags those as R understated), and when the account currency itself is unknown
         pnl_currency: str | None = self._account_currency() or None
-        if info is not None:                           # pnl from the broker's deals, in the account currency
+        ret_basis: Literal["pnl", "price"] = "pnl"     # ClosedTrade.ret_basis: "price" only when ret is not from pnl
+        if info is not None:                          # pnl from the broker's deals, in the account currency
             exit_px, exit_utc, pnl = info["exit_price"], info["exit_utc"], info["pnl"]
             commission, swap = info["commission"], info["swap"]
             if reason == "broker_close" and info["reason"]:
@@ -2474,10 +2477,13 @@ class Engine:
             if fx is not None:
                 r = pnl / (risk_usd * fx) if risk_usd > 0 else None
                 ret = pnl / (notional_usd * fx)
-            else:                                      # no conversion: R unknown (never a wrong R); gross price return
+            elif self._account_currency() == "USD":    # the notional is already in the account currency (finding B)
+                log.warning("position %s: the broker's USD conversion is off; R left empty, return from the P&L", pid)
+                r, ret = None, pnl / notional_usd
+            else:                                      # no conversion: R unknown (never a wrong R); gross price return,
                 log.warning("position %s: no USD -> %s conversion; R left empty, return from prices", pid,
                             self._account_currency() or "account currency")
-                r, ret = None, tr.side * (exit_px - entry) / entry
+                r, ret, ret_basis = None, tr.side * (exit_px - entry) / entry, "price"   # flagged on the record
         else:                                          # the engine's own fills: pnl in USD, converted for the record
             if px is None:
                 tick = self.broker.last_tick(self.cfg.symbol)
@@ -2512,6 +2518,7 @@ class Engine:
                           initial_sl=tr.initial_sl if tr.risk_known else None, final_sl=tr.sl, final_tp=tr.tp,
                           money_source="broker" if info is not None else "engine",
                           pnl_basis="net" if commission is not None and swap is not None else "gross",
+                          ret_basis=ret_basis,
                           **(tr.audit or EntryAudit(timeframe=tr.timeframe)).model_dump(),
                           **self._closed_excursion(pid, tr, entry, tr.opened_utc or tr.entry_bar_ts, exit_utc,
                                                    None if synthetic else px if px is not None else exit_px,
