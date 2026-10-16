@@ -2,7 +2,6 @@
 owner's lockout (one shared counter) and alert the owner; mode_by is the channel for every role (A15); error text carries the
 exception type only; API responses are never cached."""
 import json
-import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,12 +36,25 @@ def _events(app, prefix: str) -> list[str]:
     return [e["event"] for e in app.state.st.auth.audit_events() if e["event"].startswith(prefix)]
 
 
-def _window_passes(monkeypatch) -> None:
-    real_ns = time.time_ns
-    monkeypatch.setattr(auth_mod.time, "time_ns", lambda: real_ns() + (auth_mod.LOCKOUT_WINDOW_S + 1) * 10**9)
+@pytest.fixture(autouse=True)
+def _pinned_clock(lockout_clock):
+    """Every test here runs on the pinned lockout clock (tests/conftest.py): a counter or a session never expires
+    because the machine was slow, only when a test moves the clock (BACKLOG 55)."""
+    return lockout_clock
 
 
-def test_wrong_auto_mode_codes_lock_the_switch_even_for_a_valid_code_and_alert_the_owner(app_client, monkeypatch):
+def _step(clock: list[int], seconds: int) -> None:
+    clock[0] += seconds * 10**9
+
+
+def _still_locked_then_window_passes(clock: list[int], locked) -> None:
+    """1 s before the window ends the lock holds (`locked()` asserts it); 1 s after, the failures are pruned."""
+    _step(clock, auth_mod.LOCKOUT_WINDOW_S - 1)
+    locked()
+    _step(clock, 2)
+
+
+def test_wrong_auto_mode_codes_lock_the_switch_even_for_a_valid_code_and_alert_the_owner(app_client, _pinned_clock):
     app, c, state, _ = app_client
     owner, secret = _owner_secret(c, app)
     seed_eligible(state)
@@ -55,7 +67,12 @@ def test_wrong_auto_mode_codes_lock_the_switch_even_for_a_valid_code_and_alert_t
     (n,) = _notices(state)                                   # one notice at the limit, relayed to Telegram
     assert n["role"] == "account_security" and n["status"] == "notice" and "auto mode" in n["detail"]
     assert OWNER not in n["detail"] and "000000" not in n["detail"]
-    _window_passes(monkeypatch)
+
+    def locked() -> None:
+        r = c.post("/api/automode", json={"mode": "auto", "totp": totp_code(secret)}, headers=owner)
+        assert r.status_code == 403 and "too many attempts" in r.json()["detail"]
+        assert ApprovalBus(state).control().approval_mode is None
+    _still_locked_then_window_passes(_pinned_clock, locked)
     r = c.post("/api/automode", json={"mode": "auto", "totp": totp_code(secret)}, headers=owner)
     assert r.status_code == 200 and ApprovalBus(state).control().approval_mode == "auto"
 
@@ -80,7 +97,7 @@ def test_telegram_mode_and_the_dashboard_share_one_lockout_counter(app_client):
     assert c.post("/api/automode", json={"mode": "propose"}, headers=owner).status_code == 200
 
 
-def test_wrong_rearm_codes_lock_rearm_even_for_a_valid_code_and_alert_the_owner(app_client, monkeypatch):
+def test_wrong_rearm_codes_lock_rearm_even_for_a_valid_code_and_alert_the_owner(app_client, _pinned_clock):
     app, c, state, _ = app_client
     owner, secret = _owner_secret(c, app)
     ApprovalBus(state).set_halt(True, by="dashboard:o@x.io", reason="test")
@@ -92,7 +109,12 @@ def test_wrong_rearm_codes_lock_rearm_even_for_a_valid_code_and_alert_the_owner(
     assert _events(app, "rearm_failed") == ["rearm_failed"] * LOCKOUT_FAILURES and "rearm_locked" in _events(app, "rearm")
     (n,) = _notices(state)
     assert "re-arming" in n["detail"] and OWNER not in n["detail"]
-    _window_passes(monkeypatch)
+
+    def locked() -> None:
+        r = c.post("/api/rearm", json={"totp": totp_code(secret)}, headers=owner)
+        assert r.status_code == 403 and "too many attempts" in r.json()["detail"]
+        assert ApprovalBus(state).control().halted
+    _still_locked_then_window_passes(_pinned_clock, locked)
     assert c.post("/api/rearm", json={"totp": totp_code(secret)}, headers=owner).json()["halted"] is False
 
 
