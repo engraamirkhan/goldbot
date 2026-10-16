@@ -1,7 +1,9 @@
 # 0022: Results verdict rule: day-clustered errors, a Bonferroni bar for breakdown rows
 
-Status: accepted (implementer, 2026-10-16; from the quant review of the results verdicts, 16 Oct; frozen from this
-date). Numbers 0019 (Wine), 0020 (MT5 installer) and 0021 (bridge-smoke gate split) are taken or reserved on other
+Status: accepted 2026-10-16 (quant reviewer; implementer's change to the review formula — CR1 and t on G−1 df — ruled
+correct by the quant reviewer 2026-10-16, before any report was read under this rule). Amended the same day, before
+merge and before any report was read: zero clustered se with dispersion is "no se" (quant re-review B1), and the
+overall bar is max(2.0, t⁻¹_{G−1}(0.975)) (F4, adopted by the program director). Frozen from this date. Numbers 0019 (Wine), 0020 (MT5 installer) and 0021 (bridge-smoke gate split) are taken or reserved on other
 lanes; this record was first committed as 0021 and renamed the same day before any code used it.
 
 ## Context
@@ -20,8 +22,9 @@ The pre-registration needs this rule recorded before any report is read under it
 code that implements it.
 
 ## Decision
-**Results verdict: day-clustered SE; Bonferroni t_bar for breakdown rows; 2.0 for the overall champion-path cell;
-frozen from this date; changing a strategy because of a row is a new registry trial.**
+**Results verdict: day-clustered SE; Bonferroni t_bar for breakdown rows; max(2.0, t⁻¹_{G−1}(0.975)) for the overall
+champion-path cell; frozen from this date; changing a strategy because of a row is a new registry trial.**
+(As first recorded the overall bar was a flat 2.0; F4 amended it the same day, before any report was read.)
 
 1. **Standard error, clustered by entry UTC day** (`goldbot.data.timeutil.epoch_ns`; a live fill by its fill day).
    With G days, n trades and x̄ the cell mean:
@@ -30,13 +33,17 @@ frozen from this date; changing a strategy because of a row is a new registry tr
    - A cell with fewer than 2 days has no se. Its verdicts are "indistinguishable from zero" (or "noise" below the
      minimum count). The one exception is zero dispersion (every trade the same R), where the sign is the evidence,
      as before.
+   - A clustered se of exactly 0 with dispersion in the cell (every day's mean equal to the cell mean) is "no se":
+     the cell is indistinguishable from zero. Zero dispersion (every trade the same R) keeps its sign.
 2. **Row bar.** m = the number of breakdown cells with n >= `attribution.min_trades` in that report. The overall
    cell, the challengers and the live fills are not counted. The report's nominal bar is
    `t_bar = max(2.0, Φ⁻¹(1 − 0.025 / m))`: 2.81 for m = 10, 3.14 for m = 30, 3.29 for m = 50.
    - Each row applies the same tail probability on G − 1 degrees of freedom:
      `bar = max(2.0, t⁻¹_{G−1}(1 − 0.025 / m))`. For many days this is t_bar.
    - The report carries `t_bar` and `m`, and each cell carries the bar it applied (`Cell.t_bar`).
-3. **Overall cell.** The overall champion-path cell, the challengers and the live fills keep a flat 2.0.
+3. **Overall bar (F4).** The overall champion-path cell, the challengers and the live fills use
+   `max(2.0, t⁻¹_{G−1}(0.975))`, G = the cell's days; a cell with fewer than 2 days uses 2.0. With 30 days this is
+   2.045; from 62 days on it is 2.0. The live fills carry `t_bar` and `verdict_adj` too.
 4. **Adjusted range and verdict.** Every cell carries `ci_adj = mean ± bar · se` and `verdict_adj`. `verdict_adj` is
    "positive" or "negative" if and only if `ci_adj` excludes 0. It is read from the stored (rounded) range, so the
    two can never disagree. A noise cell has no `ci_adj`.
@@ -64,7 +71,9 @@ That would be a superseding ADR, not an edit of this one.
 
 ## Consequences
 - **Fewer, sturdier rows.** A typical report (m ≈ 30) needs |t| >= 3.14 on a row instead of 2. A real edge needs
-  about 2.5 times as many trades to show as a row; the overall cell is unchanged.
+  about 2.5 times as many trades to show as a row. The overall cell's bar rises above 2 only on few days.
+- **Digest (quant ruling F3).** The Telegram digest names only rows whose `verdict_adj` is signed; otherwise it says
+  no row clears the bar and gives the overall cell.
 - **Same-day duplicates add no evidence.** Tripling every trade within its own day leaves t unchanged.
 - **Single-day cells.** A cell whose trades all fall on one day is never positive or negative (except at zero
   dispersion).
@@ -72,4 +81,4 @@ That would be a superseding ADR, not an edit of this one.
 - **Not changed.** The gates and the stop rule (`goldbot/ops/gates_phase.py`) are unchanged. The stop rule's iid
   bound is an owner note only.
 - **Consumers.** The director's attribution term (`goldbot/research/director.py`) recomputes its own t from the trade
-  rows. The raw verdict's meaning (|t| >= 2) is unchanged, so the digest and the staff agents read the same fields.
+  rows. The raw verdict's meaning (|t| >= 2) is unchanged for the staff agents.
