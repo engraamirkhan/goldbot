@@ -65,6 +65,17 @@ async function signIn(page: Page, email: string, password: string, secret: strin
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
 }
 
+/** The header names the role, never the address (docs/ux/header-role.md). The local part "owner" equals the role
+ *  word, so the identity check is the whole address, its domain and the "@". */
+async function expectRoleNotEmail(page: Page, role: string, email: string) {
+  const banner = page.getByRole("banner");
+  await expect(banner).toContainText(`Signed in as ${role}`);
+  await expect(banner).not.toContainText(email);
+  await expect(banner).not.toContainText(email.split("@")[1]);
+  await expect(banner).not.toContainText("@");
+  expect(await banner.innerHTML()).not.toContain("@");                         // no title / aria-label carries it
+}
+
 /** A six-digit code that is none of the codes the server would accept now (it allows one step either side). */
 function wrongCode(secret: string): string {
   const now = Date.now();
@@ -104,7 +115,7 @@ test("login: the owner is created, a wrong code is refused, the right one signs 
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveText("invalid credentials");   // the same words: nothing to tell apart
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
-  await expect(page.getByText(`${OWNER.email} · owner`)).toBeVisible();
+  await expectRoleNotEmail(page, "Owner", OWNER.email);
   expect(await page.evaluate(() => sessionStorage.getItem("goldbot_token"))).toBeTruthy();
 
   // a second account for the later steps
@@ -145,7 +156,7 @@ test("forgot password: an unknown account is answered like a wrong code; the rig
   await page.getByRole("button", { name: "Set new password", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("Password changed. Sign in with the new password.");
   await signIn(page, VIEWER.email, "a new password 42", viewerSecret);
-  await expect(page.getByText(`${VIEWER.email} · viewer`)).toBeVisible();
+  await expectRoleNotEmail(page, "Viewer", VIEWER.email);
   expect(mails().length).toBe(before);                                         // self-service reset: nothing mailed
 });
 
@@ -169,7 +180,7 @@ test("password reset link: the owner's link sets a new password and authenticato
   const newSecret = await enrolledSecret(viewer);
   expect(newSecret).not.toBe(viewerSecret);                                    // a new authenticator, too
   await signIn(viewer, VIEWER.email, "viewer reset pw 777", newSecret);
-  await expect(viewer.getByText(`${VIEWER.email} · viewer`)).toBeVisible();
+  await expectRoleNotEmail(viewer, "Viewer", VIEWER.email);
   viewerSecret = newSecret;
   await viewer.close();
 
@@ -207,7 +218,7 @@ test("email sign-in link: the owner gets a one-time link, signs in with it and t
   await page.getByLabel("Authenticator code", { exact: true }).fill(await freshTotp(ownerSecret));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
-  await expect(page.getByText(`${OWNER.email} · owner`)).toBeVisible();
+  await expectRoleNotEmail(page, "Owner", OWNER.email);
 
   const notice = await mailAfter(before, NOTICE_SUBJECT);                      // ADR 0013: every such sign-in is announced
   expect(notice.to).toBe(OWNER.email);
@@ -295,7 +306,15 @@ test.describe("on a phone", () => {
     await expect(code).toHaveAttribute("inputmode", "numeric");               // the digit keypad
     await code.fill(await freshTotp(ownerSecret));
     await page.getByRole("button", { name: "Sign in", exact: true }).tap();
-    await expect(page.getByText(`${OWNER.email} · owner`)).toBeVisible();
+    await expectRoleNotEmail(page, "Owner", OWNER.email);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+    // row 1 holds "goldbot", the role and Sign out: the role never wraps under the title
+    const banner = page.getByRole("banner");
+    const title = await banner.getByRole("heading", { name: "goldbot", exact: true }).boundingBox();
+    const role = await banner.locator(".who").boundingBox();
+    expect(title && role && Math.abs(title.y + title.height / 2 - (role.y + role.height / 2)) < 4).toBe(true);
+    const signOut = await banner.getByRole("button", { name: "Sign out", exact: true }).boundingBox();
+    expect(signOut && signOut.height >= 44).toBe(true);                       // a thumb-sized tap target
+    expect(signOut && signOut.x + signOut.width <= 360).toBe(true);
   });
 });

@@ -35,7 +35,8 @@ th { color: var(--muted); font-weight: 500; }
 .login .alt { display: flex; flex-wrap: wrap; gap: 0 16px; }
 tr.retired { color: var(--muted); }
 
-.who { margin-left: auto; font-size: 13px; } button.link { background: none; border: 0; color: var(--muted); cursor: pointer; }
+/* signed-in role, never the email (docs/ux/header-role.md); muted, never a state colour */
+.who { margin-left: auto; font-size: 13px; position: relative; white-space: nowrap; } button.link { background: none; border: 0; color: var(--muted); cursor: pointer; }
 .mono { font-family: ui-monospace, monospace; word-break: break-all; }
 form.inline { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; } form.inline input, form.inline select, table select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
 form.inline button { padding: 6px 12px; border-radius: 6px; border: 0; background: var(--accent); color: white; }
@@ -210,6 +211,7 @@ td a { color: inherit; }
   .shell header { flex-wrap: wrap; gap: 8px 16px; }
   .shell header nav { order: 3; width: 100%; display: flex; overflow-x: auto; }
   .shell header nav button { flex: none; min-height: 44px; }
+  .shell header button.link { min-height: 44px; padding: 0 8px; }   /* Sign out is a tap target on row 1 */
   .agents-health thead { display: none; }
   .agents-health tr { display: block; border-bottom: 1px solid var(--line); padding: 6px 0; }
   .agents-health td { display: grid; grid-template-columns: 9em minmax(0, 1fr); gap: 8px; border: 0; padding: 4px 0; }
@@ -297,3 +299,8 @@ td a { color: inherit; }
 .entry-banner { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--warn-tint); color: var(--warn-fg);
   font-weight: 600; font-size: 14px; }
 .entry-row.idle .entry-badge { color: var(--muted); background: transparent; }
+
+/* ------------------------------------------------------------------ Account: your sign-in (role and own email) */
+.your-signin dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 0; }
+.your-signin dt { color: var(--muted); }
+.your-signin dd { margin: 0; overflow-wrap: anywhere; }
