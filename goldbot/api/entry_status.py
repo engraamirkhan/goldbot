@@ -484,7 +484,10 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
         if (_num(e.get("tick_ahead_s")) or 0.0) > limits.max_tick_ahead_s:
             add(block("tick_from_future"))
         tick_age = _num(e.get("last_tick_age_s"))
-        if e.get("stale_bars") is True or (tick_age is not None and tick_age > limits.stale_tick_seconds):
+        # BACKLOG 59: a closed market has no fresh prices by design (the engine's weekend heartbeat says so); only
+        # `market_closed` is shown then, so a weekend never reads like a fault
+        if e.get("market_closed") is not True and \
+                (e.get("stale_bars") is True or (tick_age is not None and tick_age > limits.stale_tick_seconds)):
             add(block("stale_data"))
         if e.get("account_class") == "unknown" and e.get("mode") != "paper":
             add(block("account_class_unknown"))

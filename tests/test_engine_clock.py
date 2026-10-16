@@ -473,9 +473,9 @@ def test_tick_errors_are_rate_limited_in_the_log_and_the_state_file(tmp_path, ca
     writes: list[int] = []
     real = eng._write_state
 
-    def counted() -> None:
+    def counted(heartbeat: bool = False) -> None:
         writes.append(1)
-        real()
+        real(heartbeat)
     eng._write_state = counted                                         # type: ignore[method-assign]
     import logging
     with caplog.at_level(logging.ERROR, logger="goldbot.engine"):
