@@ -1005,7 +1005,9 @@
        {
         "enum": [
          "paused",
-         "not_summed"
+         "not_summed",
+         "mixed_currencies",
+         "mixed_currencies_paused"
         ],
         "type": "string"
        },
@@ -2257,6 +2259,11 @@
       ],
       "title": "Unknown"
      },
+     "unknown_mixed": {
+      "default": false,
+      "title": "Unknown Mixed",
+      "type": "boolean"
+     },
      "unknown_paused": {
       "default": false,
       "title": "Unknown Paused",
@@ -2753,7 +2760,9 @@
        {
         "enum": [
          "paused",
-         "not_summed"
+         "not_summed",
+         "mixed_currencies",
+         "mixed_currencies_paused"
         ],
         "type": "string"
        },

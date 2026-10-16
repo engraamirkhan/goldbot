@@ -113,12 +113,46 @@ def test_todays_gains_add_room_before_the_cap_and_an_exhausted_budget_has_none_l
     assert b is not None and b.remaining == 0.0 and b.used == pytest.approx(25.0)
 
 
-def test_mixed_currencies_leave_the_combined_caps_out_with_a_note_instead_of_adding_pounds_to_dollars():
+MIXED = "The accounts report different currencies (GBP, USD), so the combined loss cap can't be checked. "
+
+
+def test_mixed_currencies_mean_the_budget_cant_be_checked_in_amber_never_the_roomier_account_cap():
+    """BACKLOG 61 (UX review 2026-10-16): with a GBP and a USD account the combined caps are left out (pounds are never
+    added to dollars), so the account's own 2% cap alone would be the roomier figure. The budget can't be checked:
+    amber while the supervisor does not halt on it; the account caps stay listed for the entry status's blocks."""
     other = _engine(account="vantage-demo", currency="USD", equity=10_000.0, day_start_equity=10_000.0)
     b = _budget(_engine(), _sup(combined_day_start_equity=11_000.0, combined_equity=10_990.0), [_engine(), other])
     assert b is not None
+    assert (b.unknown, b.unknown_paused, b.unknown_mixed) == (MIXED + "Exits always run.", False, True)
+    assert b.cant_check_reason == "the accounts report different currencies"
     assert [c.name for c in b.caps] == ["account 2.0% daily cap", "account 5.0% weekly cap"]
-    assert any("mixed currencies" in n for n in b.notes)
+    assert (b.binding, b.remaining) == ("account 2.0% daily cap", pytest.approx(10.0))   # entry status: unchanged
+
+
+def test_mixed_currencies_read_red_when_the_supervisor_halts_entries_on_them():
+    """`mixed_account_currencies` halts every account's entries (supervisor.py): the same "can't check", in red."""
+    other = _engine(account="vantage-demo", currency="USD")
+    halt = _sup(halt=True, reasons=["mixed_account_currencies"])
+    b = _budget(_engine(), halt, [_engine(), other])
+    assert b is not None
+    assert (b.unknown, b.unknown_paused, b.unknown_mixed) == (MIXED + "New entries are paused; exits always run.",
+                                                              True, True)
+    assert b.cant_check_reason == "the accounts report different currencies; new entries paused"
+    assert [c.name for c in b.caps] == ["account 2.0% daily cap", "account 5.0% weekly cap"]
+
+
+def test_a_supervisor_halting_on_mixed_currencies_is_believed_even_when_this_view_sees_one_currency():
+    """Its combined figures then add pounds to dollars: never shown, whatever engine files the dashboard can read."""
+    halt = _sup(halt=True, reasons=["mixed_account_currencies"], currencies={"icm-demo": "GBP", "vantage-demo": "USD"})
+    b = _budget(_engine(), halt)
+    assert b is not None and b.unknown == MIXED + "New entries are paused; exits always run." and b.unknown_paused
+    assert not any(c.name.startswith("combined") for c in b.caps)
+
+
+def test_an_account_that_does_not_report_its_currency_next_to_others_reads_as_mixed():
+    b = _budget(_engine(), _sup(), [_engine(), _engine(account="vantage-demo", currency=None)])
+    assert b is not None and b.unknown_mixed and b.unknown is not None
+    assert b.unknown.startswith("The accounts report different currencies (GBP, one not reported)")
 
 
 PAUSED = "New entries are paused; exits always run."

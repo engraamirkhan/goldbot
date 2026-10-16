@@ -72,6 +72,13 @@ export function budgetLine(p: AnyProposal): { text: string; tone: Tone } {
   if (p.loss_cant_check === "not_summed") {
     return { text: "Loss budget left today: can't check (the supervisor hasn't added up the accounts yet)", tone: "warn" };
   }
+  if (p.loss_cant_check === "mixed_currencies_paused") {   // BACKLOG 61: pounds are never added to dollars
+    return { text: "Loss budget left today: can't check (the accounts report different currencies; new entries paused)",
+             tone: "bad" };
+  }
+  if (p.loss_cant_check === "mixed_currencies") {
+    return { text: "Loss budget left today: can't check (the accounts report different currencies)", tone: "warn" };
+  }
   if (p.loss_left == null || !p.loss_left_period) return { text: "Loss budget left today: unknown", tone: "idle" };
   const left = floorCent(p.loss_left);
   if (left <= 0) {
