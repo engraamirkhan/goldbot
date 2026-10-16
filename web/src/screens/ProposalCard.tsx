@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { ReasonCode } from "../lib/api";
 import {
   type AnyProposal, type CardState, EXPIRING_S, REASONS, WINDOW_S, budgetLine, cardMoney, cardState, countdown, isDecided,
-  localTime, pct, plain, reasonLabel, signed, via,
+  localTime, pct, plain, reasonLabel, signed, viaChannel,
 } from "../lib/approval";
 import { featureValue, plainFeature } from "../lib/features";
 import { secondsLeft } from "../lib/useNow";
@@ -131,7 +131,7 @@ const STATE_NAME: Record<CardState, string> = {
 function Outcome({ p, state }: { p: AnyProposal; state: CardState }) {
   if (state === "pending" || state === "expiring") return null;
   const d = isDecided(p) ? p : null;
-  const by = via(d?.decided_by);
+  const by = viaChannel(d?.decided_channel);
   const tail = by ? <span className="muted"> · via {by}</span> : null;
   switch (state) {
     case "submitted":

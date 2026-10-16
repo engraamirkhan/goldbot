@@ -134,11 +134,12 @@ class DeployWatch:
                              "before deploying")
         return notes
 
-    def approve(self, sha: str, by: int) -> bool:
-        """The owner approved `sha` (must be the commit on offer). The root deploy script applies it."""
+    def approve(self, sha: str) -> bool:
+        """The owner approved `sha` (must be the commit on offer). The root deploy script applies it and reads only
+        the sha; who tapped is in the audit log, never in this file (A15)."""
         if not SHA.match(sha) or self._read("pending.json").get("sha") != sha:
             return False
-        _write(self.dir / "approved.json", {"sha": sha, "by": by})
+        _write(self.dir / "approved.json", {"sha": sha})
         (self.dir / "pending.json").unlink(missing_ok=True)
         return True
 

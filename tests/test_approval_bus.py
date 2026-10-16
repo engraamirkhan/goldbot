@@ -41,7 +41,7 @@ def test_engine_proposal_is_decided_from_another_process(tmp_path):
         dashboard.submit("zzz", True, None, by="dashboard:x")
     assert [p.proposal_id for p in dashboard.pending()] == ["b"]   # decided ones leave the list at once
     assert engine.poll_bus()[0].proposal_id == "a"
-    assert decided[0].outcome == Outcome.APPROVED and decided[0].decided_via == "telegram:42"
+    assert decided[0].outcome == Outcome.APPROVED and decided[0].decided_channel == "telegram"
     assert dashboard.outcome("a") == "APPROVED" and "a" not in engine.pending
     assert not (tmp_path / "approvals" / "pending" / "a.json").exists()
     assert engine.poll_bus() == []                                 # nothing new
@@ -63,7 +63,7 @@ def test_owner_halt_blocks_entries_and_fails_closed(tmp_path):
     assert bus.control().halted is False
     bus.set_halt(True, by="telegram:42", reason="fomc")
     c = ApprovalBus(tmp_path).control()
-    assert c.halted and c.by == "telegram:42" and c.reason == "fomc"
+    assert c.halted and c.by == "telegram" and c.reason == "fomc"      # the channel only (A15)
     (tmp_path / "control.json").write_text("{not json")
     assert bus.control().halted is True                           # unreadable -> no new entries
     st = AccountState(equity=10_000, balance_closed_hwm=10_000, day_start_equity=10_000, week_start_equity=10_000,

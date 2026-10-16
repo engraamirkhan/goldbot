@@ -56,6 +56,7 @@ from goldbot.api.schema import (
     VetoTestView,
 )
 from goldbot.config import DriftSettings, Settings, TelegramSettings
+from goldbot.research.registry import costs_recorded
 
 log = logging.getLogger(__name__)
 
@@ -369,6 +370,11 @@ def _trial(r: dict[str, Any], timeframes: dict[str, str]) -> TrialRow:
     elif isinstance(hv, dict):
         passed = bool(hv.get("passed"))
         gates = [GateCheck(name="holdout", passed=passed, detail=str(hv.get("rule", "")))]
+    # a recorded pass counts only with the research cost treatment (registry.gate_pass_counts): a pass from before swap
+    # was charged is shown as not passed and marked pre-swap, so the view never claims a pass the registry won't count
+    pre_swap = passed is True and not costs_recorded(res)
+    if passed is True:
+        passed = costs_recorded(res)
     family = str(r.get("family", ""))
     cfg = _d(r.get("config"))
     n = gross.get("n", net.get("n"))
@@ -377,7 +383,7 @@ def _trial(r: dict[str, Any], timeframes: dict[str, str]) -> TrialRow:
                     status=str(r.get("status", "")), agent_id=str(r.get("agent_id", "")),
                     gross_r=_f(gross.get("mean_r")), gross_t=_f(gross.get("t_stat")), net_r=_f(net.get("mean_r")),
                     net_t=_f(net.get("t_stat")), n=int(n) if isinstance(n, (int, float)) else None,
-                    gates_passed=passed, gates=gates, rationale=str(r.get("rationale", "")))
+                    gates_passed=passed, pre_swap=pre_swap, gates=gates, rationale=str(r.get("rationale", "")))
 
 
 def _retired(p: dict[str, Any]) -> list[RetiredFamilyView]:
@@ -546,6 +552,11 @@ def _engine_modes(state: Path) -> dict[str, str]:
     return out
 
 
+def _mode_by(by: str | None) -> str | None:
+    """"telegram:<id>" -> "telegram", "dashboard:<email>" -> "dashboard"; "engine:<account>" is kept."""
+    return by if by is None or by.startswith("engine:") else by.split(":", 1)[0]
+
+
 def automode_view(state: Path, settings: Settings | None, is_owner: bool) -> AutoModeView:
     """The auto-mode card: the owner's mode, what each engine runs, and the exact evidence check `/mode auto` runs
     (telegram/automode.py auto_mode_eligibility_from_state), so the card and Telegram never disagree. Read-only."""
@@ -562,8 +573,9 @@ def automode_view(state: Path, settings: Settings | None, is_owner: bool) -> Aut
                                  breaches=[], test=automode.VetoTest(n_approved=0, n_rejected=0, alpha=tg.auto_alpha))
     t = e.test
     return AutoModeView(
-        # who switched ("dashboard:<email>", "telegram:<uid>") is the owner's to see; other roles get the channel
-        owner_mode=c.approval_mode, mode_by=c.mode_by if is_owner or c.mode_by is None else c.mode_by.split(":", 1)[0],
+        # the channel that switched, for every role (A15): a control.json from before it names who, cut here; an
+        # engine's kill switch keeps "engine:<account>"
+        owner_mode=c.approval_mode, mode_by=_mode_by(c.mode_by),
         mode_since=datetime.fromtimestamp(c.mode_ts, tz=timezone.utc) if c.mode_ts else None, mode_reason=c.mode_reason,
         engine_modes=_engine_modes(state), eligible=e.eligible, reasons=list(e.reasons), decided=e.decided,
         approved=e.approved, rejected=e.rejected, min_proposals=tg.auto_min_proposals,

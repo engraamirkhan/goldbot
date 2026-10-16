@@ -1,6 +1,8 @@
 """Supervisor: reads each engine's heartbeat/equity file, enforces the combined caps (tighter than the
 per-account caps because both engines trade the same instrument) and writes a HALT flag. Engines fail
-closed if the supervisor heartbeat is older than 60 s.
+closed if the supervisor heartbeat is older than 60 s, stamped more than a few seconds in the future
+(`supervisor_heartbeat_future`: clock skew, a bad write or a restored backup would otherwise read as fresh forever) or
+not a finite number (`supervisor_state_unreadable`); `goldbot.data.timeutil.heartbeat_problem`, found 2026-10-16.
 
 The combined caps keep no period state of their own: they sum the engines' day/week-start equity, which each engine
 rolls at the risk-day (00:00 UTC) and risk-week (Sunday 00:00 UTC) boundaries, so they roll with the engines.
@@ -20,6 +22,7 @@ from typing import Any
 
 from goldbot.base import Record, write_atomic
 from goldbot.config import RiskSettings
+from goldbot.data.timeutil import heartbeat_problem
 
 
 class SupervisorLimits(Record):
@@ -183,6 +186,12 @@ class Supervisor:
             reasons.append("engine_startup_refused")
         if mixed:
             reasons.append("mixed_account_currencies")    # fail closed: GBP and USD equity are never summed
+        # an engine file stamped ahead of this clock (engines and supervisor share the box): a clock fault or a bad
+        # write, so the file cannot say whether that engine runs. It stays in `fresh` (its currency and money count,
+        # the strict direction) and every entry halts until it is rewritten with a sane clock (found 2026-10-16)
+        future = sorted(str(e.get("_file", "")) for e in engines if heartbeat_problem(e["ts"], now, math.inf) == "future")
+        if future:
+            reasons.append("engine_heartbeat_future")
         stale = [e.get("account") for e in engines if time.time() - e["ts"] > self.limits.heartbeat_max_age_s]
         # combined exposure: engines block entries that would take the sum past the cap (RiskGate)
         exposure = {str(e.get("account")): {"lots": float(e.get("open_lots", 0.0)), "notional": float(e.get("open_notional", 0.0)),
@@ -193,7 +202,7 @@ class Supervisor:
                  "combined_open_notional": sum(x["notional"] for x in exposure.values()), "exposure": exposure,
                  "ts": time.time(), "halt": bool(reasons), "reasons": reasons, "size_down": dd >= self.limits.dd_stage1,
                  "combined_equity": eq, "day_loss": day_loss, "week_loss": week_loss, "drawdown": dd, "stale_engines": stale,
-                 "unreadable_engines": self.unreadable, "startup_refused_engines": refused,
+                 "unreadable_engines": self.unreadable, "startup_refused_engines": refused, "future_engines": future,
                  "currencies": currencies, "currency_files": currency_files,
                  "money_excluded": excluded, "no_fresh_engine": bool(engines) and not fresh, "day_loss_amount": day_loss_amount, "daily_loss_limit_abs": abs_limit,
                  # the dashboard's loss budget (goldbot/ops/account_view.py): the combined caps and their (one-currency) bases
@@ -222,6 +231,11 @@ class Supervisor:
 
     @staticmethod
     def engine_should_halt(state_dir: str | Path, max_age_s: int = 60) -> tuple[bool, str]:
+        """(halt, reasons) as every engine reads the supervisor before an entry. Fails closed on a missing file, an
+        unreadable one (or not an object, or a `ts` that is not a finite number), a heartbeat older than `max_age_s`
+        and one stamped more than CLOCK_AHEAD_TOLERANCE_S in the future: a future stamp made `now - ts` negative, so
+        a dead supervisor whose last write carried a fast clock never halted the engines (found 2026-10-16). A file
+        without `ts` reads as the oldest heartbeat (stale), as before."""
         f = Path(state_dir) / "supervisor.json"
         if not f.exists():
             return True, "no_supervisor_heartbeat"
@@ -229,6 +243,13 @@ class Supervisor:
             s = json.loads(f.read_text())
         except (ValueError, OSError):
             return True, "supervisor_state_unreadable"
-        if time.time() - s.get("ts", 0) > max_age_s:
+        if not isinstance(s, dict):
+            return True, "supervisor_state_unreadable"
+        problem = heartbeat_problem(s.get("ts", 0), time.time(), max_age_s)
+        if problem == "invalid":
+            return True, "supervisor_state_unreadable"
+        if problem == "future":
+            return True, "supervisor_heartbeat_future"
+        if problem == "stale":
             return True, "supervisor_heartbeat_stale"
         return bool(s.get("halt")), ",".join(s.get("reasons", []))

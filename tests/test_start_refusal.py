@@ -53,9 +53,19 @@ def test_a_refused_start_writes_the_cause_to_the_engine_state_and_health_names_i
     assert c.status == "fail" and "refused to start" in c.reason and "deploy the MT5 box first" in c.reason, c.reason
 
 
-def test_min_compatible_is_4_so_a_v3_bridge_is_named_incompatible():
-    assert bridge_mod.MIN_COMPATIBLE == 4
+def test_min_compatible_is_at_least_4_so_a_v3_bridge_is_named_incompatible():
+    assert bridge_mod.MIN_COMPATIBLE >= 4
     old = BridgeInfo(reachable=True, server_tz="Europe/Athens", api_version=3, min_compatible=3,
                      methods=sorted(bridge_mod.METHODS))
     out = assess(old, "Europe/Athens", None)
     assert out.blocks
+
+
+def test_a_v4_bridge_without_account_positions_is_named_incompatible():
+    """ADR 0016: protocol v5 adds `account_positions` (the equity cross-check); MIN_COMPATIBLE = 5 names a v4 bridge,
+    and the missing method blocks entries on its own as well. Exits are never gated by it."""
+    assert bridge_mod.MIN_COMPATIBLE == 5
+    old = BridgeInfo(reachable=True, server_tz="Europe/Athens", api_version=4, min_compatible=4,
+                     methods=sorted(set(bridge_mod.METHODS) - {"account_positions"}))
+    out = assess(old, "Europe/Athens", None)
+    assert out.blocks and "account_positions" in out.missing

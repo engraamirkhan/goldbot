@@ -1,6 +1,6 @@
 import type { AccountSummary, Status } from "../lib/api";
 import { budgetTone, cash } from "../lib/account";
-import { blockers, localTime } from "../lib/approval";
+import { blockers, localTime, viaChannel } from "../lib/approval";
 import { STALE_MS, localHm } from "../lib/entry";
 
 type Tone = "ok" | "warn" | "bad" | "idle";
@@ -60,7 +60,8 @@ function build(s: Status, accounts: AccountSummary[]): Chip[] {
   const chips: Chip[] = [
     s.halted
       ? { key: "owner", label: "Owner halt", value: "ON", tone: "bad",
-          detail: [s.halted_by, s.halt_reason].filter(Boolean).join(": ") || undefined }
+          // the channel that halted, never who (A15): "via the dashboard: fomc"
+          detail: [s.halted_by && `via ${viaChannel(s.halted_by)}`, s.halt_reason].filter(Boolean).join(": ") || undefined }
       : { key: "owner", label: "Owner halt", value: "off", tone: "ok" },
     s.supervisor_halt
       ? { key: "sup", label: "Supervisor", value: "HALT", tone: "bad", detail: s.supervisor_reasons.join(", ") || undefined }

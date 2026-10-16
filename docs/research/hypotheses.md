@@ -163,9 +163,9 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 
 | ID | Idea | Status | Trials (registry #, report) | Result | Reason retired |
 |---|---|---|---|---|---|
-| R-01 | mean_reversion (15m; RSI/Bollinger/VWAP fades) | retired | #3 (#40) | No gross edge; leakage shuffle AUC 0.72 flagged | No cost-surviving evidence for short-horizon reversion in gold (SoA A4) |
+| R-01 | mean_reversion (15m; RSI/Bollinger/VWAP fades) | retired | #3, #5, #10, #12 (#40) | No gross edge; leakage shuffle AUC 0.72 flagged | No cost-surviving evidence for short-horizon reversion in gold (SoA A4) |
 | R-02 | session_open breakout (15m) | retired | #1, #7, #11, #13 (#37) | Gross +0.042 R, t 1.31 on 1,498 events. Fails P4 | About 90 events a year; no mechanism without an exchange open |
-| R-03 | trend pullback (1h) | retired | #2 (#39) | No gross edge | Small-tick contracts lost short-term trend after 2009 (Kurth et al. 2026) |
+| R-03 | trend pullback (1h) | retired | #2, #4, #9, #14 (#39) | No gross edge | Small-tick contracts lost short-term trend after 2009 (Kurth et al. 2026) |
 | R-04 | range breakout (1h) | retired | #6, #8, #15 (#41) | Gross +0.015 R, t 0.38 | Same reason as R-03 |
 | R-05 | intraday_momentum (NY, London) | retired | #18, #19 (#52) | NY −0.006 R (t −0.50); London −0.028 R (t −1.48); net −0.16/−0.26 R | Mechanism (close auction, gamma hedging) absent in spot XAUUSD (SoA A4) |
 | R-06 | tsmom at 1h/4h horizons (24–480 bars) | failed; superseded by H-01 | #16, #17 (#51) | Gross +0.061 R (t 2.63) but net −0.079 R; 4h net −0.014 R before swap; design gates fail | Gross edge too small for costs at this horizon. Only the slow version stays alive |

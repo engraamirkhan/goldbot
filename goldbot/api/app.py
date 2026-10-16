@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -94,12 +95,23 @@ from goldbot.api.schema import (
     UserRow,
 )
 from goldbot.config import MailSettings
+from goldbot.data.timeutil import heartbeat_problem
 from goldbot.ops.account_view import LossBudget, loss_budget, margin_level_pct, milestones, proposal_budget
-from goldbot.telegram.approvals import Outcome
+from goldbot.telegram.approvals import Outcome, decision_channel
 from goldbot.telegram.approvals import Proposal as BusProposal
 from goldbot.telegram.bus import ApprovalBus
 
 log = logging.getLogger("goldbot.api")
+
+
+def supervisor_heartbeat_age_s(sup: dict[str, Any], now: float) -> float:
+    """The Feeds page's supervisor heartbeat age: 1e9 (not reporting, the page marks it bad) when missing, not a
+    finite number or stamped more than a few seconds in the future, which would otherwise show as fresh for ever
+    (found 2026-10-16); a small skew reads as 0 s."""
+    ts: Any = sup.get("ts")
+    if heartbeat_problem(ts, now, math.inf) is not None:
+        return 1e9
+    return max(0.0, now - float(ts))
 
 if TYPE_CHECKING:
     from goldbot.agents.tools import ReadOnlyTools
@@ -570,13 +582,15 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
     @app.get("/api/proposals/recent", response_model=list[DecidedProposal])
     def recent_proposals(_: User = Depends(auth)) -> list[DecidedProposal]:
-        """Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it."""
+        """Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it: by
+        channel and time only, never who (BACKLOG 52)."""
         out = []
         for p, d in st.bus.recent():
             if d is not None:                       # decided, the engine has not applied it yet
                 out.append(DecidedProposal.model_validate({**card(p), "status": "submitted" if d.approve else "rejected",
                                                            "reason_code": None if d.approve else d.reason_code,
-                                                           "decided_by": d.by}))
+                                                           "decided_channel": decision_channel(d.by),
+                                                           "decided_ts": d.ts}))
                 continue
             if p.outcome == Outcome.APPROVED:
                 status = "refused" if p.gate_refusal else "approved"
@@ -584,8 +598,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                 status = "rejected"
             else:
                 status = "expired"
-            by = p.decided_via or (f"telegram:{p.decided_by}" if p.decided_by is not None else None)
-            out.append(DecidedProposal.model_validate({**card(p), "status": status, "decided_by": by,
+            out.append(DecidedProposal.model_validate({**card(p), "status": status,
+                                                       "decided_channel": p.decided_channel, "decided_ts": p.decided_ts,
                                                        "reason_code": p.reason_code if status == "rejected" else None,
                                                        "refusal": list(p.gate_refusal or [])}))
         return out
@@ -593,7 +607,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.post("/api/decisions")
     async def decide(d: Decision, u: User = Depends(need("approver"))) -> DecisionResult:
         try:
-            st.bus.submit(d.proposal_id, d.action == "approve", d.reason_code, by=f"dashboard:{u.email}")
+            # the channel only: who decided is the audit row below, never the decision file (A15)
+            st.bus.submit(d.proposal_id, d.action == "approve", d.reason_code, by="dashboard")
         except (KeyError, ValueError) as exc:
             raise HTTPException(400, str(exc).strip("'\""))
         st.auth.audit("decision", by=u.email, proposal=d.proposal_id, action=d.action, reason=d.reason_code)
@@ -603,7 +618,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.post("/api/halt")
     async def halt(body: HaltRequest, u: User = Depends(need("approver"))) -> Status:
         # stopping new entries needs no second factor (design); exits and open positions are untouched
-        st.bus.set_halt(True, by=f"dashboard:{u.email}", reason=body.reason)
+        st.bus.set_halt(True, by="dashboard", reason=body.reason)       # who: the audit row below (A15)
         st.auth.audit("halt", by=u.email, reason=body.reason)
         await st.broadcast({"type": "halt", "halted": True})
         return current_status()
@@ -619,7 +634,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             raise HTTPException(403, CODES_LOCKED)
         if not ok:
             raise HTTPException(403, "authenticator code required to re-arm")
-        c = st.bus.owner_rearm(by=f"dashboard:{u.email}")      # also clears the engines' drawdown halts
+        c = st.bus.owner_rearm(by="dashboard")      # also clears the engines' drawdown halts; who: the audit row
         st.auth.audit("rearm", by=u.email, rearm_id=c.rearm_id)
         await st.broadcast({"type": "halt", "halted": False})
         return current_status()
@@ -631,7 +646,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.get("/api/feeds", response_model=list[FeedHealth])
     def feeds(_: User = Depends(auth)) -> list[FeedHealth]:
         sup = st.supervisor()
-        age = time.time() - sup.get("ts", 0) if sup else 1e9
+        age = supervisor_heartbeat_age_s(sup or {}, time.time())
         return [FeedHealth(account_id=e["account"], last_tick_age_s=e.get("last_tick_age_s", 1e9), spread_points=e.get("spread_points", 0),
                            terminal_connected=e.get("terminal_connected", False), webhook_p99_latency_s=e.get("webhook_p99_latency_s"),
                            supervisor_heartbeat_age_s=age) for e in st.engines()]
@@ -748,7 +763,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         c = st.bus.control()
         sup = st.supervisor()
         drift = st.drift_halt()
-        return Status(mode=",".join(modes) or "propose", halted=c.halted, halted_by=c.by if c.halted else None,
+        # who halted is the channel for every role (A15); an older control.json's "<channel>:<id>" is cut to it
+        halted_by = decision_channel(c.by) if c.halted and c.by else None
+        return Status(mode=",".join(modes) or "propose", halted=c.halted, halted_by=halted_by,
                       halt_reason=c.reason if c.halted else None, pending=len(st.bus.pending()), supervisor=sup,
                       supervisor_halt=bool(sup.get("halt")), supervisor_reasons=[str(r) for r in sup.get("reasons") or []],
                       drift_halt=drift is not None, drift_reasons=drift or [], blackout=st.active_blackout())

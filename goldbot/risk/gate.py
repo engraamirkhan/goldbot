@@ -79,6 +79,14 @@ class RiskLimits(Record):
     heat: HeatSettings = Field(default_factory=HeatSettings)
     # BACKLOG 35: the absolute daily projection also counts open positions' remaining stop risk; off by default
     project_open_risk: bool = False
+    # BACKLOG 44 (ADR 0016): a 12% equity read trips the kill switch at once only when the balance plus the open P&L
+    # agrees with it within this fraction of the high-water mark; otherwise the next account read must confirm it
+    equity_check_tolerance: float = 0.02
+    # ...and a pending 12% read clears only after every read stayed below dd_stage2 - tolerance this long (seconds)
+    equity_recovery_s: float = 60.0
+    # BACKLOG 54 (ADR 0018): a rise in balance_closed_hwm needs the deal history or a second balance read to agree with
+    # it within this fraction of the mark (goldbot/risk/hwm.py)
+    hwm_rise_tolerance: float = 0.001
     # BACKLOG 17/18 (playbook G-2, G-3): entry windows around tier-2 events, after reopens and on thin-liquidity days;
     # off by default (the owner adopts them). The engine raises the AccountState flags; check() refuses only when on
     tier2: Tier2Blackout = Field(default_factory=Tier2Blackout)
@@ -98,6 +106,8 @@ class RiskLimits(Record):
                    min_target_over_cost=risk.min_target_over_cost,
                    min_lot_risk_cap=None if tiny_live else risk.min_lot_risk_cap, throttle=risk.throttle,
                    heat=risk.heat, project_open_risk=risk.project_open_risk,
+                   equity_check_tolerance=risk.equity_check_tolerance, equity_recovery_s=risk.equity_recovery_s,
+                   hwm_rise_tolerance=risk.hwm_rise_tolerance,
                    tier2=risk.blackout.tier2, reopen=risk.reopen, holidays=risk.holidays)
 
 
@@ -143,6 +153,10 @@ class AccountState(Record):
     open_risk: float | None = None
     open_long: int = 0
     open_short: int = 0
+    # BACKLOG 44 (ADR 0016): a 12% equity read is pending confirmation (the engine sets it until the next 12% read
+    # confirms it or the reads stay below 12% minus the tolerance for equity_recovery_s). The stage machine does not
+    # run and entries are refused `equity_unconfirmed`; exits are never gated
+    equity_unconfirmed: bool = False
 
 
 class Intent(Record):
@@ -235,6 +249,10 @@ class RiskGate:
 
     # ---------------------------------------------------------------- drawdown stage machine
     def update_stage(self, st: AccountState) -> Stage:
+        """The drawdown stage on this equity read: 8% size-down, 12% halted (only /rearm clears it). An unconfirmed
+        read (ADR 0016: "one disagreeing read never trips the kill switch") moves no stage."""
+        if st.equity_unconfirmed:
+            return st.stage
         dd = 1 - st.equity / st.balance_closed_hwm if st.balance_closed_hwm > 0 else 0.0
         if st.stage == Stage.HALTED:
             return st.stage  # only /rearm clears it
@@ -387,6 +405,8 @@ class RiskGate:
             reasons.append("owner_halt")
         if st.stage == Stage.HALTED:
             reasons.append("drawdown_halt")
+        if st.equity_unconfirmed:
+            reasons.append("equity_unconfirmed")
         if st.dq_error:
             reasons.append("data_quality_error")
         if st.in_blackout:

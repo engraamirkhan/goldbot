@@ -1,10 +1,9 @@
 ---
 number: 7
-rank: 10
 title: 'Ops alerts: heartbeats, FAILED_EXEC, weekly cap'
 stage: Operational resilience · RUN
 size: S–M
-status: 'done (PR #62)'
+status: 'done (PR #62, main 1a194e9)'
 ---
 
 ### 7. Ops alerts
@@ -17,3 +16,5 @@ Acceptance:
 - Alerts only add information: a test asserts that no alert path changes orders, sizing or halts.
 
 Rows: S5, X6, R11.
+
+Sweep 2026-10-16 (product owner): Done (PR #62, main 1a194e9). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.

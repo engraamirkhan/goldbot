@@ -1,10 +1,9 @@
 ---
 number: 2
-rank: 5
 title: Measured cost table published as a release asset for research
 stage: Execution quality · FIND
 size: S
-status: 'done (PR #62)'
+status: 'done (PR #62, main 1a194e9)'
 ---
 
 ### 2. Measured cost table published as a release asset
@@ -20,3 +19,5 @@ Acceptance:
   never published as a measurement.
 
 Depends on: 1 for real values (the plumbing can land first). Rows: X9, X10, D4.
+
+Sweep 2026-10-16 (product owner): Done (PR #62, main 1a194e9). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.

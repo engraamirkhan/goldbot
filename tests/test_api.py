@@ -72,18 +72,18 @@ def test_bootstrap_invite_roles_and_decisions(tmp_path):
     engine.pending = {p.proposal_id: p for p in (Proposal.model_validate_json((tmp_path / "approvals" / "pending" / f"{i}.json").read_text())
                                                  for i in ("p1", "p2"))}
     done = {p.proposal_id: p for p in engine.poll_bus()}
-    assert done["p1"].outcome == Outcome.REJECTED and done["p1"].reason_code == "cost" and done["p1"].decided_via == "dashboard:partner@x.io"
+    assert done["p1"].outcome == Outcome.REJECTED and done["p1"].reason_code == "cost" and done["p1"].decided_channel == "dashboard"
     assert done["p2"].outcome == Outcome.APPROVED and bus.outcome("p2") == "APPROVED"
     # halt: an approver may stop new entries; re-arming needs the owner and an authenticator code
     assert c.post("/api/halt", json={"reason": "fomc surprise"}, headers=viewer).status_code == 403
     assert c.post("/api/halt", json={"reason": "fomc surprise"}, headers=approver).json()["halted"] is True
-    assert bus.control().halted and c.get("/api/status", headers=viewer).json()["halted_by"] == "dashboard:partner@x.io"
+    assert bus.control().halted and c.get("/api/status", headers=viewer).json()["halted_by"] == "dashboard"
     assert c.post("/api/rearm", json={"totp": totp_code(owner_secret)}, headers=approver).status_code == 403
     assert c.post("/api/rearm", json={"totp": "000000"}, headers=owner).status_code == 403
     assert bus.control().rearm_id is None                         # refused re-arms issue nothing to the engines
     assert c.post("/api/rearm", json={"totp": totp_code(owner_secret)}, headers=owner).json()["halted"] is False
     rearm = bus.control()                                         # engines clear their drawdown halt on this id
-    assert rearm.rearm_id and rearm.rearm_by == "dashboard:aamir@x.io"
+    assert rearm.rearm_id and rearm.rearm_by == "dashboard"       # who: the audit log (A15)
     # owner administers
     users = c.get("/api/users", headers=owner).json()
     assert {u["email"] for u in users} == {"aamir@x.io", "friend@x.io", "partner@x.io"}
@@ -272,8 +272,8 @@ def test_recent_proposals_say_what_happened_to_each_card(tmp_path):
         bus.publish(_prop(pid))
     bus.submit("sub", True, None, by="dashboard:o@x.io")                       # the engine has not applied it yet
     bus.submit("rej-pending", False, "news", by="telegram:111")
-    bus.archive(_prop("ok", outcome=Outcome.APPROVED, decided_via="dashboard:o@x.io"))
-    bus.archive(_prop("refused", outcome=Outcome.APPROVED, gate_refusal=["owner_halt"], decided_by=111))
+    bus.archive(_prop("ok", outcome=Outcome.APPROVED, decided_channel="dashboard"))
+    bus.archive(_prop("refused", outcome=Outcome.APPROVED, gate_refusal=["owner_halt"], decided_channel="telegram"))
     bus.archive(_prop("rej", side=-1, outcome=Outcome.REJECTED, reason_code="cost"))
     bus.archive(_prop("exp", outcome=Outcome.EXPIRED))
     app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
@@ -285,8 +285,8 @@ def test_recent_proposals_say_what_happened_to_each_card(tmp_path):
     assert {k: v["status"] for k, v in rows.items()} == {"sub": "submitted", "rej-pending": "rejected", "ok": "approved",
                                                          "refused": "refused", "rej": "rejected", "exp": "expired"}
     assert rows["rej-pending"]["reason_code"] == "news" and rows["rej"]["reason_code"] == "cost"
-    assert rows["refused"]["refusal"] == ["owner_halt"] and rows["refused"]["decided_by"] == "telegram:111"
-    assert rows["sub"]["decided_by"] == "dashboard:o@x.io" and rows["ok"]["risk_usd"] == 48.0
+    assert rows["refused"]["refusal"] == ["owner_halt"] and rows["refused"]["decided_channel"] == "telegram"
+    assert rows["sub"]["decided_channel"] == "dashboard" and rows["ok"]["risk_usd"] == 48.0
     assert rows["rej"]["side"] == "short"
 
 

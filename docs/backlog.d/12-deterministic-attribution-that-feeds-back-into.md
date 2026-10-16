@@ -1,10 +1,9 @@
 ---
 number: 12
-rank: 15
 title: Deterministic attribution that feeds back into research
 stage: Performance attribution, learning · FIND
 size: M
-status: in review (daily report + staff-agent feedback done; director input and dashboard open)
+status: 'done in part (PR #63 490ebe4, PR #68 c2cd051); dashboard view parked'
 ---
 
 ### 12. Deterministic attribution that feeds back
@@ -26,3 +25,5 @@ shadow book (tests/test_attribution.py) instead of a golden file (determinism is
 improvement agent and research analyst read it (`read_attribution`). Open: `research_director` priority input (a
 change to research budget allocation, so it needs quant review and its own test), the dashboard view (goldbot/api
 and web/ were out of scope), live realised R (item 8's engine trade record). Row G12.
+
+Sweep 2026-10-16 (product owner): Done in part (PR #63 490ebe4, PR #68 c2cd051); dashboard view parked. Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.

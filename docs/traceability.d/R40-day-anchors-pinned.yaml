@@ -1,0 +1,5 @@
+id: R40
+requirement: 'The day anchors in settings say what the code does (BACKLOG 57): the loss caps reset at the fixed risk day, 00:00 UTC, and daily bars and features close at 13:30 New York; Settings refuses any other risk_day_anchor or feature_day_anchor at load, naming the fixed day, so a settings.local.yaml edit can never appear to move a cap reset'
+status: implemented
+code: 'goldbot/config.py (`_FIXED_DAY_ANCHORS`, `Settings._day_anchor_is_the_fixed_day`); config/settings.yaml (feature_day_anchor, risk_day_anchor)'
+test: tests/test_config.py::test_the_shipped_settings_load_with_the_fixed_day_anchors, ::test_an_edited_day_anchor_in_settings_local_fails_to_load_naming_the_fixed_day, ::test_any_day_anchor_other_than_the_fixed_one_is_rejected, ::test_the_risk_day_and_so_the_loss_cap_reset_is_pinned_at_00_utc; tests/test_report_days.py::test_the_risk_day_still_resets_the_day_start_equity_at_00_utc_not_at_the_22_utc_roll

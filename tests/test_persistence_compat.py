@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import importlib
 import json
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,7 @@ from goldbot.research.director import ResearchPlan
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.population import Member, Population
 from goldbot.research.promotion import PerfStats
+from goldbot.risk import hwm
 from goldbot.telegram import automode
 from goldbot.telegram.approvals import Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
@@ -74,6 +76,34 @@ def case_closed_trade(tmp: Path) -> None:
     f = next(tmp.glob("closed_trades_*.jsonl"))
     f.write_text(json.dumps(_newer(json.loads(f.read_text()))) + "\n")
     assert load_closed_trades(tmp) == ([t], None)
+
+
+def case_closed_trade_from_before_ret_basis(tmp: Path) -> None:
+    """A record written before `ret_basis` existed (or rewritten by an older release) reads it as None: unknown, never
+    "pnl" (the cost imputation then charges it by its pnl_basis, as a legacy row)."""
+    t = ClosedTrade(account_id="icm-demo", broker="icmarkets", mode="demo", exit_utc=T0, ret=0.001, pnl=10.0,
+                    equity_before=10_000.0, ret_basis="price")
+    row = json.loads(t.model_dump_json())
+    del row["ret_basis"]
+    (tmp / "closed_trades_icm-demo.jsonl").write_text(json.dumps(row) + "\n")
+    (back,), err = load_closed_trades(tmp)
+    assert err is None and back.ret_basis is None
+
+
+def case_closed_trade_price_return_without_ret_basis(tmp: Path) -> None:
+    """Review R1: the record the broker-deals path with no conversion wrote before `ret_basis` (and still writes under
+    a rolled-back release): a price return labelled pnl_basis "net", r None, the initial stop known. Read back, it is
+    charged commission and swap as a price return, never taken as net."""
+    from goldbot.ops.cost_imputation import CostImputer
+    row = {"account_id": "icm-demo", "broker": "icm", "mode": "demo", "exit_utc": "2026-10-06T12:00:00Z",
+           "ret": -0.0026, "pnl": -8.9, "equity_before": 1_000.0, "position_id": 7, "side": 1, "lots": 0.01,
+           "entry_utc": "2026-10-06T10:00:00Z", "entry_price": 4_150.0, "initial_sl": 4_139.1, "r": None,
+           "commission": 0.05, "swap": 0.0, "money_source": "broker", "pnl_basis": "net"}
+    (tmp / "closed_trades_icm-demo.jsonl").write_text(json.dumps(row) + "\n")
+    (back,), err = load_closed_trades(tmp)
+    assert err is None and back.ret_basis is None
+    c = CostImputer.from_settings(load_settings()).charge(back)
+    assert c.imputed and c.priced and c.ret > 0
 
 
 def case_bus_proposal(tmp: Path) -> None:
@@ -230,9 +260,22 @@ def case_ledger(tmp: Path) -> None:
     assert ledger.latest_report(tmp, "icm-demo") == rep
 
 
-CASES = [case_closed_trade, case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
+def case_hwm_confirmation(tmp: Path) -> None:
+    """core.db high-water-mark confirmation row (BACKLOG 54, ADR 0018) with a field from a newer release."""
+    conf = hwm.HwmConfirmation(account_id="icm-demo", mark=10_000.0, mark_utc=T0, pending_balance=10_500.0,
+                               pending_since_utc=T0, candidate_utc=T0)
+    assert hwm.HwmStore(tmp).save(conf)
+    with sqlite3.connect(tmp / "core.db") as conn:
+        body = conn.execute("SELECT body FROM hwm_confirmation").fetchone()[0]
+        conn.execute("UPDATE hwm_confirmation SET body = ?", (json.dumps(_newer(json.loads(body))),))
+    assert hwm.HwmStore(tmp).load("icm-demo") == conf
+    assert hwm.read_only_confirmation(tmp, "icm-demo") == conf
+
+
+CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed_trade_price_return_without_ret_basis,
+         case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
-         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger]
+         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_hwm_confirmation]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.__name__.removeprefix("case_") for c in CASES])
@@ -245,7 +288,7 @@ def test_every_persisted_record_model_has_a_compat_case():
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
-               ledger.BalanceSnapshot, ledger.BalanceDeal,
+               ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,

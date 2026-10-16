@@ -7,8 +7,8 @@ evaluation: docs/research/opportunity-days.md section 3.4), from the local state
 
 Writes `perf_<from>_<to>.md` and `perf_<from>_<to>.json` to `--out` (default `reports`, gitignored, never inside the
 state folder or the data root) and prints the markdown (`--json`: the JSON). Per account, for the opportunity days
-`--from`..`--to` (day D runs D-1 22:00 to D 22:00 UTC, features/day_type.py, so the Sunday reopen belongs to Monday;
-default the month so far); trades are in the range by their exit's opportunity day:
+`--from`..`--to` (day D runs D-1 22:00 to D 22:00 UTC, report_days.py, the day the monthly report uses too, so the
+Sunday reopen belongs to Monday; default the month so far); trades are in the range by their exit's opportunity day:
 
 * net and gross R and money per trade and per day (per weekday in the range, traded or not), overall and by family,
   agent, timeframe, session (`DEFAULT_SESSIONS.session_label` at the entry: asia, the Tokyo session; london; newyork),
@@ -66,7 +66,7 @@ import json
 import math
 import re
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -79,7 +79,9 @@ from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.timeutil import floor_tf, risk_day
 from goldbot.engine.shadow import ShadowTrade, VersionBook
 from goldbot.execution.costs import SESSIONS, CostTable
-from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades
+from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades, pnl_basis
+from goldbot.ops.report_days import day_buckets, month_days, report_day
+from goldbot.ops.report_days import weekdays as weekdays_in
 from goldbot.telegram.approvals import Outcome, Proposal
 
 MIN_TRADES = 30                  # below this no interval and no reading, only the counts (design rule above)
@@ -295,16 +297,6 @@ class _Row(FrozenRecord):
 
 
 # ---------------------------------------------------------------------------------------------- helpers
-def opp_day(ts: pd.Timestamp) -> str:
-    """The opportunity day (features/day_type.py: [D-1 22:00, D 22:00) UTC is D) of one instant, as YYYY-MM-DD."""
-    from goldbot.features.day_type import opportunity_day
-    return f"{opportunity_day(pd.DatetimeIndex([ts]))[0]:%Y-%m-%d}"
-
-
-def _weekdays(start: str, end: str) -> int:
-    return int(np.busday_count(date.fromisoformat(start), date.fromisoformat(end) + timedelta(days=1)))
-
-
 def _ci90(xs: list[float]) -> tuple[float, float]:
     from scipy import stats
     m, sd = float(np.mean(xs)), float(np.std(xs, ddof=1))
@@ -386,16 +378,6 @@ def _dims(t: ClosedTrade, population: dict[str, dict[str, Any]], day_types: dict
             "session": session or NOT_RECORDED, "side": side or NOT_RECORDED, "day_type": day_type or NOT_RECORDED}
 
 
-def pnl_basis(t: ClosedTrade) -> str | None:
-    """"net" | "gross" from the record's `pnl_basis`; a legacy row without it is net only when it records both
-    commission and swap (the broker's deals, net of every cost); anything else is not recorded (quant review, item 1)."""
-    if t.pnl_basis is not None:
-        return t.pnl_basis
-    if t.commission is not None and t.swap is not None:
-        return "net"
-    return None
-
-
 def _row(t: ClosedTrade, ccy: str | None, population: dict[str, dict[str, Any]],
          day_types: dict[str, str] | None) -> _Row:
     same_ccy = t.pnl_currency is None or ccy is None or t.pnl_currency.upper() == ccy.upper()
@@ -411,9 +393,9 @@ def _row(t: ClosedTrade, ccy: str | None, population: dict[str, dict[str, Any]],
         net_pnl, net_r, gross, gross_r = None, None, t.pnl if same_ccy else None, t.r
     else:
         net_pnl = net_r = gross = gross_r = None
-    entry_day = opp_day(t.entry_utc) if t.entry_utc is not None else None
+    entry_day = report_day(t.entry_utc) if t.entry_utc is not None else None
     ex = pd.DatetimeIndex([t.exit_utc])
-    return _Row(trade=t, exit_day=opp_day(t.exit_utc), entry_day=entry_day, risk_day=f"{risk_day(ex)[0]:%Y-%m-%d}",
+    return _Row(trade=t, exit_day=report_day(t.exit_utc), entry_day=entry_day, risk_day=f"{risk_day(ex)[0]:%Y-%m-%d}",
                 risk_week=f"{floor_tf(ex, 7 * 86400)[0]:%Y-%m-%d}", basis=basis, net_pnl=net_pnl, net_r=net_r,
                 gross_pnl=gross, gross_r=gross_r, risk=risk, dims=_dims(t, population, day_types, entry_day))
 
@@ -543,7 +525,7 @@ def _slippage(store: Any, account: str, start: str, end: str, table: CostTable |
     if f.empty or not {"requested", "filled", "side"} <= set(f.columns):
         return []
     f = f.dropna(subset=["requested", "filled", "side"])
-    f = f[[start <= opp_day(t) <= end for t in f["ts_utc"]]]
+    f = f[[start <= report_day(t) <= end for t in f["ts_utc"]]]
     if f.empty:
         return []
     ts = pd.DatetimeIndex(pd.to_datetime(f["ts_utc"], utc=True))
@@ -569,7 +551,7 @@ def _journal(store: Any, account: str, start: str, end: str) -> JournalReport | 
                    end=pd.Timestamp(end, tz="UTC") + pd.Timedelta(hours=22))
     if d.empty or "action" not in d:
         return None
-    d = d[[start <= opp_day(t) <= end for t in d["ts_utc"]]]
+    d = d[[start <= report_day(t) <= end for t in d["ts_utc"]]]
     actions = d["action"].astype(str)
     gate: dict[str, int] = {}
     for a in actions[actions.str.startswith("gate:")]:
@@ -591,10 +573,8 @@ def _journal(store: Any, account: str, start: str, end: str) -> JournalReport | 
 
 # ---------------------------------------------------------------------------------------------- sections
 def _days(rows: list[_Row], weekdays: int, ccy: str | None) -> DayStats:
-    per: dict[str, float] = {}
-    for r in rows:
-        if r.net_pnl is not None:
-            per[r.exit_day] = per.get(r.exit_day, 0.0) + r.net_pnl
+    per = {d: sum(r.net_pnl or 0.0 for r in v)
+           for d, v in day_buckets([r for r in rows if r.net_pnl is not None], lambda r: r.trade.exit_utc).items()}
     if not per:
         return DayStats(weekdays=weekdays, traded_days=0)
     best, worst = max(per, key=lambda d: per[d]), min(per, key=lambda d: per[d])
@@ -610,14 +590,10 @@ def _north_star(rows: list[_Row], ccy: str | None, classified: int, opp: set[str
     """`rows`: the account's trades ENTERED on the range's days (quant review, item 6), whenever they closed."""
     if not have_bars:
         return NorthStar(note=f"opportunity days {NOT_RECORDED}: they need the stored bars (--data-root)")
-    per_pnl: dict[str, float] = {}
-    per_r: dict[str, float] = {}
-    for r in rows:
-        assert r.entry_day is not None
-        if r.net_pnl is not None:
-            per_pnl[r.entry_day] = per_pnl.get(r.entry_day, 0.0) + r.net_pnl
-        if r.net_r is not None:
-            per_r[r.entry_day] = per_r.get(r.entry_day, 0.0) + r.net_r
+    entered = [(r, r.trade.entry_utc) for r in rows if r.trade.entry_utc is not None]
+    by_entry = {d: [r for r, _ in v] for d, v in day_buckets(entered, lambda x: x[1]).items()}
+    per_pnl = {d: sum(r.net_pnl for r in v if r.net_pnl is not None) for d, v in by_entry.items()}
+    per_r = {d: sum(r.net_r for r in v if r.net_r is not None) for d, v in by_entry.items()}
     on = [r for r in rows if r.entry_day in opp]
     off = [r for r in rows if r.entry_day not in opp]
     note = ("ex post: a day's range is known only at its close; trades by their entry's opportunity day (net rows), "
@@ -635,7 +611,7 @@ def _north_star(rows: list[_Row], ccy: str | None, classified: int, opp: set[str
         days_50_plus_on_opportunity=sum(per_pnl.get(d, 0.0) >= NORTH_STAR_GBP for d in opp) if ccy == "GBP" else None,
         pnl_on_opportunity_days=total([r.net_pnl for r in on]), pnl_on_other_days=total([r.net_pnl for r in off]),
         r_on_opportunity_days=total([r.net_r for r in on]),
-        pending_open=sum(opp_day(t) in opp for t in open_entries), note=note)
+        pending_open=sum(report_day(t) in opp for t in open_entries), note=note)
 
 
 def _costs(rows: list[_Row], ccy: str | None, table: CostTable | None, slippage: list[SlippageRow]) -> CostReport:
@@ -821,7 +797,7 @@ def _approvals(props: list[Proposal], pending: int, shadow: list[ShadowTrade],
 
 def _proposal_day(p: Proposal) -> str:
     close = _signal_close(p)
-    return opp_day(close if close is not None else pd.Timestamp(p.created, unit="s", tz="UTC"))
+    return report_day(close if close is not None else pd.Timestamp(p.created, unit="s", tz="UTC"))
 
 
 # ---------------------------------------------------------------------------------------------- build
@@ -831,7 +807,7 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
     """The report for opportunity days `start`..`end` (YYYY-MM-DD, inclusive). Reads only."""
     state = Path(state_dir)
     now = pd.Timestamp.now(tz="UTC") if now is None else now.tz_convert("UTC")
-    weekdays = _weekdays(start, end)
+    weekdays = weekdays_in(start, end)
     errors: list[str] = []
     trades, err = load_closed_trades(state) if state.is_dir() else ([], None)
     if err:
@@ -854,8 +830,8 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
         if start <= _proposal_day(p) <= end:
             pending_by[p.account_id] = pending_by.get(p.account_id, 0) + 1
     in_range = {a for a, ts in all_by.items()
-                if any(start <= opp_day(t.exit_utc) <= end or (t.entry_utc is not None and start <= opp_day(t.entry_utc)
-                                                              <= end) for t in ts)}
+                if any(start <= report_day(t.exit_utc) <= end
+                       or (t.entry_utc is not None and start <= report_day(t.entry_utc) <= end) for t in ts)}
     accounts = sorted(in_range | set(props_by) | set(pending_by))
     if account is not None:
         accounts = [a for a in accounts if a == account]
@@ -1088,6 +1064,13 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
+def default_range(now: pd.Timestamp, start: str | None = None, end: str | None = None) -> tuple[str, str]:
+    """`--from`/`--to` defaults: the first opportunity day of the month holding today's opportunity day, and today's
+    (at 31 Oct 23:00 UTC that is 1 Nov..1 Nov, the month the monthly report shows)."""
+    today = report_day(now)
+    return start or month_days(today[:7])[0], end or today
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="goldbot.ops.run perf-report", description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--state", default="state", help="state folder (read only; a copy works)")
@@ -1100,7 +1083,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="print the JSON instead of the markdown")
     a = ap.parse_args(argv)
     now = pd.Timestamp.now(tz="UTC")
-    start, end = a.start or f"{now:%Y-%m-01}", a.end or opp_day(now)
+    start, end = default_range(now, a.start, a.end)
     for v in (start, end):
         if not DATE.fullmatch(v):
             print(f"dates must be YYYY-MM-DD, got {v!r}", file=sys.stderr)

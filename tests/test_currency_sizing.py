@@ -318,6 +318,42 @@ def test_closed_trade_r_is_left_empty_when_no_conversion_exists(tmp_path):
     eng._save_orders()                                          # closes waiting for their record are written here
     (t,) = _records(tmp_path)                                   # the exit and its record are never blocked
     assert t.r is None and t.ret == pytest.approx(-10.90 / 4_150.0)
+    # the P&L is the broker's, but a GBP notional is unknown: ret is the price return and the record says so
+    assert t.money_source == "broker" and t.ret_basis == "price"
+
+
+def test_closed_trade_return_is_from_the_net_pnl_and_says_so_when_converted(tmp_path):
+    pb = GbpPaper(adverse_slip_points=0.0)
+    eng = _engine(tmp_path, pb)
+    _enter(eng, pb)
+    pb.on_tick(Tick(ts_utc=T0 + pd.Timedelta(minutes=30), bid=4_150.0 - 10.90, ask=4_150.0 - 10.90))
+    eng._manage_open(pd.DataFrame())
+    eng._save_orders()
+    (t,) = _records(tmp_path)
+    assert t.ret_basis == "pnl" and t.ret == pytest.approx(t.pnl / (4_150.0 * 0.01 * 100 * GBP))
+
+
+class UsdOffPaper(PaperBroker):
+    """A USD account whose broker conversion disagrees with 1 by more than 1%: sizing has no conversion (fx None)."""
+
+    def loss_per_lot(self, symbol: str, side: int, price: float, distance: float) -> float | None:
+        return distance * self.contract * 1.5
+
+
+def test_a_usd_account_without_a_conversion_records_a_net_return_from_the_pnl(tmp_path):
+    """Quant review (finding B): the broker-deals path with no conversion fell back to the gross price return while
+    pnl_basis said "net". On a USD account the notional is already in the account currency: ret = pnl / notional."""
+    pb = UsdOffPaper(commission_per_lot_side=3.5, adverse_slip_points=0.0)
+    eng = _engine(tmp_path, pb)
+    _enter(eng, pb)
+    pb.on_tick(Tick(ts_utc=T0 + pd.Timedelta(minutes=30), bid=4_150.0 - 10.90, ask=4_150.0 - 10.90))
+    eng._manage_open(pd.DataFrame())
+    eng._save_orders()
+    (t,) = _records(tmp_path)
+    assert t.money_source == "broker" and t.commission is not None and t.commission > 0
+    assert t.ret_basis == "pnl" and t.ret == pytest.approx(t.pnl / (4_150.0 * 0.01 * 100))
+    assert t.ret < -10.90 / 4_150.0                             # the commission is inside it
+    assert t.r is None                                          # R still needs the conversion
 
 
 def test_exits_are_unaffected_by_a_missing_conversion(tmp_path):

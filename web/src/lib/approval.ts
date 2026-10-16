@@ -85,11 +85,11 @@ export function localTime(iso: string): { text: string; utc: string } {
            utc: d.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC") };
 }
 
-/** "dashboard:a@x.io" -> "dashboard (a@x.io)", "telegram:111" -> "Telegram". */
-export function via(by: string | null | undefined): string {
-  if (!by) return "";
-  const [ch, who] = by.split(/:(.*)/s);
-  return ch === "telegram" ? "Telegram" : ch === "dashboard" && who ? `dashboard (${who})` : by;
+/** The decision channel in plain words: "telegram" -> "Telegram", "dashboard" -> "the dashboard"; empty when unknown.
+ *  Only the channel, never who decided (BACKLOG 52: the identity is in the auth audit log only). */
+export function viaChannel(channel: string | null | undefined): string {
+  if (!channel) return "";
+  return channel === "telegram" ? "Telegram" : channel === "dashboard" ? "the dashboard" : channel;
 }
 
 /** Why the RiskGate would refuse a new entry on this account (and for this strategy) right now, in plain words (empty:

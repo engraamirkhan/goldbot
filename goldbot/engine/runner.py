@@ -45,7 +45,7 @@ from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resamp
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
-from goldbot.execution.broker import Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
+from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
@@ -59,7 +59,7 @@ from goldbot.ops.bridge_compat import BridgeCompat
 from goldbot.ops.gates_phase import ClosedTrade, EntryAudit, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
-from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, open_risk, sizing
+from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, hwm, open_risk, sizing
 from goldbot.risk.gate import REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor, write_startup_error
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
@@ -182,7 +182,10 @@ class EngineConfig(Record):
     # production: tick age and feed staleness are measured against the wall clock (replays and tests use tick time)
     live_clock: bool = False
     # between bar closes the account is refreshed (drawdown stages, kill switch, halts) and the state file written
-    # this often (tick time), so the supervisor's combined caps and the 12% kill switch act within seconds
+    # this often (tick time), so the supervisor's combined caps and the 12% kill switch act within seconds. On the live
+    # clock the file is also rewritten this often on the host clock while the session table has the market closed
+    # (weekend, daily break: the terminal repeats its last quote), republishing only (BACKLOG 59), so health's age
+    # rules see a live engine; in market hours a frozen feed still lets the file age and health FAIL
     state_every_s: int = 10
     stale_feed_s: int = 90                   # no tick for this long in an open session -> data-quality error
     healthy_resume_s: int = 60               # after stale data or a data-quality error, entries wait this long healthy
@@ -393,7 +396,18 @@ class Engine:
         self._halted_at: pd.Timestamp | None = None  # when the 12% kill switch tripped (re-arm conditions count from it)
         self._propose_only_until: pd.Timestamp | None = None   # after a re-arm: no auto entries before this
         self._rearm_refused: str | None = None       # why the last owner re-arm was refused (engine state, dashboard)
+        # ADR 0016: an unconfirmed 12% read waiting for confirmation (persisted), the start of the current run of reads
+        # below 12% minus the tolerance (in memory: a restart restarts the recovery clock), and a re-read due next tick
+        self._stage2_pending_since: pd.Timestamp | None = None
+        self._stage2_clean_since: pd.Timestamp | None = None
+        self._reread_account = False
         self._load_risk_state()
+        # BACKLOG 54 (ADR 0018): the high-water mark's rise confirmation (core.db; a row for another mark is void) and
+        # a re-read due next tick while a rise waits for its second read. core.db is opened and migrated once here
+        # (review L1): a save on the tick thread is one short write
+        self._hwm_store = hwm.HwmStore(cfg.state_dir)
+        self._hwm = self._load_hwm()
+        self._reread_hwm = self._hwm.pending_balance is not None
         # closed-trade record (state/closed_trades.jsonl, read by the phase gates and the stop rule): positions already
         # recorded (key: this account + position id, so a restart never records one twice), closes waiting to be
         # written, and broker-side closes waiting for their exit deal (position -> bar closes asked)
@@ -445,7 +459,8 @@ class Engine:
         self._invalid_state_written: pd.Timestamp | None = None
         self._dq_repeats: dict[str, int] = {}        # ticks folded into the pending event of each check (LOW-1)
         self._load_orders()
-        self._last_state_write: pd.Timestamp | None = None
+        self._last_state_write: pd.Timestamp | None = None   # tick time of the last account refresh and write
+        self._state_written_host: pd.Timestamp | None = None   # host clock of the last state write of any kind
         self._last_reconcile: pd.Timestamp | None = None
         self._last_atr: float | None = None          # decision-tf ATR at the last bar close (orphan stops)
         self._last_terms: pd.Timestamp | None = None  # last broker-terms reading (swap, commission)
@@ -467,6 +482,13 @@ class Engine:
                 continue
             if p.expired and p.proposal_id not in self.pending:
                 bus.archive(p)
+        # A15: decision files left behind (no pending file, or a day old) go, so an old click's channel or, from a
+        # release before it, the decider's identity does not linger on disk. Never stops the start.
+        try:
+            if n := bus.sweep_decisions():
+                log.info("swept %d leftover decision files", n)
+        except Exception as exc:            # noqa: BLE001 - housekeeping: a start never fails on it
+            log.warning("decision sweep failed: %s: %s", type(exc).__name__, exc)
 
     # ------------------------------------------------------------------ ticks and bars
     def on_tick(self, t: Tick) -> list[dict]:
@@ -566,14 +588,59 @@ class Engine:
                     and self._error_tick_ts < bar_open:
                 self.state.tick_error, self._tick_error_detail = False, None   # a whole clean decision bar closed
                 self._write_state()
-        elif self._last_state_write is None or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:
+        elif self._reread_account or self._reread_hwm or self._last_state_write is None \
+                or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:   # ADR 0016 re-read
             self._rebuild_bars()            # completed minutes join the bars between closes, so their age is current
             self._refresh_account(t)
             self._write_state()
             self._last_state_write = t.ts_utc
+        elif self._state_heartbeat_due():
+            self._guard(self._write_heartbeat)
         self.last_bar_close = bar_close
         self._flush_closed()               # after every exit of this tick has been sent
         return out
+
+    def _state_heartbeat_due(self) -> bool:
+        """BACKLOG 59: on the live clock, with the market CLOSED per the session table, no state write for
+        state_every_s of HOST time. With the market closed the tick stamp is frozen, so the tick-time cadence above
+        never fires and health would read a live engine's file (bridge_compat `checked_at`, `ts`) as hours old.
+        Never in an open session (review HIGH): a frozen feed in market hours must leave the file to age, so health
+        FAILs it (bridge_compat after 5 min, engine after 45 min) as before. A session table that cannot be read is
+        not due (fail toward the alert). A host clock stepped back is due in any session, so the file never keeps a
+        stamp from the future (BACKLOG 58). Replays and backtests (tick clock only) never take this path."""
+        if not self.cfg.live_clock:
+            return False
+        now = self.clock()
+        elapsed = math.inf if self._state_written_host is None else (now - self._state_written_host).total_seconds()
+        if elapsed < 0:
+            return True
+        if elapsed < self.cfg.state_every_s:
+            return False
+        try:
+            return self.sessions.entry_block(now) is not None
+        except Exception:
+            return False
+
+    def _write_heartbeat(self) -> None:
+        """The host-clock state write (BACKLOG 59): it republishes and decides nothing. No account read, no stage
+        machine, kill switch, weekend rule or other exit step (those stay on the tick-time refresh), and no EngineState
+        field changes. The fields that describe the feed are restated on the host clock so they stay true: the last
+        tick's age and lead, and whether the session table has the market closed now."""
+        self._state_written_host = self.clock()   # a failing write is retried (and a tick error) once per cadence
+        self._write_state(heartbeat=True)
+
+    def _heartbeat_feed(self) -> dict[str, Any]:
+        """`last_tick_age_s`, `tick_ahead_s` and `market_closed` now on the host clock, as `_refresh_account` measures
+        them (signed age; a broken session table reads closed). Empty before the first valid tick."""
+        if self._last_tick is None:
+            return {}
+        now = self.clock()
+        age = (now - self._last_tick.ts_utc).total_seconds()
+        try:
+            closed = self.sessions.entry_block(now) is not None
+        except Exception:
+            closed = True
+        return {"last_tick_age_s": abs(age), "tick_ahead_s": max(0.0, -age), "market_closed": closed}
 
     def _host_now(self) -> pd.Timestamp:
         """The clock for a pass without a valid quote: the host clock live, else the last valid tick's time (a replay
@@ -1771,13 +1838,11 @@ class Engine:
         if self._ladder["lot_terms"] is None:
             self._ladder["lot_terms"] = self._lot_terms()
         self._roll_risk_period(tick.ts_utc)
-        if st.balance_closed_hwm == 0:
-            st.balance_closed_hwm = acc.balance
+        self._update_hwm(acc, self._now(tick))
         if st.day_start_equity == 0:            # normally set by the risk-period roll on the first tick
             st.day_start_equity = acc.balance
         if st.week_start_equity == 0:
             st.week_start_equity = acc.balance
-        st.balance_closed_hwm = max(st.balance_closed_hwm, acc.balance)
         # exposure unknown: the last reading stays and entries are blocked below
         positions = self._read_positions("exposure kept from the last reading, entries blocked")
         if positions is not None:
@@ -1845,15 +1910,141 @@ class Engine:
         owner_mode = self.center.bus.control().approval_mode if self.center.bus is not None else None
         if owner_mode is not None:
             self.cfg.approval_mode = owner_mode  # the owner's /mode (A10); the kill switch and re-arm lock win below
+        st.equity_unconfirmed = self._equity_unconfirmed(acc, now)
         stage = st.stage
         if self.gate.update_stage(st) != stage:
             if st.stage == Stage.HALTED:
                 self._halted_at = now
-            self._save_risk_state()             # a drawdown stage change survives a restart at once
+            # survives a restart at once; a failed save never raises, so it cannot skip or narrow the flatten below
+            self._save_risk_state_now("the stage change")
         if st.stage == Stage.HALTED:
             self._kill_switch(everything=stage != Stage.HALTED)
         if self._propose_only_until is not None and now < self._propose_only_until:
             self.cfg.approval_mode = "propose"  # 30 days propose-and-approve after a re-arm
+
+    def _load_hwm(self) -> hwm.HwmConfirmation:
+        """The persisted rise confirmation for the current mark; none (no candidate, no anchor: the strict side) when
+        there is no row, it is unreadable, or it refers to another mark (a re-arm, or an older release after a
+        rollback raised the mark). A candidate older than hwm.CANDIDATE_MAX_AGE is void (review L2; on the live clock
+        here, and on every read in `hwm.step`)."""
+        conf = self._hwm_store.load(self.cfg.account_id)
+        if conf is None or conf.mark != self.state.balance_closed_hwm:
+            return hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=self.state.balance_closed_hwm)
+        return conf.fresh(self.clock()) if self.cfg.live_clock else conf
+
+    def _update_hwm(self, acc: AccountInfo, now: pd.Timestamp) -> None:
+        """BACKLOG 54 (ADR 0018): "a rise in balance_closed_hwm is applied only once confirmed: by the deal history
+        (closed deals and balance operations since the last mark account for the rise within a tolerance), or by a
+        second balance read that agrees; one disagreeing read never raises it, two agreeing reads always do". A
+        deposit explains a rise and raises the mark. The mark is never lowered here (only /rearm resets it). An
+        unconfirmed rise is read again on the next tick; a refused one is logged and recorded. The first read of an
+        engine that has no mark yet sets it (and its deal-history anchor)."""
+        st = self.state
+        if st.balance_closed_hwm == 0:
+            st.balance_closed_hwm = acc.balance
+            self._set_hwm(hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=acc.balance, mark_utc=now))
+            return
+        if self._hwm.mark != st.balance_closed_hwm:          # the owner's re-arm reset the mark: candidate and anchor void
+            self._hwm = hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=st.balance_closed_hwm)
+        mark = st.balance_closed_hwm
+        # a broker class may declare its balance reads exact (the paper broker's own ledger): looked up on the class,
+        # so a remote broker's attribute pass-through can never answer it
+        exact = getattr(type(self.broker), "balance_exact", False) is True
+        s = hwm.step(self._hwm, mark, acc.balance, now, self.gate.limits.hwm_rise_tolerance, self.broker.deals_since,
+                     exact=exact)
+        if s.expired is not None:
+            log.warning("high-water mark not raised: balance read %.2f expired unconfirmed (older than %s)",
+                        s.expired, hwm.CANDIDATE_MAX_AGE)
+            self.decisions.append({"ts": time.time(), "action": "hwm_rise_refused", "candidate": s.expired,
+                                   "balance": acc.balance, "mark": mark, "reason": "expired"})
+        if s.dropped is not None:
+            log.warning("high-water mark not raised: balance read %.2f was not confirmed (next read %.2f, mark %.2f)",
+                        s.dropped, acc.balance, mark)
+            self.decisions.append({"ts": time.time(), "action": "hwm_rise_refused", "candidate": s.dropped,
+                                   "balance": acc.balance, "mark": mark})
+        if s.outcome == "pending":
+            log.warning("balance %.2f is above the high-water mark %.2f and is not confirmed by the deal history; "
+                        "re-read next tick", acc.balance, mark)
+            self.decisions.append({"ts": time.time(), "action": "hwm_rise_unconfirmed", "balance": acc.balance,
+                                   "mark": mark})
+        elif s.outcome == "raised":
+            st.balance_closed_hwm = s.mark
+            self.decisions.append({"ts": time.time(), "action": "hwm_raised", "from": mark, "to": s.mark, "by": s.by,
+                                   "deposits": s.deposits})
+            self._save_risk_state_now("the raised high-water mark")   # survives a restart at once
+        if s.outcome != "unchanged" or s.expired is not None:
+            self._set_hwm(s.conf)
+        self._reread_hwm = s.conf.pending_balance is not None
+
+    def _set_hwm(self, conf: hwm.HwmConfirmation) -> None:
+        """Keep and persist the rise confirmation (core.db; a failed write is logged and only loses the candidate or
+        the anchor: a later rise then needs a fresh confirmation)."""
+        self._hwm = conf
+        self._hwm_store.save(conf)
+
+    def _equity_unconfirmed(self, acc: AccountInfo, now: pd.Timestamp) -> bool:
+        """BACKLOG 44 (ADR 0016): "one disagreeing read never trips the kill switch; two agreeing reads always do".
+        An account read at 12% drawdown or more is confirmed, and the stage machine runs on it, when the balance plus
+        the open P&L and swap of every position on the account agrees with the equity within `equity_check_tolerance`
+        of the high-water mark (a genuine crash: no delay), or when an earlier 12% read is still pending. Otherwise (a
+        zero or collapsed equity, an unreadable book) it is pending: the account is read again on the next tick
+        (`on_tick`).
+        Pending is sticky (review HIGH-1): it clears only after every read has stayed below 12% minus the tolerance
+        for `equity_recovery_s`; until then entries are refused, no stage moves, and the next 12% read trips, so
+        alternating readings cannot hold the kill switch off. It is persisted, so a restart does not forget it.
+        Exits are never gated: stops rest at the broker and every exit keeps running meanwhile."""
+        st, L = self.state, self.gate.limits
+        hwm = st.balance_closed_hwm
+        if st.stage == Stage.HALTED or hwm <= 0:
+            return False
+        dd = 1 - acc.equity / hwm
+        if dd >= L.dd_stage2:
+            self._reread_account = False
+            if self._stage2_pending_since is not None or self._equity_corroborated(acc, hwm):
+                self._set_stage2_pending(None)
+                return False                     # confirmed: the stage machine trips the kill switch
+            self._stage2_clean_since, self._reread_account = None, True
+            self._set_stage2_pending(now)
+            log.warning("equity %.2f is a 12%% drawdown that balance %.2f plus open P&L does not confirm; entries "
+                        "refused, re-read next tick", acc.equity, acc.balance)
+            self.decisions.append({"ts": time.time(), "action": "equity_unconfirmed", "equity": acc.equity,
+                                   "balance": acc.balance})
+            return True
+        self._reread_account = False
+        if self._stage2_pending_since is None:
+            return False
+        if not dd < L.dd_stage2 - L.equity_check_tolerance:      # inside the band (or NaN): the recovery restarts
+            self._stage2_clean_since = None
+            return True
+        self._stage2_clean_since = self._stage2_clean_since or now
+        if (now - self._stage2_clean_since).total_seconds() < L.equity_recovery_s:
+            return True
+        self._set_stage2_pending(None)
+        self.decisions.append({"ts": time.time(), "action": "equity_recovered", "equity": acc.equity})
+        return False
+
+    def _equity_corroborated(self, acc: AccountInfo, hwm: float) -> bool:
+        """The equity agrees with the balance plus the open P&L and swap of every position on the account (all symbols;
+        a position without swap, e.g. from an older bridge, counts none) within `equity_check_tolerance` x hwm. An
+        unreadable book, or a zero or negative equity or balance, never corroborates."""
+        if not (acc.equity > 0 and acc.balance > 0):
+            return False
+        try:
+            book = self.broker.account_positions()
+        except Exception as exc:                 # an older bridge without the method, or a failed read
+            log.warning("account positions unreadable (%s); the equity is confirmed by a second read",
+                        type(exc).__name__)
+            return False
+        floating = sum(p.profit + (p.swap or 0.0) for p in book)
+        return abs(acc.equity - acc.balance - floating) <= self.gate.limits.equity_check_tolerance * hwm
+
+    def _set_stage2_pending(self, since: pd.Timestamp | None) -> None:
+        """Set or clear the pending 12% read; a change is saved at once with the risk state (review LOW-4)."""
+        if since is None:
+            self._stage2_clean_since = None
+        if (since is None) != (self._stage2_pending_since is None):
+            self._stage2_pending_since = since
+            self._save_risk_state_now("the pending 12% read")
 
     def set_sessions(self, table: SessionTable) -> None:
         """The broker session table (D13), refreshed by the run loop outside the tick path (goldbot/ops/run.py
@@ -1917,7 +2108,7 @@ class Engine:
         self.state.weekend = friday_cut or srv.weekday() >= 5
         if friday_cut and self._weekend_done != srv.date().isoformat() and self._weekend_rule(tick):
             self._weekend_done = srv.date().isoformat()   # only once every position was handled; else retried
-            self._save_risk_state()
+            self._save_risk_state_now("the weekend rule")
 
     def _weekend_rule(self, tick: Tick) -> bool:
         """Design: weekend gaps blow through stops, so losers are closed and winners' stops moved to lock in half the
@@ -2060,7 +2251,7 @@ class Engine:
         self.state.equity = self.broker.account().equity
         if new_day(self.state, now, last):
             self._last_reset = now
-            self._save_risk_state()
+            self._save_risk_state_now("the risk-period reset")
 
     def _poll_rearm(self, now: pd.Timestamp) -> None:
         """An owner re-arm on the dashboard (owner role + TOTP) writes a new rearm id to control.json; seen once, it
@@ -2364,8 +2555,10 @@ class Engine:
         durably to state/closed_trades.jsonl. Money from the broker's deals when it reports them (net P&L with
         commission and swap); otherwise from the engine's own fills at the contract size (commission and swap None).
         Finance audit: `money_source` says which, and `pnl_basis` is "gross" unless commission and swap are both known
-        (GAP-05); the stops (GAP-03) and the entry facts (`OpenTrade.audit`: GAP-01/02/13) go on the record, and a
-        broker stop or target fill is logged against its level in `exit_fills` (GAP-04)."""
+        (GAP-05), and `ret_basis` is "price" when ret could not be taken from that P&L (a non-USD account with no
+        conversion: quant review 2026-10-12, finding B); the stops (GAP-03) and the entry facts (`OpenTrade.audit`:
+        GAP-01/02/13) go on the record, and a broker stop or target fill is logged against its level in `exit_fills`
+        (GAP-04)."""
         if pid in self._recorded:
             return
         try:
@@ -2395,7 +2588,8 @@ class Engine:
         # the engine's was converted, "USD" for the unconverted own-fills fallback; None is left to legacy records
         # (the monthly report flags those as R understated), and when the account currency itself is unknown
         pnl_currency: str | None = self._account_currency() or None
-        if info is not None:                           # pnl from the broker's deals, in the account currency
+        ret_basis: Literal["pnl", "price"] = "pnl"     # ClosedTrade.ret_basis: "price" only when ret is not from pnl
+        if info is not None:                          # pnl from the broker's deals, in the account currency
             exit_px, exit_utc, pnl = info["exit_price"], info["exit_utc"], info["pnl"]
             commission, swap = info["commission"], info["swap"]
             if reason == "broker_close" and info["reason"]:
@@ -2403,10 +2597,13 @@ class Engine:
             if fx is not None:
                 r = pnl / (risk_usd * fx) if risk_usd > 0 else None
                 ret = pnl / (notional_usd * fx)
-            else:                                      # no conversion: R unknown (never a wrong R); gross price return
+            elif self._account_currency() == "USD":    # the notional is already in the account currency (finding B)
+                log.warning("position %s: the broker's USD conversion is off; R left empty, return from the P&L", pid)
+                r, ret = None, pnl / notional_usd
+            else:                                      # no conversion: R unknown (never a wrong R); gross price return,
                 log.warning("position %s: no USD -> %s conversion; R left empty, return from prices", pid,
                             self._account_currency() or "account currency")
-                r, ret = None, tr.side * (exit_px - entry) / entry
+                r, ret, ret_basis = None, tr.side * (exit_px - entry) / entry, "price"   # flagged on the record
         else:                                          # the engine's own fills: pnl in USD, converted for the record
             if px is None:
                 tick = self.broker.last_tick(self.cfg.symbol)
@@ -2441,6 +2638,7 @@ class Engine:
                           initial_sl=tr.initial_sl if tr.risk_known else None, final_sl=tr.sl, final_tp=tr.tp,
                           money_source="broker" if info is not None else "engine",
                           pnl_basis="net" if commission is not None and swap is not None else "gross",
+                          ret_basis=ret_basis,
                           **(tr.audit or EntryAudit(timeframe=tr.timeframe)).model_dump(),
                           **self._closed_excursion(pid, tr, entry, tr.opened_utc or tr.entry_bar_ts, exit_utc,
                                                    None if synthetic else px if px is not None else exit_px,
@@ -2545,8 +2743,23 @@ class Engine:
                    "rearm_seen": self._rearm_seen, "weekend_done": self._weekend_done,
                    "halted_at": self._halted_at.isoformat() if self._halted_at is not None else None,
                    "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
-                   "rearm_refused": self._rearm_refused}
+                   "rearm_refused": self._rearm_refused,
+                   "stage2_pending_since": None if self._stage2_pending_since is None
+                   else self._stage2_pending_since.isoformat()}
         write_atomic(self._risk_path(), json.dumps(payload))       # durable: halts and stages survive a power cut
+
+    def _save_risk_state_now(self, what: str) -> None:
+        """Save the risk state from the account-refresh path; never raises (BACKLOG 44 re-review MEDIUM-1, LOW-2). The
+        in-memory state (the pending 12% read, the stage, the mark) decides the kill switch, so a failed write (a full
+        disk) must never abort the refresh before the stage machine, skip the flatten, or narrow it. The failure is
+        logged and counted as a tick error, which blocks entries until a clean decision bar; the next state write
+        (`_write_state`) saves the risk state again."""
+        try:
+            self._save_risk_state()
+        except Exception as exc:
+            log.error("risk state not saved after %s (%s); kept in memory, entries blocked, retried with the next "
+                      "state write", what, type(exc).__name__)
+            self.note_tick_error(exc)
 
     def _load_risk_state(self) -> None:
         path = self._risk_path()
@@ -2566,6 +2779,9 @@ class Engine:
         self._halted_at = pd.Timestamp(d["halted_at"]) if d.get("halted_at") else None
         self._propose_only_until = pd.Timestamp(d["propose_only_until"]) if d.get("propose_only_until") else None
         self._rearm_refused = d.get("rearm_refused")
+        # ADR 0016: absent (an older file) = nothing pending; an older release drops it and trips on one read instead
+        pending = d.get("stage2_pending_since")
+        self._stage2_pending_since = pd.Timestamp(pending) if pending else None
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the
@@ -3019,7 +3235,7 @@ class Engine:
             out["error"] = type(exc).__name__
         return out
 
-    def _write_state(self) -> None:
+    def _write_state(self, heartbeat: bool = False) -> None:
         st = self.state
         payload = {
             "account": self.cfg.account_id, "broker": self.cfg.broker_name, "mode": self.cfg.mode, "ts": time.time(),
@@ -3071,7 +3287,11 @@ class Engine:
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check
         payload["currency"] = self._account_currency() or self._account_view.get("currency") or None
+        if heartbeat:                       # BACKLOG 59: the feed as it is now, not as the last account refresh saw it
+            payload.update(self._heartbeat_feed())
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync
         write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps(payload), durable=False)
         self._save_risk_state()
         self._save_orders()
+        if self.cfg.live_clock:
+            self._state_written_host = self.clock()   # any write restarts the host-clock heartbeat (BACKLOG 59)

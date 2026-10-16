@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AccountSummary, DecidedProposal, Proposal, Status } from "./api";
-import { REASONS, blockers, budgetLine, cardMoney, cardState, countdown, money, pct, via } from "./approval";
+import { REASONS, blockers, budgetLine, cardMoney, cardState, countdown, money, pct, viaChannel } from "./approval";
 import { featureValue, plainFeature } from "./features";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
@@ -45,9 +45,10 @@ describe("formatting", () => {
   it("formats money and the decision channel", () => {
     expect(money(48)).toBe("$48");
     expect(money(1234.5)).toBe("$1,235");
-    expect(via("dashboard:a@x.io")).toBe("dashboard (a@x.io)");
-    expect(via("telegram:111")).toBe("Telegram");
-    expect(via(null)).toBe("");
+    expect(viaChannel("dashboard")).toBe("the dashboard");
+    expect(viaChannel("telegram")).toBe("Telegram");
+    expect(viaChannel(null)).toBe("");
+    expect(viaChannel(undefined)).toBe("");
   });
   it("offers exactly the backend's reason codes", () => {
     expect(REASONS.map((r) => r.code)).toEqual(["news", "cost", "discretion", "duplicate", "other"]);

@@ -51,7 +51,8 @@ file. The product owner accepts work against them; the release manager does not 
   security reviewer signs off every change to a root-run script before its root copy is reinstalled.
 
 ## Leadership
-The `program-director` leads delivery (roadmap, waves, integration, risk register, owner reporting); the
+The `program-director` leads delivery (roadmap, waves, integration, risk register, owner reporting); the main Claude
+session acts as program-director and answers for its failures (an unchased owner step, idle lanes, stale items). The
 `product-owner` owns what is built and accepts it. The `research-director` leads the research team
 (strategy-researcher, performance-analyst, evaluator) toward the owner's north-star: £50 or more on days the market
 offers opportunity, less or nothing when it does not (ADR 0004); it owns the research agenda, trial budget and the
@@ -72,7 +73,8 @@ research-director and program-director. All four report to the owner.
 | goldbot/ops/linux, systemd, deploy, backups, health/alerts | sre |
 | goldbot/data, data workflows, release loaders, feature inputs | data-engineer |
 
-A HIGH or CRITICAL finding blocks release until fixed and re-verified by the same reviewer.
+A HIGH or CRITICAL finding blocks release until fixed and re-verified by the same reviewer. Reviews follow the
+one-pass rule under "Accountability and cadence"; a requested review starts within 4 h.
 
 ## Acceptance scorecard (product owner)
 
@@ -86,6 +88,7 @@ Each delivered item is scored; it is accepted only with every row "yes".
 | Required reviewers signed off; HIGH/CRITICAL findings closed and re-verified | |
 | CI green on the PR; merged; main merged back into the branch | |
 | Owner-visible behaviour change described in the PR | |
+| Accountable role and due date recorded; met, or re-dated with the reason and escalated within 24 h | |
 
 ## Parallel work rules
 - Each agent works in its own git worktree based on the tip of `claude/gifted-goldberg-lcb7pl`, on disjoint files.
@@ -95,6 +98,60 @@ Each delivered item is scored; it is accepted only with every row "yes".
   `-n auto`, so parallel lanes do not starve each other (load hit 106 on 12 cores with every agent on `-n auto`).
 - Agents commit on their branch and never push; the integrator merges, runs the gates, routes reviews, and ships.
 - Free lanes are refilled immediately from the ranked backlog (`docs/BACKLOG.md`).
+
+## Accountability and cadence
+
+Why (review of 2026-10-16, `docs/process/scorecards/2026-W42.md`): the 13 Oct demo deploy never happened and nobody
+chased it for three days; reviewed work sat five days off `main`; `macro-v1` was published on 13 Oct while the docs
+still said it did not exist; five of eight Wave 1 lanes never started. None of those was a quality problem. Each
+was an item that nobody owned by name and nobody checked.
+
+**One accountable role per item.** Every BACKLOG item, ROADMAP milestone and lane, HANDOFF next step and dated target
+names exactly ONE accountable role (`accountable: <agent>`) and a due date. Owner-only steps name `owner` and also
+the role that chases them (`chaser: program-director` by default). An item without both is not ready and is not
+started. Other roles may contribute; one role answers for it.
+
+**Late rule.** A role that sees an item it owns late, or due within 48 h with no clear path, tells the
+program-director within 24 h: what slipped, why, the new date, and what would unblock it. The program-director
+puts it on issue #34 for the owner the same day, with options and a recommendation, when it needs the owner or moves
+a milestone. A slipped date is re-dated with the reason written beside it, never carried forward silently. An
+owner-run step past its date is chased the same day. "Waiting on the owner" is a status with a chase date, not an
+excuse.
+
+**Recurring duty.** Every agent file has an `## Accountability` section: what the role checks, how often, and what it
+does when something it owns is late. Each check is short and ends in an action (do it, re-date it, or escalate).
+
+**Cadence** (the main Claude session acts as program-director and runs all three):
+
+| When | Who | What |
+| --- | --- | --- |
+| Every 4 h while work runs | program-director | Light check: stalled or idle lanes (refill per the adaptive lane policy); any lane past 2 review rounds; Definition-of-done gaps in finished work; items late or due within 48 h, each chased; owner steps due today, chased. |
+| Daily | an independent reviewer (fresh agent, read-only on code) | Full review: grades all 18 roles over the last 24 h from git, PRs, #34 and the docs; writes `docs/process/scorecards/<YYYY-MM-DD>.md`; proposes edits to the role file of any role graded C or below. |
+| Weekly | program-director | Roll-up `docs/process/scorecards/<YYYY>-W<NN>.md` and a short summary on #34: per role, items owned, delivered, late and blocked, grade, and the fix for each C or below. |
+
+Scorecards are one file per day or week (no shared file, so no merge conflicts; ADR 0012's reason). In-session
+schedulers expire after 7 days or when the session ends, so **the program-director re-arms all three at the start
+of every session** and says so in its first #34 note of the day. A session that starts without them has not started.
+
+**Delivery rules** (speed without lowering the bar; every review, gate and safety rail stays):
+- **WIP limit on unshipped work.** Reviewed work on the integration branch goes to a PR within 24 h of its first
+  merge there. More than 24 h of reviewed, unshipped work stops new builder lanes until the PR is open.
+- **Reviewer queue limit.** No more than 2 finished-but-unreviewed items per reviewer; above that, start reviewer
+  lanes, not builders.
+- **One-pass reviews.** A reviewer returns every finding in one ranked pass (HIGH/CRITICAL, then MEDIUM, then LOW),
+  not one at a time; the builder fixes all of them in one commit; the re-verify checks only those findings plus the
+  diff that fixed them. A third round goes to the program-director, who decides scope with the reviewer.
+- **Automate owner steps.** An owner-run step is the last resort, limited to what legally or physically needs the
+  owner (sign-ups with a card or MFA, CLI logins, typing a secret into a hidden prompt, a TOTP scan). Everything else
+  is Claude-run, scripted and idempotent (memory "claude-runs-deploys"). Each owner step that remains has a date, a
+  check-in time and a chaser.
+- **Dispatch, don't list.** When a role writes "X must run by date D" and X is a workflow or command it may run, it
+  runs X and records the result. Listing a task for someone else is allowed only when the role cannot do it.
+- **Status truth within 24 h.** When a fact changes (a release is published, an item merges, a date slips), the
+  accountable role updates the doc that states it within 24 h. The daily review flags any status that contradicts
+  git, `gh release list` or `gh run list`.
+- **Stale-item sweep, daily.** Any owned item untouched for 3 days, any open PR older than 48 h (Dependabot
+  included), and any branch with unmerged reviewed work is listed in the daily scorecard with its accountable role.
 
 ## Test rules
 - Stop and exit tests must prove the broker did not do the work: the broker's stop is far away (or its modify is

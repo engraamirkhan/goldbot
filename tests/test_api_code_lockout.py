@@ -1,5 +1,5 @@
 """Dashboard security review: authenticator codes for /api/automode, /api/rearm and Telegram /mode count towards the
-owner's lockout (one shared counter) and alert the owner; mode_by is the owner's to see; error text carries the
+owner's lockout (one shared counter) and alert the owner; mode_by is the channel for every role (A15); error text carries the
 exception type only; API responses are never cached."""
 import json
 import time
@@ -106,11 +106,11 @@ def test_a_right_code_clears_the_owner_counter(app_client):
     assert c.post("/api/rearm", json={"totp": totp_code(secret)}, headers=owner).status_code == 200   # not locked
 
 
-def test_mode_by_shows_who_to_the_owner_and_only_the_channel_to_other_roles(app_client):
+def test_mode_by_shows_only_the_channel_to_every_role_even_the_owner(app_client):
     app, c, state, _ = app_client
     h = _login(c, app)
     ApprovalBus(state).set_mode("propose", by="telegram:123456789")
-    assert c.get("/api/automode", headers=h["owner"]).json()["mode_by"] == "telegram:123456789"
+    assert c.get("/api/automode", headers=h["owner"]).json()["mode_by"] == "telegram"     # A15: never who
     assert c.get("/api/automode", headers=h["viewer"]).json()["mode_by"] == "telegram"
 
 

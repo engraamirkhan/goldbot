@@ -480,7 +480,8 @@ export interface paths {
         };
         /**
          * Recent Proposals
-         * @description Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it.
+         * @description Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it: by
+         *     channel and time only, never who (BACKLOG 52).
          */
         get: operations["recent_proposals_api_proposals_recent_get"];
         put?: never;
@@ -969,7 +970,9 @@ export interface components {
          *
          *     submitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;
          *     approved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);
-         *     rejected: with its reason code; expired: nobody decided within the window.
+         *     rejected: with its reason code; expired: nobody decided within the window. `decided_channel` ("telegram" |
+         *     "dashboard") and `decided_ts` say how and when it was decided, never who (BACKLOG 52: identity is kept in the
+         *     auth audit log only).
          */
         DecidedProposal: {
             /** Account Id */
@@ -978,8 +981,10 @@ export interface components {
             agent_id: string;
             /** Currency */
             currency?: string | null;
-            /** Decided By */
-            decided_by?: string | null;
+            /** Decided Channel */
+            decided_channel?: string | null;
+            /** Decided Ts */
+            decided_ts?: number | null;
             /** Entry */
             entry: number;
             /** Ev R */
@@ -2021,6 +2026,11 @@ export interface components {
             net_r: number | null;
             /** Net T */
             net_t: number | null;
+            /**
+             * Pre Swap
+             * @default false
+             */
+            pre_swap: boolean;
             /** Rationale */
             rationale: string;
             /** Status */

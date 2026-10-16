@@ -170,3 +170,13 @@ def test_run_py_dispatches_both_reports():
                         "--avg-loss", "1", "--trades-per-week", "5", "--weeks", "8", "--horizons", "4",
                         "--paths", "100"], cwd=root, capture_output=True, text=True)
     assert b.returncode == 0 and "drawdown_stage2" in b.stdout
+
+
+def test_help_renders_and_names_the_8_percent_stage(capsys):
+    # argparse %-formats help strings: a bare "8% stage" read as the "% s" conversion and printed the action's dict
+    with pytest.raises(SystemExit) as e:
+        main(["--help"])
+    assert e.value.code == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "the 8% stage: risk halved, multiplier capped at 0.5" in out
+    assert "option_strings" not in out

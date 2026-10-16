@@ -5,11 +5,17 @@ Research tabs. The first-run setup
 code is written to --info so the browser test can create the owner account the way a person would.
 
   python scripts/e2e_server.py --port 8790 --info web/e2e/.server.json
+
+--fake-mailer (the auth tests, web/e2e/auth.spec.ts) turns on the owner's email sign-in link with the e2e-only
+CaptureMailer (goldbot/api/e2e_mailer.py): mail lands in a JSONL outbox in the throwaway state dir (path in --info). It
+is refused unless GOLDBOT_E2E_FAKE_MAILER=1 and --host is 127.0.0.1 or ::1; the same host is what uvicorn binds.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import signal
 import sys
 import tempfile
 import time
@@ -23,6 +29,8 @@ import pandas as pd  # noqa: E402
 import uvicorn  # noqa: E402
 
 from goldbot.api.app import create_app  # noqa: E402
+from goldbot.api.e2e_mailer import STATE_PREFIX, CaptureMailer  # noqa: E402
+from goldbot.config import MailSettings  # noqa: E402
 from goldbot.data.econ_calendar import COLUMNS as CALENDAR_COLUMNS  # noqa: E402
 from goldbot.data.news import COLUMNS as NEWS_COLUMNS  # noqa: E402
 from goldbot.data.store import Store  # noqa: E402
@@ -152,17 +160,36 @@ def seed_automode(state: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8790)
+    ap.add_argument("--host", default="127.0.0.1", choices=["127.0.0.1", "::1"])   # loopback only
     ap.add_argument("--info", default=str(ROOT / "web" / "e2e" / ".server.json"))
+    ap.add_argument("--fake-mailer", action="store_true", help="capture mail to an outbox (e2e only, see docstring)")
     args = ap.parse_args()
-    state = tempfile.mkdtemp(prefix="goldbot-e2e-")
+    state = tempfile.mkdtemp(prefix=STATE_PREFIX)                 # 0700, this user only
     seed_proposals(state)
     seed_store(str(Path(state) / "data"))
     seed_health_research(state)
     seed_automode(state)
-    app =create_app(state, web_dist=ROOT / "web" / "dist", data_root=Path(state) / "data", owner_email="owner@example.com")
+    mail, mailer, outbox = None, None, None
+    if args.fake_mailer:
+        # refused (E2EMailerRefused) unless the flag is set and args.host, the address uvicorn binds below, is loopback
+        mailer = CaptureMailer(Path(state) / "e2e_outbox.jsonl", bind_host=args.host)
+        outbox = str(mailer.outbox)
+        url_host = f"[{args.host}]" if ":" in args.host else args.host
+        # host is required once enabled; CaptureMailer never connects anywhere
+        mail = MailSettings(enabled=True, host="127.0.0.1", from_address="goldbot-e2e@example.com",
+                            dashboard_origin=f"http://{url_host}:{args.port}")
+    app = create_app(state, web_dist=ROOT / "web" / "dist", data_root=Path(state) / "data", owner_email="owner@example.com",
+                     mail=mail, mailer=mailer)
     Path(args.info).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.info).write_text(json.dumps({"setup_code": app.state.st.auth.setup_code, "state_dir": state}))
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+    Path(args.info).write_text(json.dumps({"setup_code": app.state.st.auth.setup_code, "state_dir": state,
+                                           "outbox": outbox}))
+    # Playwright stops the server with SIGTERM (gracefulShutdown). uvicorn shuts down, then re-raises the signal to
+    # the handler it found: make that a clean exit, so the finally below removes the throwaway state dir.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="warning", timeout_graceful_shutdown=2)
+    finally:
+        shutil.rmtree(state, ignore_errors=True)
 
 
 if __name__ == "__main__":

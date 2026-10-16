@@ -99,11 +99,14 @@ class DecidedProposal(Proposal):
 
     submitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;
     approved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);
-    rejected: with its reason code; expired: nobody decided within the window."""
+    rejected: with its reason code; expired: nobody decided within the window. `decided_channel` ("telegram" |
+    "dashboard") and `decided_ts` say how and when it was decided, never who (BACKLOG 52: identity is kept in the
+    auth audit log only)."""
     status: Literal["submitted", "approved", "rejected", "expired", "refused"]
     reason_code: Literal["news", "cost", "discretion", "duplicate", "other"] | None = None
     refusal: list[str] = []
-    decided_by: str | None = None
+    decided_channel: str | None = None
+    decided_ts: float | None = None         # epoch s, the decision's own clock; None for expired and older files
 
 
 class Decision(ApiRequest):
@@ -303,7 +306,7 @@ class RearmRequest(ApiRequest):
 class Status(BaseModel):
     mode: str
     halted: bool
-    halted_by: str | None = None
+    halted_by: str | None = None           # the channel that halted ("dashboard" | "telegram"), never who (A15)
     halt_reason: str | None = None
     pending: int
     supervisor: dict[str, Any]
@@ -516,7 +519,9 @@ class TrialRow(BaseModel):
     net_r: float | None
     net_t: float | None
     n: int | None
-    gates_passed: bool | None               # null when the trial recorded no gate verdict
+    gates_passed: bool | None               # null when the trial recorded no gate verdict; a pass counts only
+                                            # with its cost treatment recorded (registry.gate_pass_counts)
+    pre_swap: bool = False                  # recorded a pass but no swap/cost source: shown, not counted
     gates: list[GateCheck]
     rationale: str
 

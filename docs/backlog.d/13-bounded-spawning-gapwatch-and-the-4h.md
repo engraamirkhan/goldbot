@@ -1,10 +1,9 @@
 ---
 number: 13
-rank: 16
 title: Bounded spawning (`gap_watch`) and the 4h founder path
 stage: Learning and adaptation · FIND
 size: M–L
-status: in review (gap_watch and the 4h retrain path done; 1d research-only)
+status: 'done in part (PR #63, main 5f7da74; aad8f99, e17f047); 1d parked'
 ---
 
 ### 13. Bounded spawning and the 4h founder path
@@ -28,3 +27,5 @@ daily bars a frame needs, so a daily agent would never decide; gap_watch keeps r
 suggestion until the engine holds daily history (an engine change, trading-safety review).
 
 Rows: G3, G6, G11.
+
+Sweep 2026-10-16 (product owner): Done in part (PR #63, main 5f7da74; aad8f99, e17f047); 1d parked. Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.

@@ -1,13 +1,12 @@
 ---
 number: 6
-rank: 9
 title: Live exit policies and blackout early close
 stage: Trade management, exit · FIND + RUN
 size: M
-status: in review (safety fixes)
+status: 'done (PR #63, main 5f7da74; b87135c)'
 ---
 
-### 6. Live exit policies and blackout early close (in review)
+### 6. Live exit policies and blackout early close (done, PR #63)
 Value: momentum edges are made in the exits. Labels cannot test exits the engine cannot run, and exits are never
 gated, so they must work unattended (FIND + RUN).
 Acceptance:
@@ -20,3 +19,5 @@ Acceptance:
 - No exit path consults the approval queue (test asserts it).
 
 Rows: M3, M6, M7, R21.
+
+Sweep 2026-10-16 (product owner): Done (PR #63, main 5f7da74; b87135c). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.

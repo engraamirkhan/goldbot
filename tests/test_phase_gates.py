@@ -9,7 +9,8 @@ import pytest
 
 from goldbot.config import load_settings
 from goldbot.ops import accounts, gates_phase, health
-from goldbot.ops.gates_phase import ClosedTrade, GateReport, evaluate_gates, evaluate_stop_rule
+from goldbot.ops.cost_imputation import CostImputer
+from goldbot.ops.gates_phase import ClosedTrade, GateReport, evaluate_gates
 from goldbot.ops.health import AccountRef, HealthContext
 
 NOW = pd.Timestamp("2026-10-07 14:00", tz="UTC")
@@ -18,13 +19,24 @@ CFG = SETTINGS.gates
 CAP = SETTINGS.risk.weekly_cap
 PAPER_START = NOW - pd.Timedelta(days=800)
 LIVE_START = NOW - pd.Timedelta(days=400)
+PRIORS = CostImputer.from_settings(SETTINGS)
+
+
+def evaluate_stop_rule(trades: list[ClosedTrade], *a: Any) -> gates_phase.StopRuleStatus:
+    return gates_phase.evaluate_stop_rule(trades, *a, imputer=PRIORS)
 
 
 def trade(ret: float, *, mode: str = "demo", broker: str = "icmarkets", days_ago: float = 10.0, pnl: float | None = None,
-          equity: float = 10_000.0, account: str | None = None) -> ClosedTrade:
+          equity: float = 10_000.0, account: str | None = None, gross_held_days: float | None = None) -> ClosedTrade:
+    """A net trade (the broker's P&L with commission and swap inside); with `gross_held_days`, a gross one (commission
+    and swap unknown) entered that many days before its exit at $2,000, long, 0.1 lots."""
+    exit_utc = NOW - pd.Timedelta(days=days_ago)
+    costs: dict[str, Any] = (dict(commission=0.0, swap=0.0, pnl_basis="net") if gross_held_days is None else
+                             dict(pnl_basis="gross", side=1, lots=0.1, entry_price=2_000.0,
+                                  entry_utc=exit_utc - pd.Timedelta(days=gross_held_days)))
     return ClosedTrade(account_id=account or f"{broker}-{mode}", broker=broker, mode=mode,  # type: ignore[arg-type]
-                       exit_utc=NOW - pd.Timedelta(days=days_ago), ret=ret,
-                       pnl=pnl if pnl is not None else ret * equity, equity_before=equity)
+                       exit_utc=exit_utc, ret=ret, pnl=pnl if pnl is not None else ret * equity, equity_before=equity,
+                       **costs)
 
 
 def trades_over(n: int, ret: float | list[float], first_days_ago: float, last_days_ago: float, **kw: Any) -> list[ClosedTrade]:
@@ -49,12 +61,17 @@ def write_phase(state: Path, recorded: dict[str, pd.Timestamp]) -> None:
         "gate_log": [{"gate": g, "ts_utc": recorded[g].strftime("%Y-%m-%dT%H:%M:%SZ"), "evidence": {"text": "t"}} for g in gates]}))
 
 
+# the research cost treatment a row records (results.swap, results.cost_source): only then does its gate pass count
+COSTS: dict = {"swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0}, "cost_source": "PRIORS ONLY: test"}
+
+
 def write_trial(path: Path, *, dsr: float = 0.97, n: int = 600, mean_ret: float = 0.002, max_dd: float = 0.05,
                 years_passed: bool = True, status: str = "evaluated") -> None:
     row = {"trial": 7, "family": "session_open", "status": status,
            "results": {"model_filtered": {"n": n, "dsr": dsr, "mean_ret": mean_ret, "max_dd": max_dd},
                        "gates": {"passed": years_passed, "checks": [
-                           {"name": "positive_years", "passed": years_passed, "detail": "positive years [2019, 2021, 2024]"}]}}}
+                           {"name": "positive_years", "passed": years_passed, "detail": "positive years [2019, 2021, 2024]"}]},
+                       **COSTS}}
     path.write_text(json.dumps(row) + "\n")
 
 
@@ -91,6 +108,22 @@ def report(state: Path, trials: Path, now: pd.Timestamp = NOW) -> GateReport:
 def item(rep: GateReport, gate: str, name: str) -> bool:
     g = next(x for x in rep.gates if x.gate == gate)
     return next(i for i in g.items if i.name == name).met
+
+
+def evidence(rep: GateReport, gate: str, name: str) -> str:
+    g = next(x for x in rep.gates if x.gate == gate)
+    return next(i for i in g.items if i.name == name).evidence
+
+
+def trial_row(trial: int, *, dsr: float, mean_ret: float, passed: bool, failed_check: str | None = None) -> dict:
+    """A swap-charged walk-forward row whose own items (DSR, trades, positive years) are all fine; `passed` is its
+    recorded research-gate verdict, `failed_check` the check that failed it."""
+    checks = [{"name": "positive_years", "passed": True, "detail": "positive years [2019, 2021, 2024]"}]
+    if failed_check:
+        checks.append({"name": failed_check, "passed": False, "detail": f"{failed_check} below the design's minimum"})
+    return {"trial": trial, "family": "session_open", "status": "evaluated",
+            "results": {"model_filtered": {"n": 600, "dsr": dsr, "mean_ret": mean_ret, "max_dd": 0.05},
+                        "gates": {"passed": passed, "checks": checks}, **COSTS}}
 
 
 def gate_met(rep: GateReport, gate: str) -> bool:
@@ -198,6 +231,37 @@ def test_paper_expectancy_within_half_of_backtest(tmp_path):
     assert item(report(state, trials), "paper_to_tiny_live", "paper_expectancy")
     write_trial(trials, mean_ret=-0.001)                                # a losing backtest is no reference
     assert not item(report(state, trials), "paper_to_tiny_live", "paper_expectancy")
+
+
+@pytest.mark.parametrize("failed_check", ["candidates_per_fold", "complete_folds"])
+def test_a_swap_charged_trial_that_failed_its_candidate_or_fold_checks_leaves_gate_1_unmet(tmp_path, failed_check):
+    """Review of 978c667: DSR, trades and positive years can all be met by a trial that failed the research gates
+    (too few candidates per fold, incomplete folds); gate 1 requires the trial's own gate pass (gate_pass_counts)."""
+    state, trials = full_state(tmp_path)
+    assert item(report(state, trials), "backtest_to_paper", "research_gates")
+    trials.write_text(json.dumps(trial_row(7, dsr=0.97, mean_ret=0.002, passed=False, failed_check=failed_check)) + "\n")
+    rep = report(state, trials)
+    assert item(rep, "backtest_to_paper", "dsr") and item(rep, "backtest_to_paper", "positive_years")
+    assert item(rep, "backtest_to_paper", "backtest_trades")
+    assert not item(rep, "backtest_to_paper", "research_gates") and not gate_met(rep, "backtest_to_paper")
+    assert failed_check in evidence(rep, "backtest_to_paper", "research_gates")
+
+
+def test_paper_expectancy_names_its_comparator_and_never_switches_to_a_trial_that_failed_the_gates(tmp_path):
+    """Review of 978c667: the comparator is the best backtest trial; a later swap-charged trial with a higher DSR that
+    failed the gates (and whose mean happens to match paper) must not silently become the reference and pass."""
+    state, trials = full_state(tmp_path)
+    rep = report(state, trials)
+    assert item(rep, "paper_to_tiny_live", "paper_expectancy")
+    assert "trial #7" in evidence(rep, "paper_to_tiny_live", "paper_expectancy")
+    rows = [trial_row(7, dsr=0.97, mean_ret=0.002, passed=True),
+            trial_row(9, dsr=0.99, mean_ret=0.001, passed=False, failed_check="candidates_per_fold")]
+    trials.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    rep = report(state, trials)
+    text = evidence(rep, "paper_to_tiny_live", "paper_expectancy")
+    assert not item(rep, "paper_to_tiny_live", "paper_expectancy") and "trial #9" in text
+    assert "did not pass the research gates" in text
+    assert not item(rep, "tiny_live_to_full_size", "live_drawdown")      # the same comparator, the same refusal
 
 
 def test_fills_within_thirty_percent_of_the_modelled_slippage(tmp_path):
@@ -393,3 +457,117 @@ def test_a_closed_trade_written_by_a_newer_release_still_counts(tmp_path):
     gates_phase.closed_trade_file(tmp_path, t.account_id).write_text(json.dumps(row) + "\n")
     trades, err = gates_phase.load_closed_trades(tmp_path)
     assert err is None and trades == [t]
+
+
+# ------------------------------------------------------------------------------------------------ gross rows (quant review)
+# A gross row (commission and swap unknown) is kept and charged the conservative imputed cost (ops/cost_imputation.py):
+# at $2,000 and no cost table, at least the largest configured commission both sides, 2 x 3.5 / 100 / 2,000 = 3.5e-5,
+# plus the swap prior for any rollover a 2.4-hour hold crosses
+INTRADAY_CHARGE = 2 * max(SETTINGS.costs.commission_per_lot_side_usd.values()) / 100 / 2_000.0
+
+
+def paid(rows: list[ClosedTrade]) -> list[ClosedTrade]:
+    """The same gross rows with each return raised by exactly its imputed cost (net of it, they read as recorded)."""
+    return [t.model_copy(update={"ret": t.ret + PRIORS.charge(t).ret}) for t in rows]
+
+
+def item_of(rep: GateReport, gate: str, name: str) -> gates_phase.GateItem:
+    return next(i for i in next(x for x in rep.gates if x.gate == gate).items if i.name == name)
+
+
+def test_gross_paper_rows_are_kept_and_charged_the_imputed_cost_in_paper_expectancy(tmp_path):
+    state, trials = full_state(tmp_path)
+    live = [t for t in gates_phase.load_closed_trades(state)[0] if t.mode == "live"]
+    # met on the gross figure (0.001001 vs the 0.001 floor), not met once each row pays its commission
+    gross = trades_over(150, 0.001001, 790, 410, gross_held_days=0.1)
+    write_trades(state, gross + live)
+    rep = report(state, trials)
+    assert item(rep, "paper_to_tiny_live", "paper_trades")                    # nothing dropped
+    assert not item(rep, "paper_to_tiny_live", "paper_expectancy")
+    text = evidence(rep, "paper_to_tiny_live", "paper_expectancy")
+    total = PRIORS.net_rets(gross)[1].total_ret
+    assert total >= 150 * INTRADAY_CHARGE
+    assert "150 gross row(s)" in text and f"{total:.5f}" in text
+    # the same rows paid exactly their charge pass: the charge is what failed them
+    write_trades(state, paid(gross) + live)
+    assert item(report(state, trials), "paper_to_tiny_live", "paper_expectancy")
+
+
+def test_a_gross_row_that_cannot_be_priced_fails_the_expectancy_items_closed(tmp_path):
+    state, trials = full_state(tmp_path)
+    trades = gates_phase.load_closed_trades(state)[0]
+    unpriced = trade(0.01, days_ago=400.5).model_copy(update={"pnl_basis": "gross", "commission": None,
+                                                              "swap": None, "entry_price": None})
+    write_trades(state, trades + [unpriced])
+    rep = report(state, trials)
+    assert not item(rep, "paper_to_tiny_live", "paper_expectancy")
+    assert "could not be priced" in evidence(rep, "paper_to_tiny_live", "paper_expectancy")
+
+
+def test_gross_live_rows_are_charged_in_live_expectancy_drawdown_and_broker_agreement(tmp_path):
+    state, trials = full_state(tmp_path)
+    paper = [t for t in gates_phase.load_closed_trades(state)[0] if t.mode == "demo"]
+    floor = (1 - CFG.live_expectancy_within) * 0.001001
+    write_trades(state, paper + trades_over(150, floor * 1.0001, 390, 10, mode="live", gross_held_days=0.1)
+                 + trades_over(150, floor * 1.0001, 389, 11, mode="live", broker="vantage", gross_held_days=0.1))
+    rep = report(state, trials)
+    assert not item(rep, "tiny_live_to_full_size", "live_expectancy")
+    for name in ("live_expectancy", "live_drawdown", "brokers_agree"):
+        assert "300 gross row(s)" in evidence(rep, "tiny_live_to_full_size", name), name
+
+
+def test_broker_agreement_compares_the_charged_expectancy(tmp_path):
+    """Two brokers that agree on the gross figure, one of them gross: after the charge they are more than 15% apart."""
+    state, trials = full_state(tmp_path)
+    paper = [t for t in gates_phase.load_closed_trades(state)[0] if t.mode == "demo"]
+    write_trades(state, paper + trades_over(150, 0.0002, 390, 10, mode="live")
+                 + trades_over(150, 0.0002, 389, 11, mode="live", broker="vantage", gross_held_days=0.1))
+    assert 0.0002 * 0.15 < INTRADAY_CHARGE
+    assert not item(report(state, trials), "tiny_live_to_full_size", "brokers_agree")
+
+
+def test_the_gross_share_item_is_context_only_while_the_setting_is_off(tmp_path):
+    state, trials = full_state(tmp_path)
+    assert SETTINGS.gates.max_gross_share is None
+    rep = report(state, trials)
+    for gate, name in (("paper_to_tiny_live", "paper_gross_share"), ("tiny_live_to_full_size", "live_gross_share")):
+        it = item_of(rep, gate, name)
+        assert not it.required and "0 of" in it.evidence and "off" in it.need
+    assert [g.met for g in rep.gates] == [True, True, True, True]
+
+
+@pytest.mark.parametrize("n_gross,met", [(7, True), (8, False)])
+def test_the_gross_share_item_decides_the_gate_when_the_owner_sets_a_limit(tmp_path, n_gross, met):
+    state, trials = full_state(tmp_path)
+    trades = gates_phase.load_closed_trades(state)[0]
+    paper = [t for t in trades if t.mode == "demo"]
+    live = [t for t in trades if t.mode == "live"]
+    # 7 of 150 is 4.7% (under 5%), 8 of 150 is 5.3%; the gross rows are paid enough to keep expectancy met
+    mixed = paper[n_gross:] + paid(trades_over(n_gross, 0.0011, 600, 500, gross_held_days=0.1))
+    write_trades(state, mixed + live)
+    settings = SETTINGS.model_copy(update={"gates": CFG.model_copy(update={"max_gross_share": 0.05})})
+    rep = evaluate_gates(state, settings, NOW, trials_path=trials)
+    it = item_of(rep, "paper_to_tiny_live", "paper_gross_share")
+    assert it.required and it.met is met and gate_met(rep, "paper_to_tiny_live") is met
+    assert f"{n_gross} of 150" in it.evidence
+
+
+def test_the_incident_check_adds_the_imputed_cost_to_a_gross_loss():
+    """Review (optional item): a gross loss exactly at the weekly cap breaches once its imputed cost is added (the USD
+    charge read as account currency: conservative on a GBP or EUR deposit)."""
+    net = trade(-0.01, pnl=-CAP * 10_000.0, days_ago=1)
+    gross = trade(-0.01, pnl=-CAP * 10_000.0, days_ago=1, gross_held_days=0.1)
+    assert not evaluate_stop_rule([net], None, CAP, CFG, NOW).breached
+    s = evaluate_stop_rule([gross], None, CAP, CFG, NOW)
+    assert s.breached and "exceeds the weekly cap" in s.reasons[0]
+
+
+def test_the_stop_rule_charges_gross_rows_and_keeps_them_pooled():
+    """A positive gross mean whose bound is above zero; each row held over Wednesday's triple swap pays enough that the
+    charged bound falls below zero: the rule breaches on the charged figure, with every row still pooled."""
+    gross = [trade(0.0005 + (0.004 if i % 2 else -0.004), days_ago=500 - i * 0.5, gross_held_days=2.0)
+             for i in range(600)]
+    net = [trade(t.ret, days_ago=500 - i * 0.5) for i, t in enumerate(gross)]
+    assert not evaluate_stop_rule(net, PAPER_START, CAP, CFG, NOW).breached
+    s = evaluate_stop_rule(gross, PAPER_START, CAP, CFG, NOW)
+    assert s.breached and s.pooled_trades == 600 and "600 gross row(s)" in s.detail

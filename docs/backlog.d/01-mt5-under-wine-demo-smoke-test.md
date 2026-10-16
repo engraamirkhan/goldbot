@@ -1,10 +1,10 @@
 ---
 number: 1
-rank: 4
+rank: 1
 title: MT5-under-Wine demo smoke test on Oracle
 stage: Operational resilience, execution · RUN
 size: S
-status: ready
+status: 'in progress (`lane/claude-run-deploy`, plan ccef822) · accountable: release-manager · due 2026-10-18 (re-dated from 2026-10-13: the demo deploy never ran) · LATE'
 ---
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -19,3 +19,5 @@ Acceptance:
 
 Depends on: owner steps (VM provisioned, demo credentials in the keyring). Rows: X6–X10 unverified on real
 hardware; lifecycle "Operational resilience".
+
+Sweep 2026-10-16 (product owner): accountable `release-manager` (sre runs the box), due 2026-10-18, re-dated from 2026-10-13 because the deploy was not run or chased for three days (scorecard 2026-W42). Acceptance unchanged (above); the deploy uses a SHA that includes #78, and the 24 h health output goes on #34. The `run.py bridge-smoke` command is ROADMAP W1-1.

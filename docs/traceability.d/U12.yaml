@@ -2,4 +2,4 @@ id: U12
 requirement: Reset and invite links are revoked and kept out of logs and Referer
 status: implemented
 code: goldbot/api/auth.py (`change_password`, `forgot_password`, `disable` delete open reset links); web/src/lib/links.ts (`#invite=`/`#reset=`); goldbot/api/app.py `no_referrer`
-test: tests/test_auth_security.py::test_password_change_forgot_and_disable_delete_open_reset_links; ::test_api_and_static_responses_send_no_referrer; web/src/lib/links.test.ts
+test: tests/test_auth_security.py::test_password_change_forgot_and_disable_delete_open_reset_links; ::test_api_and_static_responses_send_no_referrer; web/src/lib/links.test.ts; web/e2e/auth.spec.ts "password reset link ..." (works once, token leaves the address bar)

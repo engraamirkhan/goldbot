@@ -215,7 +215,20 @@ AUX: tuple[Migration, ...] = (
     )),
 )
 
-CORE: tuple[Migration, ...] = (_IMPORTS,)      # steps 5-7 (halts, approvals, orders) append here
+CORE: tuple[Migration, ...] = (
+    _IMPORTS,
+    # additive (BACKLOG 54, ADR 0018): one row per account, the high-water mark's rise confirmation (the candidate
+    # rise and the mark's deal-history anchor; goldbot/risk/hwm.py). A release without it never reads the table, so a
+    # rollback opens the file and raises the mark on one read again (the old rule). Steps 5-7 (halts, approvals,
+    # orders) append after it
+    Migration(version=2, name="hwm_confirmation", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS hwm_confirmation (
+               account_id TEXT PRIMARY KEY,
+               ts_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+    )),
+)
 
 MIGRATIONS: dict[DbKind, tuple[Migration, ...]] = {"core": CORE, "aux": AUX}
 

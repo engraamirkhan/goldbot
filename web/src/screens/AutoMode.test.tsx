@@ -40,14 +40,18 @@ describe("Auto-mode card", () => {
     expect(screen.queryByRole("button", { name: "Enable auto mode" })).toBeNull();
   });
 
-  it("shows who set the mode to the owner and only the channel to a viewer", async () => {
+  it("names the channel that set the mode, never who, and the engine for a kill switch", async () => {
     vi.spyOn(apiModule.api, "automode").mockResolvedValue(view({ owner_mode: "propose", mode_by: "telegram", mode_since: "2026-10-01T09:00:00Z" }));
     const { unmount } = renderCard("viewer");
-    expect(await screen.findByText(setLine(/ on telegram\. /))).toBeInTheDocument();
+    expect(await screen.findByText(setLine(/ via Telegram\. /))).toBeInTheDocument();
     unmount();
-    vi.spyOn(apiModule.api, "automode").mockResolvedValue(view({ owner_mode: "propose", mode_by: "dashboard:o@x.io", mode_since: "2026-10-01T09:00:00Z" }));
+    vi.spyOn(apiModule.api, "automode").mockResolvedValue(view({ owner_mode: "propose", mode_by: "dashboard", mode_since: "2026-10-01T09:00:00Z" }));
+    const second = renderCard("owner");
+    expect(await screen.findByText(setLine(/ via the dashboard\. /))).toBeInTheDocument();
+    second.unmount();
+    vi.spyOn(apiModule.api, "automode").mockResolvedValue(view({ owner_mode: "propose", mode_by: "engine:icm-demo", mode_since: "2026-10-01T09:00:00Z" }));
     renderCard("owner");
-    expect(await screen.findByText(setLine(/ by o@x\.io on dashboard\. /))).toBeInTheDocument();
+    expect(await screen.findByText(setLine(/ by the icm-demo engine\. /))).toBeInTheDocument();
   });
 
   it("shows that the re-arm lock and the kill switch still force propose", async () => {

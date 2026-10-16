@@ -4,6 +4,10 @@
 * risk-day     — ends 00:00 UTC; loss-cap resets.
 * swap-day     — each broker's rollover, read from the terminal at runtime (not here).
 
+and a fourth, never used for a limit: the opportunity day, D-1 22:00 to D 22:00 UTC (ROLLOVER_UTC_H), the day of the
+opt-in `day_type` features and of the owner's north-star reports (goldbot/ops/report_days.py). 22:00 UTC falls inside
+gold's 17:00-18:00 New York daily break in both US DST regimes, so the Sunday reopen belongs to Monday.
+
 MT5 returns epoch integers that are *server clock* values labelled as UTC. `server_to_utc`
 undoes that using the broker's zone resolved per timestamp, so DST is handled and no fixed
 offset is ever assumed. A broker's `server_tz` is an IANA name (`Europe/Athens`: UTC+2/+3 on
@@ -13,7 +17,9 @@ Oct/Nov); `goldbot.ops.server_clock` measures which one the broker really runs.
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, time, timedelta, timezone, tzinfo
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -160,6 +166,15 @@ def risk_day(utc_ts: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(utc_ts).tz_convert(UTC).normalize().tz_localize(None)
 
 
+ROLLOVER_UTC_H = 22   # the opportunity day rolls at 22:00 UTC, inside the daily break in summer and winter
+
+
+def opportunity_day(ts: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Label (naive date) of the opportunity day holding each UTC instant: [D-1 22:00, D 22:00) UTC is day D."""
+    idx = pd.DatetimeIndex(ts).tz_convert(UTC)
+    return pd.DatetimeIndex((idx + pd.Timedelta(hours=24 - ROLLOVER_UTC_H)).normalize().tz_localize(None))
+
+
 def floor_tf(utc_ts: pd.DatetimeIndex, tf_sec: int) -> pd.DatetimeIndex:
     """Floor to timeframe boundary (left label). Weekly floors to Sunday 00:00 UTC-aligned weeks via 7d."""
     idx = pd.DatetimeIndex(utc_ts)
@@ -176,6 +191,31 @@ def now_utc() -> datetime:
     return datetime.now(tz=UTC)
 
 
+# A heartbeat stamped this far ahead of the reader's clock is a clock fault, not a fresh report. Writers and readers of
+# the safety heartbeats share one box (the state directory), so the only honest skew is an NTP step; a few seconds
+# covers it. Health passes use a wider tolerance (goldbot.ops.checks._base.HEALTH_CLOCK_AHEAD_S): their `now` is taken
+# once at the start of a pass that can run for many seconds.
+CLOCK_AHEAD_TOLERANCE_S = 5.0
+
+HeartbeatProblem = Literal["invalid", "future", "stale"]
+
+
+def heartbeat_problem(ts: Any, now: float, max_age_s: float, *,
+                      ahead_s: float = CLOCK_AHEAD_TOLERANCE_S) -> HeartbeatProblem | None:
+    """Why a heartbeat stamped `ts` (epoch seconds) cannot be called alive at `now`, None when it can. Fail closed
+    both ways (found 2026-10-16): `invalid` when `ts` is not a finite number (a string, a bool, null, NaN or
+    infinity: NaN compared false with every limit and so read as fresh); `future` when it is more than `ahead_s`
+    ahead of `now` (clock skew, a bad write, a backup restored from a box with a fast clock: `now - ts` is then
+    negative and a dead writer would look fresh forever); `stale` when it is more than `max_age_s` old."""
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not math.isfinite(ts):
+        return "invalid"
+    if ts - now > ahead_s:
+        return "future"
+    if now - ts > max_age_s:
+        return "stale"
+    return None
+
+
 __all__ = [
     "UTC",
     "NY_PLUS_7",
@@ -188,8 +228,13 @@ __all__ = [
     "feature_day",
     "feature_day_close",
     "risk_day",
+    "ROLLOVER_UTC_H",
+    "opportunity_day",
     "floor_tf",
     "now_utc",
+    "CLOCK_AHEAD_TOLERANCE_S",
+    "HeartbeatProblem",
+    "heartbeat_problem",
     "time",
     "timedelta",
 ]

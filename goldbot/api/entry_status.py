@@ -93,6 +93,13 @@ REASONS: dict[str, Reason] = {
                           "Check the supervisor service and the Health tab.", "act"),
     "no_supervisor_heartbeat": _r("Safety supervisor is not running", "Start the supervisor service.", "act"),
     "supervisor_heartbeat_stale": _r("Safety supervisor stopped reporting", "Restart the supervisor service.", "act"),
+    "supervisor_heartbeat_future": _r("Safety supervisor's report is stamped ahead of this server's clock",
+                                      "Check the server clock (time sync), then restart the supervisor service.",
+                                      "act"),
+    "engine_heartbeat_future": _r("An engine's report is stamped ahead of the server clock: entries stopped on "
+                                  "every account",
+                                  "Check the server clock (time sync), then restart the engine the Health tab names.",
+                                  "act"),
     "supervisor_state_unreadable": _r("Safety supervisor's state can't be read",
                                       "Restart the supervisor service; it rewrites the file.", "act"),
     "engine_state_unreadable": _r("The supervisor can't read an engine's state file",
@@ -158,6 +165,9 @@ REASONS: dict[str, Reason] = {
                      "Usually clears at the next clean bar; if it repeats, restart the engine.", "wait"),
     "data_quality_error": _r("Market data failed a quality check",
                              "Usually clears by itself; check the Feeds tab if it lasts.", "wait"),
+    "equity_unconfirmed": _r("The broker's equity reading looked wrong: checking it again",
+                             f"{NOTHING}: entries resume after a minute of normal readings; a second 12% reading "
+                             "stops trading.", "wait"),
     "data_recovering": _r("Prices just recovered: waiting a minute to be sure", f"{NOTHING}.", "wait"),
     "spread_too_wide": _r("Spread too wide right now", f"{NOTHING}: it narrows by itself (news or rollover).", "wait"),
     "max_positions": _r("Already the maximum number of open trades",
@@ -408,7 +418,7 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
                          supervisor_reasons: list[str] | None, drift_reasons: list[str] | None,
                          budget: LossBudget | None, limits: RiskLimits, milestones: Milestones | None = None,
                          is_owner: bool = True, combined_dd: float | None = None) -> EntryStatus:
-    """owner_halt: who halted (None: not halted); supervisor_reasons: the supervisor's halt as the engine reads it
+    """owner_halt: the channel that halted (None: not halted); supervisor_reasons: the supervisor's halt as the engine reads it
     (None: no halt; empty: a halt without reasons); drift_reasons: the drift watch's system halt (None: none);
     budget: the account's loss budget (account_view.loss_budget); milestones: its ladder (account_view.milestones);
     is_owner: the viewer may re-arm; combined_dd: the supervisor's combined drawdown halt (SupervisorLimits)."""
@@ -474,7 +484,10 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
         if (_num(e.get("tick_ahead_s")) or 0.0) > limits.max_tick_ahead_s:
             add(block("tick_from_future"))
         tick_age = _num(e.get("last_tick_age_s"))
-        if e.get("stale_bars") is True or (tick_age is not None and tick_age > limits.stale_tick_seconds):
+        # BACKLOG 59: a closed market has no fresh prices by design (the engine's weekend heartbeat says so); only
+        # `market_closed` is shown then, so a weekend never reads like a fault
+        if e.get("market_closed") is not True and \
+                (e.get("stale_bars") is True or (tick_age is not None and tick_age > limits.stale_tick_seconds)):
             add(block("stale_data"))
         if e.get("account_class") == "unknown" and e.get("mode") != "paper":
             add(block("account_class_unknown"))
@@ -574,7 +587,8 @@ def entry_inputs(state_dir: str | Path, settings: Settings | None, *, is_owner: 
         sup_limits = SupervisorLimits.from_settings(settings.risk) if settings is not None else SupervisorLimits()
     except Exception:                      # noqa: BLE001 - a bad settings edit: the defaults
         limits, sup_limits = RiskLimits(), SupervisorLimits()
-    return dict(owner_halt=(c.by or "unknown") if c.halted else None,
+    # the channel that halted, never who (A15): an older control.json's "<channel>:<id>" is cut to the channel
+    return dict(owner_halt=(c.by or "unknown").split(":", 1)[0] if c.halted else None,
                 supervisor_reasons=[r for r in why.split(",") if r] if halt else None,
                 drift_reasons=read_drift_halt(state_dir), limits=limits, combined_dd=sup_limits.dd_stage2,
                 is_owner=is_owner)

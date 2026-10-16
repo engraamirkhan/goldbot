@@ -185,6 +185,15 @@ deposits.
 The owner's ambition is the purpose of the system: **£50 or more on a good day, less or nothing when conditions
 are poor.** We record it as the north star. It is not a daily quota, and the system never sizes up to reach it.
 
+> **Amended 2026-10-16 (which "day").** Two days are in use, and they are kept apart on purpose:
+> - **The north-star "£50+ day" is the opportunity day.** It runs from 22:00 UTC the evening before to 22:00 UTC
+>   (`timeutil.opportunity_day`, `goldbot/ops/report_days.py`), so the Sunday reopen counts on Monday. The monthly
+>   report, the performance report and the digest's month line count £/day, best days and £50+ days on it.
+> - **The £50 daily loss limit stays on the risk day, 00:00-24:00 UTC** (`timeutil.risk_day`, gate `new_day`). The
+>   same goes for the 2% account cap and the supervisor's 1.5% combined cap. Their reset time did not move.
+> A close between 22:00 and 24:00 UTC therefore counts toward the next north-star day but toward that day's loss
+> limit. Moving the risk day is a separate owner decision with a trading-safety review (BACKLOG 57).
+
 **What a £50 day is at £1,000.** 5% of equity: about **6.1 R** at the 15m min lot (£8.20 per R), or 5 R at the 1%
 cap. One 0.01 lot makes £50 on a ~$66 move in its favour, which is about one full daily ATR. Such a day comes from a
 **runner**: a trend or news day (volatility expansion, a London–New York overlap breakout, a CPI/NFP/FOMC move)

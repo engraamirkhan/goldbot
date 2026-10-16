@@ -1,10 +1,9 @@
 ---
 number: 31
-rank: 31
 title: 'Runner exits: let winners run on opportunity days (ADR 0004 north star)'
 stage: Trade management, exit · FIND
 size: S–M
-status: proposed (after 6; hypothesis via the trial registry)
+status: 'parked: hypothesis for Q2 2027 trial budget; needs 30'
 ---
 - **31. Runner exits (hypothesis; quant and trading-safety review).** Value: a £50 day at £1,000 is a ~6 R winner;
   only trailing or scale-out exits catch those (FIND). Acceptance:
@@ -23,3 +22,4 @@ status: proposed (after 6; hypothesis via the trial registry)
   - Existing policies are unchanged (all current exit-policy tests pass).
   - Live `modify` only tightens. A clock flat is an automatic close that never waits for approval.
   - Exits stay automatic and are never gated. Depends on: 6 (live exit policies), 30.
+  Sweep 2026-10-16 (product owner): Parked: hypothesis for Q2 2027 trial budget; needs 30.
