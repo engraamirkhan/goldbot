@@ -466,7 +466,9 @@ class Engine:
         # closes the engine decided that have not succeeded yet: position -> (action, journal extras, last attempt);
         # retried every tick (kill switch, weekend, time exit, hard flat, trail, blackout, engine stop) until done
         self._close_due: dict[int, tuple[str, dict, pd.Timestamp | None]] = {}
-        self._kill_pending = False                   # the kill switch has not seen this engine's book flat yet
+        # the kill switch has not seen its book flat yet; a saved close-everything (`_load_risk_state`) retries at once
+        self._kill_pending = self._kill_everything
+        self._mode_reset_due = self._kill_everything   # the owner's mode still to be set back to propose (A10)
         # an invalid feed (a dropped quote or a last_tick read that raised): since when on the host clock (engine state,
         # health FAILs after QUOTE_INVALID_FAIL_S), and when the state file was last written meanwhile
         self._quote_invalid_since: pd.Timestamp | None = None
@@ -579,7 +581,7 @@ class Engine:
         self._stop_check(t)
         self._retry_closes(t.ts_utc)       # closes decided earlier that have not succeeded: every tick until done
         if self._kill_pending and self.state.stage == Stage.HALTED:
-            self._kill_switch(everything=False)   # until this engine's book is flat
+            self._kill_switch(everything=False)   # until its book is flat (the whole account while _kill_everything)
         self._scale_out(t)
         self._track_excursions(t)          # reporting only, after every exit; never raises
         if not repeat:
@@ -1940,6 +1942,7 @@ class Engine:
         if self.gate.update_stage(st) != stage:
             if st.stage == Stage.HALTED:
                 self._halted_at = now
+                self._kill_everything = True   # F1: decided before any I/O and saved just below, never one read's argument
             # survives a restart at once; a failed save never raises, so it cannot skip or narrow the flatten below
             self._save_risk_state_now("the stage change")
         if st.stage == Stage.HALTED:
@@ -2096,31 +2099,58 @@ class Engine:
 
     def _kill_switch(self, *, everything: bool) -> bool:
         """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
-        approve. On the trip every position on the account is closed; while halted, any of this engine's positions
-        (its magic range) that is still open, e.g. after a failed close, is closed again on each refresh. The trip also
-        sets the owner's mode back to propose, so auto mode is offered again only on new evidence (A10).
+        approve. The trip closes every position on the account. That choice is state, not this call's argument
+        (trading-safety F1): `_kill_everything` is set before any I/O, saved with the risk state, used by every retry
+        and after a restart, and cleared only once a run has closed every position on the account (seen flat). After
+        that, while halted, any of this engine's positions (its magic range) still open is closed again on each refresh.
+        The trip also sets the owner's mode back to propose, so auto mode is offered again only on new evidence (A10);
+        that write comes after the flatten and never raises (`_reset_owner_mode`).
         Each close is tried on its own (one raising or refused close never stops the others) and a failed one is
-        re-sent every tick (`_retry_closes`); until a positions() read shows this engine's magic range flat the switch
-        runs again on every tick (`_kill_pending`). Returns whether the range was seen flat."""
-        self.cfg.approval_mode = "propose"
-        if everything and self.center.bus is not None and self.center.bus.control().approval_mode == "auto":
-            self.center.bus.set_mode("propose", by=f"engine:{self.cfg.account_id}", reason="12% kill switch")
-            self.decisions.append({"ts": time.time(), "action": "mode_propose", "reason": "kill_switch"})
+        re-sent every tick (`_retry_closes`); until a run sees its scope flat the switch runs again on every tick
+        (`_kill_pending`). Returns whether the scope was seen flat."""
+        self.cfg.approval_mode = "propose"     # in memory, before any I/O: auto entries are blocked from here on
+        if everything:
+            self._kill_everything = self._mode_reset_due = True
+        whole = self._kill_everything
         self._kill_pending = True
-        positions = self._read_positions("the kill switch runs again next tick")
-        if positions is None:
-            return False
-        flat, left = True, len(positions)
-        for p in positions:
-            if not (everything or self._own(p.magic)):
-                continue
-            # a close already due is re-sent by _retry_closes (with its market-closed backoff), not twice per tick
-            ok = p.position_id not in self._close_due and self._try_close(p.position_id, "kill_switch_close", None).ok
-            left -= ok
-            flat = flat and (ok or not self._own(p.magic))
-        self._kill_pending = not flat
-        self.state.open_positions = left
-        return flat
+        try:
+            positions = self._read_positions("the kill switch runs again next tick")
+            if positions is None:
+                return False
+            flat, left = True, len(positions)
+            for p in positions:
+                if not (whole or self._own(p.magic)):
+                    continue
+                # a close already due is re-sent by _retry_closes (with its market-closed backoff), not twice per tick
+                ok = p.position_id not in self._close_due and \
+                    self._try_close(p.position_id, "kill_switch_close", None).ok
+                left -= ok
+                flat = flat and ok
+            self._kill_pending = not flat
+            self.state.open_positions = left
+            if whole and flat:
+                self._kill_everything = False      # the whole account seen flat: later refreshes close our book only
+                self._save_risk_state_now("the kill switch's whole-account flatten")
+            return flat
+        finally:
+            self._reset_owner_mode()
+
+    def _reset_owner_mode(self) -> None:
+        """The kill switch's write of the owner's mode back to propose (A10), after the flatten and never raising
+        (trading-safety F1): a failed write (a full disk) is a tick error and is retried on the next kill-switch run;
+        the in-memory `approval_mode = "propose"` already blocks auto entries, so nothing waits on this write."""
+        bus = self.center.bus
+        if not self._mode_reset_due or bus is None:
+            return
+        try:
+            if bus.control().approval_mode == "auto":
+                bus.set_mode("propose", by=f"engine:{self.cfg.account_id}", reason="12% kill switch")
+                self.decisions.append({"ts": time.time(), "action": "mode_propose", "reason": "kill_switch"})
+            self._mode_reset_due = False
+        except Exception as exc:
+            log.error("approval mode not set back to propose after the kill switch (%s); auto entries stay blocked "
+                      "in memory, retried on the next kill-switch run", type(exc).__name__)
+            self.note_tick_error(exc)
 
     def _server_clock(self, now: pd.Timestamp, tick: Tick) -> None:
         """Rollover (+-rollover_min of 00:00 server: no entries) and weekend (Friday weekend_cut server until the week
@@ -2768,7 +2798,7 @@ class Engine:
                    "rearm_seen": self._rearm_seen, "weekend_done": self._weekend_done,
                    "halted_at": self._halted_at.isoformat() if self._halted_at is not None else None,
                    "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
-                   "rearm_refused": self._rearm_refused,
+                   "rearm_refused": self._rearm_refused, "kill_everything": self._kill_everything,
                    "stage2_pending_since": None if self._stage2_pending_since is None
                    else self._stage2_pending_since.isoformat()}
         write_atomic(self._risk_path(), json.dumps(payload))       # durable: halts and stages survive a power cut
@@ -2788,6 +2818,7 @@ class Engine:
 
     def _load_risk_state(self) -> None:
         path = self._risk_path()
+        self._kill_everything = False
         if not path.exists():
             # first start: an earlier re-arm on the bus is not a re-arm of this engine
             self._rearm_seen = self.center.bus.control().rearm_id if self.center.bus is not None else None
@@ -2807,6 +2838,9 @@ class Engine:
         # ADR 0016: absent (an older file) = nothing pending; an older release drops it and trips on one read instead
         pending = d.get("stage2_pending_since")
         self._stage2_pending_since = pd.Timestamp(pending) if pending else None
+        # F1: a trip whose whole-account flatten had not been seen flat goes on closing the whole account; absent (an
+        # older file) = this engine's book only, as that release did
+        self._kill_everything = bool(d.get("kill_everything", False))
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the

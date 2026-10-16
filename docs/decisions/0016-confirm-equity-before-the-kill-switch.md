@@ -117,5 +117,17 @@ The review offered two ways to close the alternating-readings hole:
   (`everything=True`). The next state write saves the risk state again; until one succeeds, a restart would reload
   the last saved state (the halt, the pending read or the mark may be lost), and the health check sees the tick
   errors.
+- **Correction (trading-safety F1, 16 Oct).** The bullet above was false in auto mode: the trip's write of the owner's
+  mode back to propose (`ApprovalBus.set_mode`) ran before the flatten, so a full disk raised out of it and nothing
+  was closed on the tripping read; a positions() read failing on that read did the same. Later runs were narrowed to
+  this engine's magic range, so a manual or other-magic position stayed open. It now holds in auto mode too: the
+  close-everything choice is state (`_kill_everything`), set before any I/O, saved with the risk state
+  (`kill_everything`), used by every retry and after a restart, and cleared only once a run has closed every position
+  on the account; the mode write comes after the flatten and never raises (a tick error, retried; the in-memory
+  `approval_mode = "propose"` already blocks auto entries). Evidence: `tests/test_kill_switch_everything.py`
+  (scenario A `test_a_failed_approval_mode_write_on_the_trip_still_closes_the_other_magic_position`, scenario B
+  `test_a_failed_positions_read_on_the_trip_still_closes_the_other_magic_position_on_the_next_refresh` and
+  `..._on_the_next_tick`, restart `test_after_a_restart_a_saved_close_everything_still_closes_the_whole_account`).
+  A rollback to an earlier release ignores the saved flag: the narrower, pre-fix behaviour.
 - **What would change this.** A measured bad read lasting two ticks would call for confirmation by time (reads N
   seconds apart). A bridge that reports credit would let the tolerance shrink.
