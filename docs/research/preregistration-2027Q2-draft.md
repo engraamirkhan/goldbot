@@ -440,9 +440,19 @@ rules, research director records it here. Date: **2026-10-25**.
 - [x] Quant rulings Q-1, Q-2, Q-3 recorded here (2026-10-10)
 - [ ] Owner ruling O-1 recorded, or H-18 withdrawn
 - [ ] BACKLOG 30a, 31, E-1, E-2, E-3, E-4 merged and tested; E-5 decided (E-4 built 2026-10-11, quant review pending)
-- [ ] Pins P-1 .. P-10 above recorded **before** the first count-owed-events run on `main` (target 2026-10-25)
-- [ ] `calendar-v1` and `macro-v1` releases published (absent on 2026-10-11: `data-us-calendar` and `data-macro`
-  have never run), otherwise the H-16/H-17/H-18/H-14 counts come back "not counted"
+- [ ] Pins P-1 .. P-10 above recorded **before** the first count-owed-events run on `main` that has `calendar-v1`
+  (target 2026-10-25; accountable: strategy-researcher). **Deviation, recorded 2026-10-16 by the research director:**
+  the first run on `main` (38931951849, 2026-10-16, for the Q1 counts) came before P-3, P-4 and P-6 .. P-10 were
+  recorded. It had no `calendar-v1` and E-2/E-3 are not merged, so every H-17, H-18 and H-14 row and H-16's
+  `expected_eval_days` came back "not counted" (n/a; per-year rows all 0): no count that an open pin governs was
+  seen. The only Q2 value it printed is H-16's `first_oos_month` = **2012-03** (placebo prices; the script's expected
+  value is 2012-04), which no open pin touches; the difference is explained by the strategy-researcher before the
+  Q2 freeze. The item is therefore restated to the first run that can count the pinned rows.
+- [ ] `calendar-v1` release published (accountable: owner sets the `FRED_API_KEY` repo secret, chaser:
+  program-director, by 2026-10-18; then data-engineer dispatches `data-us-calendar`), otherwise the
+  H-16/H-17/H-18/H-14 counts come back "not counted". **Blocked on the owner** (no secret on 2026-10-16;
+  `data-us-calendar` has never run).
+- [x] `macro-v1` release published (2026-10-13, scheduled `data-macro` run 38394945106; checked 2026-10-16)
 - [ ] Event counts owed above recorded (events only, no labels or outcomes): run count-owed-events and paste the
   counts before the freeze, recounted with E-2/E-3's own code once merged; H-17 withdrawn if < 1,000
 - [ ] `costs-v1` published (or the priors accepted and stated); `macro-v1` present for H-16
