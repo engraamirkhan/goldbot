@@ -183,6 +183,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     printed the action's attribute dict; now "8%%", with a test that `--help` renders.
   - Tests: tests/test_digest.py 10 new (12 cases), 1 updated; tests/test_report_days.py 2 new (5 cases);
     tests/test_min_lot.py 1 new. RUNBOOK 0.5 "Morning digest" updated.
+- Gates on the frozen next-PR candidate tree 626b56b (nobody editing; macOS, own venv, `GATES_WORKERS=4`, Node 22.22.3). All green. Raw output of `scripts/gates.sh --web` plus e2e:
+
+  | Gate | Result |
+  |---|---|
+  | unit (`pytest -m "not integration"`) | PASS, 5194 passed in 159.33s |
+  | integration (`pytest -m integration`) | PASS, 80 passed, 1 skipped, 1 warning in 382.26s |
+  | dry_run | PASS, lookahead check: 0 of 240 columns use future data [] |
+  | ruff | PASS, All checks passed! |
+  | mypy | PASS, Success: no issues found in 354 source files |
+  | pre-commit (`--all-files`) | PASS |
+  | web (npm ci, lint, typecheck, vitest, build) | PASS, Tests 129 passed (129) |
+  | e2e (`npm --prefix web run test:e2e`) | PASS, 19 passed (7.2m) |
+
+  Total wall time of gates.sh: 384 s. E2E needed `PW_CHROMIUM_PATH` set to the cached chromium_headless_shell-1208 (Playwright wanted build 1248, not installed); the first attempt without it failed on browser launch only. The `CancelledError` traceback at e2e server shutdown is the websocket sleep being cancelled at teardown, not a test failure.
 - Heartbeats stamped in the future fail closed (2026-10-16, BACKLOG 58). Before this, a `ts` ahead of the reader's
   clock, or a NaN, made `now - ts > limit` False, so a dead supervisor whose last write carried a fast clock (or came
   from a restored backup) never halted the engines. The shared rule is `goldbot.data.timeutil.heartbeat_problem`:
