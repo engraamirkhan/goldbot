@@ -1,5 +1,8 @@
 # Rendered by scripts/docs_assemble.py from docs/{handoff,traceability,backlog}.d/ (ADR 0012): GitHub collapses
 # them in PR diffs, so reviews read the fragments. Never edit them by hand.
-HANDOFF.md linguist-generated=true
-docs/TRACEABILITY.md linguist-generated=true
-docs/BACKLOG.md linguist-generated=true
+# merge=goldbot-docs: a merge, rebase or cherry-pick re-renders them from the merged fragments instead of conflicting
+# (throughput plan lever 4). Enable once per clone: `python scripts/docs_assemble.py install-merge-driver`; without
+# it git merges them as plain text.
+HANDOFF.md linguist-generated=true merge=goldbot-docs
+docs/TRACEABILITY.md linguist-generated=true merge=goldbot-docs
+docs/BACKLOG.md linguist-generated=true merge=goldbot-docs
