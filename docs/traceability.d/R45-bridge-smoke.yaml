@@ -1,4 +1,4 @@
-id: R44
+id: R45
 requirement: 'BACKLOG 1 / ADR 0021: an operational order (`run.py bridge-smoke`) passes the RiskGate''s account limits, not its model checks, needs one owner click within 90 s, and trades demo only. X7 departure: no `pending_orders` row; the client id `<account>-<epoch_ns>-smoke` (last 31 characters as the order comment) and a 24 h look-up of positions and deals with magic_base + 99 replace it'
 status: implemented
 code: 'goldbot/risk/gate.py `check_operational` (F1 operational_not_demo, F2 volume_min on the step, S6 named skips) over `_account_gate` / `_same_direction` / `_sized_limits` shared with `check` (F5); goldbot/ops/smoke.py `run_smoke`, `smoke_state` (STATE_SOURCES), `engine_running`, `smoke_lock`, `find_smoke`, `close_position`; goldbot/execution/bridge.py GuardedBroker.place_order refuses magic_base + SMOKE_MAGIC_OFFSET off demo (F4); goldbot/ops/ledger.py `smoke_positions` kept out of RC-8; goldbot/ops/commands/ops.py bridge-smoke'

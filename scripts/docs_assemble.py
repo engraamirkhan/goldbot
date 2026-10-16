@@ -25,6 +25,13 @@ Commands (all take --root, default the repo):
   merge BRANCH                   git merge --no-commit + absorb + fix-ids + render + commit, in one go
   migrate                        one-off split of the old rendered files into fragments (kept: absorb parses the
                                  old format with the same code, and the lossless test replays it)
+  install-merge-driver           register the `goldbot-docs` git merge driver in this repo's git config, so a plain
+                                 merge, rebase or cherry-pick re-renders the rendered docs instead of conflicting
+  merge-driver %O %A %B %P ...   the driver itself (git calls it; `.gitattributes` routes the rendered docs to it)
+  new-adr --slug S --title T     reserve the next ADR number under a lock in the git common dir and write
+                                 docs/decisions/NNNN-S.md (`--number N` claims a number in reserved.yaml)
+
+`check` also fails on two ADR files with one number.
 
 Standalone on purpose (stdlib + PyYAML, no goldbot import): the pre-commit hook runs it in its own environment.
 """
@@ -34,7 +41,9 @@ import argparse
 import datetime as dt
 import difflib
 import math
+import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -547,7 +556,7 @@ def duplicates(recs: list[Rec]) -> dict[str, list[Rec]]:
 
 def build(tree: Tree) -> dict[str, str]:
     """Rendered path -> text for every doc whose template exists; DocsError lists every problem at once."""
-    errors: list[str] = []
+    errors: list[str] = adr_errors(tree)
     out: dict[str, str] = {}
     template = tree.read(f"{HANDOFF_DIR}/{TEMPLATE}")
     if template is not None:
@@ -897,6 +906,278 @@ def cmd_merge(root: Path, ref: str) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------------------------------- merge driver
+
+DRIVER = "goldbot-docs"
+DRIVER_ARGS = "merge-driver %O %A %B %P %S %X %Y"
+
+
+@dataclass(frozen=True)
+class MapTree:
+    """A tree held in memory: rel path -> text (the fragments of a merge result git has not written out yet)."""
+
+    files: dict[str, str]
+
+    def read(self, rel: str) -> str | None:
+        return self.files.get(rel)
+
+    def names(self, rel_dir: str) -> list[str]:
+        return sorted(Path(p).name for p in self.files if Path(p).parent.as_posix() == rel_dir)
+
+
+def commit_of(root: Path, rev: str) -> str | None:
+    r = git(root, "rev-parse", "--verify", "-q", f"{rev}^{{commit}}", check=False)
+    return r.stdout.strip() if r.returncode == 0 and rev else None
+
+
+def label_commit(root: Path, label: str) -> str | None:
+    """The commit behind a conflict-marker label: `HEAD`, a branch, a sha, `<sha> (subject)` (rebase, cherry-pick)
+    or `parent of <sha> (subject)` (their base)."""
+    label = label.strip()
+    m = re.match(r"parent of (\S+)", label)
+    if m:
+        return commit_of(root, f"{m.group(1)}^")
+    return commit_of(root, label.split()[0]) if label else None
+
+
+def merged_commits(root: Path, base_label: str, ours_label: str, theirs_label: str) -> tuple[str, str, str] | None:
+    """(base, ours, theirs) of the merge git is running, or None when the labels do not name commits (stash)."""
+    heads = [k[len("GITHEAD_"):] for k in os.environ if k.startswith("GITHEAD_")]  # set by `git merge`, `pull`
+    theirs = commit_of(root, heads[0]) if len(heads) == 1 else label_commit(root, theirs_label)
+    ours = label_commit(root, ours_label)
+    if ours is None or theirs is None:
+        return None
+    base = label_commit(root, base_label)
+    if base is None:
+        bases = git(root, "merge-base", "--all", ours, theirs, check=False).stdout.split()
+        base = bases[0] if len(bases) == 1 else None
+    return None if base is None else (base, ours, theirs)
+
+
+def fragment_blobs(root: Path, ref: str) -> dict[str, str]:
+    out = git(root, "ls-tree", "-r", "-z", ref, "--", *FRAG_DIRS).stdout
+    blobs = {}
+    for entry in filter(None, out.split("\0")):
+        meta, _, path = entry.partition("\t")
+        blobs[path] = meta.split()[2]
+    return blobs
+
+
+def cat_blobs(root: Path, oids: list[str]) -> list[str]:
+    r = subprocess.run(["git", "cat-file", "--batch"], cwd=root, input="".join(f"{o}\n" for o in oids).encode(),
+                       capture_output=True, check=True)
+    out, pos, texts = r.stdout, 0, []
+    for _ in oids:
+        head_end = out.index(b"\n", pos)
+        size = int(out[pos:head_end].split()[2])
+        texts.append(out[head_end + 1:head_end + 1 + size].decode("utf-8"))
+        pos = head_end + 1 + size + 1
+    return texts
+
+
+def merged_fragments(root: Path, base: str, ours: str, theirs: str) -> tuple[MapTree, list[str]]:
+    """The fragment dirs of the merge result, as git merges them: per file three-way, and a file changed on both
+    sides is merged line by line (`git merge-file`, git's own algorithm). Only a file that merge leaves conflicted,
+    or one deleted on one side and changed on the other, is returned as a conflict (git conflicts on it too)."""
+    b, o, t = (fragment_blobs(root, ref) for ref in (base, ours, theirs))
+    picked: dict[str, str] = {}
+    both: list[str] = []
+    conflicts = []
+    for path in sorted(set(b) | set(o) | set(t)):
+        bv, ov, tv = b.get(path), o.get(path), t.get(path)
+        if ov == tv or bv == tv:
+            oid = ov
+        elif bv == ov:
+            oid = tv
+        elif ov is None or tv is None:
+            conflicts.append(path)  # deleted on one side, changed on the other
+            continue
+        else:
+            both.append(path)
+            continue
+        if oid is not None:
+            picked[path] = oid
+    oids = sorted({*picked.values(), *(v for p in both for v in (b.get(p), o[p], t[p]) if v is not None)})
+    text = dict(zip(oids, cat_blobs(root, oids), strict=True))
+    files = {path: text[oid] for path, oid in picked.items()}
+    for path in both:
+        bv = b.get(path)
+        merged, clean = merge_text(root, text[o[path]], text[bv] if bv else "", text[t[path]])
+        if clean:
+            files[path] = merged
+        else:
+            conflicts.append(path)
+    return MapTree(files), conflicts
+
+
+def cmd_merge_driver(root: Path, base_file: str, ours_file: str, theirs_file: str, path: str,
+                     base_label: str = "", ours_label: str = "HEAD", theirs_label: str = "") -> int:
+    """git merge driver for the rendered docs: write the render of the merged fragments to `ours_file` (%A).
+
+    "No rendered file ever conflicts" (throughput plan lever 4): git computes the merge in memory, so the working
+    tree still holds our fragments while this runs; the driver merges the fragment dirs of the three commits itself
+    and renders from that. A fragment changed differently on both sides, or a render error (two lanes took one id),
+    exits 1 and leaves the usual conflict markers, so the merge stops loudly. When the labels name no commits (a
+    stash), it falls back to git's own text merge.
+    """
+    ours_p = root / ours_file
+    current = ours_p.read_text(encoding="utf-8")
+    base_text = (root / base_file).read_text(encoding="utf-8")
+    theirs_text = (root / theirs_file).read_text(encoding="utf-8")
+    text_merge, clean = merge_text(root, current, base_text, theirs_text)
+    commits = merged_commits(root, base_label, ours_label, theirs_label) if path in RENDERED else None
+    if commits is None:
+        ours_p.write_text(text_merge, encoding="utf-8")
+        print(f"{DRIVER}: {path}: could not tell which commits are merged; used a text merge. {HINT}.",
+              file=sys.stderr)
+        return 0 if clean else 1
+    tree, conflicts = merged_fragments(root, *commits)
+    frag_dir = dict(zip(RENDERED, FRAG_DIRS, strict=True))[path]  # only this doc's fragments can leave it conflicted
+    conflicts = [c for c in conflicts if c.startswith(f"{frag_dir}/")]
+    try:
+        if conflicts:
+            raise DocsError(f"fragments conflict: {', '.join(conflicts)}; resolve them, then {HINT} "
+                            f"and `git add {path}`")
+        rendered = build(MapTree({k: v for k, v in tree.files.items() if k.startswith(f"{frag_dir}/")}))[path]
+    except DocsError as exc:
+        ours_p.write_text(text_merge, encoding="utf-8")
+        print(f"{DRIVER}: {path} left conflicted:\n{exc}", file=sys.stderr)
+        return 1
+    ours_p.write_text(rendered, encoding="utf-8")
+    return 0
+
+
+def cmd_install_merge_driver(root: Path) -> str:
+    """Register the driver in the repository's git config (shared by every worktree; never committed: it names this
+    machine's interpreter). `.gitattributes` routes the rendered docs to it; without it git merges them as text."""
+    command = f"{shlex.quote(sys.executable)} scripts/docs_assemble.py {DRIVER_ARGS}"
+    git(root, "config", f"merge.{DRIVER}.name", "goldbot rendered docs: re-render from the merged fragments")
+    git(root, "config", f"merge.{DRIVER}.driver", command)
+    return command
+
+
+# ---------------------------------------------------------------------------------------------- ADR reservation
+
+ADR_DIR = "docs/decisions"
+ADR_NAME = re.compile(r"^(\d{4})-([a-z0-9][a-z0-9-]*)\.md$")
+ADR_RESERVED = f"{ADR_DIR}/reserved.yaml"
+ADR_LEDGER = "goldbot-adr-reservations"  # in the git common dir: one per machine, shared by every worktree
+ADR_LOCK = "goldbot-adr.lock"
+ADR_TEMPLATE = """# {num:04d}: {title}
+
+Status: proposed ({role}, {date})
+
+## Context
+{stub}
+
+## Decision
+{stub}
+
+## Consequences
+{stub}
+"""
+
+
+def adr_files(tree: Tree) -> dict[int, list[str]]:
+    out: dict[int, list[str]] = {}
+    for name in tree.names(ADR_DIR):
+        m = ADR_NAME.match(name)
+        if m:
+            out.setdefault(int(m.group(1)), []).append(name)
+    return out
+
+
+def adr_reserved(tree: Tree, errors: list[str]) -> dict[int, str]:
+    """The numbers the program-director or the CTO register reserved before any ADR file exists."""
+    text = tree.read(ADR_RESERVED)
+    if text is None:
+        return {}
+    try:
+        data = yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        errors.append(f"{ADR_RESERVED}: not valid YAML ({exc})")
+        return {}
+    out: dict[int, str] = {}
+    entries = data.get("reserved") if isinstance(data, dict) else None
+    for e in entries if isinstance(entries, list) else [None]:
+        if not isinstance(e, dict) or not isinstance(e.get("number"), int) or not isinstance(e.get("slug"), str):
+            errors.append(f"{ADR_RESERVED}: `reserved:` must list entries with `number:` (int) and `slug:`")
+            continue
+        if e["number"] in out:
+            errors.append(f"{ADR_RESERVED}: {e['number']:04d} is reserved twice")
+        out[e["number"]] = e["slug"]
+    return out
+
+
+def adr_errors(tree: Tree) -> list[str]:
+    errors: list[str] = []
+    for num, names in sorted(adr_files(tree).items()):
+        if len(names) > 1:
+            errors.append(f"{ADR_DIR}: ADR {num:04d} is used by {', '.join(sorted(names))}; keep the one that landed "
+                          "first and renumber the other with `new-adr` (numbers are cited elsewhere: update them)")
+    adr_reserved(tree, errors)
+    return errors
+
+
+def adr_numbers_on_branches(root: Path) -> set[int]:
+    """ADR numbers committed on any local or remote-tracking branch: lanes that wrote an ADR before reserving one,
+    and numbers taken on other machines once fetched, still count. Limit: a number taken on another machine or in a
+    cloud sandbox and not yet fetched is invisible here (and so is a `reserved.yaml` entry not yet in this checkout);
+    `check` catches such a collision when the two meet in one tree."""
+    refs = set(git(root, "for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes").stdout.split())
+    nums: set[int] = set()
+    for ref in refs:
+        nums |= set(adr_files(GitTree(root, ref)))
+    return nums
+
+
+def cmd_new_adr(root: Path, slug: str, title: str, role: str = "author", number: int | None = None,
+                today: dt.date | None = None) -> Path:
+    """Reserve the next ADR number and write `docs/decisions/NNNN-<slug>.md` (ADR 0025, amending 0012).
+
+    "Two lanes picked 0021" (tech-debt TD-7): the number is taken under a lock in the git common dir, which every
+    worktree on this machine shares, and recorded in a ledger there before the file is written, so a parallel lane
+    sees it even while it is uncommitted. Numbers reserved in `docs/decisions/reserved.yaml` are skipped; a lane
+    whose brief names one claims it with `number`. A number once handed out is never handed out again.
+    """
+    import fcntl  # POSIX only: ADRs are written on the Mac or Linux, never on the Windows VPS
+
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug):
+        raise DocsError("slug: lower-case letters, digits and hyphens")
+    r = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False)
+    if r.returncode != 0:
+        raise DocsError("new-adr needs a git repository (it locks in the git common dir)")
+    common = Path(r.stdout.strip())
+    tree = FsTree(root)
+    errors: list[str] = []
+    reserved = adr_reserved(tree, errors)
+    if errors:
+        raise DocsError("\n".join(errors))
+    with open(common / ADR_LOCK, "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        ledger = common / ADR_LEDGER
+        lines = ledger.read_text(encoding="utf-8").splitlines() if ledger.is_file() else []
+        handed = {int(line.split()[0]) for line in lines if line[:4].isdigit()}
+        used = set(adr_files(tree)) | adr_numbers_on_branches(root) | handed
+        if number is not None:
+            if number not in reserved:
+                raise DocsError(f"ADR {number:04d} is not reserved in {ADR_RESERVED}; omit --number to take the "
+                                "next free one")
+            if number in used:
+                raise DocsError(f"ADR {number:04d} is already taken")
+            num = number
+        else:
+            num = max(used | set(reserved), default=0) + 1
+        date = (today or dt.date.today()).isoformat()
+        path = root / ADR_DIR / f"{num:04d}-{slug}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "x", encoding="utf-8") as fh:
+            fh.write(ADR_TEMPLATE.format(num=num, title=title, role=role, date=date, stub=STUB))
+        with open(ledger, "a", encoding="utf-8") as fh:
+            fh.write(f"{num:04d} {slug} {date} {root}\n")
+    return path
+
+
 # -------------------------------------------------------------------------------------------------------- migrate
 
 def cmd_migrate(root: Path) -> list[str]:
@@ -947,6 +1228,17 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("merge")
     p.add_argument("branch")
     sub.add_parser("migrate")
+    p = sub.add_parser("merge-driver", help="called by git (see install-merge-driver), not by hand")
+    for name in ("base", "ours", "theirs", "path"):
+        p.add_argument(name)
+    for name in ("base_label", "ours_label", "theirs_label"):
+        p.add_argument(name, nargs="?", default="")
+    sub.add_parser("install-merge-driver")
+    p = sub.add_parser("new-adr")
+    p.add_argument("--slug", required=True)
+    p.add_argument("--title", required=True)
+    p.add_argument("--role", default="author", help="who proposes it, for the Status line")
+    p.add_argument("--number", type=int, help="claim a number reserved in docs/decisions/reserved.yaml")
     args = ap.parse_args(argv)
     root: Path = args.root.resolve()
     try:
@@ -978,6 +1270,14 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "migrate":
             print("migrated:", ", ".join(cmd_migrate(root)) or "nothing (already migrated)")
             return cmd_render(root)
+        elif args.cmd == "merge-driver":
+            return cmd_merge_driver(root, args.base, args.ours, args.theirs, args.path, args.base_label,
+                                    args.ours_label or "HEAD", args.theirs_label)
+        elif args.cmd == "install-merge-driver":
+            print(f"merge.{DRIVER}.driver = {cmd_install_merge_driver(root)}")
+        elif args.cmd == "new-adr":
+            print(cmd_new_adr(root, args.slug, args.title, args.role, args.number),
+                  "(fill in Context, Decision and Consequences; commit it promptly)")
     except DocsError as exc:
         print(exc, file=sys.stderr)
         return 1

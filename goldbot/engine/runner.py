@@ -45,6 +45,7 @@ from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resamp
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
+from goldbot.execution.bridge import CEILING_REFUSAL, UNREADABLE_REFUSAL
 from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
 from goldbot.features import build_features
@@ -76,6 +77,7 @@ from goldbot.risk.windows import (
 )
 from goldbot.specialists.base import Specialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal, ceil_cent
+from goldbot.telegram.entry_text import account_name
 
 log = logging.getLogger("goldbot.engine")
 LOT_TERMS_WARN_S = 600.0     # the account view's symbol-info warning, at most this often
@@ -100,6 +102,23 @@ DEFINITE_REJECT_RETCODES = frozenset({
     10032, 10033, 10034, 10035, 10036,
     10038, 10039, 10040, 10041, 10042, 10043, 10044, 10045, 10046,
 })
+
+
+def bridge_refused(res: OrderResult | None) -> bool:
+    """BACKLOG 66: the MT5 bridge's notional ceiling refused the order (retcode 10006, a definite reject: nothing was
+    placed). Its message starts with `bridge.CEILING_REFUSAL`; a broker's own 10006 does not."""
+    return res is not None and not res.ok and res.message.startswith(CEILING_REFUSAL)
+
+
+BRIDGE_UNREADABLE_CODE = f"{CEILING_REFUSAL}_unreadable"
+
+
+def bridge_refusal_code(res: OrderResult) -> str:
+    """The approval card's refusal code for a bridge refusal (`bridge_refused`): the ceiling itself, or a figure the
+    MT5 box could not read. Codes only: the raw message stays in the journal and the log (ui-ux, BACKLOG 66)."""
+    return BRIDGE_UNREADABLE_CODE if res.message.startswith(UNREADABLE_REFUSAL) else CEILING_REFUSAL
+
+
 # review MEDIUM-2 (d): a pending_orders row still `sending` this long after its send is resolved in-process
 SENDING_RESOLVE_S = 60.0
 # design (D10): a bar close is detected by clock, close time plus this grace, not by the next bar's first tick
@@ -1261,9 +1280,13 @@ class Engine:
                     gd, lots = self._within_card(gd, prop, agent)
             if gd.allowed:
                 price = tick.ask if prop.side > 0 else tick.bid
-                self._execute(prop, agent, lots, price - prop.side * gd.stop_distance,
-                              price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price,
-                              atr_usd=intent.atr_usd)
+                res = self._execute(prop, agent, lots, price - prop.side * gd.stop_distance,
+                                    price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price,
+                                    atr_usd=intent.atr_usd)
+                if res is not None and bridge_refused(res):   # BACKLOG 66: the card says "refused by the MT5 box"
+                    p.gate_refusal = [bridge_refusal_code(res)]
+                    if self.center.bus is not None:
+                        self.center.bus.archive(p)
             else:
                 self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "gate_at_approval:" + ",".join(gd.reasons)})
                 p.gate_refusal = list(gd.reasons)
@@ -1322,6 +1345,9 @@ class Engine:
         if res is None:
             return
         filled = res.ok and res.position_id is not None
+        if bridge_refused(res):                         # BACKLOG 66 (trading-safety C2): nothing placed, but the brain
+            self._auto_paused = (close_ts, "bridge_refused")   # sized above the bridge's ceiling: no more this close
+            return
         if not filled and res.retcode in DEFINITE_REJECT_RETCODES:
             return                                      # nothing placed: the facts are unchanged
         if not filled:
@@ -1387,7 +1413,10 @@ class Engine:
         self._save_orders()
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "order",
                                "proposal": prop.proposal_id, "ok": res.ok,
-                               "retcode": res.retcode, "price": res.price, "lots": res.filled_lots})
+                               "retcode": res.retcode, "price": res.price, "lots": res.filled_lots,
+                               "message": res.message})
+        if bridge_refused(res):
+            self._note_bridge_refusal(prop, agent, res, lots)
         if self.store is not None and res.ok and res.price is not None:
             # requested vs filled feeds the nightly slippage table
             fill = pd.DataFrame([{"ts_utc": self.broker.last_tick(self.cfg.symbol).ts_utc, "client_order_id": prop.proposal_id,
@@ -1395,6 +1424,31 @@ class Engine:
                                   "filled": res.price, "order_type": "market", "retcode": res.retcode, "commission": np.nan}])
             self.store.append("fills", fill, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
         return res
+
+    def _note_bridge_refusal(self, prop: Proposal, agent: Specialist, res: OrderResult, lots: float) -> None:
+        """BACKLOG 66 (trading-safety C2): the bridge's notional ceiling refused the order, so the brain sized above
+        6x this terminal's equity (or the terminal could not be read). Nothing was placed. It is journalled
+        (`bridge_refused`) and the owner is told on Telegram; the auto path then pauses auto entries for the rest of the
+        bar close (`_after_auto_order`) and the approval path shows the card as refused by the bridge (`_on_decision`).
+        The notice is plain words (ui-ux review): the trade, the masked account name and which of the two causes,
+        never the proposal id or the raw message, which stay in the journal and the log. Best effort: a notice that
+        cannot be queued is logged and never changes the outcome."""
+        log.warning("order %s refused by the bridge: %s", prop.proposal_id, res.message)
+        self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "bridge_refused",
+                               "proposal": prop.proposal_id, "message": res.message})
+        auto = " Automatic entries pause until the next bar." if self.cfg.approval_mode == "auto" else ""
+        why = ("(it couldn't read the account figures it checks)" if bridge_refusal_code(res) == BRIDGE_UNREADABLE_CODE
+               else "(open gold would be worth more than 6× equity)")
+        if self.center.bus is None:
+            return
+        try:
+            self.center.bus.notify_owner(
+                f"Order not placed: the MT5 box's safety limit refused {'LONG' if prop.side > 0 else 'SHORT'} "
+                f"{lots:g} lots {self.cfg.symbol} on {account_name(self.cfg.account_id)} {why}. Nothing was sent; open "
+                f"trades keep their stops.{auto} If this repeats, the trade sizing and the MT5 box's limit disagree: "
+                f"ask Claude to check.")
+        except Exception as exc:                        # noqa: BLE001 - the refusal stands either way
+            log.warning("bridge refusal notice not queued (%s)", type(exc).__name__)
 
     @staticmethod
     def _attach_policy(tr: OpenTrade, agent: Specialist, *, entry: float, atr_usd: float | None,

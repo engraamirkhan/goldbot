@@ -173,6 +173,31 @@ def refuse_start(account_id: str, why: str, info: Any = None, state_dir: str | P
     raise SystemExit(why)
 
 
+LONGEST_CLOSE_S = 9_999_999_999        # the widest ten-digit bar close (2286): the longest id an engine makes
+
+
+def approval_ids_problem(account_id: str) -> str | None:
+    """Why no approval card could carry this account's proposal ids, or None (trading-safety review LOW-2 of 2c6e805):
+    the longest id, from the engine's own `Engine._proposal_id` (it reads only `cfg.account_id`, so it is called on a
+    stand-in holding just that), must pass `valid_proposal_id` and fit every Telegram button. Checked at engine start,
+    before any broker call, so an engine never raises proposals nobody can approve."""
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    # the class itself (runner), not goldbot.engine.Engine, which tests replace with a stand-in
+    from goldbot.engine.runner import Engine
+    from goldbot.telegram.approvals import Proposal, decision_callbacks
+    stand_in: Any = SimpleNamespace(cfg=SimpleNamespace(account_id=account_id))
+    pid = Engine._proposal_id(stand_in, "x", pd.Timestamp(LONGEST_CLOSE_S, unit="s", tz="UTC"))
+    try:
+        decision_callbacks(Proposal(proposal_id=pid, account_id=account_id, agent_id="x", side=1, lots=0.0, entry=0.0,
+                                    stop=0.0, target=0.0, p=0.0, ev_r=0.0, spread_points=0.0, top_features=[]))
+    except ValueError as exc:
+        return f"its proposal ids cannot be approved: {exc}"
+    return None
+
+
 def start_loop_watch(account_id: str, state_dir: str | Path = "state") -> "LoopWatch":
     """The engine's LoopWatch, started: Python tracebacks of every thread go to stderr (the journal) on the
     watchdog's SIGABRT, and phase "starting" beats feed the watchdog until `ready()` (a long reconcile or model load
@@ -209,6 +234,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     from goldbot.telegram.approvals import ApprovalCenter
     from goldbot.telegram.bus import ApprovalBus
     acc = accounts.load_accounts()[account_id]
+    if why := approval_ids_problem(account_id):
+        resolve(refuse_start)(account_id, f"refusing to start {account_id}: {why}")
     settings = load_settings()
     if acc.is_live and acc not in accounts.enabled_accounts("live"):
         raise SystemExit("live account not unlocked by the phase gate")

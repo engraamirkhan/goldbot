@@ -9,7 +9,7 @@ import { Approvals } from "./Approvals";
 const proposal = (over: Partial<Proposal> = {}): Proposal => ({
   proposal_id: "p1", account_id: "icm-demo", agent_id: "session_open-g0-abc", side: "long", lots: 0.05,
   entry: 2400.25, stop: 2396.0, target: 2406.5, p: 0.62, ev_r: 0.31, spread_points: 22, risk_usd: 21.25, min_lot_exception: false,
-  top_features: [["atr_14", 0.4], ["adx_14", -0.2]], expires_at: new Date(Date.now() + 60_000).toISOString(), ...over,
+  top_features: [["atr_14", 0.4], ["adx_14", -0.2]], expires_at: new Date(Date.now() + 60_000).toISOString(), created: 1760000000.125, ...over,
 });
 const status: Status = { mode: "propose", halted: false, pending: 1, supervisor: {}, supervisor_halt: false, supervisor_reasons: [],
                          drift_halt: false, drift_reasons: [], blackout: null };
@@ -49,17 +49,18 @@ describe("Approvals", () => {
     expect(screen.getByText(/Viewer role/)).toBeInTheDocument();
   });
 
-  it("lets an approver approve and reject with a reason", async () => {
+  it("lets an approver approve and reject with a reason, each bound to the card's own created stamp", async () => {
     apiModule.setUser({ email: "a@x.io", role: "approver" });
-    vi.spyOn(apiModule.api, "proposals").mockResolvedValue([proposal(), proposal({ proposal_id: "p2", side: "short" })]);
+    vi.spyOn(apiModule.api, "proposals").mockResolvedValue([proposal(),
+      proposal({ proposal_id: "p2", side: "short", created: 1760000001.875 })]);
     const decide = vi.spyOn(apiModule.api, "decide").mockResolvedValue({ outcome: "SUBMITTED" });
     renderWithClient();
     const cards = await screen.findAllByRole("article");
     await userEvent.click(within(cards[0]!).getByRole("button", { name: "Approve" }));
-    await waitFor(() => expect(decide).toHaveBeenCalledWith("p1", "approve", undefined));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith("p1", 1760000000.125, "approve", undefined));
     await userEvent.click(within(cards[1]!).getByRole("button", { name: "Reject…" }));
     await userEvent.click(within(cards[1]!).getByRole("button", { name: "Cost" }));
-    await waitFor(() => expect(decide).toHaveBeenCalledWith("p2", "reject", "cost"));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith("p2", 1760000001.875, "reject", "cost"));
   });
 
   it("shows a refused decision on the card", async () => {

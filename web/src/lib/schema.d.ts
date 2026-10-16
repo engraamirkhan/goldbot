@@ -979,6 +979,8 @@ export interface components {
             account_id: string;
             /** Agent Id */
             agent_id: string;
+            /** Created */
+            created: number;
             /** Currency */
             currency?: string | null;
             /** Decided Channel */
@@ -1061,6 +1063,8 @@ export interface components {
              * @enum {string}
              */
             action: "approve" | "reject";
+            /** Created */
+            created: number;
             /** Proposal Id */
             proposal_id: string;
             /** Reason Code */
@@ -1616,6 +1620,8 @@ export interface components {
             account_id: string;
             /** Agent Id */
             agent_id: string;
+            /** Created */
+            created: number;
             /** Currency */
             currency?: string | null;
             /** Entry */

@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
@@ -36,7 +37,7 @@ from goldbot.data.calendar import (
     SessionTable,
     session_table_from_cache,
 )
-from goldbot.data.timeutil import floor_tf
+from goldbot.data.timeutil import floor_tf, server_to_utc, server_wall
 from goldbot.ops.account_view import LossBudget, loss_budget
 from goldbot.ops.health import ENGINE_FAIL_S
 from goldbot.risk.gate import RiskLimits
@@ -53,6 +54,7 @@ CODE = re.compile(r"[a-z0-9_]{1,64}")      # anything else from a state file is 
 AGENT = re.compile(r"[A-Za-z0-9_.-]{1,80}")   # an agent id (`<family>-g<n>-<hash>`) from entry_refusals; else dropped
 TICK_ERROR_NOTE_S = 15 * 60         # health warns this long after an error the engine carried on from
 NEXT_OPEN_SEARCH = pd.Timedelta(days=8)
+ROLLOVER_MIN = 5                    # EngineConfig.rollover_min: no entries within this of 00:00 server (a test pins it)
 
 GENERIC = "Engines are running but block every entry"
 CLOCK = "Server clock (US-EU DST gap weeks)"
@@ -295,6 +297,38 @@ def next_open(sessions: Any, now: pd.Timestamp) -> pd.Timestamp | None:
         return None
 
 
+def rollover_end(sessions: Any, now: pd.Timestamp) -> pd.Timestamp | None:
+    """When the rollover pause around `now` ends: the engine refuses entries within ROLLOVER_MIN of 00:00 server time
+    (runner `_server_clock`), so it clears at the nearest server midnight + ROLLOVER_MIN, on the server zone the engine
+    publishes in `sessions` (any zone, NY+7 included). None when it cannot be placed."""
+    try:
+        tz = _table(sessions).server_tz
+        srv = server_wall(now, tz)[0]
+        midnight = srv.normalize() + pd.Timedelta(days=1 if srv.hour >= 12 else 0)
+        end = server_to_utc(pd.DatetimeIndex([midnight + pd.Timedelta(minutes=ROLLOVER_MIN)]), tz)[0]
+        return None if pd.isna(end) else pd.Timestamp(end)
+    except Exception:                       # noqa: BLE001 - reporting only: no time is promised
+        log.exception("rollover end not computed")
+        return None
+
+
+def weekend_reopen(sessions: Any, now: pd.Timestamp) -> pd.Timestamp | None:
+    """When the week reopens after the weekend cut: the first open minute after the market next closes on the
+    published session table. From the Friday cut until the close the market is still open, so `next_open` would say
+    "now"; once closed, this is `next_open`. None if not found."""
+    try:
+        grid = pd.date_range(now.ceil("min"), now + NEXT_OPEN_SEARCH, freq="min")
+        is_open = np.asarray(_table(sessions).is_open(grid), dtype=bool)
+        closed = (~is_open).nonzero()[0]
+        if not len(closed):
+            return None
+        after = is_open[closed[0]:].nonzero()[0]
+        return pd.Timestamp(grid[closed[0] + after[0]]) if len(after) else None
+    except Exception:                       # noqa: BLE001 - reporting only: no reopen time is shown
+        log.exception("weekend reopen not computed")
+        return None
+
+
 def _open_at(sessions: Any, *ts: pd.Timestamp) -> bool | None:
     """Whether the published table says the market is open at every one of `ts`; None when it cannot be read."""
     try:
@@ -425,6 +459,10 @@ def _engine_block(code: str, e: dict[str, Any], now: pd.Timestamp, limits: RiskL
         return block(code, text=f"This account is {_pct(limits.dd_stage2)} below its high: trading stopped")
     if code == "market_closed":
         return block(code, at=next_open(sessions, now), at_label="opens")
+    if code == "rollover":
+        return block(code, at=rollover_end(sessions, now), at_label="until")
+    if code == "weekend":
+        return block(code, at=weekend_reopen(sessions, now), at_label="opens")
     if code == "news_blackout":
         bo = e.get("blackout")                # a blackout is listed whatever its title (review L3)
         bo = bo if isinstance(bo, dict) else {}

@@ -1,6 +1,5 @@
 ---
 number: 51
-rank: 10
 title: 'VPS monthly loop registry push: re-check the release asset just before upload'
 stage: Idea generation (integrity) · FIND
 size: S

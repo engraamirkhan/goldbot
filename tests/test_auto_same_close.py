@@ -71,13 +71,14 @@ BASE: dict[str, Any] = dict(risk_per_trade=0.002, multiplier_bounds=(1.0, 1.0), 
 
 
 def _run(tmp_path: Any, agents: list[Any], limits: RiskLimits, pb: PaperBroker | None = None,
-         mode: str = "auto", start: str = "2025-03-03") -> tuple[Engine, PaperBroker, list[dict]]:
+         mode: str = "auto", start: str = "2025-03-03",
+         center: ApprovalCenter | None = None) -> tuple[Engine, PaperBroker, list[dict]]:
     ticks = synthetic_ticks(start, "2025-03-05", ticks_per_minute=1, seed=5)
     last, px = pd.Timestamp(ticks["ts_utc"].iloc[-1]), float(ticks["bid"].iloc[-1])
     pb = pb if pb is not None else PaperBroker(equity=10_000, adverse_slip_points=0.0)
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", approval_mode=mode, state_dir=str(tmp_path),
                               owner_user_id=111), pb, agents, {a.family: ConstantModel(p=0.9) for a in agents},
-                 ApprovalCenter({111}), limits=limits)
+                 center or ApprovalCenter({111}), limits=limits)
     eng.bars_1m = ticks_to_1m(ticks)
     tick = Tick(ts_utc=last, bid=px, ask=px + 0.2)
     pb.on_tick(tick)

@@ -1,0 +1,19 @@
+# ADR numbers reserved before their record is written (ADR 0025). `new-adr` never hands these out as "the next
+# number"; the lane whose brief names one claims it with `python scripts/docs_assemble.py new-adr --number N ...`.
+# Only the program-director or the CTO register adds entries here. An entry stays once its file exists (history).
+reserved:
+  - number: 23
+    slug: runner-split
+    by: CTO register 2026-10-16, docs/process/tech-debt.md TD-2
+  - number: 24
+    slug: release-compatibility
+    by: CTO register 2026-10-16, docs/process/tech-debt.md TD-5
+  - number: 25
+    slug: adr-number-reservation
+    by: CTO register 2026-10-16, docs/process/tech-debt.md TD-7 (amends 0012)
+  - number: 26
+    slug: core-db-cutover-and-rollback
+    by: CTO register 2026-10-16, docs/process/tech-debt.md TD-12
+  - number: 27
+    slug: bridge-lot-ceiling
+    by: CTO register 2026-10-16, docs/process/tech-debt.md TD-16

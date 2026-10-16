@@ -287,6 +287,49 @@ def test_an_engine_idle_while_the_market_is_closed_is_market_closed_not_a_fault(
     assert s.state == "waiting" and s.as_of == last.to_pydatetime()
 
 
+def utc(s: str):
+    return pd.Timestamp(s, tz="UTC").to_pydatetime()
+
+
+@pytest.mark.parametrize("now,until", [
+    ("2026-10-14 20:57", "2026-10-14 21:05"),       # 23:57 Athens (EEST): the window runs past server midnight
+    ("2026-10-14 21:02", "2026-10-14 21:05"),       # 00:02 Athens: the same window, after midnight
+    ("2026-11-04 21:57", "2026-11-04 22:05"),       # 23:57 Athens in winter (EET, UTC+2)
+])
+def test_the_rollover_says_until_when_server_midnight_plus_the_engines_minutes(now, until):
+    """BACKLOG 65 (b): rollover is "+-rollover_min of 00:00 server" (runner `_server_clock`), so it clears at server
+    midnight + rollover_min, placed with the server zone the engine publishes in `sessions`; the time is its own
+    element so the dashboard and Telegram show it in the owner's zone, as market_closed does."""
+    at = pd.Timestamp(now, tz="UTC")
+    s = status(engine(entry_blocks=["rollover"], ts=at.timestamp()), now=at)
+    [b] = s.blocks
+    assert (b.code, b.text, b.at_label, b.at) == ("rollover", "Daily rollover around broker midnight", "until", utc(until))
+    assert s.state == "waiting" and s.clears_at == utc(until)
+
+
+def test_the_rollover_follows_a_new_york_plus_seven_server_clock():
+    at = pd.Timestamp("2026-10-14 20:58", tz="UTC")       # 16:58 New York (EDT) = 23:58 NY+7
+    s = status(engine(entry_blocks=["rollover"], ts=at.timestamp(), sessions={"server_tz": "NY+7"}), now=at)
+    assert s.blocks[0].at == utc("2026-10-14 21:05")
+
+
+def test_the_rollover_minutes_are_the_engines_own():
+    from goldbot.engine.runner import EngineConfig
+    assert es.ROLLOVER_MIN == EngineConfig.model_fields["rollover_min"].default
+
+
+@pytest.mark.parametrize("now", ["2026-10-16 19:00", "2026-10-17 10:00"])
+def test_the_weekend_cut_says_when_the_market_opens_again(now):
+    """BACKLOG 65 (b): from the Friday cut (21:30 server, while the market is still open) and through the weekend the
+    block says when the week reopens: the first open minute after the weekend close on the published session table
+    (Monday 01:02 Athens = Sunday 22:02 UTC), never "now" because the market happens to be open at the cut."""
+    at = pd.Timestamp(now, tz="UTC")
+    s = status(engine(entry_blocks=["weekend"], ts=at.timestamp()), now=at)
+    [b] = s.blocks
+    assert (b.code, b.at_label, b.at) == ("weekend", "opens", utc("2026-10-18 22:02"))
+    assert b.text == "Weekend: no new trades from Friday evening"
+
+
 def test_a_report_stamped_in_the_future_counts_as_not_reporting():
     s = status(engine(ts=(WED + pd.Timedelta(minutes=5)).timestamp()))
     assert codes(s) == ["engine_not_reporting"] and s.blocks[0].at is None

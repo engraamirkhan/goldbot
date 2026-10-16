@@ -62,8 +62,11 @@ def week_chunks(start: dt.date, end: dt.date, days: int = 7) -> Iterator[tuple[d
         a = b
 
 
-def months_to_fetch(existing: pd.DataFrame | None, months: list[tuple[dt.date, dt.date]], today: dt.date | None = None) -> set[str]:
-    """Month keys (YYYY-MM) that need downloading: absent, short or flagged partial in `existing`, or still open."""
+def months_to_fetch(existing: pd.DataFrame | None, months: list[tuple[dt.date, dt.date]], today: dt.date | None = None,
+                    retry_flagged: bool = False) -> set[str]:
+    """Month keys (YYYY-MM) that need downloading: absent or short in `existing`, or still open. Closed months
+    flagged partial/imputed are retried only with `retry_flagged` (G5: the weekly retry of the three bid-imputed 2026
+    months cost ~4 h of Actions minutes a week and never repaired them; repairs are targeted dispatches)."""
     today = today or dt.date.today()
     keys = {f"{s:%Y-%m}" for s, _ in months}
     if existing is None or existing.empty:
@@ -78,7 +81,7 @@ def months_to_fetch(existing: pd.DataFrame | None, months: list[tuple[dt.date, d
         k = f"{s:%Y-%m}"
         natural_end = dt.date(s.year + 1, 1, 1) if s.month == 12 else dt.date(s.year, s.month + 1, 1)
         still_open = natural_end > today  # the current month keeps growing
-        if still_open or counts.get(k, 0) < MIN_BARS_PER_FULL_MONTH or k in partial:
+        if still_open or counts.get(k, 0) < MIN_BARS_PER_FULL_MONTH or (retry_flagged and k in partial):
             need.add(k)
     return need
 
@@ -191,6 +194,38 @@ def _published_month(existing: pd.DataFrame, start: dt.date, end: dt.date) -> pd
     return b
 
 
+def _flagged(flags: pd.Series) -> pd.Series:
+    return flags.fillna("").astype(str).str.contains("partial_month|ask_imputed|bid_imputed")
+
+
+def merge_never_shrink(published: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:
+    """Combine a re-downloaded month with the published one, one UTC day at a time, so that no published day is
+    ever replaced by one with fewer bars (G1/G5: a throttled re-download used to replace the whole month).
+
+    Per day the fresh bars win only if they are strictly more, or equally many and they repair a flagged
+    (imputed/partial) published day with an unflagged one; otherwise the published day is kept bar for bar, so
+    first-published values stay reproducible. Days only one side has are taken from that side."""
+    if published.empty:
+        return fresh
+    if fresh.empty:
+        return published
+    pday = published["ts_utc"].dt.floor("D")
+    fday = fresh["ts_utc"].dt.floor("D")
+    pn, fn = pday.value_counts(), fday.value_counts()
+    pflag = _flagged(published["dq_flag"]).groupby(pday).any() if "dq_flag" in published else pd.Series(dtype=bool)
+    fflag = _flagged(fresh["dq_flag"]).groupby(fday).any() if "dq_flag" in fresh else pd.Series(dtype=bool)
+    take_fresh = set()
+    for d, n in fn.items():
+        p = int(pn.get(d, 0))
+        if n > p or (n == p and bool(pflag.get(d, False)) and not bool(fflag.get(d, False))):
+            take_fresh.add(d)
+    out = pd.concat([published[~pday.isin(take_fresh)], fresh[fday.isin(take_fresh)]])
+    kept = sorted(d for d in fn.index if d not in take_fresh and int(pn.get(d, 0)) > 0)
+    if kept:
+        print(f"  never-shrink: kept {len(kept)} published day(s) the re-download did not improve on", flush=True)
+    return out.sort_values("ts_utc").drop_duplicates("ts_utc").reset_index(drop=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("year", type=int)
@@ -199,6 +234,8 @@ def main() -> int:
     ap.add_argument("--report", default=None)
     ap.add_argument("--existing", default=None, help="previously published Parquet for this year; complete months are kept")
     ap.add_argument("--refetch-all", action="store_true", help="download every month; --existing is only a fallback")
+    ap.add_argument("--retry-flagged", action="store_true",
+                    help="also download closed months flagged partial/imputed (off by default: hours per month)")
     args = ap.parse_args()
     months = list(month_range(args.year))
     existing = None
@@ -206,7 +243,8 @@ def main() -> int:
         existing = pd.read_parquet(args.existing)
         existing["ts_utc"] = pd.to_datetime(existing["ts_utc"], utc=True)
         print(f"existing: {len(existing):,} bars from {args.existing}", flush=True)
-    todo = {f"{m:%Y-%m}" for m, _ in months} if args.refetch_all else months_to_fetch(existing, months)
+    todo = ({f"{m:%Y-%m}" for m, _ in months} if args.refetch_all
+            else months_to_fetch(existing, months, retry_flagged=args.retry_flagged))
     frames, rows = [], []
     for start, end in months:
         k = f"{start:%Y-%m}"
@@ -219,10 +257,14 @@ def main() -> int:
             print(f"{k}: kept {len(kept):,} bars", flush=True)
             continue
         b = month_bars(start, end, Path(args.tmp))
-        if b is None and existing is not None:
-            # download failed again: keep whatever was published before rather than lose it
+        if existing is not None:
+            # never publish a day with fewer bars than before: a failed download keeps the published month, a
+            # short one keeps every published day it does not improve on (also under --refetch-all)
             old = _published_month(existing, start, end)
-            b = old if len(old) else None
+            if b is None:
+                b = old if len(old) else None
+            else:
+                b = merge_never_shrink(old, b)
         n = 0 if b is None else len(b)
         if b is None:
             status = "MISSING"
@@ -256,7 +298,10 @@ def main() -> int:
         print(f"QUARANTINED {len(held):,} bars with an error flag -> {held_path}")
     out["source"] = "dukascopy"
     path = args.out or f"xauusd_1m_dukascopy_{args.year}.parquet"
-    out.to_parquet(path, compression="zstd", index=False)
+    # write then rename: a run killed mid-write (job timeout) never leaves a truncated file for the publish step
+    tmp_path = f"{path}.tmp"
+    out.to_parquet(tmp_path, compression="zstd", index=False)
+    os.replace(tmp_path, path)
     print(f"wrote {path}: {len(out):,} bars, {len(dq)} dq events")
     shutil.rmtree(args.tmp, ignore_errors=True)
     missing = [m for m, n, s, t in rows if s == "MISSING"]

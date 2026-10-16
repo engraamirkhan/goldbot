@@ -49,6 +49,7 @@ from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import STATE_FILE as DIGEST_FILE
 from goldbot.telegram.digest import DigestSchedule, DigestState
 from goldbot.telegram.outbox import Outbox, OutboxState
+from tests.cards import submit_shown
 
 T0 = pd.Timestamp("2026-10-05 08:00", tz="UTC")
 NEW = {"future_field": {"from": "a newer release"}}
@@ -112,7 +113,7 @@ def case_bus_proposal(tmp: Path) -> None:
     p = _proposal()
     bus.publish(p)
     _rewrite(bus.pending_dir / "p1.json")
-    d = bus.submit("p1", approve=True, reason_code=None, by="dashboard:o")    # decisions stay strict (allowlist)
+    d = submit_shown(bus, "p1", approve=True, reason_code=None, by="dashboard:o")    # decisions stay strict (allowlist)
     assert bus.pending() == [] and bus.get("p1") == p
     assert bus.decisions_for({"p1"}) == [d] and bus.recent() == [(p, d)]
 

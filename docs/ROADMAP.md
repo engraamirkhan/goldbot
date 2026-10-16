@@ -123,10 +123,12 @@ a builder and waits for the batch PR; the next builder slots go to W1-1, then W1
 | W2-5 | Manual-dispatch deploy workflow with health check and rollback (auto-deploy off) | sre | new `.github/workflows/deploy.yml`, `ops/linux/goldbot-deploy.sh` | security |
 | W2-6 | Combinatorial purged CV, run quarterly (M16) | implementer | new `research/cpcv.py` | quant |
 | W2-7 | 4h bars across the daily break; swap-day costs (D7, D4) | data-engineer | `data/resample.py`, `execution/costs.py` | quant |
-| W2-8 | Self-hosted CI runner on the brain VM | release-manager | runner unit, workflow `runs-on` | security, sre |
+| W2-8 | Self-hosted CI runner (on the brain VM only with a security-reviewer GO first: fork PRs on a public repo must never reach a host holding trading secrets; see risk 14) | release-manager | runner unit, workflow `runs-on` | security, sre |
 | W2-9 | Azure Windows MT5 and Tailscale, as an update to the Oracle deploy | sre | `scripts/deploy/`, RUNBOOK | security |
 
-Wave 3 (shares `runner.py` with W2-1): A2, D10, M9, M3 15m leg. Parked until an edge exists: M28/A5, M10, F12.
+Wave 3 (shares `runner.py` with W2-1): A2, D10, M9, M3 15m leg, and **W3-1**: state-store follow-on after W2-1
+(tech-debt TD-13: step 3 remainder, steps 4-5 and 8, `state_db` health, `run.py migrate`; implementer; plan Fri
+11-20, JSON exports retired Fri 12-11; reviewers trading-safety, sre). Parked until an edge exists: M28/A5, M10, F12.
 
 ## 4. Owner steps
 
@@ -138,7 +140,7 @@ Wave 3 (shares `runner.py` with W2-1): A2, D10, M9, M3 15m leg. Parked until an 
 | FRED_API_KEY repository secret | Sun 10-18 | asked 10-11; chased 10-16 | program-director |
 | Batched decisions (section 6) | Sun 10-18 – Fri 10-30 | asked 10-16 on #34 | program-director |
 
-## 5. Risk register (top 12)
+## 5. Risk register (top 14)
 
 | # | Risk | L | I | Owner agent | Mitigation |
 | --- | --- | --- | --- | --- | --- |
@@ -148,12 +150,20 @@ Wave 3 (shares `runner.py` with W2-1): A2, D10, M9, M3 15m leg. Parked until an 
 | 4 | **Wine/MT5 reliability:** terminal hangs, logs out or misses ticks under Wine | Med | High | sre | W1-1 smoke, 24 h health, W2-4 watchdog; fail closed (R25, X8); Azure Windows fallback (W2-9) |
 | 5 | **Single-host failure:** brain VM down means no exits managed in the engine | Med | High | sre | Server-side SL/TP (X5); heartbeat and dead-man alerts; backups and the restore drill (W1-2); scripted rebuild |
 | 6 | **Oracle capacity or reclamation:** A1 out of capacity, or idle VMs reclaimed | Med | Med | sre | E2.1.Micro brain fallback tonight; Pay As You Go raises A1 priority; keep VMs busy; scripted bootstrap |
-| 7 | **CI minutes exhausted** before or during Q1 | Med | Med | release-manager | Self-hosted runner (W2-8) before January; one PR per batch |
+| 7 | **CI minutes exhausted** before or during Q1 | Med | Med | release-manager | Self-hosted runner (W2-8) before January, after a security-reviewer GO (risk 14); one PR per batch |
 | 8 | **Public repo security:** identifiers or secrets leak; workflow abuse | Low | High | security-reviewer | S4 scan on every push; httpx kept below INFO (token in journald fixed); keyring and local settings only |
 | 9 | **Data-feed gaps:** Dukascopy, FRED or broker gaps or artefacts | Med | Med | data-engineer | Quarantine (D22); coverage triage (W1-6); reconciliation (W1-4); cross-feed survival (F10) |
 | 10 | **Model drift** after promotion | Med | Med | quant-reviewer | PSI/ECE size-down and CUSUM halt (M25–M27); owner-only clear |
 | 11 | **Review bottleneck:** trading-safety holds 4 items against a limit of 2; load near 100 | High | Med | program-director | Second trading-safety reviewer lane now; builders capped at 8; `-n 2` above load 24; one-pass reviews |
 | 12 | **DST gap and market-closed clocks:** false FAILs or a wrong broker offset between 10-25 and 11-01 | Med | Med | sre | BACKLOG 59 before engine start; W1-9 daily clock check 26–30 Oct and on 11-02 |
+| 13 | **Broker leverage 1:5000 behind a fixed bridge ceiling:** the bridge's only independent size check is 3.0 lots (`execution/bridge.py:104`, `:266`), ≈ 945× equity at the demo's 1:5000, so a sizing bug past the RiskGate could wipe the account on a ≈ $4 move (added 2026-10-16) | Med | High | architect | TD-16: equity-scaled ceiling in `GuardedBroker`, fail-closed, exits ungated; plan Fri 10-23, ADR 0027, trading-safety review; built Fri 11-06. Review Fri 10-23 |
+| 14 | **Self-hosted CI runner exposes trading secrets:** on a public repo a fork PR could run code on the runner's host (CFO flag, added 2026-10-16) | Low | High | security-reviewer | No runner on a host holding trading secrets without a security-reviewer GO (W2-8; tech-debt "Standing constraint"). Review at W2-8's plan |
+
+**Technical debt and platform register:** `docs/process/tech-debt.md` (cto) holds the ranked technical-debt items
+TD-1 – TD-16, each with risk, cost, one accountable role and a date, the ADR numbers reserved for them (0023-0027),
+and the CTO's standing technical rulings. It is re-dated every Friday with the debt review; the technical rows above
+(4, 7, 13, 14) are kept consistent with it. Risk 4's pin is decided: ADR 0019 accepted 2026-10-16 (TD-1, sre, by Sat
+10-24).
 
 ## 6. Owner decision queue
 
@@ -181,10 +191,15 @@ to "Decided by PD+PO" below.
 | OD-6 | `gates.max_gross_share` | 0.05 | Sun 10-18 |
 | OD-10 | ~~Commit the uncommitted docs in the main checkout (finance, hosting options, speed-up review)~~ | **Done 10-16:** all three were committed in f7b0cdc (2026-10-11, `docs/finance/`, `docs/deploy/free-hosting-options.md`, `docs/process/speed-up-review.md`) and the main checkout is clean; no owner decision left | closed |
 | OD-11 | GitHub "Keep my email private" and "Block command line pushes" | Turn both on; do not rewrite history | Sat 10-17, before the batch push |
-| OD-12 | Finance D1 (agent API spend cap) | (b) about $10 a month until a strategy passes. D3 and D4 moved to "Decided by PD+PO" | Fri 10-23 |
+| OD-12 | Finance D1 (agent API spend cap); and whether the Claude subscription counts as a running cost of goldbot (it changes break-even, `docs/finance/budget-2026-10.md`) | Cap: (b) about $10 a month until a strategy passes (CFO). Subscription: the owner rules; the CFO shows break-even both ways. D3 and D4 moved to "Decided by PD+PO" | Fri 10-23 |
 | OD-13 | Finance D2 (hosting after the Azure trial), D5 (deposits) | D2 decide on the Wine soak's evidence; D5 no recommendation | D2 by 2027-08-13; D5 open |
 | OD-14 | Gate thresholds sign-off and a low-frequency variant; demo cost-probe orders; automatic deploys | Brought separately with options | Mon 11-30 (before the freeze) |
 | OD-15 | Paper-vs-backtest gate: also require the paper mean's lower 95% bound above 0 (a phase-gate threshold) | Yes: the quant-reviewer recommends it (review 2026-10-16); PD+PO concur | Mon 11-30, with OD-14, before paper starts |
+| OD-16 | CFO C1: real money before the paper -> tiny-live gate. (a) none, £0 at risk; (b) a live deposit now, with no strategy and an expected value of at most £0 after costs | (a), the current rule (CFO; PD+PO concur) | standing; confirm with the batch on #34 |
+| OD-17 | CFO C2: **tiny-live cannot trade at £1,000** (the 0.1% rail needs about £6,850 for a 0.01 lot). (a) fund the live account to about £6,850 at tiny-live start (£8.20 a trade, the £50 absolute limit binds, 8% stage £548, 12% halt £822); (b) keep £1,000 and the rail, so the system never goes live; (c) amend tiny-live for the minimum lot at £1,000 (0.82% a trade, worst day about £17, halt at £120): a **loosening**, needing an ADR and trading-safety review | No deposit now. (b) is the default and costs nothing; rule on (a) or (b) on paper evidence before the backtest -> paper gate is recorded. (c) is listed for completeness and **not recommended** (CFO) | before the backtest -> paper gate (earliest about Apr 2027); reviewed at the Q2 2027 freeze |
+| OD-18 | CFO C3: deposits (ADR 0004 D5; supersedes OD-13's D5) | None to the demo (demo money is not real); live deposits sized by what the next gate needs (OD-17), never by the north star | at the paper gate |
+| OD-19 | CFO C4: risk appetite | Confirm the existing rails (risk per trade, £50 absolute daily limit, 8%/12% stages, 6 x equity notional) as the appetite; nothing looser | Mon 11-30, with OD-14 |
+| OD-20 | CFO C5: broker account leverage (read 1:5000 on 2026-10-16, BACKLOG 27). (a) keep 1:5000; (b) the lowest IC Markets offers at or above 1:20 | (b) on the live account at opening, and on the demo if the client area allows. It only tightens: the broker would cap an accidental position at about 0.06-0.09 lots instead of about 16. Your action in the broker's client area (own credentials); BACKLOG 66 adds the bridge-side ceiling regardless | demo: at the next client-area login; live: at account opening |
 
 ### Decided by PD+PO (delegated 2026-10-16), reported to the owner
 

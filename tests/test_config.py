@@ -126,3 +126,31 @@ def test_the_risk_day_and_so_the_loss_cap_reset_is_pinned_at_00_utc():
     assert st.day_start_equity == 1000.0
     assert new_day(st, pd.Timestamp("2026-10-06 00:00", tz="UTC"), last) is True
     assert st.day_start_equity == 990.0
+
+
+def test_a_holdout_start_without_a_holdout_end_fails_to_load(tmp_path):
+    """Quant review 2026-10-16 N2: `holdout_from` without `holdout_to` leaves no holdout window, so research would
+    read the held-out year as ordinary history. Refused when the settings load, not first inside a discovery run."""
+    (tmp_path / "settings.yaml").write_text(DEFAULT_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "settings.local.yaml").write_text(yaml.safe_dump({"research": {"holdout_to": None}}), encoding="utf-8")
+    with pytest.raises(ValidationError, match="holdout_to"):
+        load_settings(tmp_path / "settings.yaml")
+
+
+@pytest.mark.parametrize("research,error", [
+    ({"holdout_from": None}, "set together or not at all"),                                  # an end without a start
+    ({"holdout_from": "2026-09-30", "holdout_to": "2025-10-01"}, "holdout_from is after"),   # inverted window
+], ids=["end_only", "inverted"])
+def test_a_holdout_window_that_is_half_set_or_inverted_fails_to_load(tmp_path, research, error):
+    """Quant review 2026-10-16 (N2 widened): either leaves no holdout window, so research reads the held-out year."""
+    (tmp_path / "settings.yaml").write_text(DEFAULT_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "settings.local.yaml").write_text(yaml.safe_dump({"research": research}), encoding="utf-8")
+    with pytest.raises(ValidationError, match=error):
+        load_settings(tmp_path / "settings.yaml")
+
+
+def test_settings_without_any_holdout_window_still_load(tmp_path):
+    (tmp_path / "settings.yaml").write_text(DEFAULT_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "settings.local.yaml").write_text(
+        yaml.safe_dump({"research": {"holdout_from": None, "holdout_to": None}}), encoding="utf-8")
+    assert load_settings(tmp_path / "settings.yaml").research.holdout_from is None

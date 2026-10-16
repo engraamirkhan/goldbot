@@ -22,6 +22,17 @@ async function signIn(page: Page, email: string, password: string, secret: strin
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 }
 
+/** The header names the role, never the address (docs/ux/header-role.md). The local part "owner" equals the role
+ *  word, so the identity check is the whole address, its domain and the "@". */
+async function expectRoleNotEmail(page: Page, role: string, email: string) {
+  const banner = page.getByRole("banner");
+  await expect(banner).toContainText(`Signed in as ${role}`);
+  await expect(banner).not.toContainText(email);
+  await expect(banner).not.toContainText(email.split("@")[1]);
+  await expect(banner).not.toContainText("@");
+  expect(await banner.innerHTML()).not.toContain("@");                         // no title / aria-label carries it
+}
+
 // One serial story: first run -> owner approves a trade -> halts and re-arms -> invites a viewer -> viewer sees but cannot act.
 // each authenticator code is accepted once, so a sign-in may wait up to 30 s for a fresh time step (freshTotp)
 test.describe.configure({ mode: "serial", timeout: 90_000 });
@@ -49,7 +60,12 @@ test("first run creates the owner with an authenticator, then signs in", async (
   await expect(page.locator(".err")).toContainText("invalid credentials");
 
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
-  await expect(page.getByText(`${OWNER.email} · owner`)).toBeVisible();
+  await expectRoleNotEmail(page, "Owner", OWNER.email);
+  expect(await page.title()).not.toContain("@");
+  await page.getByRole("button", { name: "Approvals" }).click();
+  await expect(page.getByRole("region", { name: "Safety state" })).not.toContainText("@");   // persistent chrome
+  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Your sign-in" })).toContainText(OWNER.email);   // the one place it shows
 });
 
 test("owner approves one proposal and rejects the other with a reason", async ({ page }) => {
@@ -210,7 +226,7 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   viewerSecret = secret;
 
   await signIn(page, VIEWER.email, VIEWER.password, secret);
-  await expect(page.getByText(`${VIEWER.email} · viewer`)).toBeVisible();
+  await expectRoleNotEmail(page, "Viewer", VIEWER.email);
   await expect(page.getByRole("button", { name: "Users" })).toHaveCount(0);
   for (const tab of ["Overview", "News", "Agents", "Health", "Research", "Feeds", "Approvals"]) {
     await page.getByRole("button", { name: tab, exact: true }).click();
@@ -220,7 +236,7 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   // the API enforces the same rule the UI hides
   const token = await page.evaluate(() => sessionStorage.getItem("goldbot_token"));
   const r = await page.request.post("/api/decisions", {
-    data: { proposal_id: "e2e-long", action: "approve" }, headers: { authorization: `Bearer ${token}` },
+    data: { proposal_id: "e2e-long", action: "approve", created: 0 }, headers: { authorization: `Bearer ${token}` },
   });
   expect(r.status()).toBe(403);
   const mode = await page.request.post("/api/automode", { data: { mode: "propose" }, headers: { authorization: `Bearer ${token}` } });

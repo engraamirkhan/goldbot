@@ -228,7 +228,8 @@ def _click(w: SimpleNamespace, approve: bool = True, then: Callable[[], Any] | N
     def hook() -> None:
         pending = w.bus.pending()
         if pending:
-            w.bus.submit(pending[0].proposal_id, approve, None if approve else "other", "dashboard")
+            w.bus.submit(pending[0].proposal_id, approve, None if approve else "other", "dashboard",
+                         card_created=pending[0].created)
             if then is not None:
                 then()
             w.clock.hooks.remove(hook)
