@@ -521,7 +521,10 @@ def _services(ps1: str) -> set[str]:
 
 
 def _run_commands() -> set[str]:
-    return set(re.findall(r'cmd == "([a-z-]+)"', (OPS / "run.py").read_text()))
+    """The commands `python -m goldbot.ops.run` dispatches (its registry since the split, goldbot/ops/commands)."""
+    import goldbot.ops.run  # noqa: F401 - registers every command
+    from goldbot.ops.commands.registry import commands
+    return {name for spec in commands() for name in spec.names}
 
 
 def test_update_script_uses_only_bootstrap_services_and_run_commands():
@@ -613,7 +616,7 @@ def test_a_service_silent_for_five_minutes_alerts_once_and_recovers(tmp_path):
 def test_every_service_has_a_heartbeat_check_and_run_py_writes_it(tmp_path):
     names = {c.name for c in health.run_checks(make_ctx(tmp_path)).checks}
     assert {f"heartbeat:{s}" for s in health.HEARTBEAT_SERVICES} <= names
-    run_py = (OPS / "run.py").read_text()
+    run_py = "\n".join(f.read_text() for f in [OPS / "run.py", *sorted((OPS / "services").glob("*.py"))])
     written = set(re.findall(r'(?:start_heartbeat|Heartbeat)\("state", "([a-z]+)"\)', run_py))
     assert written == set(health.HEARTBEAT_SERVICES)
 
