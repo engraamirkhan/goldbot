@@ -353,6 +353,38 @@ the registry (normally 0), and that settings change ships in the same change as 
   `preregistration-2027Q1.yaml`, with `research.reserved_trials_quarter` 2027Q1 = 8 in `config/settings.yaml`, one
   reviewed change, as `preregistration.py` requires) is the implementer's, by 2026-10-23, quant reviewer checks it.
   No owner decision is needed (the rule was pre-registered); the owner is told as an FYI.
+- **Run (written 2026-10-16 by the strategy researcher, before any H-06 outcome was seen; no reading rule changes).**
+  Only if H-06 survives its withdrawal rule, and only after H-01 has run (its rule compares against H-01's recorded net
+  mean R, on the same cost source: pin G1). Actions -> research -> Run workflow, exactly these inputs:
+
+  | input | value |
+  |---|---|
+  | specialist | `tsmom` |
+  | from_year | `2010` |
+  | to_year | `2026` |
+  | rationale | `H-06 macro-conditioned slow TSMOM (preregistration-2027Q1.md, commit <freeze commit>)` |
+  | variants | `["slow_macro"]` |
+  | score_holdout | false |
+  | skip_screen | false |
+  | pooled | (empty) |
+  | macro | true |
+
+  `discover`, `families`, `discover_config` and `rule_ref` stay at their defaults (false, empty, `{}`, empty). The run
+  uses the queued row because its family and config hash match. H-06 has no coded `rule_id`, so the evaluator cites
+  the reading rule above exactly. `["slow_macro"]` expands to `[{"timeframe": "4h", "signal_tf": "1d", "atr_tf": "1d",
+  "lb_fast_h": 480, "lb_mid_h": 1440, "lb_slow_h": 2880, "vol_window_h": 1440, "min_score": 0.5, "target_atr": 3.0,
+  "stop_atr": 1.5, "max_bars": 124, "macro_gate": true}]`. That is H-01's configuration plus `macro_gate`, agent
+  `tsmom-g0-fed4baec9f`, config hash `5650ad206bda`. With `macro` true the feature version is `f-51ac5ebabb`. One
+  trial. Data: `data-v1` (the same bars and research window as H-01; the holdout is cut by `pipeline.prepare`) and
+  `macro-v1` (`macro_fred.parquet`, published 2026-10-13; the workflow fails rather than run without it, and the
+  preset refuses to run without `ctx["macro"]`). Floor: `research.screen_min_events_daily` as committed at the freeze.
+  Registry writer (`scripts/preregister_quarter.py --quarter 2027Q1 --from docs/research/preregistration-2027Q1.yaml
+  --registry <registry> --bars <data-v1 folder>`): the spec row `H-06` (`specialist tsmom`, `variant slow_macro`,
+  `agent_id tsmom-g0-fed4baec9f`, `config_hash 5650ad206bda`, `macro: true`, `feature_version f-51ac5ebabb`, no
+  `rule_id`, the rationale above with `{commit}`, the reading rule above verbatim). It is written only when `pending`
+  is cleared and `freeze_commit` is set. `--bars` pins the data-v1 digests of every research-window file (a specialist
+  row). The dry run (2026-10-16, this commit's tree) rebuilds the agent id, config hash and feature version from code
+  and accepts them.
 
 ### H-04 Asia-session drift
 - Config: long at 00:00 UTC, exit 07:00 UTC (flat before London), stop 1.5 ATR(1h), every trading day, Data before

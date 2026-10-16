@@ -111,6 +111,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     schedule fails on 2026-10-18 without it.
   - Not dispatched: the first `preregister-quarter` dry run (read-only); this session's permission policy refused it.
     New date 2026-10-20 (research-director).
+- **Retired-family trial lists match the registry (BACKLOG 49, 2026-10-16; docs and settings mirror only; quant
+  review).** `research.retired_families` and `hypotheses.md` B listed R-01 `mean_reversion` as `[3]` and R-03 `trend`
+  as `[2]`. `research-v1`'s registry (20 rows) holds #3, #5, #10, #12 and #2, #4, #9, #14. Both lists are now the
+  registry's. The registry and the DSR count (20) are unchanged. `RetiredFamily.trials` feeds only the `retired_drift`
+  check, so no allocation moves. Open gap: nothing compares these lists with the registry rows themselves.
 - Gross closed trades are charged a conservative imputed cost (quant review 2026-10-12, findings A-D; TRACEABILITY X20;
   ADR 0017).
   - goldbot/ops/cost_imputation.py is the one shared helper. It charges only the costs a row's return lacks: the
@@ -1432,6 +1437,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- **H-06 run-input table written; its count says withdraw (BACKLOG 48, 2026-10-16; quant review).** The H-06
+  section of `preregistration-2027Q1.md` now has the run inputs in the H-01/H-04 format: `tsmom`, 2010-2026,
+  `variants ["slow_macro"]`, `macro true`, agent `tsmom-g0-fed4baec9f`, hash `5650ad206bda`, `f-51ac5ebabb`,
+  data-v1 + macro-v1. The writer's dry run accepts the spec row. count-owed-events (run 38931951849, `main` @
+  `eafc6ce`) gives H-06 1,105 signals (711 long / 394 short) and a one-at-a-time lower bound of **107, below the 150
+  floor**. **Next (research director):** once the quant reviewer confirms `count_h06`, withdraw H-06 by its rule
+  (spec `withdrawn:`, `reservation` 8, `research.reserved_trials_quarter` 2027Q1 8). No trial is spent. The same run
+  gives H-01's lower bound as 152, not the doc's 154; this still clears 150, and the gap is explained with the
+  2026-11-01 recount paste.
 - **Roadmap re-planned from Fri 2026-10-16 (program director; docs only).** `docs/ROADMAP.md` now dates Wave 1 from
   tonight's Claude-run demo deploy, the engine start at the Sun 10-18 22:02 UTC reopen (BACKLOG 59 first, with a
   written fallback) and the DST-gap week of 26-30 Oct (broker clock check, W1-9). Every lane and milestone names one
