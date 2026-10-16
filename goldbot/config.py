@@ -352,12 +352,13 @@ class ResearchSettings(_Section):
 
     @model_validator(mode="after")
     def _holdout_window_complete(self) -> ResearchSettings:
-        """Quant review 2026-10-16 N2: `holdout_from` without `holdout_to` is no holdout window, so research would read
-        the held-out year as ordinary history ("research never sees this window unless scoring it"). Refused at load
-        time rather than first inside a discovery run (research/discovery.py fails closed there too)."""
-        if self.holdout_from is not None and self.holdout_to is None:
-            raise ValueError(f"research.holdout_from is {self.holdout_from} but research.holdout_to is not set: set the "
-                             "holdout window's end or clear holdout_from")
+        """Quant review 2026-10-16 N2: a holdout bound without the other, or a start after the end, is no holdout window,
+        so research would read the held-out year as ordinary history ("research never sees this window unless scoring
+        it"). Refused at load time rather than first inside a discovery run (research/discovery.py fails closed too)."""
+        if (self.holdout_from is None) != (self.holdout_to is None):
+            raise ValueError("research.holdout_from and research.holdout_to are set together or not at all")
+        if self.holdout_from is not None and self.holdout_to is not None and self.holdout_from > self.holdout_to:
+            raise ValueError("research.holdout_from is after research.holdout_to")
         return self
 
     def reserved_for(self, quarter: str) -> int:

@@ -67,11 +67,11 @@ from goldbot.ops.accounts import GATES
 from goldbot.ops.cost_imputation import CostImputer, ImputationSummary
 from goldbot.research.metrics import DsrInputs, max_drawdown
 from goldbot.research.registry import (
-    _row_hash,
     costs_recorded,
     latest_evaluated,
     n_trials_effective,
     promotion_refusal,
+    row_hash,
 )
 
 CLOSED_TRADES_FILE = "closed_trades.jsonl"
@@ -384,7 +384,7 @@ def best_backtest_trial(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
         return v if v is not None else -1.0
     cands = [r for r in rows if r.get("status") == "evaluated" and (r.get("results") or {}).get("model_filtered")
              and costs_recorded(r.get("results") or {})
-             and latest_evaluated(rows, str(r.get("family")), _row_hash(r), r.get("feature_version")) is r]
+             and latest_evaluated(rows, str(r.get("family")), row_hash(r), r.get("feature_version")) is r]
     return max(cands, key=dsr) if cands else None
 
 
