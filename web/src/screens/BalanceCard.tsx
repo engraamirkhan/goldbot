@@ -57,9 +57,9 @@ function LossBudget({ a }: { a: AccountSummary }) {
   const notes = b.notes.length > 0 && <ul className="notes small muted">{b.notes.map((n) => <li key={n}>{n}</li>)}</ul>;
   if (b.unknown) {   // the account cap alone would look roomier than the combined cap the supervisor enforces
     return (
-      <div className="budget bad">
-        <p><span className="k">Loss budget</span>{" "}<strong>unknown</strong></p>
-        <p className="small">{`${b.unknown}. Exits always run.`}</p>
+      <div className={`budget ${budgetTone(b)}`}>
+        <p><strong>Loss budget: can't check</strong></p>
+        <p className="small">{b.unknown}</p>
         {notes}
       </div>
     );

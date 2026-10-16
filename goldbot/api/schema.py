@@ -92,6 +92,9 @@ class Proposal(BaseModel):
     #                                         in `currency`, or USD with only risk_usd
     loss_left: float | None = None          # the account's loss budget left if this trade loses, now (pending only)
     loss_left_period: Literal["today", "this week"] | None = None
+    # the budget can't be checked (account_view LossBudget.unknown; loss_left is then None): "paused" when new entries
+    # are paused on the supervisor's report (red), "not_summed" when the supervisor hasn't added up the accounts (amber)
+    loss_cant_check: Literal["paused", "not_summed"] | None = None
 
 
 class DecidedProposal(Proposal):

@@ -93,7 +93,7 @@ class ResticNotConfigured(BackupError):
 
 # Every job error starts with the pointer: health shows only the first few hundred characters (found 2026-10-16,
 # when a 160-character cut dropped a trailing pointer).
-RUNBOOK = "RUNBOOK 'Backups'"
+RUNBOOK = "RUNBOOK 0.6 'Backups and restore'"
 
 
 # ------------------------------------------------------------------------------------------------ configuration
@@ -145,8 +145,9 @@ class Restic:
         values = {env: get_secret(key) for env, key in SECRET_KEYS.items()}
         missing = [SECRET_KEYS[e] for e, v in values.items() if not v]
         if missing:
-            raise ResticNotConfigured(f"{RUNBOOK}: restic not configured; missing keys (`goldbot accounts set "
-                                      "<key>`): " + ", ".join(missing))
+            # at most 200 characters with every key missing (the backup_age check shows 200)
+            raise ResticNotConfigured(f"{RUNBOOK}: backups not set up on the brain; run goldbot accounts set <key> "
+                                      "for: " + ", ".join(missing))
         env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
                "HOME": os.environ.get("HOME", str(Path.home())), **{k: str(v) for k, v in values.items()}}
         m = _OCI_REGION.search(env["RESTIC_REPOSITORY"])
@@ -535,9 +536,12 @@ def run_backup(paths: BackupPaths, restic: Restic) -> BackupRecord:
         shutil.rmtree(stage, ignore_errors=True)
 
 
-def _pointer_first(msg: str) -> str:
-    """`RUNBOOK 'Backups': <msg>`, once: a ResticNotConfigured message already carries the pointer after its type."""
-    return f"{RUNBOOK}: {msg.replace(f'{RUNBOOK}: ', '', 1)}"
+def _job_error(exc: Exception) -> str:
+    """`RUNBOOK ...: <what failed>`. ResticNotConfigured is the owner's own text (it starts with the pointer, no class
+    name); any other failure keeps its class name after the pointer."""
+    if isinstance(exc, ResticNotConfigured):
+        return str(exc)
+    return f"{RUNBOOK}: {type(exc).__name__}: {exc}"
 
 
 def backup_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, host: str,
@@ -558,7 +562,7 @@ def backup_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, h
         rec.first_ok_ts = first_ok or rec.ts
         rec.last_prune_ts = rec.last_prune_ts or prev_prune
     except Exception as exc:
-        msg = _pointer_first(f"{type(exc).__name__}: {exc}")
+        msg = _job_error(exc)
         rec = BackupRecord(ts=pd.Timestamp.now("UTC"), ok=False, last_ok_ts=prev_ok, first_ok_ts=first_ok,
                            last_prune_ts=prev_prune, duration_s=round(time.monotonic() - t0, 1),
                            error=(restic.redact(msg) if restic else msg)[:800])
@@ -575,7 +579,7 @@ def backup_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, h
 # ------------------------------------------------------------------------------------------------ restore
 def restore(restic: Restic, target: Path, snapshot: str = "latest") -> Path:
     """Restore a snapshot into `target`, which must be empty or absent: a restore never writes over live state (the
-    owner stops the services and moves the files into place, RUNBOOK 'Backups'). Returns `target`, holding
+    owner stops the services and moves the files into place, RUNBOOK 0.6 'Backups and restore'). Returns `target`, holding
     MANIFEST.json, state/, models/ and data/."""
     target = target.resolve()
     if target.exists() and any(target.iterdir()):
@@ -627,7 +631,7 @@ def drill_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, ho
         with _PrivateUmask():
             rec = restore_drill(paths, restic, check_subset=check_subset)
     except Exception as exc:
-        msg = _pointer_first(f"{type(exc).__name__}: {exc}")
+        msg = _job_error(exc)
         rec = DrillRecord(ts=pd.Timestamp.now("UTC"), ok=False, duration_s=round(time.monotonic() - t0, 1),
                           error=(restic.redact(msg) if restic else msg)[:800])
     rec.last_ok_ts = rec.ts if rec.ok else prev_ok

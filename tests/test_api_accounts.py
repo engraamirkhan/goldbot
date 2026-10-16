@@ -90,14 +90,17 @@ def test_an_engine_file_from_before_the_account_view_still_renders_with_nulls(tm
 
 SUPERVISOR = {"daily_cap": 0.015, "combined_day_start_equity": 1000.0, "weekly_cap": 0.04,
               "combined_week_start_equity": 1000.0, "combined_equity": 990.0}
-PAUSED = "the combined cap can't be checked; new entries are paused"
+PAUSED = "so the combined loss cap can't be checked. New entries are paused; exits always run."
 
 
 @pytest.mark.parametrize("supervisor, why, code", [
-    (None, "supervisor report missing", "no_supervisor_heartbeat"),
-    ({**SUPERVISOR, "ts": "junk"}, "supervisor report missing", "supervisor_state_unreadable"),
-    ({**SUPERVISOR, "ts": time.time() - 600}, "supervisor report stale", "supervisor_heartbeat_stale"),
-    ({**SUPERVISOR, "ts": time.time() + 3600}, "supervisor report stamped ahead", "supervisor_heartbeat_future"),
+    (None, "The safety supervisor's report is missing or unreadable", "no_supervisor_heartbeat"),
+    ({**SUPERVISOR, "ts": "junk"}, "The safety supervisor's report is missing or unreadable",
+     "supervisor_state_unreadable"),
+    (SUPERVISOR, "The safety supervisor hasn't reported for over a minute", "supervisor_heartbeat_stale"),   # no ts
+    ({**SUPERVISOR, "ts": time.time() - 600}, "The safety supervisor hasn't reported for over a minute",
+     "supervisor_heartbeat_stale"),
+    ({**SUPERVISOR, "ts": time.time() + 3600}, "The safety supervisor's report is dated ahead", "supervisor_heartbeat_future"),
 ])
 def test_a_rejected_supervisor_report_shows_the_budget_as_unknown_never_the_roomier_account_cap(tmp_path, supervisor,
                                                                                                 why, code):
@@ -107,9 +110,11 @@ def test_a_rejected_supervisor_report_shows_the_budget_as_unknown_never_the_room
     row = _get(tmp_path, ENGINE, supervisor)
     b = row["loss_budget"]
     assert b["unknown"] is not None and b["unknown"].startswith(why) and PAUSED in b["unknown"], b
+    assert b["unknown_paused"] is True
     assert code in [x["code"] for x in row["entry_status"]["blocks"]]
 
 
 def test_a_fresh_supervisor_report_leaves_the_budget_known(tmp_path):
     row = _get(tmp_path, ENGINE, {**SUPERVISOR, "ts": time.time()})
-    assert row["loss_budget"]["unknown"] is None and row["loss_budget"]["binding"] == "combined 1.5% daily cap"
+    assert row["loss_budget"]["unknown"] is None and row["loss_budget"]["unknown_paused"] is False
+    assert row["loss_budget"]["binding"] == "combined 1.5% daily cap"

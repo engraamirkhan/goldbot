@@ -47,6 +47,7 @@ re-reviews were asked on 2026-10-12 and have not started; the reviewed batch has
 | 59 | Engine state keeps moving on the host clock while the market is closed | Operational resilience · RUN | S | done (lane market-closed-state-cadence, 2026-10-16; review fixes in, re-review pending) |
 | 58 | Fail closed on heartbeats stamped in the future | Execution and risk (supervisor) · PROTECT | S | done 2026-10-16 (needs trading-safety and SRE review) |
 | 60 | Approval window expiry trusts a future-stamped proposal | Approvals (owner confirms entries, 90 s) · PROTECT | S | proposed (trading-safety and SRE review of BACKLOG 58, 2026-10-16; owner of the fix trading-safety-reviewer, built by the implementer; due 2026-10-23) |
+| 61 | Mixed-currency accounts: the loss budget shows the account cap, not the combined cap | Dashboard and Telegram (loss budget, ADR 0004 section 3) · PROTECT | S | proposed (UX review of the loss-budget fallback, 2026-10-16; accountable implementer; due 2026-10-30) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -906,6 +907,17 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - the bus, Telegram and dashboard show such a proposal as expired, and the digest counts it as `EXPIRED_UNAPPROVED`;
   - tests: `created` 10 s ahead is expired; 2 s ahead is still open; a backward wall-clock step during the window does
     not let an approval through after the monotonic deadline; NaN or a string `created` is expired.
+- **61. Mixed-currency accounts: the loss budget shows the account cap, not the combined cap (UX review,
+  2026-10-16).** Value: with accounts in more than one currency, `account_view._combined`
+  (goldbot/ops/account_view.py) leaves out the supervisor's combined 1.5%/4% caps with a note, and the Overview card,
+  the safety-strip chip and the approval cards show the account's own 2% cap. That is the roomier figure, the same
+  gap the supervisor-report fallback closed. Accountable: implementer; due 2026-10-30. Acceptance:
+  - until BACKLOG 28's currency lane lands, a mixed-currency budget reads "can't check" in amber
+    (`LossBudget.unknown` with the owner's reason, `unknown_paused` false unless the supervisor halts on
+    `mixed_account_currencies`, then red), with no amount on the card, the chip or the approval card;
+  - the account caps stay in `caps`, so the entry status's spent-cap blocks are unchanged;
+  - tests: API (`/api/accounts`, `/api/proposals`) with a GBP and a USD engine; BalanceCard and SafetyStrip show
+    "can't check" in amber.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.

@@ -59,7 +59,7 @@ describe("SafetyStrip", () => {
   });
 
   it("shows today's loss budget left, amber under a quarter and red when spent", () => {
-    const budget = (remaining: number) => ({ limit: 15, used: 15 - remaining, remaining, binding: "combined 1.5% daily cap", binding_label: "all accounts together (1.5% of today's start)", period: "today" as const, notes: [], caps: [] });
+    const budget = (remaining: number) => ({ limit: 15, used: 15 - remaining, remaining, binding: "combined 1.5% daily cap", binding_label: "all accounts together (1.5% of today's start)", period: "today" as const, notes: [], caps: [], unknown_paused: false });
     const { rerender } = render(<SafetyStrip status={status()} accounts={[account({ currency: "GBP", loss_budget: budget(5) })]} />);
     expect(chip("Loss budget")).toHaveTextContent("£5.00 left");
     expect(chip("Loss budget")).toHaveTextContent("limit £15.00 today");
@@ -81,16 +81,21 @@ describe("SafetyStrip", () => {
     expect(chip("Loss budget")).toHaveClass("idle");
   });
 
-  it("shows the loss budget as unknown when any account's combined cap can't be checked, not the roomier figure", () => {
-    const why = "supervisor report stale: the combined cap can't be checked; new entries are paused";
+  it("says it can't check the loss budget when any account's combined cap can't be checked, not the roomier figure", () => {
+    const why = "The safety supervisor hasn't reported for over a minute, so the combined loss cap can't be checked. New entries are paused; exits always run.";
+    const notSummed = "The safety supervisor hasn't added up the accounts yet, so the combined loss cap isn't shown. Exits always run.";
     const known = { limit: 15, used: 0, remaining: 15, binding: "combined 1.5% daily cap", binding_label: "all accounts together (1.5% of today's start)", period: "today" as const, notes: [], caps: [] };
-    render(<SafetyStrip status={status()} accounts={[
-      account({ currency: "GBP", loss_budget: known }),
-      account({ account_id: "vantage-demo", currency: "GBP", loss_budget: { ...known, limit: 20, remaining: 20, unknown: why } })]} />);
-    expect(chip("Loss budget")).toHaveTextContent("vantage-demo: unknown");
+    const { rerender } = render(<SafetyStrip status={status()} accounts={[
+      account({ currency: "GBP", loss_budget: { ...known, unknown: notSummed, unknown_paused: false } }),
+      account({ account_id: "vantage-demo", currency: "GBP", loss_budget: { ...known, limit: 20, remaining: 20, unknown: why, unknown_paused: true } })]} />);
+    expect(chip("Loss budget")).toHaveTextContent("vantage-demo: can't check");   // the paused account first
     expect(chip("Loss budget")).not.toHaveTextContent("£20.00");
     expect(chip("Loss budget")).toHaveClass("bad");
     expect(chip("Loss budget")).toHaveAttribute("title", why);
+    rerender(<SafetyStrip status={status()} accounts={[
+      account({ currency: "GBP", loss_budget: { ...known, unknown: notSummed, unknown_paused: false } })]} />);
+    expect(chip("Loss budget")).toHaveTextContent("can't check");
+    expect(chip("Loss budget")).toHaveClass("warn");
   });
 
   it("never says allowed from stale data: a warning with the report's time instead", () => {

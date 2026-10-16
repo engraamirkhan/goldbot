@@ -630,7 +630,7 @@ def test_restore_drill_health(tmp_path):
 
 
 def test_unconfigured_restic_health_reasons_name_the_fix_command_and_the_runbook(brain, tmp_path):
-    """Found 2026-10-16: the job check cut the error at 160 characters and the owner lost "RUNBOOK 'Backups'". The
+    """Found 2026-10-16: the job check cut the error at 160 characters and the owner lost "the RUNBOOK pointer". The
     real scheduler runs both jobs with no restic keys; every owner-facing reason keeps the fix and the pointer."""
     from goldbot.ops.scheduler import Schedule, Scheduler
     clock = [NOW - pd.Timedelta(days=1)]
@@ -644,10 +644,14 @@ def test_unconfigured_restic_health_reasons_name_the_fix_command_and_the_runbook
     reasons = {c.name: c.reason for c in health.check_scheduler(ctx)}
     reasons["backup_age"] = health.check_backup_age(ctx).reason
     reasons["restore_drill"] = health.check_restore_drill(ctx).reason
-    for name in ("job:backup", "job:restore_drill", "backup_age", "restore_drill"):
-        assert "RUNBOOK 'Backups'" in reasons[name], (name, reasons[name])
-        assert "goldbot accounts set" in reasons[name], (name, reasons[name])
-        assert "restic-s3-secret-key" in reasons[name], (name, reasons[name])     # the last missing key survives too
+    want = ("RUNBOOK 0.6 'Backups and restore': backups not set up on the brain; run goldbot accounts set <key> for: "
+            "restic-repository, restic-password, restic-s3-access-key, restic-s3-secret-key")
+    rec = json.loads((brain.state_dir / bk.LAST_FILE).read_text())
+    assert rec["error"] == want and len(want) <= 200                  # backup_age shows 200 characters of it
+    drill = want.replace(": backups", ": restore drill failed: backups", 1)     # the scheduler's job record says which
+    for name, text in (("backup_age", want), ("restore_drill", want), ("job:backup", want), ("job:restore_drill", drill)):
+        assert text in reasons[name], (name, reasons[name])
+        assert "ResticNotConfigured" not in reasons[name] and "`" not in reasons[name], (name, reasons[name])
 
 
 def test_backup_prune_health(tmp_path):
