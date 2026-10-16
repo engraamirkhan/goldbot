@@ -133,6 +133,41 @@ def test_a_fragment_both_lanes_edited_still_conflicts_and_leaves_the_rendered_do
     assert rel in r.stdout + r.stderr  # the driver names the fragment to resolve
 
 
+def test_a_fragment_both_sides_edited_on_different_lines_merges_like_git_and_the_docs_re_render(tmp_path, git_env):
+    """Real case 2026-10-16 (merge 3e1ee0a): a lane based before .gitattributes existed edited BACKLOG item 1's
+    detail while the integration branch edited its status; git merged the fragment cleanly, but the driver called
+    it a conflict and left HANDOFF.md and BACKLOG.md conflicted."""
+    root = old_repo(tmp_path)
+    assert da.main(["--root", str(root), "migrate"]) == 0
+    item = next((root / "docs" / "backlog.d").glob("01-*.md"))
+    item.write_text(item.read_text(encoding="utf-8") + "Line two.\nLine three.\n", encoding="utf-8")
+    da.cmd_render(root)
+    commit_all(root, "migrate")
+    git(root, "checkout", "-q", "-b", "lane-old")  # predates the driver's .gitattributes
+    item.write_text(item.read_text(encoding="utf-8").replace("Line three.", "Line three, by the lane."),
+                    encoding="utf-8")
+    frag = da.cmd_new_handoff(root, "lane-old", "status")
+    frag.write_text("- lane-old done.\n", encoding="utf-8")
+    da.cmd_render(root)
+    commit_all(root, "lane edits the detail")
+    git(root, "checkout", "-q", "main")
+    (root / "scripts").mkdir()
+    shutil.copy(SCRIPT, root / "scripts" / "docs_assemble.py")
+    (root / ".gitattributes").write_text(ATTRIBUTES, encoding="utf-8")
+    item.write_text(item.read_text(encoding="utf-8").replace("status: done", "status: shipped"), encoding="utf-8")
+    other = da.cmd_new_handoff(root, "main-side", "status")
+    other.write_text("- main side done.\n", encoding="utf-8")
+    da.cmd_render(root)
+    commit_all(root, "driver and a status edit")
+    assert da.main(["--root", str(root), "install-merge-driver"]) == 0
+    r = run_git(root, "merge", "--no-edit", "lane-old")
+    assert r.returncode == 0, r.stdout + r.stderr
+    backlog, handoff = read(root, "docs/BACKLOG.md"), read(root, "HANDOFF.md")
+    assert "| 1 | One | FIND | M | shipped |" in backlog and "Line three, by the lane." in backlog
+    assert "- lane-old done." in handoff and "- main side done." in handoff
+    assert da.main(["--root", str(root), "check"]) == 0
+
+
 def test_two_lanes_that_took_the_same_id_leave_the_rendered_doc_conflicted_with_the_fix_ids_hint(
         tmp_path, git_env):
     root = driver_repo(tmp_path)
