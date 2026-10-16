@@ -10,8 +10,9 @@ London) with signal, not noise. Read on a phone, so it stays under about 15 line
            positions now;
 * risk     worst drawdown stage and drawdown from peak, daily and weekly loss-cap use (the engine's figures, on the
            risk day that resets at 00:00 UTC, not the opportunity day), any halt (owner, drift, supervisor, drawdown);
-* research the next pre-registered trial or the quarter's trial budget, and the attribution headline (best and worst
-           non-noise cell of state/attribution.json) when it exists;
+* research the next pre-registered trial or the quarter's trial budget, and the attribution headline when
+           state/attribution.json exists: the best positive and worst negative row whose adjusted verdict clears the
+           Bonferroni bar (ADR 0022), else "no row clears the bar" with the overall cell;
 * decisions waiting for the owner, with counts: pending approvals, the owner decision queue in docs/ROADMAP.md, a
            deploy on offer.
 
@@ -375,14 +376,24 @@ def _attribution_line(state_dir: Path) -> list[str]:
              for name, c in group.items() if c.get("verdict") != "noise" and c.get("mean_r_net") is not None]
     if not cells:
         return [f"Attribution: every cell is still noise (< {rep.get('min_trades', '?')} trades)"]
+    # ADR 0022 (quant ruling F3): a row is named only when its adjusted verdict clears the Bonferroni bar; a report
+    # written before the rule carries no verdict_adj, so none of its rows is named
     cells.sort(key=lambda x: float(x[2]["mean_r_net"]))
+    pos = [x for x in cells if x[2].get("verdict_adj") == "positive"]
+    neg = [x for x in cells if x[2].get("verdict_adj") == "negative"]
 
     def cell(x: tuple[str, str, dict[str, Any]]) -> str:
         return f"{x[0]} {x[1]} {float(x[2]['mean_r_net']):+.2f}R/trade net (n {x[2].get('n')})"
 
-    best = cell(cells[-1])
-    worst = f" · worst {cell(cells[0])}" if len(cells) > 1 else ""
-    return [f"Attribution: best {best}{worst}"]
+    if pos or neg:
+        parts = ([f"best {cell(pos[-1])}"] if pos else []) + ([f"worst {cell(neg[0])}"] if neg else [])
+        return ["Attribution: " + " · ".join(parts)]
+    overall = rep.get("overall") or {}
+    mean = overall.get("mean_r_net")
+    head = f"overall {float(mean):+.2f}R/trade net, {overall.get('verdict_adj', '?')}" if mean is not None \
+        else "overall no taken trades"
+    return [f"Attribution: no row clears the bar (|t| ≥ {float(rep.get('t_bar') or 2.0):.1f} over {rep.get('m', '?')} "
+            f"rows) · {head}"]
 
 
 def decisions_line(state_dir: Path, roadmap: Path) -> list[str]:

@@ -7,6 +7,7 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import t as student_t
 
 from goldbot.agents.roles import ROLES
 from goldbot.agents.tools import ReadOnlyTools
@@ -22,6 +23,7 @@ from goldbot.research.attribution import (
     VersionRole,
     build_report,
     cell_stats,
+    clustered_se,
     family_of,
     render_markdown,
     save_report,
@@ -292,6 +294,44 @@ def test_rows_bonferroni_fwer():
     assert raw / 500 > 0.5
 
 
+def test_rows_bonferroni_fwer_with_a_day_effect():
+    """40 pure-noise rows of 20 days x 3 trades, with a shared day effect (x = u_d + e_i, both N(0, 1)): clustering by
+    day keeps the share of reports with any signed adjusted row at <= 0.07."""
+    days = np.repeat(np.arange(20), 3)
+    adj = 0
+    for seed in range(500):
+        rng = np.random.default_rng(10_000 + seed)
+        x = rng.standard_normal((40, 20))[:, days] + rng.standard_normal((40, 60))
+        adj += any(cell_stats(row, row, min_trades=30, days=days, m=40).verdict_adj in ("positive", "negative")
+                   for row in x)
+    assert adj / 500 <= 0.07
+
+
+def test_zero_clustered_se_with_dispersion_is_not_evidence():
+    """Every day's mean equals the cell mean, so the clustered se is exactly 0 although the trades disperse: no se,
+    never a signed verdict on a point range (ADR 0022)."""
+    days = np.repeat(np.arange(20), 2)
+    x = np.tile([1.5, -1.0], 20)
+    assert clustered_se(x, days) is None
+    c = cell_stats(x, x, min_trades=30, days=days, m=5)
+    assert c.verdict == c.verdict_adj == "indistinguishable from zero"
+    assert c.ci_adj is None and c.t_stat is None
+
+
+def test_overall_bar_is_two_or_the_t_quantile_on_days_minus_one_for_overall_challengers_and_live():
+    x = np.random.default_rng(5).normal(0.4, 1.0, 40)
+    few = cell_stats(x, x, min_trades=30, days=np.repeat(np.arange(10), 4))
+    assert few.t_bar == pytest.approx(float(student_t.ppf(0.975, 9)), abs=1e-8) and (few.t_bar or 0.0) > 2.2
+    many = cell_stats(np.resize(x, 200), np.resize(x, 200), min_trades=30, days=np.arange(200))
+    assert many.t_bar == 2.0                                 # t_199(0.975) = 1.97: the 2.0 floor
+    # live fills over 10 days apply the same overall bar
+    fills = pd.DataFrame({"ts_utc": pd.date_range("2026-09-20 00:00", periods=40, freq="6h", tz="UTC"),
+                          "side": 1, "requested": 2400.0, "filled": 2400.15 + np.linspace(-0.05, 0.05, 40)})
+    live = build_report([], now=NOW, costs=_costs(), settings=S, fills={"icm-demo": fills}).live["icm-demo"]
+    assert live.t_bar == pytest.approx(float(student_t.ppf(0.975, 9)), abs=1e-8)
+    assert live.verdict_adj == "positive" and live.verdict == "positive"
+
+
 def test_cell_stats_duplicated_same_day_trades_do_not_raise_t():
     rng = np.random.default_rng(7)
     days = np.repeat(np.arange(20), 3)
@@ -312,8 +352,9 @@ def test_one_trade_a_day_gives_the_classical_t_and_the_interval_uses_the_same_er
     se = float(np.std(x, ddof=1)) / np.sqrt(45)
     assert c.t_stat == pytest.approx(x.mean() / se, rel=1e-6)
     assert c.ci95_net == pytest.approx((x.mean() - 1.96 * se, x.mean() + 1.96 * se), abs=1e-8)
-    assert c.t_bar == 2.0                                    # no row count given: the flat bar of the overall cell
-    assert c.ci_adj == pytest.approx((x.mean() - 2.0 * se, x.mean() + 2.0 * se), abs=1e-8)
+    bar = float(student_t.ppf(0.975, 44))                   # no row count: the overall bar, max(2, t_{G-1}(0.975))
+    assert c.t_bar == pytest.approx(bar, abs=1e-8)
+    assert c.ci_adj == pytest.approx((x.mean() - bar * se, x.mean() + bar * se), abs=1e-8)
 
 
 def test_a_cell_traded_on_one_day_is_never_signed_by_its_spread():
@@ -349,14 +390,16 @@ def test_adjusted_verdict_is_signed_exactly_when_the_adjusted_interval_excludes_
     assert seen["positive"] and seen["negative"] and seen["indistinguishable from zero"] and seen["noise"]
 
 
-def test_report_rows_use_the_bonferroni_bar_over_breakdown_cells_at_the_minimum_and_the_overall_cell_keeps_two():
+def test_report_rows_use_the_bonferroni_bar_over_breakdown_cells_at_the_minimum_and_the_overall_cell_the_overall_bar():
     trades = (_book(30, 10, hour=3) + _book(5, 25, side=-1, hour=9, agent="mean_rev-g0-1111111111", tf="15m") +
               _book(10, 10, hour=15, agent="breakout-g1-2222222222"))
     rep = build_report(trades, now=NOW, costs=FREE, settings=S)
     m = sum(1 for cells in rep.breakdowns.values() for c in cells.values() if c.n >= S.min_trades)
     assert rep.m == m > 1 and rep.t_bar == pytest.approx(t_bar(m))
-    assert rep.overall.t_bar == rep.challengers.t_bar == 2.0
-    rows = [c for cells in rep.breakdowns.values() for c in cells.values() if c.n >= S.min_trades]
+    # the overall cell's trades fall on 30 days (_book spreads them over days 0-29): max(2, t_29(0.975)) = 2.045
+    assert rep.overall.t_bar == pytest.approx(float(student_t.ppf(0.975, 29)), abs=1e-8)
+    assert rep.challengers.t_bar == 2.0                      # no trades: no days, the 2.0 floor
+    rows =[c for cells in rep.breakdowns.values() for c in cells.values() if c.n >= S.min_trades]
     assert all((c.t_bar or 0.0) >= rep.t_bar for c in rows)
     assert all(e.verdict_adj == rep.breakdowns["exit"][k].verdict_adj for k, e in rep.exits.items())
     # the raw verdict is kept as it was for the staff agents

@@ -27,15 +27,17 @@ taken and untaken candidates. Live fills are compared with the backtest's slippa
 never with the measured table built from the same fills (slippage excess, in $/oz and, where the order's stop is on
 record, in R).
 
-Honesty rules (ADR 0022: "Results verdict: day-clustered SE; Bonferroni t_bar for breakdown rows; 2.0 for the overall
-champion-path cell; frozen from this date; changing a strategy because of a row is a new registry trial"):
+Honesty rules (ADR 0022: "Results verdict: day-clustered SE; Bonferroni t_bar for breakdown rows; max(2.0,
+t⁻¹_{G−1}(0.975)) for the overall champion-path cell; frozen from this date; changing a strategy because of a row is a
+new registry trial"):
 * a cell with fewer than `attribution.min_trades` trades is "noise", whatever its mean;
 * t and both ranges use the standard error clustered by entry UTC day, so same-day trades are not counted as
-  independent evidence;
+  independent evidence; a clustered se of exactly 0 while the trades disperse is "no se" (indistinguishable);
 * the raw `verdict` (kept for the staff agents) is "positive"/"negative" at |t| >= 2, else "indistinguishable from zero";
-* `verdict_adj` is signed if and only if `ci_adj` = mean +- bar x se excludes 0. The bar is 2.0 for the overall cell,
-  the challengers and the live fills; a breakdown row's is t_bar = max(2, Φ⁻¹(1 − 0.025/m)) read on its days - 1
-  degrees of freedom, m = the report's breakdown cells at the minimum.
+* `verdict_adj` is signed if and only if `ci_adj` = mean +- bar x se excludes 0. The overall cell, the challengers and
+  the live fills use the overall bar max(2, t⁻¹_{G−1}(0.975)), G = the cell's days; a breakdown row uses
+  t_bar = max(2, Φ⁻¹(1 − 0.025/m)) read on its G - 1 degrees of freedom, m = the report's breakdown cells at the
+  minimum.
 The report changes nothing: no trade, setting,
 model or budget. Staff agents read it through `read_attribution` and file hypotheses only via `file_hypothesis`.
 Output is a pure function of its inputs and `now` (sorted, rounded), so the same book gives the same bytes.
@@ -211,7 +213,9 @@ class LiveFills(FrozenRecord):
     t_stat: float | None
     mean_excess_r: float | None           # over fills whose order stop is on record
     n_with_risk: int
-    verdict: str
+    verdict: str                          # raw, |t| >= 2
+    t_bar: float                          # the overall bar max(2, t⁻¹_{G−1}(0.975)), G = fill days (ADR 0022)
+    verdict_adj: str                      # signed if and only if mean +- t_bar se excludes 0
     orders: dict[str, int]                # pending_orders rows by status
 
 
@@ -252,7 +256,8 @@ def day_keys(ts: pd.DatetimeIndex) -> np.ndarray:
 def clustered_se(x: np.ndarray, days: np.ndarray | None) -> float | None:
     """Standard error of the mean clustered by day (ADR 0022): with G days,
     se = sqrt(G / (G - 1)) * sqrt(Σ_d (Σ_{i∈d}(x_i − x̄))²) / n. One trade a day gives std(ddof=1) / sqrt(n).
-    None with fewer than 2 trades or 2 days; 0.0 when every value is the same (zero dispersion)."""
+    None with fewer than 2 trades or 2 days, and None when it is exactly 0 although the trades disperse (every day's
+    mean equals the cell mean: "no se", not certainty); 0.0 only when every value is the same (zero dispersion)."""
     n = len(x)
     if n < 2:
         return None
@@ -263,7 +268,8 @@ def clustered_se(x: np.ndarray, days: np.ndarray | None) -> float | None:
     if g < 2:
         return None
     s = np.bincount(inv, weights=x - x.mean())
-    return float(np.sqrt(g / (g - 1)) * np.sqrt(float((s ** 2).sum())) / n)
+    out = float(np.sqrt(g / (g - 1)) * np.sqrt(float((s ** 2).sum())) / n)
+    return out if out > 0 else None
 
 
 def _verdict(n: int, mean: float | None, t: float | None, se: float | None, min_trades: int) -> str:
@@ -294,12 +300,13 @@ def cell_stats(gross: np.ndarray, net: np.ndarray, *, min_trades: int, days: np.
                m: int | None = None) -> Cell:
     """Expectancy cell: count, mean gross and net R, t-stat and normal 95% interval of the net mean on the
     day-clustered se (`days`: each trade's UTC day; None = every trade its own day), hit rate (net R > 0), profit
-    factor (net wins / net losses), the raw verdict, and the adjusted range and verdict on the cell's bar: a flat 2.0
-    when `m` is None (overall, challengers, live), else the row bar `t_bar(m, df=days - 1)` (ADR 0022)."""
+    factor (net wins / net losses), the raw verdict, and the adjusted range and verdict on the cell's bar (ADR 0022):
+    the overall bar max(2, t⁻¹_{G−1}(0.975)) when `m` is None (overall, challengers, live), else the row bar
+    `t_bar(m, df=G - 1)`, G = the cell's days."""
     g, x = np.asarray(gross, dtype=float), np.asarray(net, dtype=float)
     n = len(x)
     n_days = len(np.unique(np.arange(n) if days is None else np.asarray(days)))
-    bar = T_SIGNIFICANT if m is None else t_bar(m, df=n_days - 1 if n_days > 1 else None)
+    bar = t_bar(1 if m is None else m, df=n_days - 1 if n_days > 1 else None)
     if n == 0:
         return Cell(n=0, mean_r_gross=None, mean_r_net=None, std_r_net=None, t_stat=None, ci95_net=None,
                     hit_rate=None, profit_factor=None, verdict="noise", t_bar=_r(bar), ci_adj=None, verdict_adj="noise")
@@ -436,12 +443,13 @@ def _champion_path(roles: dict[str, VersionRole]) -> Callable[[TradeRow], bool]:
 def live_fills(fills: pd.DataFrame, orders: dict[str, Any], prior_usd: float, *, min_trades: int) -> LiveFills:
     """Each fill's slippage (filled - requested, signed so positive is worse) against the backtest's slippage prior,
     the same comparator as the phase gate (ADR 0022; never the measured table, which is built from these fills), with
-    the t on fill-day clusters and a flat bar of 2; in R where the order's stop is in the pending_orders table."""
+    the t on fill-day clusters and the overall bar; in R where the order's stop is in the pending_orders table."""
     status = Counter(str(o.get("status", "unknown")) for o in (orders.get("sent") or {}).values())
     need = {"ts_utc", "side", "requested", "filled"}
     if fills is None or fills.empty or not need <= set(fills.columns):
         return LiveFills(fills=0, mean_slippage_usd=None, prior_usd=_r(prior_usd), mean_excess_usd=None, t_stat=None,
-                         mean_excess_r=None, n_with_risk=0, verdict="noise", orders=dict(sorted(status.items())))
+                         mean_excess_r=None, n_with_risk=0, verdict="noise", t_bar=T_SIGNIFICANT,
+                         verdict_adj="noise", orders=dict(sorted(status.items())))
     f = fills.sort_values(["ts_utc"] + (["client_order_id"] if "client_order_id" in fills else [])).reset_index(drop=True)
     side = f["side"].to_numpy(float)
     slip = side * (f["filled"].to_numpy(float) - f["requested"].to_numpy(float))
@@ -459,7 +467,8 @@ def live_fills(fills: pd.DataFrame, orders: dict[str, Any], prior_usd: float, *,
     return LiveFills(fills=len(f), mean_slippage_usd=_r(float(slip.mean())), prior_usd=_r(prior_usd),
                      mean_excess_usd=st.mean_r_net, t_stat=st.t_stat,
                      mean_excess_r=_r(float(np.mean(risk_r))) if risk_r else None, n_with_risk=len(risk_r),
-                     verdict=st.verdict, orders=dict(sorted(status.items())))
+                     verdict=st.verdict, t_bar=st.t_bar or T_SIGNIFICANT, verdict_adj=st.verdict_adj,
+                     orders=dict(sorted(status.items())))
 
 
 # ------------------------------------------------------------------------------------------------ report
@@ -572,7 +581,8 @@ def render_markdown(rep: AttributionReport) -> str:
              "the ranges use standard errors clustered by entry UTC day (ADR 0022).",
              f"Rows are judged on 'verdict adj': signed only when 'CI adj' (mean +- bar x se) excludes 0. The row bar is "
              f"the Bonferroni t_bar {rep.t_bar:.2f} over m = {rep.m} breakdown cells at the minimum (higher for a row "
-             "with few days); the overall cell keeps 2. Changing a strategy because of a row is a new registry trial.",
+             "with few days); the overall cell, challengers and live fills use max(2, the t quantile at 97.5% on "
+             "days - 1). Changing a strategy because of a row is a new registry trial.",
              "",
              f"Window: exits {rep.window_from:%Y-%m-%d} .. {rep.as_of:%Y-%m-%d}. Champion-path candidates {rep.n_candidates} "
              f"(taken {rep.n_taken}, not taken {rep.n_candidates - rep.n_taken}); challenger trades {rep.challengers.n}.", ""]
@@ -616,13 +626,13 @@ def render_markdown(rep: AttributionReport) -> str:
                   for b in bins]
     if rep.live:
         lines += ["", "## Live fills vs the backtest's slippage prior", "",
-                  "| account | fills | slippage $/oz | prior $/oz | excess $/oz | excess R | t | verdict | orders |",
-                  "|---|---:|---:|---:|---:|---:|---:|---|---|"]
+                  "| account | fills | slippage $/oz | prior $/oz | excess $/oz | excess R | t | verdict | bar | "
+                  "verdict adj | orders |", "|---|---:|---:|---:|---:|---:|---:|---|---:|---|---|"]
         for acc, lf in rep.live.items():
             orders = ", ".join(f"{k} {v}" for k, v in lf.orders.items())
             lines.append(f"| {acc} | {lf.fills} | {_fmt(lf.mean_slippage_usd, '.3f')} | {_fmt(lf.prior_usd, '.3f')} | "
                          f"{_fmt(lf.mean_excess_usd, '+.3f')} | {_fmt(lf.mean_excess_r, '+.4f')} | {_fmt(lf.t_stat, '+.2f')} | "
-                         f"{lf.verdict} | {orders} |")
+                         f"{lf.verdict} | {lf.t_bar:.2f} | {lf.verdict_adj} | {orders} |")
     lines += ["", "## Notes", ""] + [f"- {n}" for n in rep.notes]
     return "\n".join(lines) + "\n"
 
