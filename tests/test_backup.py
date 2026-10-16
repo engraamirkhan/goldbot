@@ -34,27 +34,59 @@ RETENTION = bk.Retention(keep_daily=14, keep_weekly=8, keep_monthly=12)   # appl
 HOST = "goldbot-brain"
 
 
-class FakeRestic:
-    """Stands in for the restic binary: records argv and env, keeps the last backed-up tree, restores it."""
+EXCLUSIVE_LOCK = {"check", "prune", "forget", "rebuild-index", "repair"}    # restic's exclusive-lock commands
+NO_LOCK = {"init", "unlock", "version"}                                    # commands that take no lock at all
 
-    def __init__(self, repo: Path):
+
+class FakeRestic:
+    """Stands in for the restic binary: records argv and env, keeps the last backed-up tree, restores it.
+
+    It also models the brain's no-delete key (ADR 0002, incident 2026-10-16-restic-lock-no-delete-key): every command
+    that locks leaves its lock file behind, because the key cannot delete it. As in restic, an exclusive lock (check)
+    fails on any other lock, a shared lock (backup, restore, stats, snapshots) fails on an exclusive one, and the
+    global `--no-lock` takes no lock at all. `unlock` needs delete rights and fails while locks are left."""
+
+    def __init__(self, repo: Path, *, no_delete: bool = True):
         self.repo = repo
+        self.no_delete = no_delete
         self.calls: list[list[str]] = []
         self.envs: list[dict[str, str]] = []
         self.fail: dict[str, str] = {}
         self.markers: list[dict[str, str]] = []       # retention marker snapshots (`snapshots --host goldbot-retention`)
+        self.locks: list[bool] = []                   # left-over lock files: True = exclusive
 
     @property
     def snap(self) -> Path:
         return self.repo / "snap"
 
+    @staticmethod
+    def sub_of(cmd: list[str]) -> str:
+        return next(a for a in cmd[1:] if not a.startswith("-"))
+
+    def _lock(self, cmd: list[str], sub: str) -> str | None:
+        """None when the command may run; restic's error text otherwise."""
+        if "--no-lock" in cmd or sub in NO_LOCK:
+            if sub == "unlock" and self.no_delete and self.locks:
+                return "Fatal: remove locks/0a1b2c: 403 Forbidden (the key has no OBJECT_DELETE)"
+            return None
+        exclusive = sub in EXCLUSIVE_LOCK
+        if (exclusive and self.locks) or any(self.locks):
+            return ("unable to create lock in backend: repository is already locked by PID 9005 on goldbot-brain "
+                    "by goldbot (UID 997, GID 997)\nlock was created at 2026-10-16 20:01:02 (52s ago)")
+        if self.no_delete:
+            self.locks.append(exclusive)
+        return None
+
     def __call__(self, cmd: list[str], *, env: dict[str, str], capture_output: bool, text: bool, timeout: float,
                  check: bool) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(cmd))
         self.envs.append(dict(env))
-        sub = cmd[1]
+        sub = self.sub_of(cmd)
         if sub in self.fail:
             return subprocess.CompletedProcess(cmd, 1, "", self.fail[sub])
+        locked = self._lock(cmd, sub)
+        if locked:
+            return subprocess.CompletedProcess(cmd, 1, "", locked)
         out = ""
         if sub == "backup":
             src = Path(cmd[-1])
@@ -71,7 +103,7 @@ class FakeRestic:
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
     def subcommands(self) -> list[str]:
-        return [c[1] for c in self.calls]
+        return [self.sub_of(c) for c in self.calls]
 
 
 def _db(path: Path, rows: int = 50) -> None:
@@ -218,7 +250,7 @@ def test_backup_runs_restic_with_secrets_in_env_only_and_records_the_result(brai
     fake = FakeRestic(brain.work_dir.parent / "repo")
     with caplog.at_level(logging.DEBUG):
         out = _job(brain, fake)
-    assert fake.subcommands() == ["unlock", "backup", "stats", "snapshots"]
+    assert fake.subcommands() == ["backup", "stats", "snapshots"]      # no `unlock`: the key cannot delete locks
     assert out["snapshot"] == "abc123def" and out["repo_bytes"] == 123456
     for env in fake.envs:
         assert env["RESTIC_PASSWORD"] == SECRETS["restic-password"]
@@ -234,8 +266,10 @@ def test_backup_runs_restic_with_secrets_in_env_only_and_records_the_result(brai
     rec = _record(brain)
     assert rec["ok"] is True and rec["last_ok_ts"] == rec["ts"] and rec["snapshot_id"] == "abc123def"
     assert rec["dbs"]["state/core.db"]["integrity"] == "ok" and rec["files"] > 5
-    backup_call = fake.calls[1]
+    backup_call = fake.calls[0]
     assert backup_call[:6] == ["restic", "backup", "--json", "--host", HOST, "--tag"]
+    assert fake.calls[1][:3] == ["restic", "--no-lock", "stats"]                   # reads take no lock (ADR 0002)
+    assert fake.calls[2][:3] == ["restic", "--no-lock", "snapshots"]
     assert not (brain.work_dir / "snapshot").exists()             # staging removed after the upload
 
 
@@ -268,10 +302,14 @@ def test_the_brain_never_forgets_or_prunes(brain, tmp_path, capsys):
     assert "retention_args" not in (ROOT / "goldbot" / "ops" / "jobs.py").read_text()
 
 
-def test_unlock_without_delete_rights_does_not_fail_the_backup(brain):
+def test_daily_backups_run_on_top_of_the_locks_the_no_delete_key_leaves(brain):
+    """The brain's key cannot delete objects, so every `restic backup` leaves its (shared) lock behind. The next
+    night's backup takes another shared lock and still runs; nothing else on the brain adds a lock."""
     fake = FakeRestic(brain.work_dir.parent / "repo")
-    fake.fail["unlock"] = "Fatal: unable to remove lock: 403 Forbidden"
-    assert _job(brain, fake)["snapshot"] == "abc123def"
+    for _ in range(3):
+        assert _job(brain, fake)["snapshot"] == "abc123def"
+    assert fake.locks == [False, False, False]                      # one shared lock per backup, none exclusive
+    assert "unlock" not in fake.subcommands()
 
 
 def test_the_retention_marker_is_recorded_and_kept_when_unreadable(brain):
@@ -284,7 +322,8 @@ def test_the_retention_marker_is_recorded_and_kept_when_unreadable(brain):
     rec2 = _record(brain)
     assert pd.Timestamp(rec2["last_prune_ts"]) == pd.Timestamp("2026-10-01T03:00:00Z")
     assert rec2["first_ok_ts"] == rec["first_ok_ts"]
-    assert fake.calls[-1][1:] == ["snapshots", "--json", "--host", bk.RETENTION_HOST, "--tag", bk.RETENTION_TAG]
+    assert fake.calls[-1][1:] == ["--no-lock", "snapshots", "--json", "--host", bk.RETENTION_HOST, "--tag",
+                                  bk.RETENTION_TAG]
     fake.fail["snapshots"] = "network down"
     _job(brain, fake)
     assert pd.Timestamp(_record(brain)["last_prune_ts"]) == pd.Timestamp("2026-10-01T03:00:00Z")
@@ -488,11 +527,63 @@ def test_restore_drill_restores_and_verifies(brain):
     assert out["files"] > 5
     assert fake.subcommands()[-2:] == ["restore", "check"]
     restore_call = fake.calls[-2]
-    assert restore_call[1:6] == ["restore", "latest", "--host", HOST, "--tag"]
-    assert fake.calls[-1] == ["restic", "check", "--read-data-subset=5%"]
+    assert restore_call[1:7] == ["--no-lock", "restore", "latest", "--host", HOST, "--tag"]
+    assert fake.calls[-1] == ["restic", "--no-lock", "check", "--read-data-subset=5%"]
     rec = _record(brain, bk.DRILL_FILE)
     assert rec["ok"] is True and rec["problems"] == [] and rec["last_ok_ts"] == rec["ts"]
     assert not any(brain.work_dir.glob("drill-*"))                # temp restore removed
+
+
+def test_restore_drill_runs_after_a_backup_under_the_no_delete_key(brain):
+    """Incident 2026-10-16 (docs/incidents/2026-10-16-restic-lock-no-delete-key.md): the first drill on the brain
+    failed with `restic check exited 1: unable to create lock in backend: repository is already locked`, because the
+    no-delete key leaves every lock behind and `check` wanted an exclusive one. The drill only reads, so every restic
+    call it makes runs with `--no-lock` and the drill passes however many locks earlier runs left."""
+    fake = FakeRestic(brain.work_dir.parent / "repo")
+    _job(brain, fake)
+    left = list(fake.locks)
+    assert left                                                     # the backup's lock is still there
+    for _ in range(2):                                              # weekly drills, back to back
+        bk.drill_job(brain, SECRETS.get, host=HOST, runner=fake)
+        assert _record(brain, bk.DRILL_FILE)["ok"] is True
+    assert fake.locks == left                                       # the drill added no lock
+    _job(brain, fake)                                               # and the next nightly backup still runs
+    assert _record(brain)["ok"] is True
+
+
+def test_the_brain_takes_a_lock_only_to_write_a_snapshot(brain, tmp_path):
+    """Every restic command the brain runs, except `backup` and `init`, is read-only and runs with `--no-lock`, so
+    no lock it cannot delete ever blocks a later command (ADR 0002 update 2026-10-16)."""
+    fake = FakeRestic(brain.work_dir.parent / "repo")
+    bk.init_repository(bk.Restic.from_secrets(SECRETS.get, host=HOST, runner=fake))
+    _job(brain, fake)
+    bk.drill_job(brain, SECRETS.get, host=HOST, runner=fake)
+    bk.restore(bk.Restic.from_secrets(SECRETS.get, host=HOST, runner=fake), tmp_path / "manual")
+    for call in fake.calls:
+        sub = FakeRestic.sub_of(call)
+        assert (sub in {"backup", "init"}) != ("--no-lock" in call), call
+        assert sub not in EXCLUSIVE_LOCK or "--no-lock" in call, call
+    assert fake.locks == [False]
+
+
+def test_a_drill_never_overlaps_a_backup_on_the_same_host(brain):
+    """`--no-lock` gives up restic's guard against a concurrent writer, so the brain keeps its own: backup and drill
+    share a host-local lock (fcntl) in the work directory. A drill started by hand during the nightly backup waits for
+    it and, when the wait runs out, fails with a clear reason instead of checking a half-written snapshot."""
+    import fcntl
+    fake = FakeRestic(brain.work_dir.parent / "repo")
+    _job(brain, fake)
+    with open(bk.private_dir(brain.work_dir) / bk.HOST_LOCK, "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        n = len(fake.calls)
+        with pytest.raises(bk.BackupError, match="another backup or restore drill is running"):
+            bk.drill_job(brain, SECRETS.get, host=HOST, runner=fake, wait_s=0)
+        assert _record(brain, bk.DRILL_FILE)["ok"] is False
+        with pytest.raises(bk.BackupError, match="another backup or restore drill is running"):
+            bk.backup_job(brain, SECRETS.get, host=HOST, runner=fake, wait_s=0)
+        assert len(fake.calls) == n                                 # restic never ran
+    bk.drill_job(brain, SECRETS.get, host=HOST, runner=fake, wait_s=0)    # released: runs
+    assert _record(brain, bk.DRILL_FILE)["ok"] is True
 
 
 def _snap_root(fake: FakeRestic) -> Path:
