@@ -121,13 +121,36 @@ def test_mixed_currencies_leave_the_combined_caps_out_with_a_note_instead_of_add
     assert any("mixed currencies" in n for n in b.notes)
 
 
-def test_a_stale_or_missing_supervisor_report_keeps_the_account_caps_with_a_note():
-    b = _budget(_engine(), _sup(ts=NOW - 600))
-    assert b is not None and b.binding == "account 2.0% daily cap" and b.limit == pytest.approx(20.0)
-    assert any("stale" in n for n in b.notes)
-    b = _budget(_engine(), {})
-    assert b is not None and b.binding == "account 2.0% daily cap"
-    assert any("supervisor" in n for n in b.notes)
+PAUSED = "New entries are paused; exits always run."
+CANT_CHECK = "so the combined loss cap can't be checked. " + PAUSED
+STALE = "The safety supervisor hasn't reported for over a minute, " + CANT_CHECK
+MISSING = "The safety supervisor's report is missing or unreadable, " + CANT_CHECK
+FUTURE = "The safety supervisor's report is dated ahead of this server's clock (check the server time), " + CANT_CHECK
+
+
+def test_a_rejected_or_capless_supervisor_report_means_the_budget_cant_be_checked_with_the_reason():
+    """The account's 2% (20) alone is roomier than the combined 1.5% (15) the supervisor enforces (release manager,
+    2026-10-16): the budget can't be checked, red when entries are paused on the same report, amber when not; the
+    account caps stay listed for the entry status's spent-cap blocks. The reason matches `engine_should_halt`: no
+    `ts` is stale, a `ts` that is not a number is unreadable."""
+    no_ts = {k: v for k, v in _sup().items() if k != "ts"}
+    for sup, why in [(_sup(ts=NOW - 600), STALE), (no_ts, STALE), ({}, MISSING), (_sup(ts=None), MISSING),
+                     (_sup(ts="junk"), MISSING), (_sup(ts=NOW + 600), FUTURE)]:
+        b = _budget(_engine(), sup)
+        assert b is not None and (b.unknown, b.unknown_paused) == (why, True), sup
+        assert b.cant_check_reason == "supervisor not reporting; new entries paused"
+        assert [c.name for c in b.caps] == ["account 2.0% daily cap", "account 5.0% weekly cap"]
+    halted = {"ts": NOW - 5, "halt": True, "reasons": ["supervisor_error"]}         # Supervisor.error_halt
+    b = _budget(_engine(), halted)
+    assert b is not None and b.unknown_paused
+    assert b.unknown == "The safety supervisor has halted and isn't reporting the combined loss cap. " + PAUSED
+    b = _budget(_engine(), _sup(combined_day_start_equity=0.0, halt=False))           # no engine summed yet
+    assert b is not None and not b.unknown_paused
+    assert b.unknown == ("The safety supervisor hasn't added up the accounts yet, so the combined loss cap isn't "
+                         "shown. Exits always run.")
+    assert b.cant_check_reason == "the supervisor hasn't added up the accounts yet"
+    b = _budget(_engine(), _sup())
+    assert b is not None and (b.unknown, b.unknown_paused, b.cant_check_reason) == (None, False, None)
 
 
 def test_an_engine_file_without_limits_or_day_start_gives_no_budget_rather_than_a_guess():

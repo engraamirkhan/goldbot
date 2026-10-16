@@ -164,6 +164,8 @@ class Proposal(Record):
             lines.append(f"smallest trade size: above{normal}{cap}")
         if budget is None:
             lines.append("loss budget left today: unknown")
+        elif budget.cant_check_reason is not None:  # never the account cap's roomier amount
+            lines.append(f"loss budget left today: can't check ({budget.cant_check_reason})")
         elif floor_cent(budget.remaining) > 0:      # open positions' stops are not reserved: said, not implied
             lines.append(f"{cash(floor_cent(budget.remaining), ccy)} left {budget.period} if this loses {OPEN_ASIDE}")
         else:

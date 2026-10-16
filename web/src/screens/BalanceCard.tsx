@@ -54,6 +54,16 @@ export function BalanceCardSkeleton() {
 function LossBudget({ a }: { a: AccountSummary }) {
   const b = a.loss_budget;
   if (!b) return <p className="budget idle muted small">Loss budget not reported by this engine yet.</p>;
+  const notes = b.notes.length > 0 && <ul className="notes small muted">{b.notes.map((n) => <li key={n}>{n}</li>)}</ul>;
+  if (b.unknown) {   // the account cap alone would look roomier than the combined cap the supervisor enforces
+    return (
+      <div className={`budget ${budgetTone(b)}`}>
+        <p><strong>Loss budget: can't check</strong></p>
+        <p className="small">{b.unknown}</p>
+        {notes}
+      </div>
+    );
+  }
   const ccy = a.currency ?? null;
   const tone = budgetTone(b);
   const used = Math.min(b.used, b.limit);
@@ -70,7 +80,7 @@ function LossBudget({ a }: { a: AccountSummary }) {
       </div>
       <p className="small">{tone === "bad" ? `New entries are stopped while ${whose} loss is at the limit; exits always run.`
         : `Lost ${cash(b.used, ccy)} ${b.period}. New entries stop when nothing is left; exits always run.`}</p>
-      {b.notes.length > 0 && <ul className="notes small muted">{b.notes.map((n) => <li key={n}>{n}</li>)}</ul>}
+      {notes}
     </div>
   );
 }

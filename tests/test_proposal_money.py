@@ -37,6 +37,12 @@ def _engine(**over: Any) -> dict[str, Any]:
     return e
 
 
+def _sup() -> dict[str, Any]:
+    """A fresh supervisor report whose combined caps have room to spare (the account's caps bind)."""
+    return {"ts": time.time(), "daily_cap": 0.015, "combined_day_start_equity": 10_000.0, "weekly_cap": 0.04,
+            "combined_week_start_equity": 10_000.0, "combined_equity": 10_000.0}
+
+
 # ---------------------------------------------------------------------------------------------- formatting
 def test_cash_and_percent_read_as_the_owner_writes_them():
     assert cash(8.2, "GBP") == "£8.20" and cash(1234.5, "USD") == "$1,234.50" and cash(3, "EUR") == "€3.00"
@@ -68,8 +74,11 @@ def test_the_budget_if_this_trade_loses_takes_its_risk_from_every_cap():
 
 def test_proposal_budget_finds_the_account_and_never_guesses():
     engines = [_engine(account="other", equity=500.0), _engine()]
-    b = proposal_budget(engines, {}, "icm-demo", 8.2)
+    b = proposal_budget(engines, _sup(), "icm-demo", 8.2)
     assert b is not None and b.remaining == pytest.approx(11.80)
+    for sup in ({}, {**_sup(), "ts": time.time() - 600}):         # missing, stale: can't check, never the 2% cap
+        b = proposal_budget(engines, sup, "icm-demo", 8.2)
+        assert b is not None and b.unknown is not None and b.unknown_paused
     assert proposal_budget(engines, {}, "missing", 8.2) is None
     assert proposal_budget(engines, {}, "icm-demo", None) is None
     assert proposal_budget([{"account": "icm-demo", "limits": "junk"}], {}, "icm-demo", 8.2) is None
@@ -78,11 +87,15 @@ def test_proposal_budget_finds_the_account_and_never_guesses():
 def test_the_telegram_service_reads_the_budget_from_the_state_files_and_unknown_when_unreadable(tmp_path):
     assert proposal_budget_from_state(tmp_path, "icm-demo", 8.2) is None                  # no engine file yet
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
+    b = proposal_budget_from_state(tmp_path, "icm-demo", 8.2)                             # no supervisor report yet
+    assert b is not None and b.unknown_paused
+    (tmp_path / "supervisor.json").write_text(json.dumps(_sup()))
     b = proposal_budget_from_state(tmp_path, "icm-demo", 8.2)
     assert b is not None and b.remaining == pytest.approx(11.80)
-    (tmp_path / "supervisor.json").write_text("{torn")                                    # drops the combined caps only
+    (tmp_path / "supervisor.json").write_text("{torn")                     # the combined cap can't be checked
     b = proposal_budget_from_state(tmp_path, "icm-demo", 8.2)
-    assert b is not None and b.remaining == pytest.approx(11.80)
+    assert b is not None and b.unknown_paused
+    (tmp_path / "supervisor.json").write_text(json.dumps(_sup()))
     (tmp_path / "engine_icm-demo.json").write_text("{torn")
     assert proposal_budget_from_state(tmp_path, "icm-demo", 8.2) is None                  # never a failed message
 
@@ -90,7 +103,7 @@ def test_the_telegram_service_reads_the_budget_from_the_state_files_and_unknown_
 # ---------------------------------------------------------------------------------------------- Telegram
 def test_telegram_text_shows_money_in_the_account_currency_with_the_min_lot_note_and_budget():
     p = _prop(**GBP_MIN_LOT)
-    b = loss_budget(_engine(), {}, [_engine()], trade_risk=8.2)
+    b = loss_budget(_engine(), _sup(), [_engine()], trade_risk=8.2)
     lines = p.text(b).splitlines()
     assert lines[0] == "🔵 SHORT 0.01 lots XAUUSD"
     assert lines[1] == "risk £8.20 (0.82% of equity) if the stop is hit, before costs"
@@ -106,10 +119,16 @@ def test_telegram_text_without_the_exception_spent_budget_or_unknown_budget():
     txt = p.text()
     assert "smallest trade" not in txt
     assert "loss budget left today: unknown" in txt
-    spent = loss_budget(_engine(equity=980.0), {}, [_engine()], trade_risk=4.1)
+    cant = loss_budget(_engine(), {}, [_engine()], trade_risk=4.1)                # supervisor report missing
+    assert "loss budget left today: can't check (supervisor not reporting; new entries paused)" in p.text(cant)
+    assert not [x for x in p.text(cant).splitlines() if " left " in x and "£" in x]       # no roomier amount
+    not_summed = {**_sup(), "combined_day_start_equity": 0.0}
+    assert "can't check (the supervisor hasn't added up the accounts yet)" in p.text(
+        loss_budget(_engine(), not_summed, [_engine()], trade_risk=4.1))
+    spent = loss_budget(_engine(equity=980.0), _sup(), [_engine()], trade_risk=4.1)
     assert "no loss budget left today if this loses (open trades aside): new entries stop" in p.text(spent)
     week = _engine(day_start_equity=995.0, week_start_equity=1045.0)        # up £5 today, down £45 this week
-    assert "£3.15 left this week if this loses (open trades aside)" in p.text(loss_budget(week, {}, [week], trade_risk=4.1))
+    assert "£3.15 left this week if this loses (open trades aside)" in p.text(loss_budget(week, _sup(), [week], trade_risk=4.1))
 
 
 def test_telegram_text_from_an_older_engine_labels_the_dollar_figure():
@@ -125,6 +144,7 @@ def test_api_proposal_carries_currency_risk_min_lot_and_the_live_budget(tmp_path
     bus.publish(_prop(**GBP_MIN_LOT))
     bus.publish(_prop(proposal_id="old"))                                       # an older engine: dollars only
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
+    (tmp_path / "supervisor.json").write_text(json.dumps(_sup()))
     app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
     h = _owner_headers(c, app)
@@ -139,11 +159,29 @@ def test_api_proposal_carries_currency_risk_min_lot_and_the_live_budget(tmp_path
     assert old["min_lot_exception"] is False
 
 
+@pytest.mark.parametrize("report, want", [("missing", "paused"), ("stale", "paused"), ("not summed", "not_summed")])
+def test_api_proposal_says_the_budget_cant_be_checked_without_an_amount(tmp_path, report, want):
+    """Missing or stale supervisor report: paused (red on the card); fresh but not summed yet: amber. Never the
+    account cap's roomier figure in loss_left."""
+    bus = ApprovalBus(tmp_path)
+    bus.publish(_prop(**GBP_MIN_LOT))
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
+    if report == "stale":
+        (tmp_path / "supervisor.json").write_text(json.dumps({**_sup(), "ts": time.time() - 600}))
+    elif report == "not summed":
+        (tmp_path / "supervisor.json").write_text(json.dumps({**_sup(), "combined_day_start_equity": 0.0}))
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
+    c = TestClient(app)
+    [r] = c.get("/api/proposals", headers=_owner_headers(c, app)).json()
+    assert (r["loss_left"], r["loss_left_period"], r["loss_cant_check"]) == (None, None, want)
+
+
 def test_api_decided_cards_carry_no_live_budget(tmp_path):
     bus = ApprovalBus(tmp_path)
     bus.publish(_prop(**GBP_MIN_LOT))
     bus.submit("icm-1-a", False, "cost", by="dashboard:o@x.io")
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
+    (tmp_path / "supervisor.json").write_text(json.dumps(_sup()))
     app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
     rows = c.get("/api/proposals/recent", headers=_owner_headers(c, app)).json()
@@ -155,6 +193,7 @@ def test_unreadable_engine_files_never_fail_the_approval_list_or_the_accounts(tm
     bus = ApprovalBus(tmp_path)
     bus.publish(_prop(**GBP_MIN_LOT))
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
+    (tmp_path / "supervisor.json").write_text(json.dumps(_sup()))
     (tmp_path / "engine_broken.json").mkdir()                   # read_text raises IsADirectoryError (an OSError)
     app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
@@ -175,5 +214,5 @@ def test_the_shown_risk_is_never_below_the_gates():
     assert "risk £8.21 " in _prop(currency="GBP", risk_amount=8.2012, risk_fraction=0.0082).text()
     assert "stop 2404.20 (−£8.21)" in _prop(currency="GBP", risk_amount=8.2012).text()
     # the budget left is shown rounded down: never more room than there is
-    b = loss_budget(_engine(), {}, [_engine()], trade_risk=8.2012)
+    b = loss_budget(_engine(), _sup(), [_engine()], trade_risk=8.2012)
     assert b is not None and "£11.79 left today" in _prop(currency="GBP", risk_amount=8.2012).text(b)

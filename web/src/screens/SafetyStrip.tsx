@@ -101,6 +101,14 @@ function build(s: Status, accounts: AccountSummary[]): Chip[] {
 function budgetChip(accounts: AccountSummary[]): Chip {
   const withBudget = accounts.filter((a) => a.loss_budget);
   if (withBudget.length === 0) return { key: "budget", label: "Loss budget", value: "not reported", tone: "idle" };
+  // never a roomier figure while a cap can't be checked; a paused account (red) before one not summed yet (amber)
+  const unknown = withBudget.find((a) => a.loss_budget!.unknown && a.loss_budget!.unknown_paused)
+    ?? withBudget.find((a) => a.loss_budget!.unknown);
+  if (unknown) {
+    const who = accounts.length > 1 ? `${unknown.account_id}: ` : "";
+    return { key: "budget", label: "Loss budget", value: `${who}can't check`, tone: budgetTone(unknown.loss_budget),
+             title: unknown.loss_budget!.unknown! };
+  }
   const share = (a: AccountSummary) => (a.loss_budget!.limit > 0 ? a.loss_budget!.remaining / a.loss_budget!.limit : 0);
   const a = withBudget.reduce((w, x) => (share(x) < share(w) ? x : w));
   const b = a.loss_budget!;

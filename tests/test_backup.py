@@ -629,6 +629,31 @@ def test_restore_drill_health(tmp_path):
     assert c.status == "fail" and "integrity_check" in c.reason
 
 
+def test_unconfigured_restic_health_reasons_name_the_fix_command_and_the_runbook(brain, tmp_path):
+    """Found 2026-10-16: the job check cut the error at 160 characters and the owner lost "the RUNBOOK pointer". The
+    real scheduler runs both jobs with no restic keys; every owner-facing reason keeps the fix and the pointer."""
+    from goldbot.ops.scheduler import Schedule, Scheduler
+    clock = [NOW - pd.Timedelta(days=1)]
+    sch = Scheduler(brain.state_dir / "scheduler.json", clock=lambda: clock[0])
+    sch.add("backup", Schedule(kind="daily", at="03:00"), lambda slot: bk.backup_job(brain, lambda k: None, host=HOST))
+    sch.add("restore_drill", Schedule(kind="daily", at="03:00"),
+            lambda slot: bk.drill_job(brain, lambda k: None, host=HOST))
+    clock[0] = NOW
+    assert sorted(sch.run_pending()) == ["backup", "restore_drill"]
+    ctx = _ctx(brain.state_dir)
+    reasons = {c.name: c.reason for c in health.check_scheduler(ctx)}
+    reasons["backup_age"] = health.check_backup_age(ctx).reason
+    reasons["restore_drill"] = health.check_restore_drill(ctx).reason
+    want = ("RUNBOOK 0.6 'Backups and restore': backups not set up on the brain; run goldbot accounts set <key> for: "
+            "restic-repository, restic-password, restic-s3-access-key, restic-s3-secret-key")
+    rec = json.loads((brain.state_dir / bk.LAST_FILE).read_text())
+    assert rec["error"] == want and len(want) <= 200                  # backup_age shows 200 characters of it
+    drill = want.replace(": backups", ": restore drill failed: backups", 1)     # the scheduler's job record says which
+    for name, text in (("backup_age", want), ("restore_drill", want), ("job:backup", want), ("job:restore_drill", drill)):
+        assert text in reasons[name], (name, reasons[name])
+        assert "ResticNotConfigured" not in reasons[name] and "`" not in reasons[name], (name, reasons[name])
+
+
 def test_backup_prune_health(tmp_path):
     assert health.check_backup_prune(_ctx(tmp_path)).status == "ok"                  # no backup yet
     _write_backup(tmp_path, 1, first_ok_ts=(NOW - pd.Timedelta(days=10)).isoformat())

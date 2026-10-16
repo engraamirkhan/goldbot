@@ -212,9 +212,9 @@ def test_the_combined_caps_are_not_shown_from_a_supervisor_report_stamped_in_the
     shown: list[Any] = []
     notes: list[str] = []
     eng = {"currency": "GBP"}
-    _combined(eng, sup, [eng], now, lambda *a, **k: shown.append(a), notes)
-    assert not shown and any("stale or stamped ahead" in n for n in notes)
-    _combined(eng, dict(sup, ts=now + 2), [eng], now, lambda *a, **k: shown.append(a), notes)
+    unknown, paused = _combined(eng, sup, [eng], now, lambda *a, **k: shown.append(a), notes)
+    assert not shown and paused and unknown is not None and "dated ahead of this server's clock" in unknown
+    assert _combined(eng, dict(sup, ts=now + 2), [eng], now, lambda *a, **k: shown.append(a), notes) == (None, False)
     assert shown
 
 
