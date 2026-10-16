@@ -4,7 +4,7 @@ rank: 10
 title: 'VPS monthly loop registry push: re-check the release asset just before upload'
 stage: Idea generation (integrity) · FIND
 size: S
-status: 'built 2026-10-16 (5053d31 + review fixes; security, quant and code re-review pending) · accountable: implementer · due 2026-10-30'
+status: 'merged on the integration branch 2026-10-16 (5053d31, review fixes c027221 and cc00630); not in PR #79, ships in the next PR; security re-verify of cc00630 not on record · accountable: release-manager · due 2026-10-23'
 ---
 - **51. VPS monthly loop registry push: re-check the release asset just before upload (security re-verify of
   BACKLOG 47, 2026-10-11).** Value: research.yml and preregister-quarter.yml serialise their writes to

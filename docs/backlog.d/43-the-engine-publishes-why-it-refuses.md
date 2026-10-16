@@ -1,10 +1,10 @@
 ---
 number: 43
-rank: 5
+rank: 7
 title: The engine publishes why it refuses entries, and writes state while the market is closed
 stage: Operational resilience, entry status · RUN
 size: M
-status: 'in progress, heartbeat part (`lane/market-closed-state-cadence`, no commit yet); `entry_blocks` ready · accountable: implementer · due 2026-10-21'
+status: 'in progress: the heartbeat part landed as BACKLOG 59 (6287d10, 412fd0d; in PR #79); the `entry_blocks` part is ready, not started · accountable: implementer · due 2026-10-21'
 ---
 - **43. The engine publishes why it refuses entries (trading-safety review; from the entry-status review of 66ba8f9,
   ADR 0011).** Value: the dashboard's entry status (docs/ux/entry-status.md) still mirrors in the API which published

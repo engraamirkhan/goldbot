@@ -1,10 +1,10 @@
 ---
 number: 58
-rank: 47
+rank: 4
 title: Fail closed on heartbeats stamped in the future
 stage: Execution and risk (supervisor) · PROTECT
 size: S
-status: done 2026-10-16 (needs trading-safety and SRE review)
+status: 'in review (built 2026-10-16; SRE-review fix 55a07e5; in PR #79; trading-safety sign-off not on record) · accountable: trading-safety-reviewer · due 2026-10-18'
 ---
 - **58. Fail closed on heartbeats stamped in the future (found 2026-10-16).** Value: every liveness check had the
   shape `now - ts > limit`. A `ts` in the future (a clock step, a bad write, a state backup restored from a box whose
