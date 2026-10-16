@@ -4,7 +4,7 @@ rank: 8
 title: Q1 2027 pre-registered trial queue
 stage: Idea generation · FIND
 size: S
-status: in progress (draft; owner rulings recorded 2026-10-11; research director decision (c), H-01 kept as a retire test only if its recount is >= 150, H-06 withdrawn below 150; reservation 8, or 7; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, `macro-v1`)
+status: 'in progress (accountable: research-director; owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 (spec + settings: implementer, 2026-10-23); `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47)'
 ---
 
 ### 5. Q1 2027 pre-registered trial queue
