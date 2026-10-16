@@ -59,7 +59,7 @@ from goldbot.ops.bridge_compat import BridgeCompat
 from goldbot.ops.gates_phase import ClosedTrade, EntryAudit, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
-from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, open_risk, sizing
+from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, hwm, open_risk, sizing
 from goldbot.risk.gate import REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor, write_startup_error
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
@@ -399,6 +399,10 @@ class Engine:
         self._stage2_clean_since: pd.Timestamp | None = None
         self._reread_account = False
         self._load_risk_state()
+        # BACKLOG 54 (ADR 0017): the high-water mark's rise confirmation (core.db; a row for another mark is void) and
+        # a re-read due next tick while a rise waits for its second read
+        self._hwm = self._load_hwm()
+        self._reread_hwm = self._hwm.pending_balance is not None
         # closed-trade record (state/closed_trades.jsonl, read by the phase gates and the stop rule): positions already
         # recorded (key: this account + position id, so a restart never records one twice), closes waiting to be
         # written, and broker-side closes waiting for their exit deal (position -> bar closes asked)
@@ -571,7 +575,7 @@ class Engine:
                     and self._error_tick_ts < bar_open:
                 self.state.tick_error, self._tick_error_detail = False, None   # a whole clean decision bar closed
                 self._write_state()
-        elif self._reread_account or self._last_state_write is None \
+        elif self._reread_account or self._reread_hwm or self._last_state_write is None \
                 or (t.ts_utc - self._last_state_write).total_seconds() >= self.cfg.state_every_s:   # ADR 0016 re-read
             self._rebuild_bars()            # completed minutes join the bars between closes, so their age is current
             self._refresh_account(t)
@@ -1777,13 +1781,11 @@ class Engine:
         if self._ladder["lot_terms"] is None:
             self._ladder["lot_terms"] = self._lot_terms()
         self._roll_risk_period(tick.ts_utc)
-        if st.balance_closed_hwm == 0:
-            st.balance_closed_hwm = acc.balance
+        self._update_hwm(acc, self._now(tick))
         if st.day_start_equity == 0:            # normally set by the risk-period roll on the first tick
             st.day_start_equity = acc.balance
         if st.week_start_equity == 0:
             st.week_start_equity = acc.balance
-        st.balance_closed_hwm = max(st.balance_closed_hwm, acc.balance)
         # exposure unknown: the last reading stays and entries are blocked below
         positions = self._read_positions("exposure kept from the last reading, entries blocked")
         if positions is not None:
@@ -1861,6 +1863,56 @@ class Engine:
             self._kill_switch(everything=stage != Stage.HALTED)
         if self._propose_only_until is not None and now < self._propose_only_until:
             self.cfg.approval_mode = "propose"  # 30 days propose-and-approve after a re-arm
+
+    def _load_hwm(self) -> hwm.HwmConfirmation:
+        """The persisted rise confirmation for the current mark; none (no candidate, no anchor: the strict side) when
+        there is no row, it is unreadable, or it refers to another mark (a re-arm, or an older release after a
+        rollback raised the mark)."""
+        conf = hwm.load_confirmation(self.cfg.state_dir, self.cfg.account_id)
+        if conf is None or conf.mark != self.state.balance_closed_hwm:
+            return hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=self.state.balance_closed_hwm)
+        return conf
+
+    def _update_hwm(self, acc: AccountInfo, now: pd.Timestamp) -> None:
+        """BACKLOG 54 (ADR 0017): "a rise in balance_closed_hwm is applied only once confirmed: by the deal history
+        (closed deals and balance operations since the last mark account for the rise within a tolerance), or by a
+        second balance read that agrees; one disagreeing read never raises it, two agreeing reads always do". A
+        deposit explains a rise and raises the mark. The mark is never lowered here (only /rearm resets it). An
+        unconfirmed rise is read again on the next tick; a refused one is logged and recorded. The first read of an
+        engine that has no mark yet sets it (and its deal-history anchor)."""
+        st = self.state
+        if st.balance_closed_hwm == 0:
+            st.balance_closed_hwm = acc.balance
+            self._set_hwm(hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=acc.balance, mark_utc=now))
+            return
+        if self._hwm.mark != st.balance_closed_hwm:          # the owner's re-arm reset the mark: candidate and anchor void
+            self._hwm = hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=st.balance_closed_hwm)
+        mark = st.balance_closed_hwm
+        s = hwm.step(self._hwm, mark, acc.balance, now, self.gate.limits.hwm_rise_tolerance, self.broker.deals_since)
+        if s.dropped is not None:
+            log.warning("high-water mark not raised: balance read %.2f was not confirmed (next read %.2f, mark %.2f)",
+                        s.dropped, acc.balance, mark)
+            self.decisions.append({"ts": time.time(), "action": "hwm_rise_refused", "candidate": s.dropped,
+                                   "balance": acc.balance, "mark": mark})
+        if s.outcome == "pending":
+            log.warning("balance %.2f is above the high-water mark %.2f and is not confirmed by the deal history; "
+                        "re-read next tick", acc.balance, mark)
+            self.decisions.append({"ts": time.time(), "action": "hwm_rise_unconfirmed", "balance": acc.balance,
+                                   "mark": mark})
+        elif s.outcome == "raised":
+            st.balance_closed_hwm = s.mark
+            self.decisions.append({"ts": time.time(), "action": "hwm_raised", "from": mark, "to": s.mark, "by": s.by,
+                                   "deposits": s.deposits})
+            self._save_risk_state()                          # the confirmed mark survives a restart at once
+        if s.outcome != "unchanged":
+            self._set_hwm(s.conf)
+        self._reread_hwm = s.conf.pending_balance is not None
+
+    def _set_hwm(self, conf: hwm.HwmConfirmation) -> None:
+        """Keep and persist the rise confirmation (core.db; a failed write is logged and only loses the candidate or
+        the anchor: a later rise then needs a fresh confirmation)."""
+        self._hwm = conf
+        hwm.save_confirmation(self.cfg.state_dir, conf)
 
     def _equity_unconfirmed(self, acc: AccountInfo, now: pd.Timestamp) -> bool:
         """BACKLOG 44 (ADR 0016): "one disagreeing read never trips the kill switch; two agreeing reads always do".

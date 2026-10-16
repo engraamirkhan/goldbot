@@ -8,6 +8,7 @@ import pandas as pd
 from goldbot.ops.checks._base import (
     COSTS_WARN_DAYS,
     ENGINE_FAIL_S,
+    HWM_PENDING_WARN_S,
     REARM_APPLY_S,
     SUPERVISOR_FAIL_S,
     SUPERVISOR_WARN_S,
@@ -136,7 +137,29 @@ def check_risk_state(ctx: HealthContext, account_id: str) -> Check:
     if rid and r.get("rearm_seen") != rid and _epoch(ctx.now) - float(c.get("rearm_ts") or 0) > REARM_APPLY_S:
         statuses.append("warn")
         parts.append("the last owner re-arm has not been applied by this engine (engine down?)")
+    hwm_note = _hwm_pending(ctx, account_id, r)
+    if hwm_note:
+        statuses.append("warn")
+        parts.append(hwm_note)
     return Check(name=name, status=_worst(statuses), reason="; ".join(parts))
+
+
+def _hwm_pending(ctx: HealthContext, account_id: str, risk: dict[str, Any]) -> str | None:
+    """ADR 0017: a balance rise the engine has not confirmed or refused for HWM_PENDING_WARN_S in market hours (the
+    terminal's balance reads keep disagreeing, so the drawdown may be measured on a mark below the real one). No
+    amounts: the high-water mark stays out of health reasons. A row for another mark is void, as in the engine."""
+    from goldbot.risk import hwm
+    try:
+        conf = hwm.read_only_confirmation(ctx.state_dir, account_id)
+    except Exception as exc:
+        return f"high-water-mark confirmation unreadable in core.db ({type(exc).__name__})"
+    if conf is None or conf.pending_since_utc is None or conf.mark != float(risk.get("balance_closed_hwm") or 0.0):
+        return None
+    age = (ctx.now - conf.pending_since_utc).total_seconds()
+    if age <= HWM_PENDING_WARN_S or not _market_open_throughout(ctx, HWM_PENDING_WARN_S):
+        return None
+    return (f"a balance rise has waited {_age(age)} for confirmation (ADR 0017): the terminal's balance reads disagree, "
+            "so the high-water mark may be below the real one")
 
 
 @register_check("global", block=BLOCK_CORE, pos=30)

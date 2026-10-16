@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import importlib
 import json
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,7 @@ from goldbot.research.director import ResearchPlan
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.population import Member, Population
 from goldbot.research.promotion import PerfStats
+from goldbot.risk import hwm
 from goldbot.telegram import automode
 from goldbot.telegram.approvals import Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
@@ -230,9 +232,21 @@ def case_ledger(tmp: Path) -> None:
     assert ledger.latest_report(tmp, "icm-demo") == rep
 
 
+def case_hwm_confirmation(tmp: Path) -> None:
+    """core.db high-water-mark confirmation row (BACKLOG 54, ADR 0017) with a field from a newer release."""
+    conf = hwm.HwmConfirmation(account_id="icm-demo", mark=10_000.0, mark_utc=T0, pending_balance=10_500.0,
+                               pending_since_utc=T0)
+    assert hwm.save_confirmation(tmp, conf)
+    with sqlite3.connect(tmp / "core.db") as conn:
+        body = conn.execute("SELECT body FROM hwm_confirmation").fetchone()[0]
+        conn.execute("UPDATE hwm_confirmation SET body = ?", (json.dumps(_newer(json.loads(body))),))
+    assert hwm.load_confirmation(tmp, "icm-demo") == conf
+    assert hwm.read_only_confirmation(tmp, "icm-demo") == conf
+
+
 CASES = [case_closed_trade, case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
-         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger]
+         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_hwm_confirmation]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.__name__.removeprefix("case_") for c in CASES])
@@ -245,7 +259,7 @@ def test_every_persisted_record_model_has_a_compat_case():
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
-               ledger.BalanceSnapshot, ledger.BalanceDeal,
+               ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,

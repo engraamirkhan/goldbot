@@ -99,6 +99,11 @@ risk:
   # below 12% minus the tolerance (10%) for equity_recovery_s seconds; any 12% read while pending trips.
   equity_check_tolerance: 0.02
   equity_recovery_s: 60
+  # High-water-mark rise confirmation (BACKLOG 54, ADR 0017): a balance read above balance_closed_hwm raises it only
+  # when the deal history since the mark was set explains it (closed deals, swap, commission, deposits) within this
+  # fraction of the mark (0.1% = £1 on £1,000: rounding, not money), or when the next read agrees with it within the
+  # same fraction. One inflated balance read never raises the mark (no phantom size-down or kill switch after it).
+  hwm_rise_tolerance: 0.001
   # Reopen window (BACKLOG 17, playbook G-2): entries refused `reopen_window` for after_daily_reopen_min minutes after
   # each daily reopen and after_monday_open_min after the weekly open (or any reopen after a closure of 12 h or more),
   # read from the broker session table (DST follows the server clock). Entries only. OFF until the owner adopts it.

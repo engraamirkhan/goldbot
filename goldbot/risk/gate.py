@@ -84,6 +84,9 @@ class RiskLimits(Record):
     equity_check_tolerance: float = 0.02
     # ...and a pending 12% read clears only after every read stayed below dd_stage2 - tolerance this long (seconds)
     equity_recovery_s: float = 60.0
+    # BACKLOG 54 (ADR 0017): a rise in balance_closed_hwm needs the deal history or a second balance read to agree with
+    # it within this fraction of the mark (goldbot/risk/hwm.py)
+    hwm_rise_tolerance: float = 0.001
     # BACKLOG 17/18 (playbook G-2, G-3): entry windows around tier-2 events, after reopens and on thin-liquidity days;
     # off by default (the owner adopts them). The engine raises the AccountState flags; check() refuses only when on
     tier2: Tier2Blackout = Field(default_factory=Tier2Blackout)
@@ -104,6 +107,7 @@ class RiskLimits(Record):
                    min_lot_risk_cap=None if tiny_live else risk.min_lot_risk_cap, throttle=risk.throttle,
                    heat=risk.heat, project_open_risk=risk.project_open_risk,
                    equity_check_tolerance=risk.equity_check_tolerance, equity_recovery_s=risk.equity_recovery_s,
+                   hwm_rise_tolerance=risk.hwm_rise_tolerance,
                    tier2=risk.blackout.tier2, reopen=risk.reopen, holidays=risk.holidays)
 
 
