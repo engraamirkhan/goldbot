@@ -205,21 +205,40 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 - Trial registry push re-checks the release asset just before the swap (2026-10-16, BACKLOG 51). The VPS monthly loop
   pushes `research-v1/registry.jsonl` outside the workflows' `concurrency: research-registry`, so a workflow save
   that landed between the loop's pull and its push was overwritten, and the other way round too. Both writers now run
-  the same compare-and-swap (`goldbot.research.registry_sync.push_release` and `scripts/registry_release.sh save`).
-  Each one notes the asset's stamp (id, updated_at, size, digest) at the pull and uploads the merged rows as
-  `registry.jsonl.pending-*`. It re-reads the stamp, deletes the pulled asset by its id, then renames the pending
-  asset. Another writer is detected three ways: a changed stamp, a 404 on the delete, or a taken name on the rename.
-  The pending upload is then dropped and the writer pulls, merges and tries again, at most 3 times, then fails loudly.
-  On the VPS, `registry_sync` records `failed: ...` and the loop carries on; in a workflow the job fails. The local
-  file keeps every union it saw, so a lost race drops no row. The keyed union counts each trial once in the deflated
-  Sharpe. A pending upload with no published copy means another writer is mid-swap or crashed there. Reads then
-  refuse to start from an empty registry; the fix is to rename that asset to `registry.jsonl` on the release page.
-  The refusal of a union shorter than the published copy is kept, and the VPS now applies it too. `--clobber` is no
+  one implementation: `goldbot.research.registry_sync`, over HTTP on the VPS and through `gh` in the workflows.
+  `scripts/registry_release.sh fetch | save | recover` is a thin wrapper over it. Each save is a compare-and-swap:
+  - Note the asset's stamp (id, updated_at, size, digest) at the pull.
+  - Upload the merged rows as `registry.jsonl.pending-*`.
+  - Re-read the stamp, then delete the pulled asset by its id.
+  - Rename the pending asset, then re-read: published means our id is the lowest-id `registry.jsonl`. The rename's
+    status code is not relied on.
+
+  Another writer is detected by a changed stamp, a 404 on the delete, or another copy being published at the rename.
+  The pending upload is then dropped, and the writer waits a jittered 0.5-1.5 s per attempt, pulls, merges and
+  retries, at most 3 times. After that it fails loudly. On the VPS, `registry_sync` records `failed: ...` and the
+  loop carries on; in a workflow the job fails. The local file keeps every union it saw, so a lost race drops no
+  row. The keyed union counts each trial once in the deflated Sharpe.
+
+  Once the old asset is deleted, the pending upload is never deleted unless another copy is published. If the rename
+  keeps failing, the upload stays and the save fails with "run `scripts/registry_release.sh recover`". `recover`
+  unions every `registry.jsonl` and `registry.jsonl.pending-*` on the release and publishes the result the same way.
+  Reads never start from an empty registry when the release exists, in two cases:
+  - a pending upload with no published copy (a writer mid-swap, or stranded);
+  - a release with no `registry.jsonl` at all, unless `--bootstrap` is passed.
+
+  The refusal of a union shorter than the published copy is kept, and the VPS applies it too. `--clobber` is no
   longer used. GitHub has no conditional upload, so the re-check alone is not atomic with the delete; the delete by
-  id (404) and the unique-name rename (422) are what keep that window safe. A writer outside this protocol (a manual
-  `gh release upload --clobber`) is still not protected against. Tests: tests/test_registry_push_race.py (a fake
-  release, with another writer landing after the upload, before the delete and in the delete-to-rename gap, plus a
-  bounded-retry failure); tests/test_registry_release.py (a stateful fake `gh` with the same races for the script).
+  id and the post-rename re-read are what keep that window safe. A writer outside this protocol (a manual
+  `gh release upload --clobber`) is still not protected against.
+
+  Rollback: a pre-51 VPS release reads a pending-only release as an empty registry and its push deletes and
+  re-uploads `registry.jsonl` directly. Do not roll the VPS back while a pending asset is stranded; run `recover`
+  first.
+
+  Tests: tests/test_registry_push_race.py and tests/test_registry_release.py. They cover another writer landing
+  after the upload, before the delete and during the rename; a rename that fails, or answers 200 without renaming;
+  two protocol writers interleaved, including the first-ever push; a failed re-check; recover; bootstrap; and the
+  bounded-retry failure.
 - **Q1 readiness corrected and the owed counts run (research director, 2026-10-16).** `macro-v1` has been published
   since 2026-10-13 (scheduled `data-macro` run 38394945106); the docs that said it did not exist are corrected.
   count-owed-events was dispatched on `main` (run 38931951849, success, commit `eafc6ce`). It needs no `calendar-v1`:
