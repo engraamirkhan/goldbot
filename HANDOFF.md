@@ -5,6 +5,20 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Sign-in end-to-end tests (2026-10-16). web/e2e/auth.spec.ts runs on its own e2e server (Playwright project
+  `auth`, port E2E_PORT+1, independent of the dashboard story) and covers: login (wrong password or code refused
+  with the same words, sign out), forgot-password (an unknown account answered like a wrong code; nothing mailed), the
+  owner's password reset link (new password and authenticator, single use, token leaves the address bar), the owner's
+  email sign-in link (mail captured, link plus authenticator code signs in once, the sign-in notice carries no token
+  and only a coarse network), the neutral answer for unknown and non-owner addresses (UI and byte-identical API
+  answers, no mail), and the sign-in screens on a 360 px phone (no sideways scroll, 44 px targets). Mail is captured
+  by goldbot/api/e2e_mailer.py `CaptureMailer`, which is refused unless the server is bound to exactly 127.0.0.1 or
+  ::1, `GOLDBOT_E2E_FAKE_MAILER=1` is set and the outbox's directory is a `goldbot-e2e-*` mkdtemp dir (this user's,
+  mode 0700) in a system temp dir that contains neither the repo nor /var/lib/goldbot; the outbox is opened with
+  O_NOFOLLOW and created 0600. No setting or deployed module selects it (only `scripts/e2e_server.py --fake-mailer`
+  builds it; `--host` accepts only 127.0.0.1 or ::1), and the server removes its temp state dir on SIGTERM. The auth
+  story runs without retries (a retry would reuse spent first-run setup and the owner's hourly link count). Tests:
+  tests/test_e2e_mailer.py.
 - Heartbeats stamped in the future fail closed (2026-10-16, BACKLOG 58). Before this, a `ts` ahead of the reader's
   clock, or a NaN, made `now - ts > limit` False, so a dead supervisor whose last write carried a fast clock (or came
   from a restored backup) never halted the engines. The shared rule is `goldbot.data.timeutil.heartbeat_problem`:
