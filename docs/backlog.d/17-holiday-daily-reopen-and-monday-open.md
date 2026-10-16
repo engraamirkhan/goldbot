@@ -1,10 +1,9 @@
 ---
 number: 17
-rank: 20
 title: Holiday, daily-reopen and Monday-open entry rules (G-2)
 stage: Operational risk · RUN
 size: S–M
-status: 'proposed (owner: windows)'
+status: 'built, off by default (PR #74, main a913d42; e313c62); parked: adoption is the owner''s, after 45 and 46'
 ---
 - **17 (G-2).** Holiday calendar (US, UK, JP, CN, 24 Dec–2 Jan, early closes): no entries on those days. No
   entries for 15 min after each daily reopen and 30 min after the weekly open. Fake-clock tests. Exits are untouched.
@@ -18,3 +17,4 @@ status: 'proposed (owner: windows)'
   Not covered: UK, JP and CN holidays and early closes (the list is US/CME only; a broker-reported short session
   already blocks as `market_closed`). Owner: adopt and set the minutes (10 vs the playbook's 15). Needs
   trading-safety review.
+  Sweep 2026-10-16 (product owner): Built, off by default (PR #74, main a913d42; e313c62); parked: adoption is the owner's, after 45 and 46.

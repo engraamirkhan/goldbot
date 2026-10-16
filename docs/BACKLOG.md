@@ -13,66 +13,38 @@ expected-impact figure below is uncertain. None of these items is expected to cr
 
 Rank = expected impact on net profit and safety ÷ effort. Size: S < 1 day, M 1–3 days, L > 3 days.
 Status: ready / in progress / in review / done / rejected. Item numbers are stable ids; the order of the table is
-the rank. **Top priority (ADR 0004 amended, 2026-10-10):** 28 (currency-correct sizing, HIGH), then 25 (minimum-lot
-exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP demo without 28 and 25.
+the rank.
+
+**Status sweep 2026-10-16 (product owner).** Every fragment was checked against `git log` on
+`claude/gifted-goldberg-lcb7pl` and `main` (PRs #60–#77) and the open lane branches. 28, 25 and 29, the top three
+since 2026-10-10, merged in #71 and are done. The table now holds at most 15 rows (AGENT_STANDARDS "Accountability
+and cadence"). Each row's status cell names exactly one accountable role and a due date, and the acceptance
+criteria are in the item's detail block. Done items are under "Done", and items moved off the table are under
+"Later (parked)", each with a one-line reason. Ranking: safety rails first (an unsafe demo is worse than no
+demo). Then comes the north star (ADR 0004): nothing trades or gets measured until the demo deploy (1) runs.
+Research integrity for the Q1 freeze is last. Late on 2026-10-16: 1 (was due 2026-10-13), 44 and 52 (their
+re-reviews were asked on 2026-10-12 and have not started; the reviewed batch has sat off `main` since 2026-10-12).
 
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
 | --- | --- | --- | --- | --- |
-| 28 | Currency-correct sizing, margin and R on a non-USD account (ADR 0004, audit A3–A8) | Position sizing, safety · RUN | S–M | **in review** (built 2026-10-10; trading-safety review; approval-card currency label open for ui-ux) |
-| 25 | Minimum-lot exception in RiskGate (ADR 0004) | Position sizing · RUN | S | **in review** (built 2026-10-10, off by default; trading-safety review; owner enables on the demo server) |
-| 29 | Absolute daily loss limit `daily_loss_limit_abs` per account (ADR 0004) | Capital and drawdown management · RUN | S | **in review** (built 2026-10-10, 50 in settings; trading-safety review; approval-card allowance open for ui-ux) |
-| 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | ready |
-| 2 | Measured cost table published as a release asset for research | Execution quality · FIND | S | done (PR #62) |
-| 3 | Drift and health (M26/M27) | Learning and adaptation · RUN | S | done (PR #60) |
-| 4 | FRED macro data pipeline | Market and macro preparation · FIND | M | done (PR #61) |
-| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (accountable: research-director; owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 (spec + settings: implementer, 2026-10-23); `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) |
-| 6 | Live exit policies and blackout early close | Trade management, exit · FIND + RUN | M | in review (safety fixes) |
-| 7 | Ops alerts: heartbeats, FAILED_EXEC, weekly cap | Operational resilience · RUN | S–M | done (PR #62) |
-| 8 | Stop rule and gate thresholds in code | Capital and drawdown management · RUN | S | done (owner sign-off and engine trade record open) |
-| 9 | UI/UX approval card | Entry timing (owner approval) · RUN | M | done (PR #61) |
-| 10 | Trader-toolkit features (sessions, S/R, FVG, order blocks) | Idea generation · FIND | M | done (PR #61) |
-| 11 | Trader-toolkit evaluation as primary signals | Idea generation, confluence · FIND | S–M | ready (via H-02 in Q1) |
-| 12 | Deterministic attribution that feeds back into research | Performance attribution, learning · FIND | M | in review (daily report + staff-agent feedback done; director input and dashboard open) |
-| 13 | Bounded spawning (`gap_watch`) and the 4h founder path | Learning and adaptation · FIND | M–L | in review (gap_watch and the 4h retrain path done; 1d research-only) |
-| 14 | Cross-feed check (Dukascopy vs broker) | Idea generation (honesty) · FIND | M | done (2026-10-10; promotion gate once 90 days of broker M1 exist) |
-| 15 | Auto-mode offer after 100 proposals | Entry timing, governance · RUN | S–M | in review |
-| 16 | Swap in the live EV check (playbook G-1) | Capital management, costs · RUN | S | proposed |
-| 17 | Holiday, daily-reopen and Monday-open entry rules (G-2) | Operational risk · RUN | S–M | proposed (owner: windows) |
-| 18 | Tier-2 event blackout and proximity feature (G-3) | Market and macro preparation · RUN | S | data part in review (2026-10-10: calendar-v1 tiers 1+2, opt-in features); blackout proposed (owner: adopt) |
-| 19 | Open-risk (heat) cap and same-direction stacking (G-4) | Capital and drawdown management · RUN | S | proposed (owner: value) |
-| 20 | Drawdown / risk-of-ruin Monte Carlo report (G-5) | Capital and drawdown management · RUN | S | tool built (results need data) |
-| 21 | Per-agent loss-streak and entry-rate throttle (G-6) | Discipline (system analogue) · RUN | S | built, off by default (owner: set thresholds and enable; trading-safety review pending) |
-| 22 | Min-lot sizing-feasibility report (G-7) | Position sizing · RUN | S | tool built (results need data; account size answered: £1,000 GBP) |
-| 23 | MAE/MFE in closed-trade and shadow records (G-9) | Post-trade review · FIND | S | proposed |
-| 24 | DST-aware sessions and deterministic calendars (D-1, D-2) | Idea generation (honesty) · FIND | M | proposed |
-| 26 | Milestone ladder and monthly north-star / % / R report (ADR 0004) | Performance review, capital growth · RUN | S–M | ready |
-| 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | ready (after 1) |
-| 30 | Opportunity-day detection: day-type / regime classifier (ADR 0004 north star) | Market preparation, selectivity · FIND | M | proposed (hypothesis via the trial registry; no trials spent) |
-| 31 | Runner exits: let winners run on opportunity days (ADR 0004 north star) | Trade management, exit · FIND | S–M | proposed (after 6; hypothesis via the trial registry) |
-| 32 | Gate EV for exit-policy trades uses the measured mean winner (G-12) | Capital management · RUN | S | proposed (trading-safety review) |
-| 33 | Opportunity-day evaluation for research trials (£/day distribution, days captured) | Performance review · FIND | S–M | proposed (after 20, 26) |
-| 35 | Open positions' remaining stop risk in the daily £ projection (review MEDIUM-4) | Capital and drawdown management · RUN | S | proposed (after 29; trading-safety review) |
-| 36 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | proposed (after 29; trading-safety review) |
-| 37 | `goldbot-deploy` steps aux.db back on rollback (Linux `Sync-AuxSchema`) | Operational resilience · RUN | S | done (SRE, 2026-10-11; `goldbot-deploy.sh` `aux_plan`/`aux_step_back`; security review pending) |
-| 38 | Owner-run manual rollback in `goldbot-deploy` | Operational resilience · RUN | S–M | done (SRE, 2026-10-11; `goldbot-deploy --rollback <sha>`; security review pending) |
-| 39 | Validate settings (incl. settings.local.yaml) with the target code before any restart | Operational resilience · RUN | S | done (SRE, 2026-10-11; `check_settings`, `--drop-unknown-local-keys`; security review pending) |
-| 40 | `goldbot-deploy`: scheduler-job guard; restart only enabled units | Operational resilience · RUN | S | done (SRE, 2026-10-11; `guard_scheduler`, `--interrupt-jobs`; security review pending) |
-| 41 | `goldbot-deploy`: health checks against a baseline after the restart | Operational resilience · RUN | S | done (SRE, 2026-10-11; `health_out`/`health_worse`, result `deployed_degraded`, no automatic rollback) |
-| 42 | Bridge/brain version and server_tz agreement checked at run time | Operational resilience, execution · RUN | S | proposed (SRE, G6; trading-safety review) |
-| 47 | Pre-registration writer for the shared registry (queued rows, slots, sync to `research-v1`) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; needed by 2026-12-04 for the Q1 freeze) |
-| 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | done (accountable: research-director; preset `slow_macro` and `count_h06` on `main`, `d2f18c6`; counted 2026-10-16 by count-owed-events run 38931951849 on `macro-v1`: 1,105 signals, one-at-a-time lower bound 107 < 150, so H-06 is withdrawn by its pre-registered rule; reservation 8, set by the implementer by 2026-10-23) |
-| 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; settings and `hypotheses.md` B together) |
-| 50 | --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners | Idea generation (integrity) · FIND | M | implemented 2026-10-11 (TRACEABILITY M43; quant review pending) |
-| 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | proposed (security re-verify of BACKLOG 47, 2026-10-11) |
-| 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | implemented (security and trading-safety review pending; A14, follow-ups A15) |
-| 53 | The phase gates compare paper and live with the deployed model's own trial | Roadmap gates (P7) · VERIFY | M | proposed (review of 978c667, 2026-10-12) |
-| 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | proposed (trading-safety review of BACKLOG 44, 2026-10-12; needs trading-safety review) |
-| 55 | test_lockout_survives_a_restart: make it reliable under load | Platform (CI) · SECURE | S | proposed (ci follow-up, A15 lane, 2026-10-12) |
-| 57 | risk_day_anchor is read by no code: pin it or make it real | Execution and risk (loss caps) · PROTECT | S | proposed (found in the north-star day lane, 2026-10-16; needs trading-safety review) |
+| 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | in progress (`lane/claude-run-deploy`, plan ccef822) · accountable: release-manager · due 2026-10-18 (re-dated from 2026-10-13: the demo deploy never ran) · LATE |
+| 44 | Confirm a zero or collapsed equity read before the 12% kill switch (ADR 0016) | Execution and risk (drawdown stages) · PROTECT | S | in review (d2f2999, b9e9dac on the integration branch, not on main; trading-safety-reviewer asked 2026-10-12) · accountable: trading-safety-reviewer · due 2026-10-17 · LATE |
+| 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | ready · accountable: implementer · due 2026-10-23 |
+| 57 | risk_day_anchor is read by no code: pin it or make it real | Execution and risk (loss caps) · PROTECT | S | in progress (`lane/anchor-validator`, no commit yet) · accountable: implementer · due 2026-10-19 |
+| 43 | The engine publishes why it refuses entries, and writes state while the market is closed | Operational resilience, entry status · RUN | M | in progress, heartbeat part (`lane/market-closed-state-cadence`, no commit yet); `entry_blocks` ready · accountable: implementer · due 2026-10-21 |
+| 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | in review (04f6266, 3817db7, c7ea0e3 on the integration branch, not on main; security-reviewer and trading-safety-reviewer asked 2026-10-12) · accountable: security-reviewer · due 2026-10-17 · LATE |
+| 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | ready (after 1; the collector `jobs._broker_terms` exists) · accountable: sre · due 2026-10-20 |
+| 55 | test_lockout_survives_a_restart: make it reliable under load | Platform (CI) · SECURE | S | ready · accountable: test-engineer · due 2026-10-23 |
+| 36 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | ready · accountable: implementer · due 2026-10-30 |
+| 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | ready · accountable: implementer · due 2026-10-30 |
+| 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | ready · accountable: strategy-researcher · due 2026-10-23 |
+| 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 (spec + settings: implementer, 2026-10-23); `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14 |
+| 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | in review (preset `slow_macro` and `count_h06` on `main`, `d2f18c6`; counted 2026-10-16 by count-owed-events run 38931951849 on `macro-v1`: 1,105 signals, one-at-a-time lower bound 107 < 150, so H-06 is withdrawn by its pre-registered rule once the quant reviewer confirms `count_h06`; reservation 8, set by the implementer by 2026-10-23) · accountable: strategy-researcher · due 2026-10-23 |
+| 45 | Measure the holiday list before it is adopted | Operational risk (evidence) · RUN | S | ready · accountable: performance-analyst · due 2026-10-30 |
+| 56 | Digest Yesterday line on the opportunity day | Performance review · RUN | S | in progress (`lane/digest-yesterday`; its one commit, 21c84d8, is an unrelated help-text fix) · accountable: implementer · due 2026-10-19 |
 | 58 | Fail closed on heartbeats stamped in the future | Execution and risk (supervisor) · PROTECT | S | done 2026-10-16 (needs trading-safety and SRE review) |
-| 56 | Digest Yesterday line on the opportunity day | Performance review · RUN | S | proposed (quant review Q1 of the north-star day lane, 2026-10-16) |
 | 60 | Approval window expiry trusts a future-stamped proposal | Approvals (owner confirms entries, 90 s) · PROTECT | S | proposed (trading-safety and SRE review of BACKLOG 58, 2026-10-16; owner of the fix trading-safety-reviewer, built by the implementer; due 2026-10-23) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
@@ -89,6 +61,8 @@ Acceptance:
 Depends on: owner steps (VM provisioned, demo credentials in the keyring). Rows: X6–X10 unverified on real
 hardware; lifecycle "Operational resilience".
 
+Sweep 2026-10-16 (product owner): accountable `release-manager` (sre runs the box), due 2026-10-18, re-dated from 2026-10-13 because the deploy was not run or chased for three days (scorecard 2026-W42). Acceptance unchanged (above); the deploy uses a SHA that includes #78, and the 24 h health output goes on #34. The `run.py bridge-smoke` command is ROADMAP W1-1.
+
 ### 2. Measured cost table published as a release asset
 Value: removes the owner's manual commit step and makes `research.yml` charge measured swap, commission and slippage
 instead of the pessimistic priors. That alone may move tsmom 4h across zero (FIND).
@@ -103,13 +77,17 @@ Acceptance:
 
 Depends on: 1 for real values (the plumbing can land first). Rows: X9, X10, D4.
 
-### 3. Drift and health (in review, PR #60)
+Sweep 2026-10-16 (product owner): Done (PR #62, main 1a194e9). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+
+### 3. Drift and health (done, PR #60)
 Value: halts or sizes down a decaying champion the moment one exists (RUN).
 Acceptance: CI green on PR #60. Tests cover the PSI and ECE size-down, residual CUSUM halt and system halt.
 `run.py drift-review --clear` is the only path that clears a halt. TRACEABILITY M26/M27 read implemented.
 Rows: M26, M27. M25 (CUSUM calibration) stays under "later".
 
-### 4. FRED macro data pipeline (in progress)
+Sweep 2026-10-16 (product owner): Done (PR #60, main 7ef3a00). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+
+### 4. FRED macro data pipeline (done, PR #61)
 Value: gold's best-documented drivers (real yields, the dollar) are absent from every model today (FIND).
 Acceptance:
 - A weekly `data-macro.yml` publishes DFII10, T10YIE, DTWEXBGS and GVZCLS with `available_utc` set to the
@@ -119,6 +97,8 @@ Acceptance:
 - The allocator can read a real-yield and dollar regime input (20-day change), with a unit test.
 
 Rows: D14 (loader only today); new row for the pull.
+
+Sweep 2026-10-16 (product owner): Done (PR #61, main 8bc7952). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 
 ### 5. Q1 2027 pre-registered trial queue
 Value: spends the Q1 budget on the hypotheses research ranks highest, written down before any result is seen (FIND).
@@ -134,7 +114,9 @@ Acceptance:
 
 Depends on: 2 (costs), 4 (variant 3). The daily-family event floor is an owner decision (below).
 
-### 6. Live exit policies and blackout early close (in review)
+Sweep 2026-10-16 (product owner): accountable `research-director`, due 2026-12-14 (freeze commit). The writer it needed (47) is merged (#76). `macro-v1` was published on 2026-10-13. Acceptance as above, plus the dry run of `scripts/preregister_quarter.py` on the final spec reviewed by the quant reviewer.
+
+### 6. Live exit policies and blackout early close (done, PR #63)
 Value: momentum edges are made in the exits. Labels cannot test exits the engine cannot run, and exits are never
 gated, so they must work unattended (FIND + RUN).
 Acceptance:
@@ -148,6 +130,8 @@ Acceptance:
 
 Rows: M3, M6, M7, R21.
 
+Sweep 2026-10-16 (product owner): Done (PR #63, main 5f7da74; b87135c). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+
 ### 7. Ops alerts
 Value: an unattended system must tell the owner when it is silent, failing to fill or capped (RUN).
 Acceptance:
@@ -158,6 +142,8 @@ Acceptance:
 - Alerts only add information: a test asserts that no alert path changes orders, sizing or halts.
 
 Rows: S5, X6, R11.
+
+Sweep 2026-10-16 (product owner): Done (PR #62, main 1a194e9). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 
 ### 8. Stop rule and gate thresholds in code
 Value: governance the design commits to before the first paper trade, and the safe-direction automatic halt (RUN).
@@ -180,7 +166,9 @@ pass (every 60 s) evaluates it, so no scheduler job was added. Open: owner sign-
 engine appending `ClosedTrade` rows to `state/closed_trades.jsonl` (engine owner); the dashboard card (api/web
 owners; the report JSON is ready to serve).
 
-### 9. UI/UX approval card (in progress)
+Sweep 2026-10-16 (product owner): Done (PR #63, main 5f7da74); owner sign-off of the values open (Needs the owner). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+
+### 9. UI/UX approval card (done, PR #61)
 Value: the owner's one click is the only manual step, so the card must carry everything needed to decide in 90 s
 (RUN).
 Acceptance: the card shows account, direction, lots, stop, target, p, top features, current spread and a countdown.
@@ -188,12 +176,16 @@ Approve and reject each take one click and are re-checked by the RiskGate. The e
 expiry. The Telegram and dashboard approvals resolve the same proposal exactly once. Rows: A1, A3, A5 (gain
 importance until M28).
 
-### 10. Trader-toolkit features (in progress)
+Sweep 2026-10-16 (product owner): Done (PR #61, main 8bc7952). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+
+### 10. Trader-toolkit features (done, PR #61)
 Value: gives research the tools top discretionary gold traders use (session ranges, S/R, fair-value gaps, order
 blocks) as point-in-time features (FIND).
 Acceptance: each tool is a registered feature family with a docstring definition. The lookahead check passes on
 truncated history. A unit test on a hand-built bar series shows each FVG and order block appearing only after the
 bar that confirms it.
+
+Sweep 2026-10-16 (product owner): Done (PR #61, main 8bc7952). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 
 ### 11. Trader-toolkit evaluation as primary signals
 Value: answers, with numbers, whether these tools carry a gross edge on gold, instead of assuming it (FIND).
@@ -206,6 +198,8 @@ Acceptance:
 
 Depends on: 10, 2. Note: research C3 says 15m/1h trend variants are a known null. The level and structure tools are
 not covered by that null, which is why they get a test.
+
+Sweep 2026-10-16 (product owner): Parked: runs as H-02 inside the Q1 queue (5); no separate work.
 
 ### 12. Deterministic attribution that feeds back
 Value: analytics today are LLM prose. A deterministic table lets the director, tournament and owner act on where
@@ -226,6 +220,8 @@ shadow book (tests/test_attribution.py) instead of a golden file (determinism is
 improvement agent and research analyst read it (`read_attribution`). Open: `research_director` priority input (a
 change to research budget allocation, so it needs quant review and its own test), the dashboard view (goldbot/api
 and web/ were out of scope), live realised R (item 8's engine trade record). Row G12.
+
+Sweep 2026-10-16 (product owner): Done in part (PR #63 490ebe4, PR #68 c2cd051); dashboard view parked. Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 
 ### 13. Bounded spawning and the 4h founder path
 Value: explores uncovered timeframes and regimes unattended, under the same gates, so the system keeps evolving
@@ -249,10 +245,14 @@ suggestion until the engine holds daily history (an engine change, trading-safet
 
 Rows: G3, G6, G11.
 
+Sweep 2026-10-16 (product owner): Done in part (PR #63, main 5f7da74; aad8f99, e17f047); 1d parked. Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+
 ### 14. Cross-feed check
 Value: stops a broker-feed artefact being "found" as an edge once broker data accumulates (FIND, honesty).
 Acceptance: a signal is dropped unless its gross edge survives on both Dukascopy and broker bars over the overlap
 (F10, D23). The spike rule checks the other feed before flagging (D20). Tests use synthetic diverging feeds.
+
+Sweep 2026-10-16 (product owner): Done (PR #63, main 5f7da74; 49cc051). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 
 ### 15. Auto-mode offer
 Value: the owner's one-click approval stays the default, and `/mode auto` becomes available only on evidence (RUN).
@@ -260,12 +260,15 @@ Acceptance: `/mode auto` is refused until 100 proposals with no RiskGate breach 
 distinguishable difference between approved and rejected outcomes. The test covers 99 vs 100 and the difference
 test on both sides. The offer is a message. Switching still needs TOTP. Row: A10.
 
+Sweep 2026-10-16 (product owner): Done (PR #63, main 5f7da74; af441e8). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+
 ### 16–24. From the XAUUSD trader playbook (strategy researcher, 2026-10-10)
 Source and evidence: `docs/research/xauusd-trader-playbook.md` section 6 (gap ids in brackets). Ranked by the
 researcher. The product owner re-ranks against items 1–15. None of these uses trial budget. Engine, risk and
 execution items need trading-safety review. Feature items need quant review.
 - **16 (G-1).** The gate's EV adds expected swap in ATR (side, nights implied by `max_bars`, triple Wednesday).
   Test: a 4h long whose EV is positive before swap and negative after is refused; shorts are unchanged.
+  Sweep 2026-10-16 (product owner): Parked: at £1,000 only 15m trades fit, so overnight swap barely touches the EV; revisit at the 1h/4h milestone.
 - **17 (G-2).** Holiday calendar (US, UK, JP, CN, 24 Dec–2 Jan, early closes): no entries on those days. No
   entries for 15 min after each daily reopen and 30 min after the weekly open. Fake-clock tests. Exits are untouched.
   **Built 2026-10-11, off by default (TRACEABILITY R36):** `risk.reopen: {enabled: false, after_daily_reopen_min: 10,
@@ -278,6 +281,7 @@ execution items need trading-safety review. Feature items need quant review.
   Not covered: UK, JP and CN holidays and early closes (the list is US/CME only; a broker-reported short session
   already blocks as `market_closed`). Owner: adopt and set the minutes (10 vs the playbook's 15). Needs
   trading-safety review.
+  Sweep 2026-10-16 (product owner): Built, off by default (PR #74, main a913d42; e313c62); parked: adoption is the owner's, after 45 and 46.
 - **18 (G-3).** Tier-2 USD events (PPI, retail sales, ISM, GDP, JOLTS, claims, FOMC minutes, Fed chair) get a
   −5/+15 min entry blackout from config, plus a `min_to_next_tier2` feature. A test per tier.
   *Data part done (2026-10-10; review fixes 2026-10-11; row D27, ADR 0008):* the point-in-time US calendar on
@@ -299,6 +303,7 @@ execution items need trading-safety review. Feature items need quant review.
   carries tier 2). The G-3 list is tier 2 whatever impact the feed gives it (`TIER2_PATTERNS`; claims was tier 3 as
   Medium). Reason `tier2_blackout`; enabled with no calendar archived around now = `calendar_unavailable` (fail
   closed). Owner: adopt. Needs trading-safety review (and quant review of the claims re-tiering).
+  Sweep 2026-10-16 (product owner): Data part (PR #73, 514d338) and gate (PR #74, e313c62) built, off by default; parked: owner adopt after 45/46.
 - **19 (G-4).** Sum of open risk in R per account and combined ≤ the configured cap. Same-side positions of
   different agents count as one bet. Gate test on each side of the cap.
   **Built 2026-10-11, off by default (TRACEABILITY R38):** `risk.heat: {enabled: false, max_open_risk: 0.02,
@@ -307,23 +312,29 @@ execution items need trading-safety review. Feature items need quant review.
   whichever agent opened them; a position without SL or conversion refuses (`open_risk_unknown`). Not done: the
   combined (cross-account) sum and count, which needs the supervisor to publish them. Owner: set the values and
   enable. Needs trading-safety review.
+  Sweep 2026-10-16 (product owner): Built, off by default (PR #75, main a52b389; fefb759); parked: owner sets the values; cross-account sum later.
 - **20 (G-5).** Monthly bootstrap of shadow or backtest R at live risk settings: P(8%), P(12%), P(weekly cap) in
   6 and 12 months. Reporting only. Golden test on a fixed seed.
+  Sweep 2026-10-16 (product owner): Done, tool (PR #68, main e00af06; 08e654a); results wait for data. Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 - **21 (G-6).** After 3 consecutive full stop-outs in a risk day, or more than N entries in a session, an agent
   makes no entries until the next session. Logged and alerted. Never affects exits.
   **Built 2026-10-11, off by default (TRACEABILITY R35):** `risk.throttle: {enabled: false, loss_streak: 3,
   cooldown_bars: 4, max_entries_per_day_per_agent: 3}`; the clearing rule is the cooldown (bars of the agent's
   timeframe) or a winning shadow trade, and the rate is per risk day (00:00 UTC), per agent per account. Owner: set
   the thresholds and enable (playbook section 7, item 4). Needs trading-safety review.
+  Sweep 2026-10-16 (product owner): Built, off by default (PR #73, main d28a482; c8e9f07); parked: owner sets the thresholds.
 - **22 (G-7).** `run.py sizing-feasibility`: per agent, the minimum equity at which the minimum lot stays within
   1.2× target risk at the current ATR and phase risk rate. Written as phase-gate evidence.
+  Sweep 2026-10-16 (product owner): Done, tool (PR #68, main e00af06; 08e654a); results wait for data. Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 - **23 (G-9).** Maximum adverse and favourable excursion in R on every shadow and closed trade, shown by exit
   type in attribution. **In review (2026-10-11, TRACEABILITY V6):** price, R and time of each on `ShadowTrade`
   (bars, label semantics) and `ClosedTrade` (ticks; approximate from stored bars across a restart); median MAE/MFE
   in R in the monthly report and per exit type in attribution. Needs trading-safety and quant review.
+  Sweep 2026-10-16 (product owner): Done (PR #73, main d28a482; a91f01f); quant sign-off not on record (TRACEABILITY V6 in review). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 - **24 (D-1, D-2).** Session windows, zones and cost-table sessions follow London and New York local time.
   Deterministic calendars become PIT features: holidays, COMEX option expiry and first notice, Lunar New Year,
   Indian festivals, month and quarter end. Truncation test. Must land before H-04 and H-14 run.
+  Sweep 2026-10-16 (product owner): D-1 done (PR #71, main 423d2b1; 5454ea1); D-2 parked: H-04 was frozen without it, no queued trial needs it.
 
 ### 25–33. From ADR 0004 (amended 2026-10-10: £1,000 GBP account, £50 daily loss limit, £50+/day north star) and the opportunity-day research (`docs/research/opportunity-days.md`; 30a/30b, the 29 and 31 additions, 32, 33)
 Source: `docs/decisions/0004-starting-account-and-daily-target.md`. The IC Markets demo is £1,000 GBP, read from
@@ -353,6 +364,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   Depends on: nothing. 25's tests are restated in account currency on top of it.
   Status (2026-10-10): built (TRACEABILITY R32, S6; tests/test_currency_sizing.py). The supervisor refuses mixed
   currencies (halt) rather than converting. Open: the approval card still shows `risk_usd` (ui-ux label change).
+  Sweep 2026-10-16 (product owner): Done (PR #71, main 423d2b1; 9df2083); card label in PR #73 (b97f9f9). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 - **25. Minimum-lot exception (needs trading-safety review).** Value: lets tiny-live trade one minimum lot at small
   equity without loosening any limit (Position sizing · RUN). Acceptance:
   - New `risk.min_lot_risk_cap` in settings (validated 0 < x ≤ `max_risk_per_trade`, or null). With null, every
@@ -380,6 +392,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   Status (2026-10-10): built (TRACEABILITY R33; tests/test_min_lot_exception.py), `null` in settings.yaml because
   settings have no per-account section; the owner sets `risk: { min_lot_risk_cap: 0.01 }` in the demo server's
   settings.local.yaml. Open: the approval card's risk line does not show the exception (ui-ux).
+  Sweep 2026-10-16 (product owner): Done (PR #71, main 423d2b1; d70ef33); card line in PR #73 (b97f9f9). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 - **26. Milestone ladder and monthly north-star report.** Value: reports progress the way ADR 0004 decided:
   monthly averages and distributions, never a daily quota (Performance review · RUN). Acceptance:
   - A monthly report (job + dashboard card + one Telegram line) with time-weighted % return net of deposits and
@@ -395,6 +408,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
     text): a missed £50 day never prompts more risk.
   - Reviews: code, ui-ux (screen and Telegram), quant (the R interval). Read-only: no trading-safety review.
   Depends on: 22.
+  Sweep 2026-10-16 (product owner): Backend done (PR #71, main 423d2b1; d893f60); card, Telegram line and capture KPI parked: no trades until 1.
 - **27. Broker contract terms recorded.** Value: replaces the ADR's unverified leverage, minimum lot, step, contract
   size and stop-out level with the terminal's own values (Execution · RUN). Acceptance:
   - On the demo terminal, `state/broker_terms_<account>.json` records `volume_min`, `volume_step`, contract size,
@@ -403,6 +417,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - ADR 0004's assumptions table is updated with the measured values (or a note that they matched).
   - Reviews: code, sre. Read-only on the broker: no trading-safety review.
   Depends on: 1.
+  Sweep 2026-10-16 (product owner): accountable `sre`, due 2026-10-20 (two days after 1). Acceptance as above: the file on the demo box and the ADR 0004 assumptions table updated.
 - **29. Absolute daily loss limit (trading-safety review).** Value: makes the owner's £50 outer limit a hard rail
   as the account grows; the 2% / 1.5% caps stay and bind first below £2,500 / ~£3,333 (Capital management · RUN).
   Acceptance:
@@ -430,6 +445,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   per account, `daily_loss_limit_abs: 50` on icm-demo in config/accounts.yaml (its currency, GBP), not a global
   setting; the paper broker standing in for an account drops it. Engine state (`limits.daily_loss_limit_abs`) and
   health show the limit and what is left. Open: the approval card's remaining allowance (ui-ux); 35 and 36.
+  Sweep 2026-10-16 (product owner): Done (PR #71, main 423d2b1; 8cb7c66); card allowance in PR #73 (b97f9f9). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 - **30. Opportunity-day detection (hypothesis; quant review).** Value: the north star depends on trading more on
   days the market offers moves and standing aside otherwise (FIND). Acceptance:
   - The strategy-researcher registers a pre-registered hypothesis in `docs/research/hypotheses.md` and the trial
@@ -476,6 +492,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
       - the £1,000 min-lot interplay test in item 25.
     - `day_score` and the factor are in the decisions log and on the approval card's risk line (ui-ux review).
     - **Enable only after H-16 passes** its pre-registered reading rule (evaluator verdict on #34).
+  Sweep 2026-10-16 (product owner): 30a done (PR #73, main d28a482; 71e9092); 30b and the trials parked: Q2 2027 budget, enable only after H-16.
 - **31. Runner exits (hypothesis; quant and trading-safety review).** Value: a £50 day at £1,000 is a ~6 R winner;
   only trailing or scale-out exits catch those (FIND). Acceptance:
   - A pre-registered variant set (scale-out at 1–1.5 R plus an ATR trail, held only on flagged opportunity days)
@@ -493,6 +510,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - Existing policies are unchanged (all current exit-policy tests pass).
   - Live `modify` only tightens. A clock flat is an automatic close that never waits for approval.
   - Exits stay automatic and are never gated. Depends on: 6 (live exit policies), 30.
+  Sweep 2026-10-16 (product owner): Parked: hypothesis for Q2 2027 trial budget; needs 30.
 - **32. Gate EV for exit-policy trades (G-12; trading-safety review).** Value: the gate's EV
   `p × target_atr − (1 − p) × stop_atr − cost` (`gate.py:242`) assumes every win reaches the target, but under a
   policy `p` is P(win) (`exit_policy.policy_label`) (RUN). Acceptance:
@@ -503,6 +521,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
     negative.
   - The change never allows a trade today's gate refuses (property test over a grid).
   - Depends on: 31.
+  Sweep 2026-10-16 (product owner): Parked: needs 31.
 - **33. Opportunity-day evaluation for research trials (quant review; read-only).** Value: the north-star KPIs of
   item 26 applied to research trials and the shadow book, so a hypothesis is judged the way the owner states the
   goal, without making it a target (FIND). Acceptance:
@@ -518,6 +537,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - It reuses item 30's descriptive base-rate report; it does not recompute it.
   - Golden test on a fixture. Not in the Telegram digest. The header says "diagnostic, not a target".
   - Depends on: 20, 26.
+  Sweep 2026-10-16 (product owner): Parked: needs 20 and 26 results, which need trades.
 - **34. Material feature version (ADR 0006; needs the owner's sign-off).** Value: a feature correction voids research
   evidence and forces legacy rebuilds only for the models that read the corrected columns. Acceptance:
   - A material version is hashed over a specialist's selected `model_features` and the versions of the features
@@ -527,6 +547,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
     model's.
   - Tests: a bump of a feature no model reads leaves the material version unchanged; a bump of a read column
     changes it.
+  Sweep 2026-10-16 (product owner): Parked: waits on the owner's ADR 0006 ruling (Needs the owner).
 - **35. Open positions' remaining stop risk in the daily projection (trading-safety review MEDIUM-4).** Value: the
   absolute daily limit (29) projects the loss so far (equity, so open P&L included) plus the NEW trade's stop risk,
   but not what the positions already open could still lose down to their stops, so two open trades can each pass
@@ -538,10 +559,12 @@ hypotheses that go through the trial registry in a future quarter's budget.
   account has `daily_loss_limit_abs`, the projection is loss so far + open risk + this trade's risk; unknown open risk
   refuses (`open_risk_unknown`). The engine publishes `open_risk` and `open_risk_positions` in engine_<account>.json
   (dashboard budget: ui-ux follow-up). Owner: adopt or not. Needs trading-safety review.
+  Sweep 2026-10-16 (product owner): Built, off by default (PR #75, main a52b389; fefb759); parked: owner adopts or not.
 - **36. Costs in the daily projection (trading-safety review LOW-6).** Value: a full stop-out also pays the
   spread, commission and (overnight) swap, about £0.25 on a 0.01 lot, so the projection understates a full loss by
   ~3% at £1,000 (RUN). Acceptance: the projected risk adds the round-trip cost in account currency from the cost
   table (`_cost_atr` x ATR x lots x contract x fx); boundary test. Trading-safety review.
+  Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-30; trading-safety review. Acceptance as above.
 
 - **37–42. Deploy path gaps found while planning the October batch rollout (SRE, 2026-10-11;
   `docs/deploy/2026-10-batch.md` section "Gaps").** Each item is owner-approved, CI-gated and reversible. A
@@ -608,6 +631,12 @@ hypotheses that go through the trial registry in a future quarter's budget.
     - Done: the Telegram deploy offer says when the MT5 box runs an older commit than the one offered
       (goldbot/ops/deploy.py `mt5_notes`).
     - Trading-safety review.
+  Sweep 2026-10-16 (product owner): Done (PR #73, main d28a482; f1560ec). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+- **38.** Owner-run manual rollback in `goldbot-deploy`. Sweep 2026-10-16 (product owner): Done (PR #73, main d28a482; f1560ec). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+- **39.** Validate settings (incl. settings.local.yaml) with the target code before any restart. Sweep 2026-10-16 (product owner): Done (PR #73, main d28a482; f1560ec). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+- **40.** `goldbot-deploy`: scheduler-job guard; restart only enabled units. Sweep 2026-10-16 (product owner): Done (PR #73, main d28a482; f1560ec). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+- **41.** `goldbot-deploy`: health checks against a baseline after the restart. Sweep 2026-10-16 (product owner): Done (PR #73, main d28a482; 96df8f9). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+- **42.** Bridge/brain version and server_tz agreement checked at run time. Sweep 2026-10-16 (product owner): Done (PR #74, main a913d42; 6ca01e4). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 - **43. The engine publishes why it refuses entries (trading-safety review; from the entry-status review of 66ba8f9,
   ADR 0011).** Value: the dashboard's entry status (docs/ux/entry-status.md) still mirrors in the API which published
   flags block entries, and cannot see rollover, the Friday weekend cut or per-trade refusals; a closed market and a dead
@@ -623,6 +652,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
     so silence always means a fault;
   - the API then prefers `entry_blocks` (already merged when present) and the flag mapping and the `min_lot` fallback
     in `goldbot/api/entry_status.py` go; exits are never gated by any of it.
+  Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-21; trading-safety review. Not started before today: `goldbot/api/entry_status.py` still maps flags. Acceptance as above.
 - **44. Confirm a zero or collapsed equity read before the 12% kill switch (trading-safety re-verification LOW-C,
   2026-10-11; needs a decision record and trading-safety review).** Value: one bad `account().equity` read (0, or a
   value far below the last) moves `update_stage` straight to HALTED, and the kill switch closes every position at
@@ -642,6 +672,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
     (`risk.equity_recovery_s`); MEDIUM-2 the cross-check counts swap and every symbol (`account_positions`, bridge
     protocol v5); LOW-4 pending persisted in the risk state; LOW-3 declined with a test (ADR 0016). Follow-up: 53.
     Awaiting trading-safety re-review.
+  Sweep 2026-10-16 (product owner): accountable `trading-safety-reviewer`, due 2026-10-17. Built (TRACEABILITY R39, ADR 0016); the re-review asked on 2026-10-12 has not started (4 days against the 4 h rule). Acceptance: the re-review records HIGH-1, MEDIUM-2 and LOW-3/LOW-4 closed, `tests/test_equity_confirmation.py` green, then it ships with the reviewed batch (release-manager).
 - **45. Measure the holiday list before it is adopted (performance analyst; review M3, 2026-10-11).** Value: the
   holiday window (item 17, `config/holidays_cme_metals.yaml`) is a proxy, not a measurement; blocking entries on a
   day that trades normally costs signals for nothing. Do: for every listed day in the stored ticks and bars, the
@@ -649,6 +680,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   side, holidays excluded), by session. Report which listed days are thin and which are not, and any unlisted day
   that is (UK, JP, CN holidays, early closes). Acceptance: a table per day type with the ratio and its interval; the
   list is changed (new version, hand-reviewed set in the test) only on that evidence. Reporting only; quant review.
+  Sweep 2026-10-16 (product owner): accountable `performance-analyst`, due 2026-10-30. It runs on stored bars and ticks, so it does not wait for the deploy. Acceptance as above. It is the evidence the owner needs to adopt 17.
 - **46. Replay the entry windows before adopting any (performance analyst, strategy researcher; review M4).**
   Value: each window (items 17, 18) removes entries; whether the removed ones were worse than the kept ones is
   unknown. Do: over the shadow book and the backtest candidates, the fraction of entries each window (tier 2,
@@ -657,6 +689,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   (point in time: the archive as known at the signal, `available_utc` joins), so trials can be run with and without.
   No trial budget is spent by the replay itself. Acceptance: the table per window, family and timeframe, attached to
   the owner's adopt decision (OWNER_GUIDE section 4). Quant review.
+  Sweep 2026-10-16 (product owner): Parked: the replay needs a shadow book, which needs 1; schedule after 45.
 
 - **47. Pre-registration writer for the shared registry (research director, 2026-10-11).**
   Value: the Q1 queue is held in code only once its rows exist, but `TrialRegistry.preregister(queue=True,
@@ -674,6 +707,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   `preregister-quarter` workflow, `scripts/registry_release.sh`, `tests/test_preregister_quarter.py`,
   `tests/test_registry_release.py`. The spec is not writable until H-02's config, H-06's count (or withdrawal) and the
   freeze commit are settled; the dry run works now.
+  Sweep 2026-10-16 (product owner): Done (PR #76, main 520d731; ab24d87, 94ebde4; c5480ae in PR #77). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 - **48. H-06 macro-gate preset on slow tsmom (research director, 2026-10-11).** Value: H-06 is in the Q1 queue but
   has no implementation (the `tsmom` presets hold only `slow`). Do: a preset that keeps H-01's candidates only when
   the 20-day change in DFII10 and in the broad dollar index (from `macro-v1`, `asof_join` on `available_utc`, as known
@@ -682,12 +716,14 @@ hypotheses that go through the trial registry in a future quarter's budget.
   value after the signal bar; agent id pinned; count pasted into `preregistration-2027Q1.md`. If the lower bound is
   below the daily floor in force, or this is not merged by 2026-12-04, H-06 is withdrawn before the freeze and
   `reserved_trials_quarter` 2027Q1 becomes 8 (rule in the pre-registration). Quant review. Depends on: `macro-v1`.
+  Sweep 2026-10-16 (product owner): accountable `strategy-researcher`, due 2026-12-04; escalate to the program-director by 2026-11-13 if the count is below 150. Acceptance as above.
 - **49. Retired-family trial lists match the registry (research director, 2026-10-11).** Value: the registry on
   `research-v1` holds four `mean_reversion` trials (#3, #5, #10, #12) and four `trend` trials (#2, #4, #9, #14), but
   `research.retired_families` and `hypotheses.md` B list `[3]` and `[2]`. The total (20) and so the DSR count are
   unaffected, but the governance mirror and the registry disagree. Do: correct both lists in one change (the director's
   `retired_drift` check fails if only one moves). Acceptance: `tests/test_director.py` green; lists equal the
   registry's trial numbers. Depends on: none.
+  Sweep 2026-10-16 (product owner): accountable `strategy-researcher`, due 2026-10-23 (no date before this sweep). Checked today: `config/settings.yaml` still lists `trials: [3]` for R-01 and `[2]` for R-03. Acceptance as above.
 - **50. --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners (quant review
   F2 of BACKLOG 47, 2026-10-11).** Value: H-02's queued row hashes the exact first and last 1m bar the run loads
   (`bars_from`/`bars_to`), so the hash depends on how far data-v1 reaches on the day of the run, and a refresh between
@@ -701,6 +737,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   Acceptance: tests that a data-v1 refresh after the write is refused with the digest named; that a config-hash
   mismatch against a pending queued row refuses (no fallback); that `--discover`'s `bars_to` is before
   `holdout_from` whatever the data reaches. Quant review. Depends on: BACKLOG 47.
+  Sweep 2026-10-16 (product owner): Done (PR #77, main bc030d3; a231f69); quant sign-off not on record (TRACEABILITY M43 in review). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 - **51. VPS monthly loop registry push: re-check the release asset just before upload (security re-verify of
   BACKLOG 47, 2026-10-11).** Value: research.yml and preregister-quarter.yml serialise their writes to
   `research-v1/registry.jsonl` through `concurrency: research-registry`, but the VPS monthly loop pushes through
@@ -711,6 +748,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   merge again and retry a bounded number of times, failing loudly if it keeps changing. Keep the existing refusal of
   a merge shorter than the published copy. Acceptance: tests with a fake release whose asset changes between the pull
   and the upload, showing both rows survive, and a bounded-retry failure. Security review. Depends on: BACKLOG 47.
+  Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-30, ahead of the Q1 row writes (2026-12-18). Security review. Acceptance as above.
 - **52. Approvals keep only the decision channel on disk and in the API (trading-safety review of the finance audit
   record, 2026-10-11).** Value: an archived proposal in `approvals/done/` still carries the owner's identity:
   `Proposal.decided_by` (the Telegram user id) and `decided_via` ("telegram:<id>" or "dashboard:<email>"). The
@@ -724,6 +762,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   (ADR 0010). Acceptance: a test that a decided proposal archived by the bus or the engine has no Telegram id or
   email anywhere in its file; a test that the decided card shows the channel for a new file and for an older file
   with `decided_via`; the API contract regenerated; trading-safety and security review.
+  Sweep 2026-10-16 (product owner): accountable `security-reviewer`, due 2026-10-17. Built (TRACEABILITY A14, A15); the re-review asked on 2026-10-12 has not started. Acceptance: both reviews signed off, the OpenAPI export and web types regenerated, then it ships with the reviewed batch.
 - **53. The phase gates compare paper and live with the deployed model's own trial (review of 978c667,
   2026-10-12).** Value: `gates_phase.evaluate_gates` takes its backtest reference for `paper_expectancy`
   (paper -> tiny live) and `live_drawdown` (tiny live -> full size) from `best_backtest_trial`, the registry's
@@ -740,6 +779,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   reference; a test that the reference is the champion's promotion trial and that its gate pass is required; a
   test that gate 1 shows which trial count the DSR was deflated by; trading-safety and quant review (phase-gate
   inputs).
+  Sweep 2026-10-16 (product owner): Parked: matters only once a model is deployed and promoted; no champion exists.
 - **54. Confirm increases in balance_closed_hwm (trading-safety review of BACKLOG 44, 2026-10-12).** Value: the
   drawdown stages measure equity against `balance_closed_hwm`, which `_refresh_account` raises on every read
   (`max(hwm, balance)`) and saves. One inflated balance read (a glitch, a half-filled account struct) raises the
@@ -756,6 +796,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - tests: a single inflated balance read leaves the mark unchanged and causes no size-down or halt on the next real
     reads; two agreeing reads, or a read the deal history explains, raise it as today; a restart between the two reads
     does not apply an unconfirmed rise.
+  Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-23; trading-safety review. Start once `lane/market-closed-state-cadence` (43) merges, because both edit `goldbot/engine/runner.py`. Acceptance as above.
 - **55. test_lockout_survives_a_restart: make it reliable under load (ci follow-up from the A15 lane,
   2026-10-12).** Value: `tests/test_auth_security.py::test_lockout_survives_a_restart` failed once in a full
   `pytest -m "not integration" -n 4` run with the load average near 20 ("DID NOT RAISE PermissionError" on the
@@ -768,6 +809,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   stores a longer busy timeout, or retry the second login, or freeze the clock for the window. Never loosen the
   lockout itself. Acceptance: 200 repeated runs under load pass; the test still fails when the lockout is not
   persisted (checked by temporarily disabling the write).
+  Sweep 2026-10-16 (product owner): accountable `test-engineer`, due 2026-10-23. Acceptance as above (200 runs under load; still fails when the lockout write is disabled).
 - **56. Digest "Yesterday" line on the opportunity day.** Value: the digest's "Yesterday" proposals and trades
   lines still run 00:00-24:00 UTC (`goldbot/telegram/digest.py` `build_digest`). Its month line and the monthly and
   performance reports use the opportunity day (`goldbot/ops/report_days.py`). So a close at 23:00 UTC is in
@@ -778,6 +820,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - tests at 21:59 and 22:00 UTC, on a Monday digest (the Sunday reopen counts on Monday), and in a US DST week;
   - the risk lines (loss-cap use) stay on the risk day, 00:00 UTC; no limit changes;
   - reviews: code, ui-ux (Telegram wording).
+  Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-19. Acceptance as above.
 - **57. risk_day_anchor is read by no code: pin it or make it real.** Value: `config/settings.yaml` says
   `risk_day_anchor: { tz: UTC, time: "00:00" }  # loss caps reset`, and `Settings.risk_day_anchor` loads it, but no
   code reads it. The 00:00 UTC risk day is decided separately in five places: `timeutil.risk_day` (gate `new_day`,
@@ -797,6 +840,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
     server's `config/settings.local.yaml` for `risk_day_anchor` and `feature_day_anchor`, because a server that sets
     either would stop loading its settings after the deploy. Put the validator's exact error text and the fix
     (delete the key) into `docs/RUNBOOK.md` in the same change.
+  Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-19; trading-safety review. The server `settings.local.yaml` check (last bullet) is done by sre on the boxes before the validator ships. Acceptance as above.
 - **58. Fail closed on heartbeats stamped in the future (found 2026-10-16).** Value: every liveness check had the
   shape `now - ts > limit`. A `ts` in the future (a clock step, a bad write, a state backup restored from a box whose
   clock ran fast) made the age negative, and a NaN made every comparison False, so the heartbeat read as fresh for
@@ -832,6 +876,11 @@ hypotheses that go through the trial registry in a future quarter's budget.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.
+Every owner step below has `chaser: program-director`, who asks on #34 with a recommendation and a chase date.
+- **Adopt the built, off-by-default rails (sweep 2026-10-16).** Holiday, reopen and tier-2 windows (17, 18), the
+  heat cap (19), the loss-streak throttle (21) and the open-risk projection (35) are merged and off. For each:
+  adopt, set the values, or leave off. Recommendation: wait for 45 (holiday evidence, due 2026-10-30) before the
+  holiday window, and for 46 (replay) before the others, except 35, which only makes the £50 limit stricter.
 - **Automatic deployment to the trading servers (CD).** CI runs on every change. Deploying to the Oracle VMs
   automatically (on merge or tag, with health check and rollback) waits for your approval. Until then, deploys stay
   manual via `vps_update` / the Linux equivalents.
@@ -863,21 +912,35 @@ These are never decided by the product owner or by agents.
   item 2 lands; VM provisioning and every credential (item 1).
 
 ## Next parallel wave
-Three ready items with disjoint files, avoiding the four in-flight streams (`goldbot/features/`, `data/macro.py` +
-`data-macro.yml`, `web/` + approvals, `research/drift.py`):
+Only items that are not done (sweep 2026-10-16). The reviewer queue rule applies first: 44 and 52 have waited on
+re-review since 2026-10-12, so reviewer lanes start before new builders.
 
-1. **Item 2, measured costs release.** Touches `.github/workflows/research.yml`, a new costs-publish step,
-   `scripts/fetch_data_release.py` and `goldbot/execution/costs.py`.
-2. **Item 6, live exit policies.** Touches `goldbot/engine/runner.py`, `goldbot/engine/shadow.py` and the
-   `exit_policy` methods in `goldbot/specialists/`.
-3. **Item 7, ops alerts.** Touches `goldbot/ops/health.py`, `goldbot/telegram/outbox.py` and the `FAILED_EXEC` path in
-   `goldbot/execution/mt5_adapter.py` / `bridge.py`. It must not edit `engine/runner.py` (item 6): the engine
-   heartbeat and the weekly-cap notice are read from existing state and journal files. It must coordinate with the
-   approval card on `goldbot/telegram/`.
-
-Item 1 needs the owner's VM, so it runs as an owner step alongside the wave.
+1. **Reviewer lanes: 44 (trading-safety-reviewer) and 52 (security-reviewer, then trading-safety-reviewer).**
+   Read-only. After they sign off, the release-manager ships the reviewed batch.
+2. **Item 1, demo deploy and bridge smoke** (`lane/claude-run-deploy`): `docs/deploy/`, `goldbot/ops/linux/`, and
+   the new `ops/smoke.py` (W1-1).
+3. **Item 57, risk_day_anchor validator** (`lane/anchor-validator`): `goldbot/config.py`, its test, `docs/RUNBOOK.md`.
+4. **Item 43, heartbeat while closed** (`lane/market-closed-state-cadence`): `goldbot/engine/runner.py` state write.
+   54 also edits `runner.py` (`_refresh_account`), so 54 starts when this lane merges.
+5. **Item 56, digest Yesterday line** (`lane/digest-yesterday`): `goldbot/telegram/digest.py`.
+6. **Free now, disjoint:** 55 (`tests/test_auth_security.py`, test-engineer), 49 (`config/settings.yaml`
+   `retired_families` and `docs/research/hypotheses.md` B, strategy-researcher), 45 (a new report script,
+   performance-analyst).
 
 ## Later (parked)
+Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block has its status and the full reason.
+- 11, trader-toolkit evaluation: runs as H-02 inside the Q1 queue (5).
+- 12 (rest), attribution dashboard view: the backend and the director input are done; the screen is ROADMAP W2-3.
+- 13 (rest), 1d founders: needs the engine to hold daily history, which is an engine change for later.
+- 16, swap in the live EV: at £1,000 only 15m trades fit, so overnight swap barely moves the EV. Revisit at the 1h
+  milestone.
+- 17, 18, 19, 21, 35: built and off by default. Adopting them is the owner's call ("Needs the owner").
+- 24 (rest), D-2 deterministic calendars: H-04 was frozen without them, and no queued trial needs them.
+- 26 (rest), north-star card, Telegram line and capture KPI: the backend is done; there are no trades until 1.
+- 30b and 30's trials, 31, 32, 33: Q2 2027 hypotheses, or reports that need trades first.
+- 34, material feature version: waits on the owner's ADR 0006 ruling.
+- 46, replay of the entry windows: needs a shadow book (after 1); schedule after 45.
+- 53, phase-gate comparator on the deployed trial: matters only once a model is promoted, and none is.
 - M28 TreeSHAP per decision, A5 per-trade SHAP, and a post-trade review after each exit.
 - R8 `order_calc_margin` (touches the broker protocol; schedule after item 6).
 - D10 bar close by clock, A2 window from settings, M9 allocator blackout input, D11
@@ -887,6 +950,16 @@ Item 1 needs the owner's VM, so it runs as an owner step alongside the wave.
 - Economic calendar with consensus and surprises (needed for hypothesis 4); other C2 sources (COT, ETF holdings, GPR,
   GC basis).
 - Entry order type study (limit vs market); portfolio volatility target (risk use only, not alpha, per C3).
+
+## Done
+Checked against git on 2026-10-16. Main merge SHAs: #60 7ef3a00, #61 8bc7952, #62 1a194e9, #63 5f7da74,
+#68 e00af06, #71 423d2b1, #73 d28a482, #74 a913d42, #75 a52b389, #76 520d731, #77 bc030d3. Acceptance record: each
+item merged on green CI, and the tests it names exist. The criteria were not re-run one by one in this sweep. The
+product owner runs the criterion-by-criterion acceptance scorecard (AGENT_STANDARDS) for these by 2026-10-23.
+- #60: 3. #61: 4, 9, 10. #62: 2, 7. #63: 6, 8, 12 (part), 13 (part), 14, 15. #68: 12 (director input), 20, 22.
+- #71: 24 (D-1), 25, 26 (backend), 28, 29. #73: 23, 30a, 37, 38, 39, 40, 41; the approval-card lines for 25, 28 and 29.
+- #74: 42. #76: 47. #77: 50.
+- Open sign-offs on done items: quant for 23 (V6) and 50 (M43); the owner for the values of 8.
 
 ## Rejected
 - New 15m/1h trend, breakout, intraday momentum or mean-reversion variants, and meta-labelling over primaries with

@@ -1,10 +1,10 @@
 ---
 number: 51
-rank: 44
+rank: 10
 title: 'VPS monthly loop registry push: re-check the release asset just before upload'
 stage: Idea generation (integrity) · FIND
 size: S
-status: proposed (security re-verify of BACKLOG 47, 2026-10-11)
+status: 'ready · accountable: implementer · due 2026-10-30'
 ---
 - **51. VPS monthly loop registry push: re-check the release asset just before upload (security re-verify of
   BACKLOG 47, 2026-10-11).** Value: research.yml and preregister-quarter.yml serialise their writes to
@@ -16,3 +16,4 @@ status: proposed (security re-verify of BACKLOG 47, 2026-10-11)
   merge again and retry a bounded number of times, failing loudly if it keeps changing. Keep the existing refusal of
   a merge shorter than the published copy. Acceptance: tests with a fake release whose asset changes between the pull
   and the upload, showing both rows survive, and a bounded-retry failure. Security review. Depends on: BACKLOG 47.
+  Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-30, ahead of the Q1 row writes (2026-12-18). Security review. Acceptance as above.

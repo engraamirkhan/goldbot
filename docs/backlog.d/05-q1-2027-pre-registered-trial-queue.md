@@ -1,10 +1,10 @@
 ---
 number: 5
-rank: 8
+rank: 12
 title: Q1 2027 pre-registered trial queue
 stage: Idea generation · FIND
 size: S
-status: 'in progress (accountable: research-director; owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 (spec + settings: implementer, 2026-10-23); `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47)'
+status: 'in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 (spec + settings: implementer, 2026-10-23); `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14'
 ---
 
 ### 5. Q1 2027 pre-registered trial queue
@@ -20,3 +20,5 @@ Acceptance:
 - Each trial's report issue shows gross and net R, the per-year table and DSR with the real trial count.
 
 Depends on: 2 (costs), 4 (variant 3). The daily-family event floor is an owner decision (below).
+
+Sweep 2026-10-16 (product owner): accountable `research-director`, due 2026-12-14 (freeze commit). The writer it needed (47) is merged (#76). `macro-v1` was published on 2026-10-13. Acceptance as above, plus the dry run of `scripts/preregister_quarter.py` on the final spec reviewed by the quant reviewer.

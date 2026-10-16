@@ -1,10 +1,9 @@
 ---
 number: 53
-rank: 46
 title: The phase gates compare paper and live with the deployed model's own trial
 stage: Roadmap gates (P7) · VERIFY
 size: M
-status: proposed (review of 978c667, 2026-10-12)
+status: 'parked: matters only once a model is deployed and promoted; no champion exists'
 ---
 - **53. The phase gates compare paper and live with the deployed model's own trial (review of 978c667,
   2026-10-12).** Value: `gates_phase.evaluate_gates` takes its backtest reference for `paper_expectancy`
@@ -22,3 +21,4 @@ status: proposed (review of 978c667, 2026-10-12)
   reference; a test that the reference is the champion's promotion trial and that its gate pass is required; a
   test that gate 1 shows which trial count the DSR was deflated by; trading-safety and quant review (phase-gate
   inputs).
+  Sweep 2026-10-16 (product owner): Parked: matters only once a model is deployed and promoted; no champion exists.

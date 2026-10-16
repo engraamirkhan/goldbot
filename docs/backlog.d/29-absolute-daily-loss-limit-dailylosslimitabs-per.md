@@ -1,10 +1,9 @@
 ---
 number: 29
-rank: 3
 title: Absolute daily loss limit `daily_loss_limit_abs` per account (ADR 0004)
 stage: Capital and drawdown management · RUN
 size: S
-status: '**in review** (built 2026-10-10, 50 in settings; trading-safety review; approval-card allowance open for ui-ux)'
+status: 'done (PR #71, main 423d2b1; 8cb7c66); card allowance in PR #73 (b97f9f9)'
 ---
 - **29. Absolute daily loss limit (trading-safety review).** Value: makes the owner's £50 outer limit a hard rail
   as the account grows; the 2% / 1.5% caps stay and bind first below £2,500 / ~£3,333 (Capital management · RUN).
@@ -33,3 +32,4 @@ status: '**in review** (built 2026-10-10, 50 in settings; trading-safety review;
   per account, `daily_loss_limit_abs: 50` on icm-demo in config/accounts.yaml (its currency, GBP), not a global
   setting; the paper broker standing in for an account drops it. Engine state (`limits.daily_loss_limit_abs`) and
   health show the limit and what is left. Open: the approval card's remaining allowance (ui-ux); 35 and 36.
+  Sweep 2026-10-16 (product owner): Done (PR #71, main 423d2b1; 8cb7c66); card allowance in PR #73 (b97f9f9). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.

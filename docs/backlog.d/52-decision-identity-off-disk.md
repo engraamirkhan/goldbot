@@ -1,10 +1,10 @@
 ---
 number: 52
-rank: 45
+rank: 6
 title: Approvals keep only the decision channel on disk and in the API
 stage: Execution and risk (approvals) · SECURE
 size: S
-status: implemented (security and trading-safety review pending; A14, follow-ups A15)
+status: 'in review (04f6266, 3817db7, c7ea0e3 on the integration branch, not on main; security-reviewer and trading-safety-reviewer asked 2026-10-12) · accountable: security-reviewer · due 2026-10-17 · LATE'
 ---
 - **52. Approvals keep only the decision channel on disk and in the API (trading-safety review of the finance audit
   record, 2026-10-11).** Value: an archived proposal in `approvals/done/` still carries the owner's identity:
@@ -19,3 +19,4 @@ status: implemented (security and trading-safety review pending; A14, follow-ups
   (ADR 0010). Acceptance: a test that a decided proposal archived by the bus or the engine has no Telegram id or
   email anywhere in its file; a test that the decided card shows the channel for a new file and for an older file
   with `decided_via`; the API contract regenerated; trading-safety and security review.
+  Sweep 2026-10-16 (product owner): accountable `security-reviewer`, due 2026-10-17. Built (TRACEABILITY A14, A15); the re-review asked on 2026-10-12 has not started. Acceptance: both reviews signed off, the OpenAPI export and web types regenerated, then it ships with the reviewed batch.

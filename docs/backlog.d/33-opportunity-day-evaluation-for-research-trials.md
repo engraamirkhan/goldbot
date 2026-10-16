@@ -1,10 +1,9 @@
 ---
 number: 33
-rank: 33
 title: Opportunity-day evaluation for research trials (£/day distribution, days captured)
 stage: Performance review · FIND
 size: S–M
-status: proposed (after 20, 26)
+status: 'parked: needs 20 and 26 results, which need trades'
 ---
 - **33. Opportunity-day evaluation for research trials (quant review; read-only).** Value: the north-star KPIs of
   item 26 applied to research trials and the shadow book, so a hypothesis is judged the way the owner states the
@@ -21,3 +20,4 @@ status: proposed (after 20, 26)
   - It reuses item 30's descriptive base-rate report; it does not recompute it.
   - Golden test on a fixture. Not in the Telegram digest. The header says "diagnostic, not a target".
   - Depends on: 20, 26.
+  Sweep 2026-10-16 (product owner): Parked: needs 20 and 26 results, which need trades.

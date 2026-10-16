@@ -1,10 +1,9 @@
 ---
 number: 26
-rank: 28
 title: Milestone ladder and monthly north-star / % / R report (ADR 0004)
 stage: Performance review, capital growth · RUN
 size: S–M
-status: ready
+status: 'backend done (PR #71, main 423d2b1; d893f60); card, Telegram line and capture KPI parked: no trades until 1'
 ---
 - **26. Milestone ladder and monthly north-star report.** Value: reports progress the way ADR 0004 decided:
   monthly averages and distributions, never a daily quota (Performance review · RUN). Acceptance:
@@ -21,3 +20,4 @@ status: ready
     text): a missed £50 day never prompts more risk.
   - Reviews: code, ui-ux (screen and Telegram), quant (the R interval). Read-only: no trading-safety review.
   Depends on: 22.
+  Sweep 2026-10-16 (product owner): Backend done (PR #71, main 423d2b1; d893f60); card, Telegram line and capture KPI parked: no trades until 1.

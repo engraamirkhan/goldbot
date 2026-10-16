@@ -1,10 +1,10 @@
 ---
 number: 48
-rank: 42.0
+rank: 13
 title: H-06 macro-gate preset on slow tsmom, with its event count
 stage: Idea generation · FIND
 size: S
-status: 'done (accountable: research-director; preset `slow_macro` and `count_h06` on `main`, `d2f18c6`; counted 2026-10-16 by count-owed-events run 38931951849 on `macro-v1`: 1,105 signals, one-at-a-time lower bound 107 < 150, so H-06 is withdrawn by its pre-registered rule; reservation 8, set by the implementer by 2026-10-23)'
+status: 'in review (preset `slow_macro` and `count_h06` on `main`, `d2f18c6`; counted 2026-10-16 by count-owed-events run 38931951849 on `macro-v1`: 1,105 signals, one-at-a-time lower bound 107 < 150, so H-06 is withdrawn by its pre-registered rule once the quant reviewer confirms `count_h06`; reservation 8, set by the implementer by 2026-10-23) · accountable: strategy-researcher · due 2026-10-23'
 ---
 - **48. H-06 macro-gate preset on slow tsmom (research director, 2026-10-11).** Value: H-06 is in the Q1 queue but
   has no implementation (the `tsmom` presets hold only `slow`). Do: a preset that keeps H-01's candidates only when
@@ -14,3 +14,4 @@ status: 'done (accountable: research-director; preset `slow_macro` and `count_h0
   value after the signal bar; agent id pinned; count pasted into `preregistration-2027Q1.md`. If the lower bound is
   below the daily floor in force, or this is not merged by 2026-12-04, H-06 is withdrawn before the freeze and
   `reserved_trials_quarter` 2027Q1 becomes 8 (rule in the pre-registration). Quant review. Depends on: `macro-v1`.
+  Sweep 2026-10-16 (product owner): accountable `strategy-researcher`, due 2026-12-04; escalate to the program-director by 2026-11-13 if the count is below 150. Acceptance as above.

@@ -1,10 +1,9 @@
 ---
 number: 50
-rank: 43
 title: --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners
 stage: Idea generation (integrity) · FIND
 size: M
-status: implemented 2026-10-11 (TRACEABILITY M43; quant review pending)
+status: 'done (PR #77, main bc030d3; a231f69); quant sign-off not on record (TRACEABILITY M43 in review)'
 ---
 - **50. --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners (quant review
   F2 of BACKLOG 47, 2026-10-11).** Value: H-02's queued row hashes the exact first and last 1m bar the run loads
@@ -19,3 +18,4 @@ status: implemented 2026-10-11 (TRACEABILITY M43; quant review pending)
   Acceptance: tests that a data-v1 refresh after the write is refused with the digest named; that a config-hash
   mismatch against a pending queued row refuses (no fallback); that `--discover`'s `bars_to` is before
   `holdout_from` whatever the data reaches. Quant review. Depends on: BACKLOG 47.
+  Sweep 2026-10-16 (product owner): Done (PR #77, main bc030d3; a231f69); quant sign-off not on record (TRACEABILITY M43 in review). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.

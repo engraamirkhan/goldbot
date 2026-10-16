@@ -1,10 +1,9 @@
 ---
 number: 28
-rank: 1
 title: Currency-correct sizing, margin and R on a non-USD account (ADR 0004, audit A3–A8)
 stage: Position sizing, safety · RUN
 size: S–M
-status: '**in review** (built 2026-10-10; trading-safety review; approval-card currency label open for ui-ux)'
+status: 'done (PR #71, main 423d2b1; 9df2083); card label in PR #73 (b97f9f9)'
 order: 24.5
 ---
 - **28. Currency-correct sizing (HIGH, top priority; trading-safety review).** Value: today every trade on the GBP
@@ -30,3 +29,4 @@ order: 24.5
   Depends on: nothing. 25's tests are restated in account currency on top of it.
   Status (2026-10-10): built (TRACEABILITY R32, S6; tests/test_currency_sizing.py). The supervisor refuses mixed
   currencies (halt) rather than converting. Open: the approval card still shows `risk_usd` (ui-ux label change).
+  Sweep 2026-10-16 (product owner): Done (PR #71, main 423d2b1; 9df2083); card label in PR #73 (b97f9f9). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.

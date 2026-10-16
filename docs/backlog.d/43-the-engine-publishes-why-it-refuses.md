@@ -1,5 +1,10 @@
 ---
 number: 43
+rank: 5
+title: The engine publishes why it refuses entries, and writes state while the market is closed
+stage: Operational resilience, entry status · RUN
+size: M
+status: 'in progress, heartbeat part (`lane/market-closed-state-cadence`, no commit yet); `entry_blocks` ready · accountable: implementer · due 2026-10-21'
 ---
 - **43. The engine publishes why it refuses entries (trading-safety review; from the entry-status review of 66ba8f9,
   ADR 0011).** Value: the dashboard's entry status (docs/ux/entry-status.md) still mirrors in the API which published
@@ -16,3 +21,4 @@ number: 43
     so silence always means a fault;
   - the API then prefers `entry_blocks` (already merged when present) and the flag mapping and the `min_lot` fallback
     in `goldbot/api/entry_status.py` go; exits are never gated by any of it.
+  Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-21; trading-safety review. Not started before today: `goldbot/api/entry_status.py` still maps flags. Acceptance as above.
