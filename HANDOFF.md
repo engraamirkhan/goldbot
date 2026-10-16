@@ -360,6 +360,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   | e2e (`npm --prefix web run test:e2e`) | PASS, 19 passed (7.2m) |
 
   Total wall time of gates.sh: 384 s. E2E needed `PW_CHROMIUM_PATH` set to the cached chromium_headless_shell-1208 (Playwright wanted build 1248, not installed); the first attempt without it failed on browser launch only. The `CancelledError` traceback at e2e server shutdown is the websocket sleep being cancelled at teardown, not a test failure.
+- Gates on frozen release candidate 0bd0c10 (test-engineer, 2026-10-16, `GATES_WORKERS=4 scripts/gates.sh --web`, 415 s, then e2e), all green:
+
+  | Gate | Result |
+  |---|---|
+  | dry_run | PASS lookahead check: 0 of 240 columns use future data [] |
+  | integration | PASS 90 passed, 1 skipped, 1 warning in 413.59s (0:06:53) |
+  | mypy | PASS Success: no issues found in 364 source files |
+  | pre-commit | PASS |
+  | ruff | PASS All checks passed! |
+  | unit | PASS 5512 passed in 244.61s (0:04:04) |
+  | web (lint, typecheck, vitest, build) | PASS Tests 142 passed (142) |
+  | e2e (`npm --prefix web run test:e2e`, chromium_headless_shell-1208) | PASS 19 passed (7.3m); the WebServer CancelledError trace is teardown noise after the run |
 - **Gates on the frozen release candidate 3db12c8 (claude/gifted-goldberg-lcb7pl tip), 2026-10-16, all PASS.**
   `GATES_WORKERS=4 scripts/gates.sh --web` (372 s total) plus e2e, on a tree nobody edited:
 
