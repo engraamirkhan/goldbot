@@ -4,7 +4,7 @@ rank: 47
 title: 'risk_day_anchor is read by no code: pin it or make it real'
 stage: Execution and risk (loss caps) · PROTECT
 size: S
-status: proposed (found in the north-star day lane, 2026-10-16; needs trading-safety review)
+status: '**in review** (built 2026-10-16, pinned: Settings refuses any other anchor at load; trading-safety review)'
 ---
 - **57. risk_day_anchor is read by no code: pin it or make it real.** Value: `config/settings.yaml` says
   `risk_day_anchor: { tz: UTC, time: "00:00" }  # loss caps reset`, and `Settings.risk_day_anchor` loads it, but no

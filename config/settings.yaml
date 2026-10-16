@@ -3,6 +3,8 @@ symbol: XAUUSD
 data_root: data            # Parquet root; DuckDB views sit over it
 
 # The three "days" (see design: Data architecture / Time and calendar)
+# The two anchors below are fixed, not settings (BACKLOG 57): no code reads them, and Settings refuses any other value
+# at load. Moving either day needs code (one shared day function) and a trading-safety review.
 feature_day_anchor: { tz: America/New_York, time: "13:30" }   # COMEX settlement -> daily bars & features
 risk_day_anchor:    { tz: UTC,              time: "00:00" }   # loss caps reset
 # swap-day (the broker's server-midnight rollover) follows each broker's server_tz; the swap rates and triple day in
