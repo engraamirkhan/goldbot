@@ -3,17 +3,19 @@
 
     python -m goldbot.ops.run monthly-report [--state DIR] [--month YYYY-MM] [--json]
 
-Day convention: a day is the UTC calendar day, 00:00-24:00 UTC, the risk day on which the loss caps reset (settings
-`risk_day_anchor`) and the digest's "yesterday"; a trade belongs to the day and the month of its exit. The performance
-report (perf_report.py) uses the opportunity day (22:00 UTC roll) instead, so a close between 22:00 and 24:00 UTC sits
-on different days in the two reports; the report states its boundary (`MonthlyReport.day_boundary`).
+Day convention (report_days.py, shared with perf_report.py): a day is the opportunity day, D-1 22:00 to D 22:00 UTC,
+so the Sunday reopen counts on Monday; a trade belongs to the day of its exit, and the month is that day's month (a
+close at 23:30 UTC on the month's last day is the next month's). The month is its calendar days as opportunity days.
+This is not the risk day on which the loss caps reset (00:00 UTC, timeutil.risk_day), nor the digest's "yesterday"
+(00:00-24:00 UTC): a close between 22:00 and 24:00 UTC is on the next day here. The report states its boundary
+(`MonthlyReport.day_boundary`).
 
 P&L basis (finance audit GAP-05, as perf_report.py): every money, R, return, drawdown and day figure uses net rows
 only, a row with `pnl_basis` "net" or a legacy row (no `pnl_basis`) that records both commission and swap
 (gates_phase.pnl_basis). Every other row is counted in the trades and shown apart as "N trades gross only (costs not
 recorded)" with its gross money and R, left out of every net figure: nothing gross is labelled net.
 
-Per account, for one calendar month (UTC; default the current one):
+Per account, for one calendar month of opportunity days (default the one holding now):
 * % return as a chained closed-trade return (time-weighted; deposits excluded): the product of
   (1 + pnl / equity before the trade) over the month's trades, minus 1. Each trade's return is measured on the
   balance just before it, so a deposit or withdrawal between trades moves no return (ADR 0004). When positions
@@ -25,8 +27,9 @@ Per account, for one calendar month (UTC; default the current one):
   so beside R, with the count when only some trades are affected;
 * max drawdown % on closed trades this month (on the closed-trade return index: floating losses inside a trade are
   not seen);
-* net P&L and the average per trading day (Monday-Friday days of the month elapsed so far, traded or not; trades
-  closed after the report's day are left out, so the digest's "so far" is up to yesterday);
+* net P&L and the average per trading day (Monday-Friday opportunity days of the month elapsed so far, today's
+  included, traded or not; trades closed after the report's day are left out, so the digest's "so far", built at
+  `now - 1 day`, runs to yesterday's 22:00 UTC roll);
 * the three best days by net P&L (with their R), and the number of days at £50 or more on a GBP account;
 * the milestone ladder at the engine's live equity (goldbot/ops/account_view.py);
 * median MAE and MFE in R (BACKLOG 23: how far trades went against and for the position before the exit, in R of
@@ -53,16 +56,16 @@ import pandas as pd
 from goldbot.base import FrozenRecord
 from goldbot.ops.account_view import Milestones, milestones
 from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades, pnl_basis
+from goldbot.ops.report_days import DAY_BOUNDARY, day_buckets, month_days, report_day, weekdays
 
 NORTH_STAR_DAY_GBP = 50.0         # ADR 0004 section 6: days at £50+ are counted, never aimed at
 BEST_DAYS = 3
 R_NOTE = "R understated on non-USD accounts until BACKLOG 28"
-DAY_BOUNDARY = "UTC 00:00-24:00 (the risk day on which the loss caps reset)"
 SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€"}
 
 
 class DayPnl(FrozenRecord):
-    day: str                       # YYYY-MM-DD (UTC exit date)
+    day: str                       # YYYY-MM-DD (opportunity day of the exit, report_days.report_day)
     pnl: float
     r: float | None = None         # sum of the day's recorded R
     trades: int
@@ -81,7 +84,7 @@ class AccountMonth(FrozenRecord):
     r_ci90: tuple[float, float] | None = None
     max_drawdown_pct: float
     trading_days: int
-    avg_per_day: float
+    avg_per_day: float | None = None    # None when no trading day has elapsed (shown "n/a", never £0)
     best_days: list[DayPnl]
     days_50_plus: int | None = None    # GBP accounts only
     equity_now: float | None = None
@@ -115,18 +118,6 @@ class MonthlyReport(FrozenRecord):
     errors: list[str] = []
 
 
-def _month_bounds(month: str) -> tuple[pd.Timestamp, pd.Timestamp]:
-    start = pd.Timestamp(f"{month}-01", tz="UTC")
-    return start, start + pd.offsets.MonthBegin(1)
-
-
-def _weekdays(start: pd.Timestamp, end: pd.Timestamp) -> int:
-    """Monday-Friday dates in [start, end)."""
-    if end <= start:
-        return 0
-    return int(np.busday_count(start.date(), end.date()))
-
-
 def _engine(state_dir: Path, account: str) -> dict[str, Any]:
     try:
         e = json.loads((state_dir / f"engine_{account}.json").read_text(encoding="utf-8"))
@@ -154,8 +145,10 @@ def r_understated(trade: Any, account_ccy: str | None) -> bool:
     return getattr(trade, "pnl_currency", None) is None
 
 
-def account_month(account: str, trades: list[ClosedTrade], start: pd.Timestamp, end: pd.Timestamp,
+def account_month(account: str, trades: list[ClosedTrade], first: str, last: str,
                   engine: dict[str, Any]) -> AccountMonth:
+    """One account's month: `trades` already selected by their exit's opportunity day, `first`..`last` (YYYY-MM-DD,
+    inclusive) the opportunity days elapsed, for the trading-day count."""
     trades = sorted(trades, key=lambda t: t.exit_utc)
     ccy = engine.get("currency") if isinstance(engine.get("currency"), str) else None
     # money in the account's currency only (BACKLOG 28, as the digest): a row whose pnl_currency differs (the
@@ -179,14 +172,12 @@ def account_month(account: str, trades: list[ClosedTrade], start: pd.Timestamp, 
         peak = max(peak, idx)
         dd = max(dd, 1 - idx / peak)
     rs = [t.r for t in net if t.r is not None]
-    days: dict[str, list[ClosedTrade]] = {}
-    for t in money_rows:
-        days.setdefault(f"{t.exit_utc:%Y-%m-%d}", []).append(t)
+    days = day_buckets(money_rows, lambda t: t.exit_utc)
     per_day = [DayPnl(day=d, pnl=sum(t.pnl for t in ts), trades=len(ts),
                       r=sum(t.r for t in ts if t.r is not None) if any(t.r is not None for t in ts) else None)
                for d, ts in days.items()]
     best = sorted(per_day, key=lambda d: d.pnl, reverse=True)[:BEST_DAYS]
-    n_days = _weekdays(start, end)
+    n_days = weekdays(first, last)
     pnl = sum(t.pnl for t in money_rows)
     eq = engine.get("equity")
     flagged = sum(r_understated(t, ccy) for t in net)
@@ -202,7 +193,7 @@ def account_month(account: str, trades: list[ClosedTrade], start: pd.Timestamp, 
     return AccountMonth(
         account_id=account, currency=ccy, trades=len(trades), net_trades=len(net), twr_pct=100 * (idx - 1), pnl=pnl,
         net_r=sum(rs) if rs else None, r_per_trade=float(np.mean(rs)) if rs else None, r_trades=len(rs),
-        r_ci90=_ci90(rs), max_drawdown_pct=100 * dd, trading_days=n_days, avg_per_day=pnl / n_days if n_days else 0.0,
+        r_ci90=_ci90(rs), max_drawdown_pct=100 * dd, trading_days=n_days, avg_per_day=pnl / n_days if n_days else None,
         best_days=best,
         days_50_plus=sum(d.pnl >= NORTH_STAR_DAY_GBP for d in per_day) if ccy == "GBP" else None,
         equity_now=float(eq) if isinstance(eq, (int, float)) else None, milestones=milestones(engine),
@@ -223,15 +214,16 @@ def build_monthly_report(state_dir: str | Path, *, month: str | None = None,
                          now: pd.Timestamp | None = None) -> MonthlyReport:
     sd = Path(state_dir)
     now = pd.Timestamp.now(tz="UTC") if now is None else now.tz_convert("UTC")
-    month = month or f"{now:%Y-%m}"
-    start, end = _month_bounds(month)
-    upto = min(end, now.normalize() + pd.Timedelta(days=1))   # weekdays elapsed, today included
+    today = report_day(now)
+    month = month or today[:7]
+    first, end = month_days(month)
+    last = min(end, today)                                    # opportunity days elapsed, today included
     trades, err = load_closed_trades(sd)
     by_acc: dict[str, list[ClosedTrade]] = {}
     for t in trades:
-        if start <= t.exit_utc < upto:
+        if first <= report_day(t.exit_utc) <= last:
             by_acc.setdefault(t.account_id, []).append(t)
-    rows = [account_month(a, ts, start, upto, _engine(sd, a)) for a, ts in sorted(by_acc.items())]
+    rows = [account_month(a, ts, first, last, _engine(sd, a)) for a, ts in sorted(by_acc.items())]
     return MonthlyReport(month=month, as_of_utc=now.isoformat(), accounts=rows, errors=[err] if err else [])
 
 
@@ -241,6 +233,11 @@ def money(x: float, ccy: str | None, *, sign: bool = True) -> str:
     sym = SYMBOLS.get(ccy or "")
     body = f"{sym}{abs(x):,.2f}" if sym else f"{abs(x):,.2f}" + (f" {ccy}" if ccy else "")
     return (s if sign else ("" if x >= 0 else "-")) + body
+
+
+def _avg(x: float | None, ccy: str | None) -> str:
+    """The average per trading day, "n/a" before the month's first weekday (a £0 would read as a flat day)."""
+    return "n/a" if x is None else money(x, ccy)
 
 
 def _ladder_line(m: Milestones | None, ccy: str | None) -> str:
@@ -257,7 +254,7 @@ def _ladder_line(m: Milestones | None, ccy: str | None) -> str:
 
 def format_report(rep: MonthlyReport) -> str:
     name = pd.Timestamp(f"{rep.month}-01").strftime("%B %Y")
-    lines = [f"goldbot monthly report · {name} (UTC) · as of {rep.as_of_utc[:16].replace('T', ' ')} UTC",
+    lines = [f"goldbot monthly report · {name} · as of {rep.as_of_utc[:16].replace('T', ' ')} UTC",
              f"Net of commission and swap; days run {rep.day_boundary}"]
     if not rep.accounts:
         lines.append("No closed trades this month.")
@@ -284,8 +281,8 @@ def format_report(rep: MonthlyReport) -> str:
                          f"{a.approx_mfe_r_median:+.2f}R over {a.excursion_approx}")
         if parts:
             lines.append("  Excursion: " + "; ".join(parts) + " (whole position until the final exit)")
-        lines.append(f"  Max drawdown on closed trades this month {a.max_drawdown_pct:.2f}% · average {money(a.avg_per_day, c)} "
-                     f"per trading day over {a.trading_days} weekdays")
+        lines.append(f"  Max drawdown on closed trades this month {a.max_drawdown_pct:.2f}% · average "
+                     f"{_avg(a.avg_per_day, c)} per trading day over {a.trading_days} weekdays")
         best = " · ".join(f"{pd.Timestamp(d.day):%a %d %b} {money(d.pnl, c)}"
                           + (f" ({d.r:+.1f}R)" if d.r is not None else "") for d in a.best_days)
         lines.append(f"  Best days: {best}")
@@ -314,7 +311,7 @@ def month_to_date_line(state_dir: str | Path, now: pd.Timestamp) -> list[str]:
         r = f" · {a.net_r:+.2f}R" + (f" ({a.r_note})" if a.r_note else "") if a.net_r is not None else ""
         n = _trades(a.net_trades, "net ") if a.gross_only else _trades(a.trades)
         parts.append(f"{who}{a.twr_pct:+.2f}% time-weighted · {n}{r} · "
-                     f"avg {money(a.avg_per_day, a.currency)}/trading day"
+                     f"avg {_avg(a.avg_per_day, a.currency)}/trading day"
                      + (f" ({a.pnl_note})" if a.pnl_note else "")
                      + (f" ({a.gross_note}, not summed)" if a.gross_note else ""))
     return [f"• {name} so far: " + " | ".join(parts)]
@@ -323,7 +320,7 @@ def month_to_date_line(state_dir: str | Path, now: pd.Timestamp) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="goldbot.ops.run monthly-report", description=__doc__.splitlines()[0])
     ap.add_argument("--state", default="state", help="state directory (closed_trades_*.jsonl, engine_*.json)")
-    ap.add_argument("--month", help="YYYY-MM (UTC); default the current month")
+    ap.add_argument("--month", help="YYYY-MM (its opportunity days); default the month of today's opportunity day")
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
     a = ap.parse_args(argv)
     if a.month is not None and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", a.month):

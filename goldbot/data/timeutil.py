@@ -4,6 +4,10 @@
 * risk-day     — ends 00:00 UTC; loss-cap resets.
 * swap-day     — each broker's rollover, read from the terminal at runtime (not here).
 
+and a fourth, never used for a limit: the opportunity day, D-1 22:00 to D 22:00 UTC (ROLLOVER_UTC_H), the day of the
+opt-in `day_type` features and of the owner's north-star reports (goldbot/ops/report_days.py). 22:00 UTC falls inside
+gold's 17:00-18:00 New York daily break in both US DST regimes, so the Sunday reopen belongs to Monday.
+
 MT5 returns epoch integers that are *server clock* values labelled as UTC. `server_to_utc`
 undoes that using the broker's zone resolved per timestamp, so DST is handled and no fixed
 offset is ever assumed. A broker's `server_tz` is an IANA name (`Europe/Athens`: UTC+2/+3 on
@@ -160,6 +164,15 @@ def risk_day(utc_ts: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(utc_ts).tz_convert(UTC).normalize().tz_localize(None)
 
 
+ROLLOVER_UTC_H = 22   # the opportunity day rolls at 22:00 UTC, inside the daily break in summer and winter
+
+
+def opportunity_day(ts: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Label (naive date) of the opportunity day holding each UTC instant: [D-1 22:00, D 22:00) UTC is day D."""
+    idx = pd.DatetimeIndex(ts).tz_convert(UTC)
+    return pd.DatetimeIndex((idx + pd.Timedelta(hours=24 - ROLLOVER_UTC_H)).normalize().tz_localize(None))
+
+
 def floor_tf(utc_ts: pd.DatetimeIndex, tf_sec: int) -> pd.DatetimeIndex:
     """Floor to timeframe boundary (left label). Weekly floors to Sunday 00:00 UTC-aligned weeks via 7d."""
     idx = pd.DatetimeIndex(utc_ts)
@@ -188,6 +201,8 @@ __all__ = [
     "feature_day",
     "feature_day_close",
     "risk_day",
+    "ROLLOVER_UTC_H",
+    "opportunity_day",
     "floor_tf",
     "now_utc",
     "time",

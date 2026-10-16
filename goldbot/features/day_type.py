@@ -79,7 +79,7 @@ from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.data.calendar import LOCAL_SESSIONS, LocalSession
 from goldbot.data.macro import US_BDAY, driver_frames
 from goldbot.data.store import asof_join
-from goldbot.data.timeutil import epoch_ns, utc_index
+from goldbot.data.timeutil import ROLLOVER_UTC_H, epoch_ns, opportunity_day, utc_index
 from goldbot.features.registry import FEATURES, FeatureCtx, feature
 from goldbot.features.survey import yang_zhang
 
@@ -91,7 +91,6 @@ TIER1_COLUMNS = ("opp_tier1_today", "opp_min_to_first_tier1")
 COLUMNS = (*HAR_COLUMNS, "opp_gvz_rv", "opp_gvz_stale", "opp_prev_range_atr", "opp_nr4", "opp_nr7", "opp_inside_day",
            "opp_gap_atr", "opp_noise_ratio", *TIER1_COLUMNS)
 
-ROLLOVER_UTC_H = 22
 MIN_DAY_SPAN_H = 12.0
 MAX_BAR_MIN = 60
 WINDOW_OPEN = ("Europe/London", 8 * 60)          # H-16 window: 08:00 London ..
@@ -118,12 +117,8 @@ _US_HOLIDAYS = np.array(US_BDAY.holidays, dtype="datetime64[D]")
 
 
 # --------------------------------------------------------------------------- opportunity days
-def opportunity_day(ts: pd.DatetimeIndex) -> pd.DatetimeIndex:
-    """Label (naive date) of the opportunity day holding each UTC instant: [D-1 22:00, D 22:00) UTC is day D."""
-    idx = pd.DatetimeIndex(ts).tz_convert("UTC")
-    return pd.DatetimeIndex((idx + pd.Timedelta(hours=24 - ROLLOVER_UTC_H)).normalize().tz_localize(None))
-
-
+# `opportunity_day` and ROLLOVER_UTC_H live in goldbot.data.timeutil (one definition, shared with the owner's reports,
+# goldbot/ops/report_days.py) and are re-exported here for the features and the H-16 code that read them from this module.
 def day_close_utc(day: pd.DatetimeIndex) -> pd.DatetimeIndex:
     """The nominal close of opportunity day `day` (D 22:00 UTC): when its daily values become visible."""
     return pd.DatetimeIndex(day).tz_localize("UTC") + pd.Timedelta(hours=ROLLOVER_UTC_H)
