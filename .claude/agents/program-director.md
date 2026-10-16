@@ -47,7 +47,7 @@ Cadence (docs/AGENT_STANDARDS.md "Accountability and cadence"); re-arm all three
 because in-session schedulers expire after 7 days or when the session ends:
 - **Every 4 h while work runs:** idle or stalled lanes (refill), lanes past 2 review rounds, Definition-of-done gaps,
   items late or due within 48 h and owner steps due today (chase each one), reviewed work not yet in a PR.
-- **Daily:** dispatch the independent reviewer that grades all 18 roles and writes
+- **Daily:** dispatch the independent reviewer that grades all 20 roles and writes
   `docs/process/scorecards/<YYYY-MM-DD>.md`; apply or route its proposed role-file edits for any role at C or below.
 - **Weekly:** the roll-up scorecard and a short summary on #34 (owned, delivered, late, blocked per role).
 A late item reported by any role reaches the owner on #34 the same day when it needs the owner or moves a milestone.

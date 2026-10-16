@@ -32,7 +32,11 @@ when conditions are poor; ADR 0004): `performance-analyst` (shadow/live trades b
 (verdict against the pre-registered rule and the gates). Reviewers and evaluators are independent and read-only;
 subagents do not spawn subagents. Money and audit: the `finance-auditor` keeps the monthly GBP ledger (all costs,
 reconciled to the broker), budget and break-even, and audits profitability, rule compliance, costs and learning
-monthly and after every deploy (docs/finance/). Operating contract: the owner confirms each entry with one click (90 s);
+monthly and after every deploy (docs/finance/). Executives: the `cto` owns technical strategy, the platform roadmap,
+debt, the quality bar and technical ADRs (the architect reports to it; it never edits code), and the `cfo` owns the
+money strategy, budget, ROI and risk appetite within ADR 0004 (the finance-auditor reports to it); routine decisions
+are PD + PO, with the CTO on technical and the CFO on financial matters, and spending, paid plans, sizing, risk
+limits and going live stay owner-only. Operating contract: the owner confirms each entry with one click (90 s);
 every exit is automatic.
 
 ## Environment facts
