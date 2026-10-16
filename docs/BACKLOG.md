@@ -38,7 +38,7 @@ re-reviews were asked on 2026-10-12 and have not started; the reviewed batch has
 | 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | ready (after 1; the collector `jobs._broker_terms` exists) · accountable: sre · due 2026-10-20 |
 | 55 | test_lockout_survives_a_restart: make it reliable under load | Platform (CI) · SECURE | S | done 2026-10-16 (test-engineer; needs code review) · accountable: test-engineer |
 | 36 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | built (implementer, 2026-10-16); needs trading-safety + quant review · accountable: implementer · due 2026-10-30 |
-| 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | ready · accountable: implementer · due 2026-10-30 |
+| 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | built 2026-10-16 (5053d31 + review fixes; security, quant and code re-review pending) · accountable: implementer · due 2026-10-30 |
 | 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | done (fixed 2026-10-16 in 94b3460: settings and `hypotheses.md` B list the registry's trials; quant reviewer APPROVED 2026-10-16) · accountable: strategy-researcher · due 2026-10-23 |
 | 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, count-owed-events to be re-dispatched after merge (H-01 count pasted by 2026-11-01); `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14 |
 | 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | done (preset `slow_macro` and `count_h06` on `main`, `d2f18c6`; counted 2026-10-16 by count-owed-events run 38931951849 on `macro-v1`: 1,105 signals, one-at-a-time lower bound 107 < 150; quant reviewer confirmed `count_h06` 2026-10-16, so H-06 is withdrawn by its pre-registered rule; run-input table written 2026-10-16 as the record; withdrawal in the spec + reservation 8 and the lower-bound one-bar fix done 2026-10-16 by the implementer on `lane/h06-withdraw-lowerbound`, quant review pending; count-owed-events re-dispatch after merge) · accountable: strategy-researcher · due 2026-10-23 |
@@ -758,6 +758,15 @@ hypotheses that go through the trial registry in a future quarter's budget.
   a merge shorter than the published copy. Acceptance: tests with a fake release whose asset changes between the pull
   and the upload, showing both rows survive, and a bounded-retry failure. Security review. Depends on: BACKLOG 47.
   Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-30, ahead of the Q1 row writes (2026-12-18). Security review. Acceptance as above.
+  **Built 2026-10-16:** one protocol in `goldbot.research.registry_sync` for both writers (HTTP on the VPS, `gh` via
+  `scripts/registry_release.sh fetch | save | recover`). It notes the asset's stamp (id, updated_at, size, digest) at
+  the pull and uploads the merge as `registry.jsonl.pending-*`. It re-checks the stamp, deletes the pulled id (a 404
+  is a lost race), renames, then re-reads, so our id must be the published copy. A lost race drops the pending
+  upload, waits a jittered backoff, then pulls, merges and retries up to 3 times before failing loudly. After the
+  delete, the pending upload is kept unless another copy is published; a rename that keeps failing leaves it for
+  `recover`. Reads refuse a pending-only release, and refuse a release without `registry.jsonl` unless `--bootstrap`
+  is given. The shorter-merge refusal is kept and applies on the VPS too. Tests: tests/test_registry_push_race.py,
+  tests/test_registry_release.py.
 - **52. Approvals keep only the decision channel on disk and in the API (trading-safety review of the finance audit
   record, 2026-10-11).** Value: an archived proposal in `approvals/done/` still carries the owner's identity:
   `Proposal.decided_by` (the Telegram user id) and `decided_via` ("telegram:<id>" or "dashboard:<email>"). The
