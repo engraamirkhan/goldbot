@@ -180,6 +180,9 @@ class RiskSettings(_Section):
     equity_check_tolerance: float = Field(0.02, gt=0, lt=0.12)
     # ...and a pending 12% read clears only after every read stayed below 12% minus the tolerance for this long
     equity_recovery_s: float = Field(60.0, gt=0, le=3600)
+    # BACKLOG 54 (ADR 0018): a balance read above the high-water mark raises it only when the deal history since the
+    # mark explains it, or the next read agrees with it, within this fraction of the mark (rounding, not money)
+    hwm_rise_tolerance: float = Field(0.001, gt=0, lt=0.02)
     # BACKLOG 17: entry windows after the daily reopen / weekly open and on thin-liquidity days; off by default
     reopen: ReopenSettings = Field(default_factory=ReopenSettings)
     holidays: HolidaySettings = Field(default_factory=HolidaySettings)

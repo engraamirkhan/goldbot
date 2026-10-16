@@ -31,7 +31,7 @@ re-reviews were asked on 2026-10-12 and have not started; the reviewed batch has
 | --- | --- | --- | --- | --- |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | in progress (`lane/claude-run-deploy`, plan ccef822) · accountable: release-manager · due 2026-10-18 (re-dated from 2026-10-13: the demo deploy never ran) · LATE |
 | 44 | Confirm a zero or collapsed equity read before the 12% kill switch (ADR 0016) | Execution and risk (drawdown stages) · PROTECT | S | in review (d2f2999, b9e9dac on the integration branch, not on main; trading-safety-reviewer asked 2026-10-12) · accountable: trading-safety-reviewer · due 2026-10-17 · LATE |
-| 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | ready · accountable: implementer · due 2026-10-23 |
+| 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | done (2026-10-16: faf824c + review fixes d331861, c79c7e4; ADR 0018; trading-safety APPROVED on re-verify) · accountable: implementer · due 2026-10-23 |
 | 57 | risk_day_anchor is read by no code: pin it or make it real | Execution and risk (loss caps) · PROTECT | S | done (built 2026-10-16 in bd76c47 + RUNBOOK 8a268cf: Settings refuses any other anchor at load; trading-safety APPROVED 2026-10-16) · accountable: implementer · due 2026-10-19 |
 | 43 | The engine publishes why it refuses entries, and writes state while the market is closed | Operational resilience, entry status · RUN | M | in progress, heartbeat part (`lane/market-closed-state-cadence`, no commit yet); `entry_blocks` ready · accountable: implementer · due 2026-10-21 |
 | 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | in review (04f6266, 3817db7, c7ea0e3 on the integration branch, not on main; security-reviewer and trading-safety-reviewer asked 2026-10-12) · accountable: security-reviewer · due 2026-10-17 · LATE |
@@ -803,7 +803,14 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - tests: a single inflated balance read leaves the mark unchanged and causes no size-down or halt on the next real
     reads; two agreeing reads, or a read the deal history explains, raise it as today; a restart between the two reads
     does not apply an unconfirmed rise.
-  Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-23; trading-safety review. Start once `lane/market-closed-state-cadence` (43) merges, because both edit `goldbot/engine/runner.py`. Acceptance as above.
+  - **Done 2026-10-16:** ADR 0018; `goldbot/risk/hwm.py` (`step`, `HwmConfirmation` in core.db migration 2
+    `hwm_confirmation`), runner `_update_hwm` (re-read next tick), `risk.hwm_rise_tolerance` (0.1%); deposits raise
+    the mark; health `risk:<account>` warns on a rise waiting over 5 min; tests in `tests/test_hwm_confirmation.py`
+    and `tests/test_persistence_compat.py::case_hwm_confirmation` (TRACEABILITY R40).
+  - **Review fixes 2026-10-16 (trading-safety review of faf824c):** ADR renumbered 0018; M1 a candidate the later
+    deals corroborate raises the mark (`candidate_deals`), paper broker `balance_exact`; M2 the first pending time is
+    kept; L1 one core.db handle per engine, 500 ms write busy timeout; L2 candidates expire after 10 min; accepted
+    knowns recorded in the ADR. Awaiting trading-safety re-review.
 - **55. test_lockout_survives_a_restart: make it reliable under load (ci follow-up from the A15 lane,
   2026-10-12).** Value: `tests/test_auth_security.py::test_lockout_survives_a_restart` failed once in a full
   `pytest -m "not integration" -n 4` run with the load average near 20 ("DID NOT RAISE PermissionError" on the

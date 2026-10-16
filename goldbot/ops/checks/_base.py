@@ -51,6 +51,7 @@ STUCK_APPROVAL_GRACE_S = 120
 DISK_FAIL_FREE_GB, DISK_FAIL_FREE_PCT = 2.0, 5.0
 DISK_WARN_FREE_GB, DISK_WARN_FREE_PCT = 5.0, 10.0
 REARM_APPLY_S = 10 * 60           # an engine applies a re-arm on its next tick
+HWM_PENDING_WARN_S = 5 * 60      # ADR 0018: a balance rise is confirmed or refused on the next tick
 WATCH_STALE_S = 15 * 60           # health_last.json older than this: the Telegram alert loop is not running
 HEARTBEAT_EVERY_S = 60            # services write state/heartbeat_<service>.json at most this often
 HEARTBEAT_SILENT_S = 5 * 60       # design S5: "a heartbeat alert fires if any service has been silent for five minutes"

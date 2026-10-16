@@ -104,8 +104,9 @@ The review offered two ways to close the alternating-readings hole:
   filters single glitches, not a terminal that reports nonsense consistently.
 - A rollback to a release before this ADR drops `stage2_pending_since` and trips on a single read again: the stricter
   side.
-- The high-water mark itself is still raised by one balance read (`balance_closed_hwm = max(hwm, balance)`). One
-  inflated balance read would raise it for good and could cause phantom 12% reads afterwards (BACKLOG 53).
+- The high-water mark itself was still raised by one balance read (`balance_closed_hwm = max(hwm, balance)`). One
+  inflated balance read would raise it for good and could cause phantom 12% reads afterwards. ADR 0018 (BACKLOG 54)
+  now confirms every rise.
 - The supervisor's combined 12% check (`goldbot/risk/supervisor.py`) still reads the published equity. It only
   halts entries, never closes, and is re-evaluated each pass, so it was left out of scope.
 - **What would change this.** A measured bad read lasting two ticks would call for confirmation by time (reads N
