@@ -87,9 +87,10 @@ rows:
       **continue** only if net mean R exceeds H-01's by >= 0.03 R AND 2022-2024 net is positive (the period
       the yield link broke). Otherwise the macro gate is retired.
     pending: >-
-      the preset is in review and its owed-event count waits for macro-v1 (BACKLOG 48, due 2026-12-04); withdrawn by
-      its rule if not merged and counted by then, or if its lower bound is below the daily floor: set `withdrawn:` to
-      the reason, `reservation` to 8 and research.reserved_trials_quarter 2027Q1 to 8
+      the preset and count_h06 are in quant review (BACKLOG 48, due 2026-12-04). count-owed-events run 38931951849
+      (main @ eafc6ce, 2026-10-16) gives a one-at-a-time lower bound of 107, below the floor of 150, so H-06 is
+      withdrawn by its rule once the quant reviewer confirms the count (or if it is not merged and counted by
+      2026-12-04): set `withdrawn:` to the reason, `reservation` to 8 and research.reserved_trials_quarter 2027Q1 to 8
 
   - id: H-04
     specialist: asia_drift

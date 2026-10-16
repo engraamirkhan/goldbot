@@ -337,6 +337,46 @@ the registry (normally 0), and that settings change ships in the same change as 
   three differ only on data-gap days); (c) "agree" is strict, so a zero change keeps neither side; (d) the dollar
   change is a ratio and DFII10's a difference (the sign, which is all the gate reads, is the same); (e) the model's
   declared inputs are H-01's (no macro column), and the macro columns in the frame are not read by the rule.
+- **Run (written 2026-10-16 by the strategy researcher, before any H-06 outcome was seen; no reading rule changes).**
+  Only if H-06 survives its withdrawal rule, and only after H-01 has run (its rule compares against H-01's recorded net
+  mean R, on the same cost source: pin G1). Actions -> research -> Run workflow, exactly these inputs:
+
+  | input | value |
+  |---|---|
+  | specialist | `tsmom` |
+  | from_year | `2010` |
+  | to_year | `2026` |
+  | rationale | `H-06 macro-conditioned slow TSMOM (preregistration-2027Q1.md, commit <freeze commit>)` |
+  | variants | `["slow_macro"]` |
+  | score_holdout | false |
+  | skip_screen | false |
+  | pooled | (empty) |
+  | macro | true |
+
+  `discover`, `families`, `discover_config` and `rule_ref` stay at their defaults (false, empty, `{}`, empty). The run
+  uses the queued row because its family and config hash match. H-06 has no coded `rule_id`, so the evaluator cites
+  the reading rule above exactly. `["slow_macro"]` expands to `[{"timeframe": "4h", "signal_tf": "1d", "atr_tf": "1d",
+  "lb_fast_h": 480, "lb_mid_h": 1440, "lb_slow_h": 2880, "vol_window_h": 1440, "min_score": 0.5, "target_atr": 3.0,
+  "stop_atr": 1.5, "max_bars": 124, "macro_gate": true}]`. That is H-01's configuration plus `macro_gate`, agent
+  `tsmom-g0-fed4baec9f`, config hash `5650ad206bda`. With `macro` true the feature version is `f-51ac5ebabb`. One
+  trial. Data: `data-v1` (the same bars and research window as H-01; the holdout is cut by `pipeline.prepare`) and
+  `macro-v1` (`macro_fred.parquet`, published 2026-10-13; the workflow fails rather than run without it, and the
+  preset refuses to run without `ctx["macro"]`). Floor: `research.screen_min_events_daily` as committed at the freeze.
+  Registry writer (`scripts/preregister_quarter.py --quarter 2027Q1 --from docs/research/preregistration-2027Q1.yaml
+  --registry <registry> --bars <data-v1 folder>`): the spec row `H-06` (`specialist tsmom`, `variant slow_macro`,
+  `agent_id tsmom-g0-fed4baec9f`, `config_hash 5650ad206bda`, `macro: true`, `feature_version f-51ac5ebabb`, no
+  `rule_id`, the rationale above with `{commit}`, the reading rule above verbatim). It is written only when `pending`
+  is cleared and `freeze_commit` is set. `--bars` pins the data-v1 digests of every research-window file (a specialist
+  row). The dry run (2026-10-16, this commit's tree) rebuilds the agent id, config hash and feature version from code
+  and accepts them.
+- **Owed count (count-owed-events run 38931951849 on `main` @ `eafc6ce`, 2026-10-16; events only, no label, return
+  or outcome; `count_h06` is still in quant review, BACKLOG 48):** 1,105 macro-gated signals (711 long / 394 short).
+  The gate removed 1,049 of H-01's signals (0 for a missing macro value, 1,049 disagreeing; 1,105 + 1,049 = 2,154, the
+  H-01 recount above). **One-at-a-time lower bound 107, floor in force 150: below the floor.** By the withdrawal rule
+  above, H-06 is withdrawn once the quant reviewer confirms the count: the row is not written, `withdrawn:` is set in
+  the spec, and `reservation` and `research.reserved_trials_quarter` 2027Q1 become 8. The table above then stays as
+  the record of what would have run. The same run gives H-01's lower bound as 152 (154 above). That gap is for the
+  H-01 recount paste (due 2026-11-01).
 
 ### H-04 Asia-session drift
 - Config: long at 00:00 UTC, exit 07:00 UTC (flat before London), stop 1.5 ATR(1h), every trading day, Data before
@@ -523,7 +563,7 @@ and this file's freeze commit in the rationale, stamped by the registry's clock,
 |---|---|---|---|---|---|
 | H-02 | `--discover --families cluster`, `--specialist tsmom --variants '[{"timeframe": "4h", "max_bars": 12}]'`, the pinned `DiscoveryConfig` dump above (top_k 39, permutation confirmation, freq/stability 0.6, group_top_k 3, survivor_unit feature, H02_CLUSTERS), label 4h TB 3.0/1.5/12, macro on, bars range 2010-01-01 .. 2025-09-30 written into the config | none (read by the discovery verdict) | `f-51ac5ebabb` (default + macro drivers v5) | strategy researcher writes the config; quant reviewer checks it | config 2026-12-11; row 2026-12-18 .. 12-23 |
 | H-01 | `tsmom`, `variants ["slow"]`, agent `tsmom-g0-c12c9afb24` | **`H-01`** | `f-079deacc61` | strategy researcher | row 2026-12-18 .. 12-23 |
-| H-06 | frozen macro-gate preset (above), only if it survives its withdrawal rule | none: evaluator cites the rule | `f-51ac5ebabb` | strategy researcher (spec), implementer (preset), quant reviewer | spec 2026-11-08; preset 2026-12-04; row 2026-12-18 .. 12-23 or withdrawn |
+| H-06 | frozen macro-gate preset (above), only if it survives its withdrawal rule | none: evaluator cites the rule | `f-51ac5ebabb` | strategy researcher (spec), implementer (preset), quant reviewer | spec done 2026-10-16 (run-input table under H-06); preset 2026-12-04; row 2026-12-18 .. 12-23 or withdrawn (count 2026-10-16: lower bound 107 < 150) |
 | H-04 | `asia_drift`, `variants [{}]`, agent `asia_drift-g0-98dc13a518` | **`H-04`** | `f-079deacc61` | strategy researcher | row 2026-12-18 .. 12-23 |
 | tsmom 4h continuity | `tsmom`, `variants [{"timeframe": "4h", "max_bars": 12}]` | **`C4H`** | `f-079deacc61` | strategy researcher | row 2026-12-18 .. 12-23 |
 

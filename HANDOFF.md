@@ -1393,6 +1393,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `POSITION_COLS`. Tests: synthetic fixtures only (`tests/test_owner_history.py`).
 
 ## Next steps (no owner input needed unless marked)
+- **H-06 run-input table written; its count says withdraw (BACKLOG 48, 2026-10-16; quant review).** The H-06
+  section of `preregistration-2027Q1.md` now has the run inputs in the H-01/H-04 format: `tsmom`, 2010-2026,
+  `variants ["slow_macro"]`, `macro true`, agent `tsmom-g0-fed4baec9f`, hash `5650ad206bda`, `f-51ac5ebabb`,
+  data-v1 + macro-v1. The writer's dry run accepts the spec row. count-owed-events (run 38931951849, `main` @
+  `eafc6ce`) gives H-06 1,105 signals (711 long / 394 short) and a one-at-a-time lower bound of **107, below the 150
+  floor**. **Next (research director):** once the quant reviewer confirms `count_h06`, withdraw H-06 by its rule
+  (spec `withdrawn:`, `reservation` 8, `research.reserved_trials_quarter` 2027Q1 8). No trial is spent. The same run
+  gives H-01's lower bound as 152, not the doc's 154; this still clears 150, and the gap is explained with the
+  2026-11-01 recount paste.
 - **H-06 preset and its owed-event count (BACKLOG 48, 2026-10-11; quant review needed).** tsmom preset `slow_macro`
   = H-01's `slow` + `macro_gate` (agent `tsmom-g0-fed4baec9f`; `slow` and the default ids unchanged): an H-01 candidate
   is kept only when the 20-observation changes of DFII10 and DTWEXBGS (`macro_drivers`' columns, `asof_join` on
