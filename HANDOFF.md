@@ -5,7 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
-- **One north-star day for the owner's reports (2026-10-16; TRACEABILITY V9, BACKLOG 55; quant and trading-safety
+- **One north-star day for the owner's reports (2026-10-16; TRACEABILITY V9, BACKLOG 57; quant and trading-safety
   review pending).** Before this, the monthly report used the UTC calendar day. The performance report used the
   opportunity day, which rolls at 22:00 UTC. Each had its own day-bucketing and weekday-count code, so a close between
   22:00 and 24:00 UTC landed on different days in the two reports. Both now use `goldbot/ops/report_days.py`
@@ -36,7 +36,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
       23:00 UTC the default range is 1 Nov to 1 Nov, the month the monthly report shows (`perf_report.default_range`).
     - Before the month's first weekday, the monthly report and the digest show the average per trading day as "n/a"
       (`avg_per_day` None), not £0.00. A winter Friday close at 22:00 UTC lands on the Saturday, for example.
-    - The digest's "Yesterday" line is now BACKLOG 56. BACKLOG 55 now says to check each server's
+    - The digest's "Yesterday" line is now BACKLOG 56. BACKLOG 57 now says to check each server's
       settings.local.yaml before the validator ships, and to put its error text in the RUNBOOK.
   - **Finding: `risk_day_anchor` is read by no code (for the quant and trading-safety reviewers).**
     - Where it is: `Settings.risk_day_anchor` (`goldbot/config.py:491`) and `config/settings.yaml:7`
@@ -55,7 +55,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
       runner's `.date()` shortcut returns before `new_day` runs between the anchor and midnight. The card would also
       show the wrong "resets" time, and the perf report's drawdown would disagree with the gate.
     - **Recommendation.**
-      1. Now (trading-safety review, BACKLOG 55): pin the setting. A Settings validator should refuse any value other
+      1. Now (trading-safety review, BACKLOG 57): pin the setting. A Settings validator should refuse any value other
          than UTC 00:00 at load, saying the risk day is fixed. That only tightens, and it is safe on rollback (an older
          release ignores the key). `tests/test_report_days.py::test_the_configured_risk_day_anchor_is_the_hard_coded_risk_day`
          already pins the shipped yaml.

@@ -192,7 +192,7 @@ are poor.** We record it as the north star. It is not a daily quota, and the sys
 > - **The £50 daily loss limit stays on the risk day, 00:00-24:00 UTC** (`timeutil.risk_day`, gate `new_day`). The
 >   same goes for the 2% account cap and the supervisor's 1.5% combined cap. Their reset time did not move.
 > A close between 22:00 and 24:00 UTC therefore counts toward the next north-star day but toward that day's loss
-> limit. Moving the risk day is a separate owner decision with a trading-safety review (BACKLOG 55).
+> limit. Moving the risk day is a separate owner decision with a trading-safety review (BACKLOG 57).
 
 **What a £50 day is at £1,000.** 5% of equity: about **6.1 R** at the 15m min lot (£8.20 per R), or 5 R at the 1%
 cap. One 0.01 lot makes £50 on a ~$66 move in its favour, which is about one full daily ATR. Such a day comes from a
