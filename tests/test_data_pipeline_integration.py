@@ -74,9 +74,16 @@ def test_full_build_then_incremental_gap_fill(fake_dukascopy, monkeypatch, tmp_p
     rc, second = _run(monkeypatch, tmp_path, "--existing", first)
     assert rc == 0
     refetched = {f"{s:%Y-%m}" for _, s in fake_dukascopy[n_first:]}
-    assert refetched == {"2024-03", "2024-05"}          # imputed month + the still-open month only
+    assert refetched == {"2024-05"}          # G5: only the still-open month; a flagged closed month is not retried weekly
     again = pd.read_parquet(second)
     assert len(again) == len(bars) and list(again.columns) == list(bars.columns)
+
+    n_second = len(fake_dukascopy)
+    rc, third = _run(monkeypatch, tmp_path, "--existing", second, "--retry-flagged")
+    assert rc == 0
+    refetched = {f"{s:%Y-%m}" for _, s in fake_dukascopy[n_second:]}
+    assert refetched == {"2024-03", "2024-05"}          # --retry-flagged: the imputed month too, plus the open month
+    assert len(pd.read_parquet(third)) == len(bars)     # never-shrink: the retried month keeps every published bar
 
 
 def test_failed_refetch_keeps_previously_published_month(fake_dukascopy, monkeypatch, tmp_path):

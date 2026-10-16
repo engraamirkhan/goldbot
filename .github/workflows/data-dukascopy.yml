@@ -8,6 +8,7 @@ on:
       from_year: { description: "first year", default: "2010" }
       to_year:   { description: "last year (inclusive)", default: "2026" }
       full_refresh: { description: "download every month again (published bars stay as fallback). Costs hours of runner time per year of data: on the free tier this can use the whole month's 2,000 minutes", type: boolean, default: false }
+      retry_flagged: { description: "also re-download closed months flagged imputed/partial (about 80 runner-minutes per month; off for the Saturday run, G5)", type: boolean, default: false }
   schedule:
     - cron: "17 3 * * 6"   # Saturdays 03:17 UTC: refresh the current year
 # Least privilege: the token has no scopes by default; only build-year may upload release assets and write issues.
@@ -36,7 +37,9 @@ jobs:
   build-year:
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    # the Saturday run only refreshes the open month and short months (~30-45 min); a hung run stops at 120 min
+    # and publishes nothing, so the published file is never touched by it
+    timeout-minutes: ${{ github.event_name == 'schedule' && 120 || 340 }}
     permissions:
       contents: write   # release asset upload
       issues: write     # coverage and failure issues
@@ -56,22 +59,43 @@ jobs:
         with: { node-version: "22" }
       - run: pip install -e .
       - name: fetch the previously published year (complete months are kept unless full_refresh)
+        id: prev
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           mkdir -p prev
-          gh release download data-v1 -p "xauusd_1m_dukascopy_${YEAR}.parquet" -D prev || echo "no previous file"
+          # no previous file only when the release (or this year's asset) is confirmed missing; any other error (API,
+          # auth, network) fails here instead of rebuilding the year from scratch and clobbering the published months
+          if ! assets=$(gh release view data-v1 --json assets --jq '.assets[].name' 2> view.err); then
+            cat view.err
+            if grep -qi "release not found" view.err; then echo "first run: release data-v1 does not exist"; exit 0; fi
+            echo "::error::cannot read release data-v1; refusing to treat this as a first run"; exit 1
+          fi
+          if ! grep -qx "xauusd_1m_dukascopy_${YEAR}.parquet" <<< "$assets"; then
+            echo "first run: release data-v1 has no xauusd_1m_dukascopy_${YEAR}.parquet"; exit 0
+          fi
+          gh release download data-v1 -p "xauusd_1m_dukascopy_${YEAR}.parquet" -D prev
+          test -s "prev/xauusd_1m_dukascopy_${YEAR}.parquet"
       - name: download and build 1m bars for ${{ matrix.year }}
         env:
           REFETCH: ${{ inputs.full_refresh == true && '--refetch-all' || '' }}
+          RETRY: ${{ inputs.retry_flagged == true && '--retry-flagged' || '' }}
         run: |
           set -o pipefail
-          # REFETCH is a constant flag or empty (empty must expand to no argument), so it stays unquoted
+          # REFETCH/RETRY are constant flags or empty (empty must expand to no argument), so they stay unquoted.
+          # Every re-downloaded month is merged day by day and never publishes a day with fewer bars than before.
           # shellcheck disable=SC2086
           python scripts/dukascopy_year.py "$YEAR" --report "coverage-${YEAR}.md" \
-            --existing "prev/xauusd_1m_dukascopy_${YEAR}.parquet" $REFETCH 2>&1 | tee "report-${YEAR}.txt"
-      - name: publish to release data-v1
+            --existing "prev/xauusd_1m_dukascopy_${YEAR}.parquet" $REFETCH $RETRY 2>&1 | tee "report-${YEAR}.txt"
+      - name: day-by-day coverage (a month can pass at 15,000 bars and still have lost whole weekdays)
         if: always()
+        run: |
+          [ -f "xauusd_1m_dukascopy_${YEAR}.parquet" ] || exit 0
+          # exit 1 means gap days were found: reported on the coverage issue, never a reason to drop the build
+          python scripts/check_coverage.py "xauusd_1m_dukascopy_${YEAR}.parquet" --report "daycov-${YEAR}.md" || true
+      - name: publish to release data-v1
+        if: always() && steps.prev.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -94,6 +118,8 @@ jobs:
           hdr = {"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"}
           try: cov = open(f"coverage-{year}.md").read()
           except FileNotFoundError: cov = "(no coverage table; the download step crashed)"
+          try: cov += "\n\n## Day-by-day coverage (scripts/check_coverage.py)\n\n" + open(f"daycov-{year}.md").read()
+          except FileNotFoundError: pass
           run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
           body = f"Run: {run_url}\n\n{cov}"
           title = f"data coverage {year}"
