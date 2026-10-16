@@ -71,6 +71,17 @@ def _write_atomic(path: Path, text: str) -> None:
     write_atomic(path, text)                    # durable: proposals, outcomes and the owner's halt survive a power cut
 
 
+def _stored_by(by: str | None) -> str | None:
+    """Who acted, as control.json keeps it (A15): the channel for a person, "engine:<account>" for a kill switch."""
+    return by if by is None or by.startswith("engine:") else decision_channel(by)
+
+
+def _without_identity(c: Control) -> Control:
+    """Every control.json rewrite: an identity a pre-A15 file carried in `by`, `rearm_by` or `mode_by` is cut to its
+    channel rather than copied forward (A15 review L4). `rearm_id` and every other field are kept as they are."""
+    return c.model_copy(update={k: _stored_by(getattr(c, k)) for k in ("by", "rearm_by", "mode_by")})
+
+
 class ApprovalBus:
     def __init__(self, state_dir: str | Path):
         self.root = Path(state_dir) / "approvals"
@@ -215,8 +226,9 @@ class ApprovalBus:
     def set_halt(self, halted: bool, by: str, reason: str | None = None) -> Control:
         """`by` is the channel; an identity after ":" is dropped (A15: the identity is in the audit log)."""
         prev = self.control()
-        c = Control(halted=halted, by=decision_channel(by), ts=time.time(), reason=reason, rearm_id=prev.rearm_id, rearm_by=prev.rearm_by,
-                    rearm_ts=prev.rearm_ts, **{k: getattr(prev, k) for k in _MODE_FIELDS})
+        c = _without_identity(Control(halted=halted, by=by, ts=time.time(), reason=reason, rearm_id=prev.rearm_id,
+                                      rearm_by=prev.rearm_by, rearm_ts=prev.rearm_ts,
+                                      **{k: getattr(prev, k) for k in _MODE_FIELDS}))
         _write_atomic(self.control_path, c.model_dump_json())
         return c
 
@@ -227,8 +239,8 @@ class ApprovalBus:
         now = time.time()
         prev = self.control()
         by = decision_channel(by)
-        c = Control(halted=False, by=by, ts=now, rearm_id=uuid.uuid4().hex, rearm_by=by, rearm_ts=now,
-                    **{k: getattr(prev, k) for k in _MODE_FIELDS})
+        c = _without_identity(Control(halted=False, by=by, ts=now, rearm_id=uuid.uuid4().hex, rearm_by=by, rearm_ts=now,
+                                      **{k: getattr(prev, k) for k in _MODE_FIELDS}))
         _write_atomic(self.control_path, c.model_dump_json())
         return c
 
@@ -236,8 +248,7 @@ class ApprovalBus:
         """The owner's approval mode. Callers check authority first: `auto` only after the evidence check and a TOTP
         (goldbot/telegram/automode.py); `propose` lowers authority and needs neither. The halt and re-arm are kept.
         `by` is kept as its channel (A15), except an engine's kill switch, which keeps "engine:<account>"."""
-        by = by if by.startswith("engine:") else decision_channel(by)
-        c = self.control().model_copy(update={"approval_mode": mode, "mode_by": by, "mode_ts": time.time(),
-                                              "mode_reason": reason})
+        c = _without_identity(self.control().model_copy(update={"approval_mode": mode, "mode_by": by,
+                                                                "mode_ts": time.time(), "mode_reason": reason}))
         _write_atomic(self.control_path, c.model_dump_json())
         return c

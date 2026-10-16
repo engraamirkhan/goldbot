@@ -267,8 +267,8 @@ def test_a_telegram_halt_is_audited_with_the_telegram_id_and_control_json_keeps_
     assert (row["by"], row["telegram_id"], row["reason"]) == (f"telegram:{TELEGRAM_ID}", TELEGRAM_ID, "fomc")
 
 
-def test_a_slow_audit_write_runs_after_the_answer_and_never_blocks_the_event_loop(tmp_path):
-    """Review M1: aux.db can be locked for seconds; the click is answered first and the loop (proposal pump) runs."""
+def test_a_slow_audit_write_never_delays_the_click_or_blocks_the_event_loop(tmp_path):
+    """Review M1: aux.db can be locked for seconds; neither click waits for it and the loop (proposal pump) runs."""
     order: list[str] = []
     opened: list[int] = []
 
@@ -276,7 +276,6 @@ def test_a_slow_audit_write_runs_after_the_answer_and_never_blocks_the_event_loo
         opened.append(1)
 
         def audit(event, **_kw):
-            order.append("audit start")
             time.sleep(0.5)                                          # a busy aux.db lock
             order.append(f"audit {event}")
         return audit
@@ -303,8 +302,136 @@ def test_a_slow_audit_write_runs_after_the_answer_and_never_blocks_the_event_loo
         return handled
     handled = asyncio.run(go())
     assert handled < 0.3                                             # neither click waited for the audit
-    assert order.index("sent to the engine") < order.index("audit start")
+    assert order.count("sent to the engine") == 2
     assert order.count("audit decision") == 2 and opened == [1]       # one audit store, opened once
+
+
+def _timed_out_click(bot, data: str) -> None:
+    """A tap whose answer fails (Telegram: a timeout, or "query is too old") after the action stood."""
+    async def answer(text: str = "", show_alert: bool = False) -> None:
+        raise TimeoutError
+
+    async def go() -> None:
+        q = _query(data, [])
+        q.answer = answer
+        with pytest.raises(TimeoutError):
+            await bot._on_button(types.SimpleNamespace(callback_query=q), None)
+        await bot.audit.drain()
+    asyncio.run(go())
+
+
+def test_a_decision_whose_answer_times_out_is_still_audited(tmp_path):
+    bot = _bot(tmp_path)
+    bot.bus.publish(_prop("p1"))
+    _timed_out_click(bot, "ok:p1")
+    assert (bot.bus.decisions_dir / "p1.json").exists()              # the approval stands
+    (row,) = _events(tmp_path, "decision")
+    assert (row["telegram_id"], row["proposal"], row["action"]) == (TELEGRAM_ID, "p1", "approve")
+
+
+def test_a_deploy_tap_whose_answer_times_out_is_still_audited(tmp_path):
+    from goldbot.ops.deploy import DeployWatch
+    sha = "b" * 40
+    bot = _bot(tmp_path)
+    bot.deploy = DeployWatch(str(tmp_path), tmp_path)
+    bot.deploy.dir.mkdir(parents=True)
+    (bot.deploy.dir / "pending.json").write_text(json.dumps({"sha": sha}))
+    _timed_out_click(bot, f"dep:{sha}")
+    assert json.loads((bot.deploy.dir / "approved.json").read_text()) == {"sha": sha}    # the deploy stands
+    (row,) = _events(tmp_path, "deploy_approve")
+    assert (row["telegram_id"], row["sha"]) == (TELEGRAM_ID, sha)
+
+
+def test_the_audit_row_carries_the_time_of_the_action_not_of_the_write(tmp_path):
+    """A row that waited on a locked aux.db is still stamped when the owner acted (review L3)."""
+    rows: list[dict] = []
+
+    def opener(_state):
+        def audit(event, **kw):
+            time.sleep(0.4)
+            rows.append({"event": event, "written": time.time(), **kw})
+        return audit
+    bot = _bot(tmp_path, opener=opener)
+    bot.bus.publish(_prop("p1"))
+    before = time.time()
+    _click(bot, "ok:p1")
+    (row,) = rows
+    assert before <= row["ts"] < before + 0.3 and row["written"] - row["ts"] >= 0.35
+    assert _events(tmp_path, "decision") == []                       # the opener above stands in for aux.db
+
+
+def test_a_locked_audit_database_is_retried_once(tmp_path, monkeypatch):
+    import sqlite3
+
+    from goldbot.telegram.bot import OffLoopAudit
+    monkeypatch.setattr(OffLoopAudit, "RETRY_S", 0.0)
+    calls: list[str] = []
+
+    def opener(_state):
+        def audit(event, **_kw):
+            calls.append(event)
+            if len(calls) == 1:
+                raise sqlite3.OperationalError("database is locked")
+        return audit
+    a = OffLoopAudit(str(tmp_path), opener=opener)
+    a.write_now("decision", by=f"telegram:{TELEGRAM_ID}", proposal="p1")
+    assert calls == ["decision", "decision"]
+
+
+def test_an_audit_write_that_still_fails_logs_event_channel_and_proposal_never_who(tmp_path, monkeypatch, caplog):
+    import sqlite3
+
+    from goldbot.telegram.bot import OffLoopAudit
+    monkeypatch.setattr(OffLoopAudit, "RETRY_S", 0.0)
+    calls: list[str] = []
+
+    def opener(_state):
+        def audit(event, **_kw):
+            calls.append(event)
+            raise sqlite3.OperationalError("database is locked")
+        return audit
+    a = OffLoopAudit(str(tmp_path), opener=opener)
+    with caplog.at_level("WARNING", logger="goldbot.telegram.bot"):
+        a.write_now("decision", by=f"telegram:{TELEGRAM_ID}", telegram_id=TELEGRAM_ID, proposal="p1")
+        a.write_now("deploy_approve", by=f"telegram:{TELEGRAM_ID}", telegram_id=TELEGRAM_ID, sha="c" * 40)
+    assert len(calls) == 4                                           # each tried twice, then given up
+    text = caplog.text
+    assert "decision via telegram (p1)" in text and f"deploy_approve via telegram ({'c' * 40})" in text
+    _assert_no_identity(text)
+
+
+def test_shutdown_drains_pending_audit_rows(tmp_path):
+    bot = _bot(tmp_path)
+    bot.bus.publish(_prop("p1"))
+
+    async def go() -> None:
+        await bot._on_button(types.SimpleNamespace(callback_query=_query("ok:p1", [])), None)
+        await bot._on_shutdown(None)                                 # PTB's post_shutdown, after run_polling stops
+        assert not bot.audit._tasks
+    asyncio.run(go())
+    assert len(_events(tmp_path, "decision")) == 1
+
+
+def test_the_shutdown_drain_is_bounded_by_a_timeout(tmp_path):
+    from goldbot.telegram.bot import OffLoopAudit
+    release = __import__("threading").Event()
+
+    def opener(_state):
+        def audit(event, **_kw):
+            release.wait(5)                                          # aux.db stuck
+        return audit
+    a = OffLoopAudit(str(tmp_path), opener=opener)
+
+    async def go() -> tuple[bool, float]:
+        a.write("halt", TELEGRAM_ID)
+        t0 = time.monotonic()
+        done = await a.drain(timeout=0.2)
+        took = time.monotonic() - t0
+        release.set()
+        await a.drain()
+        return done, took
+    done, took = asyncio.run(go())
+    assert done is False and took < 1.0
 
 
 def test_a_telegram_deploy_tap_is_audited_and_the_approval_file_holds_only_the_sha(tmp_path):
@@ -341,3 +468,32 @@ def test_the_mode_card_names_only_the_channel_to_every_role_even_the_owner(app_c
         r = c.get("/api/automode", headers=who)
         assert r.json()["mode_by"] == "telegram"
         _assert_no_identity(r.text)
+
+
+# ------------------------------------------------------------------------------------- pre-A15 control.json (review L4)
+@pytest.mark.parametrize("rewrite", ["halt", "rearm", "mode"])
+def test_every_control_json_rewrite_cuts_a_pre_a15_identity_to_the_channel(tmp_path, rewrite):
+    """A pre-A15 file's "dashboard:<email>" / "telegram:<id>" in by, rearm_by and mode_by is never copied forward;
+    the re-arm id is kept unless the rewrite is itself a re-arm, so the engines' once-per-id clear is unchanged."""
+    _legacy_control(tmp_path, approval_mode="propose", mode_by=f"telegram:{TELEGRAM_ID}", mode_ts=1.0)
+    bus = ApprovalBus(tmp_path)
+    if rewrite == "halt":
+        c = bus.set_halt(True, by="telegram", reason="cpi")
+    elif rewrite == "rearm":
+        c = bus.owner_rearm(by="dashboard")
+    else:
+        c = bus.set_mode("propose", by="dashboard")
+    text = bus.control_path.read_text()
+    _assert_no_identity(text)
+    assert "@" not in text
+    stored = bus.control()
+    assert stored == c
+    assert stored.rearm_by == "dashboard" and stored.mode_by in ("telegram", "dashboard")
+    assert (stored.rearm_id == "r1") == (rewrite != "rearm")
+
+
+def test_a_kill_switch_rewrite_keeps_the_engine_account_and_cuts_an_old_halt_identity(tmp_path):
+    _legacy_control(tmp_path)
+    c = ApprovalBus(tmp_path).set_mode("propose", by="engine:icm-demo", reason="12% kill switch")
+    assert (c.mode_by, c.by, c.rearm_by, c.rearm_id) == ("engine:icm-demo", "telegram", "dashboard", "r1")
+    _assert_no_identity((tmp_path / "control.json").read_text())

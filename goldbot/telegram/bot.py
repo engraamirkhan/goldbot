@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sqlite3
 import threading
 import time
 from typing import Any, Callable
@@ -18,7 +19,7 @@ from goldbot.ops.deadman import DeadMan
 from goldbot.ops.deploy import DeployWatch
 from goldbot.ops.health import HealthContext, HealthWatch, run_checks
 from goldbot.telegram import automode
-from goldbot.telegram.approvals import Proposal
+from goldbot.telegram.approvals import Proposal, decision_channel
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import DigestSchedule, digest_from_runtime
 from goldbot.telegram.outbox import Outbox, ReportRetry, SendGuard
@@ -43,6 +44,7 @@ DEPLOY_EVERY_S = 600             # new version on main with CI passed -> offered
 AUTOMODE_EVERY_S = 900           # auto-mode evidence (A10): offered once per mode epoch when it holds
 DIGEST_EVERY_S = 60              # daily owner digest due check (telegram.digest_at; once a day, late <= 6 h)
 HEALTH_EVERY_S = 60               # health checks + alert dedupe: a silent service is reported within ~6 min (S5)
+AUDIT_DRAIN_S = 10.0              # at shutdown, wait this long at most for audit rows still being written
 OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED_UNAPPROVED": "⌛ EXPIRED"}
 
 
@@ -55,9 +57,12 @@ def outcome_text(outcome: str) -> str:
 class OffLoopAudit:
     """Who acted on Telegram (decision, halt, deploy tap), in the VPS audit log the dashboard and /mode write
     (automode.audit_to: state/aux.db), never in approvals/, control.json or approved.json (A15). Review M1: aux.db can
-    be locked for seconds, so `write` runs on a worker thread and returns at once; callers write after answering the
-    owner. One audit store, opened on the first write in the worker thread, never on the event loop. A failed write is
-    logged and never undoes or hides the action, which already stands."""
+    be locked for seconds, so `write` runs on a worker thread and returns at once. Callers write as soon as the action
+    stands, before answering the owner, so an answer that fails (a timeout, "query is too old") never loses the row
+    (A15 review). The row's `ts` is the moment of the action, not of the write. One audit store, opened on the first
+    write in the worker thread, never on the event loop. A locked database is retried once; a write that still fails is
+    logged (event, channel, proposal or sha; never who) and never undoes or hides the action, which already stands.
+    The service drains pending rows at shutdown, for at most AUDIT_DRAIN_S."""
 
     def __init__(self, state_dir: str, opener: Callable[[str], Callable[..., None]] | None = None):
         self.state_dir = state_dir
@@ -66,28 +71,52 @@ class OffLoopAudit:
         self._lock = threading.Lock()
         self._tasks: set[asyncio.Task[None]] = set()       # held until done: an unreferenced task can be collected
 
+    RETRY_S = 0.5                               # pause before the one retry of a locked aux.db
+
     def write_now(self, event: str, **kw: Any) -> None:
         """Blocking: call it only off the event loop (a worker thread)."""
-        try:
-            with self._lock:
-                if self._audit is None:
-                    self._audit = (self._opener or automode.audit_to)(self.state_dir)
-                audit = self._audit
-            audit(event, **kw)
-        except Exception as exc:                # noqa: BLE001 - the action already stands
-            log.warning("audit of %s failed: %s", event, type(exc).__name__)
+        for attempt in (1, 2):
+            try:
+                with self._lock:
+                    if self._audit is None:
+                        self._audit = (self._opener or automode.audit_to)(self.state_dir)
+                    audit = self._audit
+                audit(event, **kw)
+                return
+            except sqlite3.OperationalError:    # "database is locked" past the busy timeout: once more
+                if attempt == 1:
+                    time.sleep(self.RETRY_S)
+                    continue
+                self._failed(event, kw, "OperationalError")
+            except Exception as exc:            # noqa: BLE001 - the action already stands
+                self._failed(event, kw, type(exc).__name__)
+            return
+
+    @staticmethod
+    def _failed(event: str, kw: dict[str, Any], why: str) -> None:
+        ref = kw.get("proposal") or kw.get("sha") or "-"
+        log.warning("audit of %s via %s (%s) failed: %s", event, decision_channel(str(kw.get("by", "-"))), ref, why)
 
     def write(self, event: str, uid: int, **kw: Any) -> None:
-        """From a handler on the event loop: the row is written on a worker thread; this returns at once."""
+        """From a handler on the event loop: the row is written on a worker thread; this returns at once. The row's
+        time is taken now, when the action stands, not when the worker gets the database."""
         task = asyncio.get_running_loop().create_task(
-            asyncio.to_thread(self.write_now, event, by=f"telegram:{uid}", telegram_id=uid, **kw))
+            asyncio.to_thread(self.write_now, event, ts=time.time(), by=f"telegram:{uid}", telegram_id=uid, **kw))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def drain(self) -> None:
-        """Wait for the rows still being written (tests; a clean shutdown)."""
+    async def drain(self, timeout: float | None = None) -> bool:
+        """Wait for the rows still being written (a clean shutdown; tests), for at most `timeout` seconds. False, and
+        a warning, when rows were still being written at the deadline."""
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
         while self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+            left = None if deadline is None else deadline - loop.time()
+            if left is not None and left <= 0:
+                log.warning("shutdown: %d audit row(s) still being written", len(self._tasks))
+                return False
+            await asyncio.wait(set(self._tasks), timeout=left)
+        return True
 
 
 class TelegramBot:  # pragma: no cover - needs network + token
@@ -117,7 +146,8 @@ class TelegramBot:  # pragma: no cover - needs network + token
         self.digest = DigestSchedule(state_dir, self.settings.digest_at)     # goldbot/telegram/digest.py
         # one-click deploys (Linux servers; the systemd unit sets GOLDBOT_DEPLOY=1): goldbot/ops/deploy.py
         self.deploy = DeployWatch(state_dir, ROOT) if os.environ.get("GOLDBOT_DEPLOY") == "1" else None
-        self.app = Application.builder().token(token).post_init(self._start_pump).build()
+        self.app = (Application.builder().token(token).post_init(self._start_pump)
+                    .post_shutdown(self._on_shutdown).build())
         self.app.add_handler(CallbackQueryHandler(self._on_button))
         for c in ("status", "halt", "rearm", "mode"):
             self.app.add_handler(CommandHandler(c, self._on_command))
@@ -128,6 +158,10 @@ class TelegramBot:  # pragma: no cover - needs network + token
     # ------------------------------------------------------------ outbound: proposals, outcomes, reports
     async def _start_pump(self, app: "Application") -> None:
         app.create_task(self._pump())
+
+    async def _on_shutdown(self, app: "Application") -> None:
+        """After run_polling stops: let the audit rows still being written land, for at most AUDIT_DRAIN_S (A15)."""
+        await self.audit.drain(timeout=AUDIT_DRAIN_S)
 
     async def _pump(self) -> None:
         n = 0
@@ -281,9 +315,9 @@ class TelegramBot:  # pragma: no cover - needs network + token
         parts = q.data.split(":")
         if parts[0] in ("dep", "skp") and self.deploy is not None:
             ok = self.deploy.approve(parts[1]) if parts[0] == "dep" else self.deploy.skip(parts[1])
+            if ok and parts[0] == "dep":    # who tapped: the audit log only (A15); before the answer, which can fail
+                self.audit.write("deploy_approve", uid, sha=parts[1])
             await q.answer("ok" if ok else "no longer on offer", show_alert=not ok)
-            if ok and parts[0] == "dep":
-                self.audit.write("deploy_approve", uid, sha=parts[1])      # who tapped: the audit log only (A15)
             if ok:
                 await q.edit_message_text(q.message.text + ("\n\n→ deploying within a minute; you will get the result"
                                                             if parts[0] == "dep" else "\n\n→ skipped"))
@@ -292,9 +326,11 @@ class TelegramBot:  # pragma: no cover - needs network + token
             approve = parts[0] == "ok"
             reason = None if approve else parts[2]
             self.bus.submit(parts[1], approve, reason, by="telegram")     # the channel only on disk (A15)
-            await q.answer("sent to the engine")                         # first: Telegram drops a late answer
+            # who decided, before the answer (which can time out): write() only schedules the row, so the answer,
+            # which Telegram drops when late, is not delayed
             self.audit.write("decision", uid, proposal=parts[1], action="approve" if approve else "reject",
                              reason=reason)
+            await q.answer("sent to the engine")
             await q.edit_message_text(q.message.text + "\n\n→ " + ("approve" if approve else f"reject ({parts[2]})")
                                       + ": the engine re-checks risk and acts")
         except (KeyError, ValueError) as exc:
@@ -309,6 +345,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
         cmd, arg = parts[0].split("@")[0], (parts[1] if len(parts) > 1 else None)
         if cmd == "/halt":
             self.bus.set_halt(True, by="telegram", reason=arg)             # the channel only on disk (A15)
+            self.audit.write("halt", uid, reason=arg)   # who halted: the audit log only (A15); before the reply
             text = "HALTED: no new entries on any engine. Open positions keep their stops and exits. Re-arm on the dashboard."
         elif cmd == "/rearm":
             text = "Re-arming needs your authenticator code: use the dashboard (Overview → Re-arm)."
@@ -325,11 +362,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
         else:
             # the dashboard's Entry status words (goldbot/telegram/entry_text.py), per account; plain text, no parse_mode
             text = await asyncio.to_thread(self._status_text)
-        try:
-            await update.message.reply_text(text)
-        finally:                                    # after the reply, and even when it fails: the halt stands
-            if cmd == "/halt":
-                self.audit.write("halt", uid, reason=arg)    # who halted: the audit log only (A15)
+        await update.message.reply_text(text)
 
     def _status_text(self) -> str:
         """Any failure (control file, pending list, settings, build) replies with entry_text.FAILED, never nothing."""
@@ -361,4 +394,4 @@ class TelegramBot:  # pragma: no cover - needs network + token
         await self.app.bot.send_message(update.effective_user.id, "stored in the keyring, thank you")
 
     def run(self) -> None:
-        self.app.run_polling()
+        self.app.run_polling()          # its shutdown runs _on_shutdown: pending audit rows are drained (bounded)
