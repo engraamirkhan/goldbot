@@ -10,7 +10,11 @@ daily 1.5% and weekly 4% (supervisor.py, on combined start equity) and the owner
 section 3). The budget shown is the cap with least left (a bad week can bind on a quiet day). Notes:
 * each cap is on the loss from its period's start, as the gate computes it, so a profitable day adds room;
 * the combined caps need a supervisor report under 60 s old and one currency across accounts (summing pounds and
-  dollars would be wrong: ADR 0004 audit A8); otherwise they are left out with a note;
+  dollars would be wrong: ADR 0004 audit A8). With mixed currencies they are left out with a note. With the report
+  missing, unreadable, stale, stamped ahead or without its caps the budget is `unknown`, with the reason: the
+  account's own caps alone would look roomier than the combined ones the supervisor enforces (found by the release
+  manager 2026-10-16), and a combined cap rebuilt here from settings and one account's equity would miss the other
+  accounts' losses. The engines pause new entries on the same rejected report (`Supervisor.engine_should_halt`);
 * the absolute limit is listed only once the engine publishes `limits.daily_loss_limit_abs` (account currency, per
   account; the currency lane, BACKLOG 28/29): until the RiskGate enforces it, showing it would claim a protection
   that is not there. Its check is projected, so when the engine also publishes `limits.min_lot_risk_account` (the
@@ -65,6 +69,9 @@ class LossBudget(FrozenRecord):
     period: Period
     caps: list[LossCap]
     notes: list[str] = []
+    # why the budget cannot be shown (the combined caps cannot be checked), else None. limit/used/remaining are then
+    # the account's own caps only, kept for the entry status's spent-cap blocks; the card shows no amount.
+    unknown: str | None = None
 
 
 class MilestoneRung(FrozenRecord):
@@ -151,7 +158,7 @@ def loss_budget(engine: dict[str, Any], supervisor: dict[str, Any], engines: lis
     if weekly is not None and week0 is not None:
         add(f"account {_pct(weekly)} weekly cap", f"this account this week ({_pct(weekly)} of the week's start)",
             "this week", weekly * week0, week0, eq)
-    _combined(engine, supervisor, engines, time.time() if now is None else now, add, notes)
+    unknown = _combined(engine, supervisor, engines, time.time() if now is None else now, add, notes)
     absolute = _pos(limits.get("daily_loss_limit_abs"))
     if absolute is not None:
         nxt = _pos(limits.get("min_lot_risk_account"))
@@ -164,26 +171,28 @@ def loss_budget(engine: dict[str, Any], supervisor: dict[str, Any], engines: lis
         return None
     bind = min(caps, key=lambda c: c.remaining)
     return LossBudget(limit=bind.limit, used=bind.used, remaining=bind.remaining, binding=bind.name,
-                      binding_label=bind.label, period=bind.period, caps=caps, notes=notes)
+                      binding_label=bind.label, period=bind.period, caps=caps, notes=notes, unknown=unknown)
 
 
 def proposal_budget(engines: list[dict[str, Any]], supervisor: dict[str, Any], account_id: str,
                     risk: float | None, *, now: float | None = None) -> LossBudget | None:
     """The loss budget left on `account_id` if a proposal with stop risk `risk` (account currency) loses: the card's
-    "£11.80 left today if this loses". None when the risk or the account's engine file is unknown (never guessed)."""
+    "£11.80 left today if this loses". None when the risk, the account's engine file or the budget itself is unknown
+    (never guessed: an unknown budget would otherwise read as the roomier account cap)."""
     if risk is None or not math.isfinite(risk) or risk < 0:
         return None
     engine = next((e for e in engines if isinstance(e, dict) and e.get("account") == account_id), None)
     if engine is None:
         return None
-    return loss_budget(engine, supervisor, engines, now=now, trade_risk=risk)
+    b = loss_budget(engine, supervisor, engines, now=now, trade_risk=risk)
+    return None if b is None or b.unknown is not None else b
 
 
 def proposal_budget_from_state(state_dir: str | Path, account_id: str, risk: float | None) -> LossBudget | None:
     """`proposal_budget` from the state files (engine_*.json, supervisor.json), for the Telegram service. Reporting
     only: any unreadable file reads as unknown (None), never as a failed proposal message."""
     d = Path(state_dir)
-    try:                                   # a torn supervisor.json only drops the combined caps, as on the dashboard
+    try:                                   # a torn supervisor.json makes the budget unknown, as on the dashboard
         sup = json.loads((d / "supervisor.json").read_text()) if (d / "supervisor.json").exists() else {}
     except (OSError, ValueError):
         sup = {}
@@ -194,29 +203,36 @@ def proposal_budget_from_state(state_dir: str | Path, account_id: str, risk: flo
         return None
 
 
+PAUSED = "the combined cap can't be checked; new entries are paused"
+_REJECTED = {"invalid": "supervisor report missing or unreadable", "stale": "supervisor report stale",
+             "future": "supervisor report stamped ahead of this server's clock"}
+
+
 def _combined(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[dict[str, Any]], now: float,
-              add: Callable[..., None], notes: list[str]) -> None:
-    """The supervisor's combined daily and weekly caps, when its report is fresh and every account shares a currency."""
+              add: Callable[..., None], notes: list[str]) -> str | None:
+    """The supervisor's combined daily and weekly caps, when its report is fresh and every account shares a currency.
+    Returns why the budget is unknown (the report is missing, rejected or without its caps), else None. A rejected
+    report is the one the engines halt on (`heartbeat_problem` with the same 60 s, as `engine_should_halt`)."""
+    problem = heartbeat_problem(supervisor.get("ts"), now, SUPERVISOR_MAX_AGE_S)   # {} and a torn file: invalid
+    if problem is not None:
+        return f"{_REJECTED[problem]}: {PAUSED}"
     sup_eq = _num(supervisor.get("combined_equity"))
     sup_d0, sup_w0 = _pos(supervisor.get("combined_day_start_equity")), _pos(supervisor.get("combined_week_start_equity"))
     sup_day, sup_week = _pos(supervisor.get("daily_cap")), _pos(supervisor.get("weekly_cap"))
-    ts = _num(supervisor.get("ts"))
-    if sup_eq is None or sup_day is None or sup_d0 is None:
-        notes.append("combined caps: the supervisor is not reporting them yet")
-        return
-    if heartbeat_problem(ts, now, SUPERVISOR_MAX_AGE_S) is not None:      # stale, or stamped in the future
-        notes.append("combined caps not shown: the supervisor's last report is stale or stamped ahead")
-        return
+    if sup_eq is None or sup_day is None or sup_d0 is None:    # error_halt, or no engine summed yet
+        halted = supervisor.get("halt") is True
+        return "supervisor report without its combined cap: " + (PAUSED if halted else "the combined cap can't be checked")
     ccys = {e.get("currency") for e in engines} | {engine.get("currency")}
     if len(ccys) != 1 or None in ccys:
         notes.append("combined caps not shown: the accounts report mixed currencies (BACKLOG 28)")
-        return
+        return None
     add(f"combined {_pct(sup_day)} daily cap", f"all accounts together ({_pct(sup_day)} of today's start)", "today",
         sup_day * sup_d0, sup_d0, sup_eq)
     if sup_week is not None and sup_w0 is not None:
         add(f"combined {_pct(sup_week)} weekly cap",
             f"all accounts together this week ({_pct(sup_week)} of the week's start)", "this week",
             sup_week * sup_w0, sup_w0, sup_eq)
+    return None
 
 
 class _Limits(FrozenRecord):

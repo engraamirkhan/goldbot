@@ -2231,6 +2231,17 @@
       "title": "Remaining",
       "type": "number"
      },
+     "unknown": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Unknown"
+     },
      "used": {
       "title": "Used",
       "type": "number"

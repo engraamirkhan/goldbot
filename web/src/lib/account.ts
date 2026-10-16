@@ -19,11 +19,12 @@ export function signedCash(x: number, currency: string | null | undefined): stri
 }
 
 export type Tone = "ok" | "warn" | "bad" | "idle";
-type Budget = { limit: number; used: number; remaining: number };
+type Budget = { limit: number; used: number; remaining: number; unknown?: string | null };
 
-/** Red only when the budget is spent (the risk check stops new entries); amber with under a quarter left. */
+/** Red when the budget is spent (the risk check stops new entries) or unknown (the supervisor's combined cap can't be
+ * checked, so no amount is shown); amber with under a quarter left. */
 export function budgetTone(b: Budget | null | undefined): Tone {
   if (!b) return "idle";
-  if (b.remaining <= 0) return "bad";
+  if (b.unknown || b.remaining <= 0) return "bad";
   return b.limit > 0 && b.remaining / b.limit < 0.25 ? "warn" : "ok";
 }

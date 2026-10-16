@@ -86,3 +86,30 @@ def test_an_engine_file_from_before_the_account_view_still_renders_with_nulls(tm
     assert row["balance"] is None and row["currency"] is None and row["margin_level_pct"] is None
     assert row["loss_budget"] is None and row["milestones"] is None
     assert row["day_pnl"] == pytest.approx(-10.0)
+
+
+SUPERVISOR = {"daily_cap": 0.015, "combined_day_start_equity": 1000.0, "weekly_cap": 0.04,
+              "combined_week_start_equity": 1000.0, "combined_equity": 990.0}
+PAUSED = "the combined cap can't be checked; new entries are paused"
+
+
+@pytest.mark.parametrize("supervisor, why, code", [
+    (None, "supervisor report missing", "no_supervisor_heartbeat"),
+    ({**SUPERVISOR, "ts": "junk"}, "supervisor report missing", "supervisor_state_unreadable"),
+    ({**SUPERVISOR, "ts": time.time() - 600}, "supervisor report stale", "supervisor_heartbeat_stale"),
+    ({**SUPERVISOR, "ts": time.time() + 3600}, "supervisor report stamped ahead", "supervisor_heartbeat_future"),
+])
+def test_a_rejected_supervisor_report_shows_the_budget_as_unknown_never_the_roomier_account_cap(tmp_path, supervisor,
+                                                                                                why, code):
+    """Found by the release manager 2026-10-16: with the supervisor's report rejected the card showed only the
+    account's 2% cap (£20 here), roomier than the combined 1.5% (£15) the supervisor enforces. The budget now reads
+    unknown with the reason; the entry status names the same supervisor block."""
+    row = _get(tmp_path, ENGINE, supervisor)
+    b = row["loss_budget"]
+    assert b["unknown"] is not None and b["unknown"].startswith(why) and PAUSED in b["unknown"], b
+    assert code in [x["code"] for x in row["entry_status"]["blocks"]]
+
+
+def test_a_fresh_supervisor_report_leaves_the_budget_known(tmp_path):
+    row = _get(tmp_path, ENGINE, {**SUPERVISOR, "ts": time.time()})
+    assert row["loss_budget"]["unknown"] is None and row["loss_budget"]["binding"] == "combined 1.5% daily cap"

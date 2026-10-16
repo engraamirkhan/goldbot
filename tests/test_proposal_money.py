@@ -37,6 +37,12 @@ def _engine(**over: Any) -> dict[str, Any]:
     return e
 
 
+def _sup() -> dict[str, Any]:
+    """A fresh supervisor report whose combined caps have room to spare (the account's caps bind)."""
+    return {"ts": time.time(), "daily_cap": 0.015, "combined_day_start_equity": 10_000.0, "weekly_cap": 0.04,
+            "combined_week_start_equity": 10_000.0, "combined_equity": 10_000.0}
+
+
 # ---------------------------------------------------------------------------------------------- formatting
 def test_cash_and_percent_read_as_the_owner_writes_them():
     assert cash(8.2, "GBP") == "£8.20" and cash(1234.5, "USD") == "$1,234.50" and cash(3, "EUR") == "€3.00"
@@ -68,8 +74,10 @@ def test_the_budget_if_this_trade_loses_takes_its_risk_from_every_cap():
 
 def test_proposal_budget_finds_the_account_and_never_guesses():
     engines = [_engine(account="other", equity=500.0), _engine()]
-    b = proposal_budget(engines, {}, "icm-demo", 8.2)
+    b = proposal_budget(engines, _sup(), "icm-demo", 8.2)
     assert b is not None and b.remaining == pytest.approx(11.80)
+    assert proposal_budget(engines, {}, "icm-demo", 8.2) is None          # supervisor missing: unknown, not the 2% cap
+    assert proposal_budget(engines, {**_sup(), "ts": time.time() - 600}, "icm-demo", 8.2) is None        # stale
     assert proposal_budget(engines, {}, "missing", 8.2) is None
     assert proposal_budget(engines, {}, "icm-demo", None) is None
     assert proposal_budget([{"account": "icm-demo", "limits": "junk"}], {}, "icm-demo", 8.2) is None
@@ -78,11 +86,13 @@ def test_proposal_budget_finds_the_account_and_never_guesses():
 def test_the_telegram_service_reads_the_budget_from_the_state_files_and_unknown_when_unreadable(tmp_path):
     assert proposal_budget_from_state(tmp_path, "icm-demo", 8.2) is None                  # no engine file yet
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
+    assert proposal_budget_from_state(tmp_path, "icm-demo", 8.2) is None                  # no supervisor report yet
+    (tmp_path / "supervisor.json").write_text(json.dumps(_sup()))
     b = proposal_budget_from_state(tmp_path, "icm-demo", 8.2)
     assert b is not None and b.remaining == pytest.approx(11.80)
-    (tmp_path / "supervisor.json").write_text("{torn")                                    # drops the combined caps only
-    b = proposal_budget_from_state(tmp_path, "icm-demo", 8.2)
-    assert b is not None and b.remaining == pytest.approx(11.80)
+    (tmp_path / "supervisor.json").write_text("{torn")                     # unknown: the combined cap can't be checked
+    assert proposal_budget_from_state(tmp_path, "icm-demo", 8.2) is None
+    (tmp_path / "supervisor.json").write_text(json.dumps(_sup()))
     (tmp_path / "engine_icm-demo.json").write_text("{torn")
     assert proposal_budget_from_state(tmp_path, "icm-demo", 8.2) is None                  # never a failed message
 
@@ -125,6 +135,7 @@ def test_api_proposal_carries_currency_risk_min_lot_and_the_live_budget(tmp_path
     bus.publish(_prop(**GBP_MIN_LOT))
     bus.publish(_prop(proposal_id="old"))                                       # an older engine: dollars only
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
+    (tmp_path / "supervisor.json").write_text(json.dumps(_sup()))
     app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
     h = _owner_headers(c, app)
@@ -144,6 +155,7 @@ def test_api_decided_cards_carry_no_live_budget(tmp_path):
     bus.publish(_prop(**GBP_MIN_LOT))
     bus.submit("icm-1-a", False, "cost", by="dashboard:o@x.io")
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
+    (tmp_path / "supervisor.json").write_text(json.dumps(_sup()))
     app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
     rows = c.get("/api/proposals/recent", headers=_owner_headers(c, app)).json()
@@ -155,6 +167,7 @@ def test_unreadable_engine_files_never_fail_the_approval_list_or_the_accounts(tm
     bus = ApprovalBus(tmp_path)
     bus.publish(_prop(**GBP_MIN_LOT))
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
+    (tmp_path / "supervisor.json").write_text(json.dumps(_sup()))
     (tmp_path / "engine_broken.json").mkdir()                   # read_text raises IsADirectoryError (an OSError)
     app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)

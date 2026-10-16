@@ -1445,6 +1445,8 @@ export interface components {
             period: "today" | "this week";
             /** Remaining */
             remaining: number;
+            /** Unknown */
+            unknown?: string | null;
             /** Used */
             used: number;
         };

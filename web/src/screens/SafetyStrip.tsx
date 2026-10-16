@@ -101,6 +101,11 @@ function build(s: Status, accounts: AccountSummary[]): Chip[] {
 function budgetChip(accounts: AccountSummary[]): Chip {
   const withBudget = accounts.filter((a) => a.loss_budget);
   if (withBudget.length === 0) return { key: "budget", label: "Loss budget", value: "not reported", tone: "idle" };
+  const unknown = withBudget.find((a) => a.loss_budget!.unknown);   // never a roomier figure while a cap can't be checked
+  if (unknown) {
+    const who = accounts.length > 1 ? `${unknown.account_id}: ` : "";
+    return { key: "budget", label: "Loss budget", value: `${who}unknown`, tone: "bad", title: unknown.loss_budget!.unknown! };
+  }
   const share = (a: AccountSummary) => (a.loss_budget!.limit > 0 ? a.loss_budget!.remaining / a.loss_budget!.limit : 0);
   const a = withBudget.reduce((w, x) => (share(x) < share(w) ? x : w));
   const b = a.loss_budget!;

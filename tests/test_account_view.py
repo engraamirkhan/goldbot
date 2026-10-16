@@ -121,13 +121,23 @@ def test_mixed_currencies_leave_the_combined_caps_out_with_a_note_instead_of_add
     assert any("mixed currencies" in n for n in b.notes)
 
 
-def test_a_stale_or_missing_supervisor_report_keeps_the_account_caps_with_a_note():
-    b = _budget(_engine(), _sup(ts=NOW - 600))
-    assert b is not None and b.binding == "account 2.0% daily cap" and b.limit == pytest.approx(20.0)
-    assert any("stale" in n for n in b.notes)
-    b = _budget(_engine(), {})
-    assert b is not None and b.binding == "account 2.0% daily cap"
-    assert any("supervisor" in n for n in b.notes)
+def test_a_stale_missing_or_capless_supervisor_report_makes_the_budget_unknown_with_the_reason():
+    """The account's 2% (20) alone is roomier than the combined 1.5% (15) the supervisor enforces (release manager,
+    2026-10-16): the budget reads unknown, and the account caps stay listed for the entry status's spent-cap blocks."""
+    paused = "the combined cap can't be checked; new entries are paused"
+    for sup, why in [(_sup(ts=NOW - 600), "supervisor report stale"), ({}, "supervisor report missing or unreadable"),
+                     (_sup(ts=None), "supervisor report missing or unreadable"),
+                     (_sup(ts=NOW + 600), "supervisor report stamped ahead of this server's clock")]:
+        b = _budget(_engine(), sup)
+        assert b is not None and b.unknown == f"{why}: {paused}", sup
+        assert [c.name for c in b.caps] == ["account 2.0% daily cap", "account 5.0% weekly cap"]
+    halted = {"ts": NOW - 5, "halt": True, "reasons": ["supervisor_error"]}         # Supervisor.error_halt
+    b = _budget(_engine(), halted)
+    assert b is not None and b.unknown == f"supervisor report without its combined cap: {paused}"
+    b = _budget(_engine(), _sup(combined_day_start_equity=0.0, halt=False))           # no engine summed yet
+    assert b is not None and b.unknown == "supervisor report without its combined cap: the combined cap can't be checked"
+    b = _budget(_engine(), _sup())
+    assert b is not None and b.unknown is None
 
 
 def test_an_engine_file_without_limits_or_day_start_gives_no_budget_rather_than_a_guess():

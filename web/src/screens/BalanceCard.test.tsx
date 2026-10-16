@@ -85,4 +85,17 @@ describe("BalanceCard", () => {
     expect(screen.getByText(/stopped while this week's loss is at the limit/)).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "Weekly loss budget used" })).toBeInTheDocument();
   });
+
+  it("shows the budget as unknown with the reason, never the account cap's roomier amount, when the supervisor report is rejected", () => {
+    const why = "supervisor report stale: the combined cap can't be checked; new entries are paused";
+    render(<BalanceCard a={base({
+      loss_budget: { limit: 20, used: 10, remaining: 10, binding: "account 2.0% daily cap", period: "today", notes: [],
+                     binding_label: "this account (2.0% of today's start)", caps: [], unknown: why } })} />);
+    const budget = screen.getByText("unknown").closest(".budget");
+    expect(budget).toHaveClass("bad");
+    expect(budget).toHaveTextContent(why);
+    expect(budget).not.toHaveTextContent("£10.00 left");
+    expect(budget).not.toHaveTextContent("£20.00");
+    expect(screen.queryByRole("meter")).toBeNull();
+  });
 });

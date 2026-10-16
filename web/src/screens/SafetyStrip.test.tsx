@@ -81,6 +81,18 @@ describe("SafetyStrip", () => {
     expect(chip("Loss budget")).toHaveClass("idle");
   });
 
+  it("shows the loss budget as unknown when any account's combined cap can't be checked, not the roomier figure", () => {
+    const why = "supervisor report stale: the combined cap can't be checked; new entries are paused";
+    const known = { limit: 15, used: 0, remaining: 15, binding: "combined 1.5% daily cap", binding_label: "all accounts together (1.5% of today's start)", period: "today" as const, notes: [], caps: [] };
+    render(<SafetyStrip status={status()} accounts={[
+      account({ currency: "GBP", loss_budget: known }),
+      account({ account_id: "vantage-demo", currency: "GBP", loss_budget: { ...known, limit: 20, remaining: 20, unknown: why } })]} />);
+    expect(chip("Loss budget")).toHaveTextContent("vantage-demo: unknown");
+    expect(chip("Loss budget")).not.toHaveTextContent("£20.00");
+    expect(chip("Loss budget")).toHaveClass("bad");
+    expect(chip("Loss budget")).toHaveAttribute("title", why);
+  });
+
   it("never says allowed from stale data: a warning with the report's time instead", () => {
     const t0 = new Date(2026, 9, 14, 14, 2).getTime();      // local 14:02
     const stale = "Safety state from 14:02, can't reach the server; check before approving";
