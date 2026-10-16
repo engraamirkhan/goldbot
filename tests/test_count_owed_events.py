@@ -368,6 +368,35 @@ def test_h06_count_is_the_slow_macro_presets_own_candidates_against_the_h01_sign
     assert (utc_index(part_ev["decision_utc"]) > since).all()
 
 
+def _time_only_rows(idx: np.ndarray, max_bars: int) -> pd.DataFrame:
+    """Label rows as `triple_barrier` gives them when every trade runs to its time barrier: entry on the next bar's
+    open (idx + 1), exit max_bars bars later. Bar positions only, no price."""
+    return pd.DataFrame({"t_entry": idx + 1, "t_exit": idx + 1 + max_bars})
+
+
+def test_tsmom_lower_bound_equals_one_at_a_time_on_time_only_rows(b1_long: pd.DataFrame,
+                                                                   monkeypatch: pytest.MonkeyPatch):
+    """The one-at-a-time lower bound is exactly what `goldbot/labels` `one_at_a_time` keeps on time-barrier-only rows:
+    the next trade is kept when its entry is after the previous exit (idx' > idx + max_bars), not one bar later. The
+    guard above scans only the script, so the test may import the label function to compare against."""
+    from goldbot.labels.triple_barrier import one_at_a_time
+    from goldbot.specialists.time_series_momentum import TimeSeriesMomentumSpecialist as TSMOM
+    for preset in ("slow", "slow_macro"):
+        ctx = {"macro": _macro_h06()} if preset == "slow_macro" else None
+        r = co._tsmom_signals(b1_long, preset, ctx)
+        max_bars = int(r["spec"].config["max_bars"])
+        assert len(r["idx"]) > 0
+        assert len(one_at_a_time(_time_only_rows(r["idx"], max_bars))) == r["lower"], preset
+    # by hand: signals exactly max_bars + 1 apart (0, 125, 250 with max_bars 124) are all tradeable, one at a time
+    hand = np.array([0, 125, 250])
+    monkeypatch.setattr(TSMOM, "candidates_in_context",
+                        lambda self, *a, **k: pd.DataFrame({"idx": hand, "side": [1, -1, 1]}))
+    r = co._tsmom_signals(b1_long, "slow")
+    assert int(r["spec"].config["max_bars"]) == 124
+    assert list(r["idx"]) == [0, 125, 250] and r["lower"] == 3
+    assert len(one_at_a_time(_time_only_rows(hand, 124))) == 3
+
+
 def test_the_h06_count_path_and_the_gate_it_calls_are_covered_by_the_no_outcome_guard():
     """count_h06 lives in the script the AST guard scans; the specialist code it calls for the gate is checked here with
     the same forbidden names and outcome columns."""
