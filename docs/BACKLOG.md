@@ -36,7 +36,7 @@ re-reviews were asked on 2026-10-12 and have not started; the reviewed batch has
 | 43 | The engine publishes why it refuses entries, and writes state while the market is closed | Operational resilience, entry status · RUN | M | in progress, heartbeat part (`lane/market-closed-state-cadence`, no commit yet); `entry_blocks` ready · accountable: implementer · due 2026-10-21 |
 | 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | in review (04f6266, 3817db7, c7ea0e3 on the integration branch, not on main; security-reviewer and trading-safety-reviewer asked 2026-10-12) · accountable: security-reviewer · due 2026-10-17 · LATE |
 | 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | ready (after 1; the collector `jobs._broker_terms` exists) · accountable: sre · due 2026-10-20 |
-| 55 | test_lockout_survives_a_restart: make it reliable under load | Platform (CI) · SECURE | S | ready · accountable: test-engineer · due 2026-10-23 |
+| 55 | test_lockout_survives_a_restart: make it reliable under load | Platform (CI) · SECURE | S | done 2026-10-16 (test-engineer; needs code review) · accountable: test-engineer |
 | 36 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | ready · accountable: implementer · due 2026-10-30 |
 | 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | ready · accountable: implementer · due 2026-10-30 |
 | 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | done (fixed 2026-10-16 in 94b3460: settings and `hypotheses.md` B list the registry's trials; quant reviewer APPROVED 2026-10-16) · accountable: strategy-researcher · due 2026-10-23 |
@@ -825,6 +825,14 @@ hypotheses that go through the trial registry in a future quarter's budget.
   lockout itself. Acceptance: 200 repeated runs under load pass; the test still fails when the lockout is not
   persisted (checked by temporarily disabling the write).
   Sweep 2026-10-16 (product owner): accountable `test-engineer`, due 2026-10-23. Acceptance as above (200 runs under load; still fails when the lockout write is disabled).
+  Done 2026-10-16 (test-engineer). Root cause: the second candidate, in a more general form. The lockout prunes
+  `auth_failures` by the wall clock, so any run where 15 minutes of wall time passed mid-test (a paused VM or a
+  starved worker, not only slow hashes) dropped the five failures and let the sign-in through. The first candidate
+  is ruled out: a lock held past `busy_timeout` raises `database is locked`, it never lets a sign-in through. Fixed
+  by freezing the clock: the `lockout_clock` fixture in tests/conftest.py, with the restart moved to 1 s before the
+  window ends. Neither the lockout nor its timeout was loosened, and nothing is retried. Evidence: the old test fails
+  20 of 20 with the clock running 10,000 times faster than real time; the new one passes 200 of 200 that way and 200
+  of 200 under CPU stress. It still fails when the failure write is disabled, and also when the window is halved.
 - **56. Digest "Yesterday" line on the opportunity day.** Value: the digest's "Yesterday" proposals and trades
   lines still run 00:00-24:00 UTC (`goldbot/telegram/digest.py` `build_digest`). Its month line and the monthly and
   performance reports use the opportunity day (`goldbot/ops/report_days.py`). So a close at 23:00 UTC is in
