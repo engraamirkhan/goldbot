@@ -4,7 +4,7 @@ rank: 12
 title: Dashboard header shows the signed-in role, never the email
 stage: Dashboard (every screen; privacy) · RUN
 size: S
-status: 'ready (decided 2026-10-16) · accountable: implementer (ui-ux-designer spec first, review after) · due 2026-10-27'
+status: 'spec ready (docs/ux/header-role.md, 2026-10-16; no API change) · next: implementer (failing tests first), then ui-ux-designer review · accountable: implementer · due 2026-10-27'
 ---
 - **64. Dashboard header shows the signed-in role, never the email.** Decided 2026-10-16 by program director +
   product owner (owner delegated). Value (RUN, privacy): the header shows the signed-in email, and it appears in
