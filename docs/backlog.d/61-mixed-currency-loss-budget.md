@@ -1,6 +1,5 @@
 ---
 number: 61
-rank: 11
 title: 'Mixed-currency accounts: the loss budget shows the account cap, not the combined cap'
 stage: Dashboard and Telegram (loss budget, ADR 0004 section 3) · PROTECT
 size: S

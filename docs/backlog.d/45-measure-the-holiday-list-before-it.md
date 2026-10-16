@@ -1,6 +1,6 @@
 ---
 number: 45
-rank: 14
+rank: 15
 title: Measure the holiday list before it is adopted
 stage: Operational risk (evidence) · RUN
 size: S
