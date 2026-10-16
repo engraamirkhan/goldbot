@@ -6,4 +6,6 @@
   clears only after 60 s of reads below 10% (`risk.equity_recovery_s`) and survives a restart. One bad read (0 or
   collapsed) no longer closes every position at market. Exits are never gated; broker stops keep resting meanwhile.
   Bridge protocol v5 (`account_positions`, `Position.swap`): deploy the MT5 box first, then the brain (entries pause
-  until both run v5). Follow-up: BACKLOG 53 (confirm high-water-mark rises).
+  until both run v5). A risk-state save that fails (a full disk) on the account refresh is logged and blocks
+  entries (`tick_error`) but never raises, so it can no longer stop, delay or narrow the kill switch (re-review
+  MEDIUM-1, LOW-2). Follow-up: BACKLOG 53 (confirm high-water-mark rises).

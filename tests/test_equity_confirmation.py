@@ -335,3 +335,94 @@ def test_paper_positions_carry_no_swap_and_its_account_book_is_its_positions(tmp
     _open(pb, "a", lots=0.1)
     assert [p.swap for p in pb.account_positions()] == [None]
     assert pb.account_positions() == pb.positions()
+
+
+# ---------------------------------------------------------------------------------------------- re-review: failed saves
+def _disk_full(monkeypatch: Any) -> None:
+    """Every durable state write (risk, orders, engine state) raises, as on a full disk."""
+    import goldbot.engine.runner as runner
+
+    def fail(*a: Any, **k: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runner, "write_atomic", fail)
+
+
+def _no_book(monkeypatch: Any, pb: PaperBroker) -> None:
+    """An account book the cross-check cannot read (a v4 bridge): a crash read is confirmed only by a second read."""
+    def missing() -> Any:
+        raise RuntimeError("v4 bridge")
+
+    monkeypatch.setattr(pb, "account_positions", missing)
+
+
+def _spy_kill(monkeypatch: Any, eng: Engine) -> list[bool]:
+    runs: list[bool] = []
+    real = eng._kill_switch
+
+    def spy(*, everything: bool) -> bool:
+        runs.append(everything)
+        return real(everything=everything)
+
+    monkeypatch.setattr(eng, "_kill_switch", spy)
+    return runs
+
+
+def _foreign(pb: PaperBroker) -> int:
+    """A position outside this engine's magic range (another engine, or the owner by hand)."""
+    r = pb.place_order(OrderIntent(client_order_id="other", symbol="XAUUSD", side=1, lots=0.1, sl=2300.0, tp=2500.0,
+                                   magic=7, comment="other"))
+    assert r.ok and r.position_id is not None
+    return r.position_id
+
+
+def test_a_failed_risk_state_save_never_stops_an_uncorroborated_crash_from_tripping_the_kill_switch(tmp_path,
+                                                                                                     monkeypatch):
+    """Re-review MEDIUM-1: the pending 12% read is decided in memory; a save that raises (disk full) is logged, blocks
+    entries (`tick_error`) and never aborts the refresh before the stage machine runs."""
+    eng, pb = _engine(tmp_path)
+    _open(pb, "a", lots=0.1)
+    _foreign(pb)
+    _no_book(monkeypatch, pb)
+    _script(monkeypatch, pb, 8_000.0, 8_000.0)                         # a real-looking 20% crash, uncorroborated
+    _disk_full(monkeypatch)
+    runs = _spy_kill(monkeypatch, eng)
+    _read(eng, 1)                                                     # never raises
+    assert not _halted(eng) and eng._stage2_pending_since is not None and eng.state.tick_error
+    _read(eng, 2)
+    assert _halted(eng) and runs == [True] and pb.positions() == []  # the whole account flattened
+    assert not eng._kill_pending                                      # flat, so nothing left to re-run
+
+
+def test_a_failed_save_on_the_halt_still_closes_the_whole_account_on_that_read(tmp_path, monkeypatch):
+    """Re-review LOW-2: the halt's save raising must neither skip the flatten on the tripping read nor narrow the
+    next one to this engine's book."""
+    eng, pb = _engine(tmp_path)
+    _open(pb, "a", lots=0.1)
+    _foreign(pb)
+    _no_book(monkeypatch, pb)
+    _script(monkeypatch, pb, 8_000.0, 8_000.0)
+    _read(eng, 1)                                                     # pending, saved normally
+    _disk_full(monkeypatch)
+    runs = _spy_kill(monkeypatch, eng)
+    _read(eng, 2)                                                     # the trip; its save raises
+    assert _halted(eng) and runs == [True] and pb.positions() == [] and eng.state.tick_error
+
+
+def test_a_failed_save_of_a_confirmed_high_water_mark_rise_never_aborts_the_refresh(tmp_path, monkeypatch):
+    """Re-review LOW-2 (ADR 0018): the raise's save raising is logged and blocks entries; the mark is raised in
+    memory and the stage machine still runs on the same read."""
+    eng, pb = _engine(tmp_path)
+    real = pb.account
+    monkeypatch.setattr(pb, "account", lambda: real().model_copy(update={"balance": 10_500.0, "equity": 10_500.0}))
+    _disk_full(monkeypatch)
+    stages: list[Stage] = []
+    real_update = eng.gate.update_stage
+
+    def spy(st: AccountState) -> Stage:
+        stages.append(st.stage)
+        return real_update(st)
+
+    monkeypatch.setattr(eng.gate, "update_stage", spy)
+    _read(eng, 1)                                                     # paper reads are exact: one read raises
+    assert eng.state.balance_closed_hwm == 10_500 and stages and eng.state.tick_error

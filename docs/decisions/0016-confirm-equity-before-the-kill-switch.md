@@ -109,5 +109,13 @@ The review offered two ways to close the alternating-readings hole:
   now confirms every rise.
 - The supervisor's combined 12% check (`goldbot/risk/supervisor.py`) still reads the published equity. It only
   halts entries, never closes, and is re-evaluated each pass, so it was left out of scope.
+- **A failed save never delays or narrows the kill switch (re-review MEDIUM-1, LOW-2).** Every risk-state save on
+  the account-refresh path (the pending 12% read, the stage change, the ADR 0018 mark rise, the risk-period reset and
+  the weekend rule) goes through `_save_risk_state_now`: a write that raises (a full disk) is logged and counted as a
+  tick error, which blocks entries until a clean decision bar, and is never raised. The in-memory state decides: two
+  uncorroborated 12% reads still trip, and the tripping read still closes every position on the account
+  (`everything=True`). The next state write saves the risk state again; until one succeeds, a restart would reload
+  the last saved state (the halt, the pending read or the mark may be lost), and the health check sees the tick
+  errors.
 - **What would change this.** A measured bad read lasting two ticks would call for confirmation by time (reads N
   seconds apart). A bridge that reports credit would let the tolerance shrink.
