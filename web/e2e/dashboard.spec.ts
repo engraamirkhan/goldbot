@@ -22,6 +22,17 @@ async function signIn(page: Page, email: string, password: string, secret: strin
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 }
 
+/** The header names the role, never the address (docs/ux/header-role.md). The local part "owner" equals the role
+ *  word, so the identity check is the whole address, its domain and the "@". */
+async function expectRoleNotEmail(page: Page, role: string, email: string) {
+  const banner = page.getByRole("banner");
+  await expect(banner).toContainText(`Signed in as ${role}`);
+  await expect(banner).not.toContainText(email);
+  await expect(banner).not.toContainText(email.split("@")[1]);
+  await expect(banner).not.toContainText("@");
+  expect(await banner.innerHTML()).not.toContain("@");                         // no title / aria-label carries it
+}
+
 // One serial story: first run -> owner approves a trade -> halts and re-arms -> invites a viewer -> viewer sees but cannot act.
 // each authenticator code is accepted once, so a sign-in may wait up to 30 s for a fresh time step (freshTotp)
 test.describe.configure({ mode: "serial", timeout: 90_000 });
@@ -49,7 +60,12 @@ test("first run creates the owner with an authenticator, then signs in", async (
   await expect(page.locator(".err")).toContainText("invalid credentials");
 
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
-  await expect(page.getByText(`${OWNER.email} · owner`)).toBeVisible();
+  await expectRoleNotEmail(page, "Owner", OWNER.email);
+  expect(await page.title()).not.toContain("@");
+  await page.getByRole("button", { name: "Approvals" }).click();
+  await expect(page.getByRole("region", { name: "Safety state" })).not.toContainText("@");   // persistent chrome
+  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Your sign-in" })).toContainText(OWNER.email);   // the one place it shows
 });
 
 test("owner approves one proposal and rejects the other with a reason", async ({ page }) => {
@@ -210,7 +226,7 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   viewerSecret = secret;
 
   await signIn(page, VIEWER.email, VIEWER.password, secret);
-  await expect(page.getByText(`${VIEWER.email} · viewer`)).toBeVisible();
+  await expectRoleNotEmail(page, "Viewer", VIEWER.email);
   await expect(page.getByRole("button", { name: "Users" })).toHaveCount(0);
   for (const tab of ["Overview", "News", "Agents", "Health", "Research", "Feeds", "Approvals"]) {
     await page.getByRole("button", { name: tab, exact: true }).click();
@@ -220,7 +236,7 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   // the API enforces the same rule the UI hides
   const token = await page.evaluate(() => sessionStorage.getItem("goldbot_token"));
   const r = await page.request.post("/api/decisions", {
-    data: { proposal_id: "e2e-long", action: "approve" }, headers: { authorization: `Bearer ${token}` },
+    data: { proposal_id: "e2e-long", action: "approve", created: 0 }, headers: { authorization: `Bearer ${token}` },
   });
   expect(r.status()).toBe(403);
   const mode = await page.request.post("/api/automode", { data: { mode: "propose" }, headers: { authorization: `Bearer ${token}` } });
@@ -272,6 +288,7 @@ test("once the engine reports, Overview shows the live balance, today's loss bud
     limits: { risk_per_trade: 0.005, max_risk_per_trade: 0.01, multiplier_bounds: [0.25, 1.5], daily_cap: 0.02, weekly_cap: 0.05 },
     ladder_atr: { "15m": 7.27, "1h": 14.6, "4h": 29.0, "1d": 70.0 },
     lot_terms: { contract_oz: 100, volume_min: 0.01, volume_step: 0.01, volume_max: 50, stops_level_points: 0 },
+    entry_blocks: [], entry_refusals: {},                                        // the gate refuses nothing (BACKLOG 43)
   }));
   writeFileSync(join(dir, "supervisor.json"), JSON.stringify({
     ts: Date.now() / 1000, halt: false, reasons: [], daily_cap: 0.015, combined_day_start_equity: 1500, weekly_cap: 0.04,
@@ -305,6 +322,7 @@ test("entry status says in plain words why an account can't trade, when it resum
   writeFileSync(join(dir, "engine_icm-demo.json"), JSON.stringify({
     ...engine, ts: Date.now() / 1000, market_closed: true, sessions: { server_tz: "Europe/Athens", source: "static" },
     server_clock: { status: "mismatch", reason: "server clock reads UTC+3" }, login: 99887766,
+    entry_blocks: ["server_clock_mismatch", "market_closed"],                    // the gate's reasons (BACKLOG 43)
     throttle: { enabled: true, loss_streak: 3, max_entries_per_day_per_agent: 3, agents: {
       "trend-g0": { timeframe: "1h", loss_streak: 3, cooldown_until: until, blocked: ["throttle_loss_streak"] } } },
   }));
@@ -315,7 +333,7 @@ test("entry status says in plain words why an account can't trade, when it resum
   await expect(row.getByRole("link", { name: "Runbook: Server clock (US-EU DST gap weeks)" })).toHaveAttribute(
     "href", /RUNBOOK\.md#server-clock-us-eu-dst-gap-weeks$/);
   await expect(row.getByText(/^opens .* your time \(in /)).toHaveAttribute("title", / UTC$/);
-  await expect(row.getByText("trend-g0 paused after 3 losses in a row")).toBeVisible();
+  await expect(row.getByText("Trend (trend-g0) paused after 3 losses in a row")).toBeVisible();
   await expect(row.getByText(/^until .* your time \(in 1 h \d+ min\)$/)).toBeVisible();
   await expect(row.getByText(/^Exits keep running/)).toBeVisible();
   await expect(row).not.toContainText("99887766");                            // no account identifiers

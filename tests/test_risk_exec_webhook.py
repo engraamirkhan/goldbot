@@ -1,3 +1,4 @@
+import json
 import queue
 from typing import Any
 
@@ -97,6 +98,97 @@ def test_classifier_rules_and_persistence(tmp_path):
     assert pc.update(Classification(account_class="raw", median_spread=0.17, p90_spread=0.2, commission_seen=False, n_ticks=3000, reason="")) == "raw"
     assert pc.update(Classification(account_class="unknown", median_spread=None, p90_spread=None, commission_seen=False, n_ticks=10, reason="")) == "raw"     # one disagreement: keep
     assert pc.update(Classification(account_class="unknown", median_spread=None, p90_spread=None, commission_seen=False, n_ticks=10, reason="")) == "unknown"  # two in a row: change
+
+
+
+def _cls(account_class: str) -> Classification:
+    n = 10 if account_class == "unknown" else 3000
+    return Classification(account_class=account_class, median_spread=None, p90_spread=None, commission_seen=False, n_ticks=n, reason="")
+
+
+def test_a_stored_unknown_is_replaced_by_the_first_known_class_on_its_first_run(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert pc.update(_cls("unknown")) == "unknown"   # thin first Friday
+    assert PersistentClassifier(tmp_path / "acct.json").update(_cls("raw")) == "raw"   # adopted at once, after a reload
+    assert PersistentClassifier(tmp_path / "acct.json").state["pending"] is None
+
+
+def test_a_stored_unknown_adopts_standard_on_its_first_run(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert pc.update(_cls("unknown")) == "unknown"
+    assert pc.update(_cls("standard")) == "standard"
+    assert pc.state["pending"] is None
+
+
+def test_after_falling_from_standard_to_unknown_a_spread_only_raw_run_needs_a_second_agreeing_run(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert pc.update(_cls("standard")) == "standard"
+    assert pc.update(_cls("unknown")) == "standard"
+    assert pc.update(_cls("unknown")) == "unknown"
+    assert pc.update(_cls("raw")) == "unknown"   # last known class was standard: no relaxing to raw on one run
+    assert pc.state["pending"] == "raw"
+    assert pc.update(_cls("raw")) == "raw"
+
+
+def test_raw_runs_that_were_only_pending_never_count_as_the_last_known_class(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    for c in ("standard", "unknown", "unknown", "raw", "unknown"):
+        pc.update(_cls(c))
+    assert pc.update(_cls("raw")) == "unknown"   # the two raw runs were not consecutive
+    assert pc.state["pending"] == "raw"
+    assert pc.state["last_known"] == "standard"
+
+
+def test_a_last_known_standard_does_not_expire_after_more_than_twenty_unknown_runs(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    pc.update(_cls("standard"))
+    for _ in range(25):
+        pc.update(_cls("unknown"))
+    assert all(r["account_class"] == "unknown" for r in pc.state["runs"])   # standard has left the kept runs
+    assert PersistentClassifier(tmp_path / "acct.json").update(_cls("raw")) == "unknown"
+
+
+def _legacy(tmp_path, cls: str | None, runs: list[str]) -> PersistentClassifier:
+    path = tmp_path / f"legacy_{cls}_{'_'.join(runs)}.json"
+    path.write_text(json.dumps({"class": cls, "pending": None, "runs": [_cls(r).model_dump() for r in runs]}))
+    return PersistentClassifier(path)
+
+
+def test_a_legacy_state_file_without_last_known_is_migrated_from_its_class_and_runs(tmp_path):
+    assert _legacy(tmp_path, "unknown", ["standard", "unknown", "unknown"]).state["last_known"] == "standard"
+    assert _legacy(tmp_path, "unknown", ["raw", "unknown", "unknown"]).state["last_known"] is None
+    assert _legacy(tmp_path, "unknown", ["unknown"]).state["last_known"] is None
+    assert _legacy(tmp_path, "raw", ["standard", "raw"]).state["last_known"] == "raw"
+    assert _legacy(tmp_path, "standard", ["standard"]).state["last_known"] == "standard"
+    assert _legacy(tmp_path, None, []).state["last_known"] is None
+    migrated = _legacy(tmp_path, "unknown", ["standard", "unknown", "unknown", "raw", "unknown"])
+    assert migrated.update(_cls("raw")) == "unknown"   # migrated standard keeps the two-run rule
+    assert migrated.state["pending"] == "raw"
+
+
+def test_after_falling_from_standard_to_unknown_a_commission_raw_run_is_adopted_at_once(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    for c in ("standard", "unknown", "unknown"):
+        pc.update(_cls(c))
+    commission_raw = _cls("raw").model_copy(update={"commission_seen": True})
+    assert pc.update(commission_raw) == "raw"
+
+
+def test_a_known_class_needs_two_agreeing_runs_to_change_to_another_known_class(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert pc.update(_cls("raw")) == "raw"
+    assert pc.update(_cls("standard")) == "raw"
+    assert pc.state["pending"] == "standard"
+    assert pc.update(_cls("standard")) == "standard"
+
+
+def test_a_known_class_does_not_fall_back_to_unknown_on_one_thin_week(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert pc.update(_cls("raw")) == "raw"
+    assert pc.update(_cls("unknown")) == "raw"
+    assert pc.state["pending"] == "unknown"
+    assert pc.update(_cls("raw")) == "raw"   # a known run in between resets the pending fall-back
+    assert pc.state["pending"] is None
 
 
 def test_webhook_auth_hash_and_intrabar():

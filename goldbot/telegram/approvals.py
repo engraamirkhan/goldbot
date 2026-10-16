@@ -12,20 +12,26 @@ Transport-agnostic core (tested without Telegram), plus a thin python-telegram-b
 """
 from __future__ import annotations
 
+import base64
 import hmac
+import logging
 import math
+import re
+import struct
 import time
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import Field, model_validator
 
-from goldbot.base import Record
+from goldbot.base import FrozenRecord, Record
 from goldbot.data.timeutil import heartbeat_problem
 
 if TYPE_CHECKING:
     from goldbot.ops.account_view import LossBudget
     from goldbot.telegram.bus import ApprovalBus
+
+log = logging.getLogger("goldbot.approvals")
 
 REASON_CODES = ("news", "cost", "discretion", "duplicate", "other")
 TOTP_COMMANDS = {"/rearm", "/mode", "/set"}
@@ -72,6 +78,88 @@ def window_over(created: Any, window_s: Any, now: float) -> bool:
 def decision_channel(by: str) -> str:
     """"telegram:<id>" -> "telegram", "dashboard:<email>" -> "dashboard": the channel without the identity."""
     return by.split(":", 1)[0]
+
+
+# BACKLOG 63: a tap is bound to the exact card the owner saw. Telegram's callback_data is at most 64 bytes, so a card's
+# `created` travels as a fixed-width token (the 8 bytes of the float, base64url: 11 characters, exact) and a reason as
+# one letter; the proposal id goes last, so it is never cut or split. Approve: "ok:<token>:<id>"; reject:
+# "no:<letter>:<token>:<id>". goldbot.ops.accounts.ACCOUNT_ID_MAX_BYTES bounds the id so every button fits.
+CALLBACK_MAX_BYTES = 64
+# a proposal id names a file under state/approvals/ (pending, decisions, done): only these characters, no "..", so a
+# tap, a dashboard request or a bus call can never reach another path (security review of 2c6e805). The engine's ids
+# (`<account>-<epoch s>-<10 hex>`, at most 46 bytes for a 24-byte account name) always match
+PROPOSAL_ID_PATTERN = r"^[A-Za-z0-9_.-]{1,47}$"
+_PROPOSAL_ID = re.compile(PROPOSAL_ID_PATTERN)
+INVALID_PROPOSAL_ID = "invalid proposal id"
+_REASON_KEY = {"news": "n", "cost": "c", "discretion": "d", "duplicate": "u", "other": "o"}
+_KEY_REASON = {v: k for k, v in _REASON_KEY.items()}
+
+
+def valid_proposal_id(proposal_id: str) -> bool:
+    """`PROPOSAL_ID_PATTERN` and no "..": safe as a file name under state/approvals/."""
+    return _PROPOSAL_ID.fullmatch(proposal_id) is not None and ".." not in proposal_id
+
+
+def card_token(created: float) -> str:
+    """The card's `created` as 11 URL-safe characters, exact (no decimal rounding): the float's 8 bytes, base64url."""
+    return base64.urlsafe_b64encode(struct.pack(">d", created)).rstrip(b"=").decode("ascii")
+
+
+def card_created_from(token: str) -> float:
+    """The inverse of `card_token`; ValueError for anything that is not exactly one."""
+    if len(token) != 11:
+        raise ValueError("card token is not 11 characters")
+    try:
+        raw = base64.urlsafe_b64decode(token + "=")
+    except (ValueError, TypeError) as exc:
+        raise ValueError("card token is not base64url") from exc
+    if len(raw) != 8 or card_token(struct.unpack(">d", raw)[0]) != token:
+        raise ValueError("card token is not canonical")
+    return float(struct.unpack(">d", raw)[0])
+
+
+class CardTap(FrozenRecord):
+    """One Approve or Reject tap, as its callback data carries it: which proposal, on which card (its `created`)."""
+    proposal_id: str
+    approve: bool
+    reason_code: str | None
+    card_created: float
+
+
+def decision_callbacks(p: Proposal) -> dict[str | None, str]:
+    """The callback data of a card's buttons: None -> Approve, each reason code -> Reject with it. Raises ValueError
+    when one would exceed Telegram's 64 bytes (never cut: a cut id would decide nothing, or another proposal), and for
+    an id `valid_proposal_id` refuses (no tap on it could be decided)."""
+    if not valid_proposal_id(p.proposal_id):
+        raise ValueError(f"{INVALID_PROPOSAL_ID} ({len(p.proposal_id.encode('utf-8'))} bytes)")
+    tok = card_token(p.created)
+    out: dict[str | None, str] = {None: f"ok:{tok}:{p.proposal_id}"}
+    out.update({r: f"no:{_REASON_KEY[r]}:{tok}:{p.proposal_id}" for r in REASON_CODES})
+    if (longest := max(len(d.encode("utf-8")) for d in out.values())) > CALLBACK_MAX_BYTES:
+        raise ValueError(f"proposal id too long for Telegram's {CALLBACK_MAX_BYTES}-byte button data ({longest} bytes)")
+    return out
+
+
+def parse_decision_callback(data: str) -> CardTap:
+    """An Approve/Reject tap's data back to its decision. A card without the stamp (sent before BACKLOG 63) or a token
+    that does not decode is refused with ValueError "card_missing: ..." (fail closed: never an unbound decision); an
+    id `valid_proposal_id` refuses (empty, "..", a path) with ValueError "invalid proposal id"."""
+    parts = data.split(":", 3 if data.startswith("no:") else 2)
+    tap = None
+    try:
+        if parts[0] == "ok" and len(parts) == 3:
+            tap = CardTap(proposal_id=parts[2], approve=True, reason_code=None,
+                          card_created=card_created_from(parts[1]))
+        elif parts[0] == "no" and len(parts) == 4 and parts[1] in _KEY_REASON:
+            tap = CardTap(proposal_id=parts[3], approve=False, reason_code=_KEY_REASON[parts[1]],
+                          card_created=card_created_from(parts[2]))
+    except ValueError:
+        pass
+    if tap is None:
+        raise ValueError("card_missing: this card is out of date; decide on the current card")
+    if not valid_proposal_id(tap.proposal_id):
+        raise ValueError(INVALID_PROPOSAL_ID)
+    return tap
 
 
 class Outcome(str, Enum):
@@ -225,12 +313,27 @@ class ApprovalCenter:
 
     def poll_bus(self) -> list[Proposal]:
         """Apply decisions written to the bus by the dashboard or the Telegram service (already authenticated
-        there). A decision arriving after the window counts as expired, as it would in-process."""
+        there). A decision arriving after the window counts as expired, as it would in-process. A decision is applied
+        only to the card the owner saw (BACKLOG 63: "the engine refuses, and logs with a reason (`card_mismatch`), any
+        decision whose `created` differs from the pending proposal's, never approving it"; "a decision without
+        `created` is refused, not accepted (fail closed)"): the Telegram button and the dashboard request carry the
+        card's `created`, and one that does not match the proposal held here was a click on an earlier card with the
+        same id (a proposal id depends only on account, agent and bar close). Such a decision is discarded, never
+        applied, and the owner is told, so the card shown stays decidable and the dropped click is not silent."""
         if self.bus is None or not self.pending:
             return []
         done = []
         for d in self.bus.decisions_for(set(self.pending)):
             p = self.pending[d.proposal_id]
+            if d.card_created is None or d.card_created != p.created:
+                why = "card_missing" if d.card_created is None else "card_mismatch"
+                log.warning("decision on %s refused (%s): not made on the card now pending; discarded, not applied",
+                            p.proposal_id, why)
+                self.bus.discard_decision(d.proposal_id)
+                self.bus.notify_owner(f"Your tap on proposal {p.proposal_id} was not applied: it was not made on the "
+                                      f"card now pending (the proposal was re-raised, or the card was out of date). "
+                                      f"No order was placed from it.")
+                continue
             if self.expired(p):
                 done.append(self._finish(p, Outcome.EXPIRED))
                 continue

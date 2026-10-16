@@ -7,7 +7,7 @@ const NOW = Date.parse("2026-10-10T12:00:00Z");
 const at = (s: number) => new Date(NOW + s * 1000).toISOString();
 const prop = (expiresIn: number): Proposal => ({
   proposal_id: "p", account_id: "icm-demo", agent_id: "a", side: "long", lots: 0.05, entry: 1, stop: 0, target: 2, p: 0.6,
-  ev_r: 0.2, spread_points: 20, top_features: [], expires_at: at(expiresIn), min_lot_exception: false,
+  ev_r: 0.2, spread_points: 20, top_features: [], expires_at: at(expiresIn), created: NOW / 1000, min_lot_exception: false,
 });
 const status = (over: Partial<Status> = {}): Status => ({
   mode: "propose", halted: false, pending: 0, supervisor: {}, supervisor_halt: false, supervisor_reasons: [], drift_halt: false,

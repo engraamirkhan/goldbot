@@ -16,8 +16,8 @@ section 3). The budget shown is the cap with least left (a bad week can bind on 
   on it), never an amount: the account's own caps alone would look roomier than the combined ones the supervisor
   enforces (found by the release manager 2026-10-16), and a combined cap rebuilt here from settings and one
   account's equity would miss the other accounts' losses. The engines pause new entries on the same rejected report
-  (`Supervisor.engine_should_halt`); with mixed currencies only while the supervisor halts on
-  `mixed_account_currencies` (a leftover engine file in another currency, over 60 s old, does not halt it);
+  (`Supervisor.engine_should_halt`); with mixed currencies only while the supervisor halts, for any reason. A
+  leftover engine file in another currency, over 60 s old, neither halts the supervisor nor counts here (BACKLOG 61);
 * the absolute limit is listed only once the engine publishes `limits.daily_loss_limit_abs` (account currency, per
   account; the currency lane, BACKLOG 28/29): until the RiskGate enforces it, showing it would claim a protection
   that is not there. Its check is projected, so when the engine also publishes `limits.min_lot_risk_account` (the
@@ -256,6 +256,12 @@ def _mixed(currencies: set[Any], paused: bool) -> str:
             "checked. " + (_PAUSED if paused else "Each account's own loss limit still applies; exits always run."))
 
 
+def _gone(e: dict[str, Any], now: float) -> bool:
+    """An engine file left by an engine that no longer runs: its `ts` is a number over SUPERVISOR_MAX_AGE_S old (the
+    supervisor's `now - ts <= heartbeat_max_age_s`). An unstamped or unreadable stamp is never assumed gone."""
+    return heartbeat_problem(e.get("ts"), now, SUPERVISOR_MAX_AGE_S) == "stale"
+
+
 def _combined(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[dict[str, Any]], now: float,
               add: Callable[..., None]) -> tuple[str | None, bool, bool]:
     """The supervisor's combined daily and weekly caps, when its report is fresh and every account shares a currency.
@@ -263,8 +269,11 @@ def _combined(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[
     currencies); (None, False, False) when it can. The reason is the one the engines halt on
     (`Supervisor.engine_should_halt`, same 60 s): an empty report (the file missing or torn) is missing, one without
     `ts` is stale, a `ts` that is not a number is unreadable. Mixed currencies come from this view's engine files or
-    the supervisor's own `mixed_account_currencies` (its combined figures then add pounds to dollars); red only while
-    the supervisor halts on it, as only then are new entries paused for it."""
+    the supervisor's own `mixed_account_currencies` (its combined figures then add pounds to dollars). Only running
+    engines count, by the supervisor's own rule (`Supervisor.evaluate`: "a file left by an engine that no longer runs
+    must not halt the book"): a file whose `ts` is over SUPERVISOR_MAX_AGE_S old is left out (BACKLOG 61 L1); one
+    without a readable `ts` is never assumed gone. Red while the supervisor halts for any reason, as every engine then
+    pauses new entries (`engine_should_halt`; BACKLOG 61 L2); amber otherwise."""
     if not supervisor:
         return _CANT_CHECK["missing"], True, False
     problem = heartbeat_problem(supervisor.get("ts", 0), now, SUPERVISOR_MAX_AGE_S)
@@ -276,14 +285,14 @@ def _combined(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[
     if sup_eq is None or sup_day is None or sup_d0 is None:    # error_halt, or no engine summed yet
         halted = supervisor.get("halt") is True
         return _CANT_CHECK["halted" if halted else "not_summed"], halted, False
-    ccys = {e.get("currency") for e in engines} | {engine.get("currency")}
+    ccys = {e.get("currency") for e in engines if not _gone(e, now)} | {engine.get("currency")}
     reasons = supervisor.get("reasons")
     sup_mixed = isinstance(reasons, list) and "mixed_account_currencies" in reasons
     sup_ccys = supervisor.get("currencies")
     if sup_mixed and isinstance(sup_ccys, dict):
         ccys |= set(sup_ccys.values())
     if sup_mixed or len(ccys) != 1 or None in ccys:
-        paused = sup_mixed and supervisor.get("halt") is True
+        paused = supervisor.get("halt") is True
         return _mixed(ccys, paused), paused, True
     add(f"combined {_pct(sup_day)} daily cap", f"all accounts together ({_pct(sup_day)} of today's start)", "today",
         sup_day * sup_d0, sup_d0, sup_eq)

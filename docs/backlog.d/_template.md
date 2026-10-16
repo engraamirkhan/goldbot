@@ -32,6 +32,23 @@ start at the reopen (Sun 2026-10-18 22:02 UTC) waits on it. 58, 59 and 60 now na
 36 and 51 are merged on the integration branch and ship in the next PR (release-manager). 13 ranked rows. The
 daily scorecard is `docs/process/scorecards/2026-10-16.md`.
 
+**Decision sweep 2026-10-16 late (program director + product owner, owner delegated; base 3db12c8).** New standing
+rule from the owner: routine product, ops and deploy decisions are made by the program director with the product
+owner and reported to the owner, not asked; safety-touching choices take the conservative option. Recorded today:
+62 (kill switch closes every symbol, rank 5), 63 (card-bound approvals, rank 9), 64 (header shows the role, rank
+12), 65 (review hygiene, rank 15); 12 notes the digest's `verdict_adj` line; 45 carries the holiday-list decision
+schedule (quant ruling 10-23, decision 10-30). 58 and 52 left the table as done (shipped in PR #79). Stale statuses
+fixed: 59 (SRE re-verify on record), 61 (merged at 921a38a), 45 (draft delivered feda07a). 15 ranked rows.
+
+**CFO and CTO follow-ups 2026-10-16 night (product owner; base abcbe2b; all-hands memo of 2026-10-16).** From
+`docs/finance/capital-plan.md`, `docs/finance/budget-2026-10.md` and the CTO's tech-debt list: new items 66 (bridge
+lot ceiling scaled to equity, rank 3, architect plan by 10-23), 67 (Object Storage 15 GB alert, sre), 68 (CI-minutes
+explanation and worktree clean-up, release-manager) and 69 (monthly audit of leverage and the largest order,
+finance-auditor, 11-04). 27 records the terminal's contract terms read today and is in progress. To hold 15 rows,
+36, 51 and 61 left the table: they are merged on the integration branch and only wait for the next PR
+(release-manager, due 10-23, wave lane 4; accepted at that PR). 65 is parked. The CFO's owner-only matters (C1-C5,
+OD-12) are in ROADMAP section 6 as OD-16 to OD-20.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
@@ -54,9 +71,22 @@ hypotheses that go through the trial registry in a future quarter's budget.
 <!-- backlog.d:items from=25 -->
 
 ## Needs the owner
-These are never decided by the product owner or by agents.
+These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only
+matters stay here: money or paid plans; going live, `unlock_live` or phase-gate thresholds; loosening any risk limit;
+the owner's own credentials; legal. Routine product, ops and deploy decisions are made by the program director with
+the product owner and reported on #34 (ROADMAP section 6, "Decided by PD+PO").
 Every owner step below has `chaser: program-director`, who asks on #34 with a recommendation and a chase date.
-- **Adopt the built, off-by-default rails (sweep 2026-10-16).** Holiday, reopen and tier-2 windows (17, 18), the
+- **Capital and leverage (CFO capital plan section 7, queued 2026-10-16; ROADMAP section 6, OD-16 to OD-20).**
+  C1 no real money before the paper -> tiny-live gate (recommend: confirm). C2 tiny-live cannot trade at £1,000;
+  it needs about £6,850: (a) fund, (b) keep £1,000 and never go live, (c) amend the min-lot rule (a loosening; not
+  recommended); decide before the backtest -> paper gate, earliest about April 2027. C3 no demo deposits; live
+  deposits sized by what the next gate needs. C4 confirm the existing limits as the risk appetite by Mon 2026-11-30.
+  C5 set the broker leverage to the lowest IC Markets offers at or above 1:20 (tightens; your action in the client
+  area). OD-12: the agent budget (recommend about $10 a month) by Fri 2026-10-23, and whether the Claude
+  subscription counts as a running cost.
+- **Moved to PD+PO 2026-10-16 (they only tighten; the conservative option):** adopting the rails below. The PD+PO decide
+  each on the evidence of 45 and 46; any value looser than the built default goes back to the owner.
+  **Adopt the built, off-by-default rails (sweep 2026-10-16).** Holiday, reopen and tier-2 windows (17, 18), the
   heat cap (19), the loss-streak throttle (21) and the open-risk projection (35) are merged and off. For each:
   adopt, set the values, or leave off. Recommendation: wait for 45 (holiday evidence, due 2026-10-30) before the
   holiday window, and for 46 (replay) before the others, except 35, which only makes the £50 limit stricter.
@@ -71,6 +101,8 @@ Every owner step below has `chaser: program-director`, who asks on #34 with a re
   (H-11 blocked); the conservative K_eff default confirmed; `costs-v1` published by 2026-12-11 if the demo
   terminal runs, otherwise "priors accepted" on 2026-12-14; the owner's trade history exported in full, analysed
   locally, summary only.
+- **Paper-vs-backtest gate: require the paper mean's lower 95% bound above 0** (phase-gate threshold, ROADMAP
+  OD-15). The quant reviewer recommends yes; the program director and product owner concur. Yours to rule.
 - **Going live.** Demo until the paper → tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
   and the typed phrase. Item 8 computes whether the gate is met. It never flips it.
 - **Research evidence across feature versions (ADR 0006, item 34).** For now the tournament accepts a gate pass
@@ -105,13 +137,27 @@ before any new trading-safety builder. Every lane below touches different files.
    `goldbot/ops/linux/`. The bridge smoke (ROADMAP W1-1, new `goldbot/ops/smoke.py`) follows the architect's plan.
 6. **Item 43, `entry_blocks`** (`lane/entry-blocks`, implementer): `goldbot/risk/gate.py` (`account_reasons`), the
    engine state write in `goldbot/engine/runner.py`, `goldbot/api/entry_status.py`. Starts when lane A has cleared 59
-   (same runner.py write path).
-7. **Item 61, mixed-currency budget** (`lane/mixed-currency-budget`, implementer): `goldbot/ops/account_view.py`,
-   `web/src/` BalanceCard and SafetyStrip. Free now.
-8. **Running:** 45 (performance-analyst, a new report script), 5 (research-director, `docs/research/`).
+   and lane 9 (62, higher rank, same file) has merged: one runner.py lane at a time.
+7. **Item 61, mixed-currency budget**: merged at 921a38a with its reviews; release-manager ships it in the next PR,
+   then product-owner acceptance.
+8. **Running:** 45 (quant ruling on the draft, due 10-23), 5 (research-director, `docs/research/`).
+9. **Item 62, kill switch on every symbol** (implementer, then trading-safety): `_kill_switch` in
+   `goldbot/engine/runner.py`, `goldbot/execution/mt5_adapter.py` `_filling`/`close`, ADR 0016, RUNBOOK. Starts when
+   lane A has cleared 59; lane 6 (43) waits for it. Not before the Sunday start.
+10. **Item 64, header role** (ui-ux-designer spec, then implementer): `web/src/` header only. Free now; disjoint
+   from every other lane's files.
+11. **Item 66, bridge lot ceiling: architect plan** (read-only; plan by Fri 2026-10-23), then a trading-safety
+   verdict on the plan when lane A or B has room. The build (`goldbot/execution/bridge.py`, tests) waits for that
+   verdict; no other lane touches bridge.py.
+12. **Item 67, Object Storage alert** (sre): `goldbot/ops/health.py` check and settings, after lane 5's deploy steps
+   free the SRE (due 10-23). Disjoint from lanes 6 and 9.
+13. **Item 68, release hygiene** (release-manager): worktree clean-up Mon 2026-10-19; CI-minutes answer by 10-23
+   (ROADMAP section 2, budget-2026-10.md).
+14. **Item 69** (finance-auditor): one row in `docs/finance/audit-framework.md`, by the 2026-11-04 audit.
+63 waits for 60's fix lane (same approval files); 65 is parked.
 
-Top three ready items: 43 (lane 6), 27 and 61 (lane 7). 27 has no lane on purpose: it reads the terms from the demo
-terminal, so it starts when item 1's engine runs (Sun 2026-10-18).
+Top three ready items (2026-10-16 night): 66 (lane 11, architect plan), 62 (lane 9) and 43 (lane 6). 27 is in
+progress, read from the terminal; the rest of it follows item 1's engine start (Sun 2026-10-18).
 
 ## Later (parked)
 Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block has its status and the full reason.
@@ -127,6 +173,10 @@ Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block 
 - 34, material feature version: waits on the owner's ADR 0006 ruling.
 - 46, replay of the entry windows: needs a shadow book (after 1); schedule after 45.
 - 53, phase-gate comparator on the deployed trial: matters only once a model is promoted, and none is.
+- 65, review hygiene (parked 2026-10-16 for the cap): none of its parts can lose money; the quant N1 text (10-19)
+  and the N3 ADR (10-30) are still owed on their dates.
+- 36, 51, 61 (off the table 2026-10-16, not parked): merged on the integration branch, shipping in the next PR
+  (release-manager, due 10-23); accepted at that PR.
 - M28 TreeSHAP per decision, A5 per-trade SHAP, and a post-trade review after each exit.
 - R8 `order_calc_margin` (touches the broker protocol; schedule after item 6).
 - D10 bar close by clock, A2 window from settings, M9 allocator blackout input, D11
@@ -166,6 +216,7 @@ product owner runs the criterion-by-criterion acceptance scorecard (AGENT_STANDA
 - #71: 24 (D-1), 25, 26 (backend), 28, 29. #73: 23, 30a, 37, 38, 39, 40, 41; the approval-card lines for 25, 28 and 29.
 - #74: 42. #76: 47. #77: 50.
 - Integration branch, shipping in PR #79 or the next PR: 48, 49, 54, 55, 56, 57 (table above).
+- PR #79 (main 5fd90ab): 52 and 58, done with trading-safety APPROVE 2026-10-16 at 626b56b (3418bc5); 52's d2ecb8f ships in the next PR.
 - Open sign-offs on done items: quant for 23 (V6) and 50 (M45); the owner for the values of 8.
 
 ## Rejected

@@ -10,8 +10,9 @@ London) with signal, not noise. Read on a phone, so it stays under about 15 line
            positions now;
 * risk     worst drawdown stage and drawdown from peak, daily and weekly loss-cap use (the engine's figures, on the
            risk day that resets at 00:00 UTC, not the opportunity day), any halt (owner, drift, supervisor, drawdown);
-* research the next pre-registered trial or the quarter's trial budget, and the attribution headline (best and worst
-           non-noise cell of state/attribution.json) when it exists;
+* research the next pre-registered trial or the quarter's trial budget, and the attribution headline when
+           state/attribution.json exists: the best positive and worst negative row whose adjusted verdict clears the
+           Bonferroni bar (ADR 0022), else "no row clears the bar" with the overall cell;
 * decisions waiting for the owner, with counts: pending approvals, the owner decision queue in docs/ROADMAP.md, a
            deploy on offer.
 
@@ -48,7 +49,9 @@ from goldbot.telegram.entry_text import digest_line as entry_digest_line
 STATE_FILE = "telegram_digest.json"
 LATE_LIMIT = pd.Timedelta(hours=6)
 MAX_NAMES = 5                       # check names listed per status before "+N more"
-ATTRIBUTION_SKIP = ("agent", "decision")   # agent ids are per-version detail; "not taken" is not a trading cell
+# agent ids are per-version detail; "not taken" is not a trading cell; exit target/stop cells are signed by
+# construction (ADR 0022 F2): not a test
+ATTRIBUTION_SKIP = ("agent", "decision", "exit")
 DEFAULT_ROADMAP = ROOT / "docs" / "ROADMAP.md"
 _DECISION_ROW = re.compile(r"^\|\s*(?:OD-|D)\d+\s*\|")   # "| D3 |" or, since the 2026-10-16 re-plan, "| OD-3 |"
 _STAGE_RANK = {"normal": 0, "size_down": 1, "halted": 2}
@@ -375,14 +378,25 @@ def _attribution_line(state_dir: Path) -> list[str]:
              for name, c in group.items() if c.get("verdict") != "noise" and c.get("mean_r_net") is not None]
     if not cells:
         return [f"Attribution: every cell is still noise (< {rep.get('min_trades', '?')} trades)"]
+    # ADR 0022 (quant ruling F3): a row is named only when its adjusted verdict clears the Bonferroni bar; a report
+    # written before the rule carries no verdict_adj, so none of its rows is named
     cells.sort(key=lambda x: float(x[2]["mean_r_net"]))
+    pos = [x for x in cells if x[2].get("verdict_adj") == "positive"]
+    neg = [x for x in cells if x[2].get("verdict_adj") == "negative"]
 
     def cell(x: tuple[str, str, dict[str, Any]]) -> str:
         return f"{x[0]} {x[1]} {float(x[2]['mean_r_net']):+.2f}R/trade net (n {x[2].get('n')})"
 
-    best = cell(cells[-1])
-    worst = f" · worst {cell(cells[0])}" if len(cells) > 1 else ""
-    return [f"Attribution: best {best}{worst}"]
+    if pos or neg:
+        parts = ([f"best {cell(pos[-1])}"] if pos else []) + ([f"worst {cell(neg[0])}"] if neg else [])
+        return ["Attribution: " + " · ".join(parts)]
+    overall = rep.get("overall") or {}
+    mean = overall.get("mean_r_net")
+    head = f"overall {float(mean):+.2f}R/trade net, {overall.get('verdict_adj', '?')}" if mean is not None \
+        else "overall no taken trades"
+    bar = f"{float(rep['t_bar']):.1f}" if rep.get("t_bar") is not None else "?"   # older report: no bar recorded
+    return [f"Attribution: no row clears the bar (|t| ≥ {bar} over {rep.get('m', '?')} "
+            f"rows) · {head}"]
 
 
 def decisions_line(state_dir: Path, roadmap: Path) -> list[str]:

@@ -19,6 +19,7 @@ from goldbot.ops.health import check_halt
 from goldbot.telegram import automode
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 from goldbot.telegram.bus import DECISION_MAX_AGE_S, ApprovalBus
+from tests.cards import shown, submit_shown, tap_data
 from tests.test_api_owner_controls import _owner_secret
 from tests.test_api_security_followup import _viewer
 from tests.test_health import make_ctx
@@ -41,7 +42,7 @@ def _assert_no_identity(text: str) -> None:
 def test_a_submitted_decision_file_keeps_only_the_channel_even_when_given_an_identity(tmp_path, by):
     bus = ApprovalBus(tmp_path)
     bus.publish(_prop("p1"))
-    d = bus.submit("p1", True, None, by=by)
+    d = submit_shown(bus, "p1", True, None, by=by)
     text = (bus.decisions_dir / "p1.json").read_text()
     _assert_no_identity(text)
     assert "@" not in text and json.loads(text)["by"] == by.split(":")[0] == d.by
@@ -50,9 +51,10 @@ def test_a_submitted_decision_file_keeps_only_the_channel_even_when_given_an_ide
 def test_an_older_decision_file_with_an_identity_is_still_applied_by_its_channel(tmp_path):
     bus = ApprovalBus(tmp_path)
     center = ApprovalCenter({TELEGRAM_ID}, bus=bus)
-    center.propose(_prop("p1"))
+    card = center.propose(_prop("p1")).created
     (bus.decisions_dir / "p1.json").write_text(json.dumps({"proposal_id": "p1", "approve": True, "by":
-                                                           f"telegram:{TELEGRAM_ID}", "ts": time.time()}))
+                                                           f"telegram:{TELEGRAM_ID}", "ts": time.time(),
+                                                           "card_created": card}))
     (p,) = center.poll_bus()
     assert p.outcome == Outcome.APPROVED and p.decided_channel == "telegram"
     _assert_no_identity((bus.done_dir / "p1.json").read_text())
@@ -159,11 +161,34 @@ def test_a_dashboard_decision_file_holds_no_email_and_the_audit_log_names_the_ap
     owner, _ = _owner_secret(c, app)
     bus = ApprovalBus(state)
     bus.publish(_prop("p1"))
-    assert c.post("/api/decisions", json={"proposal_id": "p1", "action": "approve"}, headers=owner).status_code == 200
+    assert c.post("/api/decisions", json={"proposal_id": "p1", "action": "approve", "created": shown(bus, "p1")}, headers=owner).status_code == 200
     text = (bus.decisions_dir / "p1.json").read_text()
     assert "@" not in text and json.loads(text)["by"] == "dashboard"
     assert any(e["event"] == "decision" and e["by"] == "o@x.io" and e["proposal"] == "p1"
                for e in app.state.st.auth.audit_events())
+
+
+@pytest.mark.integration
+def test_a_failing_audit_never_undoes_or_hides_a_dashboard_decision(app_client, monkeypatch, caplog):
+    """The decision stands once submitted (first click wins on the bus); an audit write that raises after it is logged
+    by channel and proposal, never the email, and the owner still reads SUBMITTED, as on Telegram, not a 500."""
+    app, c, state = app_client
+    owner, _ = _owner_secret(c, app)
+    bus = ApprovalBus(state)
+    bus.publish(_prop("p1"))
+    auth = app.state.st.auth
+    real = auth.audit
+
+    def broken(event, **kw):
+        if event == "decision":
+            raise RuntimeError("database is locked")
+        return real(event, **kw)
+
+    monkeypatch.setattr(auth, "audit", broken)
+    r = c.post("/api/decisions", json={"proposal_id": "p1", "action": "approve", "created": shown(bus, "p1")}, headers=owner)
+    assert r.status_code == 200 and r.json()["outcome"] == "SUBMITTED"
+    assert json.loads((bus.decisions_dir / "p1.json").read_text())["approve"] is True
+    assert "audit of decision" in caplog.text and "p1" in caplog.text and "o@x.io" not in caplog.text
 
 
 @pytest.mark.integration
@@ -197,7 +222,7 @@ def _click(bot, data: str) -> list[str]:
     answers: list[str] = []
 
     async def go() -> None:
-        await bot._on_button(types.SimpleNamespace(callback_query=_query(data, answers)), None)
+        await bot._on_button(types.SimpleNamespace(callback_query=_query(tap_data(bot.bus, data), answers)), None)
         await bot.audit.drain()
     asyncio.run(go())
     return answers
@@ -292,8 +317,8 @@ def test_a_slow_audit_write_never_delays_the_click_or_blocks_the_event_loop(tmp_
     async def go() -> float:
         task = asyncio.create_task(pump())
         t0 = time.monotonic()
-        await bot._on_button(types.SimpleNamespace(callback_query=_query("ok:p1", order)), None)
-        await bot._on_button(types.SimpleNamespace(callback_query=_query("ok:p2", order)), None)
+        await bot._on_button(types.SimpleNamespace(callback_query=_query(tap_data(bot.bus, "ok:p1"), order)), None)
+        await bot._on_button(types.SimpleNamespace(callback_query=_query(tap_data(bot.bus, "ok:p2"), order)), None)
         handled = time.monotonic() - t0
         mid = len(ticks)
         await bot.audit.drain()
@@ -312,7 +337,7 @@ def _timed_out_click(bot, data: str) -> None:
         raise TimeoutError
 
     async def go() -> None:
-        q = _query(data, [])
+        q = _query(tap_data(bot.bus, data), [])
         q.answer = answer
         with pytest.raises(TimeoutError):
             await bot._on_button(types.SimpleNamespace(callback_query=q), None)
@@ -405,7 +430,7 @@ def test_shutdown_drains_pending_audit_rows(tmp_path):
     bot.bus.publish(_prop("p1"))
 
     async def go() -> None:
-        await bot._on_button(types.SimpleNamespace(callback_query=_query("ok:p1", [])), None)
+        await bot._on_button(types.SimpleNamespace(callback_query=_query(tap_data(bot.bus, "ok:p1"), [])), None)
         await bot._on_shutdown(None)                                 # PTB's post_shutdown, after run_polling stops
         assert not bot.audit._tasks
     asyncio.run(go())

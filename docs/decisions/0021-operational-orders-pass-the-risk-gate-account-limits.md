@@ -1,7 +1,9 @@
 # 0021: Operational orders pass the RiskGate's account limits, not its model checks
 
-Status: proposed (architect, 2026-10-16; W1-1 bridge smoke, BACKLOG 1). Trading-safety review 2026-10-16:
-APPROVE-WITH-CONDITIONS; the conditions are fences F1-F6 below, all required.
+Status: accepted 2026-10-16. Proposed by the architect 2026-10-16 (W1-1 bridge smoke, BACKLOG 1). Trading-safety
+review 2026-10-16 at `d1d86d6`: ADR APPROVE with fences F1-F6, all required; plan APPROVE with the G1a-c text fix
+(`combined_size_down`, `in_blackout`, dq/tick flags), applied in `d4ce33d` (review record:
+`docs/proposals/2026-10-w1-1-bridge-smoke-plan.md`, "Review record").
 
 ## Context
 BACKLOG 1 needs one real 0.01-lot round trip on the demo terminal through the bridge (`run.py bridge-smoke`). The
@@ -42,3 +44,18 @@ Boundaries match `check`: the daily cap refuses at equality, and the absolute da
 - `gate.py` changes shape. Any later change to `check` must keep the grid test green.
 - What would change this: a second operational use, which would need its own ADR, or a design rule that tests run
   only on paper.
+
+## Acceptance
+Accepted as written, fences F1-F6 included. Rationale:
+- It is the only way to run BACKLOG 1's real round trip without inventing a p, target or cost for `check`, which
+  would launder the gate. The operational path keeps every account and limit check and the owner's click (F6), so
+  no safety rail is weakened: RiskGate stays the only path to an order, the entry is owner-confirmed, it is
+  demo-only (F1), and exits call neither check.
+- The trading-safety reviewer approved it with the fences at `d1d86d6`; the plan's G1a-c finding is fixed in
+  `d4ce33d`. At the build, code review re-checks F1-F6 and the F5 decision-grid test, and the trading-safety reviewer
+  verifies the fences on the code before merge.
+
+Decided 2026-10-16 by PD + PO + CTO (owner delegated).
+
+**Reverse if:** the F5 grid test shows `check` changed behaviour, a fence cannot be built as written (the lane stops
+and returns to the architect), or a second operational use appears (its own ADR, as above).

@@ -132,8 +132,10 @@ class ReadOnlyTools:
                                  "gross and net with count, t-stat, 95% interval, hit rate and profit factor by timeframe, "
                                  "family, agent, session, side, volatility regime, decision and exit; cost per trade "
                                  "(spread, slippage vs the cost table, commission, swap); calibration of p on taken and "
-                                 "untaken candidates; live fills vs the cost table. Cells marked 'noise' are below the "
-                                 "minimum trade count and are not evidence. section 'summary' is the markdown overview; "
+                                 "untaken candidates; live fills vs the backtest's slippage prior. Cells marked 'noise' are "
+                                 "below the minimum trade count and are not evidence; a breakdown row is a lead only when "
+                                 "'verdict_adj' (Bonferroni bar t_bar over m rows, day-clustered errors) is signed, and "
+                                 "acting on it is a new registry trial. section 'summary' is the markdown overview; "
                                  "the others return that part of the JSON.",
                                  _schema({"section": {"type": "string", "enum": ATTRIBUTION_SECTIONS}}, ["section"]),
                                  self.read_attribution),

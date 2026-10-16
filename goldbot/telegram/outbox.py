@@ -137,14 +137,16 @@ class Outbox:
 
     def finished(self) -> list[tuple[str, str, list[tuple[int, int]]]]:
         """(proposal id, outcome, messages) for sent proposals that are finished, forgotten once returned. A proposal
-        that vanished without an archive (engine restarted before its window ended) is reported as expired. Each is
-        returned once: the row is deleted in the same commit that decides to report it."""
+        that vanished without an archive (engine restarted before its window ended) is reported as expired, and so is
+        one archived with no outcome (a restarted engine withdrew it; it is never raised again): its card loses its
+        buttons at once rather than at the end of its window (F60 re-verify finding 1). Each is returned once: the
+        row is deleted in the same commit that decides to report it."""
         out = []
         for pid, msgs in self.sent.items():
             outcome = self.bus.outcome(pid)
             if outcome is None:
                 p = self.bus.get(pid)
-                if p is not None and not p.expired:
+                if p is not None and not p.expired and (self.bus.pending_dir / f"{pid}.json").exists():
                     continue                                 # still open
                 outcome = "EXPIRED_UNAPPROVED"
             elif outcome == "APPROVED":

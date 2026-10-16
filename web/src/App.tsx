@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, currentUser, hasRole, hasToken, liveSocket, setToken } from "./lib/api";
+import { roleLabel } from "./lib/roles";
 import { Login } from "./screens/Login";
 import { Overview } from "./screens/Overview";
 import { Approvals } from "./screens/Approvals";
@@ -33,6 +34,7 @@ export function App() {
   }, [authed, qc]);
 
   if (!authed) return <Login onLogin={() => setAuthed(true)} />;
+  const me = currentUser();
 
   return (
     <div className="shell">
@@ -43,7 +45,8 @@ export function App() {
             <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>
           ))}
         </nav>
-        <span className="muted who">{currentUser()?.email} · {currentUser()?.role}</span>
+        {/* Role, never the email: persistent chrome never renders an identity (docs/ux/header-role.md) */}
+        <span className="muted who">{me ? <><span className="sr-only">Signed in as </span>{roleLabel(me.role)}</> : "Signed in"}</span>
         <button className="link" onClick={async () => { try { await api.logout(); } catch { /* session already gone server-side */ } setToken(null); setAuthed(false); }}>Sign out</button>
       </header>
       <main>

@@ -16,6 +16,39 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   with no new persisted field. After a restart the engine holds no proposal, so one left on disk is never executed,
   and it expires by the wall-clock rule with the guard. One stamped days ahead is archived at engine start. Tests:
   tests/test_approval_window_clock.py.
+- Attribution results verdicts follow ADR 0022 (2026-10-16, quant review of the results verdicts). The rule was
+  recorded before the code, in its own commit. Changes in `goldbot/research/attribution.py`:
+  - **Day-clustered errors.** t, `ci95_net` and the new `ci_adj` use standard errors clustered by entry UTC day
+    (CR1, `epoch_ns`). Tripling a day's trades no longer raises t.
+  - **Row bar.** Every cell carries `t_bar`, `ci_adj` and `verdict_adj`.
+    - Breakdown rows use the Bonferroni bar `t_bar = max(2, Φ⁻¹(1 − 0.025/m))`, m = breakdown cells at the minimum,
+      read on the row's days − 1 degrees of freedom. The report carries `t_bar` and `m`.
+    - The overall cell, the challengers and the live fills use `max(2.0, t⁻¹_{G−1}(0.975))` (F4).
+    - `verdict_adj` is signed if and only if `ci_adj` excludes 0.
+    - A clustered se of exactly 0 while the trades disperse is "no se": indistinguishable, never a point range (B1).
+    - The raw `verdict` (|t| >= 2) is kept for `read_attribution`.
+  - **Telegram digest** (`goldbot/telegram/digest.py`, quant ruling F3): names only rows whose `verdict_adj` is
+    signed, else "no row clears the bar (|t| ≥ t_bar over m rows) · overall ...".
+  - **Live fills** are compared with the backtest's slippage prior, not with the measured table built from the same
+    fills. `LiveFills.mean_table_usd` is now `prior_usd`.
+  - **Stale note fixed.** The note on live realised R now points at `ClosedTrade.r` in `closed_trades*.jsonl`.
+
+  **Change to the review's formula, ruled correct by the quant reviewer (2026-10-16).** The review's formula (CR0,
+  normal quantile) fails the review's own family-wise test: 0.085 in theory, 0.072 over seeds 0–499, against a bar of
+  0.07. CR1 with t on G − 1 degrees of freedom gives 0.049. The gates and the stop rule are unchanged.
+
+  Tests: tests/test_attribution.py
+  - ::test_rows_bonferroni_fwer, ::test_rows_bonferroni_fwer_with_a_day_effect, ::test_t_bar_values
+  - ::test_zero_clustered_se_with_dispersion_is_not_evidence
+  - ::test_overall_bar_is_two_or_the_t_quantile_on_days_minus_one_for_overall_challengers_and_live
+  - ::test_cell_stats_duplicated_same_day_trades_do_not_raise_t
+  - ::test_adjusted_verdict_is_signed_exactly_when_the_adjusted_interval_excludes_zero
+  - ::test_live_fills_are_compared_with_the_backtest_slippage_prior_not_the_table_built_from_them
+  - ::test_build_report_notes_do_not_say_live_r_unrecorded
+
+  tests/test_digest.py::test_attribution_line_names_no_best_or_worst_row_when_no_row_clears_the_bar,
+  ::test_attribution_line_never_names_an_exit_row (exit cells are signed by construction),
+  ::test_attribution_line_from_an_older_report_without_the_bar_prints_unknowns
 - Sign-in end-to-end tests (2026-10-16). web/e2e/auth.spec.ts runs on its own e2e server (Playwright project
   `auth`, port E2E_PORT+1, independent of the dashboard story) and covers: login (wrong password or code refused
   with the same words, sign out), forgot-password (an unknown account answered like a wrong code; nothing mailed), the
@@ -30,6 +63,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   builds it; `--host` accepts only 127.0.0.1 or ::1), and the server removes its temp state dir on SIGTERM. The auth
   story runs without retries (a retry would reuse spent first-run setup and the owner's hourly link count). Tests:
   tests/test_e2e_mailer.py.
+- **BACKLOG 65 code parts (a), (b), (d N1/N2) built; reviews pending (implementer, 2026-10-16).** (a) BACKLOG 61 L1:
+  the loss budget's currency check counts only running engines (a `ts` over 60 s old is left out, the supervisor's
+  own rule; an unstamped file is never assumed gone), so a removed engine's leftover file no longer keeps a
+  single-currency account amber; L2: mixed currencies during any supervisor halt read red (`mixed_currencies_paused`),
+  as every engine pauses then (`tests/test_account_view.py`). (b) the rollover block says "until" server midnight +
+  5 min and the weekend block "opens" at the first open minute after the weekend close, on the dashboard and Telegram
+  in the owner's zone (`tests/test_api_entry_status.py`, `tests/test_telegram_status.py`). (d) N1: gate 1's best
+  backtest trial is chosen among each configuration's latest run only, so a passing rerun meets gate 1 and is the
+  reference (`tests/test_phase_gates.py`); N2: settings with `holdout_from` but no `holdout_to` fail to load
+  (`tests/test_config.py`). Needs: quant-reviewer (N1, N2), trading-safety-reviewer (L1/L2 display), code-reviewer
+  (all). Not built: N3 (research-director ADR), (c) F1/F2 (W2-3).
 - **BACKLOG 52 security re-review, both LOW findings fixed (implementer).** `automode.audit_to` now opens the
   audit store with `auth.owner_email` from settings, as `owner_totp_ok` and the dashboard do. Before this, the
   Telegram service logged a false "auth.owner_email is not set" warning on its first audit write once dashboard
@@ -39,6 +83,85 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   fields and keeps the channel, the outcome, `decided_ts` and the file's modification time. A test runs the block
   exactly as printed. The step says not to delete done files: the auto-mode evidence, the digest and the
   performance report count them. Telegram decisions have an audit row only from `3817db7`.
+- Approval window: trading-safety findings on BACKLOG 60 and the dashboard audit follow-up to BACKLOG 52
+  (2026-10-16). Review not yet recorded: routed to `trading-safety-reviewer` (F60-1, F60-2) and `security-reviewer`
+  (audit).
+  - F60-1 (LOW): a click made before a restart could be applied to the same proposal raised again after it. The
+    proposal id depends only on account, agent and bar close, and a restarted engine can re-decide the last close.
+    The engine start now archives every pending file of its own account, inside its window or not, with outcome
+    None. `archive` also deletes the decision file. The account is checked on the record as well as by the file
+    glob, so an account named `<id>-<suffix>` is never touched. Defence in depth: `ApprovalCenter.poll_bus` discards
+    a decision stamped more than CLOCK_AHEAD_TOLERANCE_S before its proposal's `created` (new
+    `ApprovalBus.discard_decision`), so the card shown stays decidable. Tests:
+    `test_after_a_restart_an_on_disk_proposal_is_never_executed_and_falls_back_to_the_wall_clock` (updated),
+    `test_a_click_made_before_a_restart_is_never_applied_to_the_same_proposal_raised_again`,
+    `test_a_decision_stamped_before_its_proposal_was_raised_is_discarded_and_never_applied`,
+    `test_a_decision_stamped_a_couple_of_seconds_before_its_proposal_is_still_applied`
+    (tests/test_approval_window_clock.py), and
+    `test_every_proposal_of_this_account_expired_or_not_is_archived_on_start` (tests/test_cov_engine.py, renamed
+    from the expired-only rule).
+  - F60-2 (LOW, health only): the `approvals` health check uses `window_over(created, window_s + grace, now)`, so a
+    NaN or future `created` is reported as stuck rather than read as fine. Test:
+    `test_a_proposal_stamped_in_the_future_or_not_a_number_is_reported_stuck` (tests/test_health.py).
+  - Audit: `POST /api/decisions` catches and logs an audit failure (channel and proposal, never the email) and
+    still returns SUBMITTED, as the Telegram service does. Before, the decision stood on the bus while the owner saw
+    a 500. Test: `test_a_failing_audit_never_undoes_or_hides_a_dashboard_decision`
+    (tests/test_decision_identity_followup.py). The API contract does not change.
+  - Trading-safety re-verify of d5aa35b (CHANGES, 2026-10-16), all three findings fixed in the next commit:
+    - Finding 1 (MEDIUM): the old Telegram card stayed live after a restart, and a tap on it approved the same id
+      raised again, possibly at another size. The engine now never raises an id archived at its start
+      (`restart_archived`) or finished before it (`proposal_finished`), via `Engine._retired_proposal` on the one
+      publish path. Ids stay per bar close, because they drive sent_ids and order idempotency. `Outbox.finished`
+      reports a card archived with no outcome as expired at once, so it loses its buttons; a tap on it is refused.
+      Test (integration): `test_a_restart_inside_the_window_never_raises_the_same_proposal_again_and_the_old_card_expires`.
+    - Finding 2 (LOW): the 5 s tolerance is gone. `submit` copies the card's `created` into the decision
+      (`BusDecision.card_created`), and `poll_bus` applies a decision only when it matches the proposal held. A
+      decision file from an older release, with no card stamp, falls back to `ts < created`, with no tolerance.
+      Tests: `test_a_decision_bound_to_an_earlier_card_with_the_same_id_is_discarded_and_the_owner_is_told`,
+      `test_submit_binds_the_decision_to_the_card_it_read`,
+      `test_an_unbound_decision_from_an_older_release_is_applied_only_if_not_stamped_before_its_proposal`.
+      Rollback note: `BusDecision` is strict, so a pre-binding engine refuses a decision file that carries
+      `card_created`; the proposal expires (fail closed). Deploy the engines with the API and Telegram services.
+    - Finding 3 (INFO): a tap that is dropped (deleted at a restart, or bound to an earlier card) queues an owner
+      notice through `ApprovalBus.notify_owner` (state/agent_runs.jsonl, relayed by the Telegram service). Asserted
+      in `test_a_click_made_before_a_restart_is_never_applied_to_the_same_proposal_raised_again` and the binding test.
+- BACKLOG 63, card-bound approvals (2026-10-16, implementer). Review not yet recorded: routed to
+  `trading-safety-reviewer` (APPROVE needed at the merge, E1) and `code-reviewer`. TRACEABILITY A16.
+  - A tap is bound to the card the owner saw, not to the pending file at submit time (the BACKLOG 60 binding).
+    Telegram button data is `ok:<token>:<id>` / `no:<reason letter>:<token>:<id>`, where the token is the card's
+    `created` as its 8 float bytes in base64url (11 characters, exact). `/api/proposals` sends `created`, and the
+    dashboard sends it back in `POST /api/decisions` (required: a request without it is a 422).
+  - `ApprovalBus.submit(..., card_created=)` is keyword-only and required. None is refused (`card_missing`), and a
+    stamp that differs from the pending proposal's is refused (`card_mismatch`, logged). `ApprovalCenter.poll_bus`
+    refuses both again (defence in depth for a re-raise after the check), logs the reason, discards the decision
+    and notifies the owner. The BACKLOG 60 fallback (an unbound decision applied when stamped after its proposal)
+    is removed: an unbound decision is never applied.
+  - 64-byte bound: account names are capped at `ACCOUNT_ID_MAX_BYTES = 24` (UTF-8) in `load_accounts`, so the
+    longest proposal id gives 63-byte reject data. `decision_callbacks` raises rather than cut an id that does not
+    fit. Today's names (icm-demo, vantage-demo, icm-live) are well inside.
+  - Rollout: Telegram cards sent before the deploy are refused on tap (`card_missing`) and expire within 90 s. An
+    open dashboard tab with the old bundle gets a 422 until reloaded. Rollback: a BACKLOG 60 engine reads
+    `card_created` and checks it against its proposal; an older engine refuses the field (strict `BusDecision`),
+    so the proposal expires. Deploy the API, Telegram and engine services together.
+  - Tests: tests/test_card_bound_approvals.py (19). Existing callers now decide on the shown card through
+    `tests/cards.py`. `test_an_unbound_decision_from_an_older_release_is_never_applied_whatever_its_stamp`
+    replaces the BACKLOG 60 fallback test.
+  - Review round on 2c6e805 (trading-safety APPROVE, 194 passed; code-reviewer APPROVE, 30/30; security PUSH-OK;
+    all 2026-10-16). The LOW and INFO findings are fixed in the follow-up `fix:` commit:
+    - Security LOW: proposal ids are allow-listed (`PROPOSAL_ID_PATTERN = ^[A-Za-z0-9_.-]{1,47}$`, and no `..`) in
+      `parse_decision_callback`, `decision_callbacks`, `ApprovalBus.submit/get/discard_decision` and
+      `Decision.proposal_id` (a 422 for anything outside the pattern; `..` gets a 400 from the bus). An empty id is
+      refused at parse (trading-safety INFO-2).
+    - Trading-safety LOW-1: a card whose buttons cannot be built is logged and the owner is told. It is recorded as
+      sent, so the pump moves on to later cards, outcome edits and reports; the proposal expires undecided.
+    - Trading-safety LOW-2: the engine start (`goldbot/ops/services/engine.py::approval_ids_problem`) checks the
+      longest id from `Engine._proposal_id` before any broker call and refuses to start (`startup_error`) when no
+      card could carry it. runner.py is untouched.
+    - INFO-1: a deploy tap with deploys off answers "no longer on offer".
+    - Tests (tests/test_card_bound_approvals.py): the traversal and empty ids at parse, bus and dashboard;
+      `test_a_card_that_cannot_be_built_is_skipped_the_owner_is_told_and_later_cards_still_go_out`;
+      `test_an_engine_whose_proposal_ids_no_card_can_carry_refuses_to_start_before_any_broker_call`;
+      `test_a_deploy_tap_with_no_deploy_watch_says_no_longer_on_offer`.
 - **Backup and restore-drill errors keep the fix and the RUNBOOK pointer (2026-10-16; health text only; SRE
   review).** The scheduler job check cut a failed job's first error line at 160 characters, so a restic-not-configured
   message lost its trailing "RUNBOOK 'Backups'". The backup and drill job errors now start with
@@ -48,6 +171,43 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `test_unconfigured_restic_health_reasons_name_the_fix_command_and_the_runbook` runs both jobs through the real
   scheduler with no keys and checks `job:backup`, `job:restore_drill`, `backup_age` and `restore_drill`. The
   scheduler still prefixes the job check's line with `BackupError:`.
+- BACKLOG 66, equity-scaled notional ceiling at the bridge (implementer, 2026-10-16; plan
+  `docs/proposals/2026-10-backlog66-bridge-notional-ceiling-plan.md` plus trading-safety conditions C1-C6; TRACEABILITY
+  R44, cross-references R7). `GuardedBroker.place_order` now refuses an order that would take the terminal's gross
+  notional on the symbol above 6x its own equity (DESIGN.md:112: 30% x 1:20), read entirely on the MT5 box and failing
+  closed. A refusal is a definite reject (retcode 10006, message `bridge_notional_ceiling: ...`), never a 500:
+  - the engine journals the message on the order entry, notifies the owner on Telegram, pauses auto entries for that
+    bar close (`auto_paused:bridge_refused`), and an approved card shows "refused by the MT5 box" (Telegram and
+    dashboard), worded per cause (the 6x limit, or figures it could not read); the notice and cards never show the
+    proposal id or the raw message (ui-ux round, 2026-10-16); account() returning None refuses too;
+  - the account is read once for every order (also without a verifier); the changed-account raise stays;
+  - the order's age is checked again just before the inner send (C6, `bridge_stale_order`);
+  - close, modify, `MAX_ORDER_LOTS`, the gate and the wire protocol (API 5, `protocol_digest`) are unchanged.
+  Built on the current `place_order` (C1): W1-1's F4 fence slots in after the account check, before the ceiling.
+  Deploy: MT5 box first (the guard works with any brain), then the brain. RUNBOOK has the recovery entry for both
+  refusal messages (ceiling, `unreadable:<field>`; SRE condition C1). Reviews pending: trading-safety (build),
+  code-reviewer, security PUSH-OK, sre for the deploy.
+- Account classifier: a stored Unknown no longer sticks (implementer, 2026-10-16, SRE review finding;
+  trading-safety Low and Option B applied). `PersistentClassifier.update` (goldbot/execution/classifier.py) lets a
+  stored "unknown" adopt a known class on its first run when that cannot relax the account: the class is Standard,
+  or Raw was proven by commission, or `state["last_known"]` is Raw or None. Otherwise (last stored Standard, now a
+  spread-only Raw) the two-run rule applies. `last_known` is the last raw/standard class actually stored as the
+  class (never a pending run) and never expires. Legacy state files without it are migrated on load: a known
+  stored class is used as-is; a stored unknown with any standard in the kept runs reads Standard; otherwise None.
+  Before, a thin first run (< 1,000 London/NY ticks) stored "unknown" and a known class then needed two agreeing
+  Fridays, so the demo account would have stayed blocked by `account_class_unknown` until Fri 30 Oct instead of
+  23 Oct. Unchanged: Raw <-> Standard still needs two agreeing runs, and a known class falls back to Unknown only
+  after two Unknown runs in a row. Entry-rule change: reviewed by `trading-safety-reviewer`. Tests in
+  tests/test_risk_exec_webhook.py:
+  ::test_a_stored_unknown_is_replaced_by_the_first_known_class_on_its_first_run,
+  ::test_a_stored_unknown_adopts_standard_on_its_first_run,
+  ::test_after_falling_from_standard_to_unknown_a_spread_only_raw_run_needs_a_second_agreeing_run,
+  ::test_after_falling_from_standard_to_unknown_a_commission_raw_run_is_adopted_at_once,
+  ::test_raw_runs_that_were_only_pending_never_count_as_the_last_known_class,
+  ::test_a_last_known_standard_does_not_expire_after_more_than_twenty_unknown_runs,
+  ::test_a_legacy_state_file_without_last_known_is_migrated_from_its_class_and_runs,
+  ::test_a_known_class_needs_two_agreeing_runs_to_change_to_another_known_class,
+  ::test_a_known_class_does_not_fall_back_to_unknown_on_one_thin_week.
 - **Engine state keeps moving while the market is closed (2026-10-16; BACKLOG 59; trading-safety and SRE review
   pending).** The engine wrote `engine_<acct>.json` on tick time only. With the market closed the tick stamp is
   frozen, so the file stopped, and health failed `bridge_compat:<acct>` once its `checked_at` was 5 min old: a
@@ -183,6 +343,30 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     printed the action's attribute dict; now "8%%", with a test that `--help` renders.
   - Tests: tests/test_digest.py 10 new (12 cases), 1 updated; tests/test_report_days.py 2 new (5 cases);
     tests/test_min_lot.py 1 new. RUNBOOK 0.5 "Morning digest" updated.
+- **The engine publishes why it refuses entries (BACKLOG 43, `entry_blocks` part; implementer).**
+  `RiskGate.account_reasons(st, now)` is every account-level reason `check()` refuses for, and `check()` starts from
+  it (one list, cannot drift). `engine_<account>.json` carries `entry_blocks` (those codes, at every state write; a
+  heartbeat judges the feed it publishes) and `entry_refusals` (per agent, the last per-trade refusal and its time,
+  cleared when the gate next allows that agent; in memory only). The API (`goldbot/api/entry_status.py`) now only
+  words them: the flag mapping and the min-lot "Likely" fallback are gone, rollover and the weekend cut show, a
+  strategy's last refusal is its own block "since" then, and an engine without `entry_blocks` shows
+  `entry_reasons_missing` (act), never OPEN. Order change on refusals only: `account_class_unknown` and
+  `open_risk_unknown` now come before the intent's own reasons. Deploy: brain and API together (same release);
+  exits are never gated by any of it. R43; reviews owed: code-reviewer, trading-safety-reviewer (gate and engine),
+  ui-ux-designer (new wording).
+  Reviews of 558588e: ui-ux-designer 2026-10-16: CHANGES applied (per-trade refusals worded per code in
+  `REFUSAL_TEXT`, so a per-trade `daily_loss_limit_abs` never says "limit reached"; every strategy line and the
+  PARTLY OPEN headline use `agent_label`, e.g. "Trend (trend-g0)"; new `entry_reasons_missing` and `invalid_state`
+  texts). code-reviewer 2026-10-16: APPROVE, both LOWs fixed: the risk-day rollover clears `entry_refusals`, and
+  "every strategy held" now needs the whole throttle roster held (an agent named only by a refusal never makes it
+  read blocked for everyone). trading-safety review of 558588e: running, not recorded here yet.
+  trading-safety-reviewer 2026-10-16: APPROVE 558588e (0 differences in 420k old-vs-new differential cases); LOW-1
+  fixed (entry_blocks and the refusal note are guarded: a failure is logged, the state, risk and orders still write,
+  entry_blocks is left out and the API shows `entry_reasons_missing`), INFO-4 fixed (a non-empty list with no valid
+  code is `entry_reasons_missing`, never OPEN), INFO-3 pinned (a same-direction-cap intent in the account-reasons
+  test). INFO-2: refusal reason lists are longer in the invalid-number cases (`account_class_unknown` and
+  `open_risk_unknown` now come before `invalid_state`, and with a bad intent number on a valid state the loss caps
+  too), so perf_report's gate_refusals counts rise slightly; every decision is unchanged.
 - Gates on the frozen next-PR candidate tree 626b56b (nobody editing; macOS, own venv, `GATES_WORKERS=4`, Node 22.22.3). All green. Raw output of `scripts/gates.sh --web` plus e2e:
 
   | Gate | Result |
@@ -213,6 +397,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
 
   Notes: e2e needs `PYTHON=<venv>/bin/python` (playwright.config.ts defaults to bare `python`, which resolved to a pyenv 3.10 without duckdb on the first try).
   dashboard.spec.ts takes 5.7 m (Playwright flagged it slow). The e2e server logs a CancelledError on shutdown (graceful-shutdown timeout on the /ws sleep, goldbot/api/app.py:795); it does not fail the run.
+- **BACKLOG 64: the dashboard header shows the signed-in role, never the email (implementer, 2026-10-16; spec
+  `docs/ux/header-role.md`).** The header reads "Owner", "Approver" or "Viewer" (screen readers hear "Signed in as
+  …"; "Signed in" when the session record is missing), from one map `web/src/lib/roles.ts` `roleLabel` that the
+  Users tab's role column also uses. The Account tab gains "Your sign-in" (role and own email) as its first section.
+  "Sign out" is a 44 px tap target below 720 px. No API change. Tests: `web/src/App.test.tsx`,
+  `web/src/lib/roles.test.ts`, `web/src/screens/Account.test.tsx` ("Account: your sign-in"), and the banner, safety
+  strip, Account and 360 px row/tap-target checks in `web/e2e/dashboard.spec.ts` and `web/e2e/auth.spec.ts`.
+  Rule for future screens: persistent chrome never renders an identity. Next: ui-ux-designer review, code-reviewer.
 - Heartbeats stamped in the future fail closed (2026-10-16, BACKLOG 58). Before this, a `ts` ahead of the reader's
   clock, or a NaN, made `now - ts > limit` False, so a dead supervisor whose last write carried a fast clock (or came
   from a restored backup) never halted the engines. The shared rule is `goldbot.data.timeutil.heartbeat_problem`:
@@ -246,6 +438,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - core.db is opened once per engine, with a 500 ms write busy timeout;
   - the paper broker declares its balance reads exact, so one read raises the mark there.
   The ADR is renumbered 0018 (0017 is CostImputer).
+- Integration chores scripted (implementer, 2026-10-16; throughput plan lever 4, TD-7, TD-8; ADR 0025 proposed,
+  amends 0012). The work comes in four parts:
+  - **Rendered-docs merge driver.** `.gitattributes` routes HANDOFF.md, TRACEABILITY.md and BACKLOG.md to the
+    `goldbot-docs` driver. It re-renders each file from the fragments merged three-way, so a plain merge, rebase or
+    cherry-pick no longer conflicts on them. A fragment edited on both sides, or two lanes taking one id, still
+    stops the merge and names the fix.
+    **Enable it once per clone:** `python scripts/docs_assemble.py install-merge-driver`.
+  - **ADR numbers.** `docs_assemble.py new-adr --slug S --title T` reserves the next number under a lock in the git
+    common dir, so parallel worktrees never share a number. It skips `docs/decisions/reserved.yaml`, which holds
+    0023-0026 from the CTO register; `--number N` claims a reserved number. `check` fails on two ADRs with one number.
+  - **Worktree prune.** `scripts/prune_worktrees.sh` is a dry run by default; `--apply` removes. It handles only
+    merged, clean worktrees that have been idle for 24 h, and never the main checkout or a locked, dirty or unmerged
+    tree. It also keeps a lane that never committed (a read-only reviewer) and one that holds ignored files outside
+    the regenerable caches (an `.env`, say: `git worktree remove` would delete it silently).
+  - **Lane dispatch checklist.** `docs/process/lane-checklist.md`.
+
+  Tests: `tests/test_docs_assemble_chores.py`, `tests/test_prune_worktrees.py`.
 - The kill switch's close-everything choice is now state (2026-10-16, trading-safety finding F1 MEDIUM; re-review
   APPROVED 6cf86e3, with two follow-ups fixed in the next commit). Before, `everything` was true only on the tripping
   read, and the owner-mode write (`ApprovalBus.set_mode`) ran before the flatten: in auto mode a full disk raised out
@@ -542,6 +751,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   as `[2]`. `research-v1`'s registry (20 rows) holds #3, #5, #10, #12 and #2, #4, #9, #14. Both lists are now the
   registry's. The registry and the DSR count (20) are unchanged. `RetiredFamily.trials` feeds only the `retired_drift`
   check, so no allocation moves. Open gap: nothing compares these lists with the registry rows themselves.
+- Backlog throughput plan (program-director, 2026-10-16, owner request): `docs/process/throughput-plan.md` measures
+  the flow from git:
+  - the last 25 items: median cycle ~24 h, with 4 items at 114–127 h;
+  - 2.2 review rounds per item, and 75% of items needed 2 or more;
+  - work waited up to 117 h off `main`, while a PR, once opened, sat 9–68 min;
+  - 31 of 47 merges had conflict events, mostly in the rendered docs.
+
+  It ranks 8 levers: (1) daily release with auto-merge on recorded reviews; (2) a shift-left review packet and a
+  definition of ready; (3) parallel reviewers with one fix round; (4) scripted docs merge, ADR reservation and the
+  dispatch checklist; (5) a review SLA; (6) a test-speed budget; (7) a weekly owner batch; (8) the `runner.py`
+  split. Rollout runs 10-17 – 10-30, with an accountable role for each step. Forecast for the 13
+  engineering-closeable items: ~10-22 under the plan, against ~10-30 today. No safety rail, review or gate changes.
 - Gross closed trades are charged a conservative imputed cost (quant review 2026-10-12, findings A-D; TRACEABILITY X20;
   ADR 0017).
   - goldbot/ops/cost_imputation.py is the one shared helper. It charges only the costs a row's return lacks: the

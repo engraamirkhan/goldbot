@@ -10,6 +10,7 @@ import pandas as pd
 from goldbot.ops.checks._base import (
     BACKUP_FAIL_H,
     BACKUP_REPO_WARN_BYTES,
+    BACKUP_SLOW_WARN_S,
     BACKUP_WARN_H,
     DISK_FAIL_FREE_GB,
     DISK_FAIL_FREE_PCT,
@@ -115,6 +116,10 @@ def check_backup_age(ctx: HealthContext) -> Check:
         return Check(name=name, status="warn", reason=msg + f"; repository {repo / 1e9:.1f} GB of the 20 GB free tier")
     if rec.get("model_problems"):
         return Check(name=name, status="warn", reason=msg + "; " + "; ".join(rec["model_problems"])[:200])
+    took = rec.get("duration_s")
+    if isinstance(took, (int, float)) and took >= BACKUP_SLOW_WARN_S:
+        return Check(name=name, status="warn", reason=msg + f"; it took {took / 60:.0f} min: restic cancels a backup "
+                                                            "near 20 min under the no-delete key (ADR 0002)")
     return Check(name=name, status="ok", reason=msg)
 
 

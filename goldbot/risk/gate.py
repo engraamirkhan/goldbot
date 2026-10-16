@@ -213,14 +213,28 @@ _POSITIVE_STATE = ("equity",)
 _POSITIVE_INTENT = ("price", "atr_usd", "stop_atr", "contract_oz", "volume_step", "volume_min", "volume_max")
 
 
+# BACKLOG 43: the refusals check() can only reach once it has sized the trade (they need the intent's stop, price and
+# conversion). The engine publishes the last one per agent (`entry_refusals` in engine_<account>.json); every other
+# refusal is an account reason (`RiskGate.account_reasons`, published as `entry_blocks`) or the intent's own filtering
+# (negative EV, cost floor, account class rules, same-direction cap), which is not published
+PER_TRADE_REFUSALS = frozenset({"fx_conversion_unavailable", "min_lot_exceeds_risk", "margin_level_floor",
+                                "combined_exposure_cap", "daily_loss_limit_abs", "heat_cap"})
+
+
+def _bad(obj: Any, f: str, positive: tuple[str, ...]) -> bool:
+    v = getattr(obj, f)
+    return v is not None and (not math.isfinite(v) or (f in positive and not v > 0))
+
+
+def invalid_state_fields(st: AccountState) -> list[str]:
+    """The account state fields the gate reads that it cannot compare (as `invalid_fields`)."""
+    return [f for f in _STATE_NUMBERS if _bad(st, f, _POSITIVE_STATE)]
+
+
 def invalid_fields(intent: Intent, st: AccountState) -> list[str]:
     """The state and intent fields the gate reads that are NaN or infinite, or not > 0 where only a positive number
     means anything (`_POSITIVE_*`). None is left to the explicit handling."""
-    def bad(obj: Any, f: str, positive: tuple[str, ...]) -> bool:
-        v = getattr(obj, f)
-        return v is not None and (not math.isfinite(v) or (f in positive and not v > 0))
-    return [f for f in _STATE_NUMBERS if bad(st, f, _POSITIVE_STATE)] + \
-        [f for f in _INTENT_NUMBERS if bad(intent, f, _POSITIVE_INTENT)]
+    return invalid_state_fields(st) + [f for f in _INTENT_NUMBERS if _bad(intent, f, _POSITIVE_INTENT)]
 
 
 def _family_has_target(intent: Intent) -> bool:
@@ -330,21 +344,6 @@ class RiskGate:
             out.append("throttle_entry_rate")
         return out
 
-    def open_risk_reasons(self, intent: Intent, st: AccountState) -> list[str]:
-        """The open-risk checks that need no sizing (BACKLOG 19, 35). `same_direction_cap` once
-        `heat.max_same_direction` positions on the intent's side are open on the account (playbook G-4: "same-side
-        positions of different agents count as one bet"); `open_risk_unknown` when the heat cap, or the projection with
-        an absolute daily limit, needs the open risk and the engine could not compute it, or it is not a finite amount
-        >= 0 (fail closed). Nothing while both are off, so the new facts are never read then."""
-        L = self.limits
-        out = []
-        if L.heat.enabled and (st.open_long if intent.side > 0 else st.open_short) >= L.heat.max_same_direction:
-            out.append("same_direction_cap")
-        needs = L.heat.enabled or (L.project_open_risk and L.daily_loss_limit_abs is not None)
-        if needs and (st.open_risk is None or not math.isfinite(st.open_risk) or st.open_risk < 0):
-            out.append("open_risk_unknown")
-        return out
-
     def window_reasons(self, st: AccountState) -> list[str]:
         """BACKLOG 17 (playbook G-2: "no entries on those days. No entries for 15 min after each daily reopen and 30
         min after the weekly open ... Exits are untouched") and BACKLOG 18 (G-3: "a -5/+15 min entry blackout from
@@ -388,21 +387,19 @@ class RiskGate:
             return broker, f"broker {broker:.2f} > 1:20 {cap:.2f}"
         return cap, f"1:20 {cap:.2f} >= broker {broker:.2f}"
 
-    def check(self, intent: Intent, st: AccountState, now_utc: pd.Timestamp | None = None,
-              margin_required: MarginFn | None = None, throttle: AgentThrottle | None = None) -> GateDecision:
-        """`margin_required(side, lots, price)` is the broker's margin figure (`broker_margin(broker, symbol)`);
-        without it the margin check uses the 1:20 figure alone and says so in `margin_note`. `throttle` is the
-        intent's agent's throttle facts (BACKLOG 21), judged at `now_utc` (`throttle_reasons`).
+    def account_reasons(self, st: AccountState, now_utc: pd.Timestamp | None = None,
+                        throttle: AgentThrottle | None = None) -> list[str]:
+        """BACKLOG 43 (ADR 0011: the engine publishes "the gate's account-level reasons at each refresh, including
+        rollover and the weekend cut"): every reason `check()` refuses an entry for that does not depend on the intent,
+        in the order `check()` gives them. `check()` starts from this list, so the two cannot drift; the engine
+        publishes it as `entry_blocks`. `throttle` is one agent's facts (BACKLOG 21), judged at `now_utc`: the account's
+        own list leaves it out (None), and the engine publishes the per-agent part under `throttle`.
 
-        A number outside its domain (NaN, infinite, or not > 0 where it must be: `invalid_fields`) refuses the entry
-        (`invalid_state`, then `invalid:<field>` for each) after the flag reasons and before any limit or the sizing
-        reads it; the stage machine does not run on it (a zero equity read is not a 100% drawdown). The gate fails
-        closed, never open, on state it cannot compare. Entries only; exits never call the gate."""
-        bad = invalid_fields(intent, st)
+        Reads only: the stage machine runs in `check()` and in the engine's account refresh, never here. A state number
+        the gate cannot compare (`invalid_state_fields`) ends the list with `invalid_state` and `invalid:<field>`, and
+        the loss caps, which read those numbers, are not judged on it. Entries only; exits never call the gate."""
         L = self.limits
         reasons: list[str] = []
-        if not bad:
-            self.update_stage(st)
         if st.supervisor_halt:
             reasons.append("supervisor_halt")
         if st.owner_halt:
@@ -441,15 +438,48 @@ class RiskGate:
         if st.open_positions >= L.max_positions:
             reasons.append("max_positions")
         reasons += self.throttle_reasons(throttle, now_utc)
+        bad = invalid_state_fields(st)
+        if not bad:
+            day_loss = 1 - st.equity / st.day_start_equity if st.day_start_equity else 0.0
+            week_loss = 1 - st.equity / st.week_start_equity if st.week_start_equity else 0.0
+            if day_loss >= L.daily_cap:
+                reasons.append("daily_cap")
+            if week_loss >= L.weekly_cap:
+                reasons.append("weekly_cap")
+        if st.account_class == "unknown":
+            reasons.append("account_class_unknown")
+        # BACKLOG 19/35: the heat cap, or the projection with an absolute daily limit, needs the open risk; unknown, or not
+        # a finite amount >= 0, refuses (fail closed). Nothing while both are off, so the fact is never read then
+        needs = L.heat.enabled or (L.project_open_risk and L.daily_loss_limit_abs is not None)
+        if needs and (st.open_risk is None or not math.isfinite(st.open_risk) or st.open_risk < 0):
+            reasons.append("open_risk_unknown")
+        if bad:
+            reasons.append("invalid_state")
+            reasons += [f"invalid:{f}" for f in bad]
+        return reasons
+
+    def check(self, intent: Intent, st: AccountState, now_utc: pd.Timestamp | None = None,
+              margin_required: MarginFn | None = None, throttle: AgentThrottle | None = None) -> GateDecision:
+        """`margin_required(side, lots, price)` is the broker's margin figure (`broker_margin(broker, symbol)`);
+        without it the margin check uses the 1:20 figure alone and says so in `margin_note`. `throttle` is the
+        intent's agent's throttle facts (BACKLOG 21), judged at `now_utc` (`throttle_reasons`).
+
+        A refusal is `account_reasons` (BACKLOG 43) followed by the intent's own reasons. A number outside its domain
+        (NaN, infinite, or not > 0 where it must be: `invalid_fields`) refuses the entry (`invalid_state`, then
+        `invalid:<field>` for each) after the account reasons and before any limit or the sizing reads it; the stage
+        machine does not run on it (a zero equity read is not a 100% drawdown). The gate fails closed, never open, on
+        state it cannot compare. Entries only; exits never call the gate."""
+        bad = invalid_fields(intent, st)
+        L = self.limits
+        if not bad:
+            self.update_stage(st)
+        reasons = self.account_reasons(st, now_utc, throttle)
         if bad:
             log.warning("entry refused: invalid state %s", bad)
-            return GateDecision(allowed=False, reasons=[*reasons, "invalid_state", *(f"invalid:{f}" for f in bad)])
-        day_loss = 1 - st.equity / st.day_start_equity if st.day_start_equity else 0.0
-        week_loss = 1 - st.equity / st.week_start_equity if st.week_start_equity else 0.0
-        if day_loss >= L.daily_cap:
-            reasons.append("daily_cap")
-        if week_loss >= L.weekly_cap:
-            reasons.append("weekly_cap")
+            if "invalid_state" not in reasons:
+                reasons.append("invalid_state")
+            return GateDecision(allowed=False, reasons=[*reasons, *(f"invalid:{f}" for f in bad
+                                                                    if f"invalid:{f}" not in reasons)])
         # a time-exit rule has no reachable target: p x target would be fiction (quant review H1). Fail closed until the
         # EV uses the time-exit outcome (HANDOFF: what must change before live)
         if not intent.has_target or not _family_has_target(intent):
@@ -460,15 +490,15 @@ class RiskGate:
             reasons.append("negative_ev")
         if intent.target_atr < L.min_target_over_cost * intent.cost_atr:
             reasons.append("target_below_cost_floor")
-        if st.account_class == "unknown":
-            reasons.append("account_class_unknown")
-        elif st.account_class == "standard":
+        if st.account_class == "standard":
             if intent.timeframe == "15m" and intent.family != "session_open":
                 reasons.append("standard_account_15m")
             edge = intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr      # gross, before costs
             if edge <= L.standard_edge_over_cost * intent.cost_atr:            # design: must exceed 1.5x
                 reasons.append("standard_account_edge")
-        reasons += self.open_risk_reasons(intent, st)
+        # BACKLOG 19 (playbook G-4: "same-side positions of different agents count as one bet")
+        if L.heat.enabled and (st.open_long if intent.side > 0 else st.open_short) >= L.heat.max_same_direction:
+            reasons.append("same_direction_cap")
         if reasons:
             return GateDecision(allowed=False, reasons=reasons)
 

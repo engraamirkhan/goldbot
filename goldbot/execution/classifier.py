@@ -2,7 +2,8 @@
 
 Decisive test: commission on past deals => Raw. Otherwise session-filtered median spread:
 < $0.20 floating with no deal history => Raw, >= $0.30 => Standard, between => Unknown. The last classification is
-persisted and only changes after two consecutive disagreeing runs. On Standard, 15m specialists are
+persisted and only changes after two consecutive disagreeing runs; a stored Unknown counts as never classified, so
+the first known class is adopted on its first run. On Standard, 15m specialists are
 disabled; on Unknown, the engine trades paper and alerts.
 """
 from __future__ import annotations
@@ -51,20 +52,56 @@ def classify(ticks: pd.DataFrame, deals: pd.DataFrame, *, raw_spread_max: float 
 
 
 class PersistentClassifier:
-    """Only changes the stored class after two consecutive runs disagree with it."""
+    """Only changes the stored class after two consecutive runs disagree with it.
+
+    "only changes when two consecutive runs disagree" guards a *known* class: Raw <-> Standard, and a known class
+    falling back to Unknown, each need two agreeing runs. A stored Unknown adopts a known class on its first run
+    when that cannot relax the account: the class is Standard (the restrictive one), or Raw was proven by
+    commission, or the account has never been *stored* as anything but Raw. So one thin first Friday does not leave
+    the account unclassified (and blocked by `account_class_unknown`) for a further week, while an account last
+    stored as Standard needs two consecutive spread-only Raw runs before it is treated as Raw.
+
+    `state["last_known"]` is the last raw/standard class actually stored as `state["class"]`. It is set only when
+    the stored class is assigned, never from pending runs, and it never expires (unlike the 20 kept runs).
+    """
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.state = json.loads(self.path.read_text()) if self.path.exists() else {"class": None, "pending": None, "runs": []}
+        if "last_known" not in self.state:
+            self.state["last_known"] = self._migrated_last_known()
+
+    def _migrated_last_known(self) -> str | None:
+        """Legacy files (no `last_known`): a known stored class is it; a stored unknown with any standard run in
+        the kept runs is taken as last stored Standard (the restrictive reading); otherwise none."""
+        cur = self.state["class"]
+        if cur in ("raw", "standard"):
+            return str(cur)
+        if cur == "unknown" and any(r.get("account_class") == "standard" for r in self.state["runs"]):
+            return "standard"
+        return None
+
+    def _store(self, account_class: str) -> None:
+        self.state["class"] = account_class
+        self.state["pending"] = None
+        if account_class in ("raw", "standard"):
+            self.state["last_known"] = account_class
+
+    def _adopt_at_once(self, c: Classification) -> bool:
+        cur = self.state["class"]
+        if cur is None:
+            return True
+        if cur != "unknown" or c.account_class == "unknown":
+            return False
+        return c.account_class == "standard" or c.commission_seen or self.state.get("last_known") in (None, "raw")
 
     def update(self, c: Classification) -> str:
         cur = self.state["class"]
-        if cur is None:
-            self.state["class"] = c.account_class
+        if self._adopt_at_once(c):
+            self._store(c.account_class)
         elif c.account_class != cur:
             if self.state["pending"] == c.account_class:
-                self.state["class"] = c.account_class
-                self.state["pending"] = None
+                self._store(c.account_class)
             else:
                 self.state["pending"] = c.account_class
         else:

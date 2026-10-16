@@ -1,6 +1,6 @@
 ---
 number: 60
-rank: 6
+rank: 5
 title: Approval window expiry trusts a future-stamped proposal
 stage: Approvals (owner confirms entries, 90 s) · PROTECT
 size: S

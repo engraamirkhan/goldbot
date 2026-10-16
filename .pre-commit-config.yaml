@@ -35,10 +35,11 @@ repos:
         name: no MT5 trade-history reports
         entry: python scripts/check_no_mt5_report.py
         language: python
-      - id: docs-assemble             # HANDOFF/TRACEABILITY/BACKLOG are rendered from fragments (ADR 0012)
+      - id: docs-assemble             # HANDOFF/TRACEABILITY/BACKLOG are rendered from fragments (ADR 0012);
+        # also fails on two ADRs with one number (ADR 0025)
         name: rendered docs match their fragments (fix with `python scripts/docs_assemble.py`)
         entry: python scripts/docs_assemble.py check
         language: python
         additional_dependencies: ["pyyaml==6.0.3"]
         pass_filenames: false
-        files: ^(HANDOFF\.md|docs/(TRACEABILITY|BACKLOG)\.md|docs/(handoff|traceability|backlog)\.d/.*|scripts/docs_assemble\.py)$
+        files: ^(HANDOFF\.md|docs/(TRACEABILITY|BACKLOG)\.md|docs/(handoff|traceability|backlog)\.d/.*|docs/decisions/.*|scripts/docs_assemble\.py)$

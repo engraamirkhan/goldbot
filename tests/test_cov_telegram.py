@@ -6,6 +6,7 @@ import pytest
 
 from goldbot.telegram.approvals import REASON_CODES, ApprovalCenter, Outcome, Proposal, constant_time_equal
 from goldbot.telegram.bus import ApprovalBus, BusDecision
+from tests.cards import submit_shown
 
 OWNER, BACKUP, STRANGER = 111, 222, 999
 
@@ -51,7 +52,7 @@ def test_bus_recent_lists_finished_and_submitted_newest_first(tmp_path):
     bus.publish(_prop("open"))
     bus.publish(_prop("sub"))
     bus.archive(_prop("old", outcome=Outcome.EXPIRED))
-    bus.submit("sub", False, "cost", by="dashboard:o@x.io")
+    submit_shown(bus, "sub", False, "cost", by="dashboard:o@x.io")
     rows = bus.recent()
     assert [(p.proposal_id, d is not None) for p, d in rows] == [("sub", True), ("old", False)]   # "open" is not decided
     assert rows[0][1] is not None and rows[0][1].reason_code == "cost"
@@ -152,15 +153,15 @@ def test_bus_submit_validates_and_the_first_decision_wins(tmp_path):
     bus = ApprovalBus(tmp_path)
     bus.publish(_prop())
     with pytest.raises(ValueError):
-        bus.submit("icm-1-a", False, None, "dashboard:a@x")
+        submit_shown(bus, "icm-1-a", False, None, "dashboard:a@x")
     with pytest.raises(ValueError):
-        bus.submit("icm-1-a", False, "whatever", "dashboard:a@x")
+        submit_shown(bus, "icm-1-a", False, "whatever", "dashboard:a@x")
     with pytest.raises(KeyError):
-        bus.submit("unknown", True, None, "dashboard:a@x")
-    d = bus.submit("icm-1-a", True, "news", "telegram:111")
+        submit_shown(bus, "unknown", True, None, "dashboard:a@x")
+    d = submit_shown(bus, "icm-1-a", True, "news", "telegram:111")
     assert d.approve and d.reason_code is None and d.by == "telegram"            # the channel only (A15)
     with pytest.raises(KeyError, match="already decided"):
-        bus.submit("icm-1-a", False, "cost", "dashboard:b@x")
+        submit_shown(bus, "icm-1-a", False, "cost", "dashboard:b@x")
     assert bus.pending() == []                                       # decided proposals leave the queue
 
 
@@ -168,7 +169,7 @@ def test_bus_refuses_decisions_on_expired_proposals(tmp_path):
     bus = ApprovalBus(tmp_path)
     bus.publish(_prop(age_s=100))
     with pytest.raises(KeyError, match="expired"):
-        bus.submit("icm-1-a", True, None, "dashboard:a@x")
+        submit_shown(bus, "icm-1-a", True, None, "dashboard:a@x")
     assert bus.pending() == []
 
 
@@ -194,8 +195,8 @@ def test_engine_side_poll_applies_bus_decisions_and_archives_them(tmp_path):
     c.propose(_prop("b"))
     c.propose(_prop("c"))
     assert {p.proposal_id for p in bus.pending()} == {"a", "b", "c"}
-    bus.submit("a", True, None, "dashboard:owner@x")
-    bus.submit("b", False, "duplicate", "telegram:222")
+    submit_shown(bus, "a", True, None, "dashboard:owner@x")
+    submit_shown(bus, "b", False, "duplicate", "telegram:222")
     (bus.decisions_dir / "c.json").write_text('{"proposal_id": "c", "appr')       # torn: ignored, not crashed
     done = {p.proposal_id: p for p in c.poll_bus()}
     assert done["a"].outcome == Outcome.APPROVED and done["a"].decided_channel == "dashboard"
@@ -216,7 +217,8 @@ def test_a_decision_file_written_after_the_window_counts_as_expired(tmp_path):
     c, _ = _center(bus=bus)
     p = c.propose(_prop("late", age_s=100))
     (bus.decisions_dir / "late.json").write_text(
-        BusDecision(proposal_id="late", approve=True, by="dashboard:x", ts=time.time()).model_dump_json())
+        BusDecision(proposal_id="late", approve=True, by="dashboard:x", ts=time.time(),
+                    card_created=p.created).model_dump_json())
     [done] = c.poll_bus()
     assert done is p and done.outcome == Outcome.EXPIRED and done.decided_channel is None
 

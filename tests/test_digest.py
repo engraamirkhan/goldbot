@@ -65,11 +65,15 @@ def _full_state(sd: Path) -> Path:
                                                  "reason": "news"}))
     (sd / "drift.json").write_text(json.dumps({"system_halt": {"reasons": ["cusum"]}}))
     (sd / "supervisor.json").write_text(json.dumps({"ts": NOW.timestamp(), "halt": True, "reasons": [ACCOUNT]}))
-    (sd / "attribution.json").write_text(json.dumps({"min_trades": 30, "breakdowns": {
-        "session": {"london": {"n": 64, "mean_r_net": 0.21, "verdict": "positive"},
-                    "asia": {"n": 12, "mean_r_net": -0.9, "verdict": "noise"}},
-        "exit": {"time": {"n": 41, "mean_r_net": -0.15, "verdict": "indistinguishable from zero"}},
-        "agent": {ACCOUNT: {"n": 99, "mean_r_net": 5.0, "verdict": "positive"}}}}))
+    (sd / "attribution.json").write_text(json.dumps({"min_trades": 30, "t_bar": 3.14, "m": 30, "breakdowns": {
+        "session": {"london": {"n": 64, "mean_r_net": 0.21, "verdict": "positive", "verdict_adj": "positive"},
+                    "newyork": {"n": 50, "mean_r_net": 0.35, "verdict": "positive",
+                                "verdict_adj": "indistinguishable from zero"},
+                    "asia": {"n": 12, "mean_r_net": -0.9, "verdict": "noise", "verdict_adj": "noise"}},
+        "side": {"short": {"n": 41, "mean_r_net": -0.15, "verdict": "negative", "verdict_adj": "negative"}},
+        "exit": {"time": {"n": 41, "mean_r_net": -0.6, "verdict": "negative", "verdict_adj": "negative"}},
+        "agent": {ACCOUNT: {"n": 99, "mean_r_net": 5.0, "verdict": "positive", "verdict_adj": "positive"}}},
+        "overall": {"n": 155, "mean_r_net": 0.12, "verdict_adj": "positive"}}))
     (sd / "deploy").mkdir()
     (sd / "deploy" / "pending.json").write_text(json.dumps({"sha": "a" * 40}))
     reg = sd / "research_registry.jsonl"
@@ -110,8 +114,48 @@ def test_digest_renders_every_section_from_fixture_state(tmp_path: Path) -> None
     assert "supervisor combined-cap halt" in text
     assert "next pre-registered trial #3 (carry) · budget 2026Q4: 2 of 20 trials used, 1 reserved for " \
            "pre-registered, 17 open" in text
-    assert "Attribution: best session london +0.21R/trade net (n 64) · worst exit time -0.15R/trade net (n 41)" in text
+    assert "Attribution: best session london +0.21R/trade net (n 64) · worst side short -0.15R/trade net (n 41)" in text
     assert "👉 For you: 1 approval pending · 3 owner decisions open (see OWNER_GUIDE) · 1 deploy on offer" in text
+
+
+def test_attribution_line_names_no_best_or_worst_row_when_no_row_clears_the_bar(tmp_path: Path) -> None:
+    """ADR 0022 (quant ruling F3): only rows whose adjusted verdict is signed are named; a row signed only by the raw
+    |t| >= 2 (newyork above, mean +0.35) is never shown as the best."""
+    _full_state(tmp_path)
+    rep = json.loads((tmp_path / "attribution.json").read_text())
+    for group in rep["breakdowns"].values():
+        for c in group.values():
+            if c["verdict_adj"] != "noise":
+                c["verdict_adj"] = "indistinguishable from zero"
+    rep["overall"]["verdict_adj"] = "indistinguishable from zero"
+    (tmp_path / "attribution.json").write_text(json.dumps(rep))
+    text = build_digest(tmp_path, NOW, roadmap=tmp_path / "nope.md", registry_path=tmp_path / "research_registry.jsonl")
+    line = next(x for x in text.splitlines() if "Attribution" in x)
+    assert "best" not in line and "worst" not in line
+    assert line.endswith("Attribution: no row clears the bar (|t| ≥ 3.1 over 30 rows) · overall +0.12R/trade net, "
+                         "indistinguishable from zero")
+
+
+def test_attribution_line_never_names_an_exit_row(tmp_path: Path) -> None:
+    """Exit target and stop cells are signed by construction (a target pays, a stop loses): not a test (ADR 0022 F2)."""
+    _full_state(tmp_path)
+    rep = json.loads((tmp_path / "attribution.json").read_text())
+    rep["breakdowns"]["exit"] = {
+        "target": {"n": 80, "mean_r_net": 1.9, "verdict": "positive", "verdict_adj": "positive"},
+        "stop": {"n": 90, "mean_r_net": -1.1, "verdict": "negative", "verdict_adj": "negative"}}
+    (tmp_path / "attribution.json").write_text(json.dumps(rep))
+    text = build_digest(tmp_path, NOW, roadmap=tmp_path / "nope.md", registry_path=tmp_path / "research_registry.jsonl")
+    line = next(x for x in text.splitlines() if "Attribution" in x)
+    assert "exit" not in line and "target" not in line and "stop" not in line
+    assert "best session london +0.21R/trade net (n 64)" in line
+
+
+def test_attribution_line_from_an_older_report_without_the_bar_prints_unknowns(tmp_path: Path) -> None:
+    (tmp_path / "attribution.json").write_text(json.dumps({"min_trades": 30, "breakdowns": {
+        "session": {"london": {"n": 64, "mean_r_net": 0.21, "verdict": "positive"}}},
+        "overall": {"n": 64, "mean_r_net": 0.21}}))
+    text = build_digest(tmp_path, NOW, roadmap=tmp_path / "nope.md")
+    assert "Attribution: no row clears the bar (|t| ≥ ? over ? rows) · overall +0.21R/trade net, ?" in text
 
 
 def test_digest_is_phone_sized_with_units_and_utc(tmp_path: Path) -> None:

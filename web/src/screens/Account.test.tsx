@@ -61,3 +61,35 @@ describe("Account recovery codes", () => {
     expect(screen.getByRole("button", { name: "Generate new recovery codes" })).toBeInTheDocument();
   });
 });
+
+// The only place a non-owner sees the address they signed in with (docs/ux/header-role.md, BACKLOG 64).
+describe("Account: your sign-in", () => {
+  afterEach(() => { apiModule.setUser(null); });
+
+  it("comes first and lists the owner's role and email", () => {
+    apiModule.setUser({ email: "owner@example.com", role: "owner" });
+    render(<Account />);
+    const mine = screen.getByRole("region", { name: "Your sign-in" });
+    expect(within(mine).getByText("Owner")).toBeInTheDocument();
+    expect(within(mine).getByText("owner@example.com")).toBeInTheDocument();
+    const headings = screen.getAllByRole("heading").map((h) => h.textContent);
+    expect(headings[0]).toBe("Your sign-in");
+    expect(headings[1]).toBe("Change password");
+  });
+
+  it("shows a viewer their own role and email", () => {
+    apiModule.setUser({ email: "v@x.io", role: "viewer" });
+    render(<Account />);
+    const mine = screen.getByRole("region", { name: "Your sign-in" });
+    expect(within(mine).getByText("Viewer")).toBeInTheDocument();
+    expect(within(mine).getByText("v@x.io")).toBeInTheDocument();
+  });
+
+  it("says the email is not known in this tab when the session record is missing", () => {
+    apiModule.setUser(null);
+    render(<Account />);
+    const mine = screen.getByRole("region", { name: "Your sign-in" });
+    expect(within(mine).getByText(/not known in this tab: sign out and in again to see it/)).toBeInTheDocument();
+    expect(mine.textContent).not.toContain("@");
+  });
+});

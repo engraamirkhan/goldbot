@@ -38,6 +38,7 @@ from goldbot.ops.checks.registry import (
     register_check,
     resolve,
 )
+from goldbot.telegram.approvals import window_over
 
 # The first line of a failed job's error shown in health and alerts: long enough for a fix command and its RUNBOOK
 # pointer (160 cut "RUNBOOK 'Backups'" off a restic-not-configured message, found 2026-10-16).
@@ -128,25 +129,30 @@ def check_scheduler(ctx: HealthContext) -> list[Check]:
 def check_approvals(ctx: HealthContext) -> Check:
     """Pending proposals past their window that no engine archived. Warn, not fail: the bus refuses decisions on them
     (nothing can be entered from them) and a dead engine already fails its own check; they mostly mean an engine
-    restarted with a proposal open."""
+    restarted with a proposal open. Stuck is the window rule (`window_over`) with STUCK_APPROVAL_GRACE_S added, so it
+    fails closed as the bus does (trading-safety F60-2): a `created` stamped in the future or not a finite number is
+    reported, never read as fine (`now - created - window_s` was negative or NaN for those)."""
     d = ctx.state_dir / "approvals" / "pending"
     now = _epoch(ctx.now)
     stuck: list[tuple[float, str]] = []
     for f in sorted(d.glob("*.json")) if d.exists() else []:
         try:
             p = _read_json(f)
-            over = now - float(p["created"]) - float(p.get("window_s", 90))
+            created, window_s = p["created"], p.get("window_s", 90)
+            is_over = window_over(created, window_s + STUCK_APPROVAL_GRACE_S, now)
+            over = now - float(created) - float(window_s)
         except (ValueError, OSError, KeyError, TypeError):
             stuck.append((float("inf"), f.stem))
             continue
-        if over > STUCK_APPROVAL_GRACE_S and p.get("outcome") is None:
-            stuck.append((over, f.stem))
+        if is_over and p.get("outcome") is None:
+            # a future or non-finite stamp has no meaningful age: listed as the unreadable ones are
+            stuck.append((over if math.isfinite(over) and over > 0 else float("inf"), f.stem))
     if not stuck:
         return Check(name="approvals", status="ok", reason="no proposal stuck past its window")
     oldest = max(stuck)
     return Check(name="approvals", status="warn",
                  reason=f"{len(stuck)} pending proposal(s) past their window, oldest {oldest[1]} "
-                        f"({_age(oldest[0]) if oldest[0] != float('inf') else 'unreadable'}); the engine never archived them")
+                        f"({_age(oldest[0]) if oldest[0] != float('inf') else 'unreadable or stamped ahead'}); the engine never archived them")
 
 
 @register_check("global", block=BLOCK_TAIL, pos=130)

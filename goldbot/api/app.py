@@ -533,7 +533,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                        day_pnl=eq - num("day_start_equity") if num("day_start_equity") else None,
                                        loss_budget=budget, milestones=ladder,
                                        entry_status=(None if status_inputs is None else
-                                                     view(account_entry_status, e, budget, ladder, status_inputs))
+                                                     view(account_entry_status, e, budget, status_inputs))
                                        or entry_status.unknown_status()))
         return rows
 
@@ -541,9 +541,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         """What every account's entry status shares (entry_status.entry_inputs; Telegram /status reads the same)."""
         return entry_status.entry_inputs(st.dir, view_settings(), is_owner=is_owner)
 
-    def account_entry_status(e: dict, budget: LossBudget | None, ladder: Any, inputs: dict[str, Any]) -> Any:
-        return entry_status.account_entry_status(e, now=pd.Timestamp.now("UTC"), budget=budget, milestones=ladder,
-                                                 **inputs)
+    def account_entry_status(e: dict, budget: LossBudget | None, inputs: dict[str, Any]) -> Any:
+        return entry_status.account_entry_status(e, now=pd.Timestamp.now("UTC"), budget=budget, **inputs)
 
     def card(p: BusProposal, budget: LossBudget | None = None) -> dict[str, Any]:
         return dict(proposal_id=p.proposal_id, account_id=p.account_id, agent_id=p.agent_id,
@@ -555,7 +554,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                     loss_left=budget.remaining if budget and budget.unknown is None else None,
                     loss_left_period=budget.period if budget and budget.unknown is None else None,
                     loss_cant_check=budget.cant_check if budget else None,
-                    expires_at=datetime.fromtimestamp(p.created + p.window_s, tz=timezone.utc))
+                    expires_at=datetime.fromtimestamp(p.created + p.window_s, tz=timezone.utc), created=p.created)
 
     @app.get("/api/proposals", response_model=list[Proposal])
     def proposals(_: User = Depends(auth)) -> list[Proposal]:
@@ -610,10 +609,16 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     async def decide(d: Decision, u: User = Depends(need("approver"))) -> DecisionResult:
         try:
             # the channel only: who decided is the audit row below, never the decision file (A15)
-            st.bus.submit(d.proposal_id, d.action == "approve", d.reason_code, by="dashboard")
+            st.bus.submit(d.proposal_id, d.action == "approve", d.reason_code, by="dashboard",
+                          card_created=d.created)       # bound to the card the owner saw (BACKLOG 63)
         except (KeyError, ValueError) as exc:
             raise HTTPException(400, str(exc).strip("'\""))
-        st.auth.audit("decision", by=u.email, proposal=d.proposal_id, action=d.action, reason=d.reason_code)
+        try:
+            st.auth.audit("decision", by=u.email, proposal=d.proposal_id, action=d.action, reason=d.reason_code)
+        except Exception as exc:            # noqa: BLE001 - the decision already stands (first click wins on the bus)
+            # as the Telegram service does (bot.OffLoopAudit): logged by channel and proposal, never the email; the
+            # owner still reads SUBMITTED, not a 500 that hides a decision the engine will apply
+            log.warning("audit of decision via dashboard (%s) failed: %s", d.proposal_id, type(exc).__name__)
         await st.broadcast({"type": "decision", "proposal_id": d.proposal_id, "action": d.action})
         return DecisionResult(outcome="SUBMITTED")
 

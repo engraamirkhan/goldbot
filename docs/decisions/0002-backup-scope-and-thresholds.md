@@ -52,3 +52,69 @@ and fails at 36 h. The brief for this change gave 72 h as the fail threshold and
 - What would change these choices: a repository approaching 15 GB would mean revisiting the Parquet scope or
   retention. An owner who wants credentials recoverable from the backup is an owner decision; the default keeps
   them out.
+
+## Update 2026-10-16: restic locks under the no-delete key
+Incident: [docs/incidents/2026-10-16-restic-lock-no-delete-key.md](../incidents/2026-10-16-restic-lock-no-delete-key.md).
+
+**Context.** The first restore drill on the brain failed: `restic check exited 1: unable to create lock in backend:
+repository is already locked ... lock was created 52 s ago`. Every restic command that locks writes a file under
+`locks/` and deletes it when it ends. The brain's key has no `OBJECT_DELETE`, so each of those files stays. `backup`,
+`restore`, `stats` and `snapshots` take shared locks, which never block one another. `check` (and `prune`) needs an
+exclusive lock, which any other lock blocks. restic does not skip a stale lock when it takes a new one; only
+`restic unlock` (which needs delete rights) removes stale locks. So after the first backup, a locking `check` from the
+brain can never succeed again.
+
+**Options weighed.**
+| Option | Verdict |
+| --- | --- |
+| Read-only commands with restic's global `--no-lock` (`restore`, `check`, `snapshots`, `stats`, ...) | **Chosen.** Adds no lock and waits on none. Supported by both restic versions the brain can get from apt (0.12.1 on Ubuntu 22.04, 0.16.4 on 24.04), and `check` honours it too. |
+| Run `check` before `restore` | Rejected. The backup's leftover shared lock still blocks the exclusive lock, and `check` would then leave an exclusive lock that blocks every later backup. That is worse than the incident. |
+| An acceptance window for stale locks | Rejected. restic has no such option. Building one means deleting locks, which needs the delete right we refuse to give. |
+| A key with delete rights, or dropping the no-delete condition | **Never.** See "Who may delete" above. |
+
+Evidence, gathered 2026-10-16 with real restic release binaries (checksums matched against the upstream
+SHA256SUMS):
+- restic 0.12.1, on a local repository whose `locks/` folder denies delete (macOS ACL).
+- restic 0.16.4, against a REST backend that answers every DELETE with 403, the way the OCI key without
+  OBJECT_DELETE does. The ACL setup cannot be used for 0.16, because 0.16 writes local files by rename.
+
+Results with both versions:
+- `backup` over a leftover lock exited 0. It left one lock and logged that the cleanup failed. On 0.16 it took
+  about 70 s longer, because restic keeps retrying the refused DELETE.
+- `--no-lock` `stats`, `snapshots`, `restore` and `check --read-data-subset=5%` exited 0 and added no lock.
+- A locking `check` reproduced the incident's error.
+- The real-restic integration test (`test_real_restic_round_trip_and_drill`) passes with both versions.
+
+**Decision.**
+- `Restic.run` adds `--no-lock` to every read-only subcommand (`READ_ONLY_COMMANDS` in goldbot/ops/backup.py). Only
+  `backup` (shared lock) and `init` (no lock) run without it.
+- The brain no longer runs `restic unlock`. It cannot succeed without the delete right. Each try only retried and
+  logged a warning.
+- `--no-lock` gives up restic's guard that a `check` never reads while a backup writes. A host-local lock replaces
+  it: `host_lock`, an fcntl lock on `<work_dir>/.backup.lock`, held by both `backup_job` and `drill_job`. The
+  kernel releases it when the process ends, so it can never go stale. A second run waits up to 30 min, then fails
+  with "another backup or restore drill is running". The scheduler already runs jobs one at a time, so the lock only
+  matters for a run started by hand.
+- Leftover locks: one shared lock per nightly backup, plus one more for each 5-minute lock refresh during a long
+  backup. The monthly `scripts/backup_retention.sh` runs `restic unlock` first. That clears every lock older than
+  30 min, and its `forget --prune` then gets its exclusive lock.
+
+**Consequences.**
+- The weekly drill (Sunday 10:00) and the nightly backup (22:15) cannot collide on restic locks: the drill takes
+  none, and the backup's shared lock ignores the shared locks earlier backups left.
+- A drill or restore that runs while the Mac's prune deletes packs can fail. It fails loudly, because restic
+  verifies every blob, so nothing is silently wrong. Run retention outside 22:00-23:30 UTC and Sunday 09:45-11:00 UTC
+  (RUNBOOK 0.6).
+- Locks pile up under `locks/` between monthly retention runs (about 30-60 small files). Each backup reads them, so
+  a skipped retention makes backups a little slower. `backup_prune` already warns after 45 days.
+- Measured risk: restic refreshes a long backup's lock every 5 min by writing a new lock file and deleting the old
+  one. From 0.16, a refresh whose delete is refused counts as failed. The lock goes stale after 30 min, so restic
+  cancels the backup once it cannot refresh in time (about 22 min in). Against the DELETE-refusing backend, restic
+  0.16.4 logged `unable to refresh lock: ... 403` every 5 min. A 30-minute backup ended with
+  `Fatal: unable to save snapshot: context canceled` (exit 1). Nightly backups are incremental and take seconds to a
+  few minutes, plus about 70 s of refused-delete retries. Health `backup_age` now warns when a good backup took 10
+  min or more (`BACKUP_SLOW_WARN_S`), well before the cancel point. If that warning fires, the fix is the fallback
+  below, never a delete right. A backup that is cancelled shows as a failed backup in `backup_age` and alerts the
+  owner as usual.
+- What would change this: a restic release that drops `--no-lock` on `check`, or a backup that grows past about 15
+  min. Then the fallback is the one named above: an append-only restic rest-server, never a delete right.

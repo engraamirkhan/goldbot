@@ -34,7 +34,7 @@ def test_an_open_account_says_open_the_headline_and_that_exits_keep_running():
 
 
 def test_a_closed_market_is_paused_with_the_reopen_time_in_the_owners_zone_and_utc():
-    s = status(engine(market_closed=True, ts=SAT.timestamp()), now=SAT)
+    s = status(engine(market_closed=True, entry_blocks=["market_closed"], ts=SAT.timestamp()), now=SAT)
     t = text(s, now=SAT)
     assert lines(t)[0].startswith("PAUSED · icm-demo (demo)")
     assert s.headline in t and s.exits in t
@@ -44,6 +44,16 @@ def test_a_closed_market_is_paused_with_the_reopen_time_in_the_owners_zone_and_u
     assert "Nothing to do" not in t           # a wait whose fix is "nothing to do" is one line: the time says it
 
 
+def test_rollover_and_the_weekend_cut_say_their_times_in_the_owners_zone_and_utc():
+    """BACKLOG 65 (b): the same times as the dashboard, from the same API blocks."""
+    roll = pd.Timestamp("2026-10-14 20:57", tz="UTC")              # 23:57 Athens: clears 00:05 Athens = 22:05 BST
+    t = text(status(engine(entry_blocks=["rollover"], ts=roll.timestamp()), now=roll), now=roll)
+    assert "Daily rollover around broker midnight · until 22:05 BST (21:05 UTC, in 8 min)" in t
+    fri = pd.Timestamp("2026-10-16 19:00", tz="UTC")               # Friday 22:00 Athens, after the 21:30 cut
+    t = text(status(engine(entry_blocks=["weekend"], ts=fri.timestamp()), now=fri), now=fri)
+    assert "Weekend: no new trades from Friday evening · opens Sun 23:02 BST (22:02 UTC, in 2 d 3 h)" in t
+
+
 def test_a_throttled_agent_is_partly_open_and_names_the_strategy_and_its_cooldown():
     th: dict[str, Any] = {"enabled": True, "loss_streak": 3, "agents": {
         "trend-g0": {"loss_streak": 3, "cooldown_until": "2026-10-14T14:30:00+00:00", "blocked": ["throttle_loss_streak"]},
@@ -51,12 +61,21 @@ def test_a_throttled_agent_is_partly_open_and_names_the_strategy_and_its_cooldow
     s = status(engine(throttle=th))
     t = text(s)
     assert lines(t)[0].startswith("PARTLY OPEN · icm-demo (demo)")
-    assert "Can take new trades, except trend-g0" in t
-    assert "trend-g0 paused after 3 losses in a row · until 15:30 BST (14:30 UTC, in 30 min)" in t
+    assert "Can take new trades, except Trend (trend-g0)" in t
+    assert "Trend (trend-g0) paused after 3 losses in a row · until 15:30 BST (14:30 UTC, in 30 min)" in t
+
+
+def test_a_strategys_last_refused_trade_reads_the_same_as_on_the_dashboard():
+    s = status(engine(entry_refusals={"trend-g0": {"code": "daily_loss_limit_abs", "at": "2026-10-14T13:02:00+00:00"}}))
+    t = text(s)
+    assert lines(t)[0].startswith("PARTLY OPEN · icm-demo (demo)")
+    assert ("Trend (trend-g0): last entry refused, this trade could lose more than is left of today's loss limit"
+            " · since 14:02 BST") in t
+    assert "limit reached" not in t.lower()
 
 
 def test_a_clock_mismatch_is_blocked_and_the_fix_comes_under_needs_you_first():
-    s = status(engine(market_closed=True,
+    s = status(engine(market_closed=True, entry_blocks=["server_clock_mismatch", "market_closed"],
                       server_clock={"status": "mismatch", "reason": "server clock reads UTC+3, Europe/Athens gives UTC+2"}))
     t = text(s)
     assert lines(t)[0].startswith("BLOCKED · icm-demo (demo)")
@@ -82,7 +101,10 @@ def test_every_line_of_every_status_is_from_the_api_and_a_busy_account_stays_pho
     lim = es.RiskLimits()
     s = status(engine(stage="halted", dq_error=True, stale_bars=True, tick_ahead_s=30.0, tick_error=True,
                       data_recovering=True, spread_points=lim.max_spread_points + 1, open_positions=lim.max_positions,
-                      account_class="unknown", blackout={"kind": "calendar", "title": "CPI m/m"}),
+                      account_class="unknown", blackout={"kind": "calendar", "title": "CPI m/m"},
+                      entry_blocks=["drawdown_halt", "data_quality_error", "news_blackout", "stale_data",
+                                    "tick_from_future", "tick_error", "data_recovering", "spread_too_wide",
+                                    "max_positions", "account_class_unknown"]),
                owner_halt="telegram", drift_reasons=["x"])
     t = text(s)
     assert len(lines(t)) <= et.MAX_LINES
@@ -102,7 +124,7 @@ def _state(tmp_path: Path, **over: Any) -> Path:
 
 
 def test_the_status_message_is_built_from_the_state_files_like_the_api_and_carries_no_identifiers(tmp_path):
-    sd = _state(tmp_path, server_clock={"status": "mismatch", "reason": "x"})
+    sd = _state(tmp_path, server_clock={"status": "mismatch", "reason": "x"}, entry_blocks=["server_clock_mismatch"])
     [(account, mode, s)] = es.statuses_from_state(sd, WED, None)
     assert (account, mode, s.state) == ("icm-demo", "demo", "blocked")
     msg = et.status_message(sd, WED, tz=LONDON, settings=None, footer="Approval mode: propose · pending proposals: 0")
@@ -144,7 +166,8 @@ def test_no_engine_and_a_broken_build_are_never_shown_as_open(tmp_path, monkeypa
 def test_an_entry_window_reaches_status_in_the_apis_words():
     from tests.test_api_entry_status import window_limits, windows
     s = status(engine(windows=windows(calendar_unavailable=True, tier2_blackout=True,
-                                      calendar_unavailable_since=(WED - pd.Timedelta(hours=2)).isoformat())),
+                                      calendar_unavailable_since=(WED - pd.Timedelta(hours=2)).isoformat()),
+                      entry_blocks=["tier2_blackout", "calendar_unavailable"]),
                limits=window_limits())
     t = text(s)
     for b in s.blocks:
@@ -182,13 +205,13 @@ def test_the_reply_carries_the_footer_and_any_failure_still_answers(tmp_path):
 
 
 def test_a_bad_zone_falls_back_to_utc():
-    t = et.account_text("icm-demo", "demo", status(engine(market_closed=True, ts=SAT.timestamp()), now=SAT),
+    t = et.account_text("icm-demo", "demo", status(engine(market_closed=True, entry_blocks=["market_closed"], ts=SAT.timestamp()), now=SAT),
                         now=SAT, tz="Not/AZone")
     assert "opens Sun 22:02 UTC (in 1 d 12 h)" in t
 
 
 def test_the_digest_names_every_account_not_open(tmp_path):
-    sd = _state(tmp_path, market_closed=True)
+    sd = _state(tmp_path, market_closed=True, entry_blocks=["market_closed"])
     d = build_digest(sd, WED)
     assert "Entries not open: icm-demo PAUSED (Market closed)" in d
     (tmp_path / "open").mkdir()
