@@ -53,6 +53,9 @@ LOCK=/run/goldbot-deploy.lock
 APPROVED=$ROOT/state/deploy/approved.json
 PY_BRAIN=$ROOT/.venv/bin/python           # run only as the service user
 BRIDGE_REQS=goldbot/ops/linux/mt5-bridge-requirements.txt   # MT5 box: hash-pinned from uv.lock (scripts/bridge_requirements.py)
+# MT5 box: the Windows Python by absolute path (as $WINPY in mt5_bootstrap.sh), never a bare `python`: Windows runs a
+# python.exe from the current directory before PATH
+WINPY=/home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe
 MANUAL=""
 MODE=approval
 DROP_KEYS=0
@@ -270,7 +273,7 @@ print(os.path.basename(bak))
 PY
 )
 
-target_py() { if [ "$ROLE" = mt5 ]; then echo "env WINEDEBUG=-all DISPLAY=:99 wine python"; else echo "$PY_BRAIN"; fi; }
+target_py() { if [ "$ROLE" = mt5 ]; then echo "env WINEDEBUG=-all DISPLAY=:99 wine $WINPY"; else echo "$PY_BRAIN"; fi; }
 
 settings_problems() {  # $1 target; prints problems; returns 0 valid, 3 invalid, 4 could not check
   local localf=$ROOT/config/settings.local.yaml dir rc=0 py
@@ -392,7 +395,7 @@ install_for() {  # reinstall Python deps / rebuild the dashboard only when they 
     # first: Wine cannot replace a .pyd a running bridge has loaded (half-installed package); switch_to starts them.
     local svcs; mapfile -t svcs < <(services)
     stop_all "${svcs[@]}" || return 1
-    sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install -q --require-hashes --no-deps \
+    sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine "$WINPY" -m pip install -q --require-hashes --no-deps \
       --only-binary :all: -r "Z:$ROOT/$BRIDGE_REQS" || return 1
   fi
   return 0
