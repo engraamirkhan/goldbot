@@ -389,6 +389,19 @@ def test_stuck_approvals(tmp_path):
     assert c.status == "warn" and "p-stuck" in c.reason and "1 pending" in c.reason
 
 
+@pytest.mark.parametrize("created", [float("nan"), "future"])
+def test_a_proposal_stamped_in_the_future_or_not_a_number_is_reported_stuck(tmp_path, created):
+    """F60-2: `now - created - window_s` read NaN and a future stamp as fine; the window rule (`window_over`) fails
+    closed, so the health check reports such a proposal as stuck, as the bus refuses decisions on it."""
+    ctx = make_ctx(tmp_path)
+    bus = ApprovalBus(tmp_path)
+    f = bus.pending_dir / "p-odd.json"
+    stamp = ago(-2 * 86_400) if created == "future" else created
+    f.write_text(json.dumps({**json.loads(proposal("p-odd", ago(30)).model_dump_json()), "created": stamp}))
+    c = health.check_approvals(ctx)
+    assert c.status == "warn" and "p-odd" in c.reason and "1 pending" in c.reason
+
+
 def test_alert_loop_freshness(tmp_path):
     assert health.check_alert_loop(make_ctx(tmp_path)).status == "warn"
     HealthWatch(tmp_path).record(HealthReport(ts=NOW - pd.Timedelta(minutes=3), status="ok", checks=[]))

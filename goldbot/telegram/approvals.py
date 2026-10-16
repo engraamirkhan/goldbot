@@ -13,6 +13,7 @@ Transport-agnostic core (tested without Telegram), plus a thin python-telegram-b
 from __future__ import annotations
 
 import hmac
+import logging
 import math
 import time
 from enum import Enum
@@ -26,6 +27,8 @@ from goldbot.data.timeutil import heartbeat_problem
 if TYPE_CHECKING:
     from goldbot.ops.account_view import LossBudget
     from goldbot.telegram.bus import ApprovalBus
+
+log = logging.getLogger("goldbot.approvals")
 
 REASON_CODES = ("news", "cost", "discretion", "duplicate", "other")
 TOTP_COMMANDS = {"/rearm", "/mode", "/set"}
@@ -225,12 +228,27 @@ class ApprovalCenter:
 
     def poll_bus(self) -> list[Proposal]:
         """Apply decisions written to the bus by the dashboard or the Telegram service (already authenticated
-        there). A decision arriving after the window counts as expired, as it would in-process."""
+        there). A decision arriving after the window counts as expired, as it would in-process. A decision is applied
+        only to the card it was made on (F60 re-verify finding 2): `submit` copies the card's `created` into it, and
+        one that does not match the proposal held here was a click on an earlier card with the same id (a proposal id
+        depends only on account, agent and bar close). A decision from an older release, with no card stamp, counts
+        as such when it is stamped before the proposal was raised (no tolerance: both stamps come from the one VPS
+        clock). Such a decision is discarded, never applied, and the owner is told, so the card shown stays
+        decidable and the dropped click is not silent."""
         if self.bus is None or not self.pending:
             return []
         done = []
         for d in self.bus.decisions_for(set(self.pending)):
             p = self.pending[d.proposal_id]
+            other_card = d.ts < p.created if d.card_created is None else d.card_created != p.created
+            if other_card:
+                log.warning("decision on %s was made on an earlier card with the same id: discarded, not applied",
+                            p.proposal_id)
+                self.bus.discard_decision(d.proposal_id)
+                self.bus.notify_owner(f"Your tap on proposal {p.proposal_id} was not applied: it was made on an "
+                                      f"earlier card with the same id (the proposal was re-raised or expired). "
+                                      f"No order was placed from it.")
+                continue
             if self.expired(p):
                 done.append(self._finish(p, Outcome.EXPIRED))
                 continue
