@@ -60,16 +60,20 @@ FLAGS: list[tuple[dict[str, Any], str]] = [
     ({"week_start_equity": 10_600.0}, "weekly_cap"), ({"account_class": "unknown"}, "account_class_unknown"),
     ({"open_risk": None}, "open_risk_unknown"), ({"equity": math.nan}, "invalid_state"),
 ]
-# an intent with no reason of its own, and one refused for its own reasons (negative EV, its side's cap)
-INTENTS = {"clean": _intent(), "own": _intent(p=0.2)}
+# an intent with no reason of its own, one refused for its own EV, and (trading-safety INFO-3) one also refused for its
+# side's cap: (intent, the account facts it is judged on besides the flag)
+SIDE_FULL = {"open_long": LIMITS.heat.max_same_direction}
+INTENTS: dict[str, tuple[Intent, dict[str, Any]]] = {
+    "clean": (_intent(), {}), "own": (_intent(p=0.2), {}), "side_cap": (_intent(p=0.2), SIDE_FULL)}
 
 
 @pytest.mark.parametrize("over, code", FLAGS, ids=[c + ":" + ",".join(o) for o, c in FLAGS])
 @pytest.mark.parametrize("which", list(INTENTS))
 def test_check_refuses_with_exactly_the_account_reasons_plus_the_intents_own(over, code, which):
-    gate, intent = RiskGate(LIMITS), INTENTS[which]
-    own = gate.check(intent, _state()).reasons
-    st = _state(**over)
+    gate, (intent, base) = RiskGate(LIMITS), INTENTS[which]
+    own = gate.check(intent, _state(**base)).reasons
+    assert ("same_direction_cap" in own) == (which == "side_cap")
+    st = _state(**{**base, **over})
     listed = gate.account_reasons(st, NOW)
     assert code in listed
     d = gate.check(intent, st, NOW)
@@ -194,3 +198,37 @@ def test_a_refusal_at_approval_time_is_published_for_its_agent(tmp_path):
     refusals = _file(eng)["entry_refusals"]
     assert refusals == {agent: {"code": "fx_conversion_unavailable", "at": pb.last_tick("XAUUSD").ts_utc.isoformat()}}
     assert not pb.positions()
+
+
+# ---------------------------------------------------------------------------------------------- reporting never costs
+def test_a_failing_entry_blocks_never_stops_the_state_or_risk_write(tmp_path, monkeypatch):
+    """Trading-safety LOW-1 (558588e): entry_blocks is reporting only. If listing the reasons raises, the state file,
+    the risk state and the orders are still written, entry_blocks is left out, and the API shows it never OPEN."""
+    from goldbot.api import entry_status as es
+    eng, _, _ = _engine(tmp_path)
+
+    def boom(*_a: Any, **_k: Any) -> list[str]:
+        raise RuntimeError("bug")
+    monkeypatch.setattr(eng.gate, "account_reasons", boom)
+    risk = eng._risk_path()
+    risk.unlink(missing_ok=True)
+    eng._write_state()
+    st = _file(eng)
+    assert "entry_blocks" not in st and risk.exists()
+    s = es.account_entry_status(st, now=pd.Timestamp(st["ts"], unit="s", tz="UTC"), owner_halt=None,
+                                supervisor_reasons=None, drift_reasons=None, budget=None, limits=RiskLimits())
+    assert s.state != "open" and [b.code for b in s.blocks] == ["entry_reasons_missing"]
+
+
+def test_a_failing_refusal_note_never_changes_a_decision(tmp_path, monkeypatch):
+    """Trading-safety LOW-1: noting a refusal is reporting only; if it raises, the bar-close decisions and an approval
+    go on exactly as the gate decided."""
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("bug")
+    monkeypatch.setattr(Engine, "_record_refusal", boom)
+    _, pb, dec = _run(tmp_path / "close", _two(), RiskLimits(**BASE))
+    assert _actions(dec) == ["executed:auto", "executed:auto"] and len(pb.positions()) == 2
+    gbp = GbpPaper()
+    eng, center = _approval_engine(tmp_path / "click", gbp)
+    center.decide("icm-demo-9-a", OWNER, True)
+    assert len(gbp.positions()) == 1 and _file(eng)["entry_refusals"] == {}

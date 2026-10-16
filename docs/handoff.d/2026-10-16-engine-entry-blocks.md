@@ -15,3 +15,10 @@
   texts). code-reviewer 2026-10-16: APPROVE, both LOWs fixed: the risk-day rollover clears `entry_refusals`, and
   "every strategy held" now needs the whole throttle roster held (an agent named only by a refusal never makes it
   read blocked for everyone). trading-safety review of 558588e: running, not recorded here yet.
+  trading-safety-reviewer 2026-10-16: APPROVE 558588e (0 differences in 420k old-vs-new differential cases); LOW-1
+  fixed (entry_blocks and the refusal note are guarded: a failure is logged, the state, risk and orders still write,
+  entry_blocks is left out and the API shows `entry_reasons_missing`), INFO-4 fixed (a non-empty list with no valid
+  code is `entry_reasons_missing`, never OPEN), INFO-3 pinned (a same-direction-cap intent in the account-reasons
+  test). INFO-2: refusal reason lists are longer in the invalid-number cases (`account_class_unknown` and
+  `open_risk_unknown` now come before `invalid_state`, and with a bad intent number on a valid state the loss caps
+  too), so perf_report's gate_refusals counts rise slightly; every decision is unchanged.

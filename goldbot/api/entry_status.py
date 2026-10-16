@@ -531,10 +531,13 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
             add(block("status_unknown", at=reported, at_label="since"))
     else:
         published = e.get("entry_blocks")
-        if not isinstance(published, list):  # an engine from before BACKLOG 43: why is unknown, so never OPEN
+        listed = [c for c in published if isinstance(c, str) and CODE.fullmatch(c)] \
+            if isinstance(published, list) else []
+        # an engine from before BACKLOG 43, a failed listing (left out), or a list of which nothing is a code
+        # (trading-safety INFO-4): the engine refuses for a reason the API cannot say, so never OPEN
+        if not isinstance(published, list) or (published and not listed):
             add(block("entry_reasons_missing"))
         else:
-            listed = [c for c in published if isinstance(c, str) and CODE.fullmatch(c)]
             for code in listed:
                 if code == "stale_data" and "market_closed" in listed:
                     continue                # BACKLOG 59: a closed market has no fresh prices by design; never a fault

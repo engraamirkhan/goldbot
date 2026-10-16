@@ -180,6 +180,15 @@ def test_an_engine_that_does_not_publish_its_reasons_is_never_shown_open():
         assert b.fix == "Update the brain to the current version, then restart the engine."
 
 
+def test_a_list_with_no_valid_code_is_entry_reasons_missing_never_open():
+    """Trading-safety INFO-4: a non-empty entry_blocks of which nothing is a code says the engine refuses for a reason
+    the API cannot read; never OPEN."""
+    for junk in (["invalid:equity"], ["Bad Code", 3, None], [""]):
+        s = status(engine(entry_blocks=junk))
+        assert codes(s) == ["entry_reasons_missing"] and s.state == "blocked", junk
+    assert status(engine(entry_blocks=[])).state == "open"          # an empty list: the gate refuses nothing
+
+
 def test_invalid_field_codes_are_never_shown_but_the_invalid_state_is():
     s = status(engine(entry_blocks=["invalid_state", "invalid:equity"]))
     assert codes(s) == ["invalid_state"] and s.state != "open"

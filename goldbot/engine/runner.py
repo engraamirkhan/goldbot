@@ -1241,7 +1241,14 @@ class Engine:
     def _note_refusal(self, agent_id: str, gd: GateDecision, at: pd.Timestamp) -> None:
         """BACKLOG 43 (`entry_refusals`): a gate decision for one agent. A per-trade refusal (gate.PER_TRADE_REFUSALS,
         which check() returns alone) is kept with its time; an allowed decision clears it; any other refusal (an
-        account reason, the intent's own filtering) leaves the last per-trade one as it was. Reporting only."""
+        account reason, the intent's own filtering) leaves the last per-trade one as it was. Reporting only: a failure
+        is logged and never changes the decision (trading-safety review LOW-1)."""
+        try:
+            self._record_refusal(agent_id, gd, at)
+        except Exception as exc:
+            log.warning("entry refusal for %s not noted (%s)", agent_id, type(exc).__name__)
+
+    def _record_refusal(self, agent_id: str, gd: GateDecision, at: pd.Timestamp) -> None:
         if gd.allowed:
             self._entry_refusals.pop(agent_id, None)
         elif len(gd.reasons) == 1 and gd.reasons[0] in PER_TRADE_REFUSALS:
@@ -3349,9 +3356,14 @@ class Engine:
         payload.update(feed)
         # BACKLOG 43 (ADR 0011): why entries are refused now, as the RiskGate's account-level codes on the facts this
         # file publishes (a heartbeat's feed on a copy: the in-memory state stays the last refresh's), and each agent's
-        # last per-trade refusal. Reporting only: the gate decides at every entry
-        payload["entry_blocks"] = self.gate.account_reasons(st.model_copy(update=feed) if feed else st)
-        payload["entry_refusals"] = {a: dict(v) for a, v in self._entry_refusals.items()}
+        # last per-trade refusal. Reporting only: the gate decides at every entry. A failure leaves them out (the API then
+        # shows entry_reasons_missing, never OPEN) and never stops the state, risk or orders write (trading-safety LOW-1)
+        try:
+            payload["entry_blocks"] = self.gate.account_reasons(st.model_copy(update=feed) if feed else st)
+            payload["entry_refusals"] = {a: dict(v) for a, v in self._entry_refusals.items()}
+        except Exception as exc:
+            payload.pop("entry_blocks", None)
+            log.warning("entry_blocks not published (%s)", type(exc).__name__)
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync
         write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps(payload), durable=False)
         self._save_risk_state()
