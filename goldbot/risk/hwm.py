@@ -28,7 +28,7 @@ import pandas as pd
 
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.data.timeutil import epoch_ns
-from goldbot.db.connection import Database, db_path
+from goldbot.db.connection import Database, connect, db_path, write
 from goldbot.db.repo import RecordRepo
 
 log = logging.getLogger(__name__)
@@ -63,9 +63,11 @@ class HwmConfirmation(FrozenRecord):
         return self.model_copy(update={"pending_balance": None, "pending_since_utc": None, "candidate_utc": None})
 
     def fresh(self, now: pd.Timestamp) -> HwmConfirmation:
-        """This row with a candidate older than CANDIDATE_MAX_AGE dropped (L2)."""
+        """This row with a candidate older than CANDIDATE_MAX_AGE dropped (L2). A candidate stamped after `now` (a
+        clock that ran ahead, a row from another host) is void too: its age cannot be known, and a negative age must
+        never keep it alive."""
         at = self.candidate_at()
-        if self.pending_balance is not None and (at is None or now - at > CANDIDATE_MAX_AGE):
+        if self.pending_balance is not None and (at is None or at > now or abs(now - at) > CANDIDATE_MAX_AGE):
             return self.without_candidate()
         return self
 
@@ -81,17 +83,24 @@ HWM: RecordRepo[HwmConfirmation] = RecordRepo(
 
 
 class HwmStore:
-    """The engine's handle on core.db, opened (and migrated) once at start (review L1), so a save on the tick thread
-    is one short write with a WRITE_BUSY_TIMEOUT_MS busy timeout. When core.db cannot be opened, nothing is loaded or
-    saved (logged): every rise then needs its confirmation within this process, the strict side."""
+    """The engine's handle on core.db, opened (and migrated) once at start with the default busy timeout (review L1),
+    so a save on the tick thread is one short write with a WRITE_BUSY_TIMEOUT_MS busy timeout. When core.db cannot be
+    opened, the open is retried on the next save; until then nothing is loaded or saved (logged), and every rise needs
+    its confirmation within this process, the strict side."""
 
     def __init__(self, state_dir: str | Path):
+        self.state_dir = Path(state_dir)
         self.db: Database | None = None
+        self._open()
+
+    def _open(self) -> Database | None:
+        """Open and migrate core.db (default busy timeout: a lock at start-up is waited out, not given up at once)."""
         try:
-            self.db = Database.open(state_dir, "core", busy_timeout_ms=WRITE_BUSY_TIMEOUT_MS)
+            self.db = Database.open(self.state_dir, "core")
         except Exception as exc:
-            log.warning("core.db unavailable for the high-water-mark confirmation (%s): a pending rise is not kept "
-                        "across a restart", type(exc).__name__)
+            log.warning("core.db unavailable for the high-water-mark confirmation (%s): retried on the next save",
+                        type(exc).__name__)
+        return self.db
 
     def load(self, account_id: str) -> HwmConfirmation | None:
         """The persisted row, or None when there is none or it cannot be read (no anchor, no candidate)."""
@@ -108,11 +117,16 @@ class HwmStore:
     def save(self, conf: HwmConfirmation) -> bool:
         """Upsert the row (synchronous FULL); False (logged) when it cannot be written. A lost write only loses a
         candidate or an anchor, so the next rise needs a fresh confirmation (never a rise applied on one read)."""
-        if self.db is None:
+        db = self.db or self._open()
+        if db is None:
             return False
         try:
-            with self.db.write() as conn:
-                HWM.upsert(conn, conf)
+            conn = connect(db.path, "core", busy_timeout_ms=WRITE_BUSY_TIMEOUT_MS)
+            try:
+                with write(conn):
+                    HWM.upsert(conn, conf)
+            finally:
+                conn.close()
             return True
         except Exception as exc:
             log.warning("high-water-mark confirmation state not saved (%s): a restart forgets the pending rise",

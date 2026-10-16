@@ -34,7 +34,8 @@ collapsed equity read, but it trusted any balance read that raised the mark.
     for an unbounded time.
 - One disagreeing read never raises the mark; two agreeing reads always do.
 - **Candidates expire (review L2).** A candidate older than `hwm.CANDIDATE_MAX_AGE` (10 min) is void. It is dropped on
-  the next read, and on load on the live clock, and recorded as `hwm_rise_refused` with `reason: expired`. A read
+  the next read, and on load on the live clock, and recorded as `hwm_rise_refused` with `reason: expired`. A candidate
+  stamped after the current time (a clock that ran ahead) is void too: a negative age never keeps it alive. A read
   after an outage, or after a weekend, never confirms a value read before it.
 - **Exact brokers.** A broker class may declare `balance_exact = True`. Only the paper broker does: its balance is its
   own ledger and cannot glitch. There, a read above the mark raises it at once (`by: exact`). The engine looks the flag
@@ -80,9 +81,10 @@ Alternating readings cannot hold off a real rise either:
   warning's age. `candidate_utc` is when the current candidate was read: its age (L2), and the anchor for the deals
   that may corroborate it (M1). A row from before `candidate_utc` existed uses `pending_since_utc`, which then meant
   the same.
-- **One handle (review L1).** The engine opens and migrates core.db once at start (`hwm.HwmStore`). Each save is one
-  write on the tick thread, with a busy timeout of `hwm.WRITE_BUSY_TIMEOUT_MS` (500 ms) instead of 5 s. A locked or
-  unopenable core.db is logged and takes the strict side: the rise is confirmed in-process only, and never on one
+- **One handle (review L1).** The engine opens and migrates core.db once at start (`hwm.HwmStore`), with the default
+  busy timeout, so a lock at start-up is waited out. If that open fails, it is retried on the next save. Each save is
+  one write on the tick thread, with a busy timeout of `hwm.WRITE_BUSY_TIMEOUT_MS` (500 ms) instead of 5 s. A locked
+  or unopenable core.db is logged and takes the strict side: the rise is confirmed in-process only, and never on one
   read.
 - **The mark stays in the risk state.** The mark itself is still in `risk_<account>.json`, and a confirmed rise saves
   it at once.

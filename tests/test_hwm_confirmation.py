@@ -331,7 +331,8 @@ def test_a_core_db_that_cannot_be_opened_never_stops_the_engine_and_never_raises
 
 
 def test_core_db_is_opened_once_per_engine_and_writes_with_a_short_busy_timeout(tmp_path, monkeypatch):
-    """Review L1: the save runs on the tick thread, so it never migrates or waits the default 5 s busy timeout."""
+    """Review L1: the save runs on the tick thread, so it never migrates or waits the default 5 s busy timeout; the
+    open (and migration) at start waits the default timeout, so a lock at start-up does not lose core.db."""
     opened: list[Any] = []
     real = hwm.Database.open.__func__                                 # type: ignore[attr-defined]
 
@@ -339,11 +340,37 @@ def test_core_db_is_opened_once_per_engine_and_writes_with_a_short_busy_timeout(
         opened.append(k.get("busy_timeout_ms"))
         return real(cls, *a, **k)
     monkeypatch.setattr(hwm.Database, "open", classmethod(counting))
+    timeouts: list[int] = []
+    real_connect = hwm.connect
+
+    def connecting(*a: Any, **k: Any) -> Any:
+        timeouts.append(k["busy_timeout_ms"])
+        return real_connect(*a, **k)
+    monkeypatch.setattr(hwm, "connect", connecting)
     eng, pb = _engine(tmp_path)
     _script(monkeypatch, pb, 12_000.0, None, 10_500.0, 10_500.0)
     for s in (1, 2, 3, 4):
         _read(eng, s)
-    assert opened == [hwm.WRITE_BUSY_TIMEOUT_MS] and 250 <= hwm.WRITE_BUSY_TIMEOUT_MS <= 500
+    assert opened == [None]                                            # once, with the default busy timeout
+    assert timeouts and set(timeouts) == {hwm.WRITE_BUSY_TIMEOUT_MS} and 250 <= hwm.WRITE_BUSY_TIMEOUT_MS <= 500
+
+
+def test_a_failed_open_at_start_is_retried_on_the_next_save(tmp_path, monkeypatch):
+    """Review LOW: a lock at start-up must not leave core.db unused for the whole run."""
+    real = hwm.Database.open.__func__                                 # type: ignore[attr-defined]
+    calls: list[int] = []
+
+    def first_fails(cls: Any, *a: Any, **k: Any) -> Any:
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("database is locked")
+        return real(cls, *a, **k)
+    monkeypatch.setattr(hwm.Database, "open", classmethod(first_fails))
+    store = hwm.HwmStore(tmp_path)
+    assert store.db is None
+    conf = hwm.HwmConfirmation(account_id="icm-demo", mark=10_000.0, mark_utc=T0)
+    assert store.save(conf) and store.db is not None and len(calls) == 2
+    assert hwm.HwmStore(tmp_path).load("icm-demo") == conf
 
 
 # ---------------------------------------------------------------------------------------------- review fixes
@@ -437,6 +464,15 @@ def test_a_candidate_older_than_ten_minutes_is_void_on_load(tmp_path, monkeypatc
     assert live._hwm.pending_balance is None and not live._reread_hwm
     replay = _new_engine(tmp_path, pb)                                 # tick clock: judged on its first read instead
     assert replay._hwm.pending_balance == 10_500.0
+
+
+def test_a_future_dated_candidate_is_void_so_an_agreeing_read_does_not_raise():
+    """Review LOW: a candidate stamped two days ahead has a negative age; it must never live for ever."""
+    ahead = T0 + pd.Timedelta(days=2)
+    future = _conf(pending_balance=1_050.0, pending_since_utc=ahead, candidate_utc=ahead)
+    s = hwm.step(future, 1_000.0, 1_050.0, T0, TOL, _none)
+    assert s.outcome == "pending" and s.mark == 1_000.0 and s.expired == 1_050.0
+    assert s.conf.candidate_utc == T0 and s.conf.pending_since_utc == T0
 
 
 def test_a_legacy_row_without_candidate_time_uses_its_pending_time():
