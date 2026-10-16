@@ -1806,6 +1806,21 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   the first unblocker and no new builder lane starts before it; trading-safety is over its review queue limit, so a
   second trading-safety reviewer lane starts first. M2 moves from 11-14 – 12-12 to 10-30. The owner decision queue
   (OD-1 to OD-14, with deadlines) is asked once on #34.
+- **BACKLOG 59 SRE re-verify: APPROVE (sre, 2026-10-16, 6287d10 + 412fd0d, merged at a13c8a3).** Evidence:
+  `tests/test_weekend_reopen_alerting.py` (700c116) runs the engine, the bridge and the minute-by-minute health
+  poll with `alert_text` on the production zone (Europe/Athens; the table opens 22:02 UTC Sun 18 Oct). No page
+  through the close, the weekend or a first quote up to 5 min after the open; a bridge that dies on Saturday pages
+  `bridge:` within 2 min and the engine's verdict goes `unchecked` (it is not refreshed by the heartbeat); a dead
+  engine pages; an open market with no quote pages `bridge_compat:` at the 5-min verdict age and recovers. The
+  supervisor's 60 s freshness rule only gains (weekend files now read fresh; no new halt reason). Two notes, neither
+  blocking: (1) pre-existing, an engine STARTED in an open session before its first quote pages `engine:` "stale
+  feed" once and recovers; start the engine on Sunday while the market is still closed (about 21:50 UTC) or only
+  after the terminal shows a fresh XAUUSD quote. (2) LOW: the frozen-feed page reads "engine has not confirmed the
+  bridge (its check may be stuck)", not "no quotes in an open market"; a clearer reason is a follow-up.
+- **MT5 login on a generic-installer terminal (sre, 2026-10-16).** Postmortem
+  `docs/incidents/2026-10-16-mt5-login-generic-installer.md`; ADR 0020 keeps MetaQuotes' installer and RUNBOOK 0.3
+  logs in through File -> Open an Account -> Raw Trading Ltd; `mt5.initialize` gets `timeout=60000` beside `path=`
+  (`MT5_INIT_TIMEOUT_MS`); the bridge requirements header no longer shows a bare `wine python`.
 - **H-06 preset and its owed-event count (BACKLOG 48, 2026-10-11; quant review needed).** tsmom preset `slow_macro`
   = H-01's `slow` + `macro_gate` (agent `tsmom-g0-fed4baec9f`; `slow` and the default ids unchanged): an H-01 candidate
   is kept only when the 20-observation changes of DFII10 and DTWEXBGS (`macro_drivers`' columns, `asof_join` on

@@ -11,3 +11,4 @@ Blameless: describe what the system and the process allowed, not who did it.
 | Date | Incident | Severity | Status |
 | --- | --- | --- | --- |
 | 2026-10-16 | [MT5 refuses to run under wine-stable ("A debugger has been found")](2026-10-16-mt5-debugger-found-under-wine.md) | S3 | open (ADR 0019 with the owner) |
+| 2026-10-16 | [MT5 login to ICMarketsSC-Demo silently never connects (generic installer)](2026-10-16-mt5-login-generic-installer.md) | S3 | closed (ADR 0020) |

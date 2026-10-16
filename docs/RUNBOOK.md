@@ -66,10 +66,23 @@ Log in to your IC Markets demo **once** (MT5 keeps the login; goldbot never sees
 2. On your Mac, a second Terminal window: `ssh -L 5900:localhost:5900 ubuntu@<mt5 public ip>`.
 3. In Finder: Go -> Connect to Server -> `vnc://localhost:5900` (macOS Screen Sharing; leave the password empty).
 4. In that window start the terminal if it is not open (`sudo -u mt5 -H env DISPLAY=:99 wine 'C:\MT5\ICMarkets\terminal64.exe' &`
-   on the VM), then File -> Login to Trade Account: your login, password, server **ICMarketsSC-Demo**, tick
-   **Save password**. Check `XAUUSD` is in Market Watch, and enable Tools -> Options -> Expert Advisors ->
-   *Allow algorithmic trading*. Close the terminal.
+   on the VM). The bootstrap installs MetaQuotes' generic terminal, which has **no IC Markets servers** (ADR 0020),
+   so do not use File -> Login to Trade Account first. Instead: File -> Open an Account -> type `ICMarkets` in the
+   search box -> pick **Raw Trading Ltd** (the company behind the ICMarketsSC servers) -> Next -> **Connect with an
+   existing trade account** -> your login, password, server **ICMarketsSC-Demo**, tick **Save password** -> Finish.
+   This downloads the server list into `Config/servers.dat`; later logins can use File -> Login as usual.
+   Check `XAUUSD` is in Market Watch, and enable Tools -> Options -> Expert Advisors -> *Allow algorithmic trading*.
+   Close the terminal.
+
+   *Symptom when the server list is missing:* File -> Login with ICMarketsSC-Demo does nothing at all: no line in
+   the Journal, no network connection, the corner keeps showing "No connection". Fix: the Open an Account flow above.
 5. `sudo systemctl stop goldbot-vnc`, close the tunnel window.
+
+The bridge attaches to that running terminal through the MT5 Python API with
+`initialize(path=r"C:\MT5\ICMarkets\terminal64.exe", timeout=60000)` (`terminal_path` in `config/accounts.yaml`,
+`MT5_INIT_TIMEOUT_MS` in `goldbot/execution/mt5_adapter.py`). Without `path=` it fails with IPC timeout `-10005`.
+If a hand test from the Windows Python on the box shows `-10005`, check the path is given and the terminal runs
+under the same user (`mt5`) and `DISPLAY=:99`.
 
 Bridge address and token:
 ```bash

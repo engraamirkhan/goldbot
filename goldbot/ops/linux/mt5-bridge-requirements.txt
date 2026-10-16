@@ -1,6 +1,8 @@
 # GENERATED from uv.lock by scripts/bridge_requirements.py: do not edit (python scripts/bridge_requirements.py write)
 # The Wine MT5 box's Windows CPython 3.11 (win_amd64), installed as the mt5 user with
-#   wine python -m pip install --require-hashes --no-deps --only-binary :all: -r <this file>
+#   wine $WINPY -m pip install --require-hashes --no-deps --only-binary :all: -r <this file>
+# $WINPY: the absolute path of the prefix's python.exe (WINPY in goldbot/ops/linux/mt5_bootstrap.sh);
+# never a bare `wine python`: Windows tries the current directory before PATH (incident 2026-10-16)
 annotated-types==0.8.0 \
     --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
 backports-tarfile==1.2.0 \
