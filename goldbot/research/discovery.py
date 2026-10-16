@@ -692,7 +692,7 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
                    cfg: DiscoveryConfig, group_mode: str = "column", extra_cost_usd: float = 0.0, swap: Any = None,
                    holdout: Window | None = None, ctx: dict | None = None, rationale: str = "",
                    cost_source: str = "settings priors", rule_ref: str | None = None,
-                   capped: bool = False) -> tuple[dict[str, Any], str]:
+                   capped: bool = False, holdout_from: Any = None) -> tuple[dict[str, Any], str]:
     """`research_pass.py --discover`: budget check (one trial), the pre-registration row, then the run and its result
     row (status "discovery"). Call under `reg.locked()`. Returns (result row, report).
 
@@ -705,7 +705,9 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
 
     Holdout cut (BACKLOG 50, quant review F2 of BACKLOG 47: "`--discover` cuts b1 at holdout_from"): with a holdout
     window, the 1m bars are cut at its start before the config is built or anything is resampled, as `--h16` does, so
-    the hashed `bars_to` is the last bar before the holdout whatever data-v1 reaches on the day of the run."""
+    the hashed `bars_to` is the last bar before the holdout whatever data-v1 reaches on the day of the run. With
+    `holdout_from` (research.holdout_from) set but no window (holdout_to missing, so holdout_window() is None) the run
+    is refused rather than run uncut over the held-out bars (quant review 2026-10-16: fail closed)."""
     from goldbot.data.resample import resample_bars
     from goldbot.features.mtf import TF_LABEL, context_tfs
     from goldbot.features.registry import feature_version
@@ -718,6 +720,9 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     from goldbot.research.registry import DISCOVERY
 
     check_group_config(cfg)              # before the budget check, the pre-registration and any look
+    if holdout is None and holdout_from is not None:
+        raise ValueError(f"research.holdout_from is {holdout_from} but there is no holdout window (research.holdout_to "
+                         f"unset?): --discover would read the held-out bars uncut; set the window or clear holdout_from")
     if holdout is not None:
         b1 = b1.loc[np.asarray(utc_index(b1["ts_utc"]) < pd.Timestamp(holdout[0]))].reset_index(drop=True)
         if b1.empty:

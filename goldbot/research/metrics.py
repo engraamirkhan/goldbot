@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from pydantic import Field
 from scipy import stats
+
+from goldbot.base import FrozenRecord
 
 
 def expectancy_r(ret: np.ndarray, risk_r: np.ndarray) -> float:
@@ -59,16 +62,34 @@ def size_multiplier(p: np.ndarray, allocator_w: float, target_atr: float, stop_a
 MIN_TRADES_FOR_DSR = 200      # below this the deflated Sharpe is not reported (asymptotic statistic; design gates)
 
 
+class DsrInputs(FrozenRecord):
+    """Everything the deflated Sharpe of a trade sample needs except the trial count, stored with the result
+    (`summarize` -> `dsr_inputs`) so a reader can recompute it with the registry's count of today. Quant review
+    2026-10-16: the backtest -> paper gate wants "DSR >= 1.0 on the true trial count", and the count at run time is not
+    the true count once later trials have been run."""
+
+    sr: float                          # per-trade Sharpe (mean / sd), not annualised
+    n: int = Field(ge=1)               # trades
+    skew: float
+    kurtosis: float                    # Pearson (normal = 3)
+    var_sr_trials: float               # variance of the SR across trials (summarize: 1 / n)
+
+    def dsr(self, n_trials: int) -> float:
+        return deflated_sharpe(self.sr, n_trials, self.n, self.skew, self.kurtosis, self.var_sr_trials)
+
+
 def summarize(trades: pd.DataFrame, trades_per_year: float, n_trials: int = 1) -> dict:
     """Trade-level summary. `dsr` is None below MIN_TRADES_FOR_DSR trades: on a few dozen trades the deflated Sharpe's
-    normal approximation and its skew/kurtosis terms are meaningless (16 trades once read 0.991)."""
+    normal approximation and its skew/kurtosis terms are meaningless (16 trades once read 0.991). `dsr` uses `n_trials`
+    (the count at run time); `dsr_inputs` (a DsrInputs dump, None with `dsr`) lets a reader recompute it on a later count."""
     r = trades["ret"].to_numpy()
     if len(r) == 0:
         return {"n": 0}
     sr_per_trade = np.mean(r) / (np.std(r, ddof=1) if len(r) > 1 and np.std(r, ddof=1) > 0 else 1)
-    dsr = (deflated_sharpe(sr_per_trade, n_trials, len(r), float(stats.skew(r)), float(stats.kurtosis(r, fisher=False)),
-                           var_sr_trials=1.0 / max(len(r), 1))
-           if len(r) >= MIN_TRADES_FOR_DSR else None)
+    inputs = (DsrInputs(sr=float(sr_per_trade), n=len(r), skew=float(stats.skew(r)),
+                        kurtosis=float(stats.kurtosis(r, fisher=False)), var_sr_trials=1.0 / max(len(r), 1))
+              if len(r) >= MIN_TRADES_FOR_DSR else None)
+    dsr = inputs.dsr(n_trials) if inputs is not None else None
     return {
         "n": int(len(r)),
         "hit_rate": float(np.mean(r > 0)),
@@ -78,6 +99,7 @@ def summarize(trades: pd.DataFrame, trades_per_year: float, n_trials: int = 1) -
         "sharpe_ann": sharpe_annualised(r, trades_per_year),
         "max_dd": max_drawdown(r),
         "dsr": dsr,
+        "dsr_inputs": inputs.model_dump() if inputs is not None else None,
     }
 
 

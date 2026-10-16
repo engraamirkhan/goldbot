@@ -430,6 +430,27 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - The spread is counted twice on purpose: `cost_atr` includes it, and so does the stop risk measured from the fill.
     This is conservative and recorded in the gate comment and R42.
   - Quant, code and trading-safety reviews done.
+- Quant review 2026-10-16 fixes (e501d56, 1589755, 4ed8270; quant-reviewer re-review owed, gate 1 is on the
+  promotion path).
+  - HIGH: gate 1 (`backtest_to_paper`) and gap watch read `registry.promotion_refusal` / `promotion_pass_counts`:
+    `gate_pass_counts`, plus the latest evaluated rerun of the config decides, plus a `from_discovery` config needs
+    its passed holdout scoring (the rule `passed_gates` already applied). A discovery-derived pass without its
+    holdout no longer meets gate 1 or becomes the paper/live backtest reference.
+  - MEDIUM: `metrics.summarize` stores `dsr_inputs` (`DsrInputs`: sr, n, skew, kurtosis, var_sr_trials). Gate 1
+    recomputes the DSR on the registry's current `n_trials_effective`; a row without stored inputs fails the `dsr`
+    item closed ("no stored DSR inputs ... re-run the trial"). Every registry row written before this commit is in
+    that state, so gate 1 stays unmet until the best trial is re-run.
+  - MEDIUM: `passed_gates` no longer takes best-of-N over reruns: only the latest evaluated row (same family, config
+    hash, feature version, costs recorded) decides. Gap watch now founds from the latest rerun's trial id.
+  - MEDIUM: the ruin Monte Carlo prices a closed trade without R from its stop, side x (exit - entry) / |entry -
+    initial stop|, and charges it as a price return. A row that cannot be priced is left out, counted
+    (`n_excluded`, in the report notes) and makes the cost basis "unknown".
+  - LOW: `research_pass` refuses a matching pending queued row that pins no `data_digests`; `--discover` refuses to
+    run when `research.holdout_from` is set but `holdout_window()` is None.
+  - Tests: tests/test_phase_gates.py (gate_1_* tests), tests/test_research_discipline.py
+    ::test_a_later_failing_rerun_of_the_same_config_revokes_an_earlier_pass, tests/test_gate_pass_counts.py,
+    tests/test_ruin.py::test_a_price_return_row_without_r_is_priced_from_its_stop_and_charged_not_dropped,
+    tests/test_discover_holdout_and_digests.py (fail-closed tests), tests/test_persistence_compat.py (DsrInputs).
 - Trial registry push re-checks the release asset just before the swap (2026-10-16, BACKLOG 51). The VPS monthly loop
   pushes `research-v1/registry.jsonl` outside the workflows' `concurrency: research-registry`, so a workflow save
   that landed between the loop's pull and its push was overwritten, and the other way round too. Both writers now run

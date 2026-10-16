@@ -245,6 +245,26 @@ def test_holdout_is_scored_once_and_gates_are_looked_up_by_exact_config(tmp_path
     assert reg.passed_gates("session_open", {"band_z": 2.5}) and not reg.passed_gates("trend", {"band_z": 2.5})
 
 
+def test_a_later_failing_rerun_of_the_same_config_revokes_an_earlier_pass(tmp_path):
+    """Quant review 2026-10-16: reruns of one configuration are not best-of-N; only the latest evaluated row (same family,
+    config hash and feature version, costs recorded) decides."""
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    cfg = {"band_z": 2.0}
+    _row(reg, config=cfg, gates=True)
+    assert reg.passed_gates("session_open", cfg)
+    _row(reg, config=cfg, gates=False)                                  # the rerun failed: the earlier pass is revoked
+    assert not reg.passed_gates("session_open", cfg) and not reg.passed_gates("session_open", cfg, feature_version="f")
+    _row(reg, config=cfg, gates=True)                                   # a still later pass decides again
+    assert reg.passed_gates("session_open", cfg)
+    # a later row without the cost treatment is no rerun of the swap-charged configuration: it decides nothing
+    reg.record(agent_id="a", family="session_open", config=cfg, feature_version="f", rationale="pre-swap",
+               results={"gates": {"passed": False, "checks": []}, "swap": None})
+    assert reg.passed_gates("session_open", cfg)
+    # a holdout scoring is not a rerun either
+    _row(reg, status="holdout", config=cfg, gates=False)
+    assert reg.passed_gates("session_open", cfg)
+
+
 def test_settings_pause_the_label_grid_and_hold_out_the_last_year():
     r = load_settings().research
     assert r.label_grid_paused and r.trial_budget_quarter == 20

@@ -538,8 +538,14 @@ def test_discovery_honours_the_reservation_like_any_run(release_dir, tmp_path, m
     with pytest.raises(SystemExit, match="held for the pre-registered queue"):
         rp.main()                                        # a second ad-hoc discovery would spend the reserved trial
     assert len(_rows(registry)) == 2                     # refused before any row is written
+    # a queued row pins the research window's data-v1 digests (BACKLOG 50); one without them is refused (fail closed)
+    from goldbot.config import load_settings
+    from goldbot.data.release import bar_file_digests
+    holdout_from = load_settings().research.holdout_from
+    assert holdout_from is not None
     queued = queued_prereg(TrialRegistry(registry), agent_id=res["agent_id"], family=res["family"], config=res["config"],
-                                                 feature_version="f", rationale="H-02", reading_rule=pre["reading_rule"])
+                           feature_version="f", rationale="H-02", reading_rule=pre["reading_rule"],
+                           plan={"data_digests": bar_file_digests(release_dir, to_year=holdout_from.year)})
     assert rp.main() == 0                                # the queued pre-registration may use it
     rows = _rows(registry)
     assert [r["status"] for r in rows[2:]] == ["preregistered", "discovery"]   # no second, self-written row

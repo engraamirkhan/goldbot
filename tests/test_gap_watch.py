@@ -246,7 +246,9 @@ def test_passed_research_is_spawned_first_once_per_trial(tmp_path):
     t = _passed_trial("trend", 7, target_atr=base["target_atr"] * 1.2)
     rep = _run(tmp_path, pop, trials=[t, dict(t, trial=9)])
     first = [a for a in rep.actions if a.action == "spawn_founder"][0]
-    assert first.gap_ids == ["research_ready:trial7"] and pop.members[first.target].origin == "trial 7"
+    # trial 9 reruns trial 7's config: the latest rerun decides (quant review 2026-10-16), one founder for the config
+    assert first.gap_ids == ["research_ready:trial9"] and pop.members[first.target].origin == "trial 9"
+    assert [a.gap_ids for a in rep.actions if a.gap_ids[0].startswith("research_ready")] == [["research_ready:trial9"]]
     assert not [g for g in G.research_ready([t], pop)]                 # already has its agent
 
 

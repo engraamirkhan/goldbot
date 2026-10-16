@@ -72,6 +72,22 @@ def test_gap_watch_founds_no_agent_from_a_pre_swap_gate_pass(tmp_path: Path):
     assert [g.gap_id for g in G.research_ready([pre_swap, charged], pop)] == ["research_ready:trial8"]
 
 
+def test_gap_watch_founds_no_agent_from_a_discovery_derived_pass_until_its_holdout_passed(tmp_path: Path):
+    """Quant review 2026-10-16: gap watch reads the same promotion predicate as gate 1 (registry.promotion_pass_counts),
+    so a discovery-derived config is research-ready only with its holdout pass."""
+    from goldbot.research.registry import FROM_DISCOVERY_KEY, config_hash
+    pop = Population(tmp_path / "population.json")
+    pop.ensure_founders(NOW - pd.Timedelta(days=60))
+    base = SPECIALISTS["trend"].default_config
+    cfg = {**base, "target_atr": base["target_atr"] * 1.1, FROM_DISCOVERY_KEY: {"trial": 3}}
+    wf = {"trial": 8, "family": "trend", "config": cfg, "config_hash": config_hash(cfg), "feature_version": "f",
+          "status": "evaluated", "results": _results()}
+    assert G.research_ready([wf], pop) == []
+    holdout = {"trial": 9, "family": "trend", "config": cfg, "config_hash": config_hash(cfg), "feature_version": "f",
+               "status": "holdout", "results": {"holdout_verdict": {"passed": True}, **COSTS}}
+    assert [g.gap_id for g in G.research_ready([wf, holdout], pop)] == ["research_ready:trial8"]
+
+
 # ---------------------------------------------------------------------------------------------- CPCV
 def test_the_quarterly_cpcv_job_re_evaluates_no_pre_swap_gate_pass(tmp_path: Path):
     acc = Account(account_id="icm-demo", broker="icm", mode="demo", server="ICMarketsSC-Demo", login=None,

@@ -58,15 +58,15 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import Field
+from pydantic import Field, ValidationError
 from scipy import stats
 
-from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, load_record_json, write_atomic
+from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, load_record, load_record_json, write_atomic
 from goldbot.config import GateSettings, Settings
 from goldbot.ops.accounts import GATES
 from goldbot.ops.cost_imputation import CostImputer, ImputationSummary
-from goldbot.research.metrics import max_drawdown
-from goldbot.research.registry import costs_recorded, gate_pass_counts
+from goldbot.research.metrics import DsrInputs, max_drawdown
+from goldbot.research.registry import costs_recorded, n_trials_effective, promotion_refusal
 
 CLOSED_TRADES_FILE = "closed_trades.jsonl"
 EVIDENCE_FILE = "gate_evidence.json"
@@ -345,14 +345,34 @@ def _trial_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def current_dsr(row: dict[str, Any] | None, n_trials: int) -> tuple[float | None, str]:
+    """The row's model-filtered deflated Sharpe recomputed on `n_trials` (the registry's `n_trials_effective` today)
+    from its stored inputs (`metrics.DsrInputs`, results.model_filtered.dsr_inputs), and the reason when it cannot be.
+    Design: "DSR >= 1.0 on the true trial count"; the stored `dsr` used the count of its run, which every later trial
+    makes too small (quant review 2026-10-16). A row without stored inputs (written before they were recorded, or below
+    metrics.MIN_TRADES_FOR_DSR trades) fails closed: it is no DSR evidence whatever its stored value."""
+    mf = ((row or {}).get("results") or {}).get("model_filtered") or {}
+    raw = mf.get("dsr_inputs")
+    if raw is None:
+        return None, "no stored DSR inputs to recompute it on today's trial count (re-run the trial)"
+    try:
+        inputs = load_record(DsrInputs, raw, source="trial_registry")
+    except ValidationError:
+        return None, "unreadable stored DSR inputs (re-run the trial)"
+    return inputs.dsr(max(int(n_trials), 1)), ""
+
+
 def best_backtest_trial(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The evaluated walk-forward trial (never a holdout scoring) with the highest model-filtered DSR, among rows that
-    record the research cost treatment (`registry.costs_recorded`: the swap charged and the cost source stated). Quant
+    """The evaluated walk-forward trial (never a holdout scoring) with the highest model-filtered DSR recomputed on the
+    registry's trial count today (`current_dsr`; a row that cannot be recomputed ranks last), among rows that record
+    the research cost treatment (`registry.costs_recorded`: the swap charged and the cost source stated). Quant
     review, 2026-10-11: "A pass from before swap was charged is not a pass of the swap-charged configuration", so a
     pre-swap row is not backtest evidence for the backtest -> paper gate, whatever its DSR."""
+    k = n_trials_effective(rows)
+
     def dsr(r: dict[str, Any]) -> float:
-        v = ((r.get("results") or {}).get("model_filtered") or {}).get("dsr")
-        return float(v) if v is not None else -1.0
+        v = current_dsr(r, k)[0]
+        return v if v is not None else -1.0
     cands = [r for r in rows if r.get("status") == "evaluated" and (r.get("results") or {}).get("model_filtered")
              and costs_recorded(r.get("results") or {})]
     return max(cands, key=dsr) if cands else None
@@ -492,10 +512,12 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     rows = _trial_rows(trials_path if trials_path is not None else _registry_path(state_dir, settings))
     best = best_backtest_trial(rows)
     mf = ((best or {}).get("results") or {}).get("model_filtered") or {}
-    # the backtest reference for paper expectancy and live drawdown is the best trial only when it passed the research
-    # gates with its costs recorded (gate_pass_counts): a trial that failed them is no reference, so the comparator can
-    # never silently switch to an unrelated trial and pass (review of 978c667)
-    best_ok = best is not None and gate_pass_counts(best)
+    # the backtest reference for paper expectancy and live drawdown is the best trial only when its research pass
+    # counts for a promotion (registry.promotion_refusal: gates passed with costs recorded, the latest rerun of its
+    # config, and a discovery-derived config's holdout passed): a trial that fails that is no reference, so the
+    # comparator can never silently switch to an unrelated trial and pass (review of 978c667; quant review 2026-10-16)
+    refusal = promotion_refusal(best, rows) if best is not None else "no evaluated trial"
+    best_ok = refusal is None
     bt_mean = float(mf["mean_ret"]) if best_ok and mf.get("mean_ret") is not None else None
     bt_dd = float(mf["max_dd"]) if best_ok and mf.get("max_dd") is not None else None
 
@@ -518,8 +540,10 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     ]
     gates.append(_status(0, passed, items))
 
-    # 1 backtest -> paper: from the trial registry and the measured spread table
-    dsr = mf.get("dsr")
+    # 1 backtest -> paper: from the trial registry and the measured spread table; the DSR recomputed on today's count
+    k_now = n_trials_effective(rows)
+    dsr, dsr_why = current_dsr(best, k_now)
+    stored = mf.get("dsr")
     gchecks = {c.get("name"): c for c in (((best or {}).get("results") or {}).get("gates") or {}).get("checks", [])}
     years = gchecks.get("positive_years") or {}
     spread_tables = [c for c in _cost_tables(state_dir) if int(c.get("n_ticks") or 0) > 0 and c.get("spread")]
@@ -527,13 +551,17 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     failed_checks = [str(n) for n, c in gchecks.items() if not c.get("passed")]
     research_ev = (f"{trial} passed the research gates" if best_ok else
                    f"{trial} did not pass the research gates"
-                   + (f" (failed: {', '.join(failed_checks)})" if failed_checks else "") if best else trial)
+                   + (f" (failed: {', '.join(failed_checks)})" if failed_checks else "")
+                   + (f": {refusal}" if refusal and "research gates" not in refusal else "")
+                   if best else trial)
     reference = f"{trial}" + ("" if best_ok or best is None else ", which did not pass the research gates: no reference")
     items = _previous(1, passed) + [
         GateItem(name="research_gates", met=best_ok, evidence=research_ev,
                  need="the trial passed the design's research gates with swap charged and its cost source stated"),
-        GateItem(name="dsr", met=dsr is not None and float(dsr) >= cfg.backtest_min_dsr,
-                 evidence=f"{_fmt(float(dsr) if dsr is not None else None, '.3f')} at {trial}; registry now holds {len(rows)} trials",
+        GateItem(name="dsr", met=dsr is not None and dsr >= cfg.backtest_min_dsr,
+                 evidence=(f"{_fmt(dsr, '.3f')} at {trial}, recomputed on the registry's {k_now} trials"
+                           if dsr is not None else f"n/a at {trial}: {dsr_why}")
+                 + (f" ({float(stored):.3f} stored at run time)" if stored is not None else ""),
                  need=f">= {cfg.backtest_min_dsr} on the true trial count"),
         GateItem(name="positive_years", met=bool(years.get("passed")), evidence=str(years.get("detail") or "n/a"),
                  need="positive in 3 separate years incl. 2021-22 (research gates)"),

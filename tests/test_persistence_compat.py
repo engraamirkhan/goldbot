@@ -38,6 +38,7 @@ from goldbot.ops import health, jobs, ledger, scheduler
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research import ruin
 from goldbot.research.director import ResearchPlan
+from goldbot.research.metrics import DsrInputs
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.population import Member, Population
 from goldbot.research.promotion import PerfStats
@@ -272,10 +273,20 @@ def case_hwm_confirmation(tmp: Path) -> None:
     assert hwm.read_only_confirmation(tmp, "icm-demo") == conf
 
 
+def case_trial_dsr_inputs(tmp: Path) -> None:
+    """A trial row's stored deflated-Sharpe inputs (results.model_filtered.dsr_inputs, metrics.DsrInputs; quant review
+    2026-10-16) with a field from a newer release: gate 1 still recomputes the DSR from them."""
+    from goldbot.ops.gates_phase import current_dsr
+    inputs = DsrInputs(sr=0.12, n=600, skew=0.0, kurtosis=3.0, var_sr_trials=1 / 600)
+    row = json.loads(json.dumps({"results": {"model_filtered": {"dsr_inputs": _newer(inputs.model_dump())}}}))
+    assert current_dsr(row, 7) == (inputs.dsr(7), "")
+
+
 CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed_trade_price_return_without_ret_basis,
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
-         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_hwm_confirmation]
+         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_hwm_confirmation,
+         case_trial_dsr_inputs]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.__name__.removeprefix("case_") for c in CASES])
@@ -288,7 +299,7 @@ def test_every_persisted_record_model_has_a_compat_case():
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
-               ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation,
+               ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, DsrInputs,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,

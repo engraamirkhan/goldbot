@@ -360,7 +360,9 @@ the registry (normally 0), and that settings change ships in the same change as 
   **107 < 150, so H-06 is withdrawn by the rule written above: its row is not written and the 2027Q1 reservation is
   8.** The quant estimate (80-130) is confirmed. The spec change (`withdrawn:` on H-06 and `reservation: 8` in
   `preregistration-2027Q1.yaml`, with `research.reserved_trials_quarter` 2027Q1 = 8 in `config/settings.yaml`, one
-  reviewed change, as `preregistration.py` requires) was made by the implementer on 2026-10-16, quant reviewer approved.
+  reviewed change, as `preregistration.py` requires) was made by the implementer on 2026-10-16 (quant review
+  2026-10-16: count_h06 and 9754ca0 signed off; withdrawal to be confirmed on the merged recount run (must run on a
+  commit containing 9754ca0)).
   No owner decision is needed (the rule was pre-registered); the owner is told as an FYI.
 - **Run (written 2026-10-16 by the strategy researcher, before any H-06 outcome was seen; no reading rule changes).**
   Only if H-06 survives its withdrawal rule, and only after H-01 has run (its rule compares against H-01's recorded net
@@ -628,7 +630,7 @@ together, in one reviewed change.
 
 | Item | Accountable | Date | Status |
 |---|---|---|---|
-| `preregistration-2027Q1.yaml`: H-06 `withdrawn:` (reason: lower bound 107 < 150, run 38931951849), `reservation: 8`; `config/settings.yaml` `reserved_trials_quarter` 2027Q1 = 8, in one reviewed change (quant-reviewer checks) | implementer | 2026-10-23 | **done 2026-10-16** (quant reviewer approved) |
+| `preregistration-2027Q1.yaml`: H-06 `withdrawn:` (reason: lower bound 107 < 150, run 38931951849), `reservation: 8`; `config/settings.yaml` `reserved_trials_quarter` 2027Q1 = 8, in one reviewed change (quant-reviewer checks) | implementer | 2026-10-23 | **done 2026-10-16** (quant review 2026-10-16: count_h06 and 9754ca0 signed off; withdrawal to be confirmed on the merged recount run (must run on a commit containing 9754ca0)) |
 | Four survivor slots written on H-02's row | strategy-researcher | with the rows, 2026-12-18 .. 12-23 | on track |
 
 **3. Owed counts** (events only, no outcome). Source: count-owed-events run 38931951849 on `main` `eafc6ce`,

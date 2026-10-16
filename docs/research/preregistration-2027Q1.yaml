@@ -90,7 +90,7 @@ rows:
       2026-10-16, by its pre-registered withdrawal rule (preregistration-2027Q1.md, H-06 "Readiness gap and
       withdrawal rule"): count-owed-events run 38931951849 (main @ eafc6ce, data-v1 cut before 2025-10-01) gives
       1,105 signals and a one-at-a-time lower bound of 107, below the retire floor in force (150), so the row is not
-      written and no trial is spent; the 2027Q1 reservation is 8 (quant reviewer approved the withdrawal)
+      written and no trial is spent; the 2027Q1 reservation is 8 (quant review 2026-10-16: count_h06 and 9754ca0 signed off; withdrawal to be confirmed on the merged recount run (must run on a commit containing 9754ca0))
 
   - id: H-04
     specialist: asia_drift
