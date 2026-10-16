@@ -3,10 +3,13 @@ requirement: '"only changes when two consecutive runs disagree"; "re-runs weekly
 status: implemented
 code: 'goldbot/execution/classifier.py `PersistentClassifier.update` (a known class changes only after two consecutive runs
   that agree on another class; a stored unknown adopts a known class on its first run when it is standard, raw by
-  commission, or the last known class in the kept runs is raw or absent, otherwise the two-run rule applies);
-  goldbot/ops/jobs.py (Friday)'
+  commission, or `state["last_known"]` (last stored raw/standard, never pending, never expires; migrated for legacy
+  files) is raw or None, otherwise the two-run rule applies); goldbot/ops/jobs.py (Friday)'
 test: tests/test_risk_exec_webhook.py::test_classifier_rules_and_persistence; ::test_a_stored_unknown_is_replaced_by_the_first_known_class_on_its_first_run;
   ::test_a_stored_unknown_adopts_standard_on_its_first_run; ::test_after_falling_from_standard_to_unknown_a_spread_only_raw_run_needs_a_second_agreeing_run;
   ::test_after_falling_from_standard_to_unknown_a_commission_raw_run_is_adopted_at_once;
+  ::test_raw_runs_that_were_only_pending_never_count_as_the_last_known_class;
+  ::test_a_last_known_standard_does_not_expire_after_more_than_twenty_unknown_runs;
+  ::test_a_legacy_state_file_without_last_known_is_migrated_from_its_class_and_runs;
   ::test_a_known_class_needs_two_agreeing_runs_to_change_to_another_known_class; ::test_a_known_class_does_not_fall_back_to_unknown_on_one_thin_week;
   tests/test_jobs_integration.py::test_nightly_costs_from_logged_ticks_and_fills
