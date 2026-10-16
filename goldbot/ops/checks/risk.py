@@ -86,6 +86,11 @@ def _control(ctx: HealthContext) -> dict[str, Any] | None:
         return None
 
 
+def _channel(by: object) -> str:
+    """"telegram:<id>" -> "telegram": a control.json from before A15 names who; the check names the channel only."""
+    return str(by).split(":", 1)[0] if by else "unknown"
+
+
 @register_check("global", block=BLOCK_CORE, pos=20)
 def check_halt(ctx: HealthContext) -> Check:
     c = _control(ctx)
@@ -94,12 +99,12 @@ def check_halt(ctx: HealthContext) -> Check:
     rearm = ""
     if c.get("rearm_id"):
         at = pd.Timestamp(float(c.get("rearm_ts") or 0), unit="s", tz="UTC")
-        rearm = f"; last owner re-arm by {c.get('rearm_by')} at {at:%Y-%m-%d %H:%M} UTC"
+        rearm = f"; last owner re-arm via {_channel(c.get('rearm_by'))} at {at:%Y-%m-%d %H:%M} UTC"
     if c.get("halted"):
         since = pd.Timestamp(float(c.get("ts") or 0), unit="s", tz="UTC")
         why = f" ({c['reason']})" if c.get("reason") else ""
         return Check(name="owner_halt", status="warn",
-                     reason=f"HALTED by {c.get('by')}{why} since {since:%Y-%m-%d %H:%M} UTC; re-arm on the dashboard{rearm}")
+                     reason=f"HALTED via {_channel(c.get('by'))}{why} since {since:%Y-%m-%d %H:%M} UTC; re-arm on the dashboard{rearm}")
     return Check(name="owner_halt", status="ok", reason="armed" + rearm)
 
 

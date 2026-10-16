@@ -158,7 +158,7 @@ def test_bus_submit_validates_and_the_first_decision_wins(tmp_path):
     with pytest.raises(KeyError):
         bus.submit("unknown", True, None, "dashboard:a@x")
     d = bus.submit("icm-1-a", True, "news", "telegram:111")
-    assert d.approve and d.reason_code is None and d.by == "telegram:111"
+    assert d.approve and d.reason_code is None and d.by == "telegram"            # the channel only (A15)
     with pytest.raises(KeyError, match="already decided"):
         bus.submit("icm-1-a", False, "cost", "dashboard:b@x")
     assert bus.pending() == []                                       # decided proposals leave the queue

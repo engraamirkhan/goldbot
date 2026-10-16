@@ -595,7 +595,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.post("/api/decisions")
     async def decide(d: Decision, u: User = Depends(need("approver"))) -> DecisionResult:
         try:
-            st.bus.submit(d.proposal_id, d.action == "approve", d.reason_code, by=f"dashboard:{u.email}")
+            # the channel only: who decided is the audit row below, never the decision file (A15)
+            st.bus.submit(d.proposal_id, d.action == "approve", d.reason_code, by="dashboard")
         except (KeyError, ValueError) as exc:
             raise HTTPException(400, str(exc).strip("'\""))
         st.auth.audit("decision", by=u.email, proposal=d.proposal_id, action=d.action, reason=d.reason_code)
@@ -605,7 +606,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.post("/api/halt")
     async def halt(body: HaltRequest, u: User = Depends(need("approver"))) -> Status:
         # stopping new entries needs no second factor (design); exits and open positions are untouched
-        st.bus.set_halt(True, by=f"dashboard:{u.email}", reason=body.reason)
+        st.bus.set_halt(True, by="dashboard", reason=body.reason)       # who: the audit row below (A15)
         st.auth.audit("halt", by=u.email, reason=body.reason)
         await st.broadcast({"type": "halt", "halted": True})
         return current_status()
@@ -621,7 +622,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             raise HTTPException(403, CODES_LOCKED)
         if not ok:
             raise HTTPException(403, "authenticator code required to re-arm")
-        c = st.bus.owner_rearm(by=f"dashboard:{u.email}")      # also clears the engines' drawdown halts
+        c = st.bus.owner_rearm(by="dashboard")      # also clears the engines' drawdown halts; who: the audit row
         st.auth.audit("rearm", by=u.email, rearm_id=c.rearm_id)
         await st.broadcast({"type": "halt", "halted": False})
         return current_status()
@@ -750,7 +751,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         c = st.bus.control()
         sup = st.supervisor()
         drift = st.drift_halt()
-        return Status(mode=",".join(modes) or "propose", halted=c.halted, halted_by=c.by if c.halted else None,
+        # who halted is the channel for every role (A15); an older control.json's "<channel>:<id>" is cut to it
+        halted_by = decision_channel(c.by) if c.halted and c.by else None
+        return Status(mode=",".join(modes) or "propose", halted=c.halted, halted_by=halted_by,
                       halt_reason=c.reason if c.halted else None, pending=len(st.bus.pending()), supervisor=sup,
                       supervisor_halt=bool(sup.get("halt")), supervisor_reasons=[str(r) for r in sup.get("reasons") or []],
                       drift_halt=drift is not None, drift_reasons=drift or [], blackout=st.active_blackout())

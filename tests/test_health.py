@@ -145,10 +145,10 @@ def test_owner_halt_and_rearm(tmp_path):
     bus = ApprovalBus(tmp_path)
     bus.set_halt(True, by="telegram:42", reason="news")
     c = health.check_halt(ctx)
-    assert c.status == "warn" and "telegram:42" in c.reason and "news" in c.reason
+    assert c.status == "warn" and "HALTED via telegram" in c.reason and "news" in c.reason
     bus.owner_rearm(by="dashboard:owner@x")
     c = health.check_halt(ctx)
-    assert c.status == "ok" and "re-arm by dashboard:owner@x" in c.reason
+    assert c.status == "ok" and "re-arm via dashboard" in c.reason and "owner@x" not in c.reason
     (tmp_path / "control.json").write_text("not json")
     assert health.check_halt(ctx).status == "fail"
 

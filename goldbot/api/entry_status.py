@@ -411,7 +411,7 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
                          supervisor_reasons: list[str] | None, drift_reasons: list[str] | None,
                          budget: LossBudget | None, limits: RiskLimits, milestones: Milestones | None = None,
                          is_owner: bool = True, combined_dd: float | None = None) -> EntryStatus:
-    """owner_halt: who halted (None: not halted); supervisor_reasons: the supervisor's halt as the engine reads it
+    """owner_halt: the channel that halted (None: not halted); supervisor_reasons: the supervisor's halt as the engine reads it
     (None: no halt; empty: a halt without reasons); drift_reasons: the drift watch's system halt (None: none);
     budget: the account's loss budget (account_view.loss_budget); milestones: its ladder (account_view.milestones);
     is_owner: the viewer may re-arm; combined_dd: the supervisor's combined drawdown halt (SupervisorLimits)."""
@@ -577,7 +577,8 @@ def entry_inputs(state_dir: str | Path, settings: Settings | None, *, is_owner: 
         sup_limits = SupervisorLimits.from_settings(settings.risk) if settings is not None else SupervisorLimits()
     except Exception:                      # noqa: BLE001 - a bad settings edit: the defaults
         limits, sup_limits = RiskLimits(), SupervisorLimits()
-    return dict(owner_halt=(c.by or "unknown") if c.halted else None,
+    # the channel that halted, never who (A15): an older control.json's "<channel>:<id>" is cut to the channel
+    return dict(owner_halt=(c.by or "unknown").split(":", 1)[0] if c.halted else None,
                 supervisor_reasons=[r for r in why.split(",") if r] if halt else None,
                 drift_reasons=read_drift_halt(state_dir), limits=limits, combined_dd=sup_limits.dd_stage2,
                 is_owner=is_owner)

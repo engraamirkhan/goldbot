@@ -61,11 +61,11 @@ def test_a_new_commit_that_passed_ci_is_offered_once(tmp_path):
 
 def test_an_approval_names_the_exact_commit_on_offer(tmp_path):
     w = _watch(tmp_path, _Git(A, B))
-    assert not w.approve(B, by=42)                                    # nothing on offer yet
+    assert not w.approve(B)                                    # nothing on offer yet
     w.check()
-    assert not w.approve(C, by=42) and not w.approve("not-a-sha", by=42)
-    assert w.approve(B, by=42)
-    assert json.loads((tmp_path / "deploy" / "approved.json").read_text()) == {"sha": B, "by": 42}
+    assert not w.approve(C) and not w.approve("not-a-sha")
+    assert w.approve(B)
+    assert json.loads((tmp_path / "deploy" / "approved.json").read_text()) == {"sha": B}       # the commit only: who tapped is in the audit log (A15)
     assert not (tmp_path / "deploy" / "pending.json").exists()
 
 

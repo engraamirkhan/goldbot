@@ -324,7 +324,7 @@ def test_telegram_halt_through_the_bot_still_halts_while_codes_are_locked(store)
     import asyncio
     import types
 
-    from goldbot.telegram.bot import TelegramBot
+    from goldbot.telegram.bot import OffLoopAudit, TelegramBot
     s, _ = store
     for _ in range(LOCKOUT_FAILURES):
         assert not s.verify_code_guarded("000000", "mode")
@@ -332,6 +332,7 @@ def test_telegram_halt_through_the_bot_still_halts_while_codes_are_locked(store)
         s.verify_code_guarded("000000", "mode")
     bot = TelegramBot.__new__(TelegramBot)                    # no network: only the command handler's state
     bot.bus, bot.owner_ids, bot.state_dir = ApprovalBus(s.dir), {111}, str(s.dir)
+    bot.audit = OffLoopAudit(str(s.dir))
     replies: list[str] = []
 
     async def reply_text(text: str) -> None:

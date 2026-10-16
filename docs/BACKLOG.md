@@ -66,9 +66,10 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; settings and `hypotheses.md` B together) |
 | 50 | --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners | Idea generation (integrity) · FIND | M | implemented 2026-10-11 (TRACEABILITY M43; quant review pending) |
 | 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | proposed (security re-verify of BACKLOG 47, 2026-10-11) |
-| 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | implemented (security and trading-safety review pending; A14) |
+| 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | implemented (security and trading-safety review pending; A14, follow-ups A15) |
 | 53 | The phase gates compare paper and live with the deployed model's own trial | Roadmap gates (P7) · VERIFY | M | proposed (review of 978c667, 2026-10-12) |
 | 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | proposed (trading-safety review of BACKLOG 44, 2026-10-12; needs trading-safety review) |
+| 55 | test_lockout_survives_a_restart: make it reliable under load | Platform (CI) · SECURE | S | proposed (ci follow-up, A15 lane, 2026-10-12) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -751,6 +752,18 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - tests: a single inflated balance read leaves the mark unchanged and causes no size-down or halt on the next real
     reads; two agreeing reads, or a read the deal history explains, raise it as today; a restart between the two reads
     does not apply an unconfirmed rise.
+- **55. test_lockout_survives_a_restart: make it reliable under load (ci follow-up from the A15 lane,
+  2026-10-12).** Value: `tests/test_auth_security.py::test_lockout_survives_a_restart` failed once in a full
+  `pytest -m "not integration" -n 4` run with the load average near 20 ("DID NOT RAISE PermissionError" on the
+  second AuthStore's login). The same file passed alone (29 passed), and the change under test did not touch
+  goldbot/api/auth.py. A flaky security test hides a real lockout regression. Likely cause, not yet confirmed: the
+  test opens a second `AuthStore` on the same aux.db while the first may still hold a write, and under load the
+  failure rows are not visible to it within the `busy_timeout`. A second candidate is the lockout window: five slow
+  password hashes under load may push the first failure out of the window. Do: reproduce under load (for example
+  `pytest -n 8 --count 50` with `stress` running), then confirm which cause it is. Then either give the fixture's
+  stores a longer busy timeout, or retry the second login, or freeze the clock for the window. Never loosen the
+  lockout itself. Acceptance: 200 repeated runs under load pass; the test still fails when the lockout is not
+  persisted (checked by temporarily disabling the write).
 
 ## Needs the owner
 These are never decided by the product owner or by agents.

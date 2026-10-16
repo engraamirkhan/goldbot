@@ -62,19 +62,20 @@ describe("Overview halt control", () => {
 
   it("lets an approver halt new entries with a reason", async () => {
     vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
-    const halt = vi.spyOn(apiModule.api, "halt").mockResolvedValue(status({ halted: true, halted_by: "dashboard:a@x.io", halt_reason: "fomc" }));
+    const halt = vi.spyOn(apiModule.api, "halt").mockResolvedValue(status({ halted: true, halted_by: "dashboard", halt_reason: "fomc" }));
     renderOverview("approver");
     fireEvent.change(await screen.findByLabelText("Halt reason"), { target: { value: "fomc" } });
     fireEvent.click(screen.getByRole("button", { name: "Halt new entries" }));
     await waitFor(() => expect(halt).toHaveBeenCalledWith("fomc"));
-    expect(await screen.findByText(/Entries halted by dashboard:a@x.io: fomc/)).toBeInTheDocument();
+    expect(await screen.findByText("Entries halted via the dashboard: fomc.")).toBeInTheDocument();
     expect(screen.getByText("Only the owner can re-arm.")).toBeInTheDocument();
   });
 
   it("re-arms only for the owner with an authenticator code", async () => {
-    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({ halted: true, halted_by: "telegram:42" }));
+    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({ halted: true, halted_by: "telegram" }));
     const rearm = vi.spyOn(apiModule.api, "rearm").mockResolvedValue(status({}));
     renderOverview("owner");
+    expect(await screen.findByText("Entries halted via Telegram.")).toBeInTheDocument();
     const button = await screen.findByRole("button", { name: "Re-arm" });
     expect(button).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Authenticator code"), { target: { value: "123456" } });

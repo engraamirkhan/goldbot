@@ -27,12 +27,12 @@ describe("SafetyStrip", () => {
 
   it("shows every halt in red with its reason", () => {
     render(<SafetyStrip accounts={[account({ stage: "halted" })]} status={status({
-      halted: true, halted_by: "dashboard:o@x.io", halt_reason: "fomc", drift_halt: true, drift_reasons: ["ECE 0.12"],
+      halted: true, halted_by: "dashboard", halt_reason: "fomc", drift_halt: true, drift_reasons: ["ECE 0.12"],
       blackout: { kind: "calendar", title: "US CPI", ts_utc: "2026-10-10T12:30:00Z", received_utc: null, accounts: ["icm-demo"] },
     })} />);
     expect(screen.getByRole("status")).toHaveTextContent("New entries blocked: owner halt, drift halt, news blackout, drawdown halt");
     expect(chip("Owner halt")).toHaveClass("bad");
-    expect(chip("Owner halt")).toHaveTextContent("dashboard:o@x.io: fomc");
+    expect(chip("Owner halt")).toHaveTextContent("via the dashboard: fomc");
     expect(chip("Drift halt")).toHaveTextContent("ECE 0.12");
     expect(chip("News blackout")).toHaveTextContent("US CPI");
     expect(chip("Drawdown")).toHaveClass("bad");
