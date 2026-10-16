@@ -554,8 +554,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                     reward_amount=p.reward_amount,
                     loss_left=budget.remaining if budget and budget.unknown is None else None,
                     loss_left_period=budget.period if budget and budget.unknown is None else None,
-                    loss_cant_check=(None if budget is None or budget.unknown is None
-                                     else "paused" if budget.unknown_paused else "not_summed"),
+                    loss_cant_check=budget.cant_check if budget else None,
                     expires_at=datetime.fromtimestamp(p.created + p.window_s, tz=timezone.utc))
 
     @app.get("/api/proposals", response_model=list[Proposal])

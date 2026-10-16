@@ -66,7 +66,7 @@ describe("blockers", () => {
       ["owner halt", "supervisor halt", "drift halt", "news blackout", "drawdown halt", "account class unknown"]);
   });
   it("blocks when today's loss budget is spent", () => {
-    const spent = { limit: 15, used: 15, remaining: 0, binding: "account 2.0% daily cap", binding_label: "this account (2.0% of today's start)", period: "today" as const, notes: [], caps: [], unknown_paused: false };
+    const spent = { limit: 15, used: 15, remaining: 0, binding: "account 2.0% daily cap", binding_label: "this account (2.0% of today's start)", period: "today" as const, notes: [], caps: [], unknown_paused: false, unknown_mixed: false };
     expect(blockers(status(), [account({ loss_budget: spent })], "icm-demo")).toEqual(["daily loss limit reached"]);
     expect(blockers(status(), [account({ loss_budget: { ...spent, used: 5, remaining: 10 } })], "icm-demo")).toEqual([]);
     const week = { ...spent, binding: "combined 4.0% weekly cap", period: "this week" as const };
@@ -126,6 +126,11 @@ describe("card money", () => {
       { text: "Loss budget left today: can't check (supervisor not reporting; new entries paused)", tone: "bad" });
     expect(budgetLine({ ...base, loss_cant_check: "not_summed" })).toEqual(
       { text: "Loss budget left today: can't check (the supervisor hasn't added up the accounts yet)", tone: "warn" });
+    expect(budgetLine({ ...base, loss_cant_check: "mixed_currencies" })).toEqual(          // BACKLOG 61
+      { text: "Loss budget left today: can't check (the accounts report different currencies)", tone: "warn" });
+    expect(budgetLine({ ...base, loss_cant_check: "mixed_currencies_paused" })).toEqual(
+      { text: "Loss budget left today: can't check (the accounts report different currencies; new entries paused)",
+        tone: "bad" });
     expect(budgetLine({ ...base, loss_left: 11.789, loss_left_period: "today" }).text).toMatch(/^£11\.78 left/);
   });
 });

@@ -159,6 +159,34 @@ def test_api_proposal_carries_currency_risk_min_lot_and_the_live_budget(tmp_path
     assert old["min_lot_exception"] is False
 
 
+@pytest.mark.parametrize("halted, want", [(False, "mixed_currencies"), (True, "mixed_currencies_paused")])
+def test_api_proposal_with_a_gbp_and_a_usd_engine_says_cant_check_without_an_amount(tmp_path, halted, want):
+    """BACKLOG 61: with mixed currencies the combined caps are left out, so the card never shows the account cap's
+    roomier figure: "can't check" (amber; red while the supervisor halts on `mixed_account_currencies`)."""
+    bus = ApprovalBus(tmp_path)
+    bus.publish(_prop(**GBP_MIN_LOT))
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
+    (tmp_path / "engine_vantage-demo.json").write_text(json.dumps(_engine(account="vantage-demo", currency="USD")))
+    sup = {**_sup(), **({"halt": True, "reasons": ["mixed_account_currencies"]} if halted else {})}
+    (tmp_path / "supervisor.json").write_text(json.dumps(sup))
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
+    c = TestClient(app)
+    [r] = c.get("/api/proposals", headers=_owner_headers(c, app)).json()
+    assert (r["loss_left"], r["loss_left_period"], r["loss_cant_check"]) == (None, None, want)
+
+
+def test_telegram_text_with_mixed_currencies_says_cant_check_with_the_reason():
+    p = _prop(currency="GBP", risk_amount=4.1, risk_fraction=0.0041, risk_normal=0.005)
+    engines = [_engine(), _engine(account="vantage-demo", currency="USD")]
+    amber = loss_budget(_engine(), _sup(), engines, trade_risk=4.1)
+    assert "loss budget left today: can't check (the accounts report different currencies)" in p.text(amber)
+    red = loss_budget(_engine(), {**_sup(), "halt": True, "reasons": ["mixed_account_currencies"]}, engines,
+                      trade_risk=4.1)
+    assert ("loss budget left today: can't check (the accounts report different currencies; new entries paused)"
+            in p.text(red))
+    assert not [x for x in p.text(red).splitlines() if " left " in x and "£" in x]       # no roomier amount
+
+
 @pytest.mark.parametrize("report, want", [("missing", "paused"), ("stale", "paused"), ("not summed", "not_summed")])
 def test_api_proposal_says_the_budget_cant_be_checked_without_an_amount(tmp_path, report, want):
     """Missing or stale supervisor report: paused (red on the card); fresh but not summed yet: amber. Never the
