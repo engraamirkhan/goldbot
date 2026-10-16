@@ -35,12 +35,12 @@ import re
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from goldbot.base import Record, load_record_json, write_atomic
 from goldbot.config import ROOT, Settings
-from goldbot.data.timeutil import ROLLOVER_UTC_H
 from goldbot.ops.report_days import day_before, day_bounds
 from goldbot.telegram.entry_text import digest_line as entry_digest_line
 
@@ -51,6 +51,12 @@ ATTRIBUTION_SKIP = ("agent", "decision")   # agent ids are per-version detail; "
 DEFAULT_ROADMAP = ROOT / "docs" / "ROADMAP.md"
 _DECISION_ROW = re.compile(r"^\|\s*D\d+\s*\|")
 _STAGE_RANK = {"normal": 0, "size_down": 1, "halted": 2}
+OWNER_TZ = "Europe/London"          # the header's local time when telegram.owner_tz is not set ("UK")
+NO_PROPOSALS = "• Proposals: none"
+NO_TRADES = "• Trades closed: none"
+# a Saturday or Sunday opportunity day with no proposal and no close: one line instead of two "none" lines (the Sunday
+# reopen opens Monday's day, so its closes are in Tuesday's digest)
+WEEKEND_LINE = "• Weekend: market closed, no trading. Sunday-evening trades show in Tuesday's digest."
 
 
 # ---------------------------------------------------------------------------------------------- schedule and dedupe
@@ -180,7 +186,7 @@ def proposals_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp, now:
     tail = f" · {counts['open']} open" if counts["open"] else ""
     tail += f" · {bad} unreadable" if bad else ""
     if n == 0:
-        return [f"• Proposals: none{tail}"]
+        return [NO_PROPOSALS + tail]
     return [f"• Proposals {n}: ✅ {counts['APPROVED']} approved{note} · ❌ {counts['REJECTED']} rejected · "
             f"⌛ {counts['EXPIRED_UNAPPROVED']} expired{tail}"]
 
@@ -191,7 +197,7 @@ def trades_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp) -> list
     day = [t for t in trades if day0 <= t.exit_utc < day1]
     warn = " (⚠️ unreadable record lines skipped)" if err else ""
     if not day:
-        return [f"• Trades closed: none{warn}"]
+        return [NO_TRADES + warn]
     # P&L summed per currency, never across (BACKLOG 28): a row's currency is its pnl_currency, or for a legacy row
     # the account's currency from engine_<account>.json; each sum is printed with its own symbol ("+£5.00 · -$10.90")
     from goldbot.ops.monthly_report import money
@@ -228,11 +234,25 @@ def trades_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp) -> list
     return [f"• Closed {_plural(len(day), 'trade')}: {net}{gross}{warn}"]
 
 
-def month_line(state_dir: Path, yesterday: pd.Timestamp) -> list[str]:
-    """The month so far up to the opportunity day holding `yesterday` (goldbot/ops/monthly_report.py): nothing before
-    its first closed trade."""
+def month_line(state_dir: Path, day: str, as_of: pd.Timestamp) -> list[str]:
+    """The month so far up to opportunity day `day` (YYYY-MM-DD; goldbot/ops/monthly_report.py): nothing before its
+    first closed trade."""
     from goldbot.ops.monthly_report import month_to_date_line
-    return month_to_date_line(state_dir, yesterday)
+    return month_to_date_line(state_dir, as_of, day=day)
+
+
+def day_header(day: str, settings: Settings | None) -> str:
+    """"Thu 15 Oct trading day (ended 22:00 UTC, 23:00 UK)": the day's end in UTC and in the owner's zone
+    (telegram.owner_tz, else Europe/London, labelled UK; another zone by its abbreviation). A zone that cannot be
+    resolved drops the local time, never the line."""
+    end = day_bounds(day)[1]
+    tz = (settings.telegram.owner_tz if settings is not None else "") or OWNER_TZ
+    try:
+        local = end.tz_convert(ZoneInfo(tz))
+        local_txt = f", {local:%H:%M} {'UK' if tz == OWNER_TZ else local.tzname()}"
+    except (KeyError, ValueError, OSError):     # ZoneInfoNotFoundError is a KeyError; a malformed key a ValueError
+        local_txt = ""
+    return f"{pd.Timestamp(day):%a %d %b} trading day (ended {end:%H:%M} UTC{local_txt})"
 
 
 def open_line(state_dir: Path) -> list[str]:
@@ -397,21 +417,27 @@ def owner_decisions(roadmap: Path) -> int:
 
 
 # ---------------------------------------------------------------------------------------------- the message
-def build_digest(state_dir: str | Path, now: pd.Timestamp, *, report: Any = None, settings: Settings | None = None,
-                 roadmap: Path = DEFAULT_ROADMAP, registry_path: Path | None = None) -> str:
-    """The digest text for `now` (UTC). `report` is a goldbot.ops.health.HealthReport (None: unknown); yesterday is the
-    opportunity day before the one holding `now` (report_days.day_before), [D-2 22:00, D-1 22:00) UTC for a digest
-    on day D, and the month line counts up to the same day."""
+def build_digest(state_dir: str | Path, now: pd.Timestamp, *, as_of: pd.Timestamp | None = None, report: Any = None,
+                 settings: Settings | None = None, roadmap: Path = DEFAULT_ROADMAP,
+                 registry_path: Path | None = None) -> str:
+    """The digest text for `now` (UTC). `report` is a goldbot.ops.health.HealthReport (None: unknown). Yesterday is
+    the opportunity day before the one holding `as_of` (report_days.day_before; default `now`), [D-2 22:00, D-1 22:00)
+    UTC for a digest on day D, and the month line counts up to the same day. The bot passes its scheduled slot as
+    `as_of`, so a send up to 6 h late (past the 22:00 roll) neither drops a day nor repeats one; the first line and
+    the expiry of pending proposals keep `now`."""
     sd = Path(state_dir)
     now = _utc(now)
-    yesterday = day_before(now)
+    as_of = now if as_of is None else _utc(as_of)
+    yesterday = day_before(as_of)
     day0, day1 = day_bounds(yesterday)
     lines = [f"☀️ goldbot daily · {now:%a %d %b %Y} · {now:%H:%M} UTC"]
     lines += _section(lambda: status_line(report), "Health")
-    lines.append(f"Yesterday (to {ROLLOVER_UTC_H:02d}:00 UTC) · {pd.Timestamp(yesterday):%a %d %b}")
-    lines += _section(lambda: proposals_line(sd, day0, day1, now), "Proposals")
-    lines += _section(lambda: trades_line(sd, day0, day1), "Trades closed")
-    lines += _section(lambda: month_line(sd, day0), "Month so far")
+    lines.append(day_header(yesterday, settings))
+    props = _section(lambda: proposals_line(sd, day0, day1, now), "Proposals")
+    trades = _section(lambda: trades_line(sd, day0, day1), "Trades closed")
+    weekend = pd.Timestamp(yesterday).dayofweek >= 5 and props == [NO_PROPOSALS] and trades == [NO_TRADES]
+    lines += [WEEKEND_LINE] if weekend else props + trades
+    lines += _section(lambda: month_line(sd, yesterday, as_of), "Month so far")
     lines += _section(lambda: open_line(sd), "Open now")
     lines += _section(lambda: risk_lines(sd, settings), "Risk")
     lines += _section(lambda: entry_digest_line(sd, now, settings), "Entries")    # the /status words, accounts not OPEN
@@ -420,8 +446,10 @@ def build_digest(state_dir: str | Path, now: pd.Timestamp, *, report: Any = None
     return "\n".join(lines)
 
 
-def digest_from_runtime(state_dir: str | Path, now: pd.Timestamp) -> str:  # pragma: no cover - VPS wiring
-    """The digest on the VPS: health checks as the alert loop runs them, settings re-read from disk."""
+def digest_from_runtime(state_dir: str | Path, now: pd.Timestamp,
+                        as_of: pd.Timestamp | None = None) -> str:  # pragma: no cover - VPS wiring
+    """The digest on the VPS: health checks as the alert loop runs them, settings re-read from disk; `as_of` is the
+    scheduled slot (DigestSchedule.slot)."""
     report, settings = None, None
     try:
         from goldbot.ops.health import HealthContext, run_checks
@@ -434,4 +462,4 @@ def digest_from_runtime(state_dir: str | Path, now: pd.Timestamp) -> str:  # pra
     if settings is not None:
         registry = Path(settings.research.registry)
         registry = registry if registry.is_absolute() else ROOT / registry
-    return build_digest(state_dir, now, report=report, settings=settings, registry_path=registry)
+    return build_digest(state_dir, now, as_of=as_of, report=report, settings=settings, registry_path=registry)
