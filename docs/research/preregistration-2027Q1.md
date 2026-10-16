@@ -351,7 +351,7 @@ the registry (normally 0), and that settings change ships in the same change as 
   **107 < 150, so H-06 is withdrawn by the rule written above: its row is not written and the 2027Q1 reservation is
   8.** The quant estimate (80-130) is confirmed. The spec change (`withdrawn:` on H-06 and `reservation: 8` in
   `preregistration-2027Q1.yaml`, with `research.reserved_trials_quarter` 2027Q1 = 8 in `config/settings.yaml`, one
-  reviewed change, as `preregistration.py` requires) is the implementer's, by 2026-10-23, quant reviewer checks it.
+  reviewed change, as `preregistration.py` requires) was made by the implementer on 2026-10-16, quant reviewer approved.
   No owner decision is needed (the rule was pre-registered); the owner is told as an FYI.
 - **Run (written 2026-10-16 by the strategy researcher, before any H-06 outcome was seen; no reading rule changes).**
   Only if H-06 survives its withdrawal rule, and only after H-01 has run (its rule compares against H-01's recorded net
@@ -602,13 +602,14 @@ by the `preregister-quarter` workflow from `preregistration-2027Q1.yaml`)
 survivor_pool=["H-03", "H-05", "H-07", "H-08", "H-10"])`, k = 1..4, slot rule `{"min_stability": 0.6, "min_auc":
 0.53, "min_auc_lower_bound": 0.5}`. **No follow-up and no holdout slots for Q1** (decided here). Q1 follow-ups are
 funded from Q2's six-slot follow-up reserve, and any holdout scoring comes from the open budget under the E-5 cap.
-Settings and the spec today: `research.reserved_trials_quarter` = `{"2027Q1": 9}` (5 queued + 4 slots). **With H-06
-withdrawn (2026-10-16) it becomes 8** (4 queued + 4 slots), or 7 if H-01 is also withdrawn; the implementer changes
-the spec, the settings, this sentence and `tests/test_preregister_quarter.py` (which pins it) together.
+Settings and the spec today: `research.reserved_trials_quarter` = `{"2027Q1": 8}` (4 queued + 4 slots). **H-06 was
+withdrawn by its rule on 2026-10-16**, so the reservation went from 9 (5 queued + 4 slots) to 8, or 7 if H-01 is also
+withdrawn; the spec, the settings, this sentence and `tests/test_preregister_quarter.py` (which pins it) changed
+together, in one reviewed change.
 
 | Item | Accountable | Date | Status |
 |---|---|---|---|
-| `preregistration-2027Q1.yaml`: H-06 `withdrawn:` (reason: lower bound 107 < 150, run 38931951849), `reservation: 8`; `config/settings.yaml` `reserved_trials_quarter` 2027Q1 = 8, in one reviewed change (quant-reviewer checks) | implementer | 2026-10-23 | open (briefed 2026-10-16) |
+| `preregistration-2027Q1.yaml`: H-06 `withdrawn:` (reason: lower bound 107 < 150, run 38931951849), `reservation: 8`; `config/settings.yaml` `reserved_trials_quarter` 2027Q1 = 8, in one reviewed change (quant-reviewer checks) | implementer | 2026-10-23 | **done 2026-10-16** (quant reviewer approved) |
 | Four survivor slots written on H-02's row | strategy-researcher | with the rows, 2026-12-18 .. 12-23 | on track |
 
 **3. Owed counts** (events only, no outcome). Source: count-owed-events run 38931951849 on `main` `eafc6ce`,
@@ -633,7 +634,7 @@ done)
 | `costs-v1` published from the VPS, or "priors accepted" written here | owner (VPS step, BACKLOG 1; chaser: program-director), research-director records the fallback | 2026-12-11 / fallback 2026-12-14 | open; the 13 Oct demo deploy has not happened, so the fallback is likely |
 | Pre-registration writer (BACKLOG 47; `scripts/preregister_quarter.py` + `preregister-quarter` workflow) | implementer | 2026-12-04 | merged to `main` (`ab24d87`); never run. First dry run (`gh workflow run preregister-quarter.yml --ref main -f dry_run=true`) by the research director: not yet dispatched (the 2026-10-16 dispatch was refused by this session's permission policy; to be run with approval), new date 2026-10-20 |
 | H-06 preset merged and counted, or withdrawn by its rule (BACKLOG 48) | research-director | 2026-12-04 | **done 2026-10-16**: preset on `main` (`d2f18c6`), counted, withdrawn (107 < 150) |
-| Reservation and spec set to 8 after H-06's withdrawal | implementer | 2026-10-23 | open |
+| Reservation and spec set to 8 after H-06's withdrawal | implementer | 2026-10-23 | **done 2026-10-16** |
 | H-10: no `jump_news` for Q1 (decided here). H-10 reads jumps only, which is inconclusive for H-10 by its rule, so the feature version stays put | research-director | 2026-10-11 | **done** |
 | Feature-version line final (`f-079deacc61`; macro `f-51ac5ebabb`); any later bump amends it first | quant-reviewer | 2026-12-11 | on track |
 | Freeze commit of this file; `<freeze commit>` filled in every run-input table | research-director | 2026-12-14 | on track |
@@ -650,6 +651,6 @@ done)
   entries and the 7h-rule drops; H-01 recount). The two small differences (H-01 152 vs 154; H-04 upper bound 4,088 vs
   4,087) are explained by 2026-11-01
 - [x] H-06 preset merged and counted, or H-06 withdrawn (withdrawn 2026-10-16: lower bound 107 < 150)
-- [ ] the reservation set to 8 in the spec and in settings (implementer, 2026-10-23)
+- [x] the reservation set to 8 in the spec and in settings (implementer, done 2026-10-16)
 - [ ] pre-registration writer merged (BACKLOG 47; merged `ab24d87`) and dry-run on `main`; the 4 survivor slots written on H-02's row
 - [ ] each trial's `preregistered` registry row written with this file's commit id

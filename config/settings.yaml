@@ -170,9 +170,10 @@ research:
   label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
   reserved_trials_quarter:           # held for each quarter's pre-registered queue; a quarter not listed holds none
-    "2027Q1": 9                      #   preregistration-2027Q1.md: 5 queued rows + 4 contingent H-02 survivor slots (ADR
-                                     #   0007). The director, the label grid and the analyst spend only 20 - used -
-                                     #   reserved, reserved = max(this - run - withdrawn - expired slots, pending, 0). A
+    "2027Q1": 8                      #   preregistration-2027Q1.md: 4 queued rows + 4 contingent H-02 survivor slots (ADR
+                                     #   0007; H-06 withdrawn by its rule 2026-10-16, run 38931951849). The director,
+                                     #   the label grid and the analyst spend only 20 - used - reserved,
+                                     #   reserved = max(this - run - withdrawn - expired slots, pending, 0). A
                                      #   trial run against a queued row, or using a live slot by its derivation rule, uses
                                      #   one up; a withdrawn row or a slot whose condition can no longer be met frees one
   open_budget_preregistered_only:    # E-5 cap: in these quarters the analyst spends the open budget only on an ad-hoc

@@ -9,7 +9,7 @@
 quarter: "2027Q1"
 source: docs/research/preregistration-2027Q1.md
 freeze_commit: null          # the freeze commit of the markdown file (research director, 2026-12-14); fills {commit}
-reservation: 9               # 5 queued + 4 H-02 survivor slots; 8 if H-06 is withdrawn by its rule
+reservation: 8               # 4 queued + 4 H-02 survivor slots (H-06 withdrawn by its rule, 2026-10-16)
 
 rows:
   - id: H-02
@@ -77,7 +77,7 @@ rows:
 
   - id: H-06
     specialist: tsmom
-    variant: slow_macro      # the frozen macro-gate preset (BACKLOG 48, in review)
+    variant: slow_macro      # the frozen macro-gate preset (BACKLOG 48, on main d2f18c6)
     agent_id: tsmom-g0-fed4baec9f
     config_hash: 5650ad206bda
     macro: true
@@ -86,11 +86,11 @@ rows:
     reading_rule: >-
       **continue** only if net mean R exceeds H-01's by >= 0.03 R AND 2022-2024 net is positive (the period
       the yield link broke). Otherwise the macro gate is retired.
-    pending: >-
-      the preset and count_h06 are in quant review (BACKLOG 48, due 2026-12-04). count-owed-events run 38931951849
-      (main @ eafc6ce, 2026-10-16) gives a one-at-a-time lower bound of 107, below the floor of 150, so H-06 is
-      withdrawn by its rule once the quant reviewer confirms the count (or if it is not merged and counted by
-      2026-12-04): set `withdrawn:` to the reason, `reservation` to 8 and research.reserved_trials_quarter 2027Q1 to 8
+    withdrawn: >-
+      2026-10-16, by its pre-registered withdrawal rule (preregistration-2027Q1.md, H-06 "Readiness gap and
+      withdrawal rule"): count-owed-events run 38931951849 (main @ eafc6ce, data-v1 cut before 2025-10-01) gives
+      1,105 signals and a one-at-a-time lower bound of 107, below the retire floor in force (150), so the row is not
+      written and no trial is spent; the 2027Q1 reservation is 8 (quant reviewer approved the withdrawal)
 
   - id: H-04
     specialist: asia_drift
