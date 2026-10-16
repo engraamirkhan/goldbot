@@ -201,12 +201,13 @@ def _tsmom_signals(b1: pd.DataFrame, preset: str, ctx: dict[str, Any] | None = N
     idx = cands["idx"].to_numpy(dtype=int)
     inside = idx + hold < len(dec)
     idx, side = idx[inside], cands["side"].to_numpy(dtype=int)[inside]
-    close = epoch_ns(utc_index(dec["visible_at"]))
+    # one_at_a_time's rule on time-barrier-only rows (entry i + 1, exit i + 1 + max_bars): the next signal is
+    # tradeable once its entry is after the previous exit, i.e. i' > i + max_bars (not i' > i + max_bars + 1)
     busy, lower = -1, 0
-    for i in idx:                                  # one_at_a_time's rule: enter only after the previous exit
-        if close[i] > busy:
+    for i in idx:
+        if i > busy:
             lower += 1
-            busy = close[i + hold]
+            busy = i + int(spec.config["max_bars"])
     return {"spec": spec, "m": m, "idx": idx, "side": side, "lower": lower, "ts": utc_index(dec["visible_at"])[idx]}
 
 

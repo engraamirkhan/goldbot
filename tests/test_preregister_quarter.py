@@ -131,25 +131,28 @@ def test_the_dry_run_prints_exactly_the_docs_queued_rows_and_survivor_slots_and_
         if doc[r.id]["agent_id"]:
             assert r.agent_id == doc[r.id]["agent_id"], r.id
         assert r.id in out and r.feature_version in out
-    assert {r.id for r in plan.rows if r.pending} == {"H-02", "H-06"}       # open items the doc schedules
-    # table 2: four survivor slots on H-02's row, the doc's pool and slot rule, reservation 9 = settings
+    assert {r.id for r in plan.active_rows if r.pending} == {"H-02"}         # open items the doc schedules
+    assert [r.id for r in plan.rows if r.withdrawn] == ["H-06"] and "107" in str(plan.rows[2].withdrawn)
+    assert "H-06  [withdrawn: " in out                                      # printed, never written
+    # table 2: four survivor slots on H-02's row, the doc's pool and slot rule, reservation 8 = settings (H-06 out)
     assert [(s.parent, s.kind, s.k) for s in plan.slots] == [("H-02", "survivor", k) for k in (1, 2, 3, 4)]
     assert all(s.survivor_pool == ["H-03", "H-05", "H-07", "H-08", "H-10"] for s in plan.slots)
     assert all(s.rule == {"min_stability": 0.6, "min_auc": 0.53, "min_auc_lower_bound": 0.5} for s in plan.slots)
-    assert '`{"2027Q1": 9}` (5 queued + 4 slots)' in DOC.read_text() and plan.reservation == 9
-    assert load_settings().research.reserved_for(Q) == 9
+    assert '`{"2027Q1": 8}` (4 queued + 4 slots)' in DOC.read_text() and plan.reservation == 8
+    assert len(plan.active_rows) + len(plan.slots) == 8 and load_settings().research.reserved_for(Q) == 8
     assert out.count("survivor slot") == 4 and "not writable" in out
     assert not reg_path.exists()                                              # a dry run creates no registry file
 
 
-def test_the_q1_spec_is_not_writable_while_h02_h06_or_the_freeze_commit_are_open(
+def test_the_q1_spec_is_not_writable_while_h02_or_the_freeze_commit_are_open(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _clock(monkeypatch, BEFORE)
     reg_path = tmp_path / "registry.jsonl"
     with pytest.raises(SystemExit) as exc:
         _script().main(["--quarter", Q, "--from", str(SPEC), "--registry", str(reg_path)])
     msg = str(exc.value)
-    assert "H-02" in msg and "H-06" in msg and "freeze_commit" in msg
+    assert "H-02" in msg and "freeze_commit" in msg
+    assert "H-06" not in msg                                     # withdrawn by its rule: it owes nothing
     assert reg_path.read_text() == ""
 
 
@@ -251,15 +254,22 @@ def test_rows_and_slots_over_the_quarters_trial_budget_are_refused() -> None:
         _plan(_complete_spec(reservation=4), reserved=4, budget=2)
 
 
-def test_withdrawing_h06_leaves_eight_reserved_and_nine_is_then_refused() -> None:
+def test_the_withdrawn_h06_leaves_eight_reserved_and_nine_is_then_refused() -> None:
     raw = yaml.safe_load(SPEC.read_text())
     h06 = next(r for r in raw["rows"] if r["id"] == "H-06")
-    h06["withdrawn"] = "not merged by 2026-12-04 (BACKLOG 48)"
-    with pytest.raises(SpecError, match="rows \\+ slots"):
-        plan_quarter(QuarterSpec.model_validate(raw), research=_research(9), doc_text=DOC.read_text(), quarter=Q)
-    plan = plan_quarter(QuarterSpec.model_validate({**raw, "reservation": 8}), research=_research(8),
-                        doc_text=DOC.read_text(), quarter=Q)
+    assert raw["reservation"] == 8 and "38931951849" in h06["withdrawn"] and "pending" not in h06
+    plan = plan_quarter(QuarterSpec.model_validate(raw), research=_research(8), doc_text=DOC.read_text(), quarter=Q)
     assert "H-06" not in [r.id for r in plan.active_rows] and len(plan.active_rows) + len(plan.slots) == 8
+    with pytest.raises(SpecError, match="rows \\+ slots"):                 # the old 9 no longer matches the rows
+        plan_quarter(QuarterSpec.model_validate({**raw, "reservation": 9}), research=_research(9),
+                     doc_text=DOC.read_text(), quarter=Q)
+    back = {**raw, "rows": [{k: v for k, v in r.items() if k != "withdrawn"} for r in raw["rows"]]}
+    with pytest.raises(SpecError, match="rows \\+ slots"):                 # nor does 8 with H-06 back in
+        plan_quarter(QuarterSpec.model_validate(back), research=_research(8), doc_text=DOC.read_text(), quarter=Q)
+    # the settings must move with the spec: a settings reservation of 9 against the spec's 8 blocks every write
+    assert any("reserved_trials_quarter holds 9" in b for b in
+               plan_quarter(QuarterSpec.model_validate(raw), research=_research(9), doc_text=DOC.read_text(),
+                            quarter=Q).blockers)
 
 
 # ---------------------------------------------------------------------------------------------- late writes
