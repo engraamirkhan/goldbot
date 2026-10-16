@@ -195,6 +195,11 @@ REASONS: dict[str, Reason] = {
     "target_below_cost_floor": _r("Target too small for the costs", f"{NOTHING}: normal filtering.", "wait"),
     "time_exit_ev_unsupported": _r("Strategy has no target, so its value can't be checked",
                                    f"{NOTHING}: the strategy needs a target before it trades.", "wait"),
+    # ADR 0021: the bridge smoke's operational order only (goldbot/ops/smoke.py prints them; never an engine block)
+    "operational_not_demo": _r("Test trades run on demo accounts only, before the live gate",
+                               f"{NOTHING}: the bridge smoke is refused here by design.", "wait"),
+    "invalid_volume": _r("The broker's smallest trade size cannot be placed",
+                         "Check the symbol's minimum lot and lot step in the MT5 terminal.", "act"),
 }
 _ORDER = {code: i for i, code in enumerate(REASONS)}
 # BACKLOG 43 (ui-ux review 2026-10-16): a strategy's last refused trade (`entry_refusals`, gate.PER_TRADE_REFUSALS) is
