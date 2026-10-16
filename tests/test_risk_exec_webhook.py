@@ -112,6 +112,31 @@ def test_a_stored_unknown_is_replaced_by_the_first_known_class_on_its_first_run(
     assert PersistentClassifier(tmp_path / "acct.json").state["pending"] is None
 
 
+def test_a_stored_unknown_adopts_standard_on_its_first_run(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert pc.update(_cls("unknown")) == "unknown"
+    assert pc.update(_cls("standard")) == "standard"
+    assert pc.state["pending"] is None
+
+
+def test_after_falling_from_standard_to_unknown_a_spread_only_raw_run_needs_a_second_agreeing_run(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert pc.update(_cls("standard")) == "standard"
+    assert pc.update(_cls("unknown")) == "standard"
+    assert pc.update(_cls("unknown")) == "unknown"
+    assert pc.update(_cls("raw")) == "unknown"   # last known class was standard: no relaxing to raw on one run
+    assert pc.state["pending"] == "raw"
+    assert pc.update(_cls("raw")) == "raw"
+
+
+def test_after_falling_from_standard_to_unknown_a_commission_raw_run_is_adopted_at_once(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    for c in ("standard", "unknown", "unknown"):
+        pc.update(_cls(c))
+    commission_raw = _cls("raw").model_copy(update={"commission_seen": True})
+    assert pc.update(commission_raw) == "raw"
+
+
 def test_a_known_class_needs_two_agreeing_runs_to_change_to_another_known_class(tmp_path):
     pc = PersistentClassifier(tmp_path / "acct.json")
     assert pc.update(_cls("raw")) == "raw"

@@ -55,18 +55,35 @@ class PersistentClassifier:
     """Only changes the stored class after two consecutive runs disagree with it.
 
     "only changes when two consecutive runs disagree" guards a *known* class: Raw <-> Standard, and a known class
-    falling back to Unknown, each need two agreeing runs. A stored Unknown is treated exactly like "never
-    classified": the first known class is adopted on its first run, so one thin Friday does not leave the account
-    unclassified (and blocked by `account_class_unknown`) for a further week.
+    falling back to Unknown, each need two agreeing runs. A stored Unknown adopts a known class on its first run
+    when that cannot relax the account: the class is Standard (the restrictive one), or Raw was proven by
+    commission, or no earlier run was known other than Raw. So one thin first Friday does not leave the account
+    unclassified (and blocked by `account_class_unknown`) for a further week, while an account that was last
+    measured Standard needs two agreeing spread-only Raw runs before it is treated as Raw.
     """
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.state = json.loads(self.path.read_text()) if self.path.exists() else {"class": None, "pending": None, "runs": []}
 
+    def _last_known_class(self) -> str | None:
+        """The most recent raw/standard result in the kept runs (the last 20), or None if there is none."""
+        for run in reversed(self.state["runs"]):
+            if run.get("account_class") in ("raw", "standard"):
+                return str(run["account_class"])
+        return None
+
+    def _adopt_at_once(self, c: Classification) -> bool:
+        cur = self.state["class"]
+        if cur is None:
+            return True
+        if cur != "unknown" or c.account_class == "unknown":
+            return False
+        return c.account_class == "standard" or c.commission_seen or self._last_known_class() in (None, "raw")
+
     def update(self, c: Classification) -> str:
         cur = self.state["class"]
-        if cur is None or cur == "unknown":
+        if self._adopt_at_once(c):
             self.state["class"] = c.account_class
             self.state["pending"] = None
         elif c.account_class != cur:
