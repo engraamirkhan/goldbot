@@ -167,6 +167,16 @@ class ApprovalBus:
             raise KeyError("already decided")
         return d
 
+    def discard_decision(self, proposal_id: str) -> None:
+        """Delete one decision file the engine refused to apply (a click on an earlier card with the same id, F60-1),
+        so the card shown is listed and decidable again. Safe against a new click: `submit` creates the file
+        exclusively, so none can land while the refused one is still there. An OSError leaves it (the window expires
+        the proposal)."""
+        try:
+            (self.decisions_dir / f"{proposal_id}.json").unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def sweep_decisions(self, max_age_s: float = DECISION_MAX_AGE_S) -> int:
         """Delete decision files left behind: those with no pending file (the proposal was archived, e.g. by a process
         that stopped between the two unlinks in `archive`) and those older than `max_age_s` by file time (long past

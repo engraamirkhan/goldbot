@@ -13,6 +13,7 @@ Transport-agnostic core (tested without Telegram), plus a thin python-telegram-b
 from __future__ import annotations
 
 import hmac
+import logging
 import math
 import time
 from enum import Enum
@@ -21,11 +22,13 @@ from typing import TYPE_CHECKING, Any, Callable
 from pydantic import Field, model_validator
 
 from goldbot.base import Record
-from goldbot.data.timeutil import heartbeat_problem
+from goldbot.data.timeutil import CLOCK_AHEAD_TOLERANCE_S, heartbeat_problem
 
 if TYPE_CHECKING:
     from goldbot.ops.account_view import LossBudget
     from goldbot.telegram.bus import ApprovalBus
+
+log = logging.getLogger("goldbot.approvals")
 
 REASON_CODES = ("news", "cost", "discretion", "duplicate", "other")
 TOTP_COMMANDS = {"/rearm", "/mode", "/set"}
@@ -225,12 +228,20 @@ class ApprovalCenter:
 
     def poll_bus(self) -> list[Proposal]:
         """Apply decisions written to the bus by the dashboard or the Telegram service (already authenticated
-        there). A decision arriving after the window counts as expired, as it would in-process."""
+        there). A decision arriving after the window counts as expired, as it would in-process. A decision stamped
+        more than CLOCK_AHEAD_TOLERANCE_S before its proposal was raised was a click on an earlier card with the same
+        id (a proposal id depends only on account, agent and bar close; trading-safety F60-1): it is discarded, never
+        applied, so the owner can still decide the card shown."""
         if self.bus is None or not self.pending:
             return []
         done = []
         for d in self.bus.decisions_for(set(self.pending)):
             p = self.pending[d.proposal_id]
+            if d.ts < p.created - CLOCK_AHEAD_TOLERANCE_S:
+                log.warning("decision on %s stamped %.0f s before the proposal was raised: discarded, not applied",
+                            p.proposal_id, p.created - d.ts)
+                self.bus.discard_decision(d.proposal_id)
+                continue
             if self.expired(p):
                 done.append(self._finish(p, Outcome.EXPIRED))
                 continue

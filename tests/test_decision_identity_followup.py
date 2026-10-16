@@ -167,6 +167,29 @@ def test_a_dashboard_decision_file_holds_no_email_and_the_audit_log_names_the_ap
 
 
 @pytest.mark.integration
+def test_a_failing_audit_never_undoes_or_hides_a_dashboard_decision(app_client, monkeypatch, caplog):
+    """The decision stands once submitted (first click wins on the bus); an audit write that raises after it is logged
+    by channel and proposal, never the email, and the owner still reads SUBMITTED, as on Telegram, not a 500."""
+    app, c, state = app_client
+    owner, _ = _owner_secret(c, app)
+    bus = ApprovalBus(state)
+    bus.publish(_prop("p1"))
+    auth = app.state.st.auth
+    real = auth.audit
+
+    def broken(event, **kw):
+        if event == "decision":
+            raise RuntimeError("database is locked")
+        return real(event, **kw)
+
+    monkeypatch.setattr(auth, "audit", broken)
+    r = c.post("/api/decisions", json={"proposal_id": "p1", "action": "approve"}, headers=owner)
+    assert r.status_code == 200 and r.json()["outcome"] == "SUBMITTED"
+    assert json.loads((bus.decisions_dir / "p1.json").read_text())["approve"] is True
+    assert "audit of decision" in caplog.text and "p1" in caplog.text and "o@x.io" not in caplog.text
+
+
+@pytest.mark.integration
 def test_no_api_route_serves_the_audit_log(app_client):
     """The audit log (who decided, halted, re-armed, signed in) is read only on the VPS: no route exposes it."""
     app, _, _ = app_client

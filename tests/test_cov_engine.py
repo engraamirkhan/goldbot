@@ -187,7 +187,8 @@ def test_kill_switch_and_state_heartbeat_act_between_bar_closes(tmp_path):
     assert (tmp_path / "engine_icm-demo.json").stat().st_mtime_ns >= first
 
 
-def test_expired_proposals_of_this_account_are_archived_on_start(tmp_path):
+def test_every_proposal_of_this_account_expired_or_not_is_archived_on_start(tmp_path):
+    """F60-1: a restarted engine holds no proposal, so even one inside its window is archived (outcome None)."""
     bus = ApprovalBus(tmp_path)
     old: dict[str, Any] = {"account_id": "icm-demo", "agent_id": "a", "side": 1, "lots": 0.1, "entry": 2400.0, "stop": 2396.0,
            "target": 2406.0, "p": 0.6, "ev_r": 0.1, "spread_points": 20, "top_features": []}
@@ -198,5 +199,6 @@ def test_expired_proposals_of_this_account_are_archived_on_start(tmp_path):
         bus.publish(p)
     _engine(tmp_path, bus=True)
     left = {p.name for p in bus.pending_dir.glob("*.json")}
-    assert left == {"vantage-demo-1-bbbb.json", "icm-demo-2-cccc.json"}
-    assert (bus.done_dir / "icm-demo-1-aaaa.json").exists()
+    assert left == {"vantage-demo-1-bbbb.json"}
+    assert (bus.done_dir / "icm-demo-1-aaaa.json").exists() and (bus.done_dir / "icm-demo-2-cccc.json").exists()
+    assert bus.outcome("icm-demo-2-cccc") is None

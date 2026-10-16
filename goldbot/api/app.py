@@ -614,7 +614,12 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             st.bus.submit(d.proposal_id, d.action == "approve", d.reason_code, by="dashboard")
         except (KeyError, ValueError) as exc:
             raise HTTPException(400, str(exc).strip("'\""))
-        st.auth.audit("decision", by=u.email, proposal=d.proposal_id, action=d.action, reason=d.reason_code)
+        try:
+            st.auth.audit("decision", by=u.email, proposal=d.proposal_id, action=d.action, reason=d.reason_code)
+        except Exception as exc:            # noqa: BLE001 - the decision already stands (first click wins on the bus)
+            # as the Telegram service does (bot.OffLoopAudit): logged by channel and proposal, never the email; the
+            # owner still reads SUBMITTED, not a 500 that hides a decision the engine will apply
+            log.warning("audit of decision via dashboard (%s) failed: %s", d.proposal_id, type(exc).__name__)
         await st.broadcast({"type": "decision", "proposal_id": d.proposal_id, "action": d.action})
         return DecisionResult(outcome="SUBMITTED")
 

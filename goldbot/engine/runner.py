@@ -485,7 +485,10 @@ class Engine:
 
     def _archive_stale_proposals(self) -> None:
         """Proposals this account published before a restart can never be executed (the pending entries died with
-        the process): archive the expired ones so the dashboard, Telegram and health checks do not list them."""
+        the process): archive every one, inside its window or not, outcome None (decided by nobody), so the dashboard,
+        Telegram and health checks do not list them. `archive` also deletes its decision file: a proposal id depends
+        only on account, agent and bar close, and the restarted engine can re-decide the last close, so a click made
+        before the restart must never be applied to the same id raised again (trading-safety F60-1)."""
         bus = self.center.bus
         if bus is None:
             return
@@ -494,7 +497,8 @@ class Engine:
                 p = load_record_json(Proposal, f.read_text(), source="approvals/pending")
             except (ValueError, OSError):
                 continue
-            if p.expired and p.proposal_id not in self.pending:
+            # the glob alone would also match an account named "<this account>-<suffix>": its engine owns those
+            if p.account_id == self.cfg.account_id and p.proposal_id not in self.pending:
                 bus.archive(p)
         # A15: decision files left behind (no pending file, or a day old) go, so an old click's channel or, from a
         # release before it, the decider's identity does not linger on disk. Never stops the start.

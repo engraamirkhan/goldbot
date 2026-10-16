@@ -158,23 +158,67 @@ def test_the_engine_never_executes_an_approval_after_its_monotonic_deadline(tmp_
 
 # ------------------------------------------------------------------------------- restart
 def test_after_a_restart_an_on_disk_proposal_is_never_executed_and_falls_back_to_the_wall_clock(tmp_path):
-    """A monotonic deadline cannot survive a restart. The restarted engine holds no proposal, so a click on one left
-    on disk is never applied; the bus and the outbox use the wall-clock rule with the future-stamp guard, and one
-    stamped two days ahead is archived at the start, never listed."""
+    """A monotonic deadline cannot survive a restart. The restarted engine holds no proposal, so it archives every
+    pending file of its account at the start, inside its window or not (trading-safety F60-1): none is listed, a click
+    on one is refused, and one stamped two days ahead goes the same way. Another account's proposal is left alone, even one whose id starts with this account's."""
     bus = ApprovalBus(tmp_path)
     old = ApprovalCenter({1}, bus=bus)
     old.propose(_p("icm-demo-fresh"))
     old.propose(_p("icm-demo-ahead", created=time.time() + TWO_DAYS))
+    old.propose(_p("other-acct-x"))
+    old.propose(_p("icm-demo-2-x").model_copy(update={"account_id": "icm-demo-2"}))    # matches the glob, not ours
     spec = SPECIALISTS["session_open"]()
     center = ApprovalCenter({1}, bus=ApprovalBus(tmp_path))               # the restarted process: nothing in memory
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path)),
                  PaperBroker(equity=10_000), [spec], {}, center=center)
     sent: list[Any] = []
     eng._execute = lambda *a, **k: sent.append(a)          # type: ignore[method-assign]
-    assert not (bus.pending_dir / "icm-demo-ahead.json").exists()          # archived at the start
-    assert [p.proposal_id for p in bus.pending()] == ["icm-demo-fresh"]   # still inside its wall-clock window
-    bus.submit("icm-demo-fresh", True, None, by="dashboard:o")
-    assert center.poll_bus() == [] and sent == []                         # dropped: fail closed
-    f = bus.pending_dir / "icm-demo-fresh.json"                           # its wall-clock window runs out
-    f.write_text(json.dumps({**json.loads(f.read_text()), "created": time.time() - 120}))
-    assert bus.pending() == [] and center.poll_bus() == [] and sent == []
+    for pid in ("icm-demo-fresh", "icm-demo-ahead"):
+        assert not (bus.pending_dir / f"{pid}.json").exists()             # archived at the start, window open or not
+        assert (bus.done_dir / f"{pid}.json").exists() and bus.outcome(pid) is None   # decided by nobody
+    assert [p.proposal_id for p in bus.pending()] == ["icm-demo-2-x", "other-acct-x"]
+    with pytest.raises(KeyError):
+        bus.submit("icm-demo-fresh", True, None, by="dashboard:o")
+    assert center.poll_bus() == [] and sent == []
+
+
+def test_a_click_made_before_a_restart_is_never_applied_to_the_same_proposal_raised_again(tmp_path):
+    """F60-1: the proposal id depends only on account, agent and bar close, and the restarted engine can re-decide the
+    last close. The owner clicked X, the engine died before polling and restarted inside the window: the start
+    archives X and its decision, so the X raised again is a fresh card the owner has not decided."""
+    bus = ApprovalBus(tmp_path)
+    ApprovalCenter({1}, bus=bus).propose(_p("icm-demo-X"))
+    bus.submit("icm-demo-X", True, None, by="dashboard:o")                # clicked; the engine dies before polling
+    spec = SPECIALISTS["session_open"]()
+    center = ApprovalCenter({1}, bus=ApprovalBus(tmp_path))
+    Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path)),
+           PaperBroker(equity=10_000), [spec], {}, center=center)
+    assert not (bus.decisions_dir / "icm-demo-X.json").exists()
+    center.propose(_p("icm-demo-X"))                                       # the same bar close re-decided
+    assert center.poll_bus() == [] and "icm-demo-X" in center.pending
+    assert [p.proposal_id for p in bus.pending()] == ["icm-demo-X"]       # the owner sees an undecided card
+
+
+def test_a_decision_stamped_before_its_proposal_was_raised_is_discarded_and_never_applied(tmp_path):
+    """F60-1 defence in depth: a decision older than its proposal (beyond the clock tolerance) was a click on an
+    earlier card with the same id. It is discarded, never applied, so the owner can still decide the card shown."""
+    bus = ApprovalBus(tmp_path)
+    center = ApprovalCenter({1}, bus=bus)
+    center.propose(_p("icm-demo-X"))
+    (bus.decisions_dir / "icm-demo-X.json").write_text(json.dumps(
+        {"proposal_id": "icm-demo-X", "approve": True, "by": "dashboard",
+         "ts": time.time() - CLOCK_AHEAD_TOLERANCE_S - 30}))
+    assert center.poll_bus() == [] and "icm-demo-X" in center.pending
+    assert not (bus.decisions_dir / "icm-demo-X.json").exists()
+    bus.submit("icm-demo-X", False, "news", by="telegram")                # the owner's click on the card shown
+    assert [p.outcome for p in center.poll_bus()] == [Outcome.REJECTED]
+
+
+def test_a_decision_stamped_a_couple_of_seconds_before_its_proposal_is_still_applied(tmp_path):
+    """Ordinary skew between the engine and the decider's host is tolerated, as for heartbeats."""
+    bus = ApprovalBus(tmp_path)
+    center = ApprovalCenter({1}, bus=bus)
+    center.propose(_p("icm-demo-X"))
+    (bus.decisions_dir / "icm-demo-X.json").write_text(json.dumps(
+        {"proposal_id": "icm-demo-X", "approve": True, "by": "dashboard", "ts": time.time() - 2}))
+    assert [p.outcome for p in center.poll_bus()] == [Outcome.APPROVED]
