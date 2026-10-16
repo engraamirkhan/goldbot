@@ -147,7 +147,7 @@ def test_main_never_publishes_fewer_bars_for_a_day_than_before(monkeypatch, tmp_
 
     # Tue 6 and Wed 7 Oct 2026, 10:00-14:59 UTC (inside the gold session)
     days = [pd.date_range(f"2026-10-0{d} 10:00", periods=300, freq="1min", tz="UTC") for d in (6, 7)]
-    published = full(days[0].append(days[1]), 2000.0).assign(source="dukascopy")
+    published = full(pd.DatetimeIndex(days[0].append(days[1])), 2000.0).assign(source="dukascopy")
     prev = tmp_path / "prev.parquet"
     published.to_parquet(prev, index=False)
     short = full(days[0][:50], 1.0)                    # only 50 of Tuesday's 300 bars came back, no Wednesday
