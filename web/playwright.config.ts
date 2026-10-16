@@ -8,11 +8,11 @@ const PYTHON = process.env.PYTHON ?? "python";
 // so these tests cover the browser, the API contract, auth/TOTP and the approval centre together.
 // Two servers, each with its own throwaway state: the dashboard story, and the sign-in story (auth.spec.ts), whose
 // server captures the owner's sign-in emails with the e2e-only fake mailer (goldbot/api/e2e_mailer.py: refused unless
-// GOLDBOT_E2E_FAKE_MAILER=1 and the server is bound to 127.0.0.1). One worker per story, the two side by side.
+// GOLDBOT_E2E_FAKE_MAILER=1 and the server is bound to 127.0.0.1). One worker: the stories run one after the other.
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
-  workers: 2,
+  workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
