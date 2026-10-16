@@ -85,15 +85,7 @@ def public(a):
 
 
 cmd = args[:2]
-if cmd == ["release", "download"]:
-    if mode == "download-fails":
-        die("connection reset")
-    name, out = args[args.index("-p") + 1], args[args.index("-O") + 1]
-    a = find(name)
-    if a is None:
-        die(f"no asset {name}")
-    Path(out).write_text(a["body"])
-elif cmd == ["release", "create"]:
+if cmd == ["release", "create"]:
     st["exists"] = True
 elif cmd == ["release", "upload"]:
     if "--clobber" in args:
@@ -123,7 +115,14 @@ elif args[0] == "api":
     elif "/releases/assets/" in path:
         aid = int(path.rsplit("/", 1)[1])
         a = next((x for x in st["assets"] if x["id"] == aid), None)
-        if method == "DELETE":
+        if method == "GET" and "Accept: application/octet-stream" in args:     # a download, by id
+            st["downloads"] = st.get("downloads", 0) + 1
+            if mode == "download-fails":
+                die("connection reset")
+            if a is None:
+                die("gh: Not Found (HTTP 404)")
+            sys.stdout.write(a["body"])
+        elif method == "DELETE":
             st["deletes"] += 1
             if mode == "race-at-delete" and st["deletes"] == 1:
                 concurrent_write()
@@ -233,7 +232,7 @@ def test_fetch_fails_the_job_when_the_release_cannot_be_read(gh: dict[str, str],
 def test_fetch_starts_empty_only_when_the_release_does_not_exist(gh: dict[str, str], tmp_path: Path) -> None:
     r = _run(gh, tmp_path, "fetch", "registry.jsonl", mode="no-release")
     assert r.returncode == 0, r.stderr
-    assert (tmp_path / "registry.jsonl").read_text() == "" and "release download" not in _log(gh)
+    assert (tmp_path / "registry.jsonl").read_text() == "" and "octet-stream" not in _log(gh)
 
 
 def test_fetch_refuses_a_release_without_a_registry_unless_bootstrapping(gh: dict[str, str], tmp_path: Path) -> None:

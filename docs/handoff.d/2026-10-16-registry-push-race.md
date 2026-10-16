@@ -6,8 +6,13 @@
   - Note the asset's stamp (id, updated_at, size, digest) at the pull.
   - Upload the merged rows as `registry.jsonl.pending-*`.
   - Re-read the stamp, then delete the pulled asset by its id.
-  - Rename the pending asset, then re-read: published means our id is the lowest-id `registry.jsonl`. The rename's
-    status code is not relied on.
+  - Rename the pending asset, then re-read: published means our id is the lowest-id `registry.jsonl`, with the
+    deleted id filtered out. The rename's status code is not relied on. A re-read that still lists the deleted id,
+    or does not list our upload, is stale and is read again after a wait; our upload is never dropped on one.
+
+  Downloads are by asset id (`gh api -H 'Accept: application/octet-stream' .../releases/assets/<id>`), and every
+  `gh` call times out after 120 s. `recover` prints what each copy adds (row count and trial keys) before it
+  publishes.
 
   Another writer is detected by a changed stamp, a 404 on the delete, or another copy being published at the rename.
   The pending upload is then dropped, and the writer waits a jittered 0.5-1.5 s per attempt, pulls, merges and

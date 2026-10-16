@@ -107,6 +107,7 @@ RELEASE_TITLE = "Research trial registry"
 RELEASE_NOTES = ("registry.jsonl: every trial and pre-registration (feeds the deflated Sharpe). Written by the research "
                  "and preregister-quarter workflows and the VPS monthly loop (goldbot.research.registry_sync).")
 RECOVER = "scripts/registry_release.sh recover"
+GH_TIMEOUT_S = 120
 _sleep = time.sleep
 
 Stamp = tuple[int, str, int, str] | None     # (id, updated_at, size, digest) of registry.jsonl; None when absent
@@ -209,11 +210,17 @@ class GhTransport:
     def __init__(self, gh: str = "gh") -> None:
         self.gh, self.base = gh, "repos/{owner}/{repo}"
 
-    def _run(self, *args: str) -> str:
-        r = subprocess.run([self.gh, *args], capture_output=True, text=True, check=False)
+    def _bytes(self, *args: str) -> bytes:
+        try:
+            r = subprocess.run([self.gh, *args], capture_output=True, check=False, timeout=GH_TIMEOUT_S)
+        except subprocess.TimeoutExpired as exc:
+            raise GhError(list(args), f"timed out after {GH_TIMEOUT_S} s") from exc
         if r.returncode != 0:
-            raise GhError(list(args), r.stderr)
+            raise GhError(list(args), r.stderr.decode(errors="replace"))
         return r.stdout
+
+    def _run(self, *args: str) -> str:
+        return self._bytes(*args).decode()
 
     def release(self) -> dict[str, Any] | None:
         try:
@@ -241,11 +248,9 @@ class GhTransport:
                 return dict(a)
         raise RuntimeError(f"uploaded {name} but {TAG} does not list it")
 
-    def download(self, asset: dict[str, Any]) -> bytes:
-        with tempfile.TemporaryDirectory() as d:
-            out = Path(d) / "asset"
-            self._run("release", "download", TAG, "-p", str(asset["name"]), "-O", str(out))
-            return out.read_bytes()
+    def download(self, asset: dict[str, Any]) -> bytes:   # by id: exactly the asset that was stamped
+        return self._bytes("api", "-H", "Accept: application/octet-stream",
+                           f"{self.base}/releases/assets/{int(asset['id'])}")
 
     def delete(self, asset_id: int) -> bool:
         try:
@@ -330,22 +335,31 @@ def _drop_named(t: Transport, name: str) -> None:
         _drop(t, i, name)
 
 
-def _publish(t: Transport, staged_id: int, pending: str) -> None:
-    """Step 6, after the old asset is gone: rename, then require our id to be the published copy. Our pending asset
-    is deleted only when another writer's copy is published; otherwise it is the only full copy and stays."""
+def _publish(t: Transport, staged_id: int, pending: str, deleted_id: int | None) -> None:
+    """Step 6, after the old asset (`deleted_id`, None when there was none) is gone: rename, then require our id to
+    be the published copy. Our pending asset is deleted only when a fresh read (one that lists our upload, and from
+    which the deleted id is filtered) shows another writer's copy published; a stale read is re-read after a wait.
+    Otherwise our upload is the only full copy and stays."""
     for attempt in range(1, RENAME_ATTEMPTS + 1):
         try:
             t.rename(staged_id, ASSET)
         except Exception as exc:     # the status code is not relied on: the re-read decides
             log.warning("renaming %s failed (attempt %d/%d): %s", pending, attempt, RENAME_ATTEMPTS, exc)
-        published = _published(t.release())
+        rel = t.release()
+        listed = {int(a["id"]) for a in (rel or {}).get("assets", [])}
+        published = [a for a in _published(rel) if int(a["id"]) != deleted_id]
         if published and int(published[0]["id"]) == staged_id:
             return
-        if published:
+        if published and staged_id in listed:
             _drop(t, staged_id, pending)
             raise RegistryRace(f"another {TAG}/{ASSET} was published during the swap")
+        if published or deleted_id in listed or staged_id not in listed:
+            log.warning("stale release read after the swap (attempt %d/%d): reading again", attempt, RENAME_ATTEMPTS)
         if attempt < RENAME_ATTEMPTS:
             _sleep(_backoff(attempt))
+    if deleted_id is None:           # nothing was deleted: push_release removes our upload, the release is as it was
+        raise RegistryStranded(f"{pending} could not be published as {TAG}/{ASSET}; the release was left as it was "
+                               "(nothing was deleted): try again")
     raise RegistryStranded(f"{TAG}/{ASSET} was deleted but {pending} could not be renamed; it holds the merged "
                            f"registry and was left in place: run `{RECOVER}`")
 
@@ -364,7 +378,7 @@ def push_release(t: Transport, rows: list[dict[str, Any]], *, expected: Stamp, s
     except BaseException:          # the upload may have landed before the failure (gh lists the release after it)
         _drop_named(t, pending)
         raise
-    deleted_old = False
+    deleted_id: int | None = None
     try:
         current = _asset(t.release(), own=pending, strict=strict)
         if _stamp(current) != expected:
@@ -372,10 +386,10 @@ def push_release(t: Transport, rows: list[dict[str, Any]], *, expected: Stamp, s
         if current is not None:
             if not t.delete(int(current["id"])):
                 raise RegistryRace(f"{TAG}/{ASSET} was replaced just before the swap")
-            deleted_old = True
-        _publish(t, staged_id, pending)
+            deleted_id = int(current["id"])
+        _publish(t, staged_id, pending, deleted_id)
     except BaseException:
-        if not deleted_old:        # after the delete our upload may be the only copy: _publish decides
+        if deleted_id is None:     # after the delete our upload may be the only copy: _publish decides
             _drop(t, staged_id, pending)
         raise
 
@@ -423,10 +437,18 @@ def recover(t: Transport) -> int:
     copies = [a for a in rel.get("assets", []) if a["name"] == ASSET or str(a["name"]).startswith(PENDING)]
     if not copies:
         raise RegistryMissing(f"release {TAG} has no {ASSET} and no pending upload: nothing to recover")
+    copies.sort(key=lambda a: (a["name"] != ASSET, int(a["id"])))     # the published copy first
     sources = [_parse(t.download(a)) for a in copies]
     rows = merge_rows(*sources)
     if len(rows) < max(len(s) for s in sources):
         raise ValueError("the merged registry is shorter than one of its copies: refusing to publish")
+    seen: set[tuple[str, str, str, str]] = set()
+    for a, src in zip(copies, sources, strict=True):    # what each copy adds, before anything is published
+        added = sorted({_key(r) for r in src} - seen)
+        seen.update(added)
+        print(f"{a['name']} (id {a['id']}, {len(src)} rows): adds {len(added)} rows"
+              + "".join(f"\n  {ts} {agent} {cfg} {fv}" for ts, agent, cfg, fv in added))
+    print(f"publishing {len(rows)} rows ({sum(1 for r in rows if is_trial(r))} trials)")
     push_release(t, rows, expected=_stamp(_asset(rel, strict=False)), strict=False)
     for a in copies:
         if a["name"] != ASSET:

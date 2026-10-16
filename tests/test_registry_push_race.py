@@ -50,6 +50,9 @@ class FakeRelease:
         self.patch_fails = 0
         self.patch_noop = 0
         self.get_fails_after_upload = False
+        self.stale_reads = 0                                    # this many reads after the first delete are stale
+        self.stale: dict[str, Any] | None = None
+        self.stale_without: Callable[[dict[str, Any]], bool] | None = None   # assets missing from the stale read
         self.calls: list[tuple[str, str]] = []
         if rows is not None:
             self.put(rows)
@@ -95,6 +98,9 @@ class FakeRelease:
                 raise _err(url, 502)
             if not self.exists:
                 raise _err(url, 404)
+            if self.stale_reads > 0 and self.stale is not None:     # a read served from before the delete
+                self.stale_reads -= 1
+                return self.stale
             return {"upload_url": "https://uploads.example/assets{?name,label}",
                     "assets": [{k: v for k, v in a.items() if k != "body"} for a in self.assets.values()]}
         if url == f"{BASE}/releases" and method == "POST":
@@ -113,6 +119,11 @@ class FakeRelease:
             if method == "DELETE":
                 hook, self.before_delete = self.before_delete, None
                 self._run(hook, self)
+                if self.stale_reads > 0 and self.stale is None:
+                    self.stale = self.api(f"{BASE}/releases/tags/{rs.TAG}", token)
+                    if self.stale_without is not None:
+                        self.stale = {**self.stale, "assets": [a for a in self.stale["assets"]
+                                                               if not self.stale_without(a)]}
                 if aid not in self.assets:
                     raise _err(url, 404)
                 del self.assets[aid]
@@ -216,6 +227,51 @@ def test_a_rename_reported_ok_but_not_done_is_retried_and_never_reported_as_publ
         rs.sync(_local(tmp_path, VPS), "tok", REPO)
     assert sum(1 for m, _ in release.calls if m == "PATCH") == rs.RENAME_ATTEMPTS
     assert len(release.pending()) == 1 and _hashes(release.rows_of(release.pending()[0])) == ["aaa", "vps"]
+
+
+@pytest.mark.parametrize("lists_ours", [True, False], ids=["stale-read-lists-our-upload", "stale-read-predates-it"])
+def test_a_stale_read_after_the_delete_never_drops_our_upload(release: FakeRelease, tmp_path: Path,
+                                                              lists_ours: bool) -> None:
+    """NEW-M1 (reviewer's exp_rename_fail2.py): the re-read after the rename is served from before the delete, so it
+    still lists the old registry.jsonl. The deleted id is filtered out and a read that does not show our upload as
+    published is read again; our upload is never dropped on a stale read, so the release never ends empty."""
+    release.stale_reads = 2
+    if not lists_ours:
+        release.stale_without = lambda a: str(a["name"]).startswith(rs.PENDING)
+    assert rs.sync(_local(tmp_path, VPS), "tok", REPO) == 2
+    assert _hashes(release.published()) == ["aaa", "vps"] and release.names() == [rs.ASSET]
+
+
+def test_a_failed_first_push_says_the_release_was_left_as_it_was(monkeypatch: pytest.MonkeyPatch,
+                                                                 tmp_path: Path) -> None:
+    """LOW-1: with no old asset deleted (first push) the error does not claim a stranded copy."""
+    fake = _install(monkeypatch, FakeRelease(exists=False))
+    fake.patch_fails = 99
+    with pytest.raises(rs.RegistryStranded, match="nothing was deleted") as err:
+        rs.sync(_local(tmp_path, VPS), "tok", REPO)
+    assert "recover" not in str(err.value) and fake.names() == []
+
+
+def test_recover_reports_what_each_copy_adds_before_publishing(release: FakeRelease,
+                                                               capsys: pytest.CaptureFixture[str]) -> None:
+    release.put([VPS, _row("2026-10-01T00:00:00+00:00", "aaa", "w")], f"{rs.PENDING}one")
+    release.put([WF], f"{rs.PENDING}two")
+    rs.recover(_t())
+    out = capsys.readouterr().out
+    assert "registry.jsonl (id" in out and f"{rs.PENDING}one (id" in out and f"{rs.PENDING}two (id" in out
+    assert out.count("adds 1 rows") == 3                       # aaa already counted from the published copy
+    assert "2026-10-02T00:00:00+00:00 a vps f1" in out and "2026-10-03T00:00:00+00:00 w wf f1" in out
+    assert out.index("adds") < out.index("publishing 3 rows")
+
+
+def test_a_hung_gh_call_times_out_as_a_gh_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """LOW-4: a gh call that hangs fails the save instead of holding the job."""
+    hang = tmp_path / "gh"
+    hang.write_text("#!/bin/sh\nsleep 30\n")
+    hang.chmod(0o755)
+    monkeypatch.setattr(rs, "GH_TIMEOUT_S", 0.5)
+    with pytest.raises(rs.GhError, match="timed out"):
+        rs.GhTransport(str(hang)).release()
 
 
 def test_a_rename_that_fails_once_after_the_delete_is_retried_and_publishes(release: FakeRelease,
