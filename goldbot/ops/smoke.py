@@ -91,6 +91,8 @@ CLOSE_RETRY_S = 1.0
 POLL_EVERY_S = 2.5              # S4: positions and deals are read this often after a send that raised
 DEFAULT_ORDER_TIMEOUT_S = 15.0  # RemoteBroker's order timeout when the broker does not say
 LOOKUP_WINDOW = pd.Timedelta(hours=24)   # S9: earlier smoke deals are looked up this far back
+SEND_SLACK_S = 30.0             # LOW-5: a rewritten comment is matched by magic and an open at or after send - this
+ENTRY_IN, ENTRY_OUT = 0, (1, 2, 3)       # MT5 DEAL_ENTRY_IN; OUT, INOUT, OUT_BY (as goldbot/ops/ledger.py)
 BARS_TF, BARS_N = "1m", 5
 SMOKE_AGENT = "bridge-smoke"    # the approval card's agent: not a model, so p and EV are shown as 0
 COMMENT_LEN = 31                # MT5's order comment limit (the engine's comment is `cid[-31:]` too)
@@ -235,24 +237,43 @@ def engine_running(acc: Account, state_dir: Path, now: pd.Timestamp, io: SmokeIO
     return None
 
 
-@contextmanager
-def smoke_lock(state_dir: Path, account_id: str) -> Iterator[None]:
-    """flock(LOCK_EX | LOCK_NB) on state/.smoke-<account>.lock (mode 0600), held until the block ends. Raises OSError
-    when it cannot be created or another smoke holds it. Unix only: the smoke runs on the brain."""
+def acquire_lock(state_dir: Path, account_id: str) -> int:
+    """flock(LOCK_EX | LOCK_NB) on state/.smoke-<account>.lock (mode 0600); returns the descriptor (`release_lock`).
+    Opened O_NOFOLLOW | O_CLOEXEC (security review: a planted symlink is refused, no child inherits the lock) and only
+    a regular file this user owns is locked. Raises OSError when it cannot be created or taken, BlockingIOError when
+    another smoke holds it. Unix only: the smoke runs on the brain."""
     import fcntl
+    import stat
     path = Path(state_dir) / f".smoke-{account_id}.lock"
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+            raise PermissionError(f"{path.name} is not a regular file owned by this user")
         os.fchmod(fd, 0o600)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         os.close(fd)
         raise
+    return fd
+
+
+def release_lock(fd: int) -> None:
+    import fcntl
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def smoke_lock(state_dir: Path, account_id: str) -> Iterator[None]:
+    """`acquire_lock` held until the block ends."""
+    fd = acquire_lock(state_dir, account_id)
     try:
         yield
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+        release_lock(fd)
 
 
 # ---------------------------------------------------------------------------------------------- look-ups (S8, S9)
@@ -553,20 +574,25 @@ class _Run:
             self.say(f"{acc.symbol} tick bid {tick.bid} ask {tick.ask} at {tick.ts_utc.isoformat()} ({age:.1f} s old)")
         else:
             self.say(f"{acc.symbol} tick unreadable")
-        try:
-            with smoke_lock(self.state_dir, acc.account_id):
-                return self.locked(info)
+        try:                                           # only the acquisition maps to a lock refusal (review LOW-4)
+            fd = acquire_lock(self.state_dir, acc.account_id)
         except BlockingIOError:
             return self.end(EXIT_PRECONDITION, "refused: another bridge smoke holds the lock")
         except OSError as exc:
-            if exc.errno in (11, 35):                  # EAGAIN / EWOULDBLOCK on Linux / macOS
-                return self.end(EXIT_PRECONDITION, "refused: another bridge smoke holds the lock")
             return self.end(EXIT_PRECONDITION, f"refused: the smoke lock cannot be taken ({type(exc).__name__})")
+        try:
+            return self.locked(info)
+        finally:
+            release_lock(fd)
 
     def locked(self, info: AccountInfo) -> SmokeReport:
         b, acc, magic = self.broker, self.acc, smoke_magic(self.acc)
         if why := self.preconditions():
             return self.end(EXIT_PRECONDITION, "refused: precondition", f"refused: {why}")
+        if getattr(self.compat, "commit_differs", False):   # SRE S1: F4 lives on the MT5 box
+            return self.end(EXIT_PRECONDITION, "refused: the MT5 box runs another commit",
+                            f"refused: the bridge runs {self.compat.bridge_commit}, this brain "
+                            f"{self.compat.brain_commit}: deploy this commit to the MT5 box first")
         try:
             sym: SymbolInfo = b.symbol_info(acc.symbol)
             left, earlier = find_smoke(b, magic, self.now() - LOOKUP_WINDOW)
@@ -663,70 +689,121 @@ class _Run:
         oi = OrderIntent(client_order_id=cid, symbol=acc.symbol, side=1, lots=gd.lots, sl=sl, tp=tp,
                          magic=smoke_magic(acc), comment=cid[-COMMENT_LEN:])
         self.say(f"sending BUY {gd.lots:.2f} {acc.symbol} at about {tick.ask}, sl {sl}, tp {tp}")
+        sent_at = self.now()
         try:
             res: OrderResult | None = b.place_order(oi)
         except Exception as exc:                       # S4: it may or may not be at the broker; never sent again
             self.say(f"the send raised {type(exc).__name__}: looking for the order by its comment")
-            return self.resolve_unknown(oi)
+            return self.resolve_unknown(oi, sym, sent_at)
         from goldbot.engine.runner import DEFINITE_REJECT_RETCODES
-        assert res is not None
+        if res is None:                                # review LOW-4: no result is ambiguous, never an assert
+            self.say("the send returned no result: looking for the order by its comment")
+            return self.resolve_unknown(oi, sym, sent_at)
         if res.ok and res.position_id is not None:
             self.say(f"filled: position {res.position_id}, {res.filled_lots} lots at {res.price}")
-            return self.settle(int(res.position_id))
+            return self.settle(int(res.position_id), oi, sym)
         if not res.ok and res.retcode in DEFINITE_REJECT_RETCODES:
             return self.end(EXIT_FAILED, f"broker rejected the order (retcode {res.retcode}): nothing placed")
         self.say(f"order result ambiguous (retcode {res.retcode}): looking for it by its comment")
-        return self.resolve_unknown(oi)
+        return self.resolve_unknown(oi, sym, sent_at)
 
-    def settle(self, position_id: int) -> SmokeReport:
-        """S8: the fill's stop and target verified, then closed (never gated)."""
+    @staticmethod
+    def unverified(pos: Position | None, oi: OrderIntent, sym: SymbolInfo) -> str | None:
+        """Why the fill's protection is not the order's (S8, trading-safety MEDIUM-2), or None when it is: the
+        position listed, its sl and tp equal to the order's within one point, and sl < open < tp (a buy)."""
+        if pos is None:
+            return "the fill is not listed, so its stop and target were never seen"
+        if not pos.sl or not pos.tp:
+            return f"the fill has no {'stop' if not pos.sl else 'target'} at the broker"
+        tol = sym.point + 1e-9
+        if abs(pos.sl - oi.sl) > tol or abs(pos.tp - oi.tp) > tol:
+            return f"the fill carries sl {pos.sl} tp {pos.tp}, the order sent sl {oi.sl} tp {oi.tp}"
+        if not pos.sl < pos.open_price < pos.tp:
+            return f"the fill's sl {pos.sl} and tp {pos.tp} are not either side of its open {pos.open_price}"
+        return None
+
+    def settle(self, position_id: int, oi: OrderIntent, sym: SymbolInfo) -> SmokeReport:
+        """S8: the fill's stop and target verified against the order (`unverified`), then closed (never gated). A fill
+        that is not listed or does not match is closed all the same and the smoke exits 1."""
         self.report.position_id = position_id
         try:
             pos = next((p for p in self.broker.positions() if p.position_id == position_id), None)
         except Exception as exc:
             log.warning("positions unreadable after the fill (%s)", type(exc).__name__)
             pos = None
-        unprotected = pos is not None and (not pos.sl or not pos.tp)
-        if unprotected:
-            self.say(f"position {position_id} has no {'stop' if pos is not None and not pos.sl else 'target'} at "
-                     f"the broker: closing it now")
-        elif pos is None:
-            self.say(f"position {position_id} not listed: closing it in case it is still open")
+        why = self.unverified(pos, oi, sym)
+        if why:
+            self.say(f"position {position_id}: {why}: closing it now")
         else:
-            self.say(f"position {position_id} carries sl {pos.sl} tp {pos.tp}: closing it")
+            assert pos is not None
+            self.say(f"position {position_id} carries sl {pos.sl} tp {pos.tp} as sent: closing it")
         if not close_position(self.broker, position_id, self.io):
             self.alert(f"bridge smoke {self.acc.account_id}: position {position_id} is LEFT OPEN after "
                        f"{CLOSE_ATTEMPTS} close attempts; close it in the terminal")
             return self.end(EXIT_LEFT_OPEN, "LEFT OPEN", f"position {position_id} still open: close it in the terminal")
-        if unprotected:
-            return self.end(EXIT_FAILED, "closed: the fill had no stop or target at the broker")
+        if why:
+            return self.end(EXIT_FAILED, f"closed, unverified: {why}")
         return self.end(EXIT_OK, "opened and closed the minimum lot")
 
-    def resolve_unknown(self, oi: OrderIntent) -> SmokeReport:
-        """S4: poll positions and deals for the comment for order_timeout_s + ORDER_MAX_AGE_S; never re-send."""
+    def lookup(self, oi: OrderIntent, sent_at: pd.Timestamp) -> tuple[list[Position], set[int], pd.DataFrame]:
+        """(open smoke positions of this order, its entry-deal position ids, every deal read). The deals are read
+        FIRST and the positions after them (trading-safety HIGH-1: a fill landing between the two reads is then listed,
+        never taken for a closed one). An order is matched by its comment, or, for a broker that rewrites comments
+        (review LOW-5), by its magic with an open at or after the send (less SEND_SLACK_S of clock skew)."""
+        since = sent_at - pd.Timedelta(seconds=SEND_SLACK_S)
+        deals = self.broker.deals_since(self.now() - LOOKUP_WINDOW)
+        entries: set[int] = set()
+        if deals is not None and not deals.empty and {"magic", "position_id", "ts_utc"} <= set(deals.columns):
+            d = deals[pd.to_numeric(deals["magic"], errors="coerce") == oi.magic]
+            ours = (d["comment"] == oi.comment) if "comment" in d.columns else pd.Series(False, index=d.index)
+            ours = ours | (pd.to_datetime(d["ts_utc"], utc=True) >= since)
+            if "entry" in d.columns:
+                ours = ours & (pd.to_numeric(d["entry"], errors="coerce") == ENTRY_IN)
+            entries = {int(p) for p in d.loc[ours, "position_id"]}
+        else:
+            deals = pd.DataFrame()
+        positions = [p for p in self.broker.positions() if int(p.magic) == oi.magic
+                     and (p.comment == oi.comment or pd.Timestamp(p.open_time_utc) >= since)]
+        return positions, entries, deals
+
+    @staticmethod
+    def closed_by_deals(position_id: int, deals: pd.DataFrame) -> bool:
+        """An exit deal (entry OUT, INOUT or OUT_BY) for this position is in the read: it is closed."""
+        if deals.empty or "entry" not in deals.columns:
+            return False
+        rows = deals[pd.to_numeric(deals["position_id"], errors="coerce") == position_id]
+        return bool(pd.to_numeric(rows["entry"], errors="coerce").isin(ENTRY_OUT).any())
+
+    def resolve_unknown(self, oi: OrderIntent, sym: SymbolInfo, sent_at: pd.Timestamp) -> SmokeReport:
+        """S4: poll deals then positions for the order for order_timeout_s + ORDER_MAX_AGE_S; never re-send. A listed
+        position is settled; it is reported closed only when an exit deal for its position id is seen; otherwise the
+        poll goes on and ends in exit 6 UNKNOWN with an owner alert."""
         from goldbot.execution.bridge import ORDER_MAX_AGE_S
         wait_s = float(getattr(self.broker, "order_timeout_s", DEFAULT_ORDER_TIMEOUT_S)) + ORDER_MAX_AGE_S
         start = self.io.monotonic()
         while True:
             try:
-                found, deals = find_smoke(self.broker, oi.magic, self.now() - LOOKUP_WINDOW, oi.comment)
+                found, entries, deals = self.lookup(oi, sent_at)
             except Exception as exc:
                 log.warning("look-up after the send failed (%s)", type(exc).__name__)
-                found, deals = [], pd.DataFrame()
+                found, entries, deals = [], set(), pd.DataFrame()
             if found:
                 self.say(f"found the order: position {found[0].position_id}")
-                return self.settle(found[0].position_id)
-            if not deals.empty:
-                pid = int(deals["position_id"].iloc[0]) if "position_id" in deals.columns else None
-                self.report.position_id = pid
-                return self.end(EXIT_OK, "the order filled and is already closed (its deals were found)")
+                return self.settle(found[0].position_id, oi, sym)
+            closed = sorted(p for p in entries if self.closed_by_deals(p, deals))
+            if closed:
+                self.report.position_id = closed[0]
+                return self.end(EXIT_OK, "the order filled and is already closed (its entry and exit deals were found)")
+            if entries:
+                self.say(f"entry deal for position(s) {sorted(entries)} seen, not listed and no exit deal yet")
             if self.io.monotonic() - start >= wait_s:
                 break
             self.io.sleep(POLL_EVERY_S)
         self.alert(f"bridge smoke {self.acc.account_id}: UNKNOWN whether order {oi.comment} filled after "
                    f"{wait_s:.0f} s; check the terminal for magic {oi.magic}")
         return self.end(EXIT_UNKNOWN, "UNKNOWN: not found after the send; check the terminal",
-                        f"no position or deal with comment {oi.comment} after {wait_s:.0f} s; never sent again")
+                        f"no open position or closed trade for comment {oi.comment} after {wait_s:.0f} s; never sent "
+                        f"again")
 
 
 def run_smoke(broker: Any, bus: ApprovalBus, acc: Account, state_dir: str | Path, *, now: Callable[[], pd.Timestamp],

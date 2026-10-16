@@ -656,7 +656,7 @@ def test_a_fill_landing_between_the_positions_and_deals_reads_is_settled_not_rep
             armed["on"] = False
             b._fill(b.sent[-1])
         return real(since)
-    b.deals_since = deals_since                                              # type: ignore[method-assign]
+    b.deals_since = deals_since
     _click(w)
     rep = _run(w)
     assert b.open == {} and len(b.closes) == 1 and len(b.sent) == 1
@@ -669,7 +669,7 @@ def test_entry_deals_without_an_exit_deal_keep_polling_then_exit_6(w):
     b.place_raises = BridgeUnavailable("bridge place_order: ReadTimeout")
     b.fill_on_raise = True
     real = b.positions
-    b.positions = lambda magic_prefix=None: [] if b.sent else real()        # type: ignore[method-assign]
+    b.positions = lambda magic_prefix=None: [] if b.sent else real()
     _click(w)
     rep = _run(w)
     assert rep.exit_code == smoke.EXIT_UNKNOWN and len(b.sent) == 1 and w.clock.t >= 25.0
@@ -690,7 +690,7 @@ def test_a_fill_not_listed_is_closed_and_exits_1_unverified(w):
     """Trading-safety MEDIUM-2 (race probe): a fill whose stop and target were never seen is not a success."""
     b = w.broker
     real = b.positions
-    b.positions = lambda magic_prefix=None: [] if b.sent else real()        # type: ignore[method-assign]
+    b.positions = lambda magic_prefix=None: [] if b.sent else real()
     _click(w)
     rep = _run(w)
     assert rep.exit_code == smoke.EXIT_FAILED and "unverified" in rep.outcome
@@ -740,7 +740,7 @@ def test_a_position_opened_before_the_send_is_not_taken_for_the_fill(w):
     old = b.open.pop(5)
     b.place_raises = BridgeUnavailable("bridge place_order: ReadTimeout")
     real = b.positions
-    b.positions = lambda magic_prefix=None: [*real(), old] if b.sent else real()   # type: ignore[method-assign]
+    b.positions = lambda magic_prefix=None: [*real(), old] if b.sent else real()
     _click(w)
     rep = _run(w)
     assert rep.exit_code == smoke.EXIT_UNKNOWN and 5 not in b.closes
