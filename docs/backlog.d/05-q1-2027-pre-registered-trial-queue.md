@@ -4,7 +4,7 @@ rank: 12
 title: Q1 2027 pre-registered trial queue
 stage: Idea generation · FIND
 size: S
-status: 'in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 (spec + settings: implementer, 2026-10-23); `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14'
+status: 'in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, count-owed-events to be re-dispatched after merge (H-01 count pasted by 2026-11-01); `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14'
 ---
 
 ### 5. Q1 2027 pre-registered trial queue

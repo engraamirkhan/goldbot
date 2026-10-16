@@ -283,9 +283,11 @@ the registry (normally 0), and that settings change ships in the same change as 
   one-at-a-time count lies between 154 and 2,154, nearer the lower end.
 - **Recount by count-owed-events (2026-10-16, run 38931951849 on `main` `eafc6ce`; data-v1 cut before 2025-10-01;
   events only, no outcome read):** **2,154 signals (1,466 long / 688 short), one-at-a-time lower bound 152.** The
-  signals match exactly; the lower bound is 2 below the 154 above (difference to be explained here by the strategy
-  researcher by 2026-11-01). 152 >= 150, the retire floor in force, so **H-01 stays queued** as a retire-only test
-  under the decision (c) below. The margin is 2 events: if the explanation shows 152 is the right number and the floor
+  signals match exactly; the lower bound is 2 below the 154 above. *Provisional explanation (2026-10-16, quant
+  review):* identical 2,154 signals; the gap is the lower-bound arithmetic; the 154 was an unscripted count at
+  `b17de44`; fixed script count to be pasted by 2026-11-01 (strategy researcher; the script's lower-bound loop was
+  one bar stricter than `one_at_a_time`, fixed 2026-10-16). 152 >= 150, the retire floor in force, so **H-01 stays
+  queued** as a retire-only test under the decision (c) below. The margin is 2 events: if the explanation shows 152 is the right number and the floor
   committed at the freeze is still 150, the row stands; nothing is tuned to keep it.
 - Reading rule (outcomes below written 2026-10-10, before any H-01 outcome was seen; net tests on rule-only net R over
   every candidate, see *Net tests*): **continue** if the P4 screen passes (gross mean R > 0, t >= 2.0, on the event
@@ -347,7 +349,7 @@ the registry (normally 0), and that settings change ships in the same change as 
   38931951849 on `main` `eafc6ce` (data-v1 cut before 2025-10-01; `macro-v1` 34,381 rows, published 2026-10-13 by
   the scheduled `data-macro` run 38394945106): **1,105 signals (711 long / 394 short); one-at-a-time lower bound
   107**, against the retire floor in force, 150 (`below_floor: True`; the script on `main` still uses the old label
-  `daily_floor`). The gate removed 1,049 of H-01's 2,154 signals for disagreeing and 0 for a missing macro value.
+  `daily_floor`). The gate removed 1,049 of H-01's 2,154 signals as disagreeing or zero and 0 for a missing macro value.
   **107 < 150, so H-06 is withdrawn by the rule written above: its row is not written and the 2027Q1 reservation is
   8.** The quant estimate (80-130) is confirmed. The spec change (`withdrawn:` on H-06 and `reservation: 8` in
   `preregistration-2027Q1.yaml`, with `research.reserved_trials_quarter` 2027Q1 = 8 in `config/settings.yaml`, one
@@ -592,7 +594,7 @@ by the `preregister-quarter` workflow from `preregistration-2027Q1.yaml`)
 | Row | Config (exact) | `rule_id` | Feature version | Accountable | Date | Status |
 |---|---|---|---|---|---|---|
 | H-02 | `--discover --families cluster`, `--specialist tsmom --variants '[{"timeframe": "4h", "max_bars": 12}]'`, the pinned `DiscoveryConfig` dump above (top_k 39, permutation confirmation, freq/stability 0.6, group_top_k 3, survivor_unit feature, H02_CLUSTERS), label 4h TB 3.0/1.5/12, macro on, bars range 2010-01-01 .. 2025-09-30 written into the config | none (read by the discovery verdict) | `f-51ac5ebabb` (default + macro drivers v5) | strategy-researcher (quant-reviewer checks the config) | config 2026-12-11; row 2026-12-18 .. 12-23 | on track (`macro-v1` now exists) |
-| H-01 | `tsmom`, `variants ["slow"]`, agent `tsmom-g0-c12c9afb24` | **`H-01`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | on track: recount 152 >= 150, stays queued (retire-only); the 152 vs 154 difference explained by 2026-11-01 |
+| H-01 | `tsmom`, `variants ["slow"]`, agent `tsmom-g0-c12c9afb24` | **`H-01`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | on track: recount 152 >= 150, stays queued (retire-only); 152 vs 154 explained provisionally (lower-bound arithmetic), fixed script count pasted by 2026-11-01 |
 | H-06 | frozen macro-gate preset `slow_macro` | none | `f-51ac5ebabb` | strategy-researcher | withdrawn 2026-10-16 | **withdrawn by its rule** (lower bound 107 < 150): no row is written |
 | H-04 | `asia_drift`, `variants [{}]`, agent `asia_drift-g0-98dc13a518` | **`H-04`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | on track (4,025 entries counted) |
 | tsmom 4h continuity | `tsmom`, `variants [{"timeframe": "4h", "max_bars": 12}]` | **`C4H`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | on track |
@@ -619,8 +621,8 @@ absent).
 | Count | Value (run 38931951849) | Accountable | Date | Status |
 |---|---|---|---|---|
 | H-04 entries / dropped by the 7h sample rule / calendar upper bound / no decision bar / ATR warm-up | 4,025 / 10 (dates under H-04) / 4,088 / 52 / 0 | strategy-researcher (explains 4,088 vs 4,087 and the holdout-crossing entry) | 2026-11-01 | counted 2026-10-16; explanation open |
-| H-01 recount: signals (long / short), one-at-a-time lower bound | 2,154 (1,466 / 688), 152 | strategy-researcher (explains 152 vs 154) | 2026-11-01 | counted 2026-10-16; explanation open |
-| H-06 signals (long / short), lower bound vs retire floor, removed (no macro / disagree) | 1,105 (711 / 394), 107 vs 150 (below), 0 / 1,049 | research-director | 2026-10-16 | **done: withdrawn by its rule** |
+| H-01 recount: signals (long / short), one-at-a-time lower bound | 2,154 (1,466 / 688), 152 | strategy-researcher (pastes the fixed script count) | 2026-11-01 | counted 2026-10-16; 152 vs 154 explained provisionally (lower-bound arithmetic), fixed script count open |
+| H-06 signals (long / short), lower bound vs retire floor, removed (no macro / disagreeing or zero) | 1,105 (711 / 394), 107 vs 150 (below), 0 / 1,049 | research-director | 2026-10-16 | **done: withdrawn by its rule** |
 | Q2 counts (H-16, H-17, H-18, H-14) | H-16 first OOS month 2012-03 (expected 2012-04); the rest "not counted" (`calendar-v1` absent; E-2/E-3 not merged) | strategy-researcher | rerun after `calendar-v1` exists | not needed for Q1; blocked on `calendar-v1` (owner: `FRED_API_KEY`) |
 
 **4. Freeze checklist, with one accountable role and a date for each item** (the boxes below are ticked only when
