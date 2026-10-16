@@ -4,7 +4,9 @@
 The Wine MT5 box (goldbot/ops/linux/mt5_bootstrap.sh, goldbot-deploy on role mt5) runs the bridge under a Windows
 CPython 3.11 in a Wine prefix, where `uv sync` does not work. It installs exactly this file:
 
-  wine python -m pip install --require-hashes --no-deps --only-binary :all: -r Z:/opt/goldbot/<OUT>
+  wine $WINPY -m pip install --require-hashes --no-deps --only-binary :all: -r Z:/opt/goldbot/<OUT>
+
+($WINPY: the absolute path of the prefix's python.exe, never a bare `wine python`.)
 
 * Versions come from uv.lock, so the bridge runs the same packages the brain locked. The roots are the packages the
   bridge process imports (`BRIDGE_ROOTS`); their dependencies are walked through uv.lock with the markers evaluated
@@ -48,7 +50,9 @@ TARGET_ENV = {          # the Wine prefix's Windows Python (mt5_bootstrap.sh PYV
 HEADER = (
     "# GENERATED from uv.lock by scripts/bridge_requirements.py: do not edit (python scripts/bridge_requirements.py write)\n"
     "# The Wine MT5 box's Windows CPython 3.11 (win_amd64), installed as the mt5 user with\n"
-    "#   wine python -m pip install --require-hashes --no-deps --only-binary :all: -r <this file>\n"
+    "#   wine $WINPY -m pip install --require-hashes --no-deps --only-binary :all: -r <this file>\n"
+    "# $WINPY: the absolute path of the prefix's python.exe (WINPY in goldbot/ops/linux/mt5_bootstrap.sh);\n"
+    "# never a bare `wine python`: Windows tries the current directory before PATH (incident 2026-10-16)\n"
 )
 
 
