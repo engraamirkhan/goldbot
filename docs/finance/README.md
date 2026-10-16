@@ -4,9 +4,16 @@ Owner of this folder: the `finance-auditor` agent (`.claude/agents/finance-audit
 changes code, settings, limits or trials. The research-director and program-director act on its recommendations;
 the owner decides anything that spends money or changes risk.
 
-**Status 2026-10-11:** nothing trades yet. The first demo deploy is planned for 12-13 Oct 2026. This cycle set up the
-baseline: `budget-2026-10.md`, `audit-framework.md` and `recommendations-2026-10.md`. The first ledger and audit come
-after the deploy (see "Post-deploy trigger").
+**Status 2026-10-16:** nothing trades yet. The first demo deploy is in progress (it slipped from the 12-13 Oct plan);
+the engine start is planned for **Sun 18 Oct 2026 22:02 UTC, on demo**. The day-0 rule-compliance audit is due within
+24 h of the engine start, by **Mon 19 Oct 2026 22:02 UTC**. Finance D6 (Raw Spread account) is still to be confirmed
+by the owner at the MT5 login (ROADMAP OD-4). The baseline from 2026-10-11 is `budget-2026-10.md`,
+`audit-framework.md` and `recommendations-2026-10.md`; the first ledger and audit come after the deploy (see
+"Post-deploy trigger").
+
+**Stale item:** ROADMAP OD-10 ("commit the uncommitted docs in the main checkout", which lists the finance docs) is
+stale for this folder: the finance docs were committed on 2026-10-11 in `f7b0cdc`. Nothing in `docs/finance/` is
+waiting to be committed.
 
 ## What lives here
 
@@ -71,8 +78,10 @@ An audit runs after **every deploy** that changes the engine, risk, execution, a
   to the prior?
 - **First full month:** the full monthly audit.
 
-The **first demo deploy (planned 12-13 Oct 2026)** gets this trigger. Its day-0 audit is also the baseline: it
-records which GAPs from `audit-framework.md` are still open on the running system.
+The **first demo deploy (in progress; engine start planned for Sun 18 Oct 2026 22:02 UTC)** gets this trigger. Its
+day-0 audit is due by **Mon 19 Oct 2026 22:02 UTC** (`audit-2026-10-18-deploy.md`); if the engine start slips, the
+due date is the new start + 24 h. It is also the baseline: it records which GAPs from `audit-framework.md` are still
+open on the running system.
 
 Unscheduled audit: any day whose net loss exceeds the effective daily limit, any `stop_rule` or `closed_trade_record_lost`
 health FAIL, a broker balance that does not tie out, or a running cost that changes.
