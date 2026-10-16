@@ -182,7 +182,9 @@ class EngineConfig(Record):
     # production: tick age and feed staleness are measured against the wall clock (replays and tests use tick time)
     live_clock: bool = False
     # between bar closes the account is refreshed (drawdown stages, kill switch, halts) and the state file written
-    # this often (tick time), so the supervisor's combined caps and the 12% kill switch act within seconds
+    # this often (tick time), so the supervisor's combined caps and the 12% kill switch act within seconds. On the live
+    # clock the file is also rewritten this often on the host clock while no tick time passes (weekend, daily break:
+    # the terminal repeats its last quote), republishing only (BACKLOG 59), so health's age rules see a live engine
     state_every_s: int = 10
     stale_feed_s: int = 90                   # no tick for this long in an open session -> data-quality error
     healthy_resume_s: int = 60               # after stale data or a data-quality error, entries wait this long healthy
@@ -450,7 +452,8 @@ class Engine:
         self._invalid_state_written: pd.Timestamp | None = None
         self._dq_repeats: dict[str, int] = {}        # ticks folded into the pending event of each check (LOW-1)
         self._load_orders()
-        self._last_state_write: pd.Timestamp | None = None
+        self._last_state_write: pd.Timestamp | None = None   # tick time of the last account refresh and write
+        self._state_written_host: pd.Timestamp | None = None   # host clock of the last state write of any kind
         self._last_reconcile: pd.Timestamp | None = None
         self._last_atr: float | None = None          # decision-tf ATR at the last bar close (orphan stops)
         self._last_terms: pd.Timestamp | None = None  # last broker-terms reading (swap, commission)
@@ -584,9 +587,44 @@ class Engine:
             self._refresh_account(t)
             self._write_state()
             self._last_state_write = t.ts_utc
+        elif self._state_heartbeat_due():
+            self._guard(self._write_heartbeat)
         self.last_bar_close = bar_close
         self._flush_closed()               # after every exit of this tick has been sent
         return out
+
+    def _state_heartbeat_due(self) -> bool:
+        """BACKLOG 59: on the live clock, no state write for state_every_s of HOST time (a host clock stepped back
+        counts as due). With the market closed the tick stamp is frozen, so the tick-time cadence above never fires
+        and health would read a live engine's file (bridge_compat `checked_at`, `ts`) as hours old. Replays and
+        backtests (tick clock only) never take this path."""
+        if not self.cfg.live_clock:
+            return False
+        if self._state_written_host is None:
+            return True
+        elapsed = (self.clock() - self._state_written_host).total_seconds()
+        return elapsed >= self.cfg.state_every_s or elapsed < 0
+
+    def _write_heartbeat(self) -> None:
+        """The host-clock state write (BACKLOG 59): it republishes and decides nothing. No account read, no stage
+        machine, kill switch, weekend rule or other exit step (those stay on the tick-time refresh), and no EngineState
+        field changes. The fields that describe the feed are restated on the host clock so they stay true: the last
+        tick's age and lead, and whether the session table has the market closed now."""
+        self._state_written_host = self.clock()   # a failing write is retried (and a tick error) once per cadence
+        self._write_state(heartbeat=True)
+
+    def _heartbeat_feed(self) -> dict[str, Any]:
+        """`last_tick_age_s`, `tick_ahead_s` and `market_closed` now on the host clock, as `_refresh_account` measures
+        them (signed age; a broken session table reads closed). Empty before the first valid tick."""
+        if self._last_tick is None:
+            return {}
+        now = self.clock()
+        age = (now - self._last_tick.ts_utc).total_seconds()
+        try:
+            closed = self.sessions.entry_block(now) is not None
+        except Exception:
+            closed = True
+        return {"last_tick_age_s": abs(age), "tick_ahead_s": max(0.0, -age), "market_closed": closed}
 
     def _host_now(self) -> pd.Timestamp:
         """The clock for a pass without a valid quote: the host clock live, else the last valid tick's time (a replay
@@ -3109,7 +3147,7 @@ class Engine:
             out["error"] = type(exc).__name__
         return out
 
-    def _write_state(self) -> None:
+    def _write_state(self, heartbeat: bool = False) -> None:
         st = self.state
         payload = {
             "account": self.cfg.account_id, "broker": self.cfg.broker_name, "mode": self.cfg.mode, "ts": time.time(),
@@ -3161,7 +3199,11 @@ class Engine:
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check
         payload["currency"] = self._account_currency() or self._account_view.get("currency") or None
+        if heartbeat:                       # BACKLOG 59: the feed as it is now, not as the last account refresh saw it
+            payload.update(self._heartbeat_feed())
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync
         write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps(payload), durable=False)
         self._save_risk_state()
         self._save_orders()
+        if self.cfg.live_clock:
+            self._state_written_host = self.clock()   # any write restarts the host-clock heartbeat (BACKLOG 59)

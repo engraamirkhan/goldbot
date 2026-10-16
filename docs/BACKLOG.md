@@ -67,6 +67,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 50 | --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners | Idea generation (integrity) · FIND | M | implemented 2026-10-11 (TRACEABILITY M43; quant review pending) |
 | 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | proposed (security re-verify of BACKLOG 47, 2026-10-11) |
 | 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | implemented (security and trading-safety review pending; A14, follow-ups A15) |
+| 59 | Engine state keeps moving on the host clock while the market is closed | Operational resilience · RUN | S | done (lane market-closed-state-cadence, 2026-10-16; trading-safety and SRE review pending) |
 | 53 | The phase gates compare paper and live with the deployed model's own trial | Roadmap gates (P7) · VERIFY | M | proposed (review of 978c667, 2026-10-12) |
 | 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | proposed (trading-safety review of BACKLOG 44, 2026-10-12; needs trading-safety review) |
 | 55 | test_lockout_survives_a_restart: make it reliable under load | Platform (CI) · SECURE | S | proposed (ci follow-up, A15 lane, 2026-10-12) |
@@ -795,6 +796,20 @@ hypotheses that go through the trial registry in a future quarter's budget.
     server's `config/settings.local.yaml` for `risk_day_anchor` and `feature_day_anchor`, because a server that sets
     either would stop loading its settings after the deploy. Put the validator's exact error text and the fix
     (delete the key) into `docs/RUNBOOK.md` in the same change.
+- **59. Engine state keeps moving on the host clock while the market is closed.** Value: with the market closed
+  (weekend, weekday daily break 20:59-22:02 UTC) the terminal repeats its last quote, so the tick stamp is frozen and
+  the tick-time state cadence (`state_every_s`) never fired. `engine_<acct>.json` went stale, and health compared its
+  `bridge_compat.checked_at` with the wall clock: FAIL after 5 min, a Healthchecks.io `/fail` every 2 min all
+  weekend, and a FAIL/recovered pair every weekday evening, which masks a real outage. Acceptance:
+  - on the live clock the state file is rewritten every `state_every_s` of host time when no write happened (any
+    write restarts it), so `bridge_compat:<acct>` and `engine:<acct>` stay OK through a frozen-tick weekend and the
+    daily break (`tests/test_closed_market_state_cadence.py`);
+  - the age rules are not skipped: an engine that writes nothing still FAILs `bridge_compat` on the weekend and
+    `engine` after the reopen;
+  - the host-clock write only republishes: no account read, no stage machine, kill switch, weekend rule or other
+    exit step, and no EngineState field changes; `last_tick_age_s`, `tick_ahead_s` and `market_closed` in the file
+    are restated on the host clock so they stay true;
+  - the write rate stays one per `state_every_s`, with today's fsync rules; replays (tick clock) are unchanged.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.
