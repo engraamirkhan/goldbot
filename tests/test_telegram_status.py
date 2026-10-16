@@ -2,6 +2,7 @@
 goldbot.api.entry_status.account_entry_status builds both, so the badge word, headline, reasons, fixes and exits line
 are the API's own words. Plain text, short enough for a phone, no account identifiers beyond the config name."""
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -95,7 +96,8 @@ def _state(tmp_path: Path, **over: Any) -> Path:
     now = WED.timestamp()
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(engine(
         ts=now, login=12345678, server="ICMarketsSC-Demo", host="10.1.2.3", **over)))
-    (tmp_path / "supervisor.json").write_text(json.dumps({"ts": now, "halt": False, "reasons": []}))
+    # the supervisor heartbeat is judged against the real clock (Supervisor.engine_should_halt), not against WED
+    (tmp_path / "supervisor.json").write_text(json.dumps({"ts": time.time(), "halt": False, "reasons": []}))
     return tmp_path
 
 
