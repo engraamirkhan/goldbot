@@ -289,6 +289,13 @@ the registry (normally 0), and that settings change ships in the same change as 
   one bar stricter than `one_at_a_time`, fixed 2026-10-16). 152 >= 150, the retire floor in force, so **H-01 stays
   queued** as a retire-only test under the decision (c) below. The margin is 2 events: if the explanation shows 152 is the right number and the floor
   committed at the freeze is still 150, the row stands; nothing is tuned to keep it.
+- **AT RISK (research director, 2026-10-16 job check; no outcome read).** The 152 was counted on gapped data: the
+  coverage triage of 2026-10-16 found 21 whole weekdays missing from data-v1 in the research window (2020-2025, two
+  of them NFP Fridays; freeze gap G1). A margin of 2 events leaves no room for that. The planned 2026-11-01 script
+  recount and the G3 recount on repaired data are merged into **one count-owed-events run on `main` after G1 closes,
+  by 2026-11-13** (readiness list, items 3 and 5). That run's lower bound is the one read against the retire floor:
+  >= 150 keeps H-01 queued; < 150 withdraws it by the same rule as H-06, and the 2027Q1 reservation goes from 8 to 7.
+  Nothing is tuned and the floor is not moved to keep the row.
 - Reading rule (outcomes below written 2026-10-10, before any H-01 outcome was seen; net tests on rule-only net R over
   every candidate, see *Net tests*): **continue** if the P4 screen passes (gross mean R > 0, t >= 2.0, on the event
   floor ruled in A) AND net mean R > 0 with t >= 1.65 AND positive net years >= 3 incl. 2021 or 2022, on both sides
@@ -477,6 +484,10 @@ the registry (normally 0), and that settings change ships in the same change as 
   strategy researcher by 2026-11-01: the 1-day difference between the script's 4,088 and the hand count 4,087 above,
   and confirmation that 4,025 is net of the 10 sample-rule drops and of the entry whose window crosses the holdout (the
   script on `main` does not print that row separately).
+  *Note (research director, 2026-10-16 job check):* 9 of the 10 sample-rule drop dates are the whole-day gaps found
+  by the coverage triage (G1), so these drops are data loss, not market closures. H-04 is re-read in the same single
+  recount run on repaired data, by 2026-11-13; the strategy researcher's explanation above is due with that run's
+  output, not separately on 2026-11-01.
 
 ### tsmom 4h with swap (continuity)
 - Config: `variants=[{"timeframe": "4h", "max_bars": 12}]`, as refused on 2026-10-09.
@@ -586,6 +597,12 @@ whom, chase date)**, **late (new date, reason)**.
   `calendar-v1` and reports the calendar-dependent rows as "not counted". Its Q1 counts are pasted under H-01, H-04
   and H-06 above and summarised in item 3.
 - The pre-registration writer (`preregister-quarter`, BACKLOG 47) is on `main` (`ab24d87`) and has never run.
+- **Job check of 2026-10-16 (research director, acting on the coverage triage; nothing dispatched).** data-v1 has 21
+  whole weekdays missing in the research window and 42 in the holdout (triage bullet in HANDOFF). Five data gaps
+  G1-G5 are added below as item 5. H-01 is **AT RISK** (lower bound 152 against the floor of 150, counted on gapped
+  data). The 2026-11-01 script recount and the 2026-11-13 recount on repaired data are merged into one
+  count-owed-events run after G1 closes. W1-5 (H-13 cost filter) is scheduled to start Mon 2026-10-19 and the
+  performance analyst starts BACKLOG 45 now (item 6). The evaluator adds a G3 check row by 2026-11-14 (item 4).
 
 **1. Queued registry rows** (each written with `TrialRegistry.preregister(..., queue=True, target_quarter="2027Q1")`
 and this file's freeze commit in the rationale, stamped by the registry's clock, then synced to `research-v1`; written
@@ -594,7 +611,7 @@ by the `preregister-quarter` workflow from `preregistration-2027Q1.yaml`)
 | Row | Config (exact) | `rule_id` | Feature version | Accountable | Date | Status |
 |---|---|---|---|---|---|---|
 | H-02 | `--discover --families cluster`, `--specialist tsmom --variants '[{"timeframe": "4h", "max_bars": 12}]'`, the pinned `DiscoveryConfig` dump above (top_k 39, permutation confirmation, freq/stability 0.6, group_top_k 3, survivor_unit feature, H02_CLUSTERS), label 4h TB 3.0/1.5/12, macro on, bars range 2010-01-01 .. 2025-09-30 written into the config | none (read by the discovery verdict) | `f-51ac5ebabb` (default + macro drivers v5) | strategy-researcher (quant-reviewer checks the config) | config 2026-12-11; row 2026-12-18 .. 12-23 | on track (`macro-v1` now exists) |
-| H-01 | `tsmom`, `variants ["slow"]`, agent `tsmom-g0-c12c9afb24` | **`H-01`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | on track: recount 152 >= 150, stays queued (retire-only); 152 vs 154 explained provisionally (lower-bound arithmetic), fixed script count pasted by 2026-11-01 |
+| H-01 | `tsmom`, `variants ["slow"]`, agent `tsmom-g0-c12c9afb24` | **`H-01`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | **AT RISK (2026-10-16)**: lower bound 152 vs floor 150, counted on data-v1 with 21 weekdays missing (G1); stays queued (retire-only) until the single recount on repaired data (by 2026-11-13, item 3) is read: < 150 withdraws it by its rule (reservation 8 -> 7) |
 | H-06 | frozen macro-gate preset `slow_macro` | none | `f-51ac5ebabb` | strategy-researcher | withdrawn 2026-10-16 | **withdrawn by its rule** (lower bound 107 < 150): no row is written |
 | H-04 | `asia_drift`, `variants [{}]`, agent `asia_drift-g0-98dc13a518` | **`H-04`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | on track (4,025 entries counted) |
 | tsmom 4h continuity | `tsmom`, `variants [{"timeframe": "4h", "max_bars": 12}]` | **`C4H`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | on track |
@@ -620,8 +637,9 @@ absent).
 
 | Count | Value (run 38931951849) | Accountable | Date | Status |
 |---|---|---|---|---|
-| H-04 entries / dropped by the 7h sample rule / calendar upper bound / no decision bar / ATR warm-up | 4,025 / 10 (dates under H-04) / 4,088 / 52 / 0 | strategy-researcher (explains 4,088 vs 4,087 and the holdout-crossing entry) | 2026-11-01 | counted 2026-10-16; explanation open |
-| H-01 recount: signals (long / short), one-at-a-time lower bound | 2,154 (1,466 / 688), 152 | strategy-researcher (pastes the fixed script count) | 2026-11-01 | counted 2026-10-16; 152 vs 154 explained provisionally (lower-bound arithmetic), fixed script count open |
+| H-04 entries / dropped by the 7h sample rule / calendar upper bound / no decision bar / ATR warm-up | 4,025 / 10 (dates under H-04; 9 are G1 gap days) / 4,088 / 52 / 0 | strategy-researcher (explains 4,088 vs 4,087 and the holdout-crossing entry from the merged recount) | 2026-11-13 (was 2026-11-01; merged into the G3 run) | counted 2026-10-16 on gapped data; re-read in the merged recount |
+| H-01 recount: signals (long / short), one-at-a-time lower bound | 2,154 (1,466 / 688), 152 | strategy-researcher (pastes the fixed script count from the merged recount) | 2026-11-13 (was 2026-11-01; merged into the G3 run) | **AT RISK**: counted 2026-10-16 on gapped data, margin 2; 152 vs 154 explained provisionally (lower-bound arithmetic) |
+| **Merged recount** (replaces the planned 2026-11-01 and 2026-11-13 runs): one count-owed-events dispatch on `main` on the repaired data-v1, with the fixed lower-bound loop; reads H-01 and H-04 and records the data-v1 digests it ran on | research-director dispatches; strategy-researcher pastes and explains | after G1 closes (2026-11-06); by Fri 2026-11-13 | scheduled; not dispatched (inputs do not exist yet: G1 open). One run, not two: the second would recount on the same gapped data and spend Actions minutes the December runs need (G5) |
 | H-06 signals (long / short), lower bound vs retire floor, removed (no macro / disagreeing or zero) | 1,105 (711 / 394), 107 vs 150 (below), 0 / 1,049 | research-director | 2026-10-16 | **done: withdrawn by its rule** |
 | Q2 counts (H-16, H-17, H-18, H-14) | H-16 first OOS month 2012-03 (expected 2012-04); the rest "not counted" (`calendar-v1` absent; E-2/E-3 not merged) | strategy-researcher | rerun after `calendar-v1` exists | not needed for Q1; blocked on `calendar-v1` (owner: `FRED_API_KEY`) |
 
@@ -641,8 +659,26 @@ done)
 | Feature-version line final (`f-079deacc61`; macro `f-51ac5ebabb`); any later bump amends it first | quant-reviewer | 2026-12-11 | on track |
 | Freeze commit of this file; `<freeze commit>` filled in every run-input table | research-director | 2026-12-14 | on track |
 | Rows and slots written, `reserved_trials_quarter` matches, `research-v1` synced | strategy-researcher | 2026-12-18 .. 12-23 | on track |
+| **G3 check** (evaluator adds this row to the evaluator's checks): the merged recount ran on `main` on the repaired data-v1 (digests match the G1 release, 0 unexpected weekday gaps in 2010-01..2025-09), H-01 and H-04 are read by their written rules against the retire floor (150) with nothing tuned, and the reservation in the spec and settings matches the result (8, or 7 if H-01 is withdrawn) | evaluator | row added by Sat 2026-11-14; verdict within 2 days of the recount | open (recorded 2026-10-16) |
 | Registry and this file agree (row count, configs, `rule_id`s, slot rule, reservation) | evaluator | 2026-12-28 | on track |
 | Nothing from this queue runs before 2027-01-01. Run order from 2027-01-01: H-02, H-01, H-04, C4H (H-06 withdrawn) | research-director | 2027-01-01 | on track |
+
+**5. Data gaps from the coverage triage (2026-10-16; full evidence in the HANDOFF triage bullet, roadmap W1-6)**
+
+| Gap | What must be true | Accountable | Date | Status |
+|---|---|---|---|---|
+| G1 | data-v1 2020-2025 repaired to 0 unexpected weekday gaps in 2010-01..2025-09: `scripts/check_coverage.py` (code by Tue 2026-10-27), a merge that never replaces a published day with fewer bars, then targeted refetches of the 15 affected months. No `full_refresh` dispatch of `data-dukascopy` until that merge lands | data-engineer | Fri 2026-11-06 | open; blocks the merged recount (item 3) and G3 |
+| G2 | Holdout (2026) repaired: 42 missing weekdays, Feb/Mar/May bid-imputed, in the same lane, before any holdout scoring | data-engineer | Fri 2026-11-06 | open; not needed for Q1 runs, needed before any holdout score |
+| G3 | count-owed-events dispatched on `main` again on the repaired data; H-01 (AT RISK) and H-04 re-read. This is the merged recount of item 3 | research-director | Fri 2026-11-13 | scheduled after G1; evaluator check row by 2026-11-14 (item 4) |
+| G4 | Research-window files (2010-2025) final at the freeze commit; the rows of 12-18..12-23 pin their sha256 digests (BACKLOG 50), so a later rewrite refuses every Q1 run | data-engineer | Mon 2026-12-14 | open |
+| G5 | The Saturday `data-dukascopy` run stops re-downloading the three bid-imputed 2026 months for about 4 h (about 1,000 of 2,000 free Actions minutes a month that the December pre-registration and research runs need): cap or skip the retry | data-engineer | Tue 2026-10-27 | open |
+
+**6. Research lanes feeding the freeze and the opportunity-day work**
+
+| Item | Accountable | Date | Status |
+|---|---|---|---|
+| W1-5: H-13 volatility-forecast cost filter overlay (new `research/costfilter.py`, frozen as the Q1 overlay; 0 trials), freeze prep with the budget-guard test (BACKLOG 5) | strategy-researcher (quant-reviewer) | start Mon 2026-10-19; due Fri 2026-10-30 | **not started** (checked 2026-10-16); scheduled to start Mon 10-19 |
+| BACKLOG 45: holiday-list measurement (spread, ticks per hour and 15m ATR on each listed day against matched normal days, by session) from stored bars and ticks | performance-analyst (quant review) | start now (2026-10-16); draft Fri 2026-10-23; final Fri 2026-10-30 | **not blocked** (needs no deploy and no trades); starting 2026-10-16. Days in the G1/G2 gaps are excluded and listed, not read as thin |
 
 ## Freeze checklist (by 2027-01-01)
 - [x] Owner rulings A-D, the K_eff default and the costs-v1 rule recorded here (2026-10-11; `screen_min_events_daily: 150` committed)
@@ -651,7 +687,10 @@ done)
 - [x] `research_pass.py --discover` merged and tested (`scripts/research_pass.py --discover`, `tests/test_discovery.py`; checked 2026-10-11)
 - [x] count-owed-events merged and run on `main` (data-v1); its counts pasted here (run 38931951849, 2026-10-16: H-04
   entries and the 7h-rule drops; H-01 recount). The two small differences (H-01 152 vs 154; H-04 upper bound 4,088 vs
-  4,087) are explained by 2026-11-01
+  4,087) are explained with the merged recount on repaired data (by 2026-11-13; was 2026-11-01)
+- [ ] data gaps closed: G1 and G5 (data-engineer), G3 merged recount (research director, 2026-11-13) with the
+  evaluator's G3 check (2026-11-14), G4 research-window files final at the freeze commit (2026-12-14). H-01 AT RISK
+  until the merged recount is read
 - [x] H-06 preset merged and counted, or H-06 withdrawn (withdrawn 2026-10-16: lower bound 107 < 150)
 - [x] the reservation set to 8 in the spec and in settings (implementer, done 2026-10-16)
 - [ ] pre-registration writer merged (BACKLOG 47; merged `ab24d87`) and dry-run on `main`; the 4 survivor slots written on H-02's row
