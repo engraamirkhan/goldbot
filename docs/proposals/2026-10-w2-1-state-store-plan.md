@@ -99,3 +99,12 @@ and propose). Every open-trade field is kept. All services restart together. **F
 **Reviews.** Trading-safety F1-F10 re-check; security (0600, A15 channel only); SRE (cutover, rollback, health).
 **Docs.** TRACEABILITY X7, A7, A11, S4 + state-store row; proposal status; RUNBOOK cutover; HANDOFF.
 **Not in scope.** Step 5, step 8, moving the decision-2 file readers, exits-only mode, `aux.db`, `phase_state.json`.
+
+**Carried build condition C1 (trading-safety re-check, LOW).** The roll-forward deploy after a rollback runs a merge step
+before any service starts, for the state the API and Telegram own: `control` takes the newest stamp, and a tie keeps
+halted and `propose`; `done/` ids are inserted into `proposals` (insert-or-do-nothing). Test:
+`test_roll_forward_after_rollback_keeps_the_newer_owner_halt_and_retired_ids`.
+
+**Review record.** trading-safety-reviewer 2026-10-16: CHANGES @ 9f04599 (F1-F3 HIGH, F4-F7 MEDIUM, F8-F10 LOW); APPROVE
+on re-check @ bde611b, with C1 carried. The built change needs a trading-safety review against F1-F10 and C1 before
+merge, with every named test passing.
