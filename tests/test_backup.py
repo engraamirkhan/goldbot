@@ -708,6 +708,17 @@ def test_backup_age_no_record_failed_attempt_and_repository_size(tmp_path):
     assert health._alerting("backup_age", "warn")          # a missed night reaches Telegram, not only at 72 h
 
 
+def test_a_slow_backup_warns_before_restic_cancels_it(tmp_path):
+    """Under the no-delete key restic >= 0.16 cannot refresh its lock (the old lock file cannot be deleted) and
+    cancels a backup that runs past its refresh deadline (measured 2026-10-16: a 30 min backup failed with
+    `context canceled`; ADR 0002 update). A good backup that took 10 min or more warns, while there is still margin."""
+    _write_backup(tmp_path, 2, duration_s=540.0)
+    assert health.check_backup_age(_ctx(tmp_path)).status == "ok"
+    _write_backup(tmp_path, 2, duration_s=660.0)
+    c = health.check_backup_age(_ctx(tmp_path))
+    assert c.status == "warn" and "11 min" in c.reason and "ADR 0002" in c.reason
+
+
 def test_restore_drill_health(tmp_path):
     assert health.check_restore_drill(_ctx(tmp_path)).status == "warn"
     f = tmp_path / bk.DRILL_FILE

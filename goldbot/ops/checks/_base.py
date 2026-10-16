@@ -64,6 +64,8 @@ BACKUP_FAIL_H = 72.0              # three missed nights fail
 DRILL_WARN_DAYS = 8.0             # weekly restore drill
 PRUNE_WARN_DAYS = 45.0            # monthly retention from the owner's Mac (scripts/backup_retention.sh), two weeks' slack
 BACKUP_REPO_WARN_BYTES = 15e9     # of the 20 GB Oracle Object Storage free tier
+BACKUP_SLOW_WARN_S = 600.0        # restic >= 0.16 cancels a backup at its lock-refresh deadline under the
+                                  # no-delete key (~20 min; ADR 0002 update 2026-10-16): warn with margin
 
 REQUIRED_SECRETS = ("telegram-bot-token",)   # the webhook secret is optional: only the webhook service needs it
 OPTIONAL_SECRETS = ("anthropic-api-key", "github-token", "tradingview-webhook-secret")   # features switch off without them
