@@ -1,85 +1,85 @@
 # Plan: W1-1 bridge smoke (BACKLOG 1)
 
-Status: plan, architect (lane A-PLAN), 2026-10-16. Checked against docs/DESIGN.md and docs/TRACEABILITY.md
-(rows X6–X10 untested on real hardware). Build Fri 10-23; demo run Mon 10-26. Needs ADR 0020 (proposed) reviewed by
-the trading-safety reviewer before the build.
+Status: plan rev 2, architect (A-PLAN), 2026-10-16. Trading-safety review: ADR 0021 APPROVE-WITH-CONDITIONS (fences
+F1-F6, all in the ADR); plan CHANGES REQUESTED (S1-S11, answered below). Build Fri 10-23; demo run Mon 10-26.
 
-**Requirement.** BACKLOG 1: "`run.py bridge-smoke` … prints account login, server, balance and a live XAUUSD tick,
-then opens and closes 0.01 lot on a demo account; exits non-zero if the account is not classified as demo." Design:
-RiskGate is the only path to an order; exits are never gated.
+**Requirement.** BACKLOG 1: `run.py bridge-smoke` prints login, server, balance and a live XAUUSD tick, then opens
+and closes 0.01 lot on a demo account; non-zero exit if not demo. Design: RiskGate only path; owner confirms every
+entry (90 s); exits never gated.
 
-## Decisions (record on a new TRACEABILITY row)
-
-1. **Order path.** A new `RiskGate.check_operational` runs every account check and limit and skips only the model
-   checks (`risk/gate.py:451-465`: expected value, target over cost, time exit), which would otherwise need an invented
-   win probability. Size is exactly `volume_min`. Proposed as ADR 0020.
-2. **Public output.** The login prints masked (`****123`): the output is posted on the public issue #34.
-3. **Smoke magic** `magic_base+99`: inside `GuardedBroker`'s accepted range (`bridge.py:256`); no family uses it
-   (families land on 61, 62, 81, 82, 92; `runner.py:2995`).
-4. **Persistence.** No state file. The record is the broker's deal history plus the command output.
+## Decisions (new TRACEABILITY row)
+1. Entry passes `RiskGate.check_operational` (ADR 0021) and **one owner click on ApprovalBus** (F6); no click in 90 s
+   is EXPIRED_UNAPPROVED, exit 3, nothing sent. Approval re-runs the check (A3).
+2. Login printed masked (`****123`): output goes on public issue #34.
+3. Magic `magic_base+99`; a CI test proves no family hashes to 99 (S7; `runner.py:2995`).
+4. **X7 departure (S9):** no `pending_orders` row (the engine's table). Instead: deterministic comment
+   `cid[-31:]` (cid `{account}-{epoch_ns}-smoke`, as `runner.py:1315`), and a 24 h look-up of positions and deals
+   with magic +99 before sending.
 
 ## Files
-
 | File | Change |
 |---|---|
-| new `goldbot/ops/smoke.py` | `run_smoke(broker, acc, state_dir, *, now, place=True) -> SmokeReport`, `main(argv) -> int`, `SMOKE_MAGIC_OFFSET = 99` |
-| `ops/commands/ops.py:28` | `@register_command("bridge-smoke", pos=210)` |
-| `ops/run.py:13` | one usage line |
-| `execution/mt5_adapter.py:199` | `timeout=MT5_INIT_TIMEOUT_MS` (60 000) — being added by the SRE lane on 2026-10-16 |
-| `risk/gate.py:391-544` | account and limit checks into shared helpers; add `check_operational` |
-| `ops/ledger.py:303` | `broker_trades` lists smoke positions separately (no false RC-8 mismatch); coordinate with W1-4 (data-engineer) |
+| new `ops/smoke.py` | `smoke_state(...) -> AccountState`, `run_smoke(broker, bus, acc, state_dir, *, now) -> SmokeReport`, `main(argv) -> int` |
+| `ops/commands/ops.py:28`, `ops/run.py:13` | register `bridge-smoke` (pos 210), usage line |
+| `risk/gate.py:391-544` | pure split into shared helpers (F5); `check_operational` (F1, F2, S6) |
+| `execution/bridge.py:263` | `GuardedBroker.place_order` refuses +99 unless terminal reports demo (F4; protocol, digest unchanged) |
+| `ops/ledger.py:303` | smoke positions listed, not RC-8 mismatches (coordinate W1-4) |
 
-Must not change: the bridge protocol (`METHODS`, `API_VERSION`; bridge stays v5), `GuardedBroker`, `runner.py`, the
-records in `broker.py`.
+Must not change: `METHODS`/`API_VERSION`, `runner.py`, `broker.py` records, `ApprovalBus` API.
 
-## Data flow (on the brain)
+## Data flow (brain)
+1. `bridge_endpoint` → `RemoteBroker` → `check_bridge`; `verify_terminal_account` and `acc.mode == "demo"`, else exit 2.
+2. Print reads. Preconditions, else exit 4 (S3): `systemctl is-active goldbot-engine@<acc>` is `inactive` **and**
+   loop heartbeat (`watchdog.py:44`) >= 150 s old; `flock` on `state/.smoke-<acc>.lock` held to the end.
+3. Look-up (S8, S9): a leftover smoke position is closed first; if it cannot be closed, exit 5, never open another.
+4. **`smoke_state` (S2), the only builder, every field explicit:** equity/balance/margin from `account()`;
+   hwm, day/week start, stage, `equity_unconfirmed` from `risk_<acc>.json`, stale baseline passed through
+   `new_day()` in memory (S5, `gate.py:550`); positions, open risk, long/short from `account_positions()`; spread,
+   tick age, tick-ahead from `last_tick`; `stale_bars` from `get_bars`; owner halt from `bus.control()`; supervisor
+   halt and other-account exposure from `engine_should_halt`/`read_state` (`supervisor.py:224,233`); windows,
+   rollover, weekend, market closed from `risk/windows.py` and `trading_sessions`; `account_class` from the classifier
+   file (missing → `unknown`, refused); drift, clock, bridge flags from their stores. An unreadable source refuses.
+5. `check_operational` → Proposal on the bus → wait 90 s → re-check S3 and the gate → `place_order` (long only, S11).
+6. Verify the fill's sl/tp (S8); close. Close retried 3x, never gated; still open → exit 5 LEFT OPEN plus Telegram alert.
+7. `BridgeUnavailable`/`BridgeError` on send (S4): poll positions and deals >= `order_timeout_s + ORDER_MAX_AGE_S`
+   (25 s); found → close; not found → exit 6 UNKNOWN; never re-send.
 
-1. `bridge_endpoint` (`accounts.py:221`) → `RemoteBroker` → `check_bridge` (`bridge_compat.py:256`).
-2. `account()`, then `verify_terminal_account` and require `acc.mode == "demo"`; either failing exits 2.
-3. Print `symbol_info` and `last_tick`.
-4. Pre-order checks, any failing exits 4: the engine loop heartbeat (`watchdog.py:44`) is ≥ `LOOP_FAIL_S` (150 s) old;
-   the bridge is compatible; the engine's risk state is readable.
-5. `AccountState` from the live reads, `risk_<acc>.json` (read only), `ApprovalBus.control()` and
-   `engine_should_halt` (`supervisor.py:233`).
-6. `check_operational`; a refusal exits 3.
-7. Place with server-side stop and target, then close, retrying up to 3 times.
-
-**Fail closed.** A refused order exits 3. `BridgeUnavailable` after the send: find the position by magic and comment,
-close it, exit 3. A close still failing after the retries exits 5 "LEFT OPEN"; the server-side stop stays and engine
-reconciliation (X8) adopts the position on its next start. A leftover smoke position is closed first.
+**Order shape (S11):** buy; `stop_distance` from `sizing.stop_distance`, at or beyond stops level + spread;
+sl = ask − d, tp = ask + d; lots = `volume_min` rounded down to `volume_step`.
 
 ## Failing tests first
+`tests/test_smoke.py`: `test_prints_masked_login_server_balance_and_tick_then_opens_and_closes_the_minimum_lot`,
+`test_full_login_never_appears_in_the_output`, `test_exits_2_when_the_terminal_is_not_demo`,
+`test_no_click_in_90_s_expires_exits_3_and_sends_nothing`, `test_a_rejection_sends_nothing`,
+`test_approval_re_runs_the_gate_and_a_halt_meanwhile_sends_nothing`, `test_engine_active_or_heartbeat_149_s_refuses_150_s_inactive_allows`,
+`test_engine_started_during_the_wait_is_caught_before_place_order`, `test_a_second_smoke_cannot_take_the_lock`,
+`test_smoke_state_sets_every_account_state_field` (model_fields coverage), `test_each_source_mutated_to_unsafe_refuses`
+(mutation), `test_a_stale_baseline_is_reset_in_memory_and_never_written`, `test_bridge_error_on_send_polls_25_s_then_exits_6_and_never_resends`,
+`test_a_found_fill_after_a_timeout_is_closed`, `test_missing_sl_or_tp_after_the_fill_closes_at_once`,
+`test_left_open_exits_5_and_alerts`, `test_an_unclosable_leftover_blocks_a_new_order`,
+`test_a_smoke_deal_in_the_last_24_h_is_found_by_its_comment`, `test_stop_and_target_sides_and_stops_level`,
+`test_lots_are_volume_min_on_the_step`, `test_close_path_never_calls_the_gate`.
 
-`tests/test_smoke.py` (against `PaperBroker` with a demo `AccountInfo`):
-`test_prints_masked_login_server_balance_and_tick_then_opens_and_closes_the_minimum_lot`,
-`test_full_login_never_appears_in_the_output`, `test_exits_non_zero_when_the_terminal_is_not_demo`,
-`test_refuses_a_live_account_even_when_unlocked`, `test_an_owner_halt_refuses_and_sends_nothing`,
-`test_a_refused_order_exits_non_zero_and_leaves_no_position`, `test_a_timeout_after_send_finds_and_closes_the_position`,
-`test_a_failed_close_is_retried_then_reported_left_open`, `test_engine_heartbeat_149_s_old_refuses_and_150_s_allows`,
-`test_missing_or_corrupt_risk_state_refuses_the_order_but_reports_the_reads`,
-`test_a_leftover_smoke_position_is_closed_first`, `test_smoke_magic_is_guarded_and_no_family_uses_it`.
-
-Also: `tests/test_risk_gate_split.py::test_check_decisions_unchanged_on_a_state_grid`,
-`::test_operational_check_applies_every_account_limit_and_no_model_check` (a daily loss exactly at the limit is allowed),
-`tests/test_mt5_init.py::test_initialize_gets_the_terminal_path_and_a_60_s_timeout`,
-`tests/test_ledger.py::test_smoke_positions_are_listed_not_rc8_mismatches`; `tests/test_ops_run_registry.py` pins the
-new command.
+`tests/test_risk_gate_split.py`: `test_check_decisions_unchanged_on_a_state_grid` (F5),
+`test_operational_refuses_operational_not_demo_for_live_or_an_unreadable_phase` (F1),
+`test_operational_has_no_lots_p_target_or_cost_parameter` (F2, S6), `test_operational_keeps_account_class_unknown`,
+`test_operational_daily_cap_refuses_at_equality`, `test_operational_absolute_projection_allows_equality` (S10).
+`tests/test_operational_fence.py`: `test_only_ops_smoke_calls_check_operational`,
+`test_engine_allocator_api_telegram_never_import_ops_smoke` (F3, AST).
+`tests/test_bridge.py::test_guarded_broker_refuses_smoke_magic_unless_demo` (F4);
+`tests/test_magic.py::test_no_family_magic_equals_the_smoke_offset` (S7);
+`tests/test_ledger.py::test_smoke_positions_are_listed_not_rc8_mismatches`.
 
 ## Risks
-
 | Risk | Test |
 |---|---|
-| The gate split changes engine decisions | decisions compared on a grid of states |
-| Smoke and engine both trading | heartbeat boundary test; RUNBOOK: stop `engine@icm-demo` first |
-| Duplicate order after a timeout | no retry on orders (`bridge.py:352`); lookup test |
-| Login leaks on #34 | masked-output test |
-| Attach hangs under Wine | timeout test; the real proof is the 10-26 run |
+| Split changes engine decisions | decision grid |
+| Smoke and engine both trading | service + heartbeat + lock + re-check |
+| Duplicate order | no order retry (`bridge.py:352`); exit 6 test |
+| Position left unprotected | sl/tp verify; LEFT OPEN alert |
+| Login on #34 | masked-output test |
 
-**Reviews.** Trading-safety: the gate split, ADR 0020, the order and close paths. Security: output masking, token
-handling. SRE: RUNBOOK steps; deploy the MT5 box first (bridge-side adapter change).
-
-**Docs.** RUNBOOK "bridge smoke" (owner step: the `bridge-serve` token into setup step 2); TRACEABILITY row; HANDOFF and
-BACKLOG 1 fragments.
-
-**Not in scope.** The 24 h health run, measured swap, the adapter retry loop (X6), the protocol version, engine
-changes, W2-4 hardening.
+**Reviews.** Trading-safety (gate, ADR 0021, order/close), security (masking, lock file mode), SRE (RUNBOOK: stop
+engine, smoke, start; MT5 box first for F4).
+**Docs.** RUNBOOK "bridge smoke"; TRACEABILITY row with the X7 departure; HANDOFF, BACKLOG 1 fragments.
+**Not in scope.** 24 h health run, measured swap, X6 retry loop, protocol bump, engine changes, W2-4.
