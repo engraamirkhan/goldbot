@@ -49,6 +49,9 @@ if TYPE_CHECKING:   # service entry points import lazily; these are for annotati
     from goldbot.risk import RiskLimits
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+# httpx logs every request URL at INFO, and a Telegram Bot API URL carries the bot token (/bot<token>/getUpdates),
+# so at INFO the token would reach journald on every poll. Its warnings and errors still log.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("goldbot.run")
 
 
