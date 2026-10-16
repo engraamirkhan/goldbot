@@ -6,10 +6,12 @@ All state is explicit and serialisable so the engine can reconcile after a resta
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 from enum import Enum
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any, Callable, Literal
 
 import pandas as pd
 from pydantic import Field
@@ -200,6 +202,44 @@ class GateDecision(Record):
     margin_note: str = ""          # which figure won, or why the broker's could not be used (fallback to 1:20)
 
 
+class OperationalIntent(Record):
+    """ADR 0021: an operational order (the bridge smoke, goldbot/ops/smoke.py), checked by `check_operational`. No p,
+    target, cost, multiplier or lots: the gate sizes it at the minimum lot and sets its stop itself (F2). The contract
+    terms are the terminal's symbol_info, as for `Intent`. `account_mode` is the registry's (accounts.yaml) and
+    `phase_file` the roadmap's phase state (state/phase_state.json), which the gate reads itself (F1)."""
+    side: Literal[1, -1]
+    price: float
+    contract_oz: float = 100.0
+    volume_step: float = 0.01
+    volume_min: float = 0.01
+    volume_max: float = 2.0
+    stops_level_points: float = 0.0
+    account_currency: str = "USD"
+    acct_per_usd: float | None = None
+    account_mode: str
+    phase_file: Path
+
+
+# ADR 0021 (F2): an operational stop is never closer than this (USD per oz), nor than the stops level plus the spread.
+# 0.01 lot x 100 oz x $1.00 = $1 at the stop: the smoke's whole risk
+OPERATIONAL_MIN_STOP_USD = 1.0
+
+
+def phase_gates(path: Path) -> list[str] | None:
+    """The roadmap gates recorded in the phase file (`gates_passed`); [] when the file does not exist (phase 0); None
+    when it cannot be read or is not the shape `accounts.record_gate` writes (F1: an unreadable phase file refuses)."""
+    if not path.exists():
+        return []
+    try:
+        d = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    gates = d.get("gates_passed", []) if isinstance(d, dict) else None
+    if not isinstance(gates, list) or not all(isinstance(g, str) for g in gates):
+        return None
+    return gates
+
+
 # every number the entry check and the sizing read (October safety batch, HIGH; trading-safety review MEDIUM-3): a limit
 # written `if x > limit: refuse` lets NaN through, because every comparison with NaN is False, and a zero or negative
 # price, ATR, stop, contract or volume makes the sizing meaningless. `acct_per_usd` may be None ("unknown": the
@@ -211,6 +251,9 @@ _INTENT_NUMBERS = ("p", "target_atr", "stop_atr", "atr_usd", "cost_atr", "multip
                    "volume_step", "volume_min", "volume_max", "stops_level_points", "acct_per_usd", "swap_usd_per_oz")
 _POSITIVE_STATE = ("equity",)
 _POSITIVE_INTENT = ("price", "atr_usd", "stop_atr", "contract_oz", "volume_step", "volume_min", "volume_max")
+_OPERATIONAL_NUMBERS = ("price", "contract_oz", "volume_step", "volume_min", "volume_max", "stops_level_points",
+                        "acct_per_usd")
+_POSITIVE_OPERATIONAL = ("price", "contract_oz", "volume_step", "volume_min", "volume_max")
 
 
 # BACKLOG 43: the refusals check() can only reach once it has sized the trade (they need the intent's stop, price and
@@ -362,7 +405,7 @@ class RiskGate:
             out.append("calendar_unavailable")
         return out
 
-    def margin_for(self, intent: Intent, lots: float, notional: float,
+    def margin_for(self, intent: Intent | OperationalIntent, lots: float, notional: float,
                    margin_required: MarginFn | None) -> tuple[float, str]:
         """Design (Hard limits): margin is "checked with order_calc_margin and against the FCA retail cap of 1:20".
         `notional` is in the account currency (BACKLOG 28), as is the broker's figure. The larger of the broker's
@@ -458,6 +501,82 @@ class RiskGate:
             reasons += [f"invalid:{f}" for f in bad]
         return reasons
 
+    def _account_gate(self, st: AccountState, bad: list[str], now_utc: pd.Timestamp | None,
+                      throttle: AgentThrottle | None) -> tuple[list[str], GateDecision | None]:
+        """The start both entry checks share (ADR 0021: one code path for every account check): the stage machine on a
+        comparable state, then `account_reasons`. A number outside its domain (`bad`) ends it with the refusal
+        (`invalid_state`, then `invalid:<field>`); the stage machine does not run on it."""
+        if not bad:
+            self.update_stage(st)
+        reasons = self.account_reasons(st, now_utc, throttle)
+        if not bad:
+            return reasons, None
+        log.warning("entry refused: invalid state %s", bad)
+        if "invalid_state" not in reasons:
+            reasons.append("invalid_state")
+        return reasons, GateDecision(allowed=False, reasons=[*reasons, *(f"invalid:{f}" for f in bad
+                                                                         if f"invalid:{f}" not in reasons)])
+
+    def _same_direction(self, st: AccountState, side: int) -> list[str]:
+        """BACKLOG 19 (playbook G-4: "same-side positions of different agents count as one bet")."""
+        L = self.limits
+        if L.heat.enabled and (st.open_long if side > 0 else st.open_short) >= L.heat.max_same_direction:
+            return ["same_direction_cap"]
+        return []
+
+    def _sized_limits(self, intent: Intent | OperationalIntent, st: AccountState, *, lots: float, risk_per_lot: float,
+                      fx: float, cost_per_oz: float, stop_distance: float, realised_risk: float, notes: list[str],
+                      margin_required: MarginFn | None) -> GateDecision:
+        """Every limit both entry checks apply once the trade is sized (ADR 0021: "Every sizing limit still applies"):
+        the margin level floor, the combined exposure cap, the absolute daily loss limit and the heat cap, in that order.
+        `cost_per_oz` is the round trip and swap per oz (USD) the daily projection adds; 0 for an operational order,
+        which has no cost parameter."""
+        L = self.limits
+        notional = lots * intent.contract_oz * intent.price * fx          # account currency
+        # margin: the stricter of the broker's order_calc_margin and the FCA cap (1:20); level must stay >= 300%
+        margin_needed, margin_note = self.margin_for(intent, lots, notional, margin_required)
+        level_after = st.equity / max(st.margin_used + margin_needed, 1e-9)
+        if level_after < L.margin_level_floor:
+            return GateDecision(allowed=False, reasons=["margin_level_floor"], stop_distance=stop_distance,
+                                margin_needed=margin_needed, margin_note=margin_note)
+        # combined exposure cap: both accounts trade one instrument, so their positions are one position. Open notional
+        # is published in USD (lots x contract x price); converted here so it meets equity in the account currency
+        # (the supervisor halts accounts of mixed currencies, so other_equity is in this one)
+        comb_lots = st.open_lots + st.other_lots + lots
+        comb_notional = (st.open_notional + st.other_notional) * fx + notional
+        if comb_lots > L.max_combined_lots + 1e-9 or \
+                comb_notional > L.max_combined_notional_frac * L.leverage_cap * (st.equity + st.other_equity):
+            return GateDecision(allowed=False, reasons=["combined_exposure_cap"], stop_distance=stop_distance,
+                                margin_needed=margin_needed, margin_note=margin_note)
+        # absolute daily loss limit (BACKLOG 29, ADR 0004): projected with this trade's full stop risk, entries only.
+        # Strict boundary (review LOW-3): refused only when the projection EXCEEDS the limit; exactly equal is allowed
+        # (1e-9 absorbs float noise). The supervisor, which sees no trade, halts when the loss so far REACHES it
+        risk_amount = lots * risk_per_lot
+        # BACKLOG 36 (review LOW-6): a full stop-out also pays the round trip (spread, slippage, commission: cost_atr x
+        # ATR) and the paid swap of a rollover before the risk day ends, per oz, x lots x contract x fx. Never negative:
+        # a credit or a negative cost does not shrink the projection below loss so far + stop risk. Conservative by
+        # design: cost_atr includes the spread, but the stop risk is measured from the fill (ask in, bid out at the
+        # stop), which already pays it, so the spread is counted twice (the acceptance asks for the full `_cost_atr`)
+        cost_amount = cost_per_oz * lots * intent.contract_oz * fx
+        # BACKLOG 35 (review MEDIUM-4): with project_open_risk the projection also adds what the open positions can
+        # still lose down to their stops (unknown open risk was refused above), so two open trades cannot carry the day
+        # past the limit. Off: as before
+        held = (st.open_risk or 0.0) if L.project_open_risk else 0.0
+        if L.daily_loss_limit_abs is not None:
+            lost = max(0.0, st.day_start_equity - st.equity)
+            if lost + held + risk_amount + cost_amount > self.daily_loss_limit(st) + 1e-9:
+                return GateDecision(allowed=False, reasons=["daily_loss_limit_abs"], stop_distance=stop_distance,
+                                    margin_needed=margin_needed, margin_note=margin_note, risk_amount=risk_amount,
+                                    cost_amount=cost_amount)
+        # BACKLOG 19 (playbook G-4): open risk + this trade's full stop risk (a minimum-lot exception trade counts in
+        # full) within max_open_risk x equity; exactly at the cap is allowed, as for the daily limit
+        if L.heat.enabled and (st.open_risk or 0.0) + risk_amount > L.heat.max_open_risk * st.equity + 1e-9:
+            return GateDecision(allowed=False, reasons=["heat_cap"], stop_distance=stop_distance,
+                                margin_needed=margin_needed, margin_note=margin_note)
+        return GateDecision(allowed=True, lots=round(lots, 2), reasons=notes, risk_fraction=realised_risk,
+                            stop_distance=stop_distance, margin_needed=margin_needed, margin_note=margin_note,
+                            risk_amount=risk_amount, cost_amount=cost_amount)
+
     def check(self, intent: Intent, st: AccountState, now_utc: pd.Timestamp | None = None,
               margin_required: MarginFn | None = None, throttle: AgentThrottle | None = None) -> GateDecision:
         """`margin_required(side, lots, price)` is the broker's margin figure (`broker_margin(broker, symbol)`);
@@ -468,18 +587,15 @@ class RiskGate:
         (NaN, infinite, or not > 0 where it must be: `invalid_fields`) refuses the entry (`invalid_state`, then
         `invalid:<field>` for each) after the account reasons and before any limit or the sizing reads it; the stage
         machine does not run on it (a zero equity read is not a 100% drawdown). The gate fails closed, never open, on
-        state it cannot compare. Entries only; exits never call the gate."""
-        bad = invalid_fields(intent, st)
+        state it cannot compare. Entries only; exits never call the gate.
+
+        ADR 0021: the account checks (`_account_gate`), the same-direction cap and the limits after sizing
+        (`_sized_limits`) are shared with `check_operational`; the model checks are this method's alone.
+        tests/test_risk_gate_split.py pins the decisions on a state grid captured before the split (F5)."""
         L = self.limits
-        if not bad:
-            self.update_stage(st)
-        reasons = self.account_reasons(st, now_utc, throttle)
-        if bad:
-            log.warning("entry refused: invalid state %s", bad)
-            if "invalid_state" not in reasons:
-                reasons.append("invalid_state")
-            return GateDecision(allowed=False, reasons=[*reasons, *(f"invalid:{f}" for f in bad
-                                                                    if f"invalid:{f}" not in reasons)])
+        reasons, refused = self._account_gate(st, invalid_fields(intent, st), now_utc, throttle)
+        if refused is not None:
+            return refused
         # a time-exit rule has no reachable target: p x target would be fiction (quant review H1). Fail closed until the
         # EV uses the time-exit outcome (HANDOFF: what must change before live)
         if not intent.has_target or not _family_has_target(intent):
@@ -496,9 +612,7 @@ class RiskGate:
             edge = intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr      # gross, before costs
             if edge <= L.standard_edge_over_cost * intent.cost_atr:            # design: must exceed 1.5x
                 reasons.append("standard_account_edge")
-        # BACKLOG 19 (playbook G-4: "same-side positions of different agents count as one bet")
-        if L.heat.enabled and (st.open_long if intent.side > 0 else st.open_short) >= L.heat.max_same_direction:
-            reasons.append("same_direction_cap")
+        reasons += self._same_direction(st, intent.side)
         if reasons:
             return GateDecision(allowed=False, reasons=reasons)
 
@@ -526,51 +640,55 @@ class RiskGate:
             if cap is None or lots > intent.volume_max or realised_risk > cap:
                 return GateDecision(allowed=False, reasons=["min_lot_exceeds_risk"], stop_distance=stop_distance)
             notes = ["min_lot_exception"]
-        notional = lots * intent.contract_oz * intent.price * fx          # account currency
-        # margin: the stricter of the broker's order_calc_margin and the FCA cap (1:20); level must stay >= 300%
-        margin_needed, margin_note = self.margin_for(intent, lots, notional, margin_required)
-        level_after = st.equity / max(st.margin_used + margin_needed, 1e-9)
-        if level_after < L.margin_level_floor:
-            return GateDecision(allowed=False, reasons=["margin_level_floor"], stop_distance=stop_distance,
-                                margin_needed=margin_needed, margin_note=margin_note)
-        # combined exposure cap: both accounts trade one instrument, so their positions are one position. Open notional
-        # is published in USD (lots x contract x price); converted here so it meets equity in the account currency
-        # (the supervisor halts accounts of mixed currencies, so other_equity is in this one)
-        comb_lots = st.open_lots + st.other_lots + lots
-        comb_notional = (st.open_notional + st.other_notional) * fx + notional
-        if comb_lots > L.max_combined_lots + 1e-9 or \
-                comb_notional > L.max_combined_notional_frac * L.leverage_cap * (st.equity + st.other_equity):
-            return GateDecision(allowed=False, reasons=["combined_exposure_cap"], stop_distance=stop_distance,
-                                margin_needed=margin_needed, margin_note=margin_note)
-        # absolute daily loss limit (BACKLOG 29, ADR 0004): projected with this trade's full stop risk, entries only.
-        # Strict boundary (review LOW-3): refused only when the projection EXCEEDS the limit; exactly equal is allowed
-        # (1e-9 absorbs float noise). The supervisor, which sees no trade, halts when the loss so far REACHES it
-        risk_amount = lots * sz.risk_per_lot
-        # BACKLOG 36 (review LOW-6): a full stop-out also pays the round trip (spread, slippage, commission: cost_atr x
-        # ATR) and the paid swap of a rollover before the risk day ends, per oz, x lots x contract x fx. Never negative:
-        # a credit or a negative cost does not shrink the projection below loss so far + stop risk. Conservative by
-        # design: cost_atr includes the spread, but the stop risk is measured from the fill (ask in, bid out at the
-        # stop), which already pays it, so the spread is counted twice (the acceptance asks for the full `_cost_atr`)
         per_oz = max(0.0, intent.cost_atr * intent.atr_usd) + max(0.0, intent.swap_usd_per_oz)
-        cost_amount = per_oz * lots * intent.contract_oz * fx
-        # BACKLOG 35 (review MEDIUM-4): with project_open_risk the projection also adds what the open positions can
-        # still lose down to their stops (unknown open risk was refused above), so two open trades cannot carry the day
-        # past the limit. Off: as before
-        held = (st.open_risk or 0.0) if L.project_open_risk else 0.0
-        if L.daily_loss_limit_abs is not None:
-            lost = max(0.0, st.day_start_equity - st.equity)
-            if lost + held + risk_amount + cost_amount > self.daily_loss_limit(st) + 1e-9:
-                return GateDecision(allowed=False, reasons=["daily_loss_limit_abs"], stop_distance=stop_distance,
-                                    margin_needed=margin_needed, margin_note=margin_note, risk_amount=risk_amount,
-                                    cost_amount=cost_amount)
-        # BACKLOG 19 (playbook G-4): open risk + this trade's full stop risk (a minimum-lot exception trade counts in
-        # full) within max_open_risk x equity; exactly at the cap is allowed, as for the daily limit
-        if L.heat.enabled and (st.open_risk or 0.0) + risk_amount > L.heat.max_open_risk * st.equity + 1e-9:
-            return GateDecision(allowed=False, reasons=["heat_cap"], stop_distance=stop_distance,
-                                margin_needed=margin_needed, margin_note=margin_note)
-        return GateDecision(allowed=True, lots=round(lots, 2), reasons=notes, risk_fraction=realised_risk,
-                            stop_distance=stop_distance, margin_needed=margin_needed, margin_note=margin_note,
-                            risk_amount=risk_amount, cost_amount=cost_amount)
+        return self._sized_limits(intent, st, lots=lots, risk_per_lot=sz.risk_per_lot, fx=fx, cost_per_oz=per_oz,
+                                  stop_distance=stop_distance, realised_risk=realised_risk, notes=notes,
+                                  margin_required=margin_required)
+
+    def check_operational(self, intent: OperationalIntent, st: AccountState, now_utc: pd.Timestamp | None,
+                          margin_required: MarginFn | None) -> GateDecision:
+        """ADR 0021: "Operational orders pass the RiskGate's account limits, not its model checks." The bridge smoke's
+        order (goldbot/ops/smoke.py, the only caller: tests/test_operational_fence.py) shares `check`'s account checks
+        (`_account_gate`, so `account_class_unknown` refuses here too), the same-direction cap and every limit after
+        sizing (`_sized_limits`: margin floor, combined exposure, absolute daily loss limit, heat). It skips only the
+        model checks, by name: `time_exit_ev_unsupported`, `negative_ev`, `target_below_cost_floor`,
+        `standard_account_edge`, `standard_account_15m` (S6). It takes no p, target, cost or lots.
+
+        * F1: refused `operational_not_demo` unless `account_mode == "demo"` and `paper_to_tiny_live` is not in the
+          phase file's `gates_passed`; a missing phase file is phase 0, an unreadable or malformed one refuses.
+        * F2: the size is exactly `volume_min` rounded down to `volume_step` (`invalid_volume` when that is no lot or
+          above `volume_max`); the per-trade cap (`max_risk_per_trade`, halved in size-down) refuses it
+          `min_lot_exceeds_risk`. The stop is `sizing.stop_distance` floored at OPERATIONAL_MIN_STOP_USD: at or beyond
+          the stops level plus the spread.
+        * S10: the boundaries are `check`'s: the daily cap refuses at equality, the absolute projection allows it.
+        Entries only; exits never call it."""
+        L = self.limits
+        gates = phase_gates(intent.phase_file) if intent.account_mode == "demo" else None
+        head = [] if gates is not None and "paper_to_tiny_live" not in gates else ["operational_not_demo"]
+        bad = invalid_state_fields(st) + [f for f in _OPERATIONAL_NUMBERS if _bad(intent, f, _POSITIVE_OPERATIONAL)]
+        reasons, refused = self._account_gate(st, bad, now_utc, None)
+        if refused is not None:
+            return refused.model_copy(update={"reasons": [*head, *refused.reasons]})
+        reasons = [*head, *reasons, *self._same_direction(st, intent.side)]
+        steps = math.floor(intent.volume_min / intent.volume_step + 1e-9)
+        lots = steps * intent.volume_step
+        if steps < 1 or lots > intent.volume_max + 1e-9:
+            reasons.append("invalid_volume")
+        if reasons:
+            return GateDecision(allowed=False, reasons=reasons)
+        fx = sizing.account_fx(intent.account_currency, intent.acct_per_usd)
+        if fx is None:                       # a non-USD account without a usable conversion: never sized on a guess
+            return GateDecision(allowed=False, reasons=["fx_conversion_unavailable"])
+        stop_distance = sizing.stop_distance(1.0, OPERATIONAL_MIN_STOP_USD, stops_level_points=intent.stops_level_points,
+                                             spread_points=st.spread_points, point=L.point)
+        risk_per_lot = stop_distance * intent.contract_oz * fx
+        realised_risk = lots * risk_per_lot / st.equity
+        size_down = st.stage == Stage.SIZE_DOWN or st.combined_size_down
+        if realised_risk > L.max_risk_per_trade * (sizing.SIZE_DOWN_RISK if size_down else 1.0) + 1e-12:
+            return GateDecision(allowed=False, reasons=["min_lot_exceeds_risk"], stop_distance=stop_distance)
+        return self._sized_limits(intent, st, lots=lots, risk_per_lot=risk_per_lot, fx=fx, cost_per_oz=0.0,
+                                  stop_distance=stop_distance, realised_risk=realised_risk, notes=[],
+                                  margin_required=margin_required)
 
 
 def _risk_week(ts: pd.Timestamp) -> pd.Timestamp:
