@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from goldbot.base import schema_skew
 from goldbot.engine import Engine, EngineConfig
@@ -438,6 +439,13 @@ def test_rearm_after_the_kill_switch_needs_ten_trading_days_of_positive_shadow_t
 
 # ---------------------------------------------------------------------------------------------- BACKLOG 66
 CEILING_MSG = "bridge_notional_ceiling: notional 7500.00 USD > 6 x equity 1000.00 (0 lots open + 0.03 on XAUUSD)"
+UNREADABLE_MSG = "bridge_notional_ceiling: unreadable:account (RuntimeError)"
+CEILING_WHY = "(open gold would be worth more than 6× equity)"
+UNREADABLE_WHY = "(it couldn't read the account figures it checks)"
+TELEGRAM_CEILING = ("🛑 NOT PLACED: approved, but the MT5 box's safety limit refused it (open gold would be worth more "
+                    "than 6× equity). Nothing was sent.")
+TELEGRAM_UNREADABLE = ("🛑 NOT PLACED: approved, but the MT5 box couldn't read the account figures it checks, so it "
+                       "refused to be safe. Nothing was sent.")
 
 
 class _BridgeRefuses(PaperBroker):
@@ -482,8 +490,39 @@ def test_a_bridge_ceiling_refusal_alerts_and_pauses_auto(tmp_path):
     assert _actions(dec) == ["auto_rejected:10006", "auto_paused:bridge_refused"], _actions(dec)
     assert pb.calls == 1 and not pb.positions()
     assert eng._auto_paused is not None and eng._auto_paused[1] == "bridge_refused"
-    [notice] = _notices(tmp_path)                                   # relayed to the owner on Telegram
-    assert "refused by the bridge" in notice and "bridge_notional_ceiling" in notice and "No order was placed" in notice
+    [notice] = _notices(tmp_path)                                   # relayed to the owner on Telegram, in plain words
+    assert notice.startswith("Order not placed: the MT5 box's safety limit refused LONG ")
+    assert f"lots XAUUSD on icm-demo {CEILING_WHY}. Nothing was sent; open trades keep their stops. Automatic entries " \
+           "pause until the next bar. If this repeats, the trade sizing and the MT5 box's limit disagree: ask Claude " \
+           "to check." in notice, notice
+    assert "bridge_notional_ceiling" not in notice and "icm-demo-" not in notice
+
+
+@pytest.mark.parametrize(("message", "why"), [(CEILING_MSG, CEILING_WHY), (UNREADABLE_MSG, UNREADABLE_WHY)])
+def test_the_owner_notice_names_the_trade_in_plain_words_never_the_raw_refusal_or_the_proposal_id(tmp_path, message,
+                                                                                                   why):
+    pb = _BridgeRefuses(message=message, equity=10_000)
+    pb.on_tick(_tick(T0))
+    eng, _ = _engine(tmp_path, pb)
+    eng.center.bus = ApprovalBus(tmp_path)
+    eng.cfg.account_id = "icm-demo-51234567"                         # a config name that embeds a login
+    pid = "icm-demo-51234567-66-c"
+    eng._execute(_prop(pid).model_copy(update={"side": -1}), SPECIALISTS["session_open"](), 0.03, 2404.0, 2394.0,
+                 requested=2400.0)
+    [notice] = _notices(tmp_path)
+    assert notice == (f"Order not placed: the MT5 box's safety limit refused SHORT 0.03 lots XAUUSD on icm-demo-…67 "
+                      f"{why}. Nothing was sent; open trades keep their stops. If this repeats, the trade sizing and "
+                      f"the MT5 box's limit disagree: ask Claude to check.")
+    assert "bridge_notional_ceiling" not in notice and pid not in notice and "51234567" not in notice
+    [journal] = [d for d in eng.decisions if d.get("action") == "bridge_refused"]
+    assert journal["message"] == message and journal["proposal"] == pid       # the raw text stays in the journal
+
+
+@pytest.mark.parametrize(("code", "text"), [("bridge_notional_ceiling", TELEGRAM_CEILING),
+                                            ("bridge_notional_ceiling_unreadable", TELEGRAM_UNREADABLE)])
+def test_the_telegram_card_words_each_bridge_refusal_without_its_code(code, text):
+    from goldbot.telegram.bot import outcome_text
+    assert outcome_text(f"GATE_REFUSED: {code}") == text
 
 
 def test_a_real_broker_reject_with_the_same_retcode_neither_alerts_nor_pauses_auto(tmp_path):
@@ -496,14 +535,18 @@ def test_a_real_broker_reject_with_the_same_retcode_neither_alerts_nor_pauses_au
     assert _notices(tmp_path) == []
 
 
-def test_a_bridge_ceiling_refusal_at_approval_shows_refused_by_the_bridge(tmp_path):
+@pytest.mark.parametrize(("message", "code", "text"), [
+    (CEILING_MSG, "bridge_notional_ceiling", TELEGRAM_CEILING),
+    (UNREADABLE_MSG, "bridge_notional_ceiling_unreadable", TELEGRAM_UNREADABLE),
+])
+def test_a_bridge_ceiling_refusal_at_approval_shows_refused_by_the_bridge(tmp_path, message, code, text):
     from goldbot.telegram.bot import outcome_text
     from goldbot.telegram.outbox import Outbox
     from tests.test_approved_card_cap import _approve, _card
     from tests.test_engine_clock import WED, _intent
     from tests.test_engine_clock import _engine as _clock_engine
     from tests.test_engine_clock import _tick as _clock_tick
-    pb = _BridgeRefuses(equity=10_000)
+    pb = _BridgeRefuses(message=message, equity=10_000)
     pb.on_tick(_clock_tick(WED))
     eng, _, _ = _clock_engine(tmp_path, pb=pb)
     bus = eng.center.bus = ApprovalBus(tmp_path)
@@ -515,10 +558,11 @@ def test_a_bridge_ceiling_refusal_at_approval_shows_refused_by_the_bridge(tmp_pa
     _approve(eng, prop)
     assert pb.calls == 1 and not pb.positions()
     archived = bus.get(prop.proposal_id)
-    assert archived is not None and archived.gate_refusal == ["bridge_notional_ceiling"]
+    assert archived is not None and archived.gate_refusal == [code]
     [(pid, outcome, _)] = outbox.finished()
-    assert pid == prop.proposal_id and "refused by the bridge" in outcome_text(outcome)
-    assert any("refused by the bridge" in n for n in _notices(tmp_path))
+    assert pid == prop.proposal_id and outcome_text(outcome) == text
+    [notice] = _notices(tmp_path)
+    assert notice.startswith("Order not placed: the MT5 box's safety limit refused LONG ") and "Automatic" not in notice
     assert any(d.get("action") == "bridge_refused" for d in eng.decisions)
 
 

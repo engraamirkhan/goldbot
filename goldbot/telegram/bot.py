@@ -50,8 +50,13 @@ OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED
 
 
 def outcome_text(outcome: str) -> str:
-    if outcome == f"GATE_REFUSED: {CEILING_REFUSAL}":       # BACKLOG 66: the bridge's notional ceiling, after the gate
-        return "🛑 NOT PLACED: approved, but refused by the bridge (exposure above 6x equity, or unreadable)"
+    code = outcome.partition(": ")[2]
+    if outcome.startswith("GATE_REFUSED") and code.startswith(CEILING_REFUSAL):   # BACKLOG 66: the MT5 box refused it
+        if code.endswith("_unreadable"):
+            return ("🛑 NOT PLACED: approved, but the MT5 box couldn't read the account figures it checks, so it "
+                    "refused to be safe. Nothing was sent.")
+        return ("🛑 NOT PLACED: approved, but the MT5 box's safety limit refused it (open gold would be worth more "
+                "than 6× equity). Nothing was sent.")
     if outcome.startswith("GATE_REFUSED"):
         return "🛑 NOT PLACED: approved, but the risk check refused it at approval (" + outcome.partition(": ")[2] + ")"
     return OUTCOME_TEXT.get(outcome, outcome)

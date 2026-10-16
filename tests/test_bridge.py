@@ -561,6 +561,17 @@ def test_an_account_read_that_raises_is_a_definite_reject_not_an_http_500(guarde
     assert _refused(res, t) and "unreadable:account" in res.message
 
 
+def test_an_account_read_that_returns_nothing_is_a_definite_reject_before_the_verifier(guarded_terminal):
+    url, t = guarded_terminal
+    seen: list[Any] = []
+    t.account = lambda: None                                    # MT5 account_info() returning None
+    g = GuardedBroker(t, magic_base=260100, verify=lambda info: seen.append(info))
+    res = g.place_order(_order(0.01))
+    assert _refused(res, t) and "unreadable:account" in res.message and seen == []
+    res = RemoteBroker(url, TOKEN).place_order(_order(0.01))    # over the wire: 10006, not an HTTP 500
+    assert _refused(res, t) and "unreadable:account" in res.message
+
+
 def test_a_changed_verified_account_still_raises():
     t = _Terminal(equity=10_000.0)
     g = GuardedBroker(t, magic_base=260100, verify=lambda info: "terminal is logged in to another account")

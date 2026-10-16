@@ -113,6 +113,7 @@ MAX_ORDER_LOTS = 3.0            # the design's combined exposure cap; no single 
 # bridge enforces it on this terminal's own readings, so a brain sizing wrongly on a 1:5000 demo terminal is refused.
 MAX_NOTIONAL_EQUITY_MULT = 6.0
 CEILING_REFUSAL = "bridge_notional_ceiling"     # the message prefix of every ceiling refusal (the engine alerts on it)
+UNREADABLE_REFUSAL = f"{CEILING_REFUSAL}: unreadable:"   # ... when a figure it checks could not be read (fail closed)
 STALE_REFUSAL = "bridge_stale_order"            # an order that aged past ORDER_MAX_AGE_S during the ceiling's reads
 REFUSED_RETCODE = 10006         # MT5 "request rejected": a definite reject (runner.DEFINITE_REJECT_RETCODES)
 
@@ -328,6 +329,8 @@ class GuardedBroker:
             info = _read("account", self._b.account)
         except _Unreadable as u:
             return self._refuse(intent, f"unreadable:{u}")
+        if info is None:                               # MT5 account_info() returning None: no figures, never a 500
+            return self._refuse(intent, "unreadable:account")
         why = self._verify(info) if self._verify is not None else None
         if why:                                        # the terminal was switched to another account after start
             raise PermissionError(f"terminal account changed: {why}")

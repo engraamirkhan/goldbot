@@ -112,7 +112,8 @@ describe("ProposalCard", () => {
     ["rejected", { reason_code: "cost" as const }, /Rejected · Cost/],
     ["refused", { refusal: ["owner_halt", "drift_halt"] }, /Refused at approval\. The RiskGate blocked the order \(owner halt, drift halt\); nothing was sent/],
     // BACKLOG 66: the gate allowed it, the MT5 bridge's notional ceiling refused it
-    ["refused", { refusal: ["bridge_notional_ceiling"] }, /Refused by the bridge\. The terminal's exposure ceiling \(6× equity\) refused the order; nothing was sent/],
+    ["refused", { refusal: ["bridge_notional_ceiling"] }, /^Refused by the MT5 box\. Its safety limit stops open gold worth more than 6× equity, and this trade would have gone over it; nothing was sent\.$/],
+    ["refused", { refusal: ["bridge_notional_ceiling_unreadable"] }, /^Refused by the MT5 box\. It couldn't read the account figures it checks, so it refused to be safe; nothing was sent\.$/],
     ["expired", {}, /Expired\./],
   ])("shows the %s outcome without actions", (status, over, copy) => {
     render(<ProposalCard p={decided(status as DecidedProposal["status"], over)} now={NOW} canDecide blockers={[]} />);
