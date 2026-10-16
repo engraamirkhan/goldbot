@@ -66,7 +66,13 @@ from goldbot.config import GateSettings, Settings
 from goldbot.ops.accounts import GATES
 from goldbot.ops.cost_imputation import CostImputer, ImputationSummary
 from goldbot.research.metrics import DsrInputs, max_drawdown
-from goldbot.research.registry import costs_recorded, n_trials_effective, promotion_refusal
+from goldbot.research.registry import (
+    _row_hash,
+    costs_recorded,
+    latest_evaluated,
+    n_trials_effective,
+    promotion_refusal,
+)
 
 CLOSED_TRADES_FILE = "closed_trades.jsonl"
 EVIDENCE_FILE = "gate_evidence.json"
@@ -367,14 +373,18 @@ def best_backtest_trial(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     registry's trial count today (`current_dsr`; a row that cannot be recomputed ranks last), among rows that record
     the research cost treatment (`registry.costs_recorded`: the swap charged and the cost source stated). Quant
     review, 2026-10-11: "A pass from before swap was charged is not a pass of the swap-charged configuration", so a
-    pre-swap row is not backtest evidence for the backtest -> paper gate, whatever its DSR."""
+    pre-swap row is not backtest evidence for the backtest -> paper gate, whatever its DSR. Only the latest run of each
+    configuration on its feature version competes (`registry.latest_evaluated`; quant review 2026-10-16 N1: "only the
+    latest evaluated row ... decides"): a superseded run ranked above its own passing rerun was refused by
+    `promotion_refusal` and left gate 1 unmet although the configuration's deciding run passes."""
     k = n_trials_effective(rows)
 
     def dsr(r: dict[str, Any]) -> float:
         v = current_dsr(r, k)[0]
         return v if v is not None else -1.0
     cands = [r for r in rows if r.get("status") == "evaluated" and (r.get("results") or {}).get("model_filtered")
-             and costs_recorded(r.get("results") or {})]
+             and costs_recorded(r.get("results") or {})
+             and latest_evaluated(rows, str(r.get("family")), _row_hash(r), r.get("feature_version")) is r]
     return max(cands, key=dsr) if cands else None
 
 

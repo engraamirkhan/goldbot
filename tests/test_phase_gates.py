@@ -366,7 +366,27 @@ def test_gate_1_reads_only_the_latest_rerun_of_a_config_so_a_later_failure_revok
     write_rows(trials, [passed, rerun])
     rep = report(state, trials)
     assert not item(rep, "backtest_to_paper", "research_gates") and not gate_met(rep, "backtest_to_paper")
-    assert "later rerun" in evidence(rep, "backtest_to_paper", "research_gates")
+    text = evidence(rep, "backtest_to_paper", "research_gates")      # the rerun that decides is the one named
+    assert "trial #8" in text and "complete_folds" in text and "trial #7" not in text
+
+
+def test_gate_1_is_met_by_a_passing_rerun_of_a_config_and_the_rerun_is_the_backtest_reference(tmp_path):
+    """Quant review 2026-10-16 N1: `best_backtest_trial` ranked a superseded run (DSR 0.99) above its own passing
+    rerun (DSR 0.96), and `promotion_refusal` then refused the superseded run, so gate 1 read unmet although the
+    configuration's latest run passes. "Only the latest evaluated row ... decides": the best is chosen among latest
+    runs only (`registry.latest_evaluated`)."""
+    from goldbot.research.registry import config_hash
+    state, trials = full_state(tmp_path)
+    cfg = {"band_z": 2.0}
+    common = {"config": cfg, "config_hash": config_hash(cfg), "feature_version": "f"}
+    first = {**trial_row(7, dsr=0.99, mean_ret=0.002, passed=True), **common, "ts": "2026-10-02T10:00:00+00:00"}
+    rerun = {**trial_row(8, dsr=0.96, mean_ret=0.002, passed=True), **common, "ts": "2026-10-03T10:00:00+00:00"}
+    rerun["results"]["model_filtered"]["dsr_inputs"] = dsr_inputs(0.96, k=2)
+    write_rows(trials, [first, rerun])
+    rep = report(state, trials)
+    assert item(rep, "backtest_to_paper", "research_gates") and gate_met(rep, "backtest_to_paper"), gates_phase.render(rep)
+    assert "trial #8" in evidence(rep, "backtest_to_paper", "research_gates")
+    assert "trial #8" in evidence(rep, "paper_to_tiny_live", "paper_expectancy")   # the reference is the rerun
 
 
 def test_fills_within_thirty_percent_of_the_modelled_slippage(tmp_path):
