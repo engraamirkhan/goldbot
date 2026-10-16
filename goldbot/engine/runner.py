@@ -53,9 +53,11 @@ from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
 from goldbot.labels.excursion import Excursion
 from goldbot.labels.exit_policy import ExitPolicy
+from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops import server_clock
 from goldbot.ops.account_view import LADDER_TIMEFRAMES
 from goldbot.ops.bridge_compat import BridgeCompat
+from goldbot.ops.cost_imputation import account_swap, paid_swap_per_oz
 from goldbot.ops.gates_phase import ClosedTrade, EntryAudit, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
@@ -212,6 +214,18 @@ class EngineConfig(Record):
     # time) and written to state/broker_terms_<account>.json for the nightly cost job; commission from this many days
     broker_terms_every_s: int = 6 * 3600
     commission_window_days: int = 90
+    # BACKLOG 36: the swap the daily projection charges for a rollover before the risk day ends until the cost table
+    # measures the broker's own (`cost_imputation.account_swap`); production passes `settings_swap(settings)`, the
+    # default is the shipped prior. Read on the engine's server clock (`server_tz`), whatever zone it names
+    swap_prior: SwapSpec = Field(default_factory=lambda: _shipped_swap_prior())
+
+
+def _shipped_swap_prior() -> SwapSpec:
+    """The settings defaults (`costs.swap_*`): what an engine built without settings charges until a table measures."""
+    from goldbot.config import CostSettings
+    f = CostSettings.model_fields
+    return SwapSpec(long_usd_per_lot=f["swap_long_usd_per_lot"].default, short_usd_per_lot=f["swap_short_usd_per_lot"].default,
+                    triple_weekday=f["swap_triple_weekday"].default)
 
 
 class _Frame(Record):
@@ -1125,7 +1139,8 @@ class Engine:
             terms = self._sizing_terms(side, price, ls.stop_atr * float(a.iloc[last]), cycle=close_ts)
             self._note_min_lot_risk(terms, ls.stop_atr * float(a.iloc[last]))
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
-                            multiplier=mult, price=price, timeframe=tf, family=agent.family, **terms)
+                            multiplier=mult, price=price, timeframe=tf, family=agent.family,
+                            swap_usd_per_oz=self._swap_usd_per_oz(side, close_ts), **terms)
             gd = self.gate.check(intent, self.state, close_ts, margin_required=broker_margin(self.broker, self.cfg.symbol),
                                  throttle=self._agent_throttle(agent.agent_id, tf, close_ts))
             if not gd.allowed:
@@ -1186,9 +1201,11 @@ class Engine:
                 # contract terms and the conversion read again from the terminal (review LOW-5): one it can no longer
                 # give leaves the currency unknown, so the re-check refuses (fail closed); never the proposal-time figure
                 now_px = tick.ask if prop.side > 0 else tick.bid
+                # BACKLOG 36: the swap is priced again at the click: a window across 00:00 UTC starts a new risk day
                 intent = intent.model_copy(update={**self._sizing_terms(intent.side, now_px,
                                                                         intent.stop_atr * intent.atr_usd),
-                                                   "price": now_px})
+                                                   "price": now_px,
+                                                   "swap_usd_per_oz": self._swap_usd_per_oz(intent.side, tick.ts_utc)})
                 gd = self.gate.check(intent, self.state, tick.ts_utc,  # re-check at approval time
                                      margin_required=broker_margin(self.broker, self.cfg.symbol),
                                      throttle=self._agent_throttle(agent.agent_id, intent.timeframe or agent.timeframe,
@@ -3081,10 +3098,8 @@ class Engine:
         except Exception:
             log.exception("broker terms not refreshed for %s; the last reading stays", self.cfg.account_id)
 
-    def _cost_atr(self, atr_usd: float, ts: pd.Timestamp, ex_spread: bool = False) -> float:
-        """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one.
-        ex_spread: slippage and commission only, for the probability threshold and size multiplier (the model's p is
-        trained on labels that already pay the spread); the fallback stays the full configured cost (conservative)."""
+    def _cost_table(self) -> CostTable | None:
+        """state/costs_<account>.json from the nightly cost job (cached by mtime); None when missing or unreadable."""
         path = Path(self.cfg.state_dir, f"costs_{self.cfg.account_id}.json")
         mtime = path.stat().st_mtime if path.exists() else -1.0
         if mtime != self._cost_cache[0]:
@@ -3092,7 +3107,22 @@ class Engine:
                 self._cost_cache = (mtime, CostTable.load(path))
             except (ValueError, OSError):
                 self._cost_cache = (mtime, None)   # a bad file must not stop trading decisions; fall back
-        table = self._cost_cache[1]
+        return self._cost_cache[1]
+
+    def _swap_usd_per_oz(self, side: int, now: pd.Timestamp) -> float:
+        """BACKLOG 36: the paid swap per oz (USD) an entry at `now` would be charged at a broker rollover before the risk
+        day ends (00:00 UTC), for the RiskGate's daily projection: ADR 0017's rule (`paid_swap_per_oz`, the triple day
+        counted, a credit never) at the cost table's measured rates, else `swap_prior`, on this engine's server clock.
+        A rollover after the risk day ends lands on the next day's loss so far. Entries only."""
+        swap = account_swap(self._cost_table(), self.cfg.swap_prior.model_copy(update={"server_tz": self.cfg.server_tz}))
+        now = pd.Timestamp(now).tz_convert("UTC")
+        return paid_swap_per_oz(swap, side, now, now.normalize() + pd.Timedelta(days=1))
+
+    def _cost_atr(self, atr_usd: float, ts: pd.Timestamp, ex_spread: bool = False) -> float:
+        """Round-trip cost in ATR for the current session from the nightly cost table; config fallback without one.
+        ex_spread: slippage and commission only, for the probability threshold and size multiplier (the model's p is
+        trained on labels that already pay the spread); the fallback stays the full configured cost (conservative)."""
+        table = self._cost_table()
         if table is None:
             return self.cfg.cost_atr
         session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([ts]))[0])

@@ -71,7 +71,7 @@ class RiskLimits(Record):
     # never above max_risk_per_trade); None = off (the 1.2x rule alone)
     min_lot_risk_cap: float | None = None
     # BACKLOG 29: absolute daily loss limit, account currency; entries refused when loss so far + this trade's stop
-    # risk > min(daily_cap x day-start equity, this). None = off
+    # risk + its round-trip cost and swap (BACKLOG 36) > min(daily_cap x day-start equity, this). None = off
     daily_loss_limit_abs: float | None = None
     # BACKLOG 21 (playbook G-6): per-agent loss-streak and entry-rate throttle; off by default (owner: thresholds)
     throttle: ThrottleSettings = Field(default_factory=ThrottleSettings)
@@ -166,7 +166,10 @@ class Intent(Record):
     target_atr: float
     stop_atr: float
     atr_usd: float            # ATR in price units ($/oz)
-    cost_atr: float           # round-trip cost in ATR
+    cost_atr: float           # round-trip cost in ATR (spread, slippage, commission: the engine's `_cost_atr`)
+    # BACKLOG 36: the paid swap per oz (USD) the position would be charged at a broker rollover before the risk day
+    # ends (engine `_swap_usd_per_oz`, ADR 0017's rule); 0 = none. Only the daily projection reads it
+    swap_usd_per_oz: float = 0.0
     multiplier: float         # from allocator x bet sizing, before bounds
     price: float
     # contract terms: the engine passes the terminal's symbol_info (runner `_sizing_terms`); volume_max is also the
@@ -193,6 +196,7 @@ class GateDecision(Record):
     stop_distance: float = 0.0
     margin_needed: float = 0.0     # account currency: the margin the level check used, max(broker figure, 1:20 figure)
     risk_amount: float = 0.0       # account currency lost at the stop by the allowed lots
+    cost_amount: float = 0.0       # account currency: the round trip (cost_atr) and swap of those lots (BACKLOG 36)
     margin_note: str = ""          # which figure won, or why the broker's could not be used (fallback to 1:20)
 
 
@@ -204,7 +208,7 @@ _STATE_NUMBERS = ("equity", "balance_closed_hwm", "day_start_equity", "week_star
                   "last_tick_age_s", "spread_points", "open_lots", "open_notional", "other_lots", "other_notional",
                   "other_equity", "tick_ahead_s")
 _INTENT_NUMBERS = ("p", "target_atr", "stop_atr", "atr_usd", "cost_atr", "multiplier", "price", "contract_oz",
-                   "volume_step", "volume_min", "volume_max", "stops_level_points", "acct_per_usd")
+                   "volume_step", "volume_min", "volume_max", "stops_level_points", "acct_per_usd", "swap_usd_per_oz")
 _POSITIVE_STATE = ("equity",)
 _POSITIVE_INTENT = ("price", "atr_usd", "stop_atr", "contract_oz", "volume_step", "volume_min", "volume_max")
 
@@ -512,15 +516,21 @@ class RiskGate:
         # Strict boundary (review LOW-3): refused only when the projection EXCEEDS the limit; exactly equal is allowed
         # (1e-9 absorbs float noise). The supervisor, which sees no trade, halts when the loss so far REACHES it
         risk_amount = lots * sz.risk_per_lot
+        # BACKLOG 36 (review LOW-6): a full stop-out also pays the round trip (spread, slippage, commission: cost_atr x
+        # ATR) and the paid swap of a rollover before the risk day ends, per oz, x lots x contract x fx. Never negative:
+        # a credit or a negative cost does not shrink the projection below loss so far + stop risk
+        per_oz = max(0.0, intent.cost_atr * intent.atr_usd) + max(0.0, intent.swap_usd_per_oz)
+        cost_amount = per_oz * lots * intent.contract_oz * fx
         # BACKLOG 35 (review MEDIUM-4): with project_open_risk the projection also adds what the open positions can
         # still lose down to their stops (unknown open risk was refused above), so two open trades cannot carry the day
         # past the limit. Off: as before
         held = (st.open_risk or 0.0) if L.project_open_risk else 0.0
         if L.daily_loss_limit_abs is not None:
             lost = max(0.0, st.day_start_equity - st.equity)
-            if lost + held + risk_amount > self.daily_loss_limit(st) + 1e-9:
+            if lost + held + risk_amount + cost_amount > self.daily_loss_limit(st) + 1e-9:
                 return GateDecision(allowed=False, reasons=["daily_loss_limit_abs"], stop_distance=stop_distance,
-                                    margin_needed=margin_needed, margin_note=margin_note)
+                                    margin_needed=margin_needed, margin_note=margin_note, risk_amount=risk_amount,
+                                    cost_amount=cost_amount)
         # BACKLOG 19 (playbook G-4): open risk + this trade's full stop risk (a minimum-lot exception trade counts in
         # full) within max_open_risk x equity; exactly at the cap is allowed, as for the daily limit
         if L.heat.enabled and (st.open_risk or 0.0) + risk_amount > L.heat.max_open_risk * st.equity + 1e-9:
@@ -528,7 +538,7 @@ class RiskGate:
                                 margin_needed=margin_needed, margin_note=margin_note)
         return GateDecision(allowed=True, lots=round(lots, 2), reasons=notes, risk_fraction=realised_risk,
                             stop_distance=stop_distance, margin_needed=margin_needed, margin_note=margin_note,
-                            risk_amount=risk_amount)
+                            risk_amount=risk_amount, cost_amount=cost_amount)
 
 
 def _risk_week(ts: pd.Timestamp) -> pd.Timestamp:
