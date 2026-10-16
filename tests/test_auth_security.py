@@ -291,11 +291,12 @@ def test_api_and_static_responses_send_no_referrer(tmp_path):
 
 
 # ----------------------------------------------------------------------------- 7. lockout
-def test_lockout_survives_a_restart(team):
+def test_lockout_survives_a_restart(lockout_clock, team):
     s, sec, _ = team
     for _ in range(5):
         with pytest.raises(PermissionError, match="invalid credentials"):
             s.login("a@x.io", "wrong password!!", "000000")
+    lockout_clock[0] += (auth_mod.LOCKOUT_WINDOW_S - 1) * 10**9                # restart 1 s before the window ends
     again = AuthStore(s.dir, owner_email=OWNER)                                # a new process
     with pytest.raises(PermissionError, match="too many"):
         again.login("a@x.io", "approver password 123", totp_code(sec["a@x.io"]))
