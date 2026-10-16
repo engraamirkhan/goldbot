@@ -155,10 +155,12 @@ Only your Mac's browser (the dashboard) and Telegram (the one-click Approve).
 **Morning digest.** Every day at 06:45 UTC (before London; change it with `telegram.digest_at: "HH:MM"` in
 `config/settings.local.yaml`) Telegram sends one short message:
 * **status:** ✅ all good, or ⚠️ attention with the failing and warning health checks named (details: `goldbot run health`);
-* **yesterday** (the previous UTC day): proposals approved / rejected / expired, trades closed with net $ and R, open
-  positions now;
-* **risk:** drawdown stage and % from peak, daily and weekly loss against the caps, and any halt (yours, drift,
-  supervisor, drawdown);
+* **yesterday** (the trading day that ended at 22:00 UTC, 23:00 UK in summer; the same day the month total uses):
+  proposals approved / rejected / expired, trades closed with net $ and R, the month so far, open positions now. A
+  trade closed after 22:00 UTC counts on the next day. Saturday's digest shows Friday. Sunday's and Monday's say
+  "Weekend: market closed", because Sunday evening's trades count on Monday and show in Tuesday's digest;
+* **risk:** drawdown stage and % from peak, daily and weekly loss against the caps (these still reset at 00:00
+  UTC), and any halt (yours, drift, supervisor, drawdown);
 * **research:** the next pre-registered trial or the quarter's trial budget, and the best and worst attribution cell
   that is not noise;
 * **for you:** approvals pending, the number of owner decisions open (see OWNER_GUIDE), and a deploy on offer.

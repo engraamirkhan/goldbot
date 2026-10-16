@@ -231,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--risk", type=float, default=None, help="risk per trade (default: settings risk.risk_per_trade)")
     ap.add_argument("--tiny-live", action="store_true", help="use risk.risk_per_trade_tiny_live")
     ap.add_argument("--multiplier", type=float, default=1.0, help="model multiplier (clamped like the gate)")
-    ap.add_argument("--size-down", action="store_true", help="the 8% stage: risk halved, multiplier capped at 0.5")
+    ap.add_argument("--size-down", action="store_true", help="the 8%% stage: risk halved, multiplier capped at 0.5")
     ap.add_argument("--equity", type=float, default=None, help="also report lots and real risk at this equity")
     ap.add_argument("--contract", type=float, default=CONTRACT_OZ)
     ap.add_argument("--min-lot", type=float, default=0.01)

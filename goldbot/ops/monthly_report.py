@@ -6,9 +6,9 @@
 Day convention (report_days.py, shared with perf_report.py): a day is the opportunity day, D-1 22:00 to D 22:00 UTC,
 so the Sunday reopen counts on Monday; a trade belongs to the day of its exit, and the month is that day's month (a
 close at 23:30 UTC on the month's last day is the next month's). The month is its calendar days as opportunity days.
-This is not the risk day on which the loss caps reset (00:00 UTC, timeutil.risk_day), nor the digest's "yesterday"
-(00:00-24:00 UTC): a close between 22:00 and 24:00 UTC is on the next day here. The report states its boundary
-(`MonthlyReport.day_boundary`).
+This is not the risk day on which the loss caps reset (00:00 UTC, timeutil.risk_day): a close between 22:00 and
+24:00 UTC is on the next day here. The digest's "Yesterday" lines use this same day (report_days.day_before). The
+report states its boundary (`MonthlyReport.day_boundary`).
 
 P&L basis (finance audit GAP-05, as perf_report.py): every money, R, return, drawdown and day figure uses net rows
 only, a row with `pnl_basis` "net" or a legacy row (no `pnl_basis`) that records both commission and swap
@@ -210,11 +210,13 @@ def _trades(n: int, kind: str = "") -> str:
     return f"{n} {kind}trade{'s' if n != 1 else ''}"
 
 
-def build_monthly_report(state_dir: str | Path, *, month: str | None = None,
-                         now: pd.Timestamp | None = None) -> MonthlyReport:
+def build_monthly_report(state_dir: str | Path, *, month: str | None = None, now: pd.Timestamp | None = None,
+                         day: str | None = None) -> MonthlyReport:
+    """`day` (YYYY-MM-DD): the last opportunity day counted, default the one holding `now` (the digest passes its
+    yesterday)."""
     sd = Path(state_dir)
     now = pd.Timestamp.now(tz="UTC") if now is None else now.tz_convert("UTC")
-    today = report_day(now)
+    today = day or report_day(now)
     month = month or today[:7]
     first, end = month_days(month)
     last = min(end, today)                                    # opportunity days elapsed, today included
@@ -299,9 +301,10 @@ def format_report(rep: MonthlyReport) -> str:
     return "\n".join(lines)
 
 
-def month_to_date_line(state_dir: str | Path, now: pd.Timestamp) -> list[str]:
-    """One digest line for the month so far (all accounts), or nothing before the month's first closed trade."""
-    rep = build_monthly_report(state_dir, now=now)
+def month_to_date_line(state_dir: str | Path, now: pd.Timestamp, *, day: str | None = None) -> list[str]:
+    """One digest line for the month so far (all accounts) up to opportunity day `day` (default now's), or nothing
+    before the month's first closed trade."""
+    rep = build_monthly_report(state_dir, now=now, day=day)
     if not rep.accounts:
         return []
     name = pd.Timestamp(f"{rep.month}-01").strftime("%B")

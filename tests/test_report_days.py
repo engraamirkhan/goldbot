@@ -13,7 +13,15 @@ from goldbot.features import day_type
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade
 from goldbot.ops.monthly_report import build_monthly_report
 from goldbot.ops.perf_report import build_performance_report
-from goldbot.ops.report_days import DAY_BOUNDARY, day_buckets, month_days, report_day, weekdays
+from goldbot.ops.report_days import (
+    DAY_BOUNDARY,
+    day_before,
+    day_bounds,
+    day_buckets,
+    month_days,
+    report_day,
+    weekdays,
+)
 from goldbot.risk.gate import AccountState, new_day
 
 
@@ -80,6 +88,23 @@ def test_day_buckets_group_items_by_the_opportunity_day_of_their_instant_in_orde
     items = [("a", _utc("2026-10-07 21:59")), ("b", _utc("2026-10-07 22:00")), ("c", _utc("2026-10-08 12:00"))]
     got = day_buckets(items, lambda x: x[1])
     assert {k: [x[0] for x in v] for k, v in got.items()} == {"2026-10-07": ["a"], "2026-10-08": ["b", "c"]}
+
+
+def test_day_bounds_are_the_22_utc_instants_report_day_puts_on_that_day():
+    start, end = day_bounds("2026-10-08")
+    assert (start, end) == (_utc("2026-10-07 22:00"), _utc("2026-10-08 22:00"))
+    assert report_day(start) == report_day(end - pd.Timedelta(1, "ns")) == "2026-10-08"
+    assert report_day(start - pd.Timedelta(1, "ns")) == "2026-10-07" and report_day(end) == "2026-10-09"
+
+
+@pytest.mark.parametrize(("now", "before"), [
+    ("2026-10-15 21:59", "2026-10-14"),        # still Thursday's opportunity day: the day before is Wednesday
+    ("2026-10-15 22:00", "2026-10-15"),        # Friday's day has begun: Thursday's is complete
+    ("2026-10-19 06:45", "2026-10-18"),        # Monday morning: the day before is Sunday's (the reopen is Monday's)
+    ("2026-11-01 23:30", "2026-11-01"),        # a winter Sunday reopen (23:00 UTC) is on Monday 2 Nov
+])
+def test_day_before_is_the_opportunity_day_before_the_one_holding_the_instant(now, before):
+    assert day_before(_utc(now)) == before
 
 
 # ---------------------------------------------------------------------------------------------- both reports agree

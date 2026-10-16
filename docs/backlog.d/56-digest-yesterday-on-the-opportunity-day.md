@@ -4,7 +4,7 @@ rank: 15
 title: Digest Yesterday line on the opportunity day
 stage: Performance review · RUN
 size: S
-status: 'in progress (`lane/digest-yesterday`; its one commit, 21c84d8, is an unrelated help-text fix) · accountable: implementer · due 2026-10-19'
+status: 'done (2026-10-16: 147c68c + review fixes cc61ed1, TRACEABILITY V10; code-reviewer APPROVED, ui-ux-designer wording applied) · accountable: implementer · due 2026-10-19'
 ---
 - **56. Digest "Yesterday" line on the opportunity day.** Value: the digest's "Yesterday" proposals and trades
   lines still run 00:00-24:00 UTC (`goldbot/telegram/digest.py` `build_digest`). Its month line and the monthly and

@@ -241,7 +241,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
             now = pd.Timestamp.now("UTC")
             if not self.digest.due(now):
                 return
-            text = await asyncio.to_thread(digest_from_runtime, self.state_dir, now)
+            text = await asyncio.to_thread(digest_from_runtime, self.state_dir, now, self.digest.slot(now))
             for uid in self.owner_ids:
                 await self.app.bot.send_message(uid, text)
             self.digest.record(now)             # only after delivery: a failed send is retried next pass
