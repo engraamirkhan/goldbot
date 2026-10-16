@@ -976,10 +976,12 @@ def cat_blobs(root: Path, oids: list[str]) -> list[str]:
 
 
 def merged_fragments(root: Path, base: str, ours: str, theirs: str) -> tuple[MapTree, list[str]]:
-    """The fragment dirs of the merge result, decided per file three-way; files changed on both sides differently
-    are returned as conflicts (git conflicts on them too)."""
+    """The fragment dirs of the merge result, as git merges them: per file three-way, and a file changed on both
+    sides is merged line by line (`git merge-file`, git's own algorithm). Only a file that merge leaves conflicted,
+    or one deleted on one side and changed on the other, is returned as a conflict (git conflicts on it too)."""
     b, o, t = (fragment_blobs(root, ref) for ref in (base, ours, theirs))
     picked: dict[str, str] = {}
+    both: list[str] = []
     conflicts = []
     for path in sorted(set(b) | set(o) | set(t)):
         bv, ov, tv = b.get(path), o.get(path), t.get(path)
@@ -987,12 +989,25 @@ def merged_fragments(root: Path, base: str, ours: str, theirs: str) -> tuple[Map
             oid = ov
         elif bv == ov:
             oid = tv
+        elif ov is None or tv is None:
+            conflicts.append(path)  # deleted on one side, changed on the other
+            continue
         else:
-            conflicts.append(path)
+            both.append(path)
             continue
         if oid is not None:
             picked[path] = oid
-    return MapTree(dict(zip(picked, cat_blobs(root, list(picked.values())), strict=True))), conflicts
+    oids = sorted({*picked.values(), *(v for p in both for v in (b.get(p), o[p], t[p]) if v is not None)})
+    text = dict(zip(oids, cat_blobs(root, oids), strict=True))
+    files = {path: text[oid] for path, oid in picked.items()}
+    for path in both:
+        bv = b.get(path)
+        merged, clean = merge_text(root, text[o[path]], text[bv] if bv else "", text[t[path]])
+        if clean:
+            files[path] = merged
+        else:
+            conflicts.append(path)
+    return MapTree(files), conflicts
 
 
 def cmd_merge_driver(root: Path, base_file: str, ours_file: str, theirs_file: str, path: str,
@@ -1017,11 +1032,12 @@ def cmd_merge_driver(root: Path, base_file: str, ours_file: str, theirs_file: st
               file=sys.stderr)
         return 0 if clean else 1
     tree, conflicts = merged_fragments(root, *commits)
+    frag_dir = dict(zip(RENDERED, FRAG_DIRS, strict=True))[path]  # only this doc's fragments can leave it conflicted
+    conflicts = [c for c in conflicts if c.startswith(f"{frag_dir}/")]
     try:
         if conflicts:
-            raise DocsError(f"fragments changed on both sides: {', '.join(conflicts)}; resolve them, then {HINT} "
+            raise DocsError(f"fragments conflict: {', '.join(conflicts)}; resolve them, then {HINT} "
                             f"and `git add {path}`")
-        frag_dir = dict(zip(RENDERED, FRAG_DIRS, strict=True))[path]  # only this doc's errors leave it conflicted
         rendered = build(MapTree({k: v for k, v in tree.files.items() if k.startswith(f"{frag_dir}/")}))[path]
     except DocsError as exc:
         ours_p.write_text(text_merge, encoding="utf-8")
