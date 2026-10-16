@@ -12,6 +12,7 @@ from goldbot.api.auth import totp_code
 from goldbot.base import schema_skew
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
+from tests.cards import submit_shown
 
 TELEGRAM_ID = 987654321
 EMAIL = "owner-secret@example.org"
@@ -39,7 +40,7 @@ def test_a_dashboard_decision_archived_through_the_bus_has_no_email_in_its_done_
     bus = ApprovalBus(tmp_path)
     center = ApprovalCenter({TELEGRAM_ID}, bus=bus)
     center.propose(_prop("p1"))
-    bus.submit("p1", approve=True, reason_code=None, by=f"dashboard:{EMAIL}")
+    submit_shown(bus, "p1", approve=True, reason_code=None, by=f"dashboard:{EMAIL}")
     (p,) = center.poll_bus()
     text = (bus.done_dir / "p1.json").read_text()
     _assert_no_identity(text)
@@ -60,7 +61,7 @@ def test_a_proposal_archived_by_the_engine_from_a_telegram_click_has_no_telegram
     bus = ApprovalBus(tmp_path)
     p = _prop("p1")
     bus.publish(p)
-    bus.submit("p1", approve=True, reason_code=None, by=f"telegram:{TELEGRAM_ID}")
+    submit_shown(bus, "p1", approve=True, reason_code=None, by=f"telegram:{TELEGRAM_ID}")
     bus.archive(p.model_copy(update={"outcome": Outcome.APPROVED, "gate_refusal": ["owner_halt"]}))
     text = (bus.done_dir / "p1.json").read_text()
     _assert_no_identity(text)
@@ -102,7 +103,7 @@ def test_a_proposal_given_the_legacy_identity_fields_in_code_does_not_keep_them(
 def test_the_decided_cards_show_the_channel_and_never_an_id_or_email(tmp_path):
     bus = ApprovalBus(tmp_path)
     bus.publish(_prop("sub"))
-    bus.submit("sub", True, None, by=f"dashboard:{EMAIL}")                 # decided, not yet applied by the engine
+    submit_shown(bus, "sub", True, None, by=f"dashboard:{EMAIL}")                 # decided, not yet applied by the engine
     bus.archive(_prop("new", outcome=Outcome.REJECTED, reason_code="cost", decided_channel="telegram", decided_ts=7.0))
     _old_done_file(bus, "old-via", decided_via=f"dashboard:{EMAIL}")
     _old_done_file(bus, "old-by", decided_by=TELEGRAM_ID)

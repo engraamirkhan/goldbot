@@ -19,7 +19,7 @@ from goldbot.ops.deadman import DeadMan
 from goldbot.ops.deploy import DeployWatch
 from goldbot.ops.health import HealthContext, HealthWatch, run_checks
 from goldbot.telegram import automode
-from goldbot.telegram.approvals import Proposal, decision_channel
+from goldbot.telegram.approvals import Proposal, decision_callbacks, decision_channel, parse_decision_callback
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import DigestSchedule, digest_from_runtime
 from goldbot.telegram.outbox import Outbox, ReportRetry, SendGuard
@@ -291,11 +291,13 @@ class TelegramBot:  # pragma: no cover - needs network + token
             log.exception("deploy pass")
 
     async def send_proposal(self, p: Proposal) -> list[tuple[int, int]]:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"ok:{p.proposal_id}")],
-                                   [InlineKeyboardButton(f"Reject: {r}", callback_data=f"no:{p.proposal_id}:{r}")
+        # each button carries the card's `created`, so a tap decides only this card (BACKLOG 63)
+        cb = decision_callbacks(p)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=cb[None])],
+                                   [InlineKeyboardButton(f"Reject: {r}", callback_data=cb[r])
                                     for r in ("news", "cost", "discretion")],
-                                   [InlineKeyboardButton("Reject: duplicate", callback_data=f"no:{p.proposal_id}:duplicate"),
-                                    InlineKeyboardButton("Reject: other", callback_data=f"no:{p.proposal_id}:other")]])
+                                   [InlineKeyboardButton(f"Reject: {r}", callback_data=cb[r])
+                                    for r in ("duplicate", "other")]])
         # the loss budget left if this loses, from the engine's and supervisor's state files (unknown if unreadable)
         budget = await asyncio.to_thread(proposal_budget_from_state, self.state_dir, p.account_id, p.risk_amount)
         text = p.text(budget)
@@ -323,15 +325,16 @@ class TelegramBot:  # pragma: no cover - needs network + token
                                                             if parts[0] == "dep" else "\n\n→ skipped"))
             return
         try:
-            approve = parts[0] == "ok"
-            reason = None if approve else parts[2]
-            self.bus.submit(parts[1], approve, reason, by="telegram")     # the channel only on disk (A15)
+            tap = parse_decision_callback(q.data)        # bound to the card tapped; an unstamped one is refused (63)
+            approve, reason = tap.approve, tap.reason_code
+            self.bus.submit(tap.proposal_id, approve, reason, by="telegram",     # the channel only on disk (A15)
+                            card_created=tap.card_created)
             # who decided, before the answer (which can time out): write() only schedules the row, so the answer,
             # which Telegram drops when late, is not delayed
-            self.audit.write("decision", uid, proposal=parts[1], action="approve" if approve else "reject",
+            self.audit.write("decision", uid, proposal=tap.proposal_id, action="approve" if approve else "reject",
                              reason=reason)
             await q.answer("sent to the engine")
-            await q.edit_message_text(q.message.text + "\n\n→ " + ("approve" if approve else f"reject ({parts[2]})")
+            await q.edit_message_text(q.message.text + "\n\n→ " + ("approve" if approve else f"reject ({reason})")
                                       + ": the engine re-checks risk and acts")
         except (KeyError, ValueError) as exc:
             await q.answer(str(exc).strip("'\""), show_alert=True)

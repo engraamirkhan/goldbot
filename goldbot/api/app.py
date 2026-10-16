@@ -554,7 +554,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                     loss_left=budget.remaining if budget and budget.unknown is None else None,
                     loss_left_period=budget.period if budget and budget.unknown is None else None,
                     loss_cant_check=budget.cant_check if budget else None,
-                    expires_at=datetime.fromtimestamp(p.created + p.window_s, tz=timezone.utc))
+                    expires_at=datetime.fromtimestamp(p.created + p.window_s, tz=timezone.utc), created=p.created)
 
     @app.get("/api/proposals", response_model=list[Proposal])
     def proposals(_: User = Depends(auth)) -> list[Proposal]:
@@ -609,7 +609,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     async def decide(d: Decision, u: User = Depends(need("approver"))) -> DecisionResult:
         try:
             # the channel only: who decided is the audit row below, never the decision file (A15)
-            st.bus.submit(d.proposal_id, d.action == "approve", d.reason_code, by="dashboard")
+            st.bus.submit(d.proposal_id, d.action == "approve", d.reason_code, by="dashboard",
+                          card_created=d.created)       # bound to the card the owner saw (BACKLOG 63)
         except (KeyError, ValueError) as exc:
             raise HTTPException(400, str(exc).strip("'\""))
         try:

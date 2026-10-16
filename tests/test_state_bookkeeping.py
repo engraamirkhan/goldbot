@@ -22,6 +22,7 @@ from goldbot.ops.scheduler import Schedule, Scheduler
 from goldbot.telegram.approvals import ApprovalCenter
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.outbox import Outbox
+from tests.cards import submit_shown
 from tests.test_agents import FakeClient, _resp, _text, _usage
 from tests.test_approval_bus import _p
 from tests.test_health import make_ctx
@@ -157,7 +158,7 @@ def test_outbox_sends_each_proposal_once_across_restarts_and_reports_each_outcom
     engine.propose(_p("a"))
     Outbox(tmp_path).mark_sent("a", [(42, 1)])
     assert Outbox(tmp_path).unsent_proposals() == []                       # restart: not sent again
-    ApprovalBus(tmp_path).submit("a", True, "", by="dashboard:o@x.io")
+    submit_shown(ApprovalBus(tmp_path), "a", True, "", by="dashboard:o@x.io")
     engine.poll_bus()
     one, two = Outbox(tmp_path), Outbox(tmp_path)                           # two instances see the same row
     assert one.finished() + two.finished() == [("a", "APPROVED", [(42, 1)])]
@@ -521,7 +522,7 @@ def test_the_outbox_merge_skips_file_entries_whose_proposal_is_already_archived(
     center.propose(_p("open"))
     box = Outbox(tmp_path)
     box.mark_sent("done", [(42, 1)])
-    ApprovalBus(tmp_path).submit("done", False, "news", by="dashboard:o@x.io")
+    submit_shown(ApprovalBus(tmp_path), "done", False, "news", by="dashboard:o@x.io")
     center.poll_bus()                                                       # archived with its outcome
     assert box.finished() == [("done", "REJECTED", [(42, 1)])]              # the outcome edit went out once
     (tmp_path / "telegram_outbox.json").write_text(json.dumps(

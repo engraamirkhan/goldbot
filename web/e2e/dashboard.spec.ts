@@ -220,7 +220,7 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   // the API enforces the same rule the UI hides
   const token = await page.evaluate(() => sessionStorage.getItem("goldbot_token"));
   const r = await page.request.post("/api/decisions", {
-    data: { proposal_id: "e2e-long", action: "approve" }, headers: { authorization: `Bearer ${token}` },
+    data: { proposal_id: "e2e-long", action: "approve", created: 0 }, headers: { authorization: `Bearer ${token}` },
   });
   expect(r.status()).toBe(403);
   const mode = await page.request.post("/api/automode", { data: { mode: "propose" }, headers: { authorization: `Bearer ${token}` } });

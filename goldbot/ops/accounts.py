@@ -42,6 +42,9 @@ from goldbot.data.timeutil import server_zone
 
 ACCOUNTS_FILE = ROOT / "config" / "accounts.yaml"
 ACCOUNT_ID_LOGIN = re.compile(r"\d{5,}")      # an account name with this could carry an MT5 login: refused at load
+# BACKLOG 63: the account name starts every proposal id, which a Telegram Approve/Reject button carries with the card
+# stamp in at most 64 bytes (goldbot.telegram.approvals.decision_callbacks); a longer name is refused at load
+ACCOUNT_ID_MAX_BYTES = 24
 PHASE_FILE = ROOT / "state" / "phase_state.json"
 SERVICE = "goldbot"
 
@@ -183,10 +186,14 @@ def _edit_yaml_line(path: Path, account_id: str, key: str, value: str) -> None:
 
 def _check_account_name(name: str) -> None:
     """A name with 5+ digits in a row could carry an MT5 login (the repo is public; names reach the dashboard,
-    Telegram /status and the digest). Plain ValueError giving only the length, never the name."""
+    Telegram /status and the digest), and one over ACCOUNT_ID_MAX_BYTES would not fit the approval buttons (BACKLOG
+    63). Plain ValueError giving only the length, never the name."""
     if ACCOUNT_ID_LOGIN.search(name):
         raise ValueError(f"an account name in config/accounts.yaml has 5 or more digits in a row (could be a login): "
                          f"rename it ({len(name)} characters)")
+    if len(name.encode("utf-8")) > ACCOUNT_ID_MAX_BYTES:
+        raise ValueError(f"an account name in config/accounts.yaml is too long for the Telegram approval buttons: "
+                         f"{ACCOUNT_ID_MAX_BYTES} bytes at most, rename it ({len(name.encode('utf-8'))} bytes)")
 
 
 def load_accounts(path: Path | None = None) -> dict[str, Account]:

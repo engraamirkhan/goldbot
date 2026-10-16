@@ -20,6 +20,7 @@ from goldbot.specialists.breakout import BreakoutSpecialist
 from goldbot.specialists.trend import TrendSpecialist
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
+from tests.cards import submit_shown
 
 TREND, BREAKOUT = TrendSpecialist(), BreakoutSpecialist()
 T0 = pd.Timestamp("2025-03-03 08:00", tz="UTC")
@@ -254,7 +255,7 @@ def test_the_archived_proposal_keeps_the_owners_decision_time_and_channel_from_t
     center = ApprovalCenter({111}, bus=bus)
     center.propose(Proposal(proposal_id="p1", account_id="icm-demo", agent_id="a", side=1, lots=0.1, entry=2000.0,
                             stop=1998.0, target=2004.0, p=0.6, ev_r=0.2, spread_points=20.0, top_features=[]))
-    d = bus.submit("p1", approve=True, reason_code=None, by="telegram:12345")
+    d = submit_shown(bus, "p1", approve=True, reason_code=None, by="telegram:12345")
     center.poll_bus()
     archived = json.loads((bus.done_dir / "p1.json").read_text())
     assert archived["outcome"] == Outcome.APPROVED.value
@@ -277,7 +278,7 @@ def test_archive_takes_the_decision_time_from_the_decision_file_before_deleting_
     p = Proposal(proposal_id="p1", account_id="icm-demo", agent_id="a", side=1, lots=0.1, entry=2000.0, stop=1998.0,
                  target=2004.0, p=0.6, ev_r=0.2, spread_points=20.0, top_features=[])
     bus.publish(p)
-    d = bus.submit("p1", approve=True, reason_code=None, by="dashboard:owner")
+    d = submit_shown(bus, "p1", approve=True, reason_code=None, by="dashboard:owner")
     bus.archive(p.model_copy(update={"outcome": Outcome.APPROVED}))
     archived = bus.get("p1")
     assert archived is not None and (archived.decided_ts, archived.decided_channel) == (d.ts, "dashboard")
@@ -367,7 +368,7 @@ def test_an_unreadable_decision_file_is_archived_as_no_decision(tmp_path, monkey
     p = Proposal(proposal_id="p1", account_id="icm-demo", agent_id="a", side=1, lots=0.1, entry=2000.0, stop=1998.0,
                  target=2004.0, p=0.6, ev_r=0.2, spread_points=20.0, top_features=[])
     bus.publish(p)
-    bus.submit("p1", approve=True, reason_code=None, by="dashboard:owner")
+    submit_shown(bus, "p1", approve=True, reason_code=None, by="dashboard:owner")
 
     def unreadable(_: set[str]) -> list[Any]:
         raise PermissionError(13, "Permission denied")

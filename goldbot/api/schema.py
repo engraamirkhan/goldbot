@@ -79,6 +79,7 @@ class Proposal(BaseModel):
     spread_points: float
     top_features: list[tuple[str, float]]
     expires_at: datetime
+    created: float                          # the proposal's stamp: sent back with a decision on this card (BACKLOG 63)
     tradingview_url: str | None = None
     risk_usd: float | None = None           # USD lost at the stop (lots x stop distance x 100 oz); older engines
     # the card's money (docs/ux/approval-card.md), in `currency`, the broker account's; null from older engines
@@ -118,6 +119,9 @@ class Decision(ApiRequest):
     proposal_id: str
     action: Literal["approve", "reject"]
     reason_code: Literal["news", "cost", "discretion", "duplicate", "other"] | None = None
+    # BACKLOG 63: the `created` of the card decided on, as /api/proposals sent it. Required: a request without it (an
+    # old client) is refused, and one for another card with the same id is refused (400 card_mismatch)
+    created: float = Field(allow_inf_nan=False)
 
 
 class AgentRow(BaseModel):

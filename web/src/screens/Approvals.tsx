@@ -6,7 +6,7 @@ import { useNow } from "../lib/useNow";
 import { ProposalCard } from "./ProposalCard";
 import { SafetyStrip } from "./SafetyStrip";
 
-type Vars = { id: string; action: "approve" | "reject"; reason?: ReasonCode };
+type Vars = { id: string; created: number; action: "approve" | "reject"; reason?: ReasonCode };
 
 export function Approvals() {
   const qc = useQueryClient();
@@ -16,7 +16,7 @@ export function Approvals() {
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts, refetchInterval: 5000 });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const m = useMutation({
-    mutationFn: (v: Vars) => api.decide(v.id, v.action, v.reason),
+    mutationFn: (v: Vars) => api.decide(v.id, v.created, v.action, v.reason),
     onMutate: (v) => setErrors(({ [v.id]: _, ...rest }) => rest),
     onError: (e, v) => setErrors((x) => ({ ...x, [v.id]: (e as Error).message })),
     onSettled: () => {
@@ -47,8 +47,8 @@ export function Approvals() {
             <ProposalCard key={p.proposal_id} p={p} now={now} canDecide={canDecide}
                           blockers={blockers(status.data, accounts.data, p.account_id, p.agent_id)}
                           busy={busyId === p.proposal_id} error={errors[p.proposal_id]}
-                          onApprove={() => m.mutate({ id: p.proposal_id, action: "approve" })}
-                          onReject={(reason) => m.mutate({ id: p.proposal_id, action: "reject", reason })} />
+                          onApprove={() => m.mutate({ id: p.proposal_id, created: p.created, action: "approve" })}
+                          onReject={(reason) => m.mutate({ id: p.proposal_id, created: p.created, action: "reject", reason })} />
           ))}
         </section>
       )}

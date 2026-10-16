@@ -12,6 +12,7 @@ from goldbot.api.app import State, create_app
 from goldbot.ops.account_view import loss_budget, proposal_budget, proposal_budget_from_state
 from goldbot.telegram.approvals import Proposal, cash, ceil_cent, pct
 from goldbot.telegram.bus import ApprovalBus
+from tests.cards import submit_shown
 from tests.test_api import _owner_headers
 
 LIMITS = {"risk_per_trade": 0.005, "max_risk_per_trade": 0.01, "multiplier_bounds": [0.25, 1.5], "daily_cap": 0.02,
@@ -207,7 +208,7 @@ def test_api_proposal_says_the_budget_cant_be_checked_without_an_amount(tmp_path
 def test_api_decided_cards_carry_no_live_budget(tmp_path):
     bus = ApprovalBus(tmp_path)
     bus.publish(_prop(**GBP_MIN_LOT))
-    bus.submit("icm-1-a", False, "cost", by="dashboard:o@x.io")
+    submit_shown(bus, "icm-1-a", False, "cost", by="dashboard:o@x.io")
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))
     (tmp_path / "supervisor.json").write_text(json.dumps(_sup()))
     app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")

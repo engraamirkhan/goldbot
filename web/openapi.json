@@ -954,6 +954,10 @@
       "title": "Agent Id",
       "type": "string"
      },
+     "created": {
+      "title": "Created",
+      "type": "number"
+     },
      "currency": {
       "anyOf": [
        {
@@ -1226,6 +1230,7 @@
      "spread_points",
      "top_features",
      "expires_at",
+     "created",
      "status"
     ],
     "title": "DecidedProposal",
@@ -1241,6 +1246,10 @@
       ],
       "title": "Action",
       "type": "string"
+     },
+     "created": {
+      "title": "Created",
+      "type": "number"
      },
      "proposal_id": {
       "title": "Proposal Id",
@@ -1267,7 +1276,8 @@
     },
     "required": [
      "proposal_id",
-     "action"
+     "action",
+     "created"
     ],
     "title": "Decision",
     "type": "object"
@@ -2731,6 +2741,10 @@
       "title": "Agent Id",
       "type": "string"
      },
+     "created": {
+      "title": "Created",
+      "type": "number"
+     },
      "currency": {
       "anyOf": [
        {
@@ -2943,7 +2957,8 @@
      "ev_r",
      "spread_points",
      "top_features",
-     "expires_at"
+     "expires_at",
+     "created"
     ],
     "title": "Proposal",
     "type": "object"
