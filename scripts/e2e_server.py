@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import signal
 import sys
 import tempfile
 import time
@@ -27,7 +29,7 @@ import pandas as pd  # noqa: E402
 import uvicorn  # noqa: E402
 
 from goldbot.api.app import create_app  # noqa: E402
-from goldbot.api.e2e_mailer import CaptureMailer  # noqa: E402
+from goldbot.api.e2e_mailer import STATE_PREFIX, CaptureMailer  # noqa: E402
 from goldbot.config import MailSettings  # noqa: E402
 from goldbot.data.econ_calendar import COLUMNS as CALENDAR_COLUMNS  # noqa: E402
 from goldbot.data.news import COLUMNS as NEWS_COLUMNS  # noqa: E402
@@ -158,11 +160,11 @@ def seed_automode(state: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8790)
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default="127.0.0.1", choices=["127.0.0.1", "::1"])   # loopback only
     ap.add_argument("--info", default=str(ROOT / "web" / "e2e" / ".server.json"))
     ap.add_argument("--fake-mailer", action="store_true", help="capture mail to an outbox (e2e only, see docstring)")
     args = ap.parse_args()
-    state = tempfile.mkdtemp(prefix="goldbot-e2e-")
+    state = tempfile.mkdtemp(prefix=STATE_PREFIX)                 # 0700, this user only
     seed_proposals(state)
     seed_store(str(Path(state) / "data"))
     seed_health_research(state)
@@ -181,7 +183,13 @@ def main() -> None:
     Path(args.info).parent.mkdir(parents=True, exist_ok=True)
     Path(args.info).write_text(json.dumps({"setup_code": app.state.st.auth.setup_code, "state_dir": state,
                                            "outbox": outbox}))
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    # Playwright stops the server with SIGTERM (gracefulShutdown). uvicorn shuts down, then re-raises the signal to
+    # the handler it found: make that a clean exit, so the finally below removes the throwaway state dir.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="warning", timeout_graceful_shutdown=2)
+    finally:
+        shutil.rmtree(state, ignore_errors=True)
 
 
 if __name__ == "__main__":

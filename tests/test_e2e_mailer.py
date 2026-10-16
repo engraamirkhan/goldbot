@@ -4,7 +4,11 @@ deployed module selects it."""
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -115,3 +119,63 @@ def test_the_e2e_server_hands_the_mailer_the_host_uvicorn_binds():
     assert "CaptureMailer(" in src and "bind_host=args.host" in src
     assert re.search(r"uvicorn\.run\(app, host=args\.host,", src)
     assert e2e_mailer.LOOPBACK_BINDS == {"127.0.0.1", "::1"}
+
+
+def test_a_tmpdir_that_contains_the_repo_is_not_a_temp_dir(monkeypatch):
+    """TMPDIR is the caller's: `TMPDIR=<a parent of the repo>` (say $HOME) must not make the repo's state/ temporary."""
+    monkeypatch.setenv("TMPDIR", str(ROOT.parent))
+    monkeypatch.setattr(tempfile, "tempdir", None)            # gettempdir() caches its answer
+    assert Path(tempfile.gettempdir()).resolve() == ROOT.parent.resolve()
+    where = ROOT / "state" / "e2e_outbox.jsonl"
+    existed = where.exists()
+    with pytest.raises(E2EMailerRefused, match="contains the repo"):
+        CaptureMailer(where, bind_host="127.0.0.1", environ=ON)
+    assert where.exists() == existed
+
+
+def test_a_temp_dir_above_the_deployed_state_is_refused(monkeypatch):
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: "/var/lib")
+    with pytest.raises(E2EMailerRefused, match="contains the repo or /var/lib/goldbot"):
+        CaptureMailer(Path("/var/lib/goldbot-e2e-x/outbox.jsonl"), bind_host="127.0.0.1", environ=ON)
+
+
+def test_the_outbox_dir_must_be_an_e2e_mkdtemp_dir():
+    """Inside the temp dir is not enough: the directory carries the e2e prefix, is this user's and is mode 0700."""
+    other = Path(tempfile.mkdtemp(prefix="something-else-"))
+    with pytest.raises(E2EMailerRefused, match="mkdtemp"):
+        CaptureMailer(other / "outbox.jsonl", bind_host="127.0.0.1", environ=ON)
+    loose = Path(tempfile.mkdtemp(prefix="goldbot-e2e-loose-"))
+    os.chmod(loose, 0o755)
+    with pytest.raises(E2EMailerRefused, match="mode 0700"):
+        CaptureMailer(loose / "outbox.jsonl", bind_host="127.0.0.1", environ=ON)
+    with pytest.raises(E2EMailerRefused, match="does not exist"):
+        CaptureMailer(Path(tempfile.gettempdir()) / "goldbot-e2e-missing-dir" / "outbox.jsonl", bind_host="127.0.0.1",
+                      environ=ON)
+
+
+def test_the_outbox_dir_must_belong_to_this_user(outbox, monkeypatch):
+    monkeypatch.setattr(e2e_mailer.os, "getuid", lambda: os.stat(outbox.parent).st_uid + 1)
+    with pytest.raises(E2EMailerRefused, match="owned by this user"):
+        CaptureMailer(outbox, bind_host="127.0.0.1", environ=ON)
+
+
+def test_the_outbox_is_created_private_and_never_followed_through_a_symlink(outbox):
+    m = CaptureMailer(outbox, bind_host="127.0.0.1", environ=ON)
+    m.send("owner@example.com", "s", "b")
+    assert stat.S_IMODE(os.stat(outbox).st_mode) == 0o600
+    target = outbox.parent / "elsewhere.txt"
+    target.write_text("untouched\n")
+    link = outbox.parent / "link.jsonl"
+    link.symlink_to(target)
+    m2 = CaptureMailer(link, bind_host="127.0.0.1", environ=ON)
+    assert m2.outbox == link.parent.resolve() / "link.jsonl"      # the file name is kept, not resolved to its target
+    with pytest.raises(OSError):
+        m2.send("owner@example.com", "s", "b")
+    assert target.read_text() == "untouched\n"
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "localhost", "::"])
+def test_the_e2e_server_only_accepts_a_loopback_host(host):
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "e2e_server.py"), "--host", host, "--fake-mailer"],
+                       capture_output=True, text=True, timeout=120, env={**os.environ, E2E_FLAG: "1"})
+    assert r.returncode == 2 and "invalid choice" in r.stderr

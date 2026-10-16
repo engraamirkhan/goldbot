@@ -13,8 +13,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   and only a coarse network), the neutral answer for unknown and non-owner addresses (UI and byte-identical API
   answers, no mail), and the sign-in screens on a 360 px phone (no sideways scroll, 44 px targets). Mail is captured
   by goldbot/api/e2e_mailer.py `CaptureMailer`, which is refused unless the server is bound to exactly 127.0.0.1 or
-  ::1, `GOLDBOT_E2E_FAKE_MAILER=1` is set and the outbox is in the system temp dir; no setting or deployed module
-  selects it (only `scripts/e2e_server.py --fake-mailer` builds it). Tests: tests/test_e2e_mailer.py.
+  ::1, `GOLDBOT_E2E_FAKE_MAILER=1` is set and the outbox's directory is a `goldbot-e2e-*` mkdtemp dir (this user's,
+  mode 0700) in a system temp dir that contains neither the repo nor /var/lib/goldbot; the outbox is opened with
+  O_NOFOLLOW and created 0600. No setting or deployed module selects it (only `scripts/e2e_server.py --fake-mailer`
+  builds it; `--host` accepts only 127.0.0.1 or ::1), and the server removes its temp state dir on SIGTERM. The auth
+  story runs without retries (a retry would reuse spent first-run setup and the owner's hourly link count). Tests:
+  tests/test_e2e_mailer.py.
 - Health checks split into modules with a registry (2026-10-12, speed-up review item 7; no behaviour change).
   goldbot/ops/health.py had grown to about 1,770 lines and was the place every lane appended a check, so merges kept
   colliding there. The checks now live in goldbot/ops/checks/, one module per area (engine, bridge, feeds, risk,

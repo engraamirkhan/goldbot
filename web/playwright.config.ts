@@ -28,6 +28,7 @@ export default defineConfig({
       command: `${PYTHON} ../scripts/e2e_server.py --port ${PORT} --info e2e/.server.json`,
       url: `http://127.0.0.1:${PORT}/api/auth/state`,
       reuseExistingServer: false,
+      gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },   // lets e2e_server.py remove its temp state dir
       timeout: 60_000,
     },
     {
@@ -35,6 +36,7 @@ export default defineConfig({
       url: `http://127.0.0.1:${AUTH_PORT}/api/auth/state`,
       env: { GOLDBOT_E2E_FAKE_MAILER: "1" },
       reuseExistingServer: false,
+      gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },   // lets e2e_server.py remove its temp state dir
       timeout: 60_000,
     },
   ],

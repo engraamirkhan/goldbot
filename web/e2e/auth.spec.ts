@@ -24,7 +24,9 @@ function mails(): Mail[] {
 
 /** The first message with this subject after the first `seen` messages (mail goes out after the answer, so poll). */
 async function mailAfter(seen: number, subject: string): Promise<Mail> {
-  await expect.poll(() => mails().slice(seen).some((m) => m.subject === subject), { timeout: 10_000 }).toBe(true);
+  await expect.poll(() => mails().slice(seen).some((m) => m.subject === subject), {
+    timeout: 10_000, message: `no "${subject}" mail: not sent, or the owner address hit its 3 links an hour`,
+  }).toBe(true);
   return mails().slice(seen).find((m) => m.subject === subject)!;
 }
 
@@ -73,11 +75,15 @@ function wrongCode(secret: string): string {
   }
 }
 
-// each authenticator code is accepted once, so a sign-in may wait up to 30 s for a fresh time step (freshTotp)
-test.describe.configure({ mode: "serial", timeout: 90_000 });
+// each authenticator code is accepted once, so a sign-in may wait up to 30 s for a fresh time step (freshTotp).
+// No retries: a retry would rerun the story against the same server state, where first-run setup is spent and the
+// owner address (one per server, by design) keeps its hourly link count, so a rate-limited retry would fail as a
+// missing mail instead of the real fault. The story asks for two owner links, under the limit of 3.
+test.describe.configure({ mode: "serial", timeout: 90_000, retries: 0 });
 let ownerSecret = "";
 let viewerSecret = "";
 let inviteLink = "";
+let ownerAnswer = { status: 0, body: "" };          // the API's answer to the owner's link request
 
 test("login: the owner is created, a wrong code is refused, the right one signs in and out", async ({ page }) => {
   await page.goto("/");
@@ -182,7 +188,10 @@ test("email sign-in link: the owner gets a one-time link, signs in with it and t
   await page.getByRole("button", { name: "Email me a sign-in link", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Email me a sign-in link", exact: true })).toBeVisible();
   await page.getByLabel("Email", { exact: true }).fill(OWNER.email);
+  const answer = page.waitForResponse((r) => r.url().endsWith("/api/auth/email-link"));
   await page.getByRole("button", { name: "Send the link", exact: true }).click();
+  const r = await answer;
+  ownerAnswer = { status: r.status(), body: await r.text() };
   await expect(page.getByRole("status")).toHaveText(NEUTRAL);
 
   const mail = await mailAfter(before, LINK_SUBJECT);
@@ -226,17 +235,17 @@ test("unknown and non-owner addresses get the same neutral answer as the owner, 
     await expect(page.getByRole("status")).toHaveText(NEUTRAL);
   }
 
-  // the API answers byte for byte the same for every address; each from its own client so no limit is in play
+  // the API answers byte for byte as it did the owner's request (the previous test); each from its own client
   const ask = async (email: string, ip: string) => {
     const r = await page.request.post("/api/auth/email-link", { data: { email }, headers: { "cf-connecting-ip": ip } });
     return { status: r.status(), body: await r.text() };
   };
-  const unknown = await ask(UNKNOWN, "203.0.113.51");
-  expect(await ask(VIEWER.email, "203.0.113.52")).toEqual(unknown);
-  expect(await ask(OWNER.email, "203.0.113.53")).toEqual(unknown);
-  expect(unknown).toEqual({ status: 200, body: JSON.stringify({ ok: true, detail: NEUTRAL }) });
-  await mailAfter(before, LINK_SUBJECT);                                       // the owner's mail went out ...
-  expect(mails().slice(before).map((m) => m.to)).toEqual([OWNER.email]);       // ... and only the owner's
+  expect(ownerAnswer).toEqual({ status: 200, body: JSON.stringify({ ok: true, detail: NEUTRAL }) });
+  expect(await ask(UNKNOWN, "203.0.113.51")).toEqual(ownerAnswer);
+  expect(await ask(VIEWER.email, "203.0.113.52")).toEqual(ownerAnswer);
+  // no mail: these requests queue no send at all; the owner's link went out within a second in the previous test
+  await page.waitForTimeout(1_500);
+  expect(mails().slice(before)).toEqual([]);
 
   // forgot-password: an unknown account and a known one with a wrong code are refused alike
   const forgot = async (email: string, code: string, ip: string) => {
