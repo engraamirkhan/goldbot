@@ -58,8 +58,9 @@ fixed: 59 (SRE re-verify on record), 61 (merged at 921a38a), 45 (draft delivered
 | 61 | Mixed-currency accounts: the loss budget shows the account cap, not the combined cap | Dashboard and Telegram (loss budget, ADR 0004 section 3) · PROTECT | S | merged on the integration branch 2026-10-16 at 921a38a (4c3d087 + ecce681; trading-safety APPROVE, code-review APPROVE + PUSH-OK, ui-ux copy approved, per the merge message); ships in the next PR; product-owner acceptance at that PR; follow-ups L1/L2 in BACKLOG 65 · accountable: release-manager · due 2026-10-23 |
 | 64 | Dashboard header shows the signed-in role, never the email | Dashboard (every screen; privacy) · RUN | S | spec ready (docs/ux/header-role.md, 2026-10-16; no API change) · next: implementer (failing tests first), then ui-ux-designer review · accountable: implementer · due 2026-10-27 |
 | 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, H-01 AT RISK (152 vs 150 on data-v1 with 21 weekdays missing, coverage triage 2026-10-16); the 2026-11-01 script recount and the G3 recount on repaired data merged into one count-owed-events run after G1 closes, by 2026-11-13, evaluator G3 check by 2026-11-14; `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14 |
-| 45 | Measure the holiday list before it is adopted | Operational risk (evidence) · RUN | S | in review: draft delivered 2026-10-16 (feda07a, docs/research/holiday-list-measurement-2026-10.md, a week early) · quant-reviewer ruling on the draft due 2026-10-23 · adopt-or-not decision on the v3 list (drop 2 Jan) by program director + product owner due 2026-10-30 · accountable: performance-analyst (draft), quant-reviewer (ruling) · due 2026-10-30 |
+| 45 | Measure the holiday list before it is adopted | Operational risk (evidence) · RUN | S | in review: draft feda07a ruled 2026-10-16 (quant CHANGES, v3 list SAFE TO ADOPT; ruling applied by the research director) · DECIDED 2026-10-16: ADOPT cme-metals-v3 (implementation: 66, due 2026-10-30) · final with scripts/measure_holidays.py due 2026-10-30; G1 re-run addendum by 2026-11-13 · accountable: performance-analyst · due 2026-10-30 |
 | 65 | Review follow-ups from 2026-10-16 (hygiene) | Dashboard, Telegram and research tooling (review residuals) · RUN and FIND | M | ready (decided 2026-10-16; low priority, parts can land separately) · accountable: implementer (N3: research-director) · due 2026-10-30 |
+| 66 | Ship the cme-metals-v3 holiday list (BACKLOG 45 decision) | Operational risk (evidence) · RUN | S | ready (decided 2026-10-16 by program director + product owner on BACKLOG 45) · accountable: implementer · due 2026-10-30 |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -699,6 +700,17 @@ hypotheses that go through the trial registry in a future quarter's budget.
   Sweep 2026-10-16 (product owner): accountable `performance-analyst`, due 2026-10-30. It runs on stored bars and ticks, so it does not wait for the deploy. Acceptance as above. It is the evidence the owner needs to adopt 17.
 Research job check 2026-10-16 (research director): not blocked, so it starts now; draft table to the research director by Fri 2026-10-23, final with quant review by 2026-10-30. Days inside the data-v1 coverage gaps (G1/G2, Q1 readiness list item 5) are excluded and listed, not read as thin days.
   Decision schedule 2026-10-16: the v3 holiday list (drop 2 Jan) is decided AFTER the quant ruling on this draft. Quant-reviewer ruling by 2026-10-23; decision by 2026-10-30, recorded here with the evidence it rests on. Decided 2026-10-16 by program director + product owner (owner delegated). Adopting a list that only blocks entries is conservative and within the delegation; the list change ships as a new version with the hand-reviewed set in its test (acceptance above).
+  **Decision 2026-10-16 (program director + product owner, under the owner's delegation; owner-only items untouched):
+  ADOPT cme-metals-v3** (drop 2 Jan, which has no effect before 2029-01-02; keep every other listed day, with
+  Juneteenth, Easter Monday, the day after Thanksgiving and 26 Dec marked unresolved; add none), with the final of
+  the note on 2026-10-30. Evidence: `docs/research/holiday-list-measurement-2026-10.md` (draft feda07a, quant ruling
+  applied 2026-10-16), Tables 1 and 4: 2 Jan is NORMAL on every reading, including Bonferroni and year clusters.
+  Adopting the list does not switch the window on: `risk.holidays.enabled` stays off and stays with the owner, after
+  46. The list change is item 66 (implementer, due 2026-10-30).
+  Review record (E1): quant-reviewer · CHANGES (v3 list SAFE TO ADOPT; text fixes M1-M7, H-A/H-B/H-C to rewrite before pre-registration) · draft feda07a · 2026-10-16.
+  Still owed by the performance analyst: the final (2026-10-30) with `scripts/measure_holidays.py` and its test (Table 4
+  variants and the listed-day overlap rule included), and the re-run addendum on the repaired data-v1 in the same run
+  as the H-04 recount, by 2026-11-13.
 - **46. Replay the entry windows before adopting any (performance analyst, strategy researcher; review M4).**
   Value: each window (items 17, 18) removes entries; whether the removed ones were worse than the kept ones is
   unknown. Do: over the shadow book and the backtest candidates, the fraction of entries each window (tier 2,
@@ -1072,6 +1084,27 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
     `holdout_to` (test in the settings suite); N3: an ADR by the research-director on which `feature_version`
     governs a trial's evidence, by 2026-10-30, cross-referenced from item 34;
   - code-reviewer APPROVE for (a), (b), (d N2); quant-reviewer for (c) and (d).
+- **66. Ship the cme-metals-v3 holiday list (implementer; quant review).** Decided 2026-10-16 by program director +
+  product owner (owner delegated) on BACKLOG 45: ADOPT cme-metals-v3 (evidence:
+  `docs/research/holiday-list-measurement-2026-10.md`, draft feda07a, quant ruling CHANGES with the v3 list SAFE TO
+  ADOPT, applied by the research director 2026-10-16). Value: the list RiskGate reads becomes a measured list
+  instead of a proxy, and stops blocking a day that trades normally (2 Jan). The window stays off: this item changes
+  the list, not `risk.holidays.enabled` (switching it on is the owner's, after 46). Depends on: 45's final
+  (2026-10-30) for the final sha in the `source:` line. Files: `config/holidays_cme_metals.yaml`,
+  `tests/test_entry_windows.py` (hand-reviewed set and its comment); nothing in `goldbot/`.
+  Acceptance:
+  - `version: cme-metals-v3`; `valid_from` and `valid_through` unchanged (2026-01-01 .. 2028-12-31).
+  - 2026-01-02 is removed (the only 2 Jan in the list; the next weekday 2 Jan is 2029-01-02). No other date is
+    added or removed: every other v2 date stays.
+  - `source:` reads `"measured (BACKLOG 45, Dukascopy proxy, feda07a + <final sha>); unresolved days marked"`, with
+    the sha of the 2026-10-30 final; the header comment no longer says "a proxy, not measured" and points to the note.
+  - The labels of Juneteenth, Easter Monday, the day after Thanksgiving and 26 Dec carry "(unresolved, BACKLOG 45)".
+  - `REVIEWED_DAYS` in `tests/test_entry_windows.py` loses 2026-01-02 and its comment cites BACKLOG 45; the test
+    asserts version `cme-metals-v3` and "measured" in the source, and keeps the Columbus/Veterans and
+    day-after-Thanksgiving/Easter Monday checks. The holiday tests pass; the window's default stays off (existing
+    test).
+  - Reviews: quant-reviewer (the list matches the note's recommendation table) and code-reviewer, recorded at the
+    merge (E1).
 
 ## Needs the owner
 These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only
