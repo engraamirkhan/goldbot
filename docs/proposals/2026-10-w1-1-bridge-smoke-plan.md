@@ -30,7 +30,9 @@ Must not change: `METHODS`/`API_VERSION`, `runner.py`, `broker.py` records, `App
 ## Data flow (brain)
 1. `bridge_endpoint` → `RemoteBroker` → `check_bridge`; `verify_terminal_account` and `acc.mode == "demo"`, else exit 2.
 2. Print reads. Preconditions, else exit 4 (S3): `systemctl is-active goldbot-engine@<acc>` is `inactive` **and**
-   loop heartbeat (`watchdog.py:44`) >= 150 s old; `flock` on `state/.smoke-<acc>.lock` held to the end.
+   loop heartbeat (`watchdog.py:44`) >= 150 s old; `flock` (`LOCK_NB`, file mode 0600) on `state/.smoke-<acc>.lock`,
+   taken before any order call and held to the end; cannot create or take it → exit 4, nothing sent. The supervisor
+   service stays running (`engine_should_halt` refuses supervisor state older than 60 s).
 3. Look-up (S8, S9): a leftover smoke position is closed first; if it cannot be closed, exit 5, never open another.
 4. **`smoke_state` (S2), the only builder, every field explicit:** equity/balance/margin from `account()`;
    hwm, day/week start, stage, `equity_unconfirmed` from `risk_<acc>.json`, stale baseline passed through
@@ -38,7 +40,12 @@ Must not change: `METHODS`/`API_VERSION`, `runner.py`, `broker.py` records, `App
    tick age, tick-ahead from `last_tick`; `stale_bars` from `get_bars`; owner halt from `bus.control()`; supervisor
    halt and other-account exposure from `engine_should_halt`/`read_state` (`supervisor.py:224,233`); windows,
    rollover, weekend, market closed from `risk/windows.py` and `trading_sessions`; `account_class` from the classifier
-   file (missing → `unknown`, refused); drift, clock, bridge flags from their stores. An unreadable source refuses.
+   file (missing → `unknown`, refused); drift, clock, bridge flags from their stores; `combined_size_down` from
+   `read_state()["size_down"]` (missing key refuses; engine: `runner.py:1929`); `in_blackout` (tier-1 news) from the
+   engine's calendar (unreadable refuses; `runner.py:1932`); `dq_error` = stale bars or a failed tick/bars read,
+   `tick_error` = `last_tick` raised (refuses), `data_recovering` = False, listed as a constant with its reason
+   (engine-only state, `runner.py:1904-1920`). An unreadable source refuses. Every field maps to a named source or a
+   listed constant with a reason; a bare default fails `test_smoke_state_sets_every_account_state_field`.
 5. `check_operational` → Proposal on the bus → wait 90 s → re-check S3 and the gate → `place_order` (long only, S11).
 6. Verify the fill's sl/tp (S8); close. Close retried 3x, never gated; still open → exit 5 LEFT OPEN plus Telegram alert.
 7. `BridgeUnavailable`/`BridgeError` on send (S4): poll positions and deals >= `order_timeout_s + ORDER_MAX_AGE_S`
@@ -61,7 +68,8 @@ sl = ask − d, tp = ask + d; lots = `volume_min` rounded down to `volume_step`.
 `test_lots_are_volume_min_on_the_step`, `test_close_path_never_calls_the_gate`.
 
 `tests/test_risk_gate_split.py`: `test_check_decisions_unchanged_on_a_state_grid` (F5),
-`test_operational_refuses_operational_not_demo_for_live_or_an_unreadable_phase` (F1),
+`test_operational_refuses_operational_not_demo_for_live_or_an_unreadable_phase` (F1; a missing phase file is phase 0
+and allowed on demo, a corrupt one raises and refuses),
 `test_operational_has_no_lots_p_target_or_cost_parameter` (F2, S6), `test_operational_keeps_account_class_unknown`,
 `test_operational_daily_cap_refuses_at_equality`, `test_operational_absolute_projection_allows_equality` (S10).
 `tests/test_operational_fence.py`: `test_only_ops_smoke_calls_check_operational`,
@@ -80,6 +88,9 @@ sl = ask − d, tp = ask + d; lots = `volume_min` rounded down to `volume_step`.
 | Login on #34 | masked-output test |
 
 **Reviews.** Trading-safety (gate, ADR 0021, order/close), security (masking, lock file mode), SRE (RUNBOOK: stop
-engine, smoke, start; MT5 box first for F4).
+engine, keep the supervisor running, smoke, start; MT5 box first for F4).
+**Review record.** trading-safety-reviewer 2026-10-16 @ d1d86d6: ADR 0021 APPROVE (F1-F6); plan APPROVE with the
+G1a-c text fix (`combined_size_down`, `in_blackout`, dq/tick flags), now applied; checked at code review through the
+coverage and mutation tests.
 **Docs.** RUNBOOK "bridge smoke"; TRACEABILITY row with the X7 departure; HANDOFF, BACKLOG 1 fragments.
 **Not in scope.** 24 h health run, measured swap, X6 retry loop, protocol bump, engine changes, W2-4.
