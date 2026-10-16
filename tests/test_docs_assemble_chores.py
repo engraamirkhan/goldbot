@@ -237,6 +237,17 @@ def test_new_adr_counts_numbers_committed_on_any_local_branch(tmp_path, git_env)
     assert adr_number(da.cmd_new_adr(root, "after", "After")) == 8
 
 
+def test_new_adr_counts_numbers_on_remote_tracking_branches_too(tmp_path, git_env):
+    root = adr_repo(tmp_path)
+    git(root, "checkout", "-q", "-b", "fetched")
+    (root / "docs" / "decisions" / "0009-pushed-elsewhere.md").write_text("# 0009\n", encoding="utf-8")
+    commit_all(root, "adr from another machine")
+    git(root, "update-ref", "refs/remotes/origin/fetched", "fetched")
+    git(root, "checkout", "-q", "main")
+    git(root, "branch", "-q", "-D", "fetched")  # only the remote-tracking ref holds it now
+    assert adr_number(da.cmd_new_adr(root, "after-remote", "After remote")) == 10
+
+
 def test_check_fails_on_two_adr_files_with_one_number(tmp_path, capsys):
     root = Path(tmp_path)
     d = root / "docs" / "decisions"

@@ -27,7 +27,7 @@ Status: proposed (implementer, 2026-10-16). Amends 0012. Number reserved by the 
 - **ADR numbers.** `docs_assemble.py new-adr --slug S --title T` takes the next number while holding a lock
   (`flock`) in the git common dir (`git rev-parse --git-common-dir`), which every worktree on the machine shares.
   - **Which number.** The next number is one past the highest of four sources: the ADR files in the tree, the ADRs
-    committed on any local branch, the numbers already handed out (a ledger in the common dir) and the reservations
+    committed on any local or remote-tracking branch, the numbers already handed out (a ledger in the common dir) and the reservations
     in `docs/decisions/reserved.yaml`. The command records the number in the ledger before it writes
     `docs/decisions/NNNN-S.md` from a `Status: proposed` template. A number, once handed out, is never handed out
     again.
@@ -42,7 +42,8 @@ Status: proposed (implementer, 2026-10-16). Amends 0012. Number reserved by the 
   fragment conflicts and id clashes stop a merge.
 - **Gaps.** An abandoned reservation leaves a gap in the numbering. Gaps are allowed; reuse is not.
 - **Machines that share nothing.** A cloud sandbox does not share the git common dir, so it still takes its number
-  from the brief, as the interim rule says. The check catches any collision at merge.
+  from the brief, as the interim rule says. Numbers taken on another machine are seen only once fetched, and
+  `reserved.yaml` only as this checkout has it. The check catches any collision at merge.
 - **Not done here.** The check does not yet fail on a citation of an ADR number that does not exist (TD-7 asks for it
   too). The register still cites reserved numbers whose records are unwritten, so that check needs the reservation
   file as its allow-list. It is left to a follow-up.

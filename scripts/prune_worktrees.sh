@@ -3,13 +3,15 @@
 #   scripts/prune_worktrees.sh [--apply] [--into BRANCH] [--min-age-hours N]
 # Dry run by default: lists what it would remove, and why every other worktree is kept. A worktree is removed only
 # when all of these hold: it is not the main checkout or the current one; it is on a branch (not detached) other
-# than BRANCH, and that branch is merged into BRANCH; it is not locked; it is clean (no modified or untracked
-# files); and its HEAD, index and reflog are older than N hours (default 24: a lane just reset to the tip looks
-# merged and clean). Its branch is deleted with it, as is any merged worktree-agent-* branch without a worktree.
+# than BRANCH, merged into BRANCH, with commits of its own (a lane that never committed, e.g. a read-only reviewer,
+# is kept unless N is 0); it is not locked; its HEAD, index and reflog are older than N hours (default 24); and it
+# holds no modified, untracked or ignored file outside the regenerable caches (.venv, node_modules, __pycache__,
+# .pytest_cache, .mypy_cache, .ruff_cache): `git worktree remove` deletes ignored files such as .env silently.
+# Its branch is deleted with it, as is any merged worktree-agent-* branch without a worktree.
 # Runs on the repository of the current directory. Env: INTEGRATION_BRANCH (default claude/gifted-goldberg-lcb7pl).
 set -euo pipefail
 
-usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 APPLY=0
 INTO=${INTEGRATION_BRANCH:-claude/gifted-goldberg-lcb7pl}
@@ -27,9 +29,12 @@ case "$AGE_H" in ''|*[!0-9]*) echo "--min-age-hours takes whole hours" >&2; exit
 
 target=$(git rev-parse --verify -q "refs/heads/$INTO^{commit}") || { echo "no local branch $INTO" >&2; exit 2; }
 here=$(git rev-parse --show-toplevel)
+# Commits that were themselves a tip of BRANCH: a lane whose tip is one of them has no commits of its own.
+# Lists are newline-framed strings matched with `case`, never `| grep -q` (SIGPIPE under pipefail).
+first_parent=$'\n'"$(git rev-list --first-parent "$target")"$'\n'
+checked_out=$'\n'
 n_wt=0
 n_br=0
-checked_out=""
 
 keep() { printf 'keep    %s  (%s)\n' "$1" "$2"; }
 
@@ -44,9 +49,31 @@ recent() {
   return 1
 }
 
+# Why a worktree's files forbid removal ("" when nothing would be lost). --no-optional-locks: a dry run must not
+# refresh the index, or the tree would look recently used.
+unsafe_files() {
+  local line p dirty="" ignored=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    p=${line:3}
+    case "$line" in
+      "!! "*)
+        case "/${p%/}/" in
+          */.venv/*|*/node_modules/*|*/__pycache__/*|*/.pytest_cache/*|*/.mypy_cache/*|*/.ruff_cache/*) ;;
+          *) ignored="$ignored${ignored:+, }$p" ;;
+        esac ;;
+      *) dirty=1 ;;
+    esac
+  # matching + all: each path as it matched an ignore rule (pkg/__pycache__/), never a collapsed parent (pkg/)
+  done < <(git --no-optional-locks -C "$1" status --porcelain --ignored=matching --untracked-files=all)
+  if [ -n "$dirty" ]; then echo "uncommitted or untracked files"
+  elif [ -n "$ignored" ]; then echo "ignored files: $ignored"
+  fi
+}
+
 # One `git worktree list --porcelain` record: $1 index, $2 path, $3 branch ("" when detached), $4 locked, $5 prunable.
 decide() {
-  local idx=$1 path=$2 branch=$3 locked=$4 prunable=$5 gitdir
+  local idx=$1 path=$2 branch=$3 locked=$4 prunable=$5 gitdir tip why
   if [ "$idx" -eq 1 ]; then keep "$path" "main checkout"; return; fi
   if [ "$path" = "$here" ]; then keep "$path" "current worktree"; return; fi
   if [ -n "$prunable" ]; then keep "$path" "directory missing; \`git worktree prune\` clears it"; return; fi
@@ -56,12 +83,15 @@ decide() {
   if ! git merge-base --is-ancestor "refs/heads/$branch" "$target"; then
     keep "$path" "$branch not merged into $INTO"; return
   fi
+  tip=$(git rev-parse "refs/heads/$branch")
+  case "$first_parent" in
+    *$'\n'"$tip"$'\n'*)
+      if [ "$AGE_H" -ne 0 ]; then keep "$path" "no commits of its own; --min-age-hours 0 to remove"; return; fi ;;
+  esac
   gitdir=$(git -C "$path" rev-parse --absolute-git-dir)
   if recent "$gitdir"; then keep "$path" "used in the last $AGE_H h"; return; fi
-  # --no-optional-locks: a dry run must not refresh the index, or the tree would look recently used
-  if [ -n "$(git --no-optional-locks -C "$path" status --porcelain)" ]; then
-    keep "$path" "uncommitted or untracked files"; return
-  fi
+  why=$(unsafe_files "$path")
+  if [ -n "$why" ]; then keep "$path" "$why"; return; fi
   n_wt=$((n_wt + 1))
   printf 'remove  %s  (%s, merged)\n' "$path" "$branch"
   if [ "$APPLY" -eq 1 ]; then
@@ -88,11 +118,11 @@ done < <(git worktree list --porcelain; echo)
 
 while IFS= read -r b; do
   [ -n "$b" ] || continue
-  printf '%s' "$checked_out" | grep -Fxq -- "$b" && continue
+  case "$checked_out" in *$'\n'"$b"$'\n'*) continue ;; esac
   git merge-base --is-ancestor "refs/heads/$b" "$target" || continue
   n_br=$((n_br + 1))
   printf 'delete branch %s  (merged, no worktree)\n' "$b"
-  [ "$APPLY" -eq 1 ] && git branch -q -D "$b"
+  if [ "$APPLY" -eq 1 ]; then git branch -q -D "$b"; fi
 done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*')
 
 if [ "$APPLY" -eq 1 ]; then

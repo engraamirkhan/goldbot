@@ -1104,8 +1104,11 @@ def adr_errors(tree: Tree) -> list[str]:
 
 
 def adr_numbers_on_branches(root: Path) -> set[int]:
-    """ADR numbers committed on any local branch: lanes that wrote an ADR before reserving one still count."""
-    refs = set(git(root, "for-each-ref", "--format=%(objectname)", "refs/heads").stdout.split())
+    """ADR numbers committed on any local or remote-tracking branch: lanes that wrote an ADR before reserving one,
+    and numbers taken on other machines once fetched, still count. Limit: a number taken on another machine or in a
+    cloud sandbox and not yet fetched is invisible here (and so is a `reserved.yaml` entry not yet in this checkout);
+    `check` catches such a collision when the two meet in one tree."""
+    refs = set(git(root, "for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes").stdout.split())
     nums: set[int] = set()
     for ref in refs:
         nums |= set(adr_files(GitTree(root, ref)))

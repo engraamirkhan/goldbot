@@ -376,7 +376,8 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     0023-0026 from the CTO register; `--number N` claims a reserved number. `check` fails on two ADRs with one number.
   - **Worktree prune.** `scripts/prune_worktrees.sh` is a dry run by default; `--apply` removes. It handles only
     merged, clean worktrees that have been idle for 24 h, and never the main checkout or a locked, dirty or unmerged
-    tree.
+    tree. It also keeps a lane that never committed (a read-only reviewer) and one that holds ignored files outside
+    the regenerable caches (an `.env`, say: `git worktree remove` would delete it silently).
   - **Lane dispatch checklist.** `docs/process/lane-checklist.md`.
 
   Tests: `tests/test_docs_assemble_chores.py`, `tests/test_prune_worktrees.py`.
