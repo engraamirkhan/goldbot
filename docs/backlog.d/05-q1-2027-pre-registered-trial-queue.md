@@ -1,10 +1,10 @@
 ---
 number: 5
-rank: 8
+rank: 12
 title: Q1 2027 pre-registered trial queue
 stage: Idea generation · FIND
 size: S
-status: in progress (draft; owner rulings recorded 2026-10-11; research director decision (c), H-01 kept as a retire test only if its recount is >= 150, H-06 withdrawn below 150; reservation 8, or 7; freeze commit 2026-12-14, rows 2026-12-18..23; needs 47, `macro-v1`)
+status: 'in progress (draft; owner rulings 2026-10-11; freeze commit 2026-12-14, rows 2026-12-18..23; needs 48) · accountable: research-director · due 2026-12-14'
 ---
 
 ### 5. Q1 2027 pre-registered trial queue
@@ -20,3 +20,5 @@ Acceptance:
 - Each trial's report issue shows gross and net R, the per-year table and DSR with the real trial count.
 
 Depends on: 2 (costs), 4 (variant 3). The daily-family event floor is an owner decision (below).
+
+Sweep 2026-10-16 (product owner): accountable `research-director`, due 2026-12-14 (freeze commit). The writer it needed (47) is merged (#76). `macro-v1` was published on 2026-10-13. Acceptance as above, plus the dry run of `scripts/preregister_quarter.py` on the final spec reviewed by the quant reviewer.

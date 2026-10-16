@@ -1,5 +1,10 @@
 ---
 number: 44
+rank: 2
+title: Confirm a zero or collapsed equity read before the 12% kill switch (ADR 0016)
+stage: Execution and risk (drawdown stages) · PROTECT
+size: S
+status: 'in review (d2f2999, b9e9dac on the integration branch, not on main; trading-safety-reviewer asked 2026-10-12) · accountable: trading-safety-reviewer · due 2026-10-17 · LATE'
 ---
 - **44. Confirm a zero or collapsed equity read before the 12% kill switch (trading-safety re-verification LOW-C,
   2026-10-11; needs a decision record and trading-safety review).** Value: one bad `account().equity` read (0, or a
@@ -20,3 +25,4 @@ number: 44
     (`risk.equity_recovery_s`); MEDIUM-2 the cross-check counts swap and every symbol (`account_positions`, bridge
     protocol v5); LOW-4 pending persisted in the risk state; LOW-3 declined with a test (ADR 0016). Follow-up: 53.
     Awaiting trading-safety re-review.
+  Sweep 2026-10-16 (product owner): accountable `trading-safety-reviewer`, due 2026-10-17. Built (TRACEABILITY R39, ADR 0016); the re-review asked on 2026-10-12 has not started (4 days against the 4 h rule). Acceptance: the re-review records HIGH-1, MEDIUM-2 and LOW-3/LOW-4 closed, `tests/test_equity_confirmation.py` green, then it ships with the reviewed batch (release-manager).

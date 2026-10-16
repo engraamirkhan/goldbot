@@ -1,10 +1,9 @@
 ---
 number: 47
-rank: 42.0
 title: Pre-registration writer for the shared registry (queued rows, slots, sync to `research-v1`)
 stage: Idea generation (integrity) · FIND
 size: S
-status: proposed (research director 2026-10-11; needed by 2026-12-04 for the Q1 freeze)
+status: 'done (PR #76, main 520d731; ab24d87, 94ebde4; c5480ae in PR #77)'
 ---
 
 - **47. Pre-registration writer for the shared registry (research director, 2026-10-11).**
@@ -23,3 +22,4 @@ status: proposed (research director 2026-10-11; needed by 2026-12-04 for the Q1 
   `preregister-quarter` workflow, `scripts/registry_release.sh`, `tests/test_preregister_quarter.py`,
   `tests/test_registry_release.py`. The spec is not writable until H-02's config, H-06's count (or withdrawal) and the
   freeze commit are settled; the dry run works now.
+  Sweep 2026-10-16 (product owner): Done (PR #76, main 520d731; ab24d87, 94ebde4; c5480ae in PR #77). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.

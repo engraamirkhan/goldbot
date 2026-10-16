@@ -1,10 +1,10 @@
 ---
 number: 55
-rank: 47
+rank: 8
 title: 'test_lockout_survives_a_restart: make it reliable under load'
 stage: Platform (CI) · SECURE
 size: S
-status: proposed (ci follow-up, A15 lane, 2026-10-12)
+status: 'ready · accountable: test-engineer · due 2026-10-23'
 ---
 - **55. test_lockout_survives_a_restart: make it reliable under load (ci follow-up from the A15 lane,
   2026-10-12).** Value: `tests/test_auth_security.py::test_lockout_survives_a_restart` failed once in a full
@@ -18,3 +18,4 @@ status: proposed (ci follow-up, A15 lane, 2026-10-12)
   stores a longer busy timeout, or retry the second login, or freeze the clock for the window. Never loosen the
   lockout itself. Acceptance: 200 repeated runs under load pass; the test still fails when the lockout is not
   persisted (checked by temporarily disabling the write).
+  Sweep 2026-10-16 (product owner): accountable `test-engineer`, due 2026-10-23. Acceptance as above (200 runs under load; still fails when the lockout write is disabled).

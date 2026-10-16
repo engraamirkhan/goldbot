@@ -1,10 +1,9 @@
 ---
 number: 37
-rank: 36
 title: '`goldbot-deploy` steps aux.db back on rollback (Linux `Sync-AuxSchema`)'
 stage: Operational resilience · RUN
 size: S
-status: done (SRE, 2026-10-11; `goldbot-deploy.sh` `aux_plan`/`aux_step_back`; security review pending)
+status: 'done (PR #73, main d28a482; f1560ec)'
 ---
 
 - **37–42. Deploy path gaps found while planning the October batch rollout (SRE, 2026-10-11;
@@ -72,3 +71,4 @@ status: done (SRE, 2026-10-11; `goldbot-deploy.sh` `aux_plan`/`aux_step_back`; s
     - Done: the Telegram deploy offer says when the MT5 box runs an older commit than the one offered
       (goldbot/ops/deploy.py `mt5_notes`).
     - Trading-safety review.
+  Sweep 2026-10-16 (product owner): Done (PR #73, main d28a482; f1560ec). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
