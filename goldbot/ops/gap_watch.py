@@ -49,7 +49,7 @@ from goldbot.base import FrozenRecord, UtcTimestamp, write_atomic
 from goldbot.config import GapSettings
 from goldbot.research import population as pop_mod
 from goldbot.research.population import Population, SpawnRefused, founder_base
-from goldbot.research.registry import gate_pass_counts
+from goldbot.research.registry import promotion_pass_counts
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import TIMEFRAME_KEY, AgentIdentity
 
@@ -227,14 +227,15 @@ def unfounded_plan_families(plan: dict[str, Any] | None, pop: Population) -> lis
 
 def research_ready(trials: list[dict[str, Any]], pop: Population) -> list[Gap]:
     """Walk-forward trials (not holdout scorings) that passed the research gates and whose configuration has no agent:
-    one founder per trial id at most (identical configurations share one agent id). A pass counts only with its cost
-    treatment recorded (`registry.gate_pass_counts`)."""
+    one founder per trial id at most (identical configurations share one agent id). A pass counts only as a promotion
+    would read it (`registry.promotion_pass_counts`): its cost treatment recorded, the latest rerun of its config, and
+    a discovery-derived config's holdout passed (quant review 2026-10-16)."""
     out, seen = [], set()
     for r in trials:
         fam = r.get("family")
         if r.get("status") != "evaluated" or fam not in SPECIALISTS:
             continue
-        if not gate_pass_counts(r):
+        if not promotion_pass_counts(r, trials):
             continue
         cfg = dict(r.get("config") or {})
         aid = AgentIdentity(family=fam, config=cfg).agent_id

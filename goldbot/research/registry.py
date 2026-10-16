@@ -195,13 +195,79 @@ def costs_recorded(results: dict[str, Any]) -> bool:
 
 def gate_pass_counts(row: dict[str, Any]) -> bool:
     """The row's recorded gate pass counts: `results.gates.passed` is True AND the row records the research cost
-    treatment (`costs_recorded`). The one predicate every reader of results.gates.passed uses (passed_gates, the phase
-    gate's backtest evidence, gap watch, CPCV, the director's slots). Quant review, 2026-10-11: "A pass from before
-    swap was charged is not a pass of the swap-charged configuration." Status is the caller's to check."""
+    treatment (`costs_recorded`). The one predicate every reader of results.gates.passed uses (passed_gates, CPCV, the
+    director's slots; the phase gate's backtest evidence and gap watch through `promotion_refusal`, which adds the
+    latest-rerun and discovery-holdout rules). Quant review, 2026-10-11: "A pass from before swap was charged is not a
+    pass of the swap-charged configuration." Status is the caller's to check."""
     results = row.get("results")
     if not isinstance(results, dict):
         return False
     return (results.get("gates") or {}).get("passed") is True and costs_recorded(results)
+
+
+def _row_hash(row: dict[str, Any]) -> str:
+    """The row's config hash (recomputed from its config when a hand-built row has none)."""
+    return str(row.get("config_hash") or config_hash(row.get("config") or {}))
+
+
+def _row_when(row: dict[str, Any]) -> datetime:
+    """The row's `ts` (UTC); an unreadable stamp sorts first, so it never outranks a stamped rerun."""
+    try:
+        ts = datetime.fromisoformat(str(row.get("ts")))
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+
+def latest_evaluated(rows: list[dict[str, Any]], family: str, h: str,
+                     feature_version: str | None = None) -> dict[str, Any] | None:
+    """The latest walk-forward row (status "evaluated", by `ts`, then registry order) of one configuration (family and
+    config hash; `feature_version` None: any version) that records the research cost treatment, or None. Quant review
+    2026-10-16: reruns of one configuration are not best-of-N; "only the latest evaluated row ... decides". A row
+    without the cost treatment is no rerun of the swap-charged configuration and decides nothing."""
+    cands = [(i, r) for i, r in enumerate(rows)
+             if r.get("status") == "evaluated" and r.get("family") == family and _row_hash(r) == h
+             and (feature_version is None or r.get("feature_version") == feature_version)
+             and costs_recorded(r.get("results") or {})]
+    return max(cands, key=lambda c: (_row_when(c[1]), c[0]))[1] if cands else None
+
+
+def holdout_passed(rows: list[dict[str, Any]], family: str, h: str, feature_version: str | None = None) -> bool:
+    """The configuration's holdout scoring (status "holdout", same family and config hash; `feature_version` None: any
+    version) passed, with its cost treatment recorded."""
+    return any(r.get("status") == "holdout" and r.get("family") == family and _row_hash(r) == h
+               and (feature_version is None or r.get("feature_version") == feature_version)
+               and costs_recorded(r.get("results") or {})
+               and ((r.get("results") or {}).get("holdout_verdict") or {}).get("passed") is True for r in rows)
+
+
+def promotion_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str | None:
+    """Why the walk-forward `row` is not a research pass a promotion may rest on, or None when it is. The rule
+    `TrialRegistry.passed_gates` applies, for a reader holding a row and the registry (the phase gate's backtest
+    evidence, gap watch's research-ready founders):
+    * its own pass counts (`gate_pass_counts`: gates passed, cost treatment recorded);
+    * it is the latest evaluated run of its configuration on its feature version (`latest_evaluated`): a later
+      failing rerun revokes it;
+    * a configuration chosen from a feature-discovery trial (config key FROM_DISCOVERY_KEY) also passed its holdout
+      scoring on that feature version (`holdout_passed`): "its features were picked on the same window the
+      walk-forward scored, which the deflated Sharpe corrects only partly" (quant review 2026-10-16, HIGH)."""
+    if row.get("status") != "evaluated":
+        return "not a walk-forward trial"
+    if not gate_pass_counts(row):
+        return "did not pass the research gates with its costs recorded"
+    family, h, fv = str(row.get("family")), _row_hash(row), row.get("feature_version")
+    latest = latest_evaluated(rows, family, h, fv)
+    if latest is not None and latest != row:
+        return (f"a later rerun of the same configuration (trial #{latest.get('trial')}) decides"
+                + ("" if gate_pass_counts(latest) else ", and it did not pass"))
+    if (row.get("config") or {}).get(FROM_DISCOVERY_KEY) and not holdout_passed(rows, family, h, fv):
+        return "discovery-derived configuration without a passed holdout scoring"
+    return None
+
+
+def promotion_pass_counts(row: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
+    """`row`'s research pass counts for a promotion (`promotion_refusal` is None)."""
+    return promotion_refusal(row, rows) is None
 
 
 class TrialRegistry:
@@ -606,16 +672,17 @@ class TrialRegistry:
         from, so a row counts only when its results record the swap it charged (`results.swap`) and its cost source
         (`results.cost_source`). A pass from before swap was charged is not a pass of the swap-charged configuration.
         Swap is deliberately not part of `config_hash` (folding it in would move every pinned hash); the swap rates
-        themselves may differ between rows (a measured cost table refines the prior), the treatment may not."""
+        themselves may differ between rows (a measured cost table refines the prior), the treatment may not.
+
+        Reruns (quant review 2026-10-16): only the latest evaluated row of the configuration decides
+        (`latest_evaluated`), so a later failing rerun revokes an earlier pass; best-of-N over reruns is not a pass.
+        `promotion_refusal` is the same rule for a reader that holds one row."""
         h = config_hash(config)
-        rows = [r for r in self._rows() if r.get("family") == family and r.get("config_hash") == h
-                and (feature_version is None or r.get("feature_version") == feature_version)
-                and costs_recorded(r.get("results") or {})]
-        gates_ok = any(r.get("status") == "evaluated" and gate_pass_counts(r) for r in rows)
-        if not gates_ok or not config.get(FROM_DISCOVERY_KEY):
-            return gates_ok
-        return any(r.get("status") == "holdout"
-                   and ((r.get("results") or {}).get("holdout_verdict") or {}).get("passed") is True for r in rows)
+        rows = self._rows()
+        latest = latest_evaluated(rows, family, h, feature_version)
+        if latest is None or not gate_pass_counts(latest):
+            return False
+        return not config.get(FROM_DISCOVERY_KEY) or holdout_passed(rows, family, h, feature_version)
 
     @contextmanager
     def locked(self, wait_s: float = LOCK_WAIT_S, stale_s: float = LOCK_STALE_S) -> Iterator[None]:

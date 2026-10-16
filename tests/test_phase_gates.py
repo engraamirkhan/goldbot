@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -65,10 +66,25 @@ def write_phase(state: Path, recorded: dict[str, pd.Timestamp]) -> None:
 COSTS: dict = {"swap": {"long_usd_per_lot": -60.0, "short_usd_per_lot": 20.0}, "cost_source": "PRIORS ONLY: test"}
 
 
+def dsr_inputs(dsr: float, *, n: int = 600, k: int = 1) -> dict[str, float]:
+    """The stored deflated-Sharpe inputs (metrics.DsrInputs) of a row whose DSR is `dsr` (or a hair above) on `k`
+    trials: gate 1 recomputes the DSR from them with the registry's current trial count."""
+    from scipy.optimize import brentq
+
+    from goldbot.research.metrics import DsrInputs
+    def at(sr: float) -> DsrInputs:
+        return DsrInputs(sr=sr, n=n, skew=0.0, kurtosis=3.0, var_sr_trials=1.0 / n)
+    sr = float(brentq(lambda s: at(s).dsr(k) - dsr, -1.0, 1.0, xtol=1e-15))
+    while at(sr).dsr(k) < dsr:
+        sr = float(np.nextafter(sr, 1.0))
+    return at(sr).model_dump()
+
+
 def write_trial(path: Path, *, dsr: float = 0.97, n: int = 600, mean_ret: float = 0.002, max_dd: float = 0.05,
                 years_passed: bool = True, status: str = "evaluated") -> None:
     row = {"trial": 7, "family": "session_open", "status": status,
-           "results": {"model_filtered": {"n": n, "dsr": dsr, "mean_ret": mean_ret, "max_dd": max_dd},
+           "results": {"model_filtered": {"n": n, "dsr": dsr, "mean_ret": mean_ret, "max_dd": max_dd,
+                                          "dsr_inputs": dsr_inputs(dsr, n=n)},
                        "gates": {"passed": years_passed, "checks": [
                            {"name": "positive_years", "passed": years_passed, "detail": "positive years [2019, 2021, 2024]"}]},
                        **COSTS}}
@@ -122,7 +138,8 @@ def trial_row(trial: int, *, dsr: float, mean_ret: float, passed: bool, failed_c
     if failed_check:
         checks.append({"name": failed_check, "passed": False, "detail": f"{failed_check} below the design's minimum"})
     return {"trial": trial, "family": "session_open", "status": "evaluated",
-            "results": {"model_filtered": {"n": 600, "dsr": dsr, "mean_ret": mean_ret, "max_dd": 0.05},
+            "results": {"model_filtered": {"n": 600, "dsr": dsr, "mean_ret": mean_ret, "max_dd": 0.05,
+                                           "dsr_inputs": dsr_inputs(dsr)},
                         "gates": {"passed": passed, "checks": checks}, **COSTS}}
 
 
@@ -262,6 +279,94 @@ def test_paper_expectancy_names_its_comparator_and_never_switches_to_a_trial_tha
     assert not item(rep, "paper_to_tiny_live", "paper_expectancy") and "trial #9" in text
     assert "did not pass the research gates" in text
     assert not item(rep, "tiny_live_to_full_size", "live_drawdown")      # the same comparator, the same refusal
+
+
+# quant review 2026-10-16: a discovery-derived config needs its holdout pass; the DSR is recomputed with today's trial
+# count; reruns of one config are not best-of-N
+def discovery_rows(*, holdout_passed: bool | None, k: int = 1) -> list[dict]:
+    """A swap-charged walk-forward row of a discovery-derived config that passed its gates (DSR 0.97 on `k` trials),
+    and, unless `holdout_passed` is None, that config's one holdout scoring."""
+    from goldbot.research.registry import FROM_DISCOVERY_KEY, config_hash
+    cfg = {"band_z": 2.0, FROM_DISCOVERY_KEY: {"ts": "2026-10-01T00:00:00+00:00", "trial": 3}}
+    wf = {**trial_row(7, dsr=0.97, mean_ret=0.002, passed=True), "config": cfg, "config_hash": config_hash(cfg),
+          "feature_version": "f", "ts": "2026-10-02T10:00:00+00:00"}
+    wf["results"]["model_filtered"]["dsr_inputs"] = dsr_inputs(0.97, k=k)
+    if holdout_passed is None:
+        return [wf]
+    ho = {"trial": 8, "family": "session_open", "status": "holdout", "config": cfg, "config_hash": config_hash(cfg),
+          "feature_version": "f", "ts": "2026-10-03T10:00:00+00:00",
+          "results": {"holdout_verdict": {"passed": holdout_passed}, **COSTS}}
+    return [wf, ho]
+
+
+def write_rows(path: Path, rows: list[dict]) -> None:
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def test_gate_1_is_unmet_for_a_discovery_derived_trial_without_its_holdout_pass(tmp_path):
+    """registry.passed_gates already required it; gate 1 read gate_pass_counts alone (quant review 2026-10-16, HIGH)."""
+    state, trials = full_state(tmp_path)
+    write_rows(trials, discovery_rows(holdout_passed=None))
+    rep = report(state, trials)
+    assert item(rep, "backtest_to_paper", "dsr") and item(rep, "backtest_to_paper", "backtest_trades")
+    assert not item(rep, "backtest_to_paper", "research_gates") and not gate_met(rep, "backtest_to_paper")
+    assert "holdout" in evidence(rep, "backtest_to_paper", "research_gates")
+    write_rows(trials, discovery_rows(holdout_passed=False, k=2))           # a failed holdout scoring: still unmet
+    rep = report(state, trials)
+    assert not item(rep, "backtest_to_paper", "research_gates") and not gate_met(rep, "backtest_to_paper")
+    assert not item(rep, "paper_to_tiny_live", "paper_expectancy")         # and no backtest reference either
+
+
+def test_gate_1_is_met_for_a_discovery_derived_trial_once_its_holdout_passed(tmp_path):
+    state, trials = full_state(tmp_path)
+    write_rows(trials, discovery_rows(holdout_passed=True, k=2))
+    rep = report(state, trials)
+    assert item(rep, "backtest_to_paper", "research_gates") and gate_met(rep, "backtest_to_paper"), gates_phase.render(rep)
+
+
+def test_gate_1_dsr_is_recomputed_with_the_registrys_current_trial_count(tmp_path):
+    """The stored model_filtered.dsr used the trial count of its run; gate 1 needs "DSR on the true trial count", which
+    grows with every later trial (quant review 2026-10-16). DSR 0.96 at K=10 must fail at K=200."""
+    state, trials = full_state(tmp_path)
+    best = trial_row(7, dsr=0.96, mean_ret=0.002, passed=True)
+    best["results"]["model_filtered"]["dsr_inputs"] = dsr_inputs(0.96, k=10)
+    others = [{"trial": i, "family": "trend", "status": "screened", "results": {}} for i in range(8, 8 + 9)]
+    write_rows(trials, [best, *others])                                     # K = 10, as at run time
+    rep = report(state, trials)
+    assert item(rep, "backtest_to_paper", "dsr"), evidence(rep, "backtest_to_paper", "dsr")
+    others = [{"trial": i, "family": "trend", "status": "screened", "results": {}} for i in range(8, 8 + 199)]
+    write_rows(trials, [best, *others])                                     # K = 200 today: the same row now fails
+    rep = report(state, trials)
+    assert not item(rep, "backtest_to_paper", "dsr") and not gate_met(rep, "backtest_to_paper")
+    text = evidence(rep, "backtest_to_paper", "dsr")
+    assert "200 trials" in text and "0.960 stored" in text
+
+
+def test_gate_1_dsr_fails_closed_on_a_row_without_its_stored_dsr_inputs(tmp_path):
+    """A row written before the inputs were stored cannot be recomputed: it is not evidence, whatever its stored DSR."""
+    state, trials = full_state(tmp_path)
+    legacy = trial_row(7, dsr=0.99, mean_ret=0.002, passed=True)
+    del legacy["results"]["model_filtered"]["dsr_inputs"]
+    write_rows(trials, [legacy])
+    rep = report(state, trials)
+    assert not item(rep, "backtest_to_paper", "dsr") and not gate_met(rep, "backtest_to_paper")
+    assert "no stored DSR inputs" in evidence(rep, "backtest_to_paper", "dsr")
+
+
+def test_gate_1_reads_only_the_latest_rerun_of_a_config_so_a_later_failure_revokes_an_earlier_pass(tmp_path):
+    from goldbot.research.registry import config_hash
+    state, trials = full_state(tmp_path)
+    cfg = {"band_z": 2.0}
+    common = {"config": cfg, "config_hash": config_hash(cfg), "feature_version": "f"}
+    passed = {**trial_row(7, dsr=0.99, mean_ret=0.002, passed=True), **common, "ts": "2026-10-02T10:00:00+00:00"}
+    rerun = {**trial_row(8, dsr=0.90, mean_ret=0.001, passed=False, failed_check="complete_folds"), **common,
+             "ts": "2026-10-03T10:00:00+00:00"}
+    write_rows(trials, [passed])
+    assert item(report(state, trials), "backtest_to_paper", "research_gates")
+    write_rows(trials, [passed, rerun])
+    rep = report(state, trials)
+    assert not item(rep, "backtest_to_paper", "research_gates") and not gate_met(rep, "backtest_to_paper")
+    assert "later rerun" in evidence(rep, "backtest_to_paper", "research_gates")
 
 
 def test_fills_within_thirty_percent_of_the_modelled_slippage(tmp_path):
