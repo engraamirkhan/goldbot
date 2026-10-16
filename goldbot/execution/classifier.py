@@ -2,7 +2,8 @@
 
 Decisive test: commission on past deals => Raw. Otherwise session-filtered median spread:
 < $0.20 floating with no deal history => Raw, >= $0.30 => Standard, between => Unknown. The last classification is
-persisted and only changes after two consecutive disagreeing runs. On Standard, 15m specialists are
+persisted and only changes after two consecutive disagreeing runs; a stored Unknown counts as never classified, so
+the first known class is adopted on its first run. On Standard, 15m specialists are
 disabled; on Unknown, the engine trades paper and alerts.
 """
 from __future__ import annotations
@@ -51,7 +52,13 @@ def classify(ticks: pd.DataFrame, deals: pd.DataFrame, *, raw_spread_max: float 
 
 
 class PersistentClassifier:
-    """Only changes the stored class after two consecutive runs disagree with it."""
+    """Only changes the stored class after two consecutive runs disagree with it.
+
+    "only changes when two consecutive runs disagree" guards a *known* class: Raw <-> Standard, and a known class
+    falling back to Unknown, each need two agreeing runs. A stored Unknown is treated exactly like "never
+    classified": the first known class is adopted on its first run, so one thin Friday does not leave the account
+    unclassified (and blocked by `account_class_unknown`) for a further week.
+    """
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -59,8 +66,9 @@ class PersistentClassifier:
 
     def update(self, c: Classification) -> str:
         cur = self.state["class"]
-        if cur is None:
+        if cur is None or cur == "unknown":
             self.state["class"] = c.account_class
+            self.state["pending"] = None
         elif c.account_class != cur:
             if self.state["pending"] == c.account_class:
                 self.state["class"] = c.account_class

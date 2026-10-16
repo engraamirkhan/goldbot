@@ -99,6 +99,36 @@ def test_classifier_rules_and_persistence(tmp_path):
     assert pc.update(Classification(account_class="unknown", median_spread=None, p90_spread=None, commission_seen=False, n_ticks=10, reason="")) == "unknown"  # two in a row: change
 
 
+
+def _cls(account_class: str) -> Classification:
+    n = 10 if account_class == "unknown" else 3000
+    return Classification(account_class=account_class, median_spread=None, p90_spread=None, commission_seen=False, n_ticks=n, reason="")
+
+
+def test_a_stored_unknown_is_replaced_by_the_first_known_class_on_its_first_run(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert pc.update(_cls("unknown")) == "unknown"   # thin first Friday
+    assert PersistentClassifier(tmp_path / "acct.json").update(_cls("raw")) == "raw"   # adopted at once, after a reload
+    assert PersistentClassifier(tmp_path / "acct.json").state["pending"] is None
+
+
+def test_a_known_class_needs_two_agreeing_runs_to_change_to_another_known_class(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert pc.update(_cls("raw")) == "raw"
+    assert pc.update(_cls("standard")) == "raw"
+    assert pc.state["pending"] == "standard"
+    assert pc.update(_cls("standard")) == "standard"
+
+
+def test_a_known_class_does_not_fall_back_to_unknown_on_one_thin_week(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert pc.update(_cls("raw")) == "raw"
+    assert pc.update(_cls("unknown")) == "raw"
+    assert pc.state["pending"] == "unknown"
+    assert pc.update(_cls("raw")) == "raw"   # a known run in between resets the pending fall-back
+    assert pc.state["pending"] is None
+
+
 def test_webhook_auth_hash_and_intrabar():
     q: queue.Queue[dict[str, Any]] = queue.Queue()
     app = create_app(secret="s3cret", sink=q, enforce_ip=False)
