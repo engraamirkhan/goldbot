@@ -914,7 +914,7 @@ nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what
 | `market_closed` | The broker's session table (read once per server day; static hours if the read fails) says the market is closed, e.g. a holiday early close. | Wait for the reopen; `session_source` in `engine_<account>.json` says whether the broker's own hours are used. |
 | `spread_too_wide` | Spread above 45 points ($0.45). | Usually rollover or news; wait. |
 | `max_positions` | Two positions already open on this account. | Normal. |
-| `daily_cap` / `weekly_cap` | This account lost 2% / 5% measured from its equity when the engine started. | The engine does not yet reset its day/week starting equity at 00:00 UTC (`new_day` in `goldbot/risk/gate.py` is not called), so these clear only when the engine restarts. Review the losses before restarting. |
+| `daily_cap` / `weekly_cap` | This account lost 2% / 5% from its equity at the start of the risk day (00:00 UTC) / risk week (Sunday 00:00 UTC). | It clears by itself at the next boundary (`new_day`, goldbot/risk/gate.py:534); a restart does not clear it. Review the losses. |
 | `negative_ev`, `target_below_cost_floor` | After costs the trade has no edge, or the target is below 2.5x the round-trip cost. | Normal filtering; check the cost table if it happens to every candidate. |
 | `min_lot_exceeds_risk`, `margin_level_floor` | Minimum lot would risk too much, or margin level would fall below 300%. | Account too small for the stop; normal on small demos. On a small demo, 15m needs the minimum-lot exception: `risk: { min_lot_risk_cap: 0.01 }` in `config\settings.local.yaml` (never applies in tiny-live). |
 | `fx_conversion_unavailable` | The account is not in USD and the terminal gave no USD -> account-currency conversion (`order_calc_profit` / tick value), or the terminal's symbol info was unreadable. | Check the terminal is logged in and XAUUSD is in Market Watch; entries resume when it answers. Exits are unaffected. |
@@ -940,10 +940,11 @@ feature_day_anchor
 ```
 
 `<tz> <time>` is the value the server set. These two days are fixed in code (BACKLOG 57): a different value never
-moved the loss-cap reset or the daily bar, it only looked as if it did, so it is now refused. **Fix:** delete the
-named key (the whole `risk_day_anchor:` or `feature_day_anchor:` line) from `config/settings.local.yaml`
-(`sudo -u goldbot nano /opt/goldbot/config/settings.local.yaml` on the brain), then start the services again. Do not
-edit `config/settings.yaml`. Moving the risk day (for example to the 22:00 UTC roll) is a code change with a
+moved the loss-cap reset or the daily bar, it only looked as if it did, so it is now refused. **Fix:** on whichever host refused
+(the brain, or the mt5 host, which runs the same check under ROLE=mt5 with ROOT=/opt/goldbot), delete the named key
+(the `risk_day_anchor:` or `feature_day_anchor:` line, and its indented `tz:`/`time:` lines, if any) from
+`config/settings.local.yaml` (`sudo -u goldbot nano /opt/goldbot/config/settings.local.yaml`), then re-run the deploy
+(or, if a service failed at start, restart it). Do not edit `config/settings.yaml`. Moving the risk day (for example to the 22:00 UTC roll) is a code change with a
 trading-safety review, not a setting.
 
 ### Telegram is silent
