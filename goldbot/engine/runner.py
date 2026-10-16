@@ -1915,7 +1915,8 @@ class Engine:
         if self.gate.update_stage(st) != stage:
             if st.stage == Stage.HALTED:
                 self._halted_at = now
-            self._save_risk_state()             # a drawdown stage change survives a restart at once
+            # survives a restart at once; a failed save never raises, so it cannot skip or narrow the flatten below
+            self._save_risk_state_now("the stage change")
         if st.stage == Stage.HALTED:
             self._kill_switch(everything=stage != Stage.HALTED)
         if self._propose_only_until is not None and now < self._propose_only_until:
@@ -1970,7 +1971,7 @@ class Engine:
             st.balance_closed_hwm = s.mark
             self.decisions.append({"ts": time.time(), "action": "hwm_raised", "from": mark, "to": s.mark, "by": s.by,
                                    "deposits": s.deposits})
-            self._save_risk_state()                          # the confirmed mark survives a restart at once
+            self._save_risk_state_now("the raised high-water mark")   # survives a restart at once
         if s.outcome != "unchanged" or s.expired is not None:
             self._set_hwm(s.conf)
         self._reread_hwm = s.conf.pending_balance is not None
@@ -2043,7 +2044,7 @@ class Engine:
             self._stage2_clean_since = None
         if (since is None) != (self._stage2_pending_since is None):
             self._stage2_pending_since = since
-            self._save_risk_state()
+            self._save_risk_state_now("the pending 12% read")
 
     def set_sessions(self, table: SessionTable) -> None:
         """The broker session table (D13), refreshed by the run loop outside the tick path (goldbot/ops/run.py
@@ -2107,7 +2108,7 @@ class Engine:
         self.state.weekend = friday_cut or srv.weekday() >= 5
         if friday_cut and self._weekend_done != srv.date().isoformat() and self._weekend_rule(tick):
             self._weekend_done = srv.date().isoformat()   # only once every position was handled; else retried
-            self._save_risk_state()
+            self._save_risk_state_now("the weekend rule")
 
     def _weekend_rule(self, tick: Tick) -> bool:
         """Design: weekend gaps blow through stops, so losers are closed and winners' stops moved to lock in half the
@@ -2250,7 +2251,7 @@ class Engine:
         self.state.equity = self.broker.account().equity
         if new_day(self.state, now, last):
             self._last_reset = now
-            self._save_risk_state()
+            self._save_risk_state_now("the risk-period reset")
 
     def _poll_rearm(self, now: pd.Timestamp) -> None:
         """An owner re-arm on the dashboard (owner role + TOTP) writes a new rearm id to control.json; seen once, it
@@ -2746,6 +2747,19 @@ class Engine:
                    "stage2_pending_since": None if self._stage2_pending_since is None
                    else self._stage2_pending_since.isoformat()}
         write_atomic(self._risk_path(), json.dumps(payload))       # durable: halts and stages survive a power cut
+
+    def _save_risk_state_now(self, what: str) -> None:
+        """Save the risk state from the account-refresh path; never raises (BACKLOG 44 re-review MEDIUM-1, LOW-2). The
+        in-memory state (the pending 12% read, the stage, the mark) decides the kill switch, so a failed write (a full
+        disk) must never abort the refresh before the stage machine, skip the flatten, or narrow it. The failure is
+        logged and counted as a tick error, which blocks entries until a clean decision bar; the next state write
+        (`_write_state`) saves the risk state again."""
+        try:
+            self._save_risk_state()
+        except Exception as exc:
+            log.error("risk state not saved after %s (%s); kept in memory, entries blocked, retried with the next "
+                      "state write", what, type(exc).__name__)
+            self.note_tick_error(exc)
 
     def _load_risk_state(self) -> None:
         path = self._risk_path()
