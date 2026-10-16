@@ -1,7 +1,8 @@
-# 0021: Results verdict rule: day-clustered errors, a Bonferroni bar for breakdown rows
+# 0022: Results verdict rule: day-clustered errors, a Bonferroni bar for breakdown rows
 
 Status: accepted (implementer, 2026-10-16; from the quant review of the results verdicts, 16 Oct; frozen from this
-date). Number 0020 is reserved for the bridge-smoke gate split (docs/proposals/2026-10-w1-1-bridge-smoke-plan.md).
+date). Numbers 0019 (Wine), 0020 (MT5 installer) and 0021 (bridge-smoke gate split) are taken or reserved on other
+lanes; this record was first committed as 0021 and renamed the same day before any code used it.
 
 ## Context
 The attribution report (`goldbot/research/attribution.py`, TRACEABILITY G12) gives each cell (by timeframe, family,
