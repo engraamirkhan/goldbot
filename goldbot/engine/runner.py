@@ -481,14 +481,18 @@ class Engine:
         self._foreign: list[int] = []                # positions with unknown magic (manual trades): listed, never touched
         # position -> (consecutive rejected stop modifies, next attempt): reconciliation backs off (in memory)
         self._modify_backoff: dict[int, tuple[int, pd.Timestamp]] = {}
+        self._restart_archived: set[str] = set()     # proposal ids archived at this start: never raised again
         self._archive_stale_proposals()
 
     def _archive_stale_proposals(self) -> None:
         """Proposals this account published before a restart can never be executed (the pending entries died with
         the process): archive every one, inside its window or not, outcome None (decided by nobody), so the dashboard,
-        Telegram and health checks do not list them. `archive` also deletes its decision file: a proposal id depends
-        only on account, agent and bar close, and the restarted engine can re-decide the last close, so a click made
-        before the restart must never be applied to the same id raised again (trading-safety F60-1)."""
+        Telegram and health checks do not list them and a tap on an old card is refused (`submit` needs the pending
+        file). `archive` also deletes the decision file; a click that had already landed is reported to the owner as
+        not applied (F60 re-verify finding 3). The ids are kept in `_restart_archived`: a proposal id depends only on
+        account, agent and bar close and the restarted engine can re-decide the last close, so `_retired_proposal`
+        never raises such an id again, and a click on the old card can never approve a re-sized proposal under it
+        (trading-safety F60-1 and its re-verify)."""
         bus = self.center.bus
         if bus is None:
             return
@@ -499,7 +503,12 @@ class Engine:
                 continue
             # the glob alone would also match an account named "<this account>-<suffix>": its engine owns those
             if p.account_id == self.cfg.account_id and p.proposal_id not in self.pending:
+                clicked = (bus.decisions_dir / f.name).exists()
                 bus.archive(p)
+                self._restart_archived.add(p.proposal_id)
+                if clicked:
+                    bus.notify_owner(f"Your tap on proposal {p.proposal_id} was not applied: the engine restarted "
+                                     f"before applying it, so the proposal was withdrawn. No order was placed from it.")
         # A15: decision files left behind (no pending file, or a day old) go, so an old click's channel or, from a
         # release before it, the decider's identity does not linger on disk. Never stops the start.
         try:
@@ -507,6 +516,19 @@ class Engine:
                 log.info("swept %d leftover decision files", n)
         except Exception as exc:            # noqa: BLE001 - housekeeping: a start never fails on it
             log.warning("decision sweep failed: %s: %s", type(exc).__name__, exc)
+
+    def _retired_proposal(self, pid: str) -> str | None:
+        """Why a proposal id must not be raised again, or None. An id archived at this start ("restart_archived") or
+        finished before it ("proposal_finished": approved, rejected or expired, its card already edited) is never
+        proposed again: the same bar close re-decided after a restart would otherwise re-publish the id, and a tap on
+        the card the owner saw before the restart would decide a proposal they never saw (F60 re-verify finding 1).
+        The id itself stays per bar close: it drives sent_ids and order idempotency."""
+        if pid in self._restart_archived:
+            return "restart_archived"
+        bus = self.center.bus
+        if bus is not None and (bus.done_dir / f"{pid}.json").exists():
+            return "proposal_finished"
+        return None
 
     # ------------------------------------------------------------------ ticks and bars
     def on_tick(self, t: Tick) -> list[dict]:
@@ -1152,6 +1174,9 @@ class Engine:
                 continue
             pid = self._proposal_id(agent.agent_id, close_ts)
             if pid in self.sent_ids:
+                continue
+            if retired := self._retired_proposal(pid):
+                decisions.append(self._record(agent, close_ts, p, mult, retired, pid, scored_fv=sfv))
                 continue
             stop = price - side * gd.stop_distance
             target = price + side * ls.target_atr * float(a.iloc[last])

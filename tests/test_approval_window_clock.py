@@ -9,19 +9,23 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import pytest
 
+from goldbot.data.synthetic import synthetic_ticks
 from goldbot.data.timeutil import CLOCK_AHEAD_TOLERANCE_S
-from goldbot.engine import Engine, EngineConfig
+from goldbot.engine import ConstantModel, Engine, EngineConfig
+from goldbot.execution.broker import Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.risk import Intent
 from goldbot.specialists import SPECIALISTS
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal, window_over
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import proposals_line
+from goldbot.telegram.outbox import Outbox
 from tests.test_approval_bus import _p
 
 TWO_DAYS = 2 * 86_400.0
@@ -185,7 +189,9 @@ def test_after_a_restart_an_on_disk_proposal_is_never_executed_and_falls_back_to
 def test_a_click_made_before_a_restart_is_never_applied_to_the_same_proposal_raised_again(tmp_path):
     """F60-1: the proposal id depends only on account, agent and bar close, and the restarted engine can re-decide the
     last close. The owner clicked X, the engine died before polling and restarted inside the window: the start
-    archives X and its decision, so the X raised again is a fresh card the owner has not decided."""
+    archives X and deletes its decision, and the owner is told the tap was not applied (F60 re-verify finding 3).
+    Even raised again directly on the center (the engine itself never re-raises it, see the integration test
+    below), the old click is gone."""
     bus = ApprovalBus(tmp_path)
     ApprovalCenter({1}, bus=bus).propose(_p("icm-demo-X"))
     bus.submit("icm-demo-X", True, None, by="dashboard:o")                # clicked; the engine dies before polling
@@ -194,31 +200,91 @@ def test_a_click_made_before_a_restart_is_never_applied_to_the_same_proposal_rai
     Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path)),
            PaperBroker(equity=10_000), [spec], {}, center=center)
     assert not (bus.decisions_dir / "icm-demo-X.json").exists()
-    center.propose(_p("icm-demo-X"))                                       # the same bar close re-decided
-    assert center.poll_bus() == [] and "icm-demo-X" in center.pending
-    assert [p.proposal_id for p in bus.pending()] == ["icm-demo-X"]       # the owner sees an undecided card
-
-
-def test_a_decision_stamped_before_its_proposal_was_raised_is_discarded_and_never_applied(tmp_path):
-    """F60-1 defence in depth: a decision older than its proposal (beyond the clock tolerance) was a click on an
-    earlier card with the same id. It is discarded, never applied, so the owner can still decide the card shown."""
-    bus = ApprovalBus(tmp_path)
-    center = ApprovalCenter({1}, bus=bus)
+    assert _notices(tmp_path) and "icm-demo-X" in _notices(tmp_path)[-1] and "not applied" in _notices(tmp_path)[-1]
     center.propose(_p("icm-demo-X"))
-    (bus.decisions_dir / "icm-demo-X.json").write_text(json.dumps(
-        {"proposal_id": "icm-demo-X", "approve": True, "by": "dashboard",
-         "ts": time.time() - CLOCK_AHEAD_TOLERANCE_S - 30}))
+    assert center.poll_bus() == [] and "icm-demo-X" in center.pending
+
+
+def _notices(state_dir: Path) -> list[str]:
+    """The owner notices queued for Telegram (state/agent_runs.jsonl rows with status "notice")."""
+    f = state_dir / "agent_runs.jsonl"
+    rows = [json.loads(line) for line in f.read_text().splitlines()] if f.exists() else []
+    return [r["detail"] for r in rows if r.get("status") == "notice"]
+
+
+def test_a_decision_bound_to_an_earlier_card_with_the_same_id_is_discarded_and_the_owner_is_told(tmp_path):
+    """F60 re-verify finding 2: `submit` binds the decision to the card it read (`card_created`), and `poll_bus`
+    applies it only to that card. A click on an earlier card with the same id is discarded, never applied, whatever
+    either clock says, and the owner is told; the card now shown stays decidable."""
+    bus = ApprovalBus(tmp_path)
+    bus.publish(_p("icm-demo-X", created=time.time() - 30))               # the earlier card
+    bus.submit("icm-demo-X", True, None, by="telegram")
+    center = ApprovalCenter({1}, bus=bus)
+    center.propose(_p("icm-demo-X", created=time.time() - 60))           # raised again, even stamped earlier
     assert center.poll_bus() == [] and "icm-demo-X" in center.pending
     assert not (bus.decisions_dir / "icm-demo-X.json").exists()
+    assert "icm-demo-X" in _notices(tmp_path)[-1] and "not applied" in _notices(tmp_path)[-1]
     bus.submit("icm-demo-X", False, "news", by="telegram")                # the owner's click on the card shown
     assert [p.outcome for p in center.poll_bus()] == [Outcome.REJECTED]
 
 
-def test_a_decision_stamped_a_couple_of_seconds_before_its_proposal_is_still_applied(tmp_path):
-    """Ordinary skew between the engine and the decider's host is tolerated, as for heartbeats."""
+def test_submit_binds_the_decision_to_the_card_it_read(tmp_path):
+    bus = ApprovalBus(tmp_path)
+    p = _p("icm-demo-X", created=time.time() - 3)
+    bus.publish(p)
+    assert bus.submit("icm-demo-X", True, None, by="dashboard").card_created == p.created
+
+
+@pytest.mark.parametrize(("offset", "applied"), [(-1.0, False), (0.0, True), (1.0, True)])
+def test_an_unbound_decision_from_an_older_release_is_applied_only_if_not_stamped_before_its_proposal(tmp_path, offset,
+                                                                                                       applied):
+    """A decision file with no `card_created` (written by a release before the binding) falls back to the stamps,
+    with no tolerance: both come from the one VPS clock (re-verify finding 2)."""
     bus = ApprovalBus(tmp_path)
     center = ApprovalCenter({1}, bus=bus)
-    center.propose(_p("icm-demo-X"))
+    p = center.propose(_p("icm-demo-X"))
     (bus.decisions_dir / "icm-demo-X.json").write_text(json.dumps(
-        {"proposal_id": "icm-demo-X", "approve": True, "by": "dashboard", "ts": time.time() - 2}))
-    assert [p.outcome for p in center.poll_bus()] == [Outcome.APPROVED]
+        {"proposal_id": "icm-demo-X", "approve": True, "by": "dashboard", "ts": p.created + offset}))
+    assert [q.outcome for q in center.poll_bus()] == ([Outcome.APPROVED] if applied else [])
+
+
+@pytest.mark.integration
+def test_a_restart_inside_the_window_never_raises_the_same_proposal_again_and_the_old_card_expires(tmp_path):
+    """F60 re-verify finding 1: the engine proposes at a bar close and the Telegram card goes out; the engine restarts
+    inside the 90 s window and re-decides the same close (possibly at another size). The id was archived at the start,
+    so it is journalled `restart_archived` and never proposed again; the old card is edited to expired at once and a
+    tap on it is refused, so it can never approve a re-sized proposal."""
+    ticks = synthetic_ticks("2025-03-03", "2025-03-05", ticks_per_minute=1, seed=5)
+    rows = list(zip(ticks["ts_utc"], ticks["bid"].to_numpy(float), ticks["ask"].to_numpy(float)))
+
+    def engine() -> tuple[Engine, ApprovalCenter]:
+        center = ApprovalCenter({1}, bus=ApprovalBus(tmp_path))
+        spec = SPECIALISTS["session_open"](min_body_pct=0.0, asia_range_max_atr_d=99.0)
+        return Engine(EngineConfig(account_id="icm-demo", broker_name="icm", approval_mode="propose",
+                                   state_dir=str(tmp_path)),
+                      PaperBroker(equity=10_000), [spec], {"session_open": ConstantModel(p=0.65)}, center), center
+
+    def run_until_proposed(eng: Engine, upto: int | None = None) -> tuple[int, list[dict]]:
+        out: list[dict] = []
+        for i, (ts, bid, ask) in enumerate(rows[:upto]):
+            out += eng.on_tick(Tick(ts_utc=pd.Timestamp(ts), bid=float(bid), ask=float(ask)))
+            if upto is None and any(d["action"] == "proposed" for d in out):
+                return i, out
+        return len(rows), out
+
+    eng1, _ = engine()
+    i, first = run_until_proposed(eng1)
+    (pid,) = [d["proposal"] for d in first if d["action"] == "proposed"]
+    bus = ApprovalBus(tmp_path)
+    ob = Outbox(tmp_path, bus)
+    assert [p.proposal_id for p in ob.unsent_proposals()] == [pid]
+    ob.mark_sent(pid, [(1, 100)])                                          # the old card, buttons live
+
+    eng2, center2 = engine()                                               # the restart, inside the window
+    assert ob.finished() == [(pid, "EXPIRED_UNAPPROVED", [(1, 100)])]    # the old card loses its buttons at once
+    _, again = run_until_proposed(eng2, upto=i + 1)                        # the same closes re-decided
+    assert not [d for d in again if d["action"] == "proposed"] and pid not in center2.pending
+    assert [d["action"] for d in again if d.get("proposal") == pid] == ["restart_archived"]
+    assert not (bus.pending_dir / f"{pid}.json").exists() and ob.unsent_proposals() == []
+    with pytest.raises(KeyError):
+        bus.submit(pid, True, None, by="telegram")                         # a tap on the old card

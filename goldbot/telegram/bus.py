@@ -24,6 +24,8 @@ left behind (`sweep_decisions`).
 """
 from __future__ import annotations
 
+import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -39,6 +41,8 @@ from goldbot.base import (
 )
 from goldbot.telegram.approvals import REASON_CODES, Outcome, Proposal, decision_channel
 
+log = logging.getLogger(__name__)
+
 
 class BusDecision(Record):
     proposal_id: str
@@ -46,6 +50,9 @@ class BusDecision(Record):
     reason_code: str | None = None
     by: str                         # "dashboard" | "telegram": the channel only (A15); older files: "<channel>:<id>"
     ts: float
+    # the decided card's `created`, copied from the pending file `submit` read: the engine applies the decision only to
+    # that card, never to a proposal raised again under the same id (F60 re-verify). None: an older release's file
+    card_created: float | None = None
 
 
 class Control(Record):
@@ -158,10 +165,12 @@ class ApprovalBus:
         f = self.pending_dir / f"{proposal_id}.json"
         if not f.exists():
             raise KeyError("unknown or already decided proposal")
-        if load_record_json(Proposal, f.read_text(), source="approvals/pending").expired:
+        card = load_record_json(Proposal, f.read_text(), source="approvals/pending")
+        if card.expired:
             raise KeyError("proposal expired")
         d = BusDecision(proposal_id=proposal_id, approve=approve, reason_code=None if approve else reason_code,
-                        by=decision_channel(by), ts=time.time())     # never the id or email on disk (A15)
+                        by=decision_channel(by), ts=time.time(),     # never the id or email on disk (A15)
+                        card_created=card.created)
         # first decision wins, and it is written whole before it becomes visible (no empty decision after a crash)
         if not create_exclusive(self.decisions_dir / f"{proposal_id}.json", d.model_dump_json()):
             raise KeyError("already decided")
@@ -176,6 +185,19 @@ class ApprovalBus:
             (self.decisions_dir / f"{proposal_id}.json").unlink(missing_ok=True)
         except OSError:
             pass
+
+    def notify_owner(self, text: str) -> None:
+        """A Telegram notice to the owner that a tap was not applied, so a dropped click is never silent (F60 re-verify
+        finding 3): one "notice" row in state/agent_runs.jsonl, which the Telegram service relays (as the API's
+        owner notices). Best effort: a failed write is logged, never raised; the proposal is never applied either way."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        row = {"role": "approvals", "started_utc": now, "finished_utc": now, "status": "notice", "turns": 0,
+               "cost_usd": 0.0, "report_path": None, "detail": text}
+        try:
+            with open(self.root.parent / "agent_runs.jsonl", "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except OSError as exc:
+            log.warning("could not queue the owner notice: %s", exc)
 
     def sweep_decisions(self, max_age_s: float = DECISION_MAX_AGE_S) -> int:
         """Delete decision files left behind: those with no pending file (the proposal was archived, e.g. by a process
