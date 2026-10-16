@@ -28,4 +28,6 @@
   - ::test_live_fills_are_compared_with_the_backtest_slippage_prior_not_the_table_built_from_them
   - ::test_build_report_notes_do_not_say_live_r_unrecorded
 
-  tests/test_digest.py::test_attribution_line_names_no_best_or_worst_row_when_no_row_clears_the_bar
+  tests/test_digest.py::test_attribution_line_names_no_best_or_worst_row_when_no_row_clears_the_bar,
+  ::test_attribution_line_never_names_an_exit_row (exit cells are signed by construction),
+  ::test_attribution_line_from_an_older_report_without_the_bar_prints_unknowns

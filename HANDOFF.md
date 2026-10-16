@@ -46,7 +46,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - ::test_live_fills_are_compared_with_the_backtest_slippage_prior_not_the_table_built_from_them
   - ::test_build_report_notes_do_not_say_live_r_unrecorded
 
-  tests/test_digest.py::test_attribution_line_names_no_best_or_worst_row_when_no_row_clears_the_bar
+  tests/test_digest.py::test_attribution_line_names_no_best_or_worst_row_when_no_row_clears_the_bar,
+  ::test_attribution_line_never_names_an_exit_row (exit cells are signed by construction),
+  ::test_attribution_line_from_an_older_report_without_the_bar_prints_unknowns
 - Sign-in end-to-end tests (2026-10-16). web/e2e/auth.spec.ts runs on its own e2e server (Playwright project
   `auth`, port E2E_PORT+1, independent of the dashboard story) and covers: login (wrong password or code refused
   with the same words, sign out), forgot-password (an unknown account answered like a wrong code; nothing mailed), the

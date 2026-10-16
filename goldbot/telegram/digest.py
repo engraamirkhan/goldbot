@@ -49,7 +49,9 @@ from goldbot.telegram.entry_text import digest_line as entry_digest_line
 STATE_FILE = "telegram_digest.json"
 LATE_LIMIT = pd.Timedelta(hours=6)
 MAX_NAMES = 5                       # check names listed per status before "+N more"
-ATTRIBUTION_SKIP = ("agent", "decision")   # agent ids are per-version detail; "not taken" is not a trading cell
+# agent ids are per-version detail; "not taken" is not a trading cell; exit target/stop cells are signed by
+# construction (ADR 0022 F2): not a test
+ATTRIBUTION_SKIP = ("agent", "decision", "exit")
 DEFAULT_ROADMAP = ROOT / "docs" / "ROADMAP.md"
 _DECISION_ROW = re.compile(r"^\|\s*(?:OD-|D)\d+\s*\|")   # "| D3 |" or, since the 2026-10-16 re-plan, "| OD-3 |"
 _STAGE_RANK = {"normal": 0, "size_down": 1, "halted": 2}
@@ -392,7 +394,8 @@ def _attribution_line(state_dir: Path) -> list[str]:
     mean = overall.get("mean_r_net")
     head = f"overall {float(mean):+.2f}R/trade net, {overall.get('verdict_adj', '?')}" if mean is not None \
         else "overall no taken trades"
-    return [f"Attribution: no row clears the bar (|t| ≥ {float(rep.get('t_bar') or 2.0):.1f} over {rep.get('m', '?')} "
+    bar = f"{float(rep['t_bar']):.1f}" if rep.get("t_bar") is not None else "?"   # older report: no bar recorded
+    return [f"Attribution: no row clears the bar (|t| ≥ {bar} over {rep.get('m', '?')} "
             f"rows) · {head}"]
 
 
