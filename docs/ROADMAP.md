@@ -118,7 +118,7 @@ a builder and waits for the batch PR; the next builder slots go to W1-1, then W1
 | --- | --- | --- | --- | --- |
 | W2-1 | State store step 2: orders, approvals and risk state in `core.db` with fsync (architect plan by Wed 10-21, lane A-PLAN) | implementer | `goldbot/db`, `engine/runner.py` persistence, `telegram/bus.py` | trading-safety, security, sre |
 | W2-2 | `order_calc_margin` and tick-flags dedup (R8, D11) | implementer | `risk/gate.py`, `execution/mt5_adapter.py`, broker protocol | trading-safety |
-| W2-3 | Attribution, stop-rule and gate screens | ui-ux-designer | `goldbot/api` (read-only routes), `web/` | ui-ux, code |
+| W2-3 | Attribution, stop-rule and gate screens; UX spec `docs/ux/progress-screens.md` ready Fri 10-16 (due 10-23), with its API gaps listed; build in Wave 2 after the quant review of the verdict wording | ui-ux-designer | `goldbot/api` (read-only routes), `web/` | ui-ux, code |
 | W2-4 | Wine/bridge hardening from M2 findings (watchdog, reconnect, terminal restart) | sre | `ops/linux/`, `execution/bridge.py` | security, trading-safety |
 | W2-5 | Manual-dispatch deploy workflow with health check and rollback (auto-deploy off) | sre | new `.github/workflows/deploy.yml`, `ops/linux/goldbot-deploy.sh` | security |
 | W2-6 | Combinatorial purged CV, run quarterly (M16) | implementer | new `research/cpcv.py` | quant |
