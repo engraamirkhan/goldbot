@@ -141,6 +141,22 @@ function Outcome({ p, state }: { p: AnyProposal; state: CardState }) {
     case "rejected":
       return <p className="outcome muted-box" role="status"><strong>Rejected</strong> · {reasonLabel(d?.reason_code)}{tail}</p>;
     case "refused":
+      {
+        // BACKLOG 66: the RiskGate allowed it; the MT5 box's own ceiling (6× its equity) refused it. The code picks
+        // the wording (a prefix match) and is never shown
+        const bridge = (d?.refusal ?? []).find((r) => r.startsWith("bridge_notional_ceiling"));
+        if (bridge) {
+          return (
+            <p className="outcome bad" role="status">
+              <strong>Refused by the MT5 box.</strong>{" "}
+              {bridge === "bridge_notional_ceiling_unreadable"
+                ? "It couldn't read the account figures it checks, so it refused to be safe; nothing was sent."
+                : "Its safety limit stops open gold worth more than 6× equity, and this trade would have gone over it; nothing was sent."}
+              {tail}
+            </p>
+          );
+        }
+      }
       return (
         <p className="outcome bad" role="status">
           <strong>Refused at approval.</strong> The RiskGate blocked the order ({(d?.refusal ?? []).map(plain).join(", ") || "no reason given"}); nothing was sent.{tail}

@@ -1308,6 +1308,20 @@ the equity cross-check before the 12% kill switch) the two versions start next t
 below the new bridge's `MIN_COMPATIBLE`. Exits, closes and the kill switch keep running either way. Deploy the MT5
 box first and the brain straight after, so the entry pause lasts only the brain's deploy.
 
+BACKLOG 66 (bridge notional ceiling, protocol unchanged at v5): deploy the MT5 box first (the ceiling guards any
+brain), then the brain; until the brain is updated, a refusal ("bridge_notional_ceiling: ...", retcode 10006) shows
+only in the bridge log on the MT5 box, with no Telegram notice and no "refused by the MT5 box" card.
+
+**Recovery: an order refused by the MT5 box (BACKLOG 66).** The journal's order entry carries the bridge's message:
+- `bridge_notional_ceiling: notional X > 6 x equity Y`: the brain sized above 6× this terminal's equity; nothing was
+  placed and exits are unaffected. Compare the brain's and the terminal's equity and fx (`curl /health`, the bridge
+  log on the MT5 box), and check for manual or other-EA XAUUSD positions, since every lot on the symbol counts. Auto
+  entries resume at the next bar close.
+- `bridge_notional_ceiling: unreadable:<field>`: a terminal read failed and every entry is refused. Check
+  `journalctl -u goldbot-bridge@<account>`; if it is stuck, run `sudo systemctl restart goldbot-bridge@<account>`
+  (the watchdog also restarts it).
+- Repeated refusals mean an engine sizing bug: raise a trading-safety issue and never loosen the ceiling.
+
 **Rollback order: roll back the brain first, then the MT5 box** (the reverse of a deploy), so no step leaves a newer
 brain next to an older bridge.
 
