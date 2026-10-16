@@ -77,6 +77,8 @@ hardware; lifecycle "Operational resilience".
 
 Sweep 2026-10-16 (product owner): accountable `release-manager` (sre runs the box), due 2026-10-18, re-dated from 2026-10-13 because the deploy was not run or chased for three days (scorecard 2026-W42). Acceptance unchanged (above); the deploy uses a SHA that includes #78, and the 24 h health output goes on #34. The `run.py bridge-smoke` command is ROADMAP W1-1.
 
+Build 2026-10-16 (implementer, eb52fad..ed14a83, unreviewed): the `run.py bridge-smoke` command (first acceptance bullet) exists per plan W1-1 and ADR 0021, tested against a fake demo terminal in tests/test_smoke.py rather than the paper broker, because the paper broker reports no `trade_mode` and the command must refuse it (exit 2). The command has not been run on the Oracle VM. The 24 h health run and the measured costs (bullets 2-3) are open.
+
 ### 2. Measured cost table published as a release asset
 Value: removes the owner's manual commit step and makes `research.yml` charge measured swap, commission and slippage
 instead of the pessimistic priors. That alone may move tsmom 4h across zero (FIND).

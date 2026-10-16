@@ -162,6 +162,30 @@ goldbot run health
 log. If the bridge is unreachable the engine exits and restarts every 10 s; it trades nothing meanwhile, and open
 positions keep their broker-side stop and target.
 
+#### Bridge smoke (BACKLOG 1: one real 0.01-lot round trip, demo only)
+Proves the brain can trade the demo terminal through the bridge: it prints the login (masked, `****123`), server,
+balance and a live XAUUSD tick, then, after **your one click**, buys the minimum lot with a stop and target about
+$1 away and closes it at once. It refuses anything but a demo account (exit 2), and it runs only with the market
+open. The engine must have run once on this account (its `state/risk_icm-demo.json` holds the day start and the
+high-water mark the limits are judged by). Then, on the brain:
+```bash
+sudo systemctl stop goldbot-engine@icm-demo     # the engine only: KEEP the supervisor running
+sleep 160                                       # the smoke waits for the engine heartbeat to be 150 s old
+goldbot run bridge-smoke icm-demo               # approve the card on Telegram or the dashboard within 90 s
+sudo systemctl start goldbot-engine@icm-demo
+```
+Paste the output on issue #34 (it never shows the full login). Exit codes: 0 opened and closed; 1 failed with nothing
+left open (the broker rejected it, or the fill had no stop or target and was closed); 2 not a demo terminal of this
+account; 3 not approved (no click within 90 s, or rejected): nothing was sent; 4 a precondition (engine running or its
+heartbeat under 150 s old, another smoke running, a state file or the calendar unreadable, no bridge endpoint):
+nothing was sent; 5 **LEFT OPEN**: a smoke position could not be closed after three tries, close it in the terminal
+(magic 260199 on icm-demo; Telegram also says so); 6 **UNKNOWN**: the order call failed and no fill was found within
+25 s: look in the terminal for magic 260199 and close it by hand if it is there (it is never sent twice); 7 the
+RiskGate refused (the reasons are printed: a halt, a cap, stale data, the news blackout...). A leftover smoke position
+from an earlier run is closed before a new one is opened. The smoke's position is listed apart in the broker ledger
+(`smoke_positions`), not as a missing trade. Update the MT5 box first: its bridge refuses the smoke's magic unless the
+terminal reports a demo account.
+
 ### 0.5 Daily use
 Only your Mac's browser (the dashboard) and Telegram (the one-click Approve).
 
