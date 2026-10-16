@@ -257,6 +257,29 @@ def test_an_order_is_refused_if_the_terminal_switched_account_after_start():
     assert len(pb.positions()) == 1
 
 
+@pytest.mark.parametrize("trade_mode, allowed", [("demo", True), ("real", False), ("contest", False), (None, False)])
+def test_guarded_broker_refuses_smoke_magic_unless_demo(trade_mode, allowed):
+    """ADR 0021 F4: magic_base + 99 (the bridge smoke's) is refused unless the terminal's account reports demo; the
+    engine's own magics are unaffected, and the protocol (METHODS, signatures, API_VERSION, digest) is unchanged."""
+    from goldbot.execution.broker import SMOKE_MAGIC_OFFSET
+
+    class Terminal(PaperBroker):
+        def account(self) -> AccountInfo:
+            return super().account().model_copy(update={"trade_mode": trade_mode})
+    pb = Terminal(equity=10_000)
+    pb.on_tick(Tick(ts_utc=T0, bid=2400.0, ask=2400.2))
+    g = GuardedBroker(pb, magic_base=260100)
+    smoke = _intent("icm-demo-1-smoke").model_copy(update={"magic": 260100 + SMOKE_MAGIC_OFFSET, "lots": 0.01})
+    if allowed:
+        assert g.place_order(smoke).ok
+    else:
+        with pytest.raises(PermissionError, match="smoke magic"):
+            g.place_order(smoke)
+        assert pb.positions() == []
+    assert g.place_order(_intent()).ok                         # an engine magic: not this fence's business
+    assert SMOKE_MAGIC_OFFSET == 99
+
+
 def test_the_health_probe_answers_through_the_bridge(bridge):
     url, _ = bridge
     assert bridge_mod.probe_health(url) is None                     # no token needed, nothing reaches the terminal

@@ -46,6 +46,7 @@ from pydantic import BaseModel
 from goldbot.base import load_record
 from goldbot.data.calendar import TradingSession
 from goldbot.execution.broker import (
+    SMOKE_MAGIC_OFFSET,
     AccountInfo,
     OrderIntent,
     OrderResult,
@@ -248,7 +249,8 @@ class GuardedBroker:
     """The terminal-side broker behind the bridge, refusing what goldbot never sends: orders outside this account's
     magic range (magic_base .. magic_base + 99) or above MAX_ORDER_LOTS, and stop/target changes on positions outside
     that range. Closes are allowed for any position: closing only reduces risk, and the 12% kill switch closes
-    everything on the account (design: Drawdown kill switch)."""
+    everything on the account (design: Drawdown kill switch). The bridge smoke's magic (magic_base + SMOKE_MAGIC_OFFSET)
+    is refused unless the terminal reports a demo account (ADR 0021 F4)."""
 
     def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None) -> None:
         self._b, self.magic_base, self._verify = broker, magic_base, verify
@@ -265,7 +267,14 @@ class GuardedBroker:
             raise PermissionError(f"magic {intent.magic} outside {self.magic_base}..{self.magic_base + 99}")
         if not 0 < intent.lots <= MAX_ORDER_LOTS:
             raise PermissionError(f"{intent.lots} lots outside (0, {MAX_ORDER_LOTS}]")
-        why = self._verify(self._b.account()) if self._verify is not None else None
+        smoke = int(intent.magic) == self.magic_base + SMOKE_MAGIC_OFFSET
+        info = self._b.account() if smoke or self._verify is not None else None
+        # ADR 0021 F4: the bridge smoke's magic only ever trades a terminal that reports a demo account, whatever the
+        # brain sent (internal only: METHODS, signatures and the protocol digest are unchanged)
+        if smoke and getattr(info, "trade_mode", None) != "demo":
+            raise PermissionError(f"smoke magic {intent.magic} refused: the terminal account is "
+                                  f"{getattr(info, 'trade_mode', None) or 'unknown'}, not demo")
+        why = self._verify(info) if self._verify is not None else None
         if why:                                        # the terminal was switched to another account after start
             raise PermissionError(f"terminal account changed: {why}")
         return self._b.place_order(intent)
