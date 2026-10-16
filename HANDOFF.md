@@ -287,12 +287,6 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   from the bootstrap's heredoc, `sudo systemctl daemon-reload && sudo systemctl restart goldbot-bridge@icm-demo`, then
   check `systemctl is-active goldbot-bridge@icm-demo` and `test -f` on the `WINPY` path as mt5. Not run on any host yet:
   the bootstrap change is checked by shellcheck and static tests only.
-- **MT5 adapter waits up to 60 s for the terminal to start (W1-1 plan, item A3; implementer).**
-  `goldbot/execution/mt5_adapter.py` passes `timeout=MT5_INIT_TIMEOUT_MS` (60 000 ms) to `mt5.initialize`, so a
-  terminal under Wine that is slow on first login or a history sync no longer fails the bridge start on the package's
-  short default. Test: `tests/test_mt5_init.py::test_initialize_gets_the_terminal_path_and_a_60_s_timeout`. Bridge
-  side: takes effect only after the MT5 box is updated (`sudo goldbot-deploy latest` on it, RUNBOOK "Updating the VPS
-  to a new version"). Review: code-reviewer, trading-safety-reviewer (bridge start path), not yet recorded.
 - **One north-star day for the owner's reports (2026-10-16; TRACEABILITY V9, BACKLOG 57; quant and trading-safety
   review pending).** Before this, the monthly report used the UTC calendar day. The performance report used the
   opportunity day, which rolls at 22:00 UTC. Each had its own day-bucketing and weekday-count code, so a close between

@@ -63,9 +63,6 @@ except ImportError:  # pragma: no cover
 
 TF_MAP = {"1m": "TIMEFRAME_M1", "5m": "TIMEFRAME_M5", "15m": "TIMEFRAME_M15", "1h": "TIMEFRAME_H1",
           "4h": "TIMEFRAME_H4", "1d": "TIMEFRAME_D1", "1w": "TIMEFRAME_W1"}
-# how long mt5.initialize waits for the terminal to start and connect (ms). The package's default is far shorter, and
-# a terminal under Wine on its first login or a large history sync takes longer, so the bridge would fail to start
-MT5_INIT_TIMEOUT_MS = 60_000
 RETCODE_DONE = 10009
 RETCODE_REQUOTE = 10004
 RETCODE_REJECT = 10006
@@ -199,7 +196,7 @@ class MT5Broker:
         self.account_label = account_label
         # without a login the terminal's own saved account is used (bridge on Wine: no password leaves the terminal)
         creds = {} if login is None else {"login": login, "password": password, "server": server}
-        if not mt5.initialize(path=terminal_path, timeout=MT5_INIT_TIMEOUT_MS, **creds):
+        if not mt5.initialize(path=terminal_path, **creds):
             raise RuntimeError(f"mt5.initialize failed: {mt5.last_error()}")
         if not mt5.symbol_select(symbol, True):
             mt5.shutdown()
