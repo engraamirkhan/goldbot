@@ -183,6 +183,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     printed the action's attribute dict; now "8%%", with a test that `--help` renders.
   - Tests: tests/test_digest.py 10 new (12 cases), 1 updated; tests/test_report_days.py 2 new (5 cases);
     tests/test_min_lot.py 1 new. RUNBOOK 0.5 "Morning digest" updated.
+- **The engine publishes why it refuses entries (BACKLOG 43, `entry_blocks` part; implementer).**
+  `RiskGate.account_reasons(st, now)` is every account-level reason `check()` refuses for, and `check()` starts from
+  it (one list, cannot drift). `engine_<account>.json` carries `entry_blocks` (those codes, at every state write; a
+  heartbeat judges the feed it publishes) and `entry_refusals` (per agent, the last per-trade refusal and its time,
+  cleared when the gate next allows that agent; in memory only). The API (`goldbot/api/entry_status.py`) now only
+  words them: the flag mapping and the min-lot "Likely" fallback are gone, rollover and the weekend cut show, a
+  strategy's last refusal is its own block "since" then, and an engine without `entry_blocks` shows
+  `entry_reasons_missing` (act), never OPEN. Order change on refusals only: `account_class_unknown` and
+  `open_risk_unknown` now come before the intent's own reasons. Deploy: brain and API together (same release);
+  exits are never gated by any of it. R43; reviews owed: code-reviewer, trading-safety-reviewer (gate and engine),
+  ui-ux-designer (new wording).
 - Heartbeats stamped in the future fail closed (2026-10-16, BACKLOG 58). Before this, a `ts` ahead of the reader's
   clock, or a NaN, made `now - ts > limit` False, so a dead supervisor whose last write carried a fast clock (or came
   from a restored backup) never halted the engines. The shared rule is `goldbot.data.timeutil.heartbeat_problem`:

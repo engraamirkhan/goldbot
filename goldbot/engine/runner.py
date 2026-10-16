@@ -62,7 +62,7 @@ from goldbot.ops.gates_phase import ClosedTrade, EntryAudit, append_closed_trade
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, hwm, open_risk, sizing
-from goldbot.risk.gate import REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
+from goldbot.risk.gate import PER_TRADE_REFUSALS, REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.supervisor import Supervisor, write_startup_error
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
 from goldbot.risk.windows import (
@@ -460,6 +460,9 @@ class Engine:
         # (bar close, why): auto entries stopped for the rest of that bar close after an ambiguous order or a failed
         # account re-read (review HIGH); a later bar close trades again on a fresh read
         self._auto_paused: tuple[pd.Timestamp, str] | None = None
+        # BACKLOG 43: each agent's last per-trade refusal (gate.PER_TRADE_REFUSALS) and its time, until the gate next
+        # allows that agent (published as `entry_refusals`; in memory: a restart starts empty)
+        self._entry_refusals: dict[str, dict[str, str]] = {}
         self._unconfirmed: dict[int, int] = {}
         # position -> (consecutive market-closed refusals, next attempt): closes back off only when the market is closed
         self._close_backoff: dict[int, tuple[int, pd.Timestamp]] = {}
@@ -1143,6 +1146,7 @@ class Engine:
                             swap_usd_per_oz=self._swap_usd_per_oz(side, close_ts), **terms)
             gd = self.gate.check(intent, self.state, close_ts, margin_required=broker_margin(self.broker, self.cfg.symbol),
                                  throttle=self._agent_throttle(agent.agent_id, tf, close_ts))
+            self._note_refusal(agent.agent_id, gd, close_ts)
             if not gd.allowed:
                 decisions.append(self._record(agent, close_ts, p, mult, "gate:" + ",".join(gd.reasons), scored_fv=sfv))
                 continue
@@ -1218,6 +1222,7 @@ class Engine:
                                      margin_required=broker_margin(self.broker, self.cfg.symbol),
                                      throttle=self._agent_throttle(agent.agent_id, intent.timeframe or agent.timeframe,
                                                                    tick.ts_utc))
+                self._note_refusal(agent.agent_id, gd, tick.ts_utc)
                 lots = gd.lots
                 if gd.allowed:
                     gd, lots = self._within_card(gd, prop, agent)
@@ -1232,6 +1237,15 @@ class Engine:
                 if self.center.bus is not None:
                     self.center.bus.archive(p)          # the dashboard shows "refused at approval", not "approved"
         self._write_state()
+
+    def _note_refusal(self, agent_id: str, gd: GateDecision, at: pd.Timestamp) -> None:
+        """BACKLOG 43 (`entry_refusals`): a gate decision for one agent. A per-trade refusal (gate.PER_TRADE_REFUSALS,
+        which check() returns alone) is kept with its time; an allowed decision clears it; any other refusal (an
+        account reason, the intent's own filtering) leaves the last per-trade one as it was. Reporting only."""
+        if gd.allowed:
+            self._entry_refusals.pop(agent_id, None)
+        elif len(gd.reasons) == 1 and gd.reasons[0] in PER_TRADE_REFUSALS:
+            self._entry_refusals[agent_id] = {"code": gd.reasons[0], "at": at.isoformat()}
 
     def _within_card(self, gd: GateDecision, prop: Proposal, agent: Specialist) -> tuple[GateDecision, float]:
         """ADR 0009: the order never exceeds the card the owner approved. The re-check's lots are capped at the card's
@@ -3327,8 +3341,14 @@ class Engine:
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check
         payload["currency"] = self._account_currency() or self._account_view.get("currency") or None
-        if heartbeat:                       # BACKLOG 59: the feed as it is now, not as the last account refresh saw it
-            payload.update(self._heartbeat_feed())
+        # BACKLOG 59: a heartbeat publishes the feed as it is now, not as the last account refresh saw it
+        feed = self._heartbeat_feed() if heartbeat else {}
+        payload.update(feed)
+        # BACKLOG 43 (ADR 0011): why entries are refused now, as the RiskGate's account-level codes on the facts this
+        # file publishes (a heartbeat's feed on a copy: the in-memory state stays the last refresh's), and each agent's
+        # last per-trade refusal. Reporting only: the gate decides at every entry
+        payload["entry_blocks"] = self.gate.account_reasons(st.model_copy(update=feed) if feed else st)
+        payload["entry_refusals"] = {a: dict(v) for a, v in self._entry_refusals.items()}
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync
         write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps(payload), durable=False)
         self._save_risk_state()

@@ -15,9 +15,10 @@ Code: `goldbot/api/entry_status.py` (reasons, words, next steps), `AccountSummar
 | Owner halt | `state/control.json` (the approval bus) |
 | Supervisor halt | `Supervisor.engine_should_halt`: exactly what the engines read (missing, stale or unreadable heartbeat included) |
 | Drift system halt | `state/drift.json` (unreadable halts, as in the engine) |
-| Engine flags | `engine_<account>.json`: `ts`, `stage`, `market_closed` + `sessions` (reopen time), `server_clock.status`, `tick_ahead_s`, `last_tick_age_s`, `stale_bars`, `tick_error`, `last_tick_error_at`, `tick_errors_total`, `dq_error`, `data_recovering`, `spread_points`, `open_positions`, `account_class`, `blackout`, `throttle.agents[*].blocked` + `cooldown_until`, `bridge_compat.status`, and `entry_blocks` when an engine publishes it |
+| Engine reasons (BACKLOG 43) | `engine_<account>.json` `entry_blocks`: the RiskGate's account-level codes (`RiskGate.account_reasons`, rollover and the weekend cut included), written at every state write and heartbeat; the API words them and decides nothing. Missing: `entry_reasons_missing` (act), never OPEN |
+| Details beside them | `ts`, `sessions` (reopen time), `blackout` (title), `spread_points`, `open_positions`, `windows` (times), `last_tick_error_at` + `tick_errors_total` (note), `throttle.agents[*].blocked` + `cooldown_until`, `bridge_compat.commit_differs` (note) |
+| A strategy's last refusal | `entry_refusals`: per agent, the last per-trade refusal (fx conversion, minimum lot, margin, combined exposure, absolute daily limit, heat cap) and its time; shown as that strategy's block "since" then, until the gate next allows it |
 | Loss limits | `account_view.loss_budget.caps`: one block per spent cap (account daily/weekly, absolute, combined), each with its amount in the account currency and its own reset (00:00 UTC; Sunday 00:00 UTC for weekly) |
-| Balance too small | `account_view.milestones`: no tradeable timeframe (and no broker terms pending) is `min_lot_exceeds_risk` until the engine publishes it |
 | Drawdown texts | `RiskLimits.dd_stage2` and `SupervisorLimits.dd_stage2` from settings ("12%" is never hard-coded) |
 | Thresholds (stale tick, tick ahead, spread, positions) | `RiskLimits.from_settings` (the RiskGate's own limits), never a copy |
 
@@ -118,15 +119,15 @@ counts on that strategy's proposal card only.
 Only the owner re-arms: an owner halt tells the owner "Re-arm on this page when ready" and everyone else "The owner
 re-arms on this page when ready."
 
-## Gaps (for the engine lane, BACKLOG 43)
+## Engine reasons (BACKLOG 43, ADR 0011)
 
-The engine does not publish rollover, the Friday weekend cut, or per-trade refusals (fx conversion, heat cap): the
-panel shows them once the engine publishes `entry_blocks` (ADR 0011).
+The engine publishes which reasons apply (`entry_blocks`, the running gate's own list) and the API only words them, so
+the panel cannot disagree with the gate. Two presentation rules stay in the API: with `market_closed` listed,
+`stale_data` is not shown (a closed market has no fresh prices by design, BACKLOG 59), and the engine's
+`supervisor_halt` is not shown when the supervisor's own reasons already are.
 
-The entry windows (`windows` in the engine state, BACKLOG 17/18) are mapped. Whether a window is on comes from the
-engine's own `windows.enabled` alone (the running gate's setting); the settings the API reads never hide a window (a
-settings edit without a restart, or settings that fail to load, must not show OPEN while the gate refuses). With no
-`enabled` published, a raised flag is shown. Times are the engine's own (`tier2_until`, `reopen_until`,
+The entry windows (BACKLOG 17/18) are shown when the engine lists them; whether a window is on is the running gate's
+setting, so the settings the API reads never hide one. Times are the engine's own (`tier2_until`, `reopen_until`,
 `holiday_name`, `holiday_until`); the API's settings are a fallback for wording and times only:
 `reopen_window` (wait, "until"), `holiday_thin` (wait, names the holiday, "until" server midnight of the first unlisted
 day), `tier2_blackout` (wait, "until" the release + after-minutes), `calendar_unavailable` (act, "since"; holiday-list

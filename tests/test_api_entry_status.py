@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from goldbot.api import entry_status as es
 from goldbot.api.app import create_app
 from goldbot.api.auth import totp_code
-from goldbot.ops.account_view import LossBudget, LossCap, Milestones
+from goldbot.ops.account_view import LossBudget, LossCap
 from goldbot.ops.health import ENGINE_FAIL_S
 from goldbot.risk.gate import RiskLimits
 from goldbot.risk.supervisor import SupervisorLimits
@@ -32,14 +32,16 @@ def engine(**over) -> dict:
          "tick_ahead_s": 0.0, "market_closed": False, "session_source": "broker", "tick_error": False,
          "tick_errors_total": 0, "last_tick_error_at": None, "dq_error": False, "stale_bars": False,
          "data_recovering": False, "blackout": None, "server_clock": {"status": "ok", "reason": "fine"},
-         "throttle": {"enabled": False}, "sessions": {"server_tz": "Europe/Athens", "source": "static"}}
+         "throttle": {"enabled": False}, "sessions": {"server_tz": "Europe/Athens", "source": "static"},
+         # BACKLOG 43: the RiskGate's account reasons as the engine publishes them (none: it can trade)
+         "entry_blocks": [], "entry_refusals": {}}
     e.update(over)
     return e
 
 
 def status(e: dict, now: pd.Timestamp = WED, **kw):
     args: dict[str, Any] = dict(owner_halt=None, supervisor_reasons=None, drift_reasons=None, budget=None,
-                                limits=RiskLimits(), milestones=None, is_owner=True)
+                                limits=RiskLimits(), is_owner=True)
     args.update(kw)
     return es.account_entry_status(e, now=now, **args)
 
@@ -55,7 +57,7 @@ def test_a_healthy_engine_can_take_new_trades_and_exits_keep_running():
 
 
 def test_market_closed_says_when_it_reopens_and_that_nothing_needs_doing():
-    s = status(engine(market_closed=True, ts=SAT.timestamp()), now=SAT)
+    s = status(engine(market_closed=True, entry_blocks=["market_closed"], ts=SAT.timestamp()), now=SAT)
     [b] = s.blocks
     assert (b.code, b.text, b.kind, b.at_label) == ("market_closed", "Market closed", "wait", "opens")
     assert b.at == pd.Timestamp("2026-10-18 22:02", tz="UTC").to_pydatetime()     # Monday 01:02 Athens (EEST, UTC+3)
@@ -65,14 +67,16 @@ def test_market_closed_says_when_it_reopens_and_that_nothing_needs_doing():
 
 def test_a_live_engine_on_a_closed_market_shows_market_closed_not_stale_data():
     """BACKLOG 59: the weekend heartbeat publishes an hours-old tick and stale bars with market_closed; no fault."""
-    s = status(engine(market_closed=True, ts=SAT.timestamp(), last_tick_age_s=13 * 3600.0, stale_bars=True), now=SAT)
+    s = status(engine(market_closed=True, ts=SAT.timestamp(), last_tick_age_s=13 * 3600.0, stale_bars=True,
+                      entry_blocks=["stale_data", "market_closed"]), now=SAT)
     assert codes(s) == ["market_closed"] and s.state == "waiting"
-    opened = status(engine(last_tick_age_s=13 * 3600.0, stale_bars=True))      # the same feed in market hours
+    opened = status(engine(last_tick_age_s=13 * 3600.0, stale_bars=True, entry_blocks=["stale_data"]))   # market hours
     assert "stale_data" in codes(opened)
 
 
 def test_server_clock_mismatch_points_to_the_runbook_and_needs_the_owner():
-    s = status(engine(server_clock={"status": "mismatch", "reason": "server clock reads UTC+3, Europe/Athens gives UTC+2"}))
+    s = status(engine(server_clock={"status": "mismatch", "reason": "server clock reads UTC+3, Europe/Athens gives UTC+2"},
+                      entry_blocks=["server_clock_mismatch"]))
     [b] = s.blocks
     assert b.code == "server_clock_mismatch" and b.text == "Broker clock differs from the expected time zone"
     assert b.kind == "act" and b.runbook == "Server clock (US-EU DST gap weeks)"
@@ -137,26 +141,68 @@ def test_halts_from_the_owner_supervisor_and_drift_watch_are_named_with_their_fi
     assert codes(status(engine(), supervisor_reasons=[])) == ["supervisor_halt"]
 
 
-def test_engine_flags_map_to_their_gate_reasons():
+def test_the_engines_published_reasons_decide_and_the_api_only_words_them():
+    """BACKLOG 43: the engine publishes the RiskGate's account reasons (`entry_blocks`); the API words them, with the
+    published facts for the details (a spread, a count, a news title), and no longer maps flags itself."""
     lim = RiskLimits()
-    s = status(engine(stage="halted", dq_error=True, stale_bars=True, tick_ahead_s=30.0, tick_error=True,
-                      data_recovering=True, spread_points=lim.max_spread_points + 1, open_positions=lim.max_positions,
-                      account_class="unknown", blackout={"kind": "calendar", "title": "CPI m/m"},
-                      bridge_compat={"status": "incompatible", "reason": "bridge commit abc123 lacks loss_per_lot"}))
-    assert set(codes(s)) == {"drawdown_halt", "data_quality_error", "stale_data", "tick_from_future", "tick_error",
-                             "data_recovering", "spread_too_wide", "max_positions", "account_class_unknown",
-                             "news_blackout", "bridge_incompatible"}
-    # what needs the owner comes first
+    flags: dict[str, Any] = dict(stage="halted", dq_error=True, stale_bars=True, tick_ahead_s=30.0, tick_error=True,
+                                 data_recovering=True, spread_points=lim.max_spread_points + 1,
+                                 open_positions=lim.max_positions, account_class="unknown",
+                                 blackout={"kind": "calendar", "title": "CPI m/m"},
+                                 bridge_compat={"status": "incompatible", "reason": "bridge commit abc123 lacks x"})
+    published = ["drawdown_halt", "data_quality_error", "news_blackout", "rollover", "weekend", "stale_data",
+                 "tick_from_future", "tick_error", "bridge_incompatible", "data_recovering", "spread_too_wide",
+                 "max_positions", "account_class_unknown"]
+    s = status(engine(**flags, entry_blocks=published))
+    assert sorted(codes(s)) == sorted(published)
     kinds = [b.kind for b in s.blocks]
-    assert kinds == sorted(kinds)                                     # "act" < "wait"
-    news = next(b for b in s.blocks if b.code == "news_blackout")
-    assert news.text == "News blackout: CPI m/m"
+    assert kinds == sorted(kinds)                                     # what needs the owner comes first ("act" < "wait")
+    by = {b.code: b for b in s.blocks}
+    assert by["news_blackout"].text == "News blackout: CPI m/m"
+    assert by["spread_too_wide"].text == f"Spread too wide right now (46 points; limit {lim.max_spread_points:.0f})"
+    assert by["max_positions"].text == f"Already {lim.max_positions} trades open (limit {lim.max_positions})"
+    assert by["rollover"].kind == by["weekend"].kind == "wait"
     # nothing from the engine's free-text reasons reaches the owner (commits, zones, files, hosts)
     assert "abc123" not in json.dumps(s.model_dump(mode="json"))
+    # the same flags with nothing published: the gate is not refusing, so neither is the status
+    assert status(engine(**flags)).state == "open"
 
 
-def test_a_paper_engine_is_not_blocked_by_an_unknown_account_class():
-    assert codes(status(engine(mode="paper", account_class="unknown"))) == []
+def test_an_engine_that_does_not_publish_its_reasons_is_never_shown_open():
+    """An engine from before BACKLOG 43 (or a torn field): the API cannot say why, so it says it does not know."""
+    for e in (engine(entry_blocks=None), {k: v for k, v in engine().items() if k != "entry_blocks"},
+              engine(entry_blocks="weekend")):
+        s = status(e)
+        [b] = s.blocks
+        assert (b.code, b.kind, s.state) == ("entry_reasons_missing", "act", "blocked")
+        assert b.runbook == "Updating the VPS to a new version"
+
+
+def test_invalid_field_codes_are_never_shown_but_the_invalid_state_is():
+    s = status(engine(entry_blocks=["invalid_state", "invalid:equity"]))
+    assert codes(s) == ["invalid_state"] and s.state != "open"
+
+
+def test_the_engines_supervisor_halt_adds_nothing_to_the_supervisors_own_reasons():
+    s = status(engine(entry_blocks=["supervisor_halt"]), supervisor_reasons=["combined_daily_cap"])
+    assert codes(s) == ["combined_daily_cap"]
+    # the engine read a halt the API does not see yet: still shown
+    assert codes(status(engine(entry_blocks=["supervisor_halt"]))) == ["supervisor_halt"]
+
+
+def test_a_per_trade_refusal_is_its_agents_own_block_since_when_it_happened():
+    at = (WED - pd.Timedelta(minutes=20)).isoformat()
+    s = status(engine(entry_refusals={"trend-g0": {"code": "margin_level_floor", "at": at},
+                                      "tsmom-g0": {"code": "fx_conversion_unavailable", "at": at},
+                                      "junk": {"code": "Not A Code", "at": at}, "bad": "x"}))
+    by = {b.agent_id: b for b in s.blocks}
+    assert set(by) == {"trend-g0", "tsmom-g0"}
+    m = by["trend-g0"]
+    assert (m.code, m.scope, m.at_label, m.kind) == ("margin_level_floor", "agent", "since", "wait")
+    assert m.text == "trend-g0: last entry refused: Not enough free margin"
+    assert m.at == pd.Timestamp(at).to_pydatetime()
+    assert by["tsmom-g0"].kind == "act"
+    assert s.state == "partial" and s.headline == "Can take new trades, except trend-g0, tsmom-g0"
 
 
 def test_a_silent_engine_while_the_market_is_open_past_the_health_threshold_needs_the_owner():
@@ -205,16 +251,6 @@ def test_a_recent_tick_error_the_engine_carried_on_from_is_a_note_not_a_block():
     assert s.state == "open" and s.notes and "carried on" in s.notes[0]
 
 
-def test_a_balance_too_small_for_any_timeframe_says_so():
-    ms = Milestones(rule="r", rungs=[], tradeable=[], next_timeframe="15m", next_equity=1500.0)
-    s = status(engine(), milestones=ms)
-    assert codes(s) == ["min_lot_exceeds_risk"] and s.blocks[0].kind == "wait"
-    # inferred from the ladder, not reported by the engine: worded as likely (re-verification N3)
-    assert s.blocks[0].text == "Likely: the smallest trade risks too much on every timeframe"
-    assert codes(status(engine(), milestones=ms.model_copy(update={"pending": "pending broker terms"}))) == []
-    assert codes(status(engine(), milestones=ms.model_copy(update={"tradeable": ["4h"]}))) == []
-
-
 def test_every_spent_cap_is_its_own_block_and_the_headline_says_when_the_last_clears():
     caps = [LossCap(name="absolute daily limit", label="x", period="today", limit=50.0, used=50.0, remaining=0.0),
             LossCap(name="account 5.0% weekly cap", label="x", period="this week", limit=50.0, used=52.0, remaining=0.0),
@@ -232,7 +268,7 @@ def test_every_spent_cap_is_its_own_block_and_the_headline_says_when_the_last_cl
 
 
 def test_the_drawdown_texts_come_from_the_limits():
-    s = status(engine(stage="halted"), limits=RiskLimits(dd_stage2=0.10),
+    s = status(engine(stage="halted", entry_blocks=["drawdown_halt"]), limits=RiskLimits(dd_stage2=0.10),
                supervisor_reasons=["combined_drawdown_halt"], combined_dd=0.15)
     by = {x.code: x for x in s.blocks}
     assert "10% below its high" in by["drawdown_halt"].text
@@ -240,7 +276,7 @@ def test_the_drawdown_texts_come_from_the_limits():
 
 
 def test_a_blackout_without_a_title_still_blocks():
-    s = status(engine(blackout={"kind": "calendar"}))
+    s = status(engine(blackout={"kind": "calendar"}, entry_blocks=["news_blackout"]))
     assert [(b.code, b.text) for b in s.blocks] == [("news_blackout", "News blackout")]
 
 
@@ -296,7 +332,8 @@ def _owner(c: TestClient, app) -> dict[str, str]:
 def test_accounts_carry_the_entry_status_from_engine_supervisor_and_owner_halt(tmp_path):
     now = time.time()
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(engine(
-        ts=now, server_clock={"status": "mismatch", "reason": "x"}, login=12345678, server="ICMarketsSC-Demo")))
+        ts=now, server_clock={"status": "mismatch", "reason": "x"}, entry_blocks=["server_clock_mismatch"],
+        login=12345678, server="ICMarketsSC-Demo")))
     (tmp_path / "supervisor.json").write_text(json.dumps({"ts": now, "halt": False, "reasons": []}))
     app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
     c = TestClient(app)
@@ -365,7 +402,7 @@ def test_window_reasons_are_live_not_future():
 
 
 def test_a_tier2_blackout_says_how_long_entries_wait_around_the_release():
-    s = status(engine(windows=windows(tier2_blackout=True)), limits=window_limits())
+    s = status(engine(windows=windows(tier2_blackout=True), entry_blocks=["tier2_blackout"]), limits=window_limits())
     [b] = s.blocks
     assert (b.code, b.kind, b.text) == ("tier2_blackout", "wait", "Second-tier US news: entries paused around the release")
     assert b.fix == "Nothing to do: entries resume 15 min after the release (the pause starts 5 min before it)."
@@ -375,19 +412,19 @@ def test_a_tier2_blackout_says_how_long_entries_wait_around_the_release():
 def test_the_reopen_window_says_until_when_from_the_session_table():
     # the weekly open: Monday 01:02 Athens = Sunday 22:02 UTC; the weekly window (30 min) ends 22:32 UTC
     now = pd.Timestamp("2026-10-18 22:10", tz="UTC")
-    s = status(engine(ts=now.timestamp(), windows=windows(reopen_window=True)), now=now, limits=window_limits())
+    s = status(engine(ts=now.timestamp(), windows=windows(reopen_window=True), entry_blocks=["reopen_window"]), now=now, limits=window_limits())
     [b] = s.blocks
     assert (b.code, b.kind, b.at_label) == ("reopen_window", "wait", "until")
     assert b.at == pd.Timestamp("2026-10-18 22:32", tz="UTC").to_pydatetime()
     assert s.clears_at == b.at
     # a reopen window the session table cannot place (the engine failed closed) still blocks, with no time promised
-    s = status(engine(windows=windows(reopen_window=True)), limits=window_limits())
+    s = status(engine(windows=windows(reopen_window=True), entry_blocks=["reopen_window"]), limits=window_limits())
     assert codes(s) == ["reopen_window"] and s.blocks[0].at is None
 
 
 def test_a_holiday_names_the_day_and_clears_at_the_first_normal_server_day():
     now = pd.Timestamp("2026-11-26 14:00", tz="UTC")             # Thanksgiving; the 27th is listed too
-    s = status(engine(ts=now.timestamp(), windows=windows(holiday_thin=True)), now=now, limits=window_limits())
+    s = status(engine(ts=now.timestamp(), windows=windows(holiday_thin=True), entry_blocks=["holiday_thin"]), now=now, limits=window_limits())
     [b] = s.blocks
     assert (b.code, b.kind, b.at_label) == ("holiday_thin", "wait", "until")
     assert b.text == "Holiday trading (Thanksgiving Day): thin market, entries paused"
@@ -397,7 +434,8 @@ def test_a_holiday_names_the_day_and_clears_at_the_first_normal_server_day():
 def test_an_unavailable_calendar_needs_the_owner_and_says_which_list_and_since_when():
     since = (WED - pd.Timedelta(hours=2)).isoformat()
     s = status(engine(windows=windows(calendar_unavailable=True, calendar_unavailable_since=since,
-                                      calendar_unavailable_reason="newest fetch 2026-10-01 is not within 7 days")),
+                                      calendar_unavailable_reason="newest fetch 2026-10-01 is not within 7 days"),
+                      entry_blocks=["calendar_unavailable"]),
                limits=window_limits())
     [b] = s.blocks
     assert (b.code, b.kind, b.at_label) == ("calendar_unavailable", "act", "since")
@@ -405,31 +443,32 @@ def test_an_unavailable_calendar_needs_the_owner_and_says_which_list_and_since_w
     assert "Feeds" in b.fix and s.state == "blocked"
     assert "2026-10-01" not in json.dumps(s.model_dump(mode="json"))       # the engine's free text never shows
     hol = status(engine(windows=windows(calendar_unavailable=True,
-                                        calendar_unavailable_reason="holiday list cme-metals-v2 does not cover 2029-01-02")),
+                                        calendar_unavailable_reason="holiday list cme-metals-v2 does not cover 2029-01-02"),
+                        entry_blocks=["calendar_unavailable"]),
                  limits=window_limits())
     assert "holiday list" in hol.blocks[0].text.lower() and "holidays_cme_metals.yaml" in hol.blocks[0].fix
     assert "cme-metals-v2" not in json.dumps(hol.model_dump(mode="json"))
 
 
-def test_a_window_that_is_off_never_blocks_whatever_its_flag():
+def test_a_raised_window_flag_the_gate_does_not_refuse_on_never_blocks():
     """The engine's error path raises reopen_window and calendar_unavailable even for windows that are off; the
-    RiskGate ignores them, so the status does too."""
+    RiskGate ignores them (`window_reasons`), so the engine does not list them and the status does not show them."""
     off = windows(enabled={"tier2": False, "reopen": False, "holidays": False}, tier2_blackout=True, reopen_window=True,
                   holiday_thin=True, calendar_unavailable=True)
     assert codes(status(engine(windows=off), limits=window_limits())) == []
 
 
-def test_the_engines_own_enabled_decides_even_when_the_settings_read_here_say_off():
-    """Review (trading safety, MEDIUM): the running gate's setting is the engine's `windows.enabled`. A settings edit
-    without a restart, or settings that fail to load (RiskLimits() defaults: every window off), must never hide a
-    window the gate is refusing on."""
-    s = status(engine(windows=windows(reopen_window=True, calendar_unavailable=True)))     # default limits: all off
+def test_the_engines_list_decides_even_when_the_settings_read_here_say_off():
+    """Review (trading safety, MEDIUM): the running gate decides. A settings edit without a restart, or settings that
+    fail to load (RiskLimits() defaults: every window off), must never hide a window the gate is refusing on."""
+    s = status(engine(windows=windows(reopen_window=True, calendar_unavailable=True),
+                      entry_blocks=["reopen_window", "calendar_unavailable"]))          # default limits: all off
     assert codes(s) == ["calendar_unavailable", "reopen_window"] and s.state == "blocked"
     for flag in ("tier2_blackout", "reopen_window", "holiday_thin", "calendar_unavailable"):
-        s = status(engine(windows=windows(**{flag: True})), limits=RiskLimits())
+        s = status(engine(windows=windows(**{flag: True}), entry_blocks=[flag]), limits=RiskLimits())
         assert s.state != "open" and codes(s) == [flag], flag
-    # no `enabled` published: nothing to go on, so a raised flag is shown (the safe side of a display)
-    s = status(engine(windows={"reopen_window": True}), limits=RiskLimits())
+    # no `windows` published at all: the listed reason is still shown, in its plain words
+    s = status(engine(entry_blocks=["reopen_window"]), limits=RiskLimits())
     assert codes(s) == ["reopen_window"]
 
 
@@ -437,7 +476,7 @@ def test_times_the_engine_publishes_win_over_ones_worked_out_here():
     w = windows(tier2_blackout=True, reopen_window=True, holiday_thin=True,
                 tier2_until="2026-10-14T14:12:00+00:00", reopen_until="2026-10-14T14:07:00+00:00",
                 holiday_name="Day after Thanksgiving", holiday_until="2026-10-15T21:00:00+00:00")
-    s = status(engine(windows=w), limits=RiskLimits())
+    s = status(engine(windows=w, entry_blocks=["tier2_blackout", "reopen_window", "holiday_thin"]), limits=RiskLimits())
     by = {b.code: b for b in s.blocks}
     assert (by["tier2_blackout"].at_label, by["tier2_blackout"].at) == \
         ("until", pd.Timestamp("2026-10-14 14:12", tz="UTC").to_pydatetime())
