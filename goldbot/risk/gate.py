@@ -518,7 +518,9 @@ class RiskGate:
         risk_amount = lots * sz.risk_per_lot
         # BACKLOG 36 (review LOW-6): a full stop-out also pays the round trip (spread, slippage, commission: cost_atr x
         # ATR) and the paid swap of a rollover before the risk day ends, per oz, x lots x contract x fx. Never negative:
-        # a credit or a negative cost does not shrink the projection below loss so far + stop risk
+        # a credit or a negative cost does not shrink the projection below loss so far + stop risk. Conservative by
+        # design: cost_atr includes the spread, but the stop risk is measured from the fill (ask in, bid out at the
+        # stop), which already pays it, so the spread is counted twice (the acceptance asks for the full `_cost_atr`)
         per_oz = max(0.0, intent.cost_atr * intent.atr_usd) + max(0.0, intent.swap_usd_per_oz)
         cost_amount = per_oz * lots * intent.contract_oz * fx
         # BACKLOG 35 (review MEDIUM-4): with project_open_risk the projection also adds what the open positions can

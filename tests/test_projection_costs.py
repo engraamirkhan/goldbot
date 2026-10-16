@@ -185,10 +185,77 @@ def test_the_service_passes_the_settings_swap_prior(tmp_path):
     d = EngineConfig(account_id="a", broker_name="b").swap_prior
     assert (d.long_usd_per_lot, d.short_usd_per_lot, d.triple_weekday) == \
         (s.long_usd_per_lot, s.short_usd_per_lot, s.triple_weekday)               # the default is the shipped prior
-    import inspect
 
-    from goldbot.ops.services import engine as service
-    assert "swap_prior=settings_swap(settings)" in inspect.getsource(service)
+
+def test_the_engine_service_builds_its_engine_with_the_settings_swap_prior(tmp_path, monkeypatch):
+    import goldbot.config as config
+    import goldbot.engine as engine_pkg
+    from goldbot.ops import accounts
+    from goldbot.ops import run as run_mod
+    from tests.test_engine_watchdog import ACC
+    real = config.load_settings()
+    custom = real.model_copy(update={"costs": real.costs.model_copy(
+        update={"swap_long_usd_per_lot": -33.0, "swap_short_usd_per_lot": -7.0, "swap_triple_weekday": 4})})
+    monkeypatch.setattr(config, "load_settings", lambda *a, **k: custom)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(accounts, "load_accounts", lambda path=None: {"icm-demo": ACC})
+    monkeypatch.setattr(accounts, "bridge_endpoint", lambda aid: None)
+    monkeypatch.setattr(run_mod.sys, "platform", "linux")       # the paper broker branch, wherever the test runs
+    built: list[EngineConfig] = []
+
+    class _Built(Exception):
+        pass
+
+    def capture(cfg: EngineConfig, *a: Any, **k: Any) -> Any:
+        built.append(cfg)
+        raise _Built
+
+    monkeypatch.setattr(engine_pkg, "Engine", capture)
+    with pytest.raises(_Built):
+        run_mod.run_engine("icm-demo")
+    [cfg] = built
+    assert (cfg.swap_prior.long_usd_per_lot, cfg.swap_prior.short_usd_per_lot, cfg.swap_prior.triple_weekday) == \
+        (-33.0, -7.0, 4)                                                          # the settings, not the default
+
+
+# ---------------------------------------------------------------------------------------------- non-finite swap (review)
+def test_a_nan_swap_in_the_cost_table_never_loads_so_the_engine_charges_the_prior(tmp_path):
+    import json
+    eng = _eng(tmp_path)
+    raw = json.loads(_table().model_dump_json())
+    raw.update(swap_long_usd_per_lot=float("nan"), swap_short_usd_per_lot=0.0)
+    (tmp_path / "costs_icm-demo.json").write_text(json.dumps(raw))                # NaN in the file
+    with pytest.raises(ValueError):
+        CostTable.load(tmp_path / "costs_icm-demo.json")
+    assert eng._swap_usd_per_oz(1, MON) == pytest.approx(0.60)                      # the prior, never 0
+    assert eng._cost_atr(10.0, MON) == eng.cfg.cost_atr                             # no table at all: the fallback
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_swap_spec_and_a_cost_table_refuse_a_non_finite_rate(bad):
+    with pytest.raises(ValueError):
+        SwapSpec(long_usd_per_lot=bad, short_usd_per_lot=0.0)
+    with pytest.raises(ValueError):
+        _table(swap_long_usd_per_lot=-45.0, swap_short_usd_per_lot=bad)
+
+
+def test_a_non_finite_broker_reading_is_no_swap_and_never_fails_the_nightly_job():
+    from goldbot.execution.costs import BrokerTerms
+    t = BrokerTerms(account_id="icm-demo", measured_utc=MON, swap_long_usd_per_lot=float("nan"),
+                    swap_short_usd_per_lot=1.0)
+    assert t.swap_spec("Europe/Athens") is None
+
+
+def test_a_non_finite_rate_reaching_the_engine_is_refused_by_the_gate(tmp_path, monkeypatch):
+    import goldbot.engine.runner as runner
+    nan_swap = SwapSpec.model_construct(long_usd_per_lot=float("nan"), short_usd_per_lot=0.0, triple_weekday=2,
+                                        server_tz="Europe/Athens", contract_oz=100.0)   # bypasses validation
+    monkeypatch.setattr(runner, "account_swap", lambda table, prior: nan_swap)
+    eng = _eng(tmp_path)
+    swap = eng._swap_usd_per_oz(1, MON)
+    assert swap != swap                                                             # NaN, never 0
+    d = _gate().check(_gbp(swap=swap), _state(0.0))
+    assert not d.allowed and "invalid:swap_usd_per_oz" in d.reasons
 
 
 def _record_swap(monkeypatch: Any) -> list[tuple[int, pd.Timestamp]]:
@@ -242,3 +309,54 @@ def test_the_approval_recheck_prices_the_swap_at_the_click(tmp_path, monkeypatch
     [i] = seen
     assert i.swap_usd_per_oz == 0.123                                # re-priced, not the proposal's 0.0
     assert calls == [(1, pb.last_tick("XAUUSD").ts_utc)]            # at the click's quote time
+
+
+# ---------------------------------------------------------------------------------------------- approval across a rollover
+SUMMER = pd.Timestamp("2026-07-14 20:50", tz="UTC")    # Tuesday; Athens is UTC+3 in summer, so it rolls at 21:00 UTC
+
+
+def test_a_card_proposed_before_the_summer_rollover_is_repriced_without_swap_at_a_click_after_it(tmp_path):
+    from tests.test_approved_card_cap import _approve, _card
+    from tests.test_engine_clock import _engine, _fresh_bar
+    eng, pb, clock = _engine(tmp_path, start=SUMMER, tz="Europe/Athens")
+    eng._refresh_account(_tick(SUMMER))
+    at_card = eng._swap_usd_per_oz(1, SUMMER)
+    assert at_card == pytest.approx(0.60)                                # 21:00 UTC is still ahead: one night
+    intent = _intent().model_copy(update={**eng._sizing_terms(1, 2400.2, 4.0), "swap_usd_per_oz": at_card})
+    prop = _card(eng, intent)
+    click = SUMMER + pd.Timedelta(minutes=15)                            # 21:05 UTC = 00:05 Athens
+    clock[0] = click
+    pb.on_tick(_tick(click))
+    _fresh_bar(eng, click)
+    seen: list[Intent] = []
+    real = eng.gate.check
+
+    def spy(i: Intent, *a: Any, **k: Any) -> Any:
+        seen.append(i)
+        return real(i, *a, **k)
+
+    eng.gate.check = spy                                                  # type: ignore[method-assign,assignment]
+    _approve(eng, prop)
+    [i] = seen
+    assert i.swap_usd_per_oz == 0.0                                      # the rollover passed: no swap today
+    # and nothing is placed: 21:05 is inside the +-5 min rollover window and the summer daily break (21:00-22:00
+    # UTC), so a card cannot be filled between the rollover and the next risk day's 00:00 anyway
+    assert prop.gate_refusal is not None and {"rollover", "market_closed"} <= set(prop.gate_refusal)
+    assert pb.positions() == []
+
+
+def test_a_swap_that_cannot_be_priced_at_the_click_refuses_the_approval(tmp_path, monkeypatch):
+    from tests.test_approved_card_cap import _approve, _card
+    from tests.test_engine_clock import _engine
+    eng, pb, _ = _engine(tmp_path)
+    eng._refresh_account(_tick(WED))
+    prop = _card(eng, _intent().model_copy(update=eng._sizing_terms(1, 2400.2, 4.0)))
+
+    def broken(self: Engine, side: int, now: pd.Timestamp) -> float:
+        raise OSError("cost table unreadable mid-read")
+
+    monkeypatch.setattr(Engine, "_swap_usd_per_oz", broken)
+    _approve(eng, prop)
+    assert pb.positions() == []
+    assert prop.gate_refusal == ["swap_unavailable"]
+    assert any(d.get("action") == "gate_at_approval:swap_unavailable" for d in eng.decisions)

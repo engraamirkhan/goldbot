@@ -13,5 +13,13 @@
   cost, and exits are untouched. Worked example at £5,000 GBP (fx 0.75, ATR $10, 0.01 lot): stop £7.50, round trip
   £0.30, one night of the -$60 prior £0.45 (£1.35 on Wednesday). With £42 lost, the projection was £49.50 (allowed)
   and is now £50.25 (refused). New `GateDecision.cost_amount` and `Intent.swap_usd_per_oz` (in-memory only, nothing
-  persisted). Tests: tests/test_projection_costs.py; three older boundary pins moved by exactly the cost. Needs
-  trading-safety and quant review.
+  persisted). Tests: tests/test_projection_costs.py; three older boundary pins moved by exactly the cost.
+
+  Trading-safety review fixes (one MEDIUM, four LOW):
+  - A NaN swap rate no longer reads as "pays nothing". `SwapSpec` and the cost table's swap fields are finite-only,
+    so a NaN table fails to load and the prior is charged. A NaN broker reading becomes "no swap" in the nightly job.
+    If a non-finite rate still reaches the engine, `_swap_usd_per_oz` returns NaN and the gate refuses.
+  - A swap that cannot be priced at the click refuses the approval (`swap_unavailable`).
+  - The spread is counted twice on purpose: `cost_atr` includes it, and so does the stop risk measured from the fill.
+    This is conservative and recorded in the gate comment and R42.
+  - Quant, code and trading-safety reviews done.

@@ -1194,8 +1194,16 @@ class Engine:
             # the quote the order would be priced from must pass the tick price rules (review MEDIUM-3); its time is
             # not compared here, the approval reads the terminal's latest quote
             fault = self._quote_fault(tick, order=False)
+            swap: float | None = None
+            if fault is None:
+                try:      # BACKLOG 36 review: a swap that cannot be priced refuses the approval (fail closed)
+                    swap = self._swap_usd_per_oz(intent.side, tick.ts_utc)
+                except Exception as exc:
+                    log.warning("swap not priced at approval (%s: %s): refused", type(exc).__name__, exc)
             if fault is not None:
                 gd, lots = GateDecision(allowed=False, reasons=[f"bad_quote:{fault[0]}"]), 0.0
+            elif swap is None:
+                gd, lots = GateDecision(allowed=False, reasons=["swap_unavailable"]), 0.0
             else:
                 self._refresh_account(tick)
                 # contract terms and the conversion read again from the terminal (review LOW-5): one it can no longer
@@ -1205,7 +1213,7 @@ class Engine:
                 intent = intent.model_copy(update={**self._sizing_terms(intent.side, now_px,
                                                                         intent.stop_atr * intent.atr_usd),
                                                    "price": now_px,
-                                                   "swap_usd_per_oz": self._swap_usd_per_oz(intent.side, tick.ts_utc)})
+                                                   "swap_usd_per_oz": swap})
                 gd = self.gate.check(intent, self.state, tick.ts_utc,  # re-check at approval time
                                      margin_required=broker_margin(self.broker, self.cfg.symbol),
                                      throttle=self._agent_throttle(agent.agent_id, intent.timeframe or agent.timeframe,
@@ -3115,6 +3123,8 @@ class Engine:
         counted, a credit never) at the cost table's measured rates, else `swap_prior`, on this engine's server clock.
         A rollover after the risk day ends lands on the next day's loss so far. Entries only."""
         swap = account_swap(self._cost_table(), self.cfg.swap_prior.model_copy(update={"server_tz": self.cfg.server_tz}))
+        if not (math.isfinite(swap.long_usd_per_lot) and math.isfinite(swap.short_usd_per_lot)):
+            return math.nan        # defence in depth (SwapSpec is finite-only): the gate refuses invalid:swap_usd_per_oz
         now = pd.Timestamp(now).tz_convert("UTC")
         return paid_swap_per_oz(swap, side, now, now.normalize() + pd.Timedelta(days=1))
 
