@@ -205,7 +205,7 @@ def gate_pass_counts(row: dict[str, Any]) -> bool:
     return (results.get("gates") or {}).get("passed") is True and costs_recorded(results)
 
 
-def _row_hash(row: dict[str, Any]) -> str:
+def row_hash(row: dict[str, Any]) -> str:
     """The row's config hash (recomputed from its config when a hand-built row has none)."""
     return str(row.get("config_hash") or config_hash(row.get("config") or {}))
 
@@ -226,7 +226,7 @@ def latest_evaluated(rows: list[dict[str, Any]], family: str, h: str,
     2026-10-16: reruns of one configuration are not best-of-N; "only the latest evaluated row ... decides". A row
     without the cost treatment is no rerun of the swap-charged configuration and decides nothing."""
     cands = [(i, r) for i, r in enumerate(rows)
-             if r.get("status") == "evaluated" and r.get("family") == family and _row_hash(r) == h
+             if r.get("status") == "evaluated" and r.get("family") == family and row_hash(r) == h
              and (feature_version is None or r.get("feature_version") == feature_version)
              and costs_recorded(r.get("results") or {})]
     return max(cands, key=lambda c: (_row_when(c[1]), c[0]))[1] if cands else None
@@ -235,7 +235,7 @@ def latest_evaluated(rows: list[dict[str, Any]], family: str, h: str,
 def holdout_passed(rows: list[dict[str, Any]], family: str, h: str, feature_version: str | None = None) -> bool:
     """The configuration's holdout scoring (status "holdout", same family and config hash; `feature_version` None: any
     version) passed, with its cost treatment recorded."""
-    return any(r.get("status") == "holdout" and r.get("family") == family and _row_hash(r) == h
+    return any(r.get("status") == "holdout" and r.get("family") == family and row_hash(r) == h
                and (feature_version is None or r.get("feature_version") == feature_version)
                and costs_recorded(r.get("results") or {})
                and ((r.get("results") or {}).get("holdout_verdict") or {}).get("passed") is True for r in rows)
@@ -255,7 +255,7 @@ def promotion_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str | 
         return "not a walk-forward trial"
     if not gate_pass_counts(row):
         return "did not pass the research gates with its costs recorded"
-    family, h, fv = str(row.get("family")), _row_hash(row), row.get("feature_version")
+    family, h, fv = str(row.get("family")), row_hash(row), row.get("feature_version")
     latest = latest_evaluated(rows, family, h, fv)
     if latest is not None and latest != row:
         return (f"a later rerun of the same configuration (trial #{latest.get('trial')}) decides"
