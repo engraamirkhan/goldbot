@@ -173,7 +173,8 @@ def main() -> None:
         mailer = CaptureMailer(Path(state) / "e2e_outbox.jsonl", bind_host=args.host)
         outbox = str(mailer.outbox)
         url_host = f"[{args.host}]" if ":" in args.host else args.host
-        mail = MailSettings(enabled=True, from_address="goldbot-e2e@example.com",
+        # host is required once enabled; CaptureMailer never connects anywhere
+        mail = MailSettings(enabled=True, host="127.0.0.1", from_address="goldbot-e2e@example.com",
                             dashboard_origin=f"http://{url_host}:{args.port}")
     app = create_app(state, web_dist=ROOT / "web" / "dist", data_root=Path(state) / "data", owner_email="owner@example.com",
                      mail=mail, mailer=mailer)
