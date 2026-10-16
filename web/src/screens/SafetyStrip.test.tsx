@@ -99,7 +99,7 @@ describe("SafetyStrip", () => {
   });
 
   it("says it can't check the loss budget in amber when the accounts report different currencies (BACKLOG 61)", () => {
-    const why = "The accounts report different currencies (GBP, USD), so the combined loss cap can't be checked. Exits always run.";
+    const why = "The accounts report different currencies (GBP, USD), so the combined loss cap can't be checked. Each account's own loss limit still applies; exits always run.";
     const mixed = { limit: 20, used: 0, remaining: 20, binding: "account 2.0% daily cap", binding_label: "this account (2.0% of today's start)", period: "today" as const, notes: [], caps: [], unknown: why, unknown_paused: false, unknown_mixed: true };
     render(<SafetyStrip status={status()} accounts={[
       account({ currency: "GBP", loss_budget: mixed }),

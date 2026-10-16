@@ -111,7 +111,7 @@ describe("BalanceCard", () => {
   });
 
   it("says it can't check the budget in amber, with no amount, when the accounts report different currencies", () => {
-    const why = "The accounts report different currencies (GBP, USD), so the combined loss cap can't be checked. Exits always run.";
+    const why = "The accounts report different currencies (GBP, USD), so the combined loss cap can't be checked. Each account's own loss limit still applies; exits always run.";
     render(<BalanceCard a={base({ loss_budget: { ...cantCheck(why, false).loss_budget!, unknown_mixed: true } })} />);
     const budget = screen.getByText("Loss budget: can't check").closest(".budget");
     expect(budget).toHaveClass("warn");

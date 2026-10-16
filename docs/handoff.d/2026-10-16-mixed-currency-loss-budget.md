@@ -1,9 +1,11 @@
 - **Mixed-currency accounts: the loss budget reads "can't check", not the account's own cap (BACKLOG 61, UX review
-  2026-10-16; display only; trading-safety and UX review pending).** When the accounts reported different currencies,
+  2026-10-16; display only; ui-ux-designer 2026-10-16: amber text changed, red and approval text approved;
+  trading-safety and code review of 4c3d087 pending).** When the accounts reported different currencies,
   `account_view._combined` left out the combined 1.5%/4% caps with a note. The Overview card, the safety-strip chip
   and the approval cards then showed the account's 2% cap, which is the roomier figure. Now:
   - `LossBudget.unknown` carries the owner's reason, for example "The accounts report different currencies (GBP,
-    USD), so the combined loss cap can't be checked. Exits always run." A new field, `LossBudget.unknown_mixed`,
+    USD), so the combined loss cap can't be checked. Each account's own loss limit still applies; exits always
+    run." A new field, `LossBudget.unknown_mixed`,
     names the cause.
   - The budget is amber by default. It is red ("New entries are paused; exits always run.") only while the supervisor
     halts on `mixed_account_currencies`. A leftover engine file in another currency that is over 60 s old does not

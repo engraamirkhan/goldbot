@@ -253,7 +253,7 @@ def _mixed(currencies: set[Any], paused: bool) -> str:
     if any(not (isinstance(c, str) and c) for c in currencies):
         names.append("one not reported")
     return (f"The accounts report different currencies ({', '.join(names)}), so the combined loss cap can't be "
-            "checked. " + (_PAUSED if paused else "Exits always run."))
+            "checked. " + (_PAUSED if paused else "Each account's own loss limit still applies; exits always run."))
 
 
 def _combined(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[dict[str, Any]], now: float,

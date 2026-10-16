@@ -114,6 +114,7 @@ def test_todays_gains_add_room_before_the_cap_and_an_exhausted_budget_has_none_l
 
 
 MIXED = "The accounts report different currencies (GBP, USD), so the combined loss cap can't be checked. "
+AMBER_TAIL = "Each account's own loss limit still applies; exits always run."  # ui-ux-designer 2026-10-16
 
 
 def test_mixed_currencies_mean_the_budget_cant_be_checked_in_amber_never_the_roomier_account_cap():
@@ -123,7 +124,7 @@ def test_mixed_currencies_mean_the_budget_cant_be_checked_in_amber_never_the_roo
     other = _engine(account="vantage-demo", currency="USD", equity=10_000.0, day_start_equity=10_000.0)
     b = _budget(_engine(), _sup(combined_day_start_equity=11_000.0, combined_equity=10_990.0), [_engine(), other])
     assert b is not None
-    assert (b.unknown, b.unknown_paused, b.unknown_mixed) == (MIXED + "Exits always run.", False, True)
+    assert (b.unknown, b.unknown_paused, b.unknown_mixed) == (MIXED + AMBER_TAIL, False, True)
     assert b.cant_check_reason == "the accounts report different currencies"
     assert [c.name for c in b.caps] == ["account 2.0% daily cap", "account 5.0% weekly cap"]
     assert (b.binding, b.remaining) == ("account 2.0% daily cap", pytest.approx(10.0))   # entry status: unchanged
