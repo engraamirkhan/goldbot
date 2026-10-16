@@ -530,6 +530,23 @@ def test_workflow_follows_the_data_workflow_pattern():
     assert "not endorsed or certified by the Federal Reserve Bank of St. Louis" in wf
 
 
+def test_workflow_skips_cleanly_without_the_fred_key():
+    # without the repo secret the Sunday run used to fail and open a confusing `ci` issue; now a key-check job (no
+    # token scopes) reports the missing secret as a warning and the fetch job is skipped, never failed
+    import yaml
+
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "data-us-calendar.yml").read_text())
+    jobs = wf["jobs"]
+    check = jobs["key-check"]
+    assert check["permissions"] == {} and check["outputs"]["present"]
+    step = check["steps"][0]
+    assert step["env"]["FRED_API_KEY"] == "${{ secrets.FRED_API_KEY }}"
+    assert "::warning::" in step["run"] and "GITHUB_STEP_SUMMARY" in step["run"] and "exit 1" not in step["run"]
+    assert "echo \"$FRED_API_KEY\"" not in step["run"]                      # the key is tested, never printed
+    fetch = jobs["fetch"]
+    assert fetch["needs"] == "key-check" and fetch["if"] == "needs.key-check.outputs.present == 'true'"
+
+
 # --------------------------------------------------------------------------- tier 1
 def test_tier1_proximity_and_count_today(enabled):
     cal = _cal()
