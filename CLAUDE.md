@@ -64,6 +64,11 @@ Frontend (`cd web && npm ci`):
 Docs (ADR 0012): HANDOFF.md, docs/TRACEABILITY.md and docs/BACKLOG.md are generated. Add a fragment and run the assembler: `scripts/docs_assemble.py
 new-handoff <slug>` / `new-row R --slug <s>` / `new-item --slug <s> --title <t>`, edit the new file, then `python scripts/docs_assemble.py`.
 Never edit the rendered files (the `docs-assemble` hook fails). Integrate lanes with `scripts/docs_assemble.py merge <branch>`.
+Once per clone run `python scripts/docs_assemble.py install-merge-driver`: plain merges, rebases and cherry-picks then re-render
+the rendered docs from the merged fragments instead of conflicting (a real fragment conflict still stops the merge).
+ADRs: `scripts/docs_assemble.py new-adr --slug <s> --title <t>` reserves the number (`--number N` for one in
+`docs/decisions/reserved.yaml`); never pick a number by hand. Lane briefs follow `docs/process/lane-checklist.md`;
+merged worktrees go with `scripts/prune_worktrees.sh` (dry run; `--apply` removes).
 
 CI (`.github/workflows/ci.yml`) runs pre-commit, backend lint/typecheck/unit/integration, frontend lint/typecheck/unit,
 api-contract and e2e as separate jobs; run the same commands locally before pushing.
