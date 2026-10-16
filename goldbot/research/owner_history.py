@@ -1422,7 +1422,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m goldbot.ops.run owner-history",
                                  description="Analyse the owner's MT5 trade history privately (research seeds).")
     ap.add_argument("path", nargs="?", default=str(DEFAULT_DIR),
-                    help="report file, or a folder (newest report in it); default %(default)s")
+                    help=f"report file, or a folder (newest report in it); default {DEFAULT_DIR_SHOWN}")
     ap.add_argument("--server-tz", default="Europe/Athens", help="broker server time zone (IC Markets: Europe/Athens)")
     ap.add_argument("--contract", type=float, default=CONTRACT_OZ, help="ounces per lot")
     ap.add_argument("--targets", default="30,50", help="daily targets in account currency, comma separated")
