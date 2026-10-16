@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Every backend gate from CLAUDE.md, in parallel: unit and integration tests on xdist workers, with ruff, mypy,
-# pre-commit and the dry run alongside. Add --web for the frontend gates. Logs: ${GATES_LOG:-~/tmp/gates}.
+# pre-commit and the dry run alongside. Add --web for the frontend gates. Logs: ${GATES_LOG:-~/tmp/gates/<worktree>}.
 #   scripts/gates.sh [--web]   the merge gate
 #   scripts/gates.sh --quick   ruff + mypy + unit only, for iterating in a lane; NOT the merge gate
 # Workers per pytest suite: GATES_WORKERS if set (always wins), else picked from the machine's load so parallel lanes
@@ -19,7 +19,8 @@ done
 if [ "$quick" = 1 ] && [ "$web" = 1 ]; then echo "gates: --quick and --web do not combine" >&2; exit 2; fi
 
 [ -f .venv/bin/activate ] && . .venv/bin/activate
-L=${GATES_LOG:-$HOME/tmp/gates}; mkdir -p "$L"; rm -f "$L"/*.log
+L=${GATES_LOG:-$HOME/tmp/gates/$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")}   # one log folder per worktree
+mkdir -p "$L"; rm -f "$L"/*.log                     # so parallel lanes never delete each other's logs
 
 cores() { sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1; }
 load1() {  # 1-minute load average; macOS prints "{ 9.61 8.20 7.00 }", Linux "9.61 8.20 7.00 ..."
