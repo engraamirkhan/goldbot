@@ -63,7 +63,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 42 | Bridge/brain version and server_tz agreement checked at run time | Operational resilience, execution · RUN | S | proposed (SRE, G6; trading-safety review) |
 | 47 | Pre-registration writer for the shared registry (queued rows, slots, sync to `research-v1`) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; needed by 2026-12-04 for the Q1 freeze) |
 | 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | in review (built 2026-10-11: tsmom preset `slow_macro`, agent `tsmom-g0-fed4baec9f`, and `count_h06` in count-owed-events; quant review of the readings (a)-(e) in `preregistration-2027Q1.md` H-06; count pasted once `macro-v1` exists; by 2026-12-04, else H-06 is withdrawn by its rule) |
-| 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | proposed (research director 2026-10-11; settings and `hypotheses.md` B together) |
+| 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | in review (accountable: strategy-researcher; due 2026-10-23; fixed 2026-10-16: settings and `hypotheses.md` B both list the registry's trials; quant review) |
 | 50 | --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners | Idea generation (integrity) · FIND | M | implemented 2026-10-11 (TRACEABILITY M43; quant review pending) |
 | 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | proposed (security re-verify of BACKLOG 47, 2026-10-11) |
 | 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | implemented (security and trading-safety review pending; A14, follow-ups A15) |
@@ -686,6 +686,14 @@ hypotheses that go through the trial registry in a future quarter's budget.
   unaffected, but the governance mirror and the registry disagree. Do: correct both lists in one change (the director's
   `retired_drift` check fails if only one moves). Acceptance: `tests/test_director.py` green; lists equal the
   registry's trial numbers. Depends on: none.
+  *Fixed 2026-10-16 (strategy researcher):* checked against `research-v1`'s `registry.jsonl` (uploaded 2026-10-09,
+  20 rows, sha256 `2f3a5706321b`…; only trial number, family and agent id read, no result): `mean_reversion` is
+  #3, #5, #10, #12 (one agent, `mean_reversion-g0-b0f878abf3`) and `trend` is #2, #4, #9, #14 (`trend-g0-adf39c2c14`).
+  The other retired families already matched (session_open #1, #7, #11, #13; breakout #6, #8, #15;
+  intraday_momentum #18, #19). `research.retired_families` and `hypotheses.md` B now carry those lists; the registry is
+  unchanged. `RetiredFamily.trials` is read only by `retired_drift`, so no allocation moves. `tests/test_director.py`
+  40 passed. Still open: nothing checks these lists against the registry itself (only settings against the doc); a
+  `retired_drift` input from the registry rows is proposed to the research director, not built here.
 - **50. --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners (quant review
   F2 of BACKLOG 47, 2026-10-11).** Value: H-02's queued row hashes the exact first and last 1m bar the run loads
   (`bars_from`/`bars_to`), so the hash depends on how far data-v1 reaches on the day of the run, and a refresh between
