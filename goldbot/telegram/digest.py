@@ -42,6 +42,7 @@ import pandas as pd
 from goldbot.base import Record, load_record_json, write_atomic
 from goldbot.config import ROOT, Settings
 from goldbot.ops.report_days import day_before, day_bounds
+from goldbot.telegram.approvals import window_over
 from goldbot.telegram.entry_text import digest_line as entry_digest_line
 
 STATE_FILE = "telegram_digest.json"
@@ -177,7 +178,7 @@ def proposals_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp, now:
             if outcome in counts:
                 counts[outcome] += 1
                 refused += bool(outcome == "APPROVED" and p.get("gate_refusal"))
-            elif sub == "pending" and now.timestamp() > created + float(p.get("window_s", 90)):
+            elif sub == "pending" and window_over(created, p.get("window_s", 90), now.timestamp()):   # BACKLOG 60
                 counts["EXPIRED_UNAPPROVED"] += 1
             else:
                 counts["open"] += 1

@@ -4,7 +4,9 @@ Transport-agnostic core (tested without Telegram), plus a thin python-telegram-b
 * Only allow-listed owner user ids may act. `/halt` and `/approve` need no second factor; `/rearm`,
   `/mode` and parameter changes require a TOTP within 60 s, except `/mode propose`, which lowers authority as /halt
   does. `/mode auto` also needs the auto-mode evidence (goldbot/telegram/automode.py, row A10).
-* Each proposal has a 90 s window; timeouts are logged EXPIRED_UNAPPROVED. Rejections carry a reason code.
+* Each proposal has a 90 s window; timeouts are logged EXPIRED_UNAPPROVED. Rejections carry a reason code. The window
+  never trusts the wall clock alone (BACKLOG 60): a `created` stamped ahead of now or not a finite number counts as
+  expired, and the engine's center also holds a monotonic deadline per proposal it raised.
 * Exits are never gated here.
 * The bot also acts as the credential prompter for goldbot.ops.accounts (headless secret entry).
 """
@@ -19,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from pydantic import Field, model_validator
 
 from goldbot.base import Record
+from goldbot.data.timeutil import heartbeat_problem
 
 if TYPE_CHECKING:
     from goldbot.ops.account_view import LossBudget
@@ -53,6 +56,17 @@ def floor_cent(x: float) -> float:
 def pct(fraction: float) -> str:
     """0.0082 -> "0.82%", 0.005 -> "0.5%", 0.01 -> "1%" (the dashboard's `pct` in web/src/lib/approval.ts)."""
     return f"{100 * fraction:.2f}".rstrip("0").rstrip(".") + "%"
+
+
+def window_over(created: Any, window_s: Any, now: float) -> bool:
+    """True when an approval window opened at `created` (epoch s) is over at `now`, by the wall clock. Fail closed
+    (BACKLOG 60, the heartbeat rule of BACKLOG 58): also when `created` is more than CLOCK_AHEAD_TOLERANCE_S ahead of
+    `now` (a restored backup, a bad write, a clock stepped back: `now - created` is negative and the window would last
+    longer than `window_s`), and when `created` or `window_s` is not a finite number (NaN compared False with every
+    limit, so read as open forever)."""
+    if isinstance(window_s, bool) or not isinstance(window_s, (int, float)) or not math.isfinite(window_s):
+        return True
+    return heartbeat_problem(created, now, float(window_s)) is not None
 
 
 def decision_channel(by: str) -> str:
@@ -117,7 +131,9 @@ class Proposal(Record):
 
     @property
     def expired(self) -> bool:
-        return self.outcome is None and time.time() > self.created + self.window_s
+        """Undecided and its window over by the wall clock (`window_over`: a future or non-finite `created` counts as
+        over). The engine's ApprovalCenter adds its monotonic deadline on top (`ApprovalCenter.expired`)."""
+        return self.outcome is None and window_over(self.created, self.window_s, time.time())
 
     @property
     def money(self) -> tuple[float, str | None] | None:
@@ -175,11 +191,16 @@ class Proposal(Record):
 class ApprovalCenter:
     def __init__(self, allowed_user_ids: set[int], totp_verify: Callable[[str], bool] | None = None,
                  on_decision: Callable[[Proposal], None] | None = None, bus: ApprovalBus | None = None,
-                 auto_eligible: Callable[[], bool] | None = None):
+                 auto_eligible: Callable[[], bool] | None = None, monotonic: Callable[[], float] = time.monotonic):
         self.allowed = set(allowed_user_ids)
         self.totp_verify = totp_verify or (lambda code: False)
         self.on_decision = on_decision or (lambda p: None)
         self.pending: dict[str, Proposal] = {}
+        # BACKLOG 60: proposal id -> monotonic deadline (time.monotonic() at `propose` + window_s), so a backward
+        # wall-clock step never stretches the owner's window. In memory only, never persisted: a restart drops it with
+        # the pending proposals themselves (the engine then holds none, so a proposal left on disk is never executed)
+        self.monotonic = monotonic
+        self.deadlines: dict[str, float] = {}
         self.log: list[Proposal] = []
         self.mode = "paper"
         self.halted = False
@@ -187,8 +208,15 @@ class ApprovalCenter:
         self.bus = bus                      # set in production: proposals and decisions cross process boundaries
 
     # ------------------------------------------------------------- proposals
+    def expired(self, p: Proposal) -> bool:
+        """The proposal's window is over by the wall clock (`Proposal.expired`) or past the monotonic deadline this
+        center set when it raised it, whichever comes first: a decision then counts as EXPIRED_UNAPPROVED."""
+        deadline = self.deadlines.get(p.proposal_id)
+        return p.expired or (p.outcome is None and deadline is not None and self.monotonic() > deadline)
+
     def propose(self, p: Proposal) -> Proposal:
         self.pending[p.proposal_id] = p
+        self.deadlines[p.proposal_id] = self.monotonic() + p.window_s
         if self.bus is not None:
             self.bus.publish(p)
         return p
@@ -201,7 +229,7 @@ class ApprovalCenter:
         done = []
         for d in self.bus.decisions_for(set(self.pending)):
             p = self.pending[d.proposal_id]
-            if p.expired:
+            if self.expired(p):
                 done.append(self._finish(p, Outcome.EXPIRED))
                 continue
             p.decided_ts, p.decided_channel = d.ts, decision_channel(d.by)     # never the id or email (BACKLOG 52)
@@ -215,7 +243,7 @@ class ApprovalCenter:
         p = self.pending.get(proposal_id)
         if p is None:
             raise KeyError("unknown or already decided proposal")
-        if p.expired:
+        if self.expired(p):
             return self._finish(p, Outcome.EXPIRED)
         if not approve and reason_code not in REASON_CODES:
             raise ValueError(f"rejection needs a reason code from {REASON_CODES}")
@@ -224,12 +252,13 @@ class ApprovalCenter:
         return self._finish(p, Outcome.APPROVED if approve else Outcome.REJECTED)
 
     def sweep_expired(self) -> list[Proposal]:
-        done = [self._finish(p, Outcome.EXPIRED) for p in list(self.pending.values()) if p.expired]
+        done = [self._finish(p, Outcome.EXPIRED) for p in list(self.pending.values()) if self.expired(p)]
         return done
 
     def _finish(self, p: Proposal, outcome: Outcome) -> Proposal:
         p.outcome = outcome
         self.pending.pop(p.proposal_id, None)
+        self.deadlines.pop(p.proposal_id, None)
         self.log.append(p)
         if self.bus is not None:
             self.bus.archive(p)

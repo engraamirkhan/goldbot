@@ -46,7 +46,7 @@ re-reviews were asked on 2026-10-12 and have not started; the reviewed batch has
 | 56 | Digest Yesterday line on the opportunity day | Performance review · RUN | S | done (2026-10-16: 147c68c + review fixes cc61ed1, TRACEABILITY V10; code-reviewer APPROVED, ui-ux-designer wording applied) · accountable: implementer · due 2026-10-19 |
 | 59 | Engine state keeps moving on the host clock while the market is closed | Operational resilience · RUN | S | done (lane market-closed-state-cadence, 2026-10-16; review fixes in, re-review pending) |
 | 58 | Fail closed on heartbeats stamped in the future | Execution and risk (supervisor) · PROTECT | S | done 2026-10-16 (needs trading-safety and SRE review) |
-| 60 | Approval window expiry trusts a future-stamped proposal | Approvals (owner confirms entries, 90 s) · PROTECT | S | proposed (trading-safety and SRE review of BACKLOG 58, 2026-10-16; owner of the fix trading-safety-reviewer, built by the implementer; due 2026-10-23) |
+| 60 | Approval window expiry trusts a future-stamped proposal | Approvals (owner confirms entries, 90 s) · PROTECT | S | done 2026-10-16 (needs trading-safety review; owner of the fix trading-safety-reviewer, built by the implementer) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
