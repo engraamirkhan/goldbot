@@ -84,7 +84,7 @@ class AccountMonth(FrozenRecord):
     r_ci90: tuple[float, float] | None = None
     max_drawdown_pct: float
     trading_days: int
-    avg_per_day: float
+    avg_per_day: float | None = None    # None when no trading day has elapsed (shown "n/a", never £0)
     best_days: list[DayPnl]
     days_50_plus: int | None = None    # GBP accounts only
     equity_now: float | None = None
@@ -193,7 +193,7 @@ def account_month(account: str, trades: list[ClosedTrade], first: str, last: str
     return AccountMonth(
         account_id=account, currency=ccy, trades=len(trades), net_trades=len(net), twr_pct=100 * (idx - 1), pnl=pnl,
         net_r=sum(rs) if rs else None, r_per_trade=float(np.mean(rs)) if rs else None, r_trades=len(rs),
-        r_ci90=_ci90(rs), max_drawdown_pct=100 * dd, trading_days=n_days, avg_per_day=pnl / n_days if n_days else 0.0,
+        r_ci90=_ci90(rs), max_drawdown_pct=100 * dd, trading_days=n_days, avg_per_day=pnl / n_days if n_days else None,
         best_days=best,
         days_50_plus=sum(d.pnl >= NORTH_STAR_DAY_GBP for d in per_day) if ccy == "GBP" else None,
         equity_now=float(eq) if isinstance(eq, (int, float)) else None, milestones=milestones(engine),
@@ -233,6 +233,11 @@ def money(x: float, ccy: str | None, *, sign: bool = True) -> str:
     sym = SYMBOLS.get(ccy or "")
     body = f"{sym}{abs(x):,.2f}" if sym else f"{abs(x):,.2f}" + (f" {ccy}" if ccy else "")
     return (s if sign else ("" if x >= 0 else "-")) + body
+
+
+def _avg(x: float | None, ccy: str | None) -> str:
+    """The average per trading day, "n/a" before the month's first weekday (a £0 would read as a flat day)."""
+    return "n/a" if x is None else money(x, ccy)
 
 
 def _ladder_line(m: Milestones | None, ccy: str | None) -> str:
@@ -276,8 +281,8 @@ def format_report(rep: MonthlyReport) -> str:
                          f"{a.approx_mfe_r_median:+.2f}R over {a.excursion_approx}")
         if parts:
             lines.append("  Excursion: " + "; ".join(parts) + " (whole position until the final exit)")
-        lines.append(f"  Max drawdown on closed trades this month {a.max_drawdown_pct:.2f}% · average {money(a.avg_per_day, c)} "
-                     f"per trading day over {a.trading_days} weekdays")
+        lines.append(f"  Max drawdown on closed trades this month {a.max_drawdown_pct:.2f}% · average "
+                     f"{_avg(a.avg_per_day, c)} per trading day over {a.trading_days} weekdays")
         best = " · ".join(f"{pd.Timestamp(d.day):%a %d %b} {money(d.pnl, c)}"
                           + (f" ({d.r:+.1f}R)" if d.r is not None else "") for d in a.best_days)
         lines.append(f"  Best days: {best}")
@@ -306,7 +311,7 @@ def month_to_date_line(state_dir: str | Path, now: pd.Timestamp) -> list[str]:
         r = f" · {a.net_r:+.2f}R" + (f" ({a.r_note})" if a.r_note else "") if a.net_r is not None else ""
         n = _trades(a.net_trades, "net ") if a.gross_only else _trades(a.trades)
         parts.append(f"{who}{a.twr_pct:+.2f}% time-weighted · {n}{r} · "
-                     f"avg {money(a.avg_per_day, a.currency)}/trading day"
+                     f"avg {_avg(a.avg_per_day, a.currency)}/trading day"
                      + (f" ({a.pnl_note})" if a.pnl_note else "")
                      + (f" ({a.gross_note}, not summed)" if a.gross_note else ""))
     return [f"• {name} so far: " + " | ".join(parts)]

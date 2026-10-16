@@ -29,8 +29,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     the limits (`risk_day`, `_risk_week`). No limit, RiskGate check or engine code was touched.
   - **Known gap (digest, not in this lane).** The digest's "Yesterday" line is still the UTC day, 00:00-24:00. A close
     at 23:00 UTC is in yesterday's trades line but in today's month line.
-  - **Known gap (DESIGN.md, not edited: this lane writes fragments only).** "Time and calendar" says the fourth day is
-    used "only by the opt-in day_type features". The owner's reports now use it too.
+  - **Review follow-ups (quant and trading-safety approved).**
+    - ADR 0004 section 6 now records both days: the north-star day is the opportunity day, and the £50 loss limit
+      stays on the risk day. DESIGN.md "Time and calendar" now names the reports as users of the fourth day.
+    - perf-report's default `--from` is now the first day of the month that holds today's opportunity day. At 31 Oct
+      23:00 UTC the default range is 1 Nov to 1 Nov, the month the monthly report shows (`perf_report.default_range`).
+    - Before the month's first weekday, the monthly report and the digest show the average per trading day as "n/a"
+      (`avg_per_day` None), not £0.00. A winter Friday close at 22:00 UTC lands on the Saturday, for example.
+    - The digest's "Yesterday" line is now BACKLOG 56. BACKLOG 55 now says to check each server's
+      settings.local.yaml before the validator ships, and to put its error text in the RUNBOOK.
   - **Finding: `risk_day_anchor` is read by no code (for the quant and trading-safety reviewers).**
     - Where it is: `Settings.risk_day_anchor` (`goldbot/config.py:491`) and `config/settings.yaml:7`
       (`{ tz: UTC, time: "00:00" }  # loss caps reset`). No code under goldbot/ or scripts/ reads it, and

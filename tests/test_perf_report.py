@@ -15,7 +15,7 @@ from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowTrade, VersionBook
 from goldbot.execution.costs import CostTable, SlippageStat, SpreadStat
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade
-from goldbot.ops.perf_report import MIN_TRADES, build_performance_report, format_markdown, main
+from goldbot.ops.perf_report import MIN_TRADES, build_performance_report, default_range, format_markdown, main
 from goldbot.telegram.approvals import Outcome, Proposal
 
 ACC = "icm-demo"
@@ -689,3 +689,11 @@ def test_execution_slippage_and_approval_drift_are_reported_apart(tmp_path):
     assert c.approval_drift_trades == 2 and c.approval_drift_mean_usd == pytest.approx((0.3 + 0.3) / 2)
     md = format_markdown(rep)
     assert "execution slippage" in md and "approval drift" in md
+
+
+def test_the_default_range_is_the_month_of_todays_opportunity_day_up_to_today():
+    """Review Q2: at 31 Oct 23:00 UTC the opportunity day is 1 Nov, so the default range is 1 Nov..1 Nov, the month
+    the monthly report shows, not 1 Oct..1 Nov."""
+    assert default_range(pd.Timestamp("2026-10-31 23:00", tz="UTC")) == ("2026-11-01", "2026-11-01")
+    assert default_range(pd.Timestamp("2026-10-31 21:59", tz="UTC")) == ("2026-10-01", "2026-10-31")
+    assert default_range(pd.Timestamp("2026-10-31 23:00", tz="UTC"), "2026-10-05", None) == ("2026-10-05", "2026-11-01")

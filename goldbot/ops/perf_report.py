@@ -80,7 +80,7 @@ from goldbot.data.timeutil import floor_tf, risk_day
 from goldbot.engine.shadow import ShadowTrade, VersionBook
 from goldbot.execution.costs import SESSIONS, CostTable
 from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades, pnl_basis
-from goldbot.ops.report_days import day_buckets, report_day
+from goldbot.ops.report_days import day_buckets, month_days, report_day
 from goldbot.ops.report_days import weekdays as weekdays_in
 from goldbot.telegram.approvals import Outcome, Proposal
 
@@ -1064,6 +1064,13 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
+def default_range(now: pd.Timestamp, start: str | None = None, end: str | None = None) -> tuple[str, str]:
+    """`--from`/`--to` defaults: the first opportunity day of the month holding today's opportunity day, and today's
+    (at 31 Oct 23:00 UTC that is 1 Nov..1 Nov, the month the monthly report shows)."""
+    today = report_day(now)
+    return start or month_days(today[:7])[0], end or today
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="goldbot.ops.run perf-report", description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--state", default="state", help="state folder (read only; a copy works)")
@@ -1076,7 +1083,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="print the JSON instead of the markdown")
     a = ap.parse_args(argv)
     now = pd.Timestamp.now(tz="UTC")
-    start, end = a.start or f"{now:%Y-%m-01}", a.end or report_day(now)
+    start, end = default_range(now, a.start, a.end)
     for v in (start, end):
         if not DATE.fullmatch(v):
             print(f"dates must be YYYY-MM-DD, got {v!r}", file=sys.stderr)

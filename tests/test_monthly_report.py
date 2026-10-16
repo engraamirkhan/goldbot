@@ -284,7 +284,7 @@ def test_the_default_month_and_the_last_day_follow_the_opportunity_day_of_now(tm
     rep = build_monthly_report(tmp_path, now=pd.Timestamp("2026-10-31 23:00", tz="UTC"))
     assert rep.month == "2026-11" and [a.trades for a in rep.accounts] == [1]
     [a] = rep.accounts
-    assert a.trading_days == 0 and a.avg_per_day == 0.0          # 1 Nov is a Sunday: no weekday elapsed yet
+    assert a.trading_days == 0 and a.avg_per_day is None         # 1 Nov is a Sunday: no weekday elapsed yet
 
 
 def test_the_digest_month_line_stops_at_yesterdays_22_utc_roll(tmp_path):
@@ -297,3 +297,19 @@ def test_the_digest_month_line_stops_at_yesterdays_22_utc_roll(tmp_path):
     assert "4 trades" in line
     [line] = month_to_date_line(tmp_path, pd.Timestamp("2026-10-10 06:45", tz="UTC"))
     assert "5 trades" in line
+
+
+def test_a_month_without_a_trading_day_shows_the_average_per_day_as_n_a_not_zero(tmp_path):
+    """Review Q3: a winter Friday close at 22:00 UTC is on the Saturday opportunity day; on 1 Nov (a Sunday) no weekday
+    of November has elapsed, so there is no average to show: "n/a", never a £0.00 that reads as a flat day."""
+    append_closed_trade(tmp_path, _trade("2026-10-01", 12.0, 1000.0, 1.0, pid=1,
+                                         exit_utc=pd.Timestamp("2026-10-31 22:30", tz="UTC")))
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"account": "icm-demo", "currency": "GBP"}))
+    now = pd.Timestamp("2026-11-01 12:00", tz="UTC")
+    rep = build_monthly_report(tmp_path, now=now)
+    [a] = rep.accounts
+    assert a.trading_days == 0 and a.avg_per_day is None
+    text = format_report(rep)
+    assert "average n/a per trading day over 0 weekdays" in text and "£0.00" not in text
+    [line] = month_to_date_line(tmp_path, now)
+    assert "avg n/a/trading day" in line and "£0.00" not in line

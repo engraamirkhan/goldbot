@@ -70,6 +70,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 53 | The phase gates compare paper and live with the deployed model's own trial | Roadmap gates (P7) · VERIFY | M | proposed (review of 978c667, 2026-10-12) |
 | 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | proposed (trading-safety review of BACKLOG 44, 2026-10-12; needs trading-safety review) |
 | 55 | risk_day_anchor is read by no code: pin it or make it real | Execution and risk (loss caps) · PROTECT | S | proposed (found in the north-star day lane, 2026-10-16; needs trading-safety review) |
+| 56 | Digest Yesterday line on the opportunity day | Performance review · RUN | S | proposed (quant review Q1 of the north-star day lane, 2026-10-16) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -766,7 +767,21 @@ hypotheses that go through the trial registry in a future quarter's budget.
     the key);
   - moving the risk day itself (for example to the 22:00 UTC roll) is a separate owner decision. It needs one
     shared risk-day function for all five places, a migration for the persisted reset time, and a trading-safety
-    review.
+    review;
+  - **before the validator ships** (trading-safety review of the north-star day lane, 2026-10-16): check each
+    server's `config/settings.local.yaml` for `risk_day_anchor` and `feature_day_anchor`, because a server that sets
+    either would stop loading its settings after the deploy. Put the validator's exact error text and the fix
+    (delete the key) into `docs/RUNBOOK.md` in the same change.
+- **56. Digest "Yesterday" line on the opportunity day.** Value: the digest's "Yesterday" proposals and trades
+  lines still run 00:00-24:00 UTC (`goldbot/telegram/digest.py` `build_digest`). Its month line and the monthly and
+  performance reports use the opportunity day (`goldbot/ops/report_days.py`). So a close at 23:00 UTC is in
+  yesterday's trades line and in today's month line. Acceptance:
+  - for a digest built on day D, "Yesterday" covers [D-2 22:00, D-1 22:00) UTC, the opportunity day D-1, through
+    `report_days` (no new day arithmetic in the digest);
+  - the header reads "Yesterday (to 22:00 UTC)" with the weekday and date of D-1;
+  - tests at 21:59 and 22:00 UTC, on a Monday digest (the Sunday reopen counts on Monday), and in a US DST week;
+  - the risk lines (loss-cap use) stay on the risk day, 00:00 UTC; no limit changes;
+  - reviews: code, ui-ux (Telegram wording).
 
 ## Needs the owner
 These are never decided by the product owner or by agents.

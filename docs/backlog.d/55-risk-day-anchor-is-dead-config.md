@@ -20,4 +20,8 @@ status: proposed (found in the north-star day lane, 2026-10-16; needs trading-sa
     the key);
   - moving the risk day itself (for example to the 22:00 UTC roll) is a separate owner decision. It needs one
     shared risk-day function for all five places, a migration for the persisted reset time, and a trading-safety
-    review.
+    review;
+  - **before the validator ships** (trading-safety review of the north-star day lane, 2026-10-16): check each
+    server's `config/settings.local.yaml` for `risk_day_anchor` and `feature_day_anchor`, because a server that sets
+    either would stop loading its settings after the deploy. Put the validator's exact error text and the fix
+    (delete the key) into `docs/RUNBOOK.md` in the same change.
