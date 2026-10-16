@@ -32,6 +32,14 @@ start at the reopen (Sun 2026-10-18 22:02 UTC) waits on it. 58, 59 and 60 now na
 36 and 51 are merged on the integration branch and ship in the next PR (release-manager). 13 ranked rows. The
 daily scorecard is `docs/process/scorecards/2026-10-16.md`.
 
+**Decision sweep 2026-10-16 late (program director + product owner, owner delegated; base 3db12c8).** New standing
+rule from the owner: routine product, ops and deploy decisions are made by the program director with the product
+owner and reported to the owner, not asked; safety-touching choices take the conservative option. Recorded today:
+62 (kill switch closes every symbol, rank 5), 63 (card-bound approvals, rank 9), 64 (header shows the role, rank
+12), 65 (review hygiene, rank 15); 12 notes the digest's `verdict_adj` line; 45 carries the holiday-list decision
+schedule (quant ruling 10-23, decision 10-30). 58 and 52 left the table as done (shipped in PR #79). Stale statuses
+fixed: 59 (SRE re-verify on record), 61 (merged at 921a38a), 45 (draft delivered feda07a). 15 ranked rows.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
@@ -54,9 +62,14 @@ hypotheses that go through the trial registry in a future quarter's budget.
 <!-- backlog.d:items from=25 -->
 
 ## Needs the owner
-These are never decided by the product owner or by agents.
+These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only
+matters stay here: money or paid plans; going live, `unlock_live` or phase-gate thresholds; loosening any risk limit;
+the owner's own credentials; legal. Routine product, ops and deploy decisions are made by the program director with
+the product owner and reported on #34 (ROADMAP section 6, "Decided by PD+PO").
 Every owner step below has `chaser: program-director`, who asks on #34 with a recommendation and a chase date.
-- **Adopt the built, off-by-default rails (sweep 2026-10-16).** Holiday, reopen and tier-2 windows (17, 18), the
+- **Moved to PD+PO 2026-10-16 (they only tighten; the conservative option):** adopting the rails below. The PD+PO decide
+  each on the evidence of 45 and 46; any value looser than the built default goes back to the owner.
+  **Adopt the built, off-by-default rails (sweep 2026-10-16).** Holiday, reopen and tier-2 windows (17, 18), the
   heat cap (19), the loss-streak throttle (21) and the open-risk projection (35) are merged and off. For each:
   adopt, set the values, or leave off. Recommendation: wait for 45 (holiday evidence, due 2026-10-30) before the
   holiday window, and for 46 (replay) before the others, except 35, which only makes the £50 limit stricter.
@@ -71,6 +84,8 @@ Every owner step below has `chaser: program-director`, who asks on #34 with a re
   (H-11 blocked); the conservative K_eff default confirmed; `costs-v1` published by 2026-12-11 if the demo
   terminal runs, otherwise "priors accepted" on 2026-12-14; the owner's trade history exported in full, analysed
   locally, summary only.
+- **Paper-vs-backtest gate: require the paper mean's lower 95% bound above 0** (phase-gate threshold, ROADMAP
+  OD-15). The quant reviewer recommends yes; the program director and product owner concur. Yours to rule.
 - **Going live.** Demo until the paper → tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
   and the typed phrase. Item 8 computes whether the gate is met. It never flips it.
 - **Research evidence across feature versions (ADR 0006, item 34).** For now the tournament accepts a gate pass
@@ -105,12 +120,18 @@ before any new trading-safety builder. Every lane below touches different files.
    `goldbot/ops/linux/`. The bridge smoke (ROADMAP W1-1, new `goldbot/ops/smoke.py`) follows the architect's plan.
 6. **Item 43, `entry_blocks`** (`lane/entry-blocks`, implementer): `goldbot/risk/gate.py` (`account_reasons`), the
    engine state write in `goldbot/engine/runner.py`, `goldbot/api/entry_status.py`. Starts when lane A has cleared 59
-   (same runner.py write path).
-7. **Item 61, mixed-currency budget** (`lane/mixed-currency-budget`, implementer): `goldbot/ops/account_view.py`,
-   `web/src/` BalanceCard and SafetyStrip. Free now.
-8. **Running:** 45 (performance-analyst, a new report script), 5 (research-director, `docs/research/`).
+   and lane 9 (62, higher rank, same file) has merged: one runner.py lane at a time.
+7. **Item 61, mixed-currency budget**: merged at 921a38a with its reviews; release-manager ships it in the next PR,
+   then product-owner acceptance.
+8. **Running:** 45 (quant ruling on the draft, due 10-23), 5 (research-director, `docs/research/`).
+9. **Item 62, kill switch on every symbol** (implementer, then trading-safety): `_kill_switch` in
+   `goldbot/engine/runner.py`, `goldbot/execution/mt5_adapter.py` `_filling`/`close`, ADR 0016, RUNBOOK. Starts when
+   lane A has cleared 59; lane 6 (43) waits for it. Not before the Sunday start.
+10. **Item 64, header role** (ui-ux-designer spec, then implementer): `web/src/` header only. Free now; disjoint
+   from every other lane's files.
+63 waits for 60's fix lane (same approval files); 65 waits for a free implementer.
 
-Top three ready items: 43 (lane 6), 27 and 61 (lane 7). 27 has no lane on purpose: it reads the terms from the demo
+Top three ready items (2026-10-16 late): 62 (lane 9), 43 (lane 6) and 27. 61 is merged (921a38a). 27 has no lane on purpose: it reads the terms from the demo
 terminal, so it starts when item 1's engine runs (Sun 2026-10-18).
 
 ## Later (parked)
@@ -166,6 +187,7 @@ product owner runs the criterion-by-criterion acceptance scorecard (AGENT_STANDA
 - #71: 24 (D-1), 25, 26 (backend), 28, 29. #73: 23, 30a, 37, 38, 39, 40, 41; the approval-card lines for 25, 28 and 29.
 - #74: 42. #76: 47. #77: 50.
 - Integration branch, shipping in PR #79 or the next PR: 48, 49, 54, 55, 56, 57 (table above).
+- PR #79 (main 5fd90ab): 52 and 58, done with trading-safety APPROVE 2026-10-16 at 626b56b (3418bc5); 52's d2ecb8f ships in the next PR.
 - Open sign-offs on done items: quant for 23 (V6) and 50 (M45); the owner for the values of 8.
 
 ## Rejected

@@ -1,6 +1,6 @@
 ---
 number: 5
-rank: 12
+rank: 13
 title: Q1 2027 pre-registered trial queue
 stage: Idea generation · FIND
 size: S

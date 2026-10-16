@@ -160,19 +160,35 @@ Wave 3 (shares `runner.py` with W2-1): A2, D10, M9, M3 15m leg. Parked until an 
 Asked once, batched, on #34 on 2026-10-16. Each item has a recommendation and a deadline; the finance ids are in
 `docs/finance/recommendations-2026-10.md`.
 
+**Delegated 2026-10-16 (owner rule): routine product, ops and deploy decisions are now made by the program director
+with the product owner (PD+PO) and reported to the owner on #34, not asked.** Only truly owner-only matters stay in
+this queue: money or paid plans; going live, `unlock_live` or phase-gate thresholds; loosening any risk limit; the
+owner's own credentials; legal. Safety-touching choices take the conservative option. Rows that were routine moved
+to "Decided by PD+PO" below.
+
 | # | Decision | Recommendation | Deadline |
 | --- | --- | --- | --- |
 | OD-1 | Narrow allow rules for the one demo-only deploy entry point | Yes | Fri 10-16, before the deploy |
 | OD-2 | Standing approval for demo deploys of a reviewed `main` SHA, and a daily agent budget | Yes for demo only (never live; result on #34 within 24 h); owner names the figure | Fri 10-16 |
 | OD-3 | Pay As You Go on Oracle | Yes, with the budget alert and a free-shapes-only quota | Fri 10-16 if A1 is out of capacity, else Fri 10-23 |
-| OD-4 | Finance D6: demo is a Raw Spread account | Confirm Raw | Fri 10-16, at the MT5 login |
 | OD-5 | FRED_API_KEY repository secret | Set it | Sun 10-18 |
 | OD-6 | `gates.max_gross_share` | 0.05 | Sun 10-18 |
-| OD-7 | `risk.equity_check_tolerance` | 0.02 (ADR 0016) | Sun 10-18 |
-| OD-8 | Ledger `balance_tolerance` 0.05 plus 0.01 per deal | Approve (ADR 0015) | Sun 10-18 |
-| OD-9 | `telegram.owner_tz` | Europe/London | Sun 10-18 (UK clocks change 10-25) |
 | OD-10 | ~~Commit the uncommitted docs in the main checkout (finance, hosting options, speed-up review)~~ | **Done 10-16:** all three were committed in f7b0cdc (2026-10-11, `docs/finance/`, `docs/deploy/free-hosting-options.md`, `docs/process/speed-up-review.md`) and the main checkout is clean; no owner decision left | closed |
 | OD-11 | GitHub "Keep my email private" and "Block command line pushes" | Turn both on; do not rewrite history | Sat 10-17, before the batch push |
-| OD-12 | Finance D1, D3, D4 | D1 (b) about $10 a month until a strategy passes; D3 Tailscale-only; D4 also track demo cover | Fri 10-23 |
+| OD-12 | Finance D1 (agent API spend cap) | (b) about $10 a month until a strategy passes. D3 and D4 moved to "Decided by PD+PO" | Fri 10-23 |
 | OD-13 | Finance D2 (hosting after the Azure trial), D5 (deposits) | D2 decide on the Wine soak's evidence; D5 no recommendation | D2 by 2027-08-13; D5 open |
 | OD-14 | Gate thresholds sign-off and a low-frequency variant; demo cost-probe orders; automatic deploys | Brought separately with options | Mon 11-30 (before the freeze) |
+| OD-15 | Paper-vs-backtest gate: also require the paper mean's lower 95% bound above 0 (a phase-gate threshold) | Yes: the quant-reviewer recommends it (review 2026-10-16); PD+PO concur | Mon 11-30, with OD-14, before paper starts |
+
+### Decided by PD+PO (delegated 2026-10-16), reported to the owner
+
+| # | Decision | Decided | Why it is routine |
+| --- | --- | --- | --- |
+| OD-4 | Finance D6: the demo is a Raw Spread account | Raw is the working assumption; the SRE reads the account type and commission from the terminal at the MT5 login and records it on #34. If it reads Standard, budget and break-even are re-run before any 15m trade, and opening a Raw account goes back to the owner (own credentials) | Confirming a fact about the demo; no money, no limit |
+| OD-7 | `risk.equity_check_tolerance` | Keep 0.02 (ADR 0016), the value in force; any increase would delay the kill switch and stays with the owner | Keeps the current, conservative value; loosens nothing |
+| OD-8 | Ledger `balance_tolerance` 0.05 plus 0.01 per deal | Approved as in force (ADR 0015) | An audit reconciliation tolerance; no money, no risk limit |
+| OD-9 | `telegram.owner_tz` | Europe/London, the value in force (UK clocks change 10-25) | Display time zone |
+| OD-12 D3 | Dashboard access | (a) Tailscale-only, £0, no public hostname | Free, and the smaller attack surface is the conservative choice |
+| OD-12 D4 | Track demo cover as well as real cover | (b) yes, reported monthly by the finance-auditor | Reporting only |
+
+Each row: Decided 2026-10-16 by program director + product owner (owner delegated).

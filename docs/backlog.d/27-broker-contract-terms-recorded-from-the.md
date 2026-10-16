@@ -1,6 +1,6 @@
 ---
 number: 27
-rank: 8
+rank: 7
 title: Broker contract terms recorded from the demo terminal (ADR 0004)
 stage: Execution, position sizing · RUN
 size: S

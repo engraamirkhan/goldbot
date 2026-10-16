@@ -1,6 +1,6 @@
 ---
 number: 43
-rank: 7
+rank: 6
 title: The engine publishes why it refuses entries, and writes state while the market is closed
 stage: Operational resilience, entry status · RUN
 size: M
