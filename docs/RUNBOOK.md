@@ -183,10 +183,11 @@ and the rest still arrives. It never contains account numbers or emails.
   flat or at the weekend** (restarting the bridge cuts the engine off from the terminal for a moment):
   1. `sudo systemctl stop goldbot-bridge@icm-demo` (one unit per account; stop each). Wine cannot replace a
      pydantic_core file the running bridge has loaded, so a running bridge can leave a half-installed package.
-  2. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -m pip install --require-hashes --no-deps --only-binary :all: -r Z:/opt/goldbot/goldbot/ops/linux/mt5-bridge-requirements.txt`
-     (a hash mismatch stops it with nothing changed: do not work around it, report it, it means a download was not
+  2. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine /home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe -m pip install --require-hashes --no-deps --only-binary :all: -r Z:/opt/goldbot/goldbot/ops/linux/mt5-bridge-requirements.txt`
+     (the Windows Python by its full path, never a bare `wine python`, which runs any `python.exe` in the current
+     directory first; a hash mismatch stops it with nothing changed: do not work around it, report it, it means a download was not
      what uv.lock recorded)
-  3. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine python -c "import pydantic, pydantic_core, MetaTrader5, goldbot.execution.bridge; print(pydantic.VERSION)"`
+  3. `sudo -u mt5 -H env WINEDEBUG=-all DISPLAY=:99 wine /home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe -c "import pydantic, pydantic_core, MetaTrader5, goldbot.execution.bridge; print(pydantic.VERSION)"`
      must print 2.12 or newer and no error.
   4. `sudo systemctl start goldbot-bridge@icm-demo` (each account). Wait about 20 s, then
      `systemctl is-active goldbot-bridge@icm-demo` must print `active` and `systemctl show -p NRestarts

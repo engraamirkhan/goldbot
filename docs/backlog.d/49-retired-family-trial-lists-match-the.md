@@ -1,10 +1,9 @@
 ---
 number: 49
-rank: 11
 title: Retired-family trial lists match the registry (R-01, R-03)
 stage: Idea generation (integrity) · FIND
 size: S
-status: 'done (fixed 2026-10-16 in 94b3460: settings and `hypotheses.md` B list the registry''s trials; quant reviewer APPROVED 2026-10-16) · accountable: strategy-researcher · due 2026-10-23'
+status: 'done 2026-10-16 (94b3460, merged at 717baa3 with quant APPROVED; ships to main in PR #79) · accountable: strategy-researcher'
 ---
 - **49. Retired-family trial lists match the registry (research director, 2026-10-11).** Value: the registry on
   `research-v1` holds four `mean_reversion` trials (#3, #5, #10, #12) and four `trend` trials (#2, #4, #9, #14), but
@@ -20,3 +19,8 @@ status: 'done (fixed 2026-10-16 in 94b3460: settings and `hypotheses.md` B list 
   unchanged. `RetiredFamily.trials` is read only by `retired_drift`, so no allocation moves. `tests/test_director.py`
   40 passed. Still open: nothing checks these lists against the registry itself (only settings against the doc); a
   `retired_drift` input from the registry rows is proposed to the research director, not built here.
+  **Acceptance scorecard 2026-10-16 (product owner, AGENT_STANDARDS 7 checks):** (1) criteria: yes, `tests/test_director.py` green (re-run 2026-10-16) and the lists equal
+  `research-v1`'s registry rows (checked by the researcher, numbers above). (2) DoD: yes. (3) S1-S12: yes. (4) quant
+  APPROVED (717baa3). (5) CI/merged: **no, in PR #79 (open)**. (6) PR text: yes (#79 Research). (7) role and date:
+  yes, met. Accepted, conditional on #79 merging. Not in scope: a `retired_drift` input from the registry rows,
+  proposed to the research director.

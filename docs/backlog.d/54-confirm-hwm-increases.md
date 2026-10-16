@@ -1,10 +1,9 @@
 ---
 number: 54
-rank: 3
 title: Confirm increases in balance_closed_hwm
 stage: Execution and risk (drawdown stages) · PROTECT
 size: S
-status: 'done (2026-10-16: faf824c + review fixes d331861, c79c7e4; ADR 0018; trading-safety APPROVED on re-verify) · accountable: implementer · due 2026-10-23'
+status: 'done 2026-10-16 (faf824c + review fixes d331861, c79c7e4; merged at 17c5e0d with trading-safety APPROVED on re-verify; ADR 0018; ships to main in PR #79) · accountable: implementer'
 ---
 - **54. Confirm increases in balance_closed_hwm (trading-safety review of BACKLOG 44, 2026-10-12).** Value: the
   drawdown stages measure equity against `balance_closed_hwm`, which `_refresh_account` raises on every read
@@ -30,3 +29,9 @@ status: 'done (2026-10-16: faf824c + review fixes d331861, c79c7e4; ADR 0018; tr
     deals corroborate raises the mark (`candidate_deals`), paper broker `balance_exact`; M2 the first pending time is
     kept; L1 one core.db handle per engine, 500 ms write busy timeout; L2 candidates expire after 10 min; accepted
     knowns recorded in the ADR. Awaiting trading-safety re-review.
+  **Acceptance scorecard 2026-10-16 (product owner, AGENT_STANDARDS 7 checks):** (1) criteria: yes, each bullet has a named test in `tests/test_hwm_confirmation.py` (single
+  inflated read; no size-down or halt after it; deposit; never lowered; refused rise logged and recorded; restart
+  between the reads), re-run 2026-10-16: pass; the deposit choice is in ADR 0018. (2) DoD: yes (HANDOFF
+  2026-10-16-hwm-confirmation). (3) S1-S12: yes. (4) trading-safety APPROVED on re-verify (17c5e0d). (5) CI/merged:
+  **no, in PR #79 (open)**. (6) PR text: yes (#79 "High-water-mark rises are confirmed"). (7) role and date: yes
+  (due 2026-10-23, met early). Accepted, conditional on #79 merging.

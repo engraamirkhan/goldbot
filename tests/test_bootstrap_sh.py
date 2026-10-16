@@ -103,3 +103,85 @@ def test_deploys_install_from_the_lockfile_and_react_to_it():
     s = (LINUX / "goldbot-deploy.sh").read_text(encoding="utf-8")
     assert "uv sync -q --frozen --extra live --python 3.11" in s and "uv pip install" not in s
     assert "grep -qE '^(pyproject.toml|uv.lock)$'" in s
+
+
+# --- the MT5 box as fixed by hand on 2026-10-16 (docs/incidents/2026-10-16-mt5-debugger-found-under-wine.md) ---
+
+UNIT = LINUX / "systemd" / "goldbot-bridge@.service"
+DEPLOY = LINUX / "goldbot-deploy.sh"
+WINPY_RE = re.compile(r"^WINPY=(\S+)$", re.M)
+
+
+def _winpy() -> str:
+    m = WINPY_RE.search(_text("mt5"))
+    assert m, "mt5_bootstrap.sh must define WINPY"
+    return m.group(1)
+
+
+def _code(text: str) -> list[str]:
+    return [x for x in text.splitlines() if not x.lstrip().startswith("#")]
+
+
+def test_wine_is_devel_not_stable_and_not_pinned_by_an_agent():
+    """WineHQ bug 58043: wine-stable 11.0 makes MT5 report a debugger. Pinning is the owner's call (ADR 0019)."""
+    s = _text("mt5")
+    code = "\n".join(_code(s))
+    assert "apt-get install -y --install-recommends winehq-devel" in code
+    assert "winehq-stable" not in code
+    assert "apt-mark hold" not in code and "winehq-devel=" not in code and "/etc/apt/preferences" not in code
+    assert "58043" in s and "OWNER DECISION" in s and "0019-wine-version-for-the-mt5-box.md" in s
+    assert (LINUX.parents[2] / "docs" / "decisions" / "0019-wine-version-for-the-mt5-box.md").is_file()
+
+
+def test_wineboot_runs_without_the_mono_dialog():
+    assert "WINEDLLOVERRIDES=mscoree= wineboot -i" in _text("mt5")
+
+
+def test_the_python_installer_is_not_named_python_exe():
+    """Windows looks in the current directory first: an installer saved as python.exe answers `wine python`."""
+    s = _text("mt5")
+    assert "curl -fsSLo python-installer.exe" in s and "wine python-installer.exe /quiet" in s
+    assert "-fsSLo python.exe" not in s and "wine python.exe" not in s
+
+
+def test_mt5setup_exit_code_is_ignored_but_the_terminal_must_exist():
+    s = _text("mt5")
+    setup = s.index("wine mt5setup.exe /auto /path:'C:\\\\MT5\\\\ICMarkets' || true")
+    check = s.index("test -f ~/.wine/drive_c/MT5/ICMarkets/terminal64.exe || {")
+    assert setup < check < s.index("-m pip install")
+    assert "exit 1; }" in s[check:check + 200]
+
+
+def test_winpy_is_absolute_and_matches_pyver():
+    s = _text("mt5")
+    pyver = re.search(r"^PYVER=(\d+)\.(\d+)\.\d+$", s, re.M)
+    assert pyver, "PYVER must be X.Y.Z"
+    assert _winpy() == ("/home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/"
+                        f"Python{pyver.group(1)}{pyver.group(2)}/python.exe")
+    assert '[[ "$WINPY" == */Python"$(echo "$PYVER" | cut -d. -f1,2 | tr -d .)"/python.exe ]]' in s
+
+
+@pytest.mark.skipif(not BASH, reason="needs bash")
+def test_the_runtime_winpy_check_fires_on_a_mismatch(tmp_path):
+    """The bootstrap's own guard (before the root check) refuses a WINPY that a PYVER bump left behind."""
+    broken = tmp_path / "mt5_bootstrap.sh"
+    broken.write_text(_text("mt5").replace("PYVER=3.11.9", "PYVER=3.12.7", 1), encoding="utf-8")
+    out = subprocess.run([BASH, str(broken)], capture_output=True, text=True, timeout=20)
+    assert out.returncode == 1 and "WINPY does not match PYVER" in out.stdout
+
+
+def test_every_windows_python_call_uses_the_absolute_path():
+    """No bare `wine python` in code: the bridge unit and goldbot-mt5 run with cwd /opt/goldbot (mt5-writable), where
+    a planted python.exe would run first. The unit, the wrapper and goldbot-deploy carry the same path as WINPY."""
+    winpy = _winpy()
+    texts = {"bootstrap": _text("mt5"), "unit": UNIT.read_text(encoding="utf-8"),
+             "deploy": DEPLOY.read_text(encoding="utf-8")}
+    for name, text in texts.items():
+        bare = [x for x in _code(text) if re.search(r"\bwine\s+['\"]?python(\s|['\"]|$)", x)]
+        assert bare == [], f"{name}: {bare}"
+    assert f"ExecStart=/usr/bin/wine {winpy} -m goldbot.ops.run bridge %i" in texts["unit"]
+    wrapper = texts["bootstrap"].split("cat > /usr/local/bin/goldbot-mt5 <<'WRAP'", 1)[1].split("\nWRAP\n", 1)[0]
+    assert f'wine {winpy} -m "goldbot.ops.$mod"' in wrapper
+    assert f"WINPY={winpy}\n" in texts["deploy"]
+    assert 'wine "$WINPY" -m pip install' in texts["deploy"] and 'wine $WINPY"' in texts["deploy"]
+    assert "wine '$WINPY' -m pip install" in texts["bootstrap"] and "wine '$WINPY' -c" in texts["bootstrap"]

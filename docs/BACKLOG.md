@@ -25,29 +25,31 @@ demo). Then comes the north star (ADR 0004): nothing trades or gets measured unt
 Research integrity for the Q1 freeze is last. Late on 2026-10-16: 1 (was due 2026-10-13), 44 and 52 (their
 re-reviews were asked on 2026-10-12 and have not started; the reviewed batch has sat off `main` since 2026-10-12).
 
+**Job-check sweep 2026-10-16 evening (product owner, base 3092923).** 48, 49, 54, 55, 56 and 57 moved to Done, each
+with the seven-check acceptance scorecard in its detail block; all are accepted on the condition that their PR
+merges (PR #79 open, CI running; 55 goes in the next PR). 44 and 52 were re-reviewed today (fixes 869bb04 and
+d2ecb8f), so they are no longer late; their re-verifies are owed by 2026-10-17. 59 is ranked second: the engine
+start at the reopen (Sun 2026-10-18 22:02 UTC) waits on it. 58, 59 and 60 now name one accountable role and a date.
+36 and 51 are merged on the integration branch and ship in the next PR (release-manager). 13 ranked rows. The
+daily scorecard is `docs/process/scorecards/2026-10-16.md`.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
 | --- | --- | --- | --- | --- |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | in progress (`lane/claude-run-deploy`, plan ccef822) · accountable: release-manager · due 2026-10-18 (re-dated from 2026-10-13: the demo deploy never ran) · LATE |
-| 44 | Confirm a zero or collapsed equity read before the 12% kill switch (ADR 0016) | Execution and risk (drawdown stages) · PROTECT | S | in review (d2f2999, b9e9dac on the integration branch, not on main; trading-safety-reviewer asked 2026-10-12) · accountable: trading-safety-reviewer · due 2026-10-17 · LATE |
-| 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | done (2026-10-16: faf824c + review fixes d331861, c79c7e4; ADR 0018; trading-safety APPROVED on re-verify) · accountable: implementer · due 2026-10-23 |
-| 57 | risk_day_anchor is read by no code: pin it or make it real | Execution and risk (loss caps) · PROTECT | S | done (built 2026-10-16 in bd76c47 + RUNBOOK 8a268cf: Settings refuses any other anchor at load; trading-safety APPROVED 2026-10-16) · accountable: implementer · due 2026-10-19 |
-| 43 | The engine publishes why it refuses entries, and writes state while the market is closed | Operational resilience, entry status · RUN | M | in progress, heartbeat part (`lane/market-closed-state-cadence`, no commit yet); `entry_blocks` ready · accountable: implementer · due 2026-10-21 |
-| 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | in review (04f6266, 3817db7, c7ea0e3 on the integration branch, not on main; security-reviewer and trading-safety-reviewer asked 2026-10-12) · accountable: security-reviewer · due 2026-10-17 · LATE |
+| 59 | Engine state keeps moving on the host clock while the market is closed | Operational resilience · RUN | S | in review (6287d10 + review-HIGH fix 412fd0d, merged on the integration branch at a13c8a3, in PR #79; trading-safety and SRE re-verify of 412fd0d not on record) · accountable: implementer · due Sun 2026-10-18 20:00 UTC: reviewed and deployed before the engine start at 22:02 UTC (fallback in ROADMAP section 2) |
+| 44 | Confirm a zero or collapsed equity read before the 12% kill switch (ADR 0016) | Execution and risk (drawdown stages) · PROTECT | S | in review (d2f2999, b9e9dac; re-review 2026-10-16 found a save-failure gap, fixed in 869bb04; all in PR #79; trading-safety re-verify of 869bb04 not on record) · accountable: trading-safety-reviewer · due 2026-10-17 |
+| 58 | Fail closed on heartbeats stamped in the future | Execution and risk (supervisor) · PROTECT | S | in review (built 2026-10-16; SRE-review fix 55a07e5; in PR #79; trading-safety sign-off not on record) · accountable: trading-safety-reviewer · due 2026-10-18 |
+| 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | in review (04f6266, 3817db7, c7ea0e3, eba16e3 in PR #79; security re-review ran 2026-10-16: two LOWs, fixed in d2ecb8f on the integration branch, not in PR #79; security re-verify of d2ecb8f and trading-safety sign-off not on record) · accountable: security-reviewer · due 2026-10-17 |
+| 60 | Approval window expiry trusts a future-stamped proposal | Approvals (owner confirms entries, 90 s) · PROTECT | S | in review (bf5240b on the integration branch, not in PR #79, goes in the next PR; trading-safety review not on record) · accountable: trading-safety-reviewer · due 2026-10-20 |
+| 43 | The engine publishes why it refuses entries, and writes state while the market is closed | Operational resilience, entry status · RUN | M | in progress: the heartbeat part landed as BACKLOG 59 (6287d10, 412fd0d; in PR #79); the `entry_blocks` part is ready, not started · accountable: implementer · due 2026-10-21 |
 | 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | ready (after 1; the collector `jobs._broker_terms` exists) · accountable: sre · due 2026-10-20 |
-| 55 | test_lockout_survives_a_restart: make it reliable under load | Platform (CI) · SECURE | S | done 2026-10-16 (test-engineer; needs code review) · accountable: test-engineer |
-| 36 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | built (implementer, 2026-10-16); needs trading-safety + quant review · accountable: implementer · due 2026-10-30 |
-| 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | built 2026-10-16 (5053d31 + review fixes; security, quant and code re-review pending) · accountable: implementer · due 2026-10-30 |
-| 49 | Retired-family trial lists match the registry (R-01, R-03) | Idea generation (integrity) · FIND | S | done (fixed 2026-10-16 in 94b3460: settings and `hypotheses.md` B list the registry's trials; quant reviewer APPROVED 2026-10-16) · accountable: strategy-researcher · due 2026-10-23 |
+| 36 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | merged on the integration branch 2026-10-16 (cca7219 + trading-safety MEDIUM fix 0bfacbf; quant, code and trading-safety reviews done per HANDOFF); not in PR #79, ships in the next PR · accountable: release-manager · due 2026-10-23 |
+| 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | merged on the integration branch 2026-10-16 (5053d31, review fixes c027221 and cc00630); not in PR #79, ships in the next PR; security re-verify of cc00630 not on record · accountable: release-manager · due 2026-10-23 |
+| 61 | Mixed-currency accounts: the loss budget shows the account cap, not the combined cap | Dashboard and Telegram (loss budget, ADR 0004 section 3) · PROTECT | S | ready (builds on the loss-budget "can't check" state, 8d020a7 + 7368f61 on the integration branch) · accountable: implementer · due 2026-10-30 |
 | 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, H-01 AT RISK (152 vs 150 on data-v1 with 21 weekdays missing, coverage triage 2026-10-16); the 2026-11-01 script recount and the G3 recount on repaired data merged into one count-owed-events run after G1 closes, by 2026-11-13, evaluator G3 check by 2026-11-14; `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14 |
-| 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | done (preset `slow_macro` and `count_h06` on `main`, `d2f18c6`; counted 2026-10-16 by count-owed-events run 38931951849 on `macro-v1`: 1,105 signals, one-at-a-time lower bound 107 < 150; quant reviewer confirmed `count_h06` 2026-10-16, so H-06 is withdrawn by its pre-registered rule; run-input table written 2026-10-16 as the record; withdrawal in the spec + reservation 8 and the lower-bound one-bar fix done 2026-10-16 by the implementer on `lane/h06-withdraw-lowerbound`, quant review pending; count-owed-events re-dispatch after merge) · accountable: strategy-researcher · due 2026-10-23 |
 | 45 | Measure the holiday list before it is adopted | Operational risk (evidence) · RUN | S | in progress (started 2026-10-16; not blocked: stored bars and ticks only) · accountable: performance-analyst · draft 2026-10-23 · due 2026-10-30 |
-| 56 | Digest Yesterday line on the opportunity day | Performance review · RUN | S | done (2026-10-16: 147c68c + review fixes cc61ed1, TRACEABILITY V10; code-reviewer APPROVED, ui-ux-designer wording applied) · accountable: implementer · due 2026-10-19 |
-| 59 | Engine state keeps moving on the host clock while the market is closed | Operational resilience · RUN | S | done (lane market-closed-state-cadence, 2026-10-16; review fixes in, re-review pending) |
-| 58 | Fail closed on heartbeats stamped in the future | Execution and risk (supervisor) · PROTECT | S | done 2026-10-16 (needs trading-safety and SRE review) |
-| 60 | Approval window expiry trusts a future-stamped proposal | Approvals (owner confirms entries, 90 s) · PROTECT | S | done 2026-10-16 (needs trading-safety review; owner of the fix trading-safety-reviewer, built by the implementer) |
-| 61 | Mixed-currency accounts: the loss budget shows the account cap, not the combined cap | Dashboard and Telegram (loss budget, ADR 0004 section 3) · PROTECT | S | proposed (UX review of the loss-budget fallback, 2026-10-16; accountable implementer; due 2026-10-30) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -721,6 +723,15 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   below the daily floor in force, or this is not merged by 2026-12-04, H-06 is withdrawn before the freeze and
   `reserved_trials_quarter` 2027Q1 becomes 8 (rule in the pre-registration). Quant review. Depends on: `macro-v1`.
   Sweep 2026-10-16 (product owner): accountable `strategy-researcher`, due 2026-12-04; escalate to the program-director by 2026-11-13 if the count is below 150. Acceptance as above.
+  **Acceptance scorecard 2026-10-16 (product owner, AGENT_STANDARDS 7 checks):** (1) criteria: yes. `tests/test_tsmom_macro_gate.py` (no value after the signal bar, agent id
+  pinned, a missing value drops the candidate) and `tests/test_count_owed_events.py` pass (re-run 2026-10-16 at
+  3092923); the count is pasted in `preregistration-2027Q1.md`; the withdrawal is applied by the rule. (2) DoD: yes
+  (the run-input table is the researcher's record). (3) S1-S12: yes, no exception recorded. (4) reviewers: quant
+  APPROVED the preset and the count (717baa3); quant sign-off of the lower-bound fix 9754ca0 **not on record**.
+  (5) CI/merged: the preset yes (on `main`); the withdrawal and the fix **no, in PR #79 (open)**. (6) PR text: yes
+  (#79 "H-06 withdrawn"). (7) role and date: yes (strategy-researcher, due 2026-10-23, met). The re-dispatch of
+  count-owed-events belongs to BACKLOG 5 (merged recount by 2026-11-13). Accepted, conditional on #79 merging and
+  the quant note on 9754ca0.
 - **49. Retired-family trial lists match the registry (research director, 2026-10-11).** Value: the registry on
   `research-v1` holds four `mean_reversion` trials (#3, #5, #10, #12) and four `trend` trials (#2, #4, #9, #14), but
   `research.retired_families` and `hypotheses.md` B list `[3]` and `[2]`. The total (20) and so the DSR count are
@@ -735,6 +746,11 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   unchanged. `RetiredFamily.trials` is read only by `retired_drift`, so no allocation moves. `tests/test_director.py`
   40 passed. Still open: nothing checks these lists against the registry itself (only settings against the doc); a
   `retired_drift` input from the registry rows is proposed to the research director, not built here.
+  **Acceptance scorecard 2026-10-16 (product owner, AGENT_STANDARDS 7 checks):** (1) criteria: yes, `tests/test_director.py` green (re-run 2026-10-16) and the lists equal
+  `research-v1`'s registry rows (checked by the researcher, numbers above). (2) DoD: yes. (3) S1-S12: yes. (4) quant
+  APPROVED (717baa3). (5) CI/merged: **no, in PR #79 (open)**. (6) PR text: yes (#79 Research). (7) role and date:
+  yes, met. Accepted, conditional on #79 merging. Not in scope: a `retired_drift` input from the registry rows,
+  proposed to the research director.
 - **50. --discover cuts b1 at holdout_from; data-v1 digests pinned in the plan and verified by runners (quant review
   F2 of BACKLOG 47, 2026-10-11).** Value: H-02's queued row hashes the exact first and last 1m bar the run loads
   (`bars_from`/`bars_to`), so the hash depends on how far data-v1 reaches on the day of the run, and a refresh between
@@ -748,7 +764,7 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   Acceptance: tests that a data-v1 refresh after the write is refused with the digest named; that a config-hash
   mismatch against a pending queued row refuses (no fallback); that `--discover`'s `bars_to` is before
   `holdout_from` whatever the data reaches. Quant review. Depends on: BACKLOG 47.
-  Sweep 2026-10-16 (product owner): Done (PR #77, main bc030d3; a231f69); quant sign-off not on record (TRACEABILITY M43 in review). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+  Sweep 2026-10-16 (product owner): Done (PR #77, main bc030d3; a231f69); quant sign-off not on record (TRACEABILITY M45, "implemented (quant review pending)"). Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
 - **51. VPS monthly loop registry push: re-check the release asset just before upload (security re-verify of
   BACKLOG 47, 2026-10-11).** Value: research.yml and preregister-quarter.yml serialise their writes to
   `research-v1/registry.jsonl` through `concurrency: research-registry`, but the VPS monthly loop pushes through
@@ -824,6 +840,12 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
     deals corroborate raises the mark (`candidate_deals`), paper broker `balance_exact`; M2 the first pending time is
     kept; L1 one core.db handle per engine, 500 ms write busy timeout; L2 candidates expire after 10 min; accepted
     knowns recorded in the ADR. Awaiting trading-safety re-review.
+  **Acceptance scorecard 2026-10-16 (product owner, AGENT_STANDARDS 7 checks):** (1) criteria: yes, each bullet has a named test in `tests/test_hwm_confirmation.py` (single
+  inflated read; no size-down or halt after it; deposit; never lowered; refused rise logged and recorded; restart
+  between the reads), re-run 2026-10-16: pass; the deposit choice is in ADR 0018. (2) DoD: yes (HANDOFF
+  2026-10-16-hwm-confirmation). (3) S1-S12: yes. (4) trading-safety APPROVED on re-verify (17c5e0d). (5) CI/merged:
+  **no, in PR #79 (open)**. (6) PR text: yes (#79 "High-water-mark rises are confirmed"). (7) role and date: yes
+  (due 2026-10-23, met early). Accepted, conditional on #79 merging.
 - **55. test_lockout_survives_a_restart: make it reliable under load (ci follow-up from the A15 lane,
   2026-10-12).** Value: `tests/test_auth_security.py::test_lockout_survives_a_restart` failed once in a full
   `pytest -m "not integration" -n 4` run with the load average near 20 ("DID NOT RAISE PermissionError" on the
@@ -845,6 +867,15 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   window ends. Neither the lockout nor its timeout was loosened, and nothing is retried. Evidence: the old test fails
   20 of 20 with the clock running 10,000 times faster than real time; the new one passes 200 of 200 that way and 200
   of 200 under CPU stress. It still fails when the failure write is disabled, and also when the window is halved.
+  Follow-up 71a7889 (2026-10-16): the remaining lockout tests (`tests/test_api.py`,
+  `tests/test_api_code_lockout.py`) pin the lockout clock too and prove both window edges. Code-reviewer APPROVED
+  (tests-only diff, 10 clean runs); merged at 3092923.
+  **Acceptance scorecard 2026-10-16 (product owner, AGENT_STANDARDS 7 checks):** (1) criteria: yes, 200 of 200 under CPU stress and with the accelerated clock, and the test still fails
+  with the failure write disabled (test-engineer's evidence above); the lockout suites re-run 2026-10-16 at 3092923:
+  pass. (2) DoD: yes. (3) S1-S12: yes (no production change). (4) code-reviewer APPROVED; no other reviewer routed
+  (tests only). (5) CI/merged: **no, on the integration branch, not in PR #79; goes in the next PR**. (6) PR text:
+  n/a (no owner-visible change). (7) role and date: yes (test-engineer, due 2026-10-23, met). Accepted, conditional
+  on the next PR merging.
 - **56. Digest "Yesterday" line on the opportunity day.** Value: the digest's "Yesterday" proposals and trades
   lines still run 00:00-24:00 UTC (`goldbot/telegram/digest.py` `build_digest`). Its month line and the monthly and
   performance reports use the opportunity day (`goldbot/ops/report_days.py`). So a close at 23:00 UTC is in
@@ -856,6 +887,12 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   - the risk lines (loss-cap use) stay on the risk day, 00:00 UTC; no limit changes;
   - reviews: code, ui-ux (Telegram wording).
   Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-19. Acceptance as above.
+  **Acceptance scorecard 2026-10-16 (product owner, AGENT_STANDARDS 7 checks):** (1) criteria: yes, with one approved wording change: the header reads "<day> trading day
+  (ended 22:00 UTC, 23:00 UK)" instead of "Yesterday (to 22:00 UTC)" (ui-ux-designer's wording, cc61ed1). The
+  21:59/22:00, Monday and US DST-week tests are in `tests/test_digest.py` and pass (re-run 2026-10-16); the risk lines
+  stay on the 00:00 UTC risk day. (2) DoD: yes. (3) S1-S12: yes. (4) code APPROVED, ui-ux applied. (5) CI/merged:
+  **no, in PR #79 (open)**. (6) PR text: yes (#79 Digest). (7) role and date: yes (due 2026-10-19, met). Accepted,
+  conditional on #79 merging.
 - **57. risk_day_anchor is read by no code: pin it or make it real.** Value: `config/settings.yaml` says
   `risk_day_anchor: { tz: UTC, time: "00:00" }  # loss caps reset`, and `Settings.risk_day_anchor` loads it, but no
   code reads it. The 00:00 UTC risk day is decided separately in five places: `timeutil.risk_day` (gate `new_day`,
@@ -876,6 +913,12 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
     either would stop loading its settings after the deploy. Put the validator's exact error text and the fix
     (delete the key) into `docs/RUNBOOK.md` in the same change.
   Sweep 2026-10-16 (product owner): accountable `implementer`, due 2026-10-19; trading-safety review. The server `settings.local.yaml` check (last bullet) is done by sre on the boxes before the validator ships. Acceptance as above.
+  **Acceptance scorecard 2026-10-16 (product owner, AGENT_STANDARDS 7 checks):** (1) criteria: yes, `tests/test_config.py` (the shipped yaml loads; an edited anchor in
+  settings.local fails naming the fixed day; any other anchor is rejected) passes (re-run 2026-10-16); the RUNBOOK
+  carries the error text and the fix. The check of each server's `settings.local.yaml` is **not on record** (sre,
+  before PR #79 deploys to the boxes). (2) DoD: yes. (3) S1-S12: yes. (4) trading-safety APPROVED. (5) CI/merged:
+  **no, in PR #79 (open)**. (6) PR text: yes (#79 "Day anchors pinned", "Settings"). (7) role and date: yes (due
+  2026-10-19, met). Accepted, conditional on #79 merging and the sre server check.
 - **58. Fail closed on heartbeats stamped in the future (found 2026-10-16).** Value: every liveness check had the
   shape `now - ts > limit`. A `ts` in the future (a clock step, a bad write, a state backup restored from a box whose
   clock ran fast) made the age negative, and a NaN made every comparison False, so the heartbeat read as fresh for
@@ -976,20 +1019,27 @@ Every owner step below has `chaser: program-director`, who asks on #34 with a re
   item 2 lands; VM provisioning and every credential (item 1).
 
 ## Next parallel wave
-Only items that are not done (sweep 2026-10-16). The reviewer queue rule applies first: 44 and 52 have waited on
-re-review since 2026-10-12, so reviewer lanes start before new builders.
+Only items that are not done (job-check sweep 2026-10-16 evening). The reviewer queue rule applies first:
+trading-safety holds four items (59, 44, 58, 60) against a limit of 2, so two trading-safety reviewer lanes run
+before any new trading-safety builder. Every lane below touches different files.
 
-1. **Reviewer lanes: 44 (trading-safety-reviewer) and 52 (security-reviewer, then trading-safety-reviewer).**
-   Read-only. After they sign off, the release-manager ships the reviewed batch.
-2. **Item 1, demo deploy and bridge smoke** (`lane/claude-run-deploy`): `docs/deploy/`, `goldbot/ops/linux/`, and
-   the new `ops/smoke.py` (W1-1).
-3. **Item 57, risk_day_anchor validator** (`lane/anchor-validator`): `goldbot/config.py`, its test, `docs/RUNBOOK.md`.
-4. **Item 43, heartbeat while closed** (`lane/market-closed-state-cadence`): `goldbot/engine/runner.py` state write.
-   54 also edits `runner.py` (`_refresh_account`), so 54 starts when this lane merges.
-5. **Item 56, digest Yesterday line** (`lane/digest-yesterday`): `goldbot/telegram/digest.py`.
-6. **Free now, disjoint:** 55 (`tests/test_auth_security.py`, test-engineer), 49 (`config/settings.yaml`
-   `retired_families` and `docs/research/hypotheses.md` B, strategy-researcher), 45 (a new report script,
-   performance-analyst).
+1. **Trading-safety reviewer lane A: 59, then 58** (read-only). 59's re-verify of 412fd0d is due Sun 2026-10-18
+   20:00 UTC, ahead of the engine start; SRE re-verifies 59 in the same window.
+2. **Trading-safety reviewer lane B: 44 (869bb04 re-verify), then 60 (bf5240b)** (read-only).
+3. **Security reviewer lane: 52 (d2ecb8f re-verify), then 51 (cc00630 re-verify)** (read-only).
+4. **Release-manager: PR #79** merged on green, main merged back; then the next PR with 36, 51, 55, 60 and 52's
+   d2ecb8f by 2026-10-23 (ROADMAP M1).
+5. **Item 1, demo deploy** (`lane/claude-run-deploy`, sre runs it, release-manager accountable): `docs/deploy/`,
+   `goldbot/ops/linux/`. The bridge smoke (ROADMAP W1-1, new `goldbot/ops/smoke.py`) follows the architect's plan.
+6. **Item 43, `entry_blocks`** (`lane/entry-blocks`, implementer): `goldbot/risk/gate.py` (`account_reasons`), the
+   engine state write in `goldbot/engine/runner.py`, `goldbot/api/entry_status.py`. Starts when lane A has cleared 59
+   (same runner.py write path).
+7. **Item 61, mixed-currency budget** (`lane/mixed-currency-budget`, implementer): `goldbot/ops/account_view.py`,
+   `web/src/` BalanceCard and SafetyStrip. Free now.
+8. **Running:** 45 (performance-analyst, a new report script), 5 (research-director, `docs/research/`).
+
+Top three ready items: 43 (lane 6), 27 and 61 (lane 7). 27 has no lane on purpose: it reads the terms from the demo
+terminal, so it starts when item 1's engine runs (Sun 2026-10-18).
 
 ## Later (parked)
 Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block has its status and the full reason.
@@ -1016,6 +1066,26 @@ Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block 
 - Entry order type study (limit vs market); portfolio volatility target (risk use only, not alpha, per C3).
 
 ## Done
+**Accepted 2026-10-16 evening (job-check sweep).** Each has the seven-check scorecard in its detail block; tests
+re-run at 3092923 (238 passed across their suites). Acceptance is conditional on the PR merging (check 5).
+
+| Item | 1 criteria | 2 DoD | 3 S1-S12 | 4 reviewers | 5 CI, merged | 6 PR text | 7 role, date | Gap |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 48 H-06 preset and count | yes | yes | yes | quant yes (717baa3); 9754ca0 not on record | preset on `main`; rest in #79 (open) | yes (#79) | yes | #79; quant note on 9754ca0 |
+| 49 retired-family lists | yes | yes | yes | quant yes | #79 (open) | yes | yes | #79 |
+| 54 HWM confirmation | yes | yes | yes | trading-safety yes | #79 (open) | yes | yes | #79 |
+| 55 lockout test flake | yes | yes | yes | code yes (tests only) | integration 3092923; next PR | n/a | yes | next PR |
+| 56 digest opportunity day | yes (approved wording change) | yes | yes | code yes, ui-ux applied | #79 (open) | yes | yes | #79 |
+| 57 day-anchor validator | yes | yes | yes | trading-safety yes | #79 (open) | yes | yes | #79; sre server check |
+
+**Earlier Done items: scorecard by PR (2026-10-16).** Check 5 (merged on green CI to `main`) and check 6 (every PR
+body from #60 to #77 has an owner-visible behaviour section) hold for all of them. Check 7 is **no** for all: they
+predate the one-accountable-role rule of 2026-10-16. Checks 1-3 lack evidence item by item: the criteria were not
+re-run one by one; the named tests exist and passed in each PR's CI. Check 4: #76 and #77 name their reviews
+(security, SRE, trading-safety, quant); #73 names a code review; #60-#71 have review-fix commits in git but no
+per-item sign-off record. Open sign-offs: quant for 23 (V6) and 50 (M45). The product owner re-runs checks 1-3
+for the safety items among them (6, 8, 25, 28, 29, 37-42) by 2026-10-23.
+
 Checked against git on 2026-10-16. Main merge SHAs: #60 7ef3a00, #61 8bc7952, #62 1a194e9, #63 5f7da74,
 #68 e00af06, #71 423d2b1, #73 d28a482, #74 a913d42, #75 a52b389, #76 520d731, #77 bc030d3. Acceptance record: each
 item merged on green CI, and the tests it names exist. The criteria were not re-run one by one in this sweep. The
@@ -1023,7 +1093,8 @@ product owner runs the criterion-by-criterion acceptance scorecard (AGENT_STANDA
 - #60: 3. #61: 4, 9, 10. #62: 2, 7. #63: 6, 8, 12 (part), 13 (part), 14, 15. #68: 12 (director input), 20, 22.
 - #71: 24 (D-1), 25, 26 (backend), 28, 29. #73: 23, 30a, 37, 38, 39, 40, 41; the approval-card lines for 25, 28 and 29.
 - #74: 42. #76: 47. #77: 50.
-- Open sign-offs on done items: quant for 23 (V6) and 50 (M43); the owner for the values of 8.
+- Integration branch, shipping in PR #79 or the next PR: 48, 49, 54, 55, 56, 57 (table above).
+- Open sign-offs on done items: quant for 23 (V6) and 50 (M45); the owner for the values of 8.
 
 ## Rejected
 - New 15m/1h trend, breakout, intraday momentum or mean-reversion variants, and meta-labelling over primaries with

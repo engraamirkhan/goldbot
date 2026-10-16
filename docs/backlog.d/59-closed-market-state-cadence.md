@@ -1,10 +1,10 @@
 ---
 number: 59
-rank: 45
+rank: 2
 title: 'Engine state keeps moving on the host clock while the market is closed'
 stage: Operational resilience · RUN
 size: S
-status: done (lane market-closed-state-cadence, 2026-10-16; review fixes in, re-review pending)
+status: 'in review (6287d10 + review-HIGH fix 412fd0d, merged on the integration branch at a13c8a3, in PR #79; trading-safety and SRE re-verify of 412fd0d not on record) · accountable: implementer · due Sun 2026-10-18 20:00 UTC: reviewed and deployed before the engine start at 22:02 UTC (fallback in ROADMAP section 2)'
 ---
 - **59. Engine state keeps moving on the host clock while the market is closed.** Value: with the market closed
   (weekend, weekday daily break 20:59-22:02 UTC) the terminal repeats its last quote, so the tick stamp is frozen and
