@@ -54,7 +54,7 @@ Entry status
 ┃ │ Runbook: Server clock (US-EU DST gap weeks) ↗     ┃  44 px tap target, opens the RUNBOOK section
 ┃ │ Market closed · opens Sun 23:02 your time (in 5 h)┃  time in the owner's zone, weekday when not today,
 ┃ │ Nothing to do: it reopens by itself.              ┃  how long until; UTC on hover
-┃ │ trend-g0 paused after 3 losses in a row ·        ┃
+┃ │ Trend (trend-g0) paused after 3 losses in a row · ┃
 ┃ │ until 14:30 your time (in 28 min)                 ┃
 ┃ Exits keep running: open trades keep their stop,   ┃  always last
 ┃ target and automatic exits.                         ┃
@@ -80,6 +80,10 @@ above the tiles, the halt control and the account cards.
 
 ## Reasons and words
 
+Every strategy-level line names the strategy as `agent_label`: its family in words, then its id ("Trend (trend-g0)",
+"Session open (session_open-g2-ab12)"), the PARTLY OPEN headline included ("Can take new trades, except Trend
+(trend-g0)").
+
 The full table is `REASONS` in `goldbot/api/entry_status.py`; a test fails when the RiskGate or the supervisor gains a
 reason without words. Examples:
 
@@ -87,12 +91,14 @@ reason without words. Examples:
 |---|---|---|---|
 | `market_closed` | Market closed · opens {time} | Nothing to do: it reopens by itself. | wait |
 | `server_clock_mismatch` | Broker clock differs from the expected time zone | See the Runbook: Server clock. … | act |
-| `throttle_loss_streak` | trend-g0 paused after 3 losses in a row · until {time} | Nothing to do: it resumes after its cooldown or a winning shadow trade. | wait (strategy only) |
+| `throttle_loss_streak` | Trend (trend-g0) paused after 3 losses in a row · until {time} | Nothing to do: it resumes after its cooldown or a winning shadow trade. | wait (strategy only) |
+| a strategy's last refused trade (`entry_refusals`) | Trend (trend-g0): last entry refused, not enough free margin · since {time} (words per code: `REFUSAL_TEXT`; a per-trade `daily_loss_limit_abs` reads "this trade could lose more than is left of today's loss limit", never "limit reached") | the code's own next step | the code's kind (strategy only); cleared when the gate next allows that strategy or at 00:00 UTC |
+| `entry_reasons_missing` | Can't check whether new trades are allowed: this engine version doesn't report it | Update the brain to the current version, then restart the engine. | act |
+| `invalid_state` | The broker sent account figures the safety checks can't use | Usually clears at the next update; if it lasts, check the MT5 terminal is logged in and see the Health tab. | wait |
 | `daily_loss_limit_abs` | Today's £50 loss limit reached · resets {time} | Nothing to do: it resets at the start of the next day. | wait |
 | `fx_conversion_unavailable` | Can't convert dollars to the account currency right now | Check the MT5 terminal is logged in and XAUUSD is in Market Watch. | act |
 | `tick_error` | The engine hit an error reading prices | Usually clears at the next clean bar; if it repeats, restart the engine. | wait |
 | `bridge_incompatible` | The MT5 box runs an incompatible bridge version | Update the MT5 box to the same version as the brain. | act |
-| `heat_cap`, `tier2_blackout`, `reopen_window`, `holiday_thin` | worded in advance for the lanes adding them | | wait |
 | anything else | New entries paused ({code in words}) | See the Runbook; the Health tab may say more. | act |
 
 Copy rules: no jargon codes, no times inside `text` (the time is its own element so it can be shown in the owner's

@@ -2290,6 +2290,9 @@ class Engine:
         self.state.equity = self.broker.account().equity
         if new_day(self.state, now, last):
             self._last_reset = now
+            # BACKLOG 43 (code review LOW-1): a new risk day starts with no "last entry refused" (an agent that stopped
+            # producing intents is never allowed again, so its refusal would otherwise stay until a restart)
+            self._entry_refusals.clear()
             self._save_risk_state_now("the risk-period reset")
 
     def _poll_rearm(self, now: pd.Timestamp) -> None:

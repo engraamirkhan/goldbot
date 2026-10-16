@@ -172,6 +172,19 @@ def test_an_allowed_check_clears_the_agents_refusal_and_account_reasons_are_neve
     assert set(_file(eng)["entry_refusals"]) == {"b"}
 
 
+def test_the_risk_day_rollover_clears_every_agents_last_refusal(tmp_path):
+    """Code review LOW-1 (558588e): an agent that stops producing intents is never allowed again, so its refusal would
+    read "since <old time>" until a restart; the new risk day starts with none."""
+    eng, _, _ = _engine(tmp_path)
+    eng._roll_risk_period(NOW)                                       # today's reset
+    eng._note_refusal("a", GateDecision(allowed=False, reasons=["margin_level_floor"]), NOW)
+    eng._roll_risk_period(NOW + pd.Timedelta(hours=2))               # the same risk day: kept
+    assert set(eng._entry_refusals) == {"a"}
+    eng._roll_risk_period(NOW + pd.Timedelta(days=1))                # 00:00 UTC passed: cleared
+    eng._write_state()
+    assert _file(eng)["entry_refusals"] == {}
+
+
 def test_a_refusal_at_approval_time_is_published_for_its_agent(tmp_path):
     pb = GbpPaper()
     eng, center = _approval_engine(tmp_path, pb)

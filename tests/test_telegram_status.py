@@ -51,8 +51,17 @@ def test_a_throttled_agent_is_partly_open_and_names_the_strategy_and_its_cooldow
     s = status(engine(throttle=th))
     t = text(s)
     assert lines(t)[0].startswith("PARTLY OPEN · icm-demo (demo)")
-    assert "Can take new trades, except trend-g0" in t
-    assert "trend-g0 paused after 3 losses in a row · until 15:30 BST (14:30 UTC, in 30 min)" in t
+    assert "Can take new trades, except Trend (trend-g0)" in t
+    assert "Trend (trend-g0) paused after 3 losses in a row · until 15:30 BST (14:30 UTC, in 30 min)" in t
+
+
+def test_a_strategys_last_refused_trade_reads_the_same_as_on_the_dashboard():
+    s = status(engine(entry_refusals={"trend-g0": {"code": "daily_loss_limit_abs", "at": "2026-10-14T13:02:00+00:00"}}))
+    t = text(s)
+    assert lines(t)[0].startswith("PARTLY OPEN · icm-demo (demo)")
+    assert ("Trend (trend-g0): last entry refused, this trade could lose more than is left of today's loss limit"
+            " · since 14:02 BST") in t
+    assert "limit reached" not in t.lower()
 
 
 def test_a_clock_mismatch_is_blocked_and_the_fix_comes_under_needs_you_first():

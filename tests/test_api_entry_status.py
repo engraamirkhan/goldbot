@@ -92,15 +92,15 @@ def test_a_throttled_agent_blocks_only_itself_until_its_cooldown_ends():
     s = status(engine(throttle=th))
     [b] = s.blocks
     assert (b.code, b.scope, b.agent_id) == ("throttle_loss_streak", "agent", "trend-g0")
-    assert b.text == "trend-g0 paused after 3 losses in a row" and b.at_label == "until"
+    assert b.text == "Trend (trend-g0) paused after 3 losses in a row" and b.at_label == "until"
     assert b.at == pd.Timestamp(until).to_pydatetime() and b.kind == "wait"
-    assert s.state == "partial" and s.headline == "Can take new trades, except trend-g0"
+    assert s.state == "partial" and s.headline == "Can take new trades, except Trend (trend-g0)"
     # every agent throttled: nothing can open
     th["agents"]["tsmom-g0"]["blocked"] = ["throttle_entry_rate"]
     s = status(engine(throttle=th))
     assert s.state == "waiting" and codes(s) == ["throttle_loss_streak", "throttle_entry_rate"]
     rate = s.blocks[1]
-    assert rate.text == "tsmom-g0 made its 3 trades for today" and rate.at_label == "resets"
+    assert rate.text == "Tsmom (tsmom-g0) made its 3 trades for today" and rate.at_label == "resets"
     assert rate.at == pd.Timestamp("2026-10-15", tz="UTC").to_pydatetime()
 
 
@@ -176,11 +176,16 @@ def test_an_engine_that_does_not_publish_its_reasons_is_never_shown_open():
         [b] = s.blocks
         assert (b.code, b.kind, s.state) == ("entry_reasons_missing", "act", "blocked")
         assert b.runbook == "Updating the VPS to a new version"
+        assert b.text == "Can't check whether new trades are allowed: this engine version doesn't report it"
+        assert b.fix == "Update the brain to the current version, then restart the engine."
 
 
 def test_invalid_field_codes_are_never_shown_but_the_invalid_state_is():
     s = status(engine(entry_blocks=["invalid_state", "invalid:equity"]))
     assert codes(s) == ["invalid_state"] and s.state != "open"
+    assert s.blocks[0].text == "The broker sent account figures the safety checks can't use"
+    assert s.blocks[0].fix == ("Usually clears at the next update; if it lasts, check the MT5 terminal is logged in "
+                               "and see the Health tab.")
 
 
 def test_the_engines_supervisor_halt_adds_nothing_to_the_supervisors_own_reasons():
@@ -199,10 +204,50 @@ def test_a_per_trade_refusal_is_its_agents_own_block_since_when_it_happened():
     assert set(by) == {"trend-g0", "tsmom-g0"}
     m = by["trend-g0"]
     assert (m.code, m.scope, m.at_label, m.kind) == ("margin_level_floor", "agent", "since", "wait")
-    assert m.text == "trend-g0: last entry refused: Not enough free margin"
+    assert m.text == "Trend (trend-g0): last entry refused, not enough free margin"
     assert m.at == pd.Timestamp(at).to_pydatetime()
     assert by["tsmom-g0"].kind == "act"
-    assert s.state == "partial" and s.headline == "Can take new trades, except trend-g0, tsmom-g0"
+    assert by["tsmom-g0"].text == "Tsmom (tsmom-g0): last entry refused, couldn't convert dollars to the account currency"
+    assert s.state == "partial" and s.headline == "Can take new trades, except Trend (trend-g0), Tsmom (tsmom-g0)"
+
+
+@pytest.mark.parametrize("code, reason", [
+    ("daily_loss_limit_abs", "this trade could lose more than is left of today's loss limit"),
+    ("margin_level_floor", "not enough free margin"), ("heat_cap", "too much risk already open"),
+    ("combined_exposure_cap", "enough gold already open across accounts"),
+    ("min_lot_exceeds_risk", "the smallest trade would risk too much for this balance"),
+    ("fx_conversion_unavailable", "couldn't convert dollars to the account currency")])
+def test_every_per_trade_refusal_has_its_own_words_not_the_account_reasons(code, reason):
+    """ui-ux review 2026-10-16: a refused trade is not a spent limit, so a per-trade daily_loss_limit_abs never says the
+    limit is reached; each per-trade refusal is worded for the trade."""
+    from goldbot.risk.gate import PER_TRADE_REFUSALS
+    assert set(es.REFUSAL_TEXT) == PER_TRADE_REFUSALS
+    s = status(engine(entry_refusals={"session_open-g1-abc": {"code": code, "at": WED.isoformat()}}))
+    [b] = s.blocks
+    assert b.text == f"Session open (session_open-g1-abc): last entry refused, {reason}"
+    assert "limit reached" not in b.text.lower()
+
+
+def test_a_refused_agent_outside_the_throttle_list_never_makes_it_blocked_for_everyone():
+    """Code review LOW-2 (558588e): the throttle list is the only roster; an agent named only by entry_refusals widens the
+    known agents, so one agent still free keeps the account partly open."""
+    th: dict[str, Any] = {"enabled": True, "loss_streak": 3, "max_entries_per_day_per_agent": 3, "agents": {
+        "trend-g0": {"loss_streak": 3, "cooldown_until": None, "blocked": ["throttle_loss_streak"]},
+        "tsmom-g0": {"loss_streak": 0, "cooldown_until": None, "blocked": []}}}
+    s = status(engine(throttle=th, entry_refusals={"session_open-g0": {"code": "heat_cap", "at": WED.isoformat()}}))
+    assert s.state == "partial" and "Tsmom" not in s.headline
+    # every known agent held (roster and refused alike): nothing can open
+    th["agents"]["tsmom-g0"]["blocked"] = ["throttle_entry_rate"]
+    assert status(engine(throttle=th, entry_refusals={"session_open-g0": {"code": "heat_cap",
+                                                                          "at": WED.isoformat()}})).state == "waiting"
+    # no roster published (throttle off): refusals alone never claim every strategy is held
+    assert status(engine(entry_refusals={"trend-g0": {"code": "heat_cap", "at": WED.isoformat()}})).state == "partial"
+
+
+def test_the_agent_label_names_the_family_then_the_id():
+    assert es.agent_label("trend-g0") == "Trend (trend-g0)"
+    assert es.agent_label("session_open-g2-deadbeef") == "Session open (session_open-g2-deadbeef)"
+    assert es.agent_label("solo") == "Solo (solo)"
 
 
 def test_a_silent_engine_while_the_market_is_open_past_the_health_threshold_needs_the_owner():

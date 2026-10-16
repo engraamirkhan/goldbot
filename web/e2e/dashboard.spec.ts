@@ -317,7 +317,7 @@ test("entry status says in plain words why an account can't trade, when it resum
   await expect(row.getByRole("link", { name: "Runbook: Server clock (US-EU DST gap weeks)" })).toHaveAttribute(
     "href", /RUNBOOK\.md#server-clock-us-eu-dst-gap-weeks$/);
   await expect(row.getByText(/^opens .* your time \(in /)).toHaveAttribute("title", / UTC$/);
-  await expect(row.getByText("trend-g0 paused after 3 losses in a row")).toBeVisible();
+  await expect(row.getByText("Trend (trend-g0) paused after 3 losses in a row")).toBeVisible();
   await expect(row.getByText(/^until .* your time \(in 1 h \d+ min\)$/)).toBeVisible();
   await expect(row.getByText(/^Exits keep running/)).toBeVisible();
   await expect(row).not.toContainText("99887766");                            // no account identifiers

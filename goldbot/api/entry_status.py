@@ -87,9 +87,8 @@ REASONS: dict[str, Reason] = {
                          "Usually a short gap; if it lasts, check the engine service and the Health tab.", "wait", HEALTH),
     "engine_not_reporting": _r("Engine not reporting", "Check the engine service is running and restart it if not.",
                                "act", HEALTH),
-    "entry_reasons_missing": _r("The engine doesn't say why it would refuse entries",
-                                "Update the brain to the current version and restart the engine; it then reports its "
-                                "reasons.", "act", UPDATE),
+    "entry_reasons_missing": _r("Can't check whether new trades are allowed: this engine version doesn't report it",
+                                "Update the brain to the current version, then restart the engine.", "act", UPDATE),
     "owner_halt": _r("New entries halted by you or an approver",
                      "Re-arm on this page when ready (owner and authenticator code).", "act", HALT),
     "supervisor_halt": _r("The safety supervisor stopped new entries",
@@ -168,9 +167,9 @@ REASONS: dict[str, Reason] = {
                      "Usually clears at the next clean bar; if it repeats, restart the engine.", "wait"),
     "data_quality_error": _r("Market data failed a quality check",
                              "Usually clears by itself; check the Feeds tab if it lasts.", "wait"),
-    "invalid_state": _r("The broker sent a reading the safety checks can't use",
-                        "Usually clears at the next reading; if it lasts, check the MT5 terminal and the Health tab.",
-                        "wait", HEALTH),
+    "invalid_state": _r("The broker sent account figures the safety checks can't use",
+                        "Usually clears at the next update; if it lasts, check the MT5 terminal is logged in and see "
+                        "the Health tab.", "wait", HEALTH),
     "equity_unconfirmed": _r("The broker's equity reading looked wrong: checking it again",
                              f"{NOTHING}: entries resume after a minute of normal readings; a second 12% reading "
                              "stops trading.", "wait"),
@@ -198,6 +197,17 @@ REASONS: dict[str, Reason] = {
                                    f"{NOTHING}: the strategy needs a target before it trades.", "wait"),
 }
 _ORDER = {code: i for i, code in enumerate(REASONS)}
+# BACKLOG 43 (ui-ux review 2026-10-16): a strategy's last refused trade (`entry_refusals`, gate.PER_TRADE_REFUSALS) is
+# worded for that trade, never with the account reason's text (a refused trade is not a spent limit): shown as
+# "{agent_label}: last entry refused, {reason}"; the kind, fix and Runbook stay the code's own (REASONS)
+REFUSAL_TEXT: dict[str, str] = {
+    "daily_loss_limit_abs": "this trade could lose more than is left of today's loss limit",
+    "margin_level_floor": "not enough free margin",
+    "heat_cap": "too much risk already open",
+    "combined_exposure_cap": "enough gold already open across accounts",
+    "min_lot_exceeds_risk": "the smallest trade would risk too much for this balance",
+    "fx_conversion_unavailable": "couldn't convert dollars to the account currency",
+}
 API_ONLY = frozenset({"engine_not_reporting", "status_unknown", "entry_reasons_missing"})   # raised here, not by the engine
 WINDOW_CODES = frozenset({"tier2_blackout", "reopen_window", "holiday_thin", "calendar_unavailable"})
 # worded ahead of the lanes adding them (bridge check, playbook G-items); the engine publishes them in entry_blocks
@@ -210,6 +220,15 @@ _SYMBOL = {"GBP": "£", "USD": "$", "EUR": "€"}
 def _slug(title: str) -> str:
     """GitHub's heading anchor: lower case, punctuation dropped, spaces to hyphens."""
     return re.sub(r"[^a-z0-9 -]", "", title.lower()).replace(" ", "-")
+
+
+def agent_label(aid: str) -> str:
+    """How every agent-level line names a strategy (ui-ux review 2026-10-16): its family in words, then its id, e.g.
+    "Trend (trend-g0)", "Session open (session_open-g2-ab12)"."""
+    # lazily: the research package is heavy for the API's import
+    from goldbot.research.attribution import family_of
+    family = family_of(aid).replace("_", " ")
+    return f"{family[:1].upper()}{family[1:]} ({aid})"
 
 
 def runbook_url(section: str | None) -> str | None:
@@ -286,7 +305,7 @@ def block(code: str, *, text: str | None = None, agent: str | None = None, at: p
     if r is None:                           # a newer engine's reason: shown, never dropped
         r = Reason(text=f"New entries paused ({code.replace('_', ' ')})",
                    fix="See the Runbook; the Health tab may say more.", kind="act")
-    body = text if text is not None else r.text.replace("{agent}", agent or "a strategy")
+    body = text if text is not None else r.text.replace("{agent}", agent_label(agent) if agent else "a strategy")
     return EntryBlock(code=code, scope="agent" if agent else "account", agent_id=agent, text=body,
                       fix=fix if fix is not None else r.fix, kind=r.kind, at=_dt(at) if at_label else None,
                       at_label=at_label if at is not None else None, runbook=r.runbook, runbook_url=runbook_url(r.runbook))
@@ -316,10 +335,10 @@ def _budget_blocks(budget: LossBudget, currency: Any, now: pd.Timestamp) -> list
     return []
 
 
-def _throttle_blocks(th: Any, now: pd.Timestamp) -> tuple[list[EntryBlock], int]:
-    """The strategies the throttle holds back, and how many strategies it covers."""
+def _throttle_blocks(th: Any, now: pd.Timestamp) -> tuple[list[EntryBlock], set[str]]:
+    """The strategies the throttle holds back, and the strategies it covers (the only roster the engine publishes)."""
     if not isinstance(th, dict) or not th.get("enabled") or not isinstance(th.get("agents"), dict):
-        return [], 0
+        return [], set()
     out = []
     agents = th["agents"]
     for aid, v in agents.items():
@@ -328,15 +347,15 @@ def _throttle_blocks(th: Any, now: pd.Timestamp) -> tuple[list[EntryBlock], int]
         for code in [str(c) for c in v["blocked"] if CODE.fullmatch(str(c))]:
             if code == "throttle_loss_streak":
                 n = _num(v.get("loss_streak"))
-                text = f"{aid} paused after {int(n)} losses in a row" if n else None
+                text = f"{agent_label(str(aid))} paused after {int(n)} losses in a row" if n else None
                 out.append(block(code, agent=str(aid), text=text, at=_ts(v.get("cooldown_until")), at_label="until"))
             elif code == "throttle_entry_rate":
                 n = _num(th.get("max_entries_per_day_per_agent")) or _num(v.get("entries_today"))
-                text = f"{aid} made its {int(n)} trades for today" if n else None
+                text = f"{agent_label(str(aid))} made its {int(n)} trades for today" if n else None
                 out.append(block(code, agent=str(aid), text=text, at=_next_day(now), at_label="resets"))
             else:
                 out.append(block(code, agent=str(aid)))
-    return out, len(agents)
+    return out, {str(a) for a in agents}
 
 
 def _reopen_until(sessions: Any, now: pd.Timestamp, limits: RiskLimits) -> pd.Timestamp | None:
@@ -434,9 +453,9 @@ def _refusal_blocks(refusals: Any) -> list[EntryBlock]:
         code = v.get("code") if isinstance(v, dict) else None
         if not isinstance(code, str) or not CODE.fullmatch(code) or not AGENT.fullmatch(str(aid)):
             continue
-        r = REASONS.get(code)
-        out.append(block(code, agent=str(aid), text=f"{aid}: last entry refused: {r.text}" if r else None,
-                         at=_ts(v.get("at")), at_label="since"))
+        why = REFUSAL_TEXT.get(code)
+        out.append(block(code, agent=str(aid), at=_ts(v.get("at")), at_label="since",
+                         text=f"{agent_label(str(aid))}: last entry refused, {why}" if why else None))
     return out
 
 
@@ -534,13 +553,15 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
         if isinstance(bc, dict) and bc.get("status") == "ok" and bc.get("commit_differs") is True:
             notes.append("The MT5 box and the brain run different versions; entries are not affected.")
 
-    agent_blocks, n_agents = ([], 0) if silent else _throttle_blocks(e.get("throttle"), now)
+    agent_blocks, roster = ([], set()) if silent else _throttle_blocks(e.get("throttle"), now)
     for b in agent_blocks:
         add(b)
     found.sort(key=lambda b: (b.kind, _ORDER.get(b.code, len(_ORDER))))
     account = [b for b in found if b.scope == "account"]
     held = sorted({b.agent_id for b in found if b.agent_id})
-    everyone = n_agents > 0 and len(held) >= n_agents
+    # every known strategy held (code review LOW-2): the known ones are the throttle's roster plus any agent a refusal
+    # names, so held must cover the roster; with no roster published, never claimed (partly open at most)
+    everyone = bool(roster) and roster <= set(held)
     stopping = account if account else (found if everyone else [])
     clears: pd.Timestamp | None = None
     if stopping:
@@ -551,7 +572,7 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
         if state == "waiting" and all(b.at is not None and b.at_label != "since" for b in stopping):
             clears = max(pd.Timestamp(b.at) for b in stopping if b.at is not None)
     elif held:
-        state, headline = "partial", f"Can take new trades, except {', '.join(str(a) for a in held)}"
+        state, headline = "partial", f"Can take new trades, except {', '.join(agent_label(str(a)) for a in held)}"
     else:
         state, headline = "open", "Can take new trades"
     return EntryStatus(state=state, headline=headline, blocks=found, notes=notes,

@@ -9,3 +9,9 @@
   `open_risk_unknown` now come before the intent's own reasons. Deploy: brain and API together (same release);
   exits are never gated by any of it. R43; reviews owed: code-reviewer, trading-safety-reviewer (gate and engine),
   ui-ux-designer (new wording).
+  Reviews of 558588e: ui-ux-designer 2026-10-16: CHANGES applied (per-trade refusals worded per code in
+  `REFUSAL_TEXT`, so a per-trade `daily_loss_limit_abs` never says "limit reached"; every strategy line and the
+  PARTLY OPEN headline use `agent_label`, e.g. "Trend (trend-g0)"; new `entry_reasons_missing` and `invalid_state`
+  texts). code-reviewer 2026-10-16: APPROVE, both LOWs fixed: the risk-day rollover clears `entry_refusals`, and
+  "every strategy held" now needs the whole throttle roster held (an agent named only by a refusal never makes it
+  read blocked for everyone). trading-safety review of 558588e: running, not recorded here yet.
