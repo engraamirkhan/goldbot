@@ -629,6 +629,27 @@ def test_restore_drill_health(tmp_path):
     assert c.status == "fail" and "integrity_check" in c.reason
 
 
+def test_unconfigured_restic_health_reasons_name_the_fix_command_and_the_runbook(brain, tmp_path):
+    """Found 2026-10-16: the job check cut the error at 160 characters and the owner lost "RUNBOOK 'Backups'". The
+    real scheduler runs both jobs with no restic keys; every owner-facing reason keeps the fix and the pointer."""
+    from goldbot.ops.scheduler import Schedule, Scheduler
+    clock = [NOW - pd.Timedelta(days=1)]
+    sch = Scheduler(brain.state_dir / "scheduler.json", clock=lambda: clock[0])
+    sch.add("backup", Schedule(kind="daily", at="03:00"), lambda slot: bk.backup_job(brain, lambda k: None, host=HOST))
+    sch.add("restore_drill", Schedule(kind="daily", at="03:00"),
+            lambda slot: bk.drill_job(brain, lambda k: None, host=HOST))
+    clock[0] = NOW
+    assert sorted(sch.run_pending()) == ["backup", "restore_drill"]
+    ctx = _ctx(brain.state_dir)
+    reasons = {c.name: c.reason for c in health.check_scheduler(ctx)}
+    reasons["backup_age"] = health.check_backup_age(ctx).reason
+    reasons["restore_drill"] = health.check_restore_drill(ctx).reason
+    for name in ("job:backup", "job:restore_drill", "backup_age", "restore_drill"):
+        assert "RUNBOOK 'Backups'" in reasons[name], (name, reasons[name])
+        assert "goldbot accounts set" in reasons[name], (name, reasons[name])
+        assert "restic-s3-secret-key" in reasons[name], (name, reasons[name])     # the last missing key survives too
+
+
 def test_backup_prune_health(tmp_path):
     assert health.check_backup_prune(_ctx(tmp_path)).status == "ok"                  # no backup yet
     _write_backup(tmp_path, 1, first_ok_ts=(NOW - pd.Timedelta(days=10)).isoformat())

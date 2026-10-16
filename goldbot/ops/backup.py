@@ -91,6 +91,11 @@ class ResticNotConfigured(BackupError):
     pass
 
 
+# Every job error starts with the pointer: health shows only the first few hundred characters (found 2026-10-16,
+# when a 160-character cut dropped a trailing pointer).
+RUNBOOK = "RUNBOOK 'Backups'"
+
+
 # ------------------------------------------------------------------------------------------------ configuration
 class Retention(Record):
     keep_daily: int = Field(14, ge=1)
@@ -140,8 +145,8 @@ class Restic:
         values = {env: get_secret(key) for env, key in SECRET_KEYS.items()}
         missing = [SECRET_KEYS[e] for e, v in values.items() if not v]
         if missing:
-            raise ResticNotConfigured("restic not configured, missing in the secret store: " + ", ".join(missing)
-                                      + " (goldbot accounts set <key>; RUNBOOK 'Backups')")
+            raise ResticNotConfigured(f"{RUNBOOK}: restic not configured; missing keys (`goldbot accounts set "
+                                      "<key>`): " + ", ".join(missing))
         env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
                "HOME": os.environ.get("HOME", str(Path.home())), **{k: str(v) for k, v in values.items()}}
         m = _OCI_REGION.search(env["RESTIC_REPOSITORY"])
@@ -530,6 +535,11 @@ def run_backup(paths: BackupPaths, restic: Restic) -> BackupRecord:
         shutil.rmtree(stage, ignore_errors=True)
 
 
+def _pointer_first(msg: str) -> str:
+    """`RUNBOOK 'Backups': <msg>`, once: a ResticNotConfigured message already carries the pointer after its type."""
+    return f"{RUNBOOK}: {msg.replace(f'{RUNBOOK}: ', '', 1)}"
+
+
 def backup_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, host: str,
                runner: Runner = subprocess.run, timeout_s: float = 3600) -> dict[str, Any]:
     """The scheduler job: one backup, recorded in state/backup_last.json whatever happens; raises on failure so the
@@ -548,7 +558,7 @@ def backup_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, h
         rec.first_ok_ts = first_ok or rec.ts
         rec.last_prune_ts = rec.last_prune_ts or prev_prune
     except Exception as exc:
-        msg = f"{type(exc).__name__}: {exc}"
+        msg = _pointer_first(f"{type(exc).__name__}: {exc}")
         rec = BackupRecord(ts=pd.Timestamp.now("UTC"), ok=False, last_ok_ts=prev_ok, first_ok_ts=first_ok,
                            last_prune_ts=prev_prune, duration_s=round(time.monotonic() - t0, 1),
                            error=(restic.redact(msg) if restic else msg)[:800])
@@ -617,15 +627,15 @@ def drill_job(paths: BackupPaths, get_secret: Callable[[str], str | None], *, ho
         with _PrivateUmask():
             rec = restore_drill(paths, restic, check_subset=check_subset)
     except Exception as exc:
-        msg = f"{type(exc).__name__}: {exc}"
+        msg = _pointer_first(f"{type(exc).__name__}: {exc}")
         rec = DrillRecord(ts=pd.Timestamp.now("UTC"), ok=False, duration_s=round(time.monotonic() - t0, 1),
                           error=(restic.redact(msg) if restic else msg)[:800])
     rec.last_ok_ts = rec.ts if rec.ok else prev_ok
     _record(path, rec)
     if not rec.ok:
-        why = rec.error or "; ".join(rec.problems)[:800]
+        why = (rec.error or "; ".join(rec.problems)[:800]).removeprefix(f"{RUNBOOK}: ")
         log.error("restore drill failed: %s", why)
-        raise BackupError(f"restore drill failed: {why}")
+        raise BackupError(f"{RUNBOOK}: restore drill failed: {why}")
     log.info("restore drill ok: %d files verified", rec.files)
     return {"files": rec.files, "snapshot": rec.snapshot}
 
