@@ -205,7 +205,7 @@ def _combined(engine: dict[str, Any], supervisor: dict[str, Any], engines: list[
         notes.append("combined caps: the supervisor is not reporting them yet")
         return
     if heartbeat_problem(ts, now, SUPERVISOR_MAX_AGE_S) is not None:      # stale, or stamped in the future
-        notes.append("combined caps not shown: the supervisor's last report is stale")
+        notes.append("combined caps not shown: the supervisor's last report is stale or stamped ahead")
         return
     ccys = {e.get("currency") for e in engines} | {engine.get("currency")}
     if len(ccys) != 1 or None in ccys:

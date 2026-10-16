@@ -283,7 +283,8 @@ def effective(v: BridgeCompat, now: pd.Timestamp, max_age_s: float = MAX_VERDICT
         return unchecked("never confirmed", now=now)
     age = (now - v.checked_at).total_seconds()
     if age < -CLOCK_AHEAD_TOLERANCE_S:
-        return unchecked(f"last confirmation stamped {-age / 60:.0f} min ahead of this clock", v.checked_at, now=now)
+        ahead = f"{-age:.0f} s" if -age < 120 else f"{-age / 60:.0f} min"
+        return unchecked(f"last confirmation stamped {ahead} ahead of this clock", v.checked_at, now=now)
     if age > max_age_s:
         return unchecked(f"last confirmed {age / 60:.0f} min ago (over {max_age_s / 60:g} min)", v.checked_at, now=now)
     return v

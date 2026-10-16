@@ -70,6 +70,7 @@ exception) and 29 (absolute daily loss limit). Nothing trades on the £1,000 GBP
 | 53 | The phase gates compare paper and live with the deployed model's own trial | Roadmap gates (P7) · VERIFY | M | proposed (review of 978c667, 2026-10-12) |
 | 54 | Confirm increases in balance_closed_hwm | Execution and risk (drawdown stages) · PROTECT | S | proposed (trading-safety review of BACKLOG 44, 2026-10-12; needs trading-safety review) |
 | 58 | Fail closed on heartbeats stamped in the future | Execution and risk (supervisor) · PROTECT | S | done 2026-10-16 (needs trading-safety and SRE review) |
+| 60 | Approval window expiry trusts a future-stamped proposal | Approvals (owner confirms entries, 90 s) · PROTECT | S | proposed (trading-safety and SRE review of BACKLOG 58, 2026-10-16; owner of the fix trading-safety-reviewer, built by the implementer; due 2026-10-23) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -764,10 +765,26 @@ hypotheses that go through the trial registry in a future quarter's budget.
     stamped more than 5 s ahead;
   - both reasons have plain-language text on the dashboard and Telegram (entry_status `REASONS`) and a RUNBOOK row;
   - health fails `supervisor`, `engine:<account>`, `engine_loop:<account>`, `heartbeat:<service>` and `scheduler`
-    (warns `alerts`) on a stamp more than `HEALTH_CLOCK_AHEAD_S` (60 s) ahead, and on a NaN or non-numeric stamp;
+    (warns `alerts`) on a stamp more than `HEALTH_CLOCK_AHEAD_S` (5 s) ahead of max(the pass's `now`, the wall
+    clock), so a slow pass never flags a stamp written while it ran, and on a NaN or non-numeric stamp;
   - the Feeds page shows such a supervisor heartbeat as not reporting, the dashboard does not show combined caps from
     it, and a bridge verdict confirmed in the future counts as `unchecked`;
   - tests/test_heartbeat_clock_ahead.py covers each: beyond tolerance fails, within tolerance does not, NaN/str fails.
+- **60. Approval window expiry trusts a future-stamped proposal (review of BACKLOG 58, 2026-10-16).** Value:
+  `Proposal.expired` (goldbot/telegram/approvals.py:120) is `time.time() > created + window_s`, the same
+  `now - ts > limit` shape BACKLOG 58 closed for heartbeats. A backward clock step of S seconds stretches the owner's
+  90 s window by S, and a pending file stamped in the future (a restored backup, a bad write) stays approvable for
+  longer than 90 s. The RiskGate runs again at approval, so the caps still hold, but the `EXPIRED_UNAPPROVED`
+  contract (an entry the owner did not confirm within 90 s never opens) loosens. Accountable: trading-safety-reviewer;
+  built by the implementer; due 2026-10-23. Acceptance:
+  - a proposal whose `created` is more than `CLOCK_AHEAD_TOLERANCE_S` (5 s) ahead of now counts as expired, never
+    approvable (`goldbot.data.timeutil.heartbeat_problem` or the same rule), and a non-finite `created` too;
+  - the engine also holds a monotonic deadline per proposal it raised (`time.monotonic()` at creation + `window_s`),
+    and refuses an approval after it whatever the wall clock says; a restart drops the deadline and the proposal
+    (fail closed);
+  - the bus, Telegram and dashboard show such a proposal as expired, and the digest counts it as `EXPIRED_UNAPPROVED`;
+  - tests: `created` 10 s ahead is expired; 2 s ahead is still open; a backward wall-clock step during the window does
+    not let an approval through after the monotonic deadline; NaN or a string `created` is expired.
 
 ## Needs the owner
 These are never decided by the product owner or by agents.

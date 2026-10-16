@@ -13,8 +13,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   or `supervisor_state_unreadable` (a non-numeric or NaN `ts`, or a file that is not an object). The supervisor halts
   every entry on an engine file more than 5 s ahead (`engine_heartbeat_future`, files in `future_engines`; that
   file's currency and money still count). Health fails the supervisor, engine, engine loop, service heartbeat and
-  scheduler lines (warns the alert loop) on a stamp more than 60 s ahead (`HEALTH_CLOCK_AHEAD_S`: a pass takes its
-  `now` once and can run for many seconds). The Feeds page shows such a supervisor heartbeat as not reporting, the
+  scheduler lines (warns the alert loop) on a stamp more than the same 5 s ahead (`HEALTH_CLOCK_AHEAD_S`), measured
+  against max(the pass's `now`, the wall clock) (`checks._base._ahead_s`, SRE review): a pass takes its `now` once
+  and can run for minutes while the bridge times out, and a service that beat meanwhile is not a clock fault. The
+  later clock can only clear a future flag, never raise one. The Feeds page shows such a supervisor heartbeat as not reporting, the
   dashboard hides combined caps read from it, and a bridge verdict confirmed in the future counts as `unchecked`.
   Left alone on purpose: report-age checks (drift, restore drill, ledger, crossfeed, costs, risk-day roll, re-arm,
   stuck approvals, job overdue), where a future stamp only hides a "report old" warning and the scheduler heartbeat

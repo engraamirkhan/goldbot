@@ -18,7 +18,8 @@ status: done 2026-10-16 (needs trading-safety and SRE review)
     stamped more than 5 s ahead;
   - both reasons have plain-language text on the dashboard and Telegram (entry_status `REASONS`) and a RUNBOOK row;
   - health fails `supervisor`, `engine:<account>`, `engine_loop:<account>`, `heartbeat:<service>` and `scheduler`
-    (warns `alerts`) on a stamp more than `HEALTH_CLOCK_AHEAD_S` (60 s) ahead, and on a NaN or non-numeric stamp;
+    (warns `alerts`) on a stamp more than `HEALTH_CLOCK_AHEAD_S` (5 s) ahead of max(the pass's `now`, the wall
+    clock), so a slow pass never flags a stamp written while it ran, and on a NaN or non-numeric stamp;
   - the Feeds page shows such a supervisor heartbeat as not reporting, the dashboard does not show combined caps from
     it, and a bridge verdict confirmed in the future counts as `unchecked`;
   - tests/test_heartbeat_clock_ahead.py covers each: beyond tolerance fails, within tolerance does not, NaN/str fails.

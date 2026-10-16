@@ -108,12 +108,72 @@ def test_the_new_halt_reasons_read_in_plain_words_on_the_dashboard_and_telegram(
 
 
 # ------------------------------------------------------------------------------------------------- health
-def test_health_fails_the_supervisor_on_a_heartbeat_stamped_in_the_future(tmp_path):
-    write(tmp_path / "supervisor.json", {"ts": NOW.timestamp() + HEALTH_CLOCK_AHEAD_S + 60, "halt": False, "reasons": []})
-    c = health.check_supervisor(make_ctx(tmp_path))
-    assert c.status == "fail" and "ahead" in c.reason and "engines block entries" in c.reason
-    write(tmp_path / "supervisor.json", {"ts": NOW.timestamp() + 20, "halt": False, "reasons": []})
-    assert health.check_supervisor(make_ctx(tmp_path)).status == "ok"              # the pass's own lag: tolerated
+# "Ahead" is judged against max(ctx.now, the wall clock) (`_ahead_s`, SRE review MEDIUM), so these tests stamp
+# relative to the real clock: a fixed past ctx.now could never make a stamp look ahead of time.time().
+SKEW_S = 10.0                       # beyond the 5 s tolerance: FAILs health (the first cut's 60 s let it through)
+assert SKEW_S > HEALTH_CLOCK_AHEAD_S == CLOCK_AHEAD_TOLERANCE_S
+
+
+def _live(tmp_path: Path, started_s_ago: float = 0.0, **kw: Any) -> health.HealthContext:
+    """A pass whose `now` was taken `started_s_ago` seconds before the real clock (a slow pass)."""
+    return make_ctx(tmp_path, now=pd.Timestamp.now("UTC") - pd.Timedelta(seconds=started_s_ago), **kw)
+
+
+def _ahead(s: float) -> float:
+    return time.time() + s
+
+
+def _iso(ts: float) -> str:
+    return pd.Timestamp(ts, unit="s", tz="UTC").isoformat()
+
+
+def _write_all(tmp_path: Path, ts: float) -> None:
+    """Every liveness stamp health reads, all at `ts`."""
+    write(tmp_path / "supervisor.json", {"ts": ts, "halt": False, "reasons": []})
+    write(tmp_path / "engine_icm-demo.json", {"account": "icm-demo", "ts": ts, "stage": "normal"})
+    write(loop_heartbeat_path(tmp_path, "icm-demo"), {"ts": ts, "phase": "loop"})
+    write(health.heartbeat_path(tmp_path, "telegram"), {"service": "telegram", "ts": ts})
+    write(tmp_path / "scheduler.json", {"ts": _iso(ts), "jobs": {}})
+    write(tmp_path / health.WATCH_FILE, {"ts": _iso(ts), "statuses": {}})
+
+
+def _liveness(ctx: health.HealthContext) -> dict[str, health.Check]:
+    return {"supervisor": health.check_supervisor(ctx), "engine": health.check_engine(ctx, "icm-demo"),
+            "loop": health.check_engine_loop(ctx, "icm-demo"), "heartbeat": health.check_heartbeat(ctx, "telegram"),
+            "scheduler": health.check_scheduler(ctx)[0], "alerts": health.check_alert_loop(ctx)}
+
+
+def test_health_fails_every_liveness_stamp_ten_seconds_ahead(tmp_path):
+    _write_all(tmp_path, _ahead(SKEW_S))
+    got = _liveness(_live(tmp_path, settings=None))
+    for name, c in got.items():
+        assert "ahead" in c.reason, (name, c.reason)
+        assert c.status == ("warn" if name == "alerts" else "fail"), (name, c)
+    assert "engines block entries" in got["supervisor"].reason
+
+
+def test_health_tolerates_a_stamp_a_second_or_two_ahead(tmp_path):
+    _write_all(tmp_path, _ahead(2))
+    for name, c in _liveness(_live(tmp_path, settings=None)).items():
+        assert "ahead" not in c.reason, (name, c.reason)
+        if name != "engine":                         # the engine line also judges the market hours
+            assert c.status == "ok", (name, c)
+
+
+def test_a_slow_health_pass_does_not_flag_stamps_written_while_it_ran(tmp_path):
+    """SRE review MEDIUM: with the bridge timing out (~20 s an account) a pass runs for minutes after taking `now`;
+    services that beat meanwhile are fresh, not a clock fault."""
+    _write_all(tmp_path, time.time())                # written two minutes after the pass took its `now`
+    for name, c in _liveness(_live(tmp_path, started_s_ago=120, settings=None)).items():
+        assert "ahead" not in c.reason, (name, c.reason)
+        if name != "engine":
+            assert c.status == "ok", (name, c)
+
+
+def test_a_slow_pass_still_flags_a_stamp_ahead_of_the_wall_clock(tmp_path):
+    _write_all(tmp_path, _ahead(SKEW_S))
+    for name, c in _liveness(_live(tmp_path, started_s_ago=120, settings=None)).items():
+        assert "ahead" in c.reason, (name, c.reason)
 
 
 @pytest.mark.parametrize("ts", BAD_TS)
@@ -123,6 +183,14 @@ def test_health_fails_the_supervisor_on_a_heartbeat_that_is_not_a_number(tmp_pat
     assert c.status == "fail" and "not a number" in c.reason
 
 
+@pytest.mark.parametrize("ts", [float("nan"), float("inf"), "x"])
+def test_health_fails_a_loop_or_service_heartbeat_that_is_not_a_number(tmp_path, ts):
+    _raw(loop_heartbeat_path(tmp_path, "icm-demo"), {"ts": ts, "phase": "loop"})
+    assert health.check_engine_loop(make_ctx(tmp_path), "icm-demo").status == "fail"
+    _raw(health.heartbeat_path(tmp_path, "telegram"), {"service": "telegram", "ts": ts})
+    assert health.check_heartbeat(make_ctx(tmp_path), "telegram").status == "fail"
+
+
 def test_health_fails_the_supervisor_and_names_an_engine_file_stamped_in_the_future(tmp_path):
     write(tmp_path / "supervisor.json", {"ts": NOW.timestamp(), "halt": True, "reasons": ["engine_heartbeat_future"],
                                          "future_engines": ["engine_b.json"]})
@@ -130,57 +198,11 @@ def test_health_fails_the_supervisor_and_names_an_engine_file_stamped_in_the_fut
     assert c.status == "fail" and "engine_b.json" in c.reason and "clock" in c.reason
 
 
-def _engine_at(tmp_path: Path, ts: float) -> None:
-    write(tmp_path / "engine_icm-demo.json", {"account": "icm-demo", "ts": ts, "stage": "normal"})
-
-
-def test_health_fails_an_engine_state_stamped_in_the_future(tmp_path):
-    _engine_at(tmp_path, NOW.timestamp() + HEALTH_CLOCK_AHEAD_S + 60)
-    c = health.check_engine(make_ctx(tmp_path), "icm-demo")
-    assert c.status == "fail" and "ahead" in c.reason
-    _engine_at(tmp_path, NOW.timestamp() + 20)
-    assert "ahead" not in health.check_engine(make_ctx(tmp_path), "icm-demo").reason
-
-
-@pytest.mark.parametrize("ts", [float("nan"), "x"])
-def test_health_fails_an_engine_loop_heartbeat_stamped_in_the_future_or_not_a_number(tmp_path, ts):
-    f = loop_heartbeat_path(tmp_path, "icm-demo")
-    _raw(f, {"ts": NOW.timestamp() + HEALTH_CLOCK_AHEAD_S + 60, "phase": "loop"})
-    c = health.check_engine_loop(make_ctx(tmp_path), "icm-demo")
-    assert c.status == "fail" and "ahead" in c.reason
-    _raw(f, {"ts": NOW.timestamp() + 20, "phase": "loop"})
-    assert health.check_engine_loop(make_ctx(tmp_path), "icm-demo").status == "ok"
-    _raw(f, {"ts": ts, "phase": "loop"})
-    assert health.check_engine_loop(make_ctx(tmp_path), "icm-demo").status == "fail"
-
-
-@pytest.mark.parametrize("ts", [float("nan"), "x"])
-def test_health_fails_a_service_heartbeat_stamped_in_the_future_or_not_a_number(tmp_path, ts):
-    f = health.heartbeat_path(tmp_path, "telegram")
-    _raw(f, {"service": "telegram", "ts": NOW.timestamp() + HEALTH_CLOCK_AHEAD_S + 60})
-    c = health.check_heartbeat(make_ctx(tmp_path), "telegram")
-    assert c.status == "fail" and "ahead" in c.reason
-    _raw(f, {"service": "telegram", "ts": NOW.timestamp() + 20})
-    assert health.check_heartbeat(make_ctx(tmp_path), "telegram").status == "ok"
-    _raw(f, {"service": "telegram", "ts": ts})
-    assert health.check_heartbeat(make_ctx(tmp_path), "telegram").status == "fail"
-
-
 def test_health_fails_a_scheduler_heartbeat_stamped_in_the_future_even_while_a_job_runs(tmp_path):
-    ahead = NOW + pd.Timedelta(seconds=HEALTH_CLOCK_AHEAD_S + 60)
-    job = {"last_started": (NOW - pd.Timedelta(minutes=5)).isoformat(), "last_finished": None}
-    write(tmp_path / "scheduler.json", {"ts": ahead.isoformat(), "jobs": {"retrain": job}})
-    c = health.check_scheduler(make_ctx(tmp_path, settings=None))[0]
+    job = {"last_started": _iso(time.time() - 300), "last_finished": None}
+    write(tmp_path / "scheduler.json", {"ts": _iso(_ahead(SKEW_S)), "jobs": {"retrain": job}})
+    c = health.check_scheduler(_live(tmp_path, settings=None))[0]
     assert c.name == "scheduler" and c.status == "fail" and "ahead" in c.reason
-    write(tmp_path / "scheduler.json", {"ts": (NOW + pd.Timedelta(seconds=20)).isoformat(), "jobs": {}})
-    assert health.check_scheduler(make_ctx(tmp_path, settings=None))[0].status == "ok"
-
-
-def test_health_warns_when_the_alert_loop_stamp_is_in_the_future(tmp_path):
-    ahead = NOW + pd.Timedelta(seconds=HEALTH_CLOCK_AHEAD_S + 60)
-    write(tmp_path / health.WATCH_FILE, {"ts": ahead.isoformat(), "statuses": {}})
-    c = health.check_alert_loop(make_ctx(tmp_path))
-    assert c.status == "warn" and "ahead" in c.reason
 
 
 # --------------------------------------------------------------------------- dashboard and bridge verdict
@@ -191,7 +213,7 @@ def test_the_combined_caps_are_not_shown_from_a_supervisor_report_stamped_in_the
     notes: list[str] = []
     eng = {"currency": "GBP"}
     _combined(eng, sup, [eng], now, lambda *a, **k: shown.append(a), notes)
-    assert not shown and any("stale" in n for n in notes)
+    assert not shown and any("stale or stamped ahead" in n for n in notes)
     _combined(eng, dict(sup, ts=now + 2), [eng], now, lambda *a, **k: shown.append(a), notes)
     assert shown
 
@@ -210,6 +232,8 @@ def test_a_bridge_verdict_confirmed_in_the_future_counts_as_unchecked():
     wed = pd.Timestamp("2026-10-07 14:00", tz="UTC")
     ahead = BridgeCompat(status="ok", reason="ok", checked_at=wed + pd.Timedelta(hours=2))
     v = bc.effective(ahead, wed)
-    assert v.status == "unchecked" and v.blocks and "ahead" in v.reason
+    assert v.status == "unchecked" and v.blocks and "120 min ahead" in v.reason
+    short = BridgeCompat(status="ok", reason="ok", checked_at=wed + pd.Timedelta(seconds=20))
+    assert "20 s ahead" in bc.effective(short, wed).reason          # not "0 min" (review LOW)
     near = BridgeCompat(status="ok", reason="ok", checked_at=wed + pd.Timedelta(seconds=2))
     assert bc.effective(near, wed) is near

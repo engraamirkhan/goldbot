@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -19,6 +20,7 @@ from goldbot.ops.checks._base import (
     Check,
     Status,
     _age,
+    _ahead_s,
     _epoch,
     _market_open_throughout,
     _read_json,
@@ -50,9 +52,10 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     parts: list[str] = []
     statuses: list[Status] = []
     age = _epoch(ctx.now) - float(e.get("ts", 0))
-    if age < -HEALTH_CLOCK_AHEAD_S:          # whatever the market: a future stamp proves nothing (found 2026-10-16)
+    ahead = _ahead_s(float(e.get("ts", 0)), ctx)
+    if ahead > HEALTH_CLOCK_AHEAD_S:         # whatever the market: a future stamp proves nothing (found 2026-10-16)
         statuses.append("fail")
-        parts.append(f"state stamped {_age(-age)} ahead of this server's clock (clock fault or bad write): it cannot "
+        parts.append(f"state stamped {_age(ahead)} ahead of this server's clock (clock fault or bad write): it cannot "
                      "show the engine runs, and the supervisor halts entries on every account (engine_heartbeat_future)")
     elif not market:
         parts.append(f"market closed, state {_age(age)} old")
@@ -160,12 +163,11 @@ def check_engine_loop(ctx: HealthContext, account_id: str) -> Check:
     except (ValueError, OSError, KeyError, TypeError) as exc:
         return Check(name=name, status="fail", reason=f"loop heartbeat unreadable: {exc}")
     now = _epoch(ctx.now)
-    problem = heartbeat_problem(ts, now, LOOP_FAIL_S, ahead_s=HEALTH_CLOCK_AHEAD_S)
-    if problem == "invalid":                 # float() read NaN or infinity, which compared as fresh
+    if heartbeat_problem(ts, now, math.inf, ahead_s=math.inf) == "invalid":   # float() read NaN or infinity
         return Check(name=name, status="fail", reason=f"loop heartbeat unreadable: ts {ts!r} is not a finite number")
-    if problem == "future":
+    if (ahead := _ahead_s(ts, ctx)) > HEALTH_CLOCK_AHEAD_S:
         return Check(name=name, status="fail",
-                     reason=f"loop heartbeat stamped {_age(ts - now)} ahead of this server's clock (clock fault or bad "
+                     reason=f"loop heartbeat stamped {_age(ahead)} ahead of this server's clock (clock fault or bad "
                             "write): it cannot show the loop turns; check the host clock and restart the engine")
     age = now - ts
     if age > LOOP_FAIL_S:

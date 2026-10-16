@@ -1,6 +1,7 @@
 """Risk and limits health checks: supervisor, owner halt, risk state, phase and gates, loss caps, throttle, open risk, entry windows."""
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -16,6 +17,7 @@ from goldbot.ops.checks._base import (
     Check,
     Status,
     _age,
+    _ahead_s,
     _epoch,
     _market_open_throughout,
     _read_json,
@@ -40,13 +42,13 @@ def check_supervisor(ctx: HealthContext) -> Check:
     if not isinstance(s, dict):
         return Check(name="supervisor", status="fail", reason="supervisor.json unreadable: not an object; engines block entries")
     now = _epoch(ctx.now)
-    problem = heartbeat_problem(s.get("ts", 0), now, SUPERVISOR_FAIL_S, ahead_s=HEALTH_CLOCK_AHEAD_S)
-    if problem == "invalid":
+    if heartbeat_problem(s.get("ts", 0), now, math.inf, ahead_s=math.inf) == "invalid":
         return Check(name="supervisor", status="fail",
                      reason=f"supervisor.json heartbeat is not a number ({s.get('ts')!r}): engines block entries")
-    if problem == "future":
+    ahead = _ahead_s(float(s.get("ts", 0)), ctx)
+    if ahead > HEALTH_CLOCK_AHEAD_S:
         return Check(name="supervisor", status="fail",
-                     reason=f"heartbeat stamped {_age(float(s['ts']) - now)} ahead of this server's clock (clock fault, "
+                     reason=f"heartbeat stamped {_age(ahead)} ahead of this server's clock (clock fault, "
                             "bad write or restored backup): engines block entries until the supervisor rewrites it")
     age = now - float(s.get("ts", 0))
     if age > SUPERVISOR_FAIL_S:
