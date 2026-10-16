@@ -23,7 +23,31 @@ concurrency:
   group: data-us-calendar   # one publisher at a time for calendar-v1
   cancel-in-progress: false
 jobs:
+  # Without the FRED_API_KEY secret the run is skipped, not failed: a warning annotation and the step summary name
+  # the missing secret, the published calendar-v1 file stays as is, and no `ci` issue is opened. Owner step: add
+  # the repo secret FRED_API_KEY. Cost of the check: about 1 billed runner-minute a week.
+  key-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      present: ${{ steps.key.outputs.present }}
+    steps:
+      - id: key
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          if [ -n "$FRED_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            msg="FRED_API_KEY repo secret is not set: data-us-calendar skipped, calendar-v1 left as published. Owner: add the free key from fred.stlouisfed.org in Settings -> Secrets and variables -> Actions."
+            echo "::warning::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
   fetch:
+    needs: key-check
+    if: needs.key-check.outputs.present == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
