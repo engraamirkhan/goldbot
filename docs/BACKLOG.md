@@ -41,25 +41,34 @@ owner and reported to the owner, not asked; safety-touching choices take the con
 schedule (quant ruling 10-23, decision 10-30). 58 and 52 left the table as done (shipped in PR #79). Stale statuses
 fixed: 59 (SRE re-verify on record), 61 (merged at 921a38a), 45 (draft delivered feda07a). 15 ranked rows.
 
+**CFO and CTO follow-ups 2026-10-16 night (product owner; base abcbe2b; all-hands memo of 2026-10-16).** From
+`docs/finance/capital-plan.md`, `docs/finance/budget-2026-10.md` and the CTO's tech-debt list: new items 66 (bridge
+lot ceiling scaled to equity, rank 3, architect plan by 10-23), 67 (Object Storage 15 GB alert, sre), 68 (CI-minutes
+explanation and worktree clean-up, release-manager) and 69 (monthly audit of leverage and the largest order,
+finance-auditor, 11-04). 27 records the terminal's contract terms read today and is in progress. To hold 15 rows,
+36, 51 and 61 left the table: they are merged on the integration branch and only wait for the next PR
+(release-manager, due 10-23, wave lane 4; accepted at that PR). 65 is parked. The CFO's owner-only matters (C1-C5,
+OD-12) are in ROADMAP section 6 as OD-16 to OD-20.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
 | --- | --- | --- | --- | --- |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | in progress (`lane/claude-run-deploy`, plan ccef822) · accountable: release-manager · due 2026-10-18 (re-dated from 2026-10-13: the demo deploy never ran) · LATE |
 | 59 | Engine state keeps moving on the host clock while the market is closed | Operational resilience · RUN | S | in review (6287d10 + review-HIGH fix 412fd0d, merged at a13c8a3, shipped in PR #79; follow-up 700c116) · SRE re-verify APPROVE 2026-10-16 recorded (handoff 2026-10-16-sre-backlog-59-reverify, d68dfee) · trading-safety APPROVE named in merge 57c2f14 for the SRE lane; a written trading-safety verdict on 412fd0d itself is not on record (E1) · accountable: implementer · due Sun 2026-10-18 20:00 UTC: reviewed and deployed before the engine start at 22:02 UTC (fallback in ROADMAP section 2) |
+| 66 | Equity-scaled lot ceiling at the bridge (GuardedBroker) | Execution and risk (independent backstop under RiskGate) · PROTECT · RUN | M | ready for the architect (decided 2026-10-16 from the CFO capital plan) · next: architect plan by 2026-10-23, trading-safety verdict on the plan, implementer (failing tests first), trading-safety verdict on the build · accountable: architect · due 2026-10-23 (plan; the plan names the build lane and its date) |
 | 44 | Confirm a zero or collapsed equity read before the 12% kill switch (ADR 0016) | Execution and risk (drawdown stages) · PROTECT | S | in review (d2f2999, b9e9dac; re-review 2026-10-16 found a save-failure gap, fixed in 869bb04; all in PR #79; trading-safety re-verify of 869bb04 not on record) · accountable: trading-safety-reviewer · due 2026-10-17 |
 | 60 | Approval window expiry trusts a future-stamped proposal | Approvals (owner confirms entries, 90 s) · PROTECT | S | changes requested (bf5240b/2bfeb36) · trading-safety-reviewer CHANGES 2026-10-16 at 626b56b: 3 decision paths expire at 90 s and future/NaN stamps are refused (tests/test_approval_window_clock.py); F60-1 LOW a pre-restart click can apply to the same proposal re-raised after a restart (runner.py:486-498, bus.py:186-198); F60-2 LOW checks/services.py:138 reads NaN/future as fine; fix lane running, then re-verify of F60-1/F60-2 only · accountable: implementer, then trading-safety-reviewer · due 2026-10-20 |
 | 62 | The 12% kill switch flattens every position on the account, all symbols | Execution and risk (drawdown stages, ADR 0016) · PROTECT · RUN | S | ready (decided 2026-10-16) · accountable: implementer, then trading-safety-reviewer · due 2026-10-22 (built 10-21, trading-safety verdict 10-22) |
 | 43 | The engine publishes why it refuses entries, and writes state while the market is closed | Operational resilience, entry status · RUN | M | in review: the heartbeat part landed as BACKLOG 59 (6287d10, 412fd0d; in PR #79); the `entry_blocks` part is built on lane/entry-blocks (R43), reviews owed: code, trading-safety, ui-ux · accountable: implementer · due 2026-10-21 |
-| 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | ready (after 1; the collector `jobs._broker_terms` exists) · accountable: sre · due 2026-10-20 |
-| 36 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | merged on the integration branch 2026-10-16 (cca7219 + trading-safety MEDIUM fix 0bfacbf; quant, code and trading-safety reviews done per HANDOFF); not in PR #79, ships in the next PR · accountable: release-manager · due 2026-10-23 |
+| 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | in progress (leverage, margin, stop-out, contract and volume read from the terminal 2026-10-16; swap, commission or Raw Spread, negative-balance protection and the collector file still open) · accountable: sre · due 2026-10-20 |
+| 67 | Object Storage size alert at 15 GB (restic and versioning vs the 20 GB free limit) | Operations (backups, cost guard) · RUN | S | ready (decided 2026-10-16 from the CFO budget revision) · accountable: sre · due 2026-10-23 (before the scheduler runs the nightly backup) |
 | 63 | Card-bound approvals: a tap is bound to the exact card the owner saw | Approvals (owner confirms entries, 90 s) · PROTECT · RUN | S | ready (decided 2026-10-16; starts after 60's fix lane merges, same files) · accountable: implementer, then trading-safety-reviewer · due 2026-10-23 |
-| 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | merged on the integration branch 2026-10-16 (5053d31, review fixes c027221 and cc00630); not in PR #79, ships in the next PR; security re-verify of cc00630 not on record · accountable: release-manager · due 2026-10-23 |
-| 61 | Mixed-currency accounts: the loss budget shows the account cap, not the combined cap | Dashboard and Telegram (loss budget, ADR 0004 section 3) · PROTECT | S | merged on the integration branch 2026-10-16 at 921a38a (4c3d087 + ecce681; trading-safety APPROVE, code-review APPROVE + PUSH-OK, ui-ux copy approved, per the merge message); ships in the next PR; product-owner acceptance at that PR; follow-ups L1/L2 in BACKLOG 65 · accountable: release-manager · due 2026-10-23 |
+| 68 | Release hygiene: explain the CI-minutes record; clean up and retire worktrees | Engineering operations (CI cost, disk) · RUN | S | ready (decided 2026-10-16 from the CFO budget and the CTO tech-debt list) · accountable: release-manager · due 2026-10-19 (worktrees), 2026-10-23 (CI minutes) |
 | 64 | Dashboard header shows the signed-in role, never the email | Dashboard (every screen; privacy) · RUN | S | spec ready (docs/ux/header-role.md, 2026-10-16; no API change) · next: implementer (failing tests first), then ui-ux-designer review · accountable: implementer · due 2026-10-27 |
+| 69 | Monthly audit checks the recorded leverage and the largest order against the gate limits | Review and audit (monthly finance audit) · RUN | S | ready (decided 2026-10-16 from the CFO capital plan) · accountable: finance-auditor · due 2026-11-04 (the November audit) |
 | 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, H-01 AT RISK (152 vs 150 on data-v1 with 21 weekdays missing, coverage triage 2026-10-16); the 2026-11-01 script recount and the G3 recount on repaired data merged into one count-owed-events run after G1 closes, by 2026-11-13, evaluator G3 check by 2026-11-14; `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14 |
 | 45 | Measure the holiday list before it is adopted | Operational risk (evidence) · RUN | S | in review: draft delivered 2026-10-16 (feda07a, docs/research/holiday-list-measurement-2026-10.md, a week early) · quant-reviewer ruling on the draft due 2026-10-23 · adopt-or-not decision on the v3 list (drop 2 Jan) by program director + product owner due 2026-10-30 · accountable: performance-analyst (draft), quant-reviewer (ruling) · due 2026-10-30 |
-| 65 | Review follow-ups from 2026-10-16 (hygiene) | Dashboard, Telegram and research tooling (review residuals) · RUN and FIND | M | ready (decided 2026-10-16; low priority, parts can land separately) · accountable: implementer (N3: research-director) · due 2026-10-30 |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -434,6 +443,16 @@ hypotheses that go through the trial registry in a future quarter's budget.
   - Reviews: code, sre. Read-only on the broker: no trading-safety review.
   Depends on: 1.
   Sweep 2026-10-16 (product owner): accountable `sre`, due 2026-10-20 (two days after 1). Acceptance as above: the file on the demo box and the ADR 0004 assumptions table updated.
+  **Read from the demo terminal 2026-10-16 (CFO capital plan; owner session, values only):** account leverage
+  1:5000; margin call 100%; stop-out 50%, so `margin_so_mode` 0 (percent); contract size 100 oz; volume min 0.01,
+  max 100, step 0.01; margin £0.63 GBP per 0.01 lot at the price of the day. So the 1:5000 applies to gold (no lower
+  symbol leverage), and the broker would accept about 15.9 lots on £1,000: that finding opened item 66 (bridge
+  ceiling) and owner decision C5 (lower the leverage). These readings do not yet satisfy the first criterion: the
+  collector's file on the demo box is still owed.
+  **Still open (sre, by 2026-10-20):** swap long and short for XAUUSD (points per lot per night, and the triple-swap
+  day); commission per lot and whether the account is Raw Spread (OD-4); negative-balance protection (from the
+  broker's terms, cited by URL and date). Each goes into the file or the ADR 0004 table; if the account reads
+  Standard, OD-4's re-run of budget and break-even applies before any 15m trade.
 - **29. Absolute daily loss limit (trading-safety review).** Value: makes the owner's £50 outer limit a hard rail
   as the account grows; the 2% / 1.5% caps stay and bind first below £2,500 / ~£3,333 (Capital management · RUN).
   Acceptance:
@@ -1072,6 +1091,80 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
     `holdout_to` (test in the settings suite); N3: an ADR by the research-director on which `feature_version`
     governs a trial's evidence, by 2026-10-30, cross-referenced from item 34;
   - code-reviewer APPROVE for (a), (b), (d N2); quant-reviewer for (c) and (d).
+- **66. Equity-scaled lot ceiling at the bridge (GuardedBroker).** Decided 2026-10-16 by program director + product
+  owner from the CFO's capital plan (`docs/finance/capital-plan.md` section 6, second sre row). Value (RUN,
+  protect): RiskGate is the only path to an order, but the only independent ceiling behind it is a fixed
+  `MAX_ORDER_LOTS = 3.0` in `goldbot/execution/bridge.py` (constant at line 104, checked in
+  `GuardedBroker.place_order` at line 266). The terminal read on 2026-10-16 (BACKLOG 27) shows 1:5000 leverage and
+  £0.63 margin per 0.01 lot, so the broker would accept about 15.9 lots on £1,000, and the bridge would pass up to
+  3.0 lots: about 950 x equity in notional, where the gate's own cap is 6 x equity (`gate.py` 540-543, 0.30 x
+  `leverage_cap` 20). A bug or a corrupted intent past the gate would meet no backstop sized to the account. The
+  ceiling only tightens and never touches an exit. It finds no edge; it bounds the worst single-order loss.
+  TRACEABILITY: the architect names the row for the bridge guard (or adds one with `new-row`) in the plan.
+  Depends on: 27 for the measured contract size and margin (already read from the terminal, see 27).
+  Ranked third: it shrinks the worst case on the money path by two orders of magnitude, it does not block the Sunday
+  engine start, and the architect lane is free (all-hands 2026-10-16, E4).
+  Acceptance:
+  - Plan: the architect writes the plan by Fri 2026-10-23 (formula; where equity, price and contract size come from
+    on the bridge side; behaviour when any is unreadable; interaction with the minimum-lot exception of ADR 0004 and
+    item 25). The trading-safety-reviewer records a verdict on the plan before any code.
+  - `GuardedBroker.place_order` refuses an order whose notional (lots x contract size x price, in account currency)
+    exceeds 6 x equity (the gate's combined-notional cap), with equity read on the bridge from the terminal, not
+    taken from the brain's request. The fixed 3.0 lots stays as the outer bound.
+  - Fail closed: if equity, price or contract size cannot be read, the order is refused with a reason. `modify` and
+    `close` are never subject to the ceiling (exits are never gated).
+  - Tests (bridge suite): at £1,000 equity and £3,150 notional per 0.01 lot, 0.01 lot is accepted and 0.02 lot
+    (about 6.3 x) is refused; at £10,000 the ceiling scales with equity; an unreadable equity refuses the order; a
+    close of a 3.0-lot position still goes through; the refusal reason reaches the engine journal.
+  - Reviews: trading-safety APPROVE on the plan and on the build, code-reviewer APPROVE, security-reviewer PUSH-OK,
+    each recorded at the merge with reviewer, verdict, sha and date (all-hands E1).
+- **67. Object Storage size alert at 15 GB.** Decided 2026-10-16 by program director + product owner from
+  `docs/finance/budget-2026-10.md` (Backups row and the follow-ups table). Value (RUN, cost and safety): restic to
+  Oracle Object Storage is free up to 20 GB, and bucket versioning keeps previous object versions, so `restic prune`
+  does not shrink usage; the 30-day previous-version expiry is already set (ADR 0002). Without an alert, usage can
+  pass 20 GB unseen and either start a bill or fail the backup. It finds no edge; it keeps the backups free and
+  working. TRACEABILITY: P8 (backups). Depends on: 1 (the bucket and the restic job running).
+  Acceptance:
+  - A health check reads the bucket's size, previous versions included, at least daily; it warns at 15 GB and fails
+    at 19 GB; the warning reaches Telegram through the existing ops alerts (item 7); thresholds live in settings.
+  - Tests: 14.9, 15.0 and 19.0 GB give ok, warn and fail; an unreadable size is reported as unknown (warn), never
+    as ok.
+  - On the demo box, one recorded run reports the current size on #34 (no bucket name, namespace or tenancy in the
+    repo or the comment).
+  - The finance-auditor's monthly Object Storage line (budget-2026-10.md, "first Sunday") cites this check.
+  - Reviews: code-reviewer APPROVE and security-reviewer PUSH-OK (credentials stay in the keyring), recorded at the
+    merge.
+- **68. Release hygiene: CI minutes and worktrees.** Decided 2026-10-16 by program director + product owner.
+  Value (RUN): (d) decides whether PR #81's saving of about 900 minutes a month is cash or only headroom, which the
+  CFO needs for the budget and break-even; (f) frees about 28 GB on the Mac and stops lanes starting from stale
+  trees. TRACEABILITY: none (process). Depends on: nothing.
+  Acceptance:
+  - (d) by Fri 2026-10-23: the release-manager explains ROADMAP section 2's "2,000 free minutes a month; October's
+    ran out on 2026-10-06" for a public repo (standard GitHub-hosted runners are free for public repos), with
+    evidence: the billing or usage reading (which repo, which runner type, whether the repo was private then), cited
+    by date. The answer is written into ROADMAP section 2 and the GitHub Actions paragraph of
+    `docs/finance/budget-2026-10.md`, and risk 7 is restated or closed accordingly.
+  - (f) on Mon 2026-10-19: `git worktree list` counts before and after are recorded on #34 (counts only, no paths):
+    about 60 registered, 54 merged, about 28 GB. Every worktree whose branch is merged into `main` or the integration
+    branch is removed with `git worktree remove` and pruned; unmerged ones are listed with their owning role. Disk
+    freed is reported.
+  - (f) standing rule from then on: the release-manager removes a lane's worktree in the same step as its merge,
+    written into the release-manager's Definition of done (`docs/AGENT_STANDARDS.md`) and the CTO's tech-debt list.
+  - Product-owner acceptance: both records exist on #34 and the standing rule is in the standards.
+- **69. Monthly audit: leverage and the largest order.** Decided 2026-10-16 by program director + product owner from
+  `docs/finance/capital-plan.md` section 6 (finance-auditor row). Value (RUN, protect): the broker allows 1:5000
+  (BACKLOG 27), so nothing outside goldbot stops an oversized order; a monthly check shows whether any order came
+  near the limits and whether the account leverage changed (owner decision C5). It finds no edge.
+  TRACEABILITY: X18 (finance audit record). Depends on: 27 (leverage recorded); 66 for the bridge ceiling it is
+  checked against (until 66 lands, the check compares with the gate limits only).
+  Acceptance:
+  - `docs/finance/audit-framework.md` gains a row (the next free RC id): sources `state/broker_terms_<account>.json`
+    (leverage, contract size) and the month's orders and closed trades; method: the recorded leverage and any change
+    since the last audit; the month's largest order in lots and in notional / equity at entry, compared with the
+    gate's 6 x equity notional cap, the 1% hard risk clamp and the bridge ceiling (66). Fail on any order above a
+    limit; "not computable" while 27's file is missing.
+  - The Wed 2026-11-04 audit runs the row and reports its result, or "not computable" with the reason.
+  - The trading-safety-reviewer reads the row's method once, recorded in the audit with the date.
 
 ## Needs the owner
 These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only
@@ -1079,6 +1172,14 @@ matters stay here: money or paid plans; going live, `unlock_live` or phase-gate 
 the owner's own credentials; legal. Routine product, ops and deploy decisions are made by the program director with
 the product owner and reported on #34 (ROADMAP section 6, "Decided by PD+PO").
 Every owner step below has `chaser: program-director`, who asks on #34 with a recommendation and a chase date.
+- **Capital and leverage (CFO capital plan section 7, queued 2026-10-16; ROADMAP section 6, OD-16 to OD-20).**
+  C1 no real money before the paper -> tiny-live gate (recommend: confirm). C2 tiny-live cannot trade at £1,000;
+  it needs about £6,850: (a) fund, (b) keep £1,000 and never go live, (c) amend the min-lot rule (a loosening; not
+  recommended); decide before the backtest -> paper gate, earliest about April 2027. C3 no demo deposits; live
+  deposits sized by what the next gate needs. C4 confirm the existing limits as the risk appetite by Mon 2026-11-30.
+  C5 set the broker leverage to the lowest IC Markets offers at or above 1:20 (tightens; your action in the client
+  area). OD-12: the agent budget (recommend about $10 a month) by Fri 2026-10-23, and whether the Claude
+  subscription counts as a running cost.
 - **Moved to PD+PO 2026-10-16 (they only tighten; the conservative option):** adopting the rails below. The PD+PO decide
   each on the evidence of 45 and 46; any value looser than the built default goes back to the owner.
   **Adopt the built, off-by-default rails (sweep 2026-10-16).** Holiday, reopen and tier-2 windows (17, 18), the
@@ -1141,10 +1242,18 @@ before any new trading-safety builder. Every lane below touches different files.
    lane A has cleared 59; lane 6 (43) waits for it. Not before the Sunday start.
 10. **Item 64, header role** (ui-ux-designer spec, then implementer): `web/src/` header only. Free now; disjoint
    from every other lane's files.
-63 waits for 60's fix lane (same approval files); 65 waits for a free implementer.
+11. **Item 66, bridge lot ceiling: architect plan** (read-only; plan by Fri 2026-10-23), then a trading-safety
+   verdict on the plan when lane A or B has room. The build (`goldbot/execution/bridge.py`, tests) waits for that
+   verdict; no other lane touches bridge.py.
+12. **Item 67, Object Storage alert** (sre): `goldbot/ops/health.py` check and settings, after lane 5's deploy steps
+   free the SRE (due 10-23). Disjoint from lanes 6 and 9.
+13. **Item 68, release hygiene** (release-manager): worktree clean-up Mon 2026-10-19; CI-minutes answer by 10-23
+   (ROADMAP section 2, budget-2026-10.md).
+14. **Item 69** (finance-auditor): one row in `docs/finance/audit-framework.md`, by the 2026-11-04 audit.
+63 waits for 60's fix lane (same approval files); 65 is parked.
 
-Top three ready items (2026-10-16 late): 62 (lane 9), 43 (lane 6) and 27. 61 is merged (921a38a). 27 has no lane on purpose: it reads the terms from the demo
-terminal, so it starts when item 1's engine runs (Sun 2026-10-18).
+Top three ready items (2026-10-16 night): 66 (lane 11, architect plan), 62 (lane 9) and 43 (lane 6). 27 is in
+progress, read from the terminal; the rest of it follows item 1's engine start (Sun 2026-10-18).
 
 ## Later (parked)
 Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block has its status and the full reason.
@@ -1160,6 +1269,10 @@ Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block 
 - 34, material feature version: waits on the owner's ADR 0006 ruling.
 - 46, replay of the entry windows: needs a shadow book (after 1); schedule after 45.
 - 53, phase-gate comparator on the deployed trial: matters only once a model is promoted, and none is.
+- 65, review hygiene (parked 2026-10-16 for the cap): none of its parts can lose money; the quant N1 text (10-19)
+  and the N3 ADR (10-30) are still owed on their dates.
+- 36, 51, 61 (off the table 2026-10-16, not parked): merged on the integration branch, shipping in the next PR
+  (release-manager, due 10-23); accepted at that PR.
 - M28 TreeSHAP per decision, A5 per-trade SHAP, and a post-trade review after each exit.
 - R8 `order_calc_margin` (touches the broker protocol; schedule after item 6).
 - D10 bar close by clock, A2 window from settings, M9 allocator blackout input, D11

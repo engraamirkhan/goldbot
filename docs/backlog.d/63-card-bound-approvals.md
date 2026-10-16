@@ -1,6 +1,6 @@
 ---
 number: 63
-rank: 9
+rank: 10
 title: 'Card-bound approvals: a tap is bound to the exact card the owner saw'
 stage: Approvals (owner confirms entries, 90 s) · PROTECT · RUN
 size: S

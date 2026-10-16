@@ -1,10 +1,9 @@
 ---
 number: 65
-rank: 15
 title: Review follow-ups from 2026-10-16 (hygiene)
 stage: Dashboard, Telegram and research tooling (review residuals) · RUN and FIND
 size: M
-status: 'ready (decided 2026-10-16; low priority, parts can land separately) · accountable: implementer (N3: research-director) · due 2026-10-30'
+status: 'parked 2026-10-16 (cap of 15; none of its parts can lose money; it re-enters the table when an implementer lane is free). Owed dates still hold for the records: quant N1 text 2026-10-19, research-director N3 ADR 2026-10-30 · accountable: implementer (N1: quant-reviewer, N3: research-director)'
 ---
 - **65. Review follow-ups from 2026-10-16 (hygiene).** Decided 2026-10-16 by program director + product owner
   (owner delegated). Value: none of these can lose money; each makes a screen or a setting say the truth, so the
