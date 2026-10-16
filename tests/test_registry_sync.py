@@ -39,8 +39,10 @@ def test_sync_pulls_unions_and_pushes(tmp_path, monkeypatch):
     _rows(tmp_path, "local.jsonl", [("a", {"x": 1})])
     remote = _rows(tmp_path, "remote.jsonl", [("w", {"x": 9}), ("w", {"x": 10})])
     pushed: dict[str, list] = {}
-    monkeypatch.setattr(rs, "pull_release", lambda token, repo=rs.REPO: remote)
-    monkeypatch.setattr(rs, "push_release", lambda token, rows, repo=rs.REPO: pushed.setdefault("rows", rows))
+    stamp = (7, "t1", 1, "sha256:x")
+    monkeypatch.setattr(rs, "pull_stamped", lambda token, repo=rs.REPO: (remote, stamp))
+    monkeypatch.setattr(rs, "push_release", lambda token, rows, repo=rs.REPO, *, expected: pushed.setdefault(
+        "rows", rows) if expected == stamp else pytest.fail("pushed without the pulled stamp"))
     assert rs.sync(local, "tok") == 3
     assert TrialRegistry(local).n_trials == 3 and len(pushed["rows"]) == 3
     assert json.loads(local.read_text().splitlines()[-1])["trial"] == 3
