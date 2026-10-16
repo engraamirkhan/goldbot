@@ -168,9 +168,11 @@ balance and a live XAUUSD tick, then, after **your one click**, buys the minimum
 $1 away and closes it at once. It refuses anything but a demo account (exit 2).
 
 Before you start, check all of these:
-* the market is open (not the weekend, not the daily break around 22:00 UTC);
-* the MT5 box runs the same commit as the brain (`sudo goldbot-deploy latest` on it first). Its bridge refuses the
-  smoke's order unless the terminal reports a demo account, and the smoke refuses a bridge on another commit (exit 4);
+* the market is open: not the weekend, and not the daily break at 00:00 server time (21:00 UTC until 25 Oct,
+  22:00 UTC after it);
+* the MT5 box runs exactly the brain's commit: on the MT5 box run `sudo goldbot-deploy <sha>` with the commit the
+  brain runs, never `latest`. Its bridge refuses the smoke's order unless the terminal reports a demo account. The
+  smoke refuses (exit 4) unless both commits are known and equal;
 * the engine has run once on this account: `state/risk_icm-demo.json` exists (the day start and high-water mark the
   limits are judged by);
 * `state/classifier_icm-demo.json` shows `"class": "raw"` or `"standard"`. While it is missing or `unknown` the
@@ -184,8 +186,10 @@ tmux new -s smoke
 sudo systemctl stop goldbot-engine@icm-demo     # the engine only: KEEP the supervisor running
 sleep 160                                       # the smoke waits for the engine heartbeat to be 150 s old
 goldbot run bridge-smoke icm-demo               # approve the card on Telegram or the dashboard within 90 s
-sudo systemctl start goldbot-engine@icm-demo    # ALWAYS run this line, whatever the exit code
+sudo systemctl start goldbot-engine@icm-demo    # always start the engine; on exit 5 or 6 close the position first
 ```
+Always start the engine again at the end. On exit 5 or 6 a smoke position may still be open, so close it first
+(below), then start the engine.
 Once it prints `sending BUY`, never press Ctrl-C and never close the SSH session until it prints its exit line: the
 order may already be at the broker, and only the smoke itself looks for it and closes it. While the engine is stopped,
 expect the health alert for the engine loop (`engine_loop:icm-demo` FAIL) on Telegram; it clears once the engine is
@@ -200,8 +204,9 @@ Paste the output on issue #34 (it never shows the full login). What each exit co
 * **3**: not approved (no click within 90 s, or you rejected it). Nothing was sent.
 * **4**: a precondition failed and nothing was sent. The usual causes: the engine is still running or its heartbeat
   is under 150 s old (wait and re-run); `state/risk_icm-demo.json` is missing (start the engine once); the calendar
-  archive is empty (the news service has not fetched the week yet); the supervisor is down (start it); another smoke
-  holds the lock; the MT5 box runs another commit; no bridge endpoint in the keyring.
+  archive is empty (the scheduler's `calendar_archive` jobs, daily at 06:10 UTC and Sunday at 18:00 UTC, have not
+  fetched the week yet); the supervisor is down (start it); another smoke holds the lock; the MT5 box runs another
+  or an unknown commit; no bridge endpoint in the keyring.
 * **5 LEFT OPEN**: a smoke position could not be closed after three tries (Telegram says so too). Close it
   **before** restarting the engine: re-run the smoke (it closes a leftover smoke position first, then stops if it
   cannot), or open the terminal over VNC (0.3) and close the position with magic 260199 by hand.

@@ -496,6 +496,7 @@ class _Run:
         self.broker, self.bus, self.acc, self.state_dir = broker, bus, acc, Path(state_dir)
         self.now, self.cfg, self.compat, self.io = now, cfg, compat, io
         self.gate = RiskGate(cfg.limits)
+        self.known: set[int] = set()        # smoke position ids seen before the send (NEW-1)
         self.report = SmokeReport(account_id=acc.account_id, exit_code=EXIT_FAILED, outcome="started")
 
     def say(self, line: str) -> None:
@@ -589,17 +590,23 @@ class _Run:
         b, acc, magic = self.broker, self.acc, smoke_magic(self.acc)
         if why := self.preconditions():
             return self.end(EXIT_PRECONDITION, "refused: precondition", f"refused: {why}")
-        if getattr(self.compat, "commit_differs", False):   # SRE S1: F4 lives on the MT5 box
-            return self.end(EXIT_PRECONDITION, "refused: the MT5 box runs another commit",
-                            f"refused: the bridge runs {self.compat.bridge_commit}, this brain "
-                            f"{self.compat.brain_commit}: deploy this commit to the MT5 box first")
+        # SRE S1 and follow-up 1: F4 lives on the MT5 box, so both commits must be known AND equal. Stricter than
+        # `BridgeCompat.commit_differs` (False when either is unknown), which stays the engine's rule
+        bridge_c, brain_c = getattr(self.compat, "bridge_commit", None), getattr(self.compat, "brain_commit", None)
+        if not bridge_c or not brain_c or bridge_c != brain_c:
+            return self.end(EXIT_PRECONDITION, "refused: the MT5 box is not known to run this commit",
+                            f"refused: the bridge runs {bridge_c or 'an unknown commit'}, this brain "
+                            f"{brain_c or 'an unknown commit'}: deploy this commit to the MT5 box first")
         try:
             sym: SymbolInfo = b.symbol_info(acc.symbol)
             left, earlier = find_smoke(b, magic, self.now() - LOOKUP_WINDOW)
         except Exception as exc:
             return self.end(EXIT_PRECONDITION, "refused: the terminal cannot be read",
                             f"refused: symbol or smoke look-up unreadable ({type(exc).__name__})")
-        if not earlier.empty:
+        # NEW-1: every smoke position known before this run's send is never taken for its fill
+        self.known = {int(p.position_id) for p in left}
+        if not earlier.empty and "position_id" in earlier.columns:
+            self.known |= {int(p) for p in pd.to_numeric(earlier["position_id"], errors="coerce").dropna()}
             self.say(f"{earlier['position_id'].nunique()} earlier smoke position(s) in the last 24 h")
         for p in left:                                 # S8: an earlier smoke's position is closed first
             self.say(f"closing a leftover smoke position {p.position_id}")
@@ -749,21 +756,33 @@ class _Run:
         """(open smoke positions of this order, its entry-deal position ids, every deal read). The deals are read
         FIRST and the positions after them (trading-safety HIGH-1: a fill landing between the two reads is then listed,
         never taken for a closed one). An order is matched by its comment, or, for a broker that rewrites comments
-        (review LOW-5), by its magic with an open at or after the send (less SEND_SLACK_S of clock skew)."""
+        (review LOW-5), by its magic with an open at or after the send (less SEND_SLACK_S of clock skew).
+        NEW-1 (trading-safety re-verify): the fallback never matches a smoke position known before the send
+        (`self.known`: leftovers and the 24 h look-up) nor one whose comment is another smoke's (`...-smoke`), so an
+        earlier run's trade is never reported as this order's fill."""
         since = sent_at - pd.Timedelta(seconds=SEND_SLACK_S)
+
+        def fallback(comment: Any, opened: pd.Series | pd.Timestamp) -> Any:
+            other_smoke = isinstance(comment, str) and comment.endswith("-smoke") and comment != oi.comment
+            return (not other_smoke) & (opened >= since)
+
         deals = self.broker.deals_since(self.now() - LOOKUP_WINDOW)
         entries: set[int] = set()
         if deals is not None and not deals.empty and {"magic", "position_id", "ts_utc"} <= set(deals.columns):
             d = deals[pd.to_numeric(deals["magic"], errors="coerce") == oi.magic]
-            ours = (d["comment"] == oi.comment) if "comment" in d.columns else pd.Series(False, index=d.index)
-            ours = ours | (pd.to_datetime(d["ts_utc"], utc=True) >= since)
+            d = d[~pd.to_numeric(d["position_id"], errors="coerce").isin(list(self.known))]
+            comments = d["comment"] if "comment" in d.columns else pd.Series("", index=d.index)
+            opened = pd.to_datetime(d["ts_utc"], utc=True)
+            ours = (comments == oi.comment) | pd.Series(
+                [bool(fallback(c, t)) for c, t in zip(comments, opened)], index=d.index, dtype=bool)
             if "entry" in d.columns:
                 ours = ours & (pd.to_numeric(d["entry"], errors="coerce") == ENTRY_IN)
             entries = {int(p) for p in d.loc[ours, "position_id"]}
         else:
             deals = pd.DataFrame()
         positions = [p for p in self.broker.positions() if int(p.magic) == oi.magic
-                     and (p.comment == oi.comment or pd.Timestamp(p.open_time_utc) >= since)]
+                     and int(p.position_id) not in self.known
+                     and (p.comment == oi.comment or fallback(p.comment, pd.Timestamp(p.open_time_utc)))]
         return positions, entries, deals
 
     @staticmethod

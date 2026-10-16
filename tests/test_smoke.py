@@ -31,6 +31,7 @@ LOGIN = 51234567                                      # made up; must never appe
 ACC = Account(account_id="icm-demo", broker="icm", mode="demo", server="ICMarketsSC-Demo", login=LOGIN,
               terminal_path="", server_tz="Europe/Athens", symbol="XAUUSD", magic_base=260100, enabled=True)
 SMOKE_MAGIC = 260199
+COMMIT = "0123456789abcdef0123456789abcdef01234567"   # the same commit on the brain and the MT5 box
 
 
 class Clock:
@@ -194,7 +195,8 @@ def w(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     out: list[str] = []
     ns = SimpleNamespace(state=state, clock=clock, log=log, broker=Terminal(clock, log), bus=ApprovalBus(state),
                          out=out, engine="inactive", events=events, news=pd.DataFrame(), limits=RiskLimits(),
-                         phase=tmp_path / "phase_state.json", compat=BridgeCompat(status="ok", reason="ok"),
+                         phase=tmp_path / "phase_state.json",
+                         compat=BridgeCompat(status="ok", reason="ok", bridge_commit=COMMIT, brain_commit=COMMIT),
                          calendar_raises=None, news_raises=None, acc=ACC)
     return ns
 
@@ -798,4 +800,52 @@ def test_a_bridge_on_another_commit_refuses_exit_4(w):
     _click(w)
     rep = _run(w)
     assert rep.exit_code == smoke.EXIT_PRECONDITION and w.broker.sent == []
+    assert "MT5 box" in "\n".join(w.out)
+
+
+def _run_a_deals(pid: int = 900, comment: str = "icm-demo-1793008790000000000-smoke"[-31:]) -> list[dict[str, Any]]:
+    """An earlier smoke (run A) that entered and closed seconds before this run's send."""
+    return [{"ts_utc": T0 - pd.Timedelta(seconds=10), "position_id": pid, "magic": SMOKE_MAGIC, "comment": comment,
+             "entry": 0, "type": 0, "volume": 0.01, "price": 2400.0},
+            {"ts_utc": T0 - pd.Timedelta(seconds=9), "position_id": pid, "magic": SMOKE_MAGIC, "comment": "close",
+             "entry": 1, "type": 1, "volume": 0.01, "price": 2400.0}]
+
+
+def test_previous_smoke_closed_seconds_ago_is_not_taken_for_this_order(w):
+    """Trading-safety NEW-1 (back-to-back probe): run A's closed trade, inside the 30 s fallback window, is never
+    reported as run B's fill; B's order is UNKNOWN (exit 6), never "already closed"."""
+    b = w.broker
+    b.deals = _run_a_deals()
+    b.place_raises = BridgeUnavailable("bridge place_order: ReadTimeout")
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_UNKNOWN and rep.position_id != 900 and len(b.sent) == 1
+
+
+def test_another_smokes_comment_is_never_matched_by_the_magic_fallback(w):
+    """NEW-1, second guard: a smoke deal that appears only after the pre-send look-up (so not among the known ids)
+    is still not this order's when its comment is another smoke's."""
+    b = w.broker
+    b.place_raises = BridgeUnavailable("bridge place_order: ReadTimeout")
+    real = b.deals_since
+
+    def deals_since(since: pd.Timestamp) -> pd.DataFrame:
+        if b.sent and not any(d["position_id"] == 901 for d in b.deals):
+            b.deals.extend(_run_a_deals(901, "-1793008795000000000-smoke"))
+        return real(since)
+    b.deals_since = deals_since
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_UNKNOWN and rep.position_id != 901
+
+
+@pytest.mark.parametrize("bridge_commit, brain_commit", [(None, COMMIT), (COMMIT, None), (None, None), ("", COMMIT)])
+def test_an_unknown_bridge_or_brain_commit_refuses_exit_4(w, bridge_commit, brain_commit):
+    """SRE follow-up 1: `commit_differs` is False when either commit is unknown (the engine's rule, unchanged); the
+    smoke needs both known AND equal, or F4 may not be on the MT5 box."""
+    w.compat = BridgeCompat(status="ok", reason="ok", bridge_commit=bridge_commit, brain_commit=brain_commit)
+    assert not w.compat.commit_differs
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_PRECONDITION and w.broker.sent == [] and "gate" not in w.log
     assert "MT5 box" in "\n".join(w.out)
