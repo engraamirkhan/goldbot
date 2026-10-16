@@ -4,6 +4,10 @@
 debt and quality review; next review Fri 10-23. Evidence is file:line at the base commit, a run id, an issue or a
 measured number. Nothing here changes a safety rail.
 
+**Update 2026-10-16 (late), cto:** ADR 0019 (TD-1) and ADR 0021 accepted by PD + PO + CTO under the owner's
+delegation; TD-16 added (bridge lot ceiling, ranked 3rd); TD-13 given lane id W3-1; standing rule on self-hosted CI
+runners added (section 4, "Standing constraint"). ROADMAP §5 now points here.
+
 ## Verdict
 
 The platform is sound on the money path: fail-closed fallbacks exist for every cross-process field checked, the bridge
@@ -42,27 +46,33 @@ risk × (6 − cost), so a cheap fix to a real risk ranks first. Ties go to the 
 
 | Rank | Id | Item | Risk (L×I) | Cost | Priority | Accountable | Date | ADR |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | TD-1 | Wine (and MT5 build) unpinned on the MT5 box | 15 (3×5) | 1 | **75** | sre | decision Wed 10-21; held at the next owner-approved MT5-box command, by Sat 10-24 (market closed) | ADR 0019 (decide) |
+| 1 | TD-1 | Wine (and MT5 build) unpinned on the MT5 box | 15 (3×5) | 1 | **75** | sre | **decided 10-16 (ADR 0019 accepted, option 2)**; held and in `/health` at the next owner-approved MT5-box command, by Sat 10-24 (market closed) | ADR 0019 (accepted) |
 | 2 | TD-2 | Extract the engine's persistence boundary from `runner.py` before W2-1 (split step 1) | 16 (4×4) | 2 | **64** | implementer (seam map: architect, with the W2-1 plan Wed 10-21) | merged on the integration branch Fri 10-30 | yes: 0023 runner split |
-| 3 | TD-3 | e2e `PYTHON` default can run the server on the wrong interpreter and the wrong tree | 12 (4×3) | 1 | **60** | implementer | Tue 10-20 (after R-AUTH merges; same files) | no |
-| 4 | TD-4 | Flaky auth e2e: email sign-in timeout | 12 (4×3) | 2 | **48** | test-engineer | Tue 10-20 | no |
-| 5 | TD-5 | Release-compatibility test and deploy-together guard (card_created, entry_blocks) | 15 (3×5) | 3 | **45** | test-engineer (sre: health and deploy parts) | ADR Fri 10-23; test Fri 11-06, before W2-1 merges | yes: 0024 release compatibility |
-| 6 | TD-6 | e2e speed: TOTP step waits and one worker | 10 (5×2) | 2 | **40** | test-engineer | Fri 10-23 | no |
-| 7 | TD-7 | ADR number collisions: reservation in `scripts/docs_assemble.py` | 8 (4×2) | 2 | **32** | implementer | interim rule today; command Fri 10-23 | yes: 0025 amends 0012 |
-| 8 | TD-8 | Worktree and branch pile-up (60 / 172, 28 GB) | 6 (3×2) | 1 | **30** | release-manager | first sweep Mon 10-19; removal at merge from today; script Fri 10-30 | no |
-| 9 | TD-9 | Test tooling: undeclared `pytest-testmon`, no per-test timeout | 6 (3×2) | 1 | **30** | test-engineer | Fri 10-23 | no |
-| 10 | TD-10 | e2e not in local gates | 6 (3×2) | 1 | **30** | test-engineer | Fri 10-30 (after TD-6) | no |
-| 11 | TD-11 | Unit and integration suite speed | 10 (5×2) | 3 | **30** | test-engineer | durations measured Wed 10-21; fixes Fri 11-06 | no |
-| 12 | TD-12 | State store: W2-1 cutover and its rollback story | 10 (2×5) | 4 | **20** | implementer (plan: architect) | rollback ADR Wed 10-28; build Wave 2, 11-02 – 11-20 | yes: 0026 core.db cutover and rollback |
-| 13 | TD-13 | State store leftovers: step 3 remainder, steps 4-5 and 8, `state_db` health, `run.py migrate` | 9 (3×3) | 3 | **27** → ranked after TD-12, which it depends on | implementer | plan Fri 11-20; JSON exports retired (step 8) Fri 12-11 | covered by 0026 |
-| 14 | TD-14 | `runner.py` split steps 2-7 (after W2-1) | 16 (4×4) | 5 | **16** | implementer (plan: architect, Fri 11-13) | one seam per PR, Mon 11-23 – Fri 12-11, before the 12-14 freeze | covered by 0023 |
-| 15 | TD-15 | Watch list: `owner_history.py`, `director.py`, `jobs.py`, `perf_report.py` above 1,100 lines | 4 (2×2) | 3 | **12** | architect | review Fri 11-20 | no |
+| 3 | TD-16 | Bridge's only independent size ceiling is a fixed 3.0 lots while the demo account offers 1:5000: an equity-scaled lot ceiling in `GuardedBroker` | 15 (3×5) | 2 | **60** (money path, ranked above TD-3) | architect (plan); implementer builds; trading-safety reviews | plan Fri 10-23; built and merged Fri 11-06 | yes: 0027 bridge lot ceiling |
+| 4 | TD-3 | e2e `PYTHON` default can run the server on the wrong interpreter and the wrong tree | 12 (4×3) | 1 | **60** | implementer | Tue 10-20 (after R-AUTH merges; same files) | no |
+| 5 | TD-4 | Flaky auth e2e: email sign-in timeout | 12 (4×3) | 2 | **48** | test-engineer | Tue 10-20 | no |
+| 6 | TD-5 | Release-compatibility test and deploy-together guard (card_created, entry_blocks) | 15 (3×5) | 3 | **45** | test-engineer (sre: health and deploy parts) | ADR Fri 10-23; test Fri 11-06, before W2-1 merges | yes: 0024 release compatibility |
+| 7 | TD-6 | e2e speed: TOTP step waits and one worker | 10 (5×2) | 2 | **40** | test-engineer | Fri 10-23 | no |
+| 8 | TD-7 | ADR number collisions: reservation in `scripts/docs_assemble.py` | 8 (4×2) | 2 | **32** | implementer | interim rule today; command Fri 10-23 | yes: 0025 amends 0012 |
+| 9 | TD-8 | Worktree and branch pile-up (60 / 172, 28 GB) | 6 (3×2) | 1 | **30** | release-manager | first sweep Mon 10-19; removal at merge from today; script Fri 10-30 | no |
+| 10 | TD-9 | Test tooling: undeclared `pytest-testmon`, no per-test timeout | 6 (3×2) | 1 | **30** | test-engineer | Fri 10-23 | no |
+| 11 | TD-10 | e2e not in local gates | 6 (3×2) | 1 | **30** | test-engineer | Fri 10-30 (after TD-6) | no |
+| 12 | TD-11 | Unit and integration suite speed | 10 (5×2) | 3 | **30** | test-engineer | durations measured Wed 10-21; fixes Fri 11-06 | no |
+| 13 | TD-12 | State store: W2-1 cutover and its rollback story | 10 (2×5) | 4 | **20** | implementer (plan: architect) | rollback ADR Wed 10-28; build Wave 2, 11-02 – 11-20 | yes: 0026 core.db cutover and rollback |
+| 14 | TD-13 | State store leftovers (lane **W3-1**): step 3 remainder, steps 4-5 and 8, `state_db` health, `run.py migrate` | 9 (3×3) | 3 | **27** → ranked after TD-12, which it depends on | implementer | plan Fri 11-20; JSON exports retired (step 8) Fri 12-11 | covered by 0026 |
+| 15 | TD-14 | `runner.py` split steps 2-7 (after W2-1) | 16 (4×4) | 5 | **16** | implementer (plan: architect, Fri 11-13) | one seam per PR, Mon 11-23 – Fri 12-11, before the 12-14 freeze | covered by 0023 |
+| 16 | TD-15 | Watch list: `owner_history.py`, `director.py`, `jobs.py`, `perf_report.py` above 1,100 lines | 4 (2×2) | 3 | **12** | architect | review Fri 11-20 | no |
 
 TD-13 scores 27 but cannot start before TD-12's tables exist; it is ranked by dependency, not score.
 
 ## 4. Items
 
-### TD-1 Wine and MT5 version pinning (ADR 0019, pending)
+### TD-1 Wine and MT5 version pinning (ADR 0019, accepted 2026-10-16)
+**Decided 2026-10-16 by PD + PO + CTO (owner delegated): option 2.** `apt-mark hold` the installed, verified
+`winehq-devel` 11.19 and hold the verified MT5 build; Wine version and MT5 build in the bridge `/health`; upgrades
+only through a reviewed change rehearsed on a VM. Pinning is a tightening, so it is within the delegation. The sre
+implements and verifies it on the box by Sat 10-24; the background below is the evidence it was decided on.
+
 Wine 10.3-11.5 stopped the terminal outright on 16 Oct (`docs/incidents/2026-10-16-mt5-debugger-found-under-wine.md`).
 Today any `apt-get upgrade` can repeat that with the next devel release; the bridge stops, the engine loses its
 exits-in-engine and only broker-side stops protect open trades (risk register #4). **CTO recommendation: ADR 0019
@@ -75,6 +85,67 @@ and report it on #34, unless the owner wants it back; running the command on the
 step. If the owner keeps the decision, the program-director chases it on #34 for Wed 10-21. The MT5 terminal
 self-updates and `mt5setup.exe` cannot be hashed (rolling installer): the mitigation there is detection (build in
 `/health`), not pinning.
+
+### TD-16 Equity-scaled lot ceiling at the bridge (new 2026-10-16, ranked 3rd)
+**Finding.** Read from the demo terminal 2026-10-16: leverage 1:5000, margin call 100%, stop-out 50%, margin 0.63 GBP
+for 0.01 lot of XAUUSD, about 15.9 lots possible on free margin. goldbot's own sizing is bounded several times over:
+the gate's margin check uses the stricter of the broker's figure and 1:20 (`goldbot/risk/gate.py:62`, `:365-388`),
+combined open notional is capped at 0.30 × 20 = 6× combined equity (`gate.py:63-66`, `:536-544`), and the per-order
+ceiling is the smaller of the broker's maximum and 2.0 lots (`gate.py:176-180`, applied in
+`goldbot/engine/runner.py:1032`). The bridge, the last process before the broker and the only one that runs on the
+MT5 box, has one independent size check: a fixed `MAX_ORDER_LOTS = 3.0` (`goldbot/execution/bridge.py:104`, checked
+at `:266`). It does not scale with equity.
+
+**What that means in money** (derived from the terminal's figures: 0.63 GBP at 1:5000 for 0.01 lot = 1 oz implies
+about £3,150 per oz, so 1 lot ≈ £315,000 notional; equity ≈ £1,000 from the 15.9-lot figure, consistent with ADR
+0004):
+
+| Order | Notional | Broker margin at 1:5000 | Loss per $1 move (at ~1.33 USD/GBP) | Move that loses £1,000 |
+| --- | --- | --- | --- | --- |
+| What the gate allows (6× equity) | ≈ £6,000 → 0.01 lot | £0.63 | ≈ £0.75 | ≈ $1,330 |
+| Bridge ceiling, 3.0 lots | ≈ £945,000 (≈ 945× equity) | ≈ £189 | ≈ £225 | ≈ $4.4 (≈ 0.1%) |
+
+The broker accepts the 3.0-lot order (margin £189 against £1,000), and the 50% stop-out only acts once equity falls
+under ≈ £95. So if a sizing bug got past the RiskGate (wrong `contract_oz`, a unit or fx error, a lot field taken from
+the wrong record), the account could be wiped by an ordinary few-dollar move before anything stops it. The bridge's
+ceiling is ~300× larger than what the gate would ever send.
+
+**Why likelihood 3, not 2.** The sizing path is the most-changed code in the repo (`runner.py`, 99 commits since
+10-01, section 1), ADR 0009 exists because an order exceeding its card was possible, and TD-2/TD-14 move this code
+again. Impact 5: whole account.
+
+**Direction for the plan (architect, due Fri 10-23; ADR 0027, CTO decides, trading-safety reviews):**
+1. `GuardedBroker.place_order` refuses an order whose lots, plus the account's open goldbot lots, exceed a ceiling
+   derived from the terminal's own reads at order time (equity, the symbol's contract size and price, margin or
+   notional in account currency), independent of anything the brain sent. Starting point for the bound: the gate's
+   own combined notional cap (6× equity) with headroom for one volume step, so it never refuses an order the gate
+   allows; the plan states the exact formula and its margin.
+2. **Fail closed** for entries: if equity, the tick or the contract terms cannot be read, the order is refused with a
+   named reason. **Exits are never gated:** `close` (`bridge.py:277-278`) and `modify` keep their current paths; the
+   plan proves no close or kill-switch path calls the new check.
+3. `MAX_ORDER_LOTS` stays as an absolute ceiling; the new check only tightens.
+4. Internal only, as ADR 0021 F4: no change to `METHODS`, signatures, `API_VERSION` or `protocol_digest`.
+5. Tests first: refusal at the boundary, equality behaviour stated, a read failure refuses, a close at any size
+   passes, and a grid showing every order the gate's limits allow passes the bridge.
+6. Open question for the plan: whether the bridge should also refuse when the account's leverage exceeds a configured
+   ceiling, or only report it. Reporting the broker's leverage in `/health` is in scope; refusing on it is not, until
+   the CFO and owner have seen the capital plan (`docs/finance/`).
+
+The ceiling is a tightening (a second, independent rail behind RiskGate), so it is within the delegation; it changes
+no gate threshold or risk limit. **Reverse if** the plan shows the terminal's own reads at order time are not reliable
+enough to bound on (then the bound moves to a configured equity figure refreshed by the sre, still fail-closed).
+
+### Standing constraint: no self-hosted CI runner on the brain without a security review (CFO flag, 2026-10-16)
+ROADMAP W2-8 plans a self-hosted CI runner on the brain VM to save CI minutes (risk 7). On a **public** repo, a
+self-hosted runner can be made to run a fork PR's code; on the brain that is anyone's code running on the machine that
+holds the Telegram token, the dashboard keys and the engine's state, with a network path to the bridge. Ruling:
+**no self-hosted runner is registered on the brain host, or on any host holding trading secrets, until the
+security-reviewer has reviewed the design and recorded GO.** The review covers at least: fork-PR workflows never reach
+the runner (runner limited to `push` on protected branches; "require approval for all outside collaborators" on), an
+ephemeral runner as its own user with no keyring access, and no network path to the bridge. CTO direction: prefer a
+host that holds no trading secrets; if the only free capacity is the brain, the security GO must say why the
+isolation is enough. Accountable: release-manager (W2-8) with the security-reviewer. Any paid alternative (a larger
+CI plan, a VM outside the free tier) goes to the CFO and then the owner.
 
 ### TD-2 / TD-14 `runner.py` split strategy, sequenced against W2-1
 **Problem.** `Engine` is one class, 306-3438, and the money path's every concern lives in it: tick loop, decisions,
@@ -212,7 +283,8 @@ unit ≤ 90 s at `-n 4`, integration ≤ 120 s, CI backend job ≤ 6 min. No tes
 
 ### TD-12 / TD-13 JSON-to-SQLite migration (W2-1 and what follows)
 **Note on naming:** ROADMAP W2-2 is `order_calc_margin` and tick-flags dedup, not state; the state work after W2-1 is
-the proposal's steps 5 and 8. I list it as TD-13 and recommend the program-director gives it a Wave 3 lane id.
+the proposal's steps 5 and 8. It is TD-13, lane W3-1.
+Lane id: **W3-1** (ROADMAP Wave 3), assigned 2026-10-16 so the post-W2-1 work is planned and tracked as one lane.
 - **W2-1** (proposal steps 6-7) is planned (`docs/proposals/2026-10-w2-1-state-store-plan.md`): order row and open
   trades in one `BEGIN IMMEDIATE` transaction, decisions keyed by proposal id so the first wins, JSON exported after
   each commit for one release, a corrupt `core.db` keeps today's refusal to start. **What is missing is a recorded
@@ -233,26 +305,27 @@ Fri 11-20; split only if churn or merge conflicts show it.
 
 Default one lane in eight. With at most 8 builder lanes, that is one standing debt lane (implementer) plus the
 test-engineer's and release-manager's own items. Estimated effort: TD-1 0.5 d, TD-2 2 d, TD-3 0.5 d, TD-4 1 d, TD-5
-4 d, TD-6 1.5 d, TD-7 1 d, TD-8 0.5 d, TD-9 0.5 d, TD-10 0.5 d, TD-11 3 d, TD-13 5 d: **~20 lane-days** to Fri 11-20,
+4 d, TD-6 1.5 d, TD-7 1 d, TD-8 0.5 d, TD-9 0.5 d, TD-10 0.5 d, TD-11 3 d, TD-13 5 d, TD-16 2.5 d (plan 1 d, build 1.5 d): **~22.5 lane-days** to Fri 11-20,
 against ~25 lane-days one lane gives from Mon 10-19. TD-12 is a planned feature lane (W2-1), and TD-14 (~10 days)
 falls in the Wave 3 window, so the default budget holds; no increase requested. The builder WIP limit (no new builder
 lane until the batch PR is open, ROADMAP section 2) applies to the debt lane too: it starts Mon 10-19 with TD-3.
 
-Debt-lane order: TD-3 → TD-2 → TD-7 → TD-8 script → TD-9 → TD-13 plan support. Test-engineer: TD-4 → TD-6 → TD-9 →
+Debt-lane order: TD-3 → TD-2 → TD-16 build (after its plan and ADR 0027) → TD-7 → TD-8 script → TD-9 → TD-13 plan support. Test-engineer: TD-4 → TD-6 → TD-9 →
 TD-11 → TD-10 → TD-5 test. SRE: TD-1, then TD-5 health and deploy parts.
 
 ## 6. ADRs this register needs
 
 | ADR | Subject | Drafts | Decides | By |
 | --- | --- | --- | --- | --- |
-| 0019 | Wine pinning (exists, proposed) | sre | PD+PO+CTO under the delegation, or the owner if kept | Wed 10-21 |
-| 0021 | Operational orders through the RiskGate (exists, proposed) | architect | CTO with trading-safety; not in this register, dated here because proposed ADRs are decided within a week | Fri 10-23 |
+| 0019 | Wine pinning | sre | **accepted 2026-10-16** by PD + PO + CTO (option 2) | done |
+| 0021 | Operational orders through the RiskGate | architect | **accepted 2026-10-16** by PD + PO + CTO; trading-safety APPROVE at `d1d86d6`, G1a-c fixed in `d4ce33d` | done |
 | 0023 | Engine split: seams, move-only rule, ratchet | architect | CTO | Wed 10-21 |
 | 0024 | Release compatibility: cross-release test, deploy-together manifest, release skew | test-engineer with sre | CTO | Fri 10-23 |
 | 0025 | ADR number reservation (amends 0012) | implementer | CTO | Fri 10-23 |
 | 0026 | `core.db` cutover and rollback (W2-1) | architect | CTO, trading-safety review | Wed 10-28 |
+| 0027 | Equity-scaled lot ceiling at the bridge (TD-16) | architect | CTO, trading-safety review | plan and draft Fri 10-23 |
 
-Numbers 0023-0026 are reserved by this register under the TD-7 interim rule.
+Numbers 0023-0027 are reserved by this register under the TD-7 interim rule.
 
 ## 7. Rulings recorded here (CTO, 2026-10-16)
 
@@ -261,6 +334,11 @@ Numbers 0023-0026 are reserved by this register under the TD-7 interim rule.
 3. Worktrees are removed at merge by the release-manager (TD-8).
 4. No auth bypass or clock override in production code to speed up e2e (TD-6).
 5. Flakes are root-caused, never fixed by timeout or retry alone (TD-4).
+6. ADR 0019 accepted, option 2 (TD-1). Decided 2026-10-16 by PD + PO + CTO (owner delegated).
+7. ADR 0021 accepted with fences F1-F6. Decided 2026-10-16 by PD + PO + CTO (owner delegated).
+8. Bridge lot ceiling scaled to equity (TD-16): direction set, plan by the architect Fri 10-23, ADR 0027.
+9. No self-hosted CI runner on a host holding trading secrets without a security-reviewer GO (standing constraint).
+10. Post-W2-1 state-store work is lane W3-1 (TD-13).
 
 ## 8. Not verified / left out
 
@@ -270,6 +348,7 @@ Numbers 0023-0026 are reserved by this register under the TD-7 interim rule.
   with that measurement.
 - The method counts and seam line ranges are from `grep` at `9f04599`; state shared between seams was not traced, which
   is what the architect's seam map (TD-2) settles.
-- The pointer to this register from `docs/ROADMAP.md` section 5 is left to the program-director, who owns that file's
-  layout, to avoid a merge conflict with lanes editing it tonight.
+- TD-16's figures are the terminal's as read on 2026-10-16; the notional and loss rows are derived from them (price
+  and equity inferred, not read from the broker ledger). The architect's plan re-reads them on the box.
+- The ROADMAP §5 pointer to this register was added 2026-10-16 (late).
 - No code, config, test or workflow was changed.
