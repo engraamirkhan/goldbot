@@ -263,3 +263,40 @@ def test_eligibility_record_round_trips():
     a, r = _same(100)
     e = auto_mode_eligibility(*_evidence(100, a, r))
     assert Eligibility.model_validate_json(e.model_dump_json()) == e
+
+
+def _owner_store(state_dir: Path) -> None:
+    """aux.db with one dashboard owner (o@x.io), as on a server where the dashboard is set up."""
+    import goldbot.api.auth as auth
+    store = auth.AuthStore(state_dir, owner_email="o@x.io")
+    store.bootstrap_owner(store.setup_code or "", "o@x.io", "a long enough password")
+
+
+def test_audit_to_reads_the_owner_email_so_the_telegram_service_logs_no_false_owner_warning(tmp_path, monkeypatch,
+                                                                                            caplog):
+    """BACKLOG 52 re-review (LOW): once dashboard users exist, the Telegram audit opener passes auth.owner_email, so
+    AuthStore does not warn "auth.owner_email is not set" on the first write. The row still lands in aux.db."""
+    import logging
+
+    import goldbot.api.auth as auth
+    from goldbot.telegram.automode import audit_to
+    _owner_store(tmp_path)
+    monkeypatch.setattr(auth, "_settings_owner_email", lambda: "o@x.io")
+    with caplog.at_level(logging.WARNING, logger="goldbot.api.auth"):
+        audit_to(tmp_path)("decision", channel="telegram", proposal_id="p1")
+    assert not [r for r in caplog.records if "owner_email" in r.getMessage()]
+    last = auth.AuthStore(tmp_path, owner_email="o@x.io").audit_events()[-1]
+    assert last["event"] == "decision" and last["proposal_id"] == "p1"
+
+
+def test_audit_to_still_warns_when_the_owner_email_really_is_unset(tmp_path, monkeypatch, caplog):
+    """The fix passes the configured value through; it does not silence a genuinely missing auth.owner_email."""
+    import logging
+
+    import goldbot.api.auth as auth
+    from goldbot.telegram.automode import audit_to
+    _owner_store(tmp_path)
+    monkeypatch.setattr(auth, "_settings_owner_email", lambda: None)
+    with caplog.at_level(logging.WARNING, logger="goldbot.api.auth"):
+        audit_to(tmp_path)("decision", channel="telegram")
+    assert [r for r in caplog.records if "auth.owner_email is not set" in r.getMessage()]

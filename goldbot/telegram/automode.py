@@ -255,10 +255,14 @@ def owner_totp_ok(state_dir: str | Path, code: str, owner_email: str | None = No
     return store.verify_code_guarded(code, "mode")
 
 
-def audit_to(state_dir: str | Path) -> Callable[..., None]:
-    """Append to state/audit.jsonl, the dashboard's audit log (goldbot/api/auth.py AuthStore.audit)."""
-    from goldbot.api.auth import AuthStore
-    return AuthStore(state_dir).audit
+def audit_to(state_dir: str | Path, owner_email: str | None = None) -> Callable[..., None]:
+    """Append to the dashboard's audit table in `<state_dir>/aux.db` (goldbot/api/auth.py AuthStore.audit; the old
+    state/audit.jsonl is imported once and never written). The store is opened with auth.owner_email (read from
+    settings unless given), as the dashboard and `owner_totp_ok` open it: without it, AuthStore would log a false
+    "auth.owner_email is not set" warning once dashboard users exist (BACKLOG 52 re-review). A genuinely unset or
+    mismatched value still warns."""
+    from goldbot.api.auth import AuthStore, _settings_owner_email
+    return AuthStore(state_dir, owner_email=owner_email if owner_email is not None else _settings_owner_email()).audit
 
 
 MODE_USAGE = "usage: /mode propose  |  /mode auto <6-digit code>"

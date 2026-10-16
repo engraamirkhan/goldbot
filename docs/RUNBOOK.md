@@ -218,6 +218,43 @@ and the rest still arrives. It never contains account numbers or emails.
   slot if that field matters. A heartbeat from a release before this check carries no block and is skipped. "block unreadable: the
   process could not build it" means the summary itself failed in that service (a bug, traceback once in its log):
   the skew of that process is unknown until it is fixed; file an issue and restart the service.
+* **After a rollback below `04f6266`, once you have rolled forward again: remove the decider identities.** A
+  release older than `04f6266` (BACKLOG 52) writes who decided into every proposal it archives in
+  `approvals/done/*.json`: `decided_by` (a Telegram user id) and `decided_via` (`telegram:<id>` or
+  `dashboard:<email>`). It also writes them into `control.json`. The newer release drops those fields when it reads
+  a file and keeps only the channel. It rewrites `control.json` on its next halt, re-arm or mode change, but it never
+  rewrites a done file, so the identities stay on disk. List the affected files with
+  `sudo -u goldbot grep -rlE '"decided_(by|via)"' --include='*.json' /opt/goldbot/state/approvals/done`. If any are
+  listed, scrub them in place with the block below. It is safe while the services run. It removes only the two
+  fields and keeps the channel, the outcome, `decided_ts` and the file's modification time, which the dashboard's
+  recent list and the daily digest read. Run the `grep` again: no output means you are done. **Do not delete done
+  files to get rid of the identities.** They are more than history: the auto-mode evidence (decided proposals and
+  their outcomes), the daily digest and the performance report all count them. The audit log (the audit table in
+  `aux.db`) holds dashboard decisions with the user's email in every release. It holds Telegram decisions only
+  from `3817db7`. So a Telegram decision made while the older release ran has no audit row, and after the scrub it
+  is recorded only as "via Telegram". That is acceptable because only the allow-listed owner ids can decide on
+  Telegram.
+
+  ```bash
+  sudo -u goldbot /opt/goldbot/.venv/bin/python - <<'PY'
+  import json, os
+  from pathlib import Path
+  from goldbot.base import load_record_json, write_atomic
+  from goldbot.telegram.approvals import Proposal
+  for f in sorted(Path("/opt/goldbot/state/approvals/done").glob("*.json")):
+      text = f.read_text()
+      d = json.loads(text)
+      if not {"decided_by", "decided_via"} & d.keys():
+          continue
+      st = f.stat()
+      d["decided_channel"] = load_record_json(Proposal, text, source="approvals/done").decided_channel
+      d.pop("decided_by", None)
+      d.pop("decided_via", None)
+      write_atomic(f, json.dumps(d))
+      os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns))
+      print("scrubbed", f.name)
+  PY
+  ```
 * Before anything is touched, every deploy and rollback also checks:
   * **aux.db.** A target from before schema compatibility (no `compat_back_to` in its `goldbot/db/migrations.py`)
     cannot open aux.db at schema 5. The script stops every service (inputs, supervisor, engines last), steps aux.db
