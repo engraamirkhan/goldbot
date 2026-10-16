@@ -296,6 +296,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   | e2e (`npm --prefix web run test:e2e`) | PASS, 19 passed (7.2m) |
 
   Total wall time of gates.sh: 384 s. E2E needed `PW_CHROMIUM_PATH` set to the cached chromium_headless_shell-1208 (Playwright wanted build 1248, not installed); the first attempt without it failed on browser launch only. The `CancelledError` traceback at e2e server shutdown is the websocket sleep being cancelled at teardown, not a test failure.
+- **BACKLOG 64: the dashboard header shows the signed-in role, never the email (implementer, 2026-10-16; spec
+  `docs/ux/header-role.md`).** The header reads "Owner", "Approver" or "Viewer" (screen readers hear "Signed in as
+  …"; "Signed in" when the session record is missing), from one map `web/src/lib/roles.ts` `roleLabel` that the
+  Users tab's role column also uses. The Account tab gains "Your sign-in" (role and own email) as its first section.
+  "Sign out" is a 44 px tap target below 720 px. No API change. Tests: `web/src/App.test.tsx`,
+  `web/src/lib/roles.test.ts`, `web/src/screens/Account.test.tsx` ("Account: your sign-in"), and the banner, safety
+  strip, Account and 360 px row/tap-target checks in `web/e2e/dashboard.spec.ts` and `web/e2e/auth.spec.ts`.
+  Rule for future screens: persistent chrome never renders an identity. Next: ui-ux-designer review, code-reviewer.
 - Heartbeats stamped in the future fail closed (2026-10-16, BACKLOG 58). Before this, a `ts` ahead of the reader's
   clock, or a NaN, made `now - ts > limit` False, so a dead supervisor whose last write carried a fast clock (or came
   from a restored backup) never halted the engines. The shared rule is `goldbot.data.timeutil.heartbeat_problem`:

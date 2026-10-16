@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, GrantableRole } from "../lib/api";
 import { linkUrl } from "../lib/links";
+import { roleLabel } from "../lib/roles";
 
 // Owner only. The owner role is never granted: invites and role changes offer approver or viewer.
 export function Users() {
@@ -49,9 +50,9 @@ export function Users() {
             <tr key={u.email} className={u.enabled ? "" : "retired"}>
               <td>{u.email}</td>
               <td>
-                {u.role === "owner" ? "owner" : (
+                {u.role === "owner" ? roleLabel("owner") : (
                   <select aria-label={`Role of ${u.email}`} value={u.role} onChange={(e) => setRoleM.mutate({ email: u.email, role: e.target.value as GrantableRole })}>
-                    <option value="viewer">viewer</option><option value="approver">approver</option>
+                    <option value="viewer">{roleLabel("viewer")}</option><option value="approver">{roleLabel("approver")}</option>
                   </select>
                 )}
               </td>

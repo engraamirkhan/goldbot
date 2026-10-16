@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
-import { api, hasRole } from "../lib/api";
+import { api, currentUser, hasRole } from "../lib/api";
+import { roleLabel } from "../lib/roles";
 
 // Change password (any signed-in user): current password + authenticator code. Other sessions are signed out.
 function ChangePassword() {
@@ -99,9 +100,26 @@ function RecoveryCodes() {
   );
 }
 
+// The signed-in user's own role and address: the one place a non-owner sees the email (docs/ux/header-role.md:
+// "the email is shown only on the Users tab (owner) and on the signed-in user's own Account tab").
+function YourSignIn() {
+  const me = currentUser();
+  return (
+    <section className="your-signin" aria-labelledby="ys-h">
+      <h2 id="ys-h">Your sign-in</h2>
+      <dl>
+        <dt>Role</dt><dd>{me ? roleLabel(me.role) : <span className="muted">not known in this tab</span>}</dd>
+        <dt>Email</dt>
+        <dd>{me ? me.email : <span className="muted">not known in this tab: sign out and in again to see it</span>}</dd>
+      </dl>
+    </section>
+  );
+}
+
 export function Account() {
   return (
     <>
+      <YourSignIn />
       <ChangePassword />
       {hasRole("owner") && <RecoveryCodes />}
     </>
