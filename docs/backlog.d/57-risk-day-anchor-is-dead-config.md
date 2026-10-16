@@ -4,7 +4,7 @@ rank: 4
 title: 'risk_day_anchor is read by no code: pin it or make it real'
 stage: Execution and risk (loss caps) · PROTECT
 size: S
-status: 'in progress (`lane/anchor-validator`, no commit yet) · accountable: implementer · due 2026-10-19'
+status: 'done (built 2026-10-16 in bd76c47 + RUNBOOK 8a268cf: Settings refuses any other anchor at load; trading-safety APPROVED 2026-10-16) · accountable: implementer · due 2026-10-19'
 ---
 - **57. risk_day_anchor is read by no code: pin it or make it real.** Value: `config/settings.yaml` says
   `risk_day_anchor: { tz: UTC, time: "00:00" }  # loss caps reset`, and `Settings.risk_day_anchor` loads it, but no
