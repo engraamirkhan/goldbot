@@ -95,7 +95,7 @@ test("owner halts new entries and re-arms with an authenticator code", async ({ 
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
   await page.getByLabel("Halt reason").fill("fomc surprise");
   await page.getByRole("button", { name: "Halt new entries" }).click();
-  await expect(page.getByText(`Entries halted by dashboard:${OWNER.email}: fomc surprise.`)).toBeVisible();
+  await expect(page.getByText("Entries halted via the dashboard: fomc surprise.")).toBeVisible();   // the channel, never who (A15)
   await page.getByLabel("Authenticator code").fill("000000");
   await page.getByRole("button", { name: "Re-arm" }).click();
   await expect(page.locator(".err")).toContainText("authenticator code required");
@@ -122,7 +122,7 @@ test("owner enables auto mode with an authenticator code on the evidence, then s
   await expect(card.getByRole("status")).toContainText("Mode: AUTO");
   await card.getByRole("button", { name: "Switch to propose" }).click();
   await expect(card.getByRole("heading", { name: /Entry mode: Propose-and-approve/ })).toBeVisible();
-  await expect(card.getByText(/Set .* by owner@example.com on dashboard \(owner\)/)).toBeVisible();
+  await expect(card.getByText(/Set .* via the dashboard \(owner\)/)).toBeVisible();   // channel and role, never who (A15)
 });
 
 test("owner regenerates the recovery codes with password and authenticator code; they are shown once", async ({ page }) => {
@@ -274,7 +274,7 @@ test("once the engine reports, Overview shows the live balance, today's loss bud
     lot_terms: { contract_oz: 100, volume_min: 0.01, volume_step: 0.01, volume_max: 50, stops_level_points: 0 },
   }));
   writeFileSync(join(dir, "supervisor.json"), JSON.stringify({
-    ts: Date.now() / 1000 + 3600, halt: false, reasons: [], daily_cap: 0.015, combined_day_start_equity: 1500, weekly_cap: 0.04,
+    ts: Date.now() / 1000, halt: false, reasons: [], daily_cap: 0.015, combined_day_start_equity: 1500, weekly_cap: 0.04,
     combined_week_start_equity: 1500, combined_equity: 1490,
   }));
   await page.setViewportSize({ width: 360, height: 800 });
