@@ -3,7 +3,8 @@ skips only the model checks. Fence F5: the split of `check` into shared helpers 
 decision grid captured from `check` BEFORE the split (tests/data/risk_gate_decision_grid.json). F1, F2, S6, S10 below.
 
 The grid golden is written only for an intended change of `check`'s decisions, never to make a refactor pass:
-GOLDBOT_WRITE_GATE_GRID=1 pytest tests/test_risk_gate_split.py -k grid (and the trading-safety reviewer signs it).
+GOLDBOT_WRITE_GATE_GRID=1 pytest tests/test_risk_gate_split.py -k grid, which captures it from 9f04599's gate.py
+(`pre_split_gate`), never from HEAD; the trading-safety reviewer signs any change to it.
 """
 from __future__ import annotations
 
@@ -12,32 +13,35 @@ import json
 import math
 import os
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pandas as pd
 import pytest
 
+import goldbot.risk.gate as gate_module
 from goldbot.config import HeatSettings
-from goldbot.risk.gate import AccountState, Intent, OperationalIntent, RiskGate, RiskLimits, Stage
+from goldbot.risk.gate import OperationalIntent, RiskGate, RiskLimits
 
 GRID = Path(__file__).parent / "data" / "risk_gate_decision_grid.json"
 WRITE = os.environ.get("GOLDBOT_WRITE_GATE_GRID") == "1"
 NOW = pd.Timestamp("2026-10-26 10:00", tz="UTC")
+PRE_SPLIT = "9f04599"                                  # the commit before the split (F5)
 
 
-def _state(**kw: Any) -> AccountState:
+def _state(mod: ModuleType = gate_module, **kw: Any) -> Any:
     base: dict[str, Any] = dict(equity=10_000, balance_closed_hwm=10_000, day_start_equity=10_000,
                                 week_start_equity=10_000, open_positions=0, margin_used=0.0, last_tick_age_s=1.0,
                                 spread_points=25.0)
     base.update(kw)
-    return AccountState(**base)
+    return mod.AccountState(**base)
 
 
-def _intent(**kw: Any) -> Intent:
+def _intent(mod: ModuleType = gate_module, **kw: Any) -> Any:
     base: dict[str, Any] = dict(agent_id="session_open-g0-x", side=1, p=0.62, target_atr=1.5, stop_atr=1.0, atr_usd=4.0,
                                 cost_atr=0.1, multiplier=1.0, price=2400.0, timeframe="1h", family="session_open")
     base.update(kw)
-    return Intent(**base)
+    return mod.Intent(**base)
 
 
 LIMITS: dict[str, dict[str, Any]] = {
@@ -50,7 +54,8 @@ STATES: dict[str, dict[str, Any]] = {
     "base": {},
     "day_loss_at_cap": {"equity": 9_800},
     "week_loss": {"equity": 9_600, "day_start_equity": 9_600},
-    "size_down": {"stage": Stage.SIZE_DOWN},
+    "week_loss_at_cap": {"equity": 9_500, "day_start_equity": 9_500},           # weekly_cap (review LOW-3)
+    "size_down": {"stage": "size_down"},
     "dd_to_size_down": {"balance_closed_hwm": 11_000},
     "dd_to_halt": {"balance_closed_hwm": 11_500},
     "combined_size_down": {"combined_size_down": True},
@@ -59,6 +64,7 @@ STATES: dict[str, dict[str, Any]] = {
     "open_risk": {"open_risk": 45.0, "open_long": 1, "open_positions": 1},
     "open_risk_unknown": {"open_risk": None},
     "lost_some": {"equity": 9_960, "open_risk": 10.0},
+    "open_risk_high": {"open_risk": 80.0},                                      # heat_cap (review LOW-3)
     "standard": {"account_class": "standard"},
     "unknown_class": {"account_class": "unknown"},
     "halts": {"supervisor_halt": True, "owner_halt": True, "equity_unconfirmed": True},
@@ -72,6 +78,8 @@ INTENTS: dict[str, dict[str, Any]] = {
     "below_cost_floor": {"target_atr": 0.2},
     "tight_stop": {"stop_atr": 0.05},
     "wide_stop": {"stop_atr": 40.0},
+    "wide_stop_ev": {"stop_atr": 40.0, "target_atr": 80.0},                    # min_lot_exceeds_risk (review LOW-3)
+    "min_lot_stop": {"stop_atr": 20.0, "target_atr": 40.0},                    # min_lot_exception (review LOW-3)
     "standard_15m": {"timeframe": "15m", "family": "breakout", "agent_id": "breakout-g0-x"},
     "gbp_no_fx": {"account_currency": "GBP"},
     "gbp_fx": {"account_currency": "GBP", "acct_per_usd": 0.78, "swap_usd_per_oz": 2.0},
@@ -95,23 +103,38 @@ def _row(d: Any) -> list[Any]:
             round(d.margin_needed, 6), d.margin_note, round(d.risk_amount, 6), round(d.cost_amount, 6)]
 
 
-def _grid() -> dict[str, list[Any]]:
+def _grid(mod: ModuleType = gate_module) -> dict[str, list[Any]]:
+    """`mod` is goldbot.risk.gate, or the pre-split gate.py loaded from 9f04599 to (re)capture the golden: the
+    expected values never come from the code under test."""
     out: dict[str, list[Any]] = {}
     margins = ("none", "broker_high", "raises")
     for i, (ln, lkw) in enumerate(LIMITS.items()):
-        gate = RiskGate(RiskLimits(**lkw))
+        gate = mod.RiskGate(mod.RiskLimits(**lkw))
         for j, (sn, skw) in enumerate(STATES.items()):
             for k, (iname, ikw) in enumerate(INTENTS.items()):
                 m = margins[(i + j + k) % 3]
-                st = _state(**skw)
-                d = gate.check(_intent(**ikw), st, NOW, margin_required=_margin(m))
+                st = _state(mod, **skw)
+                d = gate.check(_intent(mod, **ikw), st, NOW, margin_required=_margin(m))
                 out[f"{ln}|{sn}|{iname}|{m}"] = [*_row(d), st.stage.value]
     return out
 
 
+def pre_split_gate() -> ModuleType:
+    """goldbot/risk/gate.py as it was before the split (9f04599), loaded as its own module."""
+    import subprocess
+    import sys
+    src = subprocess.run(["git", "show", f"{PRE_SPLIT}:goldbot/risk/gate.py"], capture_output=True, text=True,
+                         check=True, cwd=Path(__file__).resolve().parents[1]).stdout
+    mod = ModuleType("gate_pre_split")
+    sys.modules[mod.__name__] = mod                 # pydantic resolves the records' annotations through it
+    exec(compile(src, f"{PRE_SPLIT}:goldbot/risk/gate.py", "exec"), mod.__dict__)
+    return mod
+
+
 def test_check_decisions_unchanged_on_a_state_grid():
     got = _grid()
-    if WRITE:                                   # one case per line, so a changed decision reads as a one-line diff
+    if WRITE:                                   # captured from the pre-split gate, never from HEAD
+        got = _grid(pre_split_gate())                                   # one case per line, so a changed decision reads as a one-line diff
         GRID.parent.mkdir(parents=True, exist_ok=True)
         GRID.write_text("{\n" + ",\n".join(f"{json.dumps(k)}: {json.dumps(got[k], separators=(',', ':'))}"
                                            for k in sorted(got)) + "\n}\n")
@@ -121,6 +144,9 @@ def test_check_decisions_unchanged_on_a_state_grid():
     diff = {k: (want[k], got[k]) for k in want if want[k] != got[k]}
     assert not diff, diff
     assert sum(v[0] for v in got.values()) > 50 and sum(not v[0] for v in got.values()) > 50   # both kinds covered
+    reached = {r for v in got.values() for r in v[2]}
+    assert {"heat_cap", "min_lot_exception", "min_lot_exceeds_risk", "weekly_cap", "daily_cap", "margin_level_floor",
+            "combined_exposure_cap", "daily_loss_limit_abs", "same_direction_cap"} <= reached, reached
 
 
 # ---------------------------------------------------------------------------------------------- check_operational
@@ -141,6 +167,7 @@ def _op(tmp_path: Path, phase: Any = None, **kw: Any) -> OperationalIntent:
     ("live", None, False),
     ("demo", {"phase": 3, "gates_passed": ["foundation_to_backtest", "backtest_to_paper", "paper_to_tiny_live"]},
      False),                                                                      # after the live gate: never
+    ("demo", {"gates_passed": ["tiny_live_to_full_size"]}, False),               # any gate from the live one on
     ("demo", "{not json", False),                                                 # corrupt: refuses
     ("demo", "[1, 2]", False),                                                    # not an object: refuses
     ("demo", {"phase": 2, "gates_passed": "paper_to_tiny_live"}, False),          # malformed list: refuses
@@ -149,6 +176,12 @@ def test_operational_refuses_operational_not_demo_for_live_or_an_unreadable_phas
     d = RiskGate().check_operational(_op(tmp_path, phase, account_mode=mode), _state(), NOW, None)
     assert d.allowed is allowed, d
     assert ("operational_not_demo" in d.reasons) is (not allowed)
+
+
+def test_operational_live_gates_are_the_roadmap_gates_from_paper_to_tiny_live_on():
+    from goldbot.ops.accounts import GATES
+    from goldbot.risk.gate import LIVE_GATES
+    assert LIVE_GATES == frozenset(GATES[GATES.index("paper_to_tiny_live"):])
 
 
 def test_operational_has_no_lots_p_target_or_cost_parameter(tmp_path):

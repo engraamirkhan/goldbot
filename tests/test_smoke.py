@@ -73,6 +73,11 @@ class Terminal:
         self.next_id = 1000
         self.place_raises: Exception | None = None
         self.fill_on_raise = False
+        self.closed_on_raise = False
+        self.result_none = False
+        self.comment_as: str | None = None           # a broker that rewrites the order comment
+        self.sl_shift = 0.0                          # a broker that stores another stop or target than was sent
+        self.tp_shift = 0.0
         self.protect = True
         self.close_ok = True
         self.raises: dict[str, Exception] = {}
@@ -124,21 +129,27 @@ class Terminal:
     def _fill(self, oi: OrderIntent) -> int:
         pid = self.next_id
         self.next_id += 1
+        comment = self.comment_as if self.comment_as is not None else oi.comment
         self.open[pid] = Position(position_id=pid, symbol=oi.symbol, side=oi.side, lots=oi.lots, open_price=self.ask,
-                                  sl=oi.sl if self.protect else None, tp=oi.tp if self.protect else None,
-                                  magic=oi.magic, comment=oi.comment, open_time_utc=self.clock.now(), profit=0.0)
-        self.deals.append({"ts_utc": self.clock.now(), "position_id": pid, "magic": oi.magic, "comment": oi.comment,
+                                  sl=oi.sl + self.sl_shift if self.protect else None,
+                                  tp=oi.tp + self.tp_shift if self.protect else None,
+                                  magic=oi.magic, comment=comment, open_time_utc=self.clock.now(), profit=0.0)
+        self.deals.append({"ts_utc": self.clock.now(), "position_id": pid, "magic": oi.magic, "comment": comment,
                            "entry": 0, "type": 0, "volume": oi.lots, "price": self.ask})
         return pid
 
-    def place_order(self, intent: OrderIntent) -> OrderResult:
+    def place_order(self, intent: OrderIntent) -> OrderResult | None:
         self.log.append("place_order")
         self.sent.append(intent)
         if self.place_raises is not None:
             if self.fill_on_raise:
-                self._fill(intent)
+                pid = self._fill(intent)
+                if self.closed_on_raise:              # filled and stopped out before anyone looked
+                    self.close(pid)
             raise self.place_raises
         pid = self._fill(intent)
+        if self.result_none:
+            return None
         return OrderResult(ok=True, retcode=10009, order_id=pid, position_id=pid, filled_lots=intent.lots,
                            price=self.ask)
 
@@ -629,3 +640,162 @@ def test_close_path_never_calls_the_gate(w, monkeypatch):
     w.bus.set_halt(True, "dashboard", "halt")
     _position(w, position_id=9, magic=SMOKE_MAGIC, lots=0.01)
     assert smoke.close_position(w.broker, 9, _io(w)) and 9 not in w.broker.open
+
+
+# ---------------------------------------------------------------------------------------------- review round 1
+def test_a_fill_landing_between_the_positions_and_deals_reads_is_settled_not_reported_closed(w):
+    """Trading-safety HIGH-1 (race probe): after a send that raised, the fill lands after positions() was read and
+    before deals_since(); its entry deal alone must never be reported "already closed" while it is open."""
+    b = w.broker
+    b.place_raises = BridgeUnavailable("bridge place_order: ReadTimeout")
+    real = b.deals_since
+    armed = {"on": True}
+
+    def deals_since(since: pd.Timestamp) -> pd.DataFrame:
+        if armed["on"] and b.sent:
+            armed["on"] = False
+            b._fill(b.sent[-1])
+        return real(since)
+    b.deals_since = deals_since                                              # type: ignore[method-assign]
+    _click(w)
+    rep = _run(w)
+    assert b.open == {} and len(b.closes) == 1 and len(b.sent) == 1
+    assert rep.exit_code == smoke.EXIT_OK and rep.position_id == 1000
+
+
+def test_entry_deals_without_an_exit_deal_keep_polling_then_exit_6(w):
+    """HIGH-1: an entry deal whose position is never listed and has no exit deal is not "closed": UNKNOWN."""
+    b = w.broker
+    b.place_raises = BridgeUnavailable("bridge place_order: ReadTimeout")
+    b.fill_on_raise = True
+    real = b.positions
+    b.positions = lambda magic_prefix=None: [] if b.sent else real()        # type: ignore[method-assign]
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_UNKNOWN and len(b.sent) == 1 and w.clock.t >= 25.0
+    assert "UNKNOWN" in _alerts(w)
+
+
+def test_entry_and_exit_deals_found_after_a_timeout_report_closed(w):
+    b = w.broker
+    b.place_raises = BridgeUnavailable("bridge place_order: ReadTimeout")
+    b.fill_on_raise = b.closed_on_raise = True
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_OK and "already closed" in rep.outcome and b.open == {}
+    assert len(b.sent) == 1
+
+
+def test_a_fill_not_listed_is_closed_and_exits_1_unverified(w):
+    """Trading-safety MEDIUM-2 (race probe): a fill whose stop and target were never seen is not a success."""
+    b = w.broker
+    real = b.positions
+    b.positions = lambda magic_prefix=None: [] if b.sent else real()        # type: ignore[method-assign]
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_FAILED and "unverified" in rep.outcome
+    assert b.closes == [1000] and b.open == {}
+
+
+@pytest.mark.parametrize("sl_shift, tp_shift", [(0.05, 0.0), (0.0, -0.05), (2.0, 0.0), (0.0, -2.0)])
+def test_a_fill_whose_stop_or_target_differs_from_the_order_is_closed_and_exits_1(w, sl_shift, tp_shift):
+    """MEDIUM-2: sl and tp must equal the order's within one point and sit either side of the open (buy:
+    sl < open < tp); (2.0, 0) puts the stop above the open, (0, -2.0) the target below it."""
+    w.broker.sl_shift, w.broker.tp_shift = sl_shift, tp_shift
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_FAILED and "unverified" in rep.outcome and w.broker.open == {}
+
+
+def test_a_stop_and_target_within_one_point_of_the_order_verify(w):
+    w.broker.sl_shift, w.broker.tp_shift = 0.01, -0.01
+    _click(w)
+    assert _run(w).exit_code == smoke.EXIT_OK and w.broker.open == {}
+
+
+def test_a_none_result_is_ambiguous_and_resolved_by_the_look_up(w):
+    """LOW-4: a send that returns None is ambiguous (never an assert): the look-up finds the fill and closes it."""
+    w.broker.result_none = True
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_OK and len(w.broker.sent) == 1 and w.broker.open == {}
+
+
+def test_a_rewritten_comment_is_matched_by_magic_and_open_time(w):
+    """LOW-5: a broker that rewrites the comment: the fill is found by its magic, opened at or after the send."""
+    b = w.broker
+    b.place_raises = BridgeUnavailable("bridge place_order: ReadTimeout")
+    b.fill_on_raise = True
+    b.comment_as = "[sl 2399.20]"
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_OK and b.open == {} and len(b.sent) == 1
+
+
+def test_a_position_opened_before_the_send_is_not_taken_for_the_fill(w):
+    """LOW-5's guard: magic alone matches only a position opened at or after the send."""
+    b = w.broker
+    _position(w, position_id=5, magic=SMOKE_MAGIC, lots=0.01, comment="older",
+              open_time_utc=T0 - pd.Timedelta(hours=1))
+    old = b.open.pop(5)
+    b.place_raises = BridgeUnavailable("bridge place_order: ReadTimeout")
+    real = b.positions
+    b.positions = lambda magic_prefix=None: [*real(), old] if b.sent else real()   # type: ignore[method-assign]
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_UNKNOWN and 5 not in b.closes
+
+
+def test_an_error_inside_the_locked_run_is_not_reported_as_a_lock_failure(w):
+    """LOW-4: only the lock's own acquisition maps to "cannot take the lock"."""
+    def engine_state(acc_id: str) -> str:
+        raise PermissionError("systemctl denied")
+    io = _io(w).model_copy(update={"engine_state": engine_state})
+    with pytest.raises(PermissionError):
+        smoke.run_smoke(w.broker, w.bus, w.acc, w.state, now=w.clock.now, cfg=_cfg(w), compat=w.compat, io=io)
+    assert w.broker.sent == []
+
+
+def test_a_planted_lock_symlink_is_refused(w, tmp_path):
+    """Security: the lock is opened O_NOFOLLOW | O_CLOEXEC and must be a regular file this user owns."""
+    target = tmp_path / "elsewhere"
+    target.write_text("keep")
+    (w.state / ".smoke-icm-demo.lock").symlink_to(target)
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_PRECONDITION and w.broker.sent == [] and target.read_text() == "keep"
+
+
+def test_a_lock_that_is_not_a_regular_file_is_refused(w):
+    import os
+    os.mkfifo(w.state / ".smoke-icm-demo.lock")
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_PRECONDITION and w.broker.sent == []
+
+
+def test_the_lock_is_not_inherited_by_child_processes(w):
+    import fcntl
+    import os
+    lock = w.state / ".smoke-icm-demo.lock"
+    with smoke.smoke_lock(w.state, "icm-demo"):
+        ident = (lock.stat().st_dev, lock.stat().st_ino)
+        mine = []
+        for fd in range(3, 256):
+            try:
+                st = os.fstat(fd)
+            except OSError:
+                continue
+            if (st.st_dev, st.st_ino) == ident:
+                mine.append(fd)
+        assert mine and all(fcntl.fcntl(fd, fcntl.F_GETFD) & fcntl.FD_CLOEXEC for fd in mine)
+
+
+def test_a_bridge_on_another_commit_refuses_exit_4(w):
+    """SRE S1: the MT5 box must run this commit (F4 lives there): deploy it to the MT5 box first."""
+    w.compat = BridgeCompat(status="ok", reason="ok", commit_differs=True, bridge_commit="aaaaaaa",
+                            brain_commit="bbbbbbb")
+    _click(w)
+    rep = _run(w)
+    assert rep.exit_code == smoke.EXIT_PRECONDITION and w.broker.sent == []
+    assert "MT5 box" in "\n".join(w.out)
