@@ -23,6 +23,7 @@ waiting to be committed.
 | `ledger-YYYY-MM.md` | monthly, from the first month with a closed trade | Gross P&L, each trading cost on its own line (spread, commission, swap, slippage against the decision price), net P&L, each running cost, and the tie-out to the broker balance |
 | `audit-YYYY-MM.md` | monthly, plus one after every deploy (`audit-YYYY-MM-DD-deploy.md`) | The checks in `audit-framework.md`, each with its result, evidence, sample size, severity and owner |
 | `recommendations-YYYY-MM.md` | monthly | A ranked list for the program-director and research-director, each item with its expected £ effect or the risk it avoids, a measurement and an owner, plus owner decisions with options |
+| `capital-plan.md` | quarterly, before each research freeze, and when a phase gate is recorded (CFO) | The account, the north star in % of equity, the growth path through the phase gates, the risk appetite, the leverage review and the owner-only capital recommendations |
 | `audit-framework.md` | changes only through review | The check catalogue: source, method, pass/fail threshold, owner, and whether today's data can compute it (GAP list) |
 
 ## Sources (read only)
