@@ -14,3 +14,6 @@ reserved:
   - number: 26
     slug: core-db-cutover-and-rollback
     by: CTO register 2026-10-16, docs/process/tech-debt.md TD-12
+  - number: 27
+    slug: bridge-lot-ceiling
+    by: CTO register 2026-10-16, docs/process/tech-debt.md TD-16
