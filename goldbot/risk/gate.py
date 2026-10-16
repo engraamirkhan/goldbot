@@ -223,6 +223,10 @@ class OperationalIntent(Record):
 # ADR 0021 (F2): an operational stop is never closer than this (USD per oz), nor than the stops level plus the spread.
 # 0.01 lot x 100 oz x $1.00 = $1 at the stop: the smoke's whole risk
 OPERATIONAL_MIN_STOP_USD = 1.0
+# ADR 0021 F1 (trading-safety INFO-6): any of these recorded refuses an operational order, not only the first, so a
+# phase file edited by hand cannot reopen it. The roadmap gates from paper_to_tiny_live on (goldbot/ops/accounts.py
+# GATES; tests/test_risk_gate_split.py keeps the two equal)
+LIVE_GATES = frozenset({"paper_to_tiny_live", "tiny_live_to_full_size"})
 
 
 def phase_gates(path: Path) -> list[str] | None:
@@ -654,8 +658,8 @@ class RiskGate:
         model checks, by name: `time_exit_ev_unsupported`, `negative_ev`, `target_below_cost_floor`,
         `standard_account_edge`, `standard_account_15m` (S6). It takes no p, target, cost or lots.
 
-        * F1: refused `operational_not_demo` unless `account_mode == "demo"` and `paper_to_tiny_live` is not in the
-          phase file's `gates_passed`; a missing phase file is phase 0, an unreadable or malformed one refuses.
+        * F1: refused `operational_not_demo` unless `account_mode == "demo"` and no gate from `paper_to_tiny_live` on
+          (LIVE_GATES) is in the phase file's `gates_passed`; a missing phase file is phase 0, an unreadable or malformed one refuses.
         * F2: the size is exactly `volume_min` rounded down to `volume_step` (`invalid_volume` when that is no lot or
           above `volume_max`); the per-trade cap (`max_risk_per_trade`, halved in size-down) refuses it
           `min_lot_exceeds_risk`. The stop is `sizing.stop_distance` floored at OPERATIONAL_MIN_STOP_USD: at or beyond
@@ -664,7 +668,7 @@ class RiskGate:
         Entries only; exits never call it."""
         L = self.limits
         gates = phase_gates(intent.phase_file) if intent.account_mode == "demo" else None
-        head = [] if gates is not None and "paper_to_tiny_live" not in gates else ["operational_not_demo"]
+        head = [] if gates is not None and not LIVE_GATES & set(gates) else ["operational_not_demo"]
         bad = invalid_state_fields(st) + [f for f in _OPERATIONAL_NUMBERS if _bad(intent, f, _POSITIVE_OPERATIONAL)]
         reasons, refused = self._account_gate(st, bad, now_utc, None)
         if refused is not None:
