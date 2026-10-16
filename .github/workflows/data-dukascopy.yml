@@ -59,11 +59,24 @@ jobs:
         with: { node-version: "22" }
       - run: pip install -e .
       - name: fetch the previously published year (complete months are kept unless full_refresh)
+        id: prev
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           mkdir -p prev
-          gh release download data-v1 -p "xauusd_1m_dukascopy_${YEAR}.parquet" -D prev || echo "no previous file"
+          # no previous file only when the release (or this year's asset) is confirmed missing; any other error (API,
+          # auth, network) fails here instead of rebuilding the year from scratch and clobbering the published months
+          if ! assets=$(gh release view data-v1 --json assets --jq '.assets[].name' 2> view.err); then
+            cat view.err
+            if grep -qi "release not found" view.err; then echo "first run: release data-v1 does not exist"; exit 0; fi
+            echo "::error::cannot read release data-v1; refusing to treat this as a first run"; exit 1
+          fi
+          if ! grep -qx "xauusd_1m_dukascopy_${YEAR}.parquet" <<< "$assets"; then
+            echo "first run: release data-v1 has no xauusd_1m_dukascopy_${YEAR}.parquet"; exit 0
+          fi
+          gh release download data-v1 -p "xauusd_1m_dukascopy_${YEAR}.parquet" -D prev
+          test -s "prev/xauusd_1m_dukascopy_${YEAR}.parquet"
       - name: download and build 1m bars for ${{ matrix.year }}
         env:
           REFETCH: ${{ inputs.full_refresh == true && '--refetch-all' || '' }}
@@ -82,7 +95,7 @@ jobs:
           # exit 1 means gap days were found: reported on the coverage issue, never a reason to drop the build
           python scripts/check_coverage.py "xauusd_1m_dukascopy_${YEAR}.parquet" --report "daycov-${YEAR}.md" || true
       - name: publish to release data-v1
-        if: always()
+        if: always() && steps.prev.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

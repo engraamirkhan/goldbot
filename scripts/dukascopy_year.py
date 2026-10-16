@@ -298,7 +298,10 @@ def main() -> int:
         print(f"QUARANTINED {len(held):,} bars with an error flag -> {held_path}")
     out["source"] = "dukascopy"
     path = args.out or f"xauusd_1m_dukascopy_{args.year}.parquet"
-    out.to_parquet(path, compression="zstd", index=False)
+    # write then rename: a run killed mid-write (job timeout) never leaves a truncated file for the publish step
+    tmp_path = f"{path}.tmp"
+    out.to_parquet(tmp_path, compression="zstd", index=False)
+    os.replace(tmp_path, path)
     print(f"wrote {path}: {len(out):,} bars, {len(dq)} dq events")
     shutil.rmtree(args.tmp, ignore_errors=True)
     missing = [m for m, n, s, t in rows if s == "MISSING"]
