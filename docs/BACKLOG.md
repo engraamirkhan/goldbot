@@ -44,7 +44,7 @@ re-reviews were asked on 2026-10-12 and have not started; the reviewed batch has
 | 48 | H-06 macro-gate preset on slow tsmom, with its event count | Idea generation · FIND | S | done (preset `slow_macro` and `count_h06` on `main`, `d2f18c6`; counted 2026-10-16 by count-owed-events run 38931951849 on `macro-v1`: 1,105 signals, one-at-a-time lower bound 107 < 150; quant reviewer confirmed `count_h06` 2026-10-16, so H-06 is withdrawn by its pre-registered rule; run-input table written 2026-10-16 as the record; withdrawal in the spec + reservation 8 and the lower-bound one-bar fix done 2026-10-16 by the implementer on `lane/h06-withdraw-lowerbound`, quant review pending; count-owed-events re-dispatch after merge) · accountable: strategy-researcher · due 2026-10-23 |
 | 45 | Measure the holiday list before it is adopted | Operational risk (evidence) · RUN | S | ready · accountable: performance-analyst · due 2026-10-30 |
 | 56 | Digest Yesterday line on the opportunity day | Performance review · RUN | S | in progress (`lane/digest-yesterday`; its one commit, 21c84d8, is an unrelated help-text fix) · accountable: implementer · due 2026-10-19 |
-| 59 | Engine state keeps moving on the host clock while the market is closed | Operational resilience · RUN | S | done (lane market-closed-state-cadence, 2026-10-16; trading-safety and SRE review pending) |
+| 59 | Engine state keeps moving on the host clock while the market is closed | Operational resilience · RUN | S | done (lane market-closed-state-cadence, 2026-10-16; review fixes in, re-review pending) |
 | 58 | Fail closed on heartbeats stamped in the future | Execution and risk (supervisor) · PROTECT | S | done 2026-10-16 (needs trading-safety and SRE review) |
 | 60 | Approval window expiry trusts a future-stamped proposal | Approvals (owner confirms entries, 90 s) · PROTECT | S | proposed (trading-safety and SRE review of BACKLOG 58, 2026-10-16; owner of the fix trading-safety-reviewer, built by the implementer; due 2026-10-23) |
 
@@ -871,11 +871,15 @@ hypotheses that go through the trial registry in a future quarter's budget.
   the tick-time state cadence (`state_every_s`) never fired. `engine_<acct>.json` went stale, and health compared its
   `bridge_compat.checked_at` with the wall clock: FAIL after 5 min, a Healthchecks.io `/fail` every 2 min all
   weekend, and a FAIL/recovered pair every weekday evening, which masks a real outage. Acceptance:
-  - on the live clock the state file is rewritten every `state_every_s` of host time when no write happened (any
-    write restarts it), so `bridge_compat:<acct>` and `engine:<acct>` stay OK through a frozen-tick weekend and the
+  - on the live clock, and only while the session table has the market closed, the state file is rewritten every
+    `state_every_s` of host time when no write happened (any write restarts it; a host clock stepped back rewrites
+    it in any session; an unreadable session table never does), so `bridge_compat:<acct>` and `engine:<acct>` stay OK through a frozen-tick weekend and the
     daily break (`tests/test_closed_market_state_cadence.py`);
   - the age rules are not skipped: an engine that writes nothing still FAILs `bridge_compat` on the weekend and
-    `engine` after the reopen;
+    `engine` after the reopen, and a feed frozen in an OPEN session still FAILs `bridge_compat` after 5 min and
+    `engine` after 45 min (review HIGH);
+  - the dashboard's entry status shows only "Market closed", not "stale data", when the engine says the market is
+    closed;
   - the host-clock write only republishes: no account read, no stage machine, kill switch, weekend rule or other
     exit step, and no EngineState field changes; `last_tick_age_s`, `tick_ahead_s` and `market_closed` in the file
     are restated on the host clock so they stay true;

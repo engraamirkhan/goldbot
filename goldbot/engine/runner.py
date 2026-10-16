@@ -183,8 +183,9 @@ class EngineConfig(Record):
     live_clock: bool = False
     # between bar closes the account is refreshed (drawdown stages, kill switch, halts) and the state file written
     # this often (tick time), so the supervisor's combined caps and the 12% kill switch act within seconds. On the live
-    # clock the file is also rewritten this often on the host clock while no tick time passes (weekend, daily break:
-    # the terminal repeats its last quote), republishing only (BACKLOG 59), so health's age rules see a live engine
+    # clock the file is also rewritten this often on the host clock while the session table has the market closed
+    # (weekend, daily break: the terminal repeats its last quote), republishing only (BACKLOG 59), so health's age
+    # rules see a live engine; in market hours a frozen feed still lets the file age and health FAIL
     state_every_s: int = 10
     stale_feed_s: int = 90                   # no tick for this long in an open session -> data-quality error
     healthy_resume_s: int = 60               # after stale data or a data-quality error, entries wait this long healthy
@@ -594,16 +595,25 @@ class Engine:
         return out
 
     def _state_heartbeat_due(self) -> bool:
-        """BACKLOG 59: on the live clock, no state write for state_every_s of HOST time (a host clock stepped back
-        counts as due). With the market closed the tick stamp is frozen, so the tick-time cadence above never fires
-        and health would read a live engine's file (bridge_compat `checked_at`, `ts`) as hours old. Replays and
-        backtests (tick clock only) never take this path."""
+        """BACKLOG 59: on the live clock, with the market CLOSED per the session table, no state write for
+        state_every_s of HOST time. With the market closed the tick stamp is frozen, so the tick-time cadence above
+        never fires and health would read a live engine's file (bridge_compat `checked_at`, `ts`) as hours old.
+        Never in an open session (review HIGH): a frozen feed in market hours must leave the file to age, so health
+        FAILs it (bridge_compat after 5 min, engine after 45 min) as before. A session table that cannot be read is
+        not due (fail toward the alert). A host clock stepped back is due in any session, so the file never keeps a
+        stamp from the future (BACKLOG 58). Replays and backtests (tick clock only) never take this path."""
         if not self.cfg.live_clock:
             return False
-        if self._state_written_host is None:
+        now = self.clock()
+        elapsed = math.inf if self._state_written_host is None else (now - self._state_written_host).total_seconds()
+        if elapsed < 0:
             return True
-        elapsed = (self.clock() - self._state_written_host).total_seconds()
-        return elapsed >= self.cfg.state_every_s or elapsed < 0
+        if elapsed < self.cfg.state_every_s:
+            return False
+        try:
+            return self.sessions.entry_block(now) is not None
+        except Exception:
+            return False
 
     def _write_heartbeat(self) -> None:
         """The host-clock state write (BACKLOG 59): it republishes and decides nothing. No account read, no stage

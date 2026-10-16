@@ -63,6 +63,14 @@ def test_market_closed_says_when_it_reopens_and_that_nothing_needs_doing():
     assert "reopens by itself" in b.fix
 
 
+def test_a_live_engine_on_a_closed_market_shows_market_closed_not_stale_data():
+    """BACKLOG 59: the weekend heartbeat publishes an hours-old tick and stale bars with market_closed; no fault."""
+    s = status(engine(market_closed=True, ts=SAT.timestamp(), last_tick_age_s=13 * 3600.0, stale_bars=True), now=SAT)
+    assert codes(s) == ["market_closed"] and s.state == "waiting"
+    opened = status(engine(last_tick_age_s=13 * 3600.0, stale_bars=True))      # the same feed in market hours
+    assert "stale_data" in codes(opened)
+
+
 def test_server_clock_mismatch_points_to_the_runbook_and_needs_the_owner():
     s = status(engine(server_clock={"status": "mismatch", "reason": "server clock reads UTC+3, Europe/Athens gives UTC+2"}))
     [b] = s.blocks

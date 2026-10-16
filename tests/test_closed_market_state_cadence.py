@@ -2,6 +2,7 @@
 the HOST clock, so health's age rules (bridge_compat `checked_at`, the engine's `ts`) see a live engine; a dead engine
 (no writes) still fails, and the heartbeat neither reads the account nor runs a risk or exit step."""
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from goldbot.data.timeutil import heartbeat_problem
 from goldbot.engine import runner
 from goldbot.engine.runner import Engine
 from goldbot.execution.bridge import API_VERSION, MIN_COMPATIBLE
@@ -180,3 +182,49 @@ def test_a_replay_on_the_tick_clock_is_unchanged(tmp_path, frozen):
     start = writes[0]
     _closed_loop(eng, pb, host, 300)
     assert writes[0] == start
+
+
+WED_OPEN = pd.Timestamp("2026-10-14 14:00:00", tz="UTC")     # market hours: gold trades
+
+
+@pytest.mark.parametrize("minutes, bc_status, engine_status", [(4, "ok", "ok"), (6, "fail", "ok"), (25, "fail", "warn"),
+                                                                (50, "fail", "fail")])
+def test_a_frozen_feed_in_market_hours_is_never_masked_and_fails_health(tmp_path, frozen, minutes, bc_status,
+                                                                         engine_status):
+    """Review HIGH: the heartbeat writes only while the market is closed, so a quote frozen in an OPEN session leaves
+    the file to age: bridge_compat FAILs after 5 min and engine after 45 min, as before BACKLOG 59."""
+    eng, pb, host, writes = frozen(WED_OPEN)
+    start = writes[0]
+    _closed_loop(eng, pb, host, minutes * 60, step_s=2)
+    assert writes[0] - start <= 1                               # at most the clock-due bar close, no heartbeat
+    bc, engine = _checks(tmp_path, host[0])
+    assert bc.status == bc_status, bc.reason
+    assert engine.status == engine_status, engine.reason
+    if engine_status == "fail":
+        assert "while the market is open" in engine.reason
+
+
+def test_an_unreadable_session_table_never_takes_the_heartbeat(tmp_path, frozen, monkeypatch):
+    eng, pb, host, writes = frozen(FRI_LAST)
+    host[0] += pd.Timedelta(minutes=10)
+
+    def broken(self: Any, now: pd.Timestamp) -> str | None:
+        raise ValueError("table")
+
+    monkeypatch.setattr(type(eng.sessions), "entry_block", broken)
+    assert eng._state_heartbeat_due() is False                  # fail toward the alert, never toward a quiet file
+
+
+@pytest.mark.parametrize("start", [FRI_LAST, WED_OPEN])
+def test_a_host_clock_stepped_back_rewrites_the_state_in_any_session(tmp_path, frozen, start):
+    """BACKLOG 58: a file stamped in the future reads as a fault; a backward host step rewrites it at once, open or
+    closed market."""
+    eng, pb, host, writes = frozen(start)
+    _closed_loop(eng, pb, host, 120)
+    before = _state(tmp_path)["ts"]
+    host[0] = pd.Timestamp(before, unit="s", tz="UTC") - pd.Timedelta(seconds=60)   # NTP steps it back 60 s
+    assert heartbeat_problem(before, host[0].timestamp(), math.inf) == "future"
+    host[0] += pd.Timedelta(seconds=0.25)
+    assert engine_pass(eng, pb, "XAUUSD")
+    after = _state(tmp_path)["ts"]
+    assert after != before and heartbeat_problem(after, host[0].timestamp(), math.inf) is None
