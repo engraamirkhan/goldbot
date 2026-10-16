@@ -121,6 +121,9 @@ sudo -u mt5 -H bash -lc "
   echo '$PY_SHA256  python-installer.exe' | sha256sum -c -     # refuse a changed installer before Wine runs it
   wine python-installer.exe /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
   rm -f python-installer.exe
+  # The MetaQuotes generic installer, kept on purpose (docs/decisions/0020-mt5-installer-generic-plus-company-search.md):
+  # it ships NO IC Markets servers, so File > Login to ICMarketsSC-Demo silently never connects until the owner adds
+  # the company once with File > Open an Account > ICMarkets > Raw Trading Ltd (RUNBOOK 0.3)
   curl -fsSLo mt5setup.exe https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe
   # mt5setup exits 1 even after a complete /auto install, so success is the installed terminal, not the exit code
   wine mt5setup.exe /auto /path:'C:\\MT5\\ICMarkets' || true
@@ -176,4 +179,6 @@ echo mt5 > /etc/goldbot/role
 install -m 755 -o root -g root "$OPS/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
 # the MT5 box is updated by hand only (sudo goldbot-deploy latest): no deploy timer here
 
-echo "MT5 box installed. Next: log in to MT5 once over VNC, then bridge-serve (docs/RUNBOOK.md)."
+echo "MT5 box installed. Next: log in to MT5 once over VNC, then bridge-serve (docs/RUNBOOK.md 0.3)."
+echo "The terminal has no IC Markets servers yet: log in through File > Open an Account > ICMarkets > Raw Trading Ltd,"
+echo "not File > Login (that never connects until the company is added)."

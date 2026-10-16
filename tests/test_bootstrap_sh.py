@@ -185,3 +185,23 @@ def test_every_windows_python_call_uses_the_absolute_path():
     assert f"WINPY={winpy}\n" in texts["deploy"]
     assert 'wine "$WINPY" -m pip install' in texts["deploy"] and 'wine $WINPY"' in texts["deploy"]
     assert "wine '$WINPY' -m pip install" in texts["bootstrap"] and "wine '$WINPY' -c" in texts["bootstrap"]
+
+
+def test_the_installer_is_the_generic_metaquotes_one_and_the_login_flow_is_named():
+    """ADR 0020: the generic mt5setup ships no IC Markets servers, so File > Login to ICMarketsSC-Demo never connects
+    (incident 2026-10-16-mt5-login-generic-installer). The installer stays MetaQuotes' own host; the bootstrap and the
+    RUNBOOK name the flow that adds the servers (File > Open an Account > Raw Trading Ltd)."""
+    s = _text("mt5")
+    code = "\n".join(_code(s))
+    urls = re.findall(r"https://\S+mt5setup\.exe|https://\S+setup\.exe", code)
+    assert urls == ["https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"], urls
+    assert "0020-mt5-installer-generic-plus-company-search.md" in s
+    assert (LINUX.parents[2] / "docs" / "decisions" / "0020-mt5-installer-generic-plus-company-search.md").is_file()
+    tail = s.rsplit("cat > /usr/local/bin/goldbot-mt5 <<'WRAP'", 1)[1]
+    assert "File > Open an Account > ICMarkets > Raw Trading Ltd" in tail
+    runbook = (LINUX.parents[2] / "docs" / "RUNBOOK.md").read_text(encoding="utf-8")
+    section = runbook.split("### 0.3 The MT5 box", 1)[1].split("### 0.4", 1)[0].replace("**", "")
+    section = " ".join(section.split())
+    for step in ("File -> Open an Account", "Raw Trading Ltd", "Connect with an existing trade account",
+                 "Config/servers.dat", "-10005"):
+        assert step in section, step
