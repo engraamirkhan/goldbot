@@ -136,6 +136,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   been run against a server. Order of work for the
   demo run: update the MT5 box first (F4), then RUNBOOK 0.4 "Bridge smoke". Reviews due: trading-safety (gate split,
   order/close path), security (masked login, lock mode), SRE (RUNBOOK steps).
+- **W1-1 review round 1 fixed (implementer, 2026-10-16; reviews of 8945bdc: trading-safety CHANGES, security
+  PUSH-OK, SRE CHANGES).** Tests first: fe2a061 (12 smoke and 3 gate tests failing), then fixes.
+  * 5a984b5: the F5 grid now has 960 cases, recaptured from 9f04599's gate.py, and reaches heat_cap, the minimum-lot
+    paths and weekly_cap.
+  * c8e7a85: F1 refuses on any live gate.
+  * 70065cc, the look-up after a send that raised: deals are read before positions, and "already closed" needs an
+    exit deal (HIGH-1).
+  * 70065cc, the fill check: the fill's sl/tp must match the order's within one point (MEDIUM-2). The lock is opened
+    O_NOFOLLOW | O_CLOEXEC, as an owned regular file. A bridge on another commit exits 4.
+  * The RUNBOOK lists the preconditions (classifier, tmux, no deploy, always restart the engine) and an action for
+    each exit code.
+
+  Re-review pending.
 - **Engine state keeps moving while the market is closed (2026-10-16; BACKLOG 59; trading-safety and SRE review
   pending).** The engine wrote `engine_<acct>.json` on tick time only. With the market closed the tick stamp is
   frozen, so the file stopped, and health failed `bridge_compat:<acct>` once its `checked_at` was 5 min old: a

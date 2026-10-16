@@ -165,26 +165,53 @@ positions keep their broker-side stop and target.
 #### Bridge smoke (BACKLOG 1: one real 0.01-lot round trip, demo only)
 Proves the brain can trade the demo terminal through the bridge: it prints the login (masked, `****123`), server,
 balance and a live XAUUSD tick, then, after **your one click**, buys the minimum lot with a stop and target about
-$1 away and closes it at once. It refuses anything but a demo account (exit 2), and it runs only with the market
-open. The engine must have run once on this account (its `state/risk_icm-demo.json` holds the day start and the
-high-water mark the limits are judged by). Then, on the brain:
+$1 away and closes it at once. It refuses anything but a demo account (exit 2).
+
+Before you start, check all of these:
+* the market is open (not the weekend, not the daily break around 22:00 UTC);
+* the MT5 box runs the same commit as the brain (`sudo goldbot-deploy latest` on it first). Its bridge refuses the
+  smoke's order unless the terminal reports a demo account, and the smoke refuses a bridge on another commit (exit 4);
+* the engine has run once on this account: `state/risk_icm-demo.json` exists (the day start and high-water mark the
+  limits are judged by);
+* `state/classifier_icm-demo.json` shows `"class": "raw"` or `"standard"`. While it is missing or `unknown` the
+  RiskGate refuses (exit 7) until the Friday `nightly_costs` run classifies the account;
+* the supervisor is running (`systemctl is-active goldbot-supervisor` says `active`);
+* no deploy is waiting for you: do **not** approve a Telegram *Deploy* until the smoke has finished.
+
+Then, on the brain, inside `tmux` (so a dropped SSH connection cannot kill it mid-order):
 ```bash
+tmux new -s smoke
 sudo systemctl stop goldbot-engine@icm-demo     # the engine only: KEEP the supervisor running
 sleep 160                                       # the smoke waits for the engine heartbeat to be 150 s old
 goldbot run bridge-smoke icm-demo               # approve the card on Telegram or the dashboard within 90 s
-sudo systemctl start goldbot-engine@icm-demo
+sudo systemctl start goldbot-engine@icm-demo    # ALWAYS run this line, whatever the exit code
 ```
-Paste the output on issue #34 (it never shows the full login). Exit codes: 0 opened and closed; 1 failed with nothing
-left open (the broker rejected it, or the fill had no stop or target and was closed); 2 not a demo terminal of this
-account; 3 not approved (no click within 90 s, or rejected): nothing was sent; 4 a precondition (engine running or its
-heartbeat under 150 s old, another smoke running, a state file or the calendar unreadable, no bridge endpoint):
-nothing was sent; 5 **LEFT OPEN**: a smoke position could not be closed after three tries, close it in the terminal
-(magic 260199 on icm-demo; Telegram also says so); 6 **UNKNOWN**: the order call failed and no fill was found within
-25 s: look in the terminal for magic 260199 and close it by hand if it is there (it is never sent twice); 7 the
-RiskGate refused (the reasons are printed: a halt, a cap, stale data, the news blackout...). A leftover smoke position
-from an earlier run is closed before a new one is opened. The smoke's position is listed apart in the broker ledger
-(`smoke_positions`), not as a missing trade. Update the MT5 box first: its bridge refuses the smoke's magic unless the
-terminal reports a demo account.
+Once it prints `sending BUY`, never press Ctrl-C and never close the SSH session until it prints its exit line: the
+order may already be at the broker, and only the smoke itself looks for it and closes it. While the engine is stopped,
+expect the health alert for the engine loop (`engine_loop:icm-demo` FAIL) on Telegram; it clears once the engine is
+started again.
+
+Paste the output on issue #34 (it never shows the full login). What each exit code means, and what to do:
+* **0**: opened and closed. Nothing to do.
+* **1**: failed with nothing left open. Either the broker rejected the order, or the fill's stop or target was
+  missing or not what was sent (`closed, unverified`) and it was closed at once. A Python traceback before
+  `sending BUY` also exits 1; then nothing was sent. Read the last lines and re-run once the cause is fixed.
+* **2**: the terminal is not the demo account of `icm-demo`. Nothing was sent.
+* **3**: not approved (no click within 90 s, or you rejected it). Nothing was sent.
+* **4**: a precondition failed and nothing was sent. The usual causes: the engine is still running or its heartbeat
+  is under 150 s old (wait and re-run); `state/risk_icm-demo.json` is missing (start the engine once); the calendar
+  archive is empty (the news service has not fetched the week yet); the supervisor is down (start it); another smoke
+  holds the lock; the MT5 box runs another commit; no bridge endpoint in the keyring.
+* **5 LEFT OPEN**: a smoke position could not be closed after three tries (Telegram says so too). Close it
+  **before** restarting the engine: re-run the smoke (it closes a leftover smoke position first, then stops if it
+  cannot), or open the terminal over VNC (0.3) and close the position with magic 260199 by hand.
+* **6 UNKNOWN**: the order call failed and no fill was found within 25 s (it is never sent twice). Look for a
+  position with magic 260199: re-run the smoke (it closes a leftover first) or use VNC (0.3), and close it before
+  restarting the engine.
+* **7**: the RiskGate refused; the reasons are printed. Common ones: `account_class_unknown` (see above),
+  `bridge_incompatible` (update the MT5 box), a halt, a cap, stale data, the news blackout.
+
+The smoke's position is listed apart in the broker ledger (`smoke_positions`), not as a missing trade.
 
 ### 0.5 Daily use
 Only your Mac's browser (the dashboard) and Telegram (the one-click Approve).
