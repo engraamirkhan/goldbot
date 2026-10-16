@@ -1,6 +1,5 @@
 ---
 number: 58
-rank: 4
 title: Fail closed on heartbeats stamped in the future
 stage: Execution and risk (supervisor) · PROTECT
 size: S

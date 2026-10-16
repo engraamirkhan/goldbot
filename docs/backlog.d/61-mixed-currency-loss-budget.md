@@ -4,7 +4,7 @@ rank: 11
 title: 'Mixed-currency accounts: the loss budget shows the account cap, not the combined cap'
 stage: Dashboard and Telegram (loss budget, ADR 0004 section 3) · PROTECT
 size: S
-status: 'built on lane/mixed-currency-budget 2026-10-16, awaiting trading-safety, code and UX review (builds on 8d020a7 + 7368f61) · accountable: implementer · due 2026-10-30'
+status: 'merged on the integration branch 2026-10-16 at 921a38a (4c3d087 + ecce681; trading-safety APPROVE, code-review APPROVE + PUSH-OK, ui-ux copy approved, per the merge message); ships in the next PR; product-owner acceptance at that PR; follow-ups L1/L2 in BACKLOG 65 · accountable: release-manager · due 2026-10-23'
 ---
 - **61. Mixed-currency accounts: the loss budget shows the account cap, not the combined cap (UX review,
   2026-10-16).** Value: with accounts in more than one currency, `account_view._combined`

@@ -1,6 +1,6 @@
 ---
 number: 36
-rank: 9
+rank: 8
 title: Round-trip costs in the daily £ projection (review LOW-6)
 stage: Capital and drawdown management · RUN
 size: S

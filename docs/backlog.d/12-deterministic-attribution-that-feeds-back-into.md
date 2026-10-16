@@ -27,3 +27,4 @@ change to research budget allocation, so it needs quant review and its own test)
 and web/ were out of scope), live realised R (item 8's engine trade record). Row G12.
 
 Sweep 2026-10-16 (product owner): Done in part (PR #63 490ebe4, PR #68 c2cd051); dashboard view parked. Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+  Note 2026-10-16: the daily digest's attribution line uses `verdict_adj` (the Bonferroni-adjusted row verdict, docs/ux/progress-screens.md), not the raw verdict. Already decided; it is being built in the attribution lane (ROADMAP W2-3). Acceptance there: the digest line's verdict equals the API row's `verdict_adj` for the same row (test). Decided 2026-10-16 by program director + product owner (owner delegated).

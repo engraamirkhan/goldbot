@@ -33,23 +33,33 @@ start at the reopen (Sun 2026-10-18 22:02 UTC) waits on it. 58, 59 and 60 now na
 36 and 51 are merged on the integration branch and ship in the next PR (release-manager). 13 ranked rows. The
 daily scorecard is `docs/process/scorecards/2026-10-16.md`.
 
+**Decision sweep 2026-10-16 late (program director + product owner, owner delegated; base 3db12c8).** New standing
+rule from the owner: routine product, ops and deploy decisions are made by the program director with the product
+owner and reported to the owner, not asked; safety-touching choices take the conservative option. Recorded today:
+62 (kill switch closes every symbol, rank 5), 63 (card-bound approvals, rank 9), 64 (header shows the role, rank
+12), 65 (review hygiene, rank 15); 12 notes the digest's `verdict_adj` line; 45 carries the holiday-list decision
+schedule (quant ruling 10-23, decision 10-30). 58 and 52 left the table as done (shipped in PR #79). Stale statuses
+fixed: 59 (SRE re-verify on record), 61 (merged at 921a38a), 45 (draft delivered feda07a). 15 ranked rows.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
 | --- | --- | --- | --- | --- |
 | 1 | MT5-under-Wine demo smoke test on Oracle | Operational resilience, execution · RUN | S | in progress (`lane/claude-run-deploy`, plan ccef822) · accountable: release-manager · due 2026-10-18 (re-dated from 2026-10-13: the demo deploy never ran) · LATE |
-| 59 | Engine state keeps moving on the host clock while the market is closed | Operational resilience · RUN | S | in review (6287d10 + review-HIGH fix 412fd0d, merged on the integration branch at a13c8a3, in PR #79; trading-safety and SRE re-verify of 412fd0d not on record) · accountable: implementer · due Sun 2026-10-18 20:00 UTC: reviewed and deployed before the engine start at 22:02 UTC (fallback in ROADMAP section 2) |
+| 59 | Engine state keeps moving on the host clock while the market is closed | Operational resilience · RUN | S | in review (6287d10 + review-HIGH fix 412fd0d, merged at a13c8a3, shipped in PR #79; follow-up 700c116) · SRE re-verify APPROVE 2026-10-16 recorded (handoff 2026-10-16-sre-backlog-59-reverify, d68dfee) · trading-safety APPROVE named in merge 57c2f14 for the SRE lane; a written trading-safety verdict on 412fd0d itself is not on record (E1) · accountable: implementer · due Sun 2026-10-18 20:00 UTC: reviewed and deployed before the engine start at 22:02 UTC (fallback in ROADMAP section 2) |
 | 44 | Confirm a zero or collapsed equity read before the 12% kill switch (ADR 0016) | Execution and risk (drawdown stages) · PROTECT | S | in review (d2f2999, b9e9dac; re-review 2026-10-16 found a save-failure gap, fixed in 869bb04; all in PR #79; trading-safety re-verify of 869bb04 not on record) · accountable: trading-safety-reviewer · due 2026-10-17 |
-| 58 | Fail closed on heartbeats stamped in the future | Execution and risk (supervisor) · PROTECT | S | done (2e87479+55a07e5, shipped in PR #79) · trading-safety-reviewer APPROVE 2026-10-16 at 626b56b: tests/test_heartbeat_clock_ahead.py 19 + approval/engine-safety suites, 77 passed at -n 2 · accountable: trading-safety-reviewer |
-| 52 | Approvals keep only the decision channel on disk and in the API | Execution and risk (approvals) · SECURE | S | done (04f6266, 3817db7, c7ea0e3, eba16e3 shipped in PR #79; d2ecb8f on the integration branch, next PR) · security re-verify PASSED 2026-10-16 (d2ecb8f fixes both LOWs, 4 passed, branch scan 0 secrets, PUSH-OK) · trading-safety-reviewer APPROVE 2026-10-16 at 626b56b (money path unchanged, 127 passed at -n 2) · follow-up: dashboard audit after submit (app.py:617) in the F60 lane · accountable: security-reviewer |
 | 60 | Approval window expiry trusts a future-stamped proposal | Approvals (owner confirms entries, 90 s) · PROTECT | S | changes requested (bf5240b/2bfeb36) · trading-safety-reviewer CHANGES 2026-10-16 at 626b56b: 3 decision paths expire at 90 s and future/NaN stamps are refused (tests/test_approval_window_clock.py); F60-1 LOW a pre-restart click can apply to the same proposal re-raised after a restart (runner.py:486-498, bus.py:186-198); F60-2 LOW checks/services.py:138 reads NaN/future as fine; fix lane running, then re-verify of F60-1/F60-2 only · accountable: implementer, then trading-safety-reviewer · due 2026-10-20 |
+| 62 | The 12% kill switch flattens every position on the account, all symbols | Execution and risk (drawdown stages, ADR 0016) · PROTECT · RUN | S | ready (decided 2026-10-16) · accountable: implementer, then trading-safety-reviewer · due 2026-10-22 (built 10-21, trading-safety verdict 10-22) |
 | 43 | The engine publishes why it refuses entries, and writes state while the market is closed | Operational resilience, entry status · RUN | M | in review: the heartbeat part landed as BACKLOG 59 (6287d10, 412fd0d; in PR #79); the `entry_blocks` part is built on lane/entry-blocks (R43), reviews owed: code, trading-safety, ui-ux · accountable: implementer · due 2026-10-21 |
 | 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | ready (after 1; the collector `jobs._broker_terms` exists) · accountable: sre · due 2026-10-20 |
 | 36 | Round-trip costs in the daily £ projection (review LOW-6) | Capital and drawdown management · RUN | S | merged on the integration branch 2026-10-16 (cca7219 + trading-safety MEDIUM fix 0bfacbf; quant, code and trading-safety reviews done per HANDOFF); not in PR #79, ships in the next PR · accountable: release-manager · due 2026-10-23 |
+| 63 | Card-bound approvals: a tap is bound to the exact card the owner saw | Approvals (owner confirms entries, 90 s) · PROTECT · RUN | S | ready (decided 2026-10-16; starts after 60's fix lane merges, same files) · accountable: implementer, then trading-safety-reviewer · due 2026-10-23 |
 | 51 | VPS monthly loop registry push: re-check the release asset just before upload | Idea generation (integrity) · FIND | S | merged on the integration branch 2026-10-16 (5053d31, review fixes c027221 and cc00630); not in PR #79, ships in the next PR; security re-verify of cc00630 not on record · accountable: release-manager · due 2026-10-23 |
-| 61 | Mixed-currency accounts: the loss budget shows the account cap, not the combined cap | Dashboard and Telegram (loss budget, ADR 0004 section 3) · PROTECT | S | built on lane/mixed-currency-budget 2026-10-16, awaiting trading-safety, code and UX review (builds on 8d020a7 + 7368f61) · accountable: implementer · due 2026-10-30 |
+| 61 | Mixed-currency accounts: the loss budget shows the account cap, not the combined cap | Dashboard and Telegram (loss budget, ADR 0004 section 3) · PROTECT | S | merged on the integration branch 2026-10-16 at 921a38a (4c3d087 + ecce681; trading-safety APPROVE, code-review APPROVE + PUSH-OK, ui-ux copy approved, per the merge message); ships in the next PR; product-owner acceptance at that PR; follow-ups L1/L2 in BACKLOG 65 · accountable: release-manager · due 2026-10-23 |
+| 64 | Dashboard header shows the signed-in role, never the email | Dashboard (every screen; privacy) · RUN | S | ready (decided 2026-10-16) · accountable: implementer (ui-ux-designer spec first, review after) · due 2026-10-27 |
 | 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, H-01 AT RISK (152 vs 150 on data-v1 with 21 weekdays missing, coverage triage 2026-10-16); the 2026-11-01 script recount and the G3 recount on repaired data merged into one count-owed-events run after G1 closes, by 2026-11-13, evaluator G3 check by 2026-11-14; `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14 |
-| 45 | Measure the holiday list before it is adopted | Operational risk (evidence) · RUN | S | in progress (started 2026-10-16; not blocked: stored bars and ticks only) · accountable: performance-analyst · draft 2026-10-23 · due 2026-10-30 |
+| 45 | Measure the holiday list before it is adopted | Operational risk (evidence) · RUN | S | in review: draft delivered 2026-10-16 (feda07a, docs/research/holiday-list-measurement-2026-10.md, a week early) · quant-reviewer ruling on the draft due 2026-10-23 · adopt-or-not decision on the v3 list (drop 2 Jan) by program director + product owner due 2026-10-30 · accountable: performance-analyst (draft), quant-reviewer (ruling) · due 2026-10-30 |
+| 65 | Review follow-ups from 2026-10-16 (hygiene) | Dashboard, Telegram and research tooling (review residuals) · RUN and FIND | M | ready (decided 2026-10-16; low priority, parts can land separately) · accountable: implementer (N3: research-director) · due 2026-10-30 |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -227,6 +237,7 @@ change to research budget allocation, so it needs quant review and its own test)
 and web/ were out of scope), live realised R (item 8's engine trade record). Row G12.
 
 Sweep 2026-10-16 (product owner): Done in part (PR #63 490ebe4, PR #68 c2cd051); dashboard view parked. Acceptance record: merged on green CI into main; checked against git and the named tests exist; the criteria were not re-run one by one in this sweep.
+  Note 2026-10-16: the daily digest's attribution line uses `verdict_adj` (the Bonferroni-adjusted row verdict, docs/ux/progress-screens.md), not the raw verdict. Already decided; it is being built in the attribution lane (ROADMAP W2-3). Acceptance there: the digest line's verdict equals the API row's `verdict_adj` for the same row (test). Decided 2026-10-16 by program director + product owner (owner delegated).
 
 ### 13. Bounded spawning and the 4h founder path
 Value: explores uncovered timeframes and regimes unattended, under the same gates, so the system keeps evolving
@@ -687,6 +698,7 @@ hypotheses that go through the trial registry in a future quarter's budget.
   list is changed (new version, hand-reviewed set in the test) only on that evidence. Reporting only; quant review.
   Sweep 2026-10-16 (product owner): accountable `performance-analyst`, due 2026-10-30. It runs on stored bars and ticks, so it does not wait for the deploy. Acceptance as above. It is the evidence the owner needs to adopt 17.
 Research job check 2026-10-16 (research director): not blocked, so it starts now; draft table to the research director by Fri 2026-10-23, final with quant review by 2026-10-30. Days inside the data-v1 coverage gaps (G1/G2, Q1 readiness list item 5) are excluded and listed, not read as thin days.
+  Decision schedule 2026-10-16: the v3 holiday list (drop 2 Jan) is decided AFTER the quant ruling on this draft. Quant-reviewer ruling by 2026-10-23; decision by 2026-10-30, recorded here with the evidence it rests on. Decided 2026-10-16 by program director + product owner (owner delegated). Adopting a list that only blocks entries is conservative and within the delegation; the list change ships as a new version with the hand-reviewed set in its test (acceptance above).
 - **46. Replay the entry windows before adopting any (performance analyst, strategy researcher; review M4).**
   Value: each window (items 17, 18) removes entries; whether the removed ones were worse than the kept ones is
   unknown. Do: over the shadow book and the backtest candidates, the fraction of entries each window (tier 2,
@@ -980,11 +992,96 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   - the account caps stay in `caps`, so the entry status's spent-cap blocks are unchanged;
   - tests: API (`/api/accounts`, `/api/proposals`) with a GBP and a USD engine; BalanceCard and SafetyStrip show
     "can't check" in amber.
+- **62. The 12% kill switch flattens every position on the account, all symbols.** Decided 2026-10-16 by program
+  director + product owner (owner delegated). Value (RUN, protect): the 12% drawdown is measured on the account's
+  equity, which already counts every symbol's P&L (ADR 0016 cross-check, `account_positions`), yet the trip closes
+  only XAUUSD (`Engine._kill_switch` reads `broker.positions()`, the engine's symbol). A losing position on another
+  symbol keeps draining the account after the halt. Closing everything matches what the switch measures. This
+  tightens risk; it loosens nothing, so it is a delegated decision. It supersedes the "other symbols untouched, an
+  owner decision" line of the F1 fix (handoff 2026-10-16-kill-switch-everything-sticky). TRACEABILITY R13, R39.
+  Depends on: nothing; touches goldbot/engine/runner.py `_kill_switch`, the broker close path
+  (goldbot/execution/mt5_adapter.py, bridge, paper), docs/decisions/0016, docs/RUNBOOK.md. Starts after lane A's 59
+  re-verify clears runner.py (same file), not before the Sunday engine start.
+  Acceptance:
+  - on the trip (`everything=True`, and while `_kill_everything` is set) the switch reads
+    `broker.account_positions()` and closes every position on the account, every symbol and every magic; the sticky
+    flag clears only when `account_positions()` reads flat (not `positions()`);
+  - each non-XAUUSD close uses that position's own symbol: its own tick, filling mode and volume step (today
+    `_filling` reads `self.symbol`); one symbol's refused or market-closed close never stops the others and is
+    re-sent by `_retry_closes` with the existing backoff;
+  - an unreadable `account_positions()` falls back to closing what `positions()` returns and keeps the switch pending
+    (never fewer closes than today);
+  - after the whole account is seen flat, later halted refreshes still close only this engine's magic range, as
+    today;
+  - ADR 0016 is amended (all symbols, why, the manual-trade consequence); RUNBOOK section on the 12% kill switch
+    says in plain words: "if the kill switch trips, every open position on the account is closed at market,
+    including trades you opened by hand on other symbols";
+  - tests (tests/test_kill_switch_everything.py): a EURUSD and an XAUUSD position both close on the trip; a refused
+    EURUSD close is retried and does not block the XAUUSD close; the flag stays set until both are gone; after a
+    restart the saved flag still closes the EURUSD position; paper and bridge brokers close a non-engine symbol;
+  - trading-safety-reviewer APPROVE recorded at the merge (E1), with sha and date.
+- **63. Card-bound approvals: a tap is bound to the exact card the owner saw.** Decided 2026-10-16 by program
+  director + product owner (owner delegated). Value (RUN, protect): the residual of BACKLOG 60's trading-safety
+  re-verify (F60-1). A tap carries only the proposal id, so a click on a card shown before a restart could approve
+  a proposal re-raised under the same id with different terms. The engine guard already blocks every known path;
+  this is defence in depth that binds the owner's consent to the card's content. TRACEABILITY A1 (and R29, the
+  approval re-check). Depends on: 60 (fix lane on goldbot/telegram/approvals.py, bot.py, the bus and runner.py must
+  merge first).
+  Acceptance:
+  - the Telegram Approve and Reject callback data and the dashboard decision request carry the card's `created`
+    (the proposal stamp the card was rendered from); the engine refuses, and logs with a reason
+    (`card_mismatch`), any decision whose `created` differs from the pending proposal's, never approving it;
+  - a decision without `created` (an old card, an old client) is refused, not accepted (fail closed);
+  - every callback data string stays within Telegram's 64-byte limit for the longest proposal id the system can
+    make (a test asserts it);
+  - the API contract is regenerated (`scripts/export_openapi.py`, `npm --prefix web run gen:api`) and the dashboard
+    sends the field;
+  - tests: a tap on the pre-restart card for a re-raised proposal is refused; a tap on the current card approves;
+    the 64-byte bound; the dashboard request without `created` is refused;
+  - trading-safety-reviewer APPROVE recorded at the merge (E1).
+- **64. Dashboard header shows the signed-in role, never the email.** Decided 2026-10-16 by program director +
+  product owner (owner delegated). Value (RUN, privacy): the header shows the signed-in email, and it appears in
+  every phone screenshot the owner shares; the role ("Owner", "Viewer") tells the reader everything they need.
+  TRACEABILITY: none (UI privacy). Depends on: nothing; touches the `web/src/` header component and, if the API
+  sends the email only for the header, the session endpoint in goldbot/api.
+  Order (product owner change to the proposal): ui-ux-designer writes the one-line spec first (label, where the
+  email is still reachable, e.g. the account page for the owner only), then the implementer, then the
+  ui-ux-designer reviews, per CLAUDE.md "ui-ux-designer for any screen change -> implementer".
+  Acceptance:
+  - no screen's persistent chrome (header, side bar, footer, safety strip) renders the email or any part of it; the
+    header shows the role;
+  - the email stays reachable only where the owner manages users or their own account;
+  - tests: a web unit test renders the header for an owner session with an email and asserts the role text and
+    that the email string is absent; an e2e check on Overview asserts the same;
+  - ui-ux-designer approval and code-reviewer APPROVE recorded at the merge.
+- **65. Review follow-ups from 2026-10-16 (hygiene).** Decided 2026-10-16 by program director + product owner
+  (owner delegated). Value: none of these can lose money; each makes a screen or a setting say the truth, so the
+  owner and the research loop act on the right reading. One item so the follow-ups are not lost, ranked last.
+  TRACEABILITY: R42-adjacent loss-budget rows for (a); none for the rest. Depends on: 61 (merged at 921a38a) for (a);
+  ROADMAP W2-3 for (c). Each part touches different files and may ship on its own.
+  Acceptance, part by part:
+  - (a) BACKLOG 61 L1: a stale engine state file no longer keeps the loss budget amber once the account is single
+    currency again (test with an old file for a removed engine); L2: during a halt that is not a mixed-currency halt
+    the budget tone is red, not amber (test);
+  - (b) the rollover and weekend entry-block reasons show their times (rollover window start and end, the Friday cut
+    and the reopen) in the owner's time zone, on the dashboard and Telegram (tests on the reason text);
+  - (c) the W2-3 API work carries the quant review's F1 (each breakdown row shows its own `t_bar`) and F2 (the exit
+    target and stop rows are labelled "not a test"); this is acceptance on W2-3, checked by the quant-reviewer there;
+  - (d) quant N1: its text is not on record in the repo (E1 gap); the quant-reviewer records N1 here by 2026-10-19
+    with a testable criterion, then it is built; N2: a settings validator rejects `holdout_from` without
+    `holdout_to` (test in the settings suite); N3: an ADR by the research-director on which `feature_version`
+    governs a trial's evidence, by 2026-10-30, cross-referenced from item 34;
+  - code-reviewer APPROVE for (a), (b), (d N2); quant-reviewer for (c) and (d).
 
 ## Needs the owner
-These are never decided by the product owner or by agents.
+These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only
+matters stay here: money or paid plans; going live, `unlock_live` or phase-gate thresholds; loosening any risk limit;
+the owner's own credentials; legal. Routine product, ops and deploy decisions are made by the program director with
+the product owner and reported on #34 (ROADMAP section 6, "Decided by PD+PO").
 Every owner step below has `chaser: program-director`, who asks on #34 with a recommendation and a chase date.
-- **Adopt the built, off-by-default rails (sweep 2026-10-16).** Holiday, reopen and tier-2 windows (17, 18), the
+- **Moved to PD+PO 2026-10-16 (they only tighten; the conservative option):** adopting the rails below. The PD+PO decide
+  each on the evidence of 45 and 46; any value looser than the built default goes back to the owner.
+  **Adopt the built, off-by-default rails (sweep 2026-10-16).** Holiday, reopen and tier-2 windows (17, 18), the
   heat cap (19), the loss-streak throttle (21) and the open-risk projection (35) are merged and off. For each:
   adopt, set the values, or leave off. Recommendation: wait for 45 (holiday evidence, due 2026-10-30) before the
   holiday window, and for 46 (replay) before the others, except 35, which only makes the £50 limit stricter.
@@ -999,6 +1096,8 @@ Every owner step below has `chaser: program-director`, who asks on #34 with a re
   (H-11 blocked); the conservative K_eff default confirmed; `costs-v1` published by 2026-12-11 if the demo
   terminal runs, otherwise "priors accepted" on 2026-12-14; the owner's trade history exported in full, analysed
   locally, summary only.
+- **Paper-vs-backtest gate: require the paper mean's lower 95% bound above 0** (phase-gate threshold, ROADMAP
+  OD-15). The quant reviewer recommends yes; the program director and product owner concur. Yours to rule.
 - **Going live.** Demo until the paper → tiny-live gate is recorded in `state/phase_state.json`, then `unlock_live`
   and the typed phrase. Item 8 computes whether the gate is met. It never flips it.
 - **Research evidence across feature versions (ADR 0006, item 34).** For now the tournament accepts a gate pass
@@ -1033,12 +1132,18 @@ before any new trading-safety builder. Every lane below touches different files.
    `goldbot/ops/linux/`. The bridge smoke (ROADMAP W1-1, new `goldbot/ops/smoke.py`) follows the architect's plan.
 6. **Item 43, `entry_blocks`** (`lane/entry-blocks`, implementer): `goldbot/risk/gate.py` (`account_reasons`), the
    engine state write in `goldbot/engine/runner.py`, `goldbot/api/entry_status.py`. Starts when lane A has cleared 59
-   (same runner.py write path).
-7. **Item 61, mixed-currency budget** (`lane/mixed-currency-budget`, implementer): `goldbot/ops/account_view.py`,
-   `web/src/` BalanceCard and SafetyStrip. Free now.
-8. **Running:** 45 (performance-analyst, a new report script), 5 (research-director, `docs/research/`).
+   and lane 9 (62, higher rank, same file) has merged: one runner.py lane at a time.
+7. **Item 61, mixed-currency budget**: merged at 921a38a with its reviews; release-manager ships it in the next PR,
+   then product-owner acceptance.
+8. **Running:** 45 (quant ruling on the draft, due 10-23), 5 (research-director, `docs/research/`).
+9. **Item 62, kill switch on every symbol** (implementer, then trading-safety): `_kill_switch` in
+   `goldbot/engine/runner.py`, `goldbot/execution/mt5_adapter.py` `_filling`/`close`, ADR 0016, RUNBOOK. Starts when
+   lane A has cleared 59; lane 6 (43) waits for it. Not before the Sunday start.
+10. **Item 64, header role** (ui-ux-designer spec, then implementer): `web/src/` header only. Free now; disjoint
+   from every other lane's files.
+63 waits for 60's fix lane (same approval files); 65 waits for a free implementer.
 
-Top three ready items: 43 (lane 6), 27 and 61 (lane 7). 27 has no lane on purpose: it reads the terms from the demo
+Top three ready items (2026-10-16 late): 62 (lane 9), 43 (lane 6) and 27. 61 is merged (921a38a). 27 has no lane on purpose: it reads the terms from the demo
 terminal, so it starts when item 1's engine runs (Sun 2026-10-18).
 
 ## Later (parked)
@@ -1094,6 +1199,7 @@ product owner runs the criterion-by-criterion acceptance scorecard (AGENT_STANDA
 - #71: 24 (D-1), 25, 26 (backend), 28, 29. #73: 23, 30a, 37, 38, 39, 40, 41; the approval-card lines for 25, 28 and 29.
 - #74: 42. #76: 47. #77: 50.
 - Integration branch, shipping in PR #79 or the next PR: 48, 49, 54, 55, 56, 57 (table above).
+- PR #79 (main 5fd90ab): 52 and 58, done with trading-safety APPROVE 2026-10-16 at 626b56b (3418bc5); 52's d2ecb8f ships in the next PR.
 - Open sign-offs on done items: quant for 23 (V6) and 50 (M45); the owner for the values of 8.
 
 ## Rejected

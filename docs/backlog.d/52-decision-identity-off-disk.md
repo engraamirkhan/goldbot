@@ -1,6 +1,5 @@
 ---
 number: 52
-rank: 5
 title: Approvals keep only the decision channel on disk and in the API
 stage: Execution and risk (approvals) · SECURE
 size: S
