@@ -2,10 +2,12 @@
 marking of small cells, cost attribution against the cost table, calibration on taken and untaken candidates, the
 exit mix, live fills against the cost table, the read_attribution tool and the improvement agent's wiring."""
 import json
+from collections import Counter
 
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import t as student_t
 
 from goldbot.agents.roles import ROLES
 from goldbot.agents.tools import ReadOnlyTools
@@ -21,9 +23,11 @@ from goldbot.research.attribution import (
     VersionRole,
     build_report,
     cell_stats,
+    clustered_se,
     family_of,
     render_markdown,
     save_report,
+    t_bar,
 )
 
 NOW = pd.Timestamp("2026-10-09 23:50", tz="UTC")
@@ -209,7 +213,7 @@ def test_exit_mix_splits_stop_target_time_and_policy():
 
 
 # ------------------------------------------------------------------------------------------------ live fills
-def test_live_fill_slippage_is_measured_against_the_cost_table_cell():
+def test_live_fill_slippage_is_measured_against_the_slippage_prior_in_usd_and_r():
     fills = pd.DataFrame({"ts_utc": pd.date_range("2026-09-10 09:00", periods=40, freq="1h", tz="UTC"),
                           "client_order_id": [f"o{i}" for i in range(40)], "side": 1, "requested": 2400.0,
                           "filled": 2400.15, "order_type": "market"})
@@ -220,8 +224,8 @@ def test_live_fill_slippage_is_measured_against_the_cost_table_cell():
                        tables={"icm-demo": table})
     live = rep.live["icm-demo"]
     assert live.fills == len(fills) and live.mean_slippage_usd == pytest.approx(0.15)
-    assert live.mean_table_usd == pytest.approx(0.05) and live.mean_excess_usd == pytest.approx(0.10)
-    assert live.mean_excess_r == pytest.approx(0.10 / 10.0)
+    assert live.prior_usd == pytest.approx(0.10) and live.mean_excess_usd == pytest.approx(0.05)
+    assert live.mean_excess_r == pytest.approx(0.05 / 10.0)
     assert live.verdict == "noise"                          # fewer fills than the minimum count
     assert live.orders == {"filled": 40}
 
@@ -263,3 +267,164 @@ def test_improvement_agent_and_research_analyst_read_the_attribution_first():
     assert "noise" in ROLES["improvement_agent"].task
     # the feedback path is still the bounded hypothesis tool; nothing new can write
     assert "file_hypothesis" in ROLES["improvement_agent"].tools and "run_trial" not in ROLES["improvement_agent"].tools
+
+
+# ------------------------------------------------------------------------------------------------ verdict rule (ADR 0022)
+def test_t_bar_values():
+    assert t_bar(10) == pytest.approx(2.81, abs=0.01)
+    assert t_bar(30) == pytest.approx(3.14, abs=0.01)
+    assert t_bar(50) == pytest.approx(3.29, abs=0.01)
+    assert t_bar(0) == t_bar(1) == 2.0                      # 1.96 for a single row: the 2.0 floor holds
+    # a row with few days applies the same tail on G - 1 degrees of freedom: a higher bar, the normal one in the limit
+    assert t_bar(30, df=19) > t_bar(30, df=200) > t_bar(30)
+    assert t_bar(30, df=10**7) == pytest.approx(t_bar(30), abs=1e-4)
+
+
+def test_rows_bonferroni_fwer():
+    """40 pure-noise rows of 60 trades (one a day): the share of reports with any signed adjusted row stays near the
+    5% family-wise rate (<= 0.07), while the raw |t| >= 2 verdict signs a row in most reports."""
+    days = np.arange(60)
+    adj = raw = 0
+    for seed in range(500):
+        x = np.random.default_rng(seed).standard_normal((40, 60))
+        cells = [cell_stats(row, row, min_trades=30, days=days, m=40) for row in x]
+        adj += any(c.verdict_adj in ("positive", "negative") for c in cells)
+        raw += any(c.verdict in ("positive", "negative") for c in cells)
+    assert adj / 500 <= 0.07
+    assert raw / 500 > 0.5
+
+
+def test_rows_bonferroni_fwer_with_a_day_effect():
+    """40 pure-noise rows of 20 days x 3 trades, with a shared day effect (x = u_d + e_i, both N(0, 1)): clustering by
+    day keeps the share of reports with any signed adjusted row at <= 0.07."""
+    days = np.repeat(np.arange(20), 3)
+    adj = 0
+    for seed in range(500):
+        rng = np.random.default_rng(10_000 + seed)
+        x = rng.standard_normal((40, 20))[:, days] + rng.standard_normal((40, 60))
+        adj += any(cell_stats(row, row, min_trades=30, days=days, m=40).verdict_adj in ("positive", "negative")
+                   for row in x)
+    assert adj / 500 <= 0.07
+
+
+def test_zero_clustered_se_with_dispersion_is_not_evidence():
+    """Every day's mean equals the cell mean, so the clustered se is exactly 0 although the trades disperse: no se,
+    never a signed verdict on a point range (ADR 0022)."""
+    days = np.repeat(np.arange(20), 2)
+    x = np.tile([1.5, -1.0], 20)
+    assert clustered_se(x, days) is None
+    c = cell_stats(x, x, min_trades=30, days=days, m=5)
+    assert c.verdict == c.verdict_adj == "indistinguishable from zero"
+    assert c.ci_adj is None and c.t_stat is None
+
+
+def test_overall_bar_is_two_or_the_t_quantile_on_days_minus_one_for_overall_challengers_and_live():
+    x = np.random.default_rng(5).normal(0.4, 1.0, 40)
+    few = cell_stats(x, x, min_trades=30, days=np.repeat(np.arange(10), 4))
+    assert few.t_bar == pytest.approx(float(student_t.ppf(0.975, 9)), abs=1e-8) and (few.t_bar or 0.0) > 2.2
+    many = cell_stats(np.resize(x, 200), np.resize(x, 200), min_trades=30, days=np.arange(200))
+    assert many.t_bar == 2.0                                 # t_199(0.975) = 1.97: the 2.0 floor
+    # live fills over 10 days apply the same overall bar
+    fills = pd.DataFrame({"ts_utc": pd.date_range("2026-09-20 00:00", periods=40, freq="6h", tz="UTC"),
+                          "side": 1, "requested": 2400.0, "filled": 2400.15 + np.linspace(-0.05, 0.05, 40)})
+    live = build_report([], now=NOW, costs=_costs(), settings=S, fills={"icm-demo": fills}).live["icm-demo"]
+    assert live.t_bar == pytest.approx(float(student_t.ppf(0.975, 9)), abs=1e-8)
+    assert live.verdict_adj == "positive" and live.verdict == "positive"
+
+
+def test_cell_stats_duplicated_same_day_trades_do_not_raise_t():
+    rng = np.random.default_rng(7)
+    days = np.repeat(np.arange(20), 3)
+    x = rng.normal(0.2, 1.0, len(days))
+    once = cell_stats(x, x, min_trades=30, days=days, m=12)
+    thrice = cell_stats(np.repeat(x, 3), np.repeat(x, 3), min_trades=30, days=np.repeat(days, 3), m=12)
+    assert once.t_stat is not None and thrice.t_stat == pytest.approx(once.t_stat, abs=1e-9)
+    assert thrice.ci95_net == pytest.approx(once.ci95_net, abs=1e-9)
+    assert thrice.ci_adj == pytest.approx(once.ci_adj, abs=1e-9) and thrice.verdict_adj == once.verdict_adj
+    # counted as independent trades, the copies would have raised t by about sqrt(3)
+    iid = cell_stats(np.repeat(x, 3), np.repeat(x, 3), min_trades=30, m=12)
+    assert abs(iid.t_stat or 0.0) > 1.6 * abs(once.t_stat)
+
+
+def test_one_trade_a_day_gives_the_classical_t_and_the_interval_uses_the_same_error():
+    x = np.random.default_rng(3).normal(0.3, 1.0, 45)
+    c = cell_stats(x, x, min_trades=30, days=np.arange(45))
+    se = float(np.std(x, ddof=1)) / np.sqrt(45)
+    assert c.t_stat == pytest.approx(x.mean() / se, rel=1e-6)
+    assert c.ci95_net == pytest.approx((x.mean() - 1.96 * se, x.mean() + 1.96 * se), abs=1e-8)
+    bar = float(student_t.ppf(0.975, 44))                   # no row count: the overall bar, max(2, t_{G-1}(0.975))
+    assert c.t_bar == pytest.approx(bar, abs=1e-8)
+    assert c.ci_adj == pytest.approx((x.mean() - bar * se, x.mean() + bar * se), abs=1e-8)
+
+
+def test_a_cell_traded_on_one_day_is_never_signed_by_its_spread():
+    x = np.array([2.0] * 35 + [-1.0] * 5)
+    c = cell_stats(x, x, min_trades=30, days=np.zeros(40, dtype=int), m=5)
+    assert c.t_stat is None and c.ci95_net is None and c.ci_adj is None
+    assert c.verdict == c.verdict_adj == "indistinguishable from zero"
+    flat = cell_stats(np.full(40, 0.5), np.full(40, 0.5), min_trades=30, days=np.zeros(40, dtype=int), m=5)
+    assert flat.verdict == "positive"                        # zero dispersion: the sign is the evidence, as before
+
+
+def test_adjusted_verdict_is_signed_exactly_when_the_adjusted_interval_excludes_zero():
+    rng = np.random.default_rng(11)
+    seen: Counter[str] = Counter()
+    for i in range(400):
+        n = int(rng.integers(5, 90))
+        days = rng.integers(0, int(rng.integers(1, 40)), n)
+        x = rng.normal(float(rng.normal(0, 0.6)), float(rng.uniform(0, 1.5)), n)
+        if i % 50 == 0:
+            x = np.full(n, float(rng.choice([-0.4, 0.0, 0.4])))   # zero dispersion
+        c = cell_stats(x, x, min_trades=30, days=days, m=int(rng.integers(0, 60)))
+        excludes = c.ci_adj is not None and (c.ci_adj[0] > 0 or c.ci_adj[1] < 0)
+        assert (c.verdict_adj in ("positive", "negative")) == excludes
+        if excludes:
+            assert c.ci_adj is not None and (c.verdict_adj == "positive") == (c.ci_adj[0] > 0)
+        if c.n < 30:
+            assert c.verdict_adj == "noise" and c.ci_adj is None
+        elif c.ci_adj is not None and c.ci95_net is not None and c.ci95_net[1] > c.ci95_net[0]:
+            # ci_adj = mean +- t_bar se, with se = half the 95% range / 1.96
+            se = (c.ci95_net[1] - c.ci95_net[0]) / (2 * 1.96)
+            assert (c.ci_adj[1] - c.ci_adj[0]) / 2 == pytest.approx((c.t_bar or 0.0) * se, rel=1e-6, abs=1e-8)
+        seen[c.verdict_adj] += 1
+    assert seen["positive"] and seen["negative"] and seen["indistinguishable from zero"] and seen["noise"]
+
+
+def test_report_rows_use_the_bonferroni_bar_over_breakdown_cells_at_the_minimum_and_the_overall_cell_the_overall_bar():
+    trades = (_book(30, 10, hour=3) + _book(5, 25, side=-1, hour=9, agent="mean_rev-g0-1111111111", tf="15m") +
+              _book(10, 10, hour=15, agent="breakout-g1-2222222222"))
+    rep = build_report(trades, now=NOW, costs=FREE, settings=S)
+    m = sum(1 for cells in rep.breakdowns.values() for c in cells.values() if c.n >= S.min_trades)
+    assert rep.m == m > 1 and rep.t_bar == pytest.approx(t_bar(m))
+    # the overall cell's trades fall on 30 days (_book spreads them over days 0-29): max(2, t_29(0.975)) = 2.045
+    assert rep.overall.t_bar == pytest.approx(float(student_t.ppf(0.975, 29)), abs=1e-8)
+    assert rep.challengers.t_bar == 2.0                      # no trades: no days, the 2.0 floor
+    rows =[c for cells in rep.breakdowns.values() for c in cells.values() if c.n >= S.min_trades]
+    assert all((c.t_bar or 0.0) >= rep.t_bar for c in rows)
+    assert all(e.verdict_adj == rep.breakdowns["exit"][k].verdict_adj for k, e in rep.exits.items())
+    # the raw verdict is kept as it was for the staff agents
+    assert rep.breakdowns["session"]["asia"].verdict == "positive"
+    md = render_markdown(rep)
+    assert f"t_bar {rep.t_bar:.2f}" in md and f"m = {m}" in md
+
+
+def test_live_fills_are_compared_with_the_backtest_slippage_prior_not_the_table_built_from_them():
+    fills = pd.DataFrame({"ts_utc": pd.date_range("2026-08-25 09:00", periods=40, freq="1D", tz="UTC"),
+                          "client_order_id": [f"o{i}" for i in range(40)], "side": 1, "requested": 2400.0,
+                          "filled": 2400.15 + np.linspace(-0.01, 0.01, 40), "order_type": "market"})
+    orders = {"sent": {f"o{i}": {"sl": 2390.0, "status": "filled"} for i in range(40)}}
+    table = _costs()                                         # measured london cell 0.05, prior 0.10
+    rep = build_report([], now=NOW, costs=table, settings=S, fills={"icm-demo": fills}, orders={"icm-demo": orders},
+                       tables={"icm-demo": table})
+    live = rep.live["icm-demo"]
+    assert live.prior_usd == pytest.approx(0.10) and live.mean_excess_usd == pytest.approx(0.05)
+    assert live.verdict == "positive"                        # 40 fills on 40 days, all 0.05 $/oz worse than the prior
+    # an account without its own table is compared with the canonical prior, never left without a comparator
+    alone = build_report([], now=NOW, costs=table, settings=S, fills={"icm-demo": fills}, orders={"icm-demo": orders})
+    assert alone.live["icm-demo"].prior_usd == pytest.approx(0.10) and alone.live["icm-demo"].verdict == "positive"
+
+
+def test_build_report_notes_do_not_say_live_r_unrecorded():
+    notes = " ".join(build_report(_book(30, 10), now=NOW, costs=FREE, settings=S).notes)
+    assert "not recorded" not in notes and "BACKLOG item 8" not in notes
+    assert "ClosedTrade.r" in notes and "closed_trades*.jsonl" in notes and "not pooled here" in notes
