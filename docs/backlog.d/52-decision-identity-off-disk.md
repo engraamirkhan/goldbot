@@ -1,10 +1,10 @@
 ---
 number: 52
-rank: 6
+rank: 5
 title: Approvals keep only the decision channel on disk and in the API
 stage: Execution and risk (approvals) · SECURE
 size: S
-status: 'in review (04f6266, 3817db7, c7ea0e3 on the integration branch, not on main; security-reviewer and trading-safety-reviewer asked 2026-10-12) · accountable: security-reviewer · due 2026-10-17 · LATE'
+status: 'in review (04f6266, 3817db7, c7ea0e3, eba16e3 in PR #79; security re-review ran 2026-10-16: two LOWs, fixed in d2ecb8f on the integration branch, not in PR #79; security re-verify of d2ecb8f and trading-safety sign-off not on record) · accountable: security-reviewer · due 2026-10-17'
 ---
 - **52. Approvals keep only the decision channel on disk and in the API (trading-safety review of the finance audit
   record, 2026-10-11).** Value: an archived proposal in `approvals/done/` still carries the owner's identity:

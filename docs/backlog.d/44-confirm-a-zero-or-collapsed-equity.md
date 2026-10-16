@@ -1,10 +1,10 @@
 ---
 number: 44
-rank: 2
+rank: 3
 title: Confirm a zero or collapsed equity read before the 12% kill switch (ADR 0016)
 stage: Execution and risk (drawdown stages) · PROTECT
 size: S
-status: 'in review (d2f2999, b9e9dac on the integration branch, not on main; trading-safety-reviewer asked 2026-10-12) · accountable: trading-safety-reviewer · due 2026-10-17 · LATE'
+status: 'in review (d2f2999, b9e9dac; re-review 2026-10-16 found a save-failure gap, fixed in 869bb04; all in PR #79; trading-safety re-verify of 869bb04 not on record) · accountable: trading-safety-reviewer · due 2026-10-17'
 ---
 - **44. Confirm a zero or collapsed equity read before the 12% kill switch (trading-safety re-verification LOW-C,
   2026-10-11; needs a decision record and trading-safety review).** Value: one bad `account().equity` read (0, or a

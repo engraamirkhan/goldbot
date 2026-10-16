@@ -24,6 +24,14 @@ demo). Then comes the north star (ADR 0004): nothing trades or gets measured unt
 Research integrity for the Q1 freeze is last. Late on 2026-10-16: 1 (was due 2026-10-13), 44 and 52 (their
 re-reviews were asked on 2026-10-12 and have not started; the reviewed batch has sat off `main` since 2026-10-12).
 
+**Job-check sweep 2026-10-16 evening (product owner, base 3092923).** 48, 49, 54, 55, 56 and 57 moved to Done, each
+with the seven-check acceptance scorecard in its detail block; all are accepted on the condition that their PR
+merges (PR #79 open, CI running; 55 goes in the next PR). 44 and 52 were re-reviewed today (fixes 869bb04 and
+d2ecb8f), so they are no longer late; their re-verifies are owed by 2026-10-17. 59 is ranked second: the engine
+start at the reopen (Sun 2026-10-18 22:02 UTC) waits on it. 58, 59 and 60 now name one accountable role and a date.
+36 and 51 are merged on the integration branch and ship in the next PR (release-manager). 13 ranked rows. The
+daily scorecard is `docs/process/scorecards/2026-10-16.md`.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
@@ -83,20 +91,27 @@ Every owner step below has `chaser: program-director`, who asks on #34 with a re
   item 2 lands; VM provisioning and every credential (item 1).
 
 ## Next parallel wave
-Only items that are not done (sweep 2026-10-16). The reviewer queue rule applies first: 44 and 52 have waited on
-re-review since 2026-10-12, so reviewer lanes start before new builders.
+Only items that are not done (job-check sweep 2026-10-16 evening). The reviewer queue rule applies first:
+trading-safety holds four items (59, 44, 58, 60) against a limit of 2, so two trading-safety reviewer lanes run
+before any new trading-safety builder. Every lane below touches different files.
 
-1. **Reviewer lanes: 44 (trading-safety-reviewer) and 52 (security-reviewer, then trading-safety-reviewer).**
-   Read-only. After they sign off, the release-manager ships the reviewed batch.
-2. **Item 1, demo deploy and bridge smoke** (`lane/claude-run-deploy`): `docs/deploy/`, `goldbot/ops/linux/`, and
-   the new `ops/smoke.py` (W1-1).
-3. **Item 57, risk_day_anchor validator** (`lane/anchor-validator`): `goldbot/config.py`, its test, `docs/RUNBOOK.md`.
-4. **Item 43, heartbeat while closed** (`lane/market-closed-state-cadence`): `goldbot/engine/runner.py` state write.
-   54 also edits `runner.py` (`_refresh_account`), so 54 starts when this lane merges.
-5. **Item 56, digest Yesterday line** (`lane/digest-yesterday`): `goldbot/telegram/digest.py`.
-6. **Free now, disjoint:** 55 (`tests/test_auth_security.py`, test-engineer), 49 (`config/settings.yaml`
-   `retired_families` and `docs/research/hypotheses.md` B, strategy-researcher), 45 (a new report script,
-   performance-analyst).
+1. **Trading-safety reviewer lane A: 59, then 58** (read-only). 59's re-verify of 412fd0d is due Sun 2026-10-18
+   20:00 UTC, ahead of the engine start; SRE re-verifies 59 in the same window.
+2. **Trading-safety reviewer lane B: 44 (869bb04 re-verify), then 60 (bf5240b)** (read-only).
+3. **Security reviewer lane: 52 (d2ecb8f re-verify), then 51 (cc00630 re-verify)** (read-only).
+4. **Release-manager: PR #79** merged on green, main merged back; then the next PR with 36, 51, 55, 60 and 52's
+   d2ecb8f by 2026-10-23 (ROADMAP M1).
+5. **Item 1, demo deploy** (`lane/claude-run-deploy`, sre runs it, release-manager accountable): `docs/deploy/`,
+   `goldbot/ops/linux/`. The bridge smoke (ROADMAP W1-1, new `goldbot/ops/smoke.py`) follows the architect's plan.
+6. **Item 43, `entry_blocks`** (`lane/entry-blocks`, implementer): `goldbot/risk/gate.py` (`account_reasons`), the
+   engine state write in `goldbot/engine/runner.py`, `goldbot/api/entry_status.py`. Starts when lane A has cleared 59
+   (same runner.py write path).
+7. **Item 61, mixed-currency budget** (`lane/mixed-currency-budget`, implementer): `goldbot/ops/account_view.py`,
+   `web/src/` BalanceCard and SafetyStrip. Free now.
+8. **Running:** 45 (performance-analyst, a new report script), 5 (research-director, `docs/research/`).
+
+Top three ready items: 43 (lane 6), 27 and 61 (lane 7). 27 has no lane on purpose: it reads the terms from the demo
+terminal, so it starts when item 1's engine runs (Sun 2026-10-18).
 
 ## Later (parked)
 Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block has its status and the full reason.
@@ -123,6 +138,26 @@ Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block 
 - Entry order type study (limit vs market); portfolio volatility target (risk use only, not alpha, per C3).
 
 ## Done
+**Accepted 2026-10-16 evening (job-check sweep).** Each has the seven-check scorecard in its detail block; tests
+re-run at 3092923 (238 passed across their suites). Acceptance is conditional on the PR merging (check 5).
+
+| Item | 1 criteria | 2 DoD | 3 S1-S12 | 4 reviewers | 5 CI, merged | 6 PR text | 7 role, date | Gap |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 48 H-06 preset and count | yes | yes | yes | quant yes (717baa3); 9754ca0 not on record | preset on `main`; rest in #79 (open) | yes (#79) | yes | #79; quant note on 9754ca0 |
+| 49 retired-family lists | yes | yes | yes | quant yes | #79 (open) | yes | yes | #79 |
+| 54 HWM confirmation | yes | yes | yes | trading-safety yes | #79 (open) | yes | yes | #79 |
+| 55 lockout test flake | yes | yes | yes | code yes (tests only) | integration 3092923; next PR | n/a | yes | next PR |
+| 56 digest opportunity day | yes (approved wording change) | yes | yes | code yes, ui-ux applied | #79 (open) | yes | yes | #79 |
+| 57 day-anchor validator | yes | yes | yes | trading-safety yes | #79 (open) | yes | yes | #79; sre server check |
+
+**Earlier Done items: scorecard by PR (2026-10-16).** Check 5 (merged on green CI to `main`) and check 6 (every PR
+body from #60 to #77 has an owner-visible behaviour section) hold for all of them. Check 7 is **no** for all: they
+predate the one-accountable-role rule of 2026-10-16. Checks 1-3 lack evidence item by item: the criteria were not
+re-run one by one; the named tests exist and passed in each PR's CI. Check 4: #76 and #77 name their reviews
+(security, SRE, trading-safety, quant); #73 names a code review; #60-#71 have review-fix commits in git but no
+per-item sign-off record. Open sign-offs: quant for 23 (V6) and 50 (M45). The product owner re-runs checks 1-3
+for the safety items among them (6, 8, 25, 28, 29, 37-42) by 2026-10-23.
+
 Checked against git on 2026-10-16. Main merge SHAs: #60 7ef3a00, #61 8bc7952, #62 1a194e9, #63 5f7da74,
 #68 e00af06, #71 423d2b1, #73 d28a482, #74 a913d42, #75 a52b389, #76 520d731, #77 bc030d3. Acceptance record: each
 item merged on green CI, and the tests it names exist. The criteria were not re-run one by one in this sweep. The
@@ -130,7 +165,8 @@ product owner runs the criterion-by-criterion acceptance scorecard (AGENT_STANDA
 - #60: 3. #61: 4, 9, 10. #62: 2, 7. #63: 6, 8, 12 (part), 13 (part), 14, 15. #68: 12 (director input), 20, 22.
 - #71: 24 (D-1), 25, 26 (backend), 28, 29. #73: 23, 30a, 37, 38, 39, 40, 41; the approval-card lines for 25, 28 and 29.
 - #74: 42. #76: 47. #77: 50.
-- Open sign-offs on done items: quant for 23 (V6) and 50 (M43); the owner for the values of 8.
+- Integration branch, shipping in PR #79 or the next PR: 48, 49, 54, 55, 56, 57 (table above).
+- Open sign-offs on done items: quant for 23 (V6) and 50 (M45); the owner for the values of 8.
 
 ## Rejected
 - New 15m/1h trend, breakout, intraday momentum or mean-reversion variants, and meta-labelling over primaries with

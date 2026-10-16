@@ -1,10 +1,10 @@
 ---
 number: 60
-rank: 48
+rank: 6
 title: Approval window expiry trusts a future-stamped proposal
 stage: Approvals (owner confirms entries, 90 s) · PROTECT
 size: S
-status: done 2026-10-16 (needs trading-safety review; owner of the fix trading-safety-reviewer, built by the implementer)
+status: 'in review (bf5240b on the integration branch, not in PR #79, goes in the next PR; trading-safety review not on record) · accountable: trading-safety-reviewer · due 2026-10-20'
 ---
 - **60. Approval window expiry trusts a future-stamped proposal (review of BACKLOG 58, 2026-10-16).** Value:
   `Proposal.expired` (goldbot/telegram/approvals.py:120) is `time.time() > created + window_s`, the same

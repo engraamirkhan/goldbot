@@ -1,10 +1,9 @@
 ---
 number: 55
-rank: 8
 title: 'test_lockout_survives_a_restart: make it reliable under load'
 stage: Platform (CI) · SECURE
 size: S
-status: 'done 2026-10-16 (test-engineer; needs code review) · accountable: test-engineer'
+status: 'done 2026-10-16 (29021ac + 71a7889; code-reviewer APPROVED 2026-10-16, tests-only diff, 10 clean runs; merged into the integration branch at 3092923; ships in the next PR after #79) · accountable: test-engineer'
 ---
 - **55. test_lockout_survives_a_restart: make it reliable under load (ci follow-up from the A15 lane,
   2026-10-12).** Value: `tests/test_auth_security.py::test_lockout_survives_a_restart` failed once in a full
@@ -27,3 +26,12 @@ status: 'done 2026-10-16 (test-engineer; needs code review) · accountable: test
   window ends. Neither the lockout nor its timeout was loosened, and nothing is retried. Evidence: the old test fails
   20 of 20 with the clock running 10,000 times faster than real time; the new one passes 200 of 200 that way and 200
   of 200 under CPU stress. It still fails when the failure write is disabled, and also when the window is halved.
+  Follow-up 71a7889 (2026-10-16): the remaining lockout tests (`tests/test_api.py`,
+  `tests/test_api_code_lockout.py`) pin the lockout clock too and prove both window edges. Code-reviewer APPROVED
+  (tests-only diff, 10 clean runs); merged at 3092923.
+  **Acceptance scorecard 2026-10-16 (product owner, AGENT_STANDARDS 7 checks):** (1) criteria: yes, 200 of 200 under CPU stress and with the accelerated clock, and the test still fails
+  with the failure write disabled (test-engineer's evidence above); the lockout suites re-run 2026-10-16 at 3092923:
+  pass. (2) DoD: yes. (3) S1-S12: yes (no production change). (4) code-reviewer APPROVED; no other reviewer routed
+  (tests only). (5) CI/merged: **no, on the integration branch, not in PR #79; goes in the next PR**. (6) PR text:
+  n/a (no owner-visible change). (7) role and date: yes (test-engineer, due 2026-10-23, met). Accepted, conditional
+  on the next PR merging.

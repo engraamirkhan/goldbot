@@ -1,10 +1,10 @@
 ---
 number: 61
-rank: 49
+rank: 11
 title: 'Mixed-currency accounts: the loss budget shows the account cap, not the combined cap'
 stage: Dashboard and Telegram (loss budget, ADR 0004 section 3) · PROTECT
 size: S
-status: proposed (UX review of the loss-budget fallback, 2026-10-16; accountable implementer; due 2026-10-30)
+status: 'ready (builds on the loss-budget "can''t check" state, 8d020a7 + 7368f61 on the integration branch) · accountable: implementer · due 2026-10-30'
 ---
 - **61. Mixed-currency accounts: the loss budget shows the account cap, not the combined cap (UX review,
   2026-10-16).** Value: with accounts in more than one currency, `account_view._combined`

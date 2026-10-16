@@ -87,17 +87,18 @@ is its role file's "Definition of done" plus S1–S12.
 | Lane | Item (rows) | Accountable | Due | Status / start | Files | Depends on | Extra reviewers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | R-59 | Market-closed state cadence (BACKLOG 59) | implementer | Sun 10-18 20:00 | running | engine state write path | — | trading-safety, sre |
-| R-56 | Digest "Yesterday" on the opportunity day; min_lot help text (BACKLOG 56) | implementer | Tue 10-20 | running | telegram digest | — | ui-ux |
-| R-57 | risk_day_anchor validator (BACKLOG 57) | implementer | Wed 10-21 | running | config validation | each server's local settings checked first | trading-safety |
-| R-SWP | Backlog status sweep, park to 15 | product-owner | Sun 10-18 | running | `docs/backlog.d/` | — | — |
+| R-56 | Digest "Yesterday" on the opportunity day; min_lot help text (BACKLOG 56) | implementer | Tue 10-20 | done 10-16 (ba1c520, in PR #79; accepted by the product owner) | telegram digest | — | ui-ux |
+| R-57 | risk_day_anchor validator (BACKLOG 57) | implementer | Wed 10-21 | done 10-16 (f7d48db, in PR #79; accepted; sre server check before the #79 deploy) | config validation | each server's local settings checked first | trading-safety |
+| R-SWP | Backlog status sweep, park to 15 | product-owner | Sun 10-18 | done 10-16 (13 ranked; 48, 49, 54-57 accepted; daily scorecard 2026-10-16) | `docs/backlog.d/` | — | — |
 | R-RD | Research dispatch (`data-us-calendar`, count-owed-events on `main`) | research-director | Sun 10-18 | running | workflow runs, research docs | FRED_API_KEY for calendar-v1 | — |
 | R-H06 | H-06 run-input table | strategy-researcher | Fri 10-23 (was 11-08) | running | research inputs | — | quant |
 | R-AUTH | Auth e2e fixes (19/19 Playwright) | implementer | Mon 10-19 | running; security review | `web/` e2e, test mailer | — | security |
 | R-OCI | OCI provisioning script fixes | sre | Fri 10-16 (tonight) | running; security review | `scripts/deploy/` | — | security |
-| V-54 | HWM confirmation (BACKLOG 54) | trading-safety-reviewer | Sun 10-18 | in review; ADR number clash (two 0017s) fixed before merge | — | — | trading-safety |
+| V-54 | HWM confirmation (BACKLOG 54) | trading-safety-reviewer | Sun 10-18 | done 10-16: APPROVED on re-verify, merged 17c5e0d (ADR 0018), in PR #79 | — | — | trading-safety |
 | V-58 | Heartbeat clock-ahead (BACKLOG 58) | trading-safety-reviewer | Sun 10-18 | in review | — | — | trading-safety, sre |
 | V-RUN | run.py split | code-reviewer | Sat 10-17 | in review; keep the httpx line after basicConfig at merge | — | — | sre |
-| W1-1 | Bridge smoke command (BACKLOG 1, X6–X10) | implementer | built Wed 10-21; run on demo Thu 10-22 | first free builder slot after the batch PR; not started (was due 10-24) | new `ops/smoke.py`, its test, one command entry | batch PR open; run.py split merged; W1-0 | trading-safety, security, sre |
+| W1-1 | Bridge smoke command (BACKLOG 1, X6–X10) | implementer | plan Mon 10-19 (A-PLAN); built Fri 10-23; run on demo Mon 10-26 (re-dated 10-16 from built 10-21 / run 10-22: not started, no plan yet, and the builder slot waits on the trading-safety review queue and the engine start Sun 10-18; still inside M2's 10-30) | not started; builder starts the day the plan lands | new `ops/smoke.py`, its test, one command entry | batch PR open; run.py split merged; W1-0 | trading-safety, security, sre |
+| A-PLAN | Architect plans: W1-1 bridge smoke (files, `ops/smoke.py` interface, failing tests first, fail-closed on a refused order) and W2-1 state store step 2 (from `docs/proposals/2026-10-state-store.md`) | architect | W1-1 plan Mon 10-19; W2-1 plan Wed 10-21; both by Wed 10-21 at the latest | not started; read-only lane, starts Sat 10-17 (plans are returned to the program-director, who records them as HANDOFF fragments) | none (read-only) | — | — |
 | W1-2 | Nightly backups and the weekly restore drill | sre | Sun 10-18 | code done (`ops/backup.py`); verified by the 22:15 run and the Sunday drill | — | W1-0 | security |
 | W1-3 | Chaos-drill harness (gate 2 criterion) | sre | Fri 10-30 | not started; starts when R-OCI frees | new `scripts/chaos_drill.py`, its test | batch PR open | trading-safety |
 | W1-4 | Reconciliation on the running demo (D12, ledger) and session state from `session_deals` (D13) | data-engineer | read Tue 10-20; D13 Fri 10-30 | re-scoped: D12 and the broker ledger are built; D13 is partial | `data/calendar.py` | engine running; R-59 merged | trading-safety |
@@ -115,7 +116,7 @@ a builder and waits for the batch PR; the next builder slots go to W1-1, then W1
 
 | Lane | Item (rows) | Accountable | Files | Extra reviewers |
 | --- | --- | --- | --- | --- |
-| W2-1 | State store step 2: orders, approvals and risk state in `core.db` with fsync | implementer | `goldbot/db`, `engine/runner.py` persistence, `telegram/bus.py` | trading-safety, security, sre |
+| W2-1 | State store step 2: orders, approvals and risk state in `core.db` with fsync (architect plan by Wed 10-21, lane A-PLAN) | implementer | `goldbot/db`, `engine/runner.py` persistence, `telegram/bus.py` | trading-safety, security, sre |
 | W2-2 | `order_calc_margin` and tick-flags dedup (R8, D11) | implementer | `risk/gate.py`, `execution/mt5_adapter.py`, broker protocol | trading-safety |
 | W2-3 | Attribution, stop-rule and gate screens | ui-ux-designer | `goldbot/api` (read-only routes), `web/` | ui-ux, code |
 | W2-4 | Wine/bridge hardening from M2 findings (watchdog, reconnect, terminal restart) | sre | `ops/linux/`, `execution/bridge.py` | security, trading-safety |
@@ -170,7 +171,7 @@ Asked once, batched, on #34 on 2026-10-16. Each item has a recommendation and a 
 | OD-7 | `risk.equity_check_tolerance` | 0.02 (ADR 0016) | Sun 10-18 |
 | OD-8 | Ledger `balance_tolerance` 0.05 plus 0.01 per deal | Approve (ADR 0015) | Sun 10-18 |
 | OD-9 | `telegram.owner_tz` | Europe/London | Sun 10-18 (UK clocks change 10-25) |
-| OD-10 | Commit the uncommitted docs in the main checkout (finance, hosting options, speed-up review) | Yes, after a secret scan, in the next PR | Sat 10-17 |
+| OD-10 | ~~Commit the uncommitted docs in the main checkout (finance, hosting options, speed-up review)~~ | **Done 10-16:** all three were committed in f7b0cdc (2026-10-11, `docs/finance/`, `docs/deploy/free-hosting-options.md`, `docs/process/speed-up-review.md`) and the main checkout is clean; no owner decision left | closed |
 | OD-11 | GitHub "Keep my email private" and "Block command line pushes" | Turn both on; do not rewrite history | Sat 10-17, before the batch push |
 | OD-12 | Finance D1, D3, D4 | D1 (b) about $10 a month until a strategy passes; D3 Tailscale-only; D4 also track demo cover | Fri 10-23 |
 | OD-13 | Finance D2 (hosting after the Azure trial), D5 (deposits) | D2 decide on the Wine soak's evidence; D5 no recommendation | D2 by 2027-08-13; D5 open |
