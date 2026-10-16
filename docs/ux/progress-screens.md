@@ -62,37 +62,42 @@ Progress                                   as of 14:02    ← evaluated time, yo
 │ LONG-RUN EDGE · can trigger from month 18         │     ← condition A
 │ Time       4.2 of 18 months       ███░░░░░░░░░    │     role=meter
 │ Trades     61, needs more than 500 █░░░░░░░░░░    │
-│ Edge       −0.041% per trade, worst case          │     lower 90% bound, % of price
-│            (must be above 0% by month 18)         │
+│ Edge       Cautious estimate −0.041% per trade    │     lower 90% bound, % of price
+│            (lower 90% bound). Judged only after   │
+│            month 18 and more than 500 trades;     │
+│            below zero this early is expected.     │
+│ Counts demo and live trades since Thu 1 Oct       │     clock start (the paper gate, or the first trade)
+│ (paper start). 2 trades had missing costs and     │     only with imputed rows
+│ were charged an estimate ($0.84 in total).        │
 │                                                   │
 │ SINGLE BIG LOSS · any time                        │     ← condition B
 │ Worst      0.82% of equity · limit 5.0%  ██░░░░   │
 │            icm-demo · demo · Tue 13 Oct 16:20     │     account config name, mode, close time (your zone)
+│ Checks every closed demo and live trade on record.│
 │                                                   │
-│ Counts demo and live trades since Thu 1 Oct       │     clock start (the paper gate, or the first trade)
-│ (paper start). 2 trades had missing costs and     │     only with imputed rows
-│ were charged an estimate ($0.84 in total).        │
 │ This check never halts trading by itself.         │
 └───────────────────────────────────────────────────┘
 
 ┌ Road to live ─────────────────────────────────────┐
 │ Now: paper (demo). Next: gate 3, Paper → tiny live │
-│ ┌ 5 thresholds are proposed, not signed off. ────┐ │     ← blue info, owner-decision; tap: list + link
+│ ┌ 6 thresholds are proposed, not signed off. ────┐ │     ← blue info; the count comes from the API, never hard-coded
 │ └ Agree them before the first paper trade. ──────┘ │
 │ ① Leakage audit             [RECORDED] 2 Oct       │     ← collapsed rows, 48 px, tap to open
 │ ② Backtest → paper (demo)   [RECORDED] 9 Oct       │
 │ ③ Paper → tiny live         [NOT MET] 3 of 7    ▾  │     ← the next unrecorded gate starts open
 │   ✓ Gate 2 recorded first                          │
 │   ✗ Demo trades      12 of 150 closed  █░░░░░░░░   │
-│   ✗ Time on paper    7 of 182 days     ░░░░░░░░░   │
+│   ✗ Time on paper  [Proposed]                      │     ← tag when the threshold is unsigned
+│                      7 of 182 days     ░░░░░░░░░   │
 │                      earliest Thu 1 Apr 2027       │     calendar date, never a forecast
-│   ✗ Results vs backtest  [Proposed]                │     ← tag when the threshold is unsigned
-│                      paper −0.02% vs backtest      │
-│                      +0.05% per trade; needs no    │
-│                      more than 50% below           │
-│   ✓ Fills vs model   $0.031/oz vs $0.028/oz        │
-│                      modelled (within 30%) · 41    │
-│                      fills                         │
+│   ✗ Results vs backtest                            │
+│                      paper −0.02% (95%: −0.07% to  │     paper 95% interval (`ci95`)
+│                      +0.03%) vs backtest +0.05%    │
+│                      per trade; needs no more than │
+│                      50% below                     │
+│   ✓ Fills vs model   $0.031/oz vs $0.150/oz        │
+│                      modelled (no more than 30%    │
+│                      worse) · 41 fills             │
 │   ✗ Chaos drill      not recorded yet              │
 │   ✓ No single big loss (stop rule)                 │
 │   · For context: 312 closed shadow trades          │     not required: muted, no tick or cross
@@ -104,21 +109,24 @@ Progress                                   as of 14:02    ← evaluated time, yo
 
 ┌ Results · last 180 days ──────── as of Wed 00:50 ┐     ← job time, your zone; UTC on hover
 │ Simulated trades: every signal the models took,    │
-│ traded on paper at the real spread. Not your       │
-│ account's money.                                   │
+│ traded at the quoted spread in the price data. Not │
+│ your account's money.                              │
 │                                                    │
 │ +0.04 R per trade after costs · 212 trades         │     16 px semibold
-│ [CAN'T TELL FROM LUCK]                              │     verdict badge (words)
-│ Likely range −0.05 to +0.13 R (95%)  ──┼──●────    │     diverging bar at 0 with the range whisker
+│ [CAN'T TELL FROM LUCK]                              │     verdict badge (words); no AHEAD/BEHIND below 100 trades
+│ Average per trade: −0.05 to +0.13 R (95%)          │
+│                          ──┼──●────                 │     diverging bar at 0 with the range whisker
 │ Before costs +0.11 R · costs −0.07 R per trade     │
 │ 1 R ≈ £5.00 at today's size (0.5% of £1,000)        │     only when the API gives it
 │                                                    │
 │ Break down by  [ Timeframe          ▾ ]             │     native <select>, 44 px
 │ 15m   +0.02 R · 120 trades  [CAN'T TELL]        ›   │     rows in fixed order, never sorted by result
-│ 1h    +0.07 R ·  71 trades  [CAN'T TELL]        ›   │
-│ 4h    −0.10 R ·  21 trades  [TOO FEW]           ›   │     muted row: fewer than 30 trades
-│   (tap a row: before costs, likely range, share   │
-│    of winners, profit factor)                     │
+│ 1h    +0.07 R ·  71 trades  [CAN'T TELL]        ›   │     badge from `verdict_adj`
+│ 4h    −0.10 R ·  21 trades  [TOO FEW TRADES]    ›   │     muted row: "21 of 30 needed"
+│   (tap a row: Average per trade: −0.05 to +0.13 R │     `ci_adj`
+│    (95%, adjusted for 3 rows); smallest average   │
+│    this row can tell from luck: ±0.09 R; before   │
+│    costs, share of winners, profit factor)        │
 │                                                    │
 │ WHERE COSTS GO (per trade)                         │
 │ Spread −0.04 R · Slippage −0.01 R ·                │
@@ -126,14 +134,21 @@ Progress                                   as of 14:02    ← evaluated time, yo
 │ Costs take 64% of the result before costs.         │
 │ 18 trades won before costs and lost after them.    │
 │                                                    │
-│ LIVE FILLS VS THE COST MODEL                       │
-│ icm-demo: 41 fills, $0.003/oz worse than modelled  │
+│ LIVE FILLS VS WHAT THE BACKTEST CHARGED            │
+│ icm-demo: 41 fills, $0.003/oz worse than the       │
+│ $0.15/oz the backtest charged                      │
 │ [CAN'T TELL FROM LUCK]                              │
 │                                                    │
-│ These are findings, not settings. With about 30    │
-│ rows, one or two can look "beyond luck" by chance. │
-│ Changing a strategy because of one row is a new    │
-│ trial: ask the research director.                  │
+│ These are findings, not settings. Each row must    │
+│ clear a stricter bar because {m} rows are compared │
+│ (|t| ≥ {t_bar:.1f}), so on average fewer than 1     │
+│ report in 20 shows a row as ahead or behind by     │
+│ luck. The report is recomputed daily: a row that   │
+│ crosses once and falls back is not a finding. A    │
+│ row can suggest an idea but cannot prove it.       │
+│ Testing the idea is a new registered trial, judged │
+│ on data the row did not use: ask the research      │
+│ director.                                          │
 │ Notes ▸ (costs source, unknowns)                    │     collapsed
 └────────────────────────────────────────────────────┘
 
@@ -147,8 +162,8 @@ Progress                                   as of 14:02    ← evaluated time, yo
 ```
 
 Desktop (from 960 px): the stop rule and the road to live sit side by side in two columns, with Results full width
-below them. From 720 px the breakdown is a real table: name, net R per trade, trades, verdict, before costs, likely
-range, share of winners, profit factor. On a phone each row is a disclosure that opens to the same four extra figures.
+below them. From 720 px the breakdown is a real table: name, net R per trade, trades, verdict, average per trade
+(95%, adjusted), before costs, share of winners, profit factor. On a phone each row is a disclosure that opens to the same four extra figures.
 
 ## States
 
@@ -163,13 +178,15 @@ range, share of winners, profit factor. On a phone each row is a disclosure that
 
 Breach reasons, in words:
 
-- **Long-run edge**: "After 18.3 months and 512 trades, the worst-case edge is still below zero (−0.012% per
-  trade)."
+- **Long-run edge**: "After 18.3 months and 512 trades, the cautious estimate of the edge (lower 90% bound)
+  is still below zero (−0.012% per trade)."
 - **Single big loss**: "One trade lost 5.6% of equity, more than the 5.0% weekly limit · icm-demo · demo · closed
   Tue 13 Oct 16:20." When there is more than one, it adds "(+2 more)" and lists up to five, worst first.
 
-Condition A shows "can trigger from month 18" until month 18. After that it reads "checked now". The edge line
-before 30 trades reads "Edge: too few trades to estimate yet".
+Condition A shows "can trigger from month 18" until month 18. After that it reads "checked now". Below
+`min_trades_for_estimate` trades (from the API) the edge line reads "Edge: too few trades to estimate yet". The
+clock line ("Counts demo and live trades since …") belongs to condition A only. Condition B reads "Checks every
+closed demo and live trade on record."
 
 ### Road to live
 
@@ -194,12 +211,31 @@ its proposed value, and a link "Owner guide: Decisions waiting for you ↗".
 
 ### Results
 
-| Verdict (API `verdict`) | Badge (words) | Tone |
-|---|---|---|
-| `positive` | **AHEAD, BEYOND LUCK** | green |
-| `negative` | **BEHIND, BEYOND LUCK** | amber (not red: it stops nothing) |
-| `indistinguishable from zero` | **CAN'T TELL FROM LUCK** | grey |
-| `noise` | **TOO FEW TRADES** ("12 of 30 needed" in the row) | grey, row muted |
+Overall result (API `verdict`, |t| ≥ 2):
+
+| Verdict | Badge (words) | Sub-line | Tone |
+|---|---|---|---|
+| `positive` | **AHEAD** | "unlikely to be luck alone (\|t\| ≥ 2, today's 180 days)" | green |
+| `negative` | **BEHIND** | the same | amber (not red: it stops nothing) |
+| `indistinguishable from zero` | **CAN'T TELL FROM LUCK** | none | grey |
+| `noise` | **TOO FEW TRADES** | "12 of 30 needed" | grey, muted |
+
+Below 100 trades the overall headline shows no AHEAD or BEHIND badge, only CAN'T TELL FROM LUCK or TOO FEW TRADES.
+Its range reads "Average per trade: −0.05 to +0.13 R (95%)".
+
+Breakdown rows (API `verdict_adj`, |t| ≥ `t_bar`, Bonferroni over the `m` rows compared):
+
+| Verdict | Badge (words) | Sub-line | Tone |
+|---|---|---|---|
+| `positive` | **AHEAD** | "unlikely to be luck, even among {m} rows (\|t\| ≥ {t_bar:.1f})" | green |
+| `negative` | **BEHIND** | the same | amber |
+| `indistinguishable from zero`, including a row that passes \|t\| ≥ 2 but not `t_bar` | **CAN'T TELL FROM LUCK** | none | grey |
+| `noise` | **TOO FEW TRADES** | "12 of 30 needed" | grey, row muted |
+
+A row's range is `ci_adj` = mean ± `t_bar` · se: "Average per trade: −0.05 to +0.13 R (95%, adjusted for N rows)".
+The expanded row adds "smallest average this row can tell from luck: ±{t_bar·se} R". The verdict and the range always
+agree: AHEAD only when the whole range is above 0, and BEHIND only when it is below 0. Both come from the API; the
+browser never recomputes either.
 
 Breakdown labels in plain words (`web/src/lib/progress.ts`; the raw key goes in the hover title): timeframe (15m, 1h,
 4h, 1d), family (from the family map, for example "Session open", "Trend"), session (Asia, London, New York),
@@ -241,8 +277,10 @@ exits always run" or "Trading is not affected").
   so every time is localised.
 - Say "simulated" for shadow-book figures and "your account's" for closed trades, every time. The two are never
   added together or shown in one table.
-- "Worst case" means the lower 90% bound. "Likely range" means the 95% interval. "Beyond luck" means |t| ≥ 2. Each
-  of these has an info tip that gives the statistical term.
+- 'Unlikely to be luck' means |t| ≥ 2 for the overall result and |t| ≥ t_bar (Bonferroni over the rows compared,
+  sent by the API) for a row, with standard errors clustered by day. 'Cautious estimate' means the one-sided lower
+  90% confidence bound. 'Average per trade … (95%)' is the confidence interval of the mean. Each has an info tip
+  with the statistical term.
 - Never "approved", "ready to go live" or "passed" for a gate that is only met. "Met on the evidence" is the
   strongest phrase. Recording is the owner's decision, and live is a separate lock.
 
@@ -310,14 +348,16 @@ Send /halt to stop new entries. Details: dashboard → Progress.
    - `GateView`: `gate` (id), `met`, `recorded`, **`recorded_utc`** (from `gate_log`, not in `GateStatus` today),
      `items: list[GateItemView]`.
    - `GateItemView`: `name`, `met`, `required`, `need`, `evidence` (**without** the owner's `detail`),
-     **`proposed: bool`**, **`progress: {value, target, unit} | None`** (trades, days, months, fills), and
-     **`earliest_utc`** for the day items.
+     **`proposed: bool`**, **`progress: {value, target, unit} | None`** (trades, days, months, fills),
+     **`earliest_utc`** for the day items, and **`ci95: [lo, hi] | None`** (the paper or live 95% interval of the
+     mean per-trade return on the expectancy items: "paper −0.02% (95%: −0.07% to +0.03%) vs backtest +0.05%").
+   - `GatesView` also carries **`proposed_count`**, so the "N thresholds are proposed" note is never hard-coded.
    - **`proposed` needs a settings field.** Today "PROPOSED" is only a YAML comment. Add `gates.signed_off:
      list[str]` (threshold names the owner has signed off; empty by default) and mark every other proposed threshold
      `proposed=True`. Signing off is the owner's decision, so the field only records it.
 2. **`StopRuleView`**: `status: "ok" | "not_started" | "breached" | "cant_check"`; `cant_check: str | None`;
    `months`, **`after_months`**, `pooled_trades`, **`min_pooled_trades`**, **`confidence`**, `lower_bound` (per-trade
-   return, fraction), `worst_loss_frac`, **`weekly_cap`**, **`clock_start_utc`** and **`clock_source: "paper_gate" |
+   return, fraction), **`min_trades_for_estimate`** (below it the edge line reads "too few trades to estimate yet"), `worst_loss_frac`, **`weekly_cap`**, **`clock_start_utc`** and **`clock_source: "paper_gate" |
    "first_trade" | None`**; **`breach: list["long_run" | "single_loss"]`**; **`incidents: list[{account, mode,
    closed_utc, loss_frac}]`** (worst first, at most 5, the account with its digits cut) with `incident_count`;
    **`imputed: {n, charged_usd, unpriced}`**. Today `StopRuleStatus` has only formatted `reasons` and `detail`
@@ -328,6 +368,12 @@ Send /halt to stop new entries. Details: dashboard → Progress.
    holds no policy); **`next_run_utc`**; `live` keyed by the account with its digits cut; **`r_money: {amount,
    currency, risk_fraction} | None`** (1 R at today's normal risk × equity, from the account view; null when either
    is missing); `cant_check: str | None`.
+   - Multiple-comparison fields (quant review, 10-16), computed in `research/attribution.py` so the browser never
+     recomputes them. Per breakdown: **`m`** (rows compared) and **`t_bar`** (the Bonferroni bar over those `m` rows,
+     with standard errors clustered by day). Per row (`Cell`): **`verdict_adj`** (positive, negative,
+     indistinguishable from zero, or noise at `t_bar`) and **`ci_adj: [lo, hi]`** (mean ± `t_bar` · se, R per trade),
+     plus `se` for the "smallest average this row can tell from luck" line. The overall cell keeps `verdict` at
+     |t| ≥ 2 with `ci95_net`. The API guarantees that the verdict and the range agree.
 4. **`GET /api/trades/summary` → `list[TradesSummary]`** (recommended; it serves the north star, ADR 0004): per
    account `{account, mode, currency, days: 30, net, n, trading_days, days_at_target (net ≥ 50 in the account
    currency, the ADR's figure from settings), best_day, worst_day, by_day: list[{day, net, n}], gross_rows}` on the
@@ -341,8 +387,9 @@ Send /halt to stop new entries. Details: dashboard → Progress.
 - **The dashboard header shows the signed-in email** (`App.tsx`, `currentUser()?.email`). It is the user's own, but it
   appears in every screenshot the owner shares from a phone. Recommendation: show the role only in the header and the
   email on the Account tab. This needs a one-line change in its own lane and an owner yes or no.
-- **Multiple comparisons on Results.** About 30 cells at |t| ≥ 2 will show one or two "beyond luck" rows by chance.
-  The footnote says so, and the order is fixed. The quant reviewer should sign off the verdict words before the
+- **Multiple comparisons on Results.** About 30 cells at |t| ≥ 2 would show one or two rows as ahead or behind by
+  chance. Rows are therefore judged at the Bonferroni bar `t_bar` (quant review, 10-16), the footnote says so, and the
+  order is fixed. The quant reviewer should sign off the verdict words before the
   build.
 - **PROPOSED thresholds are still unsigned** (OWNER_GUIDE "Decisions waiting for you"). The screen makes that visible.
   It does not decide it.
