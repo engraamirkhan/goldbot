@@ -84,7 +84,7 @@ class RiskLimits(Record):
     equity_check_tolerance: float = 0.02
     # ...and a pending 12% read clears only after every read stayed below dd_stage2 - tolerance this long (seconds)
     equity_recovery_s: float = 60.0
-    # BACKLOG 54 (ADR 0017): a rise in balance_closed_hwm needs the deal history or a second balance read to agree with
+    # BACKLOG 54 (ADR 0018): a rise in balance_closed_hwm needs the deal history or a second balance read to agree with
     # it within this fraction of the mark (goldbot/risk/hwm.py)
     hwm_rise_tolerance: float = 0.001
     # BACKLOG 17/18 (playbook G-2, G-3): entry windows around tier-2 events, after reopens and on thin-liquidity days;

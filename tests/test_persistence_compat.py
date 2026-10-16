@@ -233,14 +233,14 @@ def case_ledger(tmp: Path) -> None:
 
 
 def case_hwm_confirmation(tmp: Path) -> None:
-    """core.db high-water-mark confirmation row (BACKLOG 54, ADR 0017) with a field from a newer release."""
+    """core.db high-water-mark confirmation row (BACKLOG 54, ADR 0018) with a field from a newer release."""
     conf = hwm.HwmConfirmation(account_id="icm-demo", mark=10_000.0, mark_utc=T0, pending_balance=10_500.0,
-                               pending_since_utc=T0)
-    assert hwm.save_confirmation(tmp, conf)
+                               pending_since_utc=T0, candidate_utc=T0)
+    assert hwm.HwmStore(tmp).save(conf)
     with sqlite3.connect(tmp / "core.db") as conn:
         body = conn.execute("SELECT body FROM hwm_confirmation").fetchone()[0]
         conn.execute("UPDATE hwm_confirmation SET body = ?", (json.dumps(_newer(json.loads(body))),))
-    assert hwm.load_confirmation(tmp, "icm-demo") == conf
+    assert hwm.HwmStore(tmp).load("icm-demo") == conf
     assert hwm.read_only_confirmation(tmp, "icm-demo") == conf
 
 

@@ -1,4 +1,4 @@
-"""BACKLOG 54 (ADR 0017): a rise in balance_closed_hwm is applied only once confirmed, by the deal history or by a
+"""BACKLOG 54 (ADR 0018): a rise in balance_closed_hwm is applied only once confirmed, by the deal history or by a
 second balance read that agrees. One inflated balance read never raises the mark, so it can never cause a phantom
 size-down or kill switch on the real reads after it; two agreeing reads, or a read the deal history explains, raise it
 as before; a restart between the two reads never applies an unconfirmed rise."""
@@ -32,8 +32,14 @@ def _new_engine(tmp_path: Path, pb: PaperBroker) -> Engine:
                                halt_checks=False), pb, [], {}, ApprovalCenter({111}))
 
 
+class _Terminal(PaperBroker):
+    """A paper broker that does not declare its balance reads exact, as a real terminal (MT5, the bridge) does not."""
+
+    balance_exact = False
+
+
 def _engine(tmp_path: Path) -> tuple[Engine, PaperBroker]:
-    pb = PaperBroker(equity=10_000)
+    pb = _Terminal(equity=10_000)
     pb.on_tick(_tick(T0))
     eng = _new_engine(tmp_path, pb)
     eng._refresh_account(_tick(T0))               # high-water mark 10,000, set at T0
@@ -98,7 +104,7 @@ def test_a_single_inflated_balance_read_leaves_the_mark_unchanged(tmp_path, monk
 
 
 def test_a_single_inflated_read_causes_no_size_down_or_halt_on_the_next_real_reads(tmp_path, monkeypatch):
-    """Before ADR 0017 the 12,000 read raised the mark for good: the real 10,000 reads were a 16.7% drawdown,
+    """Before ADR 0018 the 12,000 read raised the mark for good: the real 10,000 reads were a 16.7% drawdown,
     size-down at once and, two reads later (ADR 0016), the kill switch closing everything at market."""
     eng, pb = _engine(tmp_path)
     pid = _open(pb, "a")
@@ -159,8 +165,8 @@ def test_two_reads_that_agree_within_the_tolerance_raise_the_mark_to_the_lower(t
     assert eng.state.balance_closed_hwm == 10_500
 
 
-def test_a_paper_close_raises_the_mark_on_the_second_read(tmp_path):
-    """The paper broker has no MT5 deal history, so the deal path cannot explain; the next read confirms."""
+def test_a_close_without_an_mt5_deal_history_raises_the_mark_on_the_second_read(tmp_path):
+    """A terminal whose deal history cannot explain the rise (no MT5 columns): the next read confirms."""
     eng, pb = _engine(tmp_path)
     pid = _open(pb, "a", lots=1.0)
     pb.on_tick(_tick(T0 + pd.Timedelta(seconds=1), 2410.0))
@@ -190,7 +196,7 @@ def test_a_rise_the_deal_history_explains_raises_the_mark_on_the_first_read(tmp_
 
 
 def test_a_deposit_in_the_deal_history_raises_the_mark_and_is_recorded(tmp_path, monkeypatch):
-    """ADR 0017: a deposit raises the mark (the drawdown is measured on the capital the account now holds)."""
+    """ADR 0018: a deposit raises the mark (the drawdown is measured on the capital the account now holds)."""
     eng, pb = _engine(tmp_path)
     monkeypatch.setattr(pb, "deals_since", lambda since: _deals((T0 + pd.Timedelta(minutes=5), 2, 1_000.0)))
     _script(monkeypatch, pb, 11_000.0)
@@ -301,13 +307,151 @@ def test_a_row_for_another_mark_is_void(tmp_path, monkeypatch):
     assert again.state.balance_closed_hwm == 10_200 and reads == []
 
 
+def _broken(*a: Any, **k: Any) -> Any:
+    raise OSError("disk")
+
+
 def test_an_unwritable_core_db_never_stops_the_refresh_and_never_raises_on_one_read(tmp_path, monkeypatch):
     eng, pb = _engine(tmp_path)
-    monkeypatch.setattr(hwm.Database, "open", classmethod(lambda cls, *a, **k: (_ for _ in ()).throw(OSError("disk"))))
+    monkeypatch.setattr(hwm.Database, "write", _broken)
     _script(monkeypatch, pb, 12_000.0, None)
     _read(eng, 1)
     _read(eng, 2)
     assert eng.state.balance_closed_hwm == 10_000
+
+
+def test_a_core_db_that_cannot_be_opened_never_stops_the_engine_and_never_raises_on_one_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(hwm.Database, "open", classmethod(_broken))
+    eng, pb = _engine(tmp_path)
+    assert eng._hwm_store.db is None
+    _script(monkeypatch, pb, 12_000.0, None, 10_500.0, 10_500.0)
+    for s in (1, 2, 3, 4):
+        _read(eng, s)
+    assert eng.state.balance_closed_hwm == 10_500                     # in-process confirmation still works
+
+
+def test_core_db_is_opened_once_per_engine_and_writes_with_a_short_busy_timeout(tmp_path, monkeypatch):
+    """Review L1: the save runs on the tick thread, so it never migrates or waits the default 5 s busy timeout."""
+    opened: list[Any] = []
+    real = hwm.Database.open.__func__                                 # type: ignore[attr-defined]
+
+    def counting(cls: Any, *a: Any, **k: Any) -> Any:
+        opened.append(k.get("busy_timeout_ms"))
+        return real(cls, *a, **k)
+    monkeypatch.setattr(hwm.Database, "open", classmethod(counting))
+    eng, pb = _engine(tmp_path)
+    _script(monkeypatch, pb, 12_000.0, None, 10_500.0, 10_500.0)
+    for s in (1, 2, 3, 4):
+        _read(eng, s)
+    assert opened == [hwm.WRITE_BUSY_TIMEOUT_MS] and 250 <= hwm.WRITE_BUSY_TIMEOUT_MS <= 500
+
+
+# ---------------------------------------------------------------------------------------------- review fixes
+def test_a_real_peak_followed_by_a_loss_still_raises_the_mark_to_the_peak(tmp_path, monkeypatch):
+    """Review M1: mark 10,000; a read of 10,300 the deals since the mark do not explain becomes the candidate; a loss
+    then reads 9,900. The deals since the candidate take it to 9,900, so the peak was real: the mark rises to 10,300
+    instead of staying 3% low until the next new high."""
+    eng, pb = _engine(tmp_path)
+    loss = (T0 + pd.Timedelta(seconds=20), 1, -399.0)                 # -399 profit, -1 commission
+
+    def deals_since(since: pd.Timestamp) -> pd.DataFrame:
+        return _deals(*[d for d in [loss] if d[0] >= since])
+    monkeypatch.setattr(pb, "deals_since", deals_since)
+    _script(monkeypatch, pb, 10_300.0, 9_900.0)
+    _read(eng, 10)
+    assert eng.state.balance_closed_hwm == 10_000
+    _read(eng, 30)
+    assert eng.state.balance_closed_hwm == 10_300
+    raised = [d for d in eng.decisions if d.get("action") == "hwm_raised"]
+    assert raised[-1]["by"] == "candidate_deals" and "hwm_rise_refused" not in _actions(eng)
+    assert eng._hwm.mark_utc == T0 + pd.Timedelta(seconds=10)          # anchored where the peak was read
+
+
+def test_a_glitch_followed_by_a_lower_read_without_deals_is_still_refused(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    monkeypatch.setattr(pb, "deals_since", lambda since: _deals())
+    _script(monkeypatch, pb, 12_000.0, 9_900.0)
+    _read(eng, 10)
+    _read(eng, 30)
+    assert eng.state.balance_closed_hwm == 10_000 and _actions(eng)[-1] == "hwm_rise_refused"
+
+
+def test_paper_broker_balance_reads_are_exact_so_one_read_raises_the_mark(tmp_path, monkeypatch):
+    pb = PaperBroker(equity=10_000)
+    pb.on_tick(_tick(T0))
+    eng = _new_engine(tmp_path, pb)
+    eng._refresh_account(_tick(T0))
+    _script(monkeypatch, pb, 10_500.0)
+    _read(eng, 1)
+    assert eng.state.balance_closed_hwm == 10_500
+    assert [d for d in eng.decisions if d.get("action") == "hwm_raised"][-1]["by"] == "exact"
+
+
+def test_only_the_paper_broker_declares_exact_balance_reads_and_a_remote_pass_through_cannot():
+    from goldbot.execution.bridge import RemoteBroker
+    from goldbot.execution.mt5_adapter import MT5Broker
+    assert PaperBroker.balance_exact is True
+    for cls in (RemoteBroker, MT5Broker):
+        assert getattr(cls, "balance_exact", False) is False
+
+
+def test_jittering_reads_above_the_mark_keep_the_first_pending_time_so_health_warns(tmp_path, monkeypatch):
+    """Review M2: each disagreeing candidate replaces the last, but the wait is measured from the first of them."""
+    eng, pb = _engine(tmp_path)
+    reads = [10_500.0 if i % 2 else 10_700.0 for i in range(40)]
+    _script(monkeypatch, pb, *reads)
+    for i in range(40):                                                # one read every 10 s: 6.5 min
+        _read(eng, 1 + 10 * i)
+    assert eng.state.balance_closed_hwm == 10_000
+    assert eng._hwm.pending_since_utc == T0 + pd.Timedelta(seconds=1)
+    eng._save_risk_state()
+    stuck = _health(tmp_path, T0 + pd.Timedelta(seconds=392))
+    assert stuck.status == "warn" and "balance rise has waited" in stuck.reason
+
+
+def test_a_read_at_or_below_the_mark_clears_the_pending_time(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _script(monkeypatch, pb, 10_500.0, 10_700.0, 10_000.0, 10_600.0)
+    for s in (1, 2, 3, 4):
+        _read(eng, s)
+    assert eng._hwm.pending_since_utc == T0 + pd.Timedelta(seconds=4)
+
+
+def test_a_candidate_older_than_ten_minutes_is_void_in_the_rule():
+    """Review L2: an agreeing read 11 minutes after the candidate does not confirm it; it is a new candidate."""
+    old = _conf(pending_balance=1_050.0, pending_since_utc=T0, candidate_utc=T0)
+    s = hwm.step(old, 1_000.0, 1_050.0, T0 + pd.Timedelta(minutes=11), TOL, _none)
+    assert s.outcome == "pending" and s.expired == 1_050.0 and s.mark == 1_000.0
+    assert s.conf.pending_since_utc == T0 + pd.Timedelta(minutes=11)
+    s = hwm.step(old, 1_000.0, 1_050.0, T0 + pd.Timedelta(minutes=9), TOL, _none)
+    assert s.outcome == "raised"
+
+
+def test_a_candidate_older_than_ten_minutes_is_void_on_load(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _script(monkeypatch, pb, 10_500.0)
+    _read(eng, 1)                                                      # candidate at T0 + 1 s (2025)
+    eng._save_risk_state()
+    live = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), owner_user_id=111,
+                               halt_checks=False, live_clock=True), pb, [], {}, ApprovalCenter({111}))
+    assert live._hwm.pending_balance is None and not live._reread_hwm
+    replay = _new_engine(tmp_path, pb)                                 # tick clock: judged on its first read instead
+    assert replay._hwm.pending_balance == 10_500.0
+
+
+def test_a_legacy_row_without_candidate_time_uses_its_pending_time():
+    legacy = _conf(pending_balance=1_050.0, pending_since_utc=T0)
+    assert legacy.candidate_at() == T0
+    assert hwm.step(legacy, 1_000.0, 1_050.0, T0 + pd.Timedelta(minutes=1), TOL, _none).outcome == "raised"
+
+
+def test_a_candidate_the_deals_after_it_carry_to_a_higher_read_raises_the_mark_to_that_read():
+    def deals(since: pd.Timestamp) -> pd.DataFrame:
+        return _deals((T0 + pd.Timedelta(seconds=5), 1, 21.0)) if since <= T0 else _deals()
+    c = hwm.HwmConfirmation(account_id="a", mark=1_000.0, pending_balance=1_030.0, pending_since_utc=T0,
+                            candidate_utc=T0)                          # no mark anchor: only the candidate's deals
+    s = hwm.step(c, 1_000.0, 1_050.0, T0 + pd.Timedelta(seconds=10), TOL, deals)
+    assert s.outcome == "raised" and s.mark == 1_050.0 and s.by == "candidate_deals"
 
 
 def test_the_hwm_table_is_an_additive_core_migration_an_older_release_still_opens():
@@ -338,6 +482,7 @@ def test_the_rule_never_lowers_the_mark_and_raises_only_to_the_lower_of_two_agre
     assert s.outcome == "refused" and s.mark == 1_000.0 and s.dropped == 1_050.0
     s = hwm.step(_conf(pending_balance=1_050.0, pending_since_utc=T0), 1_000.0, 1_200.0, T0, TOL, _none)
     assert s.outcome == "pending" and s.mark == 1_000.0 and s.dropped == 1_050.0 and s.conf.pending_balance == 1_200.0
+    assert s.conf.pending_since_utc == T0                              # the first of the run is kept (review M2)
 
 
 def test_without_an_anchor_the_deal_history_is_not_read():

@@ -1,8 +1,8 @@
-"""BACKLOG 54 (ADR 0017): a rise in the balance high-water mark is applied only once it is confirmed.
+"""BACKLOG 54 (ADR 0018): a rise in the balance high-water mark is applied only once it is confirmed.
 
 The drawdown stages measure equity against `balance_closed_hwm`. Raising it on every read (`max(hwm, balance)`) let one
 inflated balance read (a glitch, a half-filled account struct) raise the mark for good, so every later real read looked
-like a drawdown: size-down at 8% and, two reads later, a phantom 12% kill switch. The rule (ADR 0017):
+like a drawdown: size-down at 8% and, two reads later, a phantom 12% kill switch. The rule (ADR 0018):
 
 * "a rise in balance_closed_hwm is applied only once confirmed: by the deal history (closed deals and balance
   operations since the last mark account for the rise within a tolerance), or by a second balance read that agrees;
@@ -34,6 +34,12 @@ from goldbot.db.repo import RecordRepo
 log = logging.getLogger(__name__)
 
 
+#: a candidate older than this is void (L2: the engine was down, or no read came): a rise then needs a fresh pair
+CANDIDATE_MAX_AGE = pd.Timedelta(minutes=10)
+#: the engine's write runs on the tick thread: a locked core.db gives up after this (the strict side), never blocks exits
+WRITE_BUSY_TIMEOUT_MS = 500
+
+
 class HwmConfirmation(FrozenRecord):
     """One account's high-water-mark confirmation state (core.db `hwm_confirmation`). S12: every optional field's
     default is the strict side. No anchor means the deal history cannot explain a rise (a second read must), and no
@@ -42,8 +48,26 @@ class HwmConfirmation(FrozenRecord):
     account_id: str
     mark: float                                     # the mark this row refers to; another mark voids the row
     mark_utc: UtcTimestamp | None = None            # when that mark was set from a balance read (deal-history anchor)
-    pending_balance: float | None = None            # an unconfirmed balance read above the mark
-    pending_since_utc: UtcTimestamp | None = None   # when it was read
+    pending_balance: float | None = None            # an unconfirmed balance read above the mark (the candidate)
+    # when the first of an unbroken run of candidates was read (a disagreeing candidate replacing another keeps it; a
+    # raise or a read at or below the mark clears it): health's "waiting for confirmation" age
+    pending_since_utc: UtcTimestamp | None = None
+    # when the current candidate was read: its age, and the anchor for the deals that may corroborate it later.
+    # Missing (a row from before this field) = pending_since_utc, which then meant the same
+    candidate_utc: UtcTimestamp | None = None
+
+    def candidate_at(self) -> pd.Timestamp | None:
+        return self.candidate_utc or self.pending_since_utc
+
+    def without_candidate(self) -> HwmConfirmation:
+        return self.model_copy(update={"pending_balance": None, "pending_since_utc": None, "candidate_utc": None})
+
+    def fresh(self, now: pd.Timestamp) -> HwmConfirmation:
+        """This row with a candidate older than CANDIDATE_MAX_AGE dropped (L2)."""
+        at = self.candidate_at()
+        if self.pending_balance is not None and (at is None or now - at > CANDIDATE_MAX_AGE):
+            return self.without_candidate()
+        return self
 
 
 def _ns(ts: pd.Timestamp) -> int:
@@ -53,22 +77,47 @@ def _ns(ts: pd.Timestamp) -> int:
 HWM: RecordRepo[HwmConfirmation] = RecordRepo(
     "hwm_confirmation", HwmConfirmation, key="account_id", tolerant=True,
     columns={"account_id": lambda c: c.account_id,
-             "ts_ns": lambda c: _ns(c.pending_since_utc or c.mark_utc or pd.Timestamp(0, tz="UTC"))})
+             "ts_ns": lambda c: _ns(c.candidate_at() or c.mark_utc or pd.Timestamp(0, tz="UTC"))})
 
 
-def load_confirmation(state_dir: str | Path, account_id: str) -> HwmConfirmation | None:
-    """The persisted row, or None when there is none or it cannot be read (the strict side: no anchor, no candidate).
-    A missing core.db is not created by a read."""
-    if not db_path(state_dir, "core").exists():
-        return None
-    try:
-        db = Database.open(state_dir, "core")
-        with db.connection() as conn:
-            return HWM.get(conn, account_id)
-    except Exception as exc:          # never stops the engine: the strict side instead
-        log.warning("high-water-mark confirmation state unreadable (%s): a rise needs a fresh confirmation",
-                    type(exc).__name__)
-        return None
+class HwmStore:
+    """The engine's handle on core.db, opened (and migrated) once at start (review L1), so a save on the tick thread
+    is one short write with a WRITE_BUSY_TIMEOUT_MS busy timeout. When core.db cannot be opened, nothing is loaded or
+    saved (logged): every rise then needs its confirmation within this process, the strict side."""
+
+    def __init__(self, state_dir: str | Path):
+        self.db: Database | None = None
+        try:
+            self.db = Database.open(state_dir, "core", busy_timeout_ms=WRITE_BUSY_TIMEOUT_MS)
+        except Exception as exc:
+            log.warning("core.db unavailable for the high-water-mark confirmation (%s): a pending rise is not kept "
+                        "across a restart", type(exc).__name__)
+
+    def load(self, account_id: str) -> HwmConfirmation | None:
+        """The persisted row, or None when there is none or it cannot be read (no anchor, no candidate)."""
+        if self.db is None:
+            return None
+        try:
+            with self.db.connection() as conn:
+                return HWM.get(conn, account_id)
+        except Exception as exc:          # never stops the engine: the strict side instead
+            log.warning("high-water-mark confirmation state unreadable (%s): a rise needs a fresh confirmation",
+                        type(exc).__name__)
+            return None
+
+    def save(self, conf: HwmConfirmation) -> bool:
+        """Upsert the row (synchronous FULL); False (logged) when it cannot be written. A lost write only loses a
+        candidate or an anchor, so the next rise needs a fresh confirmation (never a rise applied on one read)."""
+        if self.db is None:
+            return False
+        try:
+            with self.db.write() as conn:
+                HWM.upsert(conn, conf)
+            return True
+        except Exception as exc:
+            log.warning("high-water-mark confirmation state not saved (%s): a restart forgets the pending rise",
+                        type(exc).__name__)
+            return False
 
 
 def read_only_confirmation(state_dir: str | Path, account_id: str) -> HwmConfirmation | None:
@@ -88,20 +137,6 @@ def read_only_confirmation(state_dir: str | Path, account_id: str) -> HwmConfirm
         conn.close()
 
 
-def save_confirmation(state_dir: str | Path, conf: HwmConfirmation) -> bool:
-    """Upsert the row (core.db, synchronous FULL); False (logged) when it cannot be written. A lost write only loses a
-    candidate or an anchor, so the next rise needs a fresh confirmation (never a rise applied on one read)."""
-    try:
-        db = Database.open(state_dir, "core")
-        with db.write() as conn:
-            HWM.upsert(conn, conf)
-        return True
-    except Exception as exc:
-        log.warning("high-water-mark confirmation state not saved (%s): a restart forgets the pending rise",
-                    type(exc).__name__)
-        return False
-
-
 def deals_balance_change(deals: pd.DataFrame) -> tuple[float, float, int]:
     """(balance change, deposits, balance-changing deals) over an MT5 deal history: profit, commission, swap and fee
     of every deal except credit (MT5 DEAL_CREDIT does not touch the balance), as the ledger's RC-9 tie-out counts it.
@@ -117,6 +152,7 @@ def deals_balance_change(deals: pd.DataFrame) -> tuple[float, float, int]:
 
 
 Outcome = Literal["unchanged", "raised", "pending", "refused"]
+By = Literal["deals", "second_read", "candidate_deals", "exact"]
 
 
 class HwmStep(FrozenRecord):
@@ -125,60 +161,83 @@ class HwmStep(FrozenRecord):
     mark: float
     conf: HwmConfirmation
     outcome: Outcome
-    by: Literal["deals", "second_read"] | None = None   # how a rise was confirmed
+    by: By | None = None                                # how a rise was confirmed
     deposits: float = 0.0                               # deposits in the deal history that explained it
     dropped: float | None = None                        # a candidate this read disagreed with (a refused rise)
+    expired: float | None = None                        # a candidate voided by age before this read (L2)
 
 
 def step(conf: HwmConfirmation, mark: float, balance: float, now: pd.Timestamp, tolerance: float,
-         deals: Callable[[pd.Timestamp], pd.DataFrame]) -> HwmStep:
-    """Apply one balance read to the mark (ADR 0017). `conf` must refer to `mark` (the caller voids it otherwise);
-    `tolerance` is a fraction of the mark; `deals(since)` reads the broker's deal history.
+         deals: Callable[[pd.Timestamp], pd.DataFrame], *, exact: bool = False) -> HwmStep:
+    """Apply one balance read to the mark (ADR 0018). `conf` must refer to `mark` (the caller voids it otherwise);
+    `tolerance` is a fraction of the mark; `deals(since)` reads the broker's deal history; `exact`: the broker's
+    balance reads cannot glitch (the paper broker's own ledger), so a read above the mark raises it at once.
 
-    * A read at or below the mark (or not a number) never moves it; a candidate it disagrees with is refused.
-    * A read above it is confirmed when the deal history since the mark was set explains it (at least one
+    * A candidate older than CANDIDATE_MAX_AGE is dropped first.
+    * A read above the mark is confirmed when the deal history since the mark was set explains it (at least one
       balance-changing deal, and mark + their sum within the tolerance of the read), or when it agrees with the
-      candidate within the tolerance (then the mark rises to the lower of the two). Otherwise it becomes the candidate
-      (replacing, and refusing, a candidate it disagrees with), and the next read must confirm it.
+      candidate within the tolerance (the mark rises to the lower of the two).
+    * A read that disagrees with the candidate first asks whether the deals since the candidate was read take the
+      candidate to this read (review M1: a real peak followed by a loss). If they do, the candidate was real and the
+      mark rises to it (and further, if this read is itself above it and explained). Otherwise the candidate is
+      refused. A read above the mark then becomes the new candidate, keeping the first pending_since_utc (review M2).
+    * A read at or below the mark (or not a number) never moves the mark, apart from that corroborated candidate.
     """
     tol = tolerance * mark
+    expired = conf.pending_balance if conf.fresh(now) is not conf else None
+    conf = conf.fresh(now)
     pend = conf.pending_balance
-    if not (math.isfinite(balance) and balance > mark):
+    above = math.isfinite(balance) and balance > mark
+    if above and exact:
+        return _raised(conf, balance, now, "exact", 0.0, expired)
+    if above:
+        explained = _explained(conf.mark_utc, mark, balance, tol, deals)
+        if explained is not None:
+            return _raised(conf, balance, now, "deals", explained, expired)
+        if pend is not None and abs(balance - pend) <= tol:
+            return _raised(conf, min(balance, pend), now, "second_read", 0.0, expired)
+    if pend is not None:
+        at = conf.candidate_at()
+        backed = _explained(at, pend, balance, tol, deals) if math.isfinite(balance) else None
+        if backed is not None and at is not None:
+            raised = _raised(conf, pend, at, "candidate_deals", backed, expired)
+            if not (balance > pend):
+                return raised
+            after = step(raised.conf, pend, balance, now, tolerance, deals)
+            if after.outcome == "raised":
+                return after.model_copy(update={"by": "candidate_deals", "expired": expired})
+            return raised.model_copy(update={"conf": after.conf})      # raised to the candidate, this read pending
+    if not above:
         if pend is None:
-            return HwmStep(mark=mark, conf=conf, outcome="unchanged")
-        cleared = conf.model_copy(update={"pending_balance": None, "pending_since_utc": None})
-        return HwmStep(mark=mark, conf=cleared, outcome="refused", dropped=pend)
-    explained = _explained(conf, mark, balance, tol, deals)
-    if explained is not None:
-        return _raised(conf, balance, now, "deals", explained)
-    if pend is not None and abs(balance - pend) <= tol:
-        return _raised(conf, min(balance, pend), now, "second_read", 0.0)
-    candidate = conf.model_copy(update={"pending_balance": balance, "pending_since_utc": now})
-    return HwmStep(mark=mark, conf=candidate, outcome="pending", dropped=pend)
+            return HwmStep(mark=mark, conf=conf, outcome="unchanged", expired=expired)
+        return HwmStep(mark=mark, conf=conf.without_candidate(), outcome="refused", dropped=pend, expired=expired)
+    candidate = conf.model_copy(update={"pending_balance": balance, "candidate_utc": now,
+                                        "pending_since_utc": conf.pending_since_utc or now})
+    return HwmStep(mark=mark, conf=candidate, outcome="pending", dropped=pend, expired=expired)
 
 
-def _raised(conf: HwmConfirmation, to: float, now: pd.Timestamp, by: Literal["deals", "second_read"],
-            deposits: float) -> HwmStep:
-    new = HwmConfirmation(account_id=conf.account_id, mark=to, mark_utc=now)
-    return HwmStep(mark=to, conf=new, outcome="raised", by=by, deposits=deposits)
+def _raised(conf: HwmConfirmation, to: float, at: pd.Timestamp, by: By, deposits: float,
+            expired: float | None) -> HwmStep:
+    new = HwmConfirmation(account_id=conf.account_id, mark=to, mark_utc=at)
+    return HwmStep(mark=to, conf=new, outcome="raised", by=by, deposits=deposits, expired=expired)
 
 
-def _explained(conf: HwmConfirmation, mark: float, balance: float, tol: float,
+def _explained(since: pd.Timestamp | None, start: float, balance: float, tol: float,
                deals: Callable[[pd.Timestamp], pd.DataFrame]) -> float | None:
-    """The deposits among the deals when the deal history since the anchor explains the read, else None. No anchor,
-    an unreadable or non-MT5 history, or no balance-changing deal never explains a rise."""
-    if conf.mark_utc is None:
+    """The deposits among the deals since `since` when `start` + their balance change is within `tol` of `balance`,
+    else None. No anchor, an unreadable or non-MT5 history, or no balance-changing deal never explains anything."""
+    if since is None:
         return None
     try:
-        change, deposits, counted = deals_balance_change(deals(conf.mark_utc))
+        change, deposits, counted = deals_balance_change(deals(since))
     except Exception as exc:
         log.warning("deal history unreadable for the high-water mark (%s); a second read confirms the rise",
                     type(exc).__name__)
         return None
-    if counted == 0 or abs(mark + change - balance) > tol:
+    if counted == 0 or abs(start + change - balance) > tol:
         return None
     return deposits
 
 
-__all__ = ["HWM", "HwmConfirmation", "HwmStep", "deals_balance_change", "load_confirmation", "read_only_confirmation",
-           "save_confirmation", "step"]
+__all__ = ["CANDIDATE_MAX_AGE", "HWM", "WRITE_BUSY_TIMEOUT_MS", "HwmConfirmation", "HwmStep", "HwmStore",
+           "deals_balance_change", "read_only_confirmation", "step"]

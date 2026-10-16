@@ -5,7 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
-- High-water-mark rises are confirmed (BACKLOG 54, ADR 0017, TRACEABILITY R40; needs trading-safety review). A
+- High-water-mark rises are confirmed (BACKLOG 54, ADR 0018, TRACEABILITY R40; needs trading-safety review). A
   balance read above `balance_closed_hwm` raises it only when the deal history since the mark was set explains it
   (closed deals, commission, swap, deposits; within `risk.hwm_rise_tolerance`, 0.1% of the mark), or when the next
   read agrees. Otherwise the mark stays where it is, the account is read again on the next tick, and the engine
@@ -14,7 +14,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (only /rearm resets it). The candidate and the deal-history anchor are stored in core.db (additive migration 2,
   table `hwm_confirmation`), not in a JSON file. A row taken for another mark is void. A restart keeps the candidate
   but never applies it unconfirmed. Health `risk:<account>` warns when a rise has waited more than 5 min in market
-  hours. A rollback to an earlier release raises the mark on one read again.
+  hours, measured from the first of a run of disagreeing candidates. A rollback to an earlier release raises the mark
+  on one read again. Review fixes (trading-safety review of faf824c):
+  - a candidate that the deals after it carry to a later lower read was a real peak, and the mark rises to it;
+  - candidates expire after 10 min;
+  - core.db is opened once per engine, with a 500 ms write busy timeout;
+  - the paper broker declares its balance reads exact, so one read raises the mark there.
+  The ADR is renumbered 0018 (0017 is CostImputer).
 - Health checks split into modules with a registry (2026-10-12, speed-up review item 7; no behaviour change).
   goldbot/ops/health.py had grown to about 1,770 lines and was the place every lane appended a check, so merges kept
   colliding there. The checks now live in goldbot/ops/checks/, one module per area (engine, bridge, feeds, risk,

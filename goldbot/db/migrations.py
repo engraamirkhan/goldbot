@@ -217,7 +217,7 @@ AUX: tuple[Migration, ...] = (
 
 CORE: tuple[Migration, ...] = (
     _IMPORTS,
-    # additive (BACKLOG 54, ADR 0017): one row per account, the high-water mark's rise confirmation (the candidate
+    # additive (BACKLOG 54, ADR 0018): one row per account, the high-water mark's rise confirmation (the candidate
     # rise and the mark's deal-history anchor; goldbot/risk/hwm.py). A release without it never reads the table, so a
     # rollback opens the file and raises the mark on one read again (the old rule). Steps 5-7 (halts, approvals,
     # orders) append after it

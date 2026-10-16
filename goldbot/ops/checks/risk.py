@@ -145,20 +145,24 @@ def check_risk_state(ctx: HealthContext, account_id: str) -> Check:
 
 
 def _hwm_pending(ctx: HealthContext, account_id: str, risk: dict[str, Any]) -> str | None:
-    """ADR 0017: a balance rise the engine has not confirmed or refused for HWM_PENDING_WARN_S in market hours (the
+    """ADR 0018: a balance rise the engine has not confirmed or refused for HWM_PENDING_WARN_S in market hours (the
     terminal's balance reads keep disagreeing, so the drawdown may be measured on a mark below the real one). No
-    amounts: the high-water mark stays out of health reasons. A row for another mark is void, as in the engine."""
+    amounts: the high-water mark stays out of health reasons. A row for another mark is void, as in the engine. The age
+    runs from the first of an unbroken run of disagreeing candidates (review M2)."""
     from goldbot.risk import hwm
     try:
         conf = hwm.read_only_confirmation(ctx.state_dir, account_id)
     except Exception as exc:
         return f"high-water-mark confirmation unreadable in core.db ({type(exc).__name__})"
-    if conf is None or conf.pending_since_utc is None or conf.mark != float(risk.get("balance_closed_hwm") or 0.0):
+    if conf is None or conf.mark != float(risk.get("balance_closed_hwm") or 0.0):
+        return None
+    conf = conf.fresh(ctx.now)                    # an expired candidate is void, as in the engine (review L2)
+    if conf.pending_since_utc is None:
         return None
     age = (ctx.now - conf.pending_since_utc).total_seconds()
     if age <= HWM_PENDING_WARN_S or not _market_open_throughout(ctx, HWM_PENDING_WARN_S):
         return None
-    return (f"a balance rise has waited {_age(age)} for confirmation (ADR 0017): the terminal's balance reads disagree, "
+    return (f"a balance rise has waited {_age(age)} for confirmation (ADR 0018): the terminal's balance reads disagree, "
             "so the high-water mark may be below the real one")
 
 

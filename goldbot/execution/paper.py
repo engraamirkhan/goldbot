@@ -49,6 +49,10 @@ class PaperBroker:
         return SymbolInfo(name=symbol, digits=2, point=self.point, contract_size=self.contract, volume_min=0.01, volume_step=0.01, volume_max=50.0, stops_level_points=0.0, filling_modes=["IOC"], trade_allowed=True,
                           commission_per_lot_side=self.commission)
 
+    # ADR 0018: the balance is this simulator's own ledger, so a read never glitches and a rise in the high-water
+    # mark needs no confirmation (the engine looks it up on the class)
+    balance_exact = True
+
     def account(self) -> AccountInfo:
         float_pl = sum(p.profit for p in self._positions.values())
         return AccountInfo(login=0, equity=self._balance + float_pl, balance=self._balance, margin=0.0, margin_free=self._balance + float_pl, leverage=20, currency="USD", server="paper")
