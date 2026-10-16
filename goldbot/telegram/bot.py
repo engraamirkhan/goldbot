@@ -173,11 +173,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
                     self.outbox = await asyncio.to_thread(Outbox, self.state_dir, self.bus)
                 outbox = self.outbox
                 await asyncio.to_thread(self.send_guard.retry, outbox, time.monotonic())
-                for p in await asyncio.to_thread(outbox.unsent_proposals):
-                    if not self.send_guard.should_send(p.proposal_id):
-                        continue                    # went out already; its mark is being retried
-                    msgs = await self.send_proposal(p)
-                    await asyncio.to_thread(self.send_guard.record, outbox, p.proposal_id, msgs, time.monotonic())
+                await self._send_new_proposals(outbox)
                 for pid, outcome, msgs in await asyncio.to_thread(outbox.finished):
                     for chat, mid in msgs:
                         try:
@@ -290,9 +286,25 @@ class TelegramBot:  # pragma: no cover - needs network + token
         except Exception:
             log.exception("deploy pass")
 
+    async def _send_new_proposals(self, outbox: Outbox) -> None:
+        """Each proposal not yet sent goes out once; one that went out but whose mark is being retried is skipped."""
+        for p in await asyncio.to_thread(outbox.unsent_proposals):
+            if not self.send_guard.should_send(p.proposal_id):
+                continue
+            msgs = await self.send_proposal(p)
+            await asyncio.to_thread(self.send_guard.record, outbox, p.proposal_id, msgs, time.monotonic())
+
     async def send_proposal(self, p: Proposal) -> list[tuple[int, int]]:
+        """The card to each owner; [] (recorded as sent, so the pump moves on) when no button can carry its id: the
+        owner is told and the proposal expires undecided (trading-safety review LOW-1 of 2c6e805)."""
         # each button carries the card's `created`, so a tap decides only this card (BACKLOG 63)
-        cb = decision_callbacks(p)
+        try:
+            cb = decision_callbacks(p)
+        except ValueError as exc:
+            log.error("proposal %s: card not sent (%s)", p.proposal_id, exc)
+            self.bus.notify_owner(f"A proposal card could not be sent: {exc}. Proposal {p.proposal_id} cannot be "
+                                  f"approved and will expire; no order is placed from it.")
+            return []
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=cb[None])],
                                    [InlineKeyboardButton(f"Reject: {r}", callback_data=cb[r])
                                     for r in ("news", "cost", "discretion")],
@@ -315,8 +327,11 @@ class TelegramBot:  # pragma: no cover - needs network + token
             await q.answer("not allowed", show_alert=True)
             return
         parts = q.data.split(":")
-        if parts[0] in ("dep", "skp") and self.deploy is not None:
-            ok = self.deploy.approve(parts[1]) if parts[0] == "dep" else self.deploy.skip(parts[1])
+        if parts[0] in ("dep", "skp"):
+            if self.deploy is None:         # deploys off: still a deploy tap, never read as an approval (INFO-1)
+                await q.answer("no longer on offer", show_alert=True)
+                return
+            ok =self.deploy.approve(parts[1]) if parts[0] == "dep" else self.deploy.skip(parts[1])
             if ok and parts[0] == "dep":    # who tapped: the audit log only (A15); before the answer, which can fail
                 self.audit.write("deploy_approve", uid, sha=parts[1])
             await q.answer("ok" if ok else "no longer on offer", show_alert=not ok)

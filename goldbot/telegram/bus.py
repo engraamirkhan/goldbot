@@ -39,7 +39,14 @@ from goldbot.base import (
     unknown_fields_json,
     write_atomic,
 )
-from goldbot.telegram.approvals import REASON_CODES, Outcome, Proposal, decision_channel
+from goldbot.telegram.approvals import (
+    INVALID_PROPOSAL_ID,
+    REASON_CODES,
+    Outcome,
+    Proposal,
+    decision_channel,
+    valid_proposal_id,
+)
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +158,9 @@ class ApprovalBus:
         return out
 
     def get(self, proposal_id: str) -> Proposal | None:
+        """None for an unknown id and for one `valid_proposal_id` refuses (never a path outside approvals/)."""
+        if not valid_proposal_id(proposal_id):
+            return None
         for d in (self.pending_dir, self.done_dir):
             f = d / f"{proposal_id}.json"
             if f.exists():
@@ -160,11 +170,14 @@ class ApprovalBus:
     def submit(self, proposal_id: str, approve: bool, reason_code: str | None, by: str, *,
                card_created: float | None) -> BusDecision:
         """Record a decision; raises KeyError (unknown, expired, already decided, or `card_mismatch`) or ValueError
-        (reason code, `card_missing`). `by` is the channel; an identity after ":" is dropped, so the file never carries
-        it (A15: "the decision file keeps only the channel; the identity is in the audit log"). `card_created` is the
+        (reason code, `card_missing`, an id `valid_proposal_id` refuses). `by` is the channel; an identity after ":"
+        is dropped, so the file never carries it (A15: "the decision file keeps only the channel; the identity is in
+        the audit log"). `card_created` is the
         `created` of the card the owner decided on (BACKLOG 63: "a tap is bound to the exact card the owner saw"):
         None is refused (an old card or client, fail closed), and one that differs from the pending proposal's is
         refused here and again by the engine, which may hold a proposal re-raised after this check."""
+        if not valid_proposal_id(proposal_id):          # a file name under approvals/: never "..", "/" or empty
+            raise ValueError(INVALID_PROPOSAL_ID)
         if card_created is None:
             raise ValueError("card_missing: this card is out of date; decide on the current card")
         if not approve and reason_code not in REASON_CODES:
@@ -190,7 +203,9 @@ class ApprovalBus:
         """Delete one decision file the engine refused to apply (a click on an earlier card with the same id, F60-1),
         so the card shown is listed and decidable again. Safe against a new click: `submit` creates the file
         exclusively, so none can land while the refused one is still there. An OSError leaves it (the window expires
-        the proposal)."""
+        the proposal). An id `valid_proposal_id` refuses is ignored (never a path outside approvals/)."""
+        if not valid_proposal_id(proposal_id):
+            return
         try:
             (self.decisions_dir / f"{proposal_id}.json").unlink(missing_ok=True)
         except OSError:

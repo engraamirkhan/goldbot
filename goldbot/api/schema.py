@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from goldbot.ops.account_view import CantCheck, LossBudget, Milestones
+from goldbot.telegram.approvals import PROPOSAL_ID_PATTERN
 
 
 class ApiRequest(BaseModel):
@@ -116,7 +117,8 @@ class DecidedProposal(Proposal):
 
 
 class Decision(ApiRequest):
-    proposal_id: str
+    # a file name under state/approvals/: the allow-list here (422), and ".." refused by the bus (400)
+    proposal_id: str = Field(pattern=PROPOSAL_ID_PATTERN)
     action: Literal["approve", "reject"]
     reason_code: Literal["news", "cost", "discretion", "duplicate", "other"] | None = None
     # BACKLOG 63: the `created` of the card decided on, as /api/proposals sent it. Required: a request without it (an

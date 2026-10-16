@@ -1252,6 +1252,7 @@
       "type": "number"
      },
      "proposal_id": {
+      "pattern": "^[A-Za-z0-9_.-]{1,47}$",
       "title": "Proposal Id",
       "type": "string"
      },

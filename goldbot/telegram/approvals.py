@@ -16,6 +16,7 @@ import base64
 import hmac
 import logging
 import math
+import re
 import struct
 import time
 from enum import Enum
@@ -84,8 +85,19 @@ def decision_channel(by: str) -> str:
 # one letter; the proposal id goes last, so it is never cut or split. Approve: "ok:<token>:<id>"; reject:
 # "no:<letter>:<token>:<id>". goldbot.ops.accounts.ACCOUNT_ID_MAX_BYTES bounds the id so every button fits.
 CALLBACK_MAX_BYTES = 64
+# a proposal id names a file under state/approvals/ (pending, decisions, done): only these characters, no "..", so a
+# tap, a dashboard request or a bus call can never reach another path (security review of 2c6e805). The engine's ids
+# (`<account>-<epoch s>-<10 hex>`, at most 46 bytes for a 24-byte account name) always match
+PROPOSAL_ID_PATTERN = r"^[A-Za-z0-9_.-]{1,47}$"
+_PROPOSAL_ID = re.compile(PROPOSAL_ID_PATTERN)
+INVALID_PROPOSAL_ID = "invalid proposal id"
 _REASON_KEY = {"news": "n", "cost": "c", "discretion": "d", "duplicate": "u", "other": "o"}
 _KEY_REASON = {v: k for k, v in _REASON_KEY.items()}
+
+
+def valid_proposal_id(proposal_id: str) -> bool:
+    """`PROPOSAL_ID_PATTERN` and no "..": safe as a file name under state/approvals/."""
+    return _PROPOSAL_ID.fullmatch(proposal_id) is not None and ".." not in proposal_id
 
 
 def card_token(created: float) -> str:
@@ -116,7 +128,10 @@ class CardTap(FrozenRecord):
 
 def decision_callbacks(p: Proposal) -> dict[str | None, str]:
     """The callback data of a card's buttons: None -> Approve, each reason code -> Reject with it. Raises ValueError
-    when one would exceed Telegram's 64 bytes (never cut: a cut id would decide nothing, or another proposal)."""
+    when one would exceed Telegram's 64 bytes (never cut: a cut id would decide nothing, or another proposal), and for
+    an id `valid_proposal_id` refuses (no tap on it could be decided)."""
+    if not valid_proposal_id(p.proposal_id):
+        raise ValueError(f"{INVALID_PROPOSAL_ID} ({len(p.proposal_id.encode('utf-8'))} bytes)")
     tok = card_token(p.created)
     out: dict[str | None, str] = {None: f"ok:{tok}:{p.proposal_id}"}
     out.update({r: f"no:{_REASON_KEY[r]}:{tok}:{p.proposal_id}" for r in REASON_CODES})
@@ -127,18 +142,24 @@ def decision_callbacks(p: Proposal) -> dict[str | None, str]:
 
 def parse_decision_callback(data: str) -> CardTap:
     """An Approve/Reject tap's data back to its decision. A card without the stamp (sent before BACKLOG 63) or a token
-    that does not decode is refused with ValueError "card_missing: ..." (fail closed: never an unbound decision)."""
+    that does not decode is refused with ValueError "card_missing: ..." (fail closed: never an unbound decision); an
+    id `valid_proposal_id` refuses (empty, "..", a path) with ValueError "invalid proposal id"."""
     parts = data.split(":", 3 if data.startswith("no:") else 2)
+    tap = None
     try:
         if parts[0] == "ok" and len(parts) == 3:
-            return CardTap(proposal_id=parts[2], approve=True, reason_code=None,
-                           card_created=card_created_from(parts[1]))
-        if parts[0] == "no" and len(parts) == 4 and parts[1] in _KEY_REASON:
-            return CardTap(proposal_id=parts[3], approve=False, reason_code=_KEY_REASON[parts[1]],
-                           card_created=card_created_from(parts[2]))
+            tap = CardTap(proposal_id=parts[2], approve=True, reason_code=None,
+                          card_created=card_created_from(parts[1]))
+        elif parts[0] == "no" and len(parts) == 4 and parts[1] in _KEY_REASON:
+            tap = CardTap(proposal_id=parts[3], approve=False, reason_code=_KEY_REASON[parts[1]],
+                          card_created=card_created_from(parts[2]))
     except ValueError:
         pass
-    raise ValueError("card_missing: this card is out of date; decide on the current card")
+    if tap is None:
+        raise ValueError("card_missing: this card is out of date; decide on the current card")
+    if not valid_proposal_id(tap.proposal_id):
+        raise ValueError(INVALID_PROPOSAL_ID)
+    return tap
 
 
 class Outcome(str, Enum):

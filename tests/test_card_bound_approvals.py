@@ -25,6 +25,7 @@ from goldbot.telegram.approvals import (
     ApprovalCenter,
     Outcome,
     Proposal,
+    card_token,
     decision_callbacks,
     parse_decision_callback,
 )
@@ -62,16 +63,17 @@ def _longest_proposal_id() -> str:
 
 
 def test_every_callback_data_string_fits_telegrams_64_byte_limit_for_the_longest_proposal_id():
-    pid = _longest_proposal_id()
-    for created in (time.time(), 1e-300, -1.7976931348623157e308, float("nan")):   # the token is fixed-width
-        for data in decision_callbacks(_p(pid, created=created)).values():
-            assert len(data.encode("utf-8")) <= CALLBACK_MAX_BYTES == 64, data
+    # the engine's longest id, and the longest the id allow-list passes (47 characters)
+    for pid in (_longest_proposal_id(), "x" * 47):
+        for created in (time.time(), 1e-300, -1.7976931348623157e308, float("nan")):   # the token is fixed-width
+            for data in decision_callbacks(_p(pid, created=created)).values():
+                assert len(data.encode("utf-8")) <= CALLBACK_MAX_BYTES == 64, data
 
 
 def test_a_proposal_id_too_long_for_telegrams_button_data_is_refused_rather_than_cut():
     pid = _longest_proposal_id()
     room = CALLBACK_MAX_BYTES - max(len(d.encode("utf-8")) for d in decision_callbacks(_p(pid)).values())
-    with pytest.raises(ValueError, match="64"):
+    with pytest.raises(ValueError, match="invalid proposal id|64"):
         decision_callbacks(_p(pid + "x" * (room + 1)))
 
 
@@ -249,3 +251,99 @@ def test_the_dashboard_decision_on_another_card_with_the_same_id_is_refused(app_
                headers=owner)
     assert r.status_code == 400 and "card_mismatch" in r.json()["detail"]
     assert not (bus.decisions_dir / "x.json").exists()
+
+
+# ------------------------------------------------------------------------------------------- review round (2c6e805)
+BAD_IDS = ["", "../../a", "..", "a..b", "a/b", "a\\b", "x" * 48, "icm-démo-1"]
+
+
+@pytest.mark.parametrize("pid", BAD_IDS)
+def test_a_callback_with_a_traversal_empty_or_unlisted_proposal_id_is_refused_at_parse(pid):
+    """Security LOW: the id names a file under state/approvals/; only [A-Za-z0-9_.-]{1,47} without ".." passes."""
+    tok = card_token(time.time())
+    for data in (f"ok:{tok}:{pid}", f"no:n:{tok}:{pid}"):
+        with pytest.raises(ValueError, match="invalid proposal id"):
+            parse_decision_callback(data)
+
+
+@pytest.mark.parametrize("pid", BAD_IDS)
+def test_the_bus_refuses_a_traversal_or_unlisted_proposal_id_at_submit_get_and_discard(tmp_path, pid):
+    bus = ApprovalBus(tmp_path)
+    victim = bus.root / "victim.json"                          # what "../victim" reaches from pending/ or decisions/
+    victim.write_text(_p("victim").model_dump_json())
+    with pytest.raises(ValueError, match="invalid proposal id"):
+        bus.submit(pid, True, None, by="telegram", card_created=time.time())
+    assert bus.get(pid) is None and bus.get("../victim") is None
+    bus.discard_decision(pid)
+    bus.discard_decision("../victim")
+    assert victim.exists() and not list(bus.decisions_dir.glob("*.json"))
+
+
+def test_decision_callbacks_refuse_an_unlisted_proposal_id():
+    with pytest.raises(ValueError, match="invalid proposal id"):
+        decision_callbacks(_p("a..b"))
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("pid", "code"), [("../../a", 422), ("", 422), ("a/b", 422), ("x" * 48, 422), ("a..b", 400)])
+def test_the_dashboard_refuses_a_traversal_or_unlisted_proposal_id(app_client, pid, code):
+    """The schema's pattern refuses all but "..", which the bus refuses ("invalid proposal id")."""
+    c, owner, bus = app_client
+    r = c.post("/api/decisions", json={"proposal_id": pid, "action": "approve", "created": time.time()},
+               headers=owner)
+    assert r.status_code == code and not list(bus.decisions_dir.glob("*.json"))
+    assert code == 422 or "invalid proposal id" in r.json()["detail"]
+
+
+def _notices(state: Path) -> list[str]:
+    f = state / "agent_runs.jsonl"
+    return [json.loads(line).get("detail") or "" for line in f.read_text().splitlines()] if f.exists() else []
+
+
+def test_a_card_that_cannot_be_built_is_skipped_the_owner_is_told_and_later_cards_still_go_out(tmp_path, monkeypatch):
+    """Trading-safety LOW-1: a ValueError from decision_callbacks used to escape to the pump's outer except, so the
+    pump retried that card on every tick and nothing after it (other cards, outcome edits, reports) went out."""
+    from goldbot.telegram import bot as bot_mod
+    from goldbot.telegram.outbox import Outbox, SendGuard
+    monkeypatch.setattr(bot_mod, "InlineKeyboardMarkup", lambda rows: rows, raising=False)
+    monkeypatch.setattr(bot_mod, "InlineKeyboardButton", lambda text, callback_data: callback_data, raising=False)
+    bot = _bot(tmp_path)
+    bot.send_guard = SendGuard()
+    sent: list[object] = []
+
+    async def send_message(uid: int, text: str, reply_markup: object = None) -> types.SimpleNamespace:
+        sent.append(reply_markup)
+        return types.SimpleNamespace(message_id=len(sent))
+    bot.app = types.SimpleNamespace(bot=types.SimpleNamespace(send_message=send_message))
+    bot.bus.publish(_p("a" * 48))                                 # sorts first: no card can carry it
+    bot.bus.publish(_p("b-ok"))
+    outbox = Outbox(tmp_path, bot.bus)
+    asyncio.run(bot._send_new_proposals(outbox))
+    assert len(sent) == 1 and outbox.unsent_proposals() == []    # the good card went out; the bad one is not retried
+    assert any("could not be sent" in n and "a" * 48 in n for n in _notices(tmp_path))
+
+
+def test_a_deploy_tap_with_no_deploy_watch_says_no_longer_on_offer(tmp_path):
+    """INFO-1: with deploys off, a dep:/skp: tap used to fall through to the approval parser (card_missing)."""
+    bot = _bot(tmp_path)
+    assert _tap(bot, "dep:" + "c" * 40) == ["no longer on offer"]
+    assert _tap(bot, "skp:" + "c" * 40) == ["no longer on offer"]
+
+
+def test_an_engine_whose_proposal_ids_no_card_can_carry_refuses_to_start_before_any_broker_call(tmp_path, monkeypatch):
+    """Trading-safety LOW-2: checked at engine start against the engine's own id format (Engine._proposal_id)."""
+    from goldbot.ops import run as run_mod
+    acc = accounts.Account(account_id="icm..demo", broker="icm", mode="demo", server="S", login=1, terminal_path="",
+                           server_tz="Europe/Athens", symbol="XAUUSD", magic_base=1, enabled=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(accounts, "load_accounts", lambda path=None: {"icm..demo": acc})
+    monkeypatch.setattr(accounts, "bridge_endpoint", lambda aid: pytest.fail("the broker was reached"))
+    with pytest.raises(SystemExit, match="invalid proposal id"):
+        run_mod.run_engine("icm..demo")
+    state = json.loads((tmp_path / "state" / "engine_icm..demo.json").read_text())
+    assert "invalid proposal id" in state["startup_error"]
+
+
+def test_the_longest_proposal_id_of_a_configured_account_passes_the_startup_check():
+    from goldbot.ops.services.engine import approval_ids_problem
+    assert approval_ids_problem("a" * accounts.ACCOUNT_ID_MAX_BYTES) is None
