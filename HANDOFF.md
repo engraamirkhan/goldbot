@@ -216,6 +216,19 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - core.db is opened once per engine, with a 500 ms write busy timeout;
   - the paper broker declares its balance reads exact, so one read raises the mark there.
   The ADR is renumbered 0018 (0017 is CostImputer).
+- The kill switch's close-everything choice is now state (2026-10-16, trading-safety finding F1 MEDIUM; re-review
+  APPROVED 6cf86e3, with two follow-ups fixed in the next commit). Before, `everything` was true only on the tripping
+  read, and the owner-mode write (`ApprovalBus.set_mode`) ran before the flatten: in auto mode a full disk raised out
+  of it and closed nothing, and a positions() read failing on that read did the same; every later run closed only this
+  engine's magic range, so a manual or other-magic position stayed open. Now `Engine._kill_everything`
+  (goldbot/engine/runner.py) is set before any I/O on the trip, saved with the risk state (`kill_everything` in
+  `risk_<account>.json`; absent = false), used by every retry (tick, no-quote pass, halted refresh) and after a restart
+  (`_kill_pending` starts true), and cleared only once a run has closed every XAUUSD position on the account (all
+  magics; `MT5Broker.positions()` reads the engine's symbol only, so other symbols are untouched, an owner decision).
+  The mode write moved after the flatten into `_reset_owner_mode`: it never raises, a failure is a tick error and is
+  retried on the next kill-switch run, and a halted engine retries it after a restart (re-review LOW, A10); the
+  in-memory `approval_mode = "propose"` already blocks auto entries. No stop widened, no size added, no new order path.
+  ADR 0016 carries the correction. Tests: tests/test_kill_switch_everything.py (7).
 - Lane test loop (2026-10-16): lanes iterate on affected tests only with `scripts/lane_test.sh` (pytest-testmon):
   `seed` copies the integrator's `.testmondata` for the lane's base commit from `~/tmp/testmon/<sha>/` (`cp -c`;
   without one the first `iter` runs the full suite), `iter` runs `pytest --testmon -n ${GATES_WORKERS:-2} -q` (never
