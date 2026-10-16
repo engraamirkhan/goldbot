@@ -252,6 +252,24 @@ def test_position_closed_moments_ago_is_not_reported_missing_within_the_grace(tm
     assert rep.diffs == [] and rep.pending == 1
 
 
+def test_smoke_positions_are_listed_not_rc8_mismatches(tmp_path):
+    """ADR 0021 / plan W1-1: the bridge smoke's positions (magic_base + 99) have no engine record by design (X7
+    departure), so they are listed in the report, never counted missing; the balance tie-out still explains them."""
+    from goldbot.execution.broker import SMOKE_MAGIC_OFFSET
+    smoke = MAGIC + SMOKE_MAGIC_OFFSET
+    closed = _trade(21, 1, 0.01, 2400.0, 2400.5, "2026-10-07 10:00", "2026-10-07 10:01", ticket=500, magic=smoke)
+    still_open = _trade(22, 1, 0.01, 2400.0, 0, "2026-10-07 11:00", None, ticket=510, magic=smoke)
+    engine = _trade(7, 1, 0.1, 2400.0, 2410.0, "2026-10-07 10:00", "2026-10-07 15:00", ticket=100)
+    _baseline(tmp_path)
+    broker = FakeBroker(1000.0 + _net(closed + still_open + engine), closed + still_open + engine,
+                        positions=[_position(22, lots=0.01, magic=smoke)])
+    rep = _run(tmp_path, broker)
+    assert [(d.position_id, d.kind) for d in rep.diffs] == [(7, "missing")]     # the engine's own trade still counts
+    assert rep.smoke_positions == [21, 22] and rep.positions_checked == 1
+    assert rep.summary()["smoke"] == 2 and "smoke" in rep.note
+    assert rep.summary()["balance"] == "ties out"                               # RC-9 still counts their P&L
+
+
 def test_positions_outside_the_magic_range_are_ignored(tmp_path):
     manual = _trade(9, 1, 0.1, 2400.0, 2410.0, "2026-10-07 10:00", "2026-10-07 15:00", ticket=100, magic=0)
     other = _trade(10, 1, 0.1, 2400.0, 0, "2026-10-07 10:00", None, ticket=300, magic=MAGIC + 100)

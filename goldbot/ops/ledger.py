@@ -32,7 +32,8 @@ The daily `broker_ledger` job (goldbot/ops/jobs.py) calls `run_ledger` per accou
   tie-out (a new baseline, with a note). A broker adjustment is explained but WARNs: someone should know why.
 * Trades (RC-8), by position id, over closes since the previous snapshot (at least the last day) less the grace:
   goldbot's positions are those whose deals or position carry a magic in magic_base .. magic_base + 99 (as
-  `GuardedBroker`). Against the closed-trade records (`gates_phase.load_closed_trades`) and the engine's open trades
+  `GuardedBroker`), less the bridge smoke's magic_base + 99 (ADR 0021: it has no engine record by design, so its
+  positions are listed in `smoke_positions` and the note, never reconciled; RC-9 still counts their P&L). Against the closed-trade records (`gates_phase.load_closed_trades`) and the engine's open trades
   (state/orders_<account>.json "open"):
       missing   at the broker (open, or fully closed by its deals) but not in goldbot's records
       extra     in goldbot's records but neither open at the broker nor in its deals
@@ -65,6 +66,7 @@ from goldbot.config import LedgerSettings
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db.connection import Database, db_path
 from goldbot.db.repo import RecordRepo
+from goldbot.execution.broker import SMOKE_MAGIC_OFFSET
 from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades
 
 if TYPE_CHECKING:
@@ -161,6 +163,9 @@ class LedgerReport(FrozenRecord):
     note: str = ""
     slot_utc: UtcTimestamp | None = None            # the scheduler slot: its UTC date keys the row
     rechecked: bool = False                         # an unexplained balance was read again before this verdict
+    # ADR 0021: bridge smoke positions (magic_base + SMOKE_MAGIC_OFFSET) open or closed in the read, listed apart: they
+    # have no engine record by design (the X7 departure), so RC-8 does not reconcile them; RC-9 still counts their P&L
+    smoke_positions: list[int] = []
 
     def counts(self) -> dict[str, int]:
         return {k: sum(d.kind == k for d in self.diffs) for k in ("missing", "extra", "mismatch")}
@@ -168,7 +173,7 @@ class LedgerReport(FrozenRecord):
     def summary(self) -> dict[str, Any]:
         """Counts and verdicts only (no amounts): the job's output and the health reason."""
         return {"status": self.status, "positions": self.positions_checked, "matched": self.matched,
-                "pending": self.pending, **self.counts(),
+                "pending": self.pending, **self.counts(), "smoke": len(self.smoke_positions),
                 "balance": "baseline" if self.tie_out is None else _balance_verdict(self.tie_out), "note": self.note}
 
 
@@ -252,7 +257,19 @@ def _read_stable(broker: Any, since: pd.Timestamp) -> tuple[AccountInfo, pd.Data
 
 
 def _ours(magic: int, magic_base: int) -> bool:
-    return magic_base <= int(magic) < magic_base + MAGIC_SPAN
+    """An engine position of this account (RC-8): the account's magic range less the bridge smoke's (ADR 0021)."""
+    return magic_base <= int(magic) < magic_base + MAGIC_SPAN and not _smoke(magic, magic_base)
+
+
+def _smoke(magic: int, magic_base: int) -> bool:
+    return int(magic) == magic_base + SMOKE_MAGIC_OFFSET
+
+
+def smoke_positions(deals: pd.DataFrame, positions: list[Position], magic_base: int) -> list[int]:
+    """The bridge smoke's positions in the read (its deals or open positions): listed, not reconciled (ADR 0021)."""
+    t = deals[deals["type"].isin([DEAL_BUY, DEAL_SELL]) & (deals["position_id"] > 0)]
+    ids = {int(p) for p, m in zip(t["position_id"], t["magic"]) if _smoke(m, magic_base)}
+    return sorted(ids | {p.position_id for p in positions if _smoke(p.magic, magic_base)})
 
 
 # ---------------------------------------------------------------------------------------------- balance (RC-9)
@@ -510,9 +527,13 @@ def run_ledger(db: Database, broker: Any, account: Account, state_dir: Path, slo
         window_from=window_from, now=read_at, currency=snap.currency, cfg=cfg)
     if status == "ok" and (diffs or open_err or records_err):
         status = "warn"
+    smoke = smoke_positions(deals, positions, account.magic_base)
+    if smoke:
+        notes.append(f"{len(smoke)} bridge smoke position(s) listed, not reconciled (ADR 0021)")
     rep = LedgerReport(account_id=acc_id, ts_utc=read_at, slot_utc=slot, window_from=window_from,
                        currency=snap.currency, positions_checked=checked, matched=matched, pending=pending,
-                       diffs=diffs, tie_out=tie, status=status, note="; ".join(notes), rechecked=rechecked)
+                       diffs=diffs, tie_out=tie, status=status, note="; ".join(notes), rechecked=rechecked,
+                       smoke_positions=smoke)
     # a tie-out books the deals it explains; a baseline books what it read, flagged (already in its opening balance)
     booked = (classify_balance_deals(acc_id, deals[deals["ts_utc"] > tie.from_utc]) if tie is not None
               else classify_balance_deals(acc_id, deals, baseline=True))
