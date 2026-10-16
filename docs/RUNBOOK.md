@@ -536,8 +536,9 @@ before it can decide. The Saturday retrain refreshes them, but load them once no
 .\.venv\Scripts\python scripts\fetch_data_release.py --years 2024 2026 --macro
 ```
 
-`--macro` also loads the macro series (release `macro-v1`) into the store; it prints `macro 0` until the
-`data-macro` workflow has run once. The engines do not use them yet; research does. Add `--positioning` to load the
+`--macro` also loads the macro series (release `macro-v1`, published since 2026-10-13 and refreshed every Tuesday
+by `data-macro`) into the store; `macro 0` means nothing new since the last load. The engines do not use them yet;
+research does. Add `--positioning` to load the
 COT and GLD holdings rows (release `positioning-v1`, table `positioning`); it prints `positioning 0` until the
 `data-positioning` workflow has run once. Research only (`research_pass.py --positioning`); the engines do not use them.
 
