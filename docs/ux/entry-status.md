@@ -15,9 +15,10 @@ Code: `goldbot/api/entry_status.py` (reasons, words, next steps), `AccountSummar
 | Owner halt | `state/control.json` (the approval bus) |
 | Supervisor halt | `Supervisor.engine_should_halt`: exactly what the engines read (missing, stale or unreadable heartbeat included) |
 | Drift system halt | `state/drift.json` (unreadable halts, as in the engine) |
-| Engine flags | `engine_<account>.json`: `ts`, `stage`, `market_closed` + `sessions` (reopen time), `server_clock.status`, `tick_ahead_s`, `last_tick_age_s`, `stale_bars`, `tick_error`, `last_tick_error_at`, `tick_errors_total`, `dq_error`, `data_recovering`, `spread_points`, `open_positions`, `account_class`, `blackout`, `throttle.agents[*].blocked` + `cooldown_until`, `bridge_compat.status`, and `entry_blocks` when an engine publishes it |
+| Engine reasons (BACKLOG 43) | `engine_<account>.json` `entry_blocks`: the RiskGate's account-level codes (`RiskGate.account_reasons`, rollover and the weekend cut included), written at every state write and heartbeat; the API words them and decides nothing. Missing: `entry_reasons_missing` (act), never OPEN |
+| Details beside them | `ts`, `sessions` (reopen time), `blackout` (title), `spread_points`, `open_positions`, `windows` (times), `last_tick_error_at` + `tick_errors_total` (note), `throttle.agents[*].blocked` + `cooldown_until`, `bridge_compat.commit_differs` (note) |
+| A strategy's last refusal | `entry_refusals`: per agent, the last per-trade refusal (fx conversion, minimum lot, margin, combined exposure, absolute daily limit, heat cap) and its time; shown as that strategy's block "since" then, until the gate next allows it |
 | Loss limits | `account_view.loss_budget.caps`: one block per spent cap (account daily/weekly, absolute, combined), each with its amount in the account currency and its own reset (00:00 UTC; Sunday 00:00 UTC for weekly) |
-| Balance too small | `account_view.milestones`: no tradeable timeframe (and no broker terms pending) is `min_lot_exceeds_risk` until the engine publishes it |
 | Drawdown texts | `RiskLimits.dd_stage2` and `SupervisorLimits.dd_stage2` from settings ("12%" is never hard-coded) |
 | Thresholds (stale tick, tick ahead, spread, positions) | `RiskLimits.from_settings` (the RiskGate's own limits), never a copy |
 
@@ -53,7 +54,7 @@ Entry status
 ┃ │ Runbook: Server clock (US-EU DST gap weeks) ↗     ┃  44 px tap target, opens the RUNBOOK section
 ┃ │ Market closed · opens Sun 23:02 your time (in 5 h)┃  time in the owner's zone, weekday when not today,
 ┃ │ Nothing to do: it reopens by itself.              ┃  how long until; UTC on hover
-┃ │ trend-g0 paused after 3 losses in a row ·        ┃
+┃ │ Trend (trend-g0) paused after 3 losses in a row · ┃
 ┃ │ until 14:30 your time (in 28 min)                 ┃
 ┃ Exits keep running: open trades keep their stop,   ┃  always last
 ┃ target and automatic exits.                         ┃
@@ -79,6 +80,10 @@ above the tiles, the halt control and the account cards.
 
 ## Reasons and words
 
+Every strategy-level line names the strategy as `agent_label`: its family in words, then its id ("Trend (trend-g0)",
+"Session open (session_open-g2-ab12)"), the PARTLY OPEN headline included ("Can take new trades, except Trend
+(trend-g0)").
+
 The full table is `REASONS` in `goldbot/api/entry_status.py`; a test fails when the RiskGate or the supervisor gains a
 reason without words. Examples:
 
@@ -86,12 +91,14 @@ reason without words. Examples:
 |---|---|---|---|
 | `market_closed` | Market closed · opens {time} | Nothing to do: it reopens by itself. | wait |
 | `server_clock_mismatch` | Broker clock differs from the expected time zone | See the Runbook: Server clock. … | act |
-| `throttle_loss_streak` | trend-g0 paused after 3 losses in a row · until {time} | Nothing to do: it resumes after its cooldown or a winning shadow trade. | wait (strategy only) |
+| `throttle_loss_streak` | Trend (trend-g0) paused after 3 losses in a row · until {time} | Nothing to do: it resumes after its cooldown or a winning shadow trade. | wait (strategy only) |
+| a strategy's last refused trade (`entry_refusals`) | Trend (trend-g0): last entry refused, not enough free margin · since {time} (words per code: `REFUSAL_TEXT`; a per-trade `daily_loss_limit_abs` reads "this trade could lose more than is left of today's loss limit", never "limit reached") | the code's own next step | the code's kind (strategy only); cleared when the gate next allows that strategy or at 00:00 UTC |
+| `entry_reasons_missing` | Can't check whether new trades are allowed: this engine version doesn't report it | Update the brain to the current version, then restart the engine. | act |
+| `invalid_state` | The broker sent account figures the safety checks can't use | Usually clears at the next update; if it lasts, check the MT5 terminal is logged in and see the Health tab. | wait |
 | `daily_loss_limit_abs` | Today's £50 loss limit reached · resets {time} | Nothing to do: it resets at the start of the next day. | wait |
 | `fx_conversion_unavailable` | Can't convert dollars to the account currency right now | Check the MT5 terminal is logged in and XAUUSD is in Market Watch. | act |
 | `tick_error` | The engine hit an error reading prices | Usually clears at the next clean bar; if it repeats, restart the engine. | wait |
 | `bridge_incompatible` | The MT5 box runs an incompatible bridge version | Update the MT5 box to the same version as the brain. | act |
-| `heat_cap`, `tier2_blackout`, `reopen_window`, `holiday_thin` | worded in advance for the lanes adding them | | wait |
 | anything else | New entries paused ({code in words}) | See the Runbook; the Health tab may say more. | act |
 
 Copy rules: no jargon codes, no times inside `text` (the time is its own element so it can be shown in the owner's
@@ -118,15 +125,15 @@ counts on that strategy's proposal card only.
 Only the owner re-arms: an owner halt tells the owner "Re-arm on this page when ready" and everyone else "The owner
 re-arms on this page when ready."
 
-## Gaps (for the engine lane, BACKLOG 43)
+## Engine reasons (BACKLOG 43, ADR 0011)
 
-The engine does not publish rollover, the Friday weekend cut, or per-trade refusals (fx conversion, heat cap): the
-panel shows them once the engine publishes `entry_blocks` (ADR 0011).
+The engine publishes which reasons apply (`entry_blocks`, the running gate's own list) and the API only words them, so
+the panel cannot disagree with the gate. Two presentation rules stay in the API: with `market_closed` listed,
+`stale_data` is not shown (a closed market has no fresh prices by design, BACKLOG 59), and the engine's
+`supervisor_halt` is not shown when the supervisor's own reasons already are.
 
-The entry windows (`windows` in the engine state, BACKLOG 17/18) are mapped. Whether a window is on comes from the
-engine's own `windows.enabled` alone (the running gate's setting); the settings the API reads never hide a window (a
-settings edit without a restart, or settings that fail to load, must not show OPEN while the gate refuses). With no
-`enabled` published, a raised flag is shown. Times are the engine's own (`tier2_until`, `reopen_until`,
+The entry windows (BACKLOG 17/18) are shown when the engine lists them; whether a window is on is the running gate's
+setting, so the settings the API reads never hide one. Times are the engine's own (`tier2_until`, `reopen_until`,
 `holiday_name`, `holiday_until`); the API's settings are a fallback for wording and times only:
 `reopen_window` (wait, "until"), `holiday_thin` (wait, names the holiday, "until" server midnight of the first unlisted
 day), `tier2_blackout` (wait, "until" the release + after-minutes), `calendar_unavailable` (act, "since"; holiday-list

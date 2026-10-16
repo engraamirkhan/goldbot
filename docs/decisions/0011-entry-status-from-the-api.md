@@ -29,3 +29,8 @@ TypeScript would drift from the engine with every new reason.
 - Telegram `/status` can reuse the same function so both channels say the same words.
 - Would change our mind: if the engine publishes `entry_blocks` for every reason, the API's flag mapping can go and
   only the wording stays.
+
+## Update 2026-10-16 (BACKLOG 43)
+The engine now publishes `entry_blocks` (`RiskGate.account_reasons`, the list `check()` starts from) and
+`entry_refusals` (each agent's last per-trade refusal). The API's flag mapping and the min-lot fallback are gone; it
+only words the codes. An engine that does not publish `entry_blocks` is shown as `entry_reasons_missing`, never OPEN.

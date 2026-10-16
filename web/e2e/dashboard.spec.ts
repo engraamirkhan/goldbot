@@ -272,6 +272,7 @@ test("once the engine reports, Overview shows the live balance, today's loss bud
     limits: { risk_per_trade: 0.005, max_risk_per_trade: 0.01, multiplier_bounds: [0.25, 1.5], daily_cap: 0.02, weekly_cap: 0.05 },
     ladder_atr: { "15m": 7.27, "1h": 14.6, "4h": 29.0, "1d": 70.0 },
     lot_terms: { contract_oz: 100, volume_min: 0.01, volume_step: 0.01, volume_max: 50, stops_level_points: 0 },
+    entry_blocks: [], entry_refusals: {},                                        // the gate refuses nothing (BACKLOG 43)
   }));
   writeFileSync(join(dir, "supervisor.json"), JSON.stringify({
     ts: Date.now() / 1000, halt: false, reasons: [], daily_cap: 0.015, combined_day_start_equity: 1500, weekly_cap: 0.04,
@@ -305,6 +306,7 @@ test("entry status says in plain words why an account can't trade, when it resum
   writeFileSync(join(dir, "engine_icm-demo.json"), JSON.stringify({
     ...engine, ts: Date.now() / 1000, market_closed: true, sessions: { server_tz: "Europe/Athens", source: "static" },
     server_clock: { status: "mismatch", reason: "server clock reads UTC+3" }, login: 99887766,
+    entry_blocks: ["server_clock_mismatch", "market_closed"],                    // the gate's reasons (BACKLOG 43)
     throttle: { enabled: true, loss_streak: 3, max_entries_per_day_per_agent: 3, agents: {
       "trend-g0": { timeframe: "1h", loss_streak: 3, cooldown_until: until, blocked: ["throttle_loss_streak"] } } },
   }));
@@ -315,7 +317,7 @@ test("entry status says in plain words why an account can't trade, when it resum
   await expect(row.getByRole("link", { name: "Runbook: Server clock (US-EU DST gap weeks)" })).toHaveAttribute(
     "href", /RUNBOOK\.md#server-clock-us-eu-dst-gap-weeks$/);
   await expect(row.getByText(/^opens .* your time \(in /)).toHaveAttribute("title", / UTC$/);
-  await expect(row.getByText("trend-g0 paused after 3 losses in a row")).toBeVisible();
+  await expect(row.getByText("Trend (trend-g0) paused after 3 losses in a row")).toBeVisible();
   await expect(row.getByText(/^until .* your time \(in 1 h \d+ min\)$/)).toBeVisible();
   await expect(row.getByText(/^Exits keep running/)).toBeVisible();
   await expect(row).not.toContainText("99887766");                            // no account identifiers

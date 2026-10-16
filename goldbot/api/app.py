@@ -533,7 +533,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                        day_pnl=eq - num("day_start_equity") if num("day_start_equity") else None,
                                        loss_budget=budget, milestones=ladder,
                                        entry_status=(None if status_inputs is None else
-                                                     view(account_entry_status, e, budget, ladder, status_inputs))
+                                                     view(account_entry_status, e, budget, status_inputs))
                                        or entry_status.unknown_status()))
         return rows
 
@@ -541,9 +541,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         """What every account's entry status shares (entry_status.entry_inputs; Telegram /status reads the same)."""
         return entry_status.entry_inputs(st.dir, view_settings(), is_owner=is_owner)
 
-    def account_entry_status(e: dict, budget: LossBudget | None, ladder: Any, inputs: dict[str, Any]) -> Any:
-        return entry_status.account_entry_status(e, now=pd.Timestamp.now("UTC"), budget=budget, milestones=ladder,
-                                                 **inputs)
+    def account_entry_status(e: dict, budget: LossBudget | None, inputs: dict[str, Any]) -> Any:
+        return entry_status.account_entry_status(e, now=pd.Timestamp.now("UTC"), budget=budget, **inputs)
 
     def card(p: BusProposal, budget: LossBudget | None = None) -> dict[str, Any]:
         return dict(proposal_id=p.proposal_id, account_id=p.account_id, agent_id=p.agent_id,
