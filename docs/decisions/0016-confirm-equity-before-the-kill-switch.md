@@ -122,9 +122,12 @@ The review offered two ways to close the alternating-readings hole:
   was closed on the tripping read; a positions() read failing on that read did the same. Later runs were narrowed to
   this engine's magic range, so a manual or other-magic position stayed open. It now holds in auto mode too: the
   close-everything choice is state (`_kill_everything`), set before any I/O, saved with the risk state
-  (`kill_everything`), used by every retry and after a restart, and cleared only once a run has closed every position
-  on the account; the mode write comes after the flatten and never raises (a tick error, retried; the in-memory
-  `approval_mode = "propose"` already blocks auto entries). Evidence: `tests/test_kill_switch_everything.py`
+  (`kill_everything`), used by every retry and after a restart, and cleared only once a run has closed every XAUUSD
+  position on the account (all magics). "The whole account" means exactly that: `MT5Broker.positions()` reads the
+  engine's symbol only, so positions in other symbols are not closed; whether to flatten them is an owner decision.
+  The mode write comes after the flatten and never raises (a tick error, retried; the in-memory
+  `approval_mode = "propose"` already blocks auto entries); a halted engine retries it after a restart too
+  (`test_a_failed_mode_write_on_a_flat_trip_is_retried_after_a_restart`). Evidence: `tests/test_kill_switch_everything.py`
   (scenario A `test_a_failed_approval_mode_write_on_the_trip_still_closes_the_other_magic_position`, scenario B
   `test_a_failed_positions_read_on_the_trip_still_closes_the_other_magic_position_on_the_next_refresh` and
   `..._on_the_next_tick`, restart `test_after_a_restart_a_saved_close_everything_still_closes_the_whole_account`).

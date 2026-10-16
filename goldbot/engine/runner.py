@@ -468,7 +468,9 @@ class Engine:
         self._close_due: dict[int, tuple[str, dict, pd.Timestamp | None]] = {}
         # the kill switch has not seen its book flat yet; a saved close-everything (`_load_risk_state`) retries at once
         self._kill_pending = self._kill_everything
-        self._mode_reset_due = self._kill_everything   # the owner's mode still to be set back to propose (A10)
+        # the owner's mode still to be set back to propose (A10): a halted engine owes it after a restart, since a failed
+        # write is not saved (re-review LOW); the write is a no-op unless the bus says auto
+        self._mode_reset_due = self._kill_everything or self.state.stage == Stage.HALTED
         # an invalid feed (a dropped quote or a last_tick read that raised): since when on the host clock (engine state,
         # health FAILs after QUOTE_INVALID_FAIL_S), and when the state file was last written meanwhile
         self._quote_invalid_since: pd.Timestamp | None = None
@@ -2099,9 +2101,10 @@ class Engine:
 
     def _kill_switch(self, *, everything: bool) -> bool:
         """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
-        approve. The trip closes every position on the account. That choice is state, not this call's argument
+        approve. The trip closes every XAUUSD position on the account (all magics; the broker's positions() reads the
+        engine's symbol only, so other symbols are untouched). That choice is state, not this call's argument
         (trading-safety F1): `_kill_everything` is set before any I/O, saved with the risk state, used by every retry
-        and after a restart, and cleared only once a run has closed every position on the account (seen flat). After
+        and after a restart, and cleared only once a run has closed every such position (seen flat). After
         that, while halted, any of this engine's positions (its magic range) still open is closed again on each refresh.
         The trip also sets the owner's mode back to propose, so auto mode is offered again only on new evidence (A10);
         that write comes after the flatten and never raises (`_reset_owner_mode`).

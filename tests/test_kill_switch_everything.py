@@ -154,3 +154,21 @@ def test_once_the_whole_account_was_seen_flat_later_halted_refreshes_close_only_
     assert not again._kill_everything
     again._refresh_account(_crash(pb, 3))
     assert _ids(pb) == [manual]
+
+
+def test_a_failed_mode_write_on_a_flat_trip_is_retried_after_a_restart(tmp_path):
+    """Re-review LOW (A10): the trip found the account flat (`kill_everything` saved false), the mode write failed and
+    the process restarted. The halted engine still owes the write: the bus shows propose after the first refresh, so
+    auto never comes back after a re-arm without new evidence."""
+    ApprovalBus(tmp_path / "bus").set_mode("auto", by="dashboard")
+    pb = PaperBroker(equity=10_000)
+    pb.on_tick(_tick(T0))
+    eng = _engine(tmp_path, pb, _FailingModeBus(tmp_path / "bus"))
+    eng._refresh_account(_tick(T0))
+    _open(pb, "own", OWN_MAGIC, lots=1.0)
+    eng._refresh_account(_crash(pb))
+    assert eng.state.stage == Stage.HALTED and pb.positions() == [] and not eng._kill_everything
+    assert ApprovalBus(tmp_path / "bus").control().approval_mode == "auto"     # the write failed
+    again = _engine(tmp_path, pb, ApprovalBus(tmp_path / "bus"))               # restart; the disk has room again
+    again._refresh_account(_crash(pb, 2))
+    assert ApprovalBus(tmp_path / "bus").control().approval_mode == "propose"
