@@ -160,7 +160,7 @@ _IMPORT_NAME = {"pyyaml": "yaml", "python-dateutil": "dateutil", "pywin32-ctypes
 # SecretService backend (secretstorage pulls jeepney and cryptography; the Windows box uses wincred instead)
 _ALLOWED = {"cloudpickle", "cython_runtime", "_cyutility",
             "secretstorage", "jeepney", "cryptography", "_cffi_backend", "_openssl"}
-_ALLOWED_RE = re.compile(r"_cython_\d+_\d+(_\d+)?|_sysconfigdata_\w*")
+_ALLOWED_RE = re.compile(r"_cython_\d+_\d+(_\d+)?|_sysconfigdata_[\w-]*")
 _PROBE = """
 import importlib.util, json, sys
 before = set(sys.modules)
